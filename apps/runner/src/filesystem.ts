@@ -2,6 +2,7 @@ import { Dirent } from "node:fs";
 import { open, readdir, stat } from "node:fs/promises";
 import { relative, sep } from "node:path";
 import type { PathPolicy } from "./path-policy.js";
+import { utf8ForwardBoundary, utf8SafePrefixLength } from "./utf8-pagination.js";
 
 const MAX_READ_BYTES = 256 * 1024;
 const MAX_SEARCH_RESULTS = 1_000;
@@ -20,20 +21,26 @@ export class FilesystemService {
   public async read(input: unknown): Promise<Record<string, unknown>> {
     const params = object(input);
     const { workspace, path } = await this.policy.resolve(params.workspace_id, params.path, "read");
-    const offset = boundedInteger(params.offset, 0, Number.MAX_SAFE_INTEGER, 0);
+    const requestedOffset = boundedInteger(params.cursor ?? params.offset, 0, Number.MAX_SAFE_INTEGER, 0);
     const requested = boundedInteger(params.limit, 1, MAX_READ_BYTES, MAX_READ_BYTES);
     const info = await stat(path);
     if (!info.isFile()) throw new Error("path is not a file");
-    const start = Math.min(offset, info.size);
-    const bytes = Math.min(requested, info.size - start);
+    const rawStart = Math.min(requestedOffset, info.size);
+    const probeStart = Math.max(0, rawStart - 3);
     const handle = await open(path, "r");
     try {
-      const data = Buffer.alloc(bytes);
-      const { bytesRead } = await handle.read(data, 0, bytes, start);
-      const end = start + bytesRead;
+      const probe = Buffer.alloc(Math.min(7, info.size - probeStart));
+      const { bytesRead: probeRead } = await handle.read(probe, 0, probe.byteLength, probeStart);
+      const start = probeStart + utf8ForwardBoundary(probe.subarray(0, probeRead), rawStart - probeStart);
+      const data = Buffer.alloc(Math.min(info.size - start, requested + 3));
+      const { bytesRead } = await handle.read(data, 0, data.byteLength, start);
+      const actual = data.subarray(0, bytesRead);
+      let used = utf8SafePrefixLength(actual, requested);
+      if (used === 0 && actual.byteLength > 0) used = utf8SafePrefixLength(actual, Math.min(4, actual.byteLength));
+      const end = start + used;
       return {
         workspace_id: workspace.workspaceId, path: relative(workspace.rootPath, path).split(sep).join("/"),
-        data: data.subarray(0, bytesRead).toString("utf8"), encoding: "utf-8", offset: start,
+        data: actual.subarray(0, used).toString("utf8"), encoding: "utf-8", offset: start,
         next_cursor: end < info.size ? String(end) : null, truncated: end < info.size, size: info.size,
       };
     } finally {

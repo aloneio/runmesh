@@ -8,8 +8,6 @@ export default defineConfig({
       ADMIN_TOKEN: "test-admin-token-0123456789abcdef",
       RUNNER_TOKEN_PEPPER: "test-runner-token-pepper-not-for-production",
       INTERNAL_CONTROL_SECRET: "test-internal-control-secret-not-for-production",
-      MCP_OWNER_PASSWORD: "test-owner-password-not-for-production",
-      MCP_STATIC_TOKEN: "test-mcp-static-token-not-for-production",
     } },
   })],
   test: { pool: "@cloudflare/vitest-pool-workers" },

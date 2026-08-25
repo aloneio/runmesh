@@ -1,4 +1,5 @@
 import { McpServer, type AuthInfo, type ServerContext } from "@modelcontextprotocol/server";
+import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS } from "@remote-coding-runtime/protocol";
 import { z } from "zod";
 import { internalHeaders, isSafeIdentifier } from "../security.js";
 import type { WorkerEnv } from "../runner-do.js";
@@ -37,6 +38,7 @@ const TOOL_SPECS = {
   fs_apply_patch: { rpc: "fs.apply_patch", scope: "coding:write", description: "Apply a transactional, baseline-checked patch to a writable workspace on a connected runner.", annotations: destructiveAnnotations },
   exec_start: { rpc: "exec.start", scope: "coding:exec", description: "Start a persistent local job and return its job metadata promptly. Use job_get and job_logs to observe it later.", annotations: execAnnotations },
   exec_run: { rpc: "exec.run", scope: "coding:exec", description: "Start a local job and wait only for the runner's short bounded completion window.", annotations: execAnnotations },
+  job_list: { scope: "coding:read", description: "List bounded historical job metadata from the registry, including while a runner is offline.", annotations: readAnnotations },
   job_get: { rpc: "job.get", scope: "coding:read", description: "Get local job metadata; an offline runner may return its last synchronized snapshot instead.", annotations: readAnnotations },
   job_logs: { rpc: "job.logs", scope: "coding:read", description: "Read a bounded, paginated stdout or stderr log range from a connected runner.", annotations: readAnnotations },
   job_cancel: { rpc: "job.cancel", scope: "coding:exec", description: "Request cancellation of a local job on a connected runner.", annotations: destructiveAnnotations },
@@ -57,7 +59,7 @@ const RunnerInputSchema = z.object({ runner_id: RunnerIdSchema }).strict();
 const WorkspaceInputSchema = z.object({ runner_id: RunnerIdSchema }).strict();
 const JobInputSchema = z.object({ runner_id: RunnerIdSchema, job_id: z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "must be a safe job identifier") }).strict();
 
-export type McpAuth = Pick<AuthInfo, "clientId" | "scopes" | "expiresAt" | "resource"> & { token: string; props: Record<string, unknown> };
+export type McpAuth = Pick<AuthInfo, "clientId" | "scopes" | "expiresAt" | "resource" | "extra"> & { token: string };
 
 /**
  * Fresh server factory target for createMcpHandler. Every HTTP request receives
@@ -71,12 +73,13 @@ export function createCodingMcpServer(env: WorkerEnv, auth: McpAuth): McpServer 
   register(server, "workspace_list", WorkspaceInputSchema, async ({ runner_id }) => registryTool(env, `/runners/${encodeURIComponent(runner_id)}/workspaces`));
 
   register(server, "env_info", RunnerInputSchema, async ({ runner_id }) => runnerTool(env, runner_id, "env.info", {}));
-  register(server, "fs_read", z.object({ runner_id: RunnerIdSchema, workspace_id: WorkspaceIdSchema, path: RelativePathSchema, offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(262_144).optional() }).strict(), async ({ runner_id, ...params }) => runnerTool(env, runner_id, "fs.read", boundedReadParams(params, 32 * 1024)));
+  register(server, "fs_read", z.object({ runner_id: RunnerIdSchema, workspace_id: WorkspaceIdSchema, path: RelativePathSchema, cursor: CursorSchema, offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(262_144).optional() }).strict(), async ({ runner_id, ...params }) => runnerTool(env, runner_id, "fs.read", boundedReadParams(params, 32 * 1024)));
   register(server, "fs_list", z.object({ runner_id: RunnerIdSchema, workspace_id: WorkspaceIdSchema, path: OptionalRelativePathSchema, cursor: CursorSchema, limit: z.number().int().min(1).max(1_000).optional() }).strict(), async ({ runner_id, ...params }) => runnerTool(env, runner_id, "fs.list", params));
   register(server, "fs_search", z.object({ runner_id: RunnerIdSchema, workspace_id: WorkspaceIdSchema, path: OptionalRelativePathSchema, query: z.string().min(1).max(1_024) }).strict(), async ({ runner_id, ...params }) => runnerTool(env, runner_id, "fs.search", params));
   register(server, "fs_apply_patch", z.object({ runner_id: RunnerIdSchema, workspace_id: WorkspaceIdSchema, patch: z.string().min(1).max(1_048_576), expected_hash: z.string().regex(/^[a-f0-9]{64}$/).optional(), expected_hashes: z.record(z.string().min(1).max(4096), z.string().regex(/^[a-f0-9]{64}$/).nullable()).optional() }).strict(), async ({ runner_id, ...params }) => runnerTool(env, runner_id, "fs.apply_patch", params));
-  register(server, "exec_start", z.object({ runner_id: RunnerIdSchema, workspace_id: WorkspaceIdSchema, cwd: OptionalRelativePathSchema, command: z.union([z.string().min(1).max(8_192), z.array(z.string().min(1).max(8_192)).min(1).max(256)]), args: z.array(z.string().max(8_192)).max(256).optional(), shell: z.boolean().optional() }).strict(), async ({ runner_id, ...params }) => runnerTool(env, runner_id, "exec.start", params));
-  register(server, "exec_run", z.object({ runner_id: RunnerIdSchema, workspace_id: WorkspaceIdSchema, cwd: OptionalRelativePathSchema, command: z.union([z.string().min(1).max(8_192), z.array(z.string().min(1).max(8_192)).min(1).max(256)]), args: z.array(z.string().max(8_192)).max(256).optional(), shell: z.boolean().optional(), wait_ms: z.number().int().min(1).max(8_000).optional() }).strict(), async ({ runner_id, ...params }) => runnerTool(env, runner_id, "exec.run", params));
+  register(server, "exec_start", z.object({ runner_id: RunnerIdSchema, workspace_id: WorkspaceIdSchema, cwd: OptionalRelativePathSchema, command: z.union([z.string().min(1).max(8_192), z.array(z.string().min(1).max(8_192)).min(1).max(256)]), args: z.array(z.string().max(8_192)).max(256).optional(), shell: z.boolean().optional() }).strict(), async ({ runner_id, ...params }) => runnerTool(env, runner_id, "exec.start", { ...params, created_by_client_id: auth.clientId }));
+  register(server, "exec_run", z.object({ runner_id: RunnerIdSchema, workspace_id: WorkspaceIdSchema, cwd: OptionalRelativePathSchema, command: z.union([z.string().min(1).max(8_192), z.array(z.string().min(1).max(8_192)).min(1).max(256)]), args: z.array(z.string().max(8_192)).max(256).optional(), shell: z.boolean().optional(), wait_ms: z.number().int().min(1).max(LOCAL_RUNNER_OPERATION_TIMEOUT_MS).optional() }).strict(), async ({ runner_id, ...params }) => runnerTool(env, runner_id, "exec.run", { ...params, created_by_client_id: auth.clientId }));
+  register(server, "job_list", z.object({ runner_id: RunnerIdSchema, workspace_id: WorkspaceIdSchema.optional(), status: z.enum(["queued", "running", "cancelling", "cancelled", "succeeded", "failed", "unknown", "interrupted"]).optional(), limit: z.number().int().min(1).max(100).optional() }).strict(), async ({ runner_id, ...filters }) => registryTool(env, registryJobsPath(runner_id, filters)));
   register(server, "job_get", JobInputSchema, async ({ runner_id, job_id }) => {
     const live = await callRunner(env, runner_id, "job.get", { job_id });
     if (live.ok || live.error.code !== "runner_offline") return asToolResult(live);
@@ -131,8 +134,8 @@ type ToolCall = ToolSuccess | ToolFailure;
 
 const SAFE_RUNNER_ERROR_CODES = new Set([
   "baseline_changed", "busy", "expected_hash_mismatch", "file_too_large", "git_failed", "git_output_too_large", "git_timeout", "git_unavailable",
-  "hunk_ambiguous", "hunk_not_found", "hunk_overlap", "invalid_params", "invalid_path", "invalid_request", "invalid_workspace",
-  "method_not_found", "patch_install_failed", "path_traversal", "readonly_workspace", "runner_offline", "symlink_escape", "symlink_write", "timeout",
+  "hunk_ambiguous", "hunk_not_found", "hunk_overlap", "invalid_params", "invalid_patch", "invalid_path", "invalid_request", "invalid_workspace", "missing_file", "mixed_newlines", "not_utf8",
+  "method_not_found", "patch_install_failed", "patch_rollback_failed", "path_traversal", "readonly_workspace", "runner_offline", "symlink_escape", "symlink_write", "target_exists", "timeout",
 ]);
 
 function safeRunnerErrorCode(value: unknown, fallback: string): string {
@@ -160,13 +163,23 @@ async function callRunner(env: WorkerEnv, runnerId: string, method: string, para
   return fail(code, message, hintFor(code));
 }
 
+function registryJobsPath(runnerId: string, filters: Record<string, unknown>): string {
+  const query = new URLSearchParams();
+  if (typeof filters.workspace_id === "string") query.set("workspace_id", filters.workspace_id);
+  if (typeof filters.status === "string") query.set("status", filters.status);
+  if (typeof filters.limit === "number") query.set("limit", String(filters.limit));
+  const suffix = query.size === 0 ? "" : `?${query.toString()}`;
+  return `/runners/${encodeURIComponent(runnerId)}/jobs${suffix}`;
+}
+
 async function registryTool(env: WorkerEnv, path: string): Promise<unknown> {
   return asToolResult(await registryCall(env, path));
 }
 
 async function registryCall(env: WorkerEnv, path: string): Promise<ToolCall> {
   if (env.INTERNAL_CONTROL_SECRET === undefined || env.INTERNAL_CONTROL_SECRET.length === 0) return fail("service_unavailable", "The registry is not configured.", "Ask the service operator to configure the internal bridge.");
-  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "GET", path, "");
+  const [pathname] = path.split("?", 1);
+  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "GET", pathname ?? path, "");
   try {
     const response = await env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method: "GET", headers }));
     const value = await json(response);
@@ -195,7 +208,13 @@ function failure(code: string, message: string, hint: string): { content: { type
 function fail(code: string, message: string, hint: string): ToolFailure { return { ok: false, error: { code, message, hint } }; }
 function hintFor(code: string): string {
   if (code === "runner_offline" || code === "timeout") return "Confirm the runner is connected, then retry.";
-  if (code === "readonly_workspace") return "Choose a writable workspace before applying a patch.";
+  if (code === "invalid_patch") return "Use the documented *** Begin Patch envelope and exact, non-overlapping hunks.";
+  if (code === "missing_file") return "Choose an existing source file or use Add File for a new target.";
+  if (code === "target_exists") return "Choose a new target path or update the existing file instead.";
+  if (code === "baseline_changed" || code === "expected_hash_mismatch") return "Re-read the affected files and retry with current expected hashes.";
+  if (code === "hunk_not_found" || code === "hunk_ambiguous" || code === "hunk_overlap") return "Re-read the file and submit an exact, unambiguous, non-overlapping hunk.";
+  if (code === "patch_install_failed" || code === "patch_rollback_failed") return "Inspect workspace state, then retry a smaller patch; no host paths were exposed.";
+  if (code === "file_too_large" || code === "not_utf8" || code === "mixed_newlines") return "Use a supported bounded UTF-8 text file or split the change.";
   if (code === "path_traversal" || code === "invalid_path") return "Use a workspace-relative path without .. segments or an absolute path.";
   if (code === "busy") return "Wait for active runner requests to complete, then retry.";
   if (code === "method_not_found") return "Update the runner to a version that supports this tool.";

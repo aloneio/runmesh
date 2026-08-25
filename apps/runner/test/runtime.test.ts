@@ -1,6 +1,7 @@
 import { mkdir, readFile, rm, symlink, writeFile, mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS } from "@remote-coding-runtime/protocol";
 import { describe, expect, it } from "vitest";
 import { FilesystemService } from "../src/filesystem.js";
 import { JobManager } from "../src/jobs.js";
@@ -174,6 +175,75 @@ describe("persistent local jobs", () => {
       await afterCrash.initialize();
       expect(afterCrash.get(vanished.job_id).status).toBe("interrupted");
       await first.cancel(alive.job_id);
+    } finally { await test.cleanup(); }
+  });
+
+  it("accepts a legal near-limit exec.run and rejects values above the shared local cap", async () => {
+    const test = await fixture();
+    try {
+      const config: RunnerConfig = { server: "ws://127.0.0.1", token: "0123456789abcdef", runnerId: "runner-1", workspaces: [test.workspace] };
+      const runtime = new RunnerRuntime({ config, stateDir: test.state });
+      await runtime.initialize();
+      const legal = await runtime.dispatch("exec.run", { workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.stdout.write('ok')"], wait_ms: LOCAL_RUNNER_OPERATION_TIMEOUT_MS - 100 });
+      expect(legal).toMatchObject({ completed: true, job: { status: "succeeded" } });
+      await expect(runtime.dispatch("exec.run", { workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.exit(0)"], wait_ms: LOCAL_RUNNER_OPERATION_TIMEOUT_MS + 1 })).rejects.toMatchObject({ code: "invalid_params" });
+    } finally { await test.cleanup(); }
+  });
+
+  it("pages mixed UTF-8 filesystem reads with byte cursors without replacement characters", async () => {
+    const test = await fixture();
+    try {
+      const original = "Hello你好😀éWorld";
+      await writeFile(join(test.root, "utf8.txt"), original, "utf8");
+      const service = new FilesystemService(policy(test.workspace));
+      let cursor: string | undefined;
+      let result = "";
+      do {
+        const page = await service.read({ workspace_id: "workspace-1", path: "utf8.txt", ...(cursor === undefined ? {} : { cursor }), limit: 4 });
+        result += page.data as string;
+        cursor = typeof page.next_cursor === "string" ? page.next_cursor : undefined;
+      } while (cursor !== undefined);
+      expect(result).toBe(original);
+      expect(result).not.toContain("\ufffd");
+      const middle = await service.read({ workspace_id: "workspace-1", path: "utf8.txt", offset: Buffer.byteLength("Hello你", "utf8") + 1, limit: 4 });
+      expect(middle.data).not.toContain("\ufffd");
+      expect(middle.offset).toBeGreaterThan(Buffer.byteLength("Hello你", "utf8"));
+    } finally { await test.cleanup(); }
+  });
+
+  it("lists bounded filtered job metadata and reconciles recovered jobs", async () => {
+    const test = await fixture();
+    try {
+      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state, maxConcurrentJobs: 3 });
+      await manager.initialize();
+      const first = await manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.exit(0)"] });
+      const second = await manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.exit(1)"] });
+      await waitFor(() => manager.get(first.job_id), (job) => job.status === "succeeded");
+      await waitFor(() => manager.get(second.job_id), (job) => job.status === "failed");
+      expect(await manager.listReconciled({ status: "succeeded", limit: 1 })).toMatchObject([{ job_id: first.job_id, status: "succeeded" }]);
+      expect(manager.list({ limit: 1 })).toHaveLength(1);
+      const metaPath = join(test.state, "jobs", first.job_id, "meta.json");
+      const meta = JSON.parse(await readFile(metaPath, "utf8")) as Record<string, unknown>;
+      meta.status = "unknown"; meta.pid = 999_999_999; meta.completed_at_ms = null; meta.exit_code = null;
+      await writeFile(metaPath, JSON.stringify(meta));
+      const recovered = new JobManager({ policy: policy(test.workspace), stateDir: test.state });
+      await recovered.initialize();
+      expect(await recovered.getReconciled(first.job_id)).toMatchObject({ status: "interrupted", exit_code: null });
+    } finally { await test.cleanup(); }
+  });
+
+  it("caches bounded parallel environment discovery without leaking environment values", async () => {
+    const test = await fixture();
+    try {
+      let calls = 0;
+      const config: RunnerConfig = { server: "ws://127.0.0.1", token: "0123456789abcdef", runnerId: "runner-1", workspaces: [test.workspace] };
+      const runtimeModule = await import("../src/runtime.js");
+      const runtime = new RunnerRuntime({ config, stateDir: test.state, environment: new runtimeModule.EnvironmentInfoService({ probe: async (command) => { calls += 1; return command === "docker" ? undefined : `${command} version`; } }) });
+      const [first, second] = await Promise.all([runtime.envInfo(), runtime.envInfo()]);
+      expect(first).toEqual(second);
+      expect(first).toMatchObject({ platform: process.platform, architecture: process.arch, tools: { docker: { available: false }, git: { available: true, version: "git version" } } });
+      expect(JSON.stringify(first)).not.toContain("PATH=");
+      expect(calls).toBe(8);
     } finally { await test.cleanup(); }
   });
 });

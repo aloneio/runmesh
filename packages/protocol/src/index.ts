@@ -1,11 +1,13 @@
 import {
   MAX_FRAME_BYTES,
+  LOCAL_RUNNER_OPERATION_TIMEOUT_MS,
   MAX_JSON_DEPTH,
   MAX_JSON_NODES,
   PROTOCOL_CURRENT_VERSION,
   PROTOCOL_MIN_VERSION,
   ProtocolVersionRangeSchema,
   WireMessageSchema,
+  WORKER_BRIDGE_TIMEOUT_MS,
   type ProtocolVersion,
   type ProtocolVersionRange,
   type WireMessage,
@@ -64,10 +66,12 @@ export { generateWireMessageJsonSchema } from "./schema-artifact.js";
 
 export {
   MAX_FRAME_BYTES,
+  LOCAL_RUNNER_OPERATION_TIMEOUT_MS,
   MAX_JSON_DEPTH,
   MAX_JSON_NODES,
   PROTOCOL_CURRENT_VERSION,
   PROTOCOL_MIN_VERSION,
+  WORKER_BRIDGE_TIMEOUT_MS,
 };
 
 export const UNSUPPORTED_PROTOCOL_VERSION = "unsupported_protocol_version" as const;

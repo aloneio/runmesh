@@ -447,6 +447,12 @@
                 "minLength": 1,
                 "maxLength": 512
               },
+              "created_by_client_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
               "runner_id": {
                 "type": "string",
                 "minLength": 1,
@@ -593,6 +599,12 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 512
+            },
+            "created_by_client_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
             },
             "runner_id": {
               "type": "string",
@@ -787,6 +799,12 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 512
+            },
+            "created_by_client_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
             },
             "runner_id": {
               "type": "string",
@@ -1002,6 +1020,12 @@
               "minLength": 1,
               "maxLength": 512
             },
+            "created_by_client_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
             "runner_id": {
               "type": "string",
               "minLength": 1,
@@ -1096,6 +1120,12 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 512
+            },
+            "created_by_client_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
             },
             "runner_id": {
               "type": "string",

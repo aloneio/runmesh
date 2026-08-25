@@ -1,5 +1,9 @@
 export const INTERNAL_CONTROL_HEADER = "x-internal-control";
 export const MAX_BEARER_TOKEN_BYTES = 512;
+export const PASSWORD_KDF_ITERATIONS = 120_000;
+export const ADMIN_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
+export const SETUP_CSRF_TTL_MS = 10 * 60 * 1_000;
+export const MCP_SECRET_BYTES = 32;
 
 const encoder = new TextEncoder();
 
@@ -58,7 +62,12 @@ export async function hmacHex(secret: string, value: string): Promise<string> {
     ["sign"],
   );
   const digest = await crypto.subtle.sign("HMAC", key, encoder.encode(value));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return toHex(new Uint8Array(digest));
+}
+
+export async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(value));
+  return toHex(new Uint8Array(digest));
 }
 
 export function constantTimeEqual(left: string, right: string): boolean {
@@ -75,7 +84,67 @@ export async function runnerTokenVerifier(token: string, pepper: string): Promis
 }
 
 export function generateRunnerToken(): string {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return randomHex(32);
 }
+
+export function randomHex(bytes: number): string {
+  const value = new Uint8Array(bytes);
+  crypto.getRandomValues(value);
+  return toHex(value);
+}
+
+export function randomBase64Url(bytes = MCP_SECRET_BYTES): string {
+  const value = new Uint8Array(bytes);
+  crypto.getRandomValues(value);
+  let binary = "";
+  for (const byte of value) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
+}
+
+export async function passwordVerifier(password: string): Promise<string> {
+  const salt = new Uint8Array(16);
+  crypto.getRandomValues(salt);
+  const digest = await derivePassword(password, salt, PASSWORD_KDF_ITERATIONS);
+  return `pbkdf2-sha256$${PASSWORD_KDF_ITERATIONS}$${toBase64Url(salt)}$${toBase64Url(new Uint8Array(digest))}`;
+}
+
+export async function verifyPassword(password: string, verifier: string): Promise<boolean> {
+  const parts = verifier.split("$");
+  if (parts.length !== 4 || parts[0] !== "pbkdf2-sha256") return false;
+  const iterations = Number(parts[1]);
+  if (!Number.isSafeInteger(iterations) || iterations < 10_000 || iterations > 1_000_000) return false;
+  const salt = fromBase64Url(parts[2] ?? "");
+  const expected = fromBase64Url(parts[3] ?? "");
+  if (salt === undefined || expected === undefined || expected.length !== 32) return false;
+  const actual = new Uint8Array(await derivePassword(password, salt, iterations));
+  return constantTimeBytesEqual(actual, expected);
+}
+
+function derivePassword(password: string, salt: Uint8Array, iterations: number): Promise<ArrayBuffer> {
+  const safeSalt = salt.slice();
+  return crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"])
+    .then((key) => crypto.subtle.deriveBits({ name: "PBKDF2", salt: safeSalt as unknown as BufferSource, iterations, hash: "SHA-256" }, key, 256));
+}
+
+function constantTimeBytesEqual(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1) difference |= (left[index] ?? 0) ^ (right[index] ?? 0);
+  return difference === 0;
+}
+function toBase64Url(value: Uint8Array): string {
+  let binary = "";
+  for (const byte of value) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
+}
+function fromBase64Url(value: string): Uint8Array | undefined {
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) return undefined;
+  try {
+    const normalized = value.replaceAll("-", "+").replaceAll("_", "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
+    const binary = atob(normalized);
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  } catch {
+    return undefined;
+  }
+}
+function toHex(value: Uint8Array): string { return Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join(""); }

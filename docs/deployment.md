@@ -7,58 +7,61 @@ npm install
 npm test
 npm run typecheck
 npm run build
-npm run generate:schema --workspace=@remote-coding-runtime/protocol
 npm run validate:worker
 ```
 
-`npm run validate:worker` runs Wrangler with `--dry-run` and the repository config. It validates the bundle and bindings but does not prove a deployed account's quotas, network behavior, OAuth provider reachability, or secret configuration.
+`validate:worker` invokes Wrangler with `--dry-run` and the Worker config. It validates the bundle and Durable Object bindings but does not publish a deployment or prove production account quotas, network behavior, or edge log policy.
 
 ## Cloudflare resources
 
-The Worker config uses:
+The Worker uses only:
 
 - one Worker;
 - SQLite-backed `RegistryDO` and `RunnerDO` classes;
-- one KV namespace binding `OAUTH_KV` for the official OAuth Provider;
-- no Sandbox, Containers, Dynamic Workers, queues, D1, R2, tunnel, or inbound service.
+- no KV, D1, R2, Queues, Sandbox, Containers, Dynamic Workers, tunnels, or inbound service.
 
-Workers Free supports SQLite-backed Durable Objects, but quotas are account-wide and exhaustion fails operations rather than transparently charging overage. Treat Free Plan as a low-volume/control-plane target and measure the actual account before making a capacity promise.
+## Secrets
 
-## Provisioning
-
-1. Create a KV namespace and replace `REPLACE_WITH_OAUTH_KV_NAMESPACE_ID` in `apps/worker/wrangler.jsonc`.
-2. Configure secrets:
+Configure only the Runner/control-plane secrets:
 
 ```sh
 cd apps/worker
 npx wrangler secret put ADMIN_TOKEN
 npx wrangler secret put RUNNER_TOKEN_PEPPER
 npx wrangler secret put INTERNAL_CONTROL_SECRET
-npx wrangler secret put MCP_OWNER_PASSWORD
 ```
 
-3. Run the safe validation command from the repository root:
+The first administrator password is created through the HTTPS setup page and is stored only as a PBKDF2-HMAC-SHA-256 verifier in RegistryDO. No bootstrap password environment variable is required by design; first setup is first-success-wins and should be performed immediately after deployment.
 
-```sh
-npm run validate:worker
-```
-
-4. Deploy only with explicit operator authorization:
+## Deploy and setup
 
 ```sh
 npx wrangler deploy --config apps/worker/wrangler.jsonc
 ```
 
-5. Enroll a Runner via `POST /admin/runners` with `Authorization: Bearer ADMIN_TOKEN`; store the returned plaintext token securely; start the Runner with `CODING_RUNNER_TOKEN` and the single `/mcp` URL.
+Then open the deployed root URL, complete `/setup`, log in, and create one independent MCP client URL per ChatGPT/Claude/Cursor/custom client. Configure the generated URL directly in that MCP client:
 
-## OAuth
+```text
+https://mcp.aloneio.com/<secret>/mcp
+```
 
-The Worker wraps only `/mcp` with `@cloudflare/workers-oauth-provider`. It publishes authorization metadata, DCR compatibility, and CIMD support. Owner authorization is an application-owned password + consent page protected by a CSRF cookie. Public clients must use S256 PKCE. `coding:read`, `coding:write`, and `coding:exec` are enforced per tool.
+The full URL is a bearer credential and is displayed only at client creation/rotation. Store it securely and rotate it if exposed.
 
-The local test suite covers DCR, S256, CSRF, wrong password, denied/approved consent, token exchange, two client tokens, and scope denial. It does not replace testing with a hosted ChatGPT/Claude/Cursor client against a deployed Internet URL.
+## Runner enrollment
 
-## Rollback and rotation
+Runner administration intentionally remains a separate `ADMIN_TOKEN` API:
 
-- Rotate a Runner via `POST /admin/runners/:id/rotate`; restart the Runner with the new returned token.
-- Revoke via `POST /admin/runners/:id/revoke`; the old token is invalidated and active sockets are closed.
-- A Worker deploy/restart can fail an in-flight bridge request. The caller should retry only safe/idempotent operations; persistent jobs remain local and can be queried after reconnect.
+```sh
+curl -sS -X POST https://mcp.aloneio.com/admin/runners \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"runner_id":"home-pc"}'
+```
+
+Start the Runner with the returned token in `CODING_RUNNER_TOKEN` and an outbound `wss://` server. Only loopback `ws://` with explicit `--insecure-local` is permitted for development.
+
+## Operational limits
+
+The shared timeout contract is an 8-second maximum local operation and a 12-second Worker bridge timeout. Use `exec_start` for long work. Registry retains active jobs and up to 1,000 terminal jobs per Runner; complete local logs remain on the Runner and are unbounded by default.
+
+MCP URL path secrets can be present in infrastructure access logs even though application code does not log them. Configure appropriate edge redaction and use rotation/revocation as the recovery mechanism.

@@ -4,12 +4,6 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-04-02",
   "compatibility_flags": ["global_fetch_strictly_public", "nodejs_compat"],
-  "kv_namespaces": [
-    {
-      "binding": "OAUTH_KV",
-      "id": "REPLACE_WITH_OAUTH_KV_NAMESPACE_ID"
-    }
-  ],
   "durable_objects": {
     "bindings": [
       {

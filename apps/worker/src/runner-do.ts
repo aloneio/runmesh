@@ -5,22 +5,14 @@ import {
   PROTOCOL_CURRENT_VERSION,
   PROTOCOL_MIN_VERSION,
   RpcRequestSchema,
+  WORKER_BRIDGE_TIMEOUT_MS,
   type WireMessage,
 } from "@remote-coding-runtime/protocol";
 import { bearerToken, internalHeaders, verifyInternalRequest } from "./security.js";
-import type { OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 
 export interface WorkerEnv {
   REGISTRY: DurableObjectNamespace;
   RUNNER: DurableObjectNamespace;
-  /** OAuthProvider persistence binding. Configure a real KV namespace in production. */
-  OAUTH_KV: KVNamespace;
-  /** Injected by OAuthProvider for authorization UI flows. */
-  OAUTH_PROVIDER: OAuthHelpers;
-  /** Owner-controlled secret for the explicit password + consent authorization UI. */
-  MCP_OWNER_PASSWORD?: string;
-  /** Test/development-only static bearer gate; disabled when this secret is unset. */
-  MCP_STATIC_TOKEN?: string;
   WORKER_ID?: string;
   WORKER_VERSION?: string;
   ADMIN_TOKEN?: string;
@@ -39,7 +31,7 @@ interface ConnectionAttachment {
 }
 
 const HELLO_DEADLINE_MS = 10_000;
-const BRIDGE_TIMEOUT_MS = 8_000;
+const BRIDGE_TIMEOUT_MS = WORKER_BRIDGE_TIMEOUT_MS;
 const MAX_BRIDGE_IN_FLIGHT = 32;
 const MAX_BRIDGE_BODY_BYTES = 1_048_576;
 type BridgeReply = Extract<WireMessage, { type: "rpc.response" | "rpc.error" }>;

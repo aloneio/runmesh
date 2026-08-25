@@ -1,6 +1,7 @@
 import {
   decodeWireFrame,
   encodeWireFrame,
+  LOCAL_RUNNER_OPERATION_TIMEOUT_MS,
   PROTOCOL_CURRENT_VERSION,
   PROTOCOL_MIN_VERSION,
   type CapabilityMetadata,
@@ -47,7 +48,7 @@ export class RunnerConnection {
   public constructor(options: RunnerConnectionOptions) {
     this.config = options.config;
     this.heartbeatMs = options.heartbeatMs ?? 15_000;
-    this.rpcTimeoutMs = options.rpcTimeoutMs ?? 10_000;
+    this.rpcTimeoutMs = options.rpcTimeoutMs ?? LOCAL_RUNNER_OPERATION_TIMEOUT_MS;
     this.syncMs = options.syncMs ?? 30_000;
     this.random = options.random ?? Math.random;
     this.sleep = options.sleep ?? ((delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)));
@@ -155,9 +156,9 @@ export class RunnerConnection {
         if (message.type === "runner.welcome") {
           welcomed = true;
           this.onStateChange("online");
-          this.sendSync(socket);
+          void this.sendSync(socket);
           this.heartbeatTimer = setInterval(() => this.sendHeartbeat(socket), this.heartbeatMs);
-          this.syncTimer = setInterval(() => this.sendSync(socket), this.syncMs);
+          this.syncTimer = setInterval(() => { void this.sendSync(socket); }, this.syncMs);
           // Stay pending until close so start() reconnects only after a real session ends.
           return;
         }
@@ -205,7 +206,9 @@ export class RunnerConnection {
     }));
   }
 
-  private sendSync(socket: WebSocket): void {
+  private async sendSync(socket: WebSocket): Promise<void> {
+    if (socket.readyState !== WebSocket.OPEN) return;
+    const jobs = await this.runtime.syncJobs();
     if (socket.readyState !== WebSocket.OPEN) return;
     const sync: RunnerSync = {
       type: "runner.sync",
@@ -218,7 +221,7 @@ export class RunnerConnection {
         persistence: "persistent",
         labels: {},
       })),
-      jobs: this.runtime.syncJobs(),
+      jobs,
     };
     socket.send(encodeWireFrame(sync));
   }
@@ -245,7 +248,7 @@ export class RunnerConnection {
   private forwardJobEvent(event: import("./jobs.js").JobEvent): void {
     const socket = this.socket;
     if (socket === undefined || socket.readyState !== WebSocket.OPEN) return;
-    const job = { job_id: event.job.job_id, workspace_id: event.job.workspace_id, status: event.job.status, created_at_ms: event.job.created_at_ms, updated_at_ms: event.job.updated_at_ms, runner_id: this.config.runnerId } as const;
+    const job = { job_id: event.job.job_id, workspace_id: event.job.workspace_id, status: event.job.status, created_at_ms: event.job.created_at_ms, updated_at_ms: event.job.updated_at_ms, ...(event.job.created_by_client_id === null ? {} : { created_by_client_id: event.job.created_by_client_id }), runner_id: this.config.runnerId } as const;
     try {
       if (event.type === "started") {
         socket.send(encodeWireFrame({ type: "job.started", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: event.job.job_id, job, workspace: { workspace_id: event.job.workspace_id, persistence: "persistent", labels: {} }, started_at_ms: event.job.started_at_ms ?? event.job.updated_at_ms }));
@@ -268,7 +271,7 @@ export function discoverCapabilities(maxConcurrentJobs = 1): CapabilityMetadata 
     pty: false,
     network_access: true,
     max_concurrent_jobs: maxConcurrentJobs,
-    supported_rpc_methods: ["echo", "runner.info", "workspace.list", "env.info", "fs.read", "fs.list", "fs.search", "fs.apply_patch", "fs.patch", "git.status", "git.diff", "exec.start", "exec.run", "job.get", "job.logs", "job.cancel", "job.input"],
+    supported_rpc_methods: ["echo", "runner.info", "workspace.list", "env.info", "fs.read", "fs.list", "fs.search", "fs.apply_patch", "fs.patch", "git.status", "git.diff", "exec.start", "exec.run", "job.list", "job.get", "job.logs", "job.cancel", "job.input"],
     labels: { runtime: "node" },
   };
 }

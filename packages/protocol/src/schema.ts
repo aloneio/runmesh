@@ -8,6 +8,10 @@ import { z } from "zod";
 export const PROTOCOL_MIN_VERSION = 1;
 export const PROTOCOL_CURRENT_VERSION = 1;
 export const MAX_FRAME_BYTES = 1_048_576;
+/** Maximum duration for normal synchronous Runner operations such as exec.run and Git. */
+export const LOCAL_RUNNER_OPERATION_TIMEOUT_MS = 8_000;
+/** Worker→Runner bridge timeout; reserves a reply margin above the Runner cap. */
+export const WORKER_BRIDGE_TIMEOUT_MS = 12_000;
 /** Nested JSON parameters/results are bounded to make validation safe for hostile frames. */
 export const MAX_JSON_DEPTH = 32;
 export const MAX_JSON_NODES = 10_000;
@@ -183,6 +187,7 @@ export const JobMetadataSchema = z
     created_at_ms: TimestampSchema,
     updated_at_ms: TimestampSchema,
     display_name: z.string().min(1).max(512).optional(),
+    created_by_client_id: IdentifierSchema.optional(),
     runner_id: IdentifierSchema.optional(),
   })
   .strict();

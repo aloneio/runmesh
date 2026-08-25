@@ -5,6 +5,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceConfig } from "./config.js";
 import type { PathPolicy } from "./path-policy.js";
+import { utf8BackwardBoundary, utf8ForwardBoundary, utf8SafePrefixLength } from "./utf8-pagination.js";
 
 export type LocalJobStatus = "queued" | "running" | "cancelling" | "cancelled" | "succeeded" | "failed" | "unknown" | "interrupted";
 export interface RecoveryLiveness {
@@ -31,6 +32,12 @@ export interface JobRecord {
   readonly completed_at_ms: number | null;
   readonly exit_code: number | null;
   readonly signal: string | null;
+  /** Recovery explanation safe to expose to MCP clients. */
+  readonly recovery_note: string | null;
+  /** MCP client identity that initiated the job; it does not grant ownership. */
+  readonly created_by_client_id: string | null;
+  /** Persisted evidence that this Runner delivered a cancellation request. */
+  readonly cancellation_delivered_at_ms: number | null;
 }
 export interface JobManagerOptions {
   readonly policy: PathPolicy;
@@ -92,25 +99,62 @@ export class JobManager {
           checked_at_ms: Date.now(), alive: inspection.alive, fingerprint_matches: inspection.fingerprintMatches,
         };
         const knownPidReuse = inspection.alive && inspection.fingerprintMatches === false;
-        restored = inspection.alive && !knownPidReuse
-          ? { ...job, status: "unknown", recovery_liveness, updated_at_ms: Date.now(), completed_at_ms: null, exit_code: null, signal: null }
-          // An unavailable PID or a fingerprint mismatch is interruption evidence,
-          // but is intentionally not a guessed completion timestamp/outcome.
-          : { ...job, status: "interrupted", recovery_liveness, updated_at_ms: Date.now(), completed_at_ms: null, exit_code: null, signal: null };
+        if (job.status === "cancelling") {
+          restored = inspection.alive && !knownPidReuse
+            ? { ...job, recovery_liveness, recovery_note: "process observed after Runner restart; terminal outcome unavailable until reconciliation", updated_at_ms: Date.now(), completed_at_ms: null, exit_code: null, signal: null }
+            : terminalRecoveredJob(job, job.cancellation_delivered_at_ms !== null ? "cancelled" : "interrupted", recovery_liveness);
+        } else {
+          restored = inspection.alive && !knownPidReuse
+            ? { ...job, status: "unknown", recovery_liveness, recovery_note: "process observed after Runner restart; terminal outcome unavailable until reconciliation", updated_at_ms: Date.now(), completed_at_ms: null, exit_code: null, signal: null }
+            // An unavailable PID or a fingerprint mismatch is interruption evidence,
+            // but is intentionally not a guessed completion timestamp/outcome.
+            : terminalRecoveredJob(job, "interrupted", recovery_liveness);
+        }
         await this.persist(restored);
       }
       this.jobs.set(restored.job_id, restored);
     }
   }
 
-  public list(recentLimit = 100): JobRecord[] {
-    return [...this.jobs.values()].sort((a, b) => b.updated_at_ms - a.updated_at_ms).slice(0, recentLimit);
+  public list(input: { readonly workspace_id?: unknown; readonly status?: unknown; readonly limit?: unknown } = {}): JobRecord[] {
+    return this.filteredList(input);
+  }
+
+  /** Reconcile recovered PIDs before returning metadata to remote callers. */
+  public async listReconciled(input: { readonly workspace_id?: unknown; readonly status?: unknown; readonly limit?: unknown } = {}): Promise<JobRecord[]> {
+    await this.reconcileRecoveredJobs();
+    return this.filteredList(input);
+  }
+
+  private filteredList(input: { readonly workspace_id?: unknown; readonly status?: unknown; readonly limit?: unknown }): JobRecord[] {
+    const workspaceId = input.workspace_id;
+    const status = input.status;
+    if (workspaceId !== undefined && typeof workspaceId !== "string") throw new Error("workspace_id must be a string");
+    if (status !== undefined && !isJobStatus(status)) throw new Error("status is invalid");
+    const limit = bounded(input.limit, 1, 100, 100);
+    return [...this.jobs.values()]
+      .filter((job) => (workspaceId === undefined || job.workspace_id === workspaceId) && (status === undefined || job.status === status))
+      .sort((a, b) => b.updated_at_ms - a.updated_at_ms || a.job_id.localeCompare(b.job_id))
+      .slice(0, limit);
+  }
+
+  public async reconcileRecoveredJobs(): Promise<void> {
+    for (const job of [...this.jobs.values()]) await this.reconcileRecoveredJob(job.job_id);
   }
 
   public get(jobId: unknown): JobRecord {
     if (typeof jobId !== "string") throw new Error("job_id is required");
     const job = this.jobs.get(jobId);
     if (job === undefined) throw new Error("job not found");
+    return job;
+  }
+
+  public async getReconciled(jobId: unknown): Promise<JobRecord> {
+    let job = this.get(jobId);
+    if (job.status === "unknown" || job.status === "cancelling") {
+      await this.reconcileRecoveredJob(job.job_id);
+      job = this.get(jobId);
+    }
     return job;
   }
 
@@ -126,6 +170,7 @@ export class JobManager {
       command: invocation.command, shell: invocation.shell, status: "queued", pid: null,
       process_start_fingerprint: null, recovery_liveness: null,
       created_at_ms: now, started_at_ms: null, updated_at_ms: now, completed_at_ms: null, exit_code: null, signal: null,
+      recovery_note: null, created_by_client_id: safeOptionalIdentifier(params.created_by_client_id), cancellation_delivered_at_ms: null,
     };
     this.jobs.set(job.job_id, job);
     await mkdir(this.jobDir(job.job_id), { recursive: true, mode: 0o700 });
@@ -174,7 +219,7 @@ export class JobManager {
   }
 
   public async cancel(jobId: unknown): Promise<JobRecord> {
-    const job = this.get(jobId);
+    const job = await this.getReconciled(jobId);
     if (job.status === "queued") {
       const cancelled = { ...job, status: "cancelled" as const, updated_at_ms: Date.now(), completed_at_ms: Date.now() };
       this.jobs.set(job.job_id, cancelled);
@@ -192,7 +237,12 @@ export class JobManager {
       this.onEvent({ type: "status", job: cancelling });
     }
     try {
-      if (await terminateProcess(cancelling.pid)) this.terminationDelivered.add(cancelling.job_id);
+      if (await terminateProcess(cancelling.pid)) {
+        this.terminationDelivered.add(cancelling.job_id);
+        const delivered = { ...cancelling, cancellation_delivered_at_ms: Date.now(), updated_at_ms: Date.now() };
+        this.jobs.set(delivered.job_id, delivered);
+        await this.persist(delivered);
+      }
     } catch (error) {
       // Do not falsely report cancellation merely because process-tree control
       // failed. The original local child remains observable and may exit normally.
@@ -283,6 +333,22 @@ export class JobManager {
     return best === 0 && initial > 0 && wireResponseBytes(logResult(jobId, stream, offset, size, data.subarray(0, initial).toString("utf8"), offset + initial)) <= MAX_LOG_RESPONSE_BYTES ? initial : best;
   }
 
+  private async reconcileRecoveredJob(jobId: string): Promise<void> {
+    const job = this.jobs.get(jobId);
+    if (job === undefined || job.status !== "unknown" && !(job.status === "cancelling" && job.recovery_liveness !== null)) return;
+    const inspection = await inspectProcess(job.pid, job.process_start_fingerprint);
+    if (inspection.alive && inspection.fingerprintMatches !== false) return;
+    const deliveredCancellation = job.status === "cancelling" && job.cancellation_delivered_at_ms !== null;
+    const terminal = terminalRecoveredJob(job, deliveredCancellation ? "cancelled" : "interrupted", {
+      checked_at_ms: Date.now(), alive: inspection.alive, fingerprint_matches: inspection.fingerprintMatches,
+    });
+    this.jobs.set(job.job_id, terminal);
+    this.terminationDelivered.delete(job.job_id);
+    await this.persist(terminal);
+    this.onEvent({ type: "completed", job: terminal });
+  }
+
+
   private async recordProcessFingerprint(jobId: string, pid: number | null): Promise<void> {
     const fingerprint = await linuxProcessStartFingerprint(pid);
     if (fingerprint === null) return;
@@ -298,14 +364,21 @@ export class JobManager {
     if (!inspection.alive || inspection.fingerprintMatches !== true) {
       throw new Error("recovered job cannot be cancelled safely because its process identity is no longer verified");
     }
-    const cancelling: JobRecord = { ...job, status: "cancelling", updated_at_ms: Date.now() };
-    this.jobs.set(job.job_id, cancelling);
-    await this.persist(cancelling);
-    this.onEvent({ type: "status", job: cancelling });
-    if (await terminateProcess(cancelling.pid)) this.terminationDelivered.add(cancelling.job_id);
-    // This runner did not spawn the recovered child and cannot observe close.
-    // Leave it cancelling rather than inventing a completed/cancelled outcome.
-    return this.get(job.job_id);
+    const recovered = { ...job, status: "cancelling" as const, recovery_liveness: job.recovery_liveness ?? { checked_at_ms: Date.now(), alive: true, fingerprint_matches: inspection.fingerprintMatches }, recovery_note: "cancellation requested after Runner restart; terminal outcome unavailable until reconciliation", updated_at_ms: Date.now() };
+    this.jobs.set(job.job_id, recovered);
+    await this.persist(recovered);
+    this.onEvent({ type: "status", job: recovered });
+    if (await terminateProcess(recovered.pid)) {
+      const delivered = { ...recovered, cancellation_delivered_at_ms: Date.now(), updated_at_ms: Date.now() };
+      this.jobs.set(delivered.job_id, delivered);
+      this.terminationDelivered.add(delivered.job_id);
+      await this.persist(delivered);
+      // This runner did not spawn the recovered child and cannot observe close.
+      // A later get/list/sync probes it and converges only to cancelled when the
+      // persisted delivery marker proves a cancellation request was sent.
+      return delivered;
+    }
+    return recovered;
   }
 
   private async finish(jobId: string, code: number | null, signal: NodeJS.Signals | null, spawnFailed: boolean): Promise<void> {
@@ -320,14 +393,15 @@ export class JobManager {
     const prior = this.jobs.get(jobId);
     if (prior === undefined || !isActive(prior)) return;
     await this.flushLogs(jobId);
-    const cancellationWasDelivered = prior.status === "cancelling" && this.terminationDelivered.has(jobId);
+    const deliveredCancellation = prior.status === "cancelling" && (this.terminationDelivered.has(jobId) || prior.cancellation_delivered_at_ms !== null);
     // A code-zero exit is a successful process completion even if cancel raced
     // with it. Cancellation is reserved for a delivered termination with an
     // abnormal/signal exit, so status does not overstate what happened.
-    const status: LocalJobStatus = spawnFailed ? "failed" : code === 0 ? "succeeded" : cancellationWasDelivered ? "cancelled" : "failed";
+    const status: LocalJobStatus = spawnFailed ? "failed" : code === 0 ? "succeeded" : deliveredCancellation ? "cancelled" : "failed";
     const completed: JobRecord = {
       ...prior, status, updated_at_ms: Date.now(), completed_at_ms: Date.now(),
       exit_code: status === "cancelled" ? null : code, signal,
+      cancellation_delivered_at_ms: prior.cancellation_delivered_at_ms,
     };
     this.jobs.set(jobId, completed);
     this.processes.delete(jobId);
@@ -365,6 +439,23 @@ export class JobManager {
   }
 }
 
+function terminalRecoveredJob(job: JobRecord, status: "cancelled" | "interrupted", recovery_liveness: RecoveryLiveness): JobRecord {
+  return {
+    ...job,
+    status,
+    updated_at_ms: Date.now(),
+    completed_at_ms: Date.now(),
+    exit_code: null,
+    signal: null,
+    recovery_liveness,
+    recovery_note: status === "cancelled"
+      ? "cancellation delivery was confirmed after Runner restart; the process exit code is unavailable"
+      : "terminal outcome unavailable after Runner restart",
+    cancellation_delivered_at_ms: job.cancellation_delivered_at_ms,
+    created_by_client_id: job.created_by_client_id,
+  };
+}
+
 function parseInvocation(params: Record<string, unknown>, workspace: WorkspaceConfig): { file: string; args: string[]; command: string[]; shell: boolean } {
   const requestedShell = params.shell === true;
   if (requestedShell && !workspace.shell) throw new Error("shell execution is disabled for this workspace");
@@ -382,6 +473,8 @@ function stringArray(value: unknown, label: string): string[] { if (!Array.isArr
 function bounded(value: unknown, min: number, max: number, fallback: number): number { if (value === undefined || value === null) return fallback; if (typeof value === "string" && /^\d+$/.test(value)) value = Number(value); if (!Number.isSafeInteger(value) || (value as number) < min || (value as number) > max) throw new Error("invalid pagination value"); return value as number; }
 function positiveInteger(value: unknown, label: string): number { if (!Number.isSafeInteger(value) || (value as number) < 1) throw new Error(`${label} must be a positive integer`); return value as number; }
 function relativeWorkspacePath(workspace: WorkspaceConfig, path: string): string { return path === workspace.rootPath ? "." : path.slice(workspace.rootPath.length + 1); }
+function isJobStatus(value: unknown): value is LocalJobStatus { return typeof value === "string" && ["queued", "running", "cancelling", "cancelled", "succeeded", "failed", "unknown", "interrupted"].includes(value); }
+function safeOptionalIdentifier(value: unknown): string | null { if (value === undefined) return null; if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) throw new Error("created_by_client_id is invalid"); return value; }
 function isActive(job: JobRecord): boolean { return job.status === "queued" || job.status === "running" || job.status === "cancelling"; }
 function logResult(jobId: string, stream: "stdout" | "stderr", offset: number, size: number, data: string, next: number): Record<string, unknown> {
   return { job_id: jobId, stream, data, offset, next_cursor: next < size ? String(next) : null, truncated: next < size, size };
@@ -443,33 +536,24 @@ async function terminateWindowsProcessTree(pid: number): Promise<boolean> {
 async function utf8AlignedStart(handle: Awaited<ReturnType<typeof open>>, requested: number, size: number, preferBackward: boolean): Promise<number> {
   if (requested === 0 || requested >= size) return requested;
   const begin = Math.max(0, requested - 3);
-  const bytes = Buffer.alloc(Math.min(6, size - begin));
+  const bytes = Buffer.alloc(Math.min(7, size - begin));
   const { bytesRead } = await handle.read(bytes, 0, bytes.length, begin);
   const data = bytes.subarray(0, bytesRead);
-  let relative = requested - begin;
-  if (preferBackward) {
-    while (relative > 0 && isUtf8Continuation(data[relative] ?? 0)) relative -= 1;
-  } else {
-    while (relative < data.length && isUtf8Continuation(data[relative] ?? 0)) relative += 1;
-  }
-  return begin + relative;
+  const relative = requested - begin;
+  return begin + (preferBackward ? utf8BackwardBoundary(data, relative) : utf8ForwardBoundary(data, relative));
 }
-function utf8SafePrefixLength(data: Buffer, maximum: number): number {
-  let end = Math.min(maximum, data.length);
-  if (end === 0) return 0;
-  let lead = end - 1;
-  while (lead > 0 && isUtf8Continuation(data[lead] ?? 0)) lead -= 1;
-  const byte = data[lead] ?? 0;
-  const sequenceLength = byte < 0x80 ? 1 : byte >= 0xc2 && byte <= 0xdf ? 2 : byte >= 0xe0 && byte <= 0xef ? 3 : byte >= 0xf0 && byte <= 0xf4 ? 4 : 1;
-  if (lead + sequenceLength > end) end = lead;
-  return end;
-}
-function isUtf8Continuation(value: number): boolean { return value >= 0x80 && value <= 0xbf; }
 function safeJobId(value: string): boolean { return /^job-[0-9a-f-]{36}$/.test(value); }
 function normalizeJobRecord(value: unknown): JobRecord | undefined {
   if (!isJobRecord(value)) return undefined;
-  const job = value as Omit<JobRecord, "process_start_fingerprint" | "recovery_liveness"> & Partial<Pick<JobRecord, "process_start_fingerprint" | "recovery_liveness">>;
-  return { ...job, process_start_fingerprint: typeof job.process_start_fingerprint === "string" ? job.process_start_fingerprint : null, recovery_liveness: validRecoveryLiveness(job.recovery_liveness) ? job.recovery_liveness : null };
+  const job = value as Omit<JobRecord, "process_start_fingerprint" | "recovery_liveness" | "cancellation_delivered_at_ms" | "created_by_client_id" | "recovery_note"> & Partial<Pick<JobRecord, "process_start_fingerprint" | "recovery_liveness" | "cancellation_delivered_at_ms" | "created_by_client_id" | "recovery_note">>;
+  return {
+    ...job,
+    process_start_fingerprint: typeof job.process_start_fingerprint === "string" ? job.process_start_fingerprint : null,
+    recovery_liveness: validRecoveryLiveness(job.recovery_liveness) ? job.recovery_liveness : null,
+    cancellation_delivered_at_ms: typeof job.cancellation_delivered_at_ms === "number" && Number.isSafeInteger(job.cancellation_delivered_at_ms) ? job.cancellation_delivered_at_ms : null,
+    created_by_client_id: typeof job.created_by_client_id === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(job.created_by_client_id) ? job.created_by_client_id : null,
+    recovery_note: typeof job.recovery_note === "string" && job.recovery_note.length <= 512 ? job.recovery_note : null,
+  };
 }
 function validRecoveryLiveness(value: unknown): value is RecoveryLiveness { return typeof value === "object" && value !== null && typeof (value as RecoveryLiveness).checked_at_ms === "number" && typeof (value as RecoveryLiveness).alive === "boolean" && (value as RecoveryLiveness).fingerprint_matches !== undefined; }
 function isJobRecord(value: unknown): value is Omit<JobRecord, "process_start_fingerprint" | "recovery_liveness"> { return typeof value === "object" && value !== null && typeof (value as JobRecord).job_id === "string" && typeof (value as JobRecord).status === "string" && typeof (value as JobRecord).workspace_id === "string"; }

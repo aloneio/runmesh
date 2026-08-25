@@ -1,7 +1,7 @@
 import { env, SELF, runInDurableObject } from "cloudflare:test";
+import { WORKER_BRIDGE_TIMEOUT_MS, decodeWireFrame, encodeWireFrame, type WireMessage } from "@remote-coding-runtime/protocol";
 import { beforeEach, describe, expect, it } from "vitest";
 import { internalHeaders } from "../src/security.js";
-import { decodeWireFrame, encodeWireFrame, type WireMessage } from "@remote-coding-runtime/protocol";
 
 
 describe("Worker runner transport", () => {
@@ -21,6 +21,11 @@ describe("Worker runner transport", () => {
   beforeEach(async () => {
     const response = await enroll();
     expect(response.status).toBe(200);
+  });
+
+  it("reserves a Worker bridge margin above the maximum local Runner operation", () => {
+    expect(WORKER_BRIDGE_TIMEOUT_MS).toBe(12_000);
+    expect(WORKER_BRIDGE_TIMEOUT_MS).toBeGreaterThan(8_000);
   });
 
   it("rejects direct RegistryDO fetches without its internal proof", async () => {
@@ -130,6 +135,36 @@ describe("Worker runner transport", () => {
     expect(recorded).toBe(true);
     await expect(runInDurableObject(registry, (instance) => instance.listJobs(runnerId))).resolves.toMatchObject([{ job_id: "job-event-1", status: "running" }]);
     socket?.close();
+  });
+
+  it("retains historical jobs across bounded sync snapshots, filters before limit, and preserves active jobs during terminal retention", async () => {
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
+    const initial = await runInDurableObject(registry, (instance) => instance.getRunner(runnerId));
+    const epoch = initial?.connection_epoch as number;
+    const credentialVersion = initial?.credential_version as number;
+    const now = Date.now();
+    const terminal = Array.from({ length: 1_005 }, (_, index) => ({
+      job_id: `terminal-${String(index).padStart(4, "0")}`,
+      workspace_id: index % 2 === 0 ? "workspace-a" : "workspace-b",
+      status: "succeeded" as const,
+      created_at_ms: now - index,
+      updated_at_ms: now - index,
+      runner_id: runnerId,
+    }));
+    const active = { job_id: "active-old", workspace_id: "workspace-a", status: "running" as const, created_at_ms: 1, updated_at_ms: 1, runner_id: runnerId };
+    await runInDurableObject(registry, (instance) => {
+      expect(instance.syncRunner(runnerId, epoch, credentialVersion, [], [...terminal, active], 1, now, false)).toBe(true);
+      expect(instance.syncRunner(runnerId, epoch, credentialVersion, [], [], 2, now + 1, false)).toBe(true);
+    });
+    const preserved = await runInDurableObject(registry, (instance) => ({
+      active: instance.getJob(runnerId, "active-old"),
+      filtered: instance.listJobs(runnerId, { workspace_id: "workspace-b", status: "succeeded", limit: 5 }),
+      all: instance.listJobs(runnerId, { limit: 100 }),
+    }));
+    expect(preserved.active).toMatchObject({ job_id: "active-old", status: "running" });
+    expect(preserved.filtered).toHaveLength(5);
+    expect(preserved.filtered.every((job) => (job as { workspace_id: string; status: string }).workspace_id === "workspace-b" && (job as { status: string }).status === "succeeded")).toBe(true);
+    expect(preserved.all.length).toBeLessThanOrEqual(100);
   });
 
   it("persists registration and initial offline state in SQLite", async () => {

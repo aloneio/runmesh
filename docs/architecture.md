@@ -1,44 +1,40 @@
 # Architecture
 
-## Components
-
 ```text
-Hosted/local MCP clients
-        │ HTTPS / stateless Streamable HTTP / OAuth
+MCP client with per-client secret URL
+        │ stateless MCP over HTTPS
         ▼
 Cloudflare Worker
-  ├─ createMcpHandler (/mcp)
-  ├─ OAuthProvider and owner consent
-  ├─ RegistryDO (SQLite metadata)
-  └─ RunnerDO per runner_id (hibernatable outbound WebSocket)
-        │
-        │ outbound-only WSS initiated by Runner
+  ├─ setup/login/admin HTML
+  ├─ RegistryDO (SQLite)
+  └─ RunnerDO per runner_id (hibernatable WebSocket)
+        │ outbound-only WSS
         ▼
-Runner
-  ├─ workspace registry + path policy
-  ├─ bounded filesystem/search
-  ├─ atomic patch engine
-  ├─ Git inspection
-  └─ persistent Job Manager + local logs
+Local Runner
+  ├─ workspace/path policy
+  ├─ filesystem and UTF-8 paging
+  ├─ transactional patch and Git
+  └─ persistent Job Manager
 ```
 
-## Design decisions
+## Decisions
 
-- The Worker is the only Remote MCP server. A Runner is not an MCP or OAuth server.
-- MCP request state is stateless. Durable application state is explicit in RegistryDO/RunnerDO and local Runner storage.
-- A Runner owns the job lifecycle. An MCP request starts or queries a job; it does not parent the process.
-- Worker/DO storage contains metadata and small bounded results, never the filesystem or complete terminal logs.
-- Multiple MCP clients share the same authenticated user/workspace/job domain; a chat window is not the job owner.
-- Long-running AI reasoning does not continue after the MCP client closes. Only execution jobs continue; no second AI agent or model API is embedded.
+- The Worker is the only public MCP server; a Runner is never an MCP/HTTP/auth server.
+- Cloudflare is a control plane. CPU, filesystem, Git, processes, and complete logs stay on the Runner.
+- MCP HTTP is stateless. Each request authenticates its path secret and creates a fresh `McpServer` through `createMcpHandler`.
+- MCP client authentication is single-user/self-hosted: first-time admin password plus independent `/<secret>/mcp` client URLs. There is no OAuth or KV dependency.
+- Runner authentication remains the existing independent enrollment-token, verifier, credential-version, epoch, rotation, and revocation design.
+- A Job belongs to the single admin instance/workspace domain, not to a chat session. `created_by_client_id` is audit metadata, not an ownership restriction.
+- Runner local disk is authoritative. RegistryDO stores bounded historical metadata and never treats a bounded sync omission as immediate job deletion.
 
 ## Failure behavior
 
-- MCP/browser disconnect: a started local job continues.
-- Runner WebSocket disconnect: local jobs/logs continue; Worker live tools return `runner_offline`; automatic reconnect and monotonic sync repair metadata.
-- Runner process restart: detached jobs may remain alive, but the MVP cannot reattach streams/stdin; status is conservatively `unknown` or `interrupted`.
-- Worker/DO restart: Runner reconnects. In-flight bridge HTTP calls can fail and must be retried according to idempotency; persistent job state is not lost.
-- Runner offline: full logs/files are unavailable; bounded registry metadata can still be returned where supported.
+- MCP/browser closes after `exec_start`: local job continues.
+- Runner WebSocket disconnects: local jobs/logs continue; live tools report `runner_offline`; `job_list` and last-known `job_get` metadata remain available from RegistryDO.
+- Runner reconnects: monotonic sync upserts workspaces and recent/active job metadata.
+- Runner process restarts: matching live jobs become `unknown`; reconciliation moves vanished jobs to `interrupted` without guessing the exit code. Recovered cancellation is reported as `cancelled` only with persisted delivery evidence.
+- Worker/DO restart: in-flight bridge calls can fail, while Runner-local jobs continue. Callers should retry only safe/idempotent requests.
 
-## Scale and Free Plan posture
+## Free Plan posture
 
-One DO per Runner isolates connection state and makes routing deterministic. Registry metadata is deliberately small. WebSocket Hibernation allows connected Runner sockets while the DO is idle. CPU/filesystem work remains on the Runner, so Cloudflare is a control plane rather than a compute/data bottleneck.
+The deployed core uses Workers and SQLite-backed Durable Objects only. WebSocket Hibernation reduces idle connection cost; local Runners carry execution/data cost. Capacity still depends on account-wide Cloudflare quotas and must be measured by the operator.

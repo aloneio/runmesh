@@ -1,37 +1,34 @@
 # Security model
 
-This runtime is a control plane plus an execution client. Cloudflare is not a sandbox and the Worker never executes the user's command.
-
 ## Trust boundaries
 
-1. **MCP client → Worker:** authenticated OAuth 2.1 bearer token, PKCE for public clients, least-privilege scopes, explicit owner consent. The static bearer lane exists only when `MCP_STATIC_TOKEN` is explicitly configured for local tests; it must be absent in production.
-2. **Worker → Durable Objects:** internal HMAC headers over method/path/body. RegistryDO and RunnerDO internal endpoints are not public APIs.
-3. **Runner WebSocket:** Runner initiates outbound TLS WebSocket and authenticates with an enrollment token in an HTTP Authorization header. Tokens are peppered HMAC verifiers in RegistryDO. Rotation/revocation increments credential versions and closes old connections.
-4. **Runner → host:** local process identity and OS permissions. Workspace paths are allowlisted and canonicalized, but Node path checks do not constrain arbitrary shell effects or malicious local actors.
+1. **MCP client → Worker:** identity is a unique 256-bit random URL path secret: `/<secret>/mcp`. RegistryDO stores only its SHA-256 verifier, prefix, scopes, and metadata. Wrong, malformed, rotated, and revoked credentials all return `404`.
+2. **Browser admin → Worker:** first-time PBKDF2 administrator password, opaque hashed sessions, `Secure`/`HttpOnly`/`SameSite=Strict` cookie, session expiry, logout/password-wide revocation, CSRF tokens, and same-origin checks.
+3. **Worker → Durable Objects:** method/path/body HMAC using `INTERNAL_CONTROL_SECRET`.
+4. **Runner → RunnerDO:** outbound TLS WebSocket with the existing enrolled token verifier, credential version, and connection epoch. This credential is independent of admin and MCP client credentials.
+5. **Runner → host:** local OS identity/permissions plus workspace path policy. This is not a universal operating-system sandbox.
 
-## Workspace boundary
+## Credential storage
 
-The model supplies only `workspace_id` plus a relative path. The Runner maps the ID to a startup-canonicalized root. It rejects:
+- Administrator password: PBKDF2-HMAC-SHA-256, random salt, documented iteration count; no plaintext or direct SHA-256 password hash.
+- Admin session: browser has a random raw token; Registry stores only SHA-256 hash, CSRF hash, version, and expiry.
+- MCP client: raw 256-bit base64url secret appears only in the one-time create/rotate page; Registry stores only SHA-256 verifier and short prefix.
+- Runner: plaintext token is returned only at enrollment/rotation; Registry stores a peppered HMAC verifier.
 
-- absolute POSIX, drive-letter, UNC, and device paths;
-- NUL bytes and `..` path components;
-- unknown workspace IDs;
-- symlink/junction ancestry and canonical paths outside the root;
-- write-through symlinks and writes to readonly workspaces.
+Changing the admin password deletes/invalidates all sessions. MCP rotation immediately replaces the verifier; revocation sets `revoked_at`. Runner rotate/revoke increments credential/connection generations and closes prior sockets.
 
-Patch installation uses baseline SHA-256/mode checks, same-directory exclusive temporary/backup handling, atomic per-file replacement, and rollback/recovery metadata. Cross-file atomicity is emulated by rollback; no general filesystem transaction is claimed.
+## Browser and URL protections
 
-## Command boundary
+Admin/MCP HTML uses `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, CSP with `frame-ancestors 'none'`, `nosniff`, and frame blocking. Admin state changes require CSRF. The Worker does not log `request.url`, the secret pathname, passwords, tokens, file content, commands, or complete output.
 
-Shell is disabled by default and requires both a workspace `shell` capability and a request opt-in. Non-shell commands use an executable plus argument vector. Jobs run detached on POSIX and persist state/logs locally. Use a VM/container with restricted mounts, secrets, and egress for untrusted code.
+A secret in a URL can still be observed by browser history or infrastructure/access logs outside application code. Never publish or screenshot it; configure Cloudflare log redaction and rotate on suspected leakage.
+
+## Workspace and execution boundary
+
+The MCP client sends only a workspace ID and relative path. The Runner rejects absolute/UNC/device paths, NULs, traversal, symlink/junction ancestry/escapes, write-through symlinks, and readonly writes. Patch installation uses bounded baseline validation, staging, atomic per-file replacement, and protected rollback.
+
+Shell execution is disabled by default and requires the workspace plus request to opt in. Non-shell execution uses an executable/argument vector. For untrusted repositories or commands, use an external VM/container with restricted mounts, secrets, network, and OS privileges.
 
 ## Data minimization
 
-- Runner roots are not included in protocol workspace metadata or MCP results.
-- MCP result redaction removes keys matching token/secret/password/verifier/root patterns.
-- Log responses and Git diffs are bounded and cursor-paginated.
-- Structured logs should include request/runner/job/method/status/duration metadata only; never auth tokens, OAuth secrets, environment secrets, or full sensitive file contents.
-
-## Operational requirements
-
-Set and rotate `ADMIN_TOKEN`, `RUNNER_TOKEN_PEPPER`, `INTERNAL_CONTROL_SECRET`, and `MCP_OWNER_PASSWORD` with Wrangler secrets. Keep OAuth KV private. Do not use `MCP_STATIC_TOKEN` in production. Review Cloudflare account quotas and Free Plan limits separately; local dry-run is not a production security/capacity proof.
+Workspace roots are absent from protocol metadata. MCP errors expose allowlisted stable codes and safe recovery hints, not Runner absolute paths. Files, Git output, and logs are bounded/paginated. Complete filesystem data and logs remain on the Runner.

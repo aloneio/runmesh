@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { relative, sep } from "node:path";
-import { MAX_FRAME_BYTES } from "@remote-coding-runtime/protocol";
+import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS, MAX_FRAME_BYTES } from "@remote-coding-runtime/protocol";
 import { RpcRuntimeError } from "./errors.js";
 import { PathPolicy } from "./path-policy.js";
 
@@ -16,7 +16,7 @@ const RPC_RESPONSE_ENVELOPE_BYTES = Buffer.byteLength(JSON.stringify({
 // Leave room for the wire response envelope even before result-specific JSON
 // escaping and metadata are accounted for below.
 const MAX_PROCESS_OUTPUT_BYTES = MAX_FRAME_BYTES - RPC_RESPONSE_ENVELOPE_BYTES;
-const GIT_TIMEOUT_MS = 8_000;
+const GIT_TIMEOUT_MS = LOCAL_RUNNER_OPERATION_TIMEOUT_MS;
 const KILL_GRACE_MS = 250;
 const HARD_KILL_MS = 1_000;
 
@@ -27,6 +27,7 @@ type GitRun = {
   readonly signal: NodeJS.Signals | null;
   readonly truncated: boolean;
   readonly timedOut: boolean;
+  readonly timeoutMs: number;
 };
 
 type StatusEntry = {
@@ -201,7 +202,7 @@ async function git(cwd: string, args: readonly string[], cap: number, options: G
         // deadline even if a descendant deliberately keeps one open.
         child.stdout?.destroy();
         child.stderr?.destroy();
-        finish({ stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr), status: null, signal: "SIGKILL", truncated, timedOut });
+        finish({ stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr), status: null, signal: "SIGKILL", truncated, timedOut, timeoutMs });
       }, killGraceMs + hardKillMs);
     }, timeoutMs);
     child.once("error", (error) => {
@@ -211,7 +212,7 @@ async function git(cwd: string, args: readonly string[], cap: number, options: G
       reject(new RpcRuntimeError("git_unavailable", `could not start git: ${error.message.slice(0, 512)}`));
     });
     child.once("close", (status, signal) => {
-      finish({ stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr), status, signal, truncated, timedOut });
+      finish({ stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr), status, signal, truncated, timedOut, timeoutMs });
     });
   });
 }
@@ -379,7 +380,9 @@ function positiveTimeout(value: number | undefined, fallback: number): number {
   return value;
 }
 function gitFailure(prefix: string, run: GitRun): RpcRuntimeError {
-  if (run.timedOut) return new RpcRuntimeError("git_timeout", `${prefix}: command exceeded ${GIT_TIMEOUT_MS}ms timeout`);
+  // Timeout classification wins even if a killed descendant eventually reports
+  // a non-zero status/signal. The configured seam is reflected in the error.
+  if (run.timedOut) return new RpcRuntimeError("git_timeout", `${prefix}: command exceeded ${run.timeoutMs}ms timeout`);
   const detail = run.stderr.toString("utf8").trim() || run.stdout.toString("utf8").trim() || run.signal || "unknown git failure";
   return new RpcRuntimeError("git_failed", `${prefix}: ${detail.slice(0, 1_024)}`);
 }
