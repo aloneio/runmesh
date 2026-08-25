@@ -1,0 +1,33 @@
+{
+  "name": "remote-coding-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A language-neutral protocol foundation for remote coding runtimes.",
+  "license": "Apache-2.0",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "npm run test --workspaces && npm run test:e2e",
+    "test:unit": "npm run test --workspaces",
+    "test:e2e": "VITE_CONFIG_NATIVE_IGNORE_WARNING=true vitest run --config vitest.e2e.config.ts",
+    "typecheck": "tsc -b --pretty false",
+    "validate:worker": "wrangler deploy --dry-run --config apps/worker/wrangler.jsonc",
+    "dev:worker": "npm run dev --workspace=@remote-coding-runtime/worker",
+    "start:runner": "npm run start --workspace=@remote-coding-runtime/runner --"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@cloudflare/workers-types": "^5.20260825.1",
+    "@types/node": "^24.10.1",
+    "@types/ws": "^8.18.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.125.0"
+  },
+  "dependencies": {
+    "ws": "^8.21.3"
+  }
+}

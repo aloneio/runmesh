@@ -1,0 +1,337 @@
+import { z } from "zod";
+
+/**
+ * A protocol version is a wire-format major version. New optional fields and
+ * capabilities are added without changing it; incompatible wire changes use a
+ * new major version.
+ */
+export const PROTOCOL_MIN_VERSION = 1;
+export const PROTOCOL_CURRENT_VERSION = 1;
+export const MAX_FRAME_BYTES = 1_048_576;
+/** Nested JSON parameters/results are bounded to make validation safe for hostile frames. */
+export const MAX_JSON_DEPTH = 32;
+export const MAX_JSON_NODES = 10_000;
+
+export const IdentifierSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "must be a safe identifier");
+const ShortTextSchema = z.string().min(1).max(4_096);
+const TimestampSchema = z.number().int().nonnegative();
+
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { readonly [key: string]: JsonValue };
+
+/**
+ * JSON-safe values permitted in RPC parameters and results.
+ *
+ * Zod's recursive lazy schemas are convenient but can exhaust the JavaScript
+ * stack on a deliberately deep frame. This iterative validator has fixed
+ * depth/node limits and rejects values JSON.stringify would silently alter.
+ */
+export const JsonValueSchema: z.ZodType<JsonValue> = z.any().superRefine(
+  (value, context) => {
+    type Pending = { readonly value: unknown; readonly depth: number };
+    const pending: Pending[] = [{ value, depth: 0 }];
+    const seen = new WeakSet<object>();
+    let nodes = 0;
+
+    while (pending.length > 0) {
+      const current = pending.pop();
+      if (current === undefined) {
+        break;
+      }
+      nodes += 1;
+      if (nodes > MAX_JSON_NODES) {
+        context.addIssue({ code: "custom", message: "JSON value has too many nodes" });
+        return;
+      }
+      if (current.depth > MAX_JSON_DEPTH) {
+        context.addIssue({ code: "custom", message: "JSON value is nested too deeply" });
+        return;
+      }
+
+      const currentType = typeof current.value;
+      if (
+        current.value === null ||
+        currentType === "boolean" ||
+        currentType === "string"
+      ) {
+        continue;
+      }
+      if (currentType === "number") {
+        if (!Number.isFinite(current.value)) {
+          context.addIssue({ code: "custom", message: "JSON numbers must be finite" });
+          return;
+        }
+        continue;
+      }
+      if (currentType !== "object" || current.value === null) {
+        context.addIssue({ code: "custom", message: "Value is not JSON-safe" });
+        return;
+      }
+      const objectValue = current.value as object;
+      if (seen.has(objectValue)) {
+        context.addIssue({ code: "custom", message: "JSON values cannot contain cycles" });
+        return;
+      }
+      seen.add(objectValue);
+
+      if (Array.isArray(objectValue)) {
+        for (const item of objectValue) {
+          pending.push({ value: item, depth: current.depth + 1 });
+        }
+        continue;
+      }
+      if (Object.getPrototypeOf(objectValue) !== Object.prototype) {
+        context.addIssue({ code: "custom", message: "JSON objects must be plain objects" });
+        return;
+      }
+      for (const descriptor of Object.values(
+        Object.getOwnPropertyDescriptors(objectValue),
+      )) {
+        if (!("value" in descriptor)) {
+          context.addIssue({ code: "custom", message: "JSON objects cannot contain accessors" });
+          return;
+        }
+        pending.push({ value: descriptor.value, depth: current.depth + 1 });
+      }
+    }
+  },
+);
+
+export const ProtocolVersionSchema = z.number().int().positive();
+const ExtensionsSchema = z.record(z.string().min(1).max(128), JsonValueSchema);
+export const ProtocolVersionRangeSchema = z
+  .object({
+    min_protocol_version: ProtocolVersionSchema,
+    max_protocol_version: ProtocolVersionSchema,
+  })
+  .strict()
+  .refine(
+    ({ min_protocol_version, max_protocol_version }) =>
+      min_protocol_version <= max_protocol_version,
+    "min_protocol_version must not exceed max_protocol_version",
+  );
+
+export const CapabilityMetadataSchema = z
+  .object({
+    filesystem: z.boolean(),
+    process_execution: z.boolean(),
+    workspace_sync: z.boolean(),
+    pty: z.boolean(),
+    network_access: z.boolean(),
+    max_concurrent_jobs: z.number().int().positive(),
+    supported_rpc_methods: z.array(ShortTextSchema).max(256),
+    labels: z.record(z.string().min(1).max(128), z.string().max(512)),
+  })
+  .strict();
+
+export const RunnerMetadataSchema = z
+  .object({
+    runner_id: IdentifierSchema,
+    runner_version: ShortTextSchema,
+    platform: ShortTextSchema,
+    architecture: ShortTextSchema,
+    capabilities: CapabilityMetadataSchema,
+  })
+  .strict();
+
+export const WorkerMetadataSchema = z
+  .object({
+    worker_id: IdentifierSchema,
+    worker_version: ShortTextSchema,
+    capabilities: CapabilityMetadataSchema,
+  })
+  .strict();
+
+export const WorkspaceMetadataSchema = z
+  .object({
+    workspace_id: IdentifierSchema,
+    /**
+     * Workspace roots are local authorization boundaries. They are never sent
+     * over this transport; callers identify a root by workspace_id instead.
+     */
+    persistence: z.enum(["persistent", "ephemeral"]),
+    revision: z.string().max(512).optional(),
+    labels: z.record(z.string().min(1).max(128), z.string().max(512)),
+  })
+  .strict();
+
+export const JobStatusSchema = z.enum([
+  "queued",
+  "running",
+  "cancelling",
+  "cancelled",
+  "succeeded",
+  "failed",
+  "unknown",
+  "interrupted",
+]);
+
+export const JobMetadataSchema = z
+  .object({
+    job_id: IdentifierSchema,
+    workspace_id: IdentifierSchema,
+    status: JobStatusSchema,
+    created_at_ms: TimestampSchema,
+    updated_at_ms: TimestampSchema,
+    display_name: z.string().min(1).max(512).optional(),
+    runner_id: IdentifierSchema.optional(),
+  })
+  .strict();
+
+const EnvelopeSchema = z
+  .object({
+    protocol_version: ProtocolVersionSchema,
+    extensions: ExtensionsSchema.optional(),
+  })
+  .strict();
+
+const CorrelatedEnvelopeSchema = EnvelopeSchema.extend({
+  request_id: IdentifierSchema,
+}).strict();
+
+export const RunnerHelloSchema = CorrelatedEnvelopeSchema.extend({
+  type: z.literal("runner.hello"),
+  runner: RunnerMetadataSchema,
+  min_protocol_version: ProtocolVersionSchema,
+  max_protocol_version: ProtocolVersionSchema,
+})
+  .strict()
+  .refine(
+    ({ min_protocol_version, max_protocol_version }) =>
+      min_protocol_version <= max_protocol_version,
+    "min_protocol_version must not exceed max_protocol_version",
+  );
+
+export const RunnerWelcomeSchema = CorrelatedEnvelopeSchema.extend({
+  type: z.literal("runner.welcome"),
+  worker: WorkerMetadataSchema,
+  session_id: IdentifierSchema,
+  negotiated_protocol_version: ProtocolVersionSchema,
+})
+  .strict();
+
+export const RunnerHeartbeatSchema = EnvelopeSchema.extend({
+  type: z.literal("runner.heartbeat"),
+  runner_id: IdentifierSchema,
+  sent_at_ms: TimestampSchema,
+  active_job_ids: z.array(IdentifierSchema).max(10_000),
+}).strict();
+
+export const RunnerSyncSchema = EnvelopeSchema.extend({
+  type: z.literal("runner.sync"),
+  runner_id: IdentifierSchema,
+  sync_sequence: z.number().int().nonnegative(),
+  sent_at_ms: TimestampSchema,
+  workspaces: z.array(WorkspaceMetadataSchema).max(10_000),
+  jobs: z.array(JobMetadataSchema).max(10_000),
+}).strict();
+
+export const RpcRequestSchema = CorrelatedEnvelopeSchema.extend({
+  type: z.literal("rpc.request"),
+  method: ShortTextSchema,
+  params: JsonValueSchema,
+  workspace: WorkspaceMetadataSchema.optional(),
+  job: JobMetadataSchema.optional(),
+}).strict();
+
+export const RpcResponseSchema = CorrelatedEnvelopeSchema.extend({
+  type: z.literal("rpc.response"),
+  result: JsonValueSchema,
+}).strict();
+
+export const RpcErrorDetailsSchema = z
+  .object({
+    code: z.string().min(1).max(128),
+    message: ShortTextSchema,
+    details: JsonValueSchema.optional(),
+  })
+  .strict();
+
+export const RpcErrorSchema = CorrelatedEnvelopeSchema.extend({
+  type: z.literal("rpc.error"),
+  error: RpcErrorDetailsSchema,
+}).strict();
+
+export const JobStartedSchema = CorrelatedEnvelopeSchema.extend({
+  type: z.literal("job.started"),
+  job: JobMetadataSchema,
+  workspace: WorkspaceMetadataSchema,
+  started_at_ms: TimestampSchema,
+}).strict();
+
+export const JobOutputSchema = CorrelatedEnvelopeSchema.extend({
+  type: z.literal("job.output"),
+  job_id: IdentifierSchema,
+  workspace_id: IdentifierSchema,
+  sequence: z.number().int().nonnegative(),
+  stream: z.enum(["stdout", "stderr"]),
+  encoding: z.literal("utf-8"),
+  data: z.string(),
+}).strict();
+
+export const JobStatusMessageSchema = CorrelatedEnvelopeSchema.extend({
+  type: z.literal("job.status"),
+  job: JobMetadataSchema,
+}).strict();
+
+export const JobCompletedSchema = CorrelatedEnvelopeSchema.extend({
+  type: z.literal("job.completed"),
+  job: JobMetadataSchema,
+  completed_at_ms: TimestampSchema,
+  outcome: z.enum(["succeeded", "failed", "cancelled"]),
+  exit_code: z.number().int().min(-1).max(255).nullable(),
+  error: RpcErrorDetailsSchema.optional(),
+}).strict().superRefine(({ job, outcome, exit_code, error }, context) => {
+  if (job.status !== outcome) context.addIssue({ code: "custom", path: ["job", "status"], message: "completed job status must equal outcome" });
+  if (outcome === "succeeded" && (exit_code === null || exit_code !== 0 || error !== undefined)) {
+    context.addIssue({ code: "custom", message: "successful jobs require exit_code 0 and no error" });
+  }
+  if (outcome === "cancelled" && exit_code !== null) {
+    context.addIssue({ code: "custom", path: ["exit_code"], message: "cancelled jobs require a null exit_code" });
+  }
+});
+
+/** The complete, closed set of valid Runner <-> Worker wire messages. */
+export const WireMessageSchema = z.discriminatedUnion("type", [
+  RunnerHelloSchema,
+  RunnerWelcomeSchema,
+  RunnerHeartbeatSchema,
+  RunnerSyncSchema,
+  RpcRequestSchema,
+  RpcResponseSchema,
+  RpcErrorSchema,
+  JobStartedSchema,
+  JobOutputSchema,
+  JobStatusMessageSchema,
+  JobCompletedSchema,
+]);
+
+export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
+export type ProtocolVersionRange = z.infer<typeof ProtocolVersionRangeSchema>;
+export type CapabilityMetadata = z.infer<typeof CapabilityMetadataSchema>;
+export type RunnerMetadata = z.infer<typeof RunnerMetadataSchema>;
+export type WorkerMetadata = z.infer<typeof WorkerMetadataSchema>;
+export type WorkspaceMetadata = z.infer<typeof WorkspaceMetadataSchema>;
+export type JobStatus = z.infer<typeof JobStatusSchema>;
+export type JobMetadata = z.infer<typeof JobMetadataSchema>;
+export type RunnerHello = z.infer<typeof RunnerHelloSchema>;
+export type RunnerWelcome = z.infer<typeof RunnerWelcomeSchema>;
+export type RunnerHeartbeat = z.infer<typeof RunnerHeartbeatSchema>;
+export type RunnerSync = z.infer<typeof RunnerSyncSchema>;
+export type RpcRequest = z.infer<typeof RpcRequestSchema>;
+export type RpcResponse = z.infer<typeof RpcResponseSchema>;
+export type RpcError = z.infer<typeof RpcErrorSchema>;
+export type JobStarted = z.infer<typeof JobStartedSchema>;
+export type JobOutput = z.infer<typeof JobOutputSchema>;
+export type JobStatusMessage = z.infer<typeof JobStatusMessageSchema>;
+export type JobCompleted = z.infer<typeof JobCompletedSchema>;
+export type WireMessage = z.infer<typeof WireMessageSchema>;

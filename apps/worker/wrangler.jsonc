@@ -1,0 +1,38 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "remote-coding-runtime-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-02",
+  "compatibility_flags": ["global_fetch_strictly_public", "nodejs_compat"],
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "REPLACE_WITH_OAUTH_KV_NAMESPACE_ID"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "REGISTRY",
+        "class_name": "RegistryDO"
+      },
+      {
+        "name": "RUNNER",
+        "class_name": "RunnerDO"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "RegistryDO",
+        "RunnerDO"
+      ]
+    }
+  ],
+  "vars": {
+    "WORKER_ID": "worker-local",
+    "WORKER_VERSION": "0.1.0"
+  }
+}

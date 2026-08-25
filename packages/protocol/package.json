@@ -1,0 +1,41 @@
+{
+  "name": "@remote-coding-runtime/protocol",
+  "version": "0.1.0",
+  "description": "Versioned JSON wire contract for Runner and Worker.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./schema": {
+      "types": "./dist/schema.d.ts",
+      "default": "./dist/schema.js"
+    },
+    "./schema-artifact": {
+      "types": "./dist/schema-artifact.d.ts",
+      "default": "./dist/schema-artifact.js"
+    }
+  },
+  "files": [
+    "dist",
+    "schema/wire-message.schema.json",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run",
+    "typecheck": "tsc -b --pretty false",
+    "generate:schema": "tsx ./scripts/generate-schema.ts",
+    "prepack": "npm run build && npm run generate:schema && rm -f dist/.tsbuildinfo"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
+  }
+}

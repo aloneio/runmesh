@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+.wrangler/
+*.tsbuildinfo
+.env
+.env.*
+.DS_Store
+.pi-loop.json.lock
