@@ -4,6 +4,7 @@ import {
   LOCAL_RUNNER_OPERATION_TIMEOUT_MS,
   PROTOCOL_CURRENT_VERSION,
   PROTOCOL_MIN_VERSION,
+  runnerPolicyChecksum,
   type CapabilityMetadata,
   type RunnerMetadata,
   type RunnerPolicyAck,
@@ -60,6 +61,8 @@ export class RunnerConnection {
   private syncTimer: ReturnType<typeof setInterval> | undefined;
   private appliedPolicyRevision = 0;
   private desiredPolicyRevision = 0;
+  private appliedPolicyChecksum = "";
+  private desiredPolicyChecksum = "";
   private policyApplyGeneration = 0;
   private readonly pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
 
@@ -118,7 +121,7 @@ export class RunnerConnection {
   public disconnectForTest(): void {
     this.socket?.close(4002, "controlled transport disconnect");
   }
-  public rpc(method: string, params: unknown): Promise<unknown> {
+  public rpc(method: string, params: unknown, policyRevision?: number): Promise<unknown> {
     const socket = this.socket;
     if (socket === undefined || socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("runner is not connected"));
@@ -130,14 +133,21 @@ export class RunnerConnection {
       request_id: requestId,
       method,
       params: params as RpcRequest["params"],
+      ...(policyRevision === undefined ? {} : { policy_revision: policyRevision }),
     };
-    socket.send(encodeWireFrame(request));
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
         reject(new Error(`RPC request timed out: ${method}`));
       }, this.rpcTimeoutMs);
       this.pending.set(requestId, { resolve, reject, timer });
+      try {
+        socket.send(encodeWireFrame(request));
+      } catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(requestId);
+        reject(error instanceof Error ? error : new Error("failed to send RPC request"));
+      }
     });
   }
 
@@ -238,11 +248,14 @@ export class RunnerConnection {
   }
 
   private async applyDesiredPolicy(socket: WebSocket, policy: NonNullable<RunnerWelcome["desired_policy"]>): Promise<void> {
-  const generation = this.policyApplyGeneration + 1;
+    if (policy.runner_id !== this.config.runnerId || policy.checksum !== runnerPolicyChecksum({ schema_version: policy.schema_version, runner_id: policy.runner_id, revision: policy.revision, runner_permissions: policy.runner_permissions, workspaces: policy.workspaces })) {
+      return;
+    }
+    const generation = this.policyApplyGeneration + 1;
     if (policy.revision < this.desiredPolicyRevision) return;
     this.policyApplyGeneration = generation;
     this.desiredPolicyRevision = policy.revision;
-    this.runtime.applyPolicy([]);
+    this.desiredPolicyChecksum = policy.checksum;
     const validation = await validateCentralWorkspacePolicy(policy.workspaces as CentralWorkspacePolicy[]);
     if (generation !== this.policyApplyGeneration || socket !== this.socket || socket.readyState !== WebSocket.OPEN) return;
     if (policy.revision !== this.desiredPolicyRevision) return;
@@ -262,11 +275,10 @@ export class RunnerConnection {
     if (!invalid) {
       this.runtime.applyPolicy(effective);
       this.appliedPolicyRevision = policy.revision;
+      this.appliedPolicyChecksum = policy.checksum;
       this.sendPolicyAck(socket, "applied", validation.status);
       await this.sendSync(socket);
     } else {
-      this.runtime.applyPolicy([]);
-      this.appliedPolicyRevision = 0;
       this.sendPolicyAck(socket, "invalid", validation.status);
       await this.sendSync(socket);
     }
@@ -274,7 +286,7 @@ export class RunnerConnection {
 
   private sendPolicyAck(socket: WebSocket, status: RunnerPolicyAck["status"], workspaceStatus: RunnerPolicyAck["workspace_status"]): void {
     if (socket.readyState !== WebSocket.OPEN) return;
-    socket.send(encodeWireFrame({ type: "runner.policy_ack", protocol_version: PROTOCOL_CURRENT_VERSION, runner_id: this.config.runnerId, desired_revision: this.desiredPolicyRevision, applied_revision: this.appliedPolicyRevision, status, workspace_status: workspaceStatus }));
+    socket.send(encodeWireFrame({ type: "runner.policy_ack", protocol_version: PROTOCOL_CURRENT_VERSION, runner_id: this.config.runnerId, desired_revision: this.desiredPolicyRevision, desired_checksum: this.desiredPolicyChecksum, applied_revision: this.appliedPolicyRevision, applied_checksum: this.appliedPolicyChecksum, status, workspace_status: workspaceStatus }));
   }
 
   private sendHeartbeat(socket: WebSocket): void {
@@ -307,7 +319,7 @@ export class RunnerConnection {
   private async respondToRpc(socket: WebSocket, request: RpcRequest): Promise<void> {
     try {
       const expectedRevision = this.appliedPolicyRevision;
-      if (request.policy_revision !== undefined && request.policy_revision !== expectedRevision) throw new Error("stale_policy");
+      if (request.method !== "echo" && request.method !== "runner.info" && (request.policy_revision === undefined || request.policy_revision !== expectedRevision)) throw new Error("stale_policy");
       const result = request.method === "echo" ? request.params : request.method === "runner.info" ? this.metadata : await this.runtime.dispatch(request.method, request.params);
       if (socket.readyState === WebSocket.OPEN) socket.send(encodeWireFrame({ type: "rpc.response", protocol_version: request.protocol_version, request_id: request.request_id, result: result as RpcRequest["params"] }));
     } catch (error) {

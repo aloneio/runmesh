@@ -6,6 +6,8 @@ import {
   MAX_JSON_DEPTH,
   PROTOCOL_CURRENT_VERSION,
   ProtocolFrameError,
+  RpcRequestSchema,
+  runnerPolicyChecksum,
   decodeWireFrame,
   encodeWireFrame,
   generateWireMessageJsonSchema,
@@ -55,15 +57,15 @@ const messages: readonly WireMessage[] = [
       architecture: "x64",
       capabilities,
     },
-    min_protocol_version: 1,
-    max_protocol_version: 1,
+    min_protocol_version: 2,
+    max_protocol_version: 2,
   },
   {
     type: "runner.welcome",
     protocol_version: PROTOCOL_CURRENT_VERSION,
     request_id: "hello-1",
     session_id: "session-1",
-    negotiated_protocol_version: 1,
+    negotiated_protocol_version: 2,
     worker: { worker_id: "worker-1", worker_version: "0.1.0", capabilities },
   },
   {
@@ -88,6 +90,7 @@ const messages: readonly WireMessage[] = [
     request_id: "rpc-1",
     method: "job.start",
     params: { command: "echo hello" },
+    policy_revision: 1,
     workspace,
   },
   {
@@ -224,6 +227,27 @@ describe("Runner-Worker protocol", () => {
     expect(decodeWireFrame(JSON.stringify({ ...messages[0], extensions: { feature: true } }))).toMatchObject({ extensions: { feature: true } });
     expect(() => decodeWireFrame(JSON.stringify({ ...messages[0], feature: true }))).toThrow(/does not match/);
   });
+  it("requires a positive top-level revision for protected RPC methods", () => {
+    const request = { type: "rpc.request", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "rpc-policy", method: "fs.read", params: {} };
+    for (const revision of [undefined, null, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(RpcRequestSchema.safeParse(revision === undefined ? request : { ...request, policy_revision: revision }).success).toBe(false);
+    }
+    expect(RpcRequestSchema.safeParse({ ...request, policy_revision: 1 }).success).toBe(true);
+  });
+
+  it("allows only echo and runner.info to omit a revision", () => {
+    for (const method of ["echo", "runner.info"]) {
+      expect(RpcRequestSchema.safeParse({ type: "rpc.request", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: `rpc-${method}`, method, params: {} }).success).toBe(true);
+    }
+    expect(RpcRequestSchema.safeParse({ type: "rpc.request", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "rpc-unknown", method: "future.method", params: {} }).success).toBe(false);
+  });
+
+  it("checks policy checksum material deterministically", () => {
+    const policy = { schema_version: 1 as const, runner_id: "runner-1", revision: 1, runner_permissions: { read: true, edit: false, shell: false, job_control: false }, workspaces: [] };
+    expect(runnerPolicyChecksum(policy)).toMatch(/^[a-f0-9]{64}$/);
+    expect(runnerPolicyChecksum(policy)).toBe(runnerPolicyChecksum({ ...policy, workspaces: [] }));
+  });
+
   it("exports deterministic language-neutral JSON Schema", () => {
     const generated = generateWireMessageJsonSchema();
     const artifactPath = fileURLToPath(

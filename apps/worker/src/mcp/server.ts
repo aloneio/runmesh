@@ -267,8 +267,9 @@ async function activeRunnerTool(env: WorkerEnv, clientId: string, method: string
       : await checkPermission(env, clientId, selected.value.runnerId, params.workspace_id, requiredPermission);
   if (permission !== undefined) return asToolResult(permission);
   const revisionCall = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/policy-revision`);
-  const revision = revisionCall.ok && isRecord(revisionCall.value) && typeof revisionCall.value.applied_policy_revision === "number" && revisionCall.value.applied_policy_revision === revisionCall.value.desired_policy_revision && revisionCall.value.policy_status === "applied" ? revisionCall.value.applied_policy_revision : undefined;
-  const call = await callRunner(env, selected.value.runnerId, method, revision === undefined ? params : { ...params, policy_revision: revision });
+  const revision = policyRevision(revisionCall);
+  if (revision === undefined) return asToolResult(policyPending());
+  const call = await callRunner(env, selected.value.runnerId, method, params, revision);
   return call.ok ? runnerSuccess(call.value, selected.value) : runnerFailure(call.error, selected.value);
 }
 
@@ -281,8 +282,9 @@ async function activeJobRunnerTool(env: WorkerEnv, clientId: string, method: str
   const permission = await checkPermission(env, clientId, selected.value.runnerId, workspaceId, requiredPermission);
   if (permission !== undefined) return asToolResult(permission);
   const revisionCall = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/policy-revision`);
-  const revision = revisionCall.ok && isRecord(revisionCall.value) && typeof revisionCall.value.applied_policy_revision === "number" && revisionCall.value.applied_policy_revision === revisionCall.value.desired_policy_revision && revisionCall.value.policy_status === "applied" ? revisionCall.value.applied_policy_revision : undefined;
-  const call = await callRunner(env, selected.value.runnerId, method, revision === undefined ? params : { ...params, policy_revision: revision });
+  const revision = policyRevision(revisionCall);
+  if (revision === undefined) return asToolResult(policyPending());
+  const call = await callRunner(env, selected.value.runnerId, method, params, revision);
   return call.ok ? runnerSuccess(call.value, selected.value) : runnerFailure(call.error, selected.value);
 }
 
@@ -387,7 +389,10 @@ async function activeJobGet(env: WorkerEnv, clientId: string, jobId: string): Pr
   const permission = await checkPermission(env, clientId, selected.value.runnerId, workspaceId, "read");
   if (permission !== undefined) return asToolResult(permission);
   if (selected.value.context.state !== "online") return runnerSuccess({ ...(snapshot.value as Record<string, unknown>), source: "registry_snapshot", runner_state: "offline" }, selected.value);
-  const live = await callRunner(env, selected.value.runnerId, "job.get", { job_id: jobId });
+  const revisionCall = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/policy-revision`);
+  const revision = policyRevision(revisionCall);
+  if (revision === undefined) return runnerFailure(policyPending().error, selected.value);
+  const live = await callRunner(env, selected.value.runnerId, "job.get", { job_id: jobId }, revision);
   if (live.ok || live.error.code !== "runner_offline") return live.ok ? runnerSuccess(live.value, selected.value) : runnerFailure(live.error, selected.value);
   return runnerSuccess({ ...(snapshot.value as Record<string, unknown>), source: "registry_snapshot", runner_state: "offline" }, selected.value);
 }
@@ -413,14 +418,25 @@ const SAFE_RUNNER_ERROR_CODES = new Set([
   "method_not_found", "patch_install_failed", "patch_rollback_failed", "path_traversal", "permission_denied", "policy_pending", "readonly_workspace", "runner_offline", "stale_policy", "symlink_escape", "symlink_write", "target_exists", "timeout",
 ]);
 
+export function policyPending(): ToolFailure {
+  return fail("policy_pending", "The selected runner has not applied the latest policy.", "Wait for the runner to apply its control-plane policy, then retry.") as ToolFailure;
+}
+
+function policyRevision(call: ToolCall): number | undefined {
+  if (!call.ok || !isRecord(call.value)) return undefined;
+  const revision = call.value.applied_policy_revision;
+  return typeof revision === "number" && Number.isSafeInteger(revision) && revision > 0 && revision === call.value.desired_policy_revision && call.value.policy_status === "applied" ? revision : undefined;
+}
+
 function safeRunnerErrorCode(value: unknown, fallback: string): string {
   return typeof value === "string" && SAFE_RUNNER_ERROR_CODES.has(value) ? value : fallback;
 }
 
-async function callRunner(env: WorkerEnv, runnerId: string, method: string, params: Record<string, unknown>): Promise<ToolCall> {
+async function callRunner(env: WorkerEnv, runnerId: string, method: string, params: Record<string, unknown>, policyRevision?: number): Promise<ToolCall> {
   if (!isSafeIdentifier(runnerId)) return fail("invalid_runner_id", "runner_id is invalid", "Use a runner identifier returned by runner_list.");
   if (env.INTERNAL_CONTROL_SECRET === undefined || env.INTERNAL_CONTROL_SECRET.length === 0) return fail("service_unavailable", "The runner bridge is not configured.", "Ask the service operator to configure the internal bridge.");
-  const body = JSON.stringify({ method, params, ...(typeof params.policy_revision === "number" ? { policy_revision: params.policy_revision } : {}) });
+  if (policyRevision === undefined && method !== "echo" && method !== "runner.info") return fail("policy_pending", "The selected runner policy could not be verified.", "Wait for the runner to apply its control-plane policy, then retry.");
+  const body = JSON.stringify({ method, params, ...(policyRevision === undefined ? {} : { policy_revision: policyRevision }) });
   const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "POST", "/rpc", body);
   let response: Response;
   try {
