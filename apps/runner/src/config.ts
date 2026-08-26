@@ -26,6 +26,9 @@ export interface RunnerConfig {
   readonly workspaces: readonly WorkspaceConfig[];
   /** Local supervisor concurrency; defaults to one to match advertised capability. */
   readonly maxConcurrentJobs?: number;
+  readonly maxRetainedJobs?: number;
+  readonly maxLogBytesPerJob?: number;
+  readonly maxTotalLogBytes?: number;
   /** Persistent local job metadata/log directory. */
   readonly stateDir?: string;
   /** Test-only delay before closing only the Runner WebSocket. */
@@ -47,6 +50,9 @@ export interface RawRunnerOptions {
   readonly runnerId?: string;
   readonly insecureLocal?: boolean;
   readonly maxConcurrentJobs?: number;
+  readonly maxRetainedJobs?: number;
+  readonly maxLogBytesPerJob?: number;
+  readonly maxTotalLogBytes?: number;
   readonly stateDir?: string;
   readonly disconnectAfterMs?: number;
   readonly disconnectControlFile?: string;
@@ -73,6 +79,9 @@ export async function validateRunnerConfig(options: RawRunnerOptions): Promise<R
   if (options.maxConcurrentJobs !== undefined && (!Number.isSafeInteger(options.maxConcurrentJobs) || options.maxConcurrentJobs < 1 || options.maxConcurrentJobs > 64)) {
     throw new Error("--max-concurrent-jobs must be an integer from 1 to 64");
   }
+  for (const [name, value] of [["maxRetainedJobs", options.maxRetainedJobs], ["maxLogBytesPerJob", options.maxLogBytesPerJob], ["maxTotalLogBytes", options.maxTotalLogBytes]] as const) {
+    if (value !== undefined && (!Number.isSafeInteger(value) || value < 1 || value > 512 * 1024 * 1024)) throw new Error(`--${name} must be a positive bounded integer`);
+  }
 
   const seen = new Set<string>();
   const workspaces: WorkspaceConfig[] = [];
@@ -90,7 +99,7 @@ export async function validateRunnerConfig(options: RawRunnerOptions): Promise<R
     seen.add(option.workspaceId);
     workspaces.push({ workspaceId: option.workspaceId, rootPath, readonly: option.readonly ?? true, shell: option.shell ?? false });
   }
-  return { server, token, runnerId, workspaces, ...(options.maxConcurrentJobs === undefined ? {} : { maxConcurrentJobs: options.maxConcurrentJobs }), ...(options.stateDir === undefined ? {} : { stateDir: options.stateDir }), ...(options.disconnectAfterMs === undefined ? {} : { disconnectAfterMs: options.disconnectAfterMs }), ...(options.disconnectControlFile === undefined ? {} : { disconnectControlFile: options.disconnectControlFile }) };
+  return { server, token, runnerId, workspaces, ...(options.maxConcurrentJobs === undefined ? {} : { maxConcurrentJobs: options.maxConcurrentJobs }), ...(options.maxRetainedJobs === undefined ? {} : { maxRetainedJobs: options.maxRetainedJobs }), ...(options.maxLogBytesPerJob === undefined ? {} : { maxLogBytesPerJob: options.maxLogBytesPerJob }), ...(options.maxTotalLogBytes === undefined ? {} : { maxTotalLogBytes: options.maxTotalLogBytes }), ...(options.stateDir === undefined ? {} : { stateDir: options.stateDir }), ...(options.disconnectAfterMs === undefined ? {} : { disconnectAfterMs: options.disconnectAfterMs }), ...(options.disconnectControlFile === undefined ? {} : { disconnectControlFile: options.disconnectControlFile }) };
 }
 
 function parseWorkspaceString(value: string): WorkspaceOption | undefined {

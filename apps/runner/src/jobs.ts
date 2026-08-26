@@ -1,4 +1,4 @@
-import { open, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { open, mkdir, readFile, readdir, rename, rm, stat as fileStat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -34,6 +34,8 @@ export interface JobRecord {
   readonly signal: string | null;
   /** Recovery explanation safe to expose to MCP clients. */
   readonly recovery_note: string | null;
+  /** True when the persisted output cap discarded one or more bytes. */
+  readonly output_truncated: boolean;
   /** MCP client identity that initiated the job; it does not grant ownership. */
   readonly created_by_client_id: string | null;
   /** Persisted evidence that this Runner delivered a cancellation request. */
@@ -44,6 +46,12 @@ export interface JobManagerOptions {
   readonly stateDir?: string;
   readonly runnerId?: string;
   readonly maxConcurrentJobs?: number;
+  /** Maximum persisted job records, including active jobs. */
+  readonly maxRetainedJobs?: number;
+  /** Maximum aggregate stdout+stderr bytes persisted for one job. */
+  readonly maxLogBytesPerJob?: number;
+  /** Maximum aggregate stdout+stderr bytes persisted across all jobs. */
+  readonly maxTotalLogBytes?: number;
   readonly onEvent?: (event: JobEvent) => void;
 }
 export type JobEvent = { readonly type: "started" | "output" | "status" | "completed"; readonly job: JobRecord; readonly stream?: "stdout" | "stderr"; readonly data?: string };
@@ -51,6 +59,11 @@ export type JobEvent = { readonly type: "started" | "output" | "status" | "compl
 const MAX_LOG_RESPONSE_BYTES = 64 * 1024;
 const MAX_LOG_READ_BYTES = 64 * 1024;
 const MAX_INPUT_BYTES = 64 * 1024;
+const DEFAULT_MAX_RETAINED_JOBS = 100;
+const DEFAULT_MAX_LOG_BYTES_PER_JOB = 4 * 1024 * 1024;
+const DEFAULT_MAX_TOTAL_LOG_BYTES = 32 * 1024 * 1024;
+const MAX_RETAINED_JOBS = 10_000;
+const MAX_CONFIGURED_LOG_BYTES = 512 * 1024 * 1024;
 
 /**
  * Local persistent process supervisor.  Process stdio is inherited directly by
@@ -64,7 +77,13 @@ export class JobManager {
   private readonly runnerStatePath: string;
   private readonly runnerId: string;
   private readonly maxConcurrentJobs: number;
+  private readonly maxRetainedJobs: number;
+  private readonly maxLogBytesPerJob: number;
+  private readonly maxTotalLogBytes: number;
   private readonly onEvent: (event: JobEvent) => void;
+  private totalLogBytes = 0;
+  private readonly jobLogBytes = new Map<string, number>();
+  private logWriteChain: Promise<void> = Promise.resolve();
   private readonly jobs = new Map<string, JobRecord>();
   private readonly processes = new Map<string, ChildProcess>();
   private readonly persistChains = new Map<string, Promise<void>>();
@@ -78,6 +97,10 @@ export class JobManager {
     this.runnerStatePath = join(this.stateDir, "runner.json");
     this.runnerId = options.runnerId ?? "runner";
     this.maxConcurrentJobs = positiveInteger(options.maxConcurrentJobs ?? 1, "maxConcurrentJobs");
+    this.maxRetainedJobs = boundedPositiveInteger(options.maxRetainedJobs ?? DEFAULT_MAX_RETAINED_JOBS, 1, MAX_RETAINED_JOBS, "maxRetainedJobs");
+    this.maxLogBytesPerJob = boundedPositiveInteger(options.maxLogBytesPerJob ?? DEFAULT_MAX_LOG_BYTES_PER_JOB, 1, MAX_CONFIGURED_LOG_BYTES, "maxLogBytesPerJob");
+    this.maxTotalLogBytes = boundedPositiveInteger(options.maxTotalLogBytes ?? DEFAULT_MAX_TOTAL_LOG_BYTES, 1, MAX_CONFIGURED_LOG_BYTES, "maxTotalLogBytes");
+    if (this.maxTotalLogBytes < this.maxLogBytesPerJob) throw new Error("maxTotalLogBytes must be at least maxLogBytesPerJob");
     this.onEvent = options.onEvent ?? (() => undefined);
   }
 
@@ -114,6 +137,14 @@ export class JobManager {
       }
       this.jobs.set(restored.job_id, restored);
     }
+    this.totalLogBytes = await this.measureLogBytes();
+    const aliveJobIds = new Set<string>();
+    for (const job of [...this.jobs.values()]) {
+      if (!isActive(job)) continue;
+      const inspection = await inspectProcess(job.pid, job.process_start_fingerprint);
+      if (inspection.alive && inspection.fingerprintMatches !== false) aliveJobIds.add(job.job_id);
+    }
+    await this.pruneRetainedJobs(this.maxRetainedJobs, aliveJobIds);
   }
 
   public list(input: { readonly workspace_id?: unknown; readonly status?: unknown; readonly limit?: unknown } = {}): JobRecord[] {
@@ -159,6 +190,8 @@ export class JobManager {
   }
 
   public async start(input: unknown): Promise<JobRecord> {
+    await this.pruneRetainedJobs(this.maxRetainedJobs - 1);
+    if (this.jobs.size >= this.maxRetainedJobs) throw new Error(`max retained jobs (${this.maxRetainedJobs}) reached while active jobs are retained`);
     if (this.activeCount() >= this.maxConcurrentJobs) throw new Error(`max concurrent jobs (${this.maxConcurrentJobs}) reached`);
     const params = paramsObject(input);
     const workspace = this.policy.getWorkspace(params.workspace_id);
@@ -170,7 +203,7 @@ export class JobManager {
       command: invocation.command, shell: invocation.shell, status: "queued", pid: null,
       process_start_fingerprint: null, recovery_liveness: null,
       created_at_ms: now, started_at_ms: null, updated_at_ms: now, completed_at_ms: null, exit_code: null, signal: null,
-      recovery_note: null, created_by_client_id: safeOptionalIdentifier(params.created_by_client_id), cancellation_delivered_at_ms: null,
+      recovery_note: null, output_truncated: false, created_by_client_id: safeOptionalIdentifier(params.created_by_client_id), cancellation_delivered_at_ms: null,
     };
     this.jobs.set(job.job_id, job);
     await mkdir(this.jobDir(job.job_id), { recursive: true, mode: 0o700 });
@@ -186,11 +219,10 @@ export class JobManager {
         cwd: cwd.path,
         shell: invocation.shell,
         detached: process.platform !== "win32",
-        // Pass descriptor numbers directly. The child owns its duplicated copy;
-        // the parent handles are closed below even when spawn fails quickly.
-        stdio: ["pipe", stdout.fd, stderr.fd],
+        stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       });
+      this.attachLogCapture(job.job_id, child);
     } catch (error) {
       await Promise.all([stdout?.close().catch(() => undefined), stderr?.close().catch(() => undefined)]);
       const failed = { ...job, status: "failed" as const, updated_at_ms: Date.now(), completed_at_ms: Date.now() };
@@ -333,6 +365,84 @@ export class JobManager {
     return best === 0 && initial > 0 && wireResponseBytes(logResult(jobId, stream, offset, size, data.subarray(0, initial).toString("utf8"), offset + initial)) <= MAX_LOG_RESPONSE_BYTES ? initial : best;
   }
 
+  private reserveLogBytes(jobId: string, chunk: Buffer): { readonly data: Buffer; readonly truncated: boolean } {
+    if (chunk.byteLength === 0) return { data: chunk, truncated: false };
+    const jobBytes = this.jobLogBytes.get(jobId) ?? 0;
+    const available = Math.max(0, Math.min(this.maxLogBytesPerJob - jobBytes, this.maxTotalLogBytes - this.totalLogBytes));
+    const data = chunk.subarray(0, available);
+    if (data.byteLength > 0) {
+      this.jobLogBytes.set(jobId, jobBytes + data.byteLength);
+      this.totalLogBytes += data.byteLength;
+    }
+    return { data, truncated: data.byteLength !== chunk.byteLength };
+  }
+
+  private queueLogAppend(jobId: string, stream: "stdout" | "stderr", chunk: Buffer): void {
+    const reserved = this.reserveLogBytes(jobId, chunk);
+    if (reserved.truncated) void this.markOutputTruncated(jobId);
+    if (reserved.data.byteLength === 0) return;
+    const prior = this.logWriteChain;
+    this.logWriteChain = prior.catch(() => undefined).then(async () => {
+      try { await writeFile(this.logPath(jobId, stream), reserved.data, { flag: "a", mode: 0o600 }); }
+      catch {
+        this.totalLogBytes = Math.max(0, this.totalLogBytes - reserved.data.byteLength);
+        this.jobLogBytes.set(jobId, Math.max(0, (this.jobLogBytes.get(jobId) ?? 0) - reserved.data.byteLength));
+        await this.markOutputTruncated(jobId);
+      }
+    });
+  }
+
+  private async markOutputTruncated(jobId: string): Promise<void> {
+    const current = this.jobs.get(jobId);
+    if (current === undefined || current.output_truncated) return;
+    const updated = { ...current, output_truncated: true };
+    this.jobs.set(jobId, updated);
+    await this.persist(updated);
+  }
+
+  private attachLogCapture(jobId: string, child: ChildProcess): void {
+    for (const stream of ["stdout", "stderr"] as const) {
+      const source = child[stream];
+      source?.on("data", (chunk: Buffer) => this.queueLogAppend(jobId, stream, Buffer.from(chunk)));
+    }
+  }
+
+  private async jobLogSize(jobId: string): Promise<number> {
+    const sizes = await Promise.all((["stdout", "stderr"] as const).map(async (stream) => (await fileStat(this.logPath(jobId, stream)).catch(() => undefined))?.size ?? 0));
+    return (sizes[0] ?? 0) + (sizes[1] ?? 0);
+  }
+
+  private async measureLogBytes(): Promise<number> {
+    let total = 0;
+    for (const job of this.jobs.values()) {
+      const size = await this.jobLogSize(job.job_id);
+      this.jobLogBytes.set(job.job_id, size);
+      total += size;
+    }
+    return total;
+  }
+
+  /** Delete only terminal records, preserving active/recovery evidence. */
+  private async pruneRetainedJobs(retainedLimit = this.maxRetainedJobs, aliveJobIds: ReadonlySet<string> = new Set()): Promise<void> {
+    const removable = [...this.jobs.values()]
+      .filter((job) => !isActive(job) && !aliveJobIds.has(job.job_id))
+      .sort((a, b) => a.updated_at_ms - b.updated_at_ms || a.job_id.localeCompare(b.job_id));
+    while (this.jobs.size > retainedLimit && removable.length > 0) {
+      const job = removable.shift() as JobRecord;
+      this.totalLogBytes = Math.max(0, this.totalLogBytes - (this.jobLogBytes.get(job.job_id) ?? await this.jobLogSize(job.job_id)));
+      this.jobLogBytes.delete(job.job_id);
+      this.jobs.delete(job.job_id);
+      await rm(this.jobDir(job.job_id), { recursive: true, force: true, maxRetries: 3, retryDelay: 25 });
+    }
+    while (this.totalLogBytes > this.maxTotalLogBytes && removable.length > 0) {
+      const job = removable.shift() as JobRecord;
+      this.totalLogBytes = Math.max(0, this.totalLogBytes - (this.jobLogBytes.get(job.job_id) ?? await this.jobLogSize(job.job_id)));
+      this.jobLogBytes.delete(job.job_id);
+      this.jobs.delete(job.job_id);
+      await rm(this.jobDir(job.job_id), { recursive: true, force: true, maxRetries: 3, retryDelay: 25 });
+    }
+  }
+
   private async reconcileRecoveredJob(jobId: string): Promise<void> {
     const job = this.jobs.get(jobId);
     if (job === undefined || job.status !== "unknown" && !(job.status === "cancelling" && job.recovery_liveness !== null)) return;
@@ -407,10 +517,12 @@ export class JobManager {
     this.processes.delete(jobId);
     this.terminationDelivered.delete(jobId);
     await this.persist(completed);
+    await this.pruneRetainedJobs();
     this.onEvent({ type: "completed", job: completed });
   }
 
   private async flushLogs(jobId: string): Promise<void> {
+    await this.logWriteChain.catch(() => undefined);
     await Promise.all((["stdout", "stderr"] as const).map(async (stream) => {
       try {
         const handle = await open(this.logPath(jobId, stream), "r");
@@ -451,6 +563,7 @@ function terminalRecoveredJob(job: JobRecord, status: "cancelled" | "interrupted
     recovery_note: status === "cancelled"
       ? "cancellation delivery was confirmed after Runner restart; the process exit code is unavailable"
       : "terminal outcome unavailable after Runner restart",
+    output_truncated: job.output_truncated,
     cancellation_delivered_at_ms: job.cancellation_delivered_at_ms,
     created_by_client_id: job.created_by_client_id,
   };
@@ -479,6 +592,7 @@ function paramsObject(value: unknown): Record<string, unknown> { if (typeof valu
 function stringArray(value: unknown, label: string): string[] { if (!Array.isArray(value) || value.length > 256 || value.some((item) => typeof item !== "string" || item.includes("\0") || item.length > 8_192)) throw new Error(`${label} must be string array`); return value as string[]; }
 function bounded(value: unknown, min: number, max: number, fallback: number): number { if (value === undefined || value === null) return fallback; if (typeof value === "string" && /^\d+$/.test(value)) value = Number(value); if (!Number.isSafeInteger(value) || (value as number) < min || (value as number) > max) throw new Error("invalid pagination value"); return value as number; }
 function positiveInteger(value: unknown, label: string): number { if (!Number.isSafeInteger(value) || (value as number) < 1) throw new Error(`${label} must be a positive integer`); return value as number; }
+function boundedPositiveInteger(value: unknown, min: number, max: number, label: string): number { if (!Number.isSafeInteger(value) || (value as number) < min || (value as number) > max) throw new Error(`${label} must be an integer from ${min} to ${max}`); return value as number; }
 function relativeWorkspacePath(workspace: WorkspaceConfig, path: string): string { return path === workspace.rootPath ? "." : path.slice(workspace.rootPath.length + 1); }
 function isJobStatus(value: unknown): value is LocalJobStatus { return typeof value === "string" && ["queued", "running", "cancelling", "cancelled", "succeeded", "failed", "unknown", "interrupted"].includes(value); }
 function safeOptionalIdentifier(value: unknown): string | null { if (value === undefined) return null; if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) throw new Error("created_by_client_id is invalid"); return value; }
@@ -552,7 +666,7 @@ async function utf8AlignedStart(handle: Awaited<ReturnType<typeof open>>, reques
 function safeJobId(value: string): boolean { return /^job-[0-9a-f-]{36}$/.test(value); }
 function normalizeJobRecord(value: unknown): JobRecord | undefined {
   if (!isJobRecord(value)) return undefined;
-  const job = value as Omit<JobRecord, "process_start_fingerprint" | "recovery_liveness" | "cancellation_delivered_at_ms" | "created_by_client_id" | "recovery_note"> & Partial<Pick<JobRecord, "process_start_fingerprint" | "recovery_liveness" | "cancellation_delivered_at_ms" | "created_by_client_id" | "recovery_note">>;
+  const job = value as Omit<JobRecord, "process_start_fingerprint" | "recovery_liveness" | "cancellation_delivered_at_ms" | "created_by_client_id" | "recovery_note" | "output_truncated"> & Partial<Pick<JobRecord, "process_start_fingerprint" | "recovery_liveness" | "cancellation_delivered_at_ms" | "created_by_client_id" | "recovery_note" | "output_truncated">>;
   return {
     ...job,
     process_start_fingerprint: typeof job.process_start_fingerprint === "string" ? job.process_start_fingerprint : null,
@@ -560,6 +674,7 @@ function normalizeJobRecord(value: unknown): JobRecord | undefined {
     cancellation_delivered_at_ms: typeof job.cancellation_delivered_at_ms === "number" && Number.isSafeInteger(job.cancellation_delivered_at_ms) ? job.cancellation_delivered_at_ms : null,
     created_by_client_id: typeof job.created_by_client_id === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(job.created_by_client_id) ? job.created_by_client_id : null,
     recovery_note: typeof job.recovery_note === "string" && job.recovery_note.length <= 512 ? job.recovery_note : null,
+    output_truncated: job.output_truncated === true,
   };
 }
 function validRecoveryLiveness(value: unknown): value is RecoveryLiveness { return typeof value === "object" && value !== null && typeof (value as RecoveryLiveness).checked_at_ms === "number" && typeof (value as RecoveryLiveness).alive === "boolean" && (value as RecoveryLiveness).fingerprint_matches !== undefined; }

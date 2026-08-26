@@ -53,6 +53,7 @@ npm run validate:worker
 
 cd apps/worker
 npx wrangler secret put ADMIN_TOKEN
+npx wrangler secret put SETUP_TOKEN # or SETUP_TOKEN_HASH (SHA-256 hexadecimal digest)
 npx wrangler secret put RUNNER_TOKEN_PEPPER
 npx wrangler secret put INTERNAL_CONTROL_SECRET
 npx wrangler deploy --config wrangler.jsonc
@@ -62,9 +63,11 @@ npx wrangler deploy --config wrangler.jsonc
 
 ### 2. Set up the dashboard
 
-Open the deployed root URL, such as `https://mcp.example.com/`. A new RegistryDO presents **Create administrator password**. The first valid setup request wins atomically, so initialize it immediately after deployment.
+`SETUP_TOKEN` (or, preferably, its SHA-256 hexadecimal digest in `SETUP_TOKEN_HASH`) is required for the first administrator setup request. Configure one before opening the dashboard; the token is verified in constant time and is never persisted or logged. The setup form still requires its CSRF token and remains throttled, and only one concurrent setup request can initialize the RegistryDO.
 
-The dashboard is the browser administration lane: it creates MCP clients, adds and renames Runners, generates enrollment codes, rotates/revokes/deletes Runners, and shows safe Runner/job metadata. It uses the administrator password and browser session; it is separate from `ADMIN_TOKEN`, Runner credentials, and MCP URL secrets.
+Internal Worker-to-Durable-Object calls use versioned, timestamped HMAC headers with method, full pathname plus query, body digest, and a unique nonce. RegistryDO durably consumes nonces for the signature TTL and periodically removes expired entries.
+
+Open the deployed root URL, such as `https://mcp.example.com/`. A new RegistryDO presents **Create administrator password**. The first valid setup request wins atomically, so initialize it immediately after deployment.
 
 ### 3. Add a Runner and redeem its one-time enrollment code
 
@@ -148,14 +151,15 @@ macOS:   /Library/Application Support/RemoteCodingRunner/profile.json
 Windows: C:\ProgramData\RemoteCodingRunner\profile.json
 ```
 
-The product CLI defaults to this system/machine profile. Use `--user` only for explicit legacy per-user compatibility. On POSIX, the profile directory is created with mode `0700` and the profile file with mode `0600`; Windows ACLs are not inspected by `doctor`. `coding-runner status` redacts the token. `coding-runner doctor` checks profile presence, stored URL, POSIX file mode, workspace existence, a managed service manifest, and selected local tools. `coding-runner env` reports bounded environment probes. `coding-runner workspace list|add|remove` manages locally configured workspace IDs; `add` canonicalizes an existing directory and supports `--readonly` and `--no-shell`.
+The product CLI defaults to this system/machine profile. New enrollment profiles record `execution_mode: dedicated_user`; profiles written before that field retain their existing privileged-host service behavior when explicitly confirmed, avoiding silent service migrations. Use `--user` only for explicit legacy per-user compatibility. On POSIX, the profile directory is created with mode `0700` and the profile file with mode `0600`; Windows ACLs are not inspected by `doctor`. `coding-runner doctor --json` emits stable required/optional checks for profile directory/file permissions, manifest/installed/active service state, Host shell runtime, execution mode, policy revision when supplied locally, and tools. Missing optional Python or Docker produces warnings; failed required checks set a nonzero exit code. `coding-runner status` redacts the token. `coding-runner env` reports bounded environment probes. `coding-runner workspace list|add|remove` manages locally configured workspace IDs; `add` canonicalizes an existing directory and supports `--readonly` and `--no-shell`.
 
 A profile-backed `coding-runner start` uses its saved server, credential, Runner ID, and workspaces. The legacy explicit `start --server --runner-id --token --workspace ...` form remains available for advanced/manual operation. Workspace roots stay local and never enter MCP or Runner metadata.
 
 Service commands are machine-level adapters by default:
 
+- Dedicated-user is the default for new machine profiles and direct manifest rendering: Linux systemd has `User=runmesh` and `Group=runmesh`; macOS LaunchDaemon has `UserName=runmesh`; Windows runs as `NT AUTHORITY\LOCAL SERVICE` at least privilege rather than SYSTEM. Operators must provision the `runmesh` account/group and grant it access to the selected profile, state, and workspace roots before activation.
+- `coding-runner install --execution-mode privileged_host --confirm-privileged-host` is the explicit opt-in for root/SYSTEM host authority. It never enables privileged mode silently for a new profile. Existing profiles without `execution_mode` keep their legacy privileged-host layout for compatibility.
 - `coding-runner install` requires an elevated administrator/root shell and writes a hash-marked system service manifest. Linux uses `/opt/remote-coding-runtime`, `/etc/remote-coding-runtime`, `/var/lib/remote-coding-runtime`, and `/etc/systemd/system/remote-coding-runner.service`; its `ExecStart` uses an absolute executable path. It refuses to overwrite an unmanaged manifest, runs `systemctl daemon-reload`, `systemctl enable --now remote-coding-runner.service`, then verifies the unit is active.
-- macOS and Windows use explicit system LaunchDaemon/Scheduled Task adapters; they do not silently downgrade to user services.
 - `coding-runner stop`, `restart`, and `uninstall` use the selected system adapter. `uninstall` only removes a manifest whose marker and content hash match. `--purge --yes` also removes the profile, but deliberately leaves workspace roots and persistent job state untouched.
 
 Use `--user` only for explicit legacy per-user service compatibility.

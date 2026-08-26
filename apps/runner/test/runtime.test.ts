@@ -72,6 +72,19 @@ describe("workspace path policy", () => {
     } finally { await test.cleanup(); }
   });
 
+  it("stat reports binary files without decoding them and search paginates bounded matches", async () => {
+    const test = await fixture();
+    try {
+      await writeFile(join(test.root, "binary.bin"), Buffer.from([0, 255, 1]));
+      await writeFile(join(test.root, "matches.txt"), "needle\nneedle\nneedle\n");
+      const service = new FilesystemService(policy(test.workspace));
+      await expect(service.stat({ workspace_id: "workspace-1", path: "binary.bin" })).resolves.toMatchObject({ type: "file", binary: true, encoding: "binary", size: 3 });
+      const first = await service.search({ workspace_id: "workspace-1", query: "needle", max_results: 2 });
+      expect(first).toMatchObject({ results: [{ line: 1 }, { line: 2 }], next_cursor: "2", truncated: true });
+      await expect(service.search({ workspace_id: "workspace-1", query: "needle", max_results: 2, cursor: first.next_cursor })).resolves.toMatchObject({ results: [{ line: 3 }], next_cursor: null, truncated: false });
+    } finally { await test.cleanup(); }
+  });
+
   it("enforces readonly workspace writes and shell policy", async () => {
     const test = await fixture();
     try {
@@ -159,7 +172,7 @@ describe("persistent local jobs", () => {
   it("marks jobs found alive after restart unknown and vanished processes interrupted", async () => {
     const test = await fixture();
     try {
-      const first = new JobManager({ policy: policy(test.workspace), stateDir: test.state, maxConcurrentJobs: 2 });
+      const first = new JobManager({ policy: policy(test.workspace), stateDir: test.state, maxConcurrentJobs: 2, maxRetainedJobs: 100 });
       await first.initialize();
       const alive = await first.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "setTimeout(() => {}, 1500)"] });
       const restarted = new JobManager({ policy: policy(test.workspace), stateDir: test.state });
@@ -171,7 +184,7 @@ describe("persistent local jobs", () => {
       const meta = JSON.parse(await readFile(metaPath, "utf8")) as Record<string, unknown>;
       meta.status = "running"; meta.pid = 999_999_999; meta.completed_at_ms = null;
       await writeFile(metaPath, JSON.stringify(meta));
-      const afterCrash = new JobManager({ policy: policy(test.workspace), stateDir: test.state });
+      const afterCrash = new JobManager({ policy: policy(test.workspace), stateDir: test.state, maxRetainedJobs: 100 });
       await afterCrash.initialize();
       expect(afterCrash.get(vanished.job_id).status).toBe("interrupted");
       await first.cancel(alive.job_id);
@@ -208,6 +221,35 @@ describe("persistent local jobs", () => {
       const middle = await service.read({ workspace_id: "workspace-1", path: "utf8.txt", offset: Buffer.byteLength("Hello你", "utf8") + 1, limit: 4 });
       expect(middle.data).not.toContain("\ufffd");
       expect(middle.offset).toBeGreaterThan(Buffer.byteLength("Hello你", "utf8"));
+    } finally { await test.cleanup(); }
+  });
+
+  it("caps persisted job output and retires only terminal jobs", async () => {
+    const test = await fixture();
+    try {
+      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state, maxConcurrentJobs: 2, maxRetainedJobs: 2, maxLogBytesPerJob: 64, maxTotalLogBytes: 128 });
+      await manager.initialize();
+      const noisy = await manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.stdout.write('x'.repeat(1024))"] });
+      const completed = await waitFor(() => manager.get(noisy.job_id), (job) => job.status === "succeeded");
+      expect(completed.output_truncated).toBe(true);
+      expect(await manager.logs(noisy.job_id, { stream: "stdout", limit: 128 })).toMatchObject({ data: "x".repeat(64), size: 64 });
+      const first = await manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.exit(0)"] });
+      await waitFor(() => manager.get(first.job_id), (job) => job.status === "succeeded");
+      const second = await manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.exit(0)"] });
+      await waitFor(() => manager.get(second.job_id), (job) => job.status === "succeeded");
+      expect(manager.list({ limit: 10 })).toHaveLength(2);
+      expect(() => manager.get(noisy.job_id)).toThrow("job not found");
+    } finally { await test.cleanup(); }
+  });
+
+  it("keeps active jobs when the retained-job quota is exhausted", async () => {
+    const test = await fixture();
+    try {
+      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state, maxRetainedJobs: 1, maxConcurrentJobs: 1 });
+      await manager.initialize();
+      const job = await manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "setTimeout(() => {}, 2000)"] });
+      await expect(manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.exit(0)"] })).rejects.toThrow(/max retained jobs/);
+      await manager.cancel(job.job_id);
     } finally { await test.cleanup(); }
   });
 

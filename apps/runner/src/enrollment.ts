@@ -11,12 +11,18 @@ export interface EnrollmentOptions {
   readonly store?: ProfileStore;
   readonly fetch?: typeof globalThis.fetch;
   readonly insecureLocal?: boolean;
+  /** Persisted machine-service identity. New enrollments default to dedicated_user. */
+  readonly executionMode?: "dedicated_user" | "privileged_host";
+  /** Explicit acknowledgement required when selecting privileged_host. */
+  readonly confirmPrivilegedHost?: boolean;
 }
 export interface EnrollmentResult { readonly profile: RunnerProfile; }
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 /** Redeems one enrollment code exactly once; the code is never written to disk or output. */
 export async function enrollRunner(options: EnrollmentOptions): Promise<EnrollmentResult> {
+  if (options.executionMode !== undefined && options.executionMode !== "dedicated_user" && options.executionMode !== "privileged_host") throw new Error("--execution-mode must be dedicated_user or privileged_host");
+  if (options.executionMode === "privileged_host" && options.confirmPrivilegedHost !== true) throw new Error("privileged_host execution mode requires --confirm-privileged-host");
   const endpoint = enrollmentEndpoint(options.server, options.insecureLocal === true);
   if (!/^[A-Za-z0-9_-]{20,256}$/.test(options.code)) throw new Error("--code must be a one-time enrollment code");
   const request = options.fetch ?? globalThis.fetch;
@@ -46,6 +52,9 @@ export async function enrollRunner(options: EnrollmentOptions): Promise<Enrollme
     workspaces: existing?.workspaces ?? [],
     ...(options.insecureLocal === true ? { insecure_local: true } : {}),
     ...(existing?.max_concurrent_jobs === undefined ? {} : { max_concurrent_jobs: existing.max_concurrent_jobs }),
+    ...(options.executionMode === undefined
+      ? existing?.execution_mode === undefined ? { execution_mode: "dedicated_user" as const } : { execution_mode: existing.execution_mode }
+      : { execution_mode: options.executionMode }),
   };
   await store.save(profile);
   return { profile };
@@ -63,9 +72,11 @@ function enrollmentEndpoint(value: string, insecureLocal: boolean): string {
 function connectionUrl(value: string): string {
   let url: URL;
   try { url = new URL(value); } catch { throw new Error("enrollment response has an invalid server URL"); }
+  const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]";
   if (url.protocol === "https:") url.protocol = "wss:";
-  else if (url.protocol === "http:") url.protocol = "ws:";
-  if (url.protocol !== "ws:" && url.protocol !== "wss:") throw new Error("enrollment response has an invalid server URL");
+  else if (url.protocol === "http:" && loopback) url.protocol = "ws:";
+  else if (url.protocol !== "wss:" && url.protocol !== "ws:") throw new Error("enrollment response has an invalid server URL");
+  if (url.protocol === "ws:" && !loopback) throw new Error("enrollment response requires wss:// except loopback development");
   return url.toString();
 }
 function enrollmentResponse(value: unknown): { readonly runnerId: string; readonly serverUrl: string; readonly token: string } | undefined {

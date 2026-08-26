@@ -1,4 +1,9 @@
 export const INTERNAL_CONTROL_HEADER = "x-internal-control";
+export const INTERNAL_SIGNATURE_VERSION_HEADER = "x-internal-control-version";
+export const INTERNAL_TIMESTAMP_HEADER = "x-internal-control-timestamp";
+export const INTERNAL_NONCE_HEADER = "x-internal-control-nonce";
+export const INTERNAL_SIGNATURE_VERSION = "v1";
+export const INTERNAL_SIGNATURE_SKEW_MS = 5 * 60 * 1_000;
 export const MAX_BEARER_TOKEN_BYTES = 512;
 export const PASSWORD_KDF_ITERATIONS = 120_000;
 export const ADMIN_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -25,32 +30,93 @@ export function bearerToken(request: Request): string | undefined {
   return encoder.encode(token).byteLength <= MAX_BEARER_TOKEN_BYTES ? token : undefined;
 }
 
+export interface InternalSignatureOptions {
+  readonly timestamp?: number;
+  readonly nonce?: string;
+}
+
+export type InternalNonceConsumer = (nonce: string, expiresAtMs: number) => boolean | Promise<boolean>;
+
+/**
+ * Sign an internal Durable Object request. The versioned canonical value binds
+ * every property that could alter routing or request semantics.
+ */
 export async function internalHeaders(
   secret: string,
   method: string,
-  pathname: string,
+  pathnameAndQuery: string,
   body: string,
+  options: InternalSignatureOptions = {},
 ): Promise<HeadersInit> {
-  const signature = await hmacHex(secret, `${method.toUpperCase()}\n${pathname}\n${body}`);
+  const timestamp = options.timestamp ?? Date.now();
+  const nonce = options.nonce ?? randomHex(32);
+  const bodyHash = await sha256Hex(body);
+  const signature = await hmacHex(secret, internalSignatureValue(
+    INTERNAL_SIGNATURE_VERSION,
+    method,
+    pathnameAndQuery,
+    timestamp,
+    nonce,
+    bodyHash,
+  ));
   return {
     [INTERNAL_CONTROL_HEADER]: signature,
+    [INTERNAL_SIGNATURE_VERSION_HEADER]: INTERNAL_SIGNATURE_VERSION,
+    [INTERNAL_TIMESTAMP_HEADER]: String(timestamp),
+    [INTERNAL_NONCE_HEADER]: nonce,
     "content-type": "application/json",
   };
 }
 
+/** Verify and atomically consume a one-time internal request nonce. */
 export async function verifyInternalRequest(
   request: Request,
   secret: string | undefined,
   body: string,
+  consumeNonce: InternalNonceConsumer,
+  nowMs = Date.now(),
 ): Promise<boolean> {
   if (secret === undefined || secret.length === 0) return false;
+  const version = request.headers.get(INTERNAL_SIGNATURE_VERSION_HEADER);
+  const timestampText = request.headers.get(INTERNAL_TIMESTAMP_HEADER);
+  const nonce = request.headers.get(INTERNAL_NONCE_HEADER);
   const supplied = request.headers.get(INTERNAL_CONTROL_HEADER);
-  if (supplied === null || !/^[0-9a-f]{64}$/.test(supplied)) return false;
+  if (version !== INTERNAL_SIGNATURE_VERSION || timestampText === null || nonce === null || supplied === null) return false;
+  if (!/^\d{13}$/.test(timestampText) || !/^[0-9a-f]{64}$/.test(nonce) || !/^[0-9a-f]{64}$/.test(supplied)) return false;
+  const timestamp = Number(timestampText);
+  if (!Number.isSafeInteger(timestamp) || Math.abs(nowMs - timestamp) > INTERNAL_SIGNATURE_SKEW_MS) return false;
+  const url = new URL(request.url);
   const expected = await hmacHex(
     secret,
-    `${request.method.toUpperCase()}\n${new URL(request.url).pathname}\n${body}`,
+    internalSignatureValue(version, request.method, `${url.pathname}${url.search}`, timestamp, nonce, await sha256Hex(body)),
   );
-  return constantTimeEqual(supplied, expected);
+  if (!constantTimeEqual(supplied, expected)) return false;
+  return consumeNonce(nonce, timestamp + INTERNAL_SIGNATURE_SKEW_MS);
+}
+
+function internalSignatureValue(
+  version: string,
+  method: string,
+  pathnameAndQuery: string,
+  timestamp: number,
+  nonce: string,
+  bodyHash: string,
+): string {
+  return `${version}\n${method.toUpperCase()}\n${pathnameAndQuery}\n${timestamp}\n${nonce}\n${bodyHash}`;
+}
+
+export async function verifySetupToken(
+  supplied: FormDataEntryValue | null,
+  setupToken: string | undefined,
+  setupTokenHash: string | undefined,
+): Promise<boolean> {
+  if (typeof supplied !== "string" || supplied.length === 0 || supplied.length > 1_024) return false;
+  if (setupTokenHash !== undefined) {
+    if (!/^[0-9a-fA-F]{64}$/.test(setupTokenHash)) return false;
+    return constantTimeEqual(await sha256Hex(supplied), setupTokenHash.toLowerCase());
+  }
+  return setupToken !== undefined && setupToken.length > 0
+    && constantTimeEqual(await sha256Hex(supplied), await sha256Hex(setupToken));
 }
 
 export async function hmacHex(secret: string, value: string): Promise<string> {
@@ -71,10 +137,10 @@ export async function sha256Hex(value: string): Promise<string> {
 }
 
 export function constantTimeEqual(left: string, right: string): boolean {
-  if (left.length !== right.length) return false;
-  let difference = 0;
-  for (let index = 0; index < left.length; index += 1) {
-    difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  let difference = left.length ^ right.length;
+  const length = Math.max(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    difference |= (left.charCodeAt(index) || 0) ^ (right.charCodeAt(index) || 0);
   }
   return difference === 0;
 }
