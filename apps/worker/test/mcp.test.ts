@@ -99,13 +99,13 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
       expect(instance.renameRunner("legacy-runner", "Friendly runner", now + 1)).toMatchObject({ runner_id: "legacy-runner", display_name: "Friendly runner" });
       expect(instance.createMcpClient({ client_id: "client-cleanup", label: "Cleanup", secret_verifier: "b".repeat(64), secret_prefix: "prefix-b", scopes: ["coding:read"] }, now)).toBeDefined();
       expect(instance.selectMcpClientRunner("client-cleanup", "legacy-runner", false, now + 2)).toMatchObject({ ok: true });
-      instance.revokeRunner("legacy-runner", now + 3);
+      instance.revokeRunner("legacy-runner", "legacy-runner", now + 3);
       expect(instance.getMcpClientActiveRunner("client-cleanup")).toMatchObject({ active_runner_id: "legacy-runner", runner: { available: false } });
       // Re-enrollment/rotation retains the selection rather than silently routing
       // a client to another runner.
       instance.registerRunner("legacy-runner", "d".repeat(64), now + 3);
       expect(instance.getMcpClientActiveRunner("client-cleanup")).toMatchObject({ active_runner_id: "legacy-runner" });
-      expect(instance.deleteRunner("legacy-runner", now + 4)).toBe(true);
+      expect(instance.deleteRunner("legacy-runner", "legacy-runner", now + 4)).toBe(true);
       expect(instance.getMcpClientActiveRunner("client-cleanup")).toMatchObject({ active_runner_id: null, runner: null });
     });
   });
@@ -218,7 +218,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
       expect(instance.getMcpClientActiveRunner(clientB)).toMatchObject({ active_runner_id: null, runner: null });
       expect(instance.renameMcpClient(clientA, "Renamed A", now + 4)).toMatchObject({ active_runner_id: "runner-b" });
       expect(instance.rotateMcpClient(clientA, "e".repeat(64), "prefix-c", now + 5)).toMatchObject({ active_runner_id: "runner-b" });
-      instance.revokeRunner("runner-b", now + 6);
+      instance.revokeRunner("runner-b", "runner-b", now + 6);
       expect(instance.getMcpClientActiveRunner(clientA)).toMatchObject({ active_runner_id: "runner-b", runner: { runner_id: "runner-b", state: "unavailable", available: false } });
     });
   });

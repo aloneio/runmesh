@@ -210,7 +210,7 @@ export class RunnerDO {
     }
     if (message.type === "runner.policy_ack") {
       if (message.runner_id !== attachment.runnerId) return ws.close(1008, "runner identity mismatch");
-      const response = await this.registryRequest(attachment.runnerId, "/policy-ack", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, desired_revision: message.desired_revision, applied_revision: message.applied_revision, status: message.status, workspace_status: message.workspace_status }) });
+      const response = await this.registryRequest(attachment.runnerId, "/policy-ack", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, desired_revision: message.desired_revision, desired_checksum: message.desired_checksum, applied_revision: message.applied_revision, applied_checksum: message.applied_checksum, runner_reported_policy_revision: message.applied_revision, status: message.status, workspace_status: message.workspace_status }) });
       if (!response.ok) ws.close(4001, "stale policy acknowledgement");
       return;
     }
@@ -258,12 +258,16 @@ export class RunnerDO {
     const attachment = socket?.deserializeAttachment() as ConnectionAttachment | null;
     if (socket === undefined || attachment === null || attachment.epoch === 0 || attachment.protocolVersion === 0) return Response.json({ error: { code: "runner_offline", message: "runner is not connected" } }, { status: 503 });
     if (this.bridgeWaiters.size >= MAX_BRIDGE_IN_FLIGHT) return Response.json({ error: { code: "busy", message: "bridge concurrency limit reached" } }, { status: 429 });
-    const requestPolicyRevision = typeof input.policy_revision === "number" && Number.isSafeInteger(input.policy_revision) ? input.policy_revision : undefined;
+    const requestPolicyRevision = typeof input.policy_revision === "number" && Number.isSafeInteger(input.policy_revision) && input.policy_revision > 0 ? input.policy_revision : undefined;
+    const method = typeof input.method === "string" ? input.method : "";
+    if (requestPolicyRevision === undefined && method !== "echo" && method !== "runner.info") {
+      return Response.json({ error: { code: "stale_policy", message: "Protected RPC requires a policy revision" } }, { status: 409 });
+    }
     if (requestPolicyRevision !== undefined) {
       const revisionResponse = await this.registryRequest(attachment.runnerId, "/policy-revision", { method: "GET" });
       if (!revisionResponse.ok) return Response.json({ error: { code: "stale_policy", message: "Runner policy revision could not be verified" } }, { status: 409 });
-      const revisionBody = await revisionResponse.json() as { desired_policy_revision?: unknown; applied_policy_revision?: unknown; policy_status?: unknown };
-      if (revisionBody.policy_status !== "applied" || revisionBody.applied_policy_revision !== requestPolicyRevision || revisionBody.desired_policy_revision !== requestPolicyRevision) return Response.json({ error: { code: "stale_policy", message: "Runner policy revision is stale" } }, { status: 409 });
+      const revisionBody = await revisionResponse.json() as { desired_policy_revision?: unknown; applied_policy_revision?: unknown; runner_reported_policy_revision?: unknown; policy_status?: unknown };
+      if (revisionBody.policy_status !== "applied" || revisionBody.applied_policy_revision !== requestPolicyRevision || revisionBody.desired_policy_revision !== requestPolicyRevision || revisionBody.runner_reported_policy_revision !== requestPolicyRevision) return Response.json({ error: { code: "stale_policy", message: "Runner policy revision is stale" } }, { status: 409 });
     }
     const requestId = `bridge-${crypto.randomUUID()}`;
     const parsed = RpcRequestSchema.safeParse({ type: "rpc.request", protocol_version: attachment.protocolVersion, request_id: requestId, method: input.method, params: input.params, ...(requestPolicyRevision === undefined ? {} : { policy_revision: requestPolicyRevision }) });
