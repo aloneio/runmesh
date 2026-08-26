@@ -45,16 +45,16 @@ npx wrangler deploy --config wrangler.jsonc
 1. Open the deployed root URL and create the first administrator password immediately. Setup is atomic first-success-wins; there is no bootstrap-password secret.
 2. Log in and open **Admin → Runners**. Add a safe Runner ID (or let the dashboard generate one) and a human-facing `display_name`. The display name is displayed to operators and by `runner_list`; the ID is the stable protocol identifier.
 3. Copy the enrollment code. It expires in 30 minutes and is single-use. **Regenerate enrollment** replaces any unused code for that Runner with a new one.
-4. On the host, from the directory to become the initial workspace, redeem it with the supported CLI:
+4. On the host, redeem it from an elevated administrator/root shell with the supported CLI. Enrollment creates a machine Runner with no workspace access; add approved roots later with `coding-runner workspace add`:
 
    ```sh
    coding-runner enroll \
      --server https://mcp.example.com/runner/enroll \
      --code '<one-time-enrollment-code>'
-   coding-runner start
+   coding-runner install
    ```
 
-   Enrollment obtains the Runner ID and long-lived Runner credential from the response; the command accepts no `--runner-id`. It saves a local profile and adds the current directory as a writable, shell-enabled initial workspace.
+   Enrollment obtains the Runner ID and long-lived Runner credential from the response; the command accepts no `--runner-id`. It saves a centralized machine profile with zero workspaces and does not use the current directory.
 5. In **Admin → MCP Clients**, create a client label and least-privilege scopes. Copy the generated one-time MCP URL and configure it directly in the MCP client:
 
    ```text
@@ -66,29 +66,25 @@ The dashboard displays safe Runner details and allows Runner rename, enrollment/
 
 ### Public bootstrap and package configuration
 
-The Worker exposes public, cacheable, secret-free `/runner/install.sh` and `/runner/install.ps1` bootstrap scripts. The dashboard renders the corresponding `curl ... | sh -s -- <one-time-code>` or PowerShell command; the code is passed only as a command argument and the generated enrollment page remains `no-store`. Installers require an already installed Node.js 20+ / npm runtime, refuse to overwrite an existing managed profile or service unless explicitly re-enrolled, install per-user, and run `coding-runner enroll` followed by `coding-runner install`. They print service activation commands for the operator to review and run; host service activation remains manual and no system service manager is invoked automatically.
+The Worker exposes public, cacheable, secret-free `/runner/install.sh` and `/runner/install.ps1` bootstrap scripts. The dashboard renders the corresponding `curl ... | sh -s -- <one-time-code>` or PowerShell command; the code is passed only as a command argument and the generated enrollment page remains `no-store`. Installers require an already installed Node.js 20+ / npm runtime, an elevated administrator/root shell, and refuse to overwrite an existing managed profile or service unless explicitly re-enrolled. They install centrally and run `coding-runner enroll` followed by `coding-runner install`; Linux activation is automatic through the system service manager.
 
-No public npm package is published by this repository. `/runner/releases/latest` therefore returns `distributable: false` until the operator configures a stable package spec through `RUNNER_PACKAGE_SPEC` (an exact `package@x.y.z` or HTTPS `.tgz` URL; GitHub `main` is rejected), with `RUNNER_PACKAGE_NAME` / `RUNNER_PACKAGE_VERSION` required when using a tarball URL. The installers fail clearly when no distributable spec is configured; they never download GitHub main or embed an administrator, MCP, or long-lived Runner credential.
+No public npm package is published by this repository. `/runner/releases/latest` remains compatible and `/runner/releases/stable` exposes the same stable, secret-free manifest. Both report `channel: "stable"`, current/latest package versions, protocol min/max, package/artifact source, and an optional SHA-256 artifact checksum. They return `distributable: false` until the operator configures a stable package spec through `RUNNER_PACKAGE_SPEC` (an exact `package@x.y.z` or HTTPS `.tgz` URL; mutable `latest`, GitHub, and `/main`/`/master` sources are rejected), with `RUNNER_PACKAGE_NAME` / `RUNNER_PACKAGE_VERSION` required when using a tarball URL. Set `RUNNER_ARTIFACT_SHA256` to include configured tarball checksum metadata. The installers fail clearly when no distributable spec is configured; they never download GitHub main or embed an administrator, MCP, or long-lived Runner credential. Runner updates, download, installation, and rollback remain explicitly deferred; the admin Version policy only records Stable/Pinned desired-version intent.
+
+The bootstrap scripts install the system/machine Runner, require an elevated administrator/root shell, use a centralized installation layout, and run `coding-runner enroll` followed by `coding-runner install`. Linux automatically runs system `daemon-reload`, `enable --now`, and an active-unit check; host lifecycle management is not downgraded to per-user services.
 
 ## Local Runner profiles and service manifests
 
-Enrollment stores server URL, Runner ID, long-lived credential, workspace configuration, and optional concurrency under:
+Enrollment stores server URL, Runner ID, long-lived credential, and optional concurrency under centralized machine locations:
 
 ```text
-Linux:   ~/.remote-coding-runner/profile.json
-macOS:   ~/Library/Application Support/RemoteCodingRunner/profile.json
-Windows: %LOCALAPPDATA%\RemoteCodingRunner\profile.json
+Linux:   /etc/remote-coding-runtime/profile.json
+macOS:   /Library/Application Support/RemoteCodingRunner/profile.json
+Windows: C:\\ProgramData\\RemoteCodingRunner\\profile.json
 ```
 
-The POSIX profile directory/file are created with modes `0700`/`0600`; the Windows path uses normal Windows storage and `doctor` does not inspect ACLs. `status` redacts the token. `workspace list|add|remove`, `env`, and `doctor` operate against the profile. `start` uses profile defaults unless explicit legacy Runner transport options are provided.
+The POSIX profile directory/file are created with modes `0700`/`0600`; the Windows path uses normal Windows storage and `doctor` does not inspect ACLs. Enrollment starts with zero local workspaces; add roots explicitly with `workspace add`. Re-enrollment replaces credentials/connection data without inferring or adding a workspace. `status` redacts the token. `workspace list|add|remove`, `env`, and `doctor` operate against the profile. `start` uses profile defaults unless explicit legacy Runner transport options are provided.
 
-`coding-runner install` writes a hash-marked per-user service manifest and refuses an unmanaged existing manifest:
-
-- Linux: systemd user unit;
-- macOS: LaunchAgent plist;
-- Windows: Scheduled Task XML.
-
-It writes the manifest but only reports the host `systemctl`, `launchctl`, or `schtasks` commands. `stop`, `restart`, and `uninstall` likewise render/report lifecycle commands instead of executing them. `uninstall` only removes a manifest whose marker and content hash match; `--purge --yes` additionally removes the local profile but leaves configured workspace roots and persistent job state untouched. Review and run the reported host command yourself.
+`coding-runner install` writes a hash-marked system service manifest and automatically activates it through an explicit host adapter. Linux uses `/opt/remote-coding-runtime`, `/etc/remote-coding-runtime`, `/var/lib/remote-coding-runtime`, and `/etc/systemd/system/remote-coding-runner.service`; it runs `systemctl daemon-reload`, `systemctl enable --now remote-coding-runner.service`, and an active-unit check. It requires an elevated administrator/root shell and refuses an unmanaged existing manifest. macOS and Windows use explicit system LaunchDaemon/Scheduled Task adapters rather than silently falling back to a user service. `stop`, `restart`, and `uninstall` invoke their selected adapter; `uninstall` only removes a manifest whose marker and content hash match. `--purge --yes` additionally removes the local profile but leaves configured workspace roots and persistent job state untouched. Use `--user` only for explicit legacy per-user compatibility.
 
 The Runner needs only outbound access. A saved profile requires `wss://`; cleartext `ws://` is available only for loopback development with explicit `--insecure-local`.
 

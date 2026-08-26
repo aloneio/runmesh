@@ -11,8 +11,7 @@ const SUPPORTED_SCOPES = ["coding:read", "coding:write", "coding:exec"] as const
 type CodingScope = (typeof SUPPORTED_SCOPES)[number];
 
 type ToolSpec = {
-  readonly rpc?: string;
-  readonly scope: CodingScope;
+  readonly scope?: CodingScope;
   readonly description: string;
   readonly annotations: {
     readonly readOnlyHint: boolean;
@@ -26,28 +25,21 @@ const readAnnotations = { readOnlyHint: true, destructiveHint: false, idempotent
 const execAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true } as const;
 const writeAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
 const destructiveAnnotations = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false } as const;
+const mixedJobAnnotations = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false } as const;
 
-/** The complete public MCP catalog. Do not add aliases: these names are the API. */
+/**
+ * The entire default public MCP API.  Runner RPC names below are intentionally
+ * not aliases: they remain internal transport implementation details.
+ */
 const TOOL_SPECS = {
-  runner_list: { scope: "coding:read", description: "List registered runners and their last known connection state. No runner credentials are returned; no selection is required.", annotations: readAnnotations },
-  runner_current: { scope: "coding:read", description: "Return this MCP client's active runner selection, or null when no runner is selected. A revoked or deleted selection is reported unavailable without fallback.", annotations: readAnnotations },
-  runner_select: { scope: "coding:read", description: "Select this MCP client's active runner. The first selection is immediate; changing it requires confirm_switch=true.", annotations: writeAnnotations },
-  runner_info: { scope: "coding:read", description: "Return safe, last-known metadata for one runner. Metadata never contains workspace roots or credentials.", annotations: readAnnotations },
-  workspace_list: { scope: "coding:read", description: "List the active runner's last synchronized workspace identifiers. Workspace roots are never exposed.", annotations: readAnnotations },
-  env_info: { rpc: "env.info", scope: "coding:read", description: "Read bounded environment and workspace capability information from the active connected runner.", annotations: readAnnotations },
-  fs_read: { rpc: "fs.read", scope: "coding:read", description: "Read a bounded UTF-8 byte range from a workspace-relative file on a connected runner.", annotations: readAnnotations },
-  fs_list: { rpc: "fs.list", scope: "coding:read", description: "List a bounded page of a workspace-relative directory on a connected runner.", annotations: readAnnotations },
-  fs_search: { rpc: "fs.search", scope: "coding:read", description: "Search bounded workspace-relative text files on a connected runner.", annotations: readAnnotations },
-  fs_apply_patch: { rpc: "fs.apply_patch", scope: "coding:write", description: "Apply a transactional, baseline-checked patch to a writable workspace on a connected runner.", annotations: destructiveAnnotations },
-  exec_start: { rpc: "exec.start", scope: "coding:exec", description: "Start a persistent local job and return its job metadata promptly. Use job_get and job_logs to observe it later.", annotations: execAnnotations },
-  exec_run: { rpc: "exec.run", scope: "coding:exec", description: "Start a local job and wait only for the runner's short bounded completion window.", annotations: execAnnotations },
-  job_list: { scope: "coding:read", description: "List bounded historical job metadata from the registry, including while a runner is offline.", annotations: readAnnotations },
-  job_get: { rpc: "job.get", scope: "coding:read", description: "Get local job metadata; an offline runner may return its last synchronized snapshot instead.", annotations: readAnnotations },
-  job_logs: { rpc: "job.logs", scope: "coding:read", description: "Read a bounded, paginated stdout or stderr log range from a connected runner.", annotations: readAnnotations },
-  job_cancel: { rpc: "job.cancel", scope: "coding:exec", description: "Request cancellation of a local job on a connected runner.", annotations: destructiveAnnotations },
-  job_input: { rpc: "job.input", scope: "coding:exec", description: "Write bounded UTF-8 input or EOF to a local running job on a connected runner.", annotations: writeAnnotations },
-  git_status: { rpc: "git.status", scope: "coding:read", description: "Return bounded Git status for a workspace on a connected runner.", annotations: readAnnotations },
-  git_diff: { rpc: "git.diff", scope: "coding:read", description: "Return a bounded Git diff for a workspace-relative path on a connected runner.", annotations: readAnnotations },
+  runner_list: { scope: "coding:read", description: "List runners this client can read, with safe IDs, display names, and last-known connection state. Credentials and workspace roots are never returned.", annotations: readAnnotations },
+  runner_current: { scope: "coding:read", description: "Return this MCP client's sticky runner selection, or null. An unavailable selection never falls back to another runner.", annotations: readAnnotations },
+  runner_select: { scope: "coding:read", description: "Select this MCP client's active runner. Initial selection is immediate; changing a selection requires confirm_switch=true.", annotations: writeAnnotations },
+  workspace_list: { scope: "coding:read", description: "List readable workspace IDs on the active runner. Workspace roots are never returned.", annotations: readAnnotations },
+  read: { scope: "coding:read", description: "Read a bounded UTF-8-safe page of a workspace-relative file. Use next_cursor or offset to continue; host roots and absolute paths are not accepted.", annotations: readAnnotations },
+  edit: { scope: "coding:write", description: "Apply a transactional, baseline-checked patch to a writable workspace. The result contains only bounded, workspace-relative change metadata.", annotations: destructiveAnnotations },
+  shell: { scope: "coding:exec", description: "Run a command through the selected runner's workspace shell. Commands have the runner user's OS permissions and are not sandboxed; use a restricted VM/container and avoid administrator/root runners for untrusted code. background=true returns a persistent job immediately; foreground waits only up to wait_ms.", annotations: execAnnotations },
+  job: { description: "List, inspect, or read bounded logs for persistent jobs. cancel and input require coding:exec plus workspace job-control permission. Job metadata never includes command, cwd, PID, roots, or secrets.", annotations: mixedJobAnnotations },
 } as const satisfies Record<string, ToolSpec>;
 
 type ToolName = keyof typeof TOOL_SPECS;
@@ -55,11 +47,23 @@ type ToolName = keyof typeof TOOL_SPECS;
 const RunnerIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "must be a safe runner identifier");
 const WorkspaceIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "must be a safe workspace identifier");
 const RelativePathSchema = z.string().min(1).max(4096).refine(isSafeRelativePath, "must be a workspace-relative path without traversal");
-const OptionalRelativePathSchema = z.string().min(1).max(4096).optional().refine((value) => value === undefined || isSafeRelativePath(value), "must be a workspace-relative path without traversal");
 const CursorSchema = z.string().max(128).regex(/^\d+$/, "must be a numeric cursor").optional();
 const BoundedLimitSchema = z.number().int().min(1).max(65_536).optional();
-const RunnerInputSchema = z.object({ runner_id: RunnerIdSchema }).strict();
 const JobIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "must be a safe job identifier");
+const JobStatusSchema = z.enum(["queued", "running", "cancelling", "cancelled", "succeeded", "failed", "unknown", "interrupted"]);
+const ReadInputSchema = z.object({ workspace_id: WorkspaceIdSchema, path: RelativePathSchema, cursor: CursorSchema, offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(262_144).optional() }).strict();
+const EditInputSchema = z.object({ workspace_id: WorkspaceIdSchema, patch: z.string().min(1).max(1_048_576), expected_hash: z.string().regex(/^[a-f0-9]{64}$/).optional(), expected_hashes: z.record(z.string().min(1).max(4096), z.string().regex(/^[a-f0-9]{64}$/).nullable()).optional() }).strict();
+const ShellInputSchema = z.object({ workspace_id: WorkspaceIdSchema, command: z.string().min(1).max(8_192), wait_ms: z.number().int().min(1).max(LOCAL_RUNNER_OPERATION_TIMEOUT_MS).optional(), background: z.boolean().optional() }).strict();
+const JobInputSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("list"), workspace_id: WorkspaceIdSchema.optional(), status: JobStatusSchema.optional(), limit: z.number().int().min(1).max(100).optional() }).strict(),
+  z.object({ action: z.literal("get"), job_id: JobIdSchema }).strict(),
+  z.object({ action: z.literal("logs"), job_id: JobIdSchema, stream: z.enum(["stdout", "stderr"]).optional(), cursor: CursorSchema, offset: z.number().int().min(0).optional(), limit: BoundedLimitSchema, tail: z.boolean().optional() }).strict(),
+  z.object({ action: z.literal("cancel"), job_id: JobIdSchema }).strict(),
+  z.object({ action: z.literal("input"), job_id: JobIdSchema, data: z.string().max(65_536).optional(), close_stdin: z.boolean().optional() }).strict().refine((value) => value.data !== undefined || value.close_stdin === true, "data or close_stdin is required"),
+]);
+
+/** Structured output is always a bounded object; individual tool descriptions define its safe fields. */
+const SafeOutputSchema = z.object({}).passthrough();
 
 export type McpAuth = Pick<AuthInfo, "clientId" | "scopes" | "expiresAt" | "resource" | "extra"> & { token: string };
 
@@ -70,7 +74,7 @@ export type McpAuth = Pick<AuthInfo, "clientId" | "scopes" | "expiresAt" | "reso
 export function createCodingMcpServer(env: WorkerEnv, auth: McpAuth): McpServer {
   const server = new McpServer({ name: "remote-coding-runtime", version: "0.1.0" });
 
-  register(server, "runner_list", z.object({}).strict(), async () => runnerListTool(env));
+  register(server, "runner_list", z.object({}).strict(), async () => gatedRunnerList(env, auth.clientId));
   register(server, "runner_current", z.object({}).strict(), async () => {
     const selection = await getActiveRunnerSelection(env, auth.clientId);
     if (selection.ok) {
@@ -95,43 +99,80 @@ export function createCodingMcpServer(env: WorkerEnv, auth: McpAuth): McpServer 
     }
     return asToolResult(selection);
   });
-  register(server, "runner_info", RunnerInputSchema, async ({ runner_id }) => registryTool(env, `/runners/${encodeURIComponent(runner_id)}`));
-
-  register(server, "workspace_list", z.object({}).strict(), async () => activeRegistryTool(env, auth.clientId, (runnerId) => `/runners/${encodeURIComponent(runnerId)}/workspaces`));
-  register(server, "env_info", z.object({}).strict(), async () => activeRunnerTool(env, auth.clientId, "env.info", {}));
-  register(server, "fs_read", z.object({ workspace_id: WorkspaceIdSchema, path: RelativePathSchema, cursor: CursorSchema, offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(262_144).optional() }).strict(), async (params) => activeRunnerTool(env, auth.clientId, "fs.read", boundedReadParams(params, 32 * 1024)));
-  register(server, "fs_list", z.object({ workspace_id: WorkspaceIdSchema, path: OptionalRelativePathSchema, cursor: CursorSchema, limit: z.number().int().min(1).max(1_000).optional() }).strict(), async (params) => activeRunnerTool(env, auth.clientId, "fs.list", params));
-  register(server, "fs_search", z.object({ workspace_id: WorkspaceIdSchema, path: OptionalRelativePathSchema, query: z.string().min(1).max(1_024) }).strict(), async (params) => activeRunnerTool(env, auth.clientId, "fs.search", params));
-  register(server, "fs_apply_patch", z.object({ workspace_id: WorkspaceIdSchema, patch: z.string().min(1).max(1_048_576), expected_hash: z.string().regex(/^[a-f0-9]{64}$/).optional(), expected_hashes: z.record(z.string().min(1).max(4096), z.string().regex(/^[a-f0-9]{64}$/).nullable()).optional() }).strict(), async (params) => activeRunnerTool(env, auth.clientId, "fs.apply_patch", params));
-  register(server, "exec_start", z.object({ workspace_id: WorkspaceIdSchema, cwd: OptionalRelativePathSchema, command: z.union([z.string().min(1).max(8_192), z.array(z.string().min(1).max(8_192)).min(1).max(256)]), args: z.array(z.string().max(8_192)).max(256).optional(), shell: z.boolean().optional() }).strict(), async (params) => activeRunnerTool(env, auth.clientId, "exec.start", { ...params, created_by_client_id: auth.clientId }));
-  register(server, "exec_run", z.object({ workspace_id: WorkspaceIdSchema, cwd: OptionalRelativePathSchema, command: z.union([z.string().min(1).max(8_192), z.array(z.string().min(1).max(8_192)).min(1).max(256)]), args: z.array(z.string().max(8_192)).max(256).optional(), shell: z.boolean().optional(), wait_ms: z.number().int().min(1).max(LOCAL_RUNNER_OPERATION_TIMEOUT_MS).optional() }).strict(), async (params) => activeRunnerTool(env, auth.clientId, "exec.run", { ...params, created_by_client_id: auth.clientId }));
-  register(server, "job_list", z.object({ workspace_id: WorkspaceIdSchema.optional(), status: z.enum(["queued", "running", "cancelling", "cancelled", "succeeded", "failed", "unknown", "interrupted"]).optional(), limit: z.number().int().min(1).max(100).optional() }).strict(), async (filters) => activeRegistryTool(env, auth.clientId, (runnerId) => registryJobsPath(runnerId, filters), true));
-  register(server, "job_get", z.object({ job_id: JobIdSchema }).strict(), async ({ job_id }) => activeJobGet(env, auth.clientId, job_id));
-  register(server, "job_logs", z.object({ job_id: JobIdSchema, stream: z.enum(["stdout", "stderr"]).optional(), cursor: CursorSchema, offset: z.number().int().min(0).optional(), limit: BoundedLimitSchema, tail: z.boolean().optional() }).strict(), async (params) => activeRunnerTool(env, auth.clientId, "job.logs", boundedReadParams(params, 16 * 1024)));
-  register(server, "job_cancel", z.object({ job_id: JobIdSchema }).strict(), async (params) => activeRunnerTool(env, auth.clientId, "job.cancel", params));
-  register(server, "job_input", z.object({ job_id: JobIdSchema, data: z.string().max(65_536).optional(), close_stdin: z.boolean().optional() }).strict().refine((value) => value.data !== undefined || value.close_stdin === true, "data or close_stdin is required"), async (params) => activeRunnerTool(env, auth.clientId, "job.input", params));
-  register(server, "git_status", z.object({ workspace_id: WorkspaceIdSchema }).strict(), async (params) => activeRunnerTool(env, auth.clientId, "git.status", params));
-  register(server, "git_diff", z.object({ workspace_id: WorkspaceIdSchema, path: OptionalRelativePathSchema, staged: z.boolean().optional(), max_bytes: BoundedLimitSchema }).strict(), async (params) => activeRunnerTool(env, auth.clientId, "git.diff", params));
+  register(server, "workspace_list", z.object({}).strict(), async () => activeWorkspaceList(env, auth.clientId));
+  register(server, "read", ReadInputSchema, async (params) => activeRunnerTool(env, auth.clientId, "fs.read", boundedReadParams(params, 32 * 1024), "read"));
+  register(server, "edit", EditInputSchema, async (params) => activeRunnerTool(env, auth.clientId, "fs.apply_patch", params, "edit"));
+  register(server, "shell", ShellInputSchema, async (params) => shellTool(env, auth.clientId, params));
+  register(server, "job", JobInputSchema, async (params, scopes) => jobTool(env, auth.clientId, params, scopes));
 
   return server;
 
-  function register<Input extends z.ZodObject<z.ZodRawShape>>(target: McpServer, name: ToolName, inputSchema: Input, action: (input: z.output<Input>) => Promise<unknown>): void {
+  function register<Input extends z.ZodType>(target: McpServer, name: ToolName, inputSchema: Input, action: (input: z.output<Input>, scopes: readonly string[]) => Promise<unknown>): void {
     const spec = TOOL_SPECS[name];
-    (target.registerTool as unknown as (toolName: string, config: Record<string, unknown>, callback: (input: z.output<Input>, context: ServerContext) => Promise<unknown>) => unknown)(name, { description: spec.description, inputSchema, outputSchema: z.record(z.string(), z.unknown()), annotations: spec.annotations }, async (input, context) => {
+    (target.registerTool as unknown as (toolName: string, config: Record<string, unknown>, callback: (input: z.output<Input>, context: ServerContext) => Promise<unknown>) => unknown)(name, { description: spec.description, inputSchema, outputSchema: SafeOutputSchema, annotations: spec.annotations }, async (input, context) => {
       const contextAuth = context.http?.authInfo;
       // The protected handler injects AuthInfo. Captured auth is intentionally
       // a fallback for the stateless legacy lane, not a bearer-token parser.
       const scopes = contextAuth?.scopes ?? auth.scopes;
-      if (!scopes.includes(spec.scope)) {
-        return failure("insufficient_scope", `This tool requires ${spec.scope}.`, `Authorize the MCP client again with ${spec.scope}.`);
+      const requiredScope = "scope" in spec ? spec.scope : undefined;
+      if (requiredScope !== undefined && !scopes.includes(requiredScope)) {
+        return failure("insufficient_scope", `This tool requires ${requiredScope}.`, `Authorize the MCP client again with ${requiredScope}.`);
       }
       try {
-        return await action(input as z.output<Input>);
+        return await action(input as z.output<Input>, scopes);
       } catch {
         return failure("internal_error", "The MCP tool could not complete the request.", "Retry the request. If the problem persists, contact the service operator.");
       }
     });
   }
+}
+
+async function shellTool(env: WorkerEnv, clientId: string, params: z.output<typeof ShellInputSchema>): Promise<unknown> {
+  const invocation = { workspace_id: params.workspace_id, command: params.command, shell: true, created_by_client_id: clientId };
+  if (params.background === true) return activeRunnerTool(env, clientId, "exec.start", invocation, "shell");
+  const result = await activeRunnerTool(env, clientId, "exec.run", { ...invocation, ...(params.wait_ms === undefined ? {} : { wait_ms: params.wait_ms }) }, "shell");
+  return normalizeShellResult(result);
+}
+
+function normalizeShellResult(result: unknown): unknown {
+  if (!isToolSuccessResult(result)) return result;
+  const value = result.structuredContent;
+  if (!isRecord(value.job)) return result;
+  const { job, ...rest } = value;
+  return success({ ...rest, ...safeJobMetadata(job), status: typeof job.status === "string" ? job.status : "unknown" });
+}
+
+async function jobTool(env: WorkerEnv, clientId: string, params: z.output<typeof JobInputSchema>, scopes: readonly string[]): Promise<unknown> {
+  switch (params.action) {
+    case "list":
+      if (!scopes.includes("coding:read")) return failure("insufficient_scope", "This job action requires coding:read.", "Authorize the MCP client again with coding:read.");
+      return activeJobList(env, clientId, params);
+    case "get":
+      if (!scopes.includes("coding:read")) return failure("insufficient_scope", "This job action requires coding:read.", "Authorize the MCP client again with coding:read.");
+      return activeJobGet(env, clientId, params.job_id);
+    case "logs":
+      if (!scopes.includes("coding:read")) return failure("insufficient_scope", "This job action requires coding:read.", "Authorize the MCP client again with coding:read.");
+      return activeJobRunnerTool(env, clientId, "job.logs", boundedReadParams(params, 16 * 1024), "read");
+    case "cancel":
+      if (!scopes.includes("coding:exec")) return failure("insufficient_scope", "This job action requires coding:exec.", "Authorize the MCP client again with coding:exec.");
+      return activeJobRunnerTool(env, clientId, "job.cancel", params, "job_control");
+    case "input":
+      if (!scopes.includes("coding:exec")) return failure("insufficient_scope", "This job action requires coding:exec.", "Authorize the MCP client again with coding:exec.");
+      return activeJobRunnerTool(env, clientId, "job.input", params, "job_control");
+  }
+}
+
+function isToolSuccessResult(value: unknown): value is { readonly structuredContent: Record<string, unknown> } {
+  return isRecord(value) && value.isError !== true && isRecord(value.structuredContent);
+}
+
+function safeJobMetadata(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) return {};
+  const output: Record<string, unknown> = {};
+  for (const key of ["job_id", "workspace_id", "status", "created_at_ms", "started_at_ms", "updated_at_ms", "completed_at_ms", "exit_code", "signal", "recovery_note", "cancellation_delivered_at_ms"]) {
+    if (value[key] !== undefined) output[key] = value[key];
+  }
+  return output;
 }
 
 type ActiveSelection = {
@@ -196,37 +237,120 @@ function runnerFailure(error: ToolFailure["error"], selection: ActiveSelection):
   return failureWithDetails(error.code, error.message, error.hint, { runner_context: selection.context });
 }
 
-async function activeRunnerTool(env: WorkerEnv, clientId: string, method: string, params: Record<string, unknown>): Promise<unknown> {
+async function activeRunnerTool(env: WorkerEnv, clientId: string, method: string, params: Record<string, unknown>, requiredPermission?: PermissionBit): Promise<unknown> {
   const selected = await resolveActiveRunner(env, clientId);
   if (!selected.ok) return asToolResult(selected);
+  const permission = requiredPermission === undefined
+    ? undefined
+    : params.workspace_id === undefined
+      ? await checkAnyReadPermission(env, clientId, selected.value.runnerId)
+      : await checkPermission(env, clientId, selected.value.runnerId, params.workspace_id, requiredPermission);
+  if (permission !== undefined) return asToolResult(permission);
   const call = await callRunner(env, selected.value.runnerId, method, params);
   return call.ok ? runnerSuccess(call.value, selected.value) : runnerFailure(call.error, selected.value);
 }
 
-async function activeRegistryTool(env: WorkerEnv, clientId: string, path: (runnerId: string) => string, allowOfflineSnapshot = false): Promise<unknown> {
-  const selected = await resolveActiveRunner(env, clientId, allowOfflineSnapshot);
+async function activeJobRunnerTool(env: WorkerEnv, clientId: string, method: string, params: Record<string, unknown>, requiredPermission: PermissionBit): Promise<unknown> {
+  const selected = await resolveActiveRunner(env, clientId);
   if (!selected.ok) return asToolResult(selected);
-  const call = await registryCall(env, path(selected.value.runnerId));
+  const job = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/jobs/${encodeURIComponent(String(params.job_id))}`);
+  if (!job.ok) return runnerFailure(job.error, selected.value);
+  const workspaceId = isRecord(job.value) && typeof job.value.workspace_id === "string" ? job.value.workspace_id : undefined;
+  const permission = await checkPermission(env, clientId, selected.value.runnerId, workspaceId, requiredPermission);
+  if (permission !== undefined) return asToolResult(permission);
+  const call = await callRunner(env, selected.value.runnerId, method, params);
   return call.ok ? runnerSuccess(call.value, selected.value) : runnerFailure(call.error, selected.value);
 }
+
+async function activeJobList(env: WorkerEnv, clientId: string, filters: Record<string, unknown>): Promise<unknown> {
+  const selected = await resolveActiveRunner(env, clientId, true);
+  if (!selected.ok) return asToolResult(selected);
+  if (filters.workspace_id !== undefined) {
+    const permission = await checkPermission(env, clientId, selected.value.runnerId, filters.workspace_id, "read");
+    if (permission !== undefined) return asToolResult(permission);
+  } else {
+    const permission = await checkAnyReadPermission(env, clientId, selected.value.runnerId);
+    if (permission !== undefined) return asToolResult(permission);
+  }
+  const call = await registryCall(env, registryJobsPath(selected.value.runnerId, filters));
+  if (!call.ok) return runnerFailure(call.error, selected.value);
+  const value = isRecord(call.value) ? call.value : {};
+  const jobs = Array.isArray(value.jobs) ? value.jobs : [];
+  const visible: unknown[] = [];
+  for (const job of jobs) {
+    const workspaceId = isRecord(job) ? job.workspace_id : undefined;
+    if (await checkPermission(env, clientId, selected.value.runnerId, workspaceId, "read") === undefined) visible.push(job);
+  }
+  return runnerSuccess({ ...value, jobs: visible }, selected.value);
+}
+
+async function activeWorkspaceList(env: WorkerEnv, clientId: string): Promise<unknown> {
+  const selected = await resolveActiveRunner(env, clientId);
+  if (!selected.ok) return asToolResult(selected);
+  const call = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/workspaces`);
+  if (!call.ok) return runnerFailure(call.error, selected.value);
+  const value = isRecord(call.value) ? call.value : {};
+  const workspaces = Array.isArray(value.workspaces) ? value.workspaces : [];
+  const visible: unknown[] = [];
+  for (const workspace of workspaces) {
+    const workspaceId = isRecord(workspace) ? workspace.workspace_id : undefined;
+    if (await checkPermission(env, clientId, selected.value.runnerId, workspaceId, "read") === undefined) visible.push(workspace);
+  }
+  return runnerSuccess({ ...value, workspaces: visible }, selected.value);
+}
+type PermissionCheck = ToolFailure;
+async function checkPermission(env: WorkerEnv, clientId: string, runnerId: string, workspaceId: unknown, required: PermissionBit): Promise<PermissionCheck | undefined> {
+  if (typeof workspaceId !== "string" || !isSafeIdentifier(workspaceId)) return fail("permission_denied", "Workspace permission could not be resolved.", "Use a workspace identifier managed by the administrator.");
+  const call = await registryCall(env, `/auth/clients/${encodeURIComponent(clientId)}/effective-permissions/${encodeURIComponent(runnerId)}?workspace_id=${encodeURIComponent(workspaceId)}`);
+  if (!call.ok) return fail("permission_denied", "The operation is not permitted for this workspace.", "Ask the administrator to grant the required workspace permission.");
+  const permissions = isRecord(call.value) && isRecord(call.value.permissions) ? call.value.permissions : undefined;
+  if (permissions?.[required] !== true) return fail("permission_denied", "The operation is not permitted for this workspace.", "Ask the administrator to grant the required workspace permission.");
+  return undefined;
+}
+async function checkAnyReadPermission(env: WorkerEnv, clientId: string, runnerId: string): Promise<PermissionCheck | undefined> {
+  const managed = await registryCall(env, `/auth/runners/${encodeURIComponent(runnerId)}/managed-workspaces`);
+  const managedWorkspaces = managed.ok && isRecord(managed.value) && Array.isArray(managed.value.workspaces) ? managed.value.workspaces : [];
+  if (managedWorkspaces.length > 0) {
+    for (const item of managedWorkspaces) {
+      if (!isRecord(item) || typeof item.workspace_id !== "string") continue;
+      if (await checkPermission(env, clientId, runnerId, item.workspace_id, "read") === undefined) return undefined;
+    }
+  } else {
+    const synced = await registryCall(env, `/runners/${encodeURIComponent(runnerId)}/workspaces`);
+    if (!synced.ok || !isRecord(synced.value) || !Array.isArray(synced.value.workspaces)) return fail("permission_denied", "The operation is not permitted for this runner.", "Ask the administrator to grant read access to a workspace.");
+    for (const item of synced.value.workspaces) {
+      if (!isRecord(item) || typeof item.workspace_id !== "string") continue;
+      if (await checkPermission(env, clientId, runnerId, item.workspace_id, "read") === undefined) return undefined;
+    }
+  }
+  return fail("permission_denied", "The operation is not permitted for this runner.", "Ask the administrator to grant read access to a workspace.");
+}
+
+async function gatedRunnerList(env: WorkerEnv, clientId: string): Promise<unknown> {
+  const call = await registryCall(env, "/runners");
+  if (!call.ok) return asToolResult(call);
+  const runners = isRecord(call.value) && Array.isArray(call.value.runners) ? call.value.runners : [];
+  const visible: unknown[] = [];
+  for (const runner of runners) {
+    if (!isRecord(runner) || typeof runner.runner_id !== "string") continue;
+    if (await checkAnyReadPermission(env, clientId, runner.runner_id) === undefined) visible.push(runner);
+  }
+  return runnerListToolValue(visible);
+}
+type PermissionBit = "read" | "edit" | "shell" | "job_control";
 
 async function activeJobGet(env: WorkerEnv, clientId: string, jobId: string): Promise<unknown> {
   const selected = await resolveActiveRunner(env, clientId, true);
   if (!selected.ok) return asToolResult(selected);
-  if (selected.value.context.state !== "online") {
-    const snapshot = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/jobs/${encodeURIComponent(jobId)}`);
-    return snapshot.ok
-      ? runnerSuccess({ ...(snapshot.value as Record<string, unknown>), source: "registry_snapshot", runner_state: "offline" }, selected.value)
-      : snapshot.error.code === "not_found"
-        ? runnerFailure(snapshot.error, selected.value)
-        : runnerFailure(fail("runner_offline", "The selected runner is not connected.", "Confirm the selected runner is connected, then retry.").error, selected.value);
-  }
+  const snapshot = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/jobs/${encodeURIComponent(jobId)}`);
+  if (!snapshot.ok) return runnerFailure(snapshot.error, selected.value);
+  const workspaceId = isRecord(snapshot.value) && typeof snapshot.value.workspace_id === "string" ? snapshot.value.workspace_id : undefined;
+  const permission = await checkPermission(env, clientId, selected.value.runnerId, workspaceId, "read");
+  if (permission !== undefined) return asToolResult(permission);
+  if (selected.value.context.state !== "online") return runnerSuccess({ ...(snapshot.value as Record<string, unknown>), source: "registry_snapshot", runner_state: "offline" }, selected.value);
   const live = await callRunner(env, selected.value.runnerId, "job.get", { job_id: jobId });
   if (live.ok || live.error.code !== "runner_offline") return live.ok ? runnerSuccess(live.value, selected.value) : runnerFailure(live.error, selected.value);
-  const snapshot = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/jobs/${encodeURIComponent(jobId)}`);
-  return snapshot.ok
-    ? runnerSuccess({ ...(snapshot.value as Record<string, unknown>), source: "registry_snapshot", runner_state: "offline" }, selected.value)
-    : runnerFailure(live.error, selected.value);
+  return runnerSuccess({ ...(snapshot.value as Record<string, unknown>), source: "registry_snapshot", runner_state: "offline" }, selected.value);
 }
 
 function isSafeRelativePath(value: string): boolean {
@@ -247,7 +371,7 @@ type ToolCall = ToolSuccess | ToolFailure;
 const SAFE_RUNNER_ERROR_CODES = new Set([
   "baseline_changed", "busy", "expected_hash_mismatch", "file_too_large", "git_failed", "git_output_too_large", "git_timeout", "git_unavailable",
   "hunk_ambiguous", "hunk_not_found", "hunk_overlap", "invalid_params", "invalid_patch", "invalid_path", "invalid_request", "invalid_workspace", "missing_file", "mixed_newlines", "not_utf8",
-  "method_not_found", "patch_install_failed", "patch_rollback_failed", "path_traversal", "readonly_workspace", "runner_offline", "symlink_escape", "symlink_write", "target_exists", "timeout",
+  "method_not_found", "patch_install_failed", "patch_rollback_failed", "path_traversal", "permission_denied", "readonly_workspace", "runner_offline", "symlink_escape", "symlink_write", "target_exists", "timeout",
 ]);
 
 function safeRunnerErrorCode(value: unknown, fallback: string): string {
@@ -284,10 +408,7 @@ function registryJobsPath(runnerId: string, filters: Record<string, unknown>): s
   return `/runners/${encodeURIComponent(runnerId)}/jobs${suffix}`;
 }
 
-async function runnerListTool(env: WorkerEnv): Promise<unknown> {
-  const call = await registryCall(env, "/runners");
-  if (!call.ok) return asToolResult(call);
-  const value = isRecord(call.value) && Array.isArray(call.value.runners) ? call.value.runners : [];
+function runnerListToolValue(value: readonly unknown[]): unknown {
   const runners = value.filter(isRecord).map((runner) => {
     const runnerId = typeof runner.runner_id === "string" ? runner.runner_id : "unknown";
     const displayName = typeof runner.display_name === "string" && runner.display_name.length > 0 ? runner.display_name : runnerId;
@@ -295,10 +416,6 @@ async function runnerListTool(env: WorkerEnv): Promise<unknown> {
     return { runner_id: runnerId, display_name: displayName, state, available: state === "online", updated_at_ms: typeof runner.updated_at_ms === "number" ? runner.updated_at_ms : null };
   });
   return success({ runners });
-}
-
-async function registryTool(env: WorkerEnv, path: string): Promise<unknown> {
-  return asToolResult(await registryCall(env, path));
 }
 
 async function registryCall(env: WorkerEnv, path: string): Promise<ToolCall> {

@@ -19,7 +19,7 @@ export interface RunnerProfile {
   /** Development-only persisted allowance for loopback ws:// profiles. */
   readonly insecure_local?: boolean;
 }
-export interface ProfileStoreOptions { readonly baseDir?: string; readonly platform?: NodeJS.Platform; readonly home?: string; }
+export interface ProfileStoreOptions { readonly baseDir?: string; readonly filePath?: string; readonly platform?: NodeJS.Platform; readonly home?: string; }
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const MAX_WORKSPACES = 64;
 
@@ -32,6 +32,7 @@ export function profileDirectory(options: ProfileStoreOptions = {}): string {
   return join(home, ".remote-coding-runner");
 }
 export function profilePath(options: ProfileStoreOptions = {}): string {
+  if (options.filePath !== undefined) return options.filePath;
   // A per-process explicit profile path keeps service and integration launches
   // isolated without making profiles relative to the current workspace.
   if (options.baseDir === undefined && process.env.CODING_RUNNER_PROFILE !== undefined) return process.env.CODING_RUNNER_PROFILE;

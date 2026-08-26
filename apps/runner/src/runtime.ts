@@ -70,31 +70,55 @@ export class RunnerRuntime {
     this.jobs = new JobManager({ policy: this.policy, runnerId: options.config.runnerId, maxConcurrentJobs: options.config.maxConcurrentJobs ?? 1, ...(options.stateDir === undefined ? {} : { stateDir: options.stateDir }), ...(options.onJobEvent === undefined ? {} : { onEvent: options.onJobEvent }) });
   }
   public async initialize(): Promise<void> { await this.jobs.initialize(); }
-  public workspaceList(): Record<string, unknown> { return { workspaces: this.policy.list().map((workspace) => ({ workspace_id: workspace.workspaceId, readonly: workspace.readonly, shell: workspace.shell })) }; }
-  public envInfo(): Promise<Record<string, unknown>> { return this.environment.get(this.policy.list()); }
+  public applyPolicy(workspaces: readonly import("./config.js").WorkspaceConfig[]): void {
+    this.policy.replace(workspaces);
+  }
+  public workspaceList(): Record<string, unknown> { return { workspaces: this.policy.list().filter((workspace) => workspace.permissions?.read !== false).map((workspace) => ({ workspace_id: workspace.workspaceId, readonly: workspace.readonly, shell: workspace.shell })) }; }
+  public syncWorkspaceMetadata(): Array<{ workspace_id: string; persistence: "persistent"; labels: Record<string, string> }> {
+    return this.policy.list().filter((workspace) => workspace.permissions?.read !== false).map((workspace) => ({ workspace_id: workspace.workspaceId, persistence: "persistent" as const, labels: {} }));
+  }
+  public envInfo(): Promise<Record<string, unknown>> { return this.environment.get(this.policy.list().filter((workspace) => workspace.permissions?.read !== false)); }
   public async dispatch(method: string, input: unknown): Promise<unknown> {
+    const params = object(input);
     switch (method) {
       case "workspace.list": return this.workspaceList();
       case "env.info": return this.envInfo();
-      case "fs.read": return this.filesystem.read(input);
-      case "fs.list": return this.filesystem.list(input);
-      case "fs.search": return this.filesystem.search(input);
-      case "fs.apply_patch": return this.patcher.apply(input);
-      case "fs.patch": { const params = object(input); this.policy.assertWritable(params.workspace_id); return this.patcher.apply(input); }
-      case "git.status": return this.git.status(input);
-      case "git.diff": return this.git.diff(input);
-      case "exec.start": return this.jobs.start(input);
-      case "exec.run": return this.run(input);
-      case "job.list": return this.jobs.listReconciled(object(input));
-      case "job.get": return this.jobs.getReconciled(object(input).job_id);
-      case "job.logs": { const params = object(input); return this.jobs.logs(params.job_id, params); }
-      case "job.cancel": return this.jobs.cancel(object(input).job_id);
-      case "job.input": { const params = object(input); return this.jobs.input(params.job_id, params.data, params.close_stdin === true); }
+      case "fs.read": return this.filesystem.read(params);
+      case "fs.list": return this.filesystem.list(params);
+      case "fs.search": return this.filesystem.search(params);
+      case "fs.apply_patch": this.policy.assertPermission(params.workspace_id, "edit"); return this.patcher.apply(params);
+      case "fs.patch": this.policy.assertWritable(params.workspace_id); return this.patcher.apply(params);
+      case "git.status": this.policy.assertPermission(params.workspace_id, "read"); return this.git.status(params);
+      case "git.diff": this.policy.assertPermission(params.workspace_id, "read"); return this.git.diff(params);
+      case "exec.start": return this.startJob(params);
+      case "exec.run": return this.run(params);
+      case "job.list": this.assertJobsReadable(params.workspace_id); return this.jobs.listReconciled(params);
+      case "job.get": { const job = this.jobs.get(params.job_id); this.policy.assertPermission(job.workspace_id, "read"); return this.jobs.getReconciled(params.job_id); }
+      case "job.logs": { const job = this.jobs.get(params.job_id); this.policy.assertPermission(job.workspace_id, "read"); return this.jobs.logs(job.job_id, params); }
+      case "job.cancel": { const job = this.jobs.get(params.job_id); this.assertJobControl(job.workspace_id); return this.jobs.cancel(job.job_id); }
+      case "job.input": { const job = this.jobs.get(params.job_id); this.assertJobControl(job.workspace_id); return this.jobs.input(job.job_id, params.data, params.close_stdin === true); }
       default: throw new RpcRuntimeError("method_not_found", `Unsupported method: ${method}`);
     }
   }
   public async syncJobs(): Promise<JobMetadata[]> {
     return (await this.jobs.listReconciled({ limit: 100 })).map((job) => ({ job_id: job.job_id, workspace_id: job.workspace_id, status: job.status, created_at_ms: job.created_at_ms, updated_at_ms: job.updated_at_ms, ...(job.created_by_client_id === null ? {} : { created_by_client_id: job.created_by_client_id }), runner_id: this.config.runnerId }));
+  }
+  private assertJobsReadable(workspaceId: unknown): void {
+    if (workspaceId === undefined) {
+      for (const workspace of this.policy.list()) this.policy.assertPermission(workspace.workspaceId, "read");
+      return;
+    }
+    this.policy.assertPermission(workspaceId, "read");
+  }
+  private assertJobControl(workspaceId: string): void {
+    const workspace = this.policy.assertPermission(workspaceId, "read");
+    if (workspace.permissions !== undefined && !workspace.permissions.job_control) throw new RpcRuntimeError("permission_denied", "job control is disabled for this workspace");
+  }
+  private async startJob(input: unknown): Promise<import("./jobs.js").JobRecord> {
+    const params = object(input); const workspace = this.policy.getWorkspace(params.workspace_id);
+    this.policy.assertPermission(workspace.workspaceId, "read");
+    if (workspace.permissions !== undefined && !workspace.permissions.shell) throw new RpcRuntimeError("permission_denied", "shell execution is disabled for this workspace");
+    return this.jobs.start(params);
   }
   private async run(input: unknown): Promise<Record<string, unknown>> {
     const params = object(input);
@@ -102,7 +126,7 @@ export class RunnerRuntime {
     if (requested > LOCAL_RUNNER_OPERATION_TIMEOUT_MS) throw new RpcRuntimeError("invalid_params", `wait_ms must be at most ${LOCAL_RUNNER_OPERATION_TIMEOUT_MS}`);
     const startParams = { ...params };
     delete startParams.wait_ms;
-    const job = await this.jobs.start(startParams);
+    const job = await this.startJob(startParams);
     const deadline = Date.now() + requested;
     while (Date.now() < deadline) { const current = this.jobs.get(job.job_id); if (!isActive(current)) return { job: current, completed: true, stdout: await this.jobs.logs(job.job_id, { stream: "stdout", limit: 16 * 1024, tail: true }), stderr: await this.jobs.logs(job.job_id, { stream: "stderr", limit: 16 * 1024, tail: true }) }; await delay(Math.min(50, deadline - Date.now())); }
     return { job: this.jobs.get(job.job_id), completed: false, wait_cap_ms: LOCAL_RUNNER_OPERATION_TIMEOUT_MS };

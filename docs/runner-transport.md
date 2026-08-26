@@ -23,9 +23,33 @@ runner_select({ runner_id, confirm_switch: true }) # switch an existing selectio
 
 `runner_list` returns safe `runner_id`, `display_name`, state, availability, and timestamp data. `runner_current` reports no selection as null and reports a revoked selection as unavailable. Deleting a Runner clears any client selection that referenced it. The first selection is direct; changing it requires `confirm_switch: true`. For an unselected client only, the first ordinary tool automatically and persistently selects the Runner if exactly one registered Runner exists. With zero or multiple registered Runners, ordinary tools fail with guidance to call `runner_list` and `runner_select`.
 
-After selection, ordinary MCP tools resolve that Runner and do **not** accept `runner_id`. Workspace-specific tool schemas retain `workspace_id`; `runner_info` and `runner_select` keep a Runner ID because they are Runner-management/routing tools. This removes per-call routing ambiguity but does not isolate clients: clients in the same single-admin instance that select the same Runner and possess the needed scope share workspace IDs and Registry job visibility.
+After selection, ordinary MCP tools resolve that Runner and do **not** accept `runner_id`. `workspace_id` remains mandatory for `read`, `edit`, and `shell`; it is optional only for the selected Runner's `job({action:"list"})`. `runner_select` is the sole public tool that accepts a Runner ID. The Runner's legacy `fs.*`, `exec.*`, `job.*`, Git, and environment names are private Worker-to-Runner RPC methods, not public MCP aliases. This removes per-call routing ambiguity but does not isolate clients: clients in the same single-admin instance that select the same Runner and possess the needed scope share workspace IDs and Registry job visibility.
 
-A selected offline, stale, revoked, or otherwise unavailable Runner never causes fallback to another Runner. Live operations return selected-Runner context and an offline/unavailable error. `job_get` may use a bounded Registry snapshot when the same selected Runner is offline; it still does not query another Runner. Deleting a Runner clears its client selections. Explicitly choose a new Runner after inspecting `runner_current`.
+A selected offline, stale, revoked, or otherwise unavailable Runner never causes fallback to another Runner. Live operations return selected-Runner context and an offline/unavailable error. `job({action:"get"})` may use a bounded Registry snapshot when the same selected Runner is offline; it still does not query another Runner. Deleting a Runner clears its client selections. Explicitly choose a new Runner after inspecting `runner_current`.
+
+## Compact MCP catalog, private RPC, and scope
+
+The exact default `tools/list` catalog is:
+
+```text
+runner_list
+runner_current
+runner_select
+workspace_list
+read
+edit
+shell
+job
+```
+
+No `runner_info`, `env_info`, `fs_*`, `exec_*`, `job_*`, or `git_*` names are public MCP tools. The Runner retains those legacy RPC implementations for Worker-to-Runner transport compatibility only; MCP clients cannot invoke them by name.
+
+- `read({workspace_id,path,cursor?,offset?,limit?})` maps to private `fs.read`, with UTF-8-safe byte cursors and a 32 KiB public page cap. It accepts only workspace-relative paths and returns no host root.
+- `edit({workspace_id,patch,expected_hash?,expected_hashes?})` maps to transactional private `fs.apply_patch`.
+- `shell({workspace_id,command,wait_ms?,background?})` maps to persistent jobs. `background:true` returns immediately; a foreground call waits no longer than `wait_ms` (maximum 8 seconds) and returns `job_id`/status when unfinished. Shell permission is the only command gate—there is no blacklist. It is not a sandbox: commands have the Runner account's OS permissions, so use a non-administrator/root Runner inside a restricted VM/container for untrusted repositories.
+- `job({action:"list"|"get"|"logs"|"cancel"|"input",...})` maps to the private job RPCs. List/get/logs require read permission; cancel/input require job-control permission. Logs remain bounded and UTF-8-safe.
+
+The Worker resolves effective client/Runner/workspace permissions before forwarding and the Runner repeats local enforcement. Permission failures are structured `permission_denied` results. `coding:read`, `coding:write`, and `coding:exec` remain the requested authorization scopes for read, edit, and shell/job-control operations respectively.
 
 ## Runner enrollment and connection
 
@@ -67,7 +91,7 @@ LOCAL_RUNNER_OPERATION_TIMEOUT_MS = 8000
 WORKER_BRIDGE_TIMEOUT_MS          = 12000
 ```
 
-`exec_run` and Git use the local maximum. The Worker bridge reserves four seconds for reply transport and scheduling. Long commands use `exec_start` and persistent Job APIs.
+`shell` foreground execution and Git use the local maximum. The Worker bridge reserves four seconds for reply transport and scheduling. Longer commands use `shell({background:true})` and the compact `job` tool.
 
 ## Jobs and sync
 
@@ -80,15 +104,15 @@ jobs/<job_id>/stdout.log
 jobs/<job_id>/stderr.log
 ```
 
-Jobs are detached process groups on POSIX and outlive MCP requests and WebSocket connections. `job_list` reads bounded Registry snapshots for the selected Runner while it is offline. Runner sync upserts current/recent jobs; a bounded snapshot omission never deletes historical job data. Registry retains active/nonterminal jobs and up to 1,000 terminal jobs per Runner.
+Jobs are detached process groups on POSIX and outlive MCP requests and WebSocket connections. `job({action:"list"})` reads bounded Registry snapshots for the selected Runner while it is offline. Runner sync upserts current/recent jobs; a bounded snapshot omission never deletes historical job data. Registry retains active/nonterminal jobs and up to 1,000 terminal jobs per Runner.
 
-A recovered live process is marked `unknown`. `job_get`, `job_list`, and sync trigger reconciliation: a vanished or fingerprint-mismatched process becomes `interrupted`; a recovered cancellation becomes `cancelled` only when persisted termination-delivery evidence exists. No exit code is fabricated after restart.
+A recovered live process is marked `unknown`. `job({action:"get"})`, `job({action:"list"})`, and sync trigger reconciliation: a vanished or fingerprint-mismatched process becomes `interrupted`; a recovered cancellation becomes `cancelled` only when persisted termination-delivery evidence exists. No exit code is fabricated after restart.
 
 ## Filesystem, logs, and scope
 
-Workspace roots are local configuration only and never cross the wire. All filesystem, Git, cwd, and patch paths pass the canonical workspace PathPolicy. `fs_read` and `job_logs` use UTF-8-safe byte cursors. Patch errors are stable root-free codes such as `invalid_patch`, `missing_file`, `target_exists`, `baseline_changed`, hunk errors, `patch_install_failed`, and `patch_rollback_failed`.
+Workspace roots are local configuration only and never cross the wire. All filesystem, Git, cwd, and patch paths pass the canonical workspace PathPolicy. Compact `read` and `job({action:"logs"})` use UTF-8-safe byte cursors. Patch errors are stable root-free codes such as `invalid_patch`, `missing_file`, `target_exists`, `baseline_changed`, hunk errors, `patch_install_failed`, and `patch_rollback_failed`.
 
-`env_info` caches bounded parallel probes for platform, architecture, hostname, shell, Node/npm/pnpm, Python, Git, Go, rustc/Cargo, and Docker. Missing tools return `available: false`. Complete on-disk logs remain unbounded by default and need disk monitoring.
+Private `env.info` retains bounded parallel probes for platform, architecture, hostname, shell, Node/npm/pnpm, Python, Git, Go, rustc/Cargo, and Docker for the Worker/Runner transport. Missing tools return `available: false`. Complete on-disk logs remain unbounded by default and need disk monitoring.
 
 The Runner path policy is not a sandbox. No OAuth, AI/model API, Cloudflare Sandbox, Cloudflare Containers, or GitHub Actions runtime is part of the deployed control plane. Use external VM/container isolation for untrusted repositories and commands.
 

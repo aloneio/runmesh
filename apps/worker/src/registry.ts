@@ -3,6 +3,8 @@ import {
   JobStartedSchema,
   JobStatusMessageSchema,
   IdentifierSchema,
+  PROTOCOL_CURRENT_VERSION,
+  PROTOCOL_MIN_VERSION,
   RunnerMetadataSchema,
   RunnerSyncSchema,
   type RunnerMetadata,
@@ -12,6 +14,15 @@ import { constantTimeEqual, isSafeIdentifier, runnerTokenVerifier, verifyInterna
 export type RunnerConnectionState = "online" | "offline" | "stale";
 export type CodingScope = "coding:read" | "coding:write" | "coding:exec";
 const VALID_SCOPES = new Set<CodingScope>(["coding:read", "coding:write", "coding:exec"]);
+
+export type PermissionBit = "read" | "edit" | "shell" | "job_control";
+export type PermissionSet = Record<PermissionBit, boolean>;
+export type RunnerProfilePreset = "locked" | "read_only" | "coding" | "full_control";
+export type WorkspaceValidationStatus = "valid" | "missing" | "not_directory" | "permission_denied" | "invalid_path";
+export type RunnerUpdateChannel = "stable" | "pinned";
+export type RunnerProtocolCompatibility = "unknown" | "compatible" | "incompatible";
+export type RunnerUpdateStatus = "unknown" | "up_to_date" | "update_available" | "pinned" | "incompatible";
+const LOCKED_PERMISSIONS: PermissionSet = { read: false, edit: false, shell: false, job_control: false };
 
 export interface RunnerPublicInfo {
   readonly platform: string;
@@ -32,7 +43,35 @@ export interface RunnerRecord {
   readonly public_info: RunnerPublicInfo | null;
   readonly last_heartbeat_ms: number | null;
   readonly last_sync_sequence: number | null;
+  readonly desired_policy_revision: number;
+  readonly applied_policy_revision: number | null;
+  readonly policy_status: "pending" | "applied" | "invalid";
+  readonly runner_permissions: PermissionSet;
+  /** Last actual Runner package/version observed at enrollment or handshake. */
+  readonly current_runner_version: string | null;
+  readonly protocol_min_version: number | null;
+  readonly protocol_max_version: number | null;
+  readonly protocol_compatibility: RunnerProtocolCompatibility;
+  readonly update_channel: RunnerUpdateChannel;
+  /** The exact requested version when the operator pins this Runner. */
+  readonly desired_runner_version: string | null;
+  /** Last stable descriptor version observed by an admin policy save. */
+  readonly latest_runner_version: string | null;
+  readonly update_status: RunnerUpdateStatus;
   readonly updated_at_ms: number;
+}
+export interface WorkspaceRecord {
+  readonly runner_id: string;
+  readonly workspace_id: string;
+  readonly display_name: string;
+  /** Admin/control-plane only; never use this type in MCP output. */
+  readonly root_path: string;
+  readonly enabled: boolean;
+  readonly permissions: PermissionSet;
+  readonly created_at_ms: number;
+  readonly updated_at_ms: number;
+  readonly revision: number;
+  readonly validation_status: WorkspaceValidationStatus | null;
 }
 export interface DashboardRunnerRecord extends RunnerRecord {
   readonly workspace_count: number;
@@ -96,10 +135,26 @@ type RunnerRow = {
   public_info_json: string | null;
   last_heartbeat_ms: number | null;
   last_sync_sequence: number | null;
+  desired_policy_revision: number;
+  applied_policy_revision: number | null;
+  policy_status: "pending" | "applied" | "invalid";
+  runner_permissions_json: string;
+  current_runner_version: string | null;
+  protocol_min_version: number | null;
+  protocol_max_version: number | null;
+  protocol_compatibility: RunnerProtocolCompatibility;
+  update_channel: RunnerUpdateChannel;
+  desired_runner_version: string | null;
+  latest_runner_version: string | null;
+  update_status: RunnerUpdateStatus;
   updated_at_ms: number;
 };
 type EnrollmentRow = { enrollment_id: string; runner_id: string; verifier: string; created_at_ms: number; expires_at_ms: number; used_at_ms: number | null };
 type WorkspaceRow = { workspace_json: string };
+type ManagedWorkspaceRow = {
+  runner_id: string; workspace_id: string; display_name: string; root_path: string; enabled: number;
+  permissions_json: string; created_at_ms: number; updated_at_ms: number; revision: number; validation_status: WorkspaceValidationStatus | null;
+};
 type JobRow = { job_json: string };
 type AdminSettingsRow = { password_verifier: string; session_version: number; created_at_ms: number; updated_at_ms: number };
 type AuthThrottleRow = { id: string; failed_attempts: number; blocked_until_ms: number; updated_at_ms: number };
@@ -138,11 +193,21 @@ export class RegistryDO {
           runner_id TEXT PRIMARY KEY, display_name TEXT NOT NULL, token_verifier TEXT NOT NULL, state TEXT NOT NULL,
           connection_epoch INTEGER NOT NULL DEFAULT 0, credential_version INTEGER NOT NULL DEFAULT 1,
           session_id TEXT, metadata_json TEXT, public_info_json TEXT, last_heartbeat_ms INTEGER, last_sync_sequence INTEGER,
-          updated_at_ms INTEGER NOT NULL
+          desired_policy_revision INTEGER NOT NULL DEFAULT 0, applied_policy_revision INTEGER, policy_status TEXT NOT NULL DEFAULT 'pending',
+          runner_permissions_json TEXT NOT NULL DEFAULT '{"read":false,"edit":false,"shell":false,"job_control":false}',
+          current_runner_version TEXT, protocol_min_version INTEGER, protocol_max_version INTEGER,
+          protocol_compatibility TEXT NOT NULL DEFAULT 'unknown', update_channel TEXT NOT NULL DEFAULT 'stable',
+          desired_runner_version TEXT, latest_runner_version TEXT, update_status TEXT NOT NULL DEFAULT 'unknown', updated_at_ms INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS workspaces (
           runner_id TEXT NOT NULL, workspace_id TEXT NOT NULL, workspace_json TEXT NOT NULL,
           updated_at_ms INTEGER NOT NULL, PRIMARY KEY (runner_id, workspace_id)
+        );
+        CREATE TABLE IF NOT EXISTS managed_workspaces (
+          runner_id TEXT NOT NULL, workspace_id TEXT NOT NULL, display_name TEXT NOT NULL, root_path TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1, permissions_json TEXT NOT NULL,
+          created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, revision INTEGER NOT NULL DEFAULT 1,
+          validation_status TEXT, PRIMARY KEY (runner_id, workspace_id)
         );
         CREATE TABLE IF NOT EXISTS jobs (
           runner_id TEXT NOT NULL, job_id TEXT NOT NULL, job_json TEXT NOT NULL,
@@ -165,6 +230,10 @@ export class RegistryDO {
           secret_prefix TEXT NOT NULL, scopes_json TEXT NOT NULL, secret_version INTEGER NOT NULL DEFAULT 1,
           created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, last_used_at_ms INTEGER, revoked_at_ms INTEGER,
           active_runner_id TEXT, active_runner_updated_at_ms INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS client_runner_overrides (
+          client_id TEXT NOT NULL, runner_id TEXT NOT NULL, permissions_json TEXT NOT NULL,
+          created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, PRIMARY KEY (client_id, runner_id)
         );
         CREATE TABLE IF NOT EXISTS runner_enrollments (
           enrollment_id TEXT PRIMARY KEY, runner_id TEXT NOT NULL, verifier TEXT NOT NULL UNIQUE,
@@ -290,7 +359,7 @@ export class RegistryDO {
     return this.ctx.storage.sql.exec<McpClientRow>("SELECT * FROM mcp_clients ORDER BY created_at_ms DESC, client_id").toArray().map(decodeMcpClient);
   }
   public createMcpClient(input: { client_id: string; label: string; secret_verifier: string; secret_prefix: string; scopes: readonly CodingScope[] }, nowMs: number): McpClientRecord | undefined {
-    if (!isSafeIdentifier(input.client_id) || !validLabel(input.label) || !validScopes(input.scopes) || !validVerifier(input.secret_verifier) || !validPrefix(input.secret_prefix)) return undefined;
+    if (!isSafeIdentifier(input.client_id) || !validLabel(input.label) || !validScopes(input.scopes) || !validVerifier(input.secret_verifier) || !/^[A-Za-z0-9_-]{4,16}$/.test(input.secret_prefix)) return undefined;
     try {
       this.ctx.storage.sql.exec(
         `INSERT INTO mcp_clients (client_id, label, secret_verifier, secret_prefix, scopes_json, secret_version, created_at_ms, updated_at_ms)
@@ -305,7 +374,7 @@ export class RegistryDO {
     return this.getMcpClient(clientId);
   }
   public rotateMcpClient(clientId: string, secretVerifier: string, secretPrefix: string, nowMs: number): McpClientRecord | undefined {
-    if (!isSafeIdentifier(clientId) || !validVerifier(secretVerifier) || !validPrefix(secretPrefix)) return undefined;
+    if (!isSafeIdentifier(clientId) || !validVerifier(secretVerifier) || !/^[A-Za-z0-9_-]{4,16}$/.test(secretPrefix)) return undefined;
     try {
       this.ctx.storage.sql.exec(
         `UPDATE mcp_clients SET secret_verifier = ?, secret_prefix = ?, secret_version = secret_version + 1,
@@ -330,6 +399,29 @@ export class RegistryDO {
       this.ctx.storage.sql.exec("UPDATE mcp_clients SET last_used_at_ms = ? WHERE client_id = ?", nowMs, row.client_id);
     }
     return { client_id: row.client_id, label: row.label, scopes, secret_version: row.secret_version };
+  }
+
+  public setClientRunnerOverride(clientId: string, runnerId: string, permissions: PermissionSet, nowMs: number): boolean {
+    if (!isSafeIdentifier(clientId) || !isSafeIdentifier(runnerId) || this.getMcpClient(clientId) === undefined || this.runnerRow(runnerId) === undefined || !validPermissionSet(permissions)) return false;
+    this.ctx.storage.sql.exec(`INSERT INTO client_runner_overrides (client_id, runner_id, permissions_json, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(client_id, runner_id) DO UPDATE SET permissions_json = excluded.permissions_json, updated_at_ms = excluded.updated_at_ms`, clientId, runnerId, JSON.stringify(permissions), nowMs, nowMs);
+    return true;
+  }
+  public clientRunnerPermissions(clientId: string, runnerId: string): PermissionSet | undefined {
+    const row = this.ctx.storage.sql.exec<{ permissions_json: string }>("SELECT permissions_json FROM client_runner_overrides WHERE client_id = ? AND runner_id = ?", clientId, runnerId).toArray()[0];
+    return row === undefined ? undefined : parsePermissionSet(row.permissions_json);
+  }
+  public effectivePermissions(clientId: string, runnerId: string, workspaceId: string): PermissionSet | undefined {
+    const client = this.getMcpClient(clientId); const runner = this.getRunner(runnerId); const workspace = this.getManagedWorkspace(runnerId, workspaceId);
+    if (client === undefined || runner === undefined) return undefined;
+    const override = this.clientRunnerPermissions(clientId, runnerId) ?? { read: true, edit: true, shell: true, job_control: true };
+    const clientPermissions: PermissionSet = { read: client.scopes.includes("coding:read"), edit: client.scopes.includes("coding:write"), shell: client.scopes.includes("coding:exec"), job_control: client.scopes.includes("coding:exec") };
+    if (workspace !== undefined) return workspace.enabled ? intersectPermissions(clientPermissions, override, runner.runner_permissions, workspace.permissions) : undefined;
+    // Before any central revision exists, explicitly configured local Runner
+    // workspaces retain their established compatibility behavior. Once central
+    // policy begins, unknown/synchronized-only workspaces fail closed.
+    const synced = this.listWorkspaces(runnerId).some((item) => typeof item === "object" && item !== null && !Array.isArray(item) && (item as Record<string, unknown>).workspace_id === workspaceId);
+    return runner.desired_policy_revision === 0 && synced ? intersectPermissions(clientPermissions, override) : undefined;
   }
 
   /** Resolve an MCP client's sticky runner selection without silently changing it. */
@@ -378,6 +470,86 @@ export class RegistryDO {
     return this.selectMcpClientRunner(clientId, runners[0]?.runner_id ?? "", false, nowMs);
   }
 
+  public desiredPolicy(runnerId: string): { revision: number; runner_permissions: PermissionSet; workspaces: Array<{ workspace_id: string; root_path: string; enabled: boolean; permissions: PermissionSet }> } | undefined {
+    const runner = this.runnerRow(runnerId);
+    if (runner === undefined) return undefined;
+    const managed = this.listManagedWorkspaces(runnerId);
+    if (runner.desired_policy_revision === 0 && managed.length === 0) return undefined;
+    return {
+      revision: runner.desired_policy_revision,
+      runner_permissions: parsePermissionSet(runner.runner_permissions_json) ?? LOCKED_PERMISSIONS,
+      workspaces: managed.map((workspace) => ({ workspace_id: workspace.workspace_id, root_path: workspace.root_path, enabled: workspace.enabled, permissions: workspace.permissions })),
+    };
+  }
+  public listManagedWorkspaces(runnerId: string): WorkspaceRecord[] {
+    return this.ctx.storage.sql.exec<ManagedWorkspaceRow>("SELECT * FROM managed_workspaces WHERE runner_id = ? ORDER BY created_at_ms, workspace_id", runnerId).toArray().flatMap((row) => decodeWorkspace(row));
+  }
+  public getManagedWorkspace(runnerId: string, workspaceId: string): WorkspaceRecord | undefined {
+    const row = this.ctx.storage.sql.exec<ManagedWorkspaceRow>("SELECT * FROM managed_workspaces WHERE runner_id = ? AND workspace_id = ?", runnerId, workspaceId).toArray()[0];
+    return row === undefined ? undefined : decodeWorkspace(row)[0];
+  }
+  public createManagedWorkspace(runnerId: string, input: { workspace_id: string; display_name: string; root_path: string; enabled: boolean; permissions: PermissionSet }, nowMs: number): WorkspaceRecord | undefined {
+    if (this.runnerRow(runnerId) === undefined || !validWorkspaceInput(input)) return undefined;
+    try {
+      this.ctx.storage.transactionSync(() => {
+        this.ctx.storage.sql.exec(`INSERT INTO managed_workspaces (runner_id, workspace_id, display_name, root_path, enabled, permissions_json, created_at_ms, updated_at_ms, revision)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`, runnerId, input.workspace_id, input.display_name, input.root_path, input.enabled ? 1 : 0, JSON.stringify(input.permissions), nowMs, nowMs);
+        this.bumpDesiredPolicy(runnerId, nowMs);
+      });
+    } catch { return undefined; }
+    return this.getManagedWorkspace(runnerId, input.workspace_id);
+  }
+  public updateManagedWorkspace(runnerId: string, workspaceId: string, input: { display_name: string; root_path: string; enabled: boolean; permissions: PermissionSet }, nowMs: number): WorkspaceRecord | undefined {
+    if (!isSafeIdentifier(workspaceId) || !validWorkspaceInput({ workspace_id: workspaceId, ...input }) || this.getManagedWorkspace(runnerId, workspaceId) === undefined) return undefined;
+    this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.sql.exec(`UPDATE managed_workspaces SET display_name = ?, root_path = ?, enabled = ?, permissions_json = ?, updated_at_ms = ?, revision = revision + 1, validation_status = NULL
+        WHERE runner_id = ? AND workspace_id = ?`, input.display_name, input.root_path, input.enabled ? 1 : 0, JSON.stringify(input.permissions), nowMs, runnerId, workspaceId);
+      this.bumpDesiredPolicy(runnerId, nowMs);
+    });
+    return this.getManagedWorkspace(runnerId, workspaceId);
+  }
+  public deleteManagedWorkspace(runnerId: string, workspaceId: string, nowMs: number): boolean {
+    if (!isSafeIdentifier(workspaceId)) return false;
+    return this.ctx.storage.transactionSync(() => {
+      const result = this.ctx.storage.sql.exec("DELETE FROM managed_workspaces WHERE runner_id = ? AND workspace_id = ?", runnerId, workspaceId);
+      if (result.rowsWritten !== 1) return false;
+      this.bumpDesiredPolicy(runnerId, nowMs);
+      return true;
+    });
+  }
+  public setRunnerPermissions(runnerId: string, permissions: PermissionSet, nowMs: number): RunnerRecord | undefined {
+    if (this.runnerRow(runnerId) === undefined || !validPermissionSet(permissions)) return undefined;
+    this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.sql.exec("UPDATE runners SET runner_permissions_json = ?, updated_at_ms = ? WHERE runner_id = ?", JSON.stringify(permissions), nowMs, runnerId);
+      this.bumpDesiredPolicy(runnerId, nowMs);
+    });
+    return this.getRunner(runnerId);
+  }
+  /**
+   * Records an operator-only update policy. This intentionally changes no
+   * Runner process: download, install, self-update, and rollback are deferred.
+   */
+  public setRunnerVersionPolicy(runnerId: string, input: { update_channel: RunnerUpdateChannel; desired_runner_version?: string; latest_runner_version?: string }, nowMs: number): RunnerRecord | undefined {
+    if (!isSafeIdentifier(runnerId) || this.runnerRow(runnerId) === undefined || !validUpdateChannel(input.update_channel) || (input.desired_runner_version !== undefined && !validRunnerVersion(input.desired_runner_version)) || (input.latest_runner_version !== undefined && !validRunnerVersion(input.latest_runner_version)) || (input.update_channel === "pinned" && input.desired_runner_version === undefined)) return undefined;
+    this.ctx.storage.sql.exec(
+      "UPDATE runners SET update_channel = ?, desired_runner_version = ?, latest_runner_version = ?, update_status = ?, updated_at_ms = ? WHERE runner_id = ?",
+      input.update_channel, input.desired_runner_version ?? null, input.latest_runner_version ?? null,
+      updateStatus(input.update_channel, input.desired_runner_version, input.latest_runner_version, this.runnerRow(runnerId)), nowMs, runnerId,
+    );
+    return this.getRunner(runnerId);
+  }
+  public emergencyLockRunner(runnerId: string, nowMs: number): RunnerRecord | undefined { return this.setRunnerPermissions(runnerId, LOCKED_PERMISSIONS, nowMs); }
+  public acknowledgePolicy(runnerId: string, epoch: number, credentialVersion: number, input: { desired_revision: number; applied_revision: number; status: "applied" | "pending" | "invalid"; workspace_status: readonly { workspace_id: string; status: WorkspaceValidationStatus }[] }, nowMs: number): boolean {
+    if (!this.sessionIsCurrent(runnerId, epoch, credentialVersion, true) || input.workspace_status.length > 64 || input.workspace_status.some((item) => !isSafeIdentifier(item.workspace_id))) return false;
+    const runner = this.runnerRow(runnerId);
+    if (runner === undefined || input.desired_revision !== runner.desired_policy_revision || input.applied_revision > input.desired_revision || (input.status === "applied" && input.applied_revision !== input.desired_revision)) return false;
+    this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.sql.exec("UPDATE runners SET applied_policy_revision = ?, policy_status = ?, updated_at_ms = ? WHERE runner_id = ?", input.applied_revision, input.status, nowMs, runnerId);
+      for (const item of input.workspace_status) this.ctx.storage.sql.exec("UPDATE managed_workspaces SET validation_status = ? WHERE runner_id = ? AND workspace_id = ?", item.status, runnerId, item.workspace_id);
+    });
+    return true;
+  }
+
   public registerRunner(runnerId: string, tokenVerifier: string, nowMs: number): void {
     this.ctx.storage.sql.exec(
       `INSERT INTO runners (runner_id, display_name, token_verifier, state, credential_version, updated_at_ms)
@@ -409,6 +581,7 @@ export class RegistryDO {
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE runner_id = ?", runnerId);
       this.ctx.storage.sql.exec("DELETE FROM workspaces WHERE runner_id = ?", runnerId);
+      this.ctx.storage.sql.exec("DELETE FROM managed_workspaces WHERE runner_id = ?", runnerId);
       this.ctx.storage.sql.exec("DELETE FROM jobs WHERE runner_id = ?", runnerId);
       this.ctx.storage.sql.exec("UPDATE mcp_clients SET active_runner_id = NULL, active_runner_updated_at_ms = ?, updated_at_ms = ? WHERE active_runner_id = ?", nowMs, nowMs, runnerId);
       this.ctx.storage.sql.exec("DELETE FROM runners WHERE runner_id = ?", runnerId);
@@ -435,8 +608,13 @@ export class RegistryDO {
       if (changed.rowsWritten !== 1) return undefined;
       this.ctx.storage.sql.exec(
         `UPDATE runners SET token_verifier = ?, credential_version = credential_version + 1, connection_epoch = connection_epoch + 1,
-         state = 'offline', session_id = NULL, metadata_json = NULL, public_info_json = ?, last_heartbeat_ms = NULL,
-         last_sync_sequence = NULL, updated_at_ms = ? WHERE runner_id = ?`, tokenVerifier, JSON.stringify(publicInfo), nowMs, row.runner_id,
+         state = 'offline', session_id = NULL, metadata_json = NULL, public_info_json = ?, current_runner_version = ?,
+         protocol_min_version = ?, protocol_max_version = ?, protocol_compatibility = ?, update_status = ?, last_heartbeat_ms = NULL,
+         last_sync_sequence = NULL, updated_at_ms = ? WHERE runner_id = ?`,
+        tokenVerifier, JSON.stringify(publicInfo), publicInfo.runner_version, publicInfo.protocol_version, publicInfo.protocol_version,
+        protocolCompatibility(publicInfo.protocol_version, publicInfo.protocol_version),
+        updateStatus(this.runnerRow(row.runner_id)?.update_channel ?? "stable", this.runnerRow(row.runner_id)?.desired_runner_version ?? undefined, this.runnerRow(row.runner_id)?.latest_runner_version ?? undefined, { current_runner_version: publicInfo.runner_version, protocol_compatibility: protocolCompatibility(publicInfo.protocol_version, publicInfo.protocol_version) }),
+        nowMs, row.runner_id,
       );
       return this.runnerRow(row.runner_id) === undefined ? undefined : { runner_id: row.runner_id };
     });
@@ -447,11 +625,17 @@ export class RegistryDO {
     const row = this.ctx.storage.sql.exec<Pick<RunnerRow, "token_verifier" | "credential_version">>("SELECT token_verifier, credential_version FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
     return row !== undefined && row.token_verifier.length > 0 && constantTimeEqual(row.token_verifier, tokenVerifier) ? { credential_version: row.credential_version } : undefined;
   }
-  public beginConnection(runnerId: string, metadata: RunnerMetadata, sessionId: string, credentialVersion: number, nowMs: number): number | undefined {
+  public beginConnection(runnerId: string, metadata: RunnerMetadata, protocol: { min_protocol_version: number; max_protocol_version: number }, sessionId: string, credentialVersion: number, nowMs: number): number | undefined {
+    const compatibility = protocolCompatibility(protocol.min_protocol_version, protocol.max_protocol_version);
+    const prior = this.runnerRow(runnerId);
     this.ctx.storage.sql.exec(
       `UPDATE runners SET state = 'online', connection_epoch = connection_epoch + 1, session_id = ?, metadata_json = ?,
-       last_heartbeat_ms = ?, last_sync_sequence = NULL, updated_at_ms = ? WHERE runner_id = ? AND credential_version = ?`,
-      sessionId, JSON.stringify(metadata), nowMs, nowMs, runnerId, credentialVersion,
+       current_runner_version = ?, protocol_min_version = ?, protocol_max_version = ?, protocol_compatibility = ?,
+       update_status = ?, last_heartbeat_ms = ?, last_sync_sequence = NULL,
+       policy_status = CASE WHEN desired_policy_revision = 0 THEN 'applied' ELSE 'pending' END, updated_at_ms = ? WHERE runner_id = ? AND credential_version = ?`,
+      sessionId, JSON.stringify(metadata), metadata.runner_version, protocol.min_protocol_version, protocol.max_protocol_version, compatibility,
+      updateStatus(prior?.update_channel ?? "stable", prior?.desired_runner_version ?? undefined, prior?.latest_runner_version ?? undefined, { ...prior, current_runner_version: metadata.runner_version, protocol_compatibility: compatibility }),
+      nowMs, nowMs, runnerId, credentialVersion,
     );
     return this.getRunner(runnerId)?.credential_version === credentialVersion ? this.getRunner(runnerId)?.connection_epoch : undefined;
   }
@@ -505,6 +689,7 @@ export class RegistryDO {
        token_verifier = '', state = 'offline', session_id = NULL, metadata_json = NULL, last_heartbeat_ms = NULL,
        last_sync_sequence = NULL, updated_at_ms = ? WHERE runner_id = ?`, nowMs, runnerId);
       this.ctx.storage.sql.exec("DELETE FROM workspaces WHERE runner_id = ?", runnerId);
+      this.ctx.storage.sql.exec("DELETE FROM managed_workspaces WHERE runner_id = ?", runnerId);
       this.ctx.storage.sql.exec("DELETE FROM jobs WHERE runner_id = ?", runnerId);
     });
   }
@@ -582,7 +767,7 @@ export class RegistryDO {
       const redeemed = verifier === undefined || tokenVerifier === undefined || publicInfo === undefined ? undefined : await this.redeemRunnerEnrollment(verifier, tokenVerifier, publicInfo, now);
       return redeemed === undefined ? new Response("invalid enrollment", { status: 401 }) : Response.json(redeemed);
     }
-    if (segments[0] === "auth") return this.handleAuth(request.method, segments.slice(1), input, now);
+    if (segments[0] === "auth") return this.handleAuth(request.method, segments.slice(1), input, now, url);
     if (request.method === "GET" && segments.length === 1 && segments[0] === "runners") return Response.json({ runners: this.listRunners() });
     if (request.method === "GET" && segments.length === 1 && segments[0] === "dashboard") return Response.json(this.dashboardSnapshot());
     const runnerId = segments[0] === "runners" ? parseRunnerId(segments[1]) : undefined;
@@ -598,9 +783,11 @@ export class RegistryDO {
       const authenticated = await this.authenticateRunner(runnerId, token); return authenticated === undefined ? new Response("unauthorized", { status: 401 }) : Response.json(authenticated);
     }
     if (request.method === "POST" && action === "connect") {
-      const sessionId = stringField(input, "session_id", 128); const credentialVersion = integerField(input, "credential_version"); const nowMs = integerField(input, "now_ms"); const metadata = RunnerMetadataSchema.safeParse(input.metadata);
-      if (!metadata.success || sessionId === undefined || credentialVersion === undefined || nowMs === undefined) return Response.json({ error: "invalid connection metadata" }, { status: 400 });
-      const epoch = this.beginConnection(runnerId, metadata.data, sessionId, credentialVersion, nowMs); return epoch === undefined ? new Response("stale credentials", { status: 409 }) : Response.json({ epoch });
+      const sessionId = stringField(input, "session_id", 128); const credentialVersion = integerField(input, "credential_version"); const nowMs = integerField(input, "now_ms"); const metadata = RunnerMetadataSchema.safeParse(input.metadata); const protocolMin = integerField(input, "min_protocol_version"); const protocolMax = integerField(input, "max_protocol_version");
+      if (!metadata.success || sessionId === undefined || credentialVersion === undefined || nowMs === undefined || protocolMin === undefined || protocolMax === undefined || protocolMin < 1 || protocolMin > protocolMax || protocolMax > 1_000) return Response.json({ error: "invalid connection metadata" }, { status: 400 });
+      const epoch = this.beginConnection(runnerId, metadata.data, { min_protocol_version: protocolMin, max_protocol_version: protocolMax }, sessionId, credentialVersion, nowMs);
+      const policy = epoch === undefined ? undefined : this.desiredPolicy(runnerId);
+      return epoch === undefined ? new Response("stale credentials", { status: 409 }) : Response.json({ epoch, desired_policy: policy });
     }
     if (request.method === "POST" && action === "heartbeat") { const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const nowMs = integerField(input, "now_ms"); if (epoch === undefined || credentialVersion === undefined || nowMs === undefined) return Response.json({ error: "invalid heartbeat" }, { status: 400 }); return this.recordHeartbeat(runnerId, epoch, credentialVersion, nowMs) ? new Response(null, { status: 204 }) : new Response("stale session", { status: 409 }); }
     if (request.method === "POST" && action === "session") { const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); return epoch !== undefined && credentialVersion !== undefined && this.sessionIsCurrent(runnerId, epoch, credentialVersion) ? new Response(null, { status: 204 }) : new Response("stale session", { status: 409 }); }
@@ -617,6 +804,8 @@ export class RegistryDO {
     if (request.method === "POST" && action === "rotate") { this.invalidateRunnerCredential(runnerId, now); return new Response(null, { status: 204 }); }
     if (request.method === "POST" && action === "revoke") { this.revokeRunner(runnerId, now); return new Response(null, { status: 204 }); }
     if (request.method === "GET" && action === "workspaces" && itemId === undefined) return Response.json({ runner_id: runnerId, workspaces: this.listWorkspaces(runnerId) });
+    if (request.method === "POST" && action === "policy-ack") { const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const desiredRevision = integerField(input, "desired_revision"); const appliedRevision = integerField(input, "applied_revision"); const status = input.status; const statuses = workspaceStatusesField(input.workspace_status); if (epoch === undefined || credentialVersion === undefined || desiredRevision === undefined || appliedRevision === undefined || (status !== "applied" && status !== "pending" && status !== "invalid") || statuses === undefined) return Response.json({ error: "invalid policy acknowledgement" }, { status: 400 }); return this.acknowledgePolicy(runnerId, epoch, credentialVersion, { desired_revision: desiredRevision, applied_revision: appliedRevision, status, workspace_status: statuses }, now) ? new Response(null, { status: 204 }) : new Response("stale policy acknowledgement", { status: 409 }); }
+    if (request.method === "GET" && action === "desired-policy" && itemId === undefined) { const policy = this.desiredPolicy(runnerId); return policy === undefined ? new Response("not found", { status: 404 }) : Response.json(policy); }
     if (request.method === "GET" && action === "jobs" && itemId === undefined) {
       const workspaceId = url.searchParams.get("workspace_id") ?? undefined;
       const status = url.searchParams.get("status") ?? undefined;
@@ -630,7 +819,7 @@ export class RegistryDO {
     return new Response("not found", { status: 404 });
   }
 
-  private handleAuth(method: string, segments: string[], input: InternalInput, nowMs: number): Response {
+  private async handleAuth(method: string, segments: string[], input: InternalInput, nowMs: number, url: URL): Promise<Response> {
     const action = segments[0]; const clientId = segments[1];
     if (method === "GET" && action === "status" && clientId === undefined) return Response.json(this.adminStatus());
     if (method === "GET" && action === "settings" && clientId === undefined) { const verifier = this.adminPasswordVerifier(); return verifier === undefined ? new Response("not found", { status: 404 }) : Response.json({ password_verifier: verifier }); }
@@ -657,6 +846,15 @@ export class RegistryDO {
       if (method === "POST" && subaction === "rotate") { const verifier = stringField(input, "secret_verifier", 64); const prefix = stringField(input, "secret_prefix", 16); const client = verifier === undefined || prefix === undefined ? undefined : this.rotateMcpClient(clientId, verifier, prefix, nowMs); return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client); }
       if (method === "POST" && subaction === "revoke") { const client = this.revokeMcpClient(clientId, nowMs); return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client); }
     }
+    if (method === "POST" && action === "clients" && clientId !== undefined && segments[2] === "runner-overrides" && segments[3] !== undefined && isSafeIdentifier(segments[3])) {
+      const permissions = permissionSetField(input.permissions);
+      return permissions !== undefined && this.setClientRunnerOverride(clientId, segments[3], permissions, nowMs) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 });
+    }
+    if (method === "GET" && action === "clients" && clientId !== undefined && segments[2] === "effective-permissions" && segments[3] !== undefined && isSafeIdentifier(segments[3])) {
+      const workspaceId = url.searchParams.get("workspace_id");
+      const permissions = workspaceId === null ? undefined : this.effectivePermissions(clientId, segments[3], workspaceId);
+      return permissions === undefined ? new Response("not found", { status: 404 }) : Response.json({ permissions });
+    }
     if (method === "GET" && action === "clients" && clientId !== undefined && segments[2] === "active-runner") {
       const selection = this.getMcpClientActiveRunner(clientId);
       return selection === undefined ? new Response("not found", { status: 404 }) : Response.json(selection);
@@ -675,6 +873,49 @@ export class RegistryDO {
     if (method === "POST" && action === "clients" && clientId !== undefined && segments[2] === "auto-select-runner") {
       const result = this.autoSelectOnlyRunner(clientId, nowMs);
       return result === undefined ? Response.json({ code: "runner_not_selected" }, { status: 409 }) : result.ok ? Response.json(result) : new Response("not found", { status: 404 });
+    }
+    if (method === "GET" && action === "runners" && clientId !== undefined && segments[2] === "managed-workspaces" && segments[3] === undefined) {
+      if (!isSafeIdentifier(clientId)) return new Response("not found", { status: 404 });
+      return this.runnerRow(clientId) === undefined
+        ? new Response("not found", { status: 404 })
+        : Response.json({ runner_id: clientId, workspaces: this.listManagedWorkspaces(clientId) });
+    }
+    if (method === "POST" && action === "runners" && clientId !== undefined && segments[2] === "managed-workspaces" && segments[3] === undefined) {
+      if (!isSafeIdentifier(clientId)) return new Response("not found", { status: 404 });
+      const workspaceId = stringField(input, "workspace_id", 128); const displayName = stringField(input, "display_name", 256); const rootPath = stringField(input, "root_path", 4_096); const permissions = permissionSetField(input.permissions);
+      if (workspaceId === undefined || displayName === undefined || rootPath === undefined || permissions === undefined || typeof input.enabled !== "boolean") return Response.json({ error: "invalid workspace" }, { status: 400 });
+      const workspace = this.createManagedWorkspace(clientId, { workspace_id: workspaceId, display_name: displayName, root_path: rootPath, enabled: input.enabled, permissions }, nowMs);
+      return workspace === undefined ? new Response("conflict", { status: 409 }) : Response.json(workspace);
+    }
+    if (action === "runners" && clientId !== undefined && segments[2] === "managed-workspaces" && segments[3] !== undefined && isSafeIdentifier(clientId) && isSafeIdentifier(segments[3])) {
+      const workspaceId = segments[3];
+      if (method === "GET") { const workspace = this.getManagedWorkspace(clientId, workspaceId); return workspace === undefined ? new Response("not found", { status: 404 }) : Response.json(workspace); }
+      if (method === "PUT") {
+        const displayName = stringField(input, "display_name", 256); const rootPath = stringField(input, "root_path", 4_096); const permissions = permissionSetField(input.permissions);
+        if (displayName === undefined || rootPath === undefined || permissions === undefined || typeof input.enabled !== "boolean") return Response.json({ error: "invalid workspace" }, { status: 400 });
+        const workspace = this.updateManagedWorkspace(clientId, workspaceId, { display_name: displayName, root_path: rootPath, enabled: input.enabled, permissions }, nowMs);
+        return workspace === undefined ? new Response("not found", { status: 404 }) : Response.json(workspace);
+      }
+      if (method === "DELETE") return this.deleteManagedWorkspace(clientId, workspaceId, nowMs) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 });
+    }
+    if (method === "POST" && action === "runners" && clientId !== undefined && segments[2] === "version-policy" && isSafeIdentifier(clientId)) {
+      const channel = input.update_channel; const desired = input.desired_runner_version; const latest = input.latest_runner_version;
+      if ((channel !== "stable" && channel !== "pinned") || (desired !== undefined && typeof desired !== "string") || (latest !== undefined && typeof latest !== "string")) return Response.json({ error: "invalid runner version policy" }, { status: 400 });
+      const runner = this.setRunnerVersionPolicy(clientId, { update_channel: channel, ...(typeof desired === "string" ? { desired_runner_version: desired } : {}), ...(typeof latest === "string" ? { latest_runner_version: latest } : {}) }, nowMs);
+      return runner === undefined ? new Response("not found", { status: 404 }) : Response.json(runner);
+    }
+    if (method === "POST" && action === "runners" && clientId !== undefined && segments[2] === "permissions" && isSafeIdentifier(clientId)) {
+      const permissions = permissionSetField(input.permissions); const runner = permissions === undefined ? undefined : this.setRunnerPermissions(clientId, permissions, nowMs);
+      return runner === undefined ? new Response("not found", { status: 404 }) : Response.json(runner);
+    }
+    if (method === "POST" && action === "runners" && clientId !== undefined && segments[2] === "emergency-lock" && isSafeIdentifier(clientId)) {
+      const runner = this.emergencyLockRunner(clientId, nowMs);
+      return runner === undefined ? new Response("not found", { status: 404 }) : Response.json(runner);
+    }
+    if (method === "POST" && action === "runners" && clientId !== undefined && segments[2] === "policy-ack" && isSafeIdentifier(clientId)) {
+      const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const desiredRevision = integerField(input, "desired_revision"); const appliedRevision = integerField(input, "applied_revision"); const status = input.status; const statuses = workspaceStatusesField(input.workspace_status);
+      if (epoch === undefined || credentialVersion === undefined || desiredRevision === undefined || appliedRevision === undefined || (status !== "applied" && status !== "pending" && status !== "invalid") || statuses === undefined) return Response.json({ error: "invalid policy acknowledgement" }, { status: 400 });
+      return this.acknowledgePolicy(clientId, epoch, credentialVersion, { desired_revision: desiredRevision, applied_revision: appliedRevision, status, workspace_status: statuses }, nowMs) ? new Response(null, { status: 204 }) : new Response("stale policy acknowledgement", { status: 409 });
     }
     if (method === "POST" && action === "mcp" && clientId === "verify") { const verifier = stringField(input, "secret_verifier", 64); if (verifier === undefined) return new Response("not found", { status: 404 }); const client = this.verifyMcpClient(verifier, nowMs); return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client); }
     return new Response("not found", { status: 404 });
@@ -700,6 +941,22 @@ export class RegistryDO {
     if (!columns.has("display_name")) { this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN display_name TEXT"); this.ctx.storage.sql.exec("UPDATE runners SET display_name = runner_id WHERE display_name IS NULL OR display_name = ''"); }
     if (!columns.has("public_info_json")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN public_info_json TEXT");
     if (!columns.has("last_sync_sequence")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN last_sync_sequence INTEGER");
+    if (!columns.has("desired_policy_revision")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN desired_policy_revision INTEGER NOT NULL DEFAULT 0");
+    if (!columns.has("applied_policy_revision")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN applied_policy_revision INTEGER");
+    if (!columns.has("policy_status")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN policy_status TEXT NOT NULL DEFAULT 'pending'");
+    if (!columns.has("runner_permissions_json")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN runner_permissions_json TEXT NOT NULL DEFAULT '{\"read\":false,\"edit\":false,\"shell\":false,\"job_control\":false}'");
+    if (!columns.has("current_runner_version")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN current_runner_version TEXT");
+    if (!columns.has("protocol_min_version")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN protocol_min_version INTEGER");
+    if (!columns.has("protocol_max_version")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN protocol_max_version INTEGER");
+    if (!columns.has("protocol_compatibility")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN protocol_compatibility TEXT NOT NULL DEFAULT 'unknown'");
+    if (!columns.has("update_channel")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN update_channel TEXT NOT NULL DEFAULT 'stable'");
+    if (!columns.has("desired_runner_version")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN desired_runner_version TEXT");
+    if (!columns.has("latest_runner_version")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN latest_runner_version TEXT");
+    if (!columns.has("update_status")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN update_status TEXT NOT NULL DEFAULT 'unknown'");
+    this.ctx.storage.sql.exec("UPDATE runners SET runner_permissions_json = ? WHERE runner_permissions_json IS NULL OR runner_permissions_json = ''", JSON.stringify(LOCKED_PERMISSIONS));
+    this.ctx.storage.sql.exec("UPDATE runners SET update_channel = 'stable' WHERE update_channel IS NULL OR update_channel NOT IN ('stable', 'pinned')");
+    this.ctx.storage.sql.exec("UPDATE runners SET protocol_compatibility = 'unknown' WHERE protocol_compatibility IS NULL OR protocol_compatibility NOT IN ('unknown', 'compatible', 'incompatible')");
+    this.ctx.storage.sql.exec("UPDATE runners SET update_status = 'unknown' WHERE update_status IS NULL OR update_status NOT IN ('unknown', 'up_to_date', 'update_available', 'pinned', 'incompatible')");
 
     const mcpColumns = new Set(this.ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(mcp_clients)").toArray().map((column) => column.name));
     if (!mcpColumns.has("active_runner_id")) this.ctx.storage.sql.exec("ALTER TABLE mcp_clients ADD COLUMN active_runner_id TEXT");
@@ -708,6 +965,16 @@ export class RegistryDO {
     // schema so an upgraded object can repair an older partial schema without
     // replacing data. Existing enrollment rows remain readable.
     this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS managed_workspaces (
+        runner_id TEXT NOT NULL, workspace_id TEXT NOT NULL, display_name TEXT NOT NULL, root_path TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1, permissions_json TEXT NOT NULL, created_at_ms INTEGER NOT NULL,
+        updated_at_ms INTEGER NOT NULL, revision INTEGER NOT NULL DEFAULT 1, validation_status TEXT,
+        PRIMARY KEY (runner_id, workspace_id)
+      );
+      CREATE TABLE IF NOT EXISTS client_runner_overrides (
+        client_id TEXT NOT NULL, runner_id TEXT NOT NULL, permissions_json TEXT NOT NULL,
+        created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, PRIMARY KEY (client_id, runner_id)
+      );
       CREATE TABLE IF NOT EXISTS runner_enrollments (
         enrollment_id TEXT PRIMARY KEY, runner_id TEXT NOT NULL, verifier TEXT NOT NULL UNIQUE,
         created_at_ms INTEGER NOT NULL, expires_at_ms INTEGER NOT NULL, used_at_ms INTEGER
@@ -719,6 +986,9 @@ export class RegistryDO {
     `);
     this.ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS idx_runner_enrollments_expiry ON runner_enrollments(expires_at_ms)");
     this.ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS idx_runner_enrollments_runner ON runner_enrollments(runner_id)");
+  }
+  private bumpDesiredPolicy(runnerId: string, nowMs: number): void {
+    this.ctx.storage.sql.exec("UPDATE runners SET desired_policy_revision = desired_policy_revision + 1, policy_status = 'pending', updated_at_ms = ? WHERE runner_id = ?", nowMs, runnerId);
   }
   private deleteMissingWorkspaces(runnerId: string, ids: ReadonlySet<string>): void {
     const rows = this.ctx.storage.sql.exec<{ id: string }>("SELECT workspace_id AS id FROM workspaces WHERE runner_id = ?", runnerId).toArray();
@@ -738,7 +1008,35 @@ export class RegistryDO {
 }
 
 function authThrottleKind(value: unknown): AuthThrottleKind | undefined { return value === "login" || value === "setup" ? value : undefined; }
-function decodeRunner(row: RunnerRow): RunnerRecord { return { runner_id: row.runner_id, display_name: row.display_name || row.runner_id, state: row.state, connection_epoch: row.connection_epoch, credential_version: row.credential_version, session_id: row.session_id, metadata: row.metadata_json === null ? null : JSON.parse(row.metadata_json) as RunnerMetadata, public_info: row.public_info_json === null ? null : JSON.parse(row.public_info_json) as RunnerPublicInfo, last_heartbeat_ms: row.last_heartbeat_ms, last_sync_sequence: row.last_sync_sequence, updated_at_ms: row.updated_at_ms }; }
+function validRunnerVersion(value: string): boolean { return /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(value); }
+function validUpdateChannel(value: unknown): value is RunnerUpdateChannel { return value === "stable" || value === "pinned"; }
+function validUpdateStatus(value: unknown): value is RunnerUpdateStatus { return value === "unknown" || value === "up_to_date" || value === "update_available" || value === "pinned" || value === "incompatible"; }
+function protocolCompatibility(minVersion: number, maxVersion: number): RunnerProtocolCompatibility { return minVersion <= PROTOCOL_CURRENT_VERSION && maxVersion >= PROTOCOL_MIN_VERSION ? "compatible" : "incompatible"; }
+function updateStatus(channel: RunnerUpdateChannel, desired: string | undefined, latest: string | undefined, current: { current_runner_version?: string | null; protocol_compatibility?: RunnerProtocolCompatibility } | undefined): RunnerUpdateStatus {
+  if (current?.protocol_compatibility === "incompatible") return "incompatible";
+  if (channel === "pinned") return desired !== undefined && current?.current_runner_version === desired ? "pinned" : "update_available";
+  if (latest === undefined || current?.current_runner_version === undefined || current.current_runner_version === null) return "unknown";
+  return current.current_runner_version === latest ? "up_to_date" : "update_available";
+}
+
+function decodeRunner(row: RunnerRow): RunnerRecord {
+  return {
+    runner_id: row.runner_id, display_name: row.display_name || row.runner_id, state: row.state, connection_epoch: row.connection_epoch,
+    credential_version: row.credential_version, session_id: row.session_id, metadata: row.metadata_json === null ? null : JSON.parse(row.metadata_json) as RunnerMetadata,
+    public_info: row.public_info_json === null ? null : JSON.parse(row.public_info_json) as RunnerPublicInfo, last_heartbeat_ms: row.last_heartbeat_ms,
+    last_sync_sequence: row.last_sync_sequence, desired_policy_revision: row.desired_policy_revision ?? 0, applied_policy_revision: row.applied_policy_revision,
+    policy_status: row.policy_status === "applied" || row.policy_status === "invalid" ? row.policy_status : "pending",
+    runner_permissions: parsePermissionSet(row.runner_permissions_json) ?? LOCKED_PERMISSIONS,
+    current_runner_version: row.current_runner_version, protocol_min_version: row.protocol_min_version, protocol_max_version: row.protocol_max_version,
+    protocol_compatibility: row.protocol_compatibility === "compatible" || row.protocol_compatibility === "incompatible" ? row.protocol_compatibility : "unknown",
+    update_channel: row.update_channel === "pinned" ? "pinned" : "stable", desired_runner_version: row.desired_runner_version,
+    latest_runner_version: row.latest_runner_version, update_status: validUpdateStatus(row.update_status) ? row.update_status : "unknown", updated_at_ms: row.updated_at_ms,
+  };
+}
+function decodeWorkspace(row: ManagedWorkspaceRow): WorkspaceRecord[] {
+  const permissions = parsePermissionSet(row.permissions_json);
+  return permissions === undefined ? [] : [{ runner_id: row.runner_id, workspace_id: row.workspace_id, display_name: row.display_name, root_path: row.root_path, enabled: row.enabled === 1, permissions, created_at_ms: row.created_at_ms, updated_at_ms: row.updated_at_ms, revision: row.revision, validation_status: row.validation_status }];
+}
 function decodeMcpClient(row: McpClientRow): McpClientRecord { const scopes = parseScopes(row.scopes_json) ?? []; return { client_id: row.client_id, label: row.label, secret_prefix: row.secret_prefix, scopes, secret_version: row.secret_version, created_at_ms: row.created_at_ms, updated_at_ms: row.updated_at_ms, last_used_at_ms: row.last_used_at_ms, revoked_at_ms: row.revoked_at_ms, active_runner_id: row.active_runner_id, active_runner_updated_at_ms: row.active_runner_updated_at_ms }; }
 function safeRunnerContext(runner: RunnerRecord, updatedAtMs: number | null): ActiveRunnerContext {
   return { runner_id: runner.runner_id, state: runner.state, available: runner.state === "online", updated_at_ms: updatedAtMs };
@@ -758,8 +1056,23 @@ function runnerPublicInfoField(value: unknown): RunnerPublicInfo | undefined {
     : undefined;
 }
 function safePublicText(value: unknown, max: number): value is string { return typeof value === "string" && value.length > 0 && value.length <= max && !/[\u0000-\u001f\u007f<>]/.test(value); }
+function intersectPermissions(...sets: readonly PermissionSet[]): PermissionSet { return { read: sets.every((set) => set.read), edit: sets.every((set) => set.edit), shell: sets.every((set) => set.shell), job_control: sets.every((set) => set.job_control) }; }
+function permissionSetField(value: unknown): PermissionSet | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const item = value as Record<string, unknown>;
+  return validPermissionSet(item) ? { read: item.read, edit: item.edit, shell: item.shell, job_control: item.job_control } : undefined;
+}
+function parsePermissionSet(value: string): PermissionSet | undefined { try { return permissionSetField(JSON.parse(value) as unknown); } catch { return undefined; } }
+function validPermissionSet(value: unknown): value is PermissionSet { return typeof value === "object" && value !== null && !Array.isArray(value) && ["read", "edit", "shell", "job_control"].every((key) => typeof (value as Record<string, unknown>)[key] === "boolean"); }
+function validWorkspaceInput(value: { workspace_id: string; display_name: string; root_path: string; enabled: boolean; permissions: PermissionSet }): boolean { return isSafeIdentifier(value.workspace_id) && validLabel(value.display_name) && value.root_path.length > 0 && value.root_path.length <= 4_096 && !value.root_path.includes("\0") && validPermissionSet(value.permissions); }
+function workspaceStatusesField(value: unknown): Array<{ workspace_id: string; status: WorkspaceValidationStatus }> | undefined {
+  if (!Array.isArray(value) || value.length > 64) return undefined;
+  const valid = new Set<WorkspaceValidationStatus>(["valid", "missing", "not_directory", "permission_denied", "invalid_path"]);
+  const output: Array<{ workspace_id: string; status: WorkspaceValidationStatus }> = [];
+  for (const item of value) { if (typeof item !== "object" || item === null || Array.isArray(item)) return undefined; const value = item as Record<string, unknown>; if (!isSafeIdentifier(String(value.workspace_id)) || typeof value.status !== "string" || !valid.has(value.status as WorkspaceValidationStatus)) return undefined; output.push({ workspace_id: value.workspace_id as string, status: value.status as WorkspaceValidationStatus }); }
+  return output;
+}
 function validVerifier(value: string): boolean { return /^[0-9a-f]{64}$/.test(value); }
-function validPrefix(value: string): boolean { return /^[A-Za-z0-9_-]{4,16}$/.test(value); }
 function validLabel(value: string): boolean { return value.trim().length >= 1 && value.length <= 256; }
 function validRunnerPublicInfo(value: RunnerPublicInfo): boolean { return value.platform.length > 0 && value.platform.length <= 128 && value.architecture.length > 0 && value.architecture.length <= 128 && value.hostname.length > 0 && value.hostname.length <= 256 && value.runner_version.length > 0 && value.runner_version.length <= 256 && Number.isSafeInteger(value.protocol_version) && value.protocol_version > 0 && value.protocol_version <= 1_000; }
 function validScopes(value: readonly CodingScope[]): boolean { return value.length > 0 && value.length <= 3 && new Set(value).size === value.length && value.every((scope) => VALID_SCOPES.has(scope)); }

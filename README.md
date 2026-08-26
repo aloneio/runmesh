@@ -1,4 +1,6 @@
-# Remote Coding Runtime
+# Runmesh
+
+**Agent Control Plane**
 
 A model-neutral, client-neutral remote coding runtime with one Cloudflare control plane and outbound-only local Runners.
 
@@ -52,9 +54,9 @@ The dashboard is the browser administration lane: it creates MCP clients, adds a
 
 In **Admin → Runners → Add Runner**, provide a human-facing `display_name` and optionally a safe Runner ID. The display name is what the dashboard and `runner_list` show; the Runner ID is the stable protocol identifier.
 
-The dashboard displays an enrollment code once. It is single-use, expires after 30 minutes, and **Regenerate enrollment** invalidates any still-unused code for that Runner before creating a replacement. Run the rendered public bootstrap command from the directory that should become the initial local workspace. Linux and macOS use the `/runner/install.sh` command; Windows uses `/runner/install.ps1`. Each script receives the code only as its command argument, requires an existing Node.js 20+ / npm runtime, then calls `coding-runner enroll --server .../runner/enroll --code ...` and `coding-runner install`.
+The dashboard displays an enrollment code once. It is single-use, expires after 30 minutes, and **Regenerate enrollment** invalidates any still-unused code for that Runner before creating a replacement. Run the rendered public bootstrap command from an elevated administrator/root shell. Linux and macOS use the `/runner/install.sh` command; Windows uses `/runner/install.ps1`. Each script receives the code only as its command argument, requires an existing Node.js 20+ / npm runtime, then calls `coding-runner enroll --server .../runner/enroll --code ...` and `coding-runner install`. Enrollment starts with zero workspaces; configure approved workspace roots explicitly afterwards.
 
-The Worker does not publish a public package itself. Configure a stable distributable `RUNNER_PACKAGE_SPEC` (exact `package@x.y.z`, or an HTTPS `.tgz` with matching `RUNNER_PACKAGE_NAME` / `RUNNER_PACKAGE_VERSION`) before using the bootstrap scripts. Until configured, `/runner/releases/latest` marks the descriptor non-distributable and the scripts fail instead of downloading GitHub `main`. Installers are per-user and print, but do not run, the systemd-user, LaunchAgent, or Scheduled Task activation command.
+The Worker does not publish a public package itself. Configure a stable distributable `RUNNER_PACKAGE_SPEC` (exact `package@x.y.z`, or an HTTPS `.tgz` with matching `RUNNER_PACKAGE_NAME` / `RUNNER_PACKAGE_VERSION`) before using the bootstrap scripts. Until configured, `/runner/releases/latest` marks the descriptor non-distributable and the scripts fail instead of downloading GitHub `main`. Installers require an elevated administrator/root shell, install to the centralized machine layout, and automatically activate the system service.
 
 The Runner uses only outbound Internet access and never exposes HTTP, MCP, OAuth, SSH, or inbound ports. Production profiles require `wss://`; `ws://` is limited to loopback development with `--insecure-local`.
 
@@ -93,75 +95,54 @@ Runner selection is **sticky per MCP client**, not per chat, browser tab, or req
 - `runner_list` lists safe Runner ID, `display_name`, connection state, availability, and timestamp. It returns no credential or workspace-root data.
 - `runner_current` reports this client's selection, including an unavailable selected Runner.
 - `runner_select` is the only MCP routing mutation. Initial selection needs no confirmation; a different selection requires `confirm_switch: true` to prevent accidental cross-host work.
-- Ordinary tools no longer accept `runner_id`. `workspace_id` remains required where a tool needs a workspace. `runner_id` is retained only for Runner-management/routing tools such as `runner_select` and `runner_info`, and on the private Runner transport.
+- Ordinary tools do not accept `runner_id`. `workspace_id` is required for `read`, `edit`, and `shell`; it is optional only when `job({action:"list"})` is intentionally listing the selected Runner's readable job history. `runner_id` is retained only by `runner_select` and the private Runner transport.
 - There is no silent fallback from a selected offline, stale, revoked, or unavailable Runner to another Runner. Resolve the condition with `runner_current`, then explicitly select another Runner. Deleting a Runner clears clients that selected it; a subsequently unselected client follows only the normal one-registered-Runner convenience rule above.
 
 The routing record is not a data-isolation boundary. This is a single-admin runtime: MCP clients that have scopes and select the same Runner share its configured workspace IDs and bounded Registry job history. `created_by_client_id` is audit metadata, not ownership enforcement. A client with the required scope can discover and read a compatible job created through another client. Use distinct client URLs and least-privilege scopes, but do not treat them as separate tenants.
 
 ## Tool catalog
 
-### Routing and runtime
-
 ```text
 runner_list
 runner_current
 runner_select
-runner_info
 workspace_list
-env_info
+read
+edit
+shell
+job
 ```
 
-### Filesystem
+This is the complete default MCP catalog. The Runner still implements its established `fs.*`, `exec.*`, `job.*`, Git, and environment RPC methods on its private Worker-to-Runner transport; those RPC names are not MCP tools and are never advertised by `tools/list`.
 
-```text
-fs_read
-fs_list
-fs_search
-fs_apply_patch
-```
+- `read({workspace_id,path,cursor?,offset?,limit?})` forwards to the private `fs.read` operation with a 32 KiB UTF-8-safe page cap. Paths are workspace-relative and host roots are never accepted or returned.
+- `edit({workspace_id,patch,expected_hash?,expected_hashes?})` forwards to transactional private `fs.apply_patch`.
+- `shell({workspace_id,command,wait_ms?,background?})` creates a persistent Runner job. `background:true`, or a foreground wait that reaches `wait_ms`, returns a `job_id` and status; a completed foreground call also returns bounded stdout/stderr pages. There is intentionally no command blacklist. Shell permission is a workspace/Runner policy gate, **not a sandbox**: commands run with the local Runner account's OS access. Run untrusted code in a VM/container with restricted mounts, secrets, network, and OS privileges; do not install a Runner with administrator/root access for that purpose.
+- `job({action:"list"|"get"|"logs"|"cancel"|"input",...})` combines persistent job operations. `list`, `get`, and `logs` require read permission; `cancel` and `input` require job-control permission. Log pages are UTF-8-safe and bounded.
 
-### Execution and persistent jobs
-
-```text
-exec_start
-exec_run
-job_list
-job_get
-job_logs
-job_cancel
-job_input
-```
-
-### Git
-
-```text
-git_status
-git_diff
-```
-
-`coding:read` permits routing/runtime/filesystem reads, job listing/inspection/logs, and Git inspection. `coding:write` permits patching. `coding:exec` permits process start/run/cancel/input.
+`coding:read` permits routing, workspace discovery, read, and read-only `job` actions. `coding:write` permits `edit`. `coding:exec` permits `shell` and job cancellation/input. The Worker checks effective client/Runner/workspace permissions before forwarding, and the Runner enforces the same local policy again. Denied calls use structured `permission_denied` errors.
 
 ## Local Runner profile and service behavior
 
-`coding-runner enroll` saves the server URL, Runner ID, long-lived Runner token, configured workspaces, and optional concurrency setting in a local profile. Default locations are:
+`coding-runner enroll` saves the server URL, Runner ID, and long-lived Runner token in a machine profile with **zero local workspaces**. Add approved roots only afterwards with `coding-runner workspace add`; re-enrollment replaces credentials/connection data without inferring or adding a workspace. Default machine locations are:
 
 ```text
-Linux:   ~/.remote-coding-runner/profile.json
-macOS:   ~/Library/Application Support/RemoteCodingRunner/profile.json
-Windows: %LOCALAPPDATA%\RemoteCodingRunner\profile.json
+Linux:   /etc/remote-coding-runtime/profile.json
+macOS:   /Library/Application Support/RemoteCodingRunner/profile.json
+Windows: C:\ProgramData\RemoteCodingRunner\profile.json
 ```
 
-On POSIX, the profile directory is created with mode `0700` and the profile file with mode `0600`; Windows ACLs are not inspected by `doctor`. `coding-runner status` redacts the token. `coding-runner doctor` checks profile presence, stored URL, POSIX file mode, workspace existence, a managed service manifest, and selected local tools. `coding-runner env` reports bounded environment probes. `coding-runner workspace list|add|remove` manages locally configured workspace IDs; `add` canonicalizes an existing directory and supports `--readonly` and `--no-shell`.
+The product CLI defaults to this system/machine profile. Use `--user` only for explicit legacy per-user compatibility. On POSIX, the profile directory is created with mode `0700` and the profile file with mode `0600`; Windows ACLs are not inspected by `doctor`. `coding-runner status` redacts the token. `coding-runner doctor` checks profile presence, stored URL, POSIX file mode, workspace existence, a managed service manifest, and selected local tools. `coding-runner env` reports bounded environment probes. `coding-runner workspace list|add|remove` manages locally configured workspace IDs; `add` canonicalizes an existing directory and supports `--readonly` and `--no-shell`.
 
 A profile-backed `coding-runner start` uses its saved server, credential, Runner ID, and workspaces. The legacy explicit `start --server --runner-id --token --workspace ...` form remains available for advanced/manual operation. Workspace roots stay local and never enter MCP or Runner metadata.
 
-Service commands are intentionally partial adapters, not a host-management installer:
+Service commands are machine-level adapters by default:
 
-- `coding-runner install` writes only a hash-marked, per-user systemd user unit (Linux), LaunchAgent plist (macOS), or Scheduled Task XML (Windows). It refuses to overwrite an unmanaged manifest. It renders the corresponding host commands but does not run `systemctl`, `launchctl`, or `schtasks`.
-- `coding-runner stop` and `coding-runner restart` render/report the platform lifecycle command; they do not execute it.
-- `coding-runner uninstall` removes only a manifest whose marker and content hash match. It reports the host disable/bootout/delete command rather than executing it. `--purge --yes` also removes the profile, but deliberately leaves workspace roots and persistent job state untouched.
+- `coding-runner install` requires an elevated administrator/root shell and writes a hash-marked system service manifest. Linux uses `/opt/remote-coding-runtime`, `/etc/remote-coding-runtime`, `/var/lib/remote-coding-runtime`, and `/etc/systemd/system/remote-coding-runner.service`; its `ExecStart` uses an absolute executable path. It refuses to overwrite an unmanaged manifest, runs `systemctl daemon-reload`, `systemctl enable --now remote-coding-runner.service`, then verifies the unit is active.
+- macOS and Windows use explicit system LaunchDaemon/Scheduled Task adapters; they do not silently downgrade to user services.
+- `coding-runner stop`, `restart`, and `uninstall` use the selected system adapter. `uninstall` only removes a manifest whose marker and content hash match. `--purge --yes` also removes the profile, but deliberately leaves workspace roots and persistent job state untouched.
 
-Run the rendered host command yourself after reviewing it. Dashboard pages also render enrollment instructions only; they cannot run host lifecycle commands.
+Use `--user` only for explicit legacy per-user service compatibility.
 
 ## Safety and operations
 
@@ -177,13 +158,13 @@ Runner enrollment codes are one-time and short-lived. Redeeming one atomically c
 
 ### Filesystem, execution, and jobs
 
-The Worker resolves the active Runner before forwarding MCP requests. MCP tool inputs provide a workspace ID and workspace-relative path, while host workspace roots never cross the protocol. The Runner rejects absolute, drive/UNC/device, NUL, traversal, symlink/junction escape, write-through-symlink, unknown-workspace, and readonly-write requests. `fs_apply_patch` uses baseline checks, staging/backups, per-file replacement, rollback, and bounded root-free errors.
+The Worker resolves the active Runner and effective workspace permission before forwarding MCP requests, and the Runner repeats the local permission check. MCP `read`, `edit`, and `shell` inputs provide a workspace ID and workspace-relative path or command, while host workspace roots never cross the protocol. The Runner rejects absolute, drive/UNC/device, NUL, traversal, symlink/junction escape, write-through-symlink, unknown-workspace, and readonly-write requests. `edit` uses baseline checks, staging/backups, per-file replacement, rollback, and bounded root-free errors.
 
 This is a workspace/path authorization boundary, not a hostile operating-system sandbox. Use an external VM or container with restricted mounts, secrets, network, and OS privileges for untrusted repositories or commands.
 
-`exec_start` returns `job_id` promptly. Runner-local state and complete logs live under `~/.remote-coding-runner/state/` by default. RegistryDO keeps bounded metadata so `job_list` works while the selected Runner is offline; full logs require a connected Runner. Active/nonterminal jobs and up to 1,000 terminal jobs per Runner are retained in RegistryDO. Local log files are unbounded by default; monitor disk use.
+`shell({background:true})` returns `job_id` promptly. For a machine service, Runner-local state and complete logs live under `/var/lib/remote-coding-runtime/` on Linux (with platform-equivalent centralized state roots elsewhere); explicit legacy user mode retains its per-user state default. RegistryDO keeps bounded metadata so `job({action:"list"})` works while the selected Runner is offline; full logs require a connected Runner. Active/nonterminal jobs and up to 1,000 terminal jobs per Runner are retained in RegistryDO. Local log files are unbounded by default; monitor disk use.
 
-The local maximum for short operations is 8 seconds and the Worker-to-Runner bridge timeout is 12 seconds. Use `exec_start` for longer work. A disconnect leaves local jobs running; live tools report the selected Runner's offline state rather than selecting another host.
+The local maximum foreground wait is 8 seconds and the Worker-to-Runner bridge timeout is 12 seconds. A `shell` call that needs longer work must use `background:true`, then poll `job`. A disconnect leaves local jobs running; live tools report the selected Runner's offline state rather than selecting another host.
 
 ## Architecture and scope
 

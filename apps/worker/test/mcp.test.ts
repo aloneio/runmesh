@@ -65,12 +65,22 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
       )`);
       sql.exec("INSERT INTO mcp_clients (client_id, label, secret_verifier, secret_prefix, scopes_json, created_at_ms, updated_at_ms) VALUES ('legacy-client', 'Legacy client', ?, 'legacy-prefix', '[\"coding:read\"]', ?, ?)", "b".repeat(64), now, now);
       (instance as unknown as { ensureSchema(): void }).ensureSchema();
-      expect(instance.getRunner("legacy-row")).toMatchObject({ display_name: "legacy-row", public_info: null, last_sync_sequence: null, credential_version: 1 });
+      expect(instance.getRunner("legacy-row")).toMatchObject({ display_name: "legacy-row", public_info: null, last_sync_sequence: null, credential_version: 1, current_runner_version: null, protocol_compatibility: "unknown", update_channel: "stable", desired_runner_version: null, latest_runner_version: null, update_status: "unknown" });
       expect(instance.listMcpClients()).toContainEqual(expect.objectContaining({ client_id: "legacy-client", active_runner_id: null, active_runner_updated_at_ms: null }));
       expect(instance.createRunnerEnrollment("legacy-row", randomBase64Url(), "c".repeat(64), now)).toBeDefined();
     });
   });
 
+  it("persists stable and pinned version policy without creating an MCP update surface", async () => {
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName(`runner-version-policy-${crypto.randomUUID()}`)); const now = Date.now();
+    await runInDurableObject(registry, (instance) => {
+      instance.registerRunner("versioned-runner", "a".repeat(64), now);
+      expect(instance.setRunnerVersionPolicy("versioned-runner", { update_channel: "stable", latest_runner_version: "1.2.3" }, now + 1)).toMatchObject({ update_channel: "stable", latest_runner_version: "1.2.3", update_status: "unknown" });
+      expect(instance.setRunnerVersionPolicy("versioned-runner", { update_channel: "pinned", desired_runner_version: "1.2.0" }, now + 2)).toMatchObject({ update_channel: "pinned", desired_runner_version: "1.2.0", latest_runner_version: null, update_status: "update_available" });
+      expect(instance.setRunnerVersionPolicy("versioned-runner", { update_channel: "pinned" }, now + 3)).toBeUndefined();
+      expect(instance.setRunnerVersionPolicy("versioned-runner", { update_channel: "stable", latest_runner_version: "latest" }, now + 4)).toBeUndefined();
+    });
+  });
   it("migrates display names, distinguishes revoke from delete, and cleans selected clients", async () => {
     const registry = env.REGISTRY.get(env.REGISTRY.idFromName(`runner-registry-${crypto.randomUUID()}`)); const now = Date.now();
     await runInDurableObject(registry, (instance) => {
@@ -131,16 +141,24 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     for (const text of [shellText, powershellText]) {
       expect(text).not.toMatch(/ADMIN_TOKEN|MCP_SECRET|CODING_RUNNER_TOKEN|Bearer /i);
       expect(text).not.toMatch(/sudo|git clone|github\.com\/.*main/i);
-      expect(text).toContain("coding-runner enroll --server"); expect(text).toContain("coding-runner install");
+      expect(text).toContain("coding-runner enroll --server"); expect(text).toContain("install --executable-path");
       expect(text).toContain("existing managed runner profile or service detected");
     }
-    expect(shellText).toContain("set -eu"); expect(shellText).toContain("systemctl --user daemon-reload"); expect(shellText).toContain("launchctl bootstrap gui/$(id -u)");
-    expect(powershellText).toContain("$ErrorActionPreference = 'Stop'"); expect(powershellText).toContain("--prefix $NpmPrefix"); expect(powershellText).toContain("schtasks /Create /TN RemoteCodingRunner");
+    expect(shellText).toContain("--re-enroll");
+    expect(powershellText).toContain("-ReEnroll");
+    expect(shellText).toContain("set -eu"); expect(shellText).toContain("/etc/systemd/system/remote-coding-runner.service"); expect(shellText).toContain("administrator/root privileges");
+    expect(powershellText).toContain("$ErrorActionPreference = 'Stop'"); expect(powershellText).toContain("$env:ProgramFiles"); expect(powershellText).toContain("Administrator PowerShell");
     expect(shellText).toContain("--prefix \"$NPM_PREFIX\""); expect(shellText).not.toContain("npm install --global \"$PACKAGE_SPEC\"");
-    expect(await release.json()).toMatchObject({ distributable: false, package_spec: "", package_version: "0.1.0", protocol: { min_version: 1, max_version: 1 } });
-    expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "@acme/coding-runner@1.2.3" })).toMatchObject({ distributable: true, package_name: "@acme/coding-runner", package_version: "1.2.3", package_spec: "@acme/coding-runner@1.2.3", protocol: { min_version: 1, max_version: 1 } });
+    expect(await release.json()).toMatchObject({ channel: "stable", distributable: false, package_spec: "", current_version: "0.1.0", latest_version: "0.1.0", package_version: "0.1.0", artifact: null, protocol: { min_version: 1, max_version: 1 } });
+    const stable = await SELF.fetch("https://worker.test/runner/releases/stable");
+    expect(stable.status).toBe(200);
+    expect(await stable.json()).toMatchObject({ channel: "stable", current_version: "0.1.0", latest_version: "0.1.0", package_version: "0.1.0", protocol: { min_version: 1, max_version: 1 } });
+    expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "@acme/coding-runner@1.2.3" })).toMatchObject({ channel: "stable", distributable: true, package_name: "@acme/coding-runner", package_version: "1.2.3", package_spec: "@acme/coding-runner@1.2.3", artifact: { source: "@acme/coding-runner@1.2.3" }, protocol: { min_version: 1, max_version: 1 } });
+    expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "https://downloads.example.test/runner-1.2.3.tgz", RUNNER_PACKAGE_NAME: "@acme/coding-runner", RUNNER_PACKAGE_VERSION: "1.2.3" })).toMatchObject({ distributable: true, package_version: "1.2.3", artifact: { source: "https://downloads.example.test/runner-1.2.3.tgz" } });
+    expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "https://downloads.example.test/runner-1.2.3.tgz", RUNNER_PACKAGE_NAME: "@acme/coding-runner", RUNNER_PACKAGE_VERSION: "1.2.3", RUNNER_ARTIFACT_SHA256: "a".repeat(64) })).toMatchObject({ distributable: true, artifact: { source: "https://downloads.example.test/runner-1.2.3.tgz", checksum: { algorithm: "sha256", value: "a".repeat(64) } } });
     expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "@acme/coding-runner@latest" }).distributable).toBe(false);
-    expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "https://github.com/acme/runner/archive/main.tgz", RUNNER_PACKAGE_NAME: "@acme/coding-runner", RUNNER_PACKAGE_VERSION: "1.2.3" }).distributable).toBe(false);
+    expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "https://downloads.example.test/main/runner.tgz", RUNNER_PACKAGE_NAME: "@acme/coding-runner", RUNNER_PACKAGE_VERSION: "1.2.3", RUNNER_ARTIFACT_SHA256: "a".repeat(64) }).distributable).toBe(false);
+    expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "https://github.com/acme/runner/archive/main.tgz", RUNNER_PACKAGE_NAME: "@acme/coding-runner", RUNNER_PACKAGE_VERSION: "1.2.3", RUNNER_ARTIFACT_SHA256: "a".repeat(64) }).distributable).toBe(false);
   });
 
   it("returns enrollment credentials once with no-store headers and never puts a token in admin HTML", async () => {
@@ -244,10 +262,12 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     const list = await mcp(secretUrl, toolsList());
     expect(list.status).toBe(200);
     const listBody = await readMcp(list) as { result?: { tools?: { name: string }[] } };
-    expect(listBody.result?.tools?.map((tool) => tool.name)).toContain("runner_list");
-    const readOnlyExec = await mcp(secretUrl, { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "exec_start", arguments: { workspace_id: "workspace", command: "echo" } } });
-    const readOnlyBody = await readMcp(readOnlyExec) as { result?: { isError?: boolean; structuredContent?: { error?: { code?: string } } } };
+    expect(listBody.result?.tools?.map((tool) => tool.name).sort()).toEqual(["edit", "job", "read", "runner_current", "runner_list", "runner_select", "shell", "workspace_list"]);
+    const readOnlyShell = await mcp(secretUrl, { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "shell", arguments: { workspace_id: "workspace", command: "echo ignored" } } });
+    const readOnlyBody = await readMcp(readOnlyShell) as { result?: { isError?: boolean; structuredContent?: { error?: { code?: string } } } };
     expect(readOnlyBody.result).toMatchObject({ isError: true, structuredContent: { error: { code: "insufficient_scope" } } });
+    const legacy = await mcp(secretUrl, { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "fs_read", arguments: { workspace_id: "workspace", path: "note.txt" } } });
+    expect((await readMcp(legacy) as { error?: { code?: number } }).error?.code).toBe(-32602);
 
     const dashboard = await SELF.fetch("https://worker.test/admin", { headers: { cookie: cookies(adminJar) } });
     const dashboardText = await dashboard.text();
@@ -302,7 +322,18 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(enrollment).toContain("Linux"); expect(enrollment).toContain("macOS"); expect(enrollment).toContain("Windows");
     expect(enrollment).toContain("/runner/install.sh"); expect(enrollment).toContain("/runner/install.ps1"); expect(enrollment).toContain("curl -fsSL"); expect(enrollment).toContain("Invoke-RestMethod");
     expect(enrollment).toContain("data-copy"); expect(enrollment).toContain("expires in 30 minutes");
+    expect(enrollment).not.toContain("--re-enroll"); expect(enrollment).not.toContain("-ReEnroll");
     expect(enrollment).not.toContain("--runner-id"); expect(enrollment).not.toContain("ADMIN_TOKEN"); expect(enrollment).not.toMatch(/CODING_RUNNER_TOKEN|MCP_SECRET/i);
+    const rotatedEnrollment = await submit("https://worker.test/admin/runners/dashboard-runner/rotate", { csrf_token: csrf }, adminJar);
+    expect(rotatedEnrollment.status).toBe(200);
+    const rotatedText = await rotatedEnrollment.text();
+    expect(rotatedText).toContain("--re-enroll"); expect(rotatedText).toContain("-ReEnroll");
+    const pinned = await submit("https://worker.test/admin/runners/dashboard-runner/version-policy", { csrf_token: csrf, update_channel: "pinned", desired_runner_version: "1.2.0" }, adminJar);
+    expect(pinned.status).toBe(303);
+    const runnerDetail = await SELF.fetch("https://worker.test/admin/runners/dashboard-runner", { headers: { cookie: cookies(adminJar) } });
+    expect(runnerDetail.status).toBe(200);
+    const runnerDetailHtml = await runnerDetail.text();
+    expect(runnerDetailHtml).toContain("Version policy"); expect(runnerDetailHtml).toContain("Stable/latest version"); expect(runnerDetailHtml).toContain("value=\"1.2.0\""); expect(runnerDetailHtml).toContain("Pinned");
     const dashboard = await SELF.fetch("https://worker.test/admin", { headers: { cookie: cookies(adminJar) } });
     expect(dashboard.headers.get("cache-control")).toBe("no-store");
     expect(dashboard.headers.get("content-security-policy")).toContain("script-src 'unsafe-inline'");

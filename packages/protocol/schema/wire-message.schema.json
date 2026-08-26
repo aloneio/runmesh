@@ -256,6 +256,100 @@
           "type": "integer",
           "exclusiveMinimum": 0,
           "maximum": 9007199254740991
+        },
+        "desired_policy": {
+          "type": "object",
+          "properties": {
+            "revision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "runner_permissions": {
+              "type": "object",
+              "properties": {
+                "read": {
+                  "type": "boolean"
+                },
+                "edit": {
+                  "type": "boolean"
+                },
+                "shell": {
+                  "type": "boolean"
+                },
+                "job_control": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "read",
+                "edit",
+                "shell",
+                "job_control"
+              ],
+              "additionalProperties": false
+            },
+            "workspaces": {
+              "maxItems": 64,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "workspace_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "root_path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "permissions": {
+                    "type": "object",
+                    "properties": {
+                      "read": {
+                        "type": "boolean"
+                      },
+                      "edit": {
+                        "type": "boolean"
+                      },
+                      "shell": {
+                        "type": "boolean"
+                      },
+                      "job_control": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "read",
+                      "edit",
+                      "shell",
+                      "job_control"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "workspace_id",
+                  "root_path",
+                  "enabled",
+                  "permissions"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "revision",
+            "runner_permissions",
+            "workspaces"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -265,6 +359,93 @@
         "worker",
         "session_id",
         "negotiated_protocol_version"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "extensions": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "additionalProperties": {}
+        },
+        "type": {
+          "type": "string",
+          "const": "runner.policy_ack"
+        },
+        "runner_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "desired_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "applied_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "applied",
+            "pending",
+            "invalid"
+          ]
+        },
+        "workspace_status": {
+          "maxItems": 64,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "workspace_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "valid",
+                  "missing",
+                  "not_directory",
+                  "permission_denied",
+                  "invalid_path"
+                ]
+              }
+            },
+            "required": [
+              "workspace_id",
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "protocol_version",
+        "type",
+        "runner_id",
+        "desired_revision",
+        "applied_revision",
+        "status",
+        "workspace_status"
       ],
       "additionalProperties": false
     },

@@ -1,11 +1,22 @@
 import { lstat, realpath } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 
+export interface PermissionSet {
+  readonly read: boolean;
+  readonly edit: boolean;
+  readonly shell: boolean;
+  readonly job_control: boolean;
+}
+
 export interface WorkspaceConfig {
   readonly workspaceId: string;
   readonly rootPath: string;
+  /** Compatibility presentation flag derived from permissions.edit. */
   readonly readonly: boolean;
+  /** Compatibility presentation flag derived from permissions.shell. */
   readonly shell: boolean;
+  /** Present for centrally managed policy; omitted by legacy CLI configurations. */
+  readonly permissions?: PermissionSet;
 }
 
 export interface RunnerConfig {

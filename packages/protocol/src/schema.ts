@@ -160,13 +160,34 @@ export const WorkspaceMetadataSchema = z
     workspace_id: IdentifierSchema,
     /**
      * Workspace roots are local authorization boundaries. They are never sent
-     * over this transport; callers identify a root by workspace_id instead.
+     * in metadata or public responses; policy delivery uses a separate,
+     * authenticated Runner-only message.
      */
     persistence: z.enum(["persistent", "ephemeral"]),
     revision: z.string().max(512).optional(),
     labels: z.record(z.string().min(1).max(128), z.string().max(512)),
   })
   .strict();
+
+/** Bounded permission bits shared by central policy and the Runner enforcement point. */
+export const PermissionSetSchema = z.object({
+  read: z.boolean(),
+  edit: z.boolean(),
+  shell: z.boolean(),
+  job_control: z.boolean(),
+}).strict();
+
+/**
+ * This is intentionally a configuration contract, not WorkspaceMetadata. Root
+ * paths are permitted only on this authenticated Runner connection and are
+ * never reflected into public/MCP metadata.
+ */
+export const RunnerPolicyWorkspaceSchema = z.object({
+  workspace_id: IdentifierSchema,
+  root_path: z.string().min(1).max(4_096).refine((value) => !value.includes("\0"), "root_path must not contain NUL"),
+  enabled: z.boolean(),
+  permissions: PermissionSetSchema,
+}).strict();
 
 export const JobStatusSchema = z.enum([
   "queued",
@@ -221,8 +242,26 @@ export const RunnerWelcomeSchema = CorrelatedEnvelopeSchema.extend({
   worker: WorkerMetadataSchema,
   session_id: IdentifierSchema,
   negotiated_protocol_version: ProtocolVersionSchema,
-})
-  .strict();
+  /** Optional v1 extension for authenticated central desired policy. */
+  desired_policy: z.object({
+    revision: z.number().int().nonnegative(),
+    runner_permissions: PermissionSetSchema,
+    workspaces: z.array(RunnerPolicyWorkspaceSchema).max(64),
+  }).strict().optional(),
+}).strict();
+
+export const RunnerPolicyAckSchema = EnvelopeSchema.extend({
+  type: z.literal("runner.policy_ack"),
+  runner_id: IdentifierSchema,
+  desired_revision: z.number().int().nonnegative(),
+  applied_revision: z.number().int().nonnegative(),
+  status: z.enum(["applied", "pending", "invalid"]),
+  /** Per-workspace non-sensitive validation status; roots are never echoed. */
+  workspace_status: z.array(z.object({
+    workspace_id: IdentifierSchema,
+    status: z.enum(["valid", "missing", "not_directory", "permission_denied", "invalid_path"]),
+  }).strict()).max(64),
+}).strict();
 
 export const RunnerHeartbeatSchema = EnvelopeSchema.extend({
   type: z.literal("runner.heartbeat"),
@@ -309,6 +348,7 @@ export const JobCompletedSchema = CorrelatedEnvelopeSchema.extend({
 export const WireMessageSchema = z.discriminatedUnion("type", [
   RunnerHelloSchema,
   RunnerWelcomeSchema,
+  RunnerPolicyAckSchema,
   RunnerHeartbeatSchema,
   RunnerSyncSchema,
   RpcRequestSchema,
@@ -320,6 +360,8 @@ export const WireMessageSchema = z.discriminatedUnion("type", [
   JobCompletedSchema,
 ]);
 
+export type PermissionSet = z.infer<typeof PermissionSetSchema>;
+export type RunnerPolicyWorkspace = z.infer<typeof RunnerPolicyWorkspaceSchema>;
 export type ProtocolVersion = z.infer<typeof ProtocolVersionSchema>;
 export type ProtocolVersionRange = z.infer<typeof ProtocolVersionRangeSchema>;
 export type CapabilityMetadata = z.infer<typeof CapabilityMetadataSchema>;
@@ -330,6 +372,7 @@ export type JobStatus = z.infer<typeof JobStatusSchema>;
 export type JobMetadata = z.infer<typeof JobMetadataSchema>;
 export type RunnerHello = z.infer<typeof RunnerHelloSchema>;
 export type RunnerWelcome = z.infer<typeof RunnerWelcomeSchema>;
+export type RunnerPolicyAck = z.infer<typeof RunnerPolicyAckSchema>;
 export type RunnerHeartbeat = z.infer<typeof RunnerHeartbeatSchema>;
 export type RunnerSync = z.infer<typeof RunnerSyncSchema>;
 export type RpcRequest = z.infer<typeof RpcRequestSchema>;

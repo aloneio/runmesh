@@ -23,6 +23,11 @@ export interface WorkerEnv {
   /** Required with a URL package spec; otherwise inferred from an npm package@version spec. */
   RUNNER_PACKAGE_NAME?: string;
   RUNNER_PACKAGE_VERSION?: string;
+  readonly RUNNER_ARTIFACT_SHA256?: string;
+  /** Optional immutable per-platform release artifacts. */
+  readonly RUNNER_ARTIFACTS_JSON?: string;
+  /** Static assets served by the Worker asset binding. */
+  ASSETS?: Fetcher;
 }
 
 interface ConnectionAttachment {
@@ -122,13 +127,13 @@ export class RunnerDO {
       }
       const epochResponse = await this.registryRequest(attachment.runnerId, "/connect", {
         method: "POST",
-        body: JSON.stringify({ metadata: message.runner, session_id: attachment.sessionId, credential_version: attachment.credentialVersion, now_ms: Date.now() }),
+        body: JSON.stringify({ metadata: message.runner, min_protocol_version: message.min_protocol_version, max_protocol_version: message.max_protocol_version, session_id: attachment.sessionId, credential_version: attachment.credentialVersion, now_ms: Date.now() }),
       });
       if (!epochResponse.ok) {
         ws.close(1008, "stale credentials");
         return;
       }
-      const body = await epochResponse.json() as { epoch?: unknown };
+      const body = await epochResponse.json() as { epoch?: unknown; desired_policy?: unknown };
       if (typeof body.epoch !== "number") {
         ws.close(1011, "invalid registry response");
         return;
@@ -149,6 +154,7 @@ export class RunnerDO {
           worker_id: this.env.WORKER_ID ?? "worker-local", worker_version: this.env.WORKER_VERSION ?? "0.1.0",
           capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: ["echo", "runner.info"], labels: { runtime: "cloudflare" } },
         },
+        ...(isPolicy(body.desired_policy) ? { desired_policy: body.desired_policy } : {}),
       };
       ws.send(encodeWireFrame(welcome));
       return;
@@ -181,6 +187,12 @@ export class RunnerDO {
       if (message.runner_id !== attachment.runnerId) return ws.close(1008, "runner identity mismatch");
       const response = await this.registryRequest(attachment.runnerId, "/heartbeat", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, now_ms: Date.now() }) });
       if (!response.ok) ws.close(4001, "credentials revoked");
+      return;
+    }
+    if (message.type === "runner.policy_ack") {
+      if (message.runner_id !== attachment.runnerId) return ws.close(1008, "runner identity mismatch");
+      const response = await this.registryRequest(attachment.runnerId, "/policy-ack", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, desired_revision: message.desired_revision, applied_revision: message.applied_revision, status: message.status, workspace_status: message.workspace_status }) });
+      if (!response.ok) ws.close(4001, "stale policy acknowledgement");
       return;
     }
     if (message.type === "runner.sync") {
@@ -290,6 +302,17 @@ export class RunnerDO {
     const headersPromise = internalHeaders(this.env.INTERNAL_CONTROL_SECRET ?? "", init.method ?? "GET", path, body);
     return headersPromise.then((headers) => this.env.REGISTRY.get(id).fetch(new Request(`https://registry.internal${path}`, { ...init, headers })));
   }
+}
+
+function isPolicy(value: unknown): value is { revision: number; runner_permissions: { read: boolean; edit: boolean; shell: boolean; job_control: boolean }; workspaces: Array<{ workspace_id: string; root_path: string; enabled: boolean; permissions: { read: boolean; edit: boolean; shell: boolean; job_control: boolean } }> } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const policy = value as Record<string, unknown>; const permissions = policy.runner_permissions as Record<string, unknown> | undefined;
+  return Number.isSafeInteger(policy.revision) && (policy.revision as number) >= 0 && Array.isArray(policy.workspaces) && permissions !== undefined && ["read", "edit", "shell", "job_control"].every((key) => typeof permissions[key] === "boolean") && (policy.workspaces as unknown[]).every((workspace) => {
+    if (typeof workspace !== "object" || workspace === null || Array.isArray(workspace)) return false;
+    const item = workspace as Record<string, unknown>;
+    const workspacePermissions = item.permissions;
+    return typeof item.workspace_id === "string" && typeof item.root_path === "string" && typeof item.enabled === "boolean" && typeof workspacePermissions === "object" && workspacePermissions !== null && !Array.isArray(workspacePermissions) && ["read", "edit", "shell", "job_control"].every((key) => typeof (workspacePermissions as Record<string, unknown>)[key] === "boolean");
+  });
 }
 
 function parseRunnerPath(pathname: string): string | undefined {

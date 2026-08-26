@@ -1,11 +1,12 @@
 import { hostname } from "node:os";
-import { realpath } from "node:fs/promises";
 import { PROTOCOL_CURRENT_VERSION } from "@remote-coding-runtime/protocol";
-import { defaultWorkspaceId, ProfileStore, type RunnerProfile, type StoredWorkspace } from "./profile.js";
+import { ProfileStore, type RunnerProfile } from "./profile.js";
+import { RUNNER_VERSION } from "./version.js";
 
 export interface EnrollmentOptions {
   readonly server: string;
   readonly code: string;
+  /** Retained for explicit CLI compatibility; enrollment never derives a workspace from it. */
   readonly cwd?: string;
   readonly store?: ProfileStore;
   readonly fetch?: typeof globalThis.fetch;
@@ -24,7 +25,7 @@ export async function enrollRunner(options: EnrollmentOptions): Promise<Enrollme
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       enrollment_code: options.code,
-      runner_public_info: { platform: process.platform, architecture: process.arch, hostname: hostname().slice(0, 256), runner_version: "0.1.0", protocol_version: PROTOCOL_CURRENT_VERSION },
+      runner_public_info: { platform: process.platform, architecture: process.arch, hostname: hostname().slice(0, 256), runner_version: RUNNER_VERSION, protocol_version: PROTOCOL_CURRENT_VERSION },
     }),
   }).catch(() => { throw new Error("enrollment request failed"); });
   if (!response.ok) throw new Error(`enrollment failed (${response.status})`);
@@ -33,15 +34,16 @@ export async function enrollRunner(options: EnrollmentOptions): Promise<Enrollme
   if (enrolled === undefined) throw new Error("enrollment response is invalid");
   const store = options.store ?? new ProfileStore();
   const existing = await store.load();
-  const root = await realpath(options.cwd ?? process.cwd()).catch(() => { throw new Error("current workspace directory does not exist"); });
-  const workspaces = existing?.workspaces ?? [];
-  const workspace: StoredWorkspace = { id: defaultWorkspaceId(root, workspaces), path: root, writable: true, shell: true };
+  // Enrollment represents a machine Runner. It intentionally never infers a local
+  // workspace from process.cwd() (or from the legacy cwd option). Initial
+  // enrollment therefore has zero workspaces; re-enrollment keeps explicitly
+  // configured roots while replacing only connection credentials.
   const profile: RunnerProfile = {
     version: 1,
     server_url: connectionUrl(enrolled.serverUrl),
     runner_id: enrolled.runnerId,
     token: enrolled.token,
-    workspaces: [...workspaces, workspace],
+    workspaces: existing?.workspaces ?? [],
     ...(options.insecureLocal === true ? { insecure_local: true } : {}),
     ...(existing?.max_concurrent_jobs === undefined ? {} : { max_concurrent_jobs: existing.max_concurrent_jobs }),
   };

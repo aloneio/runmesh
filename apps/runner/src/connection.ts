@@ -6,14 +6,18 @@ import {
   PROTOCOL_MIN_VERSION,
   type CapabilityMetadata,
   type RunnerMetadata,
+  type RunnerPolicyAck,
+  type RunnerWelcome,
   type RunnerSync,
   type RpcRequest,
   type WireMessage,
 } from "@remote-coding-runtime/protocol";
 import WebSocket from "ws";
 import { reconnectDelayMs } from "./backoff.js";
-import type { RunnerConfig } from "./config.js";
+import { validateCentralWorkspacePolicy, type CentralWorkspacePolicy } from "./policy-config.js";
+import type { RunnerConfig, WorkspaceConfig } from "./config.js";
 import { RunnerRuntime, rpcError } from "./runtime.js";
+import { RUNNER_VERSION } from "./version.js";
 
 export class RunnerAuthenticationError extends Error {
   public constructor(message = "runner credentials were rejected") { super(message); this.name = "RunnerAuthenticationError"; }
@@ -21,9 +25,9 @@ export class RunnerAuthenticationError extends Error {
 
 /** Authentication failures must not enter normal network reconnect backoff. */
 export function classifyConnectionFailure(input: { readonly statusCode?: number; readonly closeCode?: number; readonly reason?: string; readonly error?: unknown }): "authentication" | "network" {
-  if (input.statusCode === 401 || input.statusCode === 403 || input.closeCode === 4001) return "authentication";
+  if (input.statusCode === 401 || input.statusCode === 403 || input.closeCode === 4001 || input.closeCode === 1002) return "authentication";
   const message = `${input.reason ?? ""} ${input.error instanceof Error ? input.error.message : ""}`.toLowerCase();
-  return /credential|auth(?:entication|orization)?|revoked|forbidden|unauthorized|stale session/.test(message) ? "authentication" : "network";
+  return /credential|auth(?:entication|orization)?|revoked|forbidden|unauthorized|stale session|unsupported_protocol_version/.test(message) ? "authentication" : "network";
 }
 
 export interface RunnerConnectionOptions {
@@ -54,6 +58,8 @@ export class RunnerConnection {
   private syncSequence = 0;
   private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   private syncTimer: ReturnType<typeof setInterval> | undefined;
+  private appliedPolicyRevision = 0;
+  private desiredPolicyRevision = 0;
   private readonly pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
 
   public constructor(options: RunnerConnectionOptions) {
@@ -67,7 +73,7 @@ export class RunnerConnection {
     this.runtime = options.runtime ?? new RunnerRuntime({ config: this.config, ...(this.config.stateDir === undefined ? {} : { stateDir: this.config.stateDir }), onJobEvent: (event) => this.forwardJobEvent(event) });
     this.metadata = {
       runner_id: this.config.runnerId,
-      runner_version: options.version ?? "0.1.0",
+      runner_version: options.version ?? RUNNER_VERSION,
       platform: process.platform,
       architecture: process.arch,
       capabilities: discoverCapabilities(this.config.maxConcurrentJobs ?? 1),
@@ -181,6 +187,7 @@ export class RunnerConnection {
         if (message.type === "runner.welcome") {
           welcomed = true;
           this.onStateChange("online");
+          if (message.desired_policy !== undefined) void this.applyCentralPolicy(socket, message.desired_policy);
           void this.sendSync(socket);
           this.heartbeatTimer = setInterval(() => this.sendHeartbeat(socket), this.heartbeatMs);
           this.syncTimer = setInterval(() => { void this.sendSync(socket); }, this.syncMs);
@@ -224,6 +231,46 @@ export class RunnerConnection {
     });
   }
 
+  private async applyCentralPolicy(socket: WebSocket, policy: NonNullable<RunnerWelcome["desired_policy"]>): Promise<void> {
+    this.desiredPolicyRevision = policy.revision;
+    // A replacement policy must stop using any formerly managed root before
+    // asynchronous filesystem validation begins. Legacy explicit local
+    // workspaces remain compatible only until the first central policy arrives.
+    this.runtime.applyPolicy([]);
+    const validation = await validateCentralWorkspacePolicy(policy.workspaces as CentralWorkspacePolicy[]);
+    if (socket !== this.socket || socket.readyState !== WebSocket.OPEN) return;
+    const runnerPermissions = policy.runner_permissions;
+    const effective: WorkspaceConfig[] = validation.workspaces.map((workspace) => ({
+      ...workspace,
+      permissions: {
+        read: runnerPermissions.read && (workspace.permissions?.read ?? false),
+        edit: runnerPermissions.edit && (workspace.permissions?.edit ?? false),
+        shell: runnerPermissions.shell && (workspace.permissions?.shell ?? false),
+        job_control: runnerPermissions.job_control && (workspace.permissions?.job_control ?? false),
+      },
+      readonly: !(runnerPermissions.edit && (workspace.permissions?.edit ?? false)),
+      shell: runnerPermissions.shell && (workspace.permissions?.shell ?? false),
+    }));
+    const invalid = validation.status.some((item) => item.status !== "valid");
+    if (!invalid) {
+      this.runtime.applyPolicy(effective);
+      this.appliedPolicyRevision = policy.revision;
+      this.sendPolicyAck(socket, "applied", validation.status);
+      await this.sendSync(socket);
+    } else {
+      // Fail closed: retain no managed roots until the configured policy validates.
+      this.runtime.applyPolicy([]);
+      this.appliedPolicyRevision = 0;
+      this.sendPolicyAck(socket, "invalid", validation.status);
+      await this.sendSync(socket);
+    }
+  }
+
+  private sendPolicyAck(socket: WebSocket, status: RunnerPolicyAck["status"], workspaceStatus: RunnerPolicyAck["workspace_status"]): void {
+    if (socket.readyState !== WebSocket.OPEN) return;
+    socket.send(encodeWireFrame({ type: "runner.policy_ack", protocol_version: PROTOCOL_CURRENT_VERSION, runner_id: this.config.runnerId, desired_revision: this.desiredPolicyRevision, applied_revision: this.appliedPolicyRevision, status, workspace_status: workspaceStatus }));
+  }
+
   private sendHeartbeat(socket: WebSocket): void {
     if (socket.readyState !== WebSocket.OPEN) return;
     socket.send(encodeWireFrame({
@@ -245,11 +292,7 @@ export class RunnerConnection {
       runner_id: this.config.runnerId,
       sync_sequence: this.syncSequence++,
       sent_at_ms: Date.now(),
-      workspaces: this.config.workspaces.map((workspace) => ({
-        workspace_id: workspace.workspaceId,
-        persistence: "persistent",
-        labels: {},
-      })),
+      workspaces: this.runtime.syncWorkspaceMetadata(),
       jobs,
     };
     socket.send(encodeWireFrame(sync));
