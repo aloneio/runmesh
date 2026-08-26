@@ -1,46 +1,69 @@
 name: Release
 
 on:
-  push:
-    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "SemVer version to release (for example 0.1.0; no v prefix)"
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 jobs:
   release:
+    name: signed release from dev
     runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+      RELEASE_SIGNING_KEY_ID: ${{ secrets.RELEASE_SIGNING_KEY_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out the protected development branch
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+      - name: Validate release inputs and signing configuration
+        run: |
+          set -euo pipefail
+          node -e 'if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(process.env.RELEASE_VERSION ?? "")) process.exit(1)'
+          test -n "$RELEASE_SIGNING_KEY"
+          test -n "$RELEASE_SIGNING_KEY_ID"
+          node scripts/release-signature.mjs validate-key release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
+          test "$(node -p 'require("./apps/runner/package.json").version')" = "$RELEASE_VERSION"
+          test "$(node -p 'require("./packages/protocol/package.json").version')" = "$RELEASE_VERSION"
       - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:unit
       - run: npm run build
-      - run: npm pack --workspace=@aloneio/runmesh-protocol --pack-destination release
-      - run: npm pack --workspace=@aloneio/runmesh-runner --pack-destination release
-      - name: Generate checksums and manifest
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
+      - run: npm run pack:smoke
+      - name: Pack immutable release inputs
         run: |
+          set -euo pipefail
           mkdir -p release
-          sha256sum release/*.tgz > release/SHA256SUMS
-          VERSION="${RELEASE_TAG#v}"
-          node -e 'const fs=require("fs"),version=process.env.VERSION; const files=fs.readdirSync("release").filter(f=>f.endsWith(".tgz")); const artifacts=files.map(f=>({name:f,sha256:require("crypto").createHash("sha256").update(fs.readFileSync("release/"+f)).digest("hex"),size:fs.statSync("release/"+f).size})); fs.writeFileSync("release/manifest.json",JSON.stringify({schema_version:1,version,channel:"stable",published_at:new Date().toISOString(),artifacts},null,2)+"\n")'        env:
-          VERSION: ${{ github.ref_name }}
-      - name: Sign manifest when signing key is configured
-        env:
-          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+          npm pack --workspace=@aloneio/runmesh-protocol --pack-destination release
+          npm pack --workspace=@aloneio/runmesh-runner --pack-destination release
+      - name: Generate deterministic manifest and checksums
         run: |
-          if [ -n "$RELEASE_SIGNING_KEY" ]; then
-            printf '%s' "$RELEASE_SIGNING_KEY" > /tmp/runmesh-release-key
-            openssl dgst -sha256 -sign /tmp/runmesh-release-key -out release/manifest.sig release/manifest.json
-            rm -f /tmp/runmesh-release-key
-          else
-            echo 'RELEASE_SIGNING_KEY is not configured; refusing to claim a signed release.'
-          fi
-      - uses: softprops/action-gh-release@v2
+          set -euo pipefail
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          PUBLISHED_AT="$(date --utc --date="@$SOURCE_DATE_EPOCH" +%Y-%m-%dT%H:%M:%SZ)"
+          node scripts/generate-release-manifest.mjs release "$RELEASE_VERSION" "$PUBLISHED_AT"
+      - name: Sign and verify manifest with the selected trusted Ed25519 key
+        run: |
+          set -euo pipefail
+          node scripts/release-signature.mjs sign release/manifest.json release/manifest.sig release/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
+          node scripts/release-signature.mjs verify release/manifest.json release/manifest.sig release/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
+      - name: Publish the manually requested release
+        uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ inputs.version }}
+          target_commitish: dev
           files: release/*
           generate_release_notes: true

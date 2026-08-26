@@ -7,6 +7,7 @@ import { RunnerConnection } from "./connection.js";
 import { enrollRunner } from "./enrollment.js";
 import { ProfileStore, defaultWorkspaceId, redactedProfile, workspaceOptions, type RunnerProfile, type StoredWorkspace } from "./profile.js";
 import { EnvironmentInfoService, discoverShellRuntime, type ShellRuntime } from "./runtime.js";
+import { RUNNER_VERSION } from "./version.js";
 import { assertManagedServiceManifest, createServiceManager, hostServiceManifestFilesystem, installServiceManifest, isManagedService, removeServiceManifest, renderService, serviceLayout, type ExecutionMode, type ServiceManagerAdapter, type ServiceManifest, type ServiceManifestFilesystem, type ServicePlatform } from "./service.js";
 
 export interface CliDependencies {
@@ -49,7 +50,7 @@ export async function runEnrollCli(argv: readonly string[], dependencies: Enroll
   const store = dependencies.store ?? storeFor(parsed, dependencies.servicePlatform);
   try {
     const result = await enrollRunner({
-      server: requiredString(parsed, "server"), code: requiredString(parsed, "code"), insecureLocal: parsed.values.insecureLocal === true,
+      server: requiredString(parsed, "server"), code: requiredString(parsed, "code"), reEnroll: parsed.values.reEnroll === true, insecureLocal: parsed.values.insecureLocal === true,
       ...(typeof parsed.values.executionMode === "string" ? { executionMode: parsed.values.executionMode as ExecutionMode } : dependencies.executionMode === undefined ? {} : { executionMode: dependencies.executionMode }),
       ...(parsed.values.confirmPrivilegedHost === true || dependencies.confirmPrivilegedHost === true ? { confirmPrivilegedHost: true } : {}),
       ...(typeof parsed.values.cwd === "string" ? { cwd: parsed.values.cwd } : {}),
@@ -63,13 +64,15 @@ export async function runEnrollCli(argv: readonly string[], dependencies: Enroll
 export async function runCli(argv: readonly string[], dependencies: CliDependencies = {}): Promise<void> {
   const output = dependencies.stdout ?? ((line) => process.stdout.write(`${line}\n`));
   const error = dependencies.stderr ?? ((line) => process.stderr.write(`${line}\n`));
+  if (argv.length === 1 && (argv[0] === "--help" || argv[0] === "-h")) { output(HELP); return; }
+  if (argv.length === 1 && argv[0] === "--version") { output(RUNNER_VERSION); return; }
   const parsed = parseProductArgs(argv);
   const store = dependencies.store ?? storeFor(parsed, dependencies.servicePlatform);
   try {
     if (parsed.command === "start") return start(parsed, store, error, dependencies);
     if (parsed.command === "enroll") {
       const server = requiredString(parsed, "server"); const code = requiredString(parsed, "code");
-      const result = await enrollRunner({ server, code, insecureLocal: parsed.values.insecureLocal === true, ...(typeof parsed.values.executionMode === "string" ? { executionMode: parsed.values.executionMode as ExecutionMode } : {}), ...(parsed.values.confirmPrivilegedHost === true ? { confirmPrivilegedHost: true } : {}), ...(typeof parsed.values.cwd === "string" ? { cwd: parsed.values.cwd } : {}), store, ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch }) });
+      const result = await enrollRunner({ server, code, reEnroll: parsed.values.reEnroll === true, insecureLocal: parsed.values.insecureLocal === true, ...(typeof parsed.values.executionMode === "string" ? { executionMode: parsed.values.executionMode as ExecutionMode } : {}), ...(parsed.values.confirmPrivilegedHost === true ? { confirmPrivilegedHost: true } : {}), ...(typeof parsed.values.cwd === "string" ? { cwd: parsed.values.cwd } : {}), store, ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch }) });
       report(output, parsed.json, { enrolled: true, runner_id: result.profile.runner_id, workspace_count: result.profile.workspaces.length });
       return;
     }
@@ -278,6 +281,7 @@ export function parseProductArgs(argv: readonly string[]): ParsedCommand {
     if (arg === "--purge") { values.purge = true; continue; }
     if (arg === "--yes") { values.yes = true; continue; }
     if (arg === "--insecure-local") { values.insecureLocal = true; continue; }
+    if (arg === "--re-enroll") { values.reEnroll = true; continue; }
     if (arg === "--user") { values.user = true; continue; }
     if (arg === "--confirm-privileged-host") { values.confirmPrivilegedHost = true; continue; }
     const key = arg === "--execution-mode" ? "executionMode" : arg === "--server" ? "server" : arg === "--code" ? "code" : arg === "--cwd" ? "cwd" : arg === "--id" ? "id" : arg === "--path" ? "path" : arg === "--executable-path" ? "executablePath" : arg === "--profile" ? "profilePath" : undefined;
