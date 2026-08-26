@@ -1,5 +1,5 @@
 import { env, SELF, runInDurableObject } from "cloudflare:test";
-import { WORKER_BRIDGE_TIMEOUT_MS, decodeWireFrame, encodeWireFrame, type WireMessage } from "@aloneio/runmesh-protocol";
+import { WORKER_BRIDGE_TIMEOUT_MS, PROTOCOL_CURRENT_VERSION, PROTOCOL_MIN_VERSION, decodeWireFrame, encodeWireFrame, type WireMessage } from "@aloneio/runmesh-protocol";
 import { beforeEach, describe, expect, it } from "vitest";
 import { INTERNAL_CONTROL_HEADER, INTERNAL_SIGNATURE_SKEW_MS, internalHeaders } from "../src/security.js";
 
@@ -73,7 +73,7 @@ describe("Worker runner transport", () => {
     expect(socket).not.toBeNull();
     socket?.accept();
     const hello: WireMessage = {
-      type: "runner.hello", protocol_version: 1, request_id: "hello-1", min_protocol_version: 1, max_protocol_version: 1,
+      type: "runner.hello", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "hello-1", min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION,
       runner: { runner_id: runnerId, runner_version: "test", platform: "test", architecture: "test", capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: [], labels: {} } },
     };
     const welcomePromise = new Promise<string>((resolve) => {
@@ -82,7 +82,7 @@ describe("Worker runner transport", () => {
     socket?.send(encodeWireFrame(hello));
     const welcome = await welcomePromise;
     expect(decodeWireFrame(welcome).type).toBe("runner.welcome");
-    socket?.send(encodeWireFrame({ type: "runner.sync", protocol_version: 1, runner_id: runnerId, sync_sequence: 1, sent_at_ms: Date.now(), workspaces: [{ workspace_id: "workspace-1", persistence: "persistent", labels: {} }], jobs: [] }));
+    socket?.send(encodeWireFrame({ type: "runner.sync", protocol_version: PROTOCOL_CURRENT_VERSION, runner_id: runnerId, sync_sequence: 1, sent_at_ms: Date.now(), workspaces: [{ workspace_id: "workspace-1", persistence: "persistent", labels: {} }], jobs: [] }));
     const closePromise = new Promise<void>((resolve) => {
       socket?.addEventListener("close", () => resolve(), { once: true });
     });
@@ -95,7 +95,7 @@ describe("Worker runner transport", () => {
     const upgrade = await SELF.fetch(`https://worker.test/runner/connect?runner_id=${runnerId}`, { headers: { Upgrade: "websocket", Authorization: `Bearer ${token}` } });
     const socket = upgrade.webSocket;
     socket?.accept();
-    socket?.send(encodeWireFrame({ type: "runner.hello", protocol_version: 1, request_id: "hello-policy", min_protocol_version: 1, max_protocol_version: 1,
+    socket?.send(encodeWireFrame({ type: "runner.hello", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "hello-policy", min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION,
       runner: { runner_id: runnerId, runner_version: "test", platform: "test", architecture: "test", capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: [], labels: {} } },
     }));
     await new Promise<void>((resolve) => socket?.addEventListener("message", () => resolve(), { once: true }));
@@ -147,7 +147,7 @@ describe("Worker runner transport", () => {
     const upgrade = await SELF.fetch(`https://worker.test/runner/connect?runner_id=${runnerId}`, { headers: { Upgrade: "websocket", Authorization: `Bearer ${token}` } });
     const socket = upgrade.webSocket;
     socket?.accept();
-    socket?.send(encodeWireFrame({ type: "runner.hello", protocol_version: 1, request_id: "hello-sync", min_protocol_version: 1, max_protocol_version: 1,
+    socket?.send(encodeWireFrame({ type: "runner.hello", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "hello-sync", min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION,
       runner: { runner_id: runnerId, runner_version: "test", platform: "test", architecture: "test", capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: [], labels: {} } },
     }));
     await new Promise<void>((resolve) => socket?.addEventListener("message", () => resolve(), { once: true }));
@@ -170,7 +170,7 @@ describe("Worker runner transport", () => {
     const upgrade = await SELF.fetch(`https://worker.test/runner/connect?runner_id=${runnerId}`, { headers: { Upgrade: "websocket", Authorization: `Bearer ${token}` } });
     const socket = upgrade.webSocket;
     socket?.accept();
-    socket?.send(encodeWireFrame({ type: "runner.hello", protocol_version: 1, request_id: "hello-events", min_protocol_version: 1, max_protocol_version: 1,
+    socket?.send(encodeWireFrame({ type: "runner.hello", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "hello-events", min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION,
       runner: { runner_id: runnerId, runner_version: "test", platform: "test", architecture: "test", capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: [], labels: {} } },
     }));
     await new Promise<void>((resolve) => socket?.addEventListener("message", () => resolve(), { once: true }));

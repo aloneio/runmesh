@@ -6,6 +6,7 @@ import {
   PROTOCOL_MIN_VERSION,
   RpcRequestSchema,
   WORKER_BRIDGE_TIMEOUT_MS,
+  runnerPolicyChecksum,
   type WireMessage,
 } from "@aloneio/runmesh-protocol";
 import { bearerToken, internalHeaders, verifyInternalRequest } from "./security.js";
@@ -338,13 +339,15 @@ export class RunnerDO {
   }
 }
 
-function isPolicy(value: unknown): value is { revision: number; runner_permissions: { read: boolean; edit: boolean; shell: boolean; job_control: boolean }; workspaces: Array<{ workspace_id: string; root_path: string; enabled: boolean; permissions: { read: boolean; edit: boolean; shell: boolean; job_control: boolean } }> } {
+function isPolicy(value: unknown): value is { schema_version: 1; runner_id: string; revision: number; checksum: string; runner_permissions: { read: boolean; edit: boolean; shell: boolean; job_control: boolean }; workspaces: Array<{ workspace_id: string; root_path: string; enabled: boolean; permissions: { read: boolean; edit: boolean; shell: boolean; job_control: boolean } }> } {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const policy = value as Record<string, unknown>; const permissions = policy.runner_permissions as Record<string, unknown> | undefined;
-  return Number.isSafeInteger(policy.revision) && (policy.revision as number) >= 0 && Array.isArray(policy.workspaces) && permissions !== undefined && ["read", "edit", "shell", "job_control"].every((key) => typeof permissions[key] === "boolean") && (policy.workspaces as unknown[]).every((workspace) => {
+  if (policy.schema_version !== 1 || typeof policy.runner_id !== "string" || !Number.isSafeInteger(policy.revision) || (policy.revision as number) <= 0 || typeof policy.checksum !== "string" || !/^[a-f0-9]{64}$/.test(policy.checksum) || !Array.isArray(policy.workspaces) || permissions === undefined || !["read", "edit", "shell", "job_control"].every((key) => typeof permissions[key] === "boolean")) return false;
+  const unsigned = { schema_version: 1 as const, runner_id: policy.runner_id, revision: policy.revision as number, runner_permissions: permissions as { read: boolean; edit: boolean; shell: boolean; job_control: boolean }, workspaces: policy.workspaces };
+  if (runnerPolicyChecksum(unsigned) !== policy.checksum) return false;
+  return (policy.workspaces as unknown[]).every((workspace) => {
     if (typeof workspace !== "object" || workspace === null || Array.isArray(workspace)) return false;
-    const item = workspace as Record<string, unknown>;
-    const workspacePermissions = item.permissions;
+    const item = workspace as Record<string, unknown>; const workspacePermissions = item.permissions;
     return typeof item.workspace_id === "string" && typeof item.root_path === "string" && typeof item.enabled === "boolean" && typeof workspacePermissions === "object" && workspacePermissions !== null && !Array.isArray(workspacePermissions) && ["read", "edit", "shell", "job_control"].every((key) => typeof (workspacePermissions as Record<string, unknown>)[key] === "boolean");
   });
 }

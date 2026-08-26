@@ -112,7 +112,7 @@ A recovered live process is marked `unknown`. `job({action:"get"})`, `job({actio
 
 Workspace roots are local configuration only and never cross the wire. All filesystem, Git, cwd, and patch paths pass the canonical workspace PathPolicy. Compact `read` and `job({action:"logs"})` use UTF-8-safe byte cursors. Patch errors are stable root-free codes such as `invalid_patch`, `missing_file`, `target_exists`, `baseline_changed`, hunk errors, `patch_install_failed`, and `patch_rollback_failed`.
 
-Private `env.info` retains bounded parallel probes for platform, architecture, hostname, shell, Node/npm/pnpm, Python, Git, Go, rustc/Cargo, and Docker for the Worker/Runner transport. Missing tools return `available: false`. Complete on-disk logs remain unbounded by default and need disk monitoring.
+Private `env.info` retains bounded parallel probes for platform, architecture, hostname, shell, Node/npm/pnpm, Python, Git, Go, rustc/Cargo, and Docker for the Worker/Runner transport. Missing tools return `available: false`. Local stdout/stderr logs are bounded by per-Job and aggregate quotas; quota exhaustion is exposed as `output_truncated`.
 
 The Runner path policy is not a sandbox. No OAuth, AI/model API, Cloudflare Sandbox, Cloudflare Containers, or GitHub Actions runtime is part of the deployed control plane. Use external VM/container isolation for untrusted repositories and commands.
 
