@@ -5,7 +5,7 @@
   "description": "A language-neutral protocol foundation for remote coding runtimes.",
   "repository": { "type": "git", "url": "https://github.com/aloneio/runmesh.git" },
   "homepage": "https://github.com/aloneio/runmesh",
-  "license": "Apache-2.0",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "workspaces": [
     "packages/*",
     "apps/*"
@@ -20,7 +20,8 @@
     "dev:worker": "npm run dev --workspace=@remote-coding-runtime/worker",
     "start:runner": "npm run start --workspace=@remote-coding-runtime/runner --",
     "pack:runner": "npm pack --workspace=@remote-coding-runtime/runner --dry-run",
-    "pack:smoke": "node ./scripts/pack-smoke.mjs"
+    "pack:smoke": "node ./scripts/pack-smoke.mjs",
+    "check:licenses": "node ./scripts/check-licenses.mjs"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.22.0",

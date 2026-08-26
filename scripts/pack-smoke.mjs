@@ -15,6 +15,11 @@ try {
   await exec("npm", ["install", "--ignore-scripts", join(root, protocol), join(root, runner)], { cwd: root });
   const packageJson = JSON.parse(await readFile(join(root, "node_modules", "@aloneio", "runmesh-runner", "package.json"), "utf8"));
   if (packageJson.private === true || packageJson.bin === undefined) throw new Error("runner package is not distributable");
+  for (const packageName of ["runmesh-runner", "runmesh-protocol"]) {
+    for (const file of ["LICENSE", "LICENSES/Apache-2.0-history.txt", "LICENSE_HISTORY.md", "THIRD_PARTY_NOTICES.md"]) {
+      await readFile(join(root, "node_modules", "@aloneio", packageName, file));
+    }
+  }
   await exec("node", [join(root, "node_modules", "@aloneio", "runmesh-runner", "dist", "cli.js"), "--help"], { cwd: root }).catch((error) => {
     if (error?.code !== 1 || !String(error?.stderr ?? "").includes("usage:")) throw error;
   });

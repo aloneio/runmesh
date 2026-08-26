@@ -5,7 +5,7 @@
   "private": false,
   "type": "module",
   "description": "System Runner for Runmesh Agent Control Plane.",
-  "license": "Apache-2.0",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "repository": { "type": "git", "url": "https://github.com/aloneio/runmesh.git", "directory": "apps/runner" },
   "homepage": "https://github.com/aloneio/runmesh",
   "bugs": { "url": "https://github.com/aloneio/runmesh/issues" },
@@ -24,7 +24,7 @@
   "bin": {
     "coding-runner": "./dist/cli.js"
   },
-  "files": ["dist"],
+  "files": ["dist", "LICENSE", "LICENSES/Apache-2.0-history.txt", "LICENSE_HISTORY.md", "THIRD_PARTY_NOTICES.md"],
   "scripts": {
     "build": "tsc -b",
     "prepack": "npm run build && rm -f dist/*.tsbuildinfo dist/.tsbuildinfo",
