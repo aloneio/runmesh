@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { access, lstat, readFile, realpath, rm } from "node:fs/promises";
+import { access, lstat, realpath, rm } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { parseRunnerArgs, validateRunnerConfig, type RawRunnerOptions } from "./config.js";
 import { RunnerConnection } from "./connection.js";
 import { enrollRunner } from "./enrollment.js";
 import { ProfileStore, defaultWorkspaceId, redactedProfile, workspaceOptions, type RunnerProfile, type StoredWorkspace } from "./profile.js";
-import { EnvironmentInfoService } from "./runtime.js";
-import { assertManagedServiceManifest, createServiceManager, installServiceManifest, isManagedService, removeServiceManifest, renderService, serviceLayout, type ServiceManagerAdapter, type ServiceManifest, type ServiceManifestFilesystem, type ServicePlatform } from "./service.js";
+import { EnvironmentInfoService, discoverShellRuntime, type ShellRuntime } from "./runtime.js";
+import { assertManagedServiceManifest, createServiceManager, hostServiceManifestFilesystem, installServiceManifest, isManagedService, removeServiceManifest, renderService, serviceLayout, type ExecutionMode, type ServiceManagerAdapter, type ServiceManifest, type ServiceManifestFilesystem, type ServicePlatform } from "./service.js";
 
 export interface CliDependencies {
   readonly store?: ProfileStore;
@@ -22,6 +22,13 @@ export interface CliDependencies {
   readonly servicePlatform?: ServicePlatform;
   /** Test hook for elevated system installation checks. */
   readonly isAdministrator?: () => boolean;
+  /** Injectable local discovery keeps doctor diagnostics deterministic in tests. */
+  readonly environment?: EnvironmentInfoService;
+  readonly discoverShellRuntime?: () => Promise<ShellRuntime | undefined>;
+  /** Optional local policy revision source; normal profiles do not persist central policy state. */
+  readonly policyRevision?: () => Promise<{ readonly desired?: number; readonly applied?: number } | undefined>;
+  /** Injectable exit-code seam for doctor failures; production sets process.exitCode. */
+  readonly setExitCode?: (code: number) => void;
 }
 export interface EnrollCliDependencies {
   readonly store?: ProfileStore;
@@ -29,6 +36,8 @@ export interface EnrollCliDependencies {
   readonly stderr?: (line: string) => void;
   readonly fetch?: typeof globalThis.fetch;
   readonly servicePlatform?: ServicePlatform;
+  readonly executionMode?: ExecutionMode;
+  readonly confirmPrivilegedHost?: boolean;
 }
 interface ParsedCommand { readonly command: string; readonly json: boolean; readonly values: Record<string, string | boolean | string[]>; readonly passthrough: string[]; }
 const HELP = "usage: coding-runner <start|enroll|status|doctor|workspace|env|install|stop|restart|uninstall> [options]";
@@ -41,6 +50,8 @@ export async function runEnrollCli(argv: readonly string[], dependencies: Enroll
   try {
     const result = await enrollRunner({
       server: requiredString(parsed, "server"), code: requiredString(parsed, "code"), insecureLocal: parsed.values.insecureLocal === true,
+      ...(typeof parsed.values.executionMode === "string" ? { executionMode: parsed.values.executionMode as ExecutionMode } : dependencies.executionMode === undefined ? {} : { executionMode: dependencies.executionMode }),
+      ...(parsed.values.confirmPrivilegedHost === true || dependencies.confirmPrivilegedHost === true ? { confirmPrivilegedHost: true } : {}),
       ...(typeof parsed.values.cwd === "string" ? { cwd: parsed.values.cwd } : {}),
       ...(dependencies.store === undefined ? { store } : { store: dependencies.store }),
       ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch }),
@@ -58,18 +69,24 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
     if (parsed.command === "start") return start(parsed, store, error, dependencies);
     if (parsed.command === "enroll") {
       const server = requiredString(parsed, "server"); const code = requiredString(parsed, "code");
-      const result = await enrollRunner({ server, code, insecureLocal: parsed.values.insecureLocal === true, ...(typeof parsed.values.cwd === "string" ? { cwd: parsed.values.cwd } : {}), store, ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch }) });
+      const result = await enrollRunner({ server, code, insecureLocal: parsed.values.insecureLocal === true, ...(typeof parsed.values.executionMode === "string" ? { executionMode: parsed.values.executionMode as ExecutionMode } : {}), ...(parsed.values.confirmPrivilegedHost === true ? { confirmPrivilegedHost: true } : {}), ...(typeof parsed.values.cwd === "string" ? { cwd: parsed.values.cwd } : {}), store, ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch }) });
       report(output, parsed.json, { enrolled: true, runner_id: result.profile.runner_id, workspace_count: result.profile.workspaces.length });
       return;
     }
-  if (parsed.command === "status") {
+    if (parsed.command === "status") {
       const profile = await store.load();
-      report(output, parsed.json, { configured: profile !== undefined, profile: redactedProfile(profile), runner_id: profile?.runner_id ?? null, display_name: null, version: null, service: { mode: parsed.values.user === true ? "user" : "system", status: "unknown" }, connection: "unknown", desired_policy_revision: null, applied_policy_revision: null, workspace_count: profile?.workspaces.length ?? 0 });
+      const executionMode = profile?.execution_mode ?? "dedicated_user";
+      report(output, parsed.json, { configured: profile !== undefined, profile: redactedProfile(profile), runner_id: profile?.runner_id ?? null, display_name: null, version: null, service: { mode: parsed.values.user === true ? "user" : "system", execution_mode: parsed.values.user === true ? "dedicated_user" : executionMode, status: "unknown" }, connection: "unknown", desired_policy_revision: null, applied_policy_revision: null, workspace_count: profile?.workspaces.length ?? 0 });
       return;
     }
     if (parsed.command === "workspace") { await workspaceCommand(parsed, store, output); return; }
     if (parsed.command === "env") { const profile = await requireProfile(store); const info = await new EnvironmentInfoService().get(workspaceOptions(profile)); report(output, parsed.json, info); return; }
-    if (parsed.command === "doctor") { report(output, parsed.json, await doctor(store, parsed.values.user === true ? "user" : "system", dependencies.servicePlatform)); return; }
+    if (parsed.command === "doctor") {
+      const result = await doctor(store, parsed.values.user === true ? "user" : "system", dependencies.servicePlatform, dependencies);
+      report(output, parsed.json, result);
+      if (!result.ok) (dependencies.setExitCode ?? ((code) => { process.exitCode = code; }))(1);
+      return;
+    }
     if (parsed.command === "install" || parsed.command === "stop" || parsed.command === "restart") { await serviceCommand(parsed, store, output, dependencies); return; }
     if (parsed.command === "uninstall") { await uninstall(parsed, store, output, dependencies); return; }
     throw new Error(HELP);
@@ -125,29 +142,93 @@ async function workspaceCommand(parsed: ParsedCommand, store: ProfileStore, outp
   }
   throw new Error("usage: coding-runner workspace <list|add|remove>");
 }
-async function doctor(store: ProfileStore, mode: "system" | "user" = "system", platform?: ServicePlatform): Promise<Record<string, unknown>> {
-  const profile = await store.load(); const permissions = await store.permissions(); const checks: { name: string; ok: boolean; detail?: string }[] = [];
-  checks.push({ name: "profile", ok: profile !== undefined, ...(profile === undefined ? { detail: "not enrolled" } : {}) });
+export interface DoctorCheck {
+  readonly name: string;
+  readonly required: boolean;
+  readonly ok: boolean;
+  readonly status: "ok" | "warning" | "failure";
+  readonly detail?: string;
+}
+export interface DoctorReport {
+  readonly ok: boolean;
+  readonly checks: readonly DoctorCheck[];
+  readonly profile: Record<string, unknown> | undefined;
+  readonly service: { readonly manifest: string; readonly mode: "system" | "user"; readonly execution_mode: ExecutionMode };
+}
+
+export async function doctor(store: ProfileStore, mode: "system" | "user" = "system", platform: ServicePlatform | undefined = undefined, dependencies: Pick<CliDependencies, "serviceFilesystem" | "serviceManager" | "environment" | "discoverShellRuntime" | "policyRevision"> = {}): Promise<DoctorReport> {
+  const profile = await store.load();
+  const permissions = await store.permissions();
+  const checks: DoctorCheck[] = [];
+  const add = (name: string, required: boolean, ok: boolean, detail?: string): void => {
+    checks.push({ name, required, ok, status: ok ? "ok" : required ? "failure" : "warning", ...(detail === undefined ? {} : { detail }) });
+  };
+  const enrolled = profile !== undefined;
+  add("profile", true, enrolled, enrolled ? undefined : "not enrolled");
+  const targetPlatform = platform ?? (process.platform === "darwin" ? "darwin" : process.platform === "linux" ? "linux" : "win32");
+  const posix = targetPlatform !== "win32";
+  add("profile_directory_permissions", true, enrolled && (!posix || permissions.directory_mode === 0o700), !enrolled ? "not enrolled" : posix ? `mode ${formatMode(permissions.directory_mode)}` : "ACL permissions not inspected");
+  add("profile_file_permissions", true, enrolled && (!posix || permissions.file_mode === 0o600), !enrolled ? "not enrolled" : posix ? `mode ${formatMode(permissions.file_mode)}` : "ACL permissions not inspected");
   if (profile !== undefined) {
-    const url = urlCheck(profile.server_url, profile.insecure_local === true); checks.push({ name: "server_url", ok: url.ok, ...(url.detail === undefined ? {} : { detail: url.detail }) });
-    checks.push({ name: "credentials_permissions", ok: process.platform === "win32" || (permissions.file_mode ?? 0) === 0o600, detail: process.platform === "win32" ? "ACL permissions not inspected" : `mode ${formatMode(permissions.file_mode)}` });
-    for (const workspace of profile.workspaces) checks.push({ name: `workspace:${workspace.id}`, ok: await isDirectory(workspace.path), ...(await isDirectory(workspace.path) ? {} : { detail: "missing or not a directory" }) });
+    const url = urlCheck(profile.server_url, profile.insecure_local === true);
+    add("server_url", true, url.ok, url.detail);
+    for (const workspace of profile.workspaces) {
+      const exists = await isDirectory(workspace.path);
+      add(`workspace:${workspace.id}`, true, exists, exists ? undefined : "missing or not a directory");
+    }
+  } else add("server_url", false, false, "not enrolled");
+
+  const executionMode = mode === "user" ? "dedicated_user" : profile?.execution_mode ?? "dedicated_user";
+  add("execution_mode", enrolled, enrolled, !enrolled ? "not enrolled" : profile?.execution_mode === undefined ? "legacy profile defaults to dedicated_user; review service identity before installation" : executionMode);
+  const manifest = renderService({ ...(platform === undefined ? {} : { platform }), mode, profilePath: store.filePath, executionMode });
+  let serviceContent: string | undefined;
+  try { serviceContent = await (dependencies.serviceFilesystem ?? hostServiceManifestFilesystem).read(manifest.path); } catch (error) { add("service_manifest", true, false, errorMessage(error)); }
+  if (!checks.some((check) => check.name === "service_manifest")) {
+    const managed = serviceContent !== undefined && isManagedService(serviceContent);
+    add("service_manifest", true, managed, serviceContent === undefined ? "not installed" : managed ? undefined : "unmanaged manifest");
   }
-  const environment = await new EnvironmentInfoService().get(profile === undefined ? [] : workspaceOptions(profile));
-  const manifest = renderService({ ...(platform === undefined ? {} : { platform }), mode, profilePath: store.filePath });
-  const serviceContent = await readFile(manifest.path, "utf8").catch(() => undefined);
-  checks.push({ name: "service_manifest", ok: serviceContent === undefined || isManagedService(serviceContent), ...(serviceContent === undefined ? { detail: "not installed" } : isManagedService(serviceContent) ? {} : { detail: "unmanaged manifest" }) });
+  const manager = dependencies.serviceManager ?? createServiceManager({ platform: manifest.platform, mode: manifest.mode });
+  if (manager.platform !== manifest.platform || manager.mode !== manifest.mode || manager.status === undefined) {
+    add("service_installed", false, false, "service status probe unavailable");
+    add("service_active", false, false, "service status probe unavailable");
+  } else {
+    try {
+      const status = await manager.status(manifest);
+      add("service_installed", true, status.installed, status.detail);
+      add("service_active", true, status.active, status.detail);
+    } catch (error) {
+      const detail = errorMessage(error);
+      add("service_installed", true, false, detail);
+      add("service_active", true, false, detail);
+    }
+  }
+  const shell = await (dependencies.discoverShellRuntime ?? (() => discoverShellRuntime()))();
+  const shellRequired = profile?.workspaces.some((workspace) => workspace.shell) === true;
+  add("shell_runtime", shellRequired, shell !== undefined, shell === undefined ? "Host shell runtime unavailable" : `${shell.kind}: ${shell.executable}`);
+  const environment = await (dependencies.environment ?? new EnvironmentInfoService()).get(profile === undefined ? [] : workspaceOptions(profile));
   const tools = (environment.tools ?? {}) as Record<string, { available?: unknown }>;
-  for (const name of ["node", "git", "python", "docker"]) checks.push({ name: `tool:${name}`, ok: tools[name]?.available === true });
-  return { ok: checks.every((check) => check.ok), checks, profile: redactedProfile(profile), service: { manifest: manifest.path } };
+  add("tool:node", true, tools.node?.available === true);
+  add("tool:git", false, tools.git?.available === true, tools.git?.available === true ? undefined : "optional");
+  add("tool:python", false, tools.python?.available === true, tools.python?.available === true ? undefined : "optional");
+  add("tool:docker", false, tools.docker?.available === true, tools.docker?.available === true ? undefined : "optional");
+  try {
+    const revision = await dependencies.policyRevision?.();
+    if (revision === undefined) add("policy_revision", false, false, "not available locally");
+    else {
+      const desired = revision.desired; const applied = revision.applied;
+      const valid = (desired === undefined || Number.isSafeInteger(desired) && desired >= 0) && (applied === undefined || Number.isSafeInteger(applied) && applied >= 0);
+      add("policy_revision", false, valid, valid ? `desired=${desired ?? "unknown"}, applied=${applied ?? "unknown"}` : "invalid revision");
+    }
+  } catch (error) { add("policy_revision", false, false, errorMessage(error)); }
+  return { ok: checks.filter((check) => check.required).every((check) => check.ok), checks, profile: redactedProfile(profile), service: { manifest: manifest.path, mode, execution_mode: executionMode } };
 }
 async function serviceCommand(parsed: ParsedCommand, store: ProfileStore, output: (line: string) => void, dependencies: CliDependencies): Promise<void> {
-  const manifest = serviceManifestFor(parsed, store, dependencies.servicePlatform);
+  const manifest = await serviceManifestFor(parsed, store, dependencies.servicePlatform);
   const manager = dependencies.serviceManager ?? createServiceManager({ ...(manifest.platform === undefined ? {} : { platform: manifest.platform }), mode: manifest.mode });
   if (manager.platform !== manifest.platform || manager.mode !== manifest.mode) throw new Error("service manager does not match the requested service mode");
   if (parsed.command === "install") {
     assertSystemInstallationPrivilege(manifest, dependencies);
-    await installServiceManifest(manifest, dependencies.serviceFilesystem);
+    await installServiceManifest(manifest, dependencies.serviceFilesystem, { confirmPrivilegedHost: parsed.values.confirmPrivilegedHost === true });
     await manager.install(manifest);
   } else {
     await assertManagedServiceManifest(manifest, dependencies.serviceFilesystem);
@@ -158,7 +239,7 @@ async function serviceCommand(parsed: ParsedCommand, store: ProfileStore, output
 }
 async function uninstall(parsed: ParsedCommand, store: ProfileStore, output: (line: string) => void, dependencies: CliDependencies): Promise<void> {
   if (parsed.values.purge === true && parsed.values.yes !== true) throw new Error("--purge requires --yes");
-  const manifest = serviceManifestFor(parsed, store, dependencies.servicePlatform);
+  const manifest = await serviceManifestFor(parsed, store, dependencies.servicePlatform);
   const manager = dependencies.serviceManager ?? createServiceManager({ ...(manifest.platform === undefined ? {} : { platform: manifest.platform }), mode: manifest.mode });
   if (manager.platform !== manifest.platform || manager.mode !== manifest.mode) throw new Error("service manager does not match the requested service mode");
   assertSystemInstallationPrivilege(manifest, dependencies);
@@ -198,7 +279,8 @@ export function parseProductArgs(argv: readonly string[]): ParsedCommand {
     if (arg === "--yes") { values.yes = true; continue; }
     if (arg === "--insecure-local") { values.insecureLocal = true; continue; }
     if (arg === "--user") { values.user = true; continue; }
-    const key = arg === "--server" ? "server" : arg === "--code" ? "code" : arg === "--cwd" ? "cwd" : arg === "--id" ? "id" : arg === "--path" ? "path" : arg === "--executable-path" ? "executablePath" : arg === "--profile" ? "profilePath" : undefined;
+    if (arg === "--confirm-privileged-host") { values.confirmPrivilegedHost = true; continue; }
+    const key = arg === "--execution-mode" ? "executionMode" : arg === "--server" ? "server" : arg === "--code" ? "code" : arg === "--cwd" ? "cwd" : arg === "--id" ? "id" : arg === "--path" ? "path" : arg === "--executable-path" ? "executablePath" : arg === "--profile" ? "profilePath" : undefined;
     const value = rest[index + 1]; if (key === undefined || value === undefined || value.startsWith("--")) throw new Error(`unknown or incomplete option: ${arg}`);
     values[key] = value; index += 1;
   }
@@ -210,8 +292,12 @@ function storeFor(parsed: ParsedCommand, platform?: ServicePlatform): ProfileSto
   const layout = serviceLayout({ ...(platform === undefined ? {} : { platform }), mode: "system" });
   return new ProfileStore({ filePath: join(layout.configRoot, "profile.json") });
 }
-function serviceManifestFor(parsed: ParsedCommand, store: ProfileStore, platform?: ServicePlatform): ServiceManifest {
-  return renderService({ ...(platform === undefined ? {} : { platform }), mode: parsed.values.user === true ? "user" : "system", profilePath: store.filePath, ...(typeof parsed.values.executablePath === "string" ? { executablePath: parsed.values.executablePath } : {}) });
+async function serviceManifestFor(parsed: ParsedCommand, store: ProfileStore, platform?: ServicePlatform): Promise<ServiceManifest> {
+  const profile = await store.load();
+  const requestedMode = parsed.values.executionMode;
+  if (requestedMode !== undefined && requestedMode !== "dedicated_user" && requestedMode !== "privileged_host") throw new Error("--execution-mode must be dedicated_user or privileged_host");
+  const executionMode: ExecutionMode = parsed.values.user === true ? "dedicated_user" : profile === undefined ? "dedicated_user" : requestedMode ?? profile.execution_mode ?? "dedicated_user";
+  return renderService({ ...(platform === undefined ? {} : { platform }), mode: parsed.values.user === true ? "user" : "system", profilePath: store.filePath, executionMode, ...(typeof parsed.values.executablePath === "string" ? { executablePath: parsed.values.executablePath } : {}) });
 }
 function assertSystemInstallationPrivilege(manifest: ServiceManifest, dependencies: CliDependencies): void {
   if (manifest.mode !== "system") return;
@@ -244,6 +330,7 @@ function urlCheck(value: string, insecureLocal = false): { ok: boolean; detail?:
     return url.protocol === "wss:" || (url.protocol === "ws:" && loopback && insecureLocal) ? { ok: true } : { ok: false, detail: "wss:// is required except explicit loopback development" };
   } catch { return { ok: false, detail: "invalid URL" }; }
 }
+function errorMessage(error: unknown): string { return error instanceof Error ? error.message.slice(0, 512) : String(error).slice(0, 512); }
 function formatMode(mode: number | undefined): string { return mode === undefined ? "missing" : `0${mode.toString(8)}`; }
 function installDisconnectControl(runner: RunnerConnection, file: string): void { let busy = false; const interval = setInterval(async () => { if (busy) return; busy = true; try { await access(file); await rm(file, { force: true }); runner.disconnectForTest(); } catch { /* absent */ } finally { busy = false; } }, 50); interval.unref(); }
 

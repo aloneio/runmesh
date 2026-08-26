@@ -95,7 +95,7 @@ export class RunnerRuntime {
     this.filesystem = new FilesystemService(this.policy);
     this.git = new GitService(this.policy);
     this.patcher = new PatchService(this.policy);
-    this.jobs = new JobManager({ policy: this.policy, runnerId: options.config.runnerId, maxConcurrentJobs: options.config.maxConcurrentJobs ?? 1, ...(options.stateDir === undefined ? {} : { stateDir: options.stateDir }), ...(options.onJobEvent === undefined ? {} : { onEvent: options.onJobEvent }) });
+    this.jobs = new JobManager({ policy: this.policy, runnerId: options.config.runnerId, maxConcurrentJobs: options.config.maxConcurrentJobs ?? 1, ...(options.config.maxRetainedJobs === undefined ? {} : { maxRetainedJobs: options.config.maxRetainedJobs }), ...(options.config.maxLogBytesPerJob === undefined ? {} : { maxLogBytesPerJob: options.config.maxLogBytesPerJob }), ...(options.config.maxTotalLogBytes === undefined ? {} : { maxTotalLogBytes: options.config.maxTotalLogBytes }), ...(options.stateDir === undefined ? {} : { stateDir: options.stateDir }), ...(options.onJobEvent === undefined ? {} : { onEvent: options.onJobEvent }) });
   }
   public async initialize(): Promise<void> {
     await this.jobs.initialize();
@@ -106,7 +106,7 @@ export class RunnerRuntime {
   public applyPolicy(workspaces: readonly import("./config.js").WorkspaceConfig[]): void {
     this.policy.replace(workspaces);
   }
-  public workspaceList(): Record<string, unknown> { return { workspaces: this.policy.list().filter((workspace) => workspace.permissions?.read !== false).map((workspace) => ({ workspace_id: workspace.workspaceId, readonly: workspace.readonly, shell: workspace.shell })) }; }
+  public workspaceList(): Record<string, unknown> { return { workspaces: this.policy.list().filter((workspace) => workspace.permissions?.read !== false).map((workspace) => ({ workspace_id: workspace.workspaceId, readonly: workspace.readonly, shell: workspace.shell, enabled: true, permissions: workspace.permissions ?? { read: true, edit: !workspace.readonly, shell: workspace.shell, job_control: workspace.shell } })) }; }
   public syncWorkspaceMetadata(): Array<{ workspace_id: string; persistence: "persistent"; labels: Record<string, string> }> {
     return this.policy.list().filter((workspace) => workspace.permissions?.read !== false).map((workspace) => ({ workspace_id: workspace.workspaceId, persistence: "persistent" as const, labels: {} }));
   }
@@ -120,9 +120,13 @@ export class RunnerRuntime {
     switch (method) {
       case "workspace.list": return this.workspaceList();
       case "env.info": return this.envInfo();
-      case "fs.read": return this.filesystem.read(params);
-      case "fs.list": return this.filesystem.list(params);
-      case "fs.search": return this.filesystem.search(params);
+      case "fs.stat": {
+        this.policy.assertPermission(params.workspace_id, "read");
+        return this.filesystem.stat(params);
+      }
+      case "fs.read": this.policy.assertPermission(params.workspace_id, "read"); return this.filesystem.read(params);
+      case "fs.list": this.policy.assertPermission(params.workspace_id, "read"); return this.filesystem.list(params);
+      case "fs.search": this.policy.assertPermission(params.workspace_id, "read"); return this.filesystem.search(params);
       case "fs.apply_patch": this.policy.assertPermission(params.workspace_id, "edit"); return this.patcher.apply(params);
       case "fs.patch": this.policy.assertWritable(params.workspace_id); return this.patcher.apply(params);
       case "git.status": this.policy.assertPermission(params.workspace_id, "read"); return this.git.status(params);
@@ -154,8 +158,8 @@ export class RunnerRuntime {
   private async startJob(input: unknown): Promise<import("./jobs.js").JobRecord> {
     const params = object(input); const workspace = this.policy.getWorkspace(params.workspace_id);
     this.policy.assertPermission(workspace.workspaceId, "read");
-    if (workspace.permissions !== undefined && !workspace.permissions.shell) throw new RpcRuntimeError("permission_denied", "shell execution is disabled for this workspace");
-    if (params.shell === true && this.shellRuntime === undefined) throw new RpcRuntimeError("shell_unavailable", "the configured Bash or PowerShell runtime is unavailable");
+    if (workspace.permissions !== undefined && (!workspace.permissions.edit || workspace.permissions.shell === false || workspace.permissions.job_control === false)) throw new RpcRuntimeError("permission_denied", "Host shell requires read, edit, and job_control permissions");
+     if (params.shell === true && this.shellRuntime === undefined) throw new RpcRuntimeError("shell_unavailable", "the configured Host shell runtime is unavailable");
     const shellParams = params.shell === true && typeof params.command === "string" && this.shellRuntime !== undefined ? { ...params, shell_runtime: this.shellRuntime.buildInvocation(params.command) } : params;
     return this.jobs.start(shellParams);
   }
@@ -173,7 +177,7 @@ export class RunnerRuntime {
 }
 
 export { RpcRuntimeError } from "./errors.js";
-export function rpcError(error: unknown): { code: string; message: string; details?: Record<string, unknown> | undefined } { if (error instanceof PathPolicyError || error instanceof RpcRuntimeError) return { code: error.code, message: error.message.slice(0, 4_096), ...(error instanceof RpcRuntimeError && error.details === undefined ? {} : { details: (error as RpcRuntimeError).details }) }; return { code: "invalid_request", message: (error instanceof Error ? error.message : "request failed").slice(0, 4_096) || "request failed" }; }
+export function rpcError(error: unknown): { code: string; message: string; details?: Record<string, unknown> | undefined } { if (error instanceof Error && error.message === "stale_policy") return { code: "stale_policy", message: "RPC policy revision is stale" }; if (error instanceof PathPolicyError || error instanceof RpcRuntimeError) return { code: error.code, message: error.message.slice(0, 4_096), ...(error instanceof RpcRuntimeError && error.details === undefined ? {} : { details: (error as RpcRuntimeError).details }) }; return { code: "invalid_request", message: (error instanceof Error ? error.message : "request failed").slice(0, 4_096) || "request failed" }; }
 function object(value: unknown): Record<string, unknown> { if (typeof value !== "object" || value === null || Array.isArray(value)) throw new RpcRuntimeError("invalid_params", "params must be an object"); return value as Record<string, unknown>; }
 function positiveInteger(value: unknown, field: string): number { if (!Number.isSafeInteger(value) || (value as number) < 1) throw new RpcRuntimeError("invalid_params", `${field} must be a positive integer`); return value as number; }
 function isActive(job: JobRecord): boolean { return job.status === "queued" || job.status === "running" || job.status === "cancelling"; }
