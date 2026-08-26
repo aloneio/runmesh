@@ -2,7 +2,7 @@
   "name": "@aloneio/runmesh-protocol",
   "version": "0.1.0",
   "description": "Versioned JSON wire contract for Runmesh Runner and Worker.",
-  "license": "Apache-2.0",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "repository": { "type": "git", "url": "https://github.com/aloneio/runmesh.git", "directory": "packages/protocol" },
   "homepage": "https://github.com/aloneio/runmesh",
@@ -26,7 +26,10 @@
   "files": [
     "dist",
     "schema/wire-message.schema.json",
-    "LICENSE"
+    "LICENSE",
+    "LICENSES/Apache-2.0-history.txt",
+    "LICENSE_HISTORY.md",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
     "build": "tsc -b",
