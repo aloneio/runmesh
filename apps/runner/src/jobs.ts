@@ -459,6 +459,13 @@ function terminalRecoveredJob(job: JobRecord, status: "cancelled" | "interrupted
 function parseInvocation(params: Record<string, unknown>, workspace: WorkspaceConfig): { file: string; args: string[]; command: string[]; shell: boolean } {
   const requestedShell = params.shell === true;
   if (requestedShell && !workspace.shell) throw new Error("shell execution is disabled for this workspace");
+  const shellRuntime = params.shell_runtime;
+  if (requestedShell && typeof shellRuntime === "object" && shellRuntime !== null && !Array.isArray(shellRuntime)) {
+    const invocation = shellRuntime as { file?: unknown; args?: unknown };
+    if (typeof invocation.file !== "string" || !Array.isArray(invocation.args) || invocation.args.some((item) => typeof item !== "string")) throw new Error("shell runtime invocation is invalid");
+    if (typeof params.command !== "string" || params.command.length === 0 || params.command.length > 8_192 || params.command.includes("\0")) throw new Error("command is required");
+    return { file: invocation.file, args: invocation.args as string[], command: [params.command], shell: false };
+  }
   if (Array.isArray(params.command)) {
     if (params.command.length === 0 || params.command.some((item) => typeof item !== "string" || item.length === 0)) throw new Error("command must be a non-empty string array");
     return { file: params.command[0] as string, args: params.command.slice(1) as string[], command: params.command as string[], shell: requestedShell };

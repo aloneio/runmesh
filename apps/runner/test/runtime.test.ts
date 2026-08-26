@@ -1,7 +1,7 @@
 import { mkdir, readFile, rm, symlink, writeFile, mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS } from "@remote-coding-runtime/protocol";
+import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS } from "@aloneio/runmesh-protocol";
 import { describe, expect, it } from "vitest";
 import { FilesystemService } from "../src/filesystem.js";
 import { JobManager } from "../src/jobs.js";

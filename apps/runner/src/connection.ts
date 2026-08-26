@@ -11,7 +11,7 @@ import {
   type RunnerSync,
   type RpcRequest,
   type WireMessage,
-} from "@remote-coding-runtime/protocol";
+} from "@aloneio/runmesh-protocol";
 import WebSocket from "ws";
 import { reconnectDelayMs } from "./backoff.js";
 import { validateCentralWorkspacePolicy, type CentralWorkspacePolicy } from "./policy-config.js";
@@ -32,7 +32,7 @@ export function classifyConnectionFailure(input: { readonly statusCode?: number;
 
 export interface RunnerConnectionOptions {
   readonly config: RunnerConfig;
-  readonly version?: string;
+  readonly version?: string | undefined;
   readonly heartbeatMs?: number;
   readonly rpcTimeoutMs?: number;
   readonly syncMs?: number;
@@ -60,6 +60,7 @@ export class RunnerConnection {
   private syncTimer: ReturnType<typeof setInterval> | undefined;
   private appliedPolicyRevision = 0;
   private desiredPolicyRevision = 0;
+  private policyApplyGeneration = 0;
   private readonly pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
 
   public constructor(options: RunnerConnectionOptions) {
@@ -187,11 +188,16 @@ export class RunnerConnection {
         if (message.type === "runner.welcome") {
           welcomed = true;
           this.onStateChange("online");
-          if (message.desired_policy !== undefined) void this.applyCentralPolicy(socket, message.desired_policy);
+          if (message.desired_policy !== undefined) void this.applyDesiredPolicy(socket, message.desired_policy);
           void this.sendSync(socket);
           this.heartbeatTimer = setInterval(() => this.sendHeartbeat(socket), this.heartbeatMs);
           this.syncTimer = setInterval(() => { void this.sendSync(socket); }, this.syncMs);
           // Stay pending until close so start() reconnects only after a real session ends.
+          return;
+        }
+        if (message.type === "runner.policy_update") {
+          if (message.runner_id !== this.config.runnerId) { socket.close(1008, "runner identity mismatch"); return; }
+          void this.applyDesiredPolicy(socket, message.policy);
           return;
         }
         if (message.type === "rpc.request") {
@@ -231,14 +237,14 @@ export class RunnerConnection {
     });
   }
 
-  private async applyCentralPolicy(socket: WebSocket, policy: NonNullable<RunnerWelcome["desired_policy"]>): Promise<void> {
+  private async applyDesiredPolicy(socket: WebSocket, policy: NonNullable<RunnerWelcome["desired_policy"]>): Promise<void> {
+    const generation = ++this.policyApplyGeneration;
+    if (policy.revision < this.desiredPolicyRevision) return;
     this.desiredPolicyRevision = policy.revision;
-    // A replacement policy must stop using any formerly managed root before
-    // asynchronous filesystem validation begins. Legacy explicit local
-    // workspaces remain compatible only until the first central policy arrives.
     this.runtime.applyPolicy([]);
     const validation = await validateCentralWorkspacePolicy(policy.workspaces as CentralWorkspacePolicy[]);
-    if (socket !== this.socket || socket.readyState !== WebSocket.OPEN) return;
+    if (generation !== this.policyApplyGeneration || socket !== this.socket || socket.readyState !== WebSocket.OPEN) return;
+    if (policy.revision !== this.desiredPolicyRevision) return;
     const runnerPermissions = policy.runner_permissions;
     const effective: WorkspaceConfig[] = validation.workspaces.map((workspace) => ({
       ...workspace,
@@ -258,7 +264,6 @@ export class RunnerConnection {
       this.sendPolicyAck(socket, "applied", validation.status);
       await this.sendSync(socket);
     } else {
-      // Fail closed: retain no managed roots until the configured policy validates.
       this.runtime.applyPolicy([]);
       this.appliedPolicyRevision = 0;
       this.sendPolicyAck(socket, "invalid", validation.status);

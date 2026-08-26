@@ -1,9 +1,14 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "name": "@remote-coding-runtime/runner",
+  "name": "@aloneio/runmesh-runner",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "type": "module",
+  "description": "System Runner for Runmesh Agent Control Plane.",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "https://github.com/aloneio/runmesh.git", "directory": "apps/runner" },
+  "homepage": "https://github.com/aloneio/runmesh",
+  "bugs": { "url": "https://github.com/aloneio/runmesh/issues" },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -29,7 +34,7 @@
     "start": "tsx src/cli.ts start"
   },
   "dependencies": {
-    "@remote-coding-runtime/protocol": "0.1.0",
+    "@aloneio/runmesh-protocol": "0.1.0",
     "ws": "^8.21.3"
   },
   "devDependencies": {

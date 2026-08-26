@@ -224,6 +224,22 @@ const CorrelatedEnvelopeSchema = EnvelopeSchema.extend({
   request_id: IdentifierSchema,
 }).strict();
 
+/**
+ * Authenticated control-plane policy delivered only to a Runner. Root paths
+ * never appear in public metadata or MCP responses.
+ */
+export const RunnerPolicySchema = z.object({
+  revision: z.number().int().nonnegative(),
+  runner_permissions: PermissionSetSchema,
+  workspaces: z.array(RunnerPolicyWorkspaceSchema).max(64),
+}).strict();
+
+export const RunnerPolicyUpdateSchema = CorrelatedEnvelopeSchema.extend({
+  type: z.literal("runner.policy_update"),
+  runner_id: IdentifierSchema,
+  policy: RunnerPolicySchema,
+}).strict();
+
 export const RunnerHelloSchema = CorrelatedEnvelopeSchema.extend({
   type: z.literal("runner.hello"),
   runner: RunnerMetadataSchema,
@@ -243,11 +259,7 @@ export const RunnerWelcomeSchema = CorrelatedEnvelopeSchema.extend({
   session_id: IdentifierSchema,
   negotiated_protocol_version: ProtocolVersionSchema,
   /** Optional v1 extension for authenticated central desired policy. */
-  desired_policy: z.object({
-    revision: z.number().int().nonnegative(),
-    runner_permissions: PermissionSetSchema,
-    workspaces: z.array(RunnerPolicyWorkspaceSchema).max(64),
-  }).strict().optional(),
+  desired_policy: RunnerPolicySchema.optional(),
 }).strict();
 
 export const RunnerPolicyAckSchema = EnvelopeSchema.extend({
@@ -348,6 +360,7 @@ export const JobCompletedSchema = CorrelatedEnvelopeSchema.extend({
 export const WireMessageSchema = z.discriminatedUnion("type", [
   RunnerHelloSchema,
   RunnerWelcomeSchema,
+  RunnerPolicyUpdateSchema,
   RunnerPolicyAckSchema,
   RunnerHeartbeatSchema,
   RunnerSyncSchema,
@@ -372,6 +385,8 @@ export type JobStatus = z.infer<typeof JobStatusSchema>;
 export type JobMetadata = z.infer<typeof JobMetadataSchema>;
 export type RunnerHello = z.infer<typeof RunnerHelloSchema>;
 export type RunnerWelcome = z.infer<typeof RunnerWelcomeSchema>;
+export type RunnerPolicy = z.infer<typeof RunnerPolicySchema>;
+export type RunnerPolicyUpdate = z.infer<typeof RunnerPolicyUpdateSchema>;
 export type RunnerPolicyAck = z.infer<typeof RunnerPolicyAckSchema>;
 export type RunnerHeartbeat = z.infer<typeof RunnerHeartbeatSchema>;
 export type RunnerSync = z.infer<typeof RunnerSyncSchema>;

@@ -1,5 +1,5 @@
 import { hostname } from "node:os";
-import { PROTOCOL_CURRENT_VERSION } from "@remote-coding-runtime/protocol";
+import { PROTOCOL_CURRENT_VERSION } from "@aloneio/runmesh-protocol";
 import { ProfileStore, type RunnerProfile } from "./profile.js";
 import { RUNNER_VERSION } from "./version.js";
 

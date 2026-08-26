@@ -1,9 +1,12 @@
 {
-  "name": "@remote-coding-runtime/protocol",
+  "name": "@aloneio/runmesh-protocol",
   "version": "0.1.0",
-  "description": "Versioned JSON wire contract for Runner and Worker.",
+  "description": "Versioned JSON wire contract for Runmesh Runner and Worker.",
   "license": "Apache-2.0",
   "type": "module",
+  "repository": { "type": "git", "url": "https://github.com/aloneio/runmesh.git", "directory": "packages/protocol" },
+  "homepage": "https://github.com/aloneio/runmesh",
+  "bugs": { "url": "https://github.com/aloneio/runmesh/issues" },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

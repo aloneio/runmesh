@@ -234,7 +234,7 @@ describe("Runner-Worker protocol", () => {
     const schema = JSON.parse(generated) as {
       oneOf: readonly { properties: Record<string, unknown> }[];
     };
-    expect(schema.oneOf).toHaveLength(12);
+    expect(schema.oneOf).toHaveLength(13);
     expect(schema.oneOf[0]?.properties).toMatchObject({
       type: { const: "runner.hello" },
       protocol_version: { type: "integer" },

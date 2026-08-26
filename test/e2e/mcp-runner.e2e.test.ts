@@ -72,12 +72,10 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const profile = await readFile(enrolledProfile, "utf8");
     expect(profile).toContain(`\"runner_id\": \"${runnerId}\"`);
     expect(profile).not.toContain(enrollmentCode);
+    // Central policy is configured by the authenticated Panel. Enrollment and
+    // Runner startup intentionally begin with zero workspaces.
     const savedProfile = JSON.parse(profile) as Record<string, unknown>;
-    savedProfile.workspaces = [
-      { id: "workspace-1", path: workspace, writable: true, shell: true },
-      { id: "readonly-1", path: workspace, writable: false, shell: false },
-    ];
-    await writeFile(enrolledProfile, `${JSON.stringify(savedProfile, null, 2)}\n`, { mode: 0o600 });
+    expect(savedProfile.workspaces).toEqual([]);
 
     runner = spawn("npx", [
       "tsx", "apps/runner/src/cli.ts", "start", "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
@@ -86,7 +84,18 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     });
     const runnerLog = collectOutput(runner);
     runnerOutput = runnerLog;
-    await waitFor(async () => (await mcpTool("runner_list", {})).structuredContent?.runners?.some((runner: { runner_id?: string; state?: string }) => runner.runner_id === runnerId && runner.state === "online"), 15_000, runnerLog);
+    const { adminJar: policyAdminJar, csrf: policyCsrf } = await adminCredentials();
+    const runnerPermissionResponse = await submitForm(`/admin/runners/${runnerId}/permissions`, { csrf_token: policyCsrf, read: "true", edit: "true", shell: "true", job_control: "true" }, policyAdminJar);
+    expect(runnerPermissionResponse.status).toBe(303);
+    const workspaceResponse = await submitForm(`/admin/runners/${runnerId}/workspace-create`, { csrf_token: policyCsrf, workspace_id: "workspace-1", display_name: "Coding workspace", root_path: workspace, enabled: "true", profile: "coding", read: "true", edit: "true", shell: "true", job_control: "true" }, policyAdminJar);
+    expect(workspaceResponse.status).toBe(303);
+    const readonlyResponse = await submitForm(`/admin/runners/${runnerId}/workspace-create`, { csrf_token: policyCsrf, workspace_id: "readonly-1", display_name: "Read only workspace", root_path: workspace, enabled: "true", profile: "read_only", read: "true", edit: "false", shell: "false", job_control: "false" }, policyAdminJar);
+    expect(readonlyResponse.status).toBe(303);
+    await waitFor(async () => {
+      const status = await fetch(`${workerUrl}/admin/runners/${runnerId}`, { headers: { cookie: cookieHeader(policyAdminJar) } });
+      const html = await status.text();
+      return html.includes("Policy status") && html.includes("applied");
+    }, 15_000, runnerLog);
     expect((await mcpTool("runner_select", { runner_id: runnerId }, clientA)).isError).not.toBe(true);
     expect((await mcpTool("runner_select", { runner_id: runnerId }, clientB)).isError).not.toBe(true);
   }, 30_000);
@@ -289,7 +298,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(response.status).toBe(200);
     const html = await response.text();
     expect(html).toContain("/runner/install.sh");
-    const code = /sh -s -- ([A-Za-z0-9_-]{43})/.exec(html)?.[1];
+    const code = /runmesh-install\.sh ([A-Za-z0-9_-]{43})/.exec(html)?.[1] ?? /sh -s -- ([A-Za-z0-9_-]{43})/.exec(html)?.[1];
     if (code === undefined) throw new Error("browser enrollment code absent");
     return code;
   }

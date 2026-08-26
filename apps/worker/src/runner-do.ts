@@ -7,7 +7,7 @@ import {
   RpcRequestSchema,
   WORKER_BRIDGE_TIMEOUT_MS,
   type WireMessage,
-} from "@remote-coding-runtime/protocol";
+} from "@aloneio/runmesh-protocol";
 import { bearerToken, internalHeaders, verifyInternalRequest } from "./security.js";
 
 export interface WorkerEnv {
@@ -59,6 +59,22 @@ export class RunnerDO {
   }
 
   public async fetch(request: Request): Promise<Response> {
+    if (request.method === "POST" && new URL(request.url).pathname === "/policy") {
+      const body = await request.text();
+      if (!await verifyInternalRequest(request, this.env.INTERNAL_CONTROL_SECRET, body)) return new Response("not found", { status: 404 });
+      const socket = await this.currentRunnerSocket();
+      if (socket === undefined) return Response.json({ error: { code: "runner_offline", message: "runner is not connected" } }, { status: 503 });
+      const attachment = socket.deserializeAttachment() as ConnectionAttachment | null;
+      if (attachment === null || attachment.epoch === 0 || attachment.protocolVersion === 0) return Response.json({ error: { code: "runner_offline", message: "runner is not connected" } }, { status: 503 });
+      const desired = await this.registryRequest(attachment.runnerId, "/desired-policy", { method: "GET" });
+      if (desired.status === 404) return new Response(null, { status: 204 });
+      if (!desired.ok) return Response.json({ error: { code: "registry_unavailable", message: "policy is unavailable" } }, { status: 503 });
+      const policy = await desired.json() as unknown;
+      if (!isPolicy(policy)) return Response.json({ error: { code: "invalid_policy", message: "registry returned an invalid policy" } }, { status: 502 });
+      const message: WireMessage = { type: "runner.policy_update", protocol_version: attachment.protocolVersion, request_id: `policy-${crypto.randomUUID()}`, runner_id: attachment.runnerId, policy };
+      try { socket.send(encodeWireFrame(message)); } catch { return Response.json({ error: { code: "runner_offline", message: "runner is not connected" } }, { status: 503 }); }
+      return new Response(null, { status: 204 });
+    }
     if (request.method === "POST" && new URL(request.url).pathname === "/revoke") {
       const body = await request.text();
       if (!await verifyInternalRequest(request, this.env.INTERNAL_CONTROL_SECRET, body)) return new Response("not found", { status: 404 });
@@ -268,7 +284,7 @@ export class RunnerDO {
   private async currentRunnerSocket(): Promise<WebSocket | undefined> {
     for (const socket of this.ctx.getWebSockets("runner")) {
       const attachment = socket.deserializeAttachment() as ConnectionAttachment | null;
-      if (attachment?.authenticated === true && attachment.epoch > 0 && attachment.protocolVersion > 0 && await this.isCurrent(attachment)) return socket;
+      if (attachment?.authenticated === true && attachment.epoch > 0 && attachment.protocolVersion > 0 && await this.isCurrent(attachment, true)) return socket;
     }
     return undefined;
   }
@@ -287,10 +303,10 @@ export class RunnerDO {
     if (earliest !== undefined) await this.ctx.storage.setAlarm(earliest);
   }
 
-  private async isCurrent(attachment: ConnectionAttachment): Promise<boolean> {
+  private async isCurrent(attachment: ConnectionAttachment, requireOnline = false): Promise<boolean> {
     const response = await this.registryRequest(attachment.runnerId, "/session", {
       method: "POST",
-      body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion }),
+      body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, require_online: requireOnline }),
     });
     return response.ok;
   }

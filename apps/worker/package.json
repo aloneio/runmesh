@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.0.0",
-    "@remote-coding-runtime/protocol": "0.1.0",
+    "@aloneio/runmesh-protocol": "0.1.0",
     "agents": "0.21.0",
     "zod": "4.4.3"
   },

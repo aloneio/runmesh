@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { relative, sep } from "node:path";
-import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS, MAX_FRAME_BYTES } from "@remote-coding-runtime/protocol";
+import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS, MAX_FRAME_BYTES } from "@aloneio/runmesh-protocol";
 import { RpcRuntimeError } from "./errors.js";
 import { PathPolicy } from "./path-policy.js";
 

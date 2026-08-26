@@ -4,6 +4,22 @@
 
 A model-neutral, client-neutral remote coding runtime with one Cloudflare control plane and outbound-only local Runners.
 
+## Quick Start
+
+The normal Runmesh flow is Panel-first:
+
+1. Deploy the Worker and open the dashboard.
+2. Set the administrator password.
+3. Add a Runner in **Admin → Runners**.
+4. Run the generated administrator/root installation command.
+5. Wait for the Runner to appear online.
+6. Add an explicit Workspace in the Runner detail page and choose its permission profile.
+7. Create an MCP Client and copy its one-time connection URL.
+8. Select the Runner from the MCP client and start coding.
+
+The Runner service may run with root/administrator OS authority, but that does not grant the Agent unrestricted access by default. Effective Agent permissions are the intersection of client scopes, client-to-runner restrictions, Runner policy, and Workspace policy. A pending or invalid centrally managed policy fails closed.
+
+
 ```text
 ChatGPT / Claude / Cursor / any MCP client
           │ HTTPS stateless MCP
@@ -27,8 +43,8 @@ This is the preferred dashboard-led setup path. It intentionally puts deployment
 Requirements: Node.js 20+, npm, Git, Wrangler, and a Cloudflare account with SQLite-backed Durable Objects enabled.
 
 ```sh
-git clone https://github.com/aloneio/remote-coding-runtime.git
-cd remote-coding-runtime
+git clone https://github.com/aloneio/runmesh.git
+cd runmesh
 npm install
 npm test
 npm run typecheck
@@ -160,7 +176,7 @@ Runner enrollment codes are one-time and short-lived. Redeeming one atomically c
 
 The Worker resolves the active Runner and effective workspace permission before forwarding MCP requests, and the Runner repeats the local permission check. MCP `read`, `edit`, and `shell` inputs provide a workspace ID and workspace-relative path or command, while host workspace roots never cross the protocol. The Runner rejects absolute, drive/UNC/device, NUL, traversal, symlink/junction escape, write-through-symlink, unknown-workspace, and readonly-write requests. `edit` uses baseline checks, staging/backups, per-file replacement, rollback, and bounded root-free errors.
 
-This is a workspace/path authorization boundary, not a hostile operating-system sandbox. Use an external VM or container with restricted mounts, secrets, network, and OS privileges for untrusted repositories or commands.
+This is a workspace/path authorization boundary, not a hostile operating-system sandbox. Use an external VM or container with restricted mounts, secrets, network, and OS privileges for untrusted repositories or commands. **Emergency Lock blocks new read/edit/shell/job-control operations but does not automatically kill existing local processes.**
 
 `shell({background:true})` returns `job_id` promptly. For a machine service, Runner-local state and complete logs live under `/var/lib/remote-coding-runtime/` on Linux (with platform-equivalent centralized state roots elsewhere); explicit legacy user mode retains its per-user state default. RegistryDO keeps bounded metadata so `job({action:"list"})` works while the selected Runner is offline; full logs require a connected Runner. Active/nonterminal jobs and up to 1,000 terminal jobs per Runner are retained in RegistryDO. Local log files are unbounded by default; monitor disk use.
 

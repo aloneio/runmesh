@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "description": "A language-neutral protocol foundation for remote coding runtimes.",
+  "repository": { "type": "git", "url": "https://github.com/aloneio/runmesh.git" },
+  "homepage": "https://github.com/aloneio/runmesh",
   "license": "Apache-2.0",
   "workspaces": [
     "packages/*",

@@ -1,5 +1,5 @@
 import { McpServer, type AuthInfo, type ServerContext } from "@modelcontextprotocol/server";
-import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS } from "@remote-coding-runtime/protocol";
+import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS } from "@aloneio/runmesh-protocol";
 import { z } from "zod";
 import { internalHeaders, isSafeIdentifier } from "../security.js";
 import type { ActiveRunnerContext, McpClientActiveRunner, McpRunnerSelectionResult } from "../registry.js";
@@ -38,7 +38,7 @@ const TOOL_SPECS = {
   workspace_list: { scope: "coding:read", description: "List readable workspace IDs on the active runner. Workspace roots are never returned.", annotations: readAnnotations },
   read: { scope: "coding:read", description: "Read a bounded UTF-8-safe page of a workspace-relative file. Use next_cursor or offset to continue; host roots and absolute paths are not accepted.", annotations: readAnnotations },
   edit: { scope: "coding:write", description: "Apply a transactional, baseline-checked patch to a writable workspace. The result contains only bounded, workspace-relative change metadata.", annotations: destructiveAnnotations },
-  shell: { scope: "coding:exec", description: "Run a command through the selected runner's workspace shell. Commands have the runner user's OS permissions and are not sandboxed; use a restricted VM/container and avoid administrator/root runners for untrusted code. background=true returns a persistent job immediately; foreground waits only up to wait_ms.", annotations: execAnnotations },
+  shell: { scope: "coding:exec", description: "Run a command through the selected runner's Bash shell on Linux/macOS or PowerShell on Windows. Commands have the runner user's OS permissions and are not sandboxed; the workspace controls initial cwd and policy, not the shell root. Use a restricted VM/container and avoid administrator/root runners for untrusted code. background=true returns a persistent job immediately; foreground waits only up to wait_ms.", annotations: execAnnotations },
   job: { description: "List, inspect, or read bounded logs for persistent jobs. cancel and input require coding:exec plus workspace job-control permission. Job metadata never includes command, cwd, PID, roots, or secrets.", annotations: mixedJobAnnotations },
 } as const satisfies Record<string, ToolSpec>;
 
@@ -72,7 +72,7 @@ export type McpAuth = Pick<AuthInfo, "clientId" | "scopes" | "expiresAt" | "reso
  * an isolated McpServer and the default stateless 2025 compatibility lane.
  */
 export function createCodingMcpServer(env: WorkerEnv, auth: McpAuth): McpServer {
-  const server = new McpServer({ name: "remote-coding-runtime", version: "0.1.0" });
+  const server = new McpServer({ name: "runmesh", version: "0.1.0" });
 
   register(server, "runner_list", z.object({}).strict(), async () => gatedRunnerList(env, auth.clientId));
   register(server, "runner_current", z.object({}).strict(), async () => {
@@ -301,15 +301,30 @@ async function activeWorkspaceList(env: WorkerEnv, clientId: string): Promise<un
 type PermissionCheck = ToolFailure;
 async function checkPermission(env: WorkerEnv, clientId: string, runnerId: string, workspaceId: unknown, required: PermissionBit): Promise<PermissionCheck | undefined> {
   if (typeof workspaceId !== "string" || !isSafeIdentifier(workspaceId)) return fail("permission_denied", "Workspace permission could not be resolved.", "Use a workspace identifier managed by the administrator.");
+  const readiness = await policyReadiness(env, runnerId);
+  if (!readiness.ok) return readiness.error;
   const call = await registryCall(env, `/auth/clients/${encodeURIComponent(clientId)}/effective-permissions/${encodeURIComponent(runnerId)}?workspace_id=${encodeURIComponent(workspaceId)}`);
   if (!call.ok) return fail("permission_denied", "The operation is not permitted for this workspace.", "Ask the administrator to grant the required workspace permission.");
   const permissions = isRecord(call.value) && isRecord(call.value.permissions) ? call.value.permissions : undefined;
-  if (permissions?.[required] !== true) return fail("permission_denied", "The operation is not permitted for this workspace.", "Ask the administrator to grant the required workspace permission.");
+  if (permissions?.[required] !== true) return fail(required === "edit" ? "readonly_workspace" : "permission_denied", "The operation is not permitted for this workspace.", "Ask the administrator to grant the required workspace permission.");
   return undefined;
 }
+async function policyReadiness(env: WorkerEnv, runnerId: string): Promise<{ readonly ok: true } | { readonly ok: false; readonly error: PermissionCheck }> {
+  const readiness = await registryCall(env, `/runners/${encodeURIComponent(runnerId)}`);
+  if (!readiness.ok) return { ok: false, error: fail("permission_denied", "The selected runner policy could not be verified.", "Wait for the runner to reconnect and apply the latest control-plane policy.") };
+  const runner = isRecord(readiness.value) ? readiness.value : undefined;
+  const desired = runner?.desired_policy_revision;
+  const applied = runner?.applied_policy_revision;
+  const status = runner?.policy_status;
+  if (typeof desired === "number" && desired > 0 && (status !== "applied" || applied !== desired)) return { ok: false, error: fail("policy_pending", "The selected runner has not applied the latest policy.", "The control plane has a newer policy than the runner. Wait briefly and retry.") };
+  return { ok: true };
+}
+
 async function checkAnyReadPermission(env: WorkerEnv, clientId: string, runnerId: string): Promise<PermissionCheck | undefined> {
   const managed = await registryCall(env, `/auth/runners/${encodeURIComponent(runnerId)}/managed-workspaces`);
   const managedWorkspaces = managed.ok && isRecord(managed.value) && Array.isArray(managed.value.workspaces) ? managed.value.workspaces : [];
+  const readiness = await policyReadiness(env, runnerId);
+  if (!readiness.ok) return readiness.error;
   if (managedWorkspaces.length > 0) {
     for (const item of managedWorkspaces) {
       if (!isRecord(item) || typeof item.workspace_id !== "string") continue;
@@ -371,7 +386,7 @@ type ToolCall = ToolSuccess | ToolFailure;
 const SAFE_RUNNER_ERROR_CODES = new Set([
   "baseline_changed", "busy", "expected_hash_mismatch", "file_too_large", "git_failed", "git_output_too_large", "git_timeout", "git_unavailable",
   "hunk_ambiguous", "hunk_not_found", "hunk_overlap", "invalid_params", "invalid_patch", "invalid_path", "invalid_request", "invalid_workspace", "missing_file", "mixed_newlines", "not_utf8",
-  "method_not_found", "patch_install_failed", "patch_rollback_failed", "path_traversal", "permission_denied", "readonly_workspace", "runner_offline", "symlink_escape", "symlink_write", "target_exists", "timeout",
+  "method_not_found", "patch_install_failed", "patch_rollback_failed", "path_traversal", "permission_denied", "policy_pending", "readonly_workspace", "runner_offline", "symlink_escape", "symlink_write", "target_exists", "timeout",
 ]);
 
 function safeRunnerErrorCode(value: unknown, fallback: string): string {
@@ -470,6 +485,7 @@ function failWithDetails(code: string, message: string, hint: string, details: u
 function fail(code: string, message: string, hint: string): ToolFailure { return { ok: false, error: { code, message, hint } }; }
 function hintFor(code: string): string {
   if (code === "runner_offline" || code === "timeout") return "Confirm the runner is connected, then retry.";
+  if (code === "policy_pending") return "The control plane has a newer policy than the runner. Wait briefly and retry.";
   if (code === "invalid_patch") return "Use the documented *** Begin Patch envelope and exact, non-overlapping hunks.";
   if (code === "missing_file") return "Choose an existing source file or use Add File for a new target.";
   if (code === "target_exists") return "Choose a new target path or update the existing file instead.";

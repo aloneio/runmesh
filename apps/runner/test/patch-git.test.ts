@@ -1,7 +1,7 @@
 import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { encodeWireFrame } from "@remote-coding-runtime/protocol";
+import { encodeWireFrame } from "@aloneio/runmesh-protocol";
 import { describe, expect, it } from "vitest";
 import { GitService } from "../src/git-service.js";
 import { PatchService } from "../src/patch-service.js";

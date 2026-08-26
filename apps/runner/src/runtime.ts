@@ -1,6 +1,6 @@
-import { hostname } from "node:os";
 import { spawn } from "node:child_process";
-import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS, type JobMetadata } from "@remote-coding-runtime/protocol";
+import { hostname } from "node:os";
+import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS, type JobMetadata } from "@aloneio/runmesh-protocol";
 import type { RunnerConfig } from "./config.js";
 import { GitService } from "./git-service.js";
 import { FilesystemService } from "./filesystem.js";
@@ -8,6 +8,33 @@ import { JobManager, type JobEvent, type JobRecord } from "./jobs.js";
 import { PatchService } from "./patch-service.js";
 import { PathPolicy, PathPolicyError } from "./path-policy.js";
 import { RpcRuntimeError } from "./errors.js";
+
+export interface ShellRuntime {
+  readonly kind: "bash" | "powershell";
+  readonly executable: string;
+  readonly version?: string | undefined;
+  readonly buildInvocation: (command: string) => { readonly file: string; readonly args: readonly string[] };
+}
+
+export interface ShellRuntimeOptions {
+  readonly platform?: NodeJS.Platform;
+  readonly probe?: (command: string, args: readonly string[]) => Promise<string | undefined>;
+}
+
+export async function discoverShellRuntime(options: ShellRuntimeOptions = {}): Promise<ShellRuntime | undefined> {
+  const platform = options.platform ?? process.platform;
+  const probe = options.probe ?? probeVersion;
+  const candidates = platform === "win32"
+    ? [["pwsh.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"]] as const, ["powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"]] as const]
+    : [["/bin/bash", ["--version"]] as const, ["/usr/bin/bash", ["--version"]] as const];
+  for (const [executable, args] of candidates) {
+    const version = await probe(executable, args);
+    if (version === undefined) continue;
+    if (platform === "win32") return { kind: "powershell", executable, ...(version === undefined ? {} : { version: version.slice(0, 512) }), buildInvocation: (command) => ({ file: executable, args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command] }) };
+    return { kind: "bash", executable, ...(version === undefined ? {} : { version: version.split("\n", 1)[0]?.slice(0, 512) }), buildInvocation: (command) => ({ file: executable, args: ["-lc", command] }) };
+  }
+  return undefined;
+}
 
 export interface EnvironmentToolInfo { readonly available: boolean; readonly version?: string; }
 export interface EnvironmentInfoOptions { readonly probe?: (command: string, args: readonly string[]) => Promise<string | undefined>; }
@@ -58,6 +85,7 @@ export class RunnerRuntime {
   public readonly git: GitService;
   private readonly patcher: PatchService;
   private readonly config: RunnerConfig;
+  private shellRuntime: ShellRuntime | undefined;
   private readonly environment: EnvironmentInfoService;
 
   public constructor(options: RunnerRuntimeOptions) {
@@ -69,7 +97,12 @@ export class RunnerRuntime {
     this.patcher = new PatchService(this.policy);
     this.jobs = new JobManager({ policy: this.policy, runnerId: options.config.runnerId, maxConcurrentJobs: options.config.maxConcurrentJobs ?? 1, ...(options.stateDir === undefined ? {} : { stateDir: options.stateDir }), ...(options.onJobEvent === undefined ? {} : { onEvent: options.onJobEvent }) });
   }
-  public async initialize(): Promise<void> { await this.jobs.initialize(); }
+  public async initialize(): Promise<void> {
+    await this.jobs.initialize();
+    this.shellRuntime = await discoverShellRuntime();
+    if (this.shellRuntime === undefined) return;
+  }
+  public getShellRuntime(): ShellRuntime | undefined { return this.shellRuntime; }
   public applyPolicy(workspaces: readonly import("./config.js").WorkspaceConfig[]): void {
     this.policy.replace(workspaces);
   }
@@ -77,7 +110,11 @@ export class RunnerRuntime {
   public syncWorkspaceMetadata(): Array<{ workspace_id: string; persistence: "persistent"; labels: Record<string, string> }> {
     return this.policy.list().filter((workspace) => workspace.permissions?.read !== false).map((workspace) => ({ workspace_id: workspace.workspaceId, persistence: "persistent" as const, labels: {} }));
   }
-  public envInfo(): Promise<Record<string, unknown>> { return this.environment.get(this.policy.list().filter((workspace) => workspace.permissions?.read !== false)); }
+  public async envInfo(): Promise<Record<string, unknown>> {
+    const info = await this.environment.get(this.policy.list().filter((workspace) => workspace.permissions?.read !== false));
+    const shell = this.shellRuntime;
+    return { ...info, shell: shell === undefined ? { available: false } : { available: true, kind: shell.kind, version: shell.version } };
+  }
   public async dispatch(method: string, input: unknown): Promise<unknown> {
     const params = object(input);
     switch (method) {
@@ -118,7 +155,9 @@ export class RunnerRuntime {
     const params = object(input); const workspace = this.policy.getWorkspace(params.workspace_id);
     this.policy.assertPermission(workspace.workspaceId, "read");
     if (workspace.permissions !== undefined && !workspace.permissions.shell) throw new RpcRuntimeError("permission_denied", "shell execution is disabled for this workspace");
-    return this.jobs.start(params);
+    if (params.shell === true && this.shellRuntime === undefined) throw new RpcRuntimeError("shell_unavailable", "the configured Bash or PowerShell runtime is unavailable");
+    const shellParams = params.shell === true && typeof params.command === "string" && this.shellRuntime !== undefined ? { ...params, shell_runtime: this.shellRuntime.buildInvocation(params.command) } : params;
+    return this.jobs.start(shellParams);
   }
   private async run(input: unknown): Promise<Record<string, unknown>> {
     const params = object(input);

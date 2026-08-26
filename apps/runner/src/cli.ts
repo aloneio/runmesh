@@ -62,7 +62,11 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
       report(output, parsed.json, { enrolled: true, runner_id: result.profile.runner_id, workspace_count: result.profile.workspaces.length });
       return;
     }
-    if (parsed.command === "status") { report(output, parsed.json, { configured: (await store.load()) !== undefined, profile: redactedProfile(await store.load()) }); return; }
+  if (parsed.command === "status") {
+      const profile = await store.load();
+      report(output, parsed.json, { configured: profile !== undefined, profile: redactedProfile(profile), runner_id: profile?.runner_id ?? null, display_name: null, version: null, service: { mode: parsed.values.user === true ? "user" : "system", status: "unknown" }, connection: "unknown", desired_policy_revision: null, applied_policy_revision: null, workspace_count: profile?.workspaces.length ?? 0 });
+      return;
+    }
     if (parsed.command === "workspace") { await workspaceCommand(parsed, store, output); return; }
     if (parsed.command === "env") { const profile = await requireProfile(store); const info = await new EnvironmentInfoService().get(workspaceOptions(profile)); report(output, parsed.json, info); return; }
     if (parsed.command === "doctor") { report(output, parsed.json, await doctor(store, parsed.values.user === true ? "user" : "system", dependencies.servicePlatform)); return; }

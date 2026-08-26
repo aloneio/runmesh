@@ -1,5 +1,5 @@
 import { env, SELF, runInDurableObject } from "cloudflare:test";
-import { WORKER_BRIDGE_TIMEOUT_MS, decodeWireFrame, encodeWireFrame, type WireMessage } from "@remote-coding-runtime/protocol";
+import { WORKER_BRIDGE_TIMEOUT_MS, decodeWireFrame, encodeWireFrame, type WireMessage } from "@aloneio/runmesh-protocol";
 import { beforeEach, describe, expect, it } from "vitest";
 import { internalHeaders } from "../src/security.js";
 
@@ -61,6 +61,26 @@ describe("Worker runner transport", () => {
     await closePromise;
   });
 
+  it("pushes a central policy update to an online Runner and enforces readiness", async () => {
+    const upgrade = await SELF.fetch(`https://worker.test/runner/connect?runner_id=${runnerId}`, { headers: { Upgrade: "websocket", Authorization: `Bearer ${token}` } });
+    const socket = upgrade.webSocket;
+    socket?.accept();
+    socket?.send(encodeWireFrame({ type: "runner.hello", protocol_version: 1, request_id: "hello-policy", min_protocol_version: 1, max_protocol_version: 1,
+      runner: { runner_id: runnerId, runner_version: "test", platform: "test", architecture: "test", capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: [], labels: {} } },
+    }));
+    await new Promise<void>((resolve) => socket?.addEventListener("message", () => resolve(), { once: true }));
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
+    const policy = { workspace_id: "policy-workspace", display_name: "Policy workspace", root_path: "/tmp", enabled: true, permissions: { read: true, edit: false, shell: false, job_control: false } };
+    const created = await runInDurableObject(registry, (instance) => instance.createManagedWorkspace(runnerId, policy, Date.now()));
+    expect(created).toMatchObject({ workspace_id: policy.workspace_id });
+    const pushBody = "{}";
+    const pushHeaders = await internalHeaders("test-internal-control-secret-not-for-production", "POST", "/policy", pushBody);
+    const policyUpdate = new Promise<WireMessage>((resolve) => socket?.addEventListener("message", (event) => { const value = decodeWireFrame(String(event.data)); if (value.type === "runner.policy_update") resolve(value); }));
+    const push = await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch("https://runner.internal/policy", { method: "POST", headers: pushHeaders, body: pushBody });
+    expect(push.status).toBe(204);
+    await expect(policyUpdate).resolves.toMatchObject({ type: "runner.policy_update", policy: { revision: expect.any(Number), workspaces: [{ workspace_id: policy.workspace_id }] } });
+    socket?.close();
+  });
   it("rejects invalid identifiers and invalid authentication", async () => {
     await expect(SELF.fetch("https://worker.test/runner/connect?runner_id=%2Fbad", { headers: { Upgrade: "websocket", Authorization: `Bearer ${token}` } })).resolves.toMatchObject({ status: 400 });
     await expect(SELF.fetch(`https://worker.test/runner/connect?runner_id=${runnerId}`, { headers: { Upgrade: "websocket", Authorization: "Bearer incorrect-token-0123456789" } })).resolves.toMatchObject({ status: 401 });
