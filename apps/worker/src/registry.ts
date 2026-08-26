@@ -38,6 +38,7 @@ export interface RunnerRecord {
   readonly state: RunnerConnectionState;
   readonly connection_epoch: number;
   readonly credential_version: number;
+  readonly management_mode: "central" | "legacy_local";
   readonly session_id: string | null;
   readonly metadata: RunnerMetadata | null;
   /** Safe enrollment-time identity/version data, intentionally excluding paths and credentials. */
@@ -46,6 +47,7 @@ export interface RunnerRecord {
   readonly last_sync_sequence: number | null;
   readonly desired_policy_revision: number;
   readonly applied_policy_revision: number | null;
+  readonly runner_reported_policy_revision: number | null;
   readonly policy_status: "pending" | "applied" | "invalid";
   readonly runner_permissions: PermissionSet;
   /** Last actual Runner package/version observed at enrollment or handshake. */
@@ -131,6 +133,7 @@ type RunnerRow = {
   state: RunnerConnectionState;
   connection_epoch: number;
   credential_version: number;
+  management_mode: "central" | "legacy_local";
   session_id: string | null;
   metadata_json: string | null;
   public_info_json: string | null;
@@ -138,6 +141,7 @@ type RunnerRow = {
   last_sync_sequence: number | null;
   desired_policy_revision: number;
   applied_policy_revision: number | null;
+  runner_reported_policy_revision: number | null;
   policy_status: "pending" | "applied" | "invalid";
   runner_permissions_json: string;
   current_runner_version: string | null;
@@ -192,9 +196,9 @@ export class RegistryDO {
       this.ctx.storage.sql.exec(`
         CREATE TABLE IF NOT EXISTS runners (
           runner_id TEXT PRIMARY KEY, display_name TEXT NOT NULL, token_verifier TEXT NOT NULL, state TEXT NOT NULL,
-          connection_epoch INTEGER NOT NULL DEFAULT 0, credential_version INTEGER NOT NULL DEFAULT 1,
+          connection_epoch INTEGER NOT NULL DEFAULT 0, credential_version INTEGER NOT NULL DEFAULT 1, management_mode TEXT NOT NULL DEFAULT 'legacy_local',
           session_id TEXT, metadata_json TEXT, public_info_json TEXT, last_heartbeat_ms INTEGER, last_sync_sequence INTEGER,
-          desired_policy_revision INTEGER NOT NULL DEFAULT 0, applied_policy_revision INTEGER, policy_status TEXT NOT NULL DEFAULT 'pending',
+          desired_policy_revision INTEGER NOT NULL DEFAULT 0, applied_policy_revision INTEGER, runner_reported_policy_revision INTEGER, policy_status TEXT NOT NULL DEFAULT 'pending',
           runner_permissions_json TEXT NOT NULL DEFAULT '{"read":false,"edit":false,"shell":false,"job_control":false}',
           current_runner_version TEXT, protocol_min_version INTEGER, protocol_max_version INTEGER,
           protocol_compatibility TEXT NOT NULL DEFAULT 'unknown', update_channel TEXT NOT NULL DEFAULT 'stable',
@@ -232,6 +236,10 @@ export class RegistryDO {
           created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, last_used_at_ms INTEGER, revoked_at_ms INTEGER,
           active_runner_id TEXT, active_runner_updated_at_ms INTEGER
         );
+        CREATE TABLE IF NOT EXISTS internal_request_nonces (
+          nonce TEXT PRIMARY KEY, expires_at_ms INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_internal_request_nonces_expiry ON internal_request_nonces(expires_at_ms);
         CREATE TABLE IF NOT EXISTS client_runner_overrides (
           client_id TEXT NOT NULL, runner_id TEXT NOT NULL, permissions_json TEXT NOT NULL,
           created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, PRIMARY KEY (client_id, runner_id)
@@ -257,9 +265,24 @@ export class RegistryDO {
        WHERE state = 'online' AND (last_heartbeat_ms IS NULL OR last_heartbeat_ms < ?)`, nowMs, nowMs - 45_000,
     );
     this.ctx.storage.sql.exec("DELETE FROM admin_sessions WHERE expires_at_ms <= ?", nowMs);
+    this.ctx.storage.sql.exec("DELETE FROM internal_request_nonces WHERE expires_at_ms <= ?", nowMs);
     // Used enrollment records have no continuing value; retain unexpired rows only.
     this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE expires_at_ms <= ? OR used_at_ms IS NOT NULL", nowMs);
     await this.ctx.storage.setAlarm(nowMs + 30_000);
+  }
+
+  /** Atomically remembers a verified nonce until its signed request expires. */
+  public consumeInternalNonce(nonce: string, expiresAtMs: number, nowMs = Date.now()): boolean {
+    if (!/^[0-9a-f]{64}$/.test(nonce) || !Number.isSafeInteger(expiresAtMs) || expiresAtMs <= nowMs) return false;
+    return this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.sql.exec("DELETE FROM internal_request_nonces WHERE expires_at_ms <= ?", nowMs);
+      try {
+        this.ctx.storage.sql.exec("INSERT INTO internal_request_nonces (nonce, expires_at_ms) VALUES (?, ?)", nonce, expiresAtMs);
+        return true;
+      } catch {
+        return false;
+      }
+    });
   }
 
   public adminStatus(): { initialized: boolean } { return { initialized: this.settings() !== undefined }; }
@@ -424,15 +447,10 @@ export class RegistryDO {
   }
   public effectivePermissions(clientId: string, runnerId: string, workspaceId: string): PermissionSet | undefined {
     const client = this.getMcpClient(clientId); const runner = this.getRunner(runnerId); const workspace = this.getManagedWorkspace(runnerId, workspaceId);
-    if (client === undefined || runner === undefined) return undefined;
+    if (client === undefined || runner === undefined || workspace === undefined) return undefined;
     const override = this.clientRunnerPermissions(clientId, runnerId) ?? { read: true, edit: true, shell: true, job_control: true };
     const clientPermissions: PermissionSet = { read: client.scopes.includes("coding:read"), edit: client.scopes.includes("coding:write"), shell: client.scopes.includes("coding:exec"), job_control: client.scopes.includes("coding:exec") };
-    if (workspace !== undefined) return workspace.enabled ? intersectPermissions(clientPermissions, override, runner.runner_permissions, workspace.permissions) : undefined;
-    // Before any central revision exists, explicitly configured local Runner
-    // workspaces retain their established compatibility behavior. Once central
-    // policy begins, unknown/synchronized-only workspaces fail closed.
-    const synced = this.listWorkspaces(runnerId).some((item) => typeof item === "object" && item !== null && !Array.isArray(item) && (item as Record<string, unknown>).workspace_id === workspaceId);
-    return runner.desired_policy_revision === 0 && synced ? intersectPermissions(clientPermissions, override) : undefined;
+    return workspace.enabled && runner.policy_status === "applied" && runner.applied_policy_revision === runner.desired_policy_revision && runner.desired_policy_revision > 0 ? intersectPermissions(clientPermissions, override, runner.runner_permissions, workspace.permissions) : undefined;
   }
 
   /** Resolve an MCP client's sticky runner selection without silently changing it. */
@@ -556,7 +574,7 @@ export class RegistryDO {
     if (runner === undefined || input.desired_revision < runner.desired_policy_revision) return true;
     if (input.desired_revision !== runner.desired_policy_revision || input.applied_revision > input.desired_revision || (input.status === "applied" && input.applied_revision !== input.desired_revision)) return false;
     this.ctx.storage.transactionSync(() => {
-      this.ctx.storage.sql.exec("UPDATE runners SET applied_policy_revision = ?, policy_status = ?, updated_at_ms = ? WHERE runner_id = ?", input.applied_revision, input.status, nowMs, runnerId);
+      this.ctx.storage.sql.exec("UPDATE runners SET applied_policy_revision = ?, runner_reported_policy_revision = ?, policy_status = ?, updated_at_ms = ? WHERE runner_id = ?", input.applied_revision, input.applied_revision, input.status, nowMs, runnerId);
       for (const item of input.workspace_status) this.ctx.storage.sql.exec("UPDATE managed_workspaces SET validation_status = ? WHERE runner_id = ? AND workspace_id = ?", item.status, runnerId, item.workspace_id);
     });
     return true;
@@ -578,8 +596,8 @@ export class RegistryDO {
     if (!isSafeIdentifier(runnerId) || !validLabel(displayName)) return undefined;
     try {
       this.ctx.storage.sql.exec(
-        `INSERT INTO runners (runner_id, display_name, token_verifier, state, credential_version, desired_policy_revision, policy_status, runner_permissions_json, updated_at_ms)
-         VALUES (?, ?, '', 'offline', 0, 1, 'pending', ?, ?)`, runnerId, displayName, JSON.stringify(READ_ONLY_PERMISSIONS), nowMs,
+        `INSERT INTO runners (runner_id, display_name, token_verifier, state, management_mode, credential_version, desired_policy_revision, policy_status, runner_permissions_json, updated_at_ms)
+         VALUES (?, ?, '', 'offline', 'central', 0, 1, 'pending', ?, ?)`, runnerId, displayName, JSON.stringify(READ_ONLY_PERMISSIONS), nowMs,
       );
     } catch { return undefined; }
     return this.getRunner(runnerId);
@@ -769,7 +787,7 @@ export class RegistryDO {
   public async fetch(request: Request): Promise<Response> {
     const rawBody = await readCappedBody(request);
     if (rawBody === undefined) return new Response("payload too large", { status: 413 });
-    if (!await verifyInternalRequest(request, this.env.INTERNAL_CONTROL_SECRET, rawBody)) return new Response("not found", { status: 404 });
+    if (!await verifyInternalRequest(request, this.env.INTERNAL_CONTROL_SECRET, rawBody, (nonce, expiresAtMs) => this.consumeInternalNonce(nonce, expiresAtMs))) return new Response("not found", { status: 404 });
     const url = new URL(request.url);
     const segments = url.pathname.split("/").filter(Boolean);
     const input = rawBody.length === 0 ? {} : parseJsonObject(rawBody);
@@ -819,6 +837,7 @@ export class RegistryDO {
     if (request.method === "GET" && action === "workspaces" && itemId === undefined) return Response.json({ runner_id: runnerId, workspaces: this.listWorkspaces(runnerId) });
     if (request.method === "POST" && action === "policy-ack") { const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const desiredRevision = integerField(input, "desired_revision"); const appliedRevision = integerField(input, "applied_revision"); const status = input.status; const statuses = workspaceStatusesField(input.workspace_status); if (epoch === undefined || credentialVersion === undefined || desiredRevision === undefined || appliedRevision === undefined || (status !== "applied" && status !== "pending" && status !== "invalid") || statuses === undefined) return Response.json({ error: "invalid policy acknowledgement" }, { status: 400 }); return this.acknowledgePolicy(runnerId, epoch, credentialVersion, { desired_revision: desiredRevision, applied_revision: appliedRevision, status, workspace_status: statuses }, now) ? new Response(null, { status: 204 }) : new Response("stale policy acknowledgement", { status: 409 }); }
     if (request.method === "GET" && action === "desired-policy" && itemId === undefined) { const policy = this.desiredPolicy(runnerId); return policy === undefined ? new Response("not found", { status: 404 }) : Response.json(policy); }
+    if (request.method === "GET" && action === "policy-revision" && itemId === undefined) { const runner = this.getRunner(runnerId); return runner === undefined ? new Response("not found", { status: 404 }) : Response.json({ desired_policy_revision: runner.desired_policy_revision, applied_policy_revision: runner.applied_policy_revision, runner_reported_policy_revision: runner.runner_reported_policy_revision, policy_status: runner.policy_status }); }
     if (request.method === "GET" && action === "jobs" && itemId === undefined) {
       const workspaceId = url.searchParams.get("workspace_id") ?? undefined;
       const status = url.searchParams.get("status") ?? undefined;
@@ -834,6 +853,12 @@ export class RegistryDO {
 
   private async handleAuth(method: string, segments: string[], input: InternalInput, nowMs: number, url: URL): Promise<Response> {
     const action = segments[0]; const clientId = segments[1];
+    if (method === "POST" && action === "internal-nonces" && clientId === undefined) {
+      const nonce = stringField(input, "nonce", 64); const expiresAtMs = integerField(input, "expires_at_ms");
+      return nonce === undefined || expiresAtMs === undefined || !this.consumeInternalNonce(nonce, expiresAtMs, nowMs)
+        ? new Response("not found", { status: 404 })
+        : new Response(null, { status: 204 });
+    }
     if (method === "GET" && action === "status" && clientId === undefined) return Response.json(this.adminStatus());
     if (method === "GET" && action === "settings" && clientId === undefined) { const verifier = this.adminPasswordVerifier(); return verifier === undefined ? new Response("not found", { status: 404 }) : Response.json({ password_verifier: verifier }); }
     if (method === "POST" && action === "setup" && clientId === undefined) { const verifier = stringField(input, "password_verifier", 4_096); return verifier === undefined ? Response.json({ error: "invalid verifier" }, { status: 400 }) : this.setupAdmin(verifier, nowMs) ? new Response(null, { status: 204 }) : new Response("already initialized", { status: 409 }); }
@@ -960,8 +985,10 @@ export class RegistryDO {
     if (!columns.has("display_name")) { this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN display_name TEXT"); this.ctx.storage.sql.exec("UPDATE runners SET display_name = runner_id WHERE display_name IS NULL OR display_name = ''"); }
     if (!columns.has("public_info_json")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN public_info_json TEXT");
     if (!columns.has("last_sync_sequence")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN last_sync_sequence INTEGER");
+    if (!columns.has("management_mode")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN management_mode TEXT NOT NULL DEFAULT 'legacy_local'");
     if (!columns.has("desired_policy_revision")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN desired_policy_revision INTEGER NOT NULL DEFAULT 0");
     if (!columns.has("applied_policy_revision")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN applied_policy_revision INTEGER");
+    if (!columns.has("runner_reported_policy_revision")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN runner_reported_policy_revision INTEGER");
     if (!columns.has("policy_status")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN policy_status TEXT NOT NULL DEFAULT 'pending'");
     if (!columns.has("runner_permissions_json")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN runner_permissions_json TEXT NOT NULL DEFAULT '{\"read\":false,\"edit\":false,\"shell\":false,\"job_control\":false}'");
     if (!columns.has("current_runner_version")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN current_runner_version TEXT");
@@ -1002,6 +1029,10 @@ export class RegistryDO {
         id TEXT PRIMARY KEY CHECK (id IN ('login', 'setup')), failed_attempts INTEGER NOT NULL DEFAULT 0,
         blocked_until_ms INTEGER NOT NULL DEFAULT 0, updated_at_ms INTEGER NOT NULL DEFAULT 0
       );
+      CREATE TABLE IF NOT EXISTS internal_request_nonces (
+        nonce TEXT PRIMARY KEY, expires_at_ms INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_internal_request_nonces_expiry ON internal_request_nonces(expires_at_ms);
     `);
     this.ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS idx_runner_enrollments_expiry ON runner_enrollments(expires_at_ms)");
     this.ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS idx_runner_enrollments_runner ON runner_enrollments(runner_id)");
@@ -1040,10 +1071,11 @@ function updateStatus(channel: RunnerUpdateChannel, desired: string | undefined,
 
 function decodeRunner(row: RunnerRow): RunnerRecord {
   return {
-    runner_id: row.runner_id, display_name: row.display_name || row.runner_id, state: row.state, connection_epoch: row.connection_epoch,
+    runner_id: row.runner_id, display_name: row.display_name || row.runner_id, state: row.state, management_mode: row.management_mode === "central" ? "central" : "legacy_local", connection_epoch: row.connection_epoch,
     credential_version: row.credential_version, session_id: row.session_id, metadata: row.metadata_json === null ? null : JSON.parse(row.metadata_json) as RunnerMetadata,
     public_info: row.public_info_json === null ? null : JSON.parse(row.public_info_json) as RunnerPublicInfo, last_heartbeat_ms: row.last_heartbeat_ms,
     last_sync_sequence: row.last_sync_sequence, desired_policy_revision: row.desired_policy_revision ?? 0, applied_policy_revision: row.applied_policy_revision,
+    runner_reported_policy_revision: row.runner_reported_policy_revision,
     policy_status: row.policy_status === "applied" || row.policy_status === "invalid" ? row.policy_status : "pending",
     runner_permissions: parsePermissionSet(row.runner_permissions_json) ?? LOCKED_PERMISSIONS,
     current_runner_version: row.current_runner_version, protocol_min_version: row.protocol_min_version, protocol_max_version: row.protocol_max_version,

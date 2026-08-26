@@ -36,9 +36,10 @@ const TOOL_SPECS = {
   runner_current: { scope: "coding:read", description: "Return this MCP client's sticky runner selection, or null. An unavailable selection never falls back to another runner.", annotations: readAnnotations },
   runner_select: { scope: "coding:read", description: "Select this MCP client's active runner. Initial selection is immediate; changing a selection requires confirm_switch=true.", annotations: writeAnnotations },
   workspace_list: { scope: "coding:read", description: "List readable workspace IDs on the active runner. Workspace roots are never returned.", annotations: readAnnotations },
+  inspect: { scope: "coding:read", description: "Inspect a workspace with bounded list, search, stat, git status, or git diff operations. This is read-only; workspace roots and host paths are never returned.", annotations: readAnnotations },
   read: { scope: "coding:read", description: "Read a bounded UTF-8-safe page of a workspace-relative file. Use next_cursor or offset to continue; host roots and absolute paths are not accepted.", annotations: readAnnotations },
   edit: { scope: "coding:write", description: "Apply a transactional, baseline-checked patch to a writable workspace. The result contains only bounded, workspace-relative change metadata.", annotations: destructiveAnnotations },
-  shell: { scope: "coding:exec", description: "Run a command through the selected runner's Bash shell on Linux/macOS or PowerShell on Windows. Commands have the runner user's OS permissions and are not sandboxed; the workspace controls initial cwd and policy, not the shell root. Use a restricted VM/container and avoid administrator/root runners for untrusted code. background=true returns a persistent job immediately; foreground waits only up to wait_ms.", annotations: execAnnotations },
+  shell: { scope: "coding:exec", description: "Run a command through the selected runner's Host shell (Bash on Linux/macOS or PowerShell on Windows). Commands have the runner user's OS permissions and are not sandboxed; the workspace controls initial cwd and policy, not the Host shell root. Use a restricted VM/container and avoid administrator/root runners for untrusted code. background=true returns a persistent job immediately; foreground waits only up to wait_ms.", annotations: execAnnotations },
   job: { description: "List, inspect, or read bounded logs for persistent jobs. cancel and input require coding:exec plus workspace job-control permission. Job metadata never includes command, cwd, PID, roots, or secrets.", annotations: mixedJobAnnotations },
 } as const satisfies Record<string, ToolSpec>;
 
@@ -52,6 +53,10 @@ const BoundedLimitSchema = z.number().int().min(1).max(65_536).optional();
 const JobIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "must be a safe job identifier");
 const JobStatusSchema = z.enum(["queued", "running", "cancelling", "cancelled", "succeeded", "failed", "unknown", "interrupted"]);
 const ReadInputSchema = z.object({ workspace_id: WorkspaceIdSchema, path: RelativePathSchema, cursor: CursorSchema, offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(262_144).optional() }).strict();
+const InspectInputSchema = z.object({ action: z.enum(["list", "search", "stat", "git_status", "git_diff"]), workspace_id: WorkspaceIdSchema, path: RelativePathSchema.optional(), query: z.string().min(1).max(512).optional(), max_results: z.number().int().min(1).max(256).optional(), cursor: CursorSchema }).strict().superRefine((value, context) => {
+  if ((value.action === "search" && value.query === undefined) || (value.action !== "search" && value.query !== undefined)) context.addIssue({ code: "custom", message: "query is only valid and required for search" });
+  if (value.action === "stat" && value.path === undefined) context.addIssue({ code: "custom", message: "path is required for stat" });
+});
 const EditInputSchema = z.object({ workspace_id: WorkspaceIdSchema, patch: z.string().min(1).max(1_048_576), expected_hash: z.string().regex(/^[a-f0-9]{64}$/).optional(), expected_hashes: z.record(z.string().min(1).max(4096), z.string().regex(/^[a-f0-9]{64}$/).nullable()).optional() }).strict();
 const ShellInputSchema = z.object({ workspace_id: WorkspaceIdSchema, command: z.string().min(1).max(8_192), wait_ms: z.number().int().min(1).max(LOCAL_RUNNER_OPERATION_TIMEOUT_MS).optional(), background: z.boolean().optional() }).strict();
 const JobInputSchema = z.discriminatedUnion("action", [
@@ -100,6 +105,7 @@ export function createCodingMcpServer(env: WorkerEnv, auth: McpAuth): McpServer 
     return asToolResult(selection);
   });
   register(server, "workspace_list", z.object({}).strict(), async () => activeWorkspaceList(env, auth.clientId));
+  register(server, "inspect", InspectInputSchema, async (params) => inspectTool(env, auth.clientId, params));
   register(server, "read", ReadInputSchema, async (params) => activeRunnerTool(env, auth.clientId, "fs.read", boundedReadParams(params, 32 * 1024), "read"));
   register(server, "edit", EditInputSchema, async (params) => activeRunnerTool(env, auth.clientId, "fs.apply_patch", params, "edit"));
   register(server, "shell", ShellInputSchema, async (params) => shellTool(env, auth.clientId, params));
@@ -127,6 +133,20 @@ export function createCodingMcpServer(env: WorkerEnv, auth: McpAuth): McpServer 
   }
 }
 
+async function inspectTool(env: WorkerEnv, clientId: string, params: z.output<typeof InspectInputSchema>): Promise<unknown> {
+  const method = params.action === "list" ? "fs.list" : params.action === "search" ? "fs.search" : params.action === "stat" ? "fs.stat" : params.action === "git_status" ? "git.status" : "git.diff";
+  const input: Record<string, unknown> = {
+    workspace_id: params.workspace_id,
+    ...(params.path === undefined ? {} : { path: params.path }),
+    ...(params.query === undefined ? {} : { query: params.query }),
+    ...(params.cursor === undefined ? {} : { cursor: params.cursor }),
+    ...(params.action === "list" && params.max_results !== undefined ? { limit: params.max_results } : {}),
+    ...(params.action === "search" && params.max_results !== undefined ? { max_results: params.max_results } : {}),
+    ...(params.action === "git_diff" ? { max_bytes: 32 * 1024 } : {}),
+    ...(params.action === "git_status" ? { max_bytes: 32 * 1024 } : {}),
+  };
+  return activeRunnerTool(env, clientId, method, input, "read");
+}
 async function shellTool(env: WorkerEnv, clientId: string, params: z.output<typeof ShellInputSchema>): Promise<unknown> {
   const invocation = { workspace_id: params.workspace_id, command: params.command, shell: true, created_by_client_id: clientId };
   if (params.background === true) return activeRunnerTool(env, clientId, "exec.start", invocation, "shell");
@@ -169,7 +189,7 @@ function isToolSuccessResult(value: unknown): value is { readonly structuredCont
 function safeJobMetadata(value: unknown): Record<string, unknown> {
   if (!isRecord(value)) return {};
   const output: Record<string, unknown> = {};
-  for (const key of ["job_id", "workspace_id", "status", "created_at_ms", "started_at_ms", "updated_at_ms", "completed_at_ms", "exit_code", "signal", "recovery_note", "cancellation_delivered_at_ms"]) {
+  for (const key of ["job_id", "workspace_id", "status", "created_at_ms", "started_at_ms", "updated_at_ms", "completed_at_ms", "exit_code", "signal", "recovery_note", "output_truncated", "cancellation_delivered_at_ms"]) {
     if (value[key] !== undefined) output[key] = value[key];
   }
   return output;
@@ -246,7 +266,9 @@ async function activeRunnerTool(env: WorkerEnv, clientId: string, method: string
       ? await checkAnyReadPermission(env, clientId, selected.value.runnerId)
       : await checkPermission(env, clientId, selected.value.runnerId, params.workspace_id, requiredPermission);
   if (permission !== undefined) return asToolResult(permission);
-  const call = await callRunner(env, selected.value.runnerId, method, params);
+  const revisionCall = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/policy-revision`);
+  const revision = revisionCall.ok && isRecord(revisionCall.value) && typeof revisionCall.value.applied_policy_revision === "number" && revisionCall.value.applied_policy_revision === revisionCall.value.desired_policy_revision && revisionCall.value.policy_status === "applied" ? revisionCall.value.applied_policy_revision : undefined;
+  const call = await callRunner(env, selected.value.runnerId, method, revision === undefined ? params : { ...params, policy_revision: revision });
   return call.ok ? runnerSuccess(call.value, selected.value) : runnerFailure(call.error, selected.value);
 }
 
@@ -258,7 +280,9 @@ async function activeJobRunnerTool(env: WorkerEnv, clientId: string, method: str
   const workspaceId = isRecord(job.value) && typeof job.value.workspace_id === "string" ? job.value.workspace_id : undefined;
   const permission = await checkPermission(env, clientId, selected.value.runnerId, workspaceId, requiredPermission);
   if (permission !== undefined) return asToolResult(permission);
-  const call = await callRunner(env, selected.value.runnerId, method, params);
+  const revisionCall = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/policy-revision`);
+  const revision = revisionCall.ok && isRecord(revisionCall.value) && typeof revisionCall.value.applied_policy_revision === "number" && revisionCall.value.applied_policy_revision === revisionCall.value.desired_policy_revision && revisionCall.value.policy_status === "applied" ? revisionCall.value.applied_policy_revision : undefined;
+  const call = await callRunner(env, selected.value.runnerId, method, revision === undefined ? params : { ...params, policy_revision: revision });
   return call.ok ? runnerSuccess(call.value, selected.value) : runnerFailure(call.error, selected.value);
 }
 
@@ -386,7 +410,7 @@ type ToolCall = ToolSuccess | ToolFailure;
 const SAFE_RUNNER_ERROR_CODES = new Set([
   "baseline_changed", "busy", "expected_hash_mismatch", "file_too_large", "git_failed", "git_output_too_large", "git_timeout", "git_unavailable",
   "hunk_ambiguous", "hunk_not_found", "hunk_overlap", "invalid_params", "invalid_patch", "invalid_path", "invalid_request", "invalid_workspace", "missing_file", "mixed_newlines", "not_utf8",
-  "method_not_found", "patch_install_failed", "patch_rollback_failed", "path_traversal", "permission_denied", "policy_pending", "readonly_workspace", "runner_offline", "symlink_escape", "symlink_write", "target_exists", "timeout",
+  "method_not_found", "patch_install_failed", "patch_rollback_failed", "path_traversal", "permission_denied", "policy_pending", "readonly_workspace", "runner_offline", "stale_policy", "symlink_escape", "symlink_write", "target_exists", "timeout",
 ]);
 
 function safeRunnerErrorCode(value: unknown, fallback: string): string {
@@ -396,7 +420,7 @@ function safeRunnerErrorCode(value: unknown, fallback: string): string {
 async function callRunner(env: WorkerEnv, runnerId: string, method: string, params: Record<string, unknown>): Promise<ToolCall> {
   if (!isSafeIdentifier(runnerId)) return fail("invalid_runner_id", "runner_id is invalid", "Use a runner identifier returned by runner_list.");
   if (env.INTERNAL_CONTROL_SECRET === undefined || env.INTERNAL_CONTROL_SECRET.length === 0) return fail("service_unavailable", "The runner bridge is not configured.", "Ask the service operator to configure the internal bridge.");
-  const body = JSON.stringify({ method, params });
+  const body = JSON.stringify({ method, params, ...(typeof params.policy_revision === "number" ? { policy_revision: params.policy_revision } : {}) });
   const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "POST", "/rpc", body);
   let response: Response;
   try {
@@ -435,8 +459,7 @@ function runnerListToolValue(value: readonly unknown[]): unknown {
 
 async function registryCall(env: WorkerEnv, path: string): Promise<ToolCall> {
   if (env.INTERNAL_CONTROL_SECRET === undefined || env.INTERNAL_CONTROL_SECRET.length === 0) return fail("service_unavailable", "The registry is not configured.", "Ask the service operator to configure the internal bridge.");
-  const [pathname] = path.split("?", 1);
-  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "GET", pathname ?? path, "");
+  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "GET", path, "");
   try {
     const response = await env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method: "GET", headers }));
     const value = await json(response);

@@ -1,6 +1,7 @@
 import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import type { ExecutionMode } from "./service.js";
 import type { WorkspaceOption } from "./config.js";
 
 export interface StoredWorkspace {
@@ -18,6 +19,8 @@ export interface RunnerProfile {
   readonly max_concurrent_jobs?: number;
   /** Development-only persisted allowance for loopback ws:// profiles. */
   readonly insecure_local?: boolean;
+  /** Machine service identity; omitted legacy profiles safely default to privileged_host for compatibility. */
+  readonly execution_mode?: ExecutionMode;
 }
 export interface ProfileStoreOptions { readonly baseDir?: string; readonly filePath?: string; readonly platform?: NodeJS.Platform; readonly home?: string; }
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -88,13 +91,20 @@ export function validateProfile(value: unknown): RunnerProfile | undefined {
     seen.add(workspace.id as string);
     workspaces.push({ id: workspace.id as string, path: workspace.path as string, writable: workspace.writable, shell: workspace.shell });
   }
-  const result: RunnerProfile = { version: 1, server_url: item.server_url as string, runner_id: item.runner_id as string, token: item.token as string, workspaces, ...(item.insecure_local === true ? { insecure_local: true } : {}) };
+  const executionMode = item.execution_mode === undefined ? undefined : validExecutionMode(item.execution_mode) ? item.execution_mode : undefined;
+  if (item.execution_mode !== undefined && executionMode === undefined) return undefined;
+  const result: RunnerProfile = {
+    version: 1, server_url: item.server_url as string, runner_id: item.runner_id as string, token: item.token as string, workspaces,
+    ...(item.insecure_local === true ? { insecure_local: true } : {}),
+    ...(executionMode === undefined ? {} : { execution_mode: executionMode }),
+  };
   if (item.max_concurrent_jobs !== undefined) {
     if (!Number.isSafeInteger(item.max_concurrent_jobs) || (item.max_concurrent_jobs as number) < 1 || (item.max_concurrent_jobs as number) > 64) return undefined;
     return { ...result, max_concurrent_jobs: item.max_concurrent_jobs as number };
   }
   return result;
 }
+function validExecutionMode(value: unknown): value is ExecutionMode { return value === "dedicated_user" || value === "privileged_host"; }
 function validString(value: unknown, min: number, max: number): value is string { return typeof value === "string" && value.length >= min && value.length <= max && !/[\r\n]/.test(value); }
 function validServerUrl(value: unknown, insecureLocal: boolean): value is string {
   if (!validString(value, 2, 2_048)) return false;

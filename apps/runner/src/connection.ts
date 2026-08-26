@@ -238,8 +238,9 @@ export class RunnerConnection {
   }
 
   private async applyDesiredPolicy(socket: WebSocket, policy: NonNullable<RunnerWelcome["desired_policy"]>): Promise<void> {
-    const generation = ++this.policyApplyGeneration;
+  const generation = this.policyApplyGeneration + 1;
     if (policy.revision < this.desiredPolicyRevision) return;
+    this.policyApplyGeneration = generation;
     this.desiredPolicyRevision = policy.revision;
     this.runtime.applyPolicy([]);
     const validation = await validateCentralWorkspacePolicy(policy.workspaces as CentralWorkspacePolicy[]);
@@ -305,6 +306,8 @@ export class RunnerConnection {
 
   private async respondToRpc(socket: WebSocket, request: RpcRequest): Promise<void> {
     try {
+      const expectedRevision = this.appliedPolicyRevision;
+      if (request.policy_revision !== undefined && request.policy_revision !== expectedRevision) throw new Error("stale_policy");
       const result = request.method === "echo" ? request.params : request.method === "runner.info" ? this.metadata : await this.runtime.dispatch(request.method, request.params);
       if (socket.readyState === WebSocket.OPEN) socket.send(encodeWireFrame({ type: "rpc.response", protocol_version: request.protocol_version, request_id: request.request_id, result: result as RpcRequest["params"] }));
     } catch (error) {
@@ -348,7 +351,7 @@ export function discoverCapabilities(maxConcurrentJobs = 1): CapabilityMetadata 
     pty: false,
     network_access: true,
     max_concurrent_jobs: maxConcurrentJobs,
-    supported_rpc_methods: ["echo", "runner.info", "workspace.list", "env.info", "fs.read", "fs.list", "fs.search", "fs.apply_patch", "fs.patch", "git.status", "git.diff", "exec.start", "exec.run", "job.list", "job.get", "job.logs", "job.cancel", "job.input"],
+    supported_rpc_methods: ["echo", "runner.info", "workspace.list", "env.info", "fs.read", "fs.stat", "fs.list", "fs.search", "fs.apply_patch", "fs.patch", "git.status", "git.diff", "exec.start", "exec.run", "job.list", "job.get", "job.logs", "job.cancel", "job.input"],
     labels: { runtime: "node" },
   };
 }
