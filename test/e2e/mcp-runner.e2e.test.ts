@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -17,7 +17,6 @@ type FormFields = Record<string, string | readonly string[]>;
 const workerPort = await freePort();
 const workerUrl = `http://127.0.0.1:${workerPort}`;
 const runnerId = "e2e-runner";
-const runnerToken = "e2e-runner-token-0123456789abcdef";
 const adminToken = "e2e-admin-token-0123456789abcdef";
 const adminPassword = "e2e-administrator-password";
 const workerEnv = {
@@ -32,6 +31,8 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
   let root = "";
   let workerPersist = "";
   let runnerState = "";
+  let enrolledProfile = "";
+  let enrollmentCode = "";
   let worker: ChildProcess | undefined;
   let runner: ChildProcess | undefined;
   let runnerOutput: (() => string) | undefined;
@@ -53,27 +54,41 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const workerLog = collectOutput(worker);
     await waitForWorker(workerLog);
     const createdClients = await setupAdminAndClients();
+    enrollmentCode = await createBrowserRunnerEnrollment();
+    expect(enrollmentCode).toMatch(/^[A-Za-z0-9_-]{43}$/);
     clientA = createdClients.clientA;
     clientB = createdClients.clientB;
 
-    // Runner enrollment remains a separate ADMIN_TOKEN-protected control plane.
-    const enrollment = await fetch(`${workerUrl}/admin/runners`, {
-      method: "POST", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
-      body: JSON.stringify({ runner_id: runnerId, token: runnerToken }),
+    // Exercise the real source CLI against the Worker enrollment endpoint using
+    // its isolated profile, then start from that saved profile (no service manager).
+    enrolledProfile = join(root, "enrolled-profile.json");
+    const enrollmentCli = spawn("npx", ["tsx", "apps/runner/src/cli.ts", "enroll", "--server", `${workerUrl}/runner/enroll`, "--code", enrollmentCode, "--insecure-local", "--cwd", workspace, "--json"], {
+      cwd: projectRoot(), env: { ...process.env, CODING_RUNNER_PROFILE: enrolledProfile }, stdio: ["ignore", "pipe", "pipe"], detached: true,
     });
-    expect(enrollment.status).toBe(200);
+    const enrollmentCliLog = collectOutput(enrollmentCli);
+    await waitForExit(enrollmentCli, 15_000, enrollmentCliLog);
+    expect(enrollmentCli.exitCode).toBe(0);
+    expect(enrollmentCliLog()).not.toContain(enrollmentCode);
+    const profile = await readFile(enrolledProfile, "utf8");
+    expect(profile).toContain(`\"runner_id\": \"${runnerId}\"`);
+    expect(profile).not.toContain(enrollmentCode);
+    const savedProfile = JSON.parse(profile) as Record<string, unknown>;
+    savedProfile.workspaces = [
+      { id: "workspace-1", path: workspace, writable: true, shell: false },
+      { id: "readonly-1", path: workspace, writable: false, shell: false },
+    ];
+    await writeFile(enrolledProfile, `${JSON.stringify(savedProfile, null, 2)}\n`, { mode: 0o600 });
 
     runner = spawn("npx", [
-      "tsx", "apps/runner/src/cli.ts", "start", "--server", `ws://127.0.0.1:${workerPort}`, "--insecure-local",
-      "--runner-id", runnerId, "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
-      "--workspace", `workspace-1=${workspace};writable;noshell`,
-      "--workspace", `readonly-1=${workspace};readonly;noshell`,
+      "tsx", "apps/runner/src/cli.ts", "start", "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
     ], {
-      cwd: projectRoot(), env: { ...process.env, CODING_RUNNER_TOKEN: runnerToken }, stdio: ["ignore", "pipe", "pipe"], detached: true,
+      cwd: projectRoot(), env: { ...process.env, CODING_RUNNER_PROFILE: enrolledProfile }, stdio: ["ignore", "pipe", "pipe"], detached: true,
     });
     const runnerLog = collectOutput(runner);
     runnerOutput = runnerLog;
     await waitFor(async () => (await mcpTool("runner_info", { runner_id: runnerId })).structuredContent?.state === "online", 15_000, runnerLog);
+    expect((await mcpTool("runner_select", { runner_id: runnerId }, clientA)).isError).not.toBe(true);
+    expect((await mcpTool("runner_select", { runner_id: runnerId }, clientB)).isError).not.toBe(true);
   }, 30_000);
 
   afterAll(async () => {
@@ -81,6 +96,13 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     if (root) await rm(root, { recursive: true, force: true });
   }, 15_000);
 
+  it("enrolls from the browser-issued one-time code, saves an isolated profile, starts, and performs a real fs_read", async () => {
+    expect(enrollmentCode).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(await readFile(enrolledProfile, "utf8")).not.toContain(enrollmentCode);
+    const result = await mcpTool("fs_read", { workspace_id: "workspace-1", path: "note.txt", limit: 128 });
+    expect(result.isError).not.toBe(true);
+    expect(result).toMatchObject({ structuredContent: { data: "hello from a real local runner\n" } });
+  });
   it("accepts only a per-client secret URL and hides direct or invalid MCP routes", async () => {
     const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
     const direct = await fetch(`${workerUrl}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body });
@@ -90,9 +112,26 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     await expect(mcpMessage("runner_list", {})).resolves.toBeDefined();
   });
 
+  it("requires an explicit selection when multiple runners exist and rejects runner_id on coding tools", async () => {
+    const otherRunnerId = "e2e-runner-secondary";
+    const enrollment = await fetch(`${workerUrl}/admin/runners`, {
+      method: "POST", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ runner_id: otherRunnerId, token: "e2e-runner-secondary-token-0123456789" }),
+    });
+    expect(enrollment.status).toBe(200);
+
+    const { adminJar, csrf } = await adminCredentials();
+    const clientC = await createMcpClient("Client C E2E", ["coding:read"], adminJar, csrf);
+    const unselected = await mcpTool("env_info", {}, clientC);
+    expect(unselected).toMatchObject({ isError: true, structuredContent: { error: { code: "runner_not_selected" } } });
+
+    const rejectedRunnerId = await mcpTool("fs_read", { runner_id: runnerId, workspace_id: "workspace-1", path: "note.txt" }, clientA);
+    expect(rejectedRunnerId.isError).toBe(true);
+  });
+
   it("rejects POSIX, Windows drive, and UNC paths at the MCP schema boundary", async () => {
     for (const path of ["/etc/passwd", "C:\\Windows\\System32", "\\\\server\\share\\file.txt"]) {
-      const result = await mcpMessage("fs_read", { runner_id: runnerId, workspace_id: "workspace-1", path, limit: 1 });
+      const result = await mcpMessage("fs_read", { workspace_id: "workspace-1", path, limit: 1 });
       expect(result.result?.isError).toBe(true);
       expect(result.result?.content?.[0]?.text).toContain("workspace-relative");
     }
@@ -101,12 +140,12 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
   it("uses git_diff max_bytes rather than the incompatible limit field", async () => {
     const rejected = await mcpMessage("git_diff", { runner_id: runnerId, workspace_id: "workspace-1", limit: 1 });
     expect(rejected.result?.isError).toBe(true);
-    const accepted = await mcpTool("git_diff", { runner_id: runnerId, workspace_id: "workspace-1", max_bytes: 512 });
+    const accepted = await mcpTool("git_diff", { workspace_id: "workspace-1", max_bytes: 512 });
     expect(accepted.structuredContent?.error?.code).not.toBe("invalid_params");
   });
 
   it("routes fs_read through the live WebSocket runner without exposing its root", async () => {
-    const result = await mcpTool("fs_read", { runner_id: runnerId, workspace_id: "workspace-1", path: "note.txt", limit: 128 });
+    const result = await mcpTool("fs_read", { workspace_id: "workspace-1", path: "note.txt", limit: 128 });
     expect(result.isError).not.toBe(true);
     expect(result.structuredContent).toMatchObject({ workspace_id: "workspace-1", path: "note.txt", data: "hello from a real local runner\n" });
     expect(JSON.stringify(result)).not.toContain(workspace);
@@ -117,7 +156,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     let output = "";
     do {
       const page = await mcpTool("fs_read", {
-        runner_id: runnerId, workspace_id: "workspace-1", path: "utf8.txt", ...(cursor === undefined ? {} : { cursor }), limit: 4,
+        workspace_id: "workspace-1", path: "utf8.txt", ...(cursor === undefined ? {} : { cursor }), limit: 4,
       });
       output += page.structuredContent?.data as string;
       const next = page.structuredContent?.next_cursor;
@@ -128,7 +167,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
   });
 
   it("returns bounded local runner environment discovery", async () => {
-    const info = await mcpTool("env_info", { runner_id: runnerId });
+    const info = await mcpTool("env_info", {});
     expect(info.structuredContent).toMatchObject({
       platform: expect.any(String), architecture: expect.any(String), hostname: expect.any(String),
       tools: { node: { available: true, version: expect.any(String) } },
@@ -137,7 +176,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
 
   it("lets Client B discover and query a Client A job through the offline registry snapshot before reconnecting", async () => {
     const started = await mcpTool("exec_start", {
-      runner_id: runnerId, workspace_id: "workspace-1", command: process.execPath,
+      workspace_id: "workspace-1", command: process.execPath,
       args: ["-e", "setTimeout(() => process.stdout.write('completed-after-cross-client-reconnect\\n'), 5000)"],
     }, clientA);
     const jobId = started.structuredContent?.job_id;
@@ -146,83 +185,85 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     await writeFile(join(root, "disconnect"), "close transport\n");
     await waitFor(async () => (await mcpTool("runner_info", { runner_id: runnerId }, clientA)).structuredContent?.state === "offline", 5_000);
 
-    const listed = await mcpTool("job_list", { runner_id: runnerId }, clientB);
-    const jobs = listed.structuredContent?.jobs;
-    expect(Array.isArray(jobs)).toBe(true);
-    expect((jobs as Record<string, unknown>[]).some((job) => job.job_id === jobId)).toBe(true);
+    const listed = await mcpTool("job_list", {}, clientB);
+    expect(listed).toMatchObject({ structuredContent: { runner_id: runnerId, jobs: expect.any(Array), runner_context: { runner_id: runnerId, state: "offline" } } });
+    expect((listed.structuredContent?.jobs as Array<{ job_id?: string }>).some((job) => job.job_id === jobId)).toBe(true);
 
-    const duringGap = await mcpTool("job_get", { runner_id: runnerId, job_id: jobId as string }, clientB);
+    const duringGap = await mcpTool("job_get", { job_id: jobId as string }, clientB);
     expect(duringGap).toMatchObject({ structuredContent: { runner_state: "offline", source: "registry_snapshot" } });
+    const missingDuringGap = await mcpTool("job_get", { job_id: "job-00000000-0000-0000-0000-000000000000" }, clientB);
+    expect(missingDuringGap).toMatchObject({ isError: true, structuredContent: { error: { code: "not_found" } } });
 
     await waitFor(async () => (await mcpTool("runner_info", { runner_id: runnerId }, clientA)).structuredContent?.state === "online", 15_000, runnerOutput);
-    await waitFor(async () => (await mcpTool("job_get", { runner_id: runnerId, job_id: jobId as string }, clientB)).structuredContent?.status === "succeeded", 10_000);
-    const logs = await mcpTool("job_logs", { runner_id: runnerId, job_id: jobId as string, stream: "stdout", limit: 1024 }, clientB);
+    await waitFor(async () => (await mcpTool("runner_info", { runner_id: runnerId })).structuredContent?.state === "online", 15_000, runnerOutput);
+    await waitFor(async () => (await mcpTool("job_get", { job_id: jobId as string }, clientB)).structuredContent?.status === "succeeded", 10_000);
+    const logs = await mcpTool("job_logs", { job_id: jobId as string, stream: "stdout", limit: 1024 }, clientB);
     expect(logs.structuredContent?.data).toContain("completed-after-cross-client-reconnect");
     expect(runner?.exitCode).toBeNull();
   }, 35_000);
 
   it("keeps exec_start jobs alive after the MCP response closes and retrieves them from another stateless request", async () => {
     const started = await mcpTool("exec_start", {
-      runner_id: runnerId, workspace_id: "workspace-1", command: process.execPath,
+      workspace_id: "workspace-1", command: process.execPath,
       args: ["-e", "setTimeout(() => process.stdout.write('finished-after-mcp-close\\n'), 300)"],
     });
     const jobId = started.structuredContent?.job_id;
     expect(typeof jobId).toBe("string");
-    await waitFor(async () => (await mcpTool("job_get", { runner_id: runnerId, job_id: jobId as string })).structuredContent?.status === "succeeded", 10_000);
-    const logs = await mcpTool("job_logs", { runner_id: runnerId, job_id: jobId as string, stream: "stdout", limit: 1024 });
+    await waitFor(async () => (await mcpTool("job_get", { job_id: jobId as string })).structuredContent?.status === "succeeded", 10_000);
+    const logs = await mcpTool("job_logs", { job_id: jobId as string, stream: "stdout", limit: 1024 });
     expect(logs.structuredContent?.data).toContain("finished-after-mcp-close");
   });
 
   it("rejects MCP traversal at schema validation and rejects readonly patches at the actual runner", async () => {
-    const traversal = await mcpMessage("fs_read", { runner_id: runnerId, workspace_id: "workspace-1", path: "../outside", limit: 1 });
+    const traversal = await mcpMessage("fs_read", { workspace_id: "workspace-1", path: "../outside", limit: 1 });
     expect(traversal.result?.isError).toBe(true);
     expect(traversal.result?.content?.[0]?.text).toContain("traversal");
 
     const readonlyPatch = await mcpTool("fs_apply_patch", {
-      runner_id: runnerId, workspace_id: "readonly-1", patch: "*** Begin Patch\n*** Add File: forbidden.txt\n+x\n*** End Patch",
+      workspace_id: "readonly-1", patch: "*** Begin Patch\n*** Add File: forbidden.txt\n+x\n*** End Patch",
     });
     expect(readonlyPatch).toMatchObject({ isError: true, structuredContent: { error: { code: "readonly_workspace" } } });
   });
 
   it("paginates multibyte stdout to EOF and returns stderr", async () => {
     const job = await mcpTool("exec_start", {
-      runner_id: runnerId, workspace_id: "workspace-1", command: process.execPath,
+      workspace_id: "workspace-1", command: process.execPath,
       args: ["-e", "process.stdout.write('😀é😀'); process.stderr.write('stderr-page\\n')"],
     });
     const jobId = job.structuredContent?.job_id as string;
     expect(jobId).toEqual(expect.any(String));
-    await waitFor(async () => (await mcpTool("job_get", { runner_id: runnerId, job_id: jobId })).structuredContent?.status === "succeeded", 10_000);
+    await waitFor(async () => (await mcpTool("job_get", { job_id: jobId })).structuredContent?.status === "succeeded", 10_000);
     let cursor: string | undefined;
     let output = "";
     do {
-      const page = await mcpTool("job_logs", { runner_id: runnerId, job_id: jobId, stream: "stdout", ...(cursor === undefined ? {} : { cursor }), limit: 4 });
+      const page = await mcpTool("job_logs", { job_id: jobId, stream: "stdout", ...(cursor === undefined ? {} : { cursor }), limit: 4 });
       output += page.structuredContent?.data as string;
       const next = page.structuredContent?.next_cursor;
       cursor = typeof next === "string" ? next : undefined;
     } while (cursor !== undefined);
     expect(output).toBe("😀é😀");
-    const stderr = await mcpTool("job_logs", { runner_id: runnerId, job_id: jobId, stream: "stderr", limit: 1024 });
+    const stderr = await mcpTool("job_logs", { job_id: jobId, stream: "stderr", limit: 1024 });
     expect(stderr.structuredContent?.data).toBe("stderr-page\n");
   });
 
   it("paginates large real-runner logs and handles concurrent stateless MCP calls", async () => {
     const job = await mcpTool("exec_start", {
-      runner_id: runnerId, workspace_id: "workspace-1", command: process.execPath,
+      workspace_id: "workspace-1", command: process.execPath,
       args: ["-e", "process.stdout.write('x'.repeat(50000))"],
     });
     const jobId = job.structuredContent?.job_id;
     expect(typeof jobId).toBe("string");
     const jobIdValue = jobId as string;
-    await waitFor(async () => (await mcpTool("job_get", { runner_id: runnerId, job_id: jobIdValue })).structuredContent?.status === "succeeded", 10_000);
-    const first = await mcpTool("job_logs", { runner_id: runnerId, job_id: jobIdValue, stream: "stdout", limit: 65_536 });
+    await waitFor(async () => (await mcpTool("job_get", { job_id: jobIdValue })).structuredContent?.status === "succeeded", 10_000);
+    const first = await mcpTool("job_logs", { job_id: jobIdValue, stream: "stdout", limit: 65_536 });
     expect(first.structuredContent).toMatchObject({ truncated: true, offset: 0 });
     expect((first.structuredContent?.data as string).length).toBeLessThanOrEqual(16 * 1024);
     const next = first.structuredContent?.next_cursor;
     expect(typeof next).toBe("string");
-    const second = await mcpTool("job_logs", { runner_id: runnerId, job_id: jobIdValue, stream: "stdout", cursor: next, limit: 65_536 });
+    const second = await mcpTool("job_logs", { job_id: jobIdValue, stream: "stdout", cursor: next, limit: 65_536 });
     expect(second.structuredContent?.offset).toBe(16 * 1024);
 
-    const calls = await Promise.all(Array.from({ length: 8 }, () => mcpTool("fs_read", { runner_id: runnerId, workspace_id: "workspace-1", path: "note.txt", limit: 128 })));
+    const calls = await Promise.all(Array.from({ length: 8 }, () => mcpTool("fs_read", { workspace_id: "workspace-1", path: "note.txt", limit: 128 })));
     expect(calls.every((result) => result.isError !== true && result.structuredContent?.data === "hello from a real local runner\n")).toBe(true);
   });
 
@@ -230,10 +271,20 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     await stop(runner); runner = undefined;
     // Close handling is asynchronous across the runner socket and DO.
     await delay(200);
-    const offline = await mcpTool("fs_read", { runner_id: runnerId, workspace_id: "workspace-1", path: "note.txt", limit: 1 });
+    const offline = await mcpTool("fs_read", { workspace_id: "workspace-1", path: "note.txt", limit: 1 });
     expect(offline).toMatchObject({ isError: true, structuredContent: { error: { code: "runner_offline" } } });
   });
 
+  async function createBrowserRunnerEnrollment(): Promise<string> {
+    const { adminJar, csrf } = await adminCredentials();
+    const response = await submitForm("/admin/runners", { csrf_token: csrf, display_name: "Enrollment E2E Runner", runner_id: runnerId }, adminJar);
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).toContain("/runner/install.sh");
+    const code = /sh -s -- ([A-Za-z0-9_-]{43})/.exec(html)?.[1];
+    if (code === undefined) throw new Error("browser enrollment code absent");
+    return code;
+  }
   async function setupAdminAndClients(): Promise<{ readonly clientA: McpClient; readonly clientB: McpClient }> {
     const setupPage = await fetch(`${workerUrl}/`, { redirect: "manual" });
     expect(setupPage.status).toBe(200);
@@ -284,6 +335,16 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     });
     expect(response.status).toBe(200);
     return readMcp(response);
+  }
+
+  async function adminCredentials(): Promise<{ readonly adminJar: CookieJar; readonly csrf: string }> {
+    const loginPage = await fetch(`${workerUrl}/`, { redirect: "manual" });
+    const loginCsrf = formToken(await loginPage.text());
+    const loginCookie = cookieFrom(loginPage, "__Host-rcr_login_csrf");
+    const login = await submitForm("/login", { csrf_token: loginCsrf, password: adminPassword }, cookieJar([["__Host-rcr_login_csrf", loginCookie]]));
+    expect(login.status).toBe(303);
+    const csrf = cookieFrom(login, "__Host-rcr_admin_csrf");
+    return { adminJar: cookieJar([["__Host-rcr_admin_session", cookieFrom(login, "__Host-rcr_admin_session")], ["__Host-rcr_admin_csrf", csrf]]), csrf };
   }
 
   async function submitForm(path: string, fields: FormFields, cookies: CookieJar): Promise<Response> {
@@ -346,6 +407,13 @@ async function waitFor(predicate: () => boolean | Promise<boolean>, timeout: num
   throw new Error(`timed out after ${timeout}ms${output ? `\n${output}` : ""}`);
 }
 async function waitForWorker(detail: () => string): Promise<void> { await waitFor(async () => (await fetch(`${workerUrl}/health`).catch(() => undefined))?.ok === true, 15_000, detail); }
+async function waitForExit(child: ChildProcess, timeout: number, detail: () => string): Promise<void> {
+  await Promise.race([
+    new Promise<void>((resolveExit) => child.once("exit", () => resolveExit())),
+    delay(timeout).then(() => { throw new Error(`process did not exit after ${timeout}ms\n${detail()}`); }),
+  ]);
+}
+
 function collectOutput(child: ChildProcess): () => string {
   let output = "";
   const collect = (chunk: Buffer | string): void => { output = `${output}${chunk.toString()}`.slice(-8_192); };

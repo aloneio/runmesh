@@ -1,6 +1,10 @@
 export { reconnectDelayMs, RECONNECT_DELAYS_MS } from "./backoff.js";
 export { parseRunnerArgs, validateRunnerConfig } from "./config.js";
-export { discoverCapabilities, RunnerConnection } from "./connection.js";
+export { runCli, runEnrollCli, parseProductArgs } from "./cli.js";
+export { enrollRunner } from "./enrollment.js";
+export { ProfileStore, defaultWorkspaceId, profileDirectory, profilePath, redactedProfile, validateProfile, workspaceOptions } from "./profile.js";
+export { classifyConnectionFailure, discoverCapabilities, RunnerAuthenticationError, RunnerConnection } from "./connection.js";
+export { currentServicePlatform, hashContent, installServiceManifest, isManagedService, removeServiceManifest, renderService, serviceCommands, servicePath } from "./service.js";
 export { FilesystemService } from "./filesystem.js";
 export { GitService } from "./git-service.js";
 export { JobManager } from "./jobs.js";
@@ -8,5 +12,6 @@ export { PatchService } from "./patch-service.js";
 export { PathPolicy, PathPolicyError } from "./path-policy.js";
 export { RunnerRuntime, RpcRuntimeError, rpcError } from "./runtime.js";
 export type { RawRunnerOptions, RunnerConfig, WorkspaceConfig, WorkspaceOption } from "./config.js";
+export type { RunnerProfile, StoredWorkspace, ProfileStoreOptions } from "./profile.js";
 export type { JobEvent, JobManagerOptions, JobRecord, LocalJobStatus } from "./jobs.js";
 export type { RunnerConnectionOptions } from "./connection.js";

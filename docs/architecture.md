@@ -1,7 +1,7 @@
 # Architecture
 
 ```text
-MCP client with per-client secret URL
+MCP client with per-client secret URL and sticky active_runner_id
         │ stateless MCP over HTTPS
         ▼
 Cloudflare Worker
@@ -11,6 +11,7 @@ Cloudflare Worker
         │ outbound-only WSS
         ▼
 Local Runner
+  ├─ profile/credential store
   ├─ workspace/path policy
   ├─ filesystem and UTF-8 paging
   ├─ transactional patch and Git
@@ -22,19 +23,43 @@ Local Runner
 - The Worker is the only public MCP server; a Runner is never an MCP/HTTP/auth server.
 - Cloudflare is a control plane. CPU, filesystem, Git, processes, and complete logs stay on the Runner.
 - MCP HTTP is stateless. Each request authenticates its path secret and creates a fresh `McpServer` through `createMcpHandler`.
-- MCP client authentication is single-user/self-hosted: first-time admin password plus independent `/<secret>/mcp` client URLs. There is no OAuth or KV dependency.
-- Runner authentication remains the existing independent enrollment-token, verifier, credential-version, epoch, rotation, and revocation design.
-- A Job belongs to the single admin instance/workspace domain, not to a chat session. `created_by_client_id` is audit metadata, not an ownership restriction.
+- MCP client authentication is single-user/self-hosted: first-time admin password plus independent `/<secret>/mcp` client URLs. There is no OAuth lane.
+- Each MCP client stores one sticky active Runner selection. `runner_list`, `runner_current`, and `runner_select` manage this routing state; changing a non-null selection requires explicit confirmation. Ordinary tools resolve the selection and retain `workspace_id` parameters but do not expose ordinary per-call `runner_id` inputs.
+- Selected Runner failure never triggers fallback to another Runner. Explicit selection is required after an offline, stale, revoked, or unavailable selection. Deleting a Runner clears affected client selections. The only convenience auto-selection is the unselected, exactly-one-registered-Runner case.
+- Runner authentication remains independent: enrollment codes are short-lived/single-use; the resulting token uses a verifier, credential version, connection epoch, rotation, and revocation design.
+- A Job belongs to the single-admin instance/workspace domain, not to a chat session. `created_by_client_id` is audit metadata, not an ownership restriction. Clients sharing a Runner and scopes share its workspace/job context.
 - Runner local disk is authoritative. RegistryDO stores bounded historical metadata and never treats a bounded sync omission as immediate job deletion.
+- The dashboard is a browser control plane for metadata and code/manifest rendering. It does not execute arbitrary host installers or every rendered lifecycle command.
+
+## Enrollment and local control plane
+
+The dashboard adds a Runner with a stable safe ID and `display_name`, then creates a 30-minute, single-use enrollment code. Regeneration deletes any unused code for that Runner before inserting the replacement. `POST /runner/enroll` atomically redeems the code and returns a new Runner token; the packaged CLI's supported flow is `coding-runner enroll --server ... --code ...`, which stores a local profile and initial workspace.
+
+The Worker exposes public, secret-free `/runner/install.sh` and `/runner/install.ps1` bootstrap scripts. Dashboard enrollment renders a platform-specific command that passes the one-time code only as an argument. The scripts require Node.js/npm already installed, retrieve an operator-configured stable package descriptor from `/runner/releases/latest`, enroll, write the managed per-user service manifest, and render the manual activation command. There is no built-in public package channel: until `RUNNER_PACKAGE_SPEC` is configured to an exact package version or approved HTTPS tarball (with name/version metadata when needed), the descriptor is non-distributable and scripts fail rather than fetching GitHub main.
+
+The local CLI has implemented profile/status/doctor/workspace/env/start commands and a service-manifest adapter. It writes managed per-user systemd/LaunchAgent/Scheduled Task manifests and reports host lifecycle commands rather than executing each one. Bootstrap scripts do not automatically activate a host service.
+
+## State and migration
+
+RegistryDO SQLite tables cover Runners, workspace snapshots, jobs, admin settings/sessions, auth throttle state, MCP clients, and Runner enrollment records. Startup executes additive `PRAGMA table_info` checks and `ALTER TABLE`/`CREATE TABLE IF NOT EXISTS`/index repairs for known legacy layouts. There is no standalone versioned migration tool or downgrade procedure; upgrades should be backed up and rehearsed against deployed state.
+
+The authentication throttle reserves attempts transactionally before expensive password KDF work. Five failed attempts are admitted, then the per-kind (`setup` or `login`) block starts at 30 seconds and increases exponentially to a 15-minute maximum; success clears the state. It is not per-IP and not a full distributed rate limiter.
 
 ## Failure behavior
 
 - MCP/browser closes after `exec_start`: local job continues.
-- Runner WebSocket disconnects: local jobs/logs continue; live tools report `runner_offline`; `job_list` and last-known `job_get` metadata remain available from RegistryDO.
+- Runner WebSocket disconnects: local jobs/logs continue; live tools report the selected Runner as offline. No other Runner is tried. `job_list` and last-known `job_get` metadata remain available from Registry snapshots where permitted.
 - Runner reconnects: monotonic sync upserts workspaces and recent/active job metadata.
 - Runner process restarts: matching live jobs become `unknown`; reconciliation moves vanished jobs to `interrupted` without guessing the exit code. Recovered cancellation is reported as `cancelled` only with persisted delivery evidence.
+- Runner revocation: old transport credentials fail, the socket is closed, and synchronized workspace/job metadata is removed from RegistryDO; already-running local processes are not remotely killed by this metadata operation.
 - Worker/DO restart: in-flight bridge calls can fail, while Runner-local jobs continue. Callers should retry only safe/idempotent requests.
+
+## Security posture and excluded runtime
+
+Admin/MCP HTML uses no-store/referrer/no-sniff/frame protections and CSRF checks. The emitted dashboard uses inline style/script content, so its CSP currently requires `unsafe-inline`; replacing that with nonce/hash or external resources is deferred hardening.
+
+The deployed core uses Workers plus SQLite-backed Durable Objects only. It does not include OAuth, AI/model APIs, Cloudflare Sandbox, Cloudflare Containers, GitHub Actions runtime, KV, D1, R2, Queues, Dynamic Workers, tunnels, or inbound services. The Runner's workspace policy is not an OS sandbox; operators must provide external isolation for hostile code.
 
 ## Free Plan posture
 
-The deployed core uses Workers and SQLite-backed Durable Objects only. WebSocket Hibernation reduces idle connection cost; local Runners carry execution/data cost. Capacity still depends on account-wide Cloudflare quotas and must be measured by the operator.
+WebSocket Hibernation reduces idle control-plane connection cost; local Runners carry execution and disk cost. Capacity still depends on account-wide Cloudflare quotas and must be measured by the operator. Local validation does not prove deployed quotas or restart/hibernation behavior.

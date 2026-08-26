@@ -2,6 +2,7 @@ import { McpServer, type AuthInfo, type ServerContext } from "@modelcontextproto
 import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS } from "@remote-coding-runtime/protocol";
 import { z } from "zod";
 import { internalHeaders, isSafeIdentifier } from "../security.js";
+import type { ActiveRunnerContext, McpClientActiveRunner, McpRunnerSelectionResult } from "../registry.js";
 import type { WorkerEnv } from "../runner-do.js";
 
 const CONTENT_LIMIT = 32 * 1024;
@@ -28,10 +29,12 @@ const destructiveAnnotations = { readOnlyHint: false, destructiveHint: true, ide
 
 /** The complete public MCP catalog. Do not add aliases: these names are the API. */
 const TOOL_SPECS = {
-  runner_list: { scope: "coding:read", description: "List registered runners and their last known connection state. No runner credentials are returned.", annotations: readAnnotations },
+  runner_list: { scope: "coding:read", description: "List registered runners and their last known connection state. No runner credentials are returned; no selection is required.", annotations: readAnnotations },
+  runner_current: { scope: "coding:read", description: "Return this MCP client's active runner selection, or null when no runner is selected. A revoked or deleted selection is reported unavailable without fallback.", annotations: readAnnotations },
+  runner_select: { scope: "coding:read", description: "Select this MCP client's active runner. The first selection is immediate; changing it requires confirm_switch=true.", annotations: writeAnnotations },
   runner_info: { scope: "coding:read", description: "Return safe, last-known metadata for one runner. Metadata never contains workspace roots or credentials.", annotations: readAnnotations },
-  workspace_list: { scope: "coding:read", description: "List the last synchronized workspace identifiers for a runner. Workspace roots are never exposed.", annotations: readAnnotations },
-  env_info: { rpc: "env.info", scope: "coding:read", description: "Read bounded environment and workspace capability information from a currently connected runner.", annotations: readAnnotations },
+  workspace_list: { scope: "coding:read", description: "List the active runner's last synchronized workspace identifiers. Workspace roots are never exposed.", annotations: readAnnotations },
+  env_info: { rpc: "env.info", scope: "coding:read", description: "Read bounded environment and workspace capability information from the active connected runner.", annotations: readAnnotations },
   fs_read: { rpc: "fs.read", scope: "coding:read", description: "Read a bounded UTF-8 byte range from a workspace-relative file on a connected runner.", annotations: readAnnotations },
   fs_list: { rpc: "fs.list", scope: "coding:read", description: "List a bounded page of a workspace-relative directory on a connected runner.", annotations: readAnnotations },
   fs_search: { rpc: "fs.search", scope: "coding:read", description: "Search bounded workspace-relative text files on a connected runner.", annotations: readAnnotations },
@@ -56,8 +59,7 @@ const OptionalRelativePathSchema = z.string().min(1).max(4096).optional().refine
 const CursorSchema = z.string().max(128).regex(/^\d+$/, "must be a numeric cursor").optional();
 const BoundedLimitSchema = z.number().int().min(1).max(65_536).optional();
 const RunnerInputSchema = z.object({ runner_id: RunnerIdSchema }).strict();
-const WorkspaceInputSchema = z.object({ runner_id: RunnerIdSchema }).strict();
-const JobInputSchema = z.object({ runner_id: RunnerIdSchema, job_id: z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "must be a safe job identifier") }).strict();
+const JobIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "must be a safe job identifier");
 
 export type McpAuth = Pick<AuthInfo, "clientId" | "scopes" | "expiresAt" | "resource" | "extra"> & { token: string };
 
@@ -68,29 +70,48 @@ export type McpAuth = Pick<AuthInfo, "clientId" | "scopes" | "expiresAt" | "reso
 export function createCodingMcpServer(env: WorkerEnv, auth: McpAuth): McpServer {
   const server = new McpServer({ name: "remote-coding-runtime", version: "0.1.0" });
 
-  register(server, "runner_list", z.object({}).strict(), async () => registryTool(env, "/runners"));
-  register(server, "runner_info", RunnerInputSchema, async ({ runner_id }) => registryTool(env, `/runners/${encodeURIComponent(runner_id)}`));
-  register(server, "workspace_list", WorkspaceInputSchema, async ({ runner_id }) => registryTool(env, `/runners/${encodeURIComponent(runner_id)}/workspaces`));
-
-  register(server, "env_info", RunnerInputSchema, async ({ runner_id }) => runnerTool(env, runner_id, "env.info", {}));
-  register(server, "fs_read", z.object({ runner_id: RunnerIdSchema, workspace_id: WorkspaceIdSchema, path: RelativePathSchema, cursor: CursorSchema, offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(262_144).optional() }).strict(), async ({ runner_id, ...params }) => runnerTool(env, runner_id, "fs.read", boundedReadParams(params, 32 * 1024)));
-  register(server, "fs_list", z.object({ runner_id: RunnerIdSchema, workspace_id: WorkspaceIdSchema, path: OptionalRelativePathSchema, cursor: CursorSchema, limit: z.number().int().min(1).max(1_000).optional() }).strict(), async ({ runner_id, ...params }) => runnerTool(env, runner_id, "fs.list", params));
-  register(server, "fs_search", z.object({ runner_id: RunnerIdSchema, workspace_id: WorkspaceIdSchema, path: OptionalRelativePathSchema, query: z.string().min(1).max(1_024) }).strict(), async ({ runner_id, ...params }) => runnerTool(env, runner_id, "fs.search", params));
-  register(server, "fs_apply_patch", z.object({ runner_id: RunnerIdSchema, workspace_id: WorkspaceIdSchema, patch: z.string().min(1).max(1_048_576), expected_hash: z.string().regex(/^[a-f0-9]{64}$/).optional(), expected_hashes: z.record(z.string().min(1).max(4096), z.string().regex(/^[a-f0-9]{64}$/).nullable()).optional() }).strict(), async ({ runner_id, ...params }) => runnerTool(env, runner_id, "fs.apply_patch", params));
-  register(server, "exec_start", z.object({ runner_id: RunnerIdSchema, workspace_id: WorkspaceIdSchema, cwd: OptionalRelativePathSchema, command: z.union([z.string().min(1).max(8_192), z.array(z.string().min(1).max(8_192)).min(1).max(256)]), args: z.array(z.string().max(8_192)).max(256).optional(), shell: z.boolean().optional() }).strict(), async ({ runner_id, ...params }) => runnerTool(env, runner_id, "exec.start", { ...params, created_by_client_id: auth.clientId }));
-  register(server, "exec_run", z.object({ runner_id: RunnerIdSchema, workspace_id: WorkspaceIdSchema, cwd: OptionalRelativePathSchema, command: z.union([z.string().min(1).max(8_192), z.array(z.string().min(1).max(8_192)).min(1).max(256)]), args: z.array(z.string().max(8_192)).max(256).optional(), shell: z.boolean().optional(), wait_ms: z.number().int().min(1).max(LOCAL_RUNNER_OPERATION_TIMEOUT_MS).optional() }).strict(), async ({ runner_id, ...params }) => runnerTool(env, runner_id, "exec.run", { ...params, created_by_client_id: auth.clientId }));
-  register(server, "job_list", z.object({ runner_id: RunnerIdSchema, workspace_id: WorkspaceIdSchema.optional(), status: z.enum(["queued", "running", "cancelling", "cancelled", "succeeded", "failed", "unknown", "interrupted"]).optional(), limit: z.number().int().min(1).max(100).optional() }).strict(), async ({ runner_id, ...filters }) => registryTool(env, registryJobsPath(runner_id, filters)));
-  register(server, "job_get", JobInputSchema, async ({ runner_id, job_id }) => {
-    const live = await callRunner(env, runner_id, "job.get", { job_id });
-    if (live.ok || live.error.code !== "runner_offline") return asToolResult(live);
-    const snapshot = await registryCall(env, `/runners/${encodeURIComponent(runner_id)}/jobs/${encodeURIComponent(job_id)}`);
-    return snapshot.ok ? success({ ...snapshot.value as Record<string, unknown>, source: "registry_snapshot", runner_state: "offline" }) : asToolResult(live);
+  register(server, "runner_list", z.object({}).strict(), async () => runnerListTool(env));
+  register(server, "runner_current", z.object({}).strict(), async () => {
+    const selection = await getActiveRunnerSelection(env, auth.clientId);
+    if (selection.ok) {
+      const current = selection.value as McpClientActiveRunner;
+      return success({
+        active_runner_id: current.active_runner_id,
+        active_runner_updated_at_ms: current.active_runner_updated_at_ms,
+        active_runner: current.runner,
+      });
+    }
+    return asToolResult(selection);
   });
-  register(server, "job_logs", z.object({ runner_id: RunnerIdSchema, job_id: JobInputSchema.shape.job_id, stream: z.enum(["stdout", "stderr"]).optional(), cursor: CursorSchema, offset: z.number().int().min(0).optional(), limit: BoundedLimitSchema, tail: z.boolean().optional() }).strict(), async ({ runner_id, ...params }) => runnerTool(env, runner_id, "job.logs", boundedReadParams(params, 16 * 1024)));
-  register(server, "job_cancel", JobInputSchema, async ({ runner_id, job_id }) => runnerTool(env, runner_id, "job.cancel", { job_id }));
-  register(server, "job_input", z.object({ runner_id: RunnerIdSchema, job_id: JobInputSchema.shape.job_id, data: z.string().max(65_536).optional(), close_stdin: z.boolean().optional() }).strict().refine((value) => value.data !== undefined || value.close_stdin === true, "data or close_stdin is required"), async ({ runner_id, ...params }) => runnerTool(env, runner_id, "job.input", params));
-  register(server, "git_status", z.object({ runner_id: RunnerIdSchema, workspace_id: WorkspaceIdSchema }).strict(), async ({ runner_id, ...params }) => runnerTool(env, runner_id, "git.status", params));
-  register(server, "git_diff", z.object({ runner_id: RunnerIdSchema, workspace_id: WorkspaceIdSchema, path: OptionalRelativePathSchema, staged: z.boolean().optional(), max_bytes: BoundedLimitSchema }).strict(), async ({ runner_id, ...params }) => runnerTool(env, runner_id, "git.diff", params));
+  register(server, "runner_select", z.object({ runner_id: RunnerIdSchema, confirm_switch: z.boolean().optional() }).strict(), async ({ runner_id, confirm_switch }) => {
+    const selection = await selectActiveRunner(env, auth.clientId, runner_id, confirm_switch === true);
+    if (selection.ok) {
+      const result = selection.value as { selection: McpClientActiveRunner; changed: boolean };
+      return success({ ...result.selection, changed: result.changed });
+    }
+    if (selection.error.code === "runner_switch_confirmation_required") {
+      const current = selection.error.details;
+      return failureWithDetails(selection.error.code, selection.error.message, selection.error.hint, current === undefined ? {} : { current_active_runner: current });
+    }
+    return asToolResult(selection);
+  });
+  register(server, "runner_info", RunnerInputSchema, async ({ runner_id }) => registryTool(env, `/runners/${encodeURIComponent(runner_id)}`));
+
+  register(server, "workspace_list", z.object({}).strict(), async () => activeRegistryTool(env, auth.clientId, (runnerId) => `/runners/${encodeURIComponent(runnerId)}/workspaces`));
+  register(server, "env_info", z.object({}).strict(), async () => activeRunnerTool(env, auth.clientId, "env.info", {}));
+  register(server, "fs_read", z.object({ workspace_id: WorkspaceIdSchema, path: RelativePathSchema, cursor: CursorSchema, offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(262_144).optional() }).strict(), async (params) => activeRunnerTool(env, auth.clientId, "fs.read", boundedReadParams(params, 32 * 1024)));
+  register(server, "fs_list", z.object({ workspace_id: WorkspaceIdSchema, path: OptionalRelativePathSchema, cursor: CursorSchema, limit: z.number().int().min(1).max(1_000).optional() }).strict(), async (params) => activeRunnerTool(env, auth.clientId, "fs.list", params));
+  register(server, "fs_search", z.object({ workspace_id: WorkspaceIdSchema, path: OptionalRelativePathSchema, query: z.string().min(1).max(1_024) }).strict(), async (params) => activeRunnerTool(env, auth.clientId, "fs.search", params));
+  register(server, "fs_apply_patch", z.object({ workspace_id: WorkspaceIdSchema, patch: z.string().min(1).max(1_048_576), expected_hash: z.string().regex(/^[a-f0-9]{64}$/).optional(), expected_hashes: z.record(z.string().min(1).max(4096), z.string().regex(/^[a-f0-9]{64}$/).nullable()).optional() }).strict(), async (params) => activeRunnerTool(env, auth.clientId, "fs.apply_patch", params));
+  register(server, "exec_start", z.object({ workspace_id: WorkspaceIdSchema, cwd: OptionalRelativePathSchema, command: z.union([z.string().min(1).max(8_192), z.array(z.string().min(1).max(8_192)).min(1).max(256)]), args: z.array(z.string().max(8_192)).max(256).optional(), shell: z.boolean().optional() }).strict(), async (params) => activeRunnerTool(env, auth.clientId, "exec.start", { ...params, created_by_client_id: auth.clientId }));
+  register(server, "exec_run", z.object({ workspace_id: WorkspaceIdSchema, cwd: OptionalRelativePathSchema, command: z.union([z.string().min(1).max(8_192), z.array(z.string().min(1).max(8_192)).min(1).max(256)]), args: z.array(z.string().max(8_192)).max(256).optional(), shell: z.boolean().optional(), wait_ms: z.number().int().min(1).max(LOCAL_RUNNER_OPERATION_TIMEOUT_MS).optional() }).strict(), async (params) => activeRunnerTool(env, auth.clientId, "exec.run", { ...params, created_by_client_id: auth.clientId }));
+  register(server, "job_list", z.object({ workspace_id: WorkspaceIdSchema.optional(), status: z.enum(["queued", "running", "cancelling", "cancelled", "succeeded", "failed", "unknown", "interrupted"]).optional(), limit: z.number().int().min(1).max(100).optional() }).strict(), async (filters) => activeRegistryTool(env, auth.clientId, (runnerId) => registryJobsPath(runnerId, filters), true));
+  register(server, "job_get", z.object({ job_id: JobIdSchema }).strict(), async ({ job_id }) => activeJobGet(env, auth.clientId, job_id));
+  register(server, "job_logs", z.object({ job_id: JobIdSchema, stream: z.enum(["stdout", "stderr"]).optional(), cursor: CursorSchema, offset: z.number().int().min(0).optional(), limit: BoundedLimitSchema, tail: z.boolean().optional() }).strict(), async (params) => activeRunnerTool(env, auth.clientId, "job.logs", boundedReadParams(params, 16 * 1024)));
+  register(server, "job_cancel", z.object({ job_id: JobIdSchema }).strict(), async (params) => activeRunnerTool(env, auth.clientId, "job.cancel", params));
+  register(server, "job_input", z.object({ job_id: JobIdSchema, data: z.string().max(65_536).optional(), close_stdin: z.boolean().optional() }).strict().refine((value) => value.data !== undefined || value.close_stdin === true, "data or close_stdin is required"), async (params) => activeRunnerTool(env, auth.clientId, "job.input", params));
+  register(server, "git_status", z.object({ workspace_id: WorkspaceIdSchema }).strict(), async (params) => activeRunnerTool(env, auth.clientId, "git.status", params));
+  register(server, "git_diff", z.object({ workspace_id: WorkspaceIdSchema, path: OptionalRelativePathSchema, staged: z.boolean().optional(), max_bytes: BoundedLimitSchema }).strict(), async (params) => activeRunnerTool(env, auth.clientId, "git.diff", params));
 
   return server;
 
@@ -106,11 +127,106 @@ export function createCodingMcpServer(env: WorkerEnv, auth: McpAuth): McpServer 
       }
       try {
         return await action(input as z.output<Input>);
-      } catch (error) {
+      } catch {
         return failure("internal_error", "The MCP tool could not complete the request.", "Retry the request. If the problem persists, contact the service operator.");
       }
     });
   }
+}
+
+type ActiveSelection = {
+  readonly runnerId: string;
+  readonly context: ActiveRunnerContext & { readonly automatic_selection: boolean };
+};
+type SelectionCall = ToolSuccess | ToolFailure;
+type ActiveSelectionCall = { readonly ok: true; readonly value: ActiveSelection } | ToolFailure;
+
+async function getActiveRunnerSelection(env: WorkerEnv, clientId: string): Promise<SelectionCall> {
+  const call = await registryCall(env, `/auth/clients/${encodeURIComponent(clientId)}/active-runner`);
+  if (!call.ok) return call;
+  return { ok: true, value: call.value as McpClientActiveRunner };
+}
+
+async function selectActiveRunner(env: WorkerEnv, clientId: string, runnerId: string, confirmSwitch: boolean): Promise<SelectionCall> {
+  const call = await registryPostCall(env, `/auth/clients/${encodeURIComponent(clientId)}/active-runner`, { runner_id: runnerId, confirm_switch: confirmSwitch });
+  if (call.ok) {
+    const result = call.value as McpRunnerSelectionResult;
+    if (result.ok) return { ok: true, value: result };
+    if (result.code === "runner_switch_confirmation_required") return failWithDetails(result.code, "Switching the active runner requires confirmation.", "Retry with confirm_switch=true to switch runners.", result.selection);
+    return fail(result.code, "The runner selection could not be changed.", "Call runner_list and choose an available runner.");
+  }
+  return call;
+}
+
+async function resolveActiveRunner(env: WorkerEnv, clientId: string, allowOfflineSnapshot = false): Promise<ActiveSelectionCall> {
+  const initial = await getActiveRunnerSelection(env, clientId);
+  if (!initial.ok) return initial;
+  let state = initial.value as McpClientActiveRunner;
+  let automatic = false;
+  if (state.active_runner_id === null) {
+    const runners = await registryCall(env, "/runners");
+    if (!runners.ok) return runners;
+    const list = isRecord(runners.value) && Array.isArray(runners.value.runners) ? runners.value.runners : [];
+    if (list.length === 0) {
+      return fail("no_runners_available", "No registered runners are available.", "Register a runner, then call runner_list and runner_select.");
+    }
+    if (list.length !== 1 || !isRecord(list[0]) || typeof list[0].runner_id !== "string") {
+      return fail("runner_not_selected", "No active runner is selected.", "Call runner_list, then runner_select with the desired runner_id.");
+    }
+    const selected = await selectActiveRunner(env, clientId, list[0].runner_id, false);
+    if (!selected.ok) return selected;
+    state = (selected.value as { selection: McpClientActiveRunner }).selection;
+    automatic = true;
+  }
+  const context = state.runner;
+  if (context === null || context.state === "unavailable") {
+    return failWithDetails("runner_unavailable", "The selected runner is unavailable.", "Call runner_current to inspect the selection; select another runner explicitly if needed.", { runner_context: { ...(context ?? { runner_id: state.active_runner_id, state: "unavailable", available: false, updated_at_ms: state.active_runner_updated_at_ms }), automatic_selection: automatic } });
+  }
+  if (context.state !== "online" && !allowOfflineSnapshot) {
+    return failWithDetails("runner_offline", "The selected runner is not connected.", "Confirm the selected runner is connected, then retry.", { runner_context: { ...context, automatic_selection: automatic } });
+  }
+  return { ok: true, value: { runnerId: context.runner_id, context: { ...context, automatic_selection: automatic } } };
+}
+
+function runnerSuccess(value: unknown, selection: ActiveSelection): unknown {
+  if (isRecord(value)) return success({ ...value, runner_context: selection.context });
+  return success({ data: value, runner_context: selection.context });
+}
+function runnerFailure(error: ToolFailure["error"], selection: ActiveSelection): unknown {
+  return failureWithDetails(error.code, error.message, error.hint, { runner_context: selection.context });
+}
+
+async function activeRunnerTool(env: WorkerEnv, clientId: string, method: string, params: Record<string, unknown>): Promise<unknown> {
+  const selected = await resolveActiveRunner(env, clientId);
+  if (!selected.ok) return asToolResult(selected);
+  const call = await callRunner(env, selected.value.runnerId, method, params);
+  return call.ok ? runnerSuccess(call.value, selected.value) : runnerFailure(call.error, selected.value);
+}
+
+async function activeRegistryTool(env: WorkerEnv, clientId: string, path: (runnerId: string) => string, allowOfflineSnapshot = false): Promise<unknown> {
+  const selected = await resolveActiveRunner(env, clientId, allowOfflineSnapshot);
+  if (!selected.ok) return asToolResult(selected);
+  const call = await registryCall(env, path(selected.value.runnerId));
+  return call.ok ? runnerSuccess(call.value, selected.value) : runnerFailure(call.error, selected.value);
+}
+
+async function activeJobGet(env: WorkerEnv, clientId: string, jobId: string): Promise<unknown> {
+  const selected = await resolveActiveRunner(env, clientId, true);
+  if (!selected.ok) return asToolResult(selected);
+  if (selected.value.context.state !== "online") {
+    const snapshot = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/jobs/${encodeURIComponent(jobId)}`);
+    return snapshot.ok
+      ? runnerSuccess({ ...(snapshot.value as Record<string, unknown>), source: "registry_snapshot", runner_state: "offline" }, selected.value)
+      : snapshot.error.code === "not_found"
+        ? runnerFailure(snapshot.error, selected.value)
+        : runnerFailure(fail("runner_offline", "The selected runner is not connected.", "Confirm the selected runner is connected, then retry.").error, selected.value);
+  }
+  const live = await callRunner(env, selected.value.runnerId, "job.get", { job_id: jobId });
+  if (live.ok || live.error.code !== "runner_offline") return live.ok ? runnerSuccess(live.value, selected.value) : runnerFailure(live.error, selected.value);
+  const snapshot = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/jobs/${encodeURIComponent(jobId)}`);
+  return snapshot.ok
+    ? runnerSuccess({ ...(snapshot.value as Record<string, unknown>), source: "registry_snapshot", runner_state: "offline" }, selected.value)
+    : runnerFailure(live.error, selected.value);
 }
 
 function isSafeRelativePath(value: string): boolean {
@@ -124,12 +240,8 @@ function boundedReadParams(params: Record<string, unknown>, max: number): Record
   return { ...params, limit: Math.min(requested, max) };
 }
 
-async function runnerTool(env: WorkerEnv, runnerId: string, method: string, params: Record<string, unknown>): Promise<unknown> {
-  return asToolResult(await callRunner(env, runnerId, method, params));
-}
-
 type ToolSuccess = { readonly ok: true; readonly value: unknown };
-type ToolFailure = { readonly ok: false; readonly error: { readonly code: string; readonly message: string; readonly hint: string } };
+type ToolFailure = { readonly ok: false; readonly error: { readonly code: string; readonly message: string; readonly hint: string; readonly details?: unknown } };
 type ToolCall = ToolSuccess | ToolFailure;
 
 const SAFE_RUNNER_ERROR_CODES = new Set([
@@ -172,6 +284,19 @@ function registryJobsPath(runnerId: string, filters: Record<string, unknown>): s
   return `/runners/${encodeURIComponent(runnerId)}/jobs${suffix}`;
 }
 
+async function runnerListTool(env: WorkerEnv): Promise<unknown> {
+  const call = await registryCall(env, "/runners");
+  if (!call.ok) return asToolResult(call);
+  const value = isRecord(call.value) && Array.isArray(call.value.runners) ? call.value.runners : [];
+  const runners = value.filter(isRecord).map((runner) => {
+    const runnerId = typeof runner.runner_id === "string" ? runner.runner_id : "unknown";
+    const displayName = typeof runner.display_name === "string" && runner.display_name.length > 0 ? runner.display_name : runnerId;
+    const state = runner.state === "online" || runner.state === "offline" || runner.state === "stale" ? runner.state : "unavailable";
+    return { runner_id: runnerId, display_name: displayName, state, available: state === "online", updated_at_ms: typeof runner.updated_at_ms === "number" ? runner.updated_at_ms : null };
+  });
+  return success({ runners });
+}
+
 async function registryTool(env: WorkerEnv, path: string): Promise<unknown> {
   return asToolResult(await registryCall(env, path));
 }
@@ -190,8 +315,22 @@ async function registryCall(env: WorkerEnv, path: string): Promise<ToolCall> {
   }
 }
 
+async function registryPostCall(env: WorkerEnv, path: string, input: Record<string, unknown>): Promise<ToolCall> {
+  if (env.INTERNAL_CONTROL_SECRET === undefined || env.INTERNAL_CONTROL_SECRET.length === 0) return fail("service_unavailable", "The registry is not configured.", "Ask the service operator to configure the internal bridge.");
+  const body = JSON.stringify(input);
+  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "POST", path, body);
+  try {
+    const response = await env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method: "POST", headers, body }));
+    const value = await json(response);
+    if (isRecord(value) && typeof value.code === "string") return { ok: true, value };
+    if (response.ok || response.status === 409) return { ok: true, value };
+    return fail(response.status === 404 ? "not_found" : "registry_unavailable", "The registry is unavailable.", "Retry shortly.");
+  } catch { return fail("registry_unavailable", "The registry is unavailable.", "Retry shortly."); }
+}
 function asToolResult(call: ToolCall): unknown {
-  return call.ok ? success(call.value) : failure(call.error.code, call.error.message, call.error.hint);
+  return call.ok ? success(call.value) : call.error.details === undefined
+    ? failure(call.error.code, call.error.message, call.error.hint)
+    : failureWithDetails(call.error.code, call.error.message, call.error.hint, call.error.details);
 }
 
 function success(value: unknown): { content: { type: "text"; text: string }[]; structuredContent: Record<string, unknown> } {
@@ -205,6 +344,12 @@ function failure(code: string, message: string, hint: string): { content: { type
   return { content: [{ type: "text", text: `Error (${code}): ${error.error.message}\nRecovery: ${error.error.recovery_hint}` }], structuredContent: error, isError: true };
 }
 
+function failureWithDetails(code: string, message: string, hint: string, details: unknown): { content: { type: "text"; text: string }[]; structuredContent: Record<string, unknown>; isError: true } {
+  const error = { error: { code, message: message.slice(0, 4_096), recovery_hint: hint.slice(0, 4_096), details: redactAndBound(details, 8_192) } };
+  return { content: [{ type: "text", text: `Error (${code}): ${error.error.message}\nRecovery: ${error.error.recovery_hint}` }], structuredContent: error, isError: true };
+}
+
+function failWithDetails(code: string, message: string, hint: string, details: unknown): ToolFailure { return { ok: false, error: { code, message, hint, details } }; }
 function fail(code: string, message: string, hint: string): ToolFailure { return { ok: false, error: { code, message, hint } }; }
 function hintFor(code: string): string {
   if (code === "runner_offline" || code === "timeout") return "Confirm the runner is connected, then retry.";
@@ -242,7 +387,7 @@ function redact(value: unknown, seen: WeakSet<object>): unknown {
   seen.add(value);
   const output: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value)) {
-    if (/(?:token|secret|password|verifier|root)/i.test(key)) continue;
+    if (/(?:token|secret|password|verifier|root|cwd|command|pid|process_start_fingerprint|recovery_liveness)/i.test(key)) continue;
     output[key] = redact(item, seen);
   }
   return output;

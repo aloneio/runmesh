@@ -15,6 +15,17 @@ import { reconnectDelayMs } from "./backoff.js";
 import type { RunnerConfig } from "./config.js";
 import { RunnerRuntime, rpcError } from "./runtime.js";
 
+export class RunnerAuthenticationError extends Error {
+  public constructor(message = "runner credentials were rejected") { super(message); this.name = "RunnerAuthenticationError"; }
+}
+
+/** Authentication failures must not enter normal network reconnect backoff. */
+export function classifyConnectionFailure(input: { readonly statusCode?: number; readonly closeCode?: number; readonly reason?: string; readonly error?: unknown }): "authentication" | "network" {
+  if (input.statusCode === 401 || input.statusCode === 403 || input.closeCode === 4001) return "authentication";
+  const message = `${input.reason ?? ""} ${input.error instanceof Error ? input.error.message : ""}`.toLowerCase();
+  return /credential|auth(?:entication|orization)?|revoked|forbidden|unauthorized|stale session/.test(message) ? "authentication" : "network";
+}
+
 export interface RunnerConnectionOptions {
   readonly config: RunnerConfig;
   readonly version?: string;
@@ -71,9 +82,13 @@ export class RunnerConnection {
       try {
         await this.connectOnce();
         this.reconnectAttempt = 0;
-      } catch {
+      } catch (error) {
         this.onStateChange("offline");
         if (this.stopped) break;
+        if (error instanceof RunnerAuthenticationError || classifyConnectionFailure({ error }) === "authentication") {
+          this.stopped = true;
+          throw error;
+        }
         await this.sleep(reconnectDelayMs(this.reconnectAttempt, this.random()));
         this.reconnectAttempt += 1;
       }
@@ -122,7 +137,9 @@ export class RunnerConnection {
   private connectOnce(): Promise<void> {
     return new Promise((resolve, reject) => {
       const url = new URL(this.config.server);
-      url.pathname = url.pathname.endsWith("/") ? `${url.pathname}runner/connect` : `${url.pathname}/runner/connect`;
+      if (!url.pathname.replace(/\/+$/, "").endsWith("/runner/connect")) {
+        url.pathname = url.pathname.endsWith("/") ? `${url.pathname}runner/connect` : `${url.pathname}/runner/connect`;
+      }
       url.searchParams.set("runner_id", this.config.runnerId);
       const socket = new WebSocket(url, { headers: { Authorization: `Bearer ${this.config.token}` } });
       this.socket = socket;
@@ -134,6 +151,14 @@ export class RunnerConnection {
           reject(error);
         }
       };
+      socket.once("unexpected-response", (_request, response) => {
+        const statusCode = response.statusCode;
+        const error = classifyConnectionFailure(statusCode === undefined ? {} : { statusCode }) === "authentication"
+          ? new RunnerAuthenticationError(`runner authentication failed (${response.statusCode})`)
+          : new Error(`runner connection failed (${response.statusCode})`);
+        socket.terminate();
+        fail(error);
+      });
       socket.once("open", () => {
         const hello: WireMessage = {
           type: "runner.hello",
@@ -179,14 +204,18 @@ export class RunnerConnection {
         this.rejectPendingForSocket(socket, error);
         if (!welcomed) fail(error);
       });
-      socket.once("close", () => {
+      socket.once("close", (code: number, reason: Buffer) => {
         if (this.heartbeatTimer !== undefined) clearInterval(this.heartbeatTimer);
         if (this.syncTimer !== undefined) clearInterval(this.syncTimer);
         this.heartbeatTimer = undefined;
         this.syncTimer = undefined;
         this.rejectPendingForSocket(socket, new Error("runner connection closed"));
         if (this.socket === socket) this.socket = undefined;
-        if (!this.stopped) fail(new Error(welcomed ? "connection closed" : "connection closed before welcome"));
+        const closeReason = reason.toString("utf8");
+        const failure = classifyConnectionFailure({ closeCode: code, reason: closeReason }) === "authentication"
+          ? new RunnerAuthenticationError("runner credentials were revoked or rejected")
+          : new Error(welcomed ? "connection closed" : "connection closed before welcome");
+        if (!this.stopped) fail(failure);
         else if (!settled) {
           settled = true;
           resolve();

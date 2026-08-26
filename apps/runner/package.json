@@ -22,6 +22,8 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc -b",
+    "prepack": "npm run build && rm -f dist/*.tsbuildinfo dist/.tsbuildinfo",
+    "pack:check": "npm run prepack && npm pack --dry-run",
     "test": "vitest run --config vitest.config.ts",
     "typecheck": "tsc -b --pretty false",
     "start": "tsx src/cli.ts start"

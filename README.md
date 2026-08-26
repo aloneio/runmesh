@@ -1,6 +1,6 @@
 # Remote Coding Runtime
 
-A model-neutral, client-neutral remote coding runtime with one stable Cloudflare control plane and outbound-only local Runners.
+A model-neutral, client-neutral remote coding runtime with one Cloudflare control plane and outbound-only local Runners.
 
 ```text
 ChatGPT / Claude / Cursor / any MCP client
@@ -14,19 +14,13 @@ Local Runner
   filesystem · transactional patch · Git · process · persistent jobs
 ```
 
-Cloudflare does not execute code or call an AI model. The MCP client performs reasoning; the Runner performs filesystem, Git, and process work. Closing the browser, chat, MCP request, or Runner WebSocket does not stop a job that has already been started.
+Cloudflare does not execute code or call an AI model. The MCP client performs reasoning; the Runner performs filesystem, Git, and process work. Closing a browser, chat, MCP request, or Runner WebSocket does not stop an already started local job.
 
-## Architecture
+## Quick start
 
-- **Worker:** the only public MCP/control-plane endpoint. It authenticates MCP client URLs, serves the small admin UI, and routes bounded RPC messages.
-- **RegistryDO:** SQLite metadata for Runners, workspaces, historical jobs, administrator password/session state, and MCP client credentials.
-- **RunnerDO:** one hibernatable Durable Object per Runner. It owns the current outbound Runner WebSocket and correlated RPC bridge; it never executes coding work.
-- **Runner:** an outbound-only Node process with trusted workspace mappings, path confinement, patch/Git services, local subprocesses, and persistent logs/job metadata.
-- **Protocol:** `packages/protocol` provides strict TypeScript schemas and a generated language-neutral JSON Schema for future Go/Rust Runners.
+This is the preferred dashboard-led setup path. It intentionally puts deployment, initial dashboard setup, Runner enrollment, MCP-client creation, and Runner selection in that order.
 
-The Cloudflare core uses only Workers plus SQLite-backed Durable Objects. It does not use OAuth, KV, D1, Queues, R2, Sandbox, Containers, Dynamic Workers, tunnels, inbound SSH, GitHub Actions runtime, or AI model APIs.
-
-## Deploy
+### 1. Deploy the control plane
 
 Requirements: Node.js 20+, npm, Git, Wrangler, and a Cloudflare account with SQLite-backed Durable Objects enabled.
 
@@ -38,130 +32,80 @@ npm test
 npm run typecheck
 npm run build
 npm run validate:worker
-```
 
-Configure the three production secrets used by Runner administration and the internal control channel:
-
-```sh
 cd apps/worker
 npx wrangler secret put ADMIN_TOKEN
 npx wrangler secret put RUNNER_TOKEN_PEPPER
 npx wrangler secret put INTERNAL_CONTROL_SECRET
-```
-
-Then deploy only when ready:
-
-```sh
 npx wrangler deploy --config wrangler.jsonc
 ```
 
-`npm run validate:worker` runs Wrangler with `--dry-run`. Verify its output contains `--dry-run: exiting now`; it does not prove a deployed account's quotas or production network behavior.
+`npm run validate:worker` is local Wrangler `--dry-run` validation. It does not deploy, prove a Cloudflare account's quotas, validate edge logging, or test Internet MCP clients. Deployment and deployed acceptance remain operator work.
 
-## First setup
+### 2. Set up the dashboard
 
-Open the deployed root URL, for example:
+Open the deployed root URL, such as `https://mcp.example.com/`. A new RegistryDO presents **Create administrator password**. The first valid setup request wins atomically, so initialize it immediately after deployment.
 
-```text
-https://mcp.aloneio.com/
-```
+The dashboard is the browser administration lane: it creates MCP clients, adds and renames Runners, generates enrollment codes, rotates/revokes/deletes Runners, and shows safe Runner/job metadata. It uses the administrator password and browser session; it is separate from `ADMIN_TOKEN`, Runner credentials, and MCP URL secrets.
 
-A fresh RegistryDO displays:
+### 3. Add a Runner and redeem its one-time enrollment code
 
-```text
-Welcome to Remote Coding Runtime
-Create administrator password
-```
+In **Admin → Runners → Add Runner**, provide a human-facing `display_name` and optionally a safe Runner ID. The display name is what the dashboard and `runner_list` show; the Runner ID is the stable protocol identifier.
 
-The first valid setup request wins atomically. No bootstrap password is required. Set the password immediately after deployment. If an uninitialized public instance is claimed by somebody else, delete/reset its Cloudflare state and redeploy.
+The dashboard displays an enrollment code once. It is single-use, expires after 30 minutes, and **Regenerate enrollment** invalidates any still-unused code for that Runner before creating a replacement. Run the rendered public bootstrap command from the directory that should become the initial local workspace. Linux and macOS use the `/runner/install.sh` command; Windows uses `/runner/install.ps1`. Each script receives the code only as its command argument, requires an existing Node.js 20+ / npm runtime, then calls `coding-runner enroll --server .../runner/enroll --code ...` and `coding-runner install`.
 
-Passwords are not stored in plaintext. The Registry stores a versioned PBKDF2-HMAC-SHA-256 verifier with a random salt. Login creates a random seven-day opaque session; the browser receives a `Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/` cookie, while RegistryDO stores only its SHA-256 hash. Password changes revoke every existing session.
+The Worker does not publish a public package itself. Configure a stable distributable `RUNNER_PACKAGE_SPEC` (exact `package@x.y.z`, or an HTTPS `.tgz` with matching `RUNNER_PACKAGE_NAME` / `RUNNER_PACKAGE_VERSION`) before using the bootstrap scripts. Until configured, `/runner/releases/latest` marks the descriptor non-distributable and the scripts fail instead of downloading GitHub `main`. Installers are per-user and print, but do not run, the systemd-user, LaunchAgent, or Scheduled Task activation command.
 
-Admin state-changing requests use a session-bound CSRF token and same-origin checks. Setup and login also use short-lived pre-auth CSRF cookies.
+The Runner uses only outbound Internet access and never exposes HTTP, MCP, OAuth, SSH, or inbound ports. Production profiles require `wss://`; `ws://` is limited to loopback development with `--insecure-local`.
 
-## Add a Runner
+### 4. Create an MCP URL
 
-Runner authentication remains independent from admin login and MCP client credentials. Enroll or rotate a Runner through the `ADMIN_TOKEN`-protected API:
-
-```sh
-curl -sS -X POST https://mcp.aloneio.com/admin/runners \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"runner_id":"home-pc"}'
-```
-
-The plaintext Runner token is returned only by successful enrollment/rotation. Store it securely, then start the Runner:
-
-```sh
-CODING_RUNNER_TOKEN='returned-runner-token' \
-  npx tsx apps/runner/src/cli.ts start \
-  --server wss://mcp.aloneio.com \
-  --runner-id home-pc \
-  --workspace zero=/home/me/code/zero\;writable\;noshell
-```
-
-Workspace syntax:
+In **Admin → MCP Clients**, create a client label (for example `ChatGPT Web`), choose `coding:read`, `coding:write`, and/or `coding:exec`, then copy the generated URL immediately:
 
 ```text
---workspace id=path[;readonly|writable][;shell|noshell]
+https://mcp.example.com/<43-character-base64url-secret>/mcp
 ```
 
-Defaults are `readonly;noshell`. Production requires `wss://`; cleartext `ws://` is accepted only for loopback together with `--insecure-local`.
+Configure that URL directly in the MCP client. No OAuth flow, callback, or extra Bearer header is required. Create a separate URL for each client/device. The raw URL is displayed only when creating or rotating the client.
 
-The Runner needs only outbound Internet access. It does not expose HTTP, MCP, OAuth, SSH, or inbound ports.
+### 5. Select the Runner from the MCP client
 
-## Create MCP clients
-
-Log in at `/`, then use the `/admin` dashboard:
-
-1. Enter a name such as `ChatGPT Web`, `Claude`, or `Cursor Desktop`.
-2. Select `Read`, `Write`, and/or `Execute` scopes.
-3. Press **Create**.
-4. Copy the generated URL immediately. It is shown once.
-
-Example:
+Start with the routing tools:
 
 ```text
-https://mcp.aloneio.com/fJ3...43-character-base64url-secret...x92/mcp
+runner_list()
+runner_current()
+runner_select({"runner_id":"home-pc"})
 ```
 
-Configure only that URL in the MCP client. No OAuth flow, callback, or extra Bearer header is required. Each client must have its own URL:
+The first selection is immediate. Changing an already selected Runner requires an explicit confirmation:
 
 ```text
-ChatGPT → secret A
-Claude  → secret B
-Cursor  → secret C
+runner_select({"runner_id":"other-pc","confirm_switch":true})
 ```
 
-The dashboard supports:
+When a client has no selection and there is exactly one registered Runner, the first ordinary Runner-backed tool may persistently select that one Runner. With zero or multiple Runners, select one explicitly. See [Runner routing and shared context](#runner-routing-and-shared-context) before using more than one Runner or MCP URL.
 
-- Create
-- Rename
-- Rotate
-- Revoke
-- Per-client `coding:read`, `coding:write`, `coding:exec` scopes
-- Created/last-used/status/key-prefix display
+## Runner routing and shared context
 
-Rotation invalidates the old URL immediately and displays the replacement once. Revocation makes the URL return the same `404 Not Found` used for unknown secrets.
+Runner selection is **sticky per MCP client**, not per chat, browser tab, or request. The selection is stored with the MCP client record, survives that client's rename and secret rotation, and is visible through `runner_current`. Each ordinary MCP tool resolves the selected Runner; its successful and failed responses include a safe `runner_context` where applicable.
 
-### Secret URL security model
+- `runner_list` lists safe Runner ID, `display_name`, connection state, availability, and timestamp. It returns no credential or workspace-root data.
+- `runner_current` reports this client's selection, including an unavailable selected Runner.
+- `runner_select` is the only MCP routing mutation. Initial selection needs no confirmation; a different selection requires `confirm_switch: true` to prevent accidental cross-host work.
+- Ordinary tools no longer accept `runner_id`. `workspace_id` remains required where a tool needs a workspace. `runner_id` is retained only for Runner-management/routing tools such as `runner_select` and `runner_info`, and on the private Runner transport.
+- There is no silent fallback from a selected offline, stale, revoked, or unavailable Runner to another Runner. Resolve the condition with `runner_current`, then explicitly select another Runner. Deleting a Runner clears clients that selected it; a subsequently unselected client follows only the normal one-registered-Runner convenience rule above.
 
-`/<secret>/mcp` is an API credential. Treat the full URL like a password:
-
-- do not publish it;
-- do not include it in screenshots;
-- do not commit it to Git;
-- do not paste it into logs, issues, or analytics;
-- create a different URL for every MCP client/device;
-- rotate immediately if leakage is suspected.
-
-The application never logs the incoming URL/path and stores only a SHA-256 verifier plus a short display prefix. MCP/admin responses use `Cache-Control: no-store`; HTML also uses `Referrer-Policy: no-referrer`, a restrictive CSP, `nosniff`, and frame blocking. Infrastructure outside the application may still record request paths, so configure Cloudflare log redaction and rely on rotation/revocation for recovery.
+The routing record is not a data-isolation boundary. This is a single-admin runtime: MCP clients that have scopes and select the same Runner share its configured workspace IDs and bounded Registry job history. `created_by_client_id` is audit metadata, not ownership enforcement. A client with the required scope can discover and read a compatible job created through another client. Use distinct client URLs and least-privilege scopes, but do not treat them as separate tenants.
 
 ## Tool catalog
 
-### Runtime
+### Routing and runtime
 
 ```text
 runner_list
+runner_current
+runner_select
 runner_info
 workspace_list
 env_info
@@ -195,86 +139,111 @@ git_status
 git_diff
 ```
 
-`coding:read` permits runtime/filesystem reads, `job_list`/`job_get`/logs, and Git inspection. `coding:write` permits patching. `coding:exec` permits process start/run/cancel/input. A job is shared within the single-admin instance rather than owned by one MCP client: Claude can discover and read a job created earlier by ChatGPT if it has the required scope.
+`coding:read` permits routing/runtime/filesystem reads, job listing/inspection/logs, and Git inspection. `coding:write` permits patching. `coding:exec` permits process start/run/cancel/input.
 
-## Persistent jobs
+## Local Runner profile and service behavior
 
-`exec_start` returns a `job_id` promptly. The Runner persists local authoritative state under:
-
-```text
-~/.remote-coding-runner/state/
-├── runner.json
-└── jobs/<job_id>/
-    ├── meta.json
-    ├── stdout.log
-    └── stderr.log
-```
-
-The Worker stores bounded metadata only. `job_list` reads RegistryDO snapshots and therefore works while a Runner is offline. Full stdout/stderr remains on the Runner and is read through paginated `job_logs` once the Runner is online.
-
-Runner sync upserts current/recent jobs without deleting older history simply because it was omitted from a bounded snapshot. Registry retains active/nonterminal jobs and up to 1,000 terminal jobs per Runner. A job may record `created_by_client_id` for audit, but that field does not restrict cross-client access.
-
-After a Runner restart, a process that still matches its saved PID/fingerprint becomes `unknown`. Lazy reconciliation during `job_get`, `job_list`, and sync keeps it `unknown` while alive and changes it to `interrupted` after disappearance because the real exit outcome is unavailable. A recovered cancellation becomes `cancelled` only when durable evidence proves that this Runner delivered the termination request; no exit code is invented.
-
-On-disk log files remain complete and unbounded by default. Monitor Runner disk use.
-
-## Filesystem and patch safety
-
-MCP requests provide only `runner_id`, `workspace_id`, and workspace-relative paths. The Runner rejects:
-
-- POSIX absolute paths;
-- Windows drive, UNC, and device paths;
-- NUL bytes and `..` traversal;
-- unknown workspace IDs;
-- symlink/junction ancestry and escapes;
-- write-through symlinks;
-- writes to readonly workspaces.
-
-`fs_read` and `job_logs` use UTF-8-safe byte cursors. Tiny pages containing Chinese, emoji, and accented characters can be concatenated exactly without replacement characters.
-
-`fs_apply_patch` supports Add/Update/Delete/Move operations, expected SHA-256 baselines, exact hunk matching, same-directory staging/backups, rollback, BOM/newline/mode preservation, and bounded structured results. Stable safe errors such as `invalid_patch`, `missing_file`, `target_exists`, `baseline_changed`, hunk errors, `patch_install_failed`, and `patch_rollback_failed` reach MCP without exposing host absolute paths.
-
-This is a workspace/path authorization boundary, not a hostile operating-system sandbox. Run untrusted repositories or commands inside an external VM/container with restricted mounts, secrets, and network access.
-
-## Timeouts and environment discovery
-
-Shared protocol constants keep the deadlines aligned:
+`coding-runner enroll` saves the server URL, Runner ID, long-lived Runner token, configured workspaces, and optional concurrency setting in a local profile. Default locations are:
 
 ```text
-normal Runner operation maximum: 8,000 ms
-Worker → Runner bridge timeout: 12,000 ms
+Linux:   ~/.remote-coding-runner/profile.json
+macOS:   ~/Library/Application Support/RemoteCodingRunner/profile.json
+Windows: %LOCALAPPDATA%\RemoteCodingRunner\profile.json
 ```
 
-This leaves a four-second transport/reply margin. `exec_run` and Git use the shared local limit; longer work must use `exec_start`.
+On POSIX, the profile directory is created with mode `0700` and the profile file with mode `0600`; Windows ACLs are not inspected by `doctor`. `coding-runner status` redacts the token. `coding-runner doctor` checks profile presence, stored URL, POSIX file mode, workspace existence, a managed service manifest, and selected local tools. `coding-runner env` reports bounded environment probes. `coding-runner workspace list|add|remove` manages locally configured workspace IDs; `add` canonicalizes an existing directory and supports `--readonly` and `--no-shell`.
 
-`env_info` caches bounded parallel probes for platform, architecture, hostname, shell, Node, npm, pnpm, Python, Git, Go, rustc, Cargo, and Docker. Missing or timed-out tools return `{ "available": false }` instead of failing the request.
+A profile-backed `coding-runner start` uses its saved server, credential, Runner ID, and workspaces. The legacy explicit `start --server --runner-id --token --workspace ...` form remains available for advanced/manual operation. Workspace roots stay local and never enter MCP or Runner metadata.
 
-## Tests
+Service commands are intentionally partial adapters, not a host-management installer:
+
+- `coding-runner install` writes only a hash-marked, per-user systemd user unit (Linux), LaunchAgent plist (macOS), or Scheduled Task XML (Windows). It refuses to overwrite an unmanaged manifest. It renders the corresponding host commands but does not run `systemctl`, `launchctl`, or `schtasks`.
+- `coding-runner stop` and `coding-runner restart` render/report the platform lifecycle command; they do not execute it.
+- `coding-runner uninstall` removes only a manifest whose marker and content hash match. It reports the host disable/bootout/delete command rather than executing it. `--purge --yes` also removes the profile, but deliberately leaves workspace roots and persistent job state untouched.
+
+Run the rendered host command yourself after reviewing it. Dashboard pages also render enrollment instructions only; they cannot run host lifecycle commands.
+
+## Safety and operations
+
+### Credentials, dashboard, and revocation
+
+The first administrator password is stored as a salted PBKDF2-HMAC-SHA-256 verifier. Browser sessions are random opaque values whose hashes are stored in RegistryDO; password changes invalidate every session. State-changing dashboard requests require CSRF and same-origin checks.
+
+Setup and login use a deployment-wide pre-authentication throttle, not an IP or user-specific rate limiter. Five failed password-KDF attempts are permitted before a 30-second delay; later failed attempts back off exponentially up to 15 minutes. A successful authentication resets the throttle. Treat it as protection against repeated attempts and KDF concurrency, not a complete distributed attack-control solution.
+
+MCP URLs are 256-bit path credentials. RegistryDO stores only a SHA-256 verifier and a display prefix. Rotation invalidates the old URL immediately; revocation makes it return the same `404 Not Found` as an unknown URL. Never put an MCP URL in screenshots, Git, logs, or analytics. Application code avoids logging raw URL paths, but infrastructure can still record them; configure edge-log redaction and rotate on suspected exposure.
+
+Runner enrollment codes are one-time and short-lived. Redeeming one atomically creates/replaces the Runner credential. Runner credential rotation or revocation increments the credential/connection generation and closes the existing Runner socket. A revoked Runner cannot reconnect with its old token; its selected MCP clients report it unavailable rather than falling back. Revocation removes synchronized workspace/job metadata from RegistryDO but does not signal the Runner to kill already running local processes, so secure the local host separately. Deleting a Runner additionally clears its clients' selected Runner IDs.
+
+### Filesystem, execution, and jobs
+
+The Worker resolves the active Runner before forwarding MCP requests. MCP tool inputs provide a workspace ID and workspace-relative path, while host workspace roots never cross the protocol. The Runner rejects absolute, drive/UNC/device, NUL, traversal, symlink/junction escape, write-through-symlink, unknown-workspace, and readonly-write requests. `fs_apply_patch` uses baseline checks, staging/backups, per-file replacement, rollback, and bounded root-free errors.
+
+This is a workspace/path authorization boundary, not a hostile operating-system sandbox. Use an external VM or container with restricted mounts, secrets, network, and OS privileges for untrusted repositories or commands.
+
+`exec_start` returns `job_id` promptly. Runner-local state and complete logs live under `~/.remote-coding-runner/state/` by default. RegistryDO keeps bounded metadata so `job_list` works while the selected Runner is offline; full logs require a connected Runner. Active/nonterminal jobs and up to 1,000 terminal jobs per Runner are retained in RegistryDO. Local log files are unbounded by default; monitor disk use.
+
+The local maximum for short operations is 8 seconds and the Worker-to-Runner bridge timeout is 12 seconds. Use `exec_start` for longer work. A disconnect leaves local jobs running; live tools report the selected Runner's offline state rather than selecting another host.
+
+## Architecture and scope
+
+- **Worker:** the only public MCP/control-plane endpoint. It authenticates MCP URLs, serves the admin UI, and routes bounded RPC messages.
+- **RegistryDO:** SQLite metadata for Runners, workspaces, historical jobs, administrator state, MCP clients, enrollment records, selection state, and throttle state.
+- **RunnerDO:** one hibernatable Durable Object per Runner. It owns the current outbound Runner WebSocket and correlated bridge; it never executes coding work.
+- **Runner:** an outbound Node process with trusted local workspace mappings, filesystem/patch/Git services, subprocesses, persistent jobs, and local credentials.
+- **Protocol:** `packages/protocol` provides TypeScript schemas and generated JSON Schema for Runner transport implementers.
+
+The deployed core uses Workers plus SQLite-backed Durable Objects only. It has no OAuth, AI/model API, KV, D1, Queues, R2, Cloudflare Sandbox, Cloudflare Containers, Dynamic Workers, tunnels, inbound SSH, or GitHub Actions runtime.
+
+RegistryDO performs additive, in-place startup migrations for known older schema columns/tables/indexes (including display names, enrollment records, active-runner fields, and throttle state). There is no versioned external migration runner and no documented downgrade path. Back up production Durable Object data and rehearse upgrades before relying on this behavior.
+
+The dashboard response CSP deliberately permits inline styles and scripts (`style-src 'unsafe-inline'; script-src 'unsafe-inline'`) because the Worker emits inline UI CSS/JavaScript. Dynamic fields are escaped, but this is weaker than a nonce/hash/external-script CSP. Treat future dashboard HTML changes as XSS-sensitive and harden the CSP before a broader-hostile deployment.
+
+## Advanced: `ADMIN_TOKEN`, manual APIs, and protocol
+
+The dashboard path above is preferred. `ADMIN_TOKEN` is an independent, server-side Runner administration credential, not a browser or MCP credential. The programmatic API can register or rotate a Runner directly:
+
+```sh
+curl -sS -X POST https://mcp.example.com/admin/runners \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"runner_id":"home-pc"}'
+```
+
+It returns the plaintext Runner token only on successful registration/rotation. Store it securely, then use the legacy explicit Runner start form:
+
+```sh
+CODING_RUNNER_TOKEN='<returned-runner-token>' \
+coding-runner start \
+  --server wss://mcp.example.com \
+  --runner-id home-pc \
+  --workspace zero=/home/me/code/zero\;writable\;noshell
+```
+
+The manual API accepts a caller-supplied token only when it is 32–512 non-whitespace characters. `POST /admin/runners/<runner_id>/rotate` registers/replaces a credential; `POST /admin/runners/<runner_id>/revoke` invalidates it. These APIs are distinct from dashboard enrollment-code creation and require the configured `ADMIN_TOKEN`.
+
+The authoritative Runner↔Worker wire contract is `packages/protocol/src/schema.ts`; its generated artifact is `packages/protocol/schema/wire-message.schema.json`. See [docs/protocol.md](docs/protocol.md) for frame/version rules and [docs/runner-transport.md](docs/runner-transport.md) for transport details. MCP routing is documented separately because the selected Runner is resolved by the Worker rather than supplied to ordinary tool schemas.
+
+## Validation and deferred release work
+
+Run local validation from the repository root:
 
 ```sh
 npm test
 npm run typecheck
 npm run build
 npm run validate:worker
+npm run pack:runner
 ```
 
-The suite includes protocol tests, Runner filesystem/process/patch/Git/recovery tests, Worker Durable Object and admin/client-auth tests, and a real local Wrangler + real Runner E2E. Coverage includes:
+These are local tests/build/pack checks only. They do not validate a deployed Durable Object migration, Cloudflare account quotas, edge-log redaction, external MCP client behavior, browser service installation, or a production restart/hibernation event.
 
-- atomic one-time setup;
-- PBKDF2 password/session behavior, expiry, logout, password invalidation, and CSRF;
-- per-client secret URL create/rotate/revoke/404/scope enforcement;
-- real MCP → Worker → Runner `fs_read`;
-- UTF-8 file/log pagination;
-- persistent execution after an MCP request closes;
-- Runner transport disconnect, local continuation, reconnect, and sync;
-- Client A starting a job and Client B discovering it with `job_list` while offline;
-- traversal, symlink, readonly, patch, Git, timeout, output, and concurrency boundaries.
+Deferred before a public release:
 
-Local tests do not prove the quotas of a particular Cloudflare account, production edge-log redaction, Internet client compatibility, or a deployed restart/hibernation event. Deployment remains an operator-owned acceptance step.
-
-## Scope deliberately excluded
-
-The MVP does not include MCP Tasks, PTY/web terminal, multi-user accounts, organizations, teams, billing, AI agents, RAG, browser automation, GitHub Actions runtime, Cloudflare Sandbox, or Cloudflare Containers.
+- configure a signed/stable externally distributable Runner package spec before enabling bootstrap installation;
+- make service lifecycle actions execute through reviewed host-specific adapters if that is desired, rather than only rendering commands;
+- replace inline dashboard scripts/styles or use nonces/hashes so CSP no longer requires `unsafe-inline`;
+- perform deployed migration, quota, logging-redaction, and external-MCP-client acceptance testing.
 
 ## Acknowledgements and license
 

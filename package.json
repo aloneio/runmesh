@@ -16,7 +16,8 @@
     "typecheck": "tsc -b --pretty false",
     "validate:worker": "wrangler deploy --dry-run --config apps/worker/wrangler.jsonc",
     "dev:worker": "npm run dev --workspace=@remote-coding-runtime/worker",
-    "start:runner": "npm run start --workspace=@remote-coding-runtime/runner --"
+    "start:runner": "npm run start --workspace=@remote-coding-runtime/runner --",
+    "pack:runner": "npm pack --workspace=@remote-coding-runtime/runner --dry-run"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.22.0",

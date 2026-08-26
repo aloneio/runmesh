@@ -18,6 +18,11 @@ export interface WorkerEnv {
   ADMIN_TOKEN?: string;
   RUNNER_TOKEN_PEPPER?: string;
   INTERNAL_CONTROL_SECRET?: string;
+  /** A stable, externally resolvable npm package@version or HTTPS .tgz package URL for the public bootstrap installers. */
+  RUNNER_PACKAGE_SPEC?: string;
+  /** Required with a URL package spec; otherwise inferred from an npm package@version spec. */
+  RUNNER_PACKAGE_NAME?: string;
+  RUNNER_PACKAGE_VERSION?: string;
 }
 
 interface ConnectionAttachment {
