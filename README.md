@@ -246,13 +246,36 @@ Deferred before a public release:
 - replace inline dashboard scripts/styles or use nonces/hashes so CSP no longer requires `unsafe-inline`;
 - perform deployed migration, quota, logging-redaction, and external-MCP-client acceptance testing.
 
-## Acknowledgements and license
+## License, commercial use, and acknowledgements
 
-This is an independent Apache-2.0 implementation. Design research considered:
+Runmesh is source-available under the [PolyForm Noncommercial License
+1.0.0](LICENSE), **not** an OSI-approved open-source license. The license
+permits only the noncommercial uses it defines. Commercial use, or rights
+beyond the public license, requires a separate written agreement from an
+applicable rights holder; see [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md).
+The legal and operational documentation is also available in
+[Chinese / 中文](README.zh-CN.md).
+
+This change applies prospectively. The last Apache-licensed source revision
+was [`7766f7d4220386d2382170b130ac3b153936a955`](LICENSE_HISTORY.md), and
+Apache 2.0 grants for copies received under prior revisions are not revoked or
+changed. The exact historic Apache text is retained at
+[`LICENSES/Apache-2.0-history.txt`](LICENSES/Apache-2.0-history.txt). Read
+[LICENSE_HISTORY.md](LICENSE_HISTORY.md) for provenance, scope, and the
+contributor audit; [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for
+third-party boundaries; [TRADEMARKS.md](TRADEMARKS.md) for name/logo use;
+[SECURITY.md](SECURITY.md) to report vulnerabilities; and
+[CONTRIBUTING.md](CONTRIBUTING.md) before contributing.
+
+This is an independent implementation. Design research considered:
 
 - [`xyTom/coding-tools-mcp`](https://github.com/xyTom/coding-tools-mcp), Apache-2.0 + NOTICE;
 - [`volter-ai/volter-tunnel`](https://github.com/volter-ai/volter-tunnel), Apache-2.0 + NOTICE;
 - [`Hiroshimeow/agent-mcp-gateway`](https://github.com/Hiroshimeow/agent-mcp-gateway), MIT;
 - Cloudflare Workers, Durable Objects, WebSocket Hibernation, Agents MCP handler, and MCP TypeScript SDK documentation.
 
-The requested `davidlosasgonzalez/codeagent-mcp` repository was unavailable at the public URL during research, so no code or license from it was used.
+Those references are research acknowledgements, not a claim that their code or
+assets are included. The requested `davidlosasgonzalez/codeagent-mcp`
+repository was unavailable at the public URL during research, so no code or
+license from it was used. Third-party licenses remain their respective terms;
+this repository does not relicense them.
