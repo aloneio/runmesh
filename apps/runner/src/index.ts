@@ -4,7 +4,7 @@ export { runCli, runEnrollCli, parseProductArgs } from "./cli.js";
 export { enrollRunner } from "./enrollment.js";
 export { ProfileStore, defaultWorkspaceId, profileDirectory, profilePath, redactedProfile, validateProfile, workspaceOptions } from "./profile.js";
 export { classifyConnectionFailure, discoverCapabilities, RunnerAuthenticationError, RunnerConnection } from "./connection.js";
-export { currentServicePlatform, createServiceManager, hashContent, hostServiceCommandExecutor, installServiceManifest, isManagedService, removeServiceManifest, renderService, serviceCommands, serviceLayout, servicePath, serviceMode, assertManagedServiceManifest } from "./service.js";
+export { currentServicePlatform, createServiceManager, hashContent, hostServiceCommandExecutor, installServiceManifest, isManagedService, removeServiceManifest, renderService, serviceCommands, serviceLayout, servicePath, serviceMode, serviceExecutionMode, assertManagedServiceManifest } from "./service.js";
 export { FilesystemService } from "./filesystem.js";
 export { GitService } from "./git-service.js";
 export { JobManager } from "./jobs.js";
@@ -16,4 +16,4 @@ export type { RawRunnerOptions, RunnerConfig, WorkspaceConfig, WorkspaceOption }
 export type { RunnerProfile, StoredWorkspace, ProfileStoreOptions } from "./profile.js";
 export type { JobEvent, JobManagerOptions, JobRecord, LocalJobStatus } from "./jobs.js";
 export type { RunnerConnectionOptions } from "./connection.js";
-export type { ServiceAdapterOptions, ServiceCommandExecutor, ServiceLayout, ServiceManagerAdapter, ServiceManagerOptions, ServiceManifest, ServiceManifestFilesystem, ServiceMode, ServicePlatform } from "./service.js";
+export type { ServiceAdapterOptions, ServiceCommandExecutor, ServiceLayout, ServiceManagerAdapter, ServiceManagerOptions, ServiceManifest, ServiceManifestFilesystem, ServiceMode, ServicePlatform, ExecutionMode, ServiceRuntimeStatus } from "./service.js";

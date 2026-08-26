@@ -295,6 +295,7 @@ export const RpcRequestSchema = CorrelatedEnvelopeSchema.extend({
   type: z.literal("rpc.request"),
   method: ShortTextSchema,
   params: JsonValueSchema,
+  policy_revision: z.number().int().nonnegative().nullable().optional(),
   workspace: WorkspaceMetadataSchema.optional(),
   job: JobMetadataSchema.optional(),
 }).strict();

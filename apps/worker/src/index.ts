@@ -17,6 +17,7 @@ import {
   runnerTokenVerifier,
   sha256Hex,
   verifyInternalRequest,
+  verifySetupToken,
   verifyPassword,
 } from "./security.js";
 
@@ -153,7 +154,11 @@ function validRunnerPackageSpec(value: string | undefined): string | undefined {
 }
 function runnerRelease(request: Request, env: WorkerEnv): Response {
   if (request.method !== "GET" && request.method !== "HEAD") { void discardBody(request); return methodNotAllowed("GET, HEAD"); }
-  return Response.json(runnerReleaseDescriptor(env), { headers: publicInstallerHeaders("application/json; charset=utf-8") });
+    return new Response(JSON.stringify({
+      ...runnerReleaseDescriptor(env),
+      schema_version: 1,
+      published_at: new Date().toISOString(),
+    }), { headers: publicInstallerHeaders("application/json; charset=utf-8") });
 }
 function runnerInstallScript(request: Request, url: URL): Response {
   if (request.method !== "GET" && request.method !== "HEAD") { void discardBody(request); return methodNotAllowed("GET, HEAD"); }
@@ -341,6 +346,11 @@ async function submitSetup(request: Request, env: WorkerEnv): Promise<Response> 
   const throttle = await authThrottleCheck(env, "setup");
   if (throttle === undefined) return adminError(503, "Setup could not be completed. Try again.");
   if (!throttle.allowed) return throttleError(throttle.retry_after_ms);
+  const setupToken = form.get("setup_token");
+  if (!await verifySetupToken(setupToken, env.SETUP_TOKEN, env.SETUP_TOKEN_HASH)) {
+    await authThrottleRecord(env, "setup", false);
+    return adminError(403, "Setup request was rejected.");
+  }
   const password = form.get("password"); const confirmation = form.get("confirm_password");
   if (typeof password !== "string" || typeof confirmation !== "string" || !validPassword(password) || password !== confirmation) return adminError(400, "Passwords must match and be at least 12 characters.");
   const verifier = await passwordVerifier(password);
@@ -534,8 +544,17 @@ async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, baseUrl
   }
   return runnerEnrollmentPage(baseUrl, runnerId, await createEnrollmentCode(env, runnerId), String(form.get("csrf_token") ?? ""), true);
 }
+async function consumeInternalNonce(env: WorkerEnv, nonce: string, expiresAtMs: number): Promise<boolean> {
+  const body = JSON.stringify({ nonce, expires_at_ms: expiresAtMs });
+  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/auth/internal-nonces", body);
+  const response = await env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(
+    new Request("https://registry.internal/auth/internal-nonces", { method: "POST", headers, body }),
+  );
+  return response.status === 204;
+}
+
 async function registryRequest(env: WorkerEnv, path: string, method: string, body: string): Promise<Response> {
-  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", method, path.split("?", 1)[0] ?? path, body);
+  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", method, path, body);
   return env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method, body, headers }));
 }
 
@@ -621,7 +640,7 @@ function sameOrigin(request: Request): boolean {
   try { return new URL(candidate).origin === origin; } catch { return false; }
 }
 
-function setupPage(): Response { const csrf = randomBase64Url(); return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane setup</title></head><body><main><h1>Welcome to Runmesh</h1><p class="subtitle">Agent Control Plane</p><p>Create administrator password</p><form method="post" action="/setup"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Password <input type="password" name="password" autocomplete="new-password" required minlength="12"></label><label>Confirm password <input type="password" name="confirm_password" autocomplete="new-password" required minlength="12"></label><button>Initialize</button></form></main></body></html>`, [`${SETUP_CSRF_COOKIE}=${csrf}; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=${Math.floor(SETUP_CSRF_TTL_MS / 1_000)}`]); }
+function setupPage(): Response { const csrf = randomBase64Url(); return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane setup</title></head><body><main><h1>Welcome to Runmesh</h1><p class="subtitle">Agent Control Plane</p><p>Create administrator password</p><form method="post" action="/setup"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Setup token <input type="password" name="setup_token" autocomplete="one-time-code" required></label><label>Password <input type="password" name="password" autocomplete="new-password" required minlength="12"></label><label>Confirm password <input type="password" name="confirm_password" autocomplete="new-password" required minlength="12"></label><button>Initialize</button></form></main></body></html>`, [`${SETUP_CSRF_COOKIE}=${csrf}; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=${Math.floor(SETUP_CSRF_TTL_MS / 1_000)}`]); }
 function loginPage(): Response { const csrf = randomBase64Url(); return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane login</title></head><body><main><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><form method="post" action="/login"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Admin password <input type="password" name="password" autocomplete="current-password" required></label><button>Login</button></form></main></body></html>`, [`${LOGIN_CSRF_COOKIE}=${csrf}; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=${Math.floor(SETUP_CSRF_TTL_MS / 1_000)}`]); }
 type AdminData = { readonly clients: readonly McpClientRecord[]; readonly runners: readonly RunnerRecord[]; readonly jobs: readonly Record<string, unknown>[]; readonly snapshot: Record<string, unknown> };
 async function loadDashboardData(env: WorkerEnv): Promise<AdminData> {
@@ -749,7 +768,7 @@ async function forwardRunnerRpc(request: Request, env: WorkerEnv, url: URL): Pro
   const segments = url.pathname.split("/").filter(Boolean);
   if (request.method !== "POST" || segments.length !== 4 || segments[0] !== "internal" || segments[1] !== "runners" || segments[3] !== "rpc" || !isSafeIdentifier(segments[2] ?? "")) return notFound();
   const body = await request.text();
-  if (!await verifyInternalRequest(request, env.INTERNAL_CONTROL_SECRET, body)) return notFound();
+  if (!await verifyInternalRequest(request, env.INTERNAL_CONTROL_SECRET, body, (nonce, expiresAtMs) => consumeInternalNonce(env, nonce, expiresAtMs))) return notFound();
   const runnerId = segments[2] as string; const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/rpc", body);
   return env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/rpc", { method: "POST", headers, body }));
 }

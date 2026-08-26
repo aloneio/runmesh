@@ -5,9 +5,12 @@ import { dirname, join, win32 } from "node:path";
 
 export type ServicePlatform = "linux" | "darwin" | "win32";
 export type ServiceMode = "user" | "system";
+/** The OS identity used by a machine service. User-mode services retain their legacy invoking-user identity. */
+export type ExecutionMode = "dedicated_user" | "privileged_host";
 export interface ServiceManifest {
   readonly platform: ServicePlatform;
   readonly mode: ServiceMode;
+  readonly executionMode: ExecutionMode;
   readonly path: string;
   readonly content: string;
   readonly hash: string;
@@ -22,6 +25,12 @@ export interface ServiceLayout {
 export interface ServiceAdapterOptions {
   readonly platform?: ServicePlatform;
   readonly mode?: ServiceMode;
+  /** Machine services default to a dedicated, non-privileged Runmesh account. */
+  readonly executionMode?: ExecutionMode;
+  /** Linux/macOS dedicated service account. Defaults to runmesh. */
+  readonly serviceUser?: string;
+  /** Linux dedicated service group. Defaults to the service user. */
+  readonly serviceGroup?: string;
   /** @deprecated Prefer mode: "system" or mode: "user". */
   readonly system?: boolean;
   readonly home?: string;
@@ -46,6 +55,15 @@ export interface ServiceCommandResult { readonly exitCode: number; readonly stdo
 export interface ServiceCommandExecutor {
   readonly execute: (file: string, args: readonly string[]) => Promise<ServiceCommandResult>;
 }
+export interface ServiceRuntimeStatus {
+  readonly installed: boolean;
+  readonly active: boolean;
+  readonly detail?: string;
+}
+export interface InstallServiceManifestOptions {
+  /** Explicit acknowledgement required before writing a privileged machine service. */
+  readonly confirmPrivilegedHost?: boolean;
+}
 export interface ServiceManagerAdapter {
   readonly platform: ServicePlatform;
   readonly mode: ServiceMode;
@@ -53,6 +71,8 @@ export interface ServiceManagerAdapter {
   readonly stop: (manifest: ServiceManifest) => Promise<void>;
   readonly restart: (manifest: ServiceManifest) => Promise<void>;
   readonly uninstall: (manifest: ServiceManifest) => Promise<void>;
+  /** Optional injectable status probe; custom managers may omit it. */
+  readonly status?: (manifest: ServiceManifest) => Promise<ServiceRuntimeStatus>;
 }
 export interface ServiceManagerOptions {
   readonly platform?: ServicePlatform;
@@ -67,6 +87,11 @@ const WINDOWS_TASK_NAME = "RemoteCodingRunner";
 
 export function currentServicePlatform(platform: NodeJS.Platform = process.platform): ServicePlatform { return platform === "darwin" ? "darwin" : platform === "linux" ? "linux" : "win32"; }
 export function serviceMode(options: ServiceAdapterOptions = {}): ServiceMode { return options.mode ?? (options.system === false ? "user" : "system"); }
+export function serviceExecutionMode(options: Pick<ServiceAdapterOptions, "executionMode"> = {}): ExecutionMode {
+  const mode = options.executionMode ?? "dedicated_user";
+  if (mode !== "dedicated_user" && mode !== "privileged_host") throw new Error("execution mode must be dedicated_user or privileged_host");
+  return mode;
+}
 
 /** Centralized layouts make a machine Runner independent of the invoking shell or workspace. */
 export function serviceLayout(options: ServiceAdapterOptions = {}): ServiceLayout {
@@ -117,14 +142,21 @@ export function servicePath(options: ServiceAdapterOptions = {}): string { retur
 export function renderService(options: ServiceAdapterOptions = {}): ServiceManifest {
   const platform = options.platform ?? currentServicePlatform();
   const mode = serviceMode(options);
+  // Legacy user services deliberately keep their invoking-user identity.
+  const executionMode = mode === "user" ? "dedicated_user" : serviceExecutionMode(options);
   const layout = serviceLayout(options);
   const profile = options.profilePath ?? join(layout.configRoot, "profile.json");
   const invocation = serviceInvocation(options, layout, profile, options.stateDir ?? layout.stateRoot, platform);
-  const body = platform === "linux" ? renderSystemd(mode, invocation, profile) : platform === "darwin" ? renderLaunchd(mode, invocation) : renderWindowsTask(mode, invocation);
+  const identity = dedicatedServiceIdentity(options);
+  const body = platform === "linux"
+    ? renderSystemd(mode, executionMode, invocation, profile, identity)
+    : platform === "darwin"
+      ? renderLaunchd(mode, executionMode, invocation, identity.user)
+      : renderWindowsTask(mode, executionMode, invocation);
   const hash = hashContent(body);
   const marker = `${MARKER}:${hash}`;
   const content = platform === "linux" ? `# ${marker}\n${body}` : `<!-- ${marker} -->\n${body}`;
-  return { platform, mode, path: layout.manifestPath, content, hash };
+  return { platform, mode, executionMode, path: layout.manifestPath, content, hash };
 }
 
 function serviceInvocation(options: ServiceAdapterOptions, layout: ServiceLayout, profile: string, stateDir: string, platform: ServicePlatform): readonly string[] {
@@ -137,21 +169,31 @@ function serviceInvocation(options: ServiceAdapterOptions, layout: ServiceLayout
   if (!command.includes("--state-dir")) command.push("--state-dir", stateDir);
   return command;
 }
-function renderSystemd(mode: ServiceMode, invocation: readonly string[], profile: string): string {
+function renderSystemd(mode: ServiceMode, executionMode: ExecutionMode, invocation: readonly string[], profile: string, identity: { readonly user: string; readonly group: string }): string {
   const wantedBy = mode === "system" ? "multi-user.target" : "default.target";
-  return `[Unit]\nDescription=Remote Coding Runner\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nEnvironment="CODING_RUNNER_PROFILE=${escapeSystemdEnvironment(profile)}"\nExecStart=${invocation.map(escapeSystemdArgument).join(" ")}\nRestart=on-failure\n\n[Install]\nWantedBy=${wantedBy}\n`;
+  const dedicatedIdentity = mode === "system" && executionMode === "dedicated_user" ? `User=${identity.user}\nGroup=${identity.group}\n` : "";
+  return `[Unit]\nDescription=Remote Coding Runner\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\n${dedicatedIdentity}Environment="CODING_RUNNER_PROFILE=${escapeSystemdEnvironment(profile)}"\nExecStart=${invocation.map(escapeSystemdArgument).join(" ")}\nRestart=on-failure\n\n[Install]\nWantedBy=${wantedBy}\n`;
 }
-function renderLaunchd(mode: ServiceMode, invocation: readonly string[]): string {
+function renderLaunchd(mode: ServiceMode, executionMode: ExecutionMode, invocation: readonly string[], serviceUser: string): string {
   const keepAlive = mode === "system" ? "<true/>" : "<true/>";
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>${MACOS_LABEL}</string><key>ProgramArguments</key><array>${invocation.map((part) => `<string>${escapeXml(part)}</string>`).join("")}</array><key>RunAtLoad</key><true/><key>KeepAlive</key>${keepAlive}</dict></plist>\n`;
+  const userName = mode === "system" && executionMode === "dedicated_user" ? `<key>UserName</key><string>${escapeXml(serviceUser)}</string>` : "";
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>${MACOS_LABEL}</string>${userName}<key>ProgramArguments</key><array>${invocation.map((part) => `<string>${escapeXml(part)}</string>`).join("")}</array><key>RunAtLoad</key><true/><key>KeepAlive</key>${keepAlive}</dict></plist>\n`;
 }
-function renderWindowsTask(mode: ServiceMode, invocation: readonly string[]): string {
+function renderWindowsTask(mode: ServiceMode, executionMode: ExecutionMode, invocation: readonly string[]): string {
   const principal = mode === "system"
-    ? `<Principal id="Author"><UserId>SYSTEM</UserId><LogonType>ServiceAccount</LogonType><RunLevel>HighestAvailable</RunLevel></Principal>`
+    ? executionMode === "privileged_host"
+      ? `<Principal id="Author"><UserId>SYSTEM</UserId><LogonType>ServiceAccount</LogonType><RunLevel>HighestAvailable</RunLevel></Principal>`
+      : `<Principal id="Author"><UserId>NT AUTHORITY\\LOCAL SERVICE</UserId><LogonType>ServiceAccount</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal>`
     : `<Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal>`;
   const trigger = mode === "system" ? "<BootTrigger><Enabled>true</Enabled></BootTrigger>" : "<LogonTrigger><Enabled>true</Enabled></LogonTrigger>";
   // installServiceManifest writes JavaScript strings as UTF-8, so the declaration must match.
   return `<?xml version="1.0" encoding="UTF-8"?>\n<Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"><RegistrationInfo><Description>Remote Coding Runner</Description></RegistrationInfo><Triggers>${trigger}</Triggers><Principals>${principal}</Principals><Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure></Settings><Actions Context="Author"><Exec><Command>${escapeXml(invocation[0] ?? "")}</Command><Arguments>${escapeXml(windowsArguments(invocation.slice(1)))}</Arguments></Exec></Actions></Task>\n`;
+}
+function dedicatedServiceIdentity(options: ServiceAdapterOptions): { readonly user: string; readonly group: string } {
+  const user = options.serviceUser ?? "runmesh";
+  const group = options.serviceGroup ?? user;
+  if (!safeServiceIdentity(user) || !safeServiceIdentity(group)) throw new Error("service user and group must be safe account names");
+  return { user, group };
 }
 
 /** Only manifests with an intact marker and content hash are considered ours. */
@@ -171,7 +213,10 @@ export const hostServiceManifestFilesystem: ServiceManifestFilesystem = {
   },
   remove: async (path) => { await rm(path); },
 };
-export async function installServiceManifest(manifest: ServiceManifest, filesystem: ServiceManifestFilesystem = hostServiceManifestFilesystem): Promise<void> {
+export async function installServiceManifest(manifest: ServiceManifest, filesystem: ServiceManifestFilesystem = hostServiceManifestFilesystem, options: InstallServiceManifestOptions = {}): Promise<void> {
+  if (manifest.mode === "system" && manifest.executionMode === "privileged_host" && options.confirmPrivilegedHost !== true) {
+    throw new Error("privileged_host service installation requires --confirm-privileged-host");
+  }
   const existing = await filesystem.read(manifest.path);
   if (existing !== undefined && !isManagedService(existing)) throw new Error(`refusing to overwrite unmanaged service manifest: ${manifest.path}`);
   await filesystem.write(manifest.path, manifest.content);
@@ -220,6 +265,11 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
       stop: async () => execute("systemctl", [...prefix, "stop", name]),
       restart: async () => execute("systemctl", [...prefix, "restart", name]),
       uninstall: async () => execute("systemctl", [...prefix, "disable", "--now", name]),
+      status: async () => {
+        const installed = await executor.execute("systemctl", [...prefix, "is-enabled", name]);
+        const active = await executor.execute("systemctl", [...prefix, "is-active", "--quiet", name]);
+        return { installed: installed.exitCode === 0, active: active.exitCode === 0, ...(active.stderr === undefined || active.stderr.trim() === "" ? {} : { detail: active.stderr.trim().slice(0, 512) }) };
+      },
     };
   }
   if (platform === "darwin") {
@@ -231,6 +281,7 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
       stop: async () => execute("launchctl", ["kill", "SIGTERM", target]),
       restart: async () => execute("launchctl", ["kickstart", "-k", target]),
       uninstall: async () => execute("launchctl", ["bootout", target]),
+      status: async () => { const result = await executor.execute("launchctl", ["print", target]); return { installed: result.exitCode === 0, active: result.exitCode === 0, ...(result.stderr === undefined || result.stderr.trim() === "" ? {} : { detail: result.stderr.trim().slice(0, 512) }) }; },
     };
   }
   return {
@@ -239,6 +290,12 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
     stop: async () => execute("schtasks", ["/End", "/TN", WINDOWS_TASK_NAME]),
     restart: async () => { await execute("schtasks", ["/End", "/TN", WINDOWS_TASK_NAME]); await execute("schtasks", ["/Run", "/TN", WINDOWS_TASK_NAME]); },
     uninstall: async () => execute("schtasks", ["/Delete", "/TN", WINDOWS_TASK_NAME, "/F"]),
+    status: async () => {
+      const installed = await executor.execute("schtasks", ["/Query", "/TN", WINDOWS_TASK_NAME]);
+      const detail = await executor.execute("schtasks", ["/Query", "/TN", WINDOWS_TASK_NAME, "/FO", "LIST", "/V"]);
+      const active = detail.exitCode === 0 && /(?:Status:\s*Running|Status:\s*Ready)/iu.test(detail.stdout ?? "");
+      return { installed: installed.exitCode === 0, active, ...(detail.stderr === undefined || detail.stderr.trim() === "" ? {} : { detail: detail.stderr.trim().slice(0, 512) }) };
+    },
   };
 }
 
@@ -259,6 +316,7 @@ export function serviceCommands(action: "install" | "start" | "stop" | "restart"
 }
 
 function isAbsoluteForPlatform(value: string, platform: ServicePlatform): boolean { return platform === "win32" ? win32.isAbsolute(value) : value.startsWith("/"); }
+function safeServiceIdentity(value: string): boolean { return /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/.test(value); }
 function escapeSystemdArgument(value: string): string { return value.replaceAll("\\", "\\\\").replaceAll("\n", "").replaceAll(" ", "\\x20").replaceAll('"', "\\\""); }
 function escapeSystemdEnvironment(value: string): string { return value.replaceAll("\\", "\\\\").replaceAll('"', "\\\"").replaceAll("\n", ""); }
 function escapeXml(value: string): string { return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&apos;"); }

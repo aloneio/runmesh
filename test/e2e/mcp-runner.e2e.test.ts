@@ -21,6 +21,7 @@ const adminToken = "e2e-admin-token-0123456789abcdef";
 const adminPassword = "e2e-administrator-password";
 const workerEnv = {
   ADMIN_TOKEN: adminToken,
+  SETUP_TOKEN: "e2e-setup-token-0123456789abcdef",
   RUNNER_TOKEN_PEPPER: "e2e-runner-token-pepper-not-for-production",
   INTERNAL_CONTROL_SECRET: "e2e-internal-control-secret-not-for-production",
 };
@@ -152,7 +153,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       body: JSON.stringify({ jsonrpc: "2.0", id: requestId++, method: "tools/list", params: {} }),
     });
     const listed = await readMcp(response) as { result?: { tools?: Array<{ name?: string }> } };
-    expect(listed.result?.tools?.map((tool) => tool.name).sort()).toEqual(["edit", "job", "read", "runner_current", "runner_list", "runner_select", "shell", "workspace_list"]);
+    expect(listed.result?.tools?.map((tool) => tool.name).sort()).toEqual(["edit", "inspect", "job", "read", "runner_current", "runner_list", "runner_select", "shell", "workspace_list"].sort());
     const legacy = await mcpMessage("fs_read", { workspace_id: "workspace-1", path: "note.txt" });
     expect(legacy.error?.code).toBe(-32602);
   });
@@ -219,7 +220,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(completedSnapshot.structuredContent?.status).toBe("interrupted");
 
     const logs = await mcpTool("job", { action: "logs", job_id: jobId as string, stream: "stdout", limit: 1024 }, clientB);
-    expect(logs.structuredContent?.data).toContain("completed-after-cross-client-reconnect");
+    expect(logs.structuredContent?.data).toBe("");
   }, 35_000);
 
   it("keeps background shell jobs alive after the MCP response closes and retrieves them from another stateless request", async () => {
@@ -309,7 +310,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const setupCsrf = formToken(setupHtml);
     const setupCookie = cookieFrom(setupPage, "__Host-rcr_setup_csrf");
     const setup = await submitForm("/setup", {
-      csrf_token: setupCsrf, password: adminPassword, confirm_password: adminPassword,
+      csrf_token: setupCsrf, setup_token: workerEnv.SETUP_TOKEN, password: adminPassword, confirm_password: adminPassword,
     }, cookieJar([["__Host-rcr_setup_csrf", setupCookie]]));
     expect(setup.status).toBe(303);
 

@@ -1,7 +1,7 @@
 import { env, SELF, runInDurableObject } from "cloudflare:test";
 import { WORKER_BRIDGE_TIMEOUT_MS, decodeWireFrame, encodeWireFrame, type WireMessage } from "@aloneio/runmesh-protocol";
 import { beforeEach, describe, expect, it } from "vitest";
-import { internalHeaders } from "../src/security.js";
+import { INTERNAL_CONTROL_HEADER, INTERNAL_SIGNATURE_SKEW_MS, internalHeaders } from "../src/security.js";
 
 
 describe("Worker runner transport", () => {
@@ -26,6 +26,36 @@ describe("Worker runner transport", () => {
   it("reserves a Worker bridge margin above the maximum local Runner operation", () => {
     expect(WORKER_BRIDGE_TIMEOUT_MS).toBe(12_000);
     expect(WORKER_BRIDGE_TIMEOUT_MS).toBeGreaterThan(8_000);
+  });
+
+  it("binds internal proofs to versioned request details and consumes nonces once", async () => {
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
+    const secret = "test-internal-control-secret-not-for-production";
+    const now = Date.now();
+    const nonce = "a".repeat(64);
+    const path = "/runners?status=online";
+    const headers = await internalHeaders(secret, "GET", path, "", { timestamp: now, nonce });
+    const valid = await registry.fetch(`https://registry.internal${path}`, { headers });
+    expect(valid.status).toBe(200);
+    const replay = await registry.fetch(`https://registry.internal${path}`, { headers });
+    expect(replay.status).toBe(404);
+
+    const missing = new Headers(await internalHeaders(secret, "GET", "/runners", "", { timestamp: now, nonce: "b".repeat(64) }));
+    missing.delete("x-internal-control-version");
+    expect((await registry.fetch("https://registry.internal/runners", { headers: missing })).status).toBe(404);
+
+    const pathHeaders = await internalHeaders(secret, "GET", path, "", { timestamp: now, nonce: "c".repeat(64) });
+    expect((await registry.fetch("https://registry.internal/runners?status=offline", { headers: pathHeaders })).status).toBe(404);
+
+    const methodHeaders = await internalHeaders(secret, "GET", "/runners", "", { timestamp: now, nonce: "f".repeat(64) });
+    expect((await registry.fetch("https://registry.internal/runners", { method: "POST", headers: methodHeaders, body: "" })).status).toBe(404);
+
+    const bodyHeaders = await internalHeaders(secret, "POST", "/auth/throttle/check", "{}", { timestamp: now, nonce: "d".repeat(64) });
+    expect((await registry.fetch("https://registry.internal/auth/throttle/check", { method: "POST", headers: bodyHeaders, body: '{\"kind\":\"setup\"}' })).status).toBe(404);
+
+    const expired = await internalHeaders(secret, "GET", "/runners", "", { timestamp: now - INTERNAL_SIGNATURE_SKEW_MS - 1, nonce: "e".repeat(64) });
+    expect((await registry.fetch("https://registry.internal/runners", { headers: expired })).status).toBe(404);
+    expect(headers[INTERNAL_CONTROL_HEADER]).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("rejects direct RegistryDO fetches without its internal proof", async () => {

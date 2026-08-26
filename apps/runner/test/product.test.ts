@@ -102,15 +102,65 @@ describe("runner product CLI and service safety", () => {
       expect(started).toMatchObject({ runnerId: "runner-1", workspaces: [] });
     } finally { await test.cleanup(); }
   });
-  it("renders centralized system manifests with an absolute executable and UTF-8 Windows XML", () => {
+  it("renders dedicated-user manifests and uses privileged host only by explicit mode", () => {
     const linux = renderService({ platform: "linux", mode: "system", executablePath: "/opt/remote-coding-runtime/bin/coding-runner" });
     expect(serviceLayout({ platform: "linux", mode: "system" })).toMatchObject({ installRoot: "/opt/remote-coding-runtime", configRoot: "/etc/remote-coding-runtime", stateRoot: "/var/lib/remote-coding-runtime", manifestPath: "/etc/systemd/system/remote-coding-runner.service" });
+    expect(linux).toMatchObject({ executionMode: "dedicated_user" });
+    expect(linux.content).toContain("User=runmesh");
+    expect(linux.content).toContain("Group=runmesh");
     expect(linux.content).toContain("ExecStart=/opt/remote-coding-runtime/bin/coding-runner start");
     expect(linux.content).toContain("CODING_RUNNER_PROFILE=/etc/remote-coding-runtime/profile.json");
     expect(linux.content).not.toContain("coding-runner start\n");
+    const macos = renderService({ platform: "darwin", mode: "system" });
+    expect(macos.content).toContain("<key>UserName</key><string>runmesh</string>");
     const windows = renderService({ platform: "win32", mode: "system", executablePath: "C:\\Program Files\\RemoteCodingRunner\\coding-runner.cmd" });
-    expect(windows.content).toContain('<?xml version="1.0" encoding="UTF-8"?>');
+    expect(windows.content).toContain("NT AUTHORITY\\LOCAL SERVICE");
+    expect(windows.content).not.toContain("<UserId>SYSTEM</UserId>");
+    const privileged = renderService({ platform: "win32", mode: "system", executionMode: "privileged_host", executablePath: "C:\\Program Files\\RemoteCodingRunner\\coding-runner.cmd" });
+    expect(privileged.content).toContain("<UserId>SYSTEM</UserId>");
     expect(Buffer.from(windows.content, "utf8").toString("utf8")).toBe(windows.content);
+  });
+  it("requires explicit confirmation for privileged host services without breaking legacy profiles", async () => {
+    const test = await fixture();
+    try {
+      const contents = new Map<string, string>();
+      const filesystem: ServiceManifestFilesystem = { read: async (path) => contents.get(path), write: async (path, content) => { contents.set(path, content); }, remove: async (path) => { contents.delete(path); } };
+      const manager = createServiceManager({ platform: "linux", mode: "system", executor: { execute: async () => ({ exitCode: 0 }) } });
+      await test.store.save({ ...profile(join(test.root, "workspace")), execution_mode: "dedicated_user" });
+      await expect(runCli(["install", "--execution-mode", "privileged_host"], { store: test.store, stdout: () => undefined, stderr: () => undefined, servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, isAdministrator: () => true })).rejects.toThrow("confirm-privileged-host");
+      await runCli(["install", "--execution-mode", "privileged_host", "--confirm-privileged-host"], { store: test.store, stdout: () => undefined, stderr: () => undefined, servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, isAdministrator: () => true });
+      expect([...contents.values()][0]).not.toContain("User=runmesh");
+      await test.store.save(profile(join(test.root, "workspace")));
+      await expect(runCli(["install"], { store: test.store, stdout: () => undefined, stderr: () => undefined, servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, isAdministrator: () => true })).resolves.toBeUndefined();
+    } finally { await test.cleanup(); }
+  });
+  it("emits stable doctor JSON checks and only fails its exit seam for required failures", async () => {
+    const test = await fixture();
+    try {
+      await test.store.save({ ...profile(join(test.root, "workspace")), execution_mode: "dedicated_user" });
+      const content = renderService({ platform: "linux", mode: "system", profilePath: test.store.filePath, executionMode: "dedicated_user" }).content;
+      const filesystem: ServiceManifestFilesystem = { read: async () => content, write: async () => undefined, remove: async () => undefined };
+      const manager = {
+        platform: "linux" as const, mode: "system" as const,
+        install: async () => undefined, stop: async () => undefined, restart: async () => undefined, uninstall: async () => undefined,
+        status: async () => ({ installed: true, active: true }),
+      };
+      const lines: string[] = []; const exitCodes: number[] = [];
+      await runCli(["doctor", "--json"], {
+        store: test.store, stdout: (line) => lines.push(line), servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager,
+        discoverShellRuntime: async () => ({ kind: "bash", executable: "/bin/bash", buildInvocation: (command) => ({ file: "/bin/bash", args: ["-lc", command] }) }),
+        environment: new (await import("../src/runtime.js")).EnvironmentInfoService({ probe: async (command) => command === "python3" || command === "python" || command === "docker" ? undefined : `${command} version` }),
+        policyRevision: async () => ({ desired: 3, applied: 3 }), setExitCode: (code) => exitCodes.push(code),
+      });
+      const result = JSON.parse(lines[0] ?? "{}") as { ok: boolean; checks: Array<{ name: string; status: string }> };
+      expect(result.ok).toBe(true);
+      expect(result.checks.map((check) => check.name)).toEqual(expect.arrayContaining(["profile_directory_permissions", "profile_file_permissions", "service_manifest", "service_installed", "service_active", "shell_runtime", "execution_mode", "policy_revision", "tool:python", "tool:docker"]));
+      expect(result.checks.filter((check) => check.name === "tool:python" || check.name === "tool:docker").map((check) => ({ name: check.name, status: check.status }))).toEqual([{ name: "tool:python", status: "warning" }, { name: "tool:docker", status: "warning" }]);
+      expect(exitCodes).toEqual([]);
+      const failingExitCodes: number[] = [];
+      await runCli(["doctor", "--json"], { store: new ProfileStore({ baseDir: join(test.root, "missing-profile") }), stdout: () => undefined, servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, setExitCode: (code) => failingExitCodes.push(code) });
+      expect(failingExitCodes).toEqual([1]);
+    } finally { await test.cleanup(); }
   });
   it("requires administrator/root for system installation and uses injected Linux auto-start adapter", async () => {
     const test = await fixture();

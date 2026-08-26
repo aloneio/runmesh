@@ -16,6 +16,8 @@ export interface WorkerEnv {
   WORKER_ID?: string;
   WORKER_VERSION?: string;
   ADMIN_TOKEN?: string;
+  SETUP_TOKEN?: string;
+  SETUP_TOKEN_HASH?: string;
   RUNNER_TOKEN_PEPPER?: string;
   INTERNAL_CONTROL_SECRET?: string;
   /** A stable, externally resolvable npm package@version or HTTPS .tgz package URL for the public bootstrap installers. */
@@ -61,7 +63,7 @@ export class RunnerDO {
   public async fetch(request: Request): Promise<Response> {
     if (request.method === "POST" && new URL(request.url).pathname === "/policy") {
       const body = await request.text();
-      if (!await verifyInternalRequest(request, this.env.INTERNAL_CONTROL_SECRET, body)) return new Response("not found", { status: 404 });
+      if (!await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
       const socket = await this.currentRunnerSocket();
       if (socket === undefined) return Response.json({ error: { code: "runner_offline", message: "runner is not connected" } }, { status: 503 });
       const attachment = socket.deserializeAttachment() as ConnectionAttachment | null;
@@ -77,7 +79,7 @@ export class RunnerDO {
     }
     if (request.method === "POST" && new URL(request.url).pathname === "/revoke") {
       const body = await request.text();
-      if (!await verifyInternalRequest(request, this.env.INTERNAL_CONTROL_SECRET, body)) return new Response("not found", { status: 404 });
+      if (!await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
       for (const socket of this.ctx.getWebSockets("runner")) socket.close(4001, "credentials revoked");
       return new Response(null, { status: 204 });
     }
@@ -247,16 +249,23 @@ export class RunnerDO {
   private async forwardInternalRpc(request: Request): Promise<Response> {
     if (request.method !== "POST" || new URL(request.url).pathname !== "/rpc") return new Response("not found", { status: 404 });
     const body = await request.text();
-    if (new TextEncoder().encode(body).byteLength > MAX_BRIDGE_BODY_BYTES || !await verifyInternalRequest(request, this.env.INTERNAL_CONTROL_SECRET, body)) return new Response("not found", { status: 404 });
-    let input: { method?: unknown; params?: unknown };
-    try { input = JSON.parse(body) as { method?: unknown; params?: unknown }; } catch { return Response.json({ error: { code: "invalid_request", message: "invalid JSON object" } }, { status: 400 }); }
+    if (new TextEncoder().encode(body).byteLength > MAX_BRIDGE_BODY_BYTES || !await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
+    let input: { method?: unknown; params?: unknown; policy_revision?: unknown };
+    try { input = JSON.parse(body) as { method?: unknown; params?: unknown; policy_revision?: unknown }; } catch { return Response.json({ error: { code: "invalid_request", message: "invalid JSON object" } }, { status: 400 }); }
     if (typeof input !== "object" || input === null || Array.isArray(input)) return Response.json({ error: { code: "invalid_request", message: "invalid JSON object" } }, { status: 400 });
     const socket = await this.currentRunnerSocket();
     const attachment = socket?.deserializeAttachment() as ConnectionAttachment | null;
     if (socket === undefined || attachment === null || attachment.epoch === 0 || attachment.protocolVersion === 0) return Response.json({ error: { code: "runner_offline", message: "runner is not connected" } }, { status: 503 });
     if (this.bridgeWaiters.size >= MAX_BRIDGE_IN_FLIGHT) return Response.json({ error: { code: "busy", message: "bridge concurrency limit reached" } }, { status: 429 });
+    const requestPolicyRevision = typeof input.policy_revision === "number" && Number.isSafeInteger(input.policy_revision) ? input.policy_revision : undefined;
+    if (requestPolicyRevision !== undefined) {
+      const revisionResponse = await this.registryRequest(attachment.runnerId, "/policy-revision", { method: "GET" });
+      if (!revisionResponse.ok) return Response.json({ error: { code: "stale_policy", message: "Runner policy revision could not be verified" } }, { status: 409 });
+      const revisionBody = await revisionResponse.json() as { desired_policy_revision?: unknown; applied_policy_revision?: unknown; policy_status?: unknown };
+      if (revisionBody.policy_status !== "applied" || revisionBody.applied_policy_revision !== requestPolicyRevision || revisionBody.desired_policy_revision !== requestPolicyRevision) return Response.json({ error: { code: "stale_policy", message: "Runner policy revision is stale" } }, { status: 409 });
+    }
     const requestId = `bridge-${crypto.randomUUID()}`;
-    const parsed = RpcRequestSchema.safeParse({ type: "rpc.request", protocol_version: attachment.protocolVersion, request_id: requestId, method: input.method, params: input.params });
+    const parsed = RpcRequestSchema.safeParse({ type: "rpc.request", protocol_version: attachment.protocolVersion, request_id: requestId, method: input.method, params: input.params, ...(requestPolicyRevision === undefined ? {} : { policy_revision: requestPolicyRevision }) });
     if (!parsed.success) return Response.json({ error: { code: "invalid_request", message: "invalid RPC request" } }, { status: 400 });
     const reply = await new Promise<BridgeReply>((resolve) => {
       const timer = setTimeout(() => {
@@ -309,6 +318,15 @@ export class RunnerDO {
       body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, require_online: requireOnline }),
     });
     return response.ok;
+  }
+
+  private async verifyInternalRequest(body: string, request: Request): Promise<boolean> {
+    return verifyInternalRequest(request, this.env.INTERNAL_CONTROL_SECRET, body, async (nonce, expiresAtMs) => {
+      const payload = JSON.stringify({ nonce, expires_at_ms: expiresAtMs });
+      const headers = await internalHeaders(this.env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/auth/internal-nonces", payload);
+      const response = await this.env.REGISTRY.get(this.env.REGISTRY.idFromName("registry")).fetch(new Request("https://registry.internal/auth/internal-nonces", { method: "POST", headers, body: payload }));
+      return response.status === 204;
+    });
   }
 
   private registryRequest(runnerId: string, action: string, init: RequestInit): Promise<Response> {
