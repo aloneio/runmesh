@@ -572,13 +572,19 @@ export class RegistryDO {
     return this.getRunner(runnerId);
   }
   public emergencyLockRunner(runnerId: string, nowMs: number): RunnerRecord | undefined { return this.setRunnerPermissions(runnerId, LOCKED_PERMISSIONS, nowMs); }
-  public acknowledgePolicy(runnerId: string, epoch: number, credentialVersion: number, input: { desired_revision: number; applied_revision: number; status: "applied" | "pending" | "invalid"; workspace_status: readonly { workspace_id: string; status: WorkspaceValidationStatus }[] }, nowMs: number): boolean {
-    if (!this.sessionIsCurrent(runnerId, epoch, credentialVersion, true) || input.workspace_status.length > 64 || input.workspace_status.some((item) => !isSafeIdentifier(item.workspace_id))) return false;
+  public acknowledgePolicy(runnerId: string, epoch: number, credentialVersion: number, input: { desired_revision: number; desired_checksum: string; applied_revision: number; applied_checksum: string; runner_reported_policy_revision: number; status: "applied" | "pending" | "invalid"; workspace_status: readonly { workspace_id: string; status: WorkspaceValidationStatus }[] }, nowMs: number): boolean {
+    if (!this.sessionIsCurrent(runnerId, epoch, credentialVersion, true) || input.workspace_status.length > 64 || !uniqueIds(input.workspace_status.map((item) => item.workspace_id)) || input.workspace_status.some((item) => !isSafeIdentifier(item.workspace_id))) return false;
     const runner = this.runnerRow(runnerId);
-    if (runner === undefined || input.desired_revision < runner.desired_policy_revision) return true;
-    if (input.desired_revision !== runner.desired_policy_revision || input.applied_revision > input.desired_revision || (input.status === "applied" && input.applied_revision !== input.desired_revision)) return false;
+    const desired = runner === undefined ? undefined : this.desiredPolicy(runnerId);
+    if (runner === undefined || desired === undefined) return false;
+    if (input.desired_revision < runner.desired_policy_revision) return true;
+    const expectedStatuses = this.listManagedWorkspaces(runnerId).map((workspace) => workspace.workspace_id).sort();
+    const actualStatuses = input.workspace_status.map((item) => item.workspace_id).sort();
+    if (input.desired_revision !== runner.desired_policy_revision || input.desired_checksum !== desired.checksum || input.runner_reported_policy_revision !== input.applied_revision || input.applied_revision > input.desired_revision || actualStatuses.length !== expectedStatuses.length || actualStatuses.some((id, index) => id !== expectedStatuses[index])) return false;
+    if (input.status === "applied" && (input.applied_revision !== input.desired_revision || input.applied_checksum !== input.desired_checksum || input.workspace_status.some((item) => item.status !== "valid"))) return false;
+    if (input.status !== "applied" && input.applied_revision !== runner.applied_policy_revision) return false;
     this.ctx.storage.transactionSync(() => {
-      this.ctx.storage.sql.exec("UPDATE runners SET applied_policy_revision = ?, runner_reported_policy_revision = ?, policy_status = ?, updated_at_ms = ? WHERE runner_id = ?", input.applied_revision, input.applied_revision, input.status, nowMs, runnerId);
+      this.ctx.storage.sql.exec("UPDATE runners SET applied_policy_revision = ?, runner_reported_policy_revision = ?, policy_status = ?, updated_at_ms = ? WHERE runner_id = ?", input.applied_revision, input.runner_reported_policy_revision, input.status, nowMs, runnerId);
       for (const item of input.workspace_status) this.ctx.storage.sql.exec("UPDATE managed_workspaces SET validation_status = ? WHERE runner_id = ? AND workspace_id = ?", item.status, runnerId, item.workspace_id);
     });
     return true;
@@ -611,10 +617,11 @@ export class RegistryDO {
     this.ctx.storage.sql.exec("UPDATE runners SET display_name = ?, updated_at_ms = ? WHERE runner_id = ?", displayName, nowMs, runnerId);
     return this.getRunner(runnerId);
   }
-  public deleteRunner(runnerId: string, nowMs: number): boolean {
-    if (!isSafeIdentifier(runnerId) || this.runnerRow(runnerId) === undefined) return false;
+  public deleteRunner(runnerId: string, confirmation: string, nowMs: number): boolean {
+    if (!isSafeIdentifier(runnerId) || confirmation !== runnerId || this.runnerRow(runnerId) === undefined) return false;
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE runner_id = ?", runnerId);
+      this.ctx.storage.sql.exec("DELETE FROM client_runner_overrides WHERE runner_id = ?", runnerId);
       this.ctx.storage.sql.exec("DELETE FROM workspaces WHERE runner_id = ?", runnerId);
       this.ctx.storage.sql.exec("DELETE FROM managed_workspaces WHERE runner_id = ?", runnerId);
       this.ctx.storage.sql.exec("DELETE FROM jobs WHERE runner_id = ?", runnerId);
@@ -718,15 +725,14 @@ export class RegistryDO {
       token_verifier = '', state = 'offline', session_id = NULL, last_heartbeat_ms = NULL, updated_at_ms = ? WHERE runner_id = ?`, nowMs, runnerId);
     return result.rowsWritten === 1;
   }
-  public revokeRunner(runnerId: string, nowMs: number): void {
+  public revokeRunner(runnerId: string, confirmation: string, nowMs: number): boolean {
+    if (!isSafeIdentifier(runnerId) || confirmation !== runnerId || this.runnerRow(runnerId) === undefined) return false;
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec(`UPDATE runners SET credential_version = credential_version + 1, connection_epoch = connection_epoch + 1,
        token_verifier = '', state = 'offline', session_id = NULL, metadata_json = NULL, last_heartbeat_ms = NULL,
        last_sync_sequence = NULL, updated_at_ms = ? WHERE runner_id = ?`, nowMs, runnerId);
-      this.ctx.storage.sql.exec("DELETE FROM workspaces WHERE runner_id = ?", runnerId);
-      this.ctx.storage.sql.exec("DELETE FROM managed_workspaces WHERE runner_id = ?", runnerId);
-      this.ctx.storage.sql.exec("DELETE FROM jobs WHERE runner_id = ?", runnerId);
     });
+    return true;
   }
   public recordJobEvent(runnerId: string, epoch: number, credentialVersion: number, message: unknown, nowMs: number, requireOnline = true): boolean {
     if (!this.sessionIsCurrent(runnerId, epoch, credentialVersion, requireOnline)) return false;
@@ -833,13 +839,13 @@ export class RegistryDO {
       const displayName = stringField(input, "display_name", 256); const runner = displayName === undefined ? undefined : this.addRunner(runnerId, displayName, now);
       return runner === undefined ? new Response("conflict", { status: 409 }) : Response.json(runner);
     }
-    if (request.method === "DELETE" && action === undefined) return this.deleteRunner(runnerId, now) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 });
+    if (request.method === "DELETE" && action === undefined) { const confirmation = stringField(input, "confirmation", 128); return confirmation !== undefined && this.deleteRunner(runnerId, confirmation, now) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 }); }
     if (request.method === "POST" && action === "rename") { const displayName = stringField(input, "display_name", 256); const runner = displayName === undefined ? undefined : this.renameRunner(runnerId, displayName, now); return runner === undefined ? new Response("not found", { status: 404 }) : Response.json(runner); }
     if (request.method === "POST" && action === "enrollments") { const enrollmentId = stringField(input, "enrollment_id", 43); const verifier = stringField(input, "verifier", 64); const enrollment = enrollmentId === undefined || verifier === undefined ? undefined : this.createRunnerEnrollment(runnerId, enrollmentId, verifier, now); return enrollment === undefined ? new Response("not found", { status: 404 }) : Response.json(enrollment); }
     if (request.method === "POST" && action === "rotate") { this.invalidateRunnerCredential(runnerId, now); return new Response(null, { status: 204 }); }
-    if (request.method === "POST" && action === "revoke") { this.revokeRunner(runnerId, now); return new Response(null, { status: 204 }); }
+    if (request.method === "POST" && action === "revoke") { const confirmation = stringField(input, "confirmation", 128); return confirmation !== undefined && this.revokeRunner(runnerId, confirmation, now) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 }); }
     if (request.method === "GET" && action === "workspaces" && itemId === undefined) return Response.json({ runner_id: runnerId, workspaces: this.listWorkspaces(runnerId) });
-    if (request.method === "POST" && action === "policy-ack") { const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const desiredRevision = integerField(input, "desired_revision"); const appliedRevision = integerField(input, "applied_revision"); const status = input.status; const statuses = workspaceStatusesField(input.workspace_status); if (epoch === undefined || credentialVersion === undefined || desiredRevision === undefined || appliedRevision === undefined || (status !== "applied" && status !== "pending" && status !== "invalid") || statuses === undefined) return Response.json({ error: "invalid policy acknowledgement" }, { status: 400 }); return this.acknowledgePolicy(runnerId, epoch, credentialVersion, { desired_revision: desiredRevision, applied_revision: appliedRevision, status, workspace_status: statuses }, now) ? new Response(null, { status: 204 }) : new Response("stale policy acknowledgement", { status: 409 }); }
+    if (request.method === "POST" && action === "policy-ack") { const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const desiredRevision = integerField(input, "desired_revision"); const desiredChecksum = stringField(input, "desired_checksum", 64); const appliedRevision = integerField(input, "applied_revision"); const appliedChecksum = stringField(input, "applied_checksum", 64); const reportedRevision = integerField(input, "runner_reported_policy_revision"); const status = input.status; const statuses = workspaceStatusesField(input.workspace_status); if (epoch === undefined || credentialVersion === undefined || desiredRevision === undefined || desiredChecksum === undefined || appliedRevision === undefined || appliedChecksum === undefined || reportedRevision === undefined || (status !== "applied" && status !== "pending" && status !== "invalid") || statuses === undefined) return Response.json({ error: "invalid policy acknowledgement" }, { status: 400 }); return this.acknowledgePolicy(runnerId, epoch, credentialVersion, { desired_revision: desiredRevision, desired_checksum: desiredChecksum, applied_revision: appliedRevision, applied_checksum: appliedChecksum, runner_reported_policy_revision: reportedRevision, status, workspace_status: statuses }, now) ? new Response(null, { status: 204 }) : new Response("stale policy acknowledgement", { status: 409 }); }
     if (request.method === "GET" && action === "desired-policy" && itemId === undefined) { const policy = this.desiredPolicy(runnerId); return policy === undefined ? new Response("not found", { status: 404 }) : Response.json(policy); }
     if (request.method === "GET" && action === "policy-revision" && itemId === undefined) { const runner = this.getRunner(runnerId); return runner === undefined ? new Response("not found", { status: 404 }) : Response.json({ desired_policy_revision: runner.desired_policy_revision, applied_policy_revision: runner.applied_policy_revision, runner_reported_policy_revision: runner.runner_reported_policy_revision, policy_status: runner.policy_status }); }
     if (request.method === "GET" && action === "jobs" && itemId === undefined) {
@@ -961,9 +967,9 @@ export class RegistryDO {
       return runner === undefined ? new Response("not found", { status: 404 }) : Response.json(runner);
     }
     if (method === "POST" && action === "runners" && clientId !== undefined && segments[2] === "policy-ack" && isSafeIdentifier(clientId)) {
-      const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const desiredRevision = integerField(input, "desired_revision"); const appliedRevision = integerField(input, "applied_revision"); const status = input.status; const statuses = workspaceStatusesField(input.workspace_status);
-      if (epoch === undefined || credentialVersion === undefined || desiredRevision === undefined || appliedRevision === undefined || (status !== "applied" && status !== "pending" && status !== "invalid") || statuses === undefined) return Response.json({ error: "invalid policy acknowledgement" }, { status: 400 });
-      return this.acknowledgePolicy(clientId, epoch, credentialVersion, { desired_revision: desiredRevision, applied_revision: appliedRevision, status, workspace_status: statuses }, nowMs) ? new Response(null, { status: 204 }) : new Response("stale policy acknowledgement", { status: 409 });
+      const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const desiredRevision = integerField(input, "desired_revision"); const desiredChecksum = stringField(input, "desired_checksum", 64); const appliedRevision = integerField(input, "applied_revision"); const appliedChecksum = stringField(input, "applied_checksum", 64); const reportedRevision = integerField(input, "runner_reported_policy_revision"); const status = input.status; const statuses = workspaceStatusesField(input.workspace_status);
+      if (epoch === undefined || credentialVersion === undefined || desiredRevision === undefined || desiredChecksum === undefined || appliedRevision === undefined || appliedChecksum === undefined || reportedRevision === undefined || (status !== "applied" && status !== "pending" && status !== "invalid") || statuses === undefined) return Response.json({ error: "invalid policy acknowledgement" }, { status: 400 });
+      return this.acknowledgePolicy(clientId, epoch, credentialVersion, { desired_revision: desiredRevision, desired_checksum: desiredChecksum, applied_revision: appliedRevision, applied_checksum: appliedChecksum, runner_reported_policy_revision: reportedRevision, status, workspace_status: statuses }, nowMs) ? new Response(null, { status: 204 }) : new Response("stale policy acknowledgement", { status: 409 });
     }
     if (method === "POST" && action === "mcp" && clientId === "verify") { const verifier = stringField(input, "secret_verifier", 64); if (verifier === undefined) return new Response("not found", { status: 404 }); const client = this.verifyMcpClient(verifier, nowMs); return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client); }
     return new Response("not found", { status: 404 });
@@ -1124,7 +1130,7 @@ function workspaceStatusesField(value: unknown): Array<{ workspace_id: string; s
   if (!Array.isArray(value) || value.length > 64) return undefined;
   const valid = new Set<WorkspaceValidationStatus>(["valid", "missing", "not_directory", "permission_denied", "invalid_path"]);
   const output: Array<{ workspace_id: string; status: WorkspaceValidationStatus }> = [];
-  for (const item of value) { if (typeof item !== "object" || item === null || Array.isArray(item)) return undefined; const value = item as Record<string, unknown>; if (!isSafeIdentifier(String(value.workspace_id)) || typeof value.status !== "string" || !valid.has(value.status as WorkspaceValidationStatus)) return undefined; output.push({ workspace_id: value.workspace_id as string, status: value.status as WorkspaceValidationStatus }); }
+  for (const item of value) { if (typeof item !== "object" || item === null || Array.isArray(item)) return undefined; const itemValue = item as Record<string, unknown>; if (typeof itemValue.workspace_id !== "string" || !isSafeIdentifier(itemValue.workspace_id) || typeof itemValue.status !== "string" || !valid.has(itemValue.status as WorkspaceValidationStatus)) return undefined; output.push({ workspace_id: itemValue.workspace_id, status: itemValue.status as WorkspaceValidationStatus }); }
   return output;
 }
 function validVerifier(value: string): boolean { return /^[0-9a-f]{64}$/.test(value); }
