@@ -186,8 +186,9 @@ describe("persistent local jobs", () => {
       await writeFile(metaPath, JSON.stringify(meta));
       const afterCrash = new JobManager({ policy: policy(test.workspace), stateDir: test.state, maxRetainedJobs: 100 });
       await afterCrash.initialize();
-      expect(afterCrash.get(vanished.job_id).status).toBe("interrupted");
+      await expect(waitFor(() => afterCrash.get(vanished.job_id), (value) => value.status === "interrupted")).resolves.toMatchObject({ status: "interrupted" });
       await first.cancel(alive.job_id);
+      await waitFor(() => first.get(alive.job_id), (value) => value.status === "cancelled" || value.status === "failed");
     } finally { await test.cleanup(); }
   });
 
