@@ -159,11 +159,11 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(shellText).toContain("set -eu"); expect(shellText).toContain("/etc/systemd/system/remote-coding-runner.service"); expect(shellText).toContain("administrator/root privileges");
     expect(powershellText).toContain("$ErrorActionPreference = 'Stop'"); expect(powershellText).toContain("$env:ProgramFiles"); expect(powershellText).toContain("Administrator PowerShell");
     expect(shellText).toContain("--prefix \"$NPM_PREFIX\""); expect(shellText).not.toContain("npm install --global \"$PACKAGE_SPEC\"");
-    expect(await release.json()).toMatchObject({ channel: "stable", distributable: false, package_spec: "", current_version: "0.1.0", latest_version: "0.1.0", package_version: "0.1.0", artifact: null, protocol: { min_version: 1, max_version: 1 } });
+    expect(await release.json()).toMatchObject({ channel: "stable", distributable: false, package_spec: "", current_version: "0.1.0", latest_version: "0.1.0", package_version: "0.1.0", artifact: null, protocol: { min_version: 2, max_version: 2 } });
     const stable = await SELF.fetch("https://worker.test/runner/releases/stable");
     expect(stable.status).toBe(200);
-    expect(await stable.json()).toMatchObject({ channel: "stable", current_version: "0.1.0", latest_version: "0.1.0", package_version: "0.1.0", protocol: { min_version: 1, max_version: 1 } });
-    expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "@acme/coding-runner@1.2.3" })).toMatchObject({ channel: "stable", distributable: true, package_name: "@acme/coding-runner", package_version: "1.2.3", package_spec: "@acme/coding-runner@1.2.3", artifact: { source: "@acme/coding-runner@1.2.3" }, protocol: { min_version: 1, max_version: 1 } });
+    expect(await stable.json()).toMatchObject({ channel: "stable", current_version: "0.1.0", latest_version: "0.1.0", package_version: "0.1.0", protocol: { min_version: 2, max_version: 2 } });
+    expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "@acme/coding-runner@1.2.3" })).toMatchObject({ channel: "stable", distributable: true, package_name: "@acme/coding-runner", package_version: "1.2.3", package_spec: "@acme/coding-runner@1.2.3", artifact: { source: "@acme/coding-runner@1.2.3" }, protocol: { min_version: 2, max_version: 2 } });
     expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "https://downloads.example.test/runner-1.2.3.tgz", RUNNER_PACKAGE_NAME: "@acme/coding-runner", RUNNER_PACKAGE_VERSION: "1.2.3" })).toMatchObject({ distributable: true, package_version: "1.2.3", artifact: { source: "https://downloads.example.test/runner-1.2.3.tgz" } });
     expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "https://downloads.example.test/runner-1.2.3.tgz", RUNNER_PACKAGE_NAME: "@acme/coding-runner", RUNNER_PACKAGE_VERSION: "1.2.3", RUNNER_ARTIFACT_SHA256: "a".repeat(64) })).toMatchObject({ distributable: true, artifact: { source: "https://downloads.example.test/runner-1.2.3.tgz", checksum: { algorithm: "sha256", value: "a".repeat(64) } } });
     expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "@acme/coding-runner@latest" }).distributable).toBe(false);
@@ -181,10 +181,10 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     await runInDurableObject(registry, async (instance) => {
       expect(instance.createRunnerEnrollment(runnerId as string, randomBase64Url(), await sha256Hex(code), now)).toBeDefined();
     });
-    const response = await SELF.fetch("https://worker.test/runner/enroll", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ enrollment_code: code, runner_public_info: { platform: "linux", architecture: "x64", hostname: "host", runner_version: "1.0", protocol_version: 1 } }) });
+    const response = await SELF.fetch("https://worker.test/runner/enroll", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ enrollment_code: code, runner_public_info: { platform: "linux", architecture: "x64", hostname: "host", runner_version: "1.0", protocol_version: 2 } }) });
     expect(response.status).toBe(200); expect(response.headers.get("cache-control")).toBe("no-store"); expect(response.headers.get("referrer-policy")).toBe("no-referrer"); expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
     const body = await response.json() as { token?: string }; expect(body.token).toMatch(/^[a-f0-9]{64}$/);
-    const second = await SELF.fetch("https://worker.test/runner/enroll", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ enrollment_code: code, runner_public_info: { platform: "linux", architecture: "x64", hostname: "host", runner_version: "1.0", protocol_version: 1 } }) });
+    const second = await SELF.fetch("https://worker.test/runner/enroll", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ enrollment_code: code, runner_public_info: { platform: "linux", architecture: "x64", hostname: "host", runner_version: "1.0", protocol_version: 2 } }) });
     expect(second.status).toBe(401);
   });
 

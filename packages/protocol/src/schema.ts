@@ -5,8 +5,8 @@ import { z } from "zod";
  * capabilities are added without changing it; incompatible wire changes use a
  * new major version.
  */
-export const PROTOCOL_MIN_VERSION = 1;
-export const PROTOCOL_CURRENT_VERSION = 1;
+export const PROTOCOL_MIN_VERSION = 2;
+export const PROTOCOL_CURRENT_VERSION = 2;
 export const MAX_FRAME_BYTES = 1_048_576;
 /** Maximum duration for normal synchronous Runner operations such as exec.run and Git. */
 export const LOCAL_RUNNER_OPERATION_TIMEOUT_MS = 8_000;
@@ -224,12 +224,25 @@ const CorrelatedEnvelopeSchema = EnvelopeSchema.extend({
   request_id: IdentifierSchema,
 }).strict();
 
+export const ProtectedRpcMethodSchema = z.enum([
+  "env.info", "workspace.list", "fs.stat", "fs.read", "fs.list", "fs.search", "fs.apply_patch", "fs.patch",
+  "git.status", "git.diff", "exec.start", "exec.run", "job.list", "job.get", "job.logs", "job.cancel", "job.input",
+]);
+export type ProtectedRpcMethod = z.infer<typeof ProtectedRpcMethodSchema>;
+/** Unknown methods are protected by default; only echo and runner.info are unprotected. */
+export function isProtectedRpcMethod(method: string): boolean {
+  return method !== "echo" && method !== "runner.info";
+}
+
 /**
  * Authenticated control-plane policy delivered only to a Runner. Root paths
  * never appear in public metadata or MCP responses.
  */
 export const RunnerPolicySchema = z.object({
-  revision: z.number().int().nonnegative(),
+  schema_version: z.literal(1),
+  runner_id: IdentifierSchema,
+  revision: z.number().int().positive().refine(Number.isSafeInteger),
+  checksum: z.string().regex(/^[a-f0-9]{64}$/),
   runner_permissions: PermissionSetSchema,
   workspaces: z.array(RunnerPolicyWorkspaceSchema).max(64),
 }).strict();
@@ -265,8 +278,10 @@ export const RunnerWelcomeSchema = CorrelatedEnvelopeSchema.extend({
 export const RunnerPolicyAckSchema = EnvelopeSchema.extend({
   type: z.literal("runner.policy_ack"),
   runner_id: IdentifierSchema,
-  desired_revision: z.number().int().nonnegative(),
-  applied_revision: z.number().int().nonnegative(),
+  desired_revision: z.number().int().positive().refine(Number.isSafeInteger),
+  desired_checksum: z.string().regex(/^[a-f0-9]{64}$/),
+  applied_revision: z.number().int().nonnegative().refine(Number.isSafeInteger),
+  applied_checksum: z.string().regex(/^[a-f0-9]{64}$/),
   status: z.enum(["applied", "pending", "invalid"]),
   /** Per-workspace non-sensitive validation status; roots are never echoed. */
   workspace_status: z.array(z.object({
@@ -295,10 +310,14 @@ export const RpcRequestSchema = CorrelatedEnvelopeSchema.extend({
   type: z.literal("rpc.request"),
   method: ShortTextSchema,
   params: JsonValueSchema,
-  policy_revision: z.number().int().nonnegative().nullable().optional(),
+  policy_revision: z.number().int().positive().refine(Number.isSafeInteger).optional(),
   workspace: WorkspaceMetadataSchema.optional(),
   job: JobMetadataSchema.optional(),
-}).strict();
+}).strict().superRefine((value, context) => {
+  if (isProtectedRpcMethod(value.method) && value.policy_revision === undefined) {
+    context.addIssue({ code: "custom", path: ["policy_revision"], message: "protected RPC methods require a positive policy_revision" });
+  }
+});
 
 export const RpcResponseSchema = CorrelatedEnvelopeSchema.extend({
   type: z.literal("rpc.response"),

@@ -7,6 +7,7 @@ import {
   PROTOCOL_MIN_VERSION,
   RunnerMetadataSchema,
   RunnerSyncSchema,
+  runnerPolicyChecksum,
   type RunnerMetadata,
 } from "@aloneio/runmesh-protocol";
 import { constantTimeEqual, isSafeIdentifier, runnerTokenVerifier, verifyInternalRequest } from "./security.js";
@@ -499,16 +500,19 @@ export class RegistryDO {
     return this.selectMcpClientRunner(clientId, runners[0]?.runner_id ?? "", false, nowMs);
   }
 
-  public desiredPolicy(runnerId: string): { revision: number; runner_permissions: PermissionSet; workspaces: Array<{ workspace_id: string; root_path: string; enabled: boolean; permissions: PermissionSet }> } | undefined {
+  public desiredPolicy(runnerId: string): { schema_version: 1; runner_id: string; revision: number; checksum: string; runner_permissions: PermissionSet; workspaces: Array<{ workspace_id: string; root_path: string; enabled: boolean; permissions: PermissionSet }> } | undefined {
     const runner = this.runnerRow(runnerId);
     if (runner === undefined) return undefined;
     const managed = this.listManagedWorkspaces(runnerId);
     if (runner.desired_policy_revision === 0 && managed.length === 0) return undefined;
-    return {
-      revision: runner.desired_policy_revision,
+    const unsigned = {
+      schema_version: 1 as const,
+      runner_id: runnerId,
+      revision: Math.max(1, runner.desired_policy_revision),
       runner_permissions: parsePermissionSet(runner.runner_permissions_json) ?? LOCKED_PERMISSIONS,
       workspaces: managed.map((workspace) => ({ workspace_id: workspace.workspace_id, root_path: workspace.root_path, enabled: workspace.enabled, permissions: workspace.permissions })),
     };
+    return { ...unsigned, checksum: runnerPolicyChecksum(unsigned) };
   }
   public listManagedWorkspaces(runnerId: string): WorkspaceRecord[] {
     return this.ctx.storage.sql.exec<ManagedWorkspaceRow>("SELECT * FROM managed_workspaces WHERE runner_id = ? ORDER BY created_at_ms, workspace_id", runnerId).toArray().flatMap((row) => decodeWorkspace(row));

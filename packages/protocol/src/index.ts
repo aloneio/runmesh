@@ -42,6 +42,8 @@ export {
   WireMessageSchema,
   WorkerMetadataSchema,
   WorkspaceMetadataSchema,
+  ProtectedRpcMethodSchema,
+  isProtectedRpcMethod,
 } from "./schema.js";
 export type {
   CapabilityMetadata,
@@ -70,9 +72,12 @@ export type {
   WireMessage,
   WorkerMetadata,
   WorkspaceMetadata,
+  ProtectedRpcMethod,
 } from "./schema.js";
 
 export { generateWireMessageJsonSchema } from "./schema-artifact.js";
+export { canonicalJson, policyWithoutChecksum, runnerPolicyChecksum, sha256Hex } from "./crypto.js";
+export type { RunnerPolicyChecksumInput } from "./crypto.js";
 
 export {
   MAX_FRAME_BYTES,
