@@ -15,6 +15,8 @@ export interface EnrollmentOptions {
   readonly executionMode?: "dedicated_user" | "privileged_host";
   /** Explicit acknowledgement required when selecting privileged_host. */
   readonly confirmPrivilegedHost?: boolean;
+  /** Explicit acknowledgement required before replacing an existing profile's credentials. */
+  readonly reEnroll?: boolean;
 }
 export interface EnrollmentResult { readonly profile: RunnerProfile; }
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -23,6 +25,9 @@ const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 export async function enrollRunner(options: EnrollmentOptions): Promise<EnrollmentResult> {
   if (options.executionMode !== undefined && options.executionMode !== "dedicated_user" && options.executionMode !== "privileged_host") throw new Error("--execution-mode must be dedicated_user or privileged_host");
   if (options.executionMode === "privileged_host" && options.confirmPrivilegedHost !== true) throw new Error("privileged_host execution mode requires --confirm-privileged-host");
+  const store = options.store ?? new ProfileStore();
+  const existing = await store.load();
+  if (existing !== undefined && options.reEnroll !== true) throw new Error("an existing Runner profile was found; use --re-enroll to replace its connection credentials");
   const endpoint = enrollmentEndpoint(options.server, options.insecureLocal === true);
   if (!/^[A-Za-z0-9_-]{20,256}$/.test(options.code)) throw new Error("--code must be a one-time enrollment code");
   const request = options.fetch ?? globalThis.fetch;
@@ -38,8 +43,6 @@ export async function enrollRunner(options: EnrollmentOptions): Promise<Enrollme
   const body = await response.json().catch(() => undefined);
   const enrolled = enrollmentResponse(body);
   if (enrolled === undefined) throw new Error("enrollment response is invalid");
-  const store = options.store ?? new ProfileStore();
-  const existing = await store.load();
   // Enrollment represents a machine Runner. It intentionally never infers a local
   // workspace from process.cwd() (or from the legacy cwd option). Initial
   // enrollment therefore has zero workspaces; re-enrollment keeps explicitly
