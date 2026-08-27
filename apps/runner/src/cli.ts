@@ -5,10 +5,10 @@ import { isAbsolute, join, resolve } from "node:path";
 import { parseRunnerArgs, validateRunnerConfig, type RawRunnerOptions } from "./config.js";
 import { RunnerConnection } from "./connection.js";
 import { enrollRunner } from "./enrollment.js";
-import { ProfileStore, defaultWorkspaceId, redactedProfile, workspaceOptions, type RunnerProfile, type StoredWorkspace } from "./profile.js";
+import { ProfileStore, defaultWorkspaceId, profileExecutionMode, redactedProfile, workspaceOptions, type RunnerProfile, type StoredWorkspace } from "./profile.js";
 import { EnvironmentInfoService, discoverShellRuntime, type ShellRuntime } from "./runtime.js";
 import { RUNNER_VERSION } from "./version.js";
-import { assertManagedServiceManifest, createServiceManager, hostServiceManifestFilesystem, installServiceManifest, isManagedService, removeServiceManifest, renderService, serviceLayout, type ExecutionMode, type ServiceManagerAdapter, type ServiceManifest, type ServiceManifestFilesystem, type ServicePlatform } from "./service.js";
+import { assertManagedServiceManifest, createServiceManager, createServiceProvisioner, hostServiceManifestFilesystem, installServiceManifest, isManagedService, removeServiceManifest, renderService, serviceLayout, type ExecutionMode, type ServiceManagerAdapter, type ServiceManifest, type ServiceManifestFilesystem, type ServicePlatform, type ServiceProvisioner } from "./service.js";
 
 export interface CliDependencies {
   readonly store?: ProfileStore;
@@ -18,6 +18,8 @@ export interface CliDependencies {
   readonly startRunner?: (config: Awaited<ReturnType<typeof validateRunnerConfig>>) => Promise<void>;
   /** Injectable host adapter; production uses the platform service manager. */
   readonly serviceManager?: ServiceManagerAdapter;
+  /** Injectable service-account and Runmesh-owned directory/ACL setup. */
+  readonly serviceProvisioner?: ServiceProvisioner;
   /** Injectable manifest I/O keeps service tests off the host filesystem. */
   readonly serviceFilesystem?: ServiceManifestFilesystem;
   readonly servicePlatform?: ServicePlatform;
@@ -78,8 +80,8 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
     }
     if (parsed.command === "status") {
       const profile = await store.load();
-      const executionMode = profile?.execution_mode ?? "dedicated_user";
-      report(output, parsed.json, { configured: profile !== undefined, profile: redactedProfile(profile), runner_id: profile?.runner_id ?? null, display_name: null, version: null, service: { mode: parsed.values.user === true ? "user" : "system", execution_mode: parsed.values.user === true ? "dedicated_user" : executionMode, status: "unknown" }, connection: "unknown", desired_policy_revision: null, applied_policy_revision: null, workspace_count: profile?.workspaces.length ?? 0 });
+      const executionMode = parsed.values.user === true ? "dedicated_user" : profileExecutionMode(profile) ?? "migration_required";
+      report(output, parsed.json, { configured: profile !== undefined, profile: redactedProfile(profile), runner_id: profile?.runner_id ?? null, display_name: null, version: null, service: { mode: parsed.values.user === true ? "user" : "system", execution_mode: executionMode, status: "unknown" }, connection: "unknown", desired_policy_revision: null, applied_policy_revision: null, workspace_count: profile?.workspaces.length ?? 0 });
       return;
     }
     if (parsed.command === "workspace") { await workspaceCommand(parsed, store, output); return; }
@@ -156,7 +158,7 @@ export interface DoctorReport {
   readonly ok: boolean;
   readonly checks: readonly DoctorCheck[];
   readonly profile: Record<string, unknown> | undefined;
-  readonly service: { readonly manifest: string; readonly mode: "system" | "user"; readonly execution_mode: ExecutionMode };
+  readonly service: { readonly manifest: string; readonly mode: "system" | "user"; readonly execution_mode: ExecutionMode | "migration_required" };
 }
 
 export async function doctor(store: ProfileStore, mode: "system" | "user" = "system", platform: ServicePlatform | undefined = undefined, dependencies: Pick<CliDependencies, "serviceFilesystem" | "serviceManager" | "environment" | "discoverShellRuntime" | "policyRevision"> = {}): Promise<DoctorReport> {
@@ -181,9 +183,10 @@ export async function doctor(store: ProfileStore, mode: "system" | "user" = "sys
     }
   } else add("server_url", false, false, "not enrolled");
 
-  const executionMode = mode === "user" ? "dedicated_user" : profile?.execution_mode ?? "dedicated_user";
-  add("execution_mode", enrolled, enrolled, !enrolled ? "not enrolled" : profile?.execution_mode === undefined ? "legacy profile defaults to dedicated_user; review service identity before installation" : executionMode);
-  const manifest = renderService({ ...(platform === undefined ? {} : { platform }), mode, profilePath: store.filePath, executionMode });
+  const storedMode = profileExecutionMode(profile);
+  const executionMode: ExecutionMode | "migration_required" = mode === "user" ? "dedicated_user" : storedMode ?? "migration_required";
+  const manifest = renderService({ ...(platform === undefined ? {} : { platform }), mode, profilePath: store.filePath, ...(executionMode === "migration_required" ? {} : { executionMode }) });
+  add("execution_mode", enrolled, executionMode !== "migration_required", !enrolled ? "not enrolled" : executionMode === "migration_required" ? "legacy profile has no execution_mode; choose --execution-mode dedicated_user or privileged_host before installation" : executionMode);
   let serviceContent: string | undefined;
   try { serviceContent = await (dependencies.serviceFilesystem ?? hostServiceManifestFilesystem).read(manifest.path); } catch (error) { add("service_manifest", true, false, errorMessage(error)); }
   if (!checks.some((check) => check.name === "service_manifest")) {
@@ -199,10 +202,14 @@ export async function doctor(store: ProfileStore, mode: "system" | "user" = "sys
       const status = await manager.status(manifest);
       add("service_installed", true, status.installed, status.detail);
       add("service_active", true, status.active, status.detail);
+      const expectedIdentity = manifest.mode === "system" && manifest.executionMode === "dedicated_user" ? "runmesh" : undefined;
+      const identityMatches = expectedIdentity === undefined || status.identity === expectedIdentity || (manifest.platform === "win32" && status.identity === "NT AUTHORITY\\LOCAL SERVICE");
+      add("service_identity", expectedIdentity !== undefined, identityMatches, status.identity ?? "service identity unavailable");
     } catch (error) {
       const detail = errorMessage(error);
       add("service_installed", true, false, detail);
       add("service_active", true, false, detail);
+      add("service_identity", manifest.mode === "system" && manifest.executionMode === "dedicated_user", false, detail);
     }
   }
   const shell = await (dependencies.discoverShellRuntime ?? (() => discoverShellRuntime()))();
@@ -227,23 +234,26 @@ export async function doctor(store: ProfileStore, mode: "system" | "user" = "sys
 }
 async function serviceCommand(parsed: ParsedCommand, store: ProfileStore, output: (line: string) => void, dependencies: CliDependencies): Promise<void> {
   const manifest = await serviceManifestFor(parsed, store, dependencies.servicePlatform);
-  const manager = dependencies.serviceManager ?? createServiceManager({ ...(manifest.platform === undefined ? {} : { platform: manifest.platform }), mode: manifest.mode });
+  const manager = dependencies.serviceManager ?? createServiceManager({ platform: manifest.platform, mode: manifest.mode });
   if (manager.platform !== manifest.platform || manager.mode !== manifest.mode) throw new Error("service manager does not match the requested service mode");
   if (parsed.command === "install") {
     assertSystemInstallationPrivilege(manifest, dependencies);
+    const provisioner = dependencies.serviceProvisioner ?? createServiceProvisioner({ platform: manifest.platform });
+    const provisioned = await provisioner.provision(manifest, store.filePath);
     await installServiceManifest(manifest, dependencies.serviceFilesystem, { confirmPrivilegedHost: parsed.values.confirmPrivilegedHost === true });
     await manager.install(manifest);
-  } else {
-    await assertManagedServiceManifest(manifest, dependencies.serviceFilesystem);
-    if (parsed.command === "stop") await manager.stop(manifest);
-    else await manager.restart(manifest);
+    report(output, parsed.json, { action: "install", manifest: manifest.path, mode: manifest.mode, identity: provisioned.identity, profile_secured: provisioned.profileSecured, commands: serviceCommandNames("install", manifest) });
+    return;
   }
+  await assertManagedServiceManifest(manifest, dependencies.serviceFilesystem);
+  if (parsed.command === "stop") await manager.stop(manifest);
+  else await manager.restart(manifest);
   report(output, parsed.json, { action: parsed.command, manifest: manifest.path, mode: manifest.mode, commands: serviceCommandNames(parsed.command as "install" | "stop" | "restart", manifest) });
 }
 async function uninstall(parsed: ParsedCommand, store: ProfileStore, output: (line: string) => void, dependencies: CliDependencies): Promise<void> {
   if (parsed.values.purge === true && parsed.values.yes !== true) throw new Error("--purge requires --yes");
   const manifest = await serviceManifestFor(parsed, store, dependencies.servicePlatform);
-  const manager = dependencies.serviceManager ?? createServiceManager({ ...(manifest.platform === undefined ? {} : { platform: manifest.platform }), mode: manifest.mode });
+  const manager = dependencies.serviceManager ?? createServiceManager({ platform: manifest.platform, mode: manifest.mode });
   if (manager.platform !== manifest.platform || manager.mode !== manifest.mode) throw new Error("service manager does not match the requested service mode");
   assertSystemInstallationPrivilege(manifest, dependencies);
   const managed = await assertManagedServiceManifest(manifest, dependencies.serviceFilesystem);
@@ -300,8 +310,12 @@ async function serviceManifestFor(parsed: ParsedCommand, store: ProfileStore, pl
   const profile = await store.load();
   const requestedMode = parsed.values.executionMode;
   if (requestedMode !== undefined && requestedMode !== "dedicated_user" && requestedMode !== "privileged_host") throw new Error("--execution-mode must be dedicated_user or privileged_host");
-  const executionMode: ExecutionMode = parsed.values.user === true ? "dedicated_user" : profile === undefined ? "dedicated_user" : requestedMode ?? profile.execution_mode ?? "dedicated_user";
-  return renderService({ ...(platform === undefined ? {} : { platform }), mode: parsed.values.user === true ? "user" : "system", profilePath: store.filePath, executionMode, ...(typeof parsed.values.executablePath === "string" ? { executablePath: parsed.values.executablePath } : {}) });
+  const profileMode = profileExecutionMode(profile);
+  const profileExecutionModeValue: ExecutionMode | undefined = profileMode === "migration_required" ? undefined : profileMode;
+  if (parsed.values.user !== true && profileMode === "migration_required" && requestedMode === undefined) throw new Error("legacy Runner profile requires --execution-mode dedicated_user or --execution-mode privileged_host before system installation");
+  const executionMode: ExecutionMode = parsed.values.user === true ? "dedicated_user" : requestedMode ?? profileExecutionModeValue ?? "dedicated_user";
+  const requestedServiceMode = parsed.values.user === true ? "user" : "system";
+  return renderService({ ...(platform === undefined ? {} : { platform }), mode: requestedServiceMode, profilePath: store.filePath, executionMode, ...(typeof parsed.values.executablePath === "string" ? { executablePath: parsed.values.executablePath } : {}) });
 }
 function assertSystemInstallationPrivilege(manifest: ServiceManifest, dependencies: CliDependencies): void {
   if (manifest.mode !== "system") return;
@@ -315,8 +329,8 @@ function assertSystemInstallationPrivilege(manifest: ServiceManifest, dependenci
 function serviceCommandNames(action: "install" | "stop" | "restart" | "uninstall", manifest: ServiceManifest): readonly string[] {
   if (manifest.platform === "linux") {
     const prefix = manifest.mode === "user" ? "systemctl --user" : "systemctl";
-    if (action === "install") return [`${prefix} daemon-reload`, `${prefix} enable --now remote-coding-runner.service`, `${prefix} is-active --quiet remote-coding-runner.service`];
-    return [`${prefix} ${action === "uninstall" ? "disable --now" : action} remote-coding-runner.service`];
+    if (action === "install") return [`${prefix} daemon-reload`, `${prefix} enable --now runmesh-runner.service`, `${prefix} is-active --quiet runmesh-runner.service`];
+    return [`${prefix} ${action === "uninstall" ? "disable --now" : action} runmesh-runner.service`];
   }
   return [];
 }
