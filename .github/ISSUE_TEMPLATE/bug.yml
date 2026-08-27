@@ -1,0 +1,52 @@
+name: Bug report
+description: Report a reproducible problem in Runmesh
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Runmesh. Do not include credentials, MCP secret URLs, enrollment codes, private workspace paths, sensitive logs, or vulnerability details. Use the security policy for security reports.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Include the development version, commit SHA, or deployed Worker version.
+      placeholder: package version / commit SHA
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Give a concise description of the observed behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: List the smallest safe reproduction. Redact secrets and private paths.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Node.js version, Runner mode, and relevant non-sensitive configuration.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have removed credentials, secret URLs, private workspace data, and sensitive logs.
+          required: true
+        - label: This is not a security vulnerability report.
+          required: true

@@ -4,6 +4,8 @@ import { dirname, join } from "node:path";
 import type { ExecutionMode } from "./service.js";
 import type { WorkspaceOption } from "./config.js";
 
+export type ProfileExecutionMode = ExecutionMode | "migration_required";
+
 export interface StoredWorkspace {
   readonly id: string;
   readonly path: string;
@@ -19,8 +21,8 @@ export interface RunnerProfile {
   readonly max_concurrent_jobs?: number;
   /** Development-only persisted allowance for loopback ws:// profiles. */
   readonly insecure_local?: boolean;
-  /** Machine service identity; omitted legacy profiles safely default to privileged_host for compatibility. */
-  readonly execution_mode?: ExecutionMode;
+  /** Machine service identity. Omitted pre-release profiles require explicit migration before service installation. */
+  readonly execution_mode?: ProfileExecutionMode;
 }
 export interface ProfileStoreOptions { readonly baseDir?: string; readonly filePath?: string; readonly platform?: NodeJS.Platform; readonly home?: string; }
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -91,20 +93,22 @@ export function validateProfile(value: unknown): RunnerProfile | undefined {
     seen.add(workspace.id as string);
     workspaces.push({ id: workspace.id as string, path: workspace.path as string, writable: workspace.writable, shell: workspace.shell });
   }
-  const executionMode = item.execution_mode === undefined ? undefined : validExecutionMode(item.execution_mode) ? item.execution_mode : undefined;
-  if (item.execution_mode !== undefined && executionMode === undefined) return undefined;
-  const result: RunnerProfile = {
-    version: 1, server_url: item.server_url as string, runner_id: item.runner_id as string, token: item.token as string, workspaces,
-    ...(item.insecure_local === true ? { insecure_local: true } : {}),
-    ...(executionMode === undefined ? {} : { execution_mode: executionMode }),
-  };
-  if (item.max_concurrent_jobs !== undefined) {
-    if (!Number.isSafeInteger(item.max_concurrent_jobs) || (item.max_concurrent_jobs as number) < 1 || (item.max_concurrent_jobs as number) > 64) return undefined;
-    return { ...result, max_concurrent_jobs: item.max_concurrent_jobs as number };
+  const executionMode: ProfileExecutionMode | undefined = item.execution_mode === undefined ? "migration_required" : validExecutionMode(item.execution_mode) ? item.execution_mode : undefined;
+  if (executionMode === undefined) return undefined;
+  const resultBase = { version: 1 as const, server_url: item.server_url as string, runner_id: item.runner_id as string, token: item.token as string, workspaces };
+  if (executionMode === "migration_required") {
+    const result: RunnerProfile = { ...resultBase, ...(item.insecure_local === true ? { insecure_local: true } : {}) };
+    return withMaxConcurrentJobs(result, item.max_concurrent_jobs);
   }
-  return result;
+  const result: RunnerProfile = { ...resultBase, ...(item.insecure_local === true ? { insecure_local: true } : {}), execution_mode: executionMode };
+  return withMaxConcurrentJobs(result, item.max_concurrent_jobs);
 }
 function validExecutionMode(value: unknown): value is ExecutionMode { return value === "dedicated_user" || value === "privileged_host"; }
+function withMaxConcurrentJobs(profile: RunnerProfile, value: unknown): RunnerProfile | undefined {
+  if (value === undefined) return profile;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > 64) return undefined;
+  return { ...profile, max_concurrent_jobs: value };
+}
 function validString(value: unknown, min: number, max: number): value is string { return typeof value === "string" && value.length >= min && value.length <= max && !/[\r\n]/.test(value); }
 function validServerUrl(value: unknown, insecureLocal: boolean): value is string {
   if (!validString(value, 2, 2_048)) return false;
@@ -116,6 +120,10 @@ function validServerUrl(value: unknown, insecureLocal: boolean): value is string
 }
 function isErrno(error: unknown, code: string): boolean { return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === code; }
 
+export function profileExecutionMode(profile: RunnerProfile | undefined): ProfileExecutionMode | undefined {
+  if (profile === undefined) return undefined;
+  return profile.execution_mode ?? "migration_required";
+}
 export function workspaceOptions(profile: RunnerProfile): Array<WorkspaceOption & { readonly: boolean; shell: boolean }> {
   return profile.workspaces.map((workspace) => ({ workspaceId: workspace.id, rootPath: workspace.path, readonly: !workspace.writable, shell: workspace.shell }));
 }

@@ -6,8 +6,8 @@ declares the following external runtime dependency:
 - [`ws` 8.21.3](https://www.npmjs.com/package/ws/v/8.21.3), MIT.
 
 It also depends on `@aloneio/runmesh-protocol`, which is a separately packaged
-part of this repository and has its own `LICENSE`, historical-license record,
-and third-party notice.
+part of this repository and has its own `LICENSE`, `NOTICE`, and third-party
+notice.
 
 npm installs dependencies separately. Their upstream license files and notices
 must be retained when dependencies are redistributed. This package's PolyForm

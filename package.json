@@ -1,9 +1,12 @@
 {
-  "name": "remote-coding-runtime",
-  "version": "0.1.0",
+  "name": "@aloneio/runmesh-monorepo",
+  "version": "0.1.0-dev.1",
   "private": true,
   "description": "A language-neutral protocol foundation for remote coding runtimes.",
-  "repository": { "type": "git", "url": "https://github.com/aloneio/runmesh.git" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aloneio/runmesh.git"
+  },
   "homepage": "https://github.com/aloneio/runmesh",
   "license": "PolyForm-Noncommercial-1.0.0",
   "workspaces": [
@@ -11,23 +14,29 @@
     "apps/*"
   ],
   "scripts": {
-    "build": "tsc -b",
+    "build": "npm run generate:version && tsc -b",
     "test": "npm run test --workspaces && npm run test:e2e",
     "test:unit": "npm run test --workspaces",
     "test:e2e": "VITE_CONFIG_NATIVE_IGNORE_WARNING=true vitest run --config vitest.e2e.config.ts",
-    "typecheck": "tsc -b --pretty false",
+    "typecheck": "npm run generate:version && tsc -b --pretty false",
     "validate:worker": "wrangler deploy --dry-run --config apps/worker/wrangler.jsonc",
-    "dev:worker": "npm run dev --workspace=@remote-coding-runtime/worker",
-    "start:runner": "npm run start --workspace=@remote-coding-runtime/runner --",
-    "pack:runner": "npm pack --workspace=@remote-coding-runtime/runner --dry-run",
+    "dev:worker": "npm run dev --workspace=@aloneio/runmesh-worker",
+    "start:runner": "npm run start --workspace=@aloneio/runmesh-runner --",
+    "pack:runner": "npm pack --workspace=@aloneio/runmesh-runner --dry-run",
     "pack:smoke": "node ./scripts/pack-smoke.mjs",
-    "check:licenses": "node ./scripts/check-licenses.mjs"
+    "check:licenses": "node ./scripts/check-licenses.mjs",
+    "set-version": "node ./scripts/set-version.mjs",
+    "check:versions": "node ./scripts/check-versions.mjs",
+    "generate:version": "node ./scripts/generate-version-modules.mjs",
+    "check:format": "node ./scripts/check-format.mjs $(git ls-files '*.ts' '*.mjs' '*.json' '*.jsonc' '*.md' '*.yml' '*.yaml')",
+    "test:release-tools": "node --test ./test/release-tools.test.mjs"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.22.0",
     "@cloudflare/workers-types": "^5.20260825.1",
     "@types/node": "^24.10.1",
     "@types/ws": "^8.18.1",
+    "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11",
     "wrangler": "^4.125.0"

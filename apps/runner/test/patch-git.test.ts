@@ -1,7 +1,7 @@
 import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { encodeWireFrame } from "@aloneio/runmesh-protocol";
+import { PROTOCOL_CURRENT_VERSION, encodeWireFrame } from "@aloneio/runmesh-protocol";
 import { describe, expect, it } from "vitest";
 import { GitService } from "../src/git-service.js";
 import { PatchService } from "../src/patch-service.js";
@@ -227,7 +227,7 @@ describe("git inspection", () => {
       const diff = await git.diff({ workspace_id: test.workspace.workspaceId, path: "emoji.txt", max_bytes: 513 });
       expect(diff).toMatchObject({ truncated: true });
       expect((diff.diff as string).includes("\ufffd")).toBe(false);
-      expect(() => encodeWireFrame({ type: "rpc.response", protocol_version: 1, request_id: "result", result: diff })).not.toThrow();
+      expect(() => encodeWireFrame({ type: "rpc.response", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "result", result: diff })).not.toThrow();
     } finally { await test.cleanup(); }
   });
 

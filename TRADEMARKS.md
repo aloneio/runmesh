@@ -20,9 +20,8 @@ Without prior written permission from the applicable trademark owner, do not:
 - register or seek rights in a confusingly similar mark, domain, or account.
 
 If you distribute a modified version, choose a clearly distinguishable name and
-state that it is modified. Retain required license and attribution notices;
-see [LICENSE_HISTORY.md](LICENSE_HISTORY.md) and
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+state that it is modified. Retain required license and attribution notices; see
+[NOTICE](NOTICE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Third-party product names, logos, and marks mentioned in the repository belong
 to their respective owners. This document is not a trademark license or legal

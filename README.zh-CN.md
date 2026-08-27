@@ -297,6 +297,6 @@ git diff --check
 
 Runmesh 依据 [PolyForm Noncommercial License 1.0.0](LICENSE) 以源码可用形式提供，**不是** OSI 认可的开源软件。商业使用或额外权利需要单独书面授权，请查看 [COMMERCIAL_LICENSE.zh-CN.md](COMMERCIAL_LICENSE.zh-CN.md)。
 
-该许可证变更向前适用。最后一个 Apache 许可版本及完整历史 Apache 文本保存在 [LICENSE_HISTORY.zh-CN.md](LICENSE_HISTORY.zh-CN.md) 与 [LICENSES/Apache-2.0-history.txt](LICENSES/Apache-2.0-history.txt)。第三方边界见 [THIRD_PARTY_NOTICES.zh-CN.md](THIRD_PARTY_NOTICES.zh-CN.md)，名称和徽标使用见 [TRADEMARKS.zh-CN.md](TRADEMARKS.zh-CN.md)，安全问题请通过 [SECURITY.zh-CN.md](SECURITY.zh-CN.md) 报告。
+所需 Runmesh 通知见 [NOTICE](NOTICE)，第三方边界见 [THIRD_PARTY_NOTICES.zh-CN.md](THIRD_PARTY_NOTICES.zh-CN.md)，社区贡献条款见 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md) 和 [CONTRIBUTION_PERMISSION.zh-CN.md](CONTRIBUTION_PERMISSION.zh-CN.md)，名称和徽标使用见 [TRADEMARKS.zh-CN.md](TRADEMARKS.zh-CN.md)，安全问题请通过 [SECURITY.zh-CN.md](SECURITY.zh-CN.md) 报告。
 
 Runmesh 是独立实现。设计研究参考了 [coding-tools-mcp](https://github.com/xyTom/coding-tools-mcp)、[volter-tunnel](https://github.com/volter-ai/volter-tunnel)、[agent-mcp-gateway](https://github.com/Hiroshimeow/agent-mcp-gateway) 以及 Cloudflare/MCP 官方文档，仅用于行为和架构研究，不表示包含其源码或资产。

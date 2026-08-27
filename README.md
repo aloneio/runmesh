@@ -297,6 +297,6 @@ The validation suite is local evidence. It does not prove Cloudflare account quo
 
 Runmesh is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE). It is **not** OSI-approved open-source software. Commercial use or additional rights require a separate written agreement; see [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md).
 
-The license change applies prospectively. The last Apache-licensed revision and exact historical Apache text are preserved in [LICENSE_HISTORY.md](LICENSE_HISTORY.md) and [LICENSES/Apache-2.0-history.txt](LICENSES/Apache-2.0-history.txt). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for dependency boundaries, [TRADEMARKS.md](TRADEMARKS.md) for Runmesh name/logo guidance, and [SECURITY.md](SECURITY.md) for security reports.
+See [NOTICE](NOTICE) for required Runmesh notices, [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for dependency boundaries, [CONTRIBUTING.md](CONTRIBUTING.md) and [CONTRIBUTION_PERMISSION.md](CONTRIBUTION_PERMISSION.md) for community contribution terms, [TRADEMARKS.md](TRADEMARKS.md) for name/logo guidance, and [SECURITY.md](SECURITY.md) for security reports.
 
 Runmesh is an independent implementation. Design research considered [coding-tools-mcp](https://github.com/xyTom/coding-tools-mcp), [volter-tunnel](https://github.com/volter-ai/volter-tunnel), [agent-mcp-gateway](https://github.com/Hiroshimeow/agent-mcp-gateway), and official Cloudflare/MCP documentation. These are research acknowledgements only; no referenced source or asset is claimed as included.
