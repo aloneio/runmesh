@@ -21,6 +21,11 @@ export interface WorkerEnv {
   SETUP_TOKEN_HASH?: string;
   RUNNER_TOKEN_PEPPER?: string;
   INTERNAL_CONTROL_SECRET?: string;
+  RUNMESH_RELEASE_VERSION?: string;
+  RUNMESH_RELEASE_MANIFEST_URL?: string;
+  RUNMESH_RELEASE_SIGNATURE_URL?: string;
+  RUNMESH_RELEASE_SIGNATURE_DESCRIPTOR_URL?: string;
+  RUNMESH_RELEASE_KEY_ID?: string;
   /** A stable, externally resolvable npm package@version or HTTPS .tgz package URL for the public bootstrap installers. */
   RUNNER_PACKAGE_SPEC?: string;
   /** Required with a URL package spec; otherwise inferred from an npm package@version spec. */
