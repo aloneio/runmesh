@@ -5,6 +5,13 @@ import type { ExecutionMode } from "./service.js";
 import type { WorkspaceOption } from "./config.js";
 
 export type ProfileExecutionMode = ExecutionMode | "migration_required";
+/**
+ * `central` profiles receive Workspace authority from the authenticated
+ * control plane. `legacy_manual` retains only the deliberately opted-in
+ * local CLI compatibility path. Profiles written before this field existed
+ * are never guessed into either mode.
+ */
+export type ProfileManagementMode = "central" | "legacy_manual" | "migration_required";
 
 export interface StoredWorkspace {
   readonly id: string;
@@ -21,6 +28,11 @@ export interface RunnerProfile {
   readonly max_concurrent_jobs?: number;
   /** Development-only persisted allowance for loopback ws:// profiles. */
   readonly insecure_local?: boolean;
+  /**
+   * Explicit Workspace authority model. Omitted legacy profiles are reported
+   * as migration_required and cannot mutate local Workspace configuration.
+   */
+  readonly management_mode?: Exclude<ProfileManagementMode, "migration_required">;
   /** Machine service identity. Omitted pre-release profiles require explicit migration before service installation. */
   readonly execution_mode?: ProfileExecutionMode;
 }
@@ -95,7 +107,9 @@ export function validateProfile(value: unknown): RunnerProfile | undefined {
   }
   const executionMode: ProfileExecutionMode | undefined = item.execution_mode === undefined ? "migration_required" : validExecutionMode(item.execution_mode) ? item.execution_mode : undefined;
   if (executionMode === undefined) return undefined;
-  const resultBase = { version: 1 as const, server_url: item.server_url as string, runner_id: item.runner_id as string, token: item.token as string, workspaces };
+  const managementMode: ProfileManagementMode | undefined = item.management_mode === undefined ? "migration_required" : validManagementMode(item.management_mode) ? item.management_mode : undefined;
+  if (managementMode === undefined) return undefined;
+  const resultBase = { version: 1 as const, server_url: item.server_url as string, runner_id: item.runner_id as string, token: item.token as string, workspaces, ...(managementMode === "migration_required" ? {} : { management_mode: managementMode }) };
   if (executionMode === "migration_required") {
     const result: RunnerProfile = { ...resultBase, ...(item.insecure_local === true ? { insecure_local: true } : {}) };
     return withMaxConcurrentJobs(result, item.max_concurrent_jobs);
@@ -104,6 +118,7 @@ export function validateProfile(value: unknown): RunnerProfile | undefined {
   return withMaxConcurrentJobs(result, item.max_concurrent_jobs);
 }
 function validExecutionMode(value: unknown): value is ExecutionMode { return value === "dedicated_user" || value === "privileged_host"; }
+function validManagementMode(value: unknown): value is Exclude<ProfileManagementMode, "migration_required"> { return value === "central" || value === "legacy_manual"; }
 function withMaxConcurrentJobs(profile: RunnerProfile, value: unknown): RunnerProfile | undefined {
   if (value === undefined) return profile;
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > 64) return undefined;
@@ -123,6 +138,10 @@ function isErrno(error: unknown, code: string): boolean { return typeof error ==
 export function profileExecutionMode(profile: RunnerProfile | undefined): ProfileExecutionMode | undefined {
   if (profile === undefined) return undefined;
   return profile.execution_mode ?? "migration_required";
+}
+export function profileManagementMode(profile: RunnerProfile | undefined): ProfileManagementMode | undefined {
+  if (profile === undefined) return undefined;
+  return profile.management_mode ?? "migration_required";
 }
 export function workspaceOptions(profile: RunnerProfile): Array<WorkspaceOption & { readonly: boolean; shell: boolean }> {
   return profile.workspaces.map((workspace) => ({ workspaceId: workspace.id, rootPath: workspace.path, readonly: !workspace.writable, shell: workspace.shell }));
