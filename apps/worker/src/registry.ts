@@ -488,7 +488,6 @@ export class RegistryDO {
     return this.ctx.storage.sql.exec("DELETE FROM client_runner_overrides WHERE client_id = ? AND runner_id = ?", clientId, runnerId).rowsWritten === 1;
   }
   public effectivePermissions(clientId: string, runnerId: string, workspaceId: string): PermissionSet | undefined {
-    if (!this.getPolicyReadiness(runnerId).ok) return undefined;
     const client = this.getMcpClient(clientId);
     const policy = this.getActivePolicySnapshot(runnerId);
     if (client === undefined || policy === undefined) return undefined;
@@ -496,6 +495,18 @@ export class RegistryDO {
     if (workspace === undefined || !workspace.enabled) return undefined;
     const override = this.clientRunnerPermissions(clientId, runnerId) ?? { read: true, edit: true, shell: true, job_control: true };
     return intersectPermissionSets(permissionSetFromScopes(client.scopes), override, policy.runner_permissions, workspace.permissions);
+  }
+
+  /** Snapshot authorization validates only the immutable active Policy; it does not require a live Runner session. */
+  public getSnapshotAuthorization(runnerId: string): { readonly ok: true; readonly revision: number; readonly checksum: string } | { readonly ok: false; readonly code: "policy_pending" | "stale_policy"; readonly reason: string } {
+    const runner = this.runnerRow(runnerId);
+    if (runner === undefined) return { ok: false, code: "stale_policy", reason: "runner is missing" };
+    const revision = runner.applied_policy_revision;
+    const checksum = runner.active_policy_checksum;
+    if (!Number.isSafeInteger(revision) || revision === null || revision <= 0 || typeof checksum !== "string" || !/^[a-f0-9]{64}$/.test(checksum)) return { ok: false, code: "policy_pending", reason: "active policy identity is incomplete" };
+    const active = this.getActivePolicySnapshot(runnerId);
+    if (active === undefined || active.revision !== revision || active.checksum !== checksum) return { ok: false, code: "stale_policy", reason: "immutable active policy snapshot is unavailable" };
+    return { ok: true, revision, checksum };
   }
 
   /** Desired policy is exclusively the immutable desired revision row. */
@@ -682,7 +693,7 @@ export class RegistryDO {
     );
     return this.getRunner(runnerId);
   }
-  public emergencyLockRunner(runnerId: string, nowMs: number): RunnerRecord | undefined { return this.setRunnerPermissions(runnerId, LOCKED_PERMISSIONS, nowMs); }
+  public emergencyLockRunner(runnerId: string, confirmation: string, nowMs: number): RunnerRecord | undefined { return confirmation === runnerId ? this.setRunnerPermissions(runnerId, LOCKED_PERMISSIONS, nowMs) : undefined; }
   public acknowledgePolicy(runnerId: string, epoch: number, credentialVersion: number, input: { desired_revision: number; desired_checksum: string; applied_revision: number | null; applied_checksum: string | null; runner_reported_policy_revision: number | null; runner_reported_policy_checksum: string | null; status: "applied" | "pending" | "invalid"; workspace_status: readonly { workspace_id: string; status: WorkspaceValidationStatus }[] }, nowMs: number): boolean {
     if (!this.sessionIsCurrent(runnerId, epoch, credentialVersion, true) || input.workspace_status.length > 64 || !uniqueIds(input.workspace_status.map((item) => item.workspace_id)) || input.workspace_status.some((item) => !isSafeIdentifier(item.workspace_id))) return false;
     const runner = this.runnerRow(runnerId);
@@ -750,6 +761,7 @@ export class RegistryDO {
       this.ctx.storage.sql.exec("DELETE FROM workspaces WHERE runner_id = ?", runnerId);
       this.ctx.storage.sql.exec("DELETE FROM managed_workspaces WHERE runner_id = ?", runnerId);
       this.ctx.storage.sql.exec("DELETE FROM jobs WHERE runner_id = ?", runnerId);
+      this.ctx.storage.sql.exec("DELETE FROM runner_policy_versions WHERE runner_id = ?", runnerId);
       this.ctx.storage.sql.exec("UPDATE mcp_clients SET active_runner_id = NULL, active_runner_updated_at_ms = ?, updated_at_ms = ? WHERE active_runner_id = ?", nowMs, nowMs, runnerId);
       this.ctx.storage.sql.exec("DELETE FROM runners WHERE runner_id = ?", runnerId);
     });
@@ -974,6 +986,7 @@ export class RegistryDO {
       if (policy === undefined) return new Response("not found", { status: 404 });
       return Response.json({ runner_id: runnerId, revision: policy.revision, checksum: policy.checksum, workspaces: policy.workspaces.map((workspace) => ({ workspace_id: workspace.workspace_id, enabled: workspace.enabled, permissions: workspace.permissions })) });
     }
+    if (request.method === "GET" && action === "snapshot-authorization" && itemId === undefined) return Response.json(this.getSnapshotAuthorization(runnerId));
     if (request.method === "GET" && action === "policy-readiness" && itemId === undefined) return Response.json(this.getPolicyReadiness(runnerId));
     if (request.method === "GET" && action === "workspaces" && itemId === undefined) return Response.json({ runner_id: runnerId, workspaces: this.listWorkspaces(runnerId) });
     if (request.method === "POST" && action === "policy-ack") { const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const desiredRevision = integerField(input, "desired_revision"); const desiredChecksum = stringField(input, "desired_checksum", 64); const appliedRevision = nullableIntegerField(input, "applied_revision"); const appliedChecksum = nullableChecksumField(input, "applied_checksum"); const reportedRevision = nullableIntegerField(input, "runner_reported_policy_revision"); const reportedChecksum = nullableChecksumField(input, "runner_reported_policy_checksum"); const status = input.status; const statuses = workspaceStatusesField(input.workspace_status); if (epoch === undefined || credentialVersion === undefined || desiredRevision === undefined || desiredChecksum === undefined || appliedRevision === undefined || appliedChecksum === undefined || reportedRevision === undefined || reportedChecksum === undefined || (status !== "applied" && status !== "pending" && status !== "invalid") || statuses === undefined) return Response.json({ error: "invalid policy acknowledgement" }, { status: 400 }); return this.acknowledgePolicy(runnerId, epoch, credentialVersion, { desired_revision: desiredRevision, desired_checksum: desiredChecksum, applied_revision: appliedRevision, applied_checksum: appliedChecksum, runner_reported_policy_revision: reportedRevision, runner_reported_policy_checksum: reportedChecksum, status, workspace_status: statuses }, now) ? new Response(null, { status: 204 }) : new Response("stale policy acknowledgement", { status: 409 }); }
@@ -1082,7 +1095,10 @@ export class RegistryDO {
         const workspace = this.updateManagedWorkspace(clientId, workspaceId, { display_name: displayName, root_path: rootPath, enabled: input.enabled, permissions }, nowMs);
         return workspace === undefined ? new Response("not found", { status: 404 }) : Response.json(workspace);
       }
-      if (method === "DELETE") return this.deleteManagedWorkspace(clientId, workspaceId, nowMs) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 });
+      if (method === "DELETE") {
+        const confirmation = stringField(input, "confirmation", 128);
+        return confirmation === workspaceId && this.deleteManagedWorkspace(clientId, workspaceId, nowMs) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 });
+      }
     }
     if (method === "POST" && action === "runners" && clientId !== undefined && segments[2] === "version-policy" && isSafeIdentifier(clientId)) {
       const channel = input.update_channel; const desired = input.desired_runner_version; const latest = input.latest_runner_version;
@@ -1095,7 +1111,8 @@ export class RegistryDO {
       return runner === undefined ? new Response("not found", { status: 404 }) : Response.json(runner);
     }
     if (method === "POST" && action === "runners" && clientId !== undefined && segments[2] === "emergency-lock" && isSafeIdentifier(clientId)) {
-      const runner = this.emergencyLockRunner(clientId, nowMs);
+      const confirmation = stringField(input, "confirmation", 128);
+      const runner = confirmation === clientId ? this.emergencyLockRunner(clientId, confirmation, nowMs) : undefined;
       return runner === undefined ? new Response("not found", { status: 404 }) : Response.json(runner);
     }
     if (method === "POST" && action === "runners" && clientId !== undefined && segments[2] === "policy-ack" && isSafeIdentifier(clientId)) {
