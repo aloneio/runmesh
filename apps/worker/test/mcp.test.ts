@@ -135,11 +135,9 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
   });
 
   it("serves public secret-free cached bootstrap scripts and a bounded release descriptor", async () => {
-    const [shell, powershell, release] = await Promise.all([
-      SELF.fetch("https://worker.test/runner/install.sh"),
-      SELF.fetch("https://worker.test/runner/install.ps1"),
-      SELF.fetch("https://worker.test/runner/releases/latest"),
-    ]);
+    const shell = await SELF.fetch("https://worker.test/runner/install.sh");
+    const powershell = await SELF.fetch("https://worker.test/runner/install.ps1");
+    const release = await SELF.fetch("https://worker.test/runner/releases/latest");
     expect(shell.headers.get("content-type")).toContain("text/x-shellscript");
     expect(powershell.headers.get("content-type")).toContain("text/plain");
     for (const response of [shell, powershell, release]) {
@@ -152,24 +150,20 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     for (const text of [shellText, powershellText]) {
       expect(text).not.toMatch(/ADMIN_TOKEN|MCP_SECRET|CODING_RUNNER_TOKEN|Bearer /i);
       expect(text).not.toMatch(/sudo|git clone|github\.com\/.*main/i);
-      expect(text).toContain("coding-runner enroll --server"); expect(text).toContain("install --executable-path");
-      expect(text).toContain("existing managed runner profile or service detected");
     }
-    expect(shellText).toContain("--re-enroll");
-    expect(powershellText).toContain("-ReEnroll");
-    expect(shellText).toContain("set -eu"); expect(shellText).toContain("/etc/systemd/system/remote-coding-runner.service"); expect(shellText).toContain("administrator/root privileges");
-    expect(powershellText).toContain("$ErrorActionPreference = 'Stop'"); expect(powershellText).toContain("$env:ProgramFiles"); expect(powershellText).toContain("Administrator PowerShell");
-    expect(shellText).toContain("--prefix \"$NPM_PREFIX\""); expect(shellText).not.toContain("npm install --global \"$PACKAGE_SPEC\"");
+    expect(shellText).toContain("Hosted unsigned bootstrap is disabled");
+    expect(powershellText).toContain("Hosted unsigned bootstrap is disabled");
     expect(await release.json()).toMatchObject({ channel: "stable", distributable: false, package_spec: "", current_version: PRODUCT_VERSION, latest_version: PRODUCT_VERSION, package_version: PRODUCT_VERSION, artifact: null, protocol: { min_version: 2, max_version: 2 } });
     const stable = await SELF.fetch("https://worker.test/runner/releases/stable");
     expect(stable.status).toBe(200);
     expect(await stable.json()).toMatchObject({ channel: "stable", current_version: PRODUCT_VERSION, latest_version: PRODUCT_VERSION, package_version: PRODUCT_VERSION, protocol: { min_version: 2, max_version: 2 } });
-    expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "@acme/coding-runner@1.2.3" })).toMatchObject({ channel: "stable", distributable: true, package_name: "@acme/coding-runner", package_version: "1.2.3", package_spec: "@acme/coding-runner@1.2.3", artifact: { source: "@acme/coding-runner@1.2.3" }, protocol: { min_version: 2, max_version: 2 } });
-    expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "https://downloads.example.test/runner-1.2.3.tgz", RUNNER_PACKAGE_NAME: "@acme/coding-runner", RUNNER_PACKAGE_VERSION: "1.2.3" })).toMatchObject({ distributable: true, package_version: "1.2.3", artifact: { source: "https://downloads.example.test/runner-1.2.3.tgz" } });
-    expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "https://downloads.example.test/runner-1.2.3.tgz", RUNNER_PACKAGE_NAME: "@acme/coding-runner", RUNNER_PACKAGE_VERSION: "1.2.3", RUNNER_ARTIFACT_SHA256: "a".repeat(64) })).toMatchObject({ distributable: true, artifact: { source: "https://downloads.example.test/runner-1.2.3.tgz", checksum: { algorithm: "sha256", value: "a".repeat(64) } } });
-    expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "@acme/coding-runner@latest" }).distributable).toBe(false);
-    expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "https://downloads.example.test/main/runner.tgz", RUNNER_PACKAGE_NAME: "@acme/coding-runner", RUNNER_PACKAGE_VERSION: "1.2.3", RUNNER_ARTIFACT_SHA256: "a".repeat(64) }).distributable).toBe(false);
-    expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "https://github.com/acme/runner/archive/main.tgz", RUNNER_PACKAGE_NAME: "@acme/coding-runner", RUNNER_PACKAGE_VERSION: "1.2.3", RUNNER_ARTIFACT_SHA256: "a".repeat(64) }).distributable).toBe(false);
+    expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "@acme/coding-runner@1.2.3" })).toMatchObject({ distributable: false, package_spec: "" });
+    expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "@acme/coding-runner@1.2.3", ALLOW_LEGACY_UNSIGNED_BOOTSTRAP: "true" })).toMatchObject({ channel: "stable", distributable: true, package_name: "@acme/coding-runner", package_version: "1.2.3", package_spec: "@acme/coding-runner@1.2.3", artifact: { source: "@acme/coding-runner@1.2.3" }, protocol: { min_version: 2, max_version: 2 } });
+    expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "https://downloads.example.test/runner-1.2.3.tgz", RUNNER_PACKAGE_NAME: "@acme/coding-runner", RUNNER_PACKAGE_VERSION: "1.2.3", ALLOW_LEGACY_UNSIGNED_BOOTSTRAP: "true" })).toMatchObject({ distributable: true, package_version: "1.2.3", artifact: { source: "https://downloads.example.test/runner-1.2.3.tgz" } });
+    expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "https://downloads.example.test/runner-1.2.3.tgz", RUNNER_PACKAGE_NAME: "@acme/coding-runner", RUNNER_PACKAGE_VERSION: "1.2.3", RUNNER_ARTIFACT_SHA256: "a".repeat(64), ALLOW_LEGACY_UNSIGNED_BOOTSTRAP: "true" })).toMatchObject({ distributable: true, artifact: { source: "https://downloads.example.test/runner-1.2.3.tgz", checksum: { algorithm: "sha256", value: "a".repeat(64) } } });
+    expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "@acme/coding-runner@latest", ALLOW_LEGACY_UNSIGNED_BOOTSTRAP: "true" }).distributable).toBe(false);
+    expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "https://downloads.example.test/main/runner.tgz", RUNNER_PACKAGE_NAME: "@acme/coding-runner", RUNNER_PACKAGE_VERSION: "1.2.3", RUNNER_ARTIFACT_SHA256: "a".repeat(64), ALLOW_LEGACY_UNSIGNED_BOOTSTRAP: "true" }).distributable).toBe(false);
+    expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "https://github.com/acme/runner/archive/main.tgz", RUNNER_PACKAGE_NAME: "@acme/coding-runner", RUNNER_PACKAGE_VERSION: "1.2.3", RUNNER_ARTIFACT_SHA256: "a".repeat(64), ALLOW_LEGACY_UNSIGNED_BOOTSTRAP: "true" }).distributable).toBe(false);
   });
 
   it("returns enrollment credentials once with no-store headers and never puts a token in admin HTML", async () => {

@@ -88,6 +88,8 @@ async function asset(request: Request, env: WorkerEnv): Promise<Response> {
 
 export interface RunnerReleaseEnvironment {
   readonly RUNNER_PACKAGE_SPEC?: string;
+  /** Legacy unsigned compatibility is opt-in and development-only. */
+  readonly ALLOW_LEGACY_UNSIGNED_BOOTSTRAP?: string;
   readonly RUNNER_PACKAGE_NAME?: string;
   readonly RUNNER_PACKAGE_VERSION?: string;
   readonly RUNNER_ARTIFACT_SHA256?: string;
@@ -96,7 +98,8 @@ export interface RunnerReleaseEnvironment {
 }
 
 export function runnerReleaseDescriptor(env: RunnerReleaseEnvironment): RunnerReleaseDescriptor & { readonly distributable: boolean } {
-  const configuredSpec = validRunnerPackageSpec(env.RUNNER_PACKAGE_SPEC);
+  const legacyUnsigned = env.ALLOW_LEGACY_UNSIGNED_BOOTSTRAP === "true";
+  const configuredSpec = legacyUnsigned ? validRunnerPackageSpec(env.RUNNER_PACKAGE_SPEC) : undefined;
   const configuredName = validRunnerPackageName(env.RUNNER_PACKAGE_NAME);
   const configuredVersion = validRunnerPackageVersion(env.RUNNER_PACKAGE_VERSION);
   const checksum = validSha256(env.RUNNER_ARTIFACT_SHA256);
@@ -161,9 +164,8 @@ function runnerRelease(request: Request, env: WorkerEnv): Response {
       published_at: new Date().toISOString(),
     }), { headers: publicInstallerHeaders("application/json; charset=utf-8") });
 }
-function runnerInstallScript(request: Request, url: URL): Response {
+function runnerInstallScript(request: Request, _url: URL): Response {
   if (request.method !== "GET" && request.method !== "HEAD") { void discardBody(request); return methodNotAllowed("GET, HEAD"); }
-  const origin = shellSingleQuoted(url.origin);
   const content = `#!/usr/bin/env sh
 # Public bootstrap only: enrollment codes are accepted as the first command argument.
 set -eu
@@ -179,12 +181,8 @@ if [ "$#" -lt 1 ] || [ "$#" -gt 2 ] || { [ "$#" -eq 2 ] && [ "\${2:-}" != "--re-
 case "$CODE" in *[!A-Za-z0-9_-]*|'') die "a one-time enrollment code must be the first command argument";; esac
 if [ "\${#CODE}" -lt 20 ] || [ "\${#CODE}" -gt 256 ]; then die "a one-time enrollment code must be the first command argument"; fi
 
-case "$(uname -s)" in
-  Linux) PROFILE="/etc/remote-coding-runtime/profile.json"; MANIFEST="/etc/systemd/system/remote-coding-runner.service"; NPM_PREFIX="/opt/remote-coding-runtime";;
-  Darwin) PROFILE="/Library/Application Support/RemoteCodingRunner/profile.json"; MANIFEST="/Library/LaunchDaemons/com.remote-coding.runner.plist"; NPM_PREFIX="/opt/remote-coding-runtime";;
-  *) die "unsupported operating system; use the Windows PowerShell installer on Windows";;
-esac
-if [ "$REENROLL" -ne 1 ] && { [ -f "$PROFILE" ] || { [ -f "$MANIFEST" ] && grep -q 'remote-coding-runner-managed:' "$MANIFEST"; }; }; then
+die "Hosted unsigned bootstrap is disabled for this development preview. Download and verify the portable Runner artifact manually, then use coding-runner enroll/install."
+exit 1
   die "existing managed runner profile or service detected; refuse destructive overwrite. Re-run with --re-enroll after reviewing the existing installation."
 fi
 if [ "$(id -u)" -ne 0 ]; then die "system Runner installation requires administrator/root privileges; rerun from an elevated root shell"; fi
@@ -207,51 +205,18 @@ printf '%s\\n' 'Runner system service installed and activated.'
 `;
   return new Response(content, { headers: publicInstallerHeaders("text/x-shellscript; charset=utf-8") });
 }
-function runnerInstallPowerShell(request: Request, url: URL): Response {
+function runnerInstallPowerShell(request: Request, _url: URL): Response {
   if (request.method !== "GET" && request.method !== "HEAD") { void discardBody(request); return methodNotAllowed("GET, HEAD"); }
-  const origin = powerShellSingleQuoted(url.origin);
-  const content = `# Public bootstrap only: enrollment codes are accepted as the first command argument.
-param(
-  [Parameter(Mandatory = $true, Position = 0)]
-  [ValidatePattern('^[A-Za-z0-9_-]{20,256}$')]
-  [string]$EnrollmentCode,
-  [switch]$ReEnroll
-)
+  const content = `# Hosted unsigned bootstrap is disabled for this development preview. -ReEnroll is retained only as a legacy compatibility marker.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$ServerOrigin = '${origin}'
-$ProfilePath = Join-Path $env:ProgramData 'RemoteCodingRunner\\profile.json'
-$ManifestPath = Join-Path $env:ProgramData 'RemoteCodingRunner\\coding-runner-task.xml'
-$NpmPrefix = Join-Path $env:ProgramFiles 'RemoteCodingRunner'
-if (-not $ReEnroll -and ((Test-Path -LiteralPath $ProfilePath) -or ((Test-Path -LiteralPath $ManifestPath) -and (Select-String -LiteralPath $ManifestPath -SimpleMatch 'remote-coding-runner-managed:' -Quiet)))) {
-  throw 'existing managed runner profile or service detected; refuse destructive overwrite. Re-run with -ReEnroll after reviewing the existing installation.'
-}
-if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'system Runner installation requires an elevated Administrator PowerShell session.' }
-if (-not (Get-Command node -ErrorAction SilentlyContinue) -or -not (Get-Command npm -ErrorAction SilentlyContinue)) { throw 'Node.js 20 or newer and npm must already be installed.' }
-$NodeMajor = [int]((& node -p "process.versions.node.split('.')[0]").Trim())
-if ($NodeMajor -lt 20) { throw 'Node.js 20 or newer must already be installed.' }
-$Release = Invoke-RestMethod -Uri "$ServerOrigin/runner/releases/latest" -Method Get
-if ($Release.distributable -ne $true -or $Release.package_version -notmatch '^\\d+\\.\\d+\\.\\d+$' -or ($Release.package_spec -notmatch '^((?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*)@\\d+\\.\\d+\\.\\d+$' -and $Release.package_spec -notmatch '^https://[^?#]+\\.tgz$') -or $Release.protocol.min_version -lt 1 -or $Release.protocol.min_version -gt $Release.protocol.max_version) {
-  throw 'The operator has not configured a distributable stable runner package spec at /runner/releases/latest.'
-}
-$NpmPrefix = Join-Path $env:ProgramFiles 'RemoteCodingRunner'
-New-Item -ItemType Directory -Force -Path $NpmPrefix | Out-Null
-& npm install --global --prefix $NpmPrefix $Release.package_spec
-$Runner = Join-Path $NpmPrefix 'bin\\coding-runner.cmd'
-if (-not (Test-Path -LiteralPath $Runner)) { throw 'npm did not install coding-runner into the machine prefix.' }
-& $Runner enroll --server "$ServerOrigin/runner/enroll" --code $EnrollmentCode
-# coding-runner enroll --server is invoked above through the absolute machine executable.
-& $Runner install --executable-path $Runner
-Write-Output 'Runner system Scheduled Task installed and activated.'
+throw 'Hosted unsigned bootstrap is disabled for this development preview. Download and verify the portable Runner artifact manually, then use coding-runner enroll/install.'
 `;
   return new Response(content, { headers: publicInstallerHeaders("text/plain; charset=utf-8") });
 }
 function publicInstallerHeaders(contentType: string): Headers {
   return new Headers({ "content-type": contentType, "cache-control": "public, max-age=300", "referrer-policy": "no-referrer", "x-content-type-options": "nosniff", "x-frame-options": "DENY", "permissions-policy": "geolocation=(), microphone=(), camera=()" });
 }
-function shellSingleQuoted(value: string): string { return value.replaceAll("'", "'\\\"'\\\"'"); }
-function powerShellSingleQuoted(value: string): string { return value.replaceAll("'", "''"); }
-
 async function handleRunnerEnrollment(request: Request, env: WorkerEnv): Promise<Response> {
   if (request.method !== "POST") { await discardBody(request); return methodNotAllowed("POST"); }
   const input = await readEnrollmentBody(request);
@@ -513,16 +478,13 @@ async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, baseUrl
   if (action === "permissions") {
     const permissions = permissionsFromForm(form);
     if (permissions === undefined) return adminError(400, "Runner permissions are invalid.");
-    const response = await registryPost(env, `/auth/runners/${encodeURIComponent(runnerId)}/permissions`, { permissions });
-    if (!response.ok) return adminError(response.status === 404 ? 404 : 400, "Runner permission profile could not be updated.");
-    await pushPolicyBestEffort(env, runnerId);
-    return redirect(`/admin/runners/${encodeURIComponent(runnerId)}`);
+    const response = await mutateRunnerPolicy(env, runnerId, { path: `/auth/runners/${encodeURIComponent(runnerId)}/permissions`, method: "POST", payload: { permissions } });
+    return response.ok ? redirect(`/admin/runners/${encodeURIComponent(runnerId)}`) : adminError(response.status === 404 ? 404 : 400, "Runner permission profile could not be updated.");
   }
   if (action === "emergency-lock") {
-    const response = await registryPost(env, `/auth/runners/${encodeURIComponent(runnerId)}/emergency-lock`, {});
-    if (!response.ok) return adminError(response.status === 404 ? 404 : 400, "Emergency lock could not be applied.");
-    await pushPolicyBestEffort(env, runnerId);
-    return redirect(`/admin/runners/${encodeURIComponent(runnerId)}`);
+    if (form.get("confirmation") !== runnerId) return adminError(400, "Type the Runner ID to confirm emergency lock.");
+    const response = await mutateRunnerPolicy(env, runnerId, { path: `/auth/runners/${encodeURIComponent(runnerId)}/emergency-lock`, method: "POST", payload: { confirmation: runnerId } });
+    return response.ok ? redirect(`/admin/runners/${encodeURIComponent(runnerId)}`) : adminError(response.status === 404 ? 404 : 400, "Emergency lock could not be applied.");
   }
   if (action.startsWith("workspace-")) return handleBrowserWorkspaceAction(env, form, runnerId, action as "workspace-create" | "workspace-update" | "workspace-delete");
   if (action === "rename") {
@@ -534,24 +496,28 @@ async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, baseUrl
   if (action === "delete") {
     const confirmation = form.get("confirmation");
     if (confirmation !== runnerId) return adminError(400, "Type the Runner ID to confirm deletion.");
+    const fenced = await fenceRunnerTransport(env, runnerId, "runner-delete");
+    if (!fenced.ok) return adminError(503, "Runner deletion could not fence the Runner.");
     const body = JSON.stringify({ confirmation });
     const response = await runnerRegistryRequest(env, runnerId, "", "DELETE", body);
     if (!response.ok) return adminError(response.status === 404 ? 404 : 400, "Runner delete failed.");
-    await closeRunnerSockets(env, runnerId);
+    await deleteRunnerTransport(env, runnerId);
     return redirect("/admin");
   }
   if (action === "revoke") {
     const confirmation = form.get("confirmation");
     if (confirmation !== runnerId) return adminError(400, "Type the Runner ID to confirm revocation.");
-    const response = await runnerRegistryRequest(env, runnerId, "/revoke", "POST", JSON.stringify({ confirmation }));
-    if (!response.ok) return adminError(response.status === 404 ? 404 : 400, "Runner revoke failed.");
-    await closeRunnerSockets(env, runnerId);
+    const fenced = await fenceRunnerTransport(env, runnerId, "credential-revoked");
+    if (!fenced.ok) return adminError(503, "Runner revocation could not fence the Runner.");
+    const registryResponse = await runnerRegistryRequest(env, runnerId, "/revoke", "POST", JSON.stringify({ confirmation }));
+    if (!registryResponse.ok) return adminError(registryResponse.status === 404 ? 404 : 400, "Runner revoke failed.");
+    await revokeRunnerTransport(env, runnerId);
     return redirect("/admin");
   }
   if (action === "rotate") {
     const response = await runnerRegistryRequest(env, runnerId, "/rotate", "POST", "{}");
     if (!response.ok) return adminError(response.status === 404 ? 404 : 400, "Runner credential rotation failed.");
-    await closeRunnerSockets(env, runnerId);
+    await revokeRunnerTransport(env, runnerId);
     return runnerEnrollmentPage(baseUrl, runnerId, await createEnrollmentCode(env, runnerId), String(form.get("csrf_token") ?? ""), true);
   }
   return runnerEnrollmentPage(baseUrl, runnerId, await createEnrollmentCode(env, runnerId), String(form.get("csrf_token") ?? ""), true);
@@ -576,9 +542,8 @@ async function handleBrowserWorkspaceAction(env: WorkerEnv, form: FormData, runn
   if (typeof workspaceId !== "string" || !isSafeIdentifier(workspaceId)) return adminError(400, "Workspace identifier is invalid.");
   if (action === "workspace-delete") {
     if (form.get("confirmation") !== workspaceId) return adminError(400, "Type the Workspace ID to confirm deletion.");
-    const response = await registryRequest(env, `/auth/runners/${encodeURIComponent(runnerId)}/managed-workspaces/${encodeURIComponent(workspaceId)}`, "DELETE", JSON.stringify({ confirmation: workspaceId }));
+    const response = await mutateRunnerPolicy(env, runnerId, { path: `/auth/runners/${encodeURIComponent(runnerId)}/managed-workspaces/${encodeURIComponent(workspaceId)}`, method: "DELETE", payload: { confirmation: workspaceId } });
     if (!response.ok) return adminError(response.status === 404 ? 404 : 400, "Workspace could not be deleted.");
-    await pushPolicyBestEffort(env, runnerId);
     return redirect(returnToDetail);
   }
   const displayName = form.get("display_name"); const rootPath = form.get("root_path");
@@ -589,11 +554,8 @@ async function handleBrowserWorkspaceAction(env: WorkerEnv, form: FormData, runn
   if (permissions === undefined) return adminError(400, "Workspace permission profile is invalid.");
   const enabled = form.get("enabled") === "true";
   const payload = { workspace_id: workspaceId, display_name: displayName, root_path: rootPath, enabled, permissions };
-  const response = action === "workspace-create"
-    ? await registryPost(env, `/auth/runners/${encodeURIComponent(runnerId)}/managed-workspaces`, payload)
-    : await registryRequest(env, `/auth/runners/${encodeURIComponent(runnerId)}/managed-workspaces/${encodeURIComponent(workspaceId)}`, "PUT", JSON.stringify(payload));
+  const response = await mutateRunnerPolicy(env, runnerId, { path: action === "workspace-create" ? `/auth/runners/${encodeURIComponent(runnerId)}/managed-workspaces` : `/auth/runners/${encodeURIComponent(runnerId)}/managed-workspaces/${encodeURIComponent(workspaceId)}`, method: action === "workspace-create" ? "POST" : "PUT", payload });
   if (!response.ok) return adminError(response.status === 404 ? 404 : 400, "Workspace could not be saved.");
-  await pushPolicyBestEffort(env, runnerId);
   return redirect(returnToDetail);
 }
 function configuredWorkspacePreset(value: FormDataEntryValue | null): { read: boolean; edit: boolean; shell: boolean; job_control: boolean } | undefined {
@@ -739,7 +701,7 @@ function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly 
   const permissions = record(runner.runner_permissions);
   const desiredRevision = typeof runner.desired_policy_revision === "number" ? String(runner.desired_policy_revision) : "0";
   const appliedRevision = typeof runner.applied_policy_revision === "number" ? String(runner.applied_policy_revision) : "—";
-  return `<section class="page-heading"><div><p class="eyebrow">Runner details</p><h1>${escapeHtml(displayName)}</h1><p class="lede">Control-plane workspace roots appear only in this authenticated administrator view.</p></div><a class="button secondary" href="/admin/runners">Back to runners</a></section><div class="metrics"><div class="metric"><span>Status</span><strong>${statusBadge(state)}</strong></div><div class="metric"><span>Runner ID</span><strong class="mono">${escapeHtml(runnerId)}</strong></div><div class="metric"><span>Policy status</span><strong>${escapeHtml(policyStatus)} · ${escapeHtml(appliedRevision)} / ${escapeHtml(desiredRevision)}</strong></div><div class="metric"><span>Last seen</span><strong>${escapeHtml(time(typeof runner.last_heartbeat_ms === "number" ? runner.last_heartbeat_ms : null))}</strong></div></div><div class="grid-two"><section class="panel"><h2>Safe metadata</h2><dl class="details"><dt>Platform</dt><dd>${escapeHtml(typeof publicInfo?.platform === "string" ? publicInfo.platform : "Unknown")}</dd><dt>Architecture</dt><dd>${escapeHtml(typeof publicInfo?.architecture === "string" ? publicInfo.architecture : "Unknown")}</dd><dt>Hostname</dt><dd>${escapeHtml(typeof publicInfo?.hostname === "string" ? publicInfo.hostname : "Unknown")}</dd><dt>Runner version</dt><dd>${escapeHtml(currentVersion)}</dd><dt>Stable/latest version</dt><dd>${escapeHtml(latestVersion)}</dd><dt>Protocol compatibility</dt><dd>${escapeHtml(protocolRange)} · ${escapeHtml(protocolCompatibility)}</dd></dl></section><section class="panel"><h2>Version policy</h2><p class="muted">Policy is recorded for operators; package download, update, and rollback remain deferred.</p><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/version-policy" class="form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Channel<select name="update_channel"><option value="stable"${updateChannel === "stable" ? " selected" : ""}>Stable</option><option value="pinned"${updateChannel === "pinned" ? " selected" : ""}>Pinned</option></select></label><label>Desired version<input name="desired_runner_version" value="${escapeHtml(desiredVersion)}" placeholder="1.2.3" pattern="[0-9]+\\.[0-9]+\\.[0-9]+"></label><div><strong>Current</strong><span>${escapeHtml(currentVersion)}</span></div><div><strong>Latest</strong><span>${escapeHtml(latestVersion)}</span></div><button class="button">Save version policy</button></form><p class="muted">Status: ${escapeHtml(String(runner.update_status ?? "unknown"))}</p></section><section class="panel"><h2>Environment tools</h2>${toolRows}</section></div><div class="grid-two"><section class="panel"><h2>Runner permission profile</h2><p class="muted">Changes remain pending until the connected Runner validates and applies the revision.</p>${permissionForm(runnerId, permissions, csrf)}<form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/emergency-lock" class="stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button danger">Emergency lock all permissions</button></form></section><section class="panel"><h2>Active jobs</h2>${jobTable(jobs.filter(record) as Record<string, unknown>[])}</section></div><section class="panel"><div class="section-title"><h2>Managed workspaces</h2><span class="muted">Each save increments the desired policy revision.</span></div><ul class="plain-list">${workspaceRows}</ul><h3>Add workspace</h3>${managedWorkspaceForm(runnerId, undefined, csrf)}</section>`;
+  return `<section class="page-heading"><div><p class="eyebrow">Runner details</p><h1>${escapeHtml(displayName)}</h1><p class="lede">Control-plane workspace roots appear only in this authenticated administrator view.</p></div><a class="button secondary" href="/admin/runners">Back to runners</a></section><div class="metrics"><div class="metric"><span>Status</span><strong>${statusBadge(state)}</strong></div><div class="metric"><span>Runner ID</span><strong class="mono">${escapeHtml(runnerId)}</strong></div><div class="metric"><span>Policy status</span><strong>${escapeHtml(policyStatus)} · ${escapeHtml(appliedRevision)} / ${escapeHtml(desiredRevision)}</strong></div><div class="metric"><span>Last seen</span><strong>${escapeHtml(time(typeof runner.last_heartbeat_ms === "number" ? runner.last_heartbeat_ms : null))}</strong></div></div><div class="grid-two"><section class="panel"><h2>Safe metadata</h2><dl class="details"><dt>Platform</dt><dd>${escapeHtml(typeof publicInfo?.platform === "string" ? publicInfo.platform : "Unknown")}</dd><dt>Architecture</dt><dd>${escapeHtml(typeof publicInfo?.architecture === "string" ? publicInfo.architecture : "Unknown")}</dd><dt>Hostname</dt><dd>${escapeHtml(typeof publicInfo?.hostname === "string" ? publicInfo.hostname : "Unknown")}</dd><dt>Runner version</dt><dd>${escapeHtml(currentVersion)}</dd><dt>Stable/latest version</dt><dd>${escapeHtml(latestVersion)}</dd><dt>Protocol compatibility</dt><dd>${escapeHtml(protocolRange)} · ${escapeHtml(protocolCompatibility)}</dd></dl></section><section class="panel"><h2>Version policy</h2><p class="muted">Policy is recorded for operators; package download, update, and rollback remain deferred.</p><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/version-policy" class="form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Channel<select name="update_channel"><option value="stable"${updateChannel === "stable" ? " selected" : ""}>Stable</option><option value="pinned"${updateChannel === "pinned" ? " selected" : ""}>Pinned</option></select></label><label>Desired version<input name="desired_runner_version" value="${escapeHtml(desiredVersion)}" placeholder="1.2.3" pattern="[0-9]+\\.[0-9]+\\.[0-9]+"></label><div><strong>Current</strong><span>${escapeHtml(currentVersion)}</span></div><div><strong>Latest</strong><span>${escapeHtml(latestVersion)}</span></div><button class="button">Save version policy</button></form><p class="muted">Status: ${escapeHtml(String(runner.update_status ?? "unknown"))}</p></section><section class="panel"><h2>Environment tools</h2>${toolRows}</section></div><div class="grid-two"><section class="panel"><h2>Runner permission profile</h2><p class="muted">Changes remain pending until the connected Runner validates and applies the revision.</p>${permissionForm(runnerId, permissions, csrf)}<form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/emergency-lock" class="stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Type the Runner ID to confirm emergency lock<input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required></label><p class="muted">Emergency Lock does not automatically stop existing Jobs.</p><button class="button danger">Emergency lock all permissions</button></form></section><section class="panel"><h2>Active jobs</h2>${jobTable(jobs.filter(record) as Record<string, unknown>[])}</section></div><section class="panel"><div class="section-title"><h2>Managed workspaces</h2><span class="muted">Each save increments the desired policy revision.</span></div><ul class="plain-list">${workspaceRows}</ul><h3>Add workspace</h3>${managedWorkspaceForm(runnerId, undefined, csrf)}</section>`;
 }
 function permissionForm(runnerId: string, permissions: Record<string, unknown> | undefined, csrf: string): string {
   const current = (name: string): boolean => permissions?.[name] === true;
@@ -776,13 +738,40 @@ function validPassword(password: string): boolean { return password.length >= 12
 function validLabel(label: string): boolean { return label.trim().length > 0 && label.length <= 256; }
 function validRunnerVersion(value: string): boolean { return /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(value); }
 
-export async function pushRunnerPolicy(env: WorkerEnv, runnerId: string): Promise<Response> {
-  const body = "{}";
+export async function pushRunnerPolicy(env: WorkerEnv, runnerId: string, mutationId?: string): Promise<Response> {
+  const body = JSON.stringify(mutationId === undefined ? {} : { mutation_id: mutationId });
   const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/policy", body);
   return env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/policy", { method: "POST", headers, body }));
 }
-async function pushPolicyBestEffort(env: WorkerEnv, runnerId: string): Promise<void> {
-  try { await pushRunnerPolicy(env, runnerId); } catch { /* Registry remains authoritative; reconnect retries the latest policy. */ }
+async function beginRunnerPolicyMutation(env: WorkerEnv, runnerId: string, mutationId: string): Promise<Response> {
+  const body = JSON.stringify({ mutation_id: mutationId });
+  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/begin-policy-mutation", body);
+  return env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/begin-policy-mutation", { method: "POST", headers, body }));
+}
+async function mutateRunnerPolicy(env: WorkerEnv, runnerId: string, mutation: { readonly path: string; readonly method: "POST" | "PUT" | "DELETE"; readonly payload: Record<string, unknown> }): Promise<Response> {
+  const mutationId = `mutation-${crypto.randomUUID()}`;
+  let fenced: Response;
+  try {
+    fenced = await beginRunnerPolicyMutation(env, runnerId, mutationId);
+  } catch {
+    return new Response("runner policy fence unavailable", { status: 503 });
+  }
+  if (!fenced.ok) return fenced;
+  let changed: Response;
+  try {
+    const body = JSON.stringify(mutation.payload);
+    changed = await registryRequest(env, mutation.path, mutation.method, body);
+  } catch {
+    return new Response("registry unavailable after policy fence", { status: 503 });
+  }
+  if (!changed.ok) return changed;
+  try {
+    const pushed = await pushRunnerPolicy(env, runnerId, mutationId);
+    if (!pushed.ok && pushed.status !== 204 && pushed.status !== 503) return pushed;
+  } catch {
+    // The immutable desired policy remains pending; a reconnect can retry it.
+  }
+  return changed;
 }
 async function forwardRunnerRpc(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
   const segments = url.pathname.split("/").filter(Boolean);
@@ -804,7 +793,7 @@ async function handleRunnerAdmin(request: Request, env: WorkerEnv, url: URL): Pr
   }
   if (runnerId === undefined || !isSafeIdentifier(runnerId) || action === undefined || segments.length !== 4 || request.method !== "POST") { await discardBody(request); return notFound(); }
   if (action === "rotate") return registerRunner(env, runnerId, await readAdminBody(request));
-  if (action === "revoke") { const response = await runnerRegistryRequest(env, runnerId, "/revoke", "POST", "{}"); if (!response.ok) return new Response("registry unavailable", { status: 502 }); await closeRunnerSockets(env, runnerId); return new Response(null, { status: 204 }); }
+  if (action === "revoke") { const fenced = await fenceRunnerTransport(env, runnerId, "credential-revoked"); if (!fenced.ok) return new Response("runner unavailable", { status: 503 }); const response = await runnerRegistryRequest(env, runnerId, "/revoke", "POST", "{}"); if (!response.ok) return new Response("registry unavailable", { status: 502 }); await revokeRunnerTransport(env, runnerId); return new Response(null, { status: 204 }); }
   return notFound();
 }
 async function registerRunner(env: WorkerEnv, runnerId: string, input: Record<string, unknown> | undefined): Promise<Response> {
@@ -814,10 +803,26 @@ async function registerRunner(env: WorkerEnv, runnerId: string, input: Record<st
   if (pepper === undefined) return new Response("admin control plane is not configured", { status: 503 });
   const response = await runnerRegistryRequest(env, runnerId, "", "PUT", JSON.stringify({ token_verifier: await runnerTokenVerifier(token, pepper) }));
   if (!response.ok) return new Response("registry unavailable", { status: 502 });
-  await closeRunnerSockets(env, runnerId);
+  const fenced = await fenceRunnerTransport(env, runnerId, "credential-rotated");
+  if (!fenced.ok) return new Response("runner unavailable", { status: 503 });
+  await revokeRunnerTransport(env, runnerId);
   return Response.json({ runner_id: runnerId, token }, { headers: credentialHeaders("application/json; charset=utf-8") });
 }
-async function closeRunnerSockets(env: WorkerEnv, runnerId: string): Promise<void> { const body = "{}"; const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/revoke", body); await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/revoke", { method: "POST", headers, body })); }
+async function fenceRunnerTransport(env: WorkerEnv, runnerId: string, mutationId: string): Promise<Response> {
+  const body = JSON.stringify({ mutation_id: mutationId });
+  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/begin-policy-mutation", body);
+  return env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/begin-policy-mutation", { method: "POST", headers, body }));
+}
+async function revokeRunnerTransport(env: WorkerEnv, runnerId: string): Promise<void> {
+  const body = "{}";
+  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/revoke", body);
+  await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/revoke", { method: "POST", headers, body }));
+}
+async function deleteRunnerTransport(env: WorkerEnv, runnerId: string): Promise<void> {
+  const body = "{}";
+  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/delete", body);
+  await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/delete", { method: "POST", headers, body }));
+}
 function isRunnerAdminRequest(request: Request, env: WorkerEnv): boolean { const token = bearerToken(request); return token !== undefined && env.ADMIN_TOKEN !== undefined && constantTimeEqual(token, env.ADMIN_TOKEN); }
 async function runnerRegistryRequest(env: WorkerEnv, runnerId: string, action: string, method: string, body: string): Promise<Response> { const path = `/runners/${encodeURIComponent(runnerId)}${action}`; const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET as string, method, path, body); return env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method, body, headers })); }
 
