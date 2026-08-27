@@ -8,8 +8,28 @@ import { WireMessageSchema } from "./schema.js";
  * validation additionally enforces depth and node limits.
  */
 export function generateWireMessageJsonSchema(): string {
-  const schema = z.toJSONSchema(WireMessageSchema) as Record<string, unknown>;
-  replaceJsonValuePlaceholders(schema);
+  const generated = z.toJSONSchema(WireMessageSchema) as Record<string, unknown>;
+  if (Array.isArray(generated.anyOf)) generated.oneOf = generated.anyOf;
+  delete generated.anyOf;
+  replaceJsonValuePlaceholders(generated);
+  const schema = generated;
+  if (Array.isArray(schema.oneOf)) {
+    for (const branch of schema.oneOf) {
+      if (!isRecord(branch)) continue;
+      const branchProperties = isRecord(branch.properties) ? branch.properties : undefined;
+      const method = isRecord(branchProperties?.method) ? branchProperties.method : undefined;
+      if (method?.const === "rpc.request" && branchProperties !== undefined) {
+        const methodEnum = Array.isArray(method.enum) ? method.enum : undefined;
+        if (methodEnum?.includes("echo") === true) {
+          branch.required = Array.isArray(branch.required) ? branch.required.filter((name) => name !== "policy_revision") : branch.required;
+        } else {
+          branch.required = Array.isArray(branch.required) ? [...new Set([...branch.required, "policy_revision"])] : ["policy_revision"];
+          if (methodEnum !== undefined) delete method.enum;
+          branchProperties.method = { type: "string", minLength: 1, maxLength: 4096, not: { enum: ["echo", "runner.info"] } };
+        }
+      }
+    }
+  }
   schema.$defs = {
     ...(isRecord(schema.$defs) ? schema.$defs : {}),
     jsonValue: {
