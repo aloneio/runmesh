@@ -308,22 +308,22 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(setupPage.status).toBe(200);
     const setupHtml = await setupPage.text();
     const setupCsrf = formToken(setupHtml);
-    const setupCookie = cookieFrom(setupPage, "__Host-rcr_setup_csrf");
+    const setupCookie = cookieFrom(setupPage, "__Host-runmesh_setup_csrf");
     const setup = await submitForm("/setup", {
       csrf_token: setupCsrf, setup_token: workerEnv.SETUP_TOKEN, password: adminPassword, confirm_password: adminPassword,
-    }, cookieJar([["__Host-rcr_setup_csrf", setupCookie]]));
+    }, cookieJar([["__Host-runmesh_setup_csrf", setupCookie]]));
     expect(setup.status).toBe(303);
 
     const loginPage = await fetch(`${workerUrl}/`, { redirect: "manual" });
     expect(loginPage.status).toBe(200);
     const loginHtml = await loginPage.text();
     const loginCsrf = formToken(loginHtml);
-    const loginCookie = cookieFrom(loginPage, "__Host-rcr_login_csrf");
-    const login = await submitForm("/login", { csrf_token: loginCsrf, password: adminPassword }, cookieJar([["__Host-rcr_login_csrf", loginCookie]]));
+    const loginCookie = cookieFrom(loginPage, "__Host-runmesh_login_csrf");
+    const login = await submitForm("/login", { csrf_token: loginCsrf, password: adminPassword }, cookieJar([["__Host-runmesh_login_csrf", loginCookie]]));
     expect(login.status).toBe(303);
-    const session = cookieFrom(login, "__Host-rcr_admin_session");
-    const csrf = cookieFrom(login, "__Host-rcr_admin_csrf");
-    const adminJar = cookieJar([["__Host-rcr_admin_session", session], ["__Host-rcr_admin_csrf", csrf]]);
+    const session = cookieFrom(login, "__Host-runmesh_admin_session");
+    const csrf = cookieFrom(login, "__Host-runmesh_admin_csrf");
+    const adminJar = cookieJar([["__Host-runmesh_admin_session", session], ["__Host-runmesh_admin_csrf", csrf]]);
 
     const clientA = await createMcpClient("Client A E2E", ["coding:read", "coding:write", "coding:exec"], adminJar, csrf);
     const clientB = await createMcpClient("Client B E2E", ["coding:read"], adminJar, csrf);
@@ -358,11 +358,11 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
   async function adminCredentials(): Promise<{ readonly adminJar: CookieJar; readonly csrf: string }> {
     const loginPage = await fetch(`${workerUrl}/`, { redirect: "manual" });
     const loginCsrf = formToken(await loginPage.text());
-    const loginCookie = cookieFrom(loginPage, "__Host-rcr_login_csrf");
-    const login = await submitForm("/login", { csrf_token: loginCsrf, password: adminPassword }, cookieJar([["__Host-rcr_login_csrf", loginCookie]]));
+    const loginCookie = cookieFrom(loginPage, "__Host-runmesh_login_csrf");
+    const login = await submitForm("/login", { csrf_token: loginCsrf, password: adminPassword }, cookieJar([["__Host-runmesh_login_csrf", loginCookie]]));
     expect(login.status).toBe(303);
-    const csrf = cookieFrom(login, "__Host-rcr_admin_csrf");
-    return { adminJar: cookieJar([["__Host-rcr_admin_session", cookieFrom(login, "__Host-rcr_admin_session")], ["__Host-rcr_admin_csrf", csrf]]), csrf };
+    const csrf = cookieFrom(login, "__Host-runmesh_admin_csrf");
+    return { adminJar: cookieJar([["__Host-runmesh_admin_session", cookieFrom(login, "__Host-runmesh_admin_session")], ["__Host-runmesh_admin_csrf", csrf]]), csrf };
   }
 
   async function submitForm(path: string, fields: FormFields, cookies: CookieJar): Promise<Response> {
