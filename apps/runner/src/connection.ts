@@ -68,6 +68,7 @@ export class RunnerConnection {
   private desiredPolicyChecksum = "";
   private policyApplyGeneration = 0;
   private readonly pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  private policyApplyQueue: Promise<void> = Promise.resolve();
 
   public constructor(options: RunnerConnectionOptions) {
     this.config = options.config;
@@ -140,14 +141,9 @@ export class RunnerConnection {
       return Promise.reject(new Error("runner is not connected"));
     }
     const requestId = `rpc-${crypto.randomUUID()}`;
-    const request: RpcRequest = {
-      type: "rpc.request",
-      protocol_version: PROTOCOL_CURRENT_VERSION,
-      request_id: requestId,
-      method,
-      params: params as RpcRequest["params"],
-      ...(policyRevision === undefined ? {} : { policy_revision: policyRevision }),
-    };
+    const request: RpcRequest = policyRevision === undefined
+      ? { type: "rpc.request", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: requestId, method: method as "echo" | "runner.info", params: params as RpcRequest["params"] }
+      : { type: "rpc.request", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: requestId, method, params: params as RpcRequest["params"], policy_revision: policyRevision };
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
@@ -211,7 +207,7 @@ export class RunnerConnection {
         if (message.type === "runner.welcome") {
           welcomed = true;
           this.onStateChange("online");
-          if (message.desired_policy !== undefined) void this.applyDesiredPolicy(socket, message.desired_policy);
+          if (message.desired_policy !== undefined) this.queueDesiredPolicy(socket, message.desired_policy);
           void this.sendSync(socket);
           this.heartbeatTimer = setInterval(() => this.sendHeartbeat(socket), this.heartbeatMs);
           this.syncTimer = setInterval(() => { void this.sendSync(socket); }, this.syncMs);
@@ -220,7 +216,7 @@ export class RunnerConnection {
         }
         if (message.type === "runner.policy_update") {
           if (message.runner_id !== this.config.runnerId) { socket.close(1008, "runner identity mismatch"); return; }
-          void this.applyDesiredPolicy(socket, message.policy);
+          this.queueDesiredPolicy(socket, message.policy);
           return;
         }
         if (message.type === "rpc.request") {
@@ -260,11 +256,16 @@ export class RunnerConnection {
     });
   }
 
+  private queueDesiredPolicy(socket: WebSocket, policy: NonNullable<RunnerWelcome["desired_policy"]>): void {
+    this.policyApplyQueue = this.policyApplyQueue.then(() => this.applyDesiredPolicy(socket, policy)).catch(() => undefined);
+  }
+
   private async applyDesiredPolicy(socket: WebSocket, policy: NonNullable<RunnerWelcome["desired_policy"]>): Promise<void> {
     if (policy.runner_id !== this.config.runnerId || policy.checksum !== runnerPolicyChecksum({ schema_version: policy.schema_version, runner_id: policy.runner_id, revision: policy.revision, runner_permissions: policy.runner_permissions, workspaces: policy.workspaces })) {
       return;
     }
     if (policy.revision < this.desiredPolicyRevision) return;
+    if (policy.revision === this.desiredPolicyRevision && policy.checksum !== this.desiredPolicyChecksum) return;
     const generation = this.policyApplyGeneration + 1;
     this.policyApplyGeneration = generation;
     this.desiredPolicyRevision = policy.revision;
@@ -294,7 +295,9 @@ export class RunnerConnection {
 
   private sendPolicyAck(socket: WebSocket, status: RunnerPolicyAck["status"], workspaceStatus: RunnerPolicyAck["workspace_status"]): void {
     if (socket.readyState !== WebSocket.OPEN) return;
-    socket.send(encodeWireFrame({ type: "runner.policy_ack", protocol_version: PROTOCOL_CURRENT_VERSION, runner_id: this.config.runnerId, desired_revision: this.desiredPolicyRevision, desired_checksum: this.desiredPolicyChecksum, applied_revision: this.appliedPolicyRevision, applied_checksum: this.appliedPolicyChecksum, runner_reported_policy_revision: this.appliedPolicyRevision, runner_reported_policy_checksum: this.appliedPolicyChecksum, status, workspace_status: workspaceStatus }));
+    const reportedRevision = this.appliedPolicyRevision;
+    const reportedChecksum = this.appliedPolicyChecksum;
+    socket.send(encodeWireFrame({ type: "runner.policy_ack", protocol_version: PROTOCOL_CURRENT_VERSION, runner_id: this.config.runnerId, desired_revision: this.desiredPolicyRevision, desired_checksum: this.desiredPolicyChecksum, applied_revision: this.appliedPolicyRevision, applied_checksum: this.appliedPolicyChecksum, runner_reported_policy_revision: reportedRevision, runner_reported_policy_checksum: reportedChecksum, status, workspace_status: workspaceStatus }));
   }
 
   private sendHeartbeat(socket: WebSocket): void {

@@ -1,6 +1,6 @@
 {
   "name": "@aloneio/runmesh-monorepo",
-  "version": "0.1.0-dev.1",
+  "version": "0.1.0-dev.2",
   "private": true,
   "description": "A language-neutral protocol foundation for remote coding runtimes.",
   "repository": {

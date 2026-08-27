@@ -324,18 +324,24 @@ export const RunnerSyncSchema = EnvelopeSchema.extend({
   jobs: z.array(JobMetadataSchema).max(10_000),
 }).strict();
 
-export const RpcRequestSchema = CorrelatedEnvelopeSchema.extend({
+const ProtectedRpcMethodValueSchema = z.string().min(1).max(4_096).refine(isProtectedRpcMethod, "protected RPC methods require policy_revision");
+const UnprotectedRpcMethodSchema = z.enum(["echo", "runner.info"]);
+const RpcRequestBaseSchema = CorrelatedEnvelopeSchema.extend({
   type: z.literal("rpc.request"),
-  method: ShortTextSchema,
   params: JsonValueSchema,
-  policy_revision: z.number().int().positive().refine(Number.isSafeInteger).optional(),
   workspace: WorkspaceMetadataSchema.optional(),
   job: JobMetadataSchema.optional(),
-}).strict().superRefine((value, context) => {
-  if (isProtectedRpcMethod(value.method) && value.policy_revision === undefined) {
-    context.addIssue({ code: "custom", path: ["policy_revision"], message: "protected RPC methods require a positive policy_revision" });
-  }
-});
+}).strict();
+const UnprotectedRpcRequestSchema = RpcRequestBaseSchema.extend({
+  method: UnprotectedRpcMethodSchema,
+  policy_revision: z.number().int().positive().refine(Number.isSafeInteger).optional(),
+}).strict();
+const ProtectedRpcRequestSchema = RpcRequestBaseSchema.extend({
+  method: ProtectedRpcMethodValueSchema,
+  policy_revision: z.number().int().positive().refine(Number.isSafeInteger),
+}).strict();
+export const RpcRequestSchema = z.union([UnprotectedRpcRequestSchema, ProtectedRpcRequestSchema]);
+
 
 export const RpcResponseSchema = CorrelatedEnvelopeSchema.extend({
   type: z.literal("rpc.response"),
@@ -395,7 +401,7 @@ export const JobCompletedSchema = CorrelatedEnvelopeSchema.extend({
 });
 
 /** The complete, closed set of valid Runner <-> Worker wire messages. */
-export const WireMessageSchema = z.discriminatedUnion("type", [
+export const WireMessageSchema = z.union([
   RunnerHelloSchema,
   RunnerWelcomeSchema,
   RunnerPolicyUpdateSchema,
