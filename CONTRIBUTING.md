@@ -4,11 +4,26 @@ Thank you for helping improve Runmesh. We welcome bug reports, reproductions,
 tests, documentation, design discussion, translations, accessibility work, and
 code contributions from individuals and organizations.
 
-Runmesh is a source-available noncommercial community edition under the
-[PolyForm Noncommercial License 1.0.0](LICENSE). The project also grants a
-narrow [contribution-development permission](CONTRIBUTION_PERMISSION.md) for
-copying, running, modifying, and testing Runmesh when preparing an upstream
-contribution. That permission does not authorize commercial production use.
+Runmesh is source-available under the
+[PolyForm Noncommercial License 1.0.0](LICENSE). By submitting a contribution to
+the official `aloneio/runmesh` repository, you confirm that:
+
+- you have the right to submit the contribution;
+- you grant Runmesh and its maintainers a non-exclusive, worldwide,
+  royalty-free, perpetual license to use, modify, distribute, sublicense, and
+  include the contribution in Runmesh community and commercially licensed
+  editions; and
+- you retain copyright and attribution in your contribution.
+
+This deemed-acceptance contribution term replaces a separate signature or CLA
+submission for ordinary contributions. You do not need to email, upload, or
+sign a separate agreement. Submission of a pull request, patch, issue
+attachment, or other contribution is treated as acceptance of these terms for
+that contribution.
+
+This contribution permission does not grant commercial-use rights to you, your
+employer, or any other organization. Commercial use still requires separate
+written authorization; see [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md).
 
 ## Start here
 
@@ -25,25 +40,20 @@ contribution. That permission does not authorize commercial production use.
    check you could not run locally.
 5. Follow [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) and the pull-request template.
 
-## Contributor agreement and rights
+## Contributor rights and authority
 
-You keep copyright in your contribution and may use your own code in other
-projects. Runmesh uses a license grant, not copyright assignment, so accepted
-contributions can be included in the current community edition and in future
-commercially licensed Runmesh editions.
-
-Before a **substantive code contribution** is merged, complete the applicable
-[Individual CLA](CLA-INDIVIDUAL.md) or [Entity CLA](CLA-ENTITY.md). See
-[docs/cla-setup.md](docs/cla-setup.md) for the current signing and recordkeeping
-process. The project does not claim that CLA automation is enabled unless that
-setup document is updated with evidence.
-
+You keep copyright in your contribution and may reuse your own work elsewhere.
 Only submit material that you have the right to contribute. If you are employed,
 contracted, or contributing on behalf of an entity, confirm employer ownership,
-open-source policy, confidentiality, and patent obligations before submission.
-An Entity CLA is appropriate when the entity authorizes contributions. A
-contribution does not grant you or your employer commercial production-use
-rights; see [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md).
+confidentiality, open-source-policy, and patent obligations before submission.
+Submitting on behalf of an employer or entity means that you confirm you have
+permission to grant the contribution license described above.
+
+The contribution license is limited to rights in the submitted contribution and
+does not authorize production deployment, internal business operations, paid
+hosting, commercial SaaS, resale, white-label distribution, or commercial
+integration of Runmesh. The project does not claim that this document has been
+reviewed by a lawyer.
 
 ## Development expectations
 
@@ -61,10 +71,14 @@ rights; see [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md).
 ## Pull requests
 
 Describe the problem, solution, tests, documentation changes, security impact,
-and compatibility impact. Complete the PR checklist, including CLA status where
-required. Maintainers review changes under [GOVERNANCE.md](GOVERNANCE.md); a
-merge decision does not waive license, contributor-agreement, or security
-requirements.
+and compatibility impact. The pull-request template includes a simple
+contribution-terms confirmation. It is a reminder, not a request for a separate
+signature or private record.
+
+Maintainers review changes under [GOVERNANCE.md](GOVERNANCE.md). A merge
+decision does not waive the license, security, or authority confirmations above.
+Maintainers may ask for clarification or decline a contribution when ownership,
+confidentiality, patent, or licensing authority is unclear.
 
 ## Getting help
 
