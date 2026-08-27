@@ -394,7 +394,7 @@ export class RunnerDO {
     }
     if (!await this.restartReconcilePromise) return false;
     const final = await this.admission();
-    return final.activeRevision !== null && final.activeChecksum !== null && this.admitsProtectedRpc(final, attachment, final.activeRevision, final.activeChecksum);
+    return final.activeRevision !== null && final.activeChecksum !== null && this.admitsProtectedRpc(final, attachment, revision, checksum);
   }
 
   private async reconcileAdmissionAfterRestart(attachment: ConnectionAttachment): Promise<boolean> {
