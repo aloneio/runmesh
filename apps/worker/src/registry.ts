@@ -22,6 +22,7 @@ export type RunnerConnectionState = "online" | "offline" | "stale";
 export type PolicyReadiness =
   | {
       readonly ok: true;
+      readonly policy_status: "applied";
       readonly desired_revision: number;
       readonly desired_checksum: string;
       readonly applied_revision: number;
@@ -246,6 +247,9 @@ export class RegistryDO {
           PRIMARY KEY (runner_id, revision)
         );
         CREATE INDEX IF NOT EXISTS idx_runner_policy_versions_retention ON runner_policy_versions(runner_id, revision DESC);
+        CREATE TABLE IF NOT EXISTS runner_policy_migrations (
+          runner_id TEXT PRIMARY KEY, migrated_at_ms INTEGER NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS workspaces (
           runner_id TEXT NOT NULL, workspace_id TEXT NOT NULL, workspace_json TEXT NOT NULL,
           updated_at_ms INTEGER NOT NULL, PRIMARY KEY (runner_id, workspace_id)
@@ -557,6 +561,7 @@ export class RegistryDO {
     }
     return {
       ok: true,
+      policy_status: "applied",
       desired_revision: runner.desired_policy_revision,
       desired_checksum: runner.desired_policy_checksum,
       applied_revision: runner.applied_policy_revision,
@@ -643,40 +648,40 @@ export class RegistryDO {
     const row = this.ctx.storage.sql.exec<ManagedWorkspaceRow>("SELECT * FROM managed_workspaces WHERE runner_id = ? AND workspace_id = ?", runnerId, workspaceId).toArray()[0];
     return row === undefined ? undefined : decodeWorkspace(row)[0];
   }
-  public createManagedWorkspace(runnerId: string, input: { workspace_id: string; display_name: string; root_path: string; enabled: boolean; permissions: PermissionSet }, nowMs: number): WorkspaceRecord | undefined {
-    if (this.runnerRow(runnerId) === undefined || !validWorkspaceInput(input)) return undefined;
+  public createManagedWorkspace(runnerId: string, input: { workspace_id: string; display_name: string; root_path: string; enabled: boolean; permissions: PermissionSet }, nowMs: number, mutationId?: string): WorkspaceRecord | undefined {
+    if (this.runnerRow(runnerId) === undefined || !validWorkspaceInput(input) || !validOptionalMutationId(mutationId)) return undefined;
     try {
       this.ctx.storage.transactionSync(() => {
         this.ctx.storage.sql.exec(`INSERT INTO managed_workspaces (runner_id, workspace_id, display_name, root_path, enabled, permissions_json, created_at_ms, updated_at_ms, revision)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`, runnerId, input.workspace_id, input.display_name, input.root_path, input.enabled ? 1 : 0, JSON.stringify(input.permissions), nowMs, nowMs);
-        this.bumpDesiredPolicy(runnerId, nowMs);
+        this.bumpDesiredPolicy(runnerId, nowMs, mutationId);
       });
     } catch { return undefined; }
     return this.getManagedWorkspace(runnerId, input.workspace_id);
   }
-  public updateManagedWorkspace(runnerId: string, workspaceId: string, input: { display_name: string; root_path: string; enabled: boolean; permissions: PermissionSet }, nowMs: number): WorkspaceRecord | undefined {
-    if (!isSafeIdentifier(workspaceId) || !validWorkspaceInput({ workspace_id: workspaceId, ...input }) || this.getManagedWorkspace(runnerId, workspaceId) === undefined) return undefined;
+  public updateManagedWorkspace(runnerId: string, workspaceId: string, input: { display_name: string; root_path: string; enabled: boolean; permissions: PermissionSet }, nowMs: number, mutationId?: string): WorkspaceRecord | undefined {
+    if (!isSafeIdentifier(workspaceId) || !validWorkspaceInput({ workspace_id: workspaceId, ...input }) || this.getManagedWorkspace(runnerId, workspaceId) === undefined || !validOptionalMutationId(mutationId)) return undefined;
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec(`UPDATE managed_workspaces SET display_name = ?, root_path = ?, enabled = ?, permissions_json = ?, updated_at_ms = ?, revision = revision + 1, validation_status = NULL
         WHERE runner_id = ? AND workspace_id = ?`, input.display_name, input.root_path, input.enabled ? 1 : 0, JSON.stringify(input.permissions), nowMs, runnerId, workspaceId);
-      this.bumpDesiredPolicy(runnerId, nowMs);
+      this.bumpDesiredPolicy(runnerId, nowMs, mutationId);
     });
     return this.getManagedWorkspace(runnerId, workspaceId);
   }
-  public deleteManagedWorkspace(runnerId: string, workspaceId: string, nowMs: number): boolean {
-    if (!isSafeIdentifier(workspaceId)) return false;
+  public deleteManagedWorkspace(runnerId: string, workspaceId: string, nowMs: number, mutationId?: string): boolean {
+    if (!isSafeIdentifier(workspaceId) || !validOptionalMutationId(mutationId)) return false;
     return this.ctx.storage.transactionSync(() => {
       const result = this.ctx.storage.sql.exec("DELETE FROM managed_workspaces WHERE runner_id = ? AND workspace_id = ?", runnerId, workspaceId);
       if (result.rowsWritten !== 1) return false;
-      this.bumpDesiredPolicy(runnerId, nowMs);
+      this.bumpDesiredPolicy(runnerId, nowMs, mutationId);
       return true;
     });
   }
-  public setRunnerPermissions(runnerId: string, permissions: PermissionSet, nowMs: number): RunnerRecord | undefined {
-    if (this.runnerRow(runnerId) === undefined || !validPermissionSet(permissions)) return undefined;
+  public setRunnerPermissions(runnerId: string, permissions: PermissionSet, nowMs: number, mutationId?: string): RunnerRecord | undefined {
+    if (this.runnerRow(runnerId) === undefined || !validPermissionSet(permissions) || !validOptionalMutationId(mutationId)) return undefined;
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec("UPDATE runners SET runner_permissions_json = ?, updated_at_ms = ? WHERE runner_id = ?", JSON.stringify(permissions), nowMs, runnerId);
-      this.bumpDesiredPolicy(runnerId, nowMs);
+      this.bumpDesiredPolicy(runnerId, nowMs, mutationId);
     });
     return this.getRunner(runnerId);
   }
@@ -693,7 +698,7 @@ export class RegistryDO {
     );
     return this.getRunner(runnerId);
   }
-  public emergencyLockRunner(runnerId: string, confirmation: string, nowMs: number): RunnerRecord | undefined { return confirmation === runnerId ? this.setRunnerPermissions(runnerId, LOCKED_PERMISSIONS, nowMs) : undefined; }
+  public emergencyLockRunner(runnerId: string, confirmation: string, nowMs: number, mutationId?: string): RunnerRecord | undefined { return confirmation === runnerId ? this.setRunnerPermissions(runnerId, LOCKED_PERMISSIONS, nowMs, mutationId) : undefined; }
   public acknowledgePolicy(runnerId: string, epoch: number, credentialVersion: number, input: { desired_revision: number; desired_checksum: string; applied_revision: number | null; applied_checksum: string | null; runner_reported_policy_revision: number | null; runner_reported_policy_checksum: string | null; status: "applied" | "pending" | "invalid"; workspace_status: readonly { workspace_id: string; status: WorkspaceValidationStatus }[] }, nowMs: number): boolean {
     if (!this.sessionIsCurrent(runnerId, epoch, credentialVersion, true) || input.workspace_status.length > 64 || !uniqueIds(input.workspace_status.map((item) => item.workspace_id)) || input.workspace_status.some((item) => !isSafeIdentifier(item.workspace_id))) return false;
     const runner = this.runnerRow(runnerId);
@@ -734,6 +739,7 @@ export class RegistryDO {
          last_heartbeat_ms = NULL, last_sync_sequence = NULL,
          policy_status = CASE WHEN desired_policy_revision = 0 THEN 'applied' ELSE 'pending' END, updated_at_ms = excluded.updated_at_ms`, runnerId, runnerId, tokenVerifier, nowMs,
     );
+    this.markPolicyMigrationComplete(runnerId, nowMs);
   }
   public addRunner(runnerId: string, displayName: string, nowMs: number): RunnerRecord | undefined {
     if (!isSafeIdentifier(runnerId) || !validLabel(displayName)) return undefined;
@@ -744,6 +750,7 @@ export class RegistryDO {
            VALUES (?, ?, '', 'offline', 'central', 0, 0, NULL, 'pending', ?, ?)`, runnerId, displayName, JSON.stringify(READ_ONLY_PERMISSIONS), nowMs,
         );
         this.createPolicySnapshot(runnerId, 1, nowMs, null, "runner-created");
+        this.markPolicyMigrationComplete(runnerId, nowMs);
       });
     } catch { return undefined; }
     return this.getRunner(runnerId);
@@ -979,8 +986,19 @@ export class RegistryDO {
     if (request.method === "DELETE" && action === undefined) { const confirmation = stringField(input, "confirmation", 128); return confirmation !== undefined && this.deleteRunner(runnerId, confirmation, now) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 }); }
     if (request.method === "POST" && action === "rename") { const displayName = stringField(input, "display_name", 256); const runner = displayName === undefined ? undefined : this.renameRunner(runnerId, displayName, now); return runner === undefined ? new Response("not found", { status: 404 }) : Response.json(runner); }
     if (request.method === "POST" && action === "enrollments") { const enrollmentId = stringField(input, "enrollment_id", 43); const verifier = stringField(input, "verifier", 64); const enrollment = enrollmentId === undefined || verifier === undefined ? undefined : this.createRunnerEnrollment(runnerId, enrollmentId, verifier, now); return enrollment === undefined ? new Response("not found", { status: 404 }) : Response.json(enrollment); }
-    if (request.method === "POST" && action === "rotate") { this.invalidateRunnerCredential(runnerId, now); return new Response(null, { status: 204 }); }
-    if (request.method === "POST" && action === "revoke") { const confirmation = stringField(input, "confirmation", 128); return confirmation !== undefined && this.revokeRunner(runnerId, confirmation, now) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 }); }
+    if (request.method === "POST" && action === "rotate") {
+      if (this.runnerRow(runnerId) === undefined) return new Response("not found", { status: 404 });
+      this.invalidateRunnerCredential(runnerId, now);
+      return new Response(null, { status: 204 });
+    }
+    if (request.method === "POST" && action === "revoke") {
+      const confirmation = stringField(input, "confirmation", 128); const mutationId = mutationIdField(input);
+      return confirmation !== undefined && confirmation === runnerId && mutationId !== undefined && this.revokeRunner(runnerId, confirmation, now) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 });
+    }
+    if (request.method === "GET" && action === "active-policy" && itemId === undefined) {
+      const policy = this.getActivePolicySnapshot(runnerId);
+      return policy === undefined ? new Response("not found", { status: 404 }) : Response.json(policy);
+    }
     if (request.method === "GET" && action === "active-workspaces" && itemId === undefined) {
       const policy = this.getActivePolicySnapshot(runnerId);
       if (policy === undefined) return new Response("not found", { status: 404 });
@@ -1081,23 +1099,23 @@ export class RegistryDO {
     }
     if (method === "POST" && action === "runners" && clientId !== undefined && segments[2] === "managed-workspaces" && segments[3] === undefined) {
       if (!isSafeIdentifier(clientId)) return new Response("not found", { status: 404 });
-      const workspaceId = stringField(input, "workspace_id", 128); const displayName = stringField(input, "display_name", 256); const rootPath = stringField(input, "root_path", 4_096); const permissions = permissionSetField(input.permissions);
-      if (workspaceId === undefined || displayName === undefined || rootPath === undefined || permissions === undefined || typeof input.enabled !== "boolean") return Response.json({ error: "invalid workspace" }, { status: 400 });
-      const workspace = this.createManagedWorkspace(clientId, { workspace_id: workspaceId, display_name: displayName, root_path: rootPath, enabled: input.enabled, permissions }, nowMs);
+      const workspaceId = stringField(input, "workspace_id", 128); const displayName = stringField(input, "display_name", 256); const rootPath = stringField(input, "root_path", 4_096); const permissions = permissionSetField(input.permissions); const mutationId = mutationIdField(input);
+      if (workspaceId === undefined || displayName === undefined || rootPath === undefined || permissions === undefined || mutationId === undefined || typeof input.enabled !== "boolean") return Response.json({ error: "invalid workspace mutation" }, { status: 400 });
+      const workspace = this.createManagedWorkspace(clientId, { workspace_id: workspaceId, display_name: displayName, root_path: rootPath, enabled: input.enabled, permissions }, nowMs, mutationId);
       return workspace === undefined ? new Response("conflict", { status: 409 }) : Response.json(workspace);
     }
     if (action === "runners" && clientId !== undefined && segments[2] === "managed-workspaces" && segments[3] !== undefined && isSafeIdentifier(clientId) && isSafeIdentifier(segments[3])) {
       const workspaceId = segments[3];
       if (method === "GET") { const workspace = this.getManagedWorkspace(clientId, workspaceId); return workspace === undefined ? new Response("not found", { status: 404 }) : Response.json(workspace); }
       if (method === "PUT") {
-        const displayName = stringField(input, "display_name", 256); const rootPath = stringField(input, "root_path", 4_096); const permissions = permissionSetField(input.permissions);
-        if (displayName === undefined || rootPath === undefined || permissions === undefined || typeof input.enabled !== "boolean") return Response.json({ error: "invalid workspace" }, { status: 400 });
-        const workspace = this.updateManagedWorkspace(clientId, workspaceId, { display_name: displayName, root_path: rootPath, enabled: input.enabled, permissions }, nowMs);
+        const displayName = stringField(input, "display_name", 256); const rootPath = stringField(input, "root_path", 4_096); const permissions = permissionSetField(input.permissions); const mutationId = mutationIdField(input);
+        if (displayName === undefined || rootPath === undefined || permissions === undefined || mutationId === undefined || typeof input.enabled !== "boolean") return Response.json({ error: "invalid workspace mutation" }, { status: 400 });
+        const workspace = this.updateManagedWorkspace(clientId, workspaceId, { display_name: displayName, root_path: rootPath, enabled: input.enabled, permissions }, nowMs, mutationId);
         return workspace === undefined ? new Response("not found", { status: 404 }) : Response.json(workspace);
       }
       if (method === "DELETE") {
-        const confirmation = stringField(input, "confirmation", 128);
-        return confirmation === workspaceId && this.deleteManagedWorkspace(clientId, workspaceId, nowMs) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 });
+        const confirmation = stringField(input, "confirmation", 128); const mutationId = mutationIdField(input);
+        return confirmation === workspaceId && mutationId !== undefined && this.deleteManagedWorkspace(clientId, workspaceId, nowMs, mutationId) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 });
       }
     }
     if (method === "POST" && action === "runners" && clientId !== undefined && segments[2] === "version-policy" && isSafeIdentifier(clientId)) {
@@ -1107,12 +1125,15 @@ export class RegistryDO {
       return runner === undefined ? new Response("not found", { status: 404 }) : Response.json(runner);
     }
     if (method === "POST" && action === "runners" && clientId !== undefined && segments[2] === "permissions" && isSafeIdentifier(clientId)) {
-      const permissions = permissionSetField(input.permissions); const runner = permissions === undefined ? undefined : this.setRunnerPermissions(clientId, permissions, nowMs);
+      const permissions = permissionSetField(input.permissions);
+      const mutationId = mutationIdField(input);
+      if (mutationId === undefined) return Response.json({ error: "mutation_id is required" }, { status: 400 });
+      const runner = permissions === undefined ? undefined : this.setRunnerPermissions(clientId, permissions, nowMs, mutationId);
       return runner === undefined ? new Response("not found", { status: 404 }) : Response.json(runner);
     }
     if (method === "POST" && action === "runners" && clientId !== undefined && segments[2] === "emergency-lock" && isSafeIdentifier(clientId)) {
-      const confirmation = stringField(input, "confirmation", 128);
-      const runner = confirmation === clientId ? this.emergencyLockRunner(clientId, confirmation, nowMs) : undefined;
+      const confirmation = stringField(input, "confirmation", 128); const mutationId = mutationIdField(input);
+      const runner = confirmation === clientId && mutationId !== undefined ? this.emergencyLockRunner(clientId, confirmation, nowMs, mutationId) : undefined;
       return runner === undefined ? new Response("not found", { status: 404 }) : Response.json(runner);
     }
     if (method === "POST" && action === "runners" && clientId !== undefined && segments[2] === "policy-ack" && isSafeIdentifier(clientId)) {
@@ -1169,6 +1190,12 @@ export class RegistryDO {
     this.ctx.storage.sql.exec("UPDATE runners SET protocol_compatibility = 'unknown' WHERE protocol_compatibility IS NULL OR protocol_compatibility NOT IN ('unknown', 'compatible', 'incompatible')");
     this.ctx.storage.sql.exec("UPDATE runners SET update_status = 'unknown' WHERE update_status IS NULL OR update_status NOT IN ('unknown', 'up_to_date', 'update_available', 'pinned', 'incompatible')");
 
+    const versionColumns = new Set(this.ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(runner_policy_versions)").toArray().map((column) => column.name));
+    if (!versionColumns.has("source_revision")) this.ctx.storage.sql.exec("ALTER TABLE runner_policy_versions ADD COLUMN source_revision INTEGER");
+    if (!versionColumns.has("mutation_id")) this.ctx.storage.sql.exec("ALTER TABLE runner_policy_versions ADD COLUMN mutation_id TEXT");
+    this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS runner_policy_migrations (runner_id TEXT PRIMARY KEY, migrated_at_ms INTEGER NOT NULL)");
+    this.ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS idx_runner_policy_versions_retention ON runner_policy_versions(runner_id, revision DESC)");
+
     const mcpColumns = new Set(this.ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(mcp_clients)").toArray().map((column) => column.name));
     if (!mcpColumns.has("active_runner_id")) this.ctx.storage.sql.exec("ALTER TABLE mcp_clients ADD COLUMN active_runner_id TEXT");
     if (!mcpColumns.has("active_runner_updated_at_ms")) this.ctx.storage.sql.exec("ALTER TABLE mcp_clients ADD COLUMN active_runner_updated_at_ms INTEGER");
@@ -1201,11 +1228,57 @@ export class RegistryDO {
     `);
     this.ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS idx_runner_enrollments_expiry ON runner_enrollments(expires_at_ms)");
     this.ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS idx_runner_enrollments_runner ON runner_enrollments(runner_id)");
+    this.recoverLegacyPolicies();
   }
-  private bumpDesiredPolicy(runnerId: string, nowMs: number): void {
+  /**
+   * Legacy databases did not have immutable snapshots. Recover each runner once:
+   * retain only a fully verified applied snapshot; otherwise create one locked
+   * pending desired snapshot without touching runner, client, workspace, or job
+   * history. A subsequent constructor sees the recovery marker and is a no-op.
+   */
+  private recoverLegacyPolicies(): void {
+    const runners = this.ctx.storage.sql.exec<RunnerRow>("SELECT * FROM runners").toArray();
+    for (const runner of runners) {
+      if (this.ctx.storage.sql.exec<{ runner_id: string }>("SELECT runner_id FROM runner_policy_migrations WHERE runner_id = ?", runner.runner_id).toArray()[0] !== undefined) continue;
+      const active = this.policySnapshot(runner.runner_id, runner.applied_policy_revision, runner.active_policy_checksum, "applied");
+      const desired = this.policySnapshot(runner.runner_id, runner.desired_policy_revision, runner.desired_policy_checksum);
+      const complete = active !== undefined && desired !== undefined
+        && runner.policy_status === "applied"
+        && runner.desired_policy_revision === runner.applied_policy_revision
+        && runner.applied_policy_revision === runner.runner_reported_policy_revision
+        && runner.desired_policy_checksum === runner.active_policy_checksum
+        && runner.active_policy_checksum === runner.runner_reported_policy_checksum;
+      if (complete) {
+        this.markPolicyMigrationComplete(runner.runner_id, Date.now());
+        continue;
+      }
+      const highestSnapshotRevision = this.ctx.storage.sql.exec<{ revision: number }>("SELECT MAX(revision) AS revision FROM runner_policy_versions WHERE runner_id = ?", runner.runner_id).toArray()[0]?.revision ?? 0;
+      const revision = Math.max(0, highestSnapshotRevision, runner.desired_policy_revision, runner.applied_policy_revision ?? 0, runner.runner_reported_policy_revision ?? 0) + 1;
+      const permissions = parsePermissionSet(runner.runner_permissions_json);
+      const workspaces = this.listManagedWorkspaces(runner.runner_id);
+      const configuredWorkspaceCount = this.ctx.storage.sql.exec<{ count: number }>("SELECT COUNT(*) AS count FROM managed_workspaces WHERE runner_id = ?", runner.runner_id).toArray()[0]?.count ?? 0;
+      const validConfig = permissions !== undefined && workspaces.length === configuredWorkspaceCount
+        && workspaces.every((workspace) => validWorkspaceInput(workspace));
+      const unsigned = {
+        schema_version: 1 as const, runner_id: runner.runner_id, revision,
+        runner_permissions: validConfig ? permissions : LOCKED_PERMISSIONS,
+        workspaces: validConfig ? workspaces.map((workspace) => ({ workspace_id: workspace.workspace_id, root_path: workspace.root_path, enabled: workspace.enabled, permissions: workspace.permissions })) : [],
+      };
+      const checksum = runnerPolicyChecksum(unsigned);
+      const policy = { ...unsigned, checksum };
+      const nowMs = Date.now();
+      this.ctx.storage.sql.exec("INSERT INTO runner_policy_versions (runner_id, revision, checksum, policy_json, status, created_at_ms, acknowledged_at_ms, validation_summary_json, source_revision, mutation_id) VALUES (?, ?, ?, ?, 'pending', ?, NULL, NULL, NULL, ?)", runner.runner_id, revision, checksum, JSON.stringify(policy), nowMs, validConfig ? "migration-revalidation-required" : "migration-config-invalid");
+      this.ctx.storage.sql.exec("UPDATE runners SET desired_policy_revision = ?, desired_policy_checksum = ?, applied_policy_revision = NULL, active_policy_checksum = NULL, runner_reported_policy_revision = NULL, runner_reported_policy_checksum = NULL, policy_status = ?, policy_error_code = ?, policy_updated_at_ms = ?, updated_at_ms = ? WHERE runner_id = ?", revision, checksum, runner.state === "online" ? "pending" : "offline_pending", validConfig ? "migration_revalidation_required" : "migration_config_invalid", nowMs, nowMs, runner.runner_id);
+      this.markPolicyMigrationComplete(runner.runner_id, nowMs);
+    }
+  }
+  private markPolicyMigrationComplete(runnerId: string, nowMs: number): void {
+    this.ctx.storage.sql.exec("INSERT OR IGNORE INTO runner_policy_migrations (runner_id, migrated_at_ms) VALUES (?, ?)", runnerId, nowMs);
+  }
+  private bumpDesiredPolicy(runnerId: string, nowMs: number, mutationId?: string): void {
     const runner = this.runnerRow(runnerId);
     if (runner === undefined) throw new Error("runner not found");
-    this.createPolicySnapshot(runnerId, Math.max(1, runner.desired_policy_revision + 1), nowMs, runner.desired_policy_revision > 0 ? runner.desired_policy_revision : null, crypto.randomUUID());
+    this.createPolicySnapshot(runnerId, Math.max(1, runner.desired_policy_revision + 1), nowMs, runner.desired_policy_revision > 0 ? runner.desired_policy_revision : null, mutationId ?? crypto.randomUUID());
   }
   private createPolicySnapshot(runnerId: string, revision: number, nowMs: number, sourceRevision: number | null, mutationId: string): void {
     const runner = this.runnerRow(runnerId);
@@ -1314,6 +1387,9 @@ function workspaceStatusesField(value: unknown): Array<{ workspace_id: string; s
   return output;
 }
 function validVerifier(value: string): boolean { return /^[0-9a-f]{64}$/.test(value); }
+function validMutationId(value: unknown): value is string { return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value); }
+function validOptionalMutationId(value: string | undefined): boolean { return value === undefined || validMutationId(value); }
+function mutationIdField(input: InternalInput): string | undefined { return validMutationId(input.mutation_id) ? input.mutation_id : undefined; }
 function validLabel(value: string): boolean { return value.trim().length >= 1 && value.length <= 256; }
 function validRunnerPublicInfo(value: RunnerPublicInfo): boolean { return value.platform.length > 0 && value.platform.length <= 128 && value.architecture.length > 0 && value.architecture.length <= 128 && value.hostname.length > 0 && value.hostname.length <= 256 && value.runner_version.length > 0 && value.runner_version.length <= 256 && Number.isSafeInteger(value.protocol_version) && value.protocol_version > 0 && value.protocol_version <= 1_000; }
 function validScopes(value: readonly CodingScope[]): boolean { return value.length > 0 && value.length <= 3 && new Set(value).size === value.length && value.every((scope) => VALID_SCOPES.has(scope)); }

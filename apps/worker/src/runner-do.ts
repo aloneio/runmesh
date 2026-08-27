@@ -5,8 +5,10 @@ import {
   PROTOCOL_CURRENT_VERSION,
   PROTOCOL_MIN_VERSION,
   RpcRequestSchema,
+  RunnerPolicySchema,
   WORKER_BRIDGE_TIMEOUT_MS,
   runnerPolicyChecksum,
+  validatePermissionSet,
   type WireMessage,
 } from "@aloneio/runmesh-protocol";
 import { bearerToken, internalHeaders, verifyInternalRequest } from "./security.js";
@@ -69,14 +71,17 @@ interface AdmissionState {
   readonly credentialVersion: number | null;
   readonly sessionId: string | null;
   readonly mutationId: string | null;
-  readonly lastReconciledAtMs: number | null;
+  readonly preMutationActiveRevision: number | null;
+  readonly preMutationActiveChecksum: string | null;
+  readonly preMutationDesiredRevision: number | null;
+  readonly preMutationDesiredChecksum: string | null;  readonly lastReconciledAtMs: number | null;
 }
 const ADMISSION_STATE_KEY = "policy-admission-v1";
 const RESTART_RECONCILE_MUTATION_ID = "restart-reconcile";
 const FENCED_ADMISSION: AdmissionState = {
   fenced: true, reconciled: false, runnerId: null, activeRevision: null, activeChecksum: null,
   desiredRevision: null, desiredChecksum: null, connectionEpoch: null, credentialVersion: null,
-  sessionId: null, mutationId: null, lastReconciledAtMs: null,
+  sessionId: null, mutationId: null, preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: null,
 };
 
 export class RunnerDO {
@@ -405,24 +410,16 @@ export class RunnerDO {
     const value = await response.json() as Record<string, unknown>;
     const revision = value.applied_revision;
     const checksum = value.active_checksum;
-    const ready = value.ok === true
-      && value.desired_revision === revision
-      && value.runner_reported_policy_revision === revision
-      && value.desired_checksum === checksum
-      && value.runner_reported_policy_checksum === checksum
-      && value.connection_epoch === attachment.epoch
-      && value.credential_version === attachment.credentialVersion
-      && value.session_id === attachment.sessionId
-      && typeof revision === "number" && Number.isSafeInteger(revision) && revision > 0
-      && typeof checksum === "string" && /^[a-f0-9]{64}$/.test(checksum);
-    if (!ready) return false;
-    const active = await this.registryRequest(attachment.runnerId, "/active-workspaces", { method: "GET" });
-    if (!active.ok) return false;
+    if (!isCurrentPolicyReadiness(value, attachment, revision, checksum)) return false;
+    const active = await this.registryRequest(attachment.runnerId, "/active-policy", { method: "GET" });
+    const policy = active.ok ? await active.json() as unknown : undefined;
+    if (!isPolicy(policy) || policy.revision !== revision || policy.checksum !== checksum) return false;
     const next: AdmissionState = {
       fenced: false, reconciled: true, runnerId: attachment.runnerId,
-      activeRevision: revision as number, activeChecksum: checksum as string, desiredRevision: revision as number, desiredChecksum: checksum as string,
+      activeRevision: revision, activeChecksum: checksum, desiredRevision: revision, desiredChecksum: checksum,
       connectionEpoch: attachment.epoch, credentialVersion: attachment.credentialVersion, sessionId: attachment.sessionId,
-      mutationId: null, lastReconciledAtMs: Date.now(),
+      mutationId: null, preMutationActiveRevision: null, preMutationActiveChecksum: null,
+      preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: Date.now(),
     };
     return this.persistAdmissionIfCurrent(before, next);
   }
@@ -448,7 +445,7 @@ export class RunnerDO {
     // reconciled value must be fenced until this session has rechecked the
     // Registry identity against its current socket epoch and credential.
     this.admissionState = validAdmissionState(stored)
-      ? { ...stored, fenced: true, reconciled: false, activeRevision: null, activeChecksum: null, mutationId: RESTART_RECONCILE_MUTATION_ID, lastReconciledAtMs: null }
+      ? { ...stored, fenced: true, reconciled: false, activeRevision: null, activeChecksum: null, mutationId: RESTART_RECONCILE_MUTATION_ID, preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: null }
       : { ...FENCED_ADMISSION };
     await this.ctx.storage.put(ADMISSION_STATE_KEY, this.admissionState);
     return this.admissionState;
@@ -465,7 +462,13 @@ export class RunnerDO {
 
   private async fence(mutationId: string): Promise<void> {
     const current = await this.admission();
-    await this.persistAdmission({ ...current, fenced: true, reconciled: false, mutationId, activeRevision: null, activeChecksum: null, lastReconciledAtMs: null });
+    const preserve = current.fenced && current.mutationId === mutationId;
+    const capture = !current.fenced && current.reconciled && validPolicyIdentity(current.activeRevision, current.activeChecksum) && validPolicyIdentity(current.desiredRevision, current.desiredChecksum);
+    await this.persistAdmission({ ...current, fenced: true, reconciled: false, mutationId, activeRevision: null, activeChecksum: null, lastReconciledAtMs: null,
+      preMutationActiveRevision: preserve ? current.preMutationActiveRevision : capture ? current.activeRevision : null,
+      preMutationActiveChecksum: preserve ? current.preMutationActiveChecksum : capture ? current.activeChecksum : null,
+      preMutationDesiredRevision: preserve ? current.preMutationDesiredRevision : capture ? current.desiredRevision : null,
+      preMutationDesiredChecksum: preserve ? current.preMutationDesiredChecksum : capture ? current.desiredChecksum : null });
   }
 
   private async reconcileAdmission(attachment: ConnectionAttachment): Promise<void> {
@@ -489,7 +492,7 @@ export class RunnerDO {
       fenced: false, reconciled: true, runnerId: attachment.runnerId,
       activeRevision: revision, activeChecksum: checksum, desiredRevision: revision, desiredChecksum: checksum,
       connectionEpoch: attachment.epoch, credentialVersion: attachment.credentialVersion, sessionId: attachment.sessionId,
-      mutationId: null, lastReconciledAtMs: Date.now(),
+      mutationId: null, preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: Date.now(),
     });
   }
 
@@ -551,12 +554,26 @@ export class RunnerDO {
   }
 }
 
+function isCurrentPolicyReadiness(value: Record<string, unknown>, attachment: ConnectionAttachment, revision: unknown, checksum: unknown): revision is number {
+  return value.ok === true && value.policy_status === "applied"
+    && typeof value.desired_revision === "number" && Number.isSafeInteger(value.desired_revision) && value.desired_revision > 0
+    && typeof revision === "number" && Number.isSafeInteger(revision) && revision > 0
+    && typeof value.runner_reported_policy_revision === "number" && Number.isSafeInteger(value.runner_reported_policy_revision) && value.runner_reported_policy_revision > 0
+    && typeof value.desired_checksum === "string" && /^[a-f0-9]{64}$/.test(value.desired_checksum)
+    && typeof checksum === "string" && /^[a-f0-9]{64}$/.test(checksum)
+    && typeof value.runner_reported_policy_checksum === "string" && /^[a-f0-9]{64}$/.test(value.runner_reported_policy_checksum)
+    && value.desired_revision === revision && value.runner_reported_policy_revision === revision
+    && value.desired_checksum === checksum && value.runner_reported_policy_checksum === checksum
+    && value.connection_epoch === attachment.epoch && value.credential_version === attachment.credentialVersion && value.session_id === attachment.sessionId;
+}
+function validPolicyIdentity(revision: number | null, checksum: string | null): boolean { return revision !== null && Number.isSafeInteger(revision) && revision > 0 && checksum !== null && /^[a-f0-9]{64}$/.test(checksum); }
+
 function sameAdmissionState(left: AdmissionState, right: AdmissionState): boolean {
   return left.fenced === right.fenced && left.reconciled === right.reconciled && left.runnerId === right.runnerId
     && left.activeRevision === right.activeRevision && left.activeChecksum === right.activeChecksum
     && left.desiredRevision === right.desiredRevision && left.desiredChecksum === right.desiredChecksum
     && left.connectionEpoch === right.connectionEpoch && left.credentialVersion === right.credentialVersion
-    && left.sessionId === right.sessionId && left.mutationId === right.mutationId && left.lastReconciledAtMs === right.lastReconciledAtMs;
+    && left.sessionId === right.sessionId && left.mutationId === right.mutationId && left.preMutationActiveRevision === right.preMutationActiveRevision && left.preMutationActiveChecksum === right.preMutationActiveChecksum && left.preMutationDesiredRevision === right.preMutationDesiredRevision && left.preMutationDesiredChecksum === right.preMutationDesiredChecksum && left.lastReconciledAtMs === right.lastReconciledAtMs;
 }
 
 function validAdmissionState(value: unknown): value is AdmissionState {
@@ -572,20 +589,19 @@ function validAdmissionState(value: unknown): value is AdmissionState {
     && (state.credentialVersion === null || Number.isSafeInteger(state.credentialVersion))
     && (state.sessionId === null || typeof state.sessionId === "string")
     && (state.mutationId === null || typeof state.mutationId === "string")
+    && (state.preMutationActiveRevision === null || Number.isSafeInteger(state.preMutationActiveRevision))
+    && (state.preMutationActiveChecksum === null || typeof state.preMutationActiveChecksum === "string")
+    && (state.preMutationDesiredRevision === null || Number.isSafeInteger(state.preMutationDesiredRevision))
+    && (state.preMutationDesiredChecksum === null || typeof state.preMutationDesiredChecksum === "string")
     && (state.lastReconciledAtMs === null || Number.isSafeInteger(state.lastReconciledAtMs));
 }
 
 function isPolicy(value: unknown): value is { schema_version: 1; runner_id: string; revision: number; checksum: string; runner_permissions: { read: boolean; edit: boolean; shell: boolean; job_control: boolean }; workspaces: Array<{ workspace_id: string; root_path: string; enabled: boolean; permissions: { read: boolean; edit: boolean; shell: boolean; job_control: boolean } }> } {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const policy = value as Record<string, unknown>; const permissions = policy.runner_permissions as Record<string, unknown> | undefined;
-  if (policy.schema_version !== 1 || typeof policy.runner_id !== "string" || !Number.isSafeInteger(policy.revision) || (policy.revision as number) <= 0 || typeof policy.checksum !== "string" || !/^[a-f0-9]{64}$/.test(policy.checksum) || !Array.isArray(policy.workspaces) || permissions === undefined || !["read", "edit", "shell", "job_control"].every((key) => typeof permissions[key] === "boolean")) return false;
-  const unsigned = { schema_version: 1 as const, runner_id: policy.runner_id, revision: policy.revision as number, runner_permissions: permissions as { read: boolean; edit: boolean; shell: boolean; job_control: boolean }, workspaces: policy.workspaces };
-  if (runnerPolicyChecksum(unsigned) !== policy.checksum) return false;
-  return (policy.workspaces as unknown[]).every((workspace) => {
-    if (typeof workspace !== "object" || workspace === null || Array.isArray(workspace)) return false;
-    const item = workspace as Record<string, unknown>; const workspacePermissions = item.permissions;
-    return typeof item.workspace_id === "string" && typeof item.root_path === "string" && typeof item.enabled === "boolean" && typeof workspacePermissions === "object" && workspacePermissions !== null && !Array.isArray(workspacePermissions) && ["read", "edit", "shell", "job_control"].every((key) => typeof (workspacePermissions as Record<string, unknown>)[key] === "boolean");
-  });
+  const parsed = RunnerPolicySchema.safeParse(value);
+  if (!parsed.success || parsed.data.workspaces.length > 64 || new Set(parsed.data.workspaces.map((workspace) => workspace.workspace_id)).size !== parsed.data.workspaces.length || !validatePermissionSet(parsed.data.runner_permissions)) return false;
+  const policy = parsed.data;
+  if (policy.workspaces.some((workspace) => workspace.root_path.includes("\0") || !validatePermissionSet(workspace.permissions))) return false;
+  return runnerPolicyChecksum({ schema_version: policy.schema_version, runner_id: policy.runner_id, revision: policy.revision, runner_permissions: policy.runner_permissions, workspaces: policy.workspaces }) === policy.checksum;
 }
 
 function parseRunnerPath(pathname: string): string | undefined {
