@@ -210,8 +210,8 @@ export class RunnerDO {
     }
     if (message.type === "runner.policy_ack") {
       if (message.runner_id !== attachment.runnerId) return ws.close(1008, "runner identity mismatch");
-      const response = await this.registryRequest(attachment.runnerId, "/policy-ack", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, desired_revision: message.desired_revision, desired_checksum: message.desired_checksum, applied_revision: message.applied_revision, applied_checksum: message.applied_checksum, runner_reported_policy_revision: message.applied_revision, status: message.status, workspace_status: message.workspace_status }) });
-      if (!response.ok) ws.close(4001, "stale policy acknowledgement");
+      const response = await this.registryRequest(attachment.runnerId, "/policy-ack", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, desired_revision: message.desired_revision, desired_checksum: message.desired_checksum, applied_revision: message.applied_revision, applied_checksum: message.applied_checksum, runner_reported_policy_revision: message.runner_reported_policy_revision, runner_reported_policy_checksum: message.runner_reported_policy_checksum, status: message.status, workspace_status: message.workspace_status }) });
+      if (!response.ok && response.status !== 204) ws.close(4001, "stale policy acknowledgement");
       return;
     }
     if (message.type === "runner.sync") {
