@@ -271,24 +271,42 @@ export const RunnerWelcomeSchema = CorrelatedEnvelopeSchema.extend({
   worker: WorkerMetadataSchema,
   session_id: IdentifierSchema,
   negotiated_protocol_version: ProtocolVersionSchema,
-  /** Optional v1 extension for authenticated central desired policy. */
+  /** Authenticated central desired policy for the negotiated v2 session. */
   desired_policy: RunnerPolicySchema.optional(),
 }).strict();
+
+const NullablePolicyRevisionSchema = z.number().int().positive().refine(Number.isSafeInteger).nullable();
+const NullablePolicyChecksumSchema = z.string().regex(/^[a-f0-9]{64}$/).nullable();
 
 export const RunnerPolicyAckSchema = EnvelopeSchema.extend({
   type: z.literal("runner.policy_ack"),
   runner_id: IdentifierSchema,
   desired_revision: z.number().int().positive().refine(Number.isSafeInteger),
   desired_checksum: z.string().regex(/^[a-f0-9]{64}$/),
-  applied_revision: z.number().int().nonnegative().refine(Number.isSafeInteger),
-  applied_checksum: z.string().regex(/^[a-f0-9]{64}$/),
+  /** Runner-local active policy after applying (or retaining) the desired candidate. */
+  applied_revision: NullablePolicyRevisionSchema,
+  applied_checksum: NullablePolicyChecksumSchema,
+  /** Explicitly reported active identity; RunnerDO must forward it without deriving it. */
+  runner_reported_policy_revision: NullablePolicyRevisionSchema,
+  runner_reported_policy_checksum: NullablePolicyChecksumSchema,
   status: z.enum(["applied", "pending", "invalid"]),
   /** Per-workspace non-sensitive validation status; roots are never echoed. */
   workspace_status: z.array(z.object({
     workspace_id: IdentifierSchema,
     status: z.enum(["valid", "missing", "not_directory", "permission_denied", "invalid_path"]),
   }).strict()).max(64),
-}).strict();
+}).strict().superRefine((value, context) => {
+  const appliedPair = (value.applied_revision === null) === (value.applied_checksum === null);
+  const reportedPair = (value.runner_reported_policy_revision === null) === (value.runner_reported_policy_checksum === null);
+  if (!appliedPair) context.addIssue({ code: "custom", path: ["applied_revision"], message: "applied revision and checksum must both be null or both be present" });
+  if (!reportedPair) context.addIssue({ code: "custom", path: ["runner_reported_policy_revision"], message: "reported revision and checksum must both be null or both be present" });
+  if (value.applied_revision !== value.runner_reported_policy_revision || value.applied_checksum !== value.runner_reported_policy_checksum) {
+    context.addIssue({ code: "custom", message: "reported policy identity must equal the Runner active policy identity" });
+  }
+  if (value.status === "applied" && (value.applied_revision !== value.desired_revision || value.applied_checksum !== value.desired_checksum)) {
+    context.addIssue({ code: "custom", message: "applied acknowledgement must match the desired policy" });
+  }
+});
 
 export const RunnerHeartbeatSchema = EnvelopeSchema.extend({
   type: z.literal("runner.heartbeat"),
