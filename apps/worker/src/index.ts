@@ -3,6 +3,7 @@ import { PROTOCOL_CURRENT_VERSION, PROTOCOL_MIN_VERSION } from "@aloneio/runmesh
 import { createCodingMcpServer, type McpAuth } from "./mcp/server.js";
 import { RegistryDO, type McpClientRecord, type RunnerPublicInfo, type RunnerRecord, type VerifiedMcpClient } from "./registry.js";
 import { RunnerDO, type WorkerEnv } from "./runner-do.js";
+import { PRODUCT_VERSION } from "./generated-version.js";
 import type { CodingScope } from "./registry.js";
 import {
   ADMIN_SESSION_TTL_MS,
@@ -30,7 +31,7 @@ const SETUP_CSRF_COOKIE = "__Host-runmesh_setup_csrf";
 const LOGIN_CSRF_COOKIE = "__Host-runmesh_login_csrf";
 const MCP_SECRET_RE = /^[A-Za-z0-9_-]{43}$/;
 const CURRENT_RUNNER_PACKAGE_NAME = "@aloneio/runmesh-runner";
-const CURRENT_RUNNER_PACKAGE_VERSION = "0.1.0-dev.1";
+const CURRENT_RUNNER_PACKAGE_VERSION = PRODUCT_VERSION;
 const EXACT_STABLE_VERSION_RE = /^\d+\.\d+\.\d+$/;
 const NPM_PACKAGE_SPEC_RE = /^((?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*)@(\d+\.\d+\.\d+)$/;
 
