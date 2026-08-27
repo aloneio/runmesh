@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { relative, sep } from "node:path";
-import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS, MAX_FRAME_BYTES } from "@aloneio/runmesh-protocol";
+import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS, MAX_FRAME_BYTES, PROTOCOL_CURRENT_VERSION } from "@aloneio/runmesh-protocol";
 import { RpcRuntimeError } from "./errors.js";
 import { PathPolicy } from "./path-policy.js";
 
@@ -9,7 +9,7 @@ const MAX_OUTPUT_BYTES = MAX_FRAME_BYTES;
 const MAX_REQUEST_ID_BYTES = 128;
 const RPC_RESPONSE_ENVELOPE_BYTES = Buffer.byteLength(JSON.stringify({
   type: "rpc.response",
-  protocol_version: 1,
+  protocol_version: PROTOCOL_CURRENT_VERSION,
   request_id: "x".repeat(MAX_REQUEST_ID_BYTES),
   result: null,
 }), "utf8");
@@ -345,7 +345,7 @@ function fitDiffResult(input: {
 function responseFits(result: Record<string, unknown>): boolean {
   return Buffer.byteLength(JSON.stringify({
     type: "rpc.response",
-    protocol_version: 1,
+    protocol_version: PROTOCOL_CURRENT_VERSION,
     request_id: "x".repeat(MAX_REQUEST_ID_BYTES),
     result,
   }), "utf8") <= MAX_FRAME_BYTES;
