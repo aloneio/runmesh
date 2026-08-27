@@ -45,7 +45,19 @@ Workspace metadata contains only `workspace_id`, persistence, revision, and labe
 }
 ```
 
-A successful response is `rpc.response` with the same request ID. A rejected call is `rpc.error` with bounded `{code,message,details?}`. The Worker separates **offline Snapshot Authorization** from **Live Runner Admission**. Registry-only `runner_list`, `workspace_list`, `job_list`, and `job_get` can read the last validated Active Policy snapshot without requiring a current WebSocket. Filesystem, execution, inspection, log, input, and cancel operations require a current online Runner, matching session/epoch/credential generation, an unfenced RunnerDO, and a matching desired/applied/reported revision and checksum triad. Worker→RunnerDO forwarding additionally validates `expected_policy_revision` and `expected_policy_checksum`.
+The Worker separates **offline Snapshot Authorization** from **Live Runner Admission**. Snapshot Authorization uses only a validated immutable Active Policy and can safely serve retained Registry metadata while the Runner is offline. Live Admission is a separate proof for filesystem, execution, inspection, complete logs, input, and cancellation: it requires the current online Runner session, matching epoch/credential generation, an unfenced RunnerDO, and one matching desired/applied/reported revision-and-checksum triad. A policy mutation fences Live Admission before Registry state changes; it is unfenced only when the same session proves the pre-mutation active triad remains applied.
+
+The forwarding payload contains the requested revision and both expected identity fields:
+
+```json
+{
+  "method": "fs.read",
+  "params": { "workspace_id": "zero", "path": "src/index.ts" },
+  "policy_revision": 7,
+  "expected_policy_revision": 7,
+  "expected_policy_checksum": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+}
+```
 
 The shared deadline constants are:
 

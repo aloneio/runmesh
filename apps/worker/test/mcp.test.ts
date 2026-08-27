@@ -56,6 +56,44 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     });
   });
 
+  it("recovers incomplete legacy policy identities once without deleting retained data", async () => {
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName(`legacy-policy-recovery-${crypto.randomUUID()}`));
+    const now = Date.now();
+    await runInDurableObject(registry, (instance, state) => {
+      const sql = state.storage.sql;
+      instance.registerRunner("legacy-policy", "a".repeat(64), now);
+      sql.exec("INSERT INTO managed_workspaces (runner_id, workspace_id, display_name, root_path, enabled, permissions_json, created_at_ms, updated_at_ms, revision) VALUES (?, ?, ?, ?, 1, ?, ?, ?, 1)", "legacy-policy", "workspace", "Workspace", "/tmp", JSON.stringify({ read: true, edit: false, shell: false, job_control: false }), now, now);
+      sql.exec("INSERT INTO jobs (runner_id, job_id, job_json, updated_at_ms) VALUES (?, ?, ?, ?)", "legacy-policy", "retained-job", JSON.stringify({ job_id: "retained-job", workspace_id: "workspace", status: "succeeded" }), now);
+      sql.exec("DELETE FROM runner_policy_migrations WHERE runner_id = ?", "legacy-policy");
+      sql.exec("DELETE FROM runner_policy_versions WHERE runner_id = ?", "legacy-policy");
+      sql.exec("UPDATE runners SET desired_policy_revision = 7, desired_policy_checksum = NULL, applied_policy_revision = 7, active_policy_checksum = ?, runner_reported_policy_revision = 7, runner_reported_policy_checksum = ?, policy_status = 'applied' WHERE runner_id = ?", "b".repeat(64), "b".repeat(64), "legacy-policy");
+      (instance as unknown as { ensureSchema(): void }).ensureSchema();
+      const recovered = instance.getRunner("legacy-policy");
+      expect(recovered).toMatchObject({ desired_policy_revision: 8, applied_policy_revision: null, runner_reported_policy_revision: null, policy_status: "offline_pending" });
+      expect(instance.listPolicyVersions("legacy-policy")).toMatchObject([{ revision: 8, status: "pending", mutation_id: "migration-revalidation-required" }]);
+      expect(instance.getJob("legacy-policy", "retained-job")).toMatchObject({ job_id: "retained-job" });
+      expect(instance.listManagedWorkspaces("legacy-policy")).toHaveLength(1);
+      (instance as unknown as { ensureSchema(): void }).ensureSchema();
+      expect(instance.listPolicyVersions("legacy-policy")).toHaveLength(1);
+    });
+  });
+
+  it("retains a complete validated legacy snapshot during policy recovery", async () => {
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName(`legacy-policy-complete-${crypto.randomUUID()}`));
+    const now = Date.now();
+    await runInDurableObject(registry, (instance, state) => {
+      instance.addRunner("complete-policy", "Complete policy", now);
+      const version = instance.listPolicyVersions("complete-policy")[0];
+      expect(version).toBeDefined();
+      state.storage.sql.exec("UPDATE runner_policy_versions SET status = 'applied' WHERE runner_id = ? AND revision = ?", "complete-policy", version?.revision);
+      state.storage.sql.exec("UPDATE runners SET desired_policy_revision = ?, desired_policy_checksum = ?, applied_policy_revision = ?, active_policy_checksum = ?, runner_reported_policy_revision = ?, runner_reported_policy_checksum = ?, policy_status = 'applied' WHERE runner_id = ?", version?.revision, version?.checksum, version?.revision, version?.checksum, version?.revision, version?.checksum, "complete-policy");
+      state.storage.sql.exec("DELETE FROM runner_policy_migrations WHERE runner_id = ?", "complete-policy");
+      (instance as unknown as { ensureSchema(): void }).ensureSchema();
+      expect(instance.getRunner("complete-policy")).toMatchObject({ desired_policy_revision: 1, applied_policy_revision: 1, policy_status: "applied" });
+      expect(instance.listPolicyVersions("complete-policy")).toHaveLength(1);
+    });
+  });
+
   it("has safe additive schema defaults for legacy runner, MCP, enrollment, and sync data", async () => {
     const registry = env.REGISTRY.get(env.REGISTRY.idFromName(`schema-defaults-${crypto.randomUUID()}`));
     const now = Date.now();
@@ -153,10 +191,12 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     }
     expect(shellText).toContain("Hosted bootstrap is not available");
     expect(powershellText).toContain("Hosted bootstrap is not available");
-    expect(await release.json()).toMatchObject({ channel: "stable", distributable: false, package_spec: "", current_version: PRODUCT_VERSION, latest_version: PRODUCT_VERSION, package_version: PRODUCT_VERSION, artifact: null, protocol: { min_version: 2, max_version: 2 } });
+    expect(shellText).not.toMatch(/curl|wget|npm|enroll(ment)?[_ -]?code/i);
+    expect(powershellText).not.toMatch(/Invoke-RestMethod|Invoke-WebRequest|npm|enroll(ment)?[_ -]?code/i);
+    expect(await release.json()).toMatchObject({ channel: "stable", distributable: false, package_name: "", package_spec: "", current_version: PRODUCT_VERSION, latest_version: PRODUCT_VERSION, package_version: "", artifact: null, artifacts: null, published_at: null, protocol: { min_version: 2, max_version: 2 } });
     const stable = await SELF.fetch("https://worker.test/runner/releases/stable");
     expect(stable.status).toBe(200);
-    expect(await stable.json()).toMatchObject({ channel: "stable", current_version: PRODUCT_VERSION, latest_version: PRODUCT_VERSION, package_version: PRODUCT_VERSION, protocol: { min_version: 2, max_version: 2 } });
+    expect(await stable.json()).toMatchObject({ channel: "stable", package_name: "", current_version: PRODUCT_VERSION, latest_version: PRODUCT_VERSION, package_version: "", artifact: null, artifacts: null, published_at: null, protocol: { min_version: 2, max_version: 2 } });
     expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "@acme/coding-runner@1.2.3" })).toMatchObject({ distributable: false, package_spec: "" });
     expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "@acme/coding-runner@1.2.3", ALLOW_LEGACY_UNSIGNED_BOOTSTRAP: "true" })).toMatchObject({ channel: "stable", distributable: true, package_name: "@acme/coding-runner", package_version: "1.2.3", package_spec: "@acme/coding-runner@1.2.3", artifact: { source: "@acme/coding-runner@1.2.3" }, protocol: { min_version: 2, max_version: 2 } });
     expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "https://downloads.example.test/runner-1.2.3.tgz", RUNNER_PACKAGE_NAME: "@acme/coding-runner", RUNNER_PACKAGE_VERSION: "1.2.3", ALLOW_LEGACY_UNSIGNED_BOOTSTRAP: "true" })).toMatchObject({ distributable: true, package_version: "1.2.3", artifact: { source: "https://downloads.example.test/runner-1.2.3.tgz" } });
