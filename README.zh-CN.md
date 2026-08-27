@@ -229,12 +229,12 @@ Runmesh 不提供操作系统级 sandbox、租户隔离、自动 failover、入�
 - [协议](docs/protocol.md) — typed wire message、策略版本、checksum 和限制；
 - [迁移](docs/migration.md) — additive schema、旧 profile 和 rollback 注意事项；
 - [SECURITY.md](SECURITY.md) — 漏洞报告；
-- [CONTRIBUTING.md](CONTRIBUTING.md) — 贡献规则和开发要求。
+- [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md) — 完整的贡献条款和流程。
 
 ## 许可证与社区
 
 Runmesh 依据 [PolyForm Noncommercial License 1.0.0](LICENSE) 以源码可用形式提供，**不是** OSI 认可的开源软件。商业使用或额外权利需要单独书面授权，请查看 [COMMERCIAL_LICENSE.zh-CN.md](COMMERCIAL_LICENSE.zh-CN.md)。
 
-欢迎社区贡献。请查看 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md) 和 [CONTRIBUTION_PERMISSION.zh-CN.md](CONTRIBUTION_PERMISSION.zh-CN.md) 了解简单的贡献条款。通知见 [NOTICE](NOTICE) 和 [THIRD_PARTY_NOTICES.zh-CN.md](THIRD_PARTY_NOTICES.zh-CN.md)，名称和徽标使用见 [TRADEMARKS.zh-CN.md](TRADEMARKS.zh-CN.md)，安全问题请通过 [SECURITY.zh-CN.md](SECURITY.zh-CN.md) 报告。
+欢迎社区贡献。请查看 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md) 了解完整的贡献条款和流程。通知见 [NOTICE](NOTICE) 和 [THIRD_PARTY_NOTICES.zh-CN.md](THIRD_PARTY_NOTICES.zh-CN.md)，名称和徽标使用见 [TRADEMARKS.zh-CN.md](TRADEMARKS.zh-CN.md)，安全问题请通过 [SECURITY.zh-CN.md](SECURITY.zh-CN.md) 报告。
 
 Runmesh 是独立实现。设计研究参考了 [coding-tools-mcp](https://github.com/xyTom/coding-tools-mcp)、[volter-tunnel](https://github.com/volter-ai/volter-tunnel)、[agent-mcp-gateway](https://github.com/Hiroshimeow/agent-mcp-gateway) 以及 Cloudflare/MCP 官方文档，仅用于行为和架构研究，不表示包含其源码或资产。
