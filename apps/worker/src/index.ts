@@ -24,13 +24,13 @@ import {
 export { RegistryDO, RunnerDO };
 
 const MAX_ADMIN_BODY_BYTES = 16_384;
-const ADMIN_SESSION_COOKIE = "__Host-rcr_admin_session";
-const ADMIN_CSRF_COOKIE = "__Host-rcr_admin_csrf";
-const SETUP_CSRF_COOKIE = "__Host-rcr_setup_csrf";
-const LOGIN_CSRF_COOKIE = "__Host-rcr_login_csrf";
+const ADMIN_SESSION_COOKIE = "__Host-runmesh_admin_session";
+const ADMIN_CSRF_COOKIE = "__Host-runmesh_admin_csrf";
+const SETUP_CSRF_COOKIE = "__Host-runmesh_setup_csrf";
+const LOGIN_CSRF_COOKIE = "__Host-runmesh_login_csrf";
 const MCP_SECRET_RE = /^[A-Za-z0-9_-]{43}$/;
 const CURRENT_RUNNER_PACKAGE_NAME = "@aloneio/runmesh-runner";
-const CURRENT_RUNNER_PACKAGE_VERSION = "0.1.0";
+const CURRENT_RUNNER_PACKAGE_VERSION = "0.1.0-dev.1";
 const EXACT_STABLE_VERSION_RE = /^\d+\.\d+\.\d+$/;
 const NPM_PACKAGE_SPEC_RE = /^((?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*)@(\d+\.\d+\.\d+)$/;
 
