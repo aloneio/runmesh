@@ -66,25 +66,21 @@ The dashboard displays safe Runner details and allows Runner rename, enrollment/
 
 ### Public bootstrap and package configuration
 
-The Worker exposes public, cacheable, secret-free bootstrap scripts for compatibility, but this development preview does not connect them to a signed hosted Release. Unless an explicitly enabled legacy unsigned compatibility configuration is present, `/runner/releases/latest` returns `distributable: false` and the scripts fail closed. The recommended `0.1.0-dev.2` path is manual portable-artifact installation: download the manifest, signature, and artifact, verify them, then run the CLI enrollment/install steps. Automatic update and rollback are not included.
-
-`/runner/releases/latest` and `/runner/releases/stable` report `distributable: false` unless the explicitly enabled legacy unsigned compatibility configuration is present. A manual, verified portable artifact is the recommended development-preview route. Automatic signed bootstrap, update, and rollback are not included.
-
-The bootstrap scripts install the system/machine Runner, require an elevated administrator/root shell, use a centralized installation layout, and run `coding-runner enroll` followed by `coding-runner install`. Linux automatically runs system `daemon-reload`, `enable --now`, and an active-unit check; host lifecycle management is not downgraded to per-user services.
+Hosted bootstrap is disabled for this development preview. `/runner/releases/latest` and `/runner/releases/stable` report `distributable: false`, with empty package and artifact fields. The generated scripts fail closed without consuming enrollment codes, accessing the network, running npm, or installing arbitrary packages. The recommended route is manual portable-artifact installation followed by the CLI enrollment/install steps above; automatic signed bootstrap, update, and rollback are not included.
 
 ## Local Runner profiles and service manifests
 
 Enrollment stores server URL, Runner ID, long-lived credential, and optional concurrency under centralized machine locations:
 
 ```text
-Linux:   /etc/remote-coding-runtime/profile.json
-macOS:   /Library/Application Support/RemoteCodingRunner/profile.json
-Windows: C:\\ProgramData\\RemoteCodingRunner\\profile.json
+Linux:   /etc/runmesh/profile.json
+macOS:   /Library/Application Support/Runmesh/profile.json
+Windows: C:\\ProgramData\\Runmesh\\profile.json
 ```
 
 The POSIX profile directory/file are created with modes `0700`/`0600`; the Windows path uses normal Windows storage and `doctor` does not inspect ACLs. New enrollment profiles record `execution_mode: dedicated_user`; legacy profiles without this field preserve their privileged-host service layout when explicitly confirmed rather than silently changing an installed service. Enrollment starts with zero local workspaces; add roots explicitly with `workspace add`. Re-enrollment replaces credentials/connection data without inferring or adding a workspace. `status` redacts the token. `doctor --json` emits stable required/optional checks for profile directory/file modes, manifest/installed/active service state, Host shell runtime, execution mode, local policy revision when available, and tools; optional Python/Docker failures remain warnings, while required failures are nonzero. `workspace list|add|remove`, `env`, and `doctor` operate against the profile. `start` uses profile defaults unless explicit legacy Runner transport options are provided.
 
-`coding-runner install` writes a hash-marked system service manifest and automatically activates it through an explicit host adapter. New dedicated-user services render Linux `User=runmesh` and `Group=runmesh`, macOS LaunchDaemon `UserName=runmesh`, and Windows `NT AUTHORITY\LOCAL SERVICE` with least privilege. Operators must provision the `runmesh` account/group and grant it profile/state/workspace access. `--execution-mode privileged_host --confirm-privileged-host` is the explicit root/SYSTEM opt-in; legacy profiles without execution mode retain their old privileged layout for compatibility. Linux uses `/opt/remote-coding-runtime`, `/etc/remote-coding-runtime`, `/var/lib/remote-coding-runtime`, and `/etc/systemd/system/remote-coding-runner.service`; it runs `systemctl daemon-reload`, `systemctl enable --now remote-coding-runner.service`, and an active-unit check. It requires an elevated administrator/root shell and refuses an unmanaged existing manifest. `stop`, `restart`, and `uninstall` invoke their selected adapter; `uninstall` only removes a manifest whose marker and content hash match. `--purge --yes` additionally removes the local profile but leaves configured workspace roots and persistent job state untouched. Use `--user` only for explicit legacy per-user compatibility.
+`coding-runner install` writes a hash-marked system service manifest and automatically activates it through an explicit host adapter. New dedicated-user services render Linux `User=runmesh` and `Group=runmesh`, macOS LaunchDaemon `UserName=runmesh`, and Windows `NT AUTHORITY\LOCAL SERVICE` with least privilege. Operators must provision the `runmesh` account/group and grant it profile/state/workspace access. `--execution-mode privileged_host --confirm-privileged-host` is the explicit root/SYSTEM opt-in; legacy profiles without execution mode retain their old privileged layout for compatibility. Linux uses `/opt/runmesh`, `/etc/runmesh`, `/var/lib/runmesh`, `/var/log/runmesh`, and `runmesh-runner.service`. It requires an elevated administrator/root shell and refuses an unmanaged existing manifest. `stop`, `restart`, and `uninstall` invoke their selected adapter; `uninstall` only removes a manifest whose marker and content hash match. `--purge --yes` additionally removes the local profile but leaves configured workspace roots and persistent job state untouched. Use `--user` only for explicit legacy per-user compatibility.
 
 The Runner needs only outbound access. A saved profile requires `wss://`; cleartext `ws://` is available only for loopback development with explicit `--insecure-local`.
 
