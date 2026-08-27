@@ -25,7 +25,7 @@ runner.heartbeat   Runner → Worker; liveness and active job IDs
 runner.sync        Runner → Worker; monotonic snapshot sequence, workspace/job metadata
 ```
 
-Workspace metadata contains only `workspace_id`, persistence, revision, and labels. A host root is never sent over the wire. A Runner has a stable `runner_id`; dashboard/MCP display names are control-plane metadata rather than a transport routing parameter.
+Workspace metadata contains only `workspace_id`, persistence, revision, and labels. The private `root_path` is delivered only in authenticated Runner-only policy frames; it is never returned in MCP output, workspace metadata, ordinary logs, or public APIs. A Runner has a stable `runner_id`; dashboard/MCP display names are control-plane metadata rather than a transport routing parameter.
 
 ## RPC and timeout contract
 
@@ -44,7 +44,7 @@ Workspace metadata contains only `workspace_id`, persistence, revision, and labe
 }
 ```
 
-A successful response is `rpc.response` with the same request ID. A rejected call is `rpc.error` with bounded `{code,message,details?}`. The Worker validates/authenticates and forwards coding RPCs to the selected Runner's current socket; it never interprets coding semantics.
+A successful response is `rpc.response` with the same request ID. A rejected call is `rpc.error` with bounded `{code,message,details?}`. The Worker separates **offline Snapshot Authorization** from **Live Runner Admission**. Registry-only `runner_list`, `workspace_list`, `job_list`, and `job_get` can read the last validated Active Policy snapshot without requiring a current WebSocket. Filesystem, execution, inspection, log, input, and cancel operations require a current online Runner, matching session/epoch/credential generation, an unfenced RunnerDO, and a matching desired/applied/reported revision and checksum triad.
 
 The shared deadline constants are:
 
@@ -65,9 +65,7 @@ Selection is sticky per MCP client. The first selection is immediate, a switch r
 
 ## Jobs
 
-`job.started`, `job.status`, and `job.completed` persist bounded metadata upstream. `job.output` is best-effort and is not a substitute for Runner-local logs. Full logs remain local and are read through `job.logs` pages.
-
-The durable compatibility API at the MCP layer is:
+`job_list` reads bounded Registry snapshots, so historical metadata remains available while that selected Runner is offline. `job_get` returns an existing Registry record with `source: "registry_snapshot"` and `runner_state: "offline"` during that gap; unknown IDs return `not_found`. Complete logs remain on the Runner and therefore require live admission.
 
 ```text
 exec_start(workspace_id, ...)
