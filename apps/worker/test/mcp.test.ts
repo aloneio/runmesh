@@ -1,6 +1,7 @@
 import { env, SELF, runInDurableObject } from "cloudflare:test";
 import { passwordVerifier, randomBase64Url, sha256Hex, verifySetupToken } from "../src/security.js";
 import { runnerReleaseDescriptor } from "../src/index.js";
+import { PRODUCT_VERSION } from "../src/generated-version.js";
 import { describe, expect, it } from "vitest";
 
 const password = "administrator-password-for-tests";
@@ -159,10 +160,10 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(shellText).toContain("set -eu"); expect(shellText).toContain("/etc/systemd/system/remote-coding-runner.service"); expect(shellText).toContain("administrator/root privileges");
     expect(powershellText).toContain("$ErrorActionPreference = 'Stop'"); expect(powershellText).toContain("$env:ProgramFiles"); expect(powershellText).toContain("Administrator PowerShell");
     expect(shellText).toContain("--prefix \"$NPM_PREFIX\""); expect(shellText).not.toContain("npm install --global \"$PACKAGE_SPEC\"");
-    expect(await release.json()).toMatchObject({ channel: "stable", distributable: false, package_spec: "", current_version: "0.1.0-dev.1", latest_version: "0.1.0-dev.1", package_version: "0.1.0-dev.1", artifact: null, protocol: { min_version: 2, max_version: 2 } });
+    expect(await release.json()).toMatchObject({ channel: "stable", distributable: false, package_spec: "", current_version: PRODUCT_VERSION, latest_version: PRODUCT_VERSION, package_version: PRODUCT_VERSION, artifact: null, protocol: { min_version: 2, max_version: 2 } });
     const stable = await SELF.fetch("https://worker.test/runner/releases/stable");
     expect(stable.status).toBe(200);
-    expect(await stable.json()).toMatchObject({ channel: "stable", current_version: "0.1.0-dev.1", latest_version: "0.1.0-dev.1", package_version: "0.1.0-dev.1", protocol: { min_version: 2, max_version: 2 } });
+    expect(await stable.json()).toMatchObject({ channel: "stable", current_version: PRODUCT_VERSION, latest_version: PRODUCT_VERSION, package_version: PRODUCT_VERSION, protocol: { min_version: 2, max_version: 2 } });
     expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "@acme/coding-runner@1.2.3" })).toMatchObject({ channel: "stable", distributable: true, package_name: "@acme/coding-runner", package_version: "1.2.3", package_spec: "@acme/coding-runner@1.2.3", artifact: { source: "@acme/coding-runner@1.2.3" }, protocol: { min_version: 2, max_version: 2 } });
     expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "https://downloads.example.test/runner-1.2.3.tgz", RUNNER_PACKAGE_NAME: "@acme/coding-runner", RUNNER_PACKAGE_VERSION: "1.2.3" })).toMatchObject({ distributable: true, package_version: "1.2.3", artifact: { source: "https://downloads.example.test/runner-1.2.3.tgz" } });
     expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "https://downloads.example.test/runner-1.2.3.tgz", RUNNER_PACKAGE_NAME: "@acme/coding-runner", RUNNER_PACKAGE_VERSION: "1.2.3", RUNNER_ARTIFACT_SHA256: "a".repeat(64) })).toMatchObject({ distributable: true, artifact: { source: "https://downloads.example.test/runner-1.2.3.tgz", checksum: { algorithm: "sha256", value: "a".repeat(64) } } });

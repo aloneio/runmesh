@@ -3,7 +3,10 @@
   "version": "0.1.0-dev.1",
   "private": true,
   "description": "A language-neutral protocol foundation for remote coding runtimes.",
-  "repository": { "type": "git", "url": "https://github.com/aloneio/runmesh.git" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aloneio/runmesh.git"
+  },
   "homepage": "https://github.com/aloneio/runmesh",
   "license": "PolyForm-Noncommercial-1.0.0",
   "workspaces": [
@@ -11,17 +14,20 @@
     "apps/*"
   ],
   "scripts": {
-    "build": "tsc -b",
+    "build": "npm run generate:version && tsc -b",
     "test": "npm run test --workspaces && npm run test:e2e",
     "test:unit": "npm run test --workspaces",
     "test:e2e": "VITE_CONFIG_NATIVE_IGNORE_WARNING=true vitest run --config vitest.e2e.config.ts",
-    "typecheck": "tsc -b --pretty false",
+    "typecheck": "npm run generate:version && tsc -b --pretty false",
     "validate:worker": "wrangler deploy --dry-run --config apps/worker/wrangler.jsonc",
     "dev:worker": "npm run dev --workspace=@aloneio/runmesh-worker",
     "start:runner": "npm run start --workspace=@aloneio/runmesh-runner --",
     "pack:runner": "npm pack --workspace=@aloneio/runmesh-runner --dry-run",
     "pack:smoke": "node ./scripts/pack-smoke.mjs",
     "check:licenses": "node ./scripts/check-licenses.mjs",
+    "set-version": "node ./scripts/set-version.mjs",
+    "check:versions": "node ./scripts/check-versions.mjs",
+    "generate:version": "node ./scripts/generate-version-modules.mjs",
     "test:release-tools": "node --test ./test/release-tools.test.mjs"
   },
   "devDependencies": {
