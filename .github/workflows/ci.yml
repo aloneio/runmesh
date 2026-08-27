@@ -22,6 +22,7 @@ jobs:
       - run: npm ci
       - run: npm run check:versions
       - run: npm run check:format
+      - run: git diff --check
       - run: npm run typecheck
       - run: npm run test:unit
       - run: npm run test:release-tools
