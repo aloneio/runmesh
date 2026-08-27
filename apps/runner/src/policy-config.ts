@@ -5,12 +5,25 @@ import type { PermissionSet, WorkspaceConfig } from "./config.js";
 export type WorkspaceValidationStatus = "valid" | "missing" | "not_directory" | "permission_denied" | "invalid_path";
 export type CentralWorkspacePolicy = { readonly workspace_id: string; readonly root_path: string; readonly enabled: boolean; readonly permissions: PermissionSet };
 
+export function validCentralPermissionSet(value: PermissionSet): boolean {
+  return value.read || (!value.edit && !value.shell && !value.job_control);
+}
+
+export function effectiveCentralPermissions(runner: PermissionSet, workspace: PermissionSet): PermissionSet {
+  return {
+    read: runner.read && workspace.read,
+    edit: runner.edit && workspace.edit,
+    shell: runner.shell && workspace.shell,
+    job_control: runner.job_control && workspace.job_control,
+  };
+}
+
 export async function validateCentralWorkspacePolicy(workspaces: readonly CentralWorkspacePolicy[]): Promise<{ workspaces: WorkspaceConfig[]; status: Array<{ workspace_id: string; status: WorkspaceValidationStatus }> }> {
   const accepted: WorkspaceConfig[] = [];
   const status: Array<{ workspace_id: string; status: WorkspaceValidationStatus }> = [];
   const seen = new Set<string>();
   for (const workspace of workspaces) {
-    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(workspace.workspace_id) || seen.has(workspace.workspace_id) || !workspace.root_path || workspace.root_path.includes("\0") || !isAbsolute(workspace.root_path)) { status.push({ workspace_id: workspace.workspace_id, status: "invalid_path" }); continue; }
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(workspace.workspace_id) || seen.has(workspace.workspace_id) || !workspace.root_path || workspace.root_path.includes("\0") || !isAbsolute(workspace.root_path) || !validCentralPermissionSet(workspace.permissions)) { status.push({ workspace_id: workspace.workspace_id, status: "invalid_path" }); continue; }
     seen.add(workspace.workspace_id);
     if (!workspace.enabled) { status.push({ workspace_id: workspace.workspace_id, status: "valid" }); continue; }
     let canonical: string;
