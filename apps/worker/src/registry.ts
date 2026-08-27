@@ -6,13 +6,33 @@ import {
   PROTOCOL_CURRENT_VERSION,
   PROTOCOL_MIN_VERSION,
   RunnerMetadataSchema,
+  RunnerPolicySchema,
   RunnerSyncSchema,
+  intersectPermissionSets,
+  permissionSetFromScopes,
   runnerPolicyChecksum,
+  validatePermissionSet,
   type RunnerMetadata,
+  type RunnerPolicy,
 } from "@aloneio/runmesh-protocol";
 import { constantTimeEqual, isSafeIdentifier, runnerTokenVerifier, verifyInternalRequest } from "./security.js";
 
 export type RunnerConnectionState = "online" | "offline" | "stale";
+
+export type PolicyReadiness =
+  | {
+      readonly ok: true;
+      readonly desired_revision: number;
+      readonly desired_checksum: string;
+      readonly applied_revision: number;
+      readonly active_checksum: string;
+      readonly runner_reported_policy_revision: number;
+      readonly runner_reported_policy_checksum: string;
+      readonly connection_epoch: number;
+      readonly credential_version: number;
+      readonly session_id: string;
+    }
+  | { readonly ok: false; readonly code: "policy_pending" | "stale_policy"; readonly reason: string };
 export type CodingScope = "coding:read" | "coding:write" | "coding:exec";
 const VALID_SCOPES = new Set<CodingScope>(["coding:read", "coding:write", "coding:exec"]);
 
@@ -468,11 +488,74 @@ export class RegistryDO {
     return this.ctx.storage.sql.exec("DELETE FROM client_runner_overrides WHERE client_id = ? AND runner_id = ?", clientId, runnerId).rowsWritten === 1;
   }
   public effectivePermissions(clientId: string, runnerId: string, workspaceId: string): PermissionSet | undefined {
-    const client = this.getMcpClient(clientId); const runner = this.getRunner(runnerId); const workspace = this.getManagedWorkspace(runnerId, workspaceId);
-    if (client === undefined || runner === undefined || workspace === undefined) return undefined;
+    if (!this.getPolicyReadiness(runnerId).ok) return undefined;
+    const client = this.getMcpClient(clientId);
+    const policy = this.getActivePolicySnapshot(runnerId);
+    if (client === undefined || policy === undefined) return undefined;
+    const workspace = policy.workspaces.find((candidate) => candidate.workspace_id === workspaceId);
+    if (workspace === undefined || !workspace.enabled) return undefined;
     const override = this.clientRunnerPermissions(clientId, runnerId) ?? { read: true, edit: true, shell: true, job_control: true };
-    const clientPermissions: PermissionSet = { read: client.scopes.includes("coding:read"), edit: client.scopes.includes("coding:write"), shell: client.scopes.includes("coding:exec"), job_control: client.scopes.includes("coding:exec") };
-    return workspace.enabled && runner.policy_status === "applied" && runner.applied_policy_revision === runner.desired_policy_revision && runner.desired_policy_revision > 0 ? intersectPermissions(clientPermissions, override, runner.runner_permissions, workspace.permissions) : undefined;
+    return intersectPermissionSets(permissionSetFromScopes(client.scopes), override, policy.runner_permissions, workspace.permissions);
+  }
+
+  /** Desired policy is exclusively the immutable desired revision row. */
+  public getDesiredPolicySnapshot(runnerId: string): RunnerPolicy | undefined {
+    const runner = this.runnerRow(runnerId);
+    if (runner === undefined) return undefined;
+    return this.policySnapshot(runnerId, runner.desired_policy_revision, runner.desired_policy_checksum);
+  }
+
+  /** Active policy is exclusively the immutable applied revision/checksum pair. */
+  public getActivePolicySnapshot(runnerId: string): RunnerPolicy | undefined {
+    const runner = this.runnerRow(runnerId);
+    if (runner === undefined || runner.applied_policy_revision === null || runner.active_policy_checksum === null) return undefined;
+    return this.policySnapshot(runnerId, runner.applied_policy_revision, runner.active_policy_checksum, "applied");
+  }
+
+  public getActiveWorkspacePolicy(runnerId: string, workspaceId: string): RunnerPolicy["workspaces"][number] | undefined {
+    return this.getActivePolicySnapshot(runnerId)?.workspaces.find((workspace) => workspace.workspace_id === workspaceId);
+  }
+
+  /**
+   * Protected operations require an established live session and an exact
+   * desired/applied/reported immutable policy identity triad. Any missing or
+   * malformed identity fails closed; mutable configuration is never consulted.
+   */
+  public getPolicyReadiness(runnerId: string): PolicyReadiness {
+    const runner = this.runnerRow(runnerId);
+    if (runner === undefined) return { ok: false, code: "stale_policy", reason: "runner is missing" };
+    const checksum = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+    const revision = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+    if (runner.state !== "online" || !revision(runner.connection_epoch) || !revision(runner.credential_version) || typeof runner.session_id !== "string" || runner.session_id.length === 0) {
+      return { ok: false, code: "stale_policy", reason: "runner session is not current" };
+    }
+    if (runner.policy_status !== "applied") return { ok: false, code: "policy_pending", reason: "policy is not applied" };
+    if (!revision(runner.desired_policy_revision) || !revision(runner.applied_policy_revision) || !revision(runner.runner_reported_policy_revision)
+      || !checksum(runner.desired_policy_checksum) || !checksum(runner.active_policy_checksum) || !checksum(runner.runner_reported_policy_checksum)) {
+      return { ok: false, code: "policy_pending", reason: "policy identity is incomplete" };
+    }
+    if (runner.desired_policy_revision !== runner.applied_policy_revision || runner.applied_policy_revision !== runner.runner_reported_policy_revision
+      || runner.desired_policy_checksum !== runner.active_policy_checksum || runner.active_policy_checksum !== runner.runner_reported_policy_checksum) {
+      return { ok: false, code: "stale_policy", reason: "policy identity mismatch" };
+    }
+    const active = this.getActivePolicySnapshot(runnerId);
+    const desired = this.getDesiredPolicySnapshot(runnerId);
+    if (active === undefined || desired === undefined || active.revision !== runner.applied_policy_revision || active.checksum !== runner.active_policy_checksum
+      || desired.revision !== runner.desired_policy_revision || desired.checksum !== runner.desired_policy_checksum) {
+      return { ok: false, code: "stale_policy", reason: "immutable policy snapshot is unavailable" };
+    }
+    return {
+      ok: true,
+      desired_revision: runner.desired_policy_revision,
+      desired_checksum: runner.desired_policy_checksum,
+      applied_revision: runner.applied_policy_revision,
+      active_checksum: runner.active_policy_checksum,
+      runner_reported_policy_revision: runner.runner_reported_policy_revision,
+      runner_reported_policy_checksum: runner.runner_reported_policy_checksum,
+      connection_epoch: runner.connection_epoch,
+      credential_version: runner.credential_version,
+      session_id: runner.session_id,
+    };
   }
 
   /** Resolve an MCP client's sticky runner selection without silently changing it. */
@@ -521,16 +604,23 @@ export class RegistryDO {
     return this.selectMcpClientRunner(clientId, runners[0]?.runner_id ?? "", false, nowMs);
   }
 
-  private desiredPolicy(runnerId: string): { schema_version: 1; runner_id: string; revision: number; checksum: string; runner_permissions: PermissionSet; workspaces: Array<{ workspace_id: string; root_path: string; enabled: boolean; permissions: PermissionSet }> } | undefined {
-    const runner = this.runnerRow(runnerId);
-    if (runner === undefined || runner.desired_policy_revision <= 0 || runner.desired_policy_checksum === null) return undefined;
-    const row = this.ctx.storage.sql.exec<PolicyVersionRow>("SELECT * FROM runner_policy_versions WHERE runner_id = ? AND revision = ?", runnerId, runner.desired_policy_revision).toArray()[0];
-    if (row === undefined || row.checksum !== runner.desired_policy_checksum) return undefined;
+  private policySnapshot(runnerId: string, revision: number | null, checksum: string | null, expectedStatus?: "applied"): RunnerPolicy | undefined {
+    if (!Number.isSafeInteger(revision) || revision === null || revision <= 0 || typeof checksum !== "string" || !/^[a-f0-9]{64}$/.test(checksum)) return undefined;
+    const row = this.ctx.storage.sql.exec<PolicyVersionRow>("SELECT * FROM runner_policy_versions WHERE runner_id = ? AND revision = ?", runnerId, revision).toArray()[0];
+    if (row === undefined || row.runner_id !== runnerId || row.revision !== revision || row.checksum !== checksum || (expectedStatus !== undefined && row.status !== expectedStatus) || !/^[a-f0-9]{64}$/.test(row.checksum)) return undefined;
     let parsed: unknown;
     try { parsed = JSON.parse(row.policy_json) as unknown; } catch { return undefined; }
-    const policy = parsed as { schema_version?: unknown; runner_id?: unknown; revision?: unknown; checksum?: unknown; runner_permissions?: unknown; workspaces?: unknown };
-    if (policy.schema_version !== 1 || policy.runner_id !== runnerId || policy.revision !== row.revision || policy.checksum !== row.checksum || !validPolicyJson(policy)) return undefined;
-    return parsed as { schema_version: 1; runner_id: string; revision: number; checksum: string; runner_permissions: PermissionSet; workspaces: Array<{ workspace_id: string; root_path: string; enabled: boolean; permissions: PermissionSet }> };
+    const result = RunnerPolicySchema.safeParse(parsed);
+    if (!result.success || !validPolicyJson(parsed as { runner_permissions?: unknown; workspaces?: unknown }) || result.data.runner_id !== runnerId || result.data.revision !== revision || result.data.checksum !== checksum) return undefined;
+    try {
+      if (runnerPolicyChecksum({ schema_version: result.data.schema_version, runner_id: result.data.runner_id, revision: result.data.revision, runner_permissions: result.data.runner_permissions, workspaces: result.data.workspaces }) !== checksum) return undefined;
+    } catch { return undefined; }
+    if (new Set(result.data.workspaces.map((workspace) => workspace.workspace_id)).size !== result.data.workspaces.length) return undefined;
+    return result.data;
+  }
+
+  private desiredPolicy(runnerId: string): RunnerPolicy | undefined {
+    return this.getDesiredPolicySnapshot(runnerId);
   }
   public listPolicyVersions(runnerId: string): Array<{ runner_id: string; revision: number; checksum: string; policy_json: string; status: string; created_at_ms: number; acknowledged_at_ms: number | null; validation_summary_json: string | null; source_revision: number | null; mutation_id: string | null }> {
     return this.ctx.storage.sql.exec<PolicyVersionRow>("SELECT * FROM runner_policy_versions WHERE runner_id = ? ORDER BY revision DESC LIMIT 50", runnerId).toArray();
@@ -599,7 +689,7 @@ export class RegistryDO {
     const desired = runner === undefined ? undefined : this.desiredPolicy(runnerId);
     if (runner === undefined || desired === undefined) return false;
     if (input.desired_revision < runner.desired_policy_revision) return true;
-    const expectedStatuses = this.listManagedWorkspaces(runnerId).map((workspace) => workspace.workspace_id).sort();
+    const expectedStatuses = desired.workspaces.map((workspace) => workspace.workspace_id).sort();
     const actualStatuses = input.workspace_status.map((item) => item.workspace_id).sort();
     const appliedPair = (input.applied_revision === null) === (input.applied_checksum === null);
     const reportedPair = (input.runner_reported_policy_revision === null) === (input.runner_reported_policy_checksum === null);
@@ -879,6 +969,12 @@ export class RegistryDO {
     if (request.method === "POST" && action === "enrollments") { const enrollmentId = stringField(input, "enrollment_id", 43); const verifier = stringField(input, "verifier", 64); const enrollment = enrollmentId === undefined || verifier === undefined ? undefined : this.createRunnerEnrollment(runnerId, enrollmentId, verifier, now); return enrollment === undefined ? new Response("not found", { status: 404 }) : Response.json(enrollment); }
     if (request.method === "POST" && action === "rotate") { this.invalidateRunnerCredential(runnerId, now); return new Response(null, { status: 204 }); }
     if (request.method === "POST" && action === "revoke") { const confirmation = stringField(input, "confirmation", 128); return confirmation !== undefined && this.revokeRunner(runnerId, confirmation, now) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 }); }
+    if (request.method === "GET" && action === "active-workspaces" && itemId === undefined) {
+      const policy = this.getActivePolicySnapshot(runnerId);
+      if (policy === undefined) return new Response("not found", { status: 404 });
+      return Response.json({ runner_id: runnerId, revision: policy.revision, checksum: policy.checksum, workspaces: policy.workspaces.map((workspace) => ({ workspace_id: workspace.workspace_id, enabled: workspace.enabled, permissions: workspace.permissions })) });
+    }
+    if (request.method === "GET" && action === "policy-readiness" && itemId === undefined) return Response.json(this.getPolicyReadiness(runnerId));
     if (request.method === "GET" && action === "workspaces" && itemId === undefined) return Response.json({ runner_id: runnerId, workspaces: this.listWorkspaces(runnerId) });
     if (request.method === "POST" && action === "policy-ack") { const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const desiredRevision = integerField(input, "desired_revision"); const desiredChecksum = stringField(input, "desired_checksum", 64); const appliedRevision = nullableIntegerField(input, "applied_revision"); const appliedChecksum = nullableChecksumField(input, "applied_checksum"); const reportedRevision = nullableIntegerField(input, "runner_reported_policy_revision"); const reportedChecksum = nullableChecksumField(input, "runner_reported_policy_checksum"); const status = input.status; const statuses = workspaceStatusesField(input.workspace_status); if (epoch === undefined || credentialVersion === undefined || desiredRevision === undefined || desiredChecksum === undefined || appliedRevision === undefined || appliedChecksum === undefined || reportedRevision === undefined || reportedChecksum === undefined || (status !== "applied" && status !== "pending" && status !== "invalid") || statuses === undefined) return Response.json({ error: "invalid policy acknowledgement" }, { status: 400 }); return this.acknowledgePolicy(runnerId, epoch, credentialVersion, { desired_revision: desiredRevision, desired_checksum: desiredChecksum, applied_revision: appliedRevision, applied_checksum: appliedChecksum, runner_reported_policy_revision: reportedRevision, runner_reported_policy_checksum: reportedChecksum, status, workspace_status: statuses }, now) ? new Response(null, { status: 204 }) : new Response("stale policy acknowledgement", { status: 409 }); }
     if (request.method === "GET" && action === "desired-policy" && itemId === undefined) { const policy = this.desiredPolicy(runnerId); return policy === undefined ? new Response("not found", { status: 404 }) : Response.json(policy); }
@@ -1179,20 +1275,18 @@ function runnerPublicInfoField(value: unknown): RunnerPublicInfo | undefined {
     : undefined;
 }
 function safePublicText(value: unknown, max: number): value is string { return typeof value === "string" && value.length > 0 && value.length <= max && !/[\u0000-\u001f\u007f<>]/.test(value); }
-function intersectPermissions(...sets: readonly PermissionSet[]): PermissionSet { return { read: sets.every((set) => set.read), edit: sets.every((set) => set.edit), shell: sets.every((set) => set.shell), job_control: sets.every((set) => set.job_control) }; }
 function permissionSetField(value: unknown): PermissionSet | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const item = value as Record<string, unknown>;
-  return validPermissionSet(item) ? { read: item.read, edit: item.edit, shell: item.shell, job_control: item.job_control } : undefined;
+  const permissions = validatePermissionSet(value);
+  return permissions === undefined ? undefined : { ...permissions };
 }
 function parsePermissionSet(value: string): PermissionSet | undefined { try { return permissionSetField(JSON.parse(value) as unknown); } catch { return undefined; } }
-function validPermissionSet(value: unknown): value is PermissionSet { return typeof value === "object" && value !== null && !Array.isArray(value) && ["read", "edit", "shell", "job_control"].every((key) => typeof (value as Record<string, unknown>)[key] === "boolean"); }
+function validPermissionSet(value: unknown): value is PermissionSet { return permissionSetField(value) !== undefined; }
 function validWorkspaceInput(value: { workspace_id: string; display_name: string; root_path: string; enabled: boolean; permissions: PermissionSet }): boolean { return isSafeIdentifier(value.workspace_id) && validLabel(value.display_name) && value.root_path.length > 0 && value.root_path.length <= 4_096 && !value.root_path.includes("\0") && validPermissionSet(value.permissions); }
 function validPolicyJson(value: { runner_permissions?: unknown; workspaces?: unknown }): boolean {
-  return permissionSetField(value.runner_permissions) !== undefined && Array.isArray(value.workspaces) && value.workspaces.every((workspace) => {
+  return permissionSetField(value.runner_permissions) !== undefined && Array.isArray(value.workspaces) && value.workspaces.length <= 64 && new Set(value.workspaces.map((workspace) => typeof workspace === "object" && workspace !== null && !Array.isArray(workspace) ? (workspace as Record<string, unknown>).workspace_id : undefined)).size === value.workspaces.length && value.workspaces.every((workspace) => {
     if (typeof workspace !== "object" || workspace === null || Array.isArray(workspace)) return false;
     const item = workspace as Record<string, unknown>;
-    return typeof item.workspace_id === "string" && isSafeIdentifier(item.workspace_id) && typeof item.root_path === "string" && item.root_path.length > 0 && typeof item.enabled === "boolean" && permissionSetField(item.permissions) !== undefined;
+    return typeof item.workspace_id === "string" && isSafeIdentifier(item.workspace_id) && typeof item.root_path === "string" && item.root_path.length > 0 && item.root_path.length <= 4_096 && !item.root_path.includes("\0") && typeof item.enabled === "boolean" && permissionSetField(item.permissions) !== undefined;
   });
 }
 function workspaceStatusesField(value: unknown): Array<{ workspace_id: string; status: WorkspaceValidationStatus }> | undefined {
