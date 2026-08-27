@@ -1,8 +1,8 @@
-# Runmesh v0.1.0-dev.1
+# Runmesh Development Preview
 
 ## English
 
-Runmesh v0.1.0-dev.1 is the first public development preview of the Runmesh Agent Control Plane.
+This Runmesh development preview is the first public development preview of the Runmesh Agent Control Plane.
 
 This preview includes:
 
@@ -25,7 +25,7 @@ Commercial use requires separate written authorization. See [COMMERCIAL_LICENSE.
 
 ## 简体中文
 
-Runmesh v0.1.0-dev.1 是 Runmesh Agent Control Plane 的首个公开开发预览版。
+本次 Runmesh 开发预览版是 Runmesh Agent Control Plane 的首个公开开发预览版。
 
 本版本包含：
 
