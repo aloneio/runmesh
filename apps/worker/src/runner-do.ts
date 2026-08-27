@@ -27,6 +27,7 @@ export interface WorkerEnv {
   RUNMESH_RELEASE_SIGNATURE_DESCRIPTOR_URL?: string;
   RUNMESH_RELEASE_KEY_ID?: string;
   /** A stable, externally resolvable npm package@version or HTTPS .tgz package URL for the public bootstrap installers. */
+  ALLOW_LEGACY_UNSIGNED_BOOTSTRAP?: string;
   RUNNER_PACKAGE_SPEC?: string;
   /** Required with a URL package spec; otherwise inferred from an npm package@version spec. */
   RUNNER_PACKAGE_NAME?: string;
@@ -71,6 +72,7 @@ interface AdmissionState {
   readonly lastReconciledAtMs: number | null;
 }
 const ADMISSION_STATE_KEY = "policy-admission-v1";
+const RESTART_RECONCILE_MUTATION_ID = "restart-reconcile";
 const FENCED_ADMISSION: AdmissionState = {
   fenced: true, reconciled: false, runnerId: null, activeRevision: null, activeChecksum: null,
   desiredRevision: null, desiredChecksum: null, connectionEpoch: null, credentialVersion: null,
@@ -80,6 +82,8 @@ const FENCED_ADMISSION: AdmissionState = {
 export class RunnerDO {
   private readonly bridgeWaiters = new Map<string, BridgeWaiter>();
   private admissionState: AdmissionState | undefined;
+  private admissionWriteQueue: Promise<void> = Promise.resolve();
+  private restartReconcilePromise: Promise<boolean> | undefined;
   public constructor(
     private readonly ctx: DurableObjectState<unknown>,
     private readonly env: WorkerEnv,
@@ -89,12 +93,32 @@ export class RunnerDO {
   }
 
   public async fetch(request: Request): Promise<Response> {
+    if (request.method === "POST" && new URL(request.url).pathname === "/begin-policy-mutation") {
+      const body = await request.text();
+      if (!await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
+      let mutationId = "";
+      try {
+        const parsed = JSON.parse(body) as unknown;
+        mutationId = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) && typeof (parsed as Record<string, unknown>).mutation_id === "string"
+          ? String((parsed as Record<string, unknown>).mutation_id)
+          : "";
+      } catch { /* invalid mutation IDs are rejected below */ }
+      if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(mutationId)) return new Response("invalid mutation id", { status: 400 });
+      await this.fence(mutationId);
+      return new Response(null, { status: 204 });
+    }
     if (request.method === "POST" && new URL(request.url).pathname === "/policy") {
       const body = await request.text();
       if (!await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
+      let requestedMutationId: string | undefined;
+      try {
+        const parsed = JSON.parse(body) as unknown;
+        const value = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as Record<string, unknown>).mutation_id : undefined;
+        requestedMutationId = typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value) ? value : undefined;
+      } catch { /* an empty body remains valid for compatibility */ }
       // Persist before any Registry or socket await: a concurrent protected RPC
       // observes this fence even while policy delivery is in flight.
-      await this.fence("policy-update");
+      await this.fence(requestedMutationId ?? "policy-update");
       const socket = await this.currentRunnerSocket();
       if (socket === undefined) return Response.json({ error: { code: "runner_offline", message: "runner is not connected" } }, { status: 503 });
       const attachment = socket.deserializeAttachment() as ConnectionAttachment | null;
@@ -104,7 +128,7 @@ export class RunnerDO {
       if (!desired.ok) return Response.json({ error: { code: "registry_unavailable", message: "policy is unavailable" } }, { status: 503 });
       const policy = await desired.json() as unknown;
       if (!isPolicy(policy)) return Response.json({ error: { code: "invalid_policy", message: "registry returned an invalid policy" } }, { status: 502 });
-      await this.persistAdmission({ ...(await this.admission()), desiredRevision: policy.revision, desiredChecksum: policy.checksum, mutationId: `policy-${policy.revision}`, fenced: true, reconciled: false });
+      await this.persistAdmission({ ...(await this.admission()), desiredRevision: policy.revision, desiredChecksum: policy.checksum, mutationId: requestedMutationId ?? `policy-${policy.revision}`, fenced: true, reconciled: false });
       const message: WireMessage = { type: "runner.policy_update", protocol_version: attachment.protocolVersion, request_id: `policy-${crypto.randomUUID()}`, runner_id: attachment.runnerId, policy };
       try { socket.send(encodeWireFrame(message)); } catch { return Response.json({ error: { code: "runner_offline", message: "runner is not connected" } }, { status: 503 }); }
       return new Response(null, { status: 204 });
@@ -330,11 +354,9 @@ export class RunnerDO {
     if (requestPolicyRevision !== undefined && (expectedPolicyRevision !== requestPolicyRevision || expectedPolicyChecksum === undefined)) {
       return Response.json({ error: { code: "stale_policy", message: "Protected RPC requires a verified policy identity" } }, { status: 409 });
     }
-    // This is deliberately the final asynchronous boundary before socket.send.
-    // A concurrent mutation persists fenced=true before doing any Registry work.
-    const admission = await this.admission();
-    if (requestPolicyRevision !== undefined && expectedPolicyChecksum !== undefined && !this.admitsProtectedRpc(admission, attachment, requestPolicyRevision, expectedPolicyChecksum)) {
-      return Response.json({ error: { code: "stale_policy", message: "Runner policy admission is fenced or stale" } }, { status: 409 });
+    if (requestPolicyRevision !== undefined && expectedPolicyChecksum !== undefined) {
+      const admission = await this.admitOrReconcileProtectedRpc(attachment, requestPolicyRevision, expectedPolicyChecksum);
+      if (!admission) return Response.json({ error: { code: "stale_policy", message: "Runner policy admission is fenced or stale" } }, { status: 409 });
     }
     const requestId = `bridge-${crypto.randomUUID()}`;
     const parsed = RpcRequestSchema.safeParse({ type: "rpc.request", protocol_version: attachment.protocolVersion, request_id: requestId, method: input.method, params: input.params, ...(requestPolicyRevision === undefined ? {} : { policy_revision: requestPolicyRevision }) });
@@ -363,6 +385,62 @@ export class RunnerDO {
     }
   }
 
+  private async admitOrReconcileProtectedRpc(attachment: ConnectionAttachment, revision: number, checksum: string): Promise<boolean> {
+    const admission = await this.admission();
+    if (!admission.fenced && admission.reconciled) return this.admitsProtectedRpc(admission, attachment, revision, checksum);
+    if (admission.mutationId !== RESTART_RECONCILE_MUTATION_ID) return false;
+    if (this.restartReconcilePromise === undefined) {
+      this.restartReconcilePromise = this.reconcileAdmissionAfterRestart(attachment).finally(() => { this.restartReconcilePromise = undefined; });
+    }
+    if (!await this.restartReconcilePromise) return false;
+    const final = await this.admission();
+    return final.activeRevision !== null && final.activeChecksum !== null && this.admitsProtectedRpc(final, attachment, final.activeRevision, final.activeChecksum);
+  }
+
+  private async reconcileAdmissionAfterRestart(attachment: ConnectionAttachment): Promise<boolean> {
+    const before = await this.admission();
+    if (before.mutationId !== RESTART_RECONCILE_MUTATION_ID || !before.fenced || before.reconciled) return false;
+    const response = await this.registryRequest(attachment.runnerId, "/policy-readiness", { method: "GET" });
+    if (!response.ok) return false;
+    const value = await response.json() as Record<string, unknown>;
+    const revision = value.applied_revision;
+    const checksum = value.active_checksum;
+    const ready = value.ok === true
+      && value.desired_revision === revision
+      && value.runner_reported_policy_revision === revision
+      && value.desired_checksum === checksum
+      && value.runner_reported_policy_checksum === checksum
+      && value.connection_epoch === attachment.epoch
+      && value.credential_version === attachment.credentialVersion
+      && value.session_id === attachment.sessionId
+      && typeof revision === "number" && Number.isSafeInteger(revision) && revision > 0
+      && typeof checksum === "string" && /^[a-f0-9]{64}$/.test(checksum);
+    if (!ready) return false;
+    const active = await this.registryRequest(attachment.runnerId, "/active-workspaces", { method: "GET" });
+    if (!active.ok) return false;
+    const next: AdmissionState = {
+      fenced: false, reconciled: true, runnerId: attachment.runnerId,
+      activeRevision: revision as number, activeChecksum: checksum as string, desiredRevision: revision as number, desiredChecksum: checksum as string,
+      connectionEpoch: attachment.epoch, credentialVersion: attachment.credentialVersion, sessionId: attachment.sessionId,
+      mutationId: null, lastReconciledAtMs: Date.now(),
+    };
+    return this.persistAdmissionIfCurrent(before, next);
+  }
+
+  private async persistAdmissionIfCurrent(expected: AdmissionState, next: AdmissionState): Promise<boolean> {
+    let applied = false;
+    const operation = this.admissionWriteQueue.then(async () => {
+      const current = await this.admission();
+      if (!sameAdmissionState(current, expected)) return;
+      this.admissionState = next;
+      await this.ctx.storage.put(ADMISSION_STATE_KEY, next);
+      applied = true;
+    });
+    this.admissionWriteQueue = operation.catch(() => undefined);
+    await operation;
+    return applied;
+  }
+
   private async admission(): Promise<AdmissionState> {
     if (this.admissionState !== undefined) return this.admissionState;
     const stored = await this.ctx.storage.get<AdmissionState>(ADMISSION_STATE_KEY);
@@ -370,14 +448,19 @@ export class RunnerDO {
     // reconciled value must be fenced until this session has rechecked the
     // Registry identity against its current socket epoch and credential.
     this.admissionState = validAdmissionState(stored)
-      ? { ...stored, fenced: true, reconciled: false, activeRevision: null, activeChecksum: null, mutationId: "restart-reconcile", lastReconciledAtMs: null }
+      ? { ...stored, fenced: true, reconciled: false, activeRevision: null, activeChecksum: null, mutationId: RESTART_RECONCILE_MUTATION_ID, lastReconciledAtMs: null }
       : { ...FENCED_ADMISSION };
+    await this.ctx.storage.put(ADMISSION_STATE_KEY, this.admissionState);
     return this.admissionState;
   }
 
   private async persistAdmission(next: AdmissionState): Promise<void> {
-    this.admissionState = next;
-    await this.ctx.storage.put(ADMISSION_STATE_KEY, next);
+    const operation = this.admissionWriteQueue.then(async () => {
+      this.admissionState = next;
+      await this.ctx.storage.put(ADMISSION_STATE_KEY, next);
+    });
+    this.admissionWriteQueue = operation.catch(() => undefined);
+    await operation;
   }
 
   private async fence(mutationId: string): Promise<void> {
@@ -386,16 +469,19 @@ export class RunnerDO {
   }
 
   private async reconcileAdmission(attachment: ConnectionAttachment): Promise<void> {
-    const response = await this.registryRequest(attachment.runnerId, "/policy-revision", { method: "GET" });
+    const response = await this.registryRequest(attachment.runnerId, "/policy-readiness", { method: "GET" });
     if (!response.ok) { await this.fence("registry-reconcile-failed"); return; }
     const value = await response.json() as Record<string, unknown>;
-    const revision = value.applied_policy_revision;
-    const checksum = value.active_policy_checksum;
-    const ready = value.policy_status === "applied"
-      && value.desired_policy_revision === revision
+    const revision = value.applied_revision;
+    const checksum = value.active_checksum;
+    const ready = value.ok === true
+      && value.desired_revision === revision
       && value.runner_reported_policy_revision === revision
-      && value.desired_policy_checksum === checksum
+      && value.desired_checksum === checksum
       && value.runner_reported_policy_checksum === checksum
+      && value.connection_epoch === attachment.epoch
+      && value.credential_version === attachment.credentialVersion
+      && value.session_id === attachment.sessionId
       && typeof revision === "number" && Number.isSafeInteger(revision) && revision > 0
       && typeof checksum === "string" && /^[a-f0-9]{64}$/.test(checksum);
     if (!ready) { await this.fence("registry-reconcile-stale"); return; }
@@ -463,6 +549,14 @@ export class RunnerDO {
     const headersPromise = internalHeaders(this.env.INTERNAL_CONTROL_SECRET ?? "", init.method ?? "GET", path, body);
     return headersPromise.then((headers) => this.env.REGISTRY.get(id).fetch(new Request(`https://registry.internal${path}`, { ...init, headers })));
   }
+}
+
+function sameAdmissionState(left: AdmissionState, right: AdmissionState): boolean {
+  return left.fenced === right.fenced && left.reconciled === right.reconciled && left.runnerId === right.runnerId
+    && left.activeRevision === right.activeRevision && left.activeChecksum === right.activeChecksum
+    && left.desiredRevision === right.desiredRevision && left.desiredChecksum === right.desiredChecksum
+    && left.connectionEpoch === right.connectionEpoch && left.credentialVersion === right.credentialVersion
+    && left.sessionId === right.sessionId && left.mutationId === right.mutationId && left.lastReconciledAtMs === right.lastReconciledAtMs;
 }
 
 function validAdmissionState(value: unknown): value is AdmissionState {

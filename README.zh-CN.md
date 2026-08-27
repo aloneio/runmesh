@@ -191,11 +191,9 @@ npx wrangler deploy --config wrangler.jsonc
 
 Dashboard 生成的 enrollment code 短期有效、单次使用，重新生成或成功兑换后立即失效。Runner 通过认证 WebSocket 主动连接 Worker，不暴露 HTTP server。
 
-本开发预览中的公网 bootstrap 路由不包含长期凭据，只接受一次性 enrollment material。只有管理员配置可信、稳定且有版本约束的 Runner package descriptor 后，bootstrap 才会继续。当前 bootstrap 需要目标机器已有 Node.js 20+ 和 npm，不会自动下载可变 Git 分支，也不会将长期 Runner credential 放入 Dashboard HTML。
+本开发预览中的公网 bootstrap 路由默认 fail closed，不会执行未经签名的动态 package 安装。除非管理员明确启用标记为 legacy、unsigned、development-only 的兼容配置，否则 `/runner/releases/latest` 返回 `distributable: false`，安装脚本会停止。`0.1.0-dev.2` 推荐使用手工下载并验证的 portable artifact，再执行 Runner CLI enrollment/install。自动更新和回滚尚未包含。
 
-Hosted bootstrap endpoint 当前不会自动绑定 GitHub Release asset；管理员必须配置 Worker 侧 package descriptor，并在依赖前完成部署验证。
-
-全新注册从零 Workspace 开始。Workspace 根目录由管理员在 Dashboard 显式添加，再作为 policy 私下发送给对应 Runner。重新注册只更新连接凭据，不会从当前目录创建 Workspace。
+全新注册从零 Workspace 开始。Workspace 根目录由管理员在 Dashboard 显式添加，再通过认证的 Runner-only policy frame 私下发送给对应 Runner；它不会进入 MCP、Workspace metadata、普通日志或公网 API。重新注册只更新连接凭据，不会从当前目录创建 Workspace。Emergency Lock 要求输入 Runner ID，并不会自动终止已经启动的 Job。
 
 ### 凭据与安全
 
@@ -206,7 +204,10 @@ Hosted bootstrap endpoint 当前不会自动绑定 GitHub Release asset；管理
 - 绝对 Workspace 根目录是私有控制平面 policy 数据，不会返回给 MCP Client、公网 endpoint、普通日志或错误；
 - Runner 即使以 root、Administrator 或其他高权限身份运行，也仍然拥有相应宿主机 authority；Runmesh policy 不是操作系统 sandbox。
 
-## 开发预览版限制
+## 当前开发预览版范围
+
+本预览版包含策略保护的 Workspace 访问、粘性 Runner 选择、持久 Job、离线 Registry 快照和认证 Runner 传输。以下能力**尚未包含在 0.1.0-dev.2**，仍属于候选路线图：Audit Log、Policy history/rollback UI、Client base-scope 在线编辑、自动 Runner 更新/回滚、SBOM 发布，以及 macOS/Windows 实机服务集成。
+
 
 本仓库发布的是开发预览版，不代表所有生产或平台集成已经完成。投入运行前，管理员应在目标环境验证：
 
@@ -216,7 +217,7 @@ Hosted bootstrap endpoint 当前不会自动绑定 GitHub Release asset；管理
 - macOS 与 Windows 的原生服务生命周期和低权限行为；
 - artifact 下载、signature/checksum 校验、更新与 rollback 流程。
 
-当前 release workflow 仅支持手动触发，不发布 npm package。它构建并验证 portable Node Runner artifact，但不提供自动 Runner 更新服务。已有安装可能在迁移期间保留旧兼容路径，请以管理员提供的部署说明为准，不要假定路径或 service manager 命令。
+当前 release workflow 仅支持手动触发，不发布 npm package。它构建并验证 portable Node Runner artifact，但不提供自动 Runner 更新服务。旧的 `remote-coding-runtime`、`RemoteCodingRunner` 路径只作为 migration/legacy 检测保留；新安装使用 Runmesh 专属路径。
 
 Runmesh 不提供操作系统级 sandbox、租户隔离、自动 failover、入站 SSH、公网 Runner HTTP server、Hosted IDE、计费、Teams/组织、MCP Tasks、PTY/Web Terminal、浏览器自动化、AI Agent、RAG 或模型网关。
 
