@@ -18,9 +18,7 @@
 - [ ] Policy, permission, path, and service-identity effects are described above when relevant
 - [ ] Migration or rollback behavior is described above when relevant
 
-## Contribution terms
+## Contribution confirmation
 
-- [ ] By submitting this contribution, I confirm that I have the right to submit it and grant the contribution license described in [CONTRIBUTION_PERMISSION.md](../CONTRIBUTION_PERMISSION.md), while retaining copyright and attribution.
-- [ ] If I am contributing for an employer or entity, I have authority to make this submission and grant those rights.
-
-<!-- This is a plain-language reminder of the repository's deemed-acceptance terms. No separate signature, CLA upload, or private agreement record is required. Do not commit personal addresses, identity documents, or confidential employer information. -->
+- [ ] I have the right to submit this contribution and grant the rights described in [CONTRIBUTING.md](../CONTRIBUTING.md), while retaining copyright and attribution.
+- [ ] If I am contributing for an employer or entity, I have authority to make this submission.
