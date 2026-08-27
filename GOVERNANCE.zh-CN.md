@@ -21,16 +21,13 @@ request 中记录相关理由。安全问题应使用 [SECURITY.zh-CN.md](SECURI
 
 ## 贡献与权利
 
-[CONTRIBUTION_PERMISSION.zh-CN.md](CONTRIBUTION_PERMISSION.zh-CN.md) 说明普通贡献的默认视为同意
-条款。贡献者保留版权和署名；贡献条款授予项目在社区版和未来取得商业许可的版本中使用已接收
-贡献所需的权利。
-
-贡献者必须确认自己有权提交工作，包括适用的雇主、承包、保密、依赖和专利义务。向 Runmesh 贡献
-不会授予贡献者或雇主商业使用权。商业权限见 [COMMERCIAL_LICENSE.zh-CN.md](COMMERCIAL_LICENSE.zh-CN.md)。
+请查看 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md) 了解完整的贡献条款和流程。贡献者必须确认自己有权提交
+工作，包括适用的雇主、承包、保密、依赖和专利义务。向 Runmesh 贡献不会授予贡献者或雇主商业使用权。
+商业权限见 [COMMERCIAL_LICENSE.zh-CN.md](COMMERCIAL_LICENSE.zh-CN.md)。
 
 ## 治理变更
 
 治理变更通过 pull request 提出，并应以通俗语言说明对贡献者和维护者的影响。仓库所有者或受委托
 的维护者批准治理变更。
 
-本文件是社区指引，不是法律意见，也不声称任何文件已经过法律顾问审查。
+本文件是社区指引，不是法律意见。对于具体权利、义务或商业使用，请获取合格的专业意见。
