@@ -1,5 +1,7 @@
 import { McpServer, type AuthInfo, type ServerContext } from "@modelcontextprotocol/server";
-import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS } from "@aloneio/runmesh-protocol";
+import {
+  LOCAL_RUNNER_OPERATION_TIMEOUT_MS,
+} from "@aloneio/runmesh-protocol";
 import { z } from "zod";
 import { internalHeaders, isSafeIdentifier } from "../security.js";
 import type { ActiveRunnerContext, McpClientActiveRunner, McpRunnerSelectionResult } from "../registry.js";
@@ -261,37 +263,37 @@ function runnerFailure(error: ToolFailure["error"], selection: ActiveSelection):
 async function activeRunnerTool(env: WorkerEnv, clientId: string, method: string, params: Record<string, unknown>, requiredPermission?: PermissionBit): Promise<unknown> {
   const selected = await resolveActiveRunner(env, clientId);
   if (!selected.ok) return asToolResult(selected);
+  const readiness = await policyReadiness(env, selected.value.runnerId);
+  if (!readiness.ok) return asToolResult(readiness.error);
   const permission = requiredPermission === undefined
     ? undefined
     : params.workspace_id === undefined
       ? await checkAnyReadPermission(env, clientId, selected.value.runnerId)
       : await checkPermission(env, clientId, selected.value.runnerId, params.workspace_id, requiredPermission);
   if (permission !== undefined) return asToolResult(permission);
-  const revisionCall = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/policy-revision`);
-  const revision = policyRevision(revisionCall);
-  if (revision === undefined) return asToolResult(policyPending());
-  const call = await callRunner(env, selected.value.runnerId, method, params, revision);
+  const call = await callRunner(env, selected.value.runnerId, method, params, readiness.value.applied_revision, readiness.value.active_checksum);
   return call.ok ? runnerSuccess(call.value, selected.value) : runnerFailure(call.error, selected.value);
 }
 
 async function activeJobRunnerTool(env: WorkerEnv, clientId: string, method: string, params: Record<string, unknown>, requiredPermission: PermissionBit): Promise<unknown> {
   const selected = await resolveActiveRunner(env, clientId);
   if (!selected.ok) return asToolResult(selected);
+  const readiness = await policyReadiness(env, selected.value.runnerId);
+  if (!readiness.ok) return asToolResult(readiness.error);
   const job = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/jobs/${encodeURIComponent(String(params.job_id))}`);
   if (!job.ok) return runnerFailure(job.error, selected.value);
   const workspaceId = isRecord(job.value) && typeof job.value.workspace_id === "string" ? job.value.workspace_id : undefined;
   const permission = await checkPermission(env, clientId, selected.value.runnerId, workspaceId, requiredPermission);
   if (permission !== undefined) return asToolResult(permission);
-  const revisionCall = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/policy-revision`);
-  const revision = policyRevision(revisionCall);
-  if (revision === undefined) return asToolResult(policyPending());
-  const call = await callRunner(env, selected.value.runnerId, method, params, revision);
+  const call = await callRunner(env, selected.value.runnerId, method, params, readiness.value.applied_revision, readiness.value.active_checksum);
   return call.ok ? runnerSuccess(call.value, selected.value) : runnerFailure(call.error, selected.value);
 }
 
 async function activeJobList(env: WorkerEnv, clientId: string, filters: Record<string, unknown>): Promise<unknown> {
   const selected = await resolveActiveRunner(env, clientId, true);
   if (!selected.ok) return asToolResult(selected);
+  const readiness = await policyReadiness(env, selected.value.runnerId);
+  if (!readiness.ok) return asToolResult(readiness.error);
   if (filters.workspace_id !== undefined) {
     const permission = await checkPermission(env, clientId, selected.value.runnerId, filters.workspace_id, "read");
     if (permission !== undefined) return asToolResult(permission);
@@ -314,7 +316,9 @@ async function activeJobList(env: WorkerEnv, clientId: string, filters: Record<s
 async function activeWorkspaceList(env: WorkerEnv, clientId: string): Promise<unknown> {
   const selected = await resolveActiveRunner(env, clientId);
   if (!selected.ok) return asToolResult(selected);
-  const call = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/workspaces`);
+  const readiness = await policyReadiness(env, selected.value.runnerId);
+  if (!readiness.ok) return asToolResult(readiness.error);
+  const call = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/active-workspaces`);
   if (!call.ok) return runnerFailure(call.error, selected.value);
   const value = isRecord(call.value) ? call.value : {};
   const workspaces = Array.isArray(value.workspaces) ? value.workspaces : [];
@@ -336,34 +340,34 @@ async function checkPermission(env: WorkerEnv, clientId: string, runnerId: strin
   if (permissions?.[required] !== true) return fail(required === "edit" ? "readonly_workspace" : "permission_denied", "The operation is not permitted for this workspace.", "Ask the administrator to grant the required workspace permission.");
   return undefined;
 }
-async function policyReadiness(env: WorkerEnv, runnerId: string): Promise<{ readonly ok: true } | { readonly ok: false; readonly error: PermissionCheck }> {
-  const readiness = await registryCall(env, `/runners/${encodeURIComponent(runnerId)}`);
-  if (!readiness.ok) return { ok: false, error: fail("permission_denied", "The selected runner policy could not be verified.", "Wait for the runner to reconnect and apply the latest control-plane policy.") };
-  const runner = isRecord(readiness.value) ? readiness.value : undefined;
-  const desired = runner?.desired_policy_revision;
-  const applied = runner?.applied_policy_revision;
-  const status = runner?.policy_status;
-  if (typeof desired === "number" && desired > 0 && (status !== "applied" || applied !== desired)) return { ok: false, error: fail("policy_pending", "The selected runner has not applied the latest policy.", "The control plane has a newer policy than the runner. Wait briefly and retry.") };
-  return { ok: true };
+type PolicyReadiness = {
+  readonly applied_revision: number;
+  readonly active_checksum: string;
+};
+async function policyReadiness(env: WorkerEnv, runnerId: string): Promise<{ readonly ok: true; readonly value: PolicyReadiness } | { readonly ok: false; readonly error: PermissionCheck }> {
+  const readiness = await registryCall(env, `/runners/${encodeURIComponent(runnerId)}/policy-readiness`);
+  if (!readiness.ok || !isRecord(readiness.value)) return { ok: false, error: fail("stale_policy", "The selected runner policy could not be verified.", "Wait for the runner to reconnect and apply the latest control-plane policy.") };
+  const value = readiness.value;
+  const revision = value.applied_revision;
+  const checksum = value.active_checksum;
+  const validRevision = typeof revision === "number" && Number.isSafeInteger(revision) && revision > 0;
+  const triad = value.desired_revision === revision && value.runner_reported_policy_revision === revision
+    && value.desired_checksum === checksum && value.runner_reported_policy_checksum === checksum;
+  if (value.ok !== true || !validRevision || typeof checksum !== "string" || !/^[a-f0-9]{64}$/.test(checksum) || !triad) {
+    const code = value.code === "stale_policy" ? "stale_policy" : "policy_pending";
+    return { ok: false, error: fail(code, "The selected runner has no trusted active policy.", "Wait for the runner to reconnect and apply the latest control-plane policy.") };
+  }
+  return { ok: true, value: { applied_revision: revision as number, active_checksum: checksum } };
 }
 
 async function checkAnyReadPermission(env: WorkerEnv, clientId: string, runnerId: string): Promise<PermissionCheck | undefined> {
-  const managed = await registryCall(env, `/auth/runners/${encodeURIComponent(runnerId)}/managed-workspaces`);
-  const managedWorkspaces = managed.ok && isRecord(managed.value) && Array.isArray(managed.value.workspaces) ? managed.value.workspaces : [];
   const readiness = await policyReadiness(env, runnerId);
   if (!readiness.ok) return readiness.error;
-  if (managedWorkspaces.length > 0) {
-    for (const item of managedWorkspaces) {
-      if (!isRecord(item) || typeof item.workspace_id !== "string") continue;
-      if (await checkPermission(env, clientId, runnerId, item.workspace_id, "read") === undefined) return undefined;
-    }
-  } else {
-    const synced = await registryCall(env, `/runners/${encodeURIComponent(runnerId)}/workspaces`);
-    if (!synced.ok || !isRecord(synced.value) || !Array.isArray(synced.value.workspaces)) return fail("permission_denied", "The operation is not permitted for this runner.", "Ask the administrator to grant read access to a workspace.");
-    for (const item of synced.value.workspaces) {
-      if (!isRecord(item) || typeof item.workspace_id !== "string") continue;
-      if (await checkPermission(env, clientId, runnerId, item.workspace_id, "read") === undefined) return undefined;
-    }
+  const active = await registryCall(env, `/runners/${encodeURIComponent(runnerId)}/active-workspaces`);
+  if (!active.ok || !isRecord(active.value) || !Array.isArray(active.value.workspaces)) return fail("stale_policy", "The selected runner policy could not be verified.", "Wait for the runner to apply a trusted policy, then retry.");
+  for (const item of active.value.workspaces) {
+    if (!isRecord(item) || typeof item.workspace_id !== "string" || item.enabled !== true) continue;
+    if (await checkPermission(env, clientId, runnerId, item.workspace_id, "read") === undefined) return undefined;
   }
   return fail("permission_denied", "The operation is not permitted for this runner.", "Ask the administrator to grant read access to a workspace.");
 }
@@ -384,16 +388,15 @@ type PermissionBit = "read" | "edit" | "shell" | "job_control";
 async function activeJobGet(env: WorkerEnv, clientId: string, jobId: string): Promise<unknown> {
   const selected = await resolveActiveRunner(env, clientId, true);
   if (!selected.ok) return asToolResult(selected);
+  const readiness = await policyReadiness(env, selected.value.runnerId);
+  if (!readiness.ok) return asToolResult(readiness.error);
   const snapshot = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/jobs/${encodeURIComponent(jobId)}`);
   if (!snapshot.ok) return runnerFailure(snapshot.error, selected.value);
   const workspaceId = isRecord(snapshot.value) && typeof snapshot.value.workspace_id === "string" ? snapshot.value.workspace_id : undefined;
   const permission = await checkPermission(env, clientId, selected.value.runnerId, workspaceId, "read");
   if (permission !== undefined) return asToolResult(permission);
   if (selected.value.context.state !== "online") return runnerSuccess({ ...(snapshot.value as Record<string, unknown>), source: "registry_snapshot", runner_state: "offline" }, selected.value);
-  const revisionCall = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/policy-revision`);
-  const revision = policyRevision(revisionCall);
-  if (revision === undefined) return runnerFailure(policyPending().error, selected.value);
-  const live = await callRunner(env, selected.value.runnerId, "job.get", { job_id: jobId }, revision);
+  const live = await callRunner(env, selected.value.runnerId, "job.get", { job_id: jobId }, readiness.value.applied_revision, readiness.value.active_checksum);
   if (live.ok || live.error.code !== "runner_offline") return live.ok ? runnerSuccess(live.value, selected.value) : runnerFailure(live.error, selected.value);
   return runnerSuccess({ ...(snapshot.value as Record<string, unknown>), source: "registry_snapshot", runner_state: "offline" }, selected.value);
 }
@@ -423,21 +426,15 @@ export function policyPending(): ToolFailure {
   return fail("policy_pending", "The selected runner has not applied the latest policy.", "Wait for the runner to apply its control-plane policy, then retry.") as ToolFailure;
 }
 
-function policyRevision(call: ToolCall): number | undefined {
-  if (!call.ok || !isRecord(call.value)) return undefined;
-  const revision = call.value.applied_policy_revision;
-  return typeof revision === "number" && Number.isSafeInteger(revision) && revision > 0 && revision === call.value.desired_policy_revision && call.value.policy_status === "applied" ? revision : undefined;
-}
-
 function safeRunnerErrorCode(value: unknown, fallback: string): string {
   return typeof value === "string" && SAFE_RUNNER_ERROR_CODES.has(value) ? value : fallback;
 }
 
-async function callRunner(env: WorkerEnv, runnerId: string, method: string, params: Record<string, unknown>, policyRevision?: number): Promise<ToolCall> {
+async function callRunner(env: WorkerEnv, runnerId: string, method: string, params: Record<string, unknown>, policyRevision?: number, policyChecksum?: string): Promise<ToolCall> {
   if (!isSafeIdentifier(runnerId)) return fail("invalid_runner_id", "runner_id is invalid", "Use a runner identifier returned by runner_list.");
   if (env.INTERNAL_CONTROL_SECRET === undefined || env.INTERNAL_CONTROL_SECRET.length === 0) return fail("service_unavailable", "The runner bridge is not configured.", "Ask the service operator to configure the internal bridge.");
-  if (policyRevision === undefined && method !== "echo" && method !== "runner.info") return fail("policy_pending", "The selected runner policy could not be verified.", "Wait for the runner to apply its control-plane policy, then retry.");
-  const body = JSON.stringify({ method, params, ...(policyRevision === undefined ? {} : { policy_revision: policyRevision }) });
+  if ((policyRevision === undefined || policyChecksum === undefined || !/^[a-f0-9]{64}$/.test(policyChecksum)) && method !== "echo" && method !== "runner.info") return fail("policy_pending", "The selected runner policy could not be verified.", "Wait for the runner to apply its control-plane policy, then retry.");
+  const body = JSON.stringify({ method, params, ...(policyRevision === undefined ? {} : { policy_revision: policyRevision, expected_policy_revision: policyRevision, expected_policy_checksum: policyChecksum }) });
   const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "POST", "/rpc", body);
   let response: Response;
   try {

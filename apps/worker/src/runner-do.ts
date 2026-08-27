@@ -51,8 +51,30 @@ type BridgeReply = Extract<WireMessage, { type: "rpc.response" | "rpc.error" }>;
 type BridgeWaiter = { readonly resolve: (value: BridgeReply) => void; readonly timer: ReturnType<typeof setTimeout>; readonly socket: WebSocket };
 
 
+interface AdmissionState {
+  readonly fenced: boolean;
+  readonly reconciled: boolean;
+  readonly runnerId: string | null;
+  readonly activeRevision: number | null;
+  readonly activeChecksum: string | null;
+  readonly desiredRevision: number | null;
+  readonly desiredChecksum: string | null;
+  readonly connectionEpoch: number | null;
+  readonly credentialVersion: number | null;
+  readonly sessionId: string | null;
+  readonly mutationId: string | null;
+  readonly lastReconciledAtMs: number | null;
+}
+const ADMISSION_STATE_KEY = "policy-admission-v1";
+const FENCED_ADMISSION: AdmissionState = {
+  fenced: true, reconciled: false, runnerId: null, activeRevision: null, activeChecksum: null,
+  desiredRevision: null, desiredChecksum: null, connectionEpoch: null, credentialVersion: null,
+  sessionId: null, mutationId: null, lastReconciledAtMs: null,
+};
+
 export class RunnerDO {
   private readonly bridgeWaiters = new Map<string, BridgeWaiter>();
+  private admissionState: AdmissionState | undefined;
   public constructor(
     private readonly ctx: DurableObjectState<unknown>,
     private readonly env: WorkerEnv,
@@ -65,6 +87,9 @@ export class RunnerDO {
     if (request.method === "POST" && new URL(request.url).pathname === "/policy") {
       const body = await request.text();
       if (!await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
+      // Persist before any Registry or socket await: a concurrent protected RPC
+      // observes this fence even while policy delivery is in flight.
+      await this.fence("policy-update");
       const socket = await this.currentRunnerSocket();
       if (socket === undefined) return Response.json({ error: { code: "runner_offline", message: "runner is not connected" } }, { status: 503 });
       const attachment = socket.deserializeAttachment() as ConnectionAttachment | null;
@@ -74,6 +99,7 @@ export class RunnerDO {
       if (!desired.ok) return Response.json({ error: { code: "registry_unavailable", message: "policy is unavailable" } }, { status: 503 });
       const policy = await desired.json() as unknown;
       if (!isPolicy(policy)) return Response.json({ error: { code: "invalid_policy", message: "registry returned an invalid policy" } }, { status: 502 });
+      await this.persistAdmission({ ...(await this.admission()), desiredRevision: policy.revision, desiredChecksum: policy.checksum, mutationId: `policy-${policy.revision}`, fenced: true, reconciled: false });
       const message: WireMessage = { type: "runner.policy_update", protocol_version: attachment.protocolVersion, request_id: `policy-${crypto.randomUUID()}`, runner_id: attachment.runnerId, policy };
       try { socket.send(encodeWireFrame(message)); } catch { return Response.json({ error: { code: "runner_offline", message: "runner is not connected" } }, { status: 503 }); }
       return new Response(null, { status: 204 });
@@ -81,7 +107,23 @@ export class RunnerDO {
     if (request.method === "POST" && new URL(request.url).pathname === "/revoke") {
       const body = await request.text();
       if (!await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
-      for (const socket of this.ctx.getWebSockets("runner")) socket.close(4001, "credentials revoked");
+      await this.fence("credential-revoked");
+      for (const socket of this.ctx.getWebSockets("runner")) {
+        this.rejectBridgeWaiters(socket, "credentials revoked");
+        socket.close(4001, "credentials revoked");
+      }
+      return new Response(null, { status: 204 });
+    }
+    if (request.method === "POST" && new URL(request.url).pathname === "/delete") {
+      const body = await request.text();
+      if (!await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
+      await this.fence("runner-deleted");
+      for (const socket of this.ctx.getWebSockets("runner")) {
+        this.rejectBridgeWaiters(socket, "runner deleted");
+        socket.close(4001, "runner deleted");
+      }
+      await this.ctx.storage.delete(ADMISSION_STATE_KEY);
+      this.admissionState = { ...FENCED_ADMISSION };
       return new Response(null, { status: 204 });
     }
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
@@ -160,6 +202,13 @@ export class RunnerDO {
       attachment.epoch = body.epoch;
       attachment.protocolVersion = negotiation.protocol_version;
       ws.serializeAttachment(attachment);
+      await this.persistAdmission({
+        ...(await this.admission()), fenced: true, reconciled: false, runnerId: attachment.runnerId,
+        connectionEpoch: attachment.epoch, credentialVersion: attachment.credentialVersion, sessionId: attachment.sessionId,
+        desiredRevision: isPolicy(body.desired_policy) ? body.desired_policy.revision : null,
+        desiredChecksum: isPolicy(body.desired_policy) ? body.desired_policy.checksum : null,
+        activeRevision: null, activeChecksum: null, mutationId: null, lastReconciledAtMs: null,
+      });
       for (const existing of this.ctx.getWebSockets("runner")) {
         if (existing !== ws) {
           const old = existing.deserializeAttachment() as ConnectionAttachment | null;
@@ -211,7 +260,15 @@ export class RunnerDO {
     if (message.type === "runner.policy_ack") {
       if (message.runner_id !== attachment.runnerId) return ws.close(1008, "runner identity mismatch");
       const response = await this.registryRequest(attachment.runnerId, "/policy-ack", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, desired_revision: message.desired_revision, desired_checksum: message.desired_checksum, applied_revision: message.applied_revision, applied_checksum: message.applied_checksum, runner_reported_policy_revision: message.runner_reported_policy_revision, runner_reported_policy_checksum: message.runner_reported_policy_checksum, status: message.status, workspace_status: message.workspace_status }) });
-      if (!response.ok && response.status !== 204) ws.close(4001, "stale policy acknowledgement");
+      if (!response.ok && response.status !== 204) {
+        // A stale but otherwise valid ACK is safe to ignore; Registry returns
+        // 204 for it. Malformed/conflicting ACKs keep the fence in place.
+        await this.fence("invalid-policy-ack");
+        ws.close(4001, "stale policy acknowledgement");
+        return;
+      }
+      if (message.status === "applied") await this.reconcileAdmission(attachment);
+      else await this.fence("policy-not-applied");
       return;
     }
     if (message.type === "runner.sync") {
@@ -242,32 +299,37 @@ export class RunnerDO {
     await this.markSocket(ws, "offline");
     await this.scheduleHelloDeadline();
   }
-  public async webSocketError(ws: WebSocket): Promise<void> {
+  public webSocketError(ws: WebSocket): Promise<void> {
     this.rejectBridgeWaiters(ws, "runner connection error");
-    await this.markSocket(ws, "stale");
+    return this.markSocket(ws, "stale");
   }
 
   private async forwardInternalRpc(request: Request): Promise<Response> {
     if (request.method !== "POST" || new URL(request.url).pathname !== "/rpc") return new Response("not found", { status: 404 });
     const body = await request.text();
     if (new TextEncoder().encode(body).byteLength > MAX_BRIDGE_BODY_BYTES || !await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
-    let input: { method?: unknown; params?: unknown; policy_revision?: unknown };
-    try { input = JSON.parse(body) as { method?: unknown; params?: unknown; policy_revision?: unknown }; } catch { return Response.json({ error: { code: "invalid_request", message: "invalid JSON object" } }, { status: 400 }); }
+    let input: { method?: unknown; params?: unknown; policy_revision?: unknown; expected_policy_revision?: unknown; expected_policy_checksum?: unknown };
+    try { input = JSON.parse(body) as { method?: unknown; params?: unknown; policy_revision?: unknown; expected_policy_revision?: unknown; expected_policy_checksum?: unknown }; } catch { return Response.json({ error: { code: "invalid_request", message: "invalid JSON object" } }, { status: 400 }); }
     if (typeof input !== "object" || input === null || Array.isArray(input)) return Response.json({ error: { code: "invalid_request", message: "invalid JSON object" } }, { status: 400 });
     const socket = await this.currentRunnerSocket();
     const attachment = socket?.deserializeAttachment() as ConnectionAttachment | null;
     if (socket === undefined || attachment === null || attachment.epoch === 0 || attachment.protocolVersion === 0) return Response.json({ error: { code: "runner_offline", message: "runner is not connected" } }, { status: 503 });
     if (this.bridgeWaiters.size >= MAX_BRIDGE_IN_FLIGHT) return Response.json({ error: { code: "busy", message: "bridge concurrency limit reached" } }, { status: 429 });
     const requestPolicyRevision = typeof input.policy_revision === "number" && Number.isSafeInteger(input.policy_revision) && input.policy_revision > 0 ? input.policy_revision : undefined;
+    const expectedPolicyRevision = typeof input.expected_policy_revision === "number" && Number.isSafeInteger(input.expected_policy_revision) && input.expected_policy_revision > 0 ? input.expected_policy_revision : undefined;
+    const expectedPolicyChecksum = typeof input.expected_policy_checksum === "string" && /^[a-f0-9]{64}$/.test(input.expected_policy_checksum) ? input.expected_policy_checksum : undefined;
     const method = typeof input.method === "string" ? input.method : "";
     if (requestPolicyRevision === undefined && method !== "echo" && method !== "runner.info") {
       return Response.json({ error: { code: "stale_policy", message: "Protected RPC requires a policy revision" } }, { status: 409 });
     }
-    if (requestPolicyRevision !== undefined) {
-      const revisionResponse = await this.registryRequest(attachment.runnerId, "/policy-revision", { method: "GET" });
-      if (!revisionResponse.ok) return Response.json({ error: { code: "stale_policy", message: "Runner policy revision could not be verified" } }, { status: 409 });
-      const revisionBody = await revisionResponse.json() as { desired_policy_revision?: unknown; applied_policy_revision?: unknown; runner_reported_policy_revision?: unknown; policy_status?: unknown };
-      if (revisionBody.policy_status !== "applied" || revisionBody.applied_policy_revision !== requestPolicyRevision || revisionBody.desired_policy_revision !== requestPolicyRevision || revisionBody.runner_reported_policy_revision !== requestPolicyRevision) return Response.json({ error: { code: "stale_policy", message: "Runner policy revision is stale" } }, { status: 409 });
+    if (requestPolicyRevision !== undefined && (expectedPolicyRevision !== requestPolicyRevision || expectedPolicyChecksum === undefined)) {
+      return Response.json({ error: { code: "stale_policy", message: "Protected RPC requires a verified policy identity" } }, { status: 409 });
+    }
+    // This is deliberately the final asynchronous boundary before socket.send.
+    // A concurrent mutation persists fenced=true before doing any Registry work.
+    const admission = await this.admission();
+    if (requestPolicyRevision !== undefined && expectedPolicyChecksum !== undefined && !this.admitsProtectedRpc(admission, attachment, requestPolicyRevision, expectedPolicyChecksum)) {
+      return Response.json({ error: { code: "stale_policy", message: "Runner policy admission is fenced or stale" } }, { status: 409 });
     }
     const requestId = `bridge-${crypto.randomUUID()}`;
     const parsed = RpcRequestSchema.safeParse({ type: "rpc.request", protocol_version: attachment.protocolVersion, request_id: requestId, method: input.method, params: input.params, ...(requestPolicyRevision === undefined ? {} : { policy_revision: requestPolicyRevision }) });
@@ -294,6 +356,60 @@ export class RunnerDO {
       const attachment = waiter.socket.deserializeAttachment() as ConnectionAttachment | null;
       waiter.resolve({ type: "rpc.error", protocol_version: attachment?.protocolVersion ?? PROTOCOL_CURRENT_VERSION, request_id: requestId, error: { code: "runner_offline", message } });
     }
+  }
+
+  private async admission(): Promise<AdmissionState> {
+    if (this.admissionState !== undefined) return this.admissionState;
+    const stored = await this.ctx.storage.get<AdmissionState>(ADMISSION_STATE_KEY);
+    // A restart/hibernation is an authorization boundary. Even a previously
+    // reconciled value must be fenced until this session has rechecked the
+    // Registry identity against its current socket epoch and credential.
+    this.admissionState = validAdmissionState(stored)
+      ? { ...stored, fenced: true, reconciled: false, activeRevision: null, activeChecksum: null, mutationId: "restart-reconcile", lastReconciledAtMs: null }
+      : { ...FENCED_ADMISSION };
+    return this.admissionState;
+  }
+
+  private async persistAdmission(next: AdmissionState): Promise<void> {
+    this.admissionState = next;
+    await this.ctx.storage.put(ADMISSION_STATE_KEY, next);
+  }
+
+  private async fence(mutationId: string): Promise<void> {
+    const current = await this.admission();
+    await this.persistAdmission({ ...current, fenced: true, reconciled: false, mutationId, activeRevision: null, activeChecksum: null, lastReconciledAtMs: null });
+  }
+
+  private async reconcileAdmission(attachment: ConnectionAttachment): Promise<void> {
+    const response = await this.registryRequest(attachment.runnerId, "/policy-revision", { method: "GET" });
+    if (!response.ok) { await this.fence("registry-reconcile-failed"); return; }
+    const value = await response.json() as Record<string, unknown>;
+    const revision = value.applied_policy_revision;
+    const checksum = value.active_policy_checksum;
+    const ready = value.policy_status === "applied"
+      && value.desired_policy_revision === revision
+      && value.runner_reported_policy_revision === revision
+      && value.desired_policy_checksum === checksum
+      && value.runner_reported_policy_checksum === checksum
+      && typeof revision === "number" && Number.isSafeInteger(revision) && revision > 0
+      && typeof checksum === "string" && /^[a-f0-9]{64}$/.test(checksum);
+    if (!ready) { await this.fence("registry-reconcile-stale"); return; }
+    await this.persistAdmission({
+      fenced: false, reconciled: true, runnerId: attachment.runnerId,
+      activeRevision: revision, activeChecksum: checksum, desiredRevision: revision, desiredChecksum: checksum,
+      connectionEpoch: attachment.epoch, credentialVersion: attachment.credentialVersion, sessionId: attachment.sessionId,
+      mutationId: null, lastReconciledAtMs: Date.now(),
+    });
+  }
+
+  private admitsProtectedRpc(state: AdmissionState, attachment: ConnectionAttachment, revision: number, checksum: string): boolean {
+    return !state.fenced && state.reconciled
+      && state.runnerId === attachment.runnerId
+      && state.connectionEpoch === attachment.epoch
+      && state.credentialVersion === attachment.credentialVersion
+      && state.sessionId === attachment.sessionId
+      && state.activeRevision === revision && state.activeChecksum === checksum
+      && state.desiredRevision === revision && state.desiredChecksum === checksum;
   }
 
   private async currentRunnerSocket(): Promise<WebSocket | undefined> {
@@ -342,6 +458,22 @@ export class RunnerDO {
     const headersPromise = internalHeaders(this.env.INTERNAL_CONTROL_SECRET ?? "", init.method ?? "GET", path, body);
     return headersPromise.then((headers) => this.env.REGISTRY.get(id).fetch(new Request(`https://registry.internal${path}`, { ...init, headers })));
   }
+}
+
+function validAdmissionState(value: unknown): value is AdmissionState {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const state = value as Record<string, unknown>;
+  return typeof state.fenced === "boolean" && typeof state.reconciled === "boolean"
+    && (state.runnerId === null || typeof state.runnerId === "string")
+    && (state.activeRevision === null || Number.isSafeInteger(state.activeRevision))
+    && (state.activeChecksum === null || typeof state.activeChecksum === "string")
+    && (state.desiredRevision === null || Number.isSafeInteger(state.desiredRevision))
+    && (state.desiredChecksum === null || typeof state.desiredChecksum === "string")
+    && (state.connectionEpoch === null || Number.isSafeInteger(state.connectionEpoch))
+    && (state.credentialVersion === null || Number.isSafeInteger(state.credentialVersion))
+    && (state.sessionId === null || typeof state.sessionId === "string")
+    && (state.mutationId === null || typeof state.mutationId === "string")
+    && (state.lastReconciledAtMs === null || Number.isSafeInteger(state.lastReconciledAtMs));
 }
 
 function isPolicy(value: unknown): value is { schema_version: 1; runner_id: string; revision: number; checksum: string; runner_permissions: { read: boolean; edit: boolean; shell: boolean; job_control: boolean }; workspaces: Array<{ workspace_id: string; root_path: string; enabled: boolean; permissions: { read: boolean; edit: boolean; shell: boolean; job_control: boolean } }> } {

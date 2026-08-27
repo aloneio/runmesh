@@ -77,6 +77,18 @@ export type {
 
 export { generateWireMessageJsonSchema } from "./schema-artifact.js";
 export { canonicalJson, policyWithoutChecksum, runnerPolicyChecksum, sha256Hex } from "./crypto.js";
+export {
+  FULL_PERMISSION_SET,
+  LOCKED_PERMISSION_SET,
+  PERMISSION_BITS,
+  intersectPermissionSets,
+  isCanonicalPermissionSet,
+  normalizeUiPermissionSet,
+  permissionSetFromScopes,
+  restrictPermissionSet,
+  validatePermissionSet,
+} from "./permissions.js";
+export type { PermissionBit as CanonicalPermissionBit } from "./permissions.js";
 export type { RunnerPolicyChecksumInput } from "./crypto.js";
 
 export {

@@ -169,13 +169,21 @@ export const WorkspaceMetadataSchema = z
   })
   .strict();
 
-/** Bounded permission bits shared by central policy and the Runner enforcement point. */
+import { isCanonicalPermissionSet } from "./permissions.js";
+
+/**
+ * A protocol permission set is canonical: dependency bits can only be enabled
+ * when their prerequisites are enabled. Invalid combinations are rejected at
+ * every wire boundary rather than silently expanded.
+ */
 export const PermissionSetSchema = z.object({
   read: z.boolean(),
   edit: z.boolean(),
   shell: z.boolean(),
   job_control: z.boolean(),
-}).strict();
+}).strict().superRefine((value, context) => {
+  if (!isCanonicalPermissionSet(value)) context.addIssue({ code: "custom", message: "permission dependencies are invalid" });
+});
 
 /**
  * This is intentionally a configuration contract, not WorkspaceMetadata. Root
