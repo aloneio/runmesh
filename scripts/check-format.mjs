@@ -1,7 +1,6 @@
 import { readFile } from "node:fs/promises";
 
 const files = process.argv.slice(2);
-if (files.length === 0) throw new Error("usage: check-format.mjs <file> [...]");
 const errors = [];
 for (const file of files) {
   const bytes = await readFile(file);
