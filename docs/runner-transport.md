@@ -63,9 +63,9 @@ coding-runner enroll \
   --code '<one-time-code>'
 ```
 
-The Worker verifies the code, creates a new Runner token, stores only a peppered verifier, and returns the Runner ID, connection URL, and token once. The CLI writes the response into a local Runner profile and does not print/store the one-time code. It uses the current directory as its initial writable/shell-enabled workspace.
+The Worker verifies the code, creates a new Runner token, stores only a peppered verifier, and returns the Runner ID, connection URL, and token once. The CLI writes the response into a local Runner profile and does not print/store the one-time code. Centrally managed enrollment starts with zero local workspaces; the Admin Panel delivers approved root paths only in authenticated policy frames.
 
-> **Enrollment behavior:** the dashboard renders public `/runner/install.sh` or `/runner/install.ps1` bootstrap commands which receive the one-time code as an argument. The browser does not execute them. The scripts require Node/npm and a configured stable distribution spec, call the packaged CLI enroll/install commands, and only render host activation commands.
+> **Enrollment behavior:** the dashboard displays only the manual portable-artifact flow: `coding-runner enroll --server ... --code ...` followed by `coding-runner install`. Hosted `/runner/install.sh` and `/runner/install.ps1` are disabled fail-closed in this development preview: they do not accept or consume a one-time code, access the network, invoke npm, or activate a host service.
 
 The established outbound transport is:
 
