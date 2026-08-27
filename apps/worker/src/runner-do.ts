@@ -16,7 +16,6 @@ export interface WorkerEnv {
   REGISTRY: DurableObjectNamespace;
   RUNNER: DurableObjectNamespace;
   WORKER_ID?: string;
-  WORKER_VERSION?: string;
   ADMIN_TOKEN?: string;
   SETUP_TOKEN?: string;
   SETUP_TOKEN_HASH?: string;
@@ -171,7 +170,7 @@ export class RunnerDO {
         type: "runner.welcome", protocol_version: negotiation.protocol_version, request_id: message.request_id,
         session_id: attachment.sessionId, negotiated_protocol_version: negotiation.protocol_version,
         worker: {
-          worker_id: this.env.WORKER_ID ?? "worker-local", worker_version: this.env.WORKER_VERSION ?? PRODUCT_VERSION,
+          worker_id: this.env.WORKER_ID ?? "worker-local", worker_version: PRODUCT_VERSION,
           capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: ["echo", "runner.info"], labels: { runtime: "cloudflare" } },
         },
         ...(isPolicy(body.desired_policy) ? { desired_policy: body.desired_policy } : {}),

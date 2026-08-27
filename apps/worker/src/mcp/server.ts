@@ -4,6 +4,7 @@ import { z } from "zod";
 import { internalHeaders, isSafeIdentifier } from "../security.js";
 import type { ActiveRunnerContext, McpClientActiveRunner, McpRunnerSelectionResult } from "../registry.js";
 import type { WorkerEnv } from "../runner-do.js";
+import { PRODUCT_VERSION } from "../generated-version.js";
 
 const CONTENT_LIMIT = 32 * 1024;
 const STRUCTURED_LIMIT = 64 * 1024;
@@ -77,7 +78,7 @@ export type McpAuth = Pick<AuthInfo, "clientId" | "scopes" | "expiresAt" | "reso
  * an isolated McpServer and the default stateless 2025 compatibility lane.
  */
 export function createCodingMcpServer(env: WorkerEnv, auth: McpAuth): McpServer {
-  const server = new McpServer({ name: "runmesh", version: "0.1.0-dev.1" });
+  const server = new McpServer({ name: "runmesh", version: PRODUCT_VERSION });
 
   register(server, "runner_list", z.object({}).strict(), async () => gatedRunnerList(env, auth.clientId));
   register(server, "runner_current", z.object({}).strict(), async () => {
