@@ -10,7 +10,7 @@ const polyFormFiles = ["LICENSE", "apps/runner/LICENSE", "apps/worker/LICENSE", 
 const noticeFiles = ["NOTICE", "apps/runner/NOTICE", "apps/worker/NOTICE", "packages/protocol/NOTICE"];
 const manifestFiles = ["package.json", "apps/runner/package.json", "apps/worker/package.json", "packages/protocol/package.json"];
 const publicPackages = ["apps/runner/package.json", "packages/protocol/package.json"];
-const requiredCommunityFiles = ["CONTRIBUTION_PERMISSION.md", "CONTRIBUTION_PERMISSION.zh-CN.md", "CLA-INDIVIDUAL.md", "CLA-ENTITY.md", "CODE_OF_CONDUCT.md", "GOVERNANCE.md", "CONTRIBUTORS.md", "docs/cla-setup.md", "docs/zh-CN/cla-setup.md", ".github/ISSUE_TEMPLATE/bug.yml", ".github/ISSUE_TEMPLATE/feature.yml", ".github/ISSUE_TEMPLATE/config.yml", ".github/pull_request_template.md"];
+const requiredCommunityFiles = ["CONTRIBUTION_PERMISSION.md", "CONTRIBUTION_PERMISSION.zh-CN.md", "CODE_OF_CONDUCT.md", "GOVERNANCE.md", "CONTRIBUTORS.md", "GOVERNANCE.zh-CN.md", "docs/cla-setup.md", "docs/zh-CN/cla-setup.md", ".github/ISSUE_TEMPLATE/bug.yml", ".github/ISSUE_TEMPLATE/feature.yml", ".github/ISSUE_TEMPLATE/config.yml", ".github/pull_request_template.md"];
 const removedProjectHistoryPaths = ["LICENSE_HISTORY.md", "LICENSE_HISTORY.zh-CN.md", "LICENSES/Apache-2.0-history.txt", "apps/runner/LICENSE_HISTORY.md", "apps/runner/LICENSES/Apache-2.0-history.txt", "apps/worker/LICENSE_HISTORY.md", "apps/worker/LICENSES/Apache-2.0-history.txt", "packages/protocol/LICENSE_HISTORY.md", "packages/protocol/LICENSES/Apache-2.0-history.txt"];
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 async function requireFile(file) { await access(file, constants.R_OK); }
