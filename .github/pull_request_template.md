@@ -18,10 +18,9 @@
 - [ ] Policy, permission, path, and service-identity effects are described above when relevant
 - [ ] Migration or rollback behavior is described above when relevant
 
-## Contributor agreement
+## Contribution terms
 
-- [ ] Not required: documentation, issue discussion, or another non-substantive change
-- [ ] Individual CLA v1 recorded privately with a maintainer
-- [ ] Entity CLA v1 recorded privately with a maintainer
+- [ ] By submitting this contribution, I confirm that I have the right to submit it and grant the contribution license described in [CONTRIBUTION_PERMISSION.md](../CONTRIBUTION_PERMISSION.md), while retaining copyright and attribution.
+- [ ] If I am contributing for an employer or entity, I have authority to make this submission and grant those rights.
 
-<!-- Do not commit signed agreements, personal addresses, or private identity documents. -->
+<!-- This is a plain-language reminder of the repository's deemed-acceptance terms. No separate signature, CLA upload, or private agreement record is required. Do not commit personal addresses, identity documents, or confidential employer information. -->

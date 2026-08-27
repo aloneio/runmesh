@@ -1,53 +1,42 @@
-# CLA setup and recordkeeping
+# Contribution terms and recordkeeping
 
-Runmesh uses the Harmony-style license-grant approach as a basis for its
-individual and entity contributor agreements. The project does not claim that
-CLA Assistant or another automated service is configured unless this document
-is updated with repository evidence.
+Runmesh uses deemed acceptance for ordinary community contributions. A
+contributor does not need to sign, email, upload, or privately record a separate
+CLA or contributor agreement. Submission of a contribution to the official
+`aloneio/runmesh` repository is treated as acceptance of the terms in
+[CONTRIBUTION_PERMISSION.md](../CONTRIBUTION_PERMISSION.md) for that
+contribution.
 
-## Which agreement applies?
+## What contributors confirm
 
-- Use [CLA-INDIVIDUAL.md](../CLA-INDIVIDUAL.md) when you contribute solely as
-  yourself.
-- Use [CLA-ENTITY.md](../CLA-ENTITY.md) when a company, institution, or other
-  entity owns or controls the contribution, or authorizes you to contribute on
-  its behalf.
+By submitting a contribution, the contributor confirms that they have the right
+to submit it and grant the contribution license, retain copyright and
+attribution, and have resolved any applicable employer, contractor,
+confidentiality, dependency, and patent obligations. An employee or entity
+representative confirms that they are authorized to make that grant.
 
-Both agreements are license grants, not copyright assignments. Contributors and
-entities retain their copyright and attribution. The grant lets the project
-include an accepted contribution in the current source-available community
-edition and in future commercially licensed Runmesh editions. It does not grant
-commercial-use rights to the contributor or entity.
+The contribution license is non-exclusive, worldwide, royalty-free, perpetual,
+and includes the rights needed to use, modify, distribute, sublicense, and ship
+accepted contributions in Runmesh community and future commercially licensed
+editions. It does not grant commercial-use rights in Runmesh itself.
 
-## Maintainer process
+## Pull-request handling
 
-Until automated signing is explicitly configured, a maintainer should:
+The pull-request template contains a plain-language contribution-terms
+checkbox as a reminder only. It is not a signature request and does not require
+a private record. Maintainers may ask for clarification when ownership,
+confidentiality, patent, or licensing authority is unclear, and may decline the
+contribution if the issue cannot be resolved.
 
-1. Ask the contributor to read the applicable agreement and confirm that they
-   have authority to grant it.
-2. Receive a signed copy, a verifiable electronic signature, or a written
-   acceptance that identifies the agreement version and contribution scope.
-3. For an entity, verify the signer's authority and retain the list of
-   authorized contributors.
-4. Store the agreement in the project's restricted contribution-record system;
-   do not commit signatures, personal addresses, private email, or identity
-   documents to the public repository.
-5. Link the record to the pull request and record only a minimal status such as
-   `CLA-INDIVIDUAL v1 accepted` or `CLA-ENTITY v1 accepted`.
-6. Preserve contributor attribution in Git and project acknowledgements.
+Preserve contributor attribution in Git and project acknowledgements. Do not
+commit signatures, personal addresses, identity documents, or confidential
+employer information.
 
-A pull request can be discussed before the record is complete, but substantive
-code should not be merged as an accepted contribution until the applicable
-agreement is recorded. Documentation, issue discussion, and small non-code
-feedback can be handled according to maintainer judgment.
+## No CLA automation claim
 
-## Automated setup (optional)
+Runmesh does not use or claim to use CLA Assistant. No external CLA service,
+webhook, account, or private agreement database is required for this process.
 
-If repository administration later enables CLA Assistant or a comparable
-service, document the exact provider, repository configuration, agreement URL,
-webhook/app permissions, privacy behavior, and a test pull request here. Do not
-add a status badge or tell contributors that automation is active until a
-maintainer has verified it.
-
-This setup guide is operational guidance, not legal advice and not a statement
-that the agreements have been reviewed by counsel.
+This document is operational project guidance, not legal advice, and does not
+claim review by counsel. Commercial use still requires separate written
+authorization under [COMMERCIAL_LICENSE.md](../COMMERCIAL_LICENSE.md).
