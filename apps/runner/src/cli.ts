@@ -352,4 +352,4 @@ function errorMessage(error: unknown): string { return error instanceof Error ? 
 function formatMode(mode: number | undefined): string { return mode === undefined ? "missing" : `0${mode.toString(8)}`; }
 function installDisconnectControl(runner: RunnerConnection, file: string): void { let busy = false; const interval = setInterval(async () => { if (busy) return; busy = true; try { await access(file); await rm(file, { force: true }); runner.disconnectForTest(); } catch { /* absent */ } finally { busy = false; } }, 50); interval.unref(); }
 
-if (process.argv[1] !== undefined && import.meta.url === new URL(`file://${process.argv[1]}`).href) runCli(process.argv.slice(2)).catch(() => { process.exitCode = 1; });
+if (process.argv[1] !== undefined && (import.meta.url === new URL(`file://${process.argv[1]}`).href || process.env.RUNMESH_RUNNER_BUNDLE === "1")) runCli(process.argv.slice(2)).catch(() => { process.exitCode = 1; });

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@aloneio/runmesh-runner",
-  "version": "0.1.0",
+  "version": "0.1.0-dev.1",
   "private": false,
   "type": "module",
   "description": "System Runner for Runmesh Agent Control Plane.",
@@ -22,25 +22,23 @@
     }
   },
   "bin": {
-    "coding-runner": "./dist/cli.js"
+    "coding-runner": "./dist/coding-runner.cjs"
   },
   "files": ["dist", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"],
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && node ../../scripts/build-runner-bundle.mjs ./src/cli.ts ./dist/coding-runner.cjs",
     "prepack": "npm run build && rm -f dist/*.tsbuildinfo dist/.tsbuildinfo",
     "pack:check": "npm run prepack && npm pack --dry-run",
     "test": "vitest run --config vitest.config.ts",
     "typecheck": "tsc -b --pretty false",
     "start": "tsx src/cli.ts start"
   },
-  "dependencies": {
-    "@aloneio/runmesh-protocol": "0.1.0",
-    "ws": "^8.21.3"
-  },
+  "dependencies": {},
   "devDependencies": {
-    "@types/node": "^24.10.1",
+    "@aloneio/runmesh-protocol": "0.1.0-dev.1",
     "@types/ws": "^8.18.1",
     "tsx": "^4.21.0",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "ws": "^8.21.3"
   }
 }

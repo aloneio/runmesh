@@ -7,6 +7,8 @@ const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
  * keeps the public identity aligned with the package that actually launched.
  */
 export function runnerPackageVersion(): string {
+  const bundledVersion = process.env.RUNMESH_RUNNER_VERSION;
+  if (bundledVersion !== undefined && EXACT_VERSION.test(bundledVersion)) return bundledVersion;
   try {
     const manifest = createRequire(import.meta.url)("../package.json") as { version?: unknown };
     if (typeof manifest.version === "string" && EXACT_VERSION.test(manifest.version)) return manifest.version;

@@ -4,6 +4,7 @@ import { constants } from "node:fs";
 
 const polyFormSha256 = "ffcca38841adb694b6f380647e15f17c446a4d1656fed51a1e2041d064c94cc8";
 const polyFormLicense = "PolyForm-Noncommercial-1.0.0";
+const TARGET_VERSION = "0.1.0-dev.1";
 
 const polyFormFiles = [
   "LICENSE",
@@ -77,6 +78,9 @@ for (const file of manifestFiles) {
   const manifest = JSON.parse(await readFile(file, "utf8"));
   if (manifest.license !== polyFormLicense) {
     throw new Error(`${file}: expected license ${polyFormLicense}, got ${manifest.license ?? "<none>"}`);
+  }
+  if (manifest.version !== TARGET_VERSION) {
+    throw new Error(`${file}: expected version ${TARGET_VERSION}, got ${manifest.version ?? "<none>"}`);
   }
 }
 

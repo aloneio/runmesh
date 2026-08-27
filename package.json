@@ -1,6 +1,6 @@
 {
   "name": "@aloneio/runmesh-monorepo",
-  "version": "0.1.0",
+  "version": "0.1.0-dev.1",
   "private": true,
   "description": "A language-neutral protocol foundation for remote coding runtimes.",
   "repository": { "type": "git", "url": "https://github.com/aloneio/runmesh.git" },
@@ -21,13 +21,15 @@
     "start:runner": "npm run start --workspace=@aloneio/runmesh-runner --",
     "pack:runner": "npm pack --workspace=@aloneio/runmesh-runner --dry-run",
     "pack:smoke": "node ./scripts/pack-smoke.mjs",
-    "check:licenses": "node ./scripts/check-licenses.mjs"
+    "check:licenses": "node ./scripts/check-licenses.mjs",
+    "test:release-tools": "node --test ./test/release-tools.test.mjs"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.22.0",
     "@cloudflare/workers-types": "^5.20260825.1",
     "@types/node": "^24.10.1",
     "@types/ws": "^8.18.1",
+    "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11",
     "wrangler": "^4.125.0"
