@@ -151,8 +151,8 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
       expect(text).not.toMatch(/ADMIN_TOKEN|MCP_SECRET|CODING_RUNNER_TOKEN|Bearer /i);
       expect(text).not.toMatch(/sudo|git clone|github\.com\/.*main/i);
     }
-    expect(shellText).toContain("Hosted unsigned bootstrap is disabled");
-    expect(powershellText).toContain("Hosted unsigned bootstrap is disabled");
+    expect(shellText).toContain("Hosted bootstrap is not available");
+    expect(powershellText).toContain("Hosted bootstrap is not available");
     expect(await release.json()).toMatchObject({ channel: "stable", distributable: false, package_spec: "", current_version: PRODUCT_VERSION, latest_version: PRODUCT_VERSION, package_version: PRODUCT_VERSION, artifact: null, protocol: { min_version: 2, max_version: 2 } });
     const stable = await SELF.fetch("https://worker.test/runner/releases/stable");
     expect(stable.status).toBe(200);
@@ -339,14 +339,14 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(created.status).toBe(200);
     const enrollment = await created.text();
     expect(enrollment).toContain("Linux"); expect(enrollment).toContain("macOS"); expect(enrollment).toContain("Windows");
-    expect(enrollment).toContain("/runner/install.sh"); expect(enrollment).toContain("/runner/install.ps1"); expect(enrollment).toContain("curl -fsSL"); expect(enrollment).toContain("Invoke-RestMethod");
+    expect(enrollment).toContain("Manual portable-artifact enrollment"); expect(enrollment).toContain("coding-runner enroll"); expect(enrollment).toContain("coding-runner install"); expect(enrollment).not.toContain("curl -fsSL"); expect(enrollment).not.toContain("Invoke-RestMethod");
     expect(enrollment).toContain("data-copy"); expect(enrollment).toContain("expires in 30 minutes");
     expect(enrollment).not.toContain("--re-enroll"); expect(enrollment).not.toContain("-ReEnroll");
     expect(enrollment).not.toContain("--runner-id"); expect(enrollment).not.toContain("ADMIN_TOKEN"); expect(enrollment).not.toMatch(/CODING_RUNNER_TOKEN|MCP_SECRET/i);
     const rotatedEnrollment = await submit("https://worker.test/admin/runners/dashboard-runner/rotate", { csrf_token: csrf }, adminJar);
     expect(rotatedEnrollment.status).toBe(200);
     const rotatedText = await rotatedEnrollment.text();
-    expect(rotatedText).toContain("--re-enroll"); expect(rotatedText).toContain("-ReEnroll");
+    expect(rotatedText).toContain("Manual portable-artifact enrollment");
     const pinned = await submit("https://worker.test/admin/runners/dashboard-runner/version-policy", { csrf_token: csrf, update_channel: "pinned", desired_runner_version: "1.2.0" }, adminJar);
     expect(pinned.status).toBe(303);
     const runnerDetail = await SELF.fetch("https://worker.test/admin/runners/dashboard-runner", { headers: { cookie: cookies(adminJar) } });

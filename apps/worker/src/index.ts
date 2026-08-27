@@ -158,59 +158,25 @@ function validRunnerPackageSpec(value: string | undefined): string | undefined {
 }
 function runnerRelease(request: Request, env: WorkerEnv): Response {
   if (request.method !== "GET" && request.method !== "HEAD") { void discardBody(request); return methodNotAllowed("GET, HEAD"); }
-    return new Response(JSON.stringify({
-      ...runnerReleaseDescriptor(env),
-      schema_version: 1,
-      published_at: new Date().toISOString(),
-    }), { headers: publicInstallerHeaders("application/json; charset=utf-8") });
+  const descriptor = runnerReleaseDescriptor(env);
+  return new Response(JSON.stringify({ ...descriptor, schema_version: 1, published_at: null }), { headers: publicInstallerHeaders("application/json; charset=utf-8") });
 }
 function runnerInstallScript(request: Request, _url: URL): Response {
   if (request.method !== "GET" && request.method !== "HEAD") { void discardBody(request); return methodNotAllowed("GET, HEAD"); }
   const content = `#!/usr/bin/env sh
-# Public bootstrap only: enrollment codes are accepted as the first command argument.
 set -eu
-
-SERVER_ORIGIN='${origin}'
-usage() { printf '%s\\n' "usage: curl -fsSL $SERVER_ORIGIN/runner/install.sh | sh -s -- <one-time-enrollment-code> [--re-enroll]" >&2; }
-die() { printf '%s\\n' "error: $*" >&2; exit 1; }
-
-CODE=\${1:-}
-REENROLL=0
-if [ "\${2:-}" = "--re-enroll" ]; then REENROLL=1; fi
-if [ "$#" -lt 1 ] || [ "$#" -gt 2 ] || { [ "$#" -eq 2 ] && [ "\${2:-}" != "--re-enroll" ]; }; then usage; exit 2; fi
-case "$CODE" in *[!A-Za-z0-9_-]*|'') die "a one-time enrollment code must be the first command argument";; esac
-if [ "\${#CODE}" -lt 20 ] || [ "\${#CODE}" -gt 256 ]; then die "a one-time enrollment code must be the first command argument"; fi
-
-die "Hosted unsigned bootstrap is disabled for this development preview. Download and verify the portable Runner artifact manually, then use coding-runner enroll/install."
+printf '%s\n' \
+  'error: Hosted bootstrap is not available in this development preview.' \
+  'Download and verify the portable Runner artifact, then use coding-runner enroll and coding-runner install.' >&2
 exit 1
-  die "existing managed runner profile or service detected; refuse destructive overwrite. Re-run with --re-enroll after reviewing the existing installation."
-fi
-if [ "$(id -u)" -ne 0 ]; then die "system Runner installation requires administrator/root privileges; rerun from an elevated root shell"; fi
-command -v node >/dev/null 2>&1 || die "Node.js 20 or newer must already be installed"
-command -v npm >/dev/null 2>&1 || die "npm must already be installed with Node.js 20 or newer"
-NODE_MAJOR="$(node -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || true)"
-case "$NODE_MAJOR" in ''|*[!0-9]*) die "could not determine the installed Node.js version";; esac
-[ "$NODE_MAJOR" -ge 20 ] || die "Node.js 20 or newer must already be installed"
-command -v curl >/dev/null 2>&1 || die "curl is required to retrieve the public release descriptor"
-RELEASE="$(curl -fsSL --proto '=https' --tlsv1.2 "$SERVER_ORIGIN/runner/releases/latest")" || die "could not retrieve the runner release descriptor"
-PACKAGE_SPEC="$(printf '%s' "$RELEASE" | node -e 'let x="";process.stdin.on("data",d=>x+=d).on("end",()=>{try{const r=JSON.parse(x),npm=/^((?:@[a-z0-9][a-z0-9._-]*\\/)?[a-z0-9][a-z0-9._-]*)@\\d+\\.\\d+\\.\\d+$/,tar=/^https:\/\/[^?#]+\\.tgz$/;if(r.distributable!==true||typeof r.package_name!=="string"||typeof r.package_version!=="string"||typeof r.package_spec!=="string"||!/^\\d+\\.\\d+\\.\\d+$/.test(r.package_version)||!(npm.test(r.package_spec)||tar.test(r.package_spec))||!r.protocol||!Number.isInteger(r.protocol.min_version)||!Number.isInteger(r.protocol.max_version)||r.protocol.min_version<1||r.protocol.min_version>r.protocol.max_version)process.exit(1);process.stdout.write(r.package_spec)}catch{process.exit(1)}})')" || die "the operator has not configured a distributable stable runner package spec at /runner/releases/latest"
-mkdir -p "$NPM_PREFIX"
-npm install --global --prefix "$NPM_PREFIX" "$PACKAGE_SPEC"
-RUNNER="$NPM_PREFIX/bin/coding-runner"
-[ -x "$RUNNER" ] || die "npm did not install coding-runner into the machine prefix"
-"$RUNNER" enroll --server "$SERVER_ORIGIN/runner/enroll" --code "$CODE"
-# coding-runner enroll --server is invoked above through the absolute machine executable.
-"$RUNNER" install --executable-path "$RUNNER"
-printf '%s\\n' 'Runner system service installed and activated.'
 `;
   return new Response(content, { headers: publicInstallerHeaders("text/x-shellscript; charset=utf-8") });
 }
 function runnerInstallPowerShell(request: Request, _url: URL): Response {
   if (request.method !== "GET" && request.method !== "HEAD") { void discardBody(request); return methodNotAllowed("GET, HEAD"); }
-  const content = `# Hosted unsigned bootstrap is disabled for this development preview. -ReEnroll is retained only as a legacy compatibility marker.
-Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
-throw 'Hosted unsigned bootstrap is disabled for this development preview. Download and verify the portable Runner artifact manually, then use coding-runner enroll/install.'
+  const content = `$ErrorActionPreference = 'Stop'
+Write-Error 'Hosted bootstrap is not available in this development preview. Download and verify the portable Runner artifact, then use coding-runner enroll and coding-runner install.'
+exit 1
 `;
   return new Response(content, { headers: publicInstallerHeaders("text/plain; charset=utf-8") });
 }
@@ -515,9 +481,15 @@ async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, baseUrl
     return redirect("/admin");
   }
   if (action === "rotate") {
+    const mutationId = `credential-rotated-${crypto.randomUUID()}`;
+    const fenced = await fenceRunnerTransport(env, runnerId, mutationId);
+    if (!fenced.ok) return adminError(503, "Runner credential rotation could not fence the Runner.");
     const response = await runnerRegistryRequest(env, runnerId, "/rotate", "POST", "{}");
-    if (!response.ok) return adminError(response.status === 404 ? 404 : 400, "Runner credential rotation failed.");
-    await revokeRunnerTransport(env, runnerId);
+    if (!response.ok) {
+      try { await cancelRunnerPolicyMutation(env, runnerId, mutationId); } catch { /* remain fenced on uncertainty */ }
+      return adminError(response.status === 404 ? 404 : 400, "Runner credential rotation failed.");
+    }
+    try { await revokeRunnerTransport(env, runnerId); } catch { /* credential generation invalidates old transport */ }
     return runnerEnrollmentPage(baseUrl, runnerId, await createEnrollmentCode(env, runnerId), String(form.get("csrf_token") ?? ""), true);
   }
   return runnerEnrollmentPage(baseUrl, runnerId, await createEnrollmentCode(env, runnerId), String(form.get("csrf_token") ?? ""), true);
@@ -626,19 +598,24 @@ async function loadDashboardData(env: WorkerEnv): Promise<AdminData> {
   const jobs = snapshotBody !== undefined && Array.isArray(snapshotBody.jobs) ? snapshotBody.jobs.filter(record) as Record<string, unknown>[] : [];
   return { clients, runners, jobs, snapshot: snapshotBody ?? {} };
 }
-async function runnerEnvironment(env: WorkerEnv, runnerId: string): Promise<Record<string, unknown> | undefined> {
-  const runnerResponse = await registryGet(env, `/runners/${encodeURIComponent(runnerId)}`);
-  const runner = runnerResponse.ok ? record(await json(runnerResponse)) : undefined;
-  const desired = runner?.desired_policy_revision;
-  const applied = runner?.applied_policy_revision;
-  if (runner?.policy_status !== "applied" || typeof desired !== "number" || desired <= 0 || applied !== desired) return undefined;
-  const response = await runnerRpc(env, runnerId, "env.info", {}, desired);
-  const body = response.ok ? record(await json(response)) : undefined;
-  const result = record(body?.result);
-  return result;
+async function policyReadiness(env: WorkerEnv, runnerId: string): Promise<{ ok: true; value: { applied_revision: number; active_checksum: string } } | { ok: false }> {
+  const response = await registryGet(env, `/runners/${encodeURIComponent(runnerId)}/policy-readiness`);
+  if (!response.ok) return { ok: false };
+  const value = record(await json(response));
+  const revision = value?.applied_revision;
+  const checksum = value?.active_checksum;
+  return value?.ok === true && typeof revision === "number" && Number.isSafeInteger(revision) && revision > 0 && typeof checksum === "string" && /^[a-f0-9]{64}$/.test(checksum) && value.desired_revision === revision && value.runner_reported_policy_revision === revision && value.desired_checksum === checksum && value.runner_reported_policy_checksum === checksum
+    ? { ok: true, value: { applied_revision: revision, active_checksum: checksum } } : { ok: false };
 }
-async function runnerRpc(env: WorkerEnv, runnerId: string, method: string, params: Record<string, unknown>, policyRevision?: number): Promise<Response> {
-  const body = JSON.stringify({ method, params, ...(policyRevision === undefined ? {} : { policy_revision: policyRevision }) });
+async function runnerEnvironment(env: WorkerEnv, runnerId: string): Promise<Record<string, unknown> | undefined> {
+  const readiness = await policyReadiness(env, runnerId);
+  if (!readiness.ok) return undefined;
+  const response = await runnerRpc(env, runnerId, "env.info", {}, readiness.value.applied_revision, readiness.value.active_checksum);
+  const body = response.ok ? record(await json(response)) : undefined;
+  return record(body?.result);
+}
+async function runnerRpc(env: WorkerEnv, runnerId: string, method: string, params: Record<string, unknown>, policyRevision?: number, policyChecksum?: string): Promise<Response> {
+  const body = JSON.stringify({ method, params, ...(policyRevision === undefined || policyChecksum === undefined ? {} : { policy_revision: policyRevision, expected_policy_revision: policyRevision, expected_policy_checksum: policyChecksum }) });
   const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/rpc", body);
   return env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/rpc", { method: "POST", headers, body }));
 }
@@ -723,13 +700,12 @@ function adminStyles(): string { return `<style>
 :root{color-scheme:light;--ink:#152033;--muted:#607086;--line:#dbe3ed;--panel:#fff;--canvas:#f5f7fa;--brand:#155eef;--danger:#b42318;--shadow:0 8px 24px #172b4d0d}*{box-sizing:border-box}body{margin:0;background:var(--canvas);color:var(--ink);font:15px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.shell{max-width:1440px;margin:auto;padding:0 28px 48px}.topbar{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:24px 0}.brand{color:var(--ink);font-size:20px;font-weight:760;text-decoration:none;display:inline-flex;align-items:center;gap:10px}.brand-logo{display:block;width:40px;height:40px;object-fit:contain;border-radius:9px}.top-actions,.actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px}nav{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:32px}nav a{padding:11px 16px;color:var(--muted);text-decoration:none;border-bottom:2px solid transparent}nav a:hover,nav a.active{color:var(--brand);border-color:var(--brand)}h1,h2,h3{line-height:1.2;margin:0 0 8px}h1{font-size:32px;letter-spacing:-.02em}h2{font-size:18px}.page-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:24px}.eyebrow{color:var(--brand);font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin:0 0 8px}.lede,.muted{color:var(--muted)}.lede{margin:0}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}.metric,.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}.metric{padding:20px}.metric span{display:block;color:var(--muted);font-size:13px;margin-bottom:8px}.metric strong{font-size:24px}.grid-two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;margin-bottom:24px}.panel{padding:22px;margin-bottom:24px}.section-title{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:16px}.section-title a{color:var(--brand);font-weight:650;text-decoration:none}.table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:760px}th,td{text-align:left;padding:13px 12px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}tr:last-child td{border-bottom:0}.strong{font-weight:700;color:var(--ink)}small{display:block;color:var(--muted);font-size:12px;margin-top:3px}.button,button{appearance:none;border:1px solid var(--brand);background:var(--brand);border-radius:7px;color:#fff;cursor:pointer;font:inherit;font-weight:650;padding:9px 14px;text-decoration:none;display:inline-block}.button.secondary,button.secondary{background:#fff;color:var(--brand);border-color:#b9c9e8}.button.small,button.small{font-size:12px;padding:6px 9px}.danger{color:var(--danger)!important;border-color:#f2b8b5!important;background:#fff!important}.badge{border-radius:999px;display:inline-block;font-size:12px;font-weight:700;padding:3px 8px;text-transform:capitalize}.badge.online{background:#d1fadf;color:#067647}.badge.offline{background:#eef2f6;color:#475467}.badge.stale{background:#fef0c7;color:#b54708}.badge.pending{background:#fef0c7;color:#b54708}.badge.invalid{background:#fee4e2;color:#b42318}.form-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-items:end;gap:14px}label{display:flex;flex-direction:column;gap:6px;font-weight:650}input,select{border:1px solid #b8c4d3;border-radius:6px;padding:9px 10px;font:inherit;color:var(--ink);min-width:0}fieldset{border:0;padding:0;margin:0}.check{display:inline-flex;flex-direction:row;align-items:center;font-weight:400;margin-right:16px}.check input{min-width:auto}.stack{display:flex;flex-direction:column;gap:14px;max-width:520px}.item-list,.plain-list{list-style:none;padding:0;margin:0}.item-list li{border-bottom:1px solid var(--line);padding:12px 0}.item-list li:last-child{border:0}.item-list a{display:block;text-decoration:none}.empty{color:var(--muted);padding:12px 0}.details{display:grid;grid-template-columns:140px 1fr;gap:10px;margin:0}.details dt{color:var(--muted)}.details dd{margin:0;font-weight:650;overflow-wrap:anywhere}.tool-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.tool-grid div{border:1px solid var(--line);border-radius:8px;padding:10px}.tool-grid span{display:block;color:var(--muted);font-size:13px}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px}.sr-only{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.hidden{display:none}.workspace-card{border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:12px}:focus-visible{outline:3px solid #84adff;outline-offset:2px}@media(max-width:800px){.shell{padding:0 16px 32px}.topbar,.page-heading{align-items:stretch;flex-direction:column}.brand{align-self:flex-start}.top-actions{width:100%}.top-actions .button{flex:1;text-align:center}nav{overflow-x:auto;margin-bottom:24px}.metrics,.grid-two,.form-grid{grid-template-columns:1fr 1fr}.panel{padding:16px}.actions{min-width:210px}.tool-grid{grid-template-columns:1fr}}@media(max-width:480px){.metrics,.grid-two,.form-grid{grid-template-columns:1fr}h1{font-size:27px}}
 </style>`; }
 function adminScript(): string { return `<script>function copyText(text){if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text);return}var area=document.createElement('textarea');area.value=text;area.setAttribute('readonly','');area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.select();document.execCommand('copy');area.remove()}document.querySelectorAll('[data-copy]').forEach(function(button){button.addEventListener('click',function(){copyText(button.getAttribute('data-copy')||'');button.textContent='Copied'})});document.querySelectorAll('[data-tab]').forEach(function(tab){tab.addEventListener('click',function(){var target=tab.getAttribute('data-tab');document.querySelectorAll('[data-tab]').forEach(function(item){item.setAttribute('aria-selected',String(item===tab));item.tabIndex=item===tab?0:-1});document.querySelectorAll('[data-panel]').forEach(function(panel){panel.hidden=panel.getAttribute('data-panel')!==target})});tab.addEventListener('keydown',function(event){if(event.key==='ArrowLeft'||event.key==='ArrowRight'){var tabs=Array.prototype.slice.call(document.querySelectorAll('[data-tab]'));var next=tabs[(tabs.indexOf(tab)+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length];next.focus();next.click()}})});</script>`; }
-function runnerEnrollmentPage(baseUrl: string, runnerId: string, code: string | undefined, csrf: string, reEnroll = false): Response {
+function runnerEnrollmentPage(baseUrl: string, runnerId: string, code: string | undefined, csrf: string, _reEnroll = false): Response {
   if (code === undefined) return adminError(503, "Enrollment code could not be generated.");
-  const installSh = `curl -fsSL ${new URL("/runner/install.sh", baseUrl).toString()} -o /tmp/runmesh-install.sh && sudo sh /tmp/runmesh-install.sh ${code}${reEnroll ? " --re-enroll" : ""}`;
-  const installPs1 = `& ([scriptblock]::Create((Invoke-RestMethod -Uri '${new URL("/runner/install.ps1", baseUrl).toString()}'))) -EnrollmentCode '${code}'${reEnroll ? " -ReEnroll" : ""}`;
-  const commands = { linux: installSh, macos: installSh, windows: installPs1 };
-  const tabs = Object.entries(commands).map(([platform, command], index) => `<button role="tab" id="tab-${platform}" aria-controls="panel-${platform}" aria-selected="${index === 0 ? "true" : "false"}" tabindex="${index === 0 ? "0" : "-1"}" data-tab="${platform}">${platform === "macos" ? "macOS" : platform === "windows" ? "Windows" : "Linux"}</button><section role="tabpanel" id="panel-${platform}" aria-labelledby="tab-${platform}" ${index === 0 ? "" : "hidden"} data-panel="${platform}"><pre><code>${escapeHtml(command)}</code></pre><button type="button" class="button secondary" data-copy="${escapeHtml(command)}">Copy command</button></section>`).join("");
-  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body><main class="shell"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><p class="eyebrow">One-time enrollment</p><h1 id="enrollment-title">Install runner</h1><p class="lede">This code expires in 30 minutes and will not be shown again. It creates the runner credential only after it is redeemed.</p></div></section><p class="muted">Runner: <span class="mono">${escapeHtml(runnerId)}</span></p><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><p class="warning">Do not share this command. It contains a one-time enrollment code, not an administrator password, MCP secret, or long-term credential.</p><div class="top-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
+  const enroll = `coding-runner enroll --server ${new URL("/runner/enroll", baseUrl).toString()} --code ${code}`;
+  const command = `${enroll}\ncoding-runner install`;
+  const tabs = Object.entries({ linux: command, macos: command, windows: command }).map(([platform, value], index) => `<button role="tab" id="tab-${platform}" aria-controls="panel-${platform}" aria-selected="${index === 0 ? "true" : "false"}" tabindex="${index === 0 ? "0" : "-1"}" data-tab="${platform}">${platform === "macos" ? "macOS" : platform === "windows" ? "Windows" : "Linux"}</button><section role="tabpanel" id="panel-${platform}" aria-labelledby="tab-${platform}" ${index === 0 ? "" : "hidden"} data-panel="${platform}"><pre><code>${escapeHtml(value)}</code></pre><button type="button" class="button secondary" data-copy="${escapeHtml(enroll)}">Copy enrollment command</button></section>`).join("");
+  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body><main class="shell"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><p class="eyebrow">Manual portable-artifact enrollment</p><h1 id="enrollment-title">Enroll Runner manually</h1><p class="lede">Hosted installers are disabled in this development preview. Download and verify the portable Runner artifact first. This one-time code expires in 30 minutes and will not be shown again.</p></div></section><p class="muted">Runner: <span class="mono">${escapeHtml(runnerId)}</span></p><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.</p><div class="top-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
 }
 function secretCreatedPage(title: string, url: string): string { return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${escapeHtml(title)}</title></head><body><main><h1>${escapeHtml(title)}</h1><p>Copy this URL now. It will not be shown again.</p><code>${escapeHtml(url)}</code><p><a href="/admin">Back to admin</a></p></main></body></html>`; }
 function secretUrl(base: string, secret: string): string { const url = new URL(base); url.pathname = `/${secret}/mcp`; url.search = ""; return url.toString(); }
@@ -748,29 +724,29 @@ async function beginRunnerPolicyMutation(env: WorkerEnv, runnerId: string, mutat
   const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/begin-policy-mutation", body);
   return env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/begin-policy-mutation", { method: "POST", headers, body }));
 }
+async function cancelRunnerPolicyMutation(env: WorkerEnv, runnerId: string, mutationId: string): Promise<Response> {
+  const body = JSON.stringify({ mutation_id: mutationId });
+  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/cancel-policy-mutation", body);
+  return env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/cancel-policy-mutation", { method: "POST", headers, body }));
+}
 async function mutateRunnerPolicy(env: WorkerEnv, runnerId: string, mutation: { readonly path: string; readonly method: "POST" | "PUT" | "DELETE"; readonly payload: Record<string, unknown> }): Promise<Response> {
   const mutationId = `mutation-${crypto.randomUUID()}`;
   let fenced: Response;
-  try {
-    fenced = await beginRunnerPolicyMutation(env, runnerId, mutationId);
-  } catch {
-    return new Response("runner policy fence unavailable", { status: 503 });
-  }
+  try { fenced = await beginRunnerPolicyMutation(env, runnerId, mutationId); } catch { return new Response("runner policy fence unavailable", { status: 503 }); }
   if (!fenced.ok) return fenced;
   let changed: Response;
-  try {
-    const body = JSON.stringify(mutation.payload);
-    changed = await registryRequest(env, mutation.path, mutation.method, body);
-  } catch {
-    return new Response("registry unavailable after policy fence", { status: 503 });
+  try { changed = await registryRequest(env, mutation.path, mutation.method, JSON.stringify({ mutation_id: mutationId, ...mutation.payload })); } catch { return new Response("registry unavailable after policy fence", { status: 503 }); }
+  if (!changed.ok) {
+    try {
+      const cancelled = await cancelRunnerPolicyMutation(env, runnerId, mutationId);
+      if (!cancelled.ok) return new Response("policy mutation failed; Runner remains safely fenced", { status: 503 });
+    } catch { return new Response("policy mutation state is uncertain; Runner remains safely fenced", { status: 503 }); }
+    return changed;
   }
-  if (!changed.ok) return changed;
   try {
     const pushed = await pushRunnerPolicy(env, runnerId, mutationId);
     if (!pushed.ok && pushed.status !== 204 && pushed.status !== 503) return pushed;
-  } catch {
-    // The immutable desired policy remains pending; a reconnect can retry it.
-  }
+  } catch { /* desired policy remains pending for reconnect */ }
   return changed;
 }
 async function forwardRunnerRpc(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
@@ -793,7 +769,16 @@ async function handleRunnerAdmin(request: Request, env: WorkerEnv, url: URL): Pr
   }
   if (runnerId === undefined || !isSafeIdentifier(runnerId) || action === undefined || segments.length !== 4 || request.method !== "POST") { await discardBody(request); return notFound(); }
   if (action === "rotate") return registerRunner(env, runnerId, await readAdminBody(request));
-  if (action === "revoke") { const fenced = await fenceRunnerTransport(env, runnerId, "credential-revoked"); if (!fenced.ok) return new Response("runner unavailable", { status: 503 }); const response = await runnerRegistryRequest(env, runnerId, "/revoke", "POST", "{}"); if (!response.ok) return new Response("registry unavailable", { status: 502 }); await revokeRunnerTransport(env, runnerId); return new Response(null, { status: 204 }); }
+  if (action === "revoke") {
+    const input = await readAdminBody(request);
+    if (input === undefined || input.confirmation !== runnerId) return Response.json({ error: "confirmation must equal runner_id" }, { status: 400 });
+    const fenced = await fenceRunnerTransport(env, runnerId, "credential-revoked");
+    if (!fenced.ok) return new Response("runner unavailable", { status: 503 });
+    const response = await runnerRegistryRequest(env, runnerId, "/revoke", "POST", JSON.stringify({ confirmation: runnerId }));
+    if (!response.ok) return new Response("registry unavailable", { status: 502 });
+    try { await revokeRunnerTransport(env, runnerId); } catch { /* generation invalidation is authoritative */ }
+    return new Response(null, { status: 204 });
+  }
   return notFound();
 }
 async function registerRunner(env: WorkerEnv, runnerId: string, input: Record<string, unknown> | undefined): Promise<Response> {
@@ -801,11 +786,19 @@ async function registerRunner(env: WorkerEnv, runnerId: string, input: Record<st
   if (supplied !== undefined && (typeof supplied !== "string" || supplied.length < 32 || supplied.length > 512 || /\s/.test(supplied))) return Response.json({ error: "token must be 32-512 non-whitespace characters" }, { status: 400 });
   const token = typeof supplied === "string" ? supplied : generateRunnerToken(); const pepper = env.RUNNER_TOKEN_PEPPER;
   if (pepper === undefined) return new Response("admin control plane is not configured", { status: 503 });
+  const existingResponse = await runnerRegistryRequest(env, runnerId, "", "GET", "");
+  const existing = existingResponse.ok;
+  const mutationId = `credential-rotated-${crypto.randomUUID()}`;
+  if (existing) {
+    const fenced = await fenceRunnerTransport(env, runnerId, mutationId);
+    if (!fenced.ok) return new Response("runner unavailable", { status: 503 });
+  }
   const response = await runnerRegistryRequest(env, runnerId, "", "PUT", JSON.stringify({ token_verifier: await runnerTokenVerifier(token, pepper) }));
-  if (!response.ok) return new Response("registry unavailable", { status: 502 });
-  const fenced = await fenceRunnerTransport(env, runnerId, "credential-rotated");
-  if (!fenced.ok) return new Response("runner unavailable", { status: 503 });
-  await revokeRunnerTransport(env, runnerId);
+  if (!response.ok) {
+    if (existing) { try { await cancelRunnerPolicyMutation(env, runnerId, mutationId); } catch { /* remain fenced on uncertainty */ } }
+    return new Response("registry unavailable", { status: 502 });
+  }
+  if (existing) { try { await revokeRunnerTransport(env, runnerId); } catch { /* new credential remains authoritative */ } }
   return Response.json({ runner_id: runnerId, token }, { headers: credentialHeaders("application/json; charset=utf-8") });
 }
 async function fenceRunnerTransport(env: WorkerEnv, runnerId: string, mutationId: string): Promise<Response> {
@@ -824,7 +817,7 @@ async function deleteRunnerTransport(env: WorkerEnv, runnerId: string): Promise<
   await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/delete", { method: "POST", headers, body }));
 }
 function isRunnerAdminRequest(request: Request, env: WorkerEnv): boolean { const token = bearerToken(request); return token !== undefined && env.ADMIN_TOKEN !== undefined && constantTimeEqual(token, env.ADMIN_TOKEN); }
-async function runnerRegistryRequest(env: WorkerEnv, runnerId: string, action: string, method: string, body: string): Promise<Response> { const path = `/runners/${encodeURIComponent(runnerId)}${action}`; const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET as string, method, path, body); return env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method, body, headers })); }
+async function runnerRegistryRequest(env: WorkerEnv, runnerId: string, action: string, method: string, body: string): Promise<Response> { const path = `/runners/${encodeURIComponent(runnerId)}${action}`; const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET as string, method, path, body); return env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method, ...(body.length === 0 ? {} : { body }), headers })); }
 
 async function verifyMcpClient(env: WorkerEnv, secretVerifier: string): Promise<VerifiedMcpClient | undefined> { const response = await registryPost(env, "/auth/mcp/verify", { secret_verifier: secretVerifier }); const body = response.ok ? record(await json(response)) : undefined; if (body === undefined || typeof body.client_id !== "string" || typeof body.label !== "string" || typeof body.secret_version !== "number" || !Array.isArray(body.scopes) || body.scopes.some((scope) => scope !== "coding:read" && scope !== "coding:write" && scope !== "coding:exec")) return undefined; return { client_id: body.client_id, label: body.label, secret_version: body.secret_version, scopes: body.scopes as CodingScope[] }; }
 async function registryGet(env: WorkerEnv, path: string): Promise<Response> { const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "GET", path, ""); return env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { headers })); }

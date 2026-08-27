@@ -49,7 +49,7 @@ No `runner_info`, `env_info`, `fs_*`, `exec_*`, `job_*`, or `git_*` names are pu
 - `shell({workspace_id,command,wait_ms?,background?})` maps to persistent jobs. `background:true` returns immediately; a foreground call waits no longer than `wait_ms` (maximum 8 seconds) and returns `job_id`/status when unfinished. Shell permission is the only command gate—there is no blacklist. It is not a sandbox: commands have the Runner account's OS permissions, so use a non-administrator/root Runner inside a restricted VM/container for untrusted repositories.
 - `job({action:"list"|"get"|"logs"|"cancel"|"input",...})` maps to the private job RPCs. List/get/logs require read permission; cancel/input require job-control permission. Logs remain bounded and UTF-8-safe.
 
-The Worker resolves effective client/Runner/workspace permissions before forwarding and the Runner repeats local enforcement. Permission failures are structured `permission_denied` results. `coding:read`, `coding:write`, and `coding:exec` remain the requested authorization scopes for read, edit, and shell/job-control operations respectively.
+The Worker resolves effective client/Runner/workspace permissions before forwarding and the Runner repeats local enforcement. Offline snapshot authorization never grants live host access. Permission failures are structured `permission_denied` results. `coding:read`, `coding:write`, and `coding:exec` remain the requested authorization scopes for read, edit, and shell/job-control operations respectively.
 
 ## Runner enrollment and connection
 
@@ -80,7 +80,7 @@ Production requires `wss://`; loopback `ws://` requires `--insecure-local`. Regi
 
 A profile holds the connection URL, Runner ID, token, workspace records, optional job concurrency, and optional execution mode. It is saved under the per-platform locations documented in [deployment.md](deployment.md); POSIX storage is created with private `0700`/`0600` permissions. New profiles default to `dedicated_user`; profiles created before this field retain their legacy privileged service layout. `status` redacts the token; `doctor --json` returns stable required/optional diagnostics for profile directory/file permissions, service manifest/installed/active state, Host shell, execution mode, local policy revision when available, and tools; missing Python/Docker are warnings. `workspace list|add|remove` updates local workspace records; and `env` runs bounded local discovery. `start` defaults to the profile but continues to support explicit legacy transport/workspace flags.
 
-The service adapter writes marked and content-hashed system manifests and refuses to overwrite/remove an unmarked or changed file. Dedicated-user Linux units explicitly set `User=runmesh` and `Group=runmesh`; macOS LaunchDaemons set `UserName=runmesh`; Windows tasks use `NT AUTHORITY\LOCAL SERVICE` at least privilege. Operators provision the account/group and filesystem access. `privileged_host` root/SYSTEM execution is available only with `--execution-mode privileged_host --confirm-privileged-host`; legacy profiles remain compatible without a silent migration. Public bootstrap scripts remain dependent on an operator-configured exact package version or HTTPS tarball; no public package is published by this repository.
+The service adapter writes marked and content-hashed system manifests and refuses to overwrite/remove an unmarked or changed file. Dedicated-user Linux units explicitly set `User=runmesh` and `Group=runmesh`; macOS LaunchDaemons set `UserName=runmesh`; Windows tasks use `NT AUTHORITY\LOCAL SERVICE` at least privilege. Operators provision the account/group and filesystem access. `privileged_host` root/SYSTEM execution is available only with `--execution-mode privileged_host --confirm-privileged-host`; legacy profiles remain compatible without a silent migration. Hosted bootstrap is disabled for this preview; use a manually verified portable artifact and the CLI enrollment/install flow.
 
 ## Timeouts
 
@@ -95,7 +95,7 @@ WORKER_BRIDGE_TIMEOUT_MS          = 12000
 
 ## Jobs and sync
 
-Runner state is stored under `~/.remote-coding-runner/state/` (or `--state-dir`):
+Runner state is stored under the Runmesh profile/state location documented in [deployment.md](deployment.md), or the explicit `--state-dir`:
 
 ```text
 runner.json
