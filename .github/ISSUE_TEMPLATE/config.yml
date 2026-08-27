@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-issue-config.json
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/aloneio/runmesh/security/policy
+    about: Request a private reporting channel; do not disclose vulnerabilities or credentials publicly.
+  - name: Commercial licensing
+    url: https://github.com/aloneio/runmesh/issues/new
+    about: Open a minimal issue requesting a private contact channel. Do not include confidential business information.

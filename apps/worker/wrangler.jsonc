@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "remote-coding-runtime-worker",
+  "name": "runmesh-worker",
   "main": "src/index.ts",
   "compatibility_date": "2026-04-02",
   "compatibility_flags": ["global_fetch_strictly_public", "nodejs_compat"],
@@ -31,7 +31,6 @@
     }
   ],
   "vars": {
-    "WORKER_ID": "worker-local",
-    "WORKER_VERSION": "0.1.0"
+    "WORKER_ID": "worker-local"
   }
 }
