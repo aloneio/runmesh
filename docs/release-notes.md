@@ -17,7 +17,7 @@ This preview includes:
 
 This is a development preview. Cross-platform native service installation, artifact update/rollback, and deployed Cloudflare behavior require validation in the target environment before operational use. `shell` is a host capability, not an operating-system sandbox.
 
-Install and configure the control plane using the [README](../README.md) and [deployment guide](deployment.md). Community contributions are welcome; see [CONTRIBUTING.md](../CONTRIBUTING.md), [CONTRIBUTION_PERMISSION.md](../CONTRIBUTION_PERMISSION.md), and the [CLA setup](cla-setup.md).
+Install and configure the control plane using the [README](../README.md) and [deployment guide](deployment.md). Community contributions are welcome; see [CONTRIBUTING.md](../CONTRIBUTING.md) and [CONTRIBUTION_PERMISSION.md](../CONTRIBUTION_PERMISSION.md) for the deemed-acceptance terms.
 
 Release assets include the Runner package, manifest, detached Ed25519 signature, trust keyring, SHA-256 checksums, license, NOTICE, and third-party notices. Verify the signature and checksums before installation.
 
@@ -40,7 +40,7 @@ Commercial use requires separate written authorization. See [COMMERCIAL_LICENSE.
 
 这是开发预览版。跨平台原生服务安装、artifact 更新/回滚以及已部署 Cloudflare 行为仍需在目标环境中验证后再投入运行。`shell` 是宿主机能力，不是操作系统 sandbox。
 
-请参考 [README](../README.zh-CN.md) 和[部署文档](zh-CN/deployment.md)完成配置。欢迎社区贡献，请阅读 [CONTRIBUTING.zh-CN.md](../CONTRIBUTING.zh-CN.md)、[CONTRIBUTION_PERMISSION.zh-CN.md](../CONTRIBUTION_PERMISSION.zh-CN.md) 和 [CLA 设置说明](zh-CN/cla-setup.md)。
+请参考 [README.zh-CN.md](../README.zh-CN.md) 和[部署文档](zh-CN/deployment.md)完成配置。欢迎社区贡献，请阅读 [CONTRIBUTING.zh-CN.md](../CONTRIBUTING.zh-CN.md) 和 [CONTRIBUTION_PERMISSION.zh-CN.md](../CONTRIBUTION_PERMISSION.zh-CN.md) 了解默认视为同意的贡献条款。
 
 Release assets 包含 Runner package、manifest、Ed25519 detached signature、trust keyring、SHA-256 checksums、许可证、NOTICE 和第三方通知。安装前请验证签名和校验和。
 
