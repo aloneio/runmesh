@@ -23,10 +23,11 @@ commercial permission.
 The current public license is the [PolyForm Noncommercial License 1.0.0](LICENSE).
 If this page and the license differ, the license controls for public-license
 terms. The project welcomes upstream contributions under
-[CONTRIBUTING.md](CONTRIBUTING.md), the
-[CONTRIBUTION_PERMISSION.md](CONTRIBUTION_PERMISSION.md), and the applicable
-contributor agreement. Contribution activity does not itself grant a company or
-individual commercial production-use rights.
+[CONTRIBUTING.md](CONTRIBUTING.md) and
+[CONTRIBUTION_PERMISSION.md](CONTRIBUTION_PERMISSION.md), which use default
+acceptance on submission rather than a separate contributor agreement.
+Contribution activity does not itself grant a company or individual commercial
+production-use rights.
 
 A software license does not itself grant trademark permission; see
 [TRADEMARKS.md](TRADEMARKS.md). Third-party dependencies and their notices

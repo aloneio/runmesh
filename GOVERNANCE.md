@@ -32,12 +32,9 @@ matters should use the private process in [SECURITY.md](SECURITY.md).
 ## Contributions and rights
 
 The [CONTRIBUTION_PERMISSION.md](CONTRIBUTION_PERMISSION.md) describes the
-narrow permission to prepare and test an upstream contribution. A substantive
-code contribution must have an accepted contributor agreement before merge;
-see [CLA-INDIVIDUAL.md](CLA-INDIVIDUAL.md), [CLA-ENTITY.md](CLA-ENTITY.md), and
-[docs/cla-setup.md](docs/cla-setup.md). Contributors retain copyright and
-attribution; the agreement grants the project the rights needed for community
-and future commercial editions.
+simple deemed-acceptance terms for ordinary contributions. Contributors retain
+copyright and attribution; the contribution terms grant the project the rights
+needed for accepted contributions in community and future commercial editions.
 
 Contributors must confirm that they have the right to submit their work,
 including any employer, contractor, confidentiality, dependency, and patent
