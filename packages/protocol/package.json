@@ -27,8 +27,7 @@
     "dist",
     "schema/wire-message.schema.json",
     "LICENSE",
-    "LICENSES/Apache-2.0-history.txt",
-    "LICENSE_HISTORY.md",
+    "NOTICE",
     "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
