@@ -31,15 +31,9 @@ matters should use the private process in [SECURITY.md](SECURITY.md).
 
 ## Contributions and rights
 
-The [CONTRIBUTION_PERMISSION.md](CONTRIBUTION_PERMISSION.md) describes the
-simple deemed-acceptance terms for ordinary contributions. Contributors retain
-copyright and attribution; the contribution terms grant the project the rights
-needed for accepted contributions in community and future commercial editions.
-
-Contributors must confirm that they have the right to submit their work,
-including any employer, contractor, confidentiality, dependency, and patent
-obligations. Contributing to Runmesh does not grant commercial-use rights to the
-contributor or their employer. Commercial permissions are described in
+The [CONTRIBUTING.md](CONTRIBUTING.md) document contains the complete
+contribution terms and process. Contribution activity does not itself grant
+commercial-use rights. Commercial permissions are described in
 [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md).
 
 ## Changes to this governance
@@ -49,5 +43,5 @@ plain-language explanation of their impact on contributors and maintainers.
 The current repository owner or delegated maintainers approve governance
 changes.
 
-This document is community guidance, not legal advice and not a statement that
-any document has been reviewed by counsel.
+This document is community guidance, not legal advice. Obtain qualified advice
+for questions about your rights, obligations, or planned commercial use.

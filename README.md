@@ -229,12 +229,12 @@ Runmesh does not provide an operating-system sandbox, tenant isolation, automati
 - [Protocol](docs/protocol.md) — typed wire messages, policy revisions, checksums, and limits.
 - [Migration](docs/migration.md) — additive schema changes, legacy profiles, and rollback precautions.
 - [SECURITY.md](SECURITY.md) — vulnerability reporting.
-- [CONTRIBUTING.md](CONTRIBUTING.md) — contribution rules and development expectations.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — complete contribution terms and process.
 
 ## License and community
 
 Runmesh is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE). It is **not** OSI-approved open-source software. Commercial use or additional rights require a separate written agreement; see [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md).
 
-Community contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) and [CONTRIBUTION_PERMISSION.md](CONTRIBUTION_PERMISSION.md) for the simple contribution terms. See [NOTICE](NOTICE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for notices, [TRADEMARKS.md](TRADEMARKS.md) for name/logo guidance, and [SECURITY.md](SECURITY.md) for security reports.
+Community contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete contribution terms and process. See [NOTICE](NOTICE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for notices, [TRADEMARKS.md](TRADEMARKS.md) for name/logo guidance, and [SECURITY.md](SECURITY.md) for security reports.
 
 Runmesh is an independent implementation. Design research considered [coding-tools-mcp](https://github.com/xyTom/coding-tools-mcp), [volter-tunnel](https://github.com/volter-ai/volter-tunnel), [agent-mcp-gateway](https://github.com/Hiroshimeow/agent-mcp-gateway), and official Cloudflare/MCP documentation. These are research acknowledgements only; no referenced source or asset is claimed as included.
