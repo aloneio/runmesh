@@ -20,8 +20,12 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run check:versions
+      - run: npm run check:format
       - run: npm run typecheck
       - run: npm run test:unit
+      - run: npm run test:release-tools
+      - run: npm run check:licenses
       - run: npm run build
       - run: npm run validate:worker -- --dry-run
       - run: npm run pack:smoke

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Development preview version; must be 0.1.0-dev.1"
+        description: "Development preview version; must match root package.json"
         required: true
         type: string
 
@@ -32,15 +32,19 @@ jobs:
       - name: Validate release identity and secrets
         run: |
           set -euo pipefail
-          test "$RELEASE_VERSION" = "0.1.0-dev.1"
+          npm run generate:version
+          npm run check:versions
+          ROOT_VERSION="$(node -p 'require("./package.json").version')"
+          test "$RELEASE_VERSION" = "$ROOT_VERSION"
           test -n "$RELEASE_SIGNING_KEY"
           test -n "$RELEASE_SIGNING_KEY_ID"
-          test "$(node -p 'require("./package.json").version')" = "$RELEASE_VERSION"
           test "$(node -p 'require("./apps/runner/package.json").version')" = "$RELEASE_VERSION"
           test "$(node -p 'require("./apps/worker/package.json").version')" = "$RELEASE_VERSION"
           test "$(node -p 'require("./packages/protocol/package.json").version')" = "$RELEASE_VERSION"
           node scripts/release-signature.mjs validate-key release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
       - run: npm ci
+      - run: npm run check:versions
+      - run: npm run check:format
       - run: npm run typecheck
       - run: npm run test:unit
       - run: npm run test:e2e
@@ -49,7 +53,7 @@ jobs:
       - run: npm run validate:worker -- --dry-run
       - run: npm run check:licenses
       - run: npm run pack:smoke
-      - name: Build immutable platform artifacts
+      - name: Build immutable portable Runner artifact
         run: |
           set -euo pipefail
           rm -rf release/assets
@@ -57,15 +61,12 @@ jobs:
           npm pack --workspace=@aloneio/runmesh-runner --pack-destination release/assets
           packed="$(find release/assets -maxdepth 1 -name '*.tgz' -print -quit)"
           test -n "$packed"
-          for platform in linux-x64 linux-arm64 darwin-x64 darwin-arm64 windows-x64; do
-            cp "$packed" "release/assets/runmesh-runner-${RELEASE_VERSION}-${platform}.tgz"
-          done
-          rm "$packed"
+          mv "$packed" "release/assets/runmesh-runner-${RELEASE_VERSION}.tgz"
       - name: Generate deterministic manifest and checksums
         run: |
           set -euo pipefail
           published_at="$(date --utc --date="@$(git log -1 --format=%ct)" +%Y-%m-%dT%H:%M:%SZ)"
-          node scripts/release-manifest.mjs release/assets "$(git rev-parse HEAD)" "$published_at"
+          node scripts/release-manifest.mjs release/assets "$RELEASE_VERSION" "$(git rev-parse HEAD)" "$published_at"
           (cd release/assets && sha256sum *.tgz manifest.json > SHA256SUMS)
       - name: Sign and verify manifest
         run: |
@@ -94,7 +95,7 @@ jobs:
             --target "$(git rev-parse HEAD)" \
             --title "Runmesh v${RELEASE_VERSION}" \
             --prerelease \
-            --notes-file docs/release-notes-v0.1.0-dev.1.md
+            --notes-file docs/release-notes.md
       - name: Re-download and verify published assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -104,4 +105,4 @@ jobs:
           gh release download "v${RELEASE_VERSION}" --repo "$GITHUB_REPOSITORY" --dir release/download
           (cd release/download && sha256sum -c SHA256SUMS)
           node scripts/release-signature.mjs verify release/download/manifest.json release/download/manifest.sig release/download/manifest.signature.json release/download/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
-          tar -xOf "$(find release/download -name 'runmesh-runner-*-linux-x64.tgz' -print -quit)" package/package.json | node -e 'let x="";process.stdin.on("data",d=>x+=d).on("end",()=>{if(JSON.parse(x).version!=="0.1.0-dev.1")process.exit(1)})'
+          RELEASE_VERSION="$RELEASE_VERSION" tar -xOf "release/download/runmesh-runner-${RELEASE_VERSION}.tgz" package/package.json | RELEASE_VERSION="$RELEASE_VERSION" node -e 'let x="";process.stdin.on("data",d=>x+=d).on("end",()=>{if(JSON.parse(x).version!==process.env.RELEASE_VERSION)process.exit(1)})'

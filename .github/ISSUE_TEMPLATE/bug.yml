@@ -11,7 +11,7 @@ body:
     attributes:
       label: Version or commit
       description: Include the development version, commit SHA, or deployed Worker version.
-      placeholder: 0.1.0-dev.1 / abc1234
+      placeholder: package version / commit SHA
     validations:
       required: true
   - type: textarea
