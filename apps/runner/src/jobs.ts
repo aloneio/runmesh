@@ -287,7 +287,28 @@ export class JobManager {
       }
       throw error;
     }
+    await this.waitForTerminal(job.job_id);
     return this.get(jobId);
+  }
+
+  /** Wait until the local child and its terminal metadata persistence finish. */
+  private async waitForTerminal(jobId: string): Promise<void> {
+    for (;;) {
+      const current = this.jobs.get(jobId);
+      if (current === undefined || !isActive(current)) return;
+      const finishing = this.finishing.get(jobId);
+      if (finishing !== undefined) {
+        await finishing;
+        continue;
+      }
+      const child = this.processes.get(jobId);
+      if (child === undefined) return;
+      if (child.exitCode !== null || child.signalCode !== null) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        continue;
+      }
+      await new Promise<void>((resolve) => child.once("close", () => resolve()));
+    }
   }
 
   public async input(jobId: unknown, data: unknown, closeStdin = false): Promise<{ accepted: number; eof: boolean }> {
