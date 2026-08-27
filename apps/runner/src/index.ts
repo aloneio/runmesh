@@ -9,7 +9,7 @@ export { FilesystemService } from "./filesystem.js";
 export { GitService } from "./git-service.js";
 export { JobManager } from "./jobs.js";
 export { PatchService } from "./patch-service.js";
-export { PathPolicy, PathPolicyError } from "./path-policy.js";
+export { PolicyStore } from "./policy-store.js";
 export { RunnerRuntime, RpcRuntimeError, rpcError } from "./runtime.js";
 export { RUNNER_VERSION, runnerPackageVersion } from "./version.js";
 export type { RawRunnerOptions, RunnerConfig, WorkspaceConfig, WorkspaceOption } from "./config.js";
