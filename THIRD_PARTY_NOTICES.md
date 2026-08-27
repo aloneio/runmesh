@@ -2,24 +2,20 @@
 
 ## Scope
 
-This file records the third-party-license boundary for the source repository.
-The repository's current PolyForm Noncommercial License 1.0.0 applies only to
-material for which an applicable rights holder has granted those terms. It does
-not relicense third-party software, dependencies, prior Apache-licensed
-copies, or marks.
+This file records third-party dependency and asset boundaries for the source
+repository. The repository's PolyForm Noncommercial License 1.0.0 applies only
+to Runmesh material for which the applicable rights holder grants those terms.
+It does not relicense third-party software, dependencies, external
+contributions, or trademarks.
 
 No third-party source or asset is identified as copied into this source tree by
-the reachable Git history and documentation audit performed for the license
-migration. The project documents independent design research only; it does not
-claim that those research references supplied source code. If copied material
-is added later, its exact license and required notices must be added before
-merging or distributing it.
+the current design-research audit. If copied or vendored material is added,
+record its exact source, license, required notices, and redistribution impact
+before merging or distributing it.
 
 ## Runtime dependency notices
 
-At lockfile version 0.1.0, the direct runtime dependencies are installed by npm
-as separate packages. Their upstream license files remain with those packages
-and must be retained when a distribution bundles or redistributes them:
+At the current lockfile revision, direct runtime dependencies include:
 
 | Workspace | Dependency | Locked version | Declared license |
 | --- | --- | ---: | --- |
@@ -29,28 +25,17 @@ and must be retained when a distribution bundles or redistributes them:
 | Worker / Protocol | [`zod`](https://www.npmjs.com/package/zod) | 4.4.3 | MIT |
 
 The lockfile also records licenses for transitive and development dependencies.
-It is the reproducible dependency inventory for this revision; it is not a
-substitute for the license files shipped by upstream packages. Release builders
-must review the actual dependency set and include every upstream notice required
-by the resulting artifact. In particular, dependency entries include MIT,
-Apache-2.0, ISC, BSD, MPL-2.0, LGPL-3.0-or-later, CC0-1.0, CC-BY-4.0, and other
-expressions; not all are included in every platform artifact.
+It is the reproducible dependency inventory for this revision, not a
+substitute for license files shipped by upstream packages. Release builders
+must review the exact dependency set and include every upstream notice required
+by the resulting artifact. The dependency inventory includes MIT, Apache-2.0,
+ISC, BSD, MPL-2.0, LGPL-3.0-or-later, CC0-1.0, CC-BY-4.0, and other
+expressions; not every expression appears in every artifact.
 
-The public Runner and protocol npm packages carry package-specific
-`THIRD_PARTY_NOTICES.md`, their current `LICENSE`, and the historical Apache
-record in their packed file lists. The private Worker workspace is not a
-published npm artifact.
-
-## Historical and research references
-
-The previous Apache 2.0 project license is preserved verbatim at
-[`LICENSES/Apache-2.0-history.txt`](LICENSES/Apache-2.0-history.txt); see
-[LICENSE_HISTORY.md](LICENSE_HISTORY.md) for its provenance and scope.
-
-The README acknowledges design research concerning `xyTom/coding-tools-mcp`,
-`volter-ai/volter-tunnel`, `Hiroshimeow/agent-mcp-gateway`, and documentation
-from Cloudflare and the MCP ecosystem. They are not represented as bundled or
-copied source. Their names and marks remain their owners' property.
+The public Runner and protocol packages carry their current `LICENSE`,
+`NOTICE`, and `THIRD_PARTY_NOTICES.md`. npm installs dependencies separately;
+upstream license files and notices must be retained when dependencies are
+redistributed. The private Worker workspace is not a published npm artifact.
 
 ## Distribution reminder
 

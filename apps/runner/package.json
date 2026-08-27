@@ -24,7 +24,7 @@
   "bin": {
     "coding-runner": "./dist/cli.js"
   },
-  "files": ["dist", "LICENSE", "LICENSES/Apache-2.0-history.txt", "LICENSE_HISTORY.md", "THIRD_PARTY_NOTICES.md"],
+  "files": ["dist", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"],
   "scripts": {
     "build": "tsc -b",
     "prepack": "npm run build && rm -f dist/*.tsbuildinfo dist/.tsbuildinfo",

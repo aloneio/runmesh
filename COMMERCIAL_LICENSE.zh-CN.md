@@ -1,30 +1,26 @@
-# 商业许可
+# 商业授权
 
-> 本文件是 [`COMMERCIAL_LICENSE.md`](COMMERCIAL_LICENSE.md) 的中文说明译文。它
-> 不是要约，也不授予许可证；如有不一致，以英文原文和 [`LICENSE`](LICENSE) 为准。
+Runmesh 依据 [PolyForm Noncommercial License 1.0.0](LICENSE) 提供，并仅授权该许可证
+允许的用途。商业使用，或需要超出公开许可证的权利时，必须在为该目的使用、部署、分发或
+提供软件之前，向适用权利人取得单独书面协议。
 
-Runmesh 在本仓库中依据 [PolyForm Noncommercial License 1.0.0](LICENSE) 提供。该
-公开许可证只授权其定义为允许的用途，包括其非商业用途规则；它**不**授予商业使用
-许可证。
+未来可能提供 Runmesh Business 或其他商业安排。本文件仅供说明，不是价格表、要约或自动
+授予商业许可。书面协议可自行约定范围、费用、支持、保证、地域、期限和合规要求。
 
-若计划用途属于商业用途，或需要超出公开许可证的权利，请在为该目的使用、部署、
-分发或提供软件**之前**，向适用的版权权利人取得单独的书面商业协议。商业协议可能
-与公开许可证有不同的范围、费用、支持、保证、地域、期限和合规要求。
+如需沟通，请在 [Runmesh issue tracker](https://github.com/aloneio/runmesh/issues) 创建最小化请求，
+并请求私密联络渠道。不要在公开 issue 中提交机密业务信息、凭据、漏洞、源代码或安全敏感
+部署细节。issue、评论、沉默或社区答复都不授予商业许可。
 
-如需咨询，可通过 [Runmesh issue tracker](https://github.com/aloneio/runmesh/issues)
-联系仓库维护者，但不要发布机密业务信息、凭证、漏洞或源代码。请请求私下联络渠道。
-不要认为 issue、评论、沉默或社区答复授予了任何商业许可。
+## 与社区使用和贡献的关系
 
-## 重要限制
+当前公开许可证是 [PolyForm Noncommercial License 1.0.0](LICENSE)。如本文件与许可证不一致，
+公开许可条款以许可证为准。项目欢迎依据 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md)、
+[CONTRIBUTION_PERMISSION.zh-CN.md](CONTRIBUTION_PERMISSION.zh-CN.md) 和适用贡献者协议进行
+上游贡献。贡献活动本身不会授予个人或公司商业生产使用权。
 
-- 本页仅供说明，不是要约，也不自行授予许可证。
-- 公开许可证的准确条款在 [`LICENSE`](LICENSE) 中；如与本页不同，就公开许可证
-  而言以 `LICENSE` 为准。
-- 商业协议只能由有权授予该协议的权利人签发。本仓库不主张重新许可第三方依赖项、
-  外部贡献或先前依据 Apache 许可收到的副本。
-- 先前版本副本所获 Apache 2.0 授权在
-  [LICENSE_HISTORY.zh-CN.md](LICENSE_HISTORY.zh-CN.md) 中说明。
-- 商标许可请参阅 [TRADEMARKS.zh-CN.md](TRADEMARKS.zh-CN.md)。软件许可证本身并不
-  授予商标权。
+软件许可证本身不授予商标使用许可；请参阅 [TRADEMARKS.zh-CN.md](TRADEMARKS.zh-CN.md)。
+第三方依赖及其通知继续受各自条款约束；请参阅
+[THIRD_PARTY_NOTICES.zh-CN.md](THIRD_PARTY_NOTICES.zh-CN.md)。
 
-本文件不构成法律意见。请由具备资格的法律顾问评估你的用途及拟议协议。
+本文件不是法律意见，也不表示已经过律师审查。对于计划中的商业使用或协议，请获取具备
+资格的意见。

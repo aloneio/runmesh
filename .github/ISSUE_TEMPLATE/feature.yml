@@ -1,0 +1,41 @@
+name: Feature request
+description: Propose an improvement for a future Runmesh development version
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for sharing an idea. A request is a roadmap candidate, not a compatibility commitment. Do not include credentials, private workspace paths, confidential business information, or vulnerability details.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Who is affected and what current limitation are you experiencing?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach
+      description: Describe the intended behavior, API or UI impact, and any alternatives considered.
+    validations:
+      required: true
+  - type: textarea
+    id: security
+    attributes:
+      label: Security and operations impact
+      description: Explain permission, data exposure, host-shell, migration, or deployment implications where relevant.
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation ideas
+      description: Suggest tests, fixtures, or acceptance evidence.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have removed credentials, secret URLs, private paths, and confidential information.
+          required: true
+        - label: I understand this request does not promise a release or compatibility commitment.
+          required: true
