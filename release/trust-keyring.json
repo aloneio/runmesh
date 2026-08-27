@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "keys": [
+    {
+      "key_id": "runmesh-preview-2026-01",
+      "algorithm": "ed25519",
+      "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEASXdEYS7UorlzNJ8ij2gftFIX2rrTvhNlZm3MqE/BWXI=\n-----END PUBLIC KEY-----\n"
+    }
+  ]
+}
