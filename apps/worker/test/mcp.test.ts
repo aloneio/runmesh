@@ -1,6 +1,7 @@
 import { env, SELF, runInDurableObject } from "cloudflare:test";
 import { passwordVerifier, randomBase64Url, sha256Hex, verifySetupToken } from "../src/security.js";
 import { runnerReleaseDescriptor } from "../src/index.js";
+import { PRODUCT_VERSION } from "../src/generated-version.js";
 import { describe, expect, it } from "vitest";
 
 const password = "administrator-password-for-tests";
@@ -159,10 +160,10 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(shellText).toContain("set -eu"); expect(shellText).toContain("/etc/systemd/system/remote-coding-runner.service"); expect(shellText).toContain("administrator/root privileges");
     expect(powershellText).toContain("$ErrorActionPreference = 'Stop'"); expect(powershellText).toContain("$env:ProgramFiles"); expect(powershellText).toContain("Administrator PowerShell");
     expect(shellText).toContain("--prefix \"$NPM_PREFIX\""); expect(shellText).not.toContain("npm install --global \"$PACKAGE_SPEC\"");
-    expect(await release.json()).toMatchObject({ channel: "stable", distributable: false, package_spec: "", current_version: "0.1.0", latest_version: "0.1.0", package_version: "0.1.0", artifact: null, protocol: { min_version: 2, max_version: 2 } });
+    expect(await release.json()).toMatchObject({ channel: "stable", distributable: false, package_spec: "", current_version: PRODUCT_VERSION, latest_version: PRODUCT_VERSION, package_version: PRODUCT_VERSION, artifact: null, protocol: { min_version: 2, max_version: 2 } });
     const stable = await SELF.fetch("https://worker.test/runner/releases/stable");
     expect(stable.status).toBe(200);
-    expect(await stable.json()).toMatchObject({ channel: "stable", current_version: "0.1.0", latest_version: "0.1.0", package_version: "0.1.0", protocol: { min_version: 2, max_version: 2 } });
+    expect(await stable.json()).toMatchObject({ channel: "stable", current_version: PRODUCT_VERSION, latest_version: PRODUCT_VERSION, package_version: PRODUCT_VERSION, protocol: { min_version: 2, max_version: 2 } });
     expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "@acme/coding-runner@1.2.3" })).toMatchObject({ channel: "stable", distributable: true, package_name: "@acme/coding-runner", package_version: "1.2.3", package_spec: "@acme/coding-runner@1.2.3", artifact: { source: "@acme/coding-runner@1.2.3" }, protocol: { min_version: 2, max_version: 2 } });
     expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "https://downloads.example.test/runner-1.2.3.tgz", RUNNER_PACKAGE_NAME: "@acme/coding-runner", RUNNER_PACKAGE_VERSION: "1.2.3" })).toMatchObject({ distributable: true, package_version: "1.2.3", artifact: { source: "https://downloads.example.test/runner-1.2.3.tgz" } });
     expect(runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "https://downloads.example.test/runner-1.2.3.tgz", RUNNER_PACKAGE_NAME: "@acme/coding-runner", RUNNER_PACKAGE_VERSION: "1.2.3", RUNNER_ARTIFACT_SHA256: "a".repeat(64) })).toMatchObject({ distributable: true, artifact: { source: "https://downloads.example.test/runner-1.2.3.tgz", checksum: { algorithm: "sha256", value: "a".repeat(64) } } });
@@ -227,7 +228,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     const initial = await SELF.fetch("https://worker.test/");
     expect(initial.status).toBe(200);
     const setupCsrf = formToken(await initial.text());
-    const setupCookie = cookieFrom(initial, "__Host-rcr_setup_csrf");
+    const setupCookie = cookieFrom(initial, "__Host-runmesh_setup_csrf");
     expect(setupCsrf).toBe(setupCookie);
     expect(initial.headers.get("cache-control")).toBe("no-store");
     expect(initial.headers.get("referrer-policy")).toBe("no-referrer");
@@ -236,16 +237,16 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     const rejectedCsrf = await submit("https://worker.test/setup", { setup_token: setupToken, password, confirm_password: password }, new Map(), false);
     expect(rejectedCsrf.status).toBe(403);
 
-    const rejectedSetup = await submit("https://worker.test/setup", { csrf_token: setupCsrf, password, confirm_password: password }, jar([["__Host-rcr_setup_csrf", setupCookie]]));
+    const rejectedSetup = await submit("https://worker.test/setup", { csrf_token: setupCsrf, password, confirm_password: password }, jar([["__Host-runmesh_setup_csrf", setupCookie]]));
     expect(rejectedSetup.status).toBe(403);
 
-    const wrongSetup = await submit("https://worker.test/setup", { csrf_token: setupCsrf, setup_token: "wrong-setup-token", password, confirm_password: password }, jar([["__Host-rcr_setup_csrf", setupCookie]]));
+    const wrongSetup = await submit("https://worker.test/setup", { csrf_token: setupCsrf, setup_token: "wrong-setup-token", password, confirm_password: password }, jar([["__Host-runmesh_setup_csrf", setupCookie]]));
     expect(wrongSetup.status).toBe(403);
 
     const setupRequests = await Promise.all(Array.from({ length: 2 }, () => submit(
       "https://worker.test/setup",
       { csrf_token: setupCsrf, setup_token: setupToken, password, confirm_password: password },
-      jar([["__Host-rcr_setup_csrf", setupCookie]]),
+      jar([["__Host-runmesh_setup_csrf", setupCookie]]),
     )));
     expect(setupRequests.filter((response) => response.status === 303)).toHaveLength(1);
     expect(setupRequests.filter((response) => response.status === 409)).toHaveLength(1);
@@ -257,16 +258,16 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
 
     const login = await SELF.fetch("https://worker.test/");
     const loginCsrf = formToken(await login.text());
-    const loginCookie = cookieFrom(login, "__Host-rcr_login_csrf");
-    const wrong = await submit("https://worker.test/login", { csrf_token: loginCsrf, password: "wrong-password" }, jar([["__Host-rcr_login_csrf", loginCookie]]));
+    const loginCookie = cookieFrom(login, "__Host-runmesh_login_csrf");
+    const wrong = await submit("https://worker.test/login", { csrf_token: loginCsrf, password: "wrong-password" }, jar([["__Host-runmesh_login_csrf", loginCookie]]));
     expect(wrong.status).toBe(403);
-    const loggedIn = await submit("https://worker.test/login", { csrf_token: loginCsrf, password }, jar([["__Host-rcr_login_csrf", loginCookie]]));
+    const loggedIn = await submit("https://worker.test/login", { csrf_token: loginCsrf, password }, jar([["__Host-runmesh_login_csrf", loginCookie]]));
     expect(loggedIn.status).toBe(303);
-    const session = cookieFrom(loggedIn, "__Host-rcr_admin_session");
-    const csrf = cookieFrom(loggedIn, "__Host-rcr_admin_csrf");
+    const session = cookieFrom(loggedIn, "__Host-runmesh_admin_session");
+    const csrf = cookieFrom(loggedIn, "__Host-runmesh_admin_csrf");
     expect(loggedIn.headers.get("set-cookie")).toContain("HttpOnly");
     expect(loggedIn.headers.get("set-cookie")).toContain("SameSite=Strict");
-    const adminJar = jar([["__Host-rcr_admin_session", session], ["__Host-rcr_admin_csrf", csrf]]);
+    const adminJar = jar([["__Host-runmesh_admin_session", session], ["__Host-runmesh_admin_csrf", csrf]]);
 
     const deniedCreate = await submit("https://worker.test/admin/clients", { label: "denied", scopes: "coding:read" }, adminJar);
     expect(deniedCreate.status).toBe(403);
@@ -318,8 +319,8 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
   it("applies login throttling through the Worker and recovers after a valid password", async () => {
     const login = await SELF.fetch("https://worker.test/");
     const csrf = formToken(await login.text());
-    const csrfCookie = cookieFrom(login, "__Host-rcr_login_csrf");
-    const jarForLogin = jar([["__Host-rcr_login_csrf", csrfCookie]]);
+    const csrfCookie = cookieFrom(login, "__Host-runmesh_login_csrf");
+    const jarForLogin = jar([["__Host-runmesh_login_csrf", csrfCookie]]);
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const failed = await submit("https://worker.test/login", { csrf_token: csrf, password: `wrong-password-${attempt}` }, jarForLogin);
       expect(failed.status).toBe(403);
@@ -336,10 +337,10 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
   it("renders responsive dashboard sections, safe runner data, client routing, and one-time enrollment commands", async () => {
     const loginPage = await SELF.fetch("https://worker.test/");
     const loginCsrf = formToken(await loginPage.text());
-    const loginCookie = cookieFrom(loginPage, "__Host-rcr_login_csrf");
-    const loggedIn = await submit("https://worker.test/login", { csrf_token: loginCsrf, password }, jar([["__Host-rcr_login_csrf", loginCookie]]));
-    const csrf = cookieFrom(loggedIn, "__Host-rcr_admin_csrf");
-    const adminJar = jar([["__Host-rcr_admin_session", cookieFrom(loggedIn, "__Host-rcr_admin_session")], ["__Host-rcr_admin_csrf", csrf]]);
+    const loginCookie = cookieFrom(loginPage, "__Host-runmesh_login_csrf");
+    const loggedIn = await submit("https://worker.test/login", { csrf_token: loginCsrf, password }, jar([["__Host-runmesh_login_csrf", loginCookie]]));
+    const csrf = cookieFrom(loggedIn, "__Host-runmesh_admin_csrf");
+    const adminJar = jar([["__Host-runmesh_admin_session", cookieFrom(loggedIn, "__Host-runmesh_admin_session")], ["__Host-runmesh_admin_csrf", csrf]]);
     const created = await submit("https://worker.test/admin/runners", { csrf_token: csrf, display_name: "Safe runner", runner_id: "dashboard-runner" }, adminJar);
     expect(created.status).toBe(200);
     const enrollment = await created.text();
@@ -380,21 +381,21 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
   it("invalidates every old session after password change", async () => {
     const loginPage = await SELF.fetch("https://worker.test/");
     const loginCsrf = formToken(await loginPage.text());
-    const loginCookie = cookieFrom(loginPage, "__Host-rcr_login_csrf");
-    const loggedIn = await submit("https://worker.test/login", { csrf_token: loginCsrf, password }, jar([["__Host-rcr_login_csrf", loginCookie]]));
-    const session = cookieFrom(loggedIn, "__Host-rcr_admin_session"); const csrf = cookieFrom(loggedIn, "__Host-rcr_admin_csrf");
-    const sessionJar = jar([["__Host-rcr_admin_session", session], ["__Host-rcr_admin_csrf", csrf]]);
+    const loginCookie = cookieFrom(loginPage, "__Host-runmesh_login_csrf");
+    const loggedIn = await submit("https://worker.test/login", { csrf_token: loginCsrf, password }, jar([["__Host-runmesh_login_csrf", loginCookie]]));
+    const session = cookieFrom(loggedIn, "__Host-runmesh_admin_session"); const csrf = cookieFrom(loggedIn, "__Host-runmesh_admin_csrf");
+    const sessionJar = jar([["__Host-runmesh_admin_session", session], ["__Host-runmesh_admin_csrf", csrf]]);
     const changed = await submit("https://worker.test/admin/password", { csrf_token: csrf, current_password: password, password: "changed-administrator-password", confirm_password: "changed-administrator-password" }, sessionJar);
     expect(changed.status).toBe(303);
     expect((await SELF.fetch("https://worker.test/admin", { redirect: "manual", headers: { cookie: cookies(sessionJar) } })).status).toBe(303);
 
     const nextLogin = await SELF.fetch("https://worker.test/");
-    const nextCsrf = formToken(await nextLogin.text()); const nextCookie = cookieFrom(nextLogin, "__Host-rcr_login_csrf");
-    const oldLogin = await submit("https://worker.test/login", { csrf_token: nextCsrf, password }, jar([["__Host-rcr_login_csrf", nextCookie]]));
+    const nextCsrf = formToken(await nextLogin.text()); const nextCookie = cookieFrom(nextLogin, "__Host-runmesh_login_csrf");
+    const oldLogin = await submit("https://worker.test/login", { csrf_token: nextCsrf, password }, jar([["__Host-runmesh_login_csrf", nextCookie]]));
     expect(oldLogin.status).toBe(403);
     const fresh = await SELF.fetch("https://worker.test/");
-    const freshCsrf = formToken(await fresh.text()); const freshCookie = cookieFrom(fresh, "__Host-rcr_login_csrf");
-    const newLogin = await submit("https://worker.test/login", { csrf_token: freshCsrf, password: "changed-administrator-password" }, jar([["__Host-rcr_login_csrf", freshCookie]]));
+    const freshCsrf = formToken(await fresh.text()); const freshCookie = cookieFrom(fresh, "__Host-runmesh_login_csrf");
+    const newLogin = await submit("https://worker.test/login", { csrf_token: freshCsrf, password: "changed-administrator-password" }, jar([["__Host-runmesh_login_csrf", freshCookie]]));
     expect(newLogin.status).toBe(303);
   });
 });
