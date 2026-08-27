@@ -251,6 +251,7 @@ describe("persistent local jobs", () => {
       const job = await manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "setTimeout(() => {}, 2000)"] });
       await expect(manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.exit(0)"] })).rejects.toThrow(/max retained jobs/);
       await manager.cancel(job.job_id);
+      await expect(waitFor(() => manager.get(job.job_id), (value) => !["queued", "running", "cancelling"].includes(value.status))).resolves.toMatchObject({ status: "cancelled" });
     } finally { await test.cleanup(); }
   });
 
