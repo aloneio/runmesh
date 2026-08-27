@@ -298,8 +298,10 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const response = await submitForm("/admin/runners", { csrf_token: csrf, display_name: "Enrollment E2E Runner", runner_id: runnerId }, adminJar);
     expect(response.status).toBe(200);
     const html = await response.text();
-    expect(html).toContain("/runner/install.sh");
-    const code = /runmesh-install\.sh ([A-Za-z0-9_-]{43})/.exec(html)?.[1] ?? /sh -s -- ([A-Za-z0-9_-]{43})/.exec(html)?.[1];
+    expect(html).toContain("Manual portable-artifact enrollment");
+    expect(html).toContain("coding-runner enroll");
+    expect(html).not.toContain("curl -fsSL");
+    const code = /--code ([A-Za-z0-9_-]{43})/.exec(html)?.[1];
     if (code === undefined) throw new Error("browser enrollment code absent");
     return code;
   }
