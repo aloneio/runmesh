@@ -5,7 +5,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { parseRunnerArgs, validateRunnerConfig, type RawRunnerOptions } from "./config.js";
 import { RunnerConnection } from "./connection.js";
 import { enrollRunner } from "./enrollment.js";
-import { ProfileStore, defaultWorkspaceId, profileExecutionMode, redactedProfile, workspaceOptions, type RunnerProfile, type StoredWorkspace } from "./profile.js";
+import { ProfileStore, defaultWorkspaceId, profileExecutionMode, profileManagementMode, redactedProfile, workspaceOptions, type RunnerProfile, type StoredWorkspace } from "./profile.js";
 import { EnvironmentInfoService, discoverShellRuntime, type ShellRuntime } from "./runtime.js";
 import { RUNNER_VERSION } from "./version.js";
 import { assertManagedServiceManifest, createServiceManager, createServiceProvisioner, hostServiceManifestFilesystem, installServiceManifest, isManagedService, removeServiceManifest, renderService, serviceLayout, type ExecutionMode, type ServiceManagerAdapter, type ServiceManifest, type ServiceManifestFilesystem, type ServicePlatform, type ServiceProvisioner } from "./service.js";
@@ -43,7 +43,7 @@ export interface EnrollCliDependencies {
   readonly confirmPrivilegedHost?: boolean;
 }
 interface ParsedCommand { readonly command: string; readonly json: boolean; readonly values: Record<string, string | boolean | string[]>; readonly passthrough: string[]; }
-const HELP = "usage: coding-runner <start|enroll|status|doctor|workspace|env|install|stop|restart|uninstall> [options]";
+const HELP = "usage: coding-runner <start|enroll|status|doctor|workspace|env|install|stop|restart|uninstall> [options]\nworkspace: list | add --path <directory> [--allow-edit] [--allow-host-shell --i-understand-host-shell-is-not-sandboxed] | remove --id <workspace-id> | migrate --management-mode <central|legacy_manual>";
 
 export async function runEnrollCli(argv: readonly string[], dependencies: EnrollCliDependencies = {}): Promise<void> {
   const output = dependencies.stdout ?? ((line) => process.stdout.write(`${line}\n`));
@@ -81,7 +81,8 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
     if (parsed.command === "status") {
       const profile = await store.load();
       const executionMode = parsed.values.user === true ? "dedicated_user" : profileExecutionMode(profile) ?? "migration_required";
-      report(output, parsed.json, { configured: profile !== undefined, profile: redactedProfile(profile), runner_id: profile?.runner_id ?? null, display_name: null, version: null, service: { mode: parsed.values.user === true ? "user" : "system", execution_mode: executionMode, status: "unknown" }, connection: "unknown", desired_policy_revision: null, applied_policy_revision: null, workspace_count: profile?.workspaces.length ?? 0 });
+      const managementMode = profileManagementMode(profile) ?? "migration_required";
+      report(output, parsed.json, { configured: profile !== undefined, profile: redactedProfile(profile), runner_id: profile?.runner_id ?? null, display_name: null, version: null, service: { mode: parsed.values.user === true ? "user" : "system", execution_mode: executionMode, status: "unknown" }, management_mode: managementMode, connection: "unknown", desired_policy_revision: null, applied_policy_revision: null, workspace_count: profile?.workspaces.length ?? 0 });
       return;
     }
     if (parsed.command === "workspace") { await workspaceCommand(parsed, store, output); return; }
@@ -102,7 +103,7 @@ async function start(parsed: ParsedCommand, store: ProfileStore, error: (line: s
   const raw = parseRunnerArgs(parsed.passthrough);
   const profile = await store.load();
   const hasLegacyExplicit = raw.server !== undefined || raw.runnerId !== undefined || raw.token !== undefined || (raw.workspaces?.length ?? 0) > 0;
-  const productWorkspaces = profile === undefined ? [] : workspaceOptions(profile);
+  const productWorkspaces = profile === undefined || profileManagementMode(profile) === "central" ? [] : workspaceOptions(profile);
   const server = raw.server ?? profile?.server_url;
   const token = raw.token ?? process.env.CODING_RUNNER_TOKEN ?? profile?.token;
   const runnerId = raw.runnerId ?? profile?.runner_id;
@@ -132,20 +133,38 @@ async function start(parsed: ParsedCommand, store: ProfileStore, error: (line: s
 async function workspaceCommand(parsed: ParsedCommand, store: ProfileStore, output: (line: string) => void): Promise<void> {
   const action = typeof parsed.values.action === "string" ? parsed.values.action : "list";
   const profile = await requireProfile(store);
-  if (action === "list") { report(output, parsed.json, { workspaces: profile.workspaces.map((workspace) => ({ ...workspace })) }); return; }
+  const managementMode = profileManagementMode(profile);
+  if (action === "list") { report(output, parsed.json, { management_mode: managementMode, workspaces: profile.workspaces.map((workspace) => ({ ...workspace })) }); return; }
+  if (action === "migrate") {
+    const mode = parsed.values.managementMode;
+    if (managementMode !== "migration_required") throw new Error("workspace management mode is already configured");
+    if (mode !== "central" && mode !== "legacy_manual") throw new Error("--management-mode must be central or legacy_manual");
+    await store.save({ ...profile, management_mode: mode });
+    report(output, parsed.json, { management_mode: mode, migrated: true });
+    return;
+  }
+  if (managementMode === "central") throw new Error("Configure managed Workspaces through the Runmesh Admin Panel.");
+  if (managementMode !== "legacy_manual") throw new Error("Runner profile management_mode is migration_required; run coding-runner workspace migrate --management-mode central or legacy_manual first.");
   if (action === "add") {
     const path = await canonicalDirectory(requiredString(parsed, "path"));
     const id = typeof parsed.values.id === "string" ? validateWorkspaceId(parsed.values.id) : defaultWorkspaceId(path, profile.workspaces);
     if (profile.workspaces.some((workspace) => workspace.id === id || workspace.path === path)) throw new Error("workspace already exists");
-    const workspace: StoredWorkspace = { id, path, writable: parsed.values.readonly !== true, shell: parsed.values.noShell !== true };
-    await store.save({ ...profile, workspaces: [...profile.workspaces, workspace] }); report(output, parsed.json, { added: id }); return;
+    const allowEdit = parsed.values.allowEdit === true;
+    const allowHostShell = parsed.values.allowHostShell === true;
+    const understoodHostShell = parsed.values.understoodHostShell === true;
+    if (allowHostShell !== understoodHostShell) throw new Error("--allow-host-shell requires --i-understand-host-shell-is-not-sandboxed");
+    if (allowHostShell && !allowEdit) throw new Error("--allow-host-shell also requires --allow-edit");
+    if (allowEdit && parsed.values.readonly === true) throw new Error("--allow-edit conflicts with --readonly");
+    if (allowHostShell && parsed.values.noShell === true) throw new Error("--allow-host-shell conflicts with --no-shell");
+    const workspace: StoredWorkspace = { id, path, writable: allowEdit, shell: allowHostShell };
+    await store.save({ ...profile, workspaces: [...profile.workspaces, workspace] }); report(output, parsed.json, { added: id, writable: workspace.writable, shell: workspace.shell }); return;
   }
   if (action === "remove") {
     const id = requiredString(parsed, "id"); const workspaces = profile.workspaces.filter((workspace) => workspace.id !== id);
     if (workspaces.length === profile.workspaces.length) throw new Error("workspace not found");
     await store.save({ ...profile, workspaces }); report(output, parsed.json, { removed: id }); return;
   }
-  throw new Error("usage: coding-runner workspace <list|add|remove>");
+  throw new Error("usage: coding-runner workspace <list|add|remove|migrate>");
 }
 export interface DoctorCheck {
   readonly name: string;
@@ -282,19 +301,22 @@ export function parseProductArgs(argv: readonly string[]): ParsedCommand {
     return { command, json: values.json === true, values, passthrough };
   }
   const rest = [...argv.slice(1)];
-  if (command === "workspace" && ["list", "add", "remove"].includes(rest[0] ?? "")) values.action = rest.shift() as string;
+  if (command === "workspace" && ["list", "add", "remove", "migrate"].includes(rest[0] ?? "")) values.action = rest.shift() as string;
   for (let index = 0; index < rest.length; index += 1) {
     const arg = rest[index];
     if (arg === "--json") { values.json = true; continue; }
     if (arg === "--readonly") { values.readonly = true; continue; }
     if (arg === "--no-shell") { values.noShell = true; continue; }
+    if (arg === "--allow-edit") { values.allowEdit = true; continue; }
+    if (arg === "--allow-host-shell") { values.allowHostShell = true; continue; }
+    if (arg === "--i-understand-host-shell-is-not-sandboxed") { values.understoodHostShell = true; continue; }
     if (arg === "--purge") { values.purge = true; continue; }
     if (arg === "--yes") { values.yes = true; continue; }
     if (arg === "--insecure-local") { values.insecureLocal = true; continue; }
     if (arg === "--re-enroll") { values.reEnroll = true; continue; }
     if (arg === "--user") { values.user = true; continue; }
     if (arg === "--confirm-privileged-host") { values.confirmPrivilegedHost = true; continue; }
-    const key = arg === "--execution-mode" ? "executionMode" : arg === "--server" ? "server" : arg === "--code" ? "code" : arg === "--cwd" ? "cwd" : arg === "--id" ? "id" : arg === "--path" ? "path" : arg === "--executable-path" ? "executablePath" : arg === "--profile" ? "profilePath" : undefined;
+    const key = arg === "--execution-mode" ? "executionMode" : arg === "--management-mode" ? "managementMode" : arg === "--server" ? "server" : arg === "--code" ? "code" : arg === "--cwd" ? "cwd" : arg === "--id" ? "id" : arg === "--path" ? "path" : arg === "--executable-path" ? "executablePath" : arg === "--profile" ? "profilePath" : undefined;
     const value = rest[index + 1]; if (key === undefined || value === undefined || value.startsWith("--")) throw new Error(`unknown or incomplete option: ${arg}`);
     values[key] = value; index += 1;
   }
