@@ -47,9 +47,12 @@ export interface RunnerRecord {
   readonly last_heartbeat_ms: number | null;
   readonly last_sync_sequence: number | null;
   readonly desired_policy_revision: number;
+  readonly desired_policy_checksum: string | null;
   readonly applied_policy_revision: number | null;
+  readonly active_policy_checksum: string | null;
   readonly runner_reported_policy_revision: number | null;
-  readonly policy_status: "pending" | "applied" | "invalid";
+  readonly runner_reported_policy_checksum: string | null;
+  readonly policy_status: "pending" | "offline_pending" | "applied" | "invalid";
   readonly runner_permissions: PermissionSet;
   /** Last actual Runner package/version observed at enrollment or handshake. */
   readonly current_runner_version: string | null;
@@ -141,9 +144,12 @@ type RunnerRow = {
   last_heartbeat_ms: number | null;
   last_sync_sequence: number | null;
   desired_policy_revision: number;
+  desired_policy_checksum: string | null;
   applied_policy_revision: number | null;
+  active_policy_checksum: string | null;
   runner_reported_policy_revision: number | null;
-  policy_status: "pending" | "applied" | "invalid";
+  runner_reported_policy_checksum: string | null;
+  policy_status: "pending" | "offline_pending" | "applied" | "invalid";
   runner_permissions_json: string;
   current_runner_version: string | null;
   protocol_min_version: number | null;
@@ -156,6 +162,12 @@ type RunnerRow = {
   updated_at_ms: number;
 };
 type EnrollmentRow = { enrollment_id: string; runner_id: string; verifier: string; created_at_ms: number; expires_at_ms: number; used_at_ms: number | null };
+type PolicyVersionRow = {
+  runner_id: string; revision: number; checksum: string; policy_json: string; status: string;
+  created_at_ms: number; acknowledged_at_ms: number | null; validation_summary_json: string | null;
+  source_revision: number | null; mutation_id: string | null;
+};
+
 type WorkspaceRow = { workspace_json: string };
 type ManagedWorkspaceRow = {
   runner_id: string; workspace_id: string; display_name: string; root_path: string; enabled: number;
@@ -199,12 +211,21 @@ export class RegistryDO {
           runner_id TEXT PRIMARY KEY, display_name TEXT NOT NULL, token_verifier TEXT NOT NULL, state TEXT NOT NULL,
           connection_epoch INTEGER NOT NULL DEFAULT 0, credential_version INTEGER NOT NULL DEFAULT 1, management_mode TEXT NOT NULL DEFAULT 'legacy_local',
           session_id TEXT, metadata_json TEXT, public_info_json TEXT, last_heartbeat_ms INTEGER, last_sync_sequence INTEGER,
-          desired_policy_revision INTEGER NOT NULL DEFAULT 0, applied_policy_revision INTEGER, runner_reported_policy_revision INTEGER, policy_status TEXT NOT NULL DEFAULT 'pending',
+          desired_policy_revision INTEGER NOT NULL DEFAULT 0, desired_policy_checksum TEXT, applied_policy_revision INTEGER, active_policy_checksum TEXT,
+          runner_reported_policy_revision INTEGER, runner_reported_policy_checksum TEXT, policy_status TEXT NOT NULL DEFAULT 'pending',
+          policy_error_code TEXT, policy_updated_at_ms INTEGER, policy_acked_at_ms INTEGER,
           runner_permissions_json TEXT NOT NULL DEFAULT '{"read":false,"edit":false,"shell":false,"job_control":false}',
           current_runner_version TEXT, protocol_min_version INTEGER, protocol_max_version INTEGER,
           protocol_compatibility TEXT NOT NULL DEFAULT 'unknown', update_channel TEXT NOT NULL DEFAULT 'stable',
           desired_runner_version TEXT, latest_runner_version TEXT, update_status TEXT NOT NULL DEFAULT 'unknown', updated_at_ms INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS runner_policy_versions (
+          runner_id TEXT NOT NULL, revision INTEGER NOT NULL, checksum TEXT NOT NULL, policy_json TEXT NOT NULL,
+          status TEXT NOT NULL, created_at_ms INTEGER NOT NULL, acknowledged_at_ms INTEGER,
+          validation_summary_json TEXT, source_revision INTEGER, mutation_id TEXT,
+          PRIMARY KEY (runner_id, revision)
+        );
+        CREATE INDEX IF NOT EXISTS idx_runner_policy_versions_retention ON runner_policy_versions(runner_id, revision DESC);
         CREATE TABLE IF NOT EXISTS workspaces (
           runner_id TEXT NOT NULL, workspace_id TEXT NOT NULL, workspace_json TEXT NOT NULL,
           updated_at_ms INTEGER NOT NULL, PRIMARY KEY (runner_id, workspace_id)
@@ -500,19 +521,23 @@ export class RegistryDO {
     return this.selectMcpClientRunner(clientId, runners[0]?.runner_id ?? "", false, nowMs);
   }
 
-  public desiredPolicy(runnerId: string): { schema_version: 1; runner_id: string; revision: number; checksum: string; runner_permissions: PermissionSet; workspaces: Array<{ workspace_id: string; root_path: string; enabled: boolean; permissions: PermissionSet }> } | undefined {
+  private desiredPolicy(runnerId: string): { schema_version: 1; runner_id: string; revision: number; checksum: string; runner_permissions: PermissionSet; workspaces: Array<{ workspace_id: string; root_path: string; enabled: boolean; permissions: PermissionSet }> } | undefined {
     const runner = this.runnerRow(runnerId);
     if (runner === undefined) return undefined;
     const managed = this.listManagedWorkspaces(runnerId);
     if (runner.desired_policy_revision === 0 && managed.length === 0) return undefined;
+    const revision = Math.max(1, runner.desired_policy_revision);
     const unsigned = {
       schema_version: 1 as const,
       runner_id: runnerId,
-      revision: Math.max(1, runner.desired_policy_revision),
+      revision,
       runner_permissions: parsePermissionSet(runner.runner_permissions_json) ?? LOCKED_PERMISSIONS,
       workspaces: managed.map((workspace) => ({ workspace_id: workspace.workspace_id, root_path: workspace.root_path, enabled: workspace.enabled, permissions: workspace.permissions })),
     };
     return { ...unsigned, checksum: runnerPolicyChecksum(unsigned) };
+  }
+  public listPolicyVersions(runnerId: string): Array<{ runner_id: string; revision: number; checksum: string; policy_json: string; status: string; created_at_ms: number; acknowledged_at_ms: number | null }> {
+    return this.ctx.storage.sql.exec<PolicyVersionRow>("SELECT * FROM runner_policy_versions WHERE runner_id = ? ORDER BY revision DESC LIMIT 50", runnerId).toArray();
   }
   public listManagedWorkspaces(runnerId: string): WorkspaceRecord[] {
     return this.ctx.storage.sql.exec<ManagedWorkspaceRow>("SELECT * FROM managed_workspaces WHERE runner_id = ? ORDER BY created_at_ms, workspace_id", runnerId).toArray().flatMap((row) => decodeWorkspace(row));
@@ -1084,9 +1109,9 @@ function decodeRunner(row: RunnerRow): RunnerRecord {
     runner_id: row.runner_id, display_name: row.display_name || row.runner_id, state: row.state, management_mode: row.management_mode === "central" ? "central" : "legacy_local", connection_epoch: row.connection_epoch,
     credential_version: row.credential_version, session_id: row.session_id, metadata: row.metadata_json === null ? null : JSON.parse(row.metadata_json) as RunnerMetadata,
     public_info: row.public_info_json === null ? null : JSON.parse(row.public_info_json) as RunnerPublicInfo, last_heartbeat_ms: row.last_heartbeat_ms,
-    last_sync_sequence: row.last_sync_sequence, desired_policy_revision: row.desired_policy_revision ?? 0, applied_policy_revision: row.applied_policy_revision,
-    runner_reported_policy_revision: row.runner_reported_policy_revision,
-    policy_status: row.policy_status === "applied" || row.policy_status === "invalid" ? row.policy_status : "pending",
+    last_sync_sequence: row.last_sync_sequence, desired_policy_revision: row.desired_policy_revision ?? 0, desired_policy_checksum: row.desired_policy_checksum, applied_policy_revision: row.applied_policy_revision, active_policy_checksum: row.active_policy_checksum,
+    runner_reported_policy_revision: row.runner_reported_policy_revision, runner_reported_policy_checksum: row.runner_reported_policy_checksum,
+    policy_status: row.policy_status === "applied" || row.policy_status === "invalid" || row.policy_status === "offline_pending" ? row.policy_status : "pending",
     runner_permissions: parsePermissionSet(row.runner_permissions_json) ?? LOCKED_PERMISSIONS,
     current_runner_version: row.current_runner_version, protocol_min_version: row.protocol_min_version, protocol_max_version: row.protocol_max_version,
     protocol_compatibility: row.protocol_compatibility === "compatible" || row.protocol_compatibility === "incompatible" ? row.protocol_compatibility : "unknown",

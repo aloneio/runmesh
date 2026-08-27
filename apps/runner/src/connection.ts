@@ -15,7 +15,8 @@ import {
 } from "@aloneio/runmesh-protocol";
 import WebSocket from "ws";
 import { reconnectDelayMs } from "./backoff.js";
-import { validateCentralWorkspacePolicy, type CentralWorkspacePolicy } from "./policy-config.js";
+import { PolicyStore } from "./policy-store.js";
+import { effectiveCentralPermissions, validateCentralWorkspacePolicy, type CentralWorkspacePolicy } from "./policy-config.js";
 import type { RunnerConfig, WorkspaceConfig } from "./config.js";
 import { RunnerRuntime, rpcError } from "./runtime.js";
 import { RUNNER_VERSION } from "./version.js";
@@ -41,6 +42,7 @@ export interface RunnerConnectionOptions {
   readonly sleep?: (delayMs: number) => Promise<void>;
   readonly onStateChange?: (state: "connecting" | "online" | "offline") => void;
   readonly runtime?: RunnerRuntime;
+  readonly policyStore?: PolicyStore;
 }
 
 export class RunnerConnection {
@@ -53,15 +55,16 @@ export class RunnerConnection {
   private readonly sleep: (delayMs: number) => Promise<void>;
   private readonly onStateChange: (state: "connecting" | "online" | "offline") => void;
   private readonly runtime: RunnerRuntime;
+  private readonly policyStore: PolicyStore;
   private socket: WebSocket | undefined;
   private stopped = false;
   private reconnectAttempt = 0;
   private syncSequence = 0;
   private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   private syncTimer: ReturnType<typeof setInterval> | undefined;
-  private appliedPolicyRevision = 0;
+  private appliedPolicyRevision: number | null = null;
   private desiredPolicyRevision = 0;
-  private appliedPolicyChecksum = "";
+  private appliedPolicyChecksum: string | null = null;
   private desiredPolicyChecksum = "";
   private policyApplyGeneration = 0;
   private readonly pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
@@ -75,6 +78,7 @@ export class RunnerConnection {
     this.sleep = options.sleep ?? ((delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)));
     this.onStateChange = options.onStateChange ?? (() => undefined);
     this.runtime = options.runtime ?? new RunnerRuntime({ config: this.config, ...(this.config.stateDir === undefined ? {} : { stateDir: this.config.stateDir }), onJobEvent: (event) => this.forwardJobEvent(event) });
+    this.policyStore = options.policyStore ?? new PolicyStore(this.config.stateDir);
     this.metadata = {
       runner_id: this.config.runnerId,
       runner_version: options.version ?? RUNNER_VERSION,
@@ -86,6 +90,15 @@ export class RunnerConnection {
 
   public async start(): Promise<void> {
     await this.runtime.initialize();
+    const persisted = await this.policyStore.load(this.config.runnerId);
+    if (persisted !== undefined) {
+      const restored = await candidateWorkspaces(persisted);
+      this.runtime.applyPolicy(restored);
+      this.appliedPolicyRevision = persisted.revision;
+      this.appliedPolicyChecksum = persisted.checksum;
+      this.desiredPolicyRevision = persisted.revision;
+      this.desiredPolicyChecksum = persisted.checksum;
+    }
     this.stopped = false;
     while (!this.stopped) {
       this.onStateChange("connecting");
@@ -251,42 +264,37 @@ export class RunnerConnection {
     if (policy.runner_id !== this.config.runnerId || policy.checksum !== runnerPolicyChecksum({ schema_version: policy.schema_version, runner_id: policy.runner_id, revision: policy.revision, runner_permissions: policy.runner_permissions, workspaces: policy.workspaces })) {
       return;
     }
-    const generation = this.policyApplyGeneration + 1;
     if (policy.revision < this.desiredPolicyRevision) return;
+    const generation = this.policyApplyGeneration + 1;
     this.policyApplyGeneration = generation;
     this.desiredPolicyRevision = policy.revision;
     this.desiredPolicyChecksum = policy.checksum;
     const validation = await validateCentralWorkspacePolicy(policy.workspaces as CentralWorkspacePolicy[]);
-    if (generation !== this.policyApplyGeneration || socket !== this.socket || socket.readyState !== WebSocket.OPEN) return;
-    if (policy.revision !== this.desiredPolicyRevision) return;
-    const runnerPermissions = policy.runner_permissions;
-    const effective: WorkspaceConfig[] = validation.workspaces.map((workspace) => ({
-      ...workspace,
-      permissions: {
-        read: runnerPermissions.read && (workspace.permissions?.read ?? false),
-        edit: runnerPermissions.edit && (workspace.permissions?.edit ?? false),
-        shell: runnerPermissions.shell && (workspace.permissions?.shell ?? false),
-        job_control: runnerPermissions.job_control && (workspace.permissions?.job_control ?? false),
-      },
-      readonly: !(runnerPermissions.edit && (workspace.permissions?.edit ?? false)),
-      shell: runnerPermissions.shell && (workspace.permissions?.shell ?? false),
-    }));
+    if (generation !== this.policyApplyGeneration || socket !== this.socket || socket.readyState !== WebSocket.OPEN || policy.revision !== this.desiredPolicyRevision) return;
     const invalid = validation.status.some((item) => item.status !== "valid");
-    if (!invalid) {
+    if (invalid) {
+      this.sendPolicyAck(socket, "invalid", validation.status);
+      await this.sendSync(socket);
+      return;
+    }
+    try {
+      const effective = effectivePolicyWorkspaces(policy, validation.workspaces);
+      await this.policyStore.activate(policy);
+      if (generation !== this.policyApplyGeneration || socket !== this.socket || socket.readyState !== WebSocket.OPEN || policy.revision !== this.desiredPolicyRevision) return;
+      // Disk activation is complete before changing the live authorization policy.
       this.runtime.applyPolicy(effective);
       this.appliedPolicyRevision = policy.revision;
       this.appliedPolicyChecksum = policy.checksum;
       this.sendPolicyAck(socket, "applied", validation.status);
-      await this.sendSync(socket);
-    } else {
-      this.sendPolicyAck(socket, "invalid", validation.status);
-      await this.sendSync(socket);
+    } catch {
+      this.sendPolicyAck(socket, "invalid", validation.status.map((item) => item.status === "valid" ? { ...item, status: "invalid_path" as const } : item));
     }
+    await this.sendSync(socket);
   }
 
   private sendPolicyAck(socket: WebSocket, status: RunnerPolicyAck["status"], workspaceStatus: RunnerPolicyAck["workspace_status"]): void {
     if (socket.readyState !== WebSocket.OPEN) return;
-    socket.send(encodeWireFrame({ type: "runner.policy_ack", protocol_version: PROTOCOL_CURRENT_VERSION, runner_id: this.config.runnerId, desired_revision: this.desiredPolicyRevision, desired_checksum: this.desiredPolicyChecksum, applied_revision: this.appliedPolicyRevision, applied_checksum: this.appliedPolicyChecksum, status, workspace_status: workspaceStatus }));
+    socket.send(encodeWireFrame({ type: "runner.policy_ack", protocol_version: PROTOCOL_CURRENT_VERSION, runner_id: this.config.runnerId, desired_revision: this.desiredPolicyRevision, desired_checksum: this.desiredPolicyChecksum, applied_revision: this.appliedPolicyRevision, applied_checksum: this.appliedPolicyChecksum, runner_reported_policy_revision: this.appliedPolicyRevision, runner_reported_policy_checksum: this.appliedPolicyChecksum, status, workspace_status: workspaceStatus }));
   }
 
   private sendHeartbeat(socket: WebSocket): void {
@@ -319,7 +327,7 @@ export class RunnerConnection {
   private async respondToRpc(socket: WebSocket, request: RpcRequest): Promise<void> {
     try {
       const expectedRevision = this.appliedPolicyRevision;
-      if (request.method !== "echo" && request.method !== "runner.info" && (request.policy_revision === undefined || request.policy_revision !== expectedRevision)) throw new Error("stale_policy");
+      if (request.method !== "echo" && request.method !== "runner.info" && (expectedRevision === null || request.policy_revision === undefined || request.policy_revision !== expectedRevision)) throw new Error("stale_policy");
       const result = request.method === "echo" ? request.params : request.method === "runner.info" ? this.metadata : await this.runtime.dispatch(request.method, request.params);
       if (socket.readyState === WebSocket.OPEN) socket.send(encodeWireFrame({ type: "rpc.response", protocol_version: request.protocol_version, request_id: request.request_id, result: result as RpcRequest["params"] }));
     } catch (error) {
@@ -355,6 +363,20 @@ export class RunnerConnection {
   }
 }
 
+function effectivePolicyWorkspaces(policy: NonNullable<RunnerWelcome["desired_policy"]>, workspaces: readonly WorkspaceConfig[]): WorkspaceConfig[] {
+  return workspaces.map((workspace) => {
+    const source = policy.workspaces.find((item) => item.workspace_id === workspace.workspaceId);
+    if (source === undefined) throw new Error("policy validation lost a workspace");
+    const permissions = effectiveCentralPermissions(policy.runner_permissions, source.permissions);
+    return { ...workspace, permissions, readonly: !permissions.edit, shell: permissions.shell };
+  });
+}
+
+async function candidateWorkspaces(policy: NonNullable<RunnerWelcome["desired_policy"]>): Promise<WorkspaceConfig[]> {
+  const validation = await validateCentralWorkspacePolicy(policy.workspaces as CentralWorkspacePolicy[]);
+  if (validation.status.some((item) => item.status !== "valid")) throw new Error("persisted active policy is not locally valid");
+  return effectivePolicyWorkspaces(policy, validation.workspaces);
+}
 export function discoverCapabilities(maxConcurrentJobs = 1): CapabilityMetadata {
   return {
     filesystem: true,
