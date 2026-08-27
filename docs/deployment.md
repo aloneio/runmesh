@@ -45,7 +45,7 @@ npx wrangler deploy --config wrangler.jsonc
 1. Open the deployed root URL and create the first administrator password immediately. Setup is atomic first-success-wins; there is no bootstrap-password secret.
 2. Log in and open **Admin → Runners**. Add a safe Runner ID (or let the dashboard generate one) and a human-facing `display_name`. The display name is displayed to operators and by `runner_list`; the ID is the stable protocol identifier.
 3. Copy the enrollment code. It expires in 30 minutes and is single-use. **Regenerate enrollment** replaces any unused code for that Runner with a new one.
-4. On the host, redeem it from an elevated administrator/root shell with the supported CLI. Enrollment creates a machine Runner with no workspace access; add approved roots later with `coding-runner workspace add`:
+4. On the host, first download and verify the portable Runner artifact and its manifest/signature. Then redeem the one-time code with the supported CLI and install the service:
 
    ```sh
    coding-runner enroll \
@@ -54,7 +54,7 @@ npx wrangler deploy --config wrangler.jsonc
    coding-runner install
    ```
 
-   Enrollment obtains the Runner ID and long-lived Runner credential from the response; the command accepts no `--runner-id`. It saves a centralized machine profile with zero workspaces and does not use the current directory.
+   Enrollment obtains the Runner ID and long-lived Runner credential from the response; the command accepts no `--runner-id`. It saves a centrally managed machine profile with zero local workspaces and does not use the current directory. Configure approved Workspace roots and permissions in the Admin Panel; centralized Runner profiles reject local `workspace add/remove`.
 5. In **Admin → MCP Clients**, create a client label and least-privilege scopes. Copy the generated one-time MCP URL and configure it directly in the MCP client:
 
    ```text
@@ -66,7 +66,7 @@ The dashboard displays safe Runner details and allows Runner rename, enrollment/
 
 ### Public bootstrap and package configuration
 
-Hosted bootstrap is disabled for this development preview. `/runner/releases/latest` and `/runner/releases/stable` report `distributable: false`, with empty package and artifact fields. The generated scripts fail closed without consuming enrollment codes, accessing the network, running npm, or installing arbitrary packages. The recommended route is manual portable-artifact installation followed by the CLI enrollment/install steps above; automatic signed bootstrap, update, and rollback are not included.
+Hosted bootstrap is disabled for this development preview. `/runner/releases/latest` and `/runner/releases/stable` report `distributable: false`, `package_name: ""`, `package_version: ""`, `package_spec: ""`, `artifact: null`, `artifacts: null`, and `published_at: null`. The generated scripts fail closed without consuming enrollment codes, accessing the network, running npm, or installing arbitrary packages. The recommended route is manual portable-artifact installation followed by the CLI enrollment/install steps above; automatic signed bootstrap, update, and rollback are roadmap items and are not implemented.
 
 ## Local Runner profiles and service manifests
 
@@ -78,7 +78,7 @@ macOS:   /Library/Application Support/Runmesh/profile.json
 Windows: C:\\ProgramData\\Runmesh\\profile.json
 ```
 
-The POSIX profile directory/file are created with modes `0700`/`0600`; the Windows path uses normal Windows storage and `doctor` does not inspect ACLs. New enrollment profiles record `execution_mode: dedicated_user`; legacy profiles without this field preserve their privileged-host service layout when explicitly confirmed rather than silently changing an installed service. Enrollment starts with zero local workspaces; add roots explicitly with `workspace add`. Re-enrollment replaces credentials/connection data without inferring or adding a workspace. `status` redacts the token. `doctor --json` emits stable required/optional checks for profile directory/file modes, manifest/installed/active service state, Host shell runtime, execution mode, local policy revision when available, and tools; optional Python/Docker failures remain warnings, while required failures are nonzero. `workspace list|add|remove`, `env`, and `doctor` operate against the profile. `start` uses profile defaults unless explicit legacy Runner transport options are provided.
+The POSIX profile directory/file are created with modes `0700`/`0600`; the Windows path uses normal Windows storage and `doctor` does not inspect ACLs. New enrollment profiles record `execution_mode: dedicated_user`; legacy profiles without this field preserve their privileged-host service layout when explicitly confirmed rather than silently changing an installed service. Centrally managed enrollment starts with zero local workspaces; central policy configures roots through the Admin Panel. Re-enrollment replaces credentials/connection data without inferring or adding a workspace. `status` redacts the token. `doctor --json` emits stable required/optional checks for profile directory/file modes, manifest/installed/active service state, Host shell runtime, execution mode, local policy revision when available, and tools; optional Python/Docker failures remain warnings, while required failures are nonzero. `workspace list|add|remove`, `env`, and `doctor` operate against the profile. `start` uses profile defaults unless explicit legacy Runner transport options are provided.
 
 `coding-runner install` writes a hash-marked system service manifest and automatically activates it through an explicit host adapter. New dedicated-user services render Linux `User=runmesh` and `Group=runmesh`, macOS LaunchDaemon `UserName=runmesh`, and Windows `NT AUTHORITY\LOCAL SERVICE` with least privilege. Operators must provision the `runmesh` account/group and grant it profile/state/workspace access. `--execution-mode privileged_host --confirm-privileged-host` is the explicit root/SYSTEM opt-in; legacy profiles without execution mode retain their old privileged layout for compatibility. Linux uses `/opt/runmesh`, `/etc/runmesh`, `/var/lib/runmesh`, `/var/log/runmesh`, and `runmesh-runner.service`. It requires an elevated administrator/root shell and refuses an unmanaged existing manifest. `stop`, `restart`, and `uninstall` invoke their selected adapter; `uninstall` only removes a manifest whose marker and content hash match. `--purge --yes` additionally removes the local profile but leaves configured workspace roots and persistent job state untouched. Use `--user` only for explicit legacy per-user compatibility.
 

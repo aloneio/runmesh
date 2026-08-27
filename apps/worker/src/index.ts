@@ -30,7 +30,6 @@ const ADMIN_CSRF_COOKIE = "__Host-runmesh_admin_csrf";
 const SETUP_CSRF_COOKIE = "__Host-runmesh_setup_csrf";
 const LOGIN_CSRF_COOKIE = "__Host-runmesh_login_csrf";
 const MCP_SECRET_RE = /^[A-Za-z0-9_-]{43}$/;
-const CURRENT_RUNNER_PACKAGE_NAME = "@aloneio/runmesh-runner";
 const CURRENT_RUNNER_PACKAGE_VERSION = PRODUCT_VERSION;
 const EXACT_STABLE_VERSION_RE = /^\d+\.\d+\.\d+$/;
 const NPM_PACKAGE_SPEC_RE = /^((?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*)@(\d+\.\d+\.\d+)$/;
@@ -119,8 +118,7 @@ export function runnerReleaseDescriptor(env: RunnerReleaseEnvironment): RunnerRe
     }
   }
   return {
-    channel: "stable", package_name: configuredName ?? CURRENT_RUNNER_PACKAGE_NAME,
-    package_version: configuredVersion ?? CURRENT_RUNNER_PACKAGE_VERSION, package_spec: "", current_version: CURRENT_RUNNER_PACKAGE_VERSION, latest_version: CURRENT_RUNNER_PACKAGE_VERSION, artifact: null, artifacts: null,
+    channel: "stable", package_name: "", package_version: "", package_spec: "", current_version: CURRENT_RUNNER_PACKAGE_VERSION, latest_version: CURRENT_RUNNER_PACKAGE_VERSION, artifact: null, artifacts: null,
     distributable: false, protocol: { min_version: PROTOCOL_MIN_VERSION, max_version: PROTOCOL_CURRENT_VERSION },
   };
 }
@@ -473,20 +471,34 @@ async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, baseUrl
   if (action === "revoke") {
     const confirmation = form.get("confirmation");
     if (confirmation !== runnerId) return adminError(400, "Type the Runner ID to confirm revocation.");
-    const fenced = await fenceRunnerTransport(env, runnerId, "credential-revoked");
+    const mutationId = `credential-revoked-${crypto.randomUUID()}`;
+    const fenced = await fenceRunnerTransport(env, runnerId, mutationId);
     if (!fenced.ok) return adminError(503, "Runner revocation could not fence the Runner.");
-    const registryResponse = await runnerRegistryRequest(env, runnerId, "/revoke", "POST", JSON.stringify({ confirmation }));
-    if (!registryResponse.ok) return adminError(registryResponse.status === 404 ? 404 : 400, "Runner revoke failed.");
-    await revokeRunnerTransport(env, runnerId);
+    let registryResponse: Response;
+    try { registryResponse = await runnerRegistryRequest(env, runnerId, "/revoke", "POST", JSON.stringify({ confirmation, mutation_id: mutationId })); } catch { return adminError(503, "Runner revocation outcome is uncertain; Runner remains safely fenced."); }
+    if (!registryResponse.ok) {
+      if (![400, 404, 409].includes(registryResponse.status)) return adminError(503, "Runner revocation outcome is uncertain; Runner remains safely fenced.");
+      try {
+        const cancelled = await cancelRunnerPolicyMutation(env, runnerId, mutationId);
+        if (!cancelled.ok) return adminError(503, "Runner revocation failed; Runner remains safely fenced.");
+      } catch { return adminError(503, "Runner revocation state is uncertain; Runner remains safely fenced."); }
+      return adminError(registryResponse.status === 404 ? 404 : 400, "Runner revoke failed.");
+    }
+    try { await revokeRunnerTransport(env, runnerId); } catch { /* registry revocation is authoritative */ }
     return redirect("/admin");
   }
   if (action === "rotate") {
     const mutationId = `credential-rotated-${crypto.randomUUID()}`;
     const fenced = await fenceRunnerTransport(env, runnerId, mutationId);
     if (!fenced.ok) return adminError(503, "Runner credential rotation could not fence the Runner.");
-    const response = await runnerRegistryRequest(env, runnerId, "/rotate", "POST", "{}");
+    let response: Response;
+    try { response = await runnerRegistryRequest(env, runnerId, "/rotate", "POST", "{}"); } catch { return adminError(503, "Runner credential rotation outcome is uncertain; Runner remains safely fenced."); }
     if (!response.ok) {
-      try { await cancelRunnerPolicyMutation(env, runnerId, mutationId); } catch { /* remain fenced on uncertainty */ }
+      if (![400, 404, 409].includes(response.status)) return adminError(503, "Runner credential rotation outcome is uncertain; Runner remains safely fenced.");
+      try {
+        const cancelled = await cancelRunnerPolicyMutation(env, runnerId, mutationId);
+        if (!cancelled.ok) return adminError(503, "Runner credential rotation failed; Runner remains safely fenced.");
+      } catch { return adminError(503, "Runner credential rotation state is uncertain; Runner remains safely fenced."); }
       return adminError(response.status === 404 ? 404 : 400, "Runner credential rotation failed.");
     }
     try { await revokeRunnerTransport(env, runnerId); } catch { /* credential generation invalidates old transport */ }
@@ -599,18 +611,26 @@ async function loadDashboardData(env: WorkerEnv): Promise<AdminData> {
   return { clients, runners, jobs, snapshot: snapshotBody ?? {} };
 }
 async function policyReadiness(env: WorkerEnv, runnerId: string): Promise<{ ok: true; value: { applied_revision: number; active_checksum: string } } | { ok: false }> {
-  const response = await registryGet(env, `/runners/${encodeURIComponent(runnerId)}/policy-readiness`);
+  let response: Response;
+  try { response = await registryGet(env, `/runners/${encodeURIComponent(runnerId)}/policy-readiness`); } catch { return { ok: false }; }
   if (!response.ok) return { ok: false };
   const value = record(await json(response));
   const revision = value?.applied_revision;
   const checksum = value?.active_checksum;
-  return value?.ok === true && typeof revision === "number" && Number.isSafeInteger(revision) && revision > 0 && typeof checksum === "string" && /^[a-f0-9]{64}$/.test(checksum) && value.desired_revision === revision && value.runner_reported_policy_revision === revision && value.desired_checksum === checksum && value.runner_reported_policy_checksum === checksum
+  const validRevision = (candidate: unknown): candidate is number => typeof candidate === "number" && Number.isSafeInteger(candidate) && candidate > 0;
+  const validChecksum = (candidate: unknown): candidate is string => typeof candidate === "string" && /^[a-f0-9]{64}$/.test(candidate);
+  return value?.ok === true && value.policy_status === "applied"
+    && validRevision(value.desired_revision) && validRevision(revision) && validRevision(value.runner_reported_policy_revision)
+    && validChecksum(value.desired_checksum) && validChecksum(checksum) && validChecksum(value.runner_reported_policy_checksum)
+    && value.desired_revision === revision && value.runner_reported_policy_revision === revision
+    && value.desired_checksum === checksum && value.runner_reported_policy_checksum === checksum
     ? { ok: true, value: { applied_revision: revision, active_checksum: checksum } } : { ok: false };
 }
 async function runnerEnvironment(env: WorkerEnv, runnerId: string): Promise<Record<string, unknown> | undefined> {
   const readiness = await policyReadiness(env, runnerId);
   if (!readiness.ok) return undefined;
-  const response = await runnerRpc(env, runnerId, "env.info", {}, readiness.value.applied_revision, readiness.value.active_checksum);
+  let response: Response;
+  try { response = await runnerRpc(env, runnerId, "env.info", {}, readiness.value.applied_revision, readiness.value.active_checksum); } catch { return undefined; }
   const body = response.ok ? record(await json(response)) : undefined;
   return record(body?.result);
 }
@@ -737,6 +757,10 @@ async function mutateRunnerPolicy(env: WorkerEnv, runnerId: string, mutation: { 
   let changed: Response;
   try { changed = await registryRequest(env, mutation.path, mutation.method, JSON.stringify({ mutation_id: mutationId, ...mutation.payload })); } catch { return new Response("registry unavailable after policy fence", { status: 503 }); }
   if (!changed.ok) {
+    // A Registry 5xx response is not evidence that no write committed. Do not
+    // attempt to treat it as a safe client rejection; leave the transport
+    // fenced and hide the uncertain upstream response behind 503.
+    if (![400, 404, 409].includes(changed.status)) return new Response("registry mutation outcome is uncertain; Runner remains safely fenced", { status: 503 });
     try {
       const cancelled = await cancelRunnerPolicyMutation(env, runnerId, mutationId);
       if (!cancelled.ok) return new Response("policy mutation failed; Runner remains safely fenced", { status: 503 });
@@ -772,11 +796,20 @@ async function handleRunnerAdmin(request: Request, env: WorkerEnv, url: URL): Pr
   if (action === "revoke") {
     const input = await readAdminBody(request);
     if (input === undefined || input.confirmation !== runnerId) return Response.json({ error: "confirmation must equal runner_id" }, { status: 400 });
-    const fenced = await fenceRunnerTransport(env, runnerId, "credential-revoked");
+    const mutationId = `credential-revoked-${crypto.randomUUID()}`;
+    const fenced = await fenceRunnerTransport(env, runnerId, mutationId);
     if (!fenced.ok) return new Response("runner unavailable", { status: 503 });
-    const response = await runnerRegistryRequest(env, runnerId, "/revoke", "POST", JSON.stringify({ confirmation: runnerId }));
-    if (!response.ok) return new Response("registry unavailable", { status: 502 });
-    try { await revokeRunnerTransport(env, runnerId); } catch { /* generation invalidation is authoritative */ }
+    let response: Response;
+    try { response = await runnerRegistryRequest(env, runnerId, "/revoke", "POST", JSON.stringify({ confirmation: runnerId, mutation_id: mutationId })); } catch { return new Response("registry mutation outcome is uncertain; Runner remains safely fenced", { status: 503 }); }
+    if (!response.ok) {
+      if (![400, 404, 409].includes(response.status)) return new Response("registry mutation outcome is uncertain; Runner remains safely fenced", { status: 503 });
+      try {
+        const cancelled = await cancelRunnerPolicyMutation(env, runnerId, mutationId);
+        if (!cancelled.ok) return new Response("Runner remains safely fenced", { status: 503 });
+      } catch { return new Response("Runner remains safely fenced", { status: 503 }); }
+      return new Response("runner revoke failed", { status: response.status });
+    }
+    try { await revokeRunnerTransport(env, runnerId); } catch { /* registry revocation is authoritative */ }
     return new Response(null, { status: 204 });
   }
   return notFound();
@@ -786,17 +819,26 @@ async function registerRunner(env: WorkerEnv, runnerId: string, input: Record<st
   if (supplied !== undefined && (typeof supplied !== "string" || supplied.length < 32 || supplied.length > 512 || /\s/.test(supplied))) return Response.json({ error: "token must be 32-512 non-whitespace characters" }, { status: 400 });
   const token = typeof supplied === "string" ? supplied : generateRunnerToken(); const pepper = env.RUNNER_TOKEN_PEPPER;
   if (pepper === undefined) return new Response("admin control plane is not configured", { status: 503 });
-  const existingResponse = await runnerRegistryRequest(env, runnerId, "", "GET", "");
+  let existingResponse: Response;
+  try { existingResponse = await runnerRegistryRequest(env, runnerId, "", "GET", ""); } catch { return new Response("registry unavailable", { status: 503 }); }
+  if (!existingResponse.ok && existingResponse.status !== 404) return new Response("registry unavailable", { status: 503 });
   const existing = existingResponse.ok;
   const mutationId = `credential-rotated-${crypto.randomUUID()}`;
   if (existing) {
     const fenced = await fenceRunnerTransport(env, runnerId, mutationId);
     if (!fenced.ok) return new Response("runner unavailable", { status: 503 });
   }
-  const response = await runnerRegistryRequest(env, runnerId, "", "PUT", JSON.stringify({ token_verifier: await runnerTokenVerifier(token, pepper) }));
+  let response: Response;
+  try { response = await runnerRegistryRequest(env, runnerId, "", "PUT", JSON.stringify({ token_verifier: await runnerTokenVerifier(token, pepper) })); } catch { return new Response("registry mutation outcome is uncertain; Runner remains safely fenced", { status: 503 }); }
   if (!response.ok) {
-    if (existing) { try { await cancelRunnerPolicyMutation(env, runnerId, mutationId); } catch { /* remain fenced on uncertainty */ } }
-    return new Response("registry unavailable", { status: 502 });
+    if (existing && ![400, 404, 409].includes(response.status)) return new Response("registry mutation outcome is uncertain; Runner remains safely fenced", { status: 503 });
+    if (existing) {
+      try {
+        const cancelled = await cancelRunnerPolicyMutation(env, runnerId, mutationId);
+        if (!cancelled.ok) return new Response("Runner remains safely fenced", { status: 503 });
+      } catch { return new Response("Runner remains safely fenced", { status: 503 }); }
+    }
+    return new Response("runner registration failed", { status: response.status });
   }
   if (existing) { try { await revokeRunnerTransport(env, runnerId); } catch { /* new credential remains authoritative */ } }
   return Response.json({ runner_id: runnerId, token }, { headers: credentialHeaders("application/json; charset=utf-8") });
