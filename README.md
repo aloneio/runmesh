@@ -40,7 +40,7 @@
 Runmesh lets an MCP client use approved workspaces on one or more machines while keeping the execution machines private:
 
 - **Cloudflare Worker** is the public control plane and MCP HTTP endpoint.
-- **RegistryDO** stores authentication, Runner and Workspace records, policy state, client selection, audit events, and bounded Job metadata.
+- **RegistryDO** stores authentication, Runner and Workspace records, policy state, client selection, and bounded Job metadata.
 - **RunnerDO** maintains the authenticated outbound WebSocket bridge for a Runner. It coordinates messages but does not execute commands or access files.
 - **Runner** is the local service that performs approved filesystem, Git, shell, and persistent Job operations.
 
@@ -191,11 +191,9 @@ Open the deployed root URL, set the administrator password with the setup token,
 
 The dashboard-generated enrollment code is short-lived, single-use, and invalidated when regenerated or redeemed. The Runner connects outward to the Worker over authenticated WebSocket; it does not expose an HTTP server.
 
-The public bootstrap routes in this development preview are credential-free and accept only the one-time enrollment material. They proceed only when the administrator has configured a trusted, versioned distributable Runner package descriptor. They currently require Node.js 20+ and npm on the target machine. They do not automatically download a mutable Git branch, and they do not put the long-lived Runner credential in the dashboard HTML.
+The hosted bootstrap routes are deliberately fail-closed in this development preview. Unless the operator explicitly enables the legacy unsigned compatibility path, `/runner/releases/latest` reports `distributable: false` and the generated installer refuses to run. The recommended route for `0.1.0-dev.2` is to download the portable artifact and its manifest/signature manually, verify it, then enroll/install with the Runner CLI. Automatic signed bootstrap, update, and rollback are not included in this preview.
 
-The hosted bootstrap endpoint is not automatically wired to the GitHub Release asset; an administrator must configure the Worker-side package descriptor and validate that deployment before relying on bootstrap installation.
-
-Fresh enrollment starts with zero Workspaces. Workspace roots are added explicitly by an administrator through the dashboard and delivered privately to the selected Runner as policy data. Re-enrollment changes connection credentials without inventing a Workspace from the current directory.
+Fresh enrollment starts with zero Workspaces. Workspace roots are added explicitly by an administrator through the dashboard and delivered privately to the selected Runner as policy data. Re-enrollment changes connection credentials without inventing a Workspace from the current directory. Browser Emergency Lock requires typing the Runner ID and locks future policy permissions without automatically stopping existing Jobs.
 
 ### Credentials and security
 
@@ -206,7 +204,10 @@ Fresh enrollment starts with zero Workspaces. Workspace roots are added explicit
 - Absolute Workspace roots are private control-plane policy data. They are not returned to MCP Clients, public endpoints, ordinary logs, or errors.
 - A Runner running as root, Administrator, or another powerful service identity still has that host authority. Runmesh policy is not an operating-system sandbox.
 
-## Development preview limits
+## Current development preview scope
+
+This preview includes policy-gated workspace access, sticky Runner selection, persistent local Jobs, offline Registry snapshots, and authenticated Runner transport. The following are **not included in v0.1.0-dev.2** and remain roadmap candidates: an Audit Log, Policy history/rollback UI, Client base-scope editing, automatic Runner update/rollback, SBOM publication, and platform-specific real-host service integration.
+
 
 This repository publishes a development preview, not a promise that every production or platform integration is complete. Before operational use, administrators should validate the target deployment and host:
 
@@ -216,7 +217,7 @@ This repository publishes a development preview, not a promise that every produc
 - native service lifecycle and least-privilege behavior on macOS and Windows;
 - artifact download, signature/checksum verification, update, and rollback procedures.
 
-The current release workflow is manual-only and does not publish npm packages. It builds and verifies a portable Node Runner artifact; it does not provide an automatic Runner update service. Existing installations may retain legacy compatibility paths during migration, so follow the administrator's deployment instructions rather than assuming a path or service manager command.
+The public bootstrap scripts currently retain legacy compatibility behavior only as an explicitly configured development option and are not the recommended installation path. Use a manually verified portable artifact for the development preview. Runner update/download/rollback remain outside this preview.
 
 Runmesh does not provide an operating-system sandbox, tenant isolation, automatic failover, inbound SSH, a public Runner HTTP server, a hosted IDE, billing, Teams/organizations, MCP Tasks, PTY/Web Terminal, browser automation, an AI agent, RAG, or a model gateway.
 

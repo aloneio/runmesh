@@ -340,6 +340,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
 
   async function mcpTool(name: string, args: Record<string, unknown>, client = clientA): Promise<ToolResult> {
     const message = await mcpMessage(name, args, client);
+    if (message.result?.isError === true) console.error(`E2E MCP ${name}:`, JSON.stringify(message.result.structuredContent));
     if (message.error) throw new Error(message.error.message ?? "MCP JSON-RPC error");
     return message.result ?? {};
   }
