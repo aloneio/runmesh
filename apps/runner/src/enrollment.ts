@@ -58,6 +58,9 @@ export async function enrollRunner(options: EnrollmentOptions): Promise<Enrollme
     ...(options.executionMode === undefined
       ? existing?.execution_mode === undefined ? { execution_mode: "dedicated_user" as const } : { execution_mode: existing.execution_mode }
       : { execution_mode: options.executionMode }),
+    ...(existing === undefined
+      ? { management_mode: "central" as const }
+      : existing.management_mode === undefined ? {} : { management_mode: existing.management_mode }),
   };
   await store.save(profile);
   return { profile };
