@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "name": "@remote-coding-runtime/worker",
+  "name": "@aloneio/runmesh-worker",
   "version": "0.1.0",
   "private": true,
   "type": "module",
