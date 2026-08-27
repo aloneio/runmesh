@@ -18,20 +18,16 @@ vulnerabilities, source code, or security-sensitive deployment details in a
 public issue. An issue, comment, silence, or community response does not grant
 commercial permission.
 
-## Relationship to community use and contributions
+## Community contributions
 
-The current public license is the [PolyForm Noncommercial License 1.0.0](LICENSE).
-If this page and the license differ, the license controls for public-license
-terms. The project welcomes upstream contributions under
-[CONTRIBUTING.md](CONTRIBUTING.md) and
-[CONTRIBUTION_PERMISSION.md](CONTRIBUTION_PERMISSION.md), which use default
-acceptance on submission rather than a separate contributor agreement.
-Contribution activity does not itself grant a company or individual commercial
-production-use rights.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete contribution terms and
+process. Contribution activity does not itself grant commercial-use rights.
+Commercial permissions are described in
+[COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md).
 
 A software license does not itself grant trademark permission; see
 [TRADEMARKS.md](TRADEMARKS.md). Third-party dependencies and their notices
 remain under their own terms; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-This document is not legal advice and does not state that it has been reviewed
-by counsel. Obtain qualified advice for a planned commercial use or agreement.
+This document is project guidance, not legal advice. Obtain qualified advice
+for questions about your rights, obligations, or planned commercial use.
