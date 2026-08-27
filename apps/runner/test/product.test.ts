@@ -14,7 +14,7 @@ async function fixture(): Promise<{ root: string; store: ProfileStore; cleanup: 
   await mkdir(join(root, "workspace"));
   return { root, store: new ProfileStore({ baseDir: join(root, "profile") }), cleanup: () => rm(root, { recursive: true, force: true }) };
 }
-const profile = (path: string) => ({ version: 1 as const, server_url: "wss://runner.example.test/runner/connect", runner_id: "runner-1", token: "0123456789abcdef", workspaces: [{ id: "workspace", path, writable: true, shell: true }] });
+const profile = (path: string) => ({ version: 1 as const, server_url: "wss://runner.example.test/runner/connect", runner_id: "runner-1", token: "0123456789abcdef", execution_mode: "dedicated_user" as const, workspaces: [{ id: "workspace", path, writable: true, shell: true }] });
 
 describe("runner product profile and enrollment", () => {
   it("writes atomic private redacted profile data and suffixes workspace ids", async () => {
@@ -103,20 +103,21 @@ describe("runner product CLI and service safety", () => {
     } finally { await test.cleanup(); }
   });
   it("renders dedicated-user manifests and uses privileged host only by explicit mode", () => {
-    const linux = renderService({ platform: "linux", mode: "system", executablePath: "/opt/remote-coding-runtime/bin/coding-runner" });
-    expect(serviceLayout({ platform: "linux", mode: "system" })).toMatchObject({ installRoot: "/opt/remote-coding-runtime", configRoot: "/etc/remote-coding-runtime", stateRoot: "/var/lib/remote-coding-runtime", manifestPath: "/etc/systemd/system/remote-coding-runner.service" });
+    const linux = renderService({ platform: "linux", mode: "system" });
+    expect(serviceLayout({ platform: "linux", mode: "system" })).toMatchObject({ installRoot: "/opt/runmesh", configRoot: "/etc/runmesh", stateRoot: "/var/lib/runmesh", logRoot: "/var/log/runmesh", manifestPath: "/etc/systemd/system/runmesh-runner.service" });
     expect(linux).toMatchObject({ executionMode: "dedicated_user" });
     expect(linux.content).toContain("User=runmesh");
     expect(linux.content).toContain("Group=runmesh");
-    expect(linux.content).toContain("ExecStart=/opt/remote-coding-runtime/bin/coding-runner start");
-    expect(linux.content).toContain("CODING_RUNNER_PROFILE=/etc/remote-coding-runtime/profile.json");
+    expect(linux.content).toContain("ExecStart=/opt/runmesh/current/coding-runner start");
+    expect(linux.content).toContain("RUNMESH_RUNNER_PROFILE=/etc/runmesh/profile.json");
     expect(linux.content).not.toContain("coding-runner start\n");
     const macos = renderService({ platform: "darwin", mode: "system" });
     expect(macos.content).toContain("<key>UserName</key><string>runmesh</string>");
-    const windows = renderService({ platform: "win32", mode: "system", executablePath: "C:\\Program Files\\RemoteCodingRunner\\coding-runner.cmd" });
+    expect(macos.content).toContain("io.alone.runmesh.runner");
+    const windows = renderService({ platform: "win32", mode: "system" });
     expect(windows.content).toContain("NT AUTHORITY\\LOCAL SERVICE");
     expect(windows.content).not.toContain("<UserId>SYSTEM</UserId>");
-    const privileged = renderService({ platform: "win32", mode: "system", executionMode: "privileged_host", executablePath: "C:\\Program Files\\RemoteCodingRunner\\coding-runner.cmd" });
+    const privileged = renderService({ platform: "win32", mode: "system", executionMode: "privileged_host" });
     expect(privileged.content).toContain("<UserId>SYSTEM</UserId>");
     expect(Buffer.from(windows.content, "utf8").toString("utf8")).toBe(windows.content);
   });
@@ -127,11 +128,12 @@ describe("runner product CLI and service safety", () => {
       const filesystem: ServiceManifestFilesystem = { read: async (path) => contents.get(path), write: async (path, content) => { contents.set(path, content); }, remove: async (path) => { contents.delete(path); } };
       const manager = createServiceManager({ platform: "linux", mode: "system", executor: { execute: async () => ({ exitCode: 0 }) } });
       await test.store.save({ ...profile(join(test.root, "workspace")), execution_mode: "dedicated_user" });
-      await expect(runCli(["install", "--execution-mode", "privileged_host"], { store: test.store, stdout: () => undefined, stderr: () => undefined, servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, isAdministrator: () => true })).rejects.toThrow("confirm-privileged-host");
-      await runCli(["install", "--execution-mode", "privileged_host", "--confirm-privileged-host"], { store: test.store, stdout: () => undefined, stderr: () => undefined, servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, isAdministrator: () => true });
+      const serviceProvisioner = { platform: "linux" as const, provision: async () => ({ identity: "runmesh", profileSecured: true }) };
+      await expect(runCli(["install", "--execution-mode", "privileged_host"], { store: test.store, stdout: () => undefined, stderr: () => undefined, servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, serviceProvisioner, isAdministrator: () => true })).rejects.toThrow("confirm-privileged-host");
+      await runCli(["install", "--execution-mode", "privileged_host", "--confirm-privileged-host"], { store: test.store, stdout: () => undefined, stderr: () => undefined, servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, serviceProvisioner, isAdministrator: () => true });
       expect([...contents.values()][0]).not.toContain("User=runmesh");
       await test.store.save(profile(join(test.root, "workspace")));
-      await expect(runCli(["install"], { store: test.store, stdout: () => undefined, stderr: () => undefined, servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, isAdministrator: () => true })).resolves.toBeUndefined();
+      await expect(runCli(["install"], { store: test.store, stdout: () => undefined, stderr: () => undefined, servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, serviceProvisioner, isAdministrator: () => true })).resolves.toBeUndefined();
     } finally { await test.cleanup(); }
   });
   it("emits stable doctor JSON checks and only fails its exit seam for required failures", async () => {
@@ -143,7 +145,7 @@ describe("runner product CLI and service safety", () => {
       const manager = {
         platform: "linux" as const, mode: "system" as const,
         install: async () => undefined, stop: async () => undefined, restart: async () => undefined, uninstall: async () => undefined,
-        status: async () => ({ installed: true, active: true }),
+        status: async () => ({ installed: true, active: true, identity: "runmesh" }),
       };
       const lines: string[] = []; const exitCodes: number[] = [];
       await runCli(["doctor", "--json"], {
@@ -172,9 +174,9 @@ describe("runner product CLI and service safety", () => {
       const deniedErrors: string[] = [];
       await expect(runCli(["install"], { store: test.store, stderr: (line) => deniedErrors.push(line), servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, isAdministrator: () => false })).rejects.toThrow("administrator/root");
       const installOutput: string[] = [];
-      await runCli(["install", "--json"], { store: test.store, stdout: (line) => installOutput.push(line), servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, isAdministrator: () => true });
-      expect(commands).toEqual(["systemctl daemon-reload", "systemctl enable --now remote-coding-runner.service", "systemctl is-active --quiet remote-coding-runner.service"]);
-      expect([...contents.values()][0]).toContain("ExecStart=/opt/remote-coding-runtime/bin/coding-runner start");
+      await runCli(["install", "--json"], { store: test.store, stdout: (line) => installOutput.push(line), servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, serviceProvisioner: { platform: "linux", provision: async () => ({ identity: "runmesh", profileSecured: true }) }, isAdministrator: () => true });
+      expect(commands).toEqual(["systemctl daemon-reload", "systemctl enable --now runmesh-runner.service", "systemctl is-active --quiet runmesh-runner.service"]);
+      expect([...contents.values()][0]).toContain("ExecStart=/opt/runmesh/current/coding-runner start");
     } finally { await test.cleanup(); }
   });
   it("renders hashed system service manifests and refuses unrelated overwrite/removal", async () => {
@@ -186,7 +188,7 @@ describe("runner product CLI and service safety", () => {
       await writeFile(manifest.path, "not ours");
       await expect(installServiceManifest(manifest)).rejects.toThrow("unmanaged");
       await expect(removeServiceManifest(manifest)).rejects.toThrow("unmanaged");
-      expect(renderService({ platform: "darwin", home: test.root }).content).toContain("com.remote-coding.runner");
+      expect(renderService({ platform: "darwin", home: test.root }).content).toContain("io.alone.runmesh.runner");
       expect(renderService({ platform: "win32", home: test.root }).content).toContain("Task");
     } finally { await test.cleanup(); }
   });

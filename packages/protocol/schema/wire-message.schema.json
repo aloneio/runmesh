@@ -570,13 +570,50 @@
           "pattern": "^[a-f0-9]{64}$"
         },
         "applied_revision": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991
+          "anyOf": [
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "applied_checksum": {
-          "type": "string",
-          "pattern": "^[a-f0-9]{64}$"
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runner_reported_policy_revision": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runner_reported_policy_checksum": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "status": {
           "type": "string",
@@ -625,6 +662,8 @@
         "desired_checksum",
         "applied_revision",
         "applied_checksum",
+        "runner_reported_policy_revision",
+        "runner_reported_policy_checksum",
         "status",
         "workspace_status"
       ],

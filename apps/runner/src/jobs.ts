@@ -1,4 +1,5 @@
 import { open, mkdir, readFile, readdir, rename, rm, stat as fileStat, writeFile } from "node:fs/promises";
+import { PROTOCOL_CURRENT_VERSION } from "@aloneio/runmesh-protocol";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -603,7 +604,7 @@ function logResult(jobId: string, stream: "stdout" | "stderr", offset: number, s
 function wireResponseBytes(result: Record<string, unknown>): number {
   // Include the largest supported request-id and JSON wire envelope so the
   // bounded local result stays under the documented 64 KiB response budget.
-  return Buffer.byteLength(JSON.stringify({ type: "rpc.response", protocol_version: 1, request_id: "x".repeat(128), result }), "utf8");
+  return Buffer.byteLength(JSON.stringify({ type: "rpc.response", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "x".repeat(128), result }), "utf8");
 }
 async function atomicJson(path: string, value: unknown): Promise<void> { await mkdir(dirname(path), { recursive: true, mode: 0o700 }); const temporary = `${path}.${randomUUID()}.tmp`; await writeFile(temporary, `${JSON.stringify(value)}\n`, { mode: 0o600 }); await rename(temporary, path); }
 async function readJson<T>(path: string): Promise<T> { return JSON.parse(await readFile(path, "utf8")) as T; }

@@ -32,7 +32,7 @@ Workspace metadata contains only `workspace_id`, persistence, revision, and labe
 ```json
 {
   "type": "rpc.request",
-  "protocol_version": 1,
+  "protocol_version": 2,
   "request_id": "bridge-uuid",
   "method": "fs.read",
   "params": {

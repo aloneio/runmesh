@@ -1,36 +1,36 @@
 # Commercial licensing
 
-Runmesh is made available in this repository under the [PolyForm
-Noncommercial License 1.0.0](LICENSE). That public license authorizes only the
-uses it defines as permitted, including its noncommercial-purpose rules. It
-does **not** grant a commercial-use license.
+Runmesh is available under the [PolyForm Noncommercial License 1.0.0](LICENSE)
+for the uses that license permits. Commercial use, or any use needing rights
+beyond the public license, requires a separate written agreement from an
+applicable rights holder before using, deploying, distributing, or offering the
+software for that purpose.
 
-If your planned use is commercial, or if you need rights beyond the public
-license, obtain a separate written commercial agreement from the applicable
-copyright holder **before** using, deploying, distributing, or offering the
-software for that purpose. A commercial agreement may have different scope,
-fees, support, warranties, territory, term, and compliance requirements from
-the public license.
+Runmesh may offer a future Runmesh Business edition or other commercial
+arrangements. This page is informational: it is not a price list, offer, or
+automatic grant of a commercial license. A written agreement may define its own
+scope, fees, support, warranties, territory, term, and compliance requirements.
 
-To request a discussion, contact the repository maintainer through the
-[Runmesh issue tracker](https://github.com/aloneio/runmesh/issues) without
-posting confidential business information, credentials, vulnerabilities, or
-source code. Ask for a private contact channel. Do not assume that an issue,
-comment, silence, or a community response grants any commercial permission.
+To request a conversation, open a minimal request through the [Runmesh issue
+tracker](https://github.com/aloneio/runmesh/issues) and ask for a private contact
+channel. Do not post confidential business information, credentials,
+vulnerabilities, source code, or security-sensitive deployment details in a
+public issue. An issue, comment, silence, or community response does not grant
+commercial permission.
 
-## Important limits
+## Relationship to community use and contributions
 
-- This page is informational, is not an offer, and does not itself grant a
-  license.
-- The exact public-license terms are in [`LICENSE`](LICENSE); if this page and
-  that license differ, `LICENSE` controls for the public license.
-- A commercial agreement can be granted only by a rights holder with authority
-  to grant it. This repository does not claim to relicense third-party
-  dependencies, external contributions, or prior Apache-licensed copies.
-- Apache 2.0 grants for copies received under prior revisions remain addressed
-  in [LICENSE_HISTORY.md](LICENSE_HISTORY.md).
-- For trademark permissions, see [TRADEMARKS.md](TRADEMARKS.md). A software
-  license does not by itself grant trademark rights.
+The current public license is the [PolyForm Noncommercial License 1.0.0](LICENSE).
+If this page and the license differ, the license controls for public-license
+terms. The project welcomes upstream contributions under
+[CONTRIBUTING.md](CONTRIBUTING.md), the
+[CONTRIBUTION_PERMISSION.md](CONTRIBUTION_PERMISSION.md), and the applicable
+contributor agreement. Contribution activity does not itself grant a company or
+individual commercial production-use rights.
 
-This document is not legal advice. Have qualified counsel assess your use and
-any proposed agreement.
+A software license does not itself grant trademark permission; see
+[TRADEMARKS.md](TRADEMARKS.md). Third-party dependencies and their notices
+remain under their own terms; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+This document is not legal advice and does not state that it has been reviewed
+by counsel. Obtain qualified advice for a planned commercial use or agreement.

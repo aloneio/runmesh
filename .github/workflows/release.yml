@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "SemVer version to release (for example 0.1.0; no v prefix)"
+        description: "Development preview version; must match root package.json"
         required: true
         type: string
 
@@ -13,14 +13,14 @@ permissions:
 
 jobs:
   release:
-    name: signed release from dev
+    name: signed development preview from dev
     runs-on: ubuntu-latest
     env:
       RELEASE_VERSION: ${{ inputs.version }}
       RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
       RELEASE_SIGNING_KEY_ID: ${{ secrets.RELEASE_SIGNING_KEY_ID }}
     steps:
-      - name: Check out the protected development branch
+      - name: Check out dev
         uses: actions/checkout@v4
         with:
           ref: dev
@@ -29,41 +29,80 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Validate release inputs and signing configuration
+      - name: Validate release identity and secrets
         run: |
           set -euo pipefail
-          node -e 'if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(process.env.RELEASE_VERSION ?? "")) process.exit(1)'
+          npm run generate:version
+          npm run check:versions
+          ROOT_VERSION="$(node -p 'require("./package.json").version')"
+          test "$RELEASE_VERSION" = "$ROOT_VERSION"
           test -n "$RELEASE_SIGNING_KEY"
           test -n "$RELEASE_SIGNING_KEY_ID"
-          node scripts/release-signature.mjs validate-key release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
           test "$(node -p 'require("./apps/runner/package.json").version')" = "$RELEASE_VERSION"
+          test "$(node -p 'require("./apps/worker/package.json").version')" = "$RELEASE_VERSION"
           test "$(node -p 'require("./packages/protocol/package.json").version')" = "$RELEASE_VERSION"
+          node scripts/release-signature.mjs validate-key release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
       - run: npm ci
+      - run: npm run check:versions
+      - run: npm run check:format
       - run: npm run typecheck
       - run: npm run test:unit
+      - run: npm run test:e2e
+      - run: npm run test:release-tools
       - run: npm run build
+      - run: npm run validate:worker -- --dry-run
+      - run: npm run check:licenses
       - run: npm run pack:smoke
-      - name: Pack immutable release inputs
+      - name: Build immutable portable Runner artifact
         run: |
           set -euo pipefail
-          mkdir -p release
-          npm pack --workspace=@aloneio/runmesh-protocol --pack-destination release
-          npm pack --workspace=@aloneio/runmesh-runner --pack-destination release
+          rm -rf release/assets
+          mkdir -p release/assets
+          npm pack --workspace=@aloneio/runmesh-runner --pack-destination release/assets
+          packed="$(find release/assets -maxdepth 1 -name '*.tgz' -print -quit)"
+          test -n "$packed"
+          mv "$packed" "release/assets/runmesh-runner-${RELEASE_VERSION}.tgz"
       - name: Generate deterministic manifest and checksums
         run: |
           set -euo pipefail
-          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
-          PUBLISHED_AT="$(date --utc --date="@$SOURCE_DATE_EPOCH" +%Y-%m-%dT%H:%M:%SZ)"
-          node scripts/generate-release-manifest.mjs release "$RELEASE_VERSION" "$PUBLISHED_AT"
-      - name: Sign and verify manifest with the selected trusted Ed25519 key
+          published_at="$(date --utc --date="@$(git log -1 --format=%ct)" +%Y-%m-%dT%H:%M:%SZ)"
+          node scripts/release-manifest.mjs release/assets "$RELEASE_VERSION" "$(git rev-parse HEAD)" "$published_at"
+          (cd release/assets && sha256sum *.tgz manifest.json > SHA256SUMS)
+      - name: Sign and verify manifest
         run: |
           set -euo pipefail
-          node scripts/release-signature.mjs sign release/manifest.json release/manifest.sig release/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
-          node scripts/release-signature.mjs verify release/manifest.json release/manifest.sig release/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
-      - name: Publish the manually requested release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ inputs.version }}
-          target_commitish: dev
-          files: release/*
-          generate_release_notes: true
+          node scripts/release-signature.mjs sign release/assets/manifest.json release/assets/manifest.sig release/assets/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
+          node scripts/release-signature.mjs verify release/assets/manifest.json release/assets/manifest.sig release/assets/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
+          cp release/trust-keyring.json LICENSE NOTICE THIRD_PARTY_NOTICES.md release/assets/
+      - name: Verify tag and release do not already exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ! git rev-parse "refs/tags/v${RELEASE_VERSION}" >/dev/null 2>&1
+          ! gh release view "v${RELEASE_VERSION}" >/dev/null 2>&1
+      - name: Create annotated tag and development prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name "aloneio"
+          git config user.email "git@aloneio.aleeas.com"
+          git tag -a "v${RELEASE_VERSION}" -m "Runmesh v${RELEASE_VERSION} development preview"
+          git push origin "v${RELEASE_VERSION}"
+          gh release create "v${RELEASE_VERSION}" release/assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$(git rev-parse HEAD)" \
+            --title "Runmesh v${RELEASE_VERSION}" \
+            --prerelease \
+            --notes-file docs/release-notes.md
+      - name: Re-download and verify published assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir release/download
+          gh release download "v${RELEASE_VERSION}" --repo "$GITHUB_REPOSITORY" --dir release/download
+          (cd release/download && sha256sum -c SHA256SUMS)
+          node scripts/release-signature.mjs verify release/download/manifest.json release/download/manifest.sig release/download/manifest.signature.json release/download/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
+          RELEASE_VERSION="$RELEASE_VERSION" tar -xOf "release/download/runmesh-runner-${RELEASE_VERSION}.tgz" package/package.json | RELEASE_VERSION="$RELEASE_VERSION" node -e 'let x="";process.stdin.on("data",d=>x+=d).on("end",()=>{if(JSON.parse(x).version!==process.env.RELEASE_VERSION)process.exit(1)})'
