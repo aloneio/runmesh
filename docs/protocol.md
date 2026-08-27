@@ -34,6 +34,7 @@ Workspace metadata contains only `workspace_id`, persistence, revision, and labe
   "type": "rpc.request",
   "protocol_version": 2,
   "request_id": "bridge-uuid",
+  "policy_revision": 7,
   "method": "fs.read",
   "params": {
     "workspace_id": "zero",
@@ -44,7 +45,7 @@ Workspace metadata contains only `workspace_id`, persistence, revision, and labe
 }
 ```
 
-A successful response is `rpc.response` with the same request ID. A rejected call is `rpc.error` with bounded `{code,message,details?}`. The Worker separates **offline Snapshot Authorization** from **Live Runner Admission**. Registry-only `runner_list`, `workspace_list`, `job_list`, and `job_get` can read the last validated Active Policy snapshot without requiring a current WebSocket. Filesystem, execution, inspection, log, input, and cancel operations require a current online Runner, matching session/epoch/credential generation, an unfenced RunnerDO, and a matching desired/applied/reported revision and checksum triad.
+A successful response is `rpc.response` with the same request ID. A rejected call is `rpc.error` with bounded `{code,message,details?}`. The Worker separates **offline Snapshot Authorization** from **Live Runner Admission**. Registry-only `runner_list`, `workspace_list`, `job_list`, and `job_get` can read the last validated Active Policy snapshot without requiring a current WebSocket. Filesystem, execution, inspection, log, input, and cancel operations require a current online Runner, matching session/epoch/credential generation, an unfenced RunnerDO, and a matching desired/applied/reported revision and checksum triad. Worker→RunnerDO forwarding additionally validates `expected_policy_revision` and `expected_policy_checksum`.
 
 The shared deadline constants are:
 
