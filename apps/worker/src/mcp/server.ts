@@ -77,7 +77,7 @@ export type McpAuth = Pick<AuthInfo, "clientId" | "scopes" | "expiresAt" | "reso
  * an isolated McpServer and the default stateless 2025 compatibility lane.
  */
 export function createCodingMcpServer(env: WorkerEnv, auth: McpAuth): McpServer {
-  const server = new McpServer({ name: "runmesh", version: "0.1.0" });
+  const server = new McpServer({ name: "runmesh", version: "0.1.0-dev.1" });
 
   register(server, "runner_list", z.object({}).strict(), async () => gatedRunnerList(env, auth.clientId));
   register(server, "runner_current", z.object({}).strict(), async () => {

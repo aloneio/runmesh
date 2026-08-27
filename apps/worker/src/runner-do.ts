@@ -170,7 +170,7 @@ export class RunnerDO {
         type: "runner.welcome", protocol_version: negotiation.protocol_version, request_id: message.request_id,
         session_id: attachment.sessionId, negotiated_protocol_version: negotiation.protocol_version,
         worker: {
-          worker_id: this.env.WORKER_ID ?? "worker-local", worker_version: this.env.WORKER_VERSION ?? "0.1.0",
+          worker_id: this.env.WORKER_ID ?? "worker-local", worker_version: this.env.WORKER_VERSION ?? "0.1.0-dev.1",
           capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: ["echo", "runner.info"], labels: { runtime: "cloudflare" } },
         },
         ...(isPolicy(body.desired_policy) ? { desired_policy: body.desired_policy } : {}),
