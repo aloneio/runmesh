@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@aloneio/runmesh-worker",
-  "version": "0.1.0-dev.1",
+  "version": "0.1.0-dev.2",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.0.0",
-    "@aloneio/runmesh-protocol": "0.1.0-dev.1",
+    "@aloneio/runmesh-protocol": "0.1.0-dev.2",
     "agents": "0.21.0",
     "zod": "4.4.3"
   },
