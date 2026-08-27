@@ -8,7 +8,7 @@
 > full agreement before signing; it is a legal agreement and this repository
 > does not state that it has been reviewed by a lawyer.
 
-**Version:** 1.0  
+**Version:** 1.0<br>
 **Project:** Runmesh, maintained through the `aloneio/runmesh` repository
 (`Project`)
 
