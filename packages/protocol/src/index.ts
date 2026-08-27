@@ -216,10 +216,11 @@ export function decodeWireFrame(
   if (!parsed.success) {
     throw new ProtocolFrameError("invalid_message", "Wire frame does not match the protocol schema");
   }
-  if (expectedProtocolVersion !== undefined && parsed.data.protocol_version !== expectedProtocolVersion) {
+  const parsedMessage = parsed.data as WireMessage;
+  if (expectedProtocolVersion !== undefined && parsedMessage.protocol_version !== expectedProtocolVersion) {
     throw new ProtocolFrameError("invalid_message", "Wire frame protocol version was not negotiated");
   }
-  return parsed.data;
+  return parsedMessage;
 }
 
 /** Reject structural nesting before JSON.parse can recurse into hostile input. */
