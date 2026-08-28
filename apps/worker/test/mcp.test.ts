@@ -440,6 +440,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(dashboard.headers.get("content-security-policy")).toContain("script-src 'unsafe-inline'");
     const dashboardHtml = await dashboard.text();
     for (const section of ["Dashboard", "MCP Clients", "Runners", "Settings", "Active MCP clients", "Online / total runners", "Running jobs", "Recent jobs", "Add Runner", "Add MCP Client"]) expect(dashboardHtml).toContain(section);
+    expect(dashboardHtml).toContain('data-lang-toggle="zh-CN"'); expect(dashboardHtml).toContain("var ZH_UI_TEXT="); expect(dashboardHtml).toContain("智能体控制平面"); expect(dashboardHtml).toContain("translateTextNodes"); expect(dashboardHtml).toContain("runmesh_lang");
     expect(dashboardHtml).toContain("@media(max-width:800px)"); expect(dashboardHtml).toContain("navigator.clipboard");
     expect(dashboardHtml).toContain('class="button secondary" href="/admin">Refresh</a>');
     expect(dashboardHtml).not.toContain("data-refresh");
