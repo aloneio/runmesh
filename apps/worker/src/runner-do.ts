@@ -534,13 +534,20 @@ export class RunnerDO {
   private async markPolicyCommitted(body: string): Promise<Response> {
     const mutationId = mutationIdFromBody(body);
     const parsed = parseJsonObject(body);
-    const phase = parsed?.phase === "offline_pending" ? "offline_pending" : "committed_pending";
-    if (mutationId === undefined) return Response.json({ error: { code: "invalid_mutation_id", message: "mutation_id is required" } }, { status: 400 });
+    const desiredRevision = parsed?.desired_revision;
+    const desiredChecksum = parsed?.desired_checksum;
+    const phase = parsed?.phase;
+    if (mutationId === undefined || (phase !== "committed_pending" && phase !== "offline_pending") || typeof desiredRevision !== "number" || !Number.isSafeInteger(desiredRevision) || desiredRevision <= 0 || typeof desiredChecksum !== "string" || !/^[a-f0-9]{64}$/.test(desiredChecksum)) return Response.json({ error: { code: "invalid_policy_commit", message: "mutation and desired policy identity are required" } }, { status: 400 });
     const before = await this.admission();
     if (!before.fenced || before.mutationId !== mutationId || before.mutationPhase !== "precommit") {
       return Response.json({ error: { code: "mutation_mismatch", message: "mutation does not own a precommit fence" } }, { status: 409 });
     }
-    const next: AdmissionState = { ...before, mutationPhase: phase };
+    const desired = await this.registryRequest(before.runnerId ?? "", "/desired-policy", { method: "GET" });
+    if (!desired.ok) return Response.json({ error: { code: "policy_commit_unverified", message: "desired policy could not be verified" } }, { status: 503 });
+    const value = await desired.json() as unknown;
+    const desiredRecord = typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+    if (desiredRecord?.mutation_id !== mutationId || desiredRecord.revision !== desiredRevision || desiredRecord.checksum !== desiredChecksum) return Response.json({ error: { code: "policy_commit_mismatch", message: "desired policy identity does not match the mutation" } }, { status: 409 });
+    const next: AdmissionState = { ...before, desiredRevision, desiredChecksum, mutationPhase: phase };
     return await this.persistAdmissionIfCurrent(before, next)
       ? new Response(null, { status: 204 })
       : Response.json({ error: { code: "mutation_state_changed", message: "mutation changed while committing" } }, { status: 409 });
