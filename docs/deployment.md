@@ -35,13 +35,11 @@ npx wrangler secret put INTERNAL_CONTROL_SECRET
 
 The first administrator setup requires the configured `SETUP_TOKEN` or the SHA-256 verifier in `SETUP_TOKEN_HASH`; the setup token is never stored in RegistryDO or displayed by the dashboard. First setup is atomic and first-success-wins, so an uninitialized public instance must be protected by deployment access controls until the intended administrator completes setup. `ADMIN_TOKEN` is only for the manual/programmatic Runner administration API. It is not an administrator-password replacement, browser cookie, MCP credential, or Runner enrollment code.
 
-Deploy when the account and hostname are ready:
+Deploy when the account and hostname are ready. The Worker name is `runmesh`:
 
 ```sh
 npx wrangler deploy --config wrangler.jsonc
 ```
-
-## Dashboard-led setup
 
 1. Open the deployed root URL and create the first administrator password immediately. Setup is atomic first-success-wins; there is no bootstrap-password secret.
 2. Log in and open **Admin → Runners**. Add a safe Runner ID (or let the dashboard generate one) and a human-facing `display_name`. The display name is displayed to operators and by `runner_list`; the ID is the stable protocol identifier.
