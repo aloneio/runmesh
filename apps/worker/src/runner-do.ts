@@ -11,7 +11,7 @@ import {
   validatePermissionSet,
   type WireMessage,
 } from "@aloneio/runmesh-protocol";
-import { bearerToken, internalHeaders, verifyInternalRequest } from "./security.js";
+import { bearerToken, internalHeaders, isSafeIdentifier, verifyInternalRequest } from "./security.js";
 import { PRODUCT_VERSION } from "./generated-version.js";
 
 export interface WorkerEnv {
@@ -59,6 +59,8 @@ type BridgeReply = Extract<WireMessage, { type: "rpc.response" | "rpc.error" }>;
 type BridgeWaiter = { readonly resolve: (value: BridgeReply) => void; readonly timer: ReturnType<typeof setTimeout>; readonly socket: WebSocket };
 
 
+type MutationPhase = "idle" | "precommit" | "committed_pending" | "offline_pending" | "invalid" | "restart_reconcile";
+
 interface AdmissionState {
   readonly fenced: boolean;
   readonly reconciled: boolean;
@@ -71,6 +73,7 @@ interface AdmissionState {
   readonly credentialVersion: number | null;
   readonly sessionId: string | null;
   readonly mutationId: string | null;
+  readonly mutationPhase: MutationPhase;
   readonly preMutationActiveRevision: number | null;
   readonly preMutationActiveChecksum: string | null;
   readonly preMutationDesiredRevision: number | null;
@@ -82,7 +85,7 @@ const RESTART_RECONCILE_MUTATION_ID = "restart-reconcile";
 const FENCED_ADMISSION: AdmissionState = {
   fenced: true, reconciled: false, runnerId: null, activeRevision: null, activeChecksum: null,
   desiredRevision: null, desiredChecksum: null, connectionEpoch: null, credentialVersion: null,
-  sessionId: null, mutationId: null, preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: null,
+  sessionId: null, mutationId: null, mutationPhase: "restart_reconcile", preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: null,
 };
 
 export class RunnerDO {
@@ -102,15 +105,11 @@ export class RunnerDO {
     if (request.method === "POST" && new URL(request.url).pathname === "/begin-policy-mutation") {
       const body = await request.text();
       if (!await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
-      let mutationId = "";
-      try {
-        const parsed = JSON.parse(body) as unknown;
-        mutationId = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) && typeof (parsed as Record<string, unknown>).mutation_id === "string"
-          ? String((parsed as Record<string, unknown>).mutation_id)
-          : "";
-      } catch { /* invalid mutation IDs are rejected below */ }
-      if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(mutationId)) return new Response("invalid mutation id", { status: 400 });
-      const result = await this.beginPolicyMutation(mutationId);
+      const parsed = parseJsonObject(body);
+      const mutationId = mutationIdFromBody(body);
+      const requestedRunnerId = typeof parsed?.runner_id === "string" && isSafeIdentifier(parsed.runner_id) ? parsed.runner_id : undefined;
+      if (mutationId === undefined) return new Response("invalid mutation id", { status: 400 });
+      const result = await this.beginPolicyMutation(mutationId, requestedRunnerId);
       return result === "started" || result === "idempotent"
         ? new Response(null, { status: 204 })
         : Response.json({ error: { code: "mutation_in_progress", message: "another Runner mutation is already in progress" } }, { status: 409 });
@@ -126,6 +125,11 @@ export class RunnerDO {
       const mutationId = mutationIdFromBody(body);
       if (mutationId === undefined) return Response.json({ error: { code: "invalid_mutation_id", message: "mutation_id is required" } }, { status: 400 });
       return this.cancelPolicyMutation(mutationId);
+    }
+    if (request.method === "POST" && new URL(request.url).pathname === "/mark-policy-committed") {
+      const body = await request.text();
+      if (!await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
+      return this.markPolicyCommitted(body);
     }
     if (request.method === "POST" && new URL(request.url).pathname === "/policy") {
       const body = await request.text();
@@ -154,9 +158,11 @@ export class RunnerDO {
       const { mutation_id: _mutationId, ...policyValue } = desiredRecord;
       const policy = policyValue as unknown;
       if (!isPolicy(policy)) return Response.json({ error: { code: "invalid_policy", message: "registry returned an invalid policy" } }, { status: 502 });
-      const beforePersist = await this.admission();
-      if (!beforePersist.fenced || beforePersist.mutationId !== requestedMutationId) return Response.json({ error: { code: "mutation_mismatch", message: "policy mutation lost its fence" } }, { status: 409 });
-      await this.persistAdmission({ ...beforePersist, runnerId: attachment.runnerId, connectionEpoch: attachment.epoch, credentialVersion: attachment.credentialVersion, sessionId: attachment.sessionId, desiredRevision: policy.revision, desiredChecksum: policy.checksum, fenced: true, reconciled: false });
+    const latest = await this.admission();
+    const phase = latest.runnerId === null || latest.connectionEpoch === null || latest.sessionId === null ? "offline_pending" : "committed_pending";
+    const state = latest.mutationId === requestedMutationId ? latest : undefined;
+    if (state === undefined) return Response.json({ error: { code: "mutation_mismatch", message: "policy mutation does not own the current fence" } }, { status: 409 });
+    await this.persistAdmission({ ...state, desiredRevision: policy.revision, desiredChecksum: policy.checksum, fenced: true, reconciled: false, mutationPhase: phase });
       const message: WireMessage = { type: "runner.policy_update", protocol_version: attachment.protocolVersion, request_id: `policy-${crypto.randomUUID()}`, runner_id: attachment.runnerId, policy };
       try { socket.send(encodeWireFrame(message)); } catch { return Response.json({ error: { code: "runner_offline", message: "runner is not connected" } }, { status: 503 }); }
       return new Response(null, { status: 204 });
@@ -261,12 +267,15 @@ export class RunnerDO {
       attachment.epoch = body.epoch;
       attachment.protocolVersion = negotiation.protocol_version;
       ws.serializeAttachment(attachment);
+      const beforeHello = await this.admission();
       await this.persistAdmission({
-        fenced: false, reconciled: true, runnerId: attachment.runnerId,
+        ...beforeHello, fenced: true, reconciled: false, runnerId: attachment.runnerId,
         activeRevision: null, activeChecksum: null, desiredRevision: null, desiredChecksum: null,
         connectionEpoch: attachment.epoch, credentialVersion: attachment.credentialVersion, sessionId: attachment.sessionId,
-        mutationId: null, preMutationActiveRevision: null, preMutationActiveChecksum: null,
-        preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: Date.now(),
+        mutationId: beforeHello.fenced && beforeHello.mutationId !== null ? beforeHello.mutationId : RESTART_RECONCILE_MUTATION_ID,
+        mutationPhase: beforeHello.fenced && beforeHello.mutationPhase !== "idle" ? beforeHello.mutationPhase : "restart_reconcile",
+        preMutationActiveRevision: beforeHello.preMutationActiveRevision, preMutationActiveChecksum: beforeHello.preMutationActiveChecksum,
+        preMutationDesiredRevision: beforeHello.preMutationDesiredRevision, preMutationDesiredChecksum: beforeHello.preMutationDesiredChecksum, lastReconciledAtMs: null,
       });
       for (const existing of this.ctx.getWebSockets("runner")) {
         if (existing !== ws) {
@@ -319,15 +328,16 @@ export class RunnerDO {
     if (message.type === "runner.policy_ack") {
       if (message.runner_id !== attachment.runnerId) return ws.close(1008, "runner identity mismatch");
       const response = await this.registryRequest(attachment.runnerId, "/policy-ack", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, desired_revision: message.desired_revision, desired_checksum: message.desired_checksum, applied_revision: message.applied_revision, applied_checksum: message.applied_checksum, runner_reported_policy_revision: message.runner_reported_policy_revision, runner_reported_policy_checksum: message.runner_reported_policy_checksum, status: message.status, workspace_status: message.workspace_status }) });
-      if (!response.ok && response.status !== 204) {
-        // A stale but otherwise valid ACK is safe to ignore; Registry returns
-        // 204 for it. Malformed/conflicting ACKs keep the fence in place.
-        await this.fence("invalid-policy-ack");
-        ws.close(4001, "stale policy acknowledgement");
+      const responseBody = response.ok ? await response.json() as { ack_result?: unknown } : undefined;
+      const ackResult = responseBody?.ack_result;
+      const before = await this.admission();
+      if (!response.ok || (ackResult !== "applied" && ackResult !== "invalid" && ackResult !== "stale")) {
+        if (before.mutationPhase === "precommit") await this.fence("invalid-policy-ack");
         return;
       }
-      if (message.status === "applied") await this.reconcileAdmission(attachment);
-      else await this.fence("policy-not-applied");
+      if (ackResult === "stale") return;
+      if (ackResult === "applied") await this.reconcileAdmission(attachment);
+      else await this.markInvalidAdmission(attachment);
       return;
     }
     if (message.type === "runner.sync") {
@@ -443,7 +453,7 @@ export class RunnerDO {
       fenced: false, reconciled: true, runnerId: attachment.runnerId,
       activeRevision: revision, activeChecksum: checksum, desiredRevision: revision, desiredChecksum: checksum,
       connectionEpoch: attachment.epoch, credentialVersion: attachment.credentialVersion, sessionId: attachment.sessionId,
-      mutationId: null, preMutationActiveRevision: null, preMutationActiveChecksum: null,
+      mutationId: null, mutationPhase: "idle", preMutationActiveRevision: null, preMutationActiveChecksum: null,
       preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: Date.now(),
     };
     return this.persistAdmissionIfCurrent(before, next);
@@ -470,7 +480,7 @@ export class RunnerDO {
     // reconciled value must be fenced until this session has rechecked the
     // Registry identity against its current socket epoch and credential.
     this.admissionState = validAdmissionState(stored)
-      ? { ...stored, fenced: true, reconciled: false, activeRevision: null, activeChecksum: null, mutationId: RESTART_RECONCILE_MUTATION_ID, preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: null }
+      ? { ...stored, fenced: true, reconciled: false, activeRevision: null, activeChecksum: null, mutationId: RESTART_RECONCILE_MUTATION_ID, mutationPhase: "restart_reconcile", preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: null }
       : { ...FENCED_ADMISSION };
     await this.ctx.storage.put(ADMISSION_STATE_KEY, this.admissionState);
     return this.admissionState;
@@ -485,24 +495,27 @@ export class RunnerDO {
     await operation;
   }
 
-  private async beginPolicyMutation(mutationId: string): Promise<"started" | "idempotent" | "conflict"> {
+  private async beginPolicyMutation(mutationId: string, requestedRunnerId?: string): Promise<"started" | "idempotent" | "conflict"> {
     let result: "started" | "idempotent" | "conflict" = "conflict";
     const initial = await this.admission();
     if (initial.fenced && initial.mutationId === RESTART_RECONCILE_MUTATION_ID) {
       const socket = await this.currentRunnerSocket();
       const attachment = socket?.deserializeAttachment() as ConnectionAttachment | null;
-      if (socket === undefined || attachment === null || !await this.reconcileAdmissionAfterRestart(attachment)) return "conflict";
+      if (socket !== undefined && attachment !== null && await this.reconcileAdmissionAfterRestart(attachment)) {
+        return this.beginPolicyMutation(mutationId, requestedRunnerId);
+      }
     }
     const operation = this.admissionWriteQueue.then(async () => {
       const refreshed = await this.admission();
-      const transition = refreshed.fenced && refreshed.mutationId !== null
-        ? refreshed.mutationId === mutationId ? "idempotent" : "conflict"
-        : "start";
-      if (transition === "conflict") return;
-      if (transition === "idempotent") { result = "idempotent"; return; }
-      const capture = refreshed.reconciled && validPolicyIdentity(refreshed.activeRevision, refreshed.activeChecksum) && validPolicyIdentity(refreshed.desiredRevision, refreshed.desiredChecksum);
+      if (requestedRunnerId !== undefined && refreshed.runnerId !== null && refreshed.runnerId !== requestedRunnerId) return;
+      if (refreshed.fenced && refreshed.mutationId === mutationId) { result = "idempotent"; return; }
+      // A mutation which has not reached Registry is the only exclusive phase.
+      // Once a desired immutable revision exists, a newer revision may supersede it
+      // while the live admission fence remains closed.
+      if (refreshed.fenced && refreshed.mutationPhase === "precommit") return;
+      const capture = !refreshed.fenced && refreshed.reconciled && validPolicyIdentity(refreshed.activeRevision, refreshed.activeChecksum) && validPolicyIdentity(refreshed.desiredRevision, refreshed.desiredChecksum);
       const next: AdmissionState = {
-        ...refreshed, fenced: true, reconciled: false, mutationId, activeRevision: null, activeChecksum: null, lastReconciledAtMs: null,
+        ...refreshed, fenced: true, reconciled: false, runnerId: requestedRunnerId ?? refreshed.runnerId, mutationId, mutationPhase: "precommit", activeRevision: null, activeChecksum: null, lastReconciledAtMs: null,
         preMutationActiveRevision: capture ? refreshed.activeRevision : null,
         preMutationActiveChecksum: capture ? refreshed.activeChecksum : null,
         preMutationDesiredRevision: capture ? refreshed.desiredRevision : null,
@@ -517,6 +530,28 @@ export class RunnerDO {
     return result;
   }
 
+  private async markPolicyCommitted(body: string): Promise<Response> {
+    const mutationId = mutationIdFromBody(body);
+    const parsed = parseJsonObject(body);
+    const desiredRevision = parsed?.desired_revision;
+    const desiredChecksum = parsed?.desired_checksum;
+    const phase = parsed?.phase;
+    if (mutationId === undefined || (phase !== "committed_pending" && phase !== "offline_pending") || typeof desiredRevision !== "number" || !Number.isSafeInteger(desiredRevision) || desiredRevision <= 0 || typeof desiredChecksum !== "string" || !/^[a-f0-9]{64}$/.test(desiredChecksum)) return Response.json({ error: { code: "invalid_policy_commit", message: "mutation and desired policy identity are required" } }, { status: 400 });
+    const before = await this.admission();
+    if (!before.fenced || before.mutationId !== mutationId || before.mutationPhase !== "precommit") {
+      return Response.json({ error: { code: "mutation_mismatch", message: "mutation does not own a precommit fence" } }, { status: 409 });
+    }
+    const desired = await this.registryRequest(before.runnerId ?? "", "/desired-policy", { method: "GET" });
+    if (!desired.ok) return Response.json({ error: { code: "policy_commit_unverified", message: "desired policy could not be verified" } }, { status: 503 });
+    const value = await desired.json() as unknown;
+    const desiredRecord = typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+    if (desiredRecord?.mutation_id !== mutationId || desiredRecord.revision !== desiredRevision || desiredRecord.checksum !== desiredChecksum) return Response.json({ error: { code: "policy_commit_mismatch", message: "desired policy identity does not match the mutation" } }, { status: 409 });
+    const next: AdmissionState = { ...before, desiredRevision, desiredChecksum, mutationPhase: phase };
+    return await this.persistAdmissionIfCurrent(before, next)
+      ? new Response(null, { status: 204 })
+      : Response.json({ error: { code: "mutation_state_changed", message: "mutation changed while committing" } }, { status: 409 });
+  }
+
   private async mutationOwnsFence(mutationId: string): Promise<boolean> {
     const current = await this.admission();
     return current.fenced && current.mutationId === mutationId;
@@ -526,11 +561,21 @@ export class RunnerDO {
     const before = await this.admission();
     if (!before.fenced || before.mutationId === null) return Response.json({ error: { code: "no_active_mutation", message: "no active mutation fence" } }, { status: 409 });
     if (before.mutationId !== mutationId) return Response.json({ error: { code: "mutation_mismatch", message: "mutation ID does not own the current fence" } }, { status: 409 });
-    if (mutationId === RESTART_RECONCILE_MUTATION_ID || before.runnerId === null || before.sessionId === null || before.connectionEpoch === null || before.credentialVersion === null) return Response.json({ error: { code: "mutation_uncertain", message: "mutation cannot be safely cancelled" } }, { status: 503 });
+    if (before.mutationPhase !== "precommit") return Response.json({ error: { code: "mutation_committed", message: "only an uncommitted mutation can be cancelled" } }, { status: 409 });
+    if (mutationId === RESTART_RECONCILE_MUTATION_ID || before.runnerId === null) return Response.json({ error: { code: "mutation_uncertain", message: "mutation cannot be safely cancelled" } }, { status: 503 });
     const stateResponse = await this.registryRequest(before.runnerId, `/mutation-state?mutation_id=${encodeURIComponent(mutationId)}`, { method: "GET" });
     if (!stateResponse.ok) return Response.json({ error: { code: "registry_unavailable", message: "mutation state is unavailable" } }, { status: 503 });
     const state = await stateResponse.json() as Record<string, unknown>;
     if (state.runner_exists !== true || state.mutation_committed === true) return Response.json({ error: { code: "mutation_committed", message: "mutation has committed or Runner is gone" } }, { status: 409 });
+    // Offline cancellation has no current live identity to restore. It only
+    // releases the precommit ownership; admission deliberately stays fenced.
+    if (before.sessionId === null || before.connectionEpoch === null || before.credentialVersion === null || before.reconciled === false) {
+      const next: AdmissionState = { ...before, fenced: true, reconciled: false, mutationId: null, mutationPhase: "idle", activeRevision: null, activeChecksum: null,
+        preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: null };
+      return await this.persistAdmissionIfCurrent(before, next)
+        ? new Response(null, { status: 204 })
+        : Response.json({ error: { code: "mutation_state_changed", message: "mutation changed while cancelling" } }, { status: 409 });
+    }
     if (state.policy_status !== "applied" || state.connection_epoch !== before.connectionEpoch || state.credential_version !== before.credentialVersion || state.session_id !== before.sessionId
       || state.applied_revision !== before.preMutationActiveRevision || state.active_checksum !== before.preMutationActiveChecksum
       || state.runner_reported_revision !== before.preMutationActiveRevision || state.runner_reported_checksum !== before.preMutationActiveChecksum
@@ -545,7 +590,7 @@ export class RunnerDO {
     if (socket === undefined || attachment === null || attachment.runnerId !== before.runnerId || attachment.sessionId !== before.sessionId || attachment.epoch !== before.connectionEpoch || attachment.credentialVersion !== before.credentialVersion) return Response.json({ error: { code: "runner_unavailable", message: "Runner session is no longer current" } }, { status: 503 });
     const next: AdmissionState = {
       ...before, fenced: false, reconciled: true, activeRevision: before.preMutationActiveRevision, activeChecksum: before.preMutationActiveChecksum,
-      desiredRevision: before.preMutationDesiredRevision, desiredChecksum: before.preMutationDesiredChecksum, mutationId: null,
+      desiredRevision: before.preMutationDesiredRevision, desiredChecksum: before.preMutationDesiredChecksum, mutationId: null, mutationPhase: "idle",
       preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: Date.now(),
     };
     return await this.persistAdmissionIfCurrent(before, next)
@@ -557,11 +602,17 @@ export class RunnerDO {
     const current = await this.admission();
     const preserve = current.fenced && current.mutationId === mutationId;
     const capture = !current.fenced && current.reconciled && validPolicyIdentity(current.activeRevision, current.activeChecksum) && validPolicyIdentity(current.desiredRevision, current.desiredChecksum);
-    await this.persistAdmission({ ...current, fenced: true, reconciled: false, mutationId, activeRevision: null, activeChecksum: null, lastReconciledAtMs: null,
+    await this.persistAdmission({ ...current, fenced: true, reconciled: false, mutationId, mutationPhase: current.mutationPhase === "precommit" ? "precommit" : "invalid", activeRevision: null, activeChecksum: null, lastReconciledAtMs: null,
       preMutationActiveRevision: preserve ? current.preMutationActiveRevision : capture ? current.activeRevision : null,
       preMutationActiveChecksum: preserve ? current.preMutationActiveChecksum : capture ? current.activeChecksum : null,
       preMutationDesiredRevision: preserve ? current.preMutationDesiredRevision : capture ? current.desiredRevision : null,
       preMutationDesiredChecksum: preserve ? current.preMutationDesiredChecksum : capture ? current.desiredChecksum : null });
+  }
+
+  private async markInvalidAdmission(attachment: ConnectionAttachment): Promise<void> {
+    const current = await this.admission();
+    if (!current.fenced || current.runnerId !== attachment.runnerId || current.connectionEpoch !== attachment.epoch || current.sessionId !== attachment.sessionId) return;
+    await this.persistAdmission({ ...current, fenced: true, reconciled: false, mutationPhase: "invalid", activeRevision: null, activeChecksum: null, lastReconciledAtMs: null });
   }
 
   private async reconcileAdmission(attachment: ConnectionAttachment): Promise<void> {
@@ -585,7 +636,7 @@ export class RunnerDO {
       fenced: false, reconciled: true, runnerId: attachment.runnerId,
       activeRevision: revision, activeChecksum: checksum, desiredRevision: revision, desiredChecksum: checksum,
       connectionEpoch: attachment.epoch, credentialVersion: attachment.credentialVersion, sessionId: attachment.sessionId,
-      mutationId: null, preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: Date.now(),
+      mutationId: null, mutationPhase: "idle", preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: Date.now(),
     });
   }
 
@@ -647,6 +698,13 @@ export class RunnerDO {
   }
 }
 
+function parseJsonObject(body: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
+  } catch { return undefined; }
+}
+
 function mutationIdFromBody(body: string): string | undefined {
   try {
     const parsed = JSON.parse(body) as unknown;
@@ -676,7 +734,7 @@ function sameAdmissionState(left: AdmissionState, right: AdmissionState): boolea
     && left.activeRevision === right.activeRevision && left.activeChecksum === right.activeChecksum
     && left.desiredRevision === right.desiredRevision && left.desiredChecksum === right.desiredChecksum
     && left.connectionEpoch === right.connectionEpoch && left.credentialVersion === right.credentialVersion
-    && left.sessionId === right.sessionId && left.mutationId === right.mutationId && left.preMutationActiveRevision === right.preMutationActiveRevision && left.preMutationActiveChecksum === right.preMutationActiveChecksum && left.preMutationDesiredRevision === right.preMutationDesiredRevision && left.preMutationDesiredChecksum === right.preMutationDesiredChecksum && left.lastReconciledAtMs === right.lastReconciledAtMs;
+    && left.sessionId === right.sessionId && left.mutationId === right.mutationId && left.mutationPhase === right.mutationPhase && left.preMutationActiveRevision === right.preMutationActiveRevision && left.preMutationActiveChecksum === right.preMutationActiveChecksum && left.preMutationDesiredRevision === right.preMutationDesiredRevision && left.preMutationDesiredChecksum === right.preMutationDesiredChecksum && left.lastReconciledAtMs === right.lastReconciledAtMs;
 }
 
 function validAdmissionState(value: unknown): value is AdmissionState {
@@ -692,6 +750,7 @@ function validAdmissionState(value: unknown): value is AdmissionState {
     && (state.credentialVersion === null || Number.isSafeInteger(state.credentialVersion))
     && (state.sessionId === null || typeof state.sessionId === "string")
     && (state.mutationId === null || typeof state.mutationId === "string")
+    && (state.mutationPhase === "idle" || state.mutationPhase === "precommit" || state.mutationPhase === "committed_pending" || state.mutationPhase === "offline_pending" || state.mutationPhase === "invalid" || state.mutationPhase === "restart_reconcile")
     && (state.preMutationActiveRevision === null || Number.isSafeInteger(state.preMutationActiveRevision))
     && (state.preMutationActiveChecksum === null || typeof state.preMutationActiveChecksum === "string")
     && (state.preMutationDesiredRevision === null || Number.isSafeInteger(state.preMutationDesiredRevision))

@@ -1,17 +1,14 @@
 # Dev branch protection
 
-The GitHub default branch is `dev`. It is **currently unprotected**: the GitHub branch-protection API returned `404 Branch not protected` during the `v0.1.0-dev.2` final-bugs baseline check. This document records the required configuration and does not claim that it has been applied.
+The GitHub default branch is `dev`. Its branch-protection configuration was confirmed through the GitHub branch-protection API during the `v0.1.0-dev.2` baseline check:
 
-A repository administrator should configure protection for `dev` at **Settings → Rules → Rulesets** (or **Branches → Branch protection rules**) with:
+- `dev` is protected;
+- the required status check is `verify` and it is strict, so a branch must be up to date before merging;
+- the required approving-review count is `0`;
+- force pushes are disabled; and
+- branch deletion is disabled.
 
-- require a pull request before merging;
-- require the `verify` status check to pass;
-- require branches to be up to date before merging;
-- prohibit force pushes;
-- prohibit branch deletion;
-- allow an administrator emergency bypass only when documented.
-
-The single-maintainer workflow does **not** require an approving review or Code Owner approval. Do not add either requirement solely for this preview.
+The API response also reports that Code Owner review is not required and administrator enforcement is disabled. This document does not infer any additional ruleset, bypass, merge-queue, or repository setting from that response.
 
 Older clones can synchronize the in-place rename without recreating `main`:
 
@@ -23,4 +20,4 @@ git remote set-head origin -a
 git remote prune origin
 ```
 
-Do not create a new `main` branch. After a repository administrator enables the rule, verify it with a test pull request before treating it as active policy.
+Do not create a new `main` branch. Re-query the GitHub branch-protection API after any administrative configuration change before relying on a changed protection policy.

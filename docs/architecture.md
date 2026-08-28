@@ -51,7 +51,7 @@ The authentication throttle reserves attempts transactionally before expensive p
 - Runner WebSocket disconnects: local jobs/logs continue; live tools report the selected Runner as offline. No other Runner is tried. `job_list` and last-known `job_get` metadata remain available from Registry snapshots where permitted.
 - Runner reconnects: monotonic sync upserts workspaces and recent/active job metadata.
 - Runner process restarts: matching live jobs become `unknown`; reconciliation moves vanished jobs to `interrupted` without guessing the exit code. Recovered cancellation is reported as `cancelled` only with persisted delivery evidence.
-- Runner revocation: old transport credentials fail and the socket is closed; centrally managed Workspace, immutable Policy, and retained Job metadata remain unavailable for operator review. Already-running local processes are not remotely killed.
+- Runner revocation: old transport credentials fail and the socket is closed; centrally managed Workspace, immutable Policy, and retained Job metadata remain available for operator review. Already-running local processes are not remotely killed.
 - Worker/DO restart: in-flight bridge calls can fail, while Runner-local jobs continue. Callers should retry only safe/idempotent requests.
 
 ## Security posture and excluded runtime
