@@ -35,9 +35,9 @@ Local Runner
 
 The dashboard adds a Runner with a stable safe ID and `display_name`, then creates a 30-minute, single-use enrollment code. Regeneration deletes any unused code for that Runner before inserting the replacement. `POST /runner/enroll` atomically redeems the code and returns a new Runner token; the packaged CLI's supported flow is `coding-runner enroll --server ... --code ...`, followed by `coding-runner install`. It stores a centrally managed local profile with zero workspaces; only the Admin Panel adds central workspace roots.
 
-The dashboard displays a one-time manual enrollment command after the operator has separately downloaded and verified the portable artifact. Hosted bootstrap is disabled for this development preview; it does not provide an automatic signed hosted distribution or update mechanism.
+The dashboard displays a one-time manual enrollment command after the operator has separately downloaded and verified the portable artifact. Hosted bootstrap is unavailable in `v0.1.0-dev.2`; there is no automatic signed hosted distribution or update mechanism.
 
-The local CLI has implemented profile/status/doctor/workspace/env/start commands and a service-manifest adapter. It writes managed system service manifests with dedicated-user identity by default, while `privileged_host` requires explicit confirmation; existing legacy profiles retain their old layout. Doctor diagnostics report stable required/optional checks and Host shell availability. Hosted bootstrap scripts are disabled fail-closed in this preview and do not activate a service; the operator runs `coding-runner install` after manual artifact verification.
+The local CLI has implemented profile/status/doctor/workspace/env/start commands and a service-manifest adapter. `coding-runner install` invokes the Runmesh service provisioner for Runmesh-owned identities and directories (and Windows Local Service ACLs), then writes managed system service manifests with dedicated-user identity by default. It never changes configured Workspace ownership or modes; the operator grants the service identity only the required Workspace access. `privileged_host` requires explicit confirmation; existing legacy profiles retain their old layout. Doctor diagnostics report stable required/optional checks and Host shell availability. Hosted bootstrap scripts fail closed and do not activate a service; the operator runs `coding-runner install` after manual artifact verification.
 
 ## State and migration
 
@@ -51,7 +51,7 @@ The authentication throttle reserves attempts transactionally before expensive p
 - Runner WebSocket disconnects: local jobs/logs continue; live tools report the selected Runner as offline. No other Runner is tried. `job_list` and last-known `job_get` metadata remain available from Registry snapshots where permitted.
 - Runner reconnects: monotonic sync upserts workspaces and recent/active job metadata.
 - Runner process restarts: matching live jobs become `unknown`; reconciliation moves vanished jobs to `interrupted` without guessing the exit code. Recovered cancellation is reported as `cancelled` only with persisted delivery evidence.
-- Runner revocation: old transport credentials fail, the socket is closed, and synchronized workspace/job metadata is removed from RegistryDO; already-running local processes are not remotely killed by this metadata operation.
+- Runner revocation: old transport credentials fail and the socket is closed; centrally managed Workspace, immutable Policy, and retained Job metadata remain unavailable for operator review. Already-running local processes are not remotely killed.
 - Worker/DO restart: in-flight bridge calls can fail, while Runner-local jobs continue. Callers should retry only safe/idempotent requests.
 
 ## Security posture and excluded runtime

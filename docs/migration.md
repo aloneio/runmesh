@@ -2,7 +2,7 @@
 
 ## Current baseline
 
-This branch preserves the existing `remote-coding-runtime` layout for installed systems and adds explicit execution-mode and policy hardening. Existing profiles without `execution_mode` are treated as legacy privileged-host profiles; they are not silently rewritten. Re-enrollment changes credentials and connection metadata only.
+This branch uses Runmesh-specific layouts for new installations. Existing `remote-coding-runtime` paths are retained only for migration detection; they are not new-install defaults. Existing profiles without `execution_mode` are treated as legacy privileged-host profiles; they are not silently rewritten. Re-enrollment changes credentials and connection metadata only. Hosted bootstrap is unavailable in `v0.1.0-dev.2`: download and verify a portable artifact, then use the Panel-generated one-time code with `coding-runner enroll` followed by `coding-runner install`.
 
 ## Migration behavior
 

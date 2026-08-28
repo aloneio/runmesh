@@ -40,7 +40,7 @@
 Runmesh 让 MCP 客户端可以使用一台或多台机器上经过批准的 Workspace，同时保持执行机器不对公网开放：
 
 - **Cloudflare Worker** 是公网控制平面和 MCP HTTP endpoint；
-- **RegistryDO** 保存认证、Runner、Workspace、策略、客户端选择、审计事件和有界 Job 元数据；
+- **RegistryDO** 保存认证、Runner、Workspace、策略、客户端选择和有界 Job 元数据；
 - **RunnerDO** 为每个 Runner 维护认证后的出站 WebSocket bridge，只负责协调和转发，不执行命令或访问文件；
 - **Runner** 是本地服务，负责执行获准的文件系统、Git、Shell 和持久 Job 操作。
 
@@ -84,7 +84,7 @@ Workspace 根目录和权限由管理员定义，而不是由 MCP Client 自己�
 ```mermaid
 flowchart LR
     Client["ChatGPT / Claude / Cursor<br/>MCP 客户端"] -->|HTTPS · secret URL| Worker["Cloudflare Worker<br/>Admin UI · MCP · 路由"]
-    Worker --> Registry[("RegistryDO<br/>SQLite 元数据 · 策略 · 审计")]
+    Worker --> Registry[("RegistryDO<br/>SQLite 元数据 · 策略 · 有界 Job 快照")]
     Worker --> RunnerDO["RunnerDO<br/>WebSocket bridge"]
     RunnerDO -->|出站 WSS| Runner["Runmesh Runner<br/>本地服务"]
     Runner --> Workspace["已批准的 Workspace<br/>文件系统 · Git"]
@@ -191,7 +191,7 @@ npx wrangler deploy --config wrangler.jsonc
 
 Dashboard 生成的 enrollment code 短期有效、单次使用，重新生成或成功兑换后立即失效。Runner 通过认证 WebSocket 主动连接 Worker，不暴露 HTTP server。
 
-本开发预览中的公网 bootstrap 路由默认 fail closed，不会执行未经签名的动态 package 安装。除非管理员明确启用标记为 legacy、unsigned、development-only 的兼容配置，否则 `/runner/releases/latest` 返回 `distributable: false`，安装脚本会停止。`0.1.0-dev.2` 推荐使用手工下载并验证的 portable artifact，再执行 Runner CLI enrollment/install。自动更新和回滚尚未包含。
+在 `v0.1.0-dev.2` 中，hosted bootstrap 不可用。`/runner/releases/latest` 和 `/runner/releases/stable` 都返回 `distributable: false`，不提供 package spec 或 artifact，生成的安装脚本会 fail closed。请下载带 manifest 和 signature 的已验证 portable artifact，完成验证后运行 `coding-runner enroll`，再运行 `coding-runner install`。自动 signed bootstrap、更新和回滚尚未包含。
 
 全新注册从零 Workspace 开始。Workspace 根目录由管理员在 Dashboard 显式添加，再通过认证的 Runner-only policy frame 私下发送给对应 Runner；它不会进入 MCP、Workspace metadata、普通日志或公网 API。重新注册只更新连接凭据，不会从当前目录创建 Workspace。Emergency Lock 要求输入 Runner ID，并不会自动终止已经启动的 Job。
 
@@ -204,22 +204,21 @@ Dashboard 生成的 enrollment code 短期有效、单次使用，重新生成�
 - 绝对 Workspace 根目录是私有控制平面 policy 数据，不会返回给 MCP Client、公网 endpoint、普通日志或错误；
 - Runner 即使以 root、Administrator 或其他高权限身份运行，也仍然拥有相应宿主机 authority；Runmesh policy 不是操作系统 sandbox。
 
-## 当前开发预览版范围
+## 本开发预览版尚未包含
 
-本预览版包含策略保护的 Workspace 访问、粘性 Runner 选择、持久 Job、离线 Registry 快照和认证 Runner 传输。以下能力**尚未包含在 0.1.0-dev.2**，仍属于候选路线图：Audit Log、Policy history/rollback UI、Client base-scope 在线编辑、自动 Runner 更新/回滚、SBOM 发布，以及 macOS/Windows 实机服务集成。
+本开发预览版包含策略保护的 Workspace 访问、粘性 Runner 选择、持久 Job、离线 Registry 快照、认证 Runner 传输，以及 MCP Client base-scope 在线编辑。以下能力不在当前预览版范围内，属于候选路线图而非兼容性承诺：Audit Log、Policy history/rollback UI、自动 Runner 更新/回滚、完整 signed hosted bootstrap、SBOM 发布、Reset runtime、企业多租户，以及 macOS/Windows 实机服务 E2E。
 
-
-本仓库发布的是开发预览版，不代表所有生产或平台集成已经完成。投入运行前，管理员应在目标环境验证：
+投入运行前，管理员应在目标环境验证：
 
 - Cloudflare 账户配额、CPU 限制、Durable Object migration、hibernation/restart 和 edge-log 脱敏；
 - 外部 MCP 客户端行为，以及基础设施对包含凭据的 URL path 的日志处理；
-- Runner package descriptor 和目标操作系统上的 bootstrap 安装；
+- 手工验证 portable artifact 后的安装与目标操作系统服务 provision；
 - macOS 与 Windows 的原生服务生命周期和低权限行为；
-- artifact 下载、signature/checksum 校验、更新与 rollback 流程。
+- artifact manifest/signature 校验和自身的恢复流程。
 
-当前 release workflow 仅支持手动触发，不发布 npm package。它构建并验证 portable Node Runner artifact，但不提供自动 Runner 更新服务。旧的 `remote-coding-runtime`、`RemoteCodingRunner` 路径只作为 migration/legacy 检测保留；新安装使用 Runmesh 专属路径。
+本预览版中的 hosted bootstrap 不可用。请使用手工验证的 portable artifact；自动 Runner 更新、下载和回滚不在当前预览版范围内。
 
-Runmesh 不提供操作系统级 sandbox、租户隔离、自动 failover、入站 SSH、公网 Runner HTTP server、Hosted IDE、计费、Teams/组织、MCP Tasks、PTY/Web Terminal、浏览器自动化、AI Agent、RAG 或模型网关。
+Runmesh 不是操作系统级 sandbox；当前预览版也不包含租户隔离、自动 failover、入站 SSH、公网 Runner HTTP server、Hosted IDE、计费、Teams/组织、MCP Tasks、PTY/Web Terminal、浏览器自动化、AI Agent、RAG 或模型网关。这些描述的是当前预览版范围，不是永久性的兼容性承诺。
 
 ## 文档导航
 

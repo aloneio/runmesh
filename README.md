@@ -84,7 +84,7 @@ Administrators—not MCP Clients—define Workspace roots and permissions. If th
 ```mermaid
 flowchart LR
     Client["ChatGPT / Claude / Cursor<br/>MCP client"] -->|HTTPS · secret URL| Worker["Cloudflare Worker<br/>Admin UI · MCP · routing"]
-    Worker --> Registry[("RegistryDO<br/>SQLite metadata · policy · audit")]
+    Worker --> Registry[("RegistryDO<br/>SQLite metadata · policy · bounded Job snapshots")]
     Worker --> RunnerDO["RunnerDO<br/>WebSocket bridge"]
     RunnerDO -->|outbound WSS| Runner["Runmesh Runner<br/>local service"]
     Runner --> Workspace["Approved Workspaces<br/>filesystem · Git"]
@@ -191,7 +191,7 @@ Open the deployed root URL, set the administrator password with the setup token,
 
 The dashboard-generated enrollment code is short-lived, single-use, and invalidated when regenerated or redeemed. The Runner connects outward to the Worker over authenticated WebSocket; it does not expose an HTTP server.
 
-The hosted bootstrap routes are deliberately fail-closed in this development preview. Unless the operator explicitly enables the legacy unsigned compatibility path, `/runner/releases/latest` reports `distributable: false` and the generated installer refuses to run. The recommended route for `0.1.0-dev.2` is to download the portable artifact and its manifest/signature manually, verify it, then enroll/install with the Runner CLI. Automatic signed bootstrap, update, and rollback are not included in this preview.
+Hosted bootstrap is unavailable in `v0.1.0-dev.2`. `/runner/releases/latest` and `/runner/releases/stable` report `distributable: false`; they expose no package specification or artifact, and the generated installers fail closed. Download a verified portable artifact with its manifest and signature, verify it, then run `coding-runner enroll` followed by `coding-runner install`. Automatic signed bootstrap, update, and rollback are not included in this preview.
 
 Fresh enrollment starts with zero Workspaces. Workspace roots are added explicitly by an administrator through the dashboard and delivered privately to the selected Runner as policy data. Re-enrollment changes connection credentials without inventing a Workspace from the current directory. Browser Emergency Lock requires typing the Runner ID and locks future policy permissions without automatically stopping existing Jobs.
 
@@ -204,22 +204,21 @@ Fresh enrollment starts with zero Workspaces. Workspace roots are added explicit
 - Absolute Workspace roots are private control-plane policy data. They are not returned to MCP Clients, public endpoints, ordinary logs, or errors.
 - A Runner running as root, Administrator, or another powerful service identity still has that host authority. Runmesh policy is not an operating-system sandbox.
 
-## Current development preview scope
+## Not included in v0.1.0-dev.2
 
-This preview includes policy-gated workspace access, sticky Runner selection, persistent local Jobs, offline Registry snapshots, and authenticated Runner transport. The following are **not included in v0.1.0-dev.2** and remain roadmap candidates: an Audit Log, Policy history/rollback UI, Client base-scope editing, automatic Runner update/rollback, SBOM publication, and platform-specific real-host service integration.
+This development preview includes policy-gated workspace access, sticky Runner selection, persistent local Jobs, offline Registry snapshots, authenticated Runner transport, and MCP Client base-scope editing. The following capabilities are outside the current preview and are roadmap candidates rather than compatibility commitments: Audit Log, Policy history/rollback UI, automatic Runner update/rollback, complete signed hosted bootstrap, SBOM publication, Reset runtime, enterprise multi-tenancy, and real-host macOS/Windows service E2E.
 
-
-This repository publishes a development preview, not a promise that every production or platform integration is complete. Before operational use, administrators should validate the target deployment and host:
+Before operational use, administrators should validate the target deployment and host:
 
 - Cloudflare account quotas, CPU limits, Durable Object migrations, hibernation/restart behavior, and edge-log redaction;
 - external MCP client behavior and infrastructure handling of secret-bearing URL paths;
-- the configured Runner package descriptor and bootstrap installation on the target OS;
+- manual verified-portable-artifact installation and service provisioning on the target OS;
 - native service lifecycle and least-privilege behavior on macOS and Windows;
-- artifact download, signature/checksum verification, update, and rollback procedures.
+- artifact manifest/signature verification and their own recovery procedures.
 
-The public bootstrap scripts currently retain legacy compatibility behavior only as an explicitly configured development option and are not the recommended installation path. Use a manually verified portable artifact for the development preview. Runner update/download/rollback remain outside this preview.
+Hosted bootstrap is unavailable in this preview. Use a manually verified portable artifact; automatic Runner update/download/rollback remains outside this preview.
 
-Runmesh does not provide an operating-system sandbox, tenant isolation, automatic failover, inbound SSH, a public Runner HTTP server, a hosted IDE, billing, Teams/organizations, MCP Tasks, PTY/Web Terminal, browser automation, an AI agent, RAG, or a model gateway.
+Runmesh is not an operating-system sandbox, and this preview does not include tenant isolation, automatic failover, inbound SSH, a public Runner HTTP server, a hosted IDE, billing, Teams/organizations, MCP Tasks, PTY/Web Terminal, browser automation, an AI agent, RAG, or a model gateway. Those exclusions describe the current preview scope, not a permanent compatibility commitment.
 
 ## Documentation
 
