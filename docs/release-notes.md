@@ -19,7 +19,7 @@ This is a development preview. Target-environment validation remains necessary f
 
 Install and configure the control plane using the [README](../README.md) and [deployment guide](deployment.md). Community contributions are welcome; see the [contribution guide](../.github/CONTRIBUTING.md) for the complete contribution terms and process.
 
-Release assets include the Runner package, manifest, detached Ed25519 signature, trust keyring, SHA-256 checksums, license, NOTICE, and third-party notices. Verify the signature and checksums before installation.
+Release assets include the Runner package, manifest, detached Ed25519 signature, trust keyring, SHA-256 checksums, license, NOTICE, and third-party notices. Verify the manifest signature with the trust keyring from an independently trusted source checkout, not the keyring downloaded with the assets; then verify `SHA256SUMS`, install the verified local `.tgz`, and confirm `coding-runner --version`. See the [portable Runner installation procedure](portable-runner-installation.md).
 
 Commercial use requires separate written authorization. See [COMMERCIAL_LICENSE.md](legal/COMMERCIAL_LICENSE.md).
 
@@ -42,6 +42,6 @@ Commercial use requires separate written authorization. See [COMMERCIAL_LICENSE.
 
 请参考 [README.zh-CN.md](../README.zh-CN.md) 和[部署文档](deployment.md)完成控制平面的安装和配置。欢迎社区贡献，请阅读[贡献指南](../.github/CONTRIBUTING.zh-CN.md)了解完整的贡献条款和流程。
 
-Release assets 包含 Runner package、manifest、Ed25519 detached signature、trust keyring、SHA-256 checksums、许可证、NOTICE 和第三方通知。安装前请验证签名和校验和。
+Release assets 包含 Runner package、manifest、Ed25519 detached signature、trust keyring、SHA-256 checksums、许可证、NOTICE 和第三方通知。必须使用独立可信源代码 checkout 中的 trust keyring 验证 manifest 签名，不能使用与 assets 一起下载的 keyring；随后验证 `SHA256SUMS`、安装已验证的本地 `.tgz`，并确认 `coding-runner --version`。参见[便携式 Runner 安装流程](portable-runner-installation.md)。
 
 商业使用需要单独书面授权，请查看 [COMMERCIAL_LICENSE.zh-CN.md](legal/COMMERCIAL_LICENSE.zh-CN.md)。
