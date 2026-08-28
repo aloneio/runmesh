@@ -5,7 +5,7 @@ export const INTERNAL_NONCE_HEADER = "x-internal-control-nonce";
 export const INTERNAL_SIGNATURE_VERSION = "v1";
 export const INTERNAL_SIGNATURE_SKEW_MS = 5 * 60 * 1_000;
 export const MAX_BEARER_TOKEN_BYTES = 512;
-export const PASSWORD_KDF_ITERATIONS = 120_000;
+export const PASSWORD_KDF_ITERATIONS = 100_000;
 export const ADMIN_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 export const SETUP_CSRF_TTL_MS = 10 * 60 * 1_000;
 export const MCP_SECRET_BYTES = 32;
@@ -178,12 +178,16 @@ export async function verifyPassword(password: string, verifier: string): Promis
   const parts = verifier.split("$");
   if (parts.length !== 4 || parts[0] !== "pbkdf2-sha256") return false;
   const iterations = Number(parts[1]);
-  if (!Number.isSafeInteger(iterations) || iterations < 10_000 || iterations > 1_000_000) return false;
+  if (!Number.isSafeInteger(iterations) || iterations < 10_000 || iterations > PASSWORD_KDF_ITERATIONS) return false;
   const salt = fromBase64Url(parts[2] ?? "");
   const expected = fromBase64Url(parts[3] ?? "");
   if (salt === undefined || expected === undefined || expected.length !== 32) return false;
-  const actual = new Uint8Array(await derivePassword(password, salt, iterations));
-  return constantTimeBytesEqual(actual, expected);
+  try {
+    const actual = new Uint8Array(await derivePassword(password, salt, iterations));
+    return constantTimeBytesEqual(actual, expected);
+  } catch {
+    return false;
+  }
 }
 
 function derivePassword(password: string, salt: Uint8Array, iterations: number): Promise<ArrayBuffer> {
