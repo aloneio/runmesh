@@ -10,7 +10,7 @@ const polyFormFiles = ["LICENSE", "apps/runner/LICENSE", "apps/worker/LICENSE", 
 const noticeFiles = ["NOTICE", "apps/runner/NOTICE", "apps/worker/NOTICE", "packages/protocol/NOTICE"];
 const manifestFiles = ["package.json", "apps/runner/package.json", "apps/worker/package.json", "packages/protocol/package.json"];
 const publicPackages = ["apps/runner/package.json", "packages/protocol/package.json"];
-const requiredCommunityFiles = ["CODE_OF_CONDUCT.md", "GOVERNANCE.md", "CONTRIBUTORS.md", "GOVERNANCE.zh-CN.md", ".github/ISSUE_TEMPLATE/bug.yml", ".github/ISSUE_TEMPLATE/feature.yml", ".github/ISSUE_TEMPLATE/config.yml", ".github/pull_request_template.md"];
+const requiredCommunityFiles = [".github/CODE_OF_CONDUCT.md", "docs/community/GOVERNANCE.md", "docs/community/CONTRIBUTORS.md", "docs/community/GOVERNANCE.zh-CN.md", ".github/ISSUE_TEMPLATE/bug.yml", ".github/ISSUE_TEMPLATE/feature.yml", ".github/ISSUE_TEMPLATE/config.yml", ".github/pull_request_template.md"];
 const removedProjectHistoryPaths = ["LICENSE_HISTORY.md", "LICENSE_HISTORY.zh-CN.md", "LICENSES/Apache-2.0-history.txt", "apps/runner/LICENSE_HISTORY.md", "apps/runner/LICENSES/Apache-2.0-history.txt", "apps/worker/LICENSE_HISTORY.md", "apps/worker/LICENSES/Apache-2.0-history.txt", "packages/protocol/LICENSE_HISTORY.md", "packages/protocol/LICENSES/Apache-2.0-history.txt"];
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 async function requireFile(file) { await access(file, constants.R_OK); }
@@ -28,5 +28,5 @@ for (const file of publicPackages) {
   for (const forbiddenFile of ["LICENSE_HISTORY.md", "LICENSES/Apache-2.0-history.txt"]) if (manifest.files?.includes(forbiddenFile)) throw new Error(`${file}: package files must not include removed history ${forbiddenFile}`);
 }
 for (const path of removedProjectHistoryPaths) await access(path, constants.F_OK).then(() => { throw new Error(`${path}: removed project-owned Apache license history is present`); }, (error) => { if (error?.code !== "ENOENT") throw error; });
-for (const file of ["THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES.zh-CN.md"]) if (!(await readFile(file, "utf8")).includes("Apache-2.0")) throw new Error(`${file}: must retain accurate third-party Apache-2.0 notice coverage`);
+for (const file of ["THIRD_PARTY_NOTICES.md", "docs/legal/THIRD_PARTY_NOTICES.zh-CN.md"]) if (!(await readFile(file, "utf8")).includes("Apache-2.0")) throw new Error(`${file}: must retain accurate third-party Apache-2.0 notice coverage`);
 console.log(`PolyForm license, NOTICE, community files, package notices, and product version ${expectedVersion} are consistent.`);

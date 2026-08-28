@@ -27,14 +27,14 @@ impact, compatibility implications, and validation plan.
 Maintainers seek technically reasoned consensus and may request additional
 review. When consensus is not available, maintainers make the decision and
 record the relevant reasoning in the issue or pull request. Security-sensitive
-matters should use the private process in [SECURITY.md](SECURITY.md).
+matters should use the private process in [.github/SECURITY.md](../../.github/SECURITY.md).
 
 ## Contributions and rights
 
-The [CONTRIBUTING.md](CONTRIBUTING.md) document contains the complete
+The [CONTRIBUTING.md](../../.github/CONTRIBUTING.md) document contains the complete
 contribution terms and process. Contribution activity does not itself grant
 commercial-use rights. Commercial permissions are described in
-[COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md).
+[COMMERCIAL_LICENSE.md](../legal/COMMERCIAL_LICENSE.md).
 
 ## Changes to this governance
 

@@ -1,6 +1,6 @@
 # Commercial licensing
 
-Runmesh is available under the [PolyForm Noncommercial License 1.0.0](LICENSE)
+Runmesh is available under the [PolyForm Noncommercial License 1.0.0](../../LICENSE)
 for the uses that license permits. Commercial use, or any use needing rights
 beyond the public license, requires a separate written agreement from an
 applicable rights holder before using, deploying, distributing, or offering the
@@ -20,14 +20,14 @@ commercial permission.
 
 ## Community contributions
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete contribution terms and
+See [CONTRIBUTING.md](../../.github/CONTRIBUTING.md) for the complete contribution terms and
 process. Contribution activity does not itself grant commercial-use rights.
 Commercial permissions are described in
 [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md).
 
 A software license does not itself grant trademark permission; see
 [TRADEMARKS.md](TRADEMARKS.md). Third-party dependencies and their notices
-remain under their own terms; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+remain under their own terms; see [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md).
 
 This document is project guidance, not legal advice. Obtain qualified advice
 for questions about your rights, obligations, or planned commercial use.
