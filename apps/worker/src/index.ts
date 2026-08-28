@@ -905,9 +905,9 @@ function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly 
   const state = typeof runner.state === "string" ? runner.state : "offline";
   const publicInfo = record(runner.public_info);
   const tools = record(environment?.tools);
-  const toolRows = tools === undefined ? `<p class="muted">Environment details unavailable while offline.</p>` : `<div class="tool-grid">${Object.entries(tools).map(([name, value]) => { const item = record(value); return `<div><strong>${escapeHtml(name)}</strong><span>${item?.available === true ? `Available${typeof item.version === "string" ? ` · ${escapeHtml(item.version)}` : ""}` : "Unavailable"}</span></div>`; }).join("")}</div>`;
+  const toolRows = tools === undefined ? `<p class="muted">Environment details unavailable while offline.</p>` : `<div class="tool-grid">${Object.entries(tools).map(([name, value]) => { const item = record(value); return `<div class="tool-item"><strong>${escapeHtml(name)}</strong><span>${item?.available === true ? `Available${typeof item.version === "string" ? ` · ${escapeHtml(item.version)}` : ""}` : "Unavailable"}</span></div>`; }).join("")}</div>`;
   const policyStatus = runner.policy_status === "applied" || runner.policy_status === "invalid" ? runner.policy_status : "pending";
-  const workspaceRows = workspaces.map((workspace) => managedWorkspaceForm(runnerId, record(workspace), csrf)).join("") || `<li class="muted">No managed workspaces configured.</li>`;
+  const workspaceRows = workspaces.map((workspace) => managedWorkspaceForm(runnerId, record(workspace), csrf)).join("") || `<li class="muted empty-item">No managed workspaces configured.</li>`;
   const updateChannel = runner.update_channel === "pinned" ? "pinned" : "stable";
   const currentVersion = typeof runner.current_runner_version === "string" ? runner.current_runner_version : typeof publicInfo?.runner_version === "string" ? publicInfo.runner_version : "Unknown";
   const latestVersion = typeof runner.latest_runner_version === "string" ? runner.latest_runner_version : release.distributable ? release.latest_version : "Not configured";
@@ -918,7 +918,7 @@ function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly 
   const permissions = record(runner.runner_permissions);
   const desiredRevision = typeof runner.desired_policy_revision === "number" ? String(runner.desired_policy_revision) : "0";
   const appliedRevision = typeof runner.applied_policy_revision === "number" ? String(runner.applied_policy_revision) : "—";
-  return `<section class="page-heading"><div><p class="eyebrow">Runner details</p><h1>${escapeHtml(displayName)}</h1><p class="lede">Control-plane workspace roots appear only in this authenticated administrator view.</p></div><a class="button secondary" href="/admin/runners">Back to runners</a></section><div class="metrics"><div class="metric"><span>Status</span><strong>${statusBadge(state)}</strong></div><div class="metric"><span>Runner ID</span><strong class="mono">${escapeHtml(runnerId)}</strong></div><div class="metric"><span>Policy status</span><strong>${escapeHtml(policyStatus)} · ${escapeHtml(appliedRevision)} / ${escapeHtml(desiredRevision)}</strong></div><div class="metric"><span>Last seen</span><strong>${escapeHtml(time(typeof runner.last_heartbeat_ms === "number" ? runner.last_heartbeat_ms : null))}</strong></div></div><div class="grid-two"><section class="panel"><h2>Safe metadata</h2><dl class="details"><dt>Platform</dt><dd>${escapeHtml(typeof publicInfo?.platform === "string" ? publicInfo.platform : "Unknown")}</dd><dt>Architecture</dt><dd>${escapeHtml(typeof publicInfo?.architecture === "string" ? publicInfo.architecture : "Unknown")}</dd><dt>Hostname</dt><dd>${escapeHtml(typeof publicInfo?.hostname === "string" ? publicInfo.hostname : "Unknown")}</dd><dt>Runner version</dt><dd>${escapeHtml(currentVersion)}</dd><dt>Stable/latest version</dt><dd>${escapeHtml(latestVersion)}</dd><dt>Protocol compatibility</dt><dd>${escapeHtml(protocolRange)} · ${escapeHtml(protocolCompatibility)}</dd></dl></section><section class="panel"><h2>Version policy</h2><p class="muted">Policy is recorded for operators; package download, update, and rollback remain deferred.</p>${distributionNotice}<form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/version-policy" class="form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Channel<select name="update_channel"><option value="stable"${updateChannel === "stable" ? " selected" : ""}>Stable</option><option value="pinned"${updateChannel === "pinned" ? " selected" : ""}>Pinned</option></select></label><label>Desired version<input name="desired_runner_version" value="${escapeHtml(desiredVersion)}" placeholder="1.2.3" pattern="[0-9]+\\.[0-9]+\\.[0-9]+"></label><div><strong>Current</strong><span>${escapeHtml(currentVersion)}</span></div><div><strong>Latest</strong><span>${escapeHtml(latestVersion)}</span></div><button class="button">Save version policy</button></form><p class="muted">Status: ${escapeHtml(String(runner.update_status ?? "unknown"))}</p></section><section class="panel"><h2>Environment tools</h2>${toolRows}</section></div><div class="grid-two"><section class="panel"><h2>Runner permission profile</h2><p class="muted">Changes remain pending until the connected Runner validates and applies the revision.</p>${permissionForm(runnerId, permissions, csrf)}<form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/emergency-lock" class="stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Type the Runner ID to confirm emergency lock<input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required></label><p class="muted">Emergency Lock does not automatically stop existing Jobs.</p><button class="button danger">Emergency lock all permissions</button></form></section><section class="panel"><h2>Active jobs</h2>${jobTable(jobs.filter(record) as Record<string, unknown>[])}</section></div><section class="panel"><div class="section-title"><h2>Managed workspaces</h2><span class="muted">Each save increments the desired policy revision.</span></div><ul class="plain-list">${workspaceRows}</ul><h3>Add workspace</h3>${managedWorkspaceForm(runnerId, undefined, csrf)}</section>`;
+  return `<section class="page-heading"><div><p class="eyebrow">Runner details</p><h1>${escapeHtml(displayName)}</h1><p class="lede">Control-plane workspace roots appear only in this authenticated administrator view.</p></div><a class="button secondary" href="/admin/runners">Back to runners</a></section><div class="metrics"><div class="metric"><span>Status</span><strong>${statusBadge(state)}</strong></div><div class="metric"><span>Runner ID</span><strong class="mono">${escapeHtml(runnerId)}</strong></div><div class="metric"><span>Policy status</span><strong>${escapeHtml(policyStatus)} · ${escapeHtml(appliedRevision)} / ${escapeHtml(desiredRevision)}</strong></div><div class="metric"><span>Last seen</span><strong>${escapeHtml(time(typeof runner.last_heartbeat_ms === "number" ? runner.last_heartbeat_ms : null))}</strong></div></div><div class="grid-two"><section class="panel"><h2>Safe metadata</h2><dl class="details"><dt>Platform</dt><dd>${escapeHtml(typeof publicInfo?.platform === "string" ? publicInfo.platform : "Unknown")}</dd><dt>Architecture</dt><dd>${escapeHtml(typeof publicInfo?.architecture === "string" ? publicInfo.architecture : "Unknown")}</dd><dt>Hostname</dt><dd>${escapeHtml(typeof publicInfo?.hostname === "string" ? publicInfo.hostname : "Unknown")}</dd><dt>Runner version</dt><dd>${escapeHtml(currentVersion)}</dd><dt>Stable/latest version</dt><dd>${escapeHtml(latestVersion)}</dd><dt>Protocol compatibility</dt><dd>${escapeHtml(protocolRange)} · ${escapeHtml(protocolCompatibility)}</dd></dl></section><section class="panel"><h2>Version policy</h2><p class="muted">Policy is recorded for operators; package download, update, and rollback remain deferred.</p>${distributionNotice}<form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/version-policy" class="form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Channel<select name="update_channel"><option value="stable"${updateChannel === "stable" ? " selected" : ""}>Stable</option><option value="pinned"${updateChannel === "pinned" ? " selected" : ""}>Pinned</option></select></label><label>Desired version<input name="desired_runner_version" value="${escapeHtml(desiredVersion)}" placeholder="1.2.3" pattern="[0-9]+\\.[0-9]+\\.[0-9]+"></label><div class="version-stat"><span class="form-stat-label">Current</span><strong>${escapeHtml(currentVersion)}</strong></div><div class="version-stat"><span class="form-stat-label">Latest</span><strong>${escapeHtml(latestVersion)}</strong></div><button class="button">Save version policy</button></form><p class="muted policy-status-foot">Status: ${escapeHtml(String(runner.update_status ?? "unknown"))}</p></section><section class="panel"><h2>Environment tools</h2>${toolRows}</section></div><div class="grid-two"><section class="panel"><h2>Runner permission profile</h2><p class="muted">Changes remain pending until the connected Runner validates and applies the revision.</p>${permissionForm(runnerId, permissions, csrf)}<div class="danger-zone"><p class="muted">Emergency Lock does not automatically stop existing Jobs.</p><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/emergency-lock" class="stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Type the Runner ID to confirm emergency lock<input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required></label><button class="button danger">Emergency lock all permissions</button></form></div></section><section class="panel"><h2>Active jobs</h2>${jobTable(jobs.filter(record) as Record<string, unknown>[])}</section></div><section class="panel"><div class="section-title"><h2>Managed workspaces</h2><span class="muted">Each save increments the desired policy revision.</span></div><ul class="plain-list workspace-list">${workspaceRows}</ul><div class="add-workspace-box"><h3>Add workspace</h3>${managedWorkspaceForm(runnerId, undefined, csrf)}</div></section>`;
 }
 function permissionForm(runnerId: string, permissions: Record<string, unknown> | undefined, csrf: string): string {
   const current = (name: string): boolean => permissions?.[name] === true;
@@ -934,44 +934,47 @@ function managedWorkspaceForm(runnerId: string, workspace: Record<string, unknow
   const current = (name: string): boolean => permissions?.[name] === true;
   const enabled = workspace?.enabled !== false;
   const status = typeof workspace?.validation_status === "string" ? workspace.validation_status : "pending";
-  return `<li class="workspace-card"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/${existing ? "workspace-update" : "workspace-create"}" class="form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Workspace ID<input name="workspace_id" value="${escapeHtml(workspaceId)}" ${existing ? "readonly" : "required"} maxlength="128"></label><label>Display name<input name="display_name" value="${escapeHtml(displayName)}" required maxlength="256"></label><label>Absolute root path<input name="root_path" value="${escapeHtml(rootPath)}" required maxlength="4096"></label><label>Usage profile<select name="profile"><option value="custom">Custom</option><option value="read_only">Read Only</option><option value="coding">Coding</option></select></label><label>Full-host confirmation<input type="hidden" name="confirm_full_host" value="false"><input type="checkbox" name="confirm_full_host" value="true"> I understand this exposes the full host filesystem.</label><label>Enabled<select name="enabled"><option value="true"${enabled ? " selected" : ""}>Enabled</option><option value="false"${enabled ? "" : " selected"}>Disabled</option></select></label>${permissionSelect("read", current("read"))}${permissionSelect("edit", current("edit"))}${permissionSelect("shell", current("shell"))}${permissionSelect("job_control", current("job_control"))}<button class="button">${existing ? "Save workspace" : "Create workspace"}</button></form>${existing ? `<div class="top-actions"><span class="muted">Validation: ${escapeHtml(status)}</span><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/workspace-delete"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input type="hidden" name="workspace_id" value="${escapeHtml(workspaceId)}"><label>Type Workspace ID to confirm<input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required></label><button class="small danger">Delete workspace</button></form></div>` : ""}</li>`;
+  return `<li class="workspace-card"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/${existing ? "workspace-update" : "workspace-create"}" class="form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Workspace ID<input name="workspace_id" value="${escapeHtml(workspaceId)}" ${existing ? "readonly" : "required"} maxlength="128"></label><label>Display name<input name="display_name" value="${escapeHtml(displayName)}" required maxlength="256"></label><label>Absolute root path<input name="root_path" value="${escapeHtml(rootPath)}" required maxlength="4096"></label><label>Usage profile<select name="profile"><option value="custom">Custom</option><option value="read_only">Read Only</option><option value="coding">Coding</option></select></label><label class="full-host-label">Full-host confirmation<input type="hidden" name="confirm_full_host" value="false"><span class="check-line"><input type="checkbox" name="confirm_full_host" value="true"> I understand this exposes the full host filesystem.</span></label><label>Enabled<select name="enabled"><option value="true"${enabled ? " selected" : ""}>Enabled</option><option value="false"${enabled ? "" : " selected"}>Disabled</option></select></label>${permissionSelect("read", current("read"))}${permissionSelect("edit", current("edit"))}${permissionSelect("shell", current("shell"))}${permissionSelect("job_control", current("job_control"))}<button class="button">${existing ? "Save workspace" : "Create workspace"}</button></form>${existing ? `<div class="top-actions workspace-actions"><span class="muted validation-tag">Validation: ${escapeHtml(status)}</span><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/workspace-delete" class="inline-delete-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input type="hidden" name="workspace_id" value="${escapeHtml(workspaceId)}"><label>Type Workspace ID to confirm<input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required></label><button class="small danger">Delete workspace</button></form></div>` : ""}</li>`;
 }
 function adminStyles(): string { return `<style>
 :root{
   color-scheme:dark;
-  --ink:#f1f5f9;
+  --ink:#f8fafc;
   --ink-heading:#ffffff;
   --muted:#94a3b8;
   --muted-dark:#64748b;
-  --line:#1e293b;
-  --line-light:#334155;
-  --panel:#0f172a;
-  --panel-card:#131d33;
-  --panel-elevated:#1e293b;
-  --canvas:#090d16;
-  --brand:#3ee0c5;
-  --brand-hover:#5eead4;
-  --brand-dim:#134e48;
-  --brand-ink:#04221c;
-  --danger:#f43f5e;
-  --danger-ink:#ffe4e6;
-  --danger-bg:#31121d;
-  --danger-line:#881337;
+  --line:#22262d;
+  --line-light:#2d333b;
+  --line-subtle:#1c2128;
+  --panel:#12151a;
+  --panel-card:#161a22;
+  --panel-elevated:#1c2128;
+  --panel-subtle:#181c24;
+  --canvas:#0b0d11;
+  --brand:#ffffff;
+  --brand-hover:#e2e8f0;
+  --brand-dim:#2d333b;
+  --brand-ink:#0b0d11;
+  --accent-gray:#262b35;
+  --accent-gray-hover:#313743;
+  --danger:#f87171;
+  --danger-ink:#fef2f2;
+  --danger-bg:#261316;
+  --danger-line:#5f1c24;
   --warn:#fbbf24;
-  --warn-bg:#2a1e09;
-  --warn-line:#78350f;
-  --ok:#34d399;
-  --ok-bg:#062d22;
-  --ok-line:#065f46;
-  --shadow-sm:0 2px 4px rgba(0,0,0,0.3);
-  --shadow-md:0 10px 25px -5px rgba(0,0,0,0.4),0 8px 10px -6px rgba(0,0,0,0.4);
-  --shadow-lg:0 20px 35px -8px rgba(0,0,0,0.5),0 12px 16px -8px rgba(0,0,0,0.4);
-  --glow-brand:0 0 0 1px rgba(62,224,197,0.35),0 0 20px rgba(62,224,197,0.18);
-  --glow-subtle:0 0 0 1px rgba(255,255,255,0.08),0 4px 20px rgba(0,0,0,0.35);
+  --warn-bg:#241d11;
+  --warn-line:#5c4210;
+  --ok:#4ade80;
+  --ok-bg:#0e2819;
+  --ok-line:#1b5730;
+  --shadow-sm:0 1px 2px rgba(0,0,0,0.3);
+  --shadow-md:0 4px 12px rgba(0,0,0,0.35);
+  --shadow-lg:0 12px 28px rgba(0,0,0,0.45);
+  --glow-subtle:0 0 0 1px rgba(255,255,255,0.06);
   --radius-sm:6px;
-  --radius-md:10px;
-  --radius-lg:14px;
-  --radius-xl:18px;
+  --radius-md:8px;
+  --radius-lg:12px;
+  --radius-xl:14px;
   --font-sans:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   --font-mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
 }
@@ -981,9 +984,8 @@ body{
   margin:0;
   background-color:var(--canvas);
   background-image:
-    radial-gradient(1100px 550px at 5% -5%, rgba(19, 78, 72, 0.4) 0%, transparent 60%),
-    radial-gradient(900px 480px at 95% -5%, rgba(30, 41, 59, 0.7) 0%, transparent 55%),
-    linear-gradient(180deg, #0b111e 0%, var(--canvas) 100%);
+    radial-gradient(1000px 500px at 50% -5%, rgba(45, 51, 59, 0.25) 0%, transparent 60%),
+    linear-gradient(180deg, #0e1117 0%, var(--canvas) 100%);
   background-attachment:fixed;
   color:var(--ink);
   font:14px/1.55 var(--font-sans);
@@ -997,10 +999,10 @@ body::before{
   inset:0;
   pointer-events:none;
   background-image:
-    linear-gradient(rgba(62, 224, 197, 0.028) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(62, 224, 197, 0.028) 1px, transparent 1px);
-  background-size:40px 40px;
-  mask-image:linear-gradient(180deg, #000 0%, rgba(0,0,0,0.6) 40%, transparent 85%);
+    linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+  background-size:32px 32px;
+  mask-image:linear-gradient(180deg, #000 0%, rgba(0,0,0,0.4) 40%, transparent 80%);
   z-index:0;
 }
 .ops-body,.auth-body{position:relative;min-height:100vh}
@@ -1019,38 +1021,37 @@ body::before{
   align-items:center;
   justify-content:space-between;
   gap:24px;
-  padding:22px 0 20px;
+  padding:20px 0 18px;
   border-bottom:1px solid var(--line);
 }
 .brand{
   color:var(--ink-heading);
-  font-size:17px;
+  font-size:16px;
   font-weight:700;
   letter-spacing:0.02em;
   text-decoration:none;
   display:inline-flex;
   align-items:center;
-  gap:13px;
+  gap:12px;
 }
 .brand-copy{display:flex;flex-direction:column;line-height:1.15}
-.brand-copy span{font-size:18px;font-weight:760;letter-spacing:-0.01em;color:var(--ink-heading)}
+.brand-copy span{font-size:17px;font-weight:750;letter-spacing:-0.01em;color:var(--ink-heading)}
 .brand-copy small{
-  margin:4px 0 0;
+  margin:3px 0 0;
   font-size:11px;
   font-weight:600;
-  letter-spacing:0.14em;
+  letter-spacing:0.12em;
   text-transform:uppercase;
   color:var(--muted);
 }
 .brand-logo{
   display:block;
-  width:38px;
-  height:38px;
+  width:34px;
+  height:34px;
   object-fit:contain;
   border-radius:var(--radius-md);
   background:#090d16;
   border:1px solid var(--line-light);
-  box-shadow:var(--glow-brand);
   padding:2px;
 }
 .top-actions,.actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px}
@@ -1059,10 +1060,10 @@ body::before{
   flex-wrap:wrap;
   gap:8px;
   align-items:center;
-  padding:6px 8px;
+  padding:4px 6px;
   border:1px solid var(--line);
   border-radius:var(--radius-md);
-  background:rgba(15, 23, 42, 0.7);
+  background:rgba(22, 26, 34, 0.7);
 }
 
 /* Language Switcher */
@@ -1073,26 +1074,25 @@ body::before{
   padding:3px;
   border:1px solid var(--line);
   border-radius:999px;
-  background:rgba(15, 23, 42, 0.8);
+  background:rgba(22, 26, 34, 0.85);
   backdrop-filter:blur(8px);
 }
 .language-switch a{
-  min-width:38px;
+  min-width:36px;
   padding:4px 10px;
   border-radius:999px;
   color:var(--muted);
   font-size:11.5px;
-  font-weight:680;
+  font-weight:650;
   letter-spacing:0.02em;
   text-align:center;
   text-decoration:none;
   transition:all 0.15s ease;
 }
-.language-switch a:hover{color:var(--ink-heading);background:rgba(51, 65, 85, 0.6)}
+.language-switch a:hover{color:var(--ink-heading);background:var(--accent-gray)}
 .language-switch a[aria-current=true]{
   color:var(--brand-ink);
   background:var(--brand);
-  box-shadow:0 0 12px rgba(62,224,197,0.3);
 }
 .auth-body>.language-switch,.ops-body>.language-switch{
   position:fixed;
@@ -1105,9 +1105,9 @@ body::before{
 nav{
   display:flex;
   gap:4px;
-  margin:22px 0 30px;
+  margin:20px 0 28px;
   padding:4px;
-  background:rgba(15, 23, 42, 0.75);
+  background:rgba(22, 26, 34, 0.75);
   border:1px solid var(--line);
   border-radius:var(--radius-lg);
   backdrop-filter:blur(8px);
@@ -1115,20 +1115,19 @@ nav{
   max-width:100%;
 }
 nav a{
-  padding:8px 16px;
+  padding:7px 15px;
   color:var(--muted);
   text-decoration:none;
   border-radius:var(--radius-md);
-  font-weight:650;
+  font-weight:600;
   font-size:13px;
   letter-spacing:0.01em;
   transition:all 0.14s ease;
 }
-nav a:hover{color:var(--ink-heading);background:rgba(51, 65, 85, 0.5)}
+nav a:hover{color:var(--ink-heading);background:var(--accent-gray)}
 nav a.active{
   color:var(--brand-ink);
   background:var(--brand);
-  box-shadow:0 0 14px rgba(62,224,197,0.35);
 }
 
 /* Typography & Headings */
@@ -1136,183 +1135,169 @@ h1,h2,h3{
   line-height:1.2;
   margin:0 0 8px;
   color:var(--ink-heading);
-  letter-spacing:-0.025em;
+  letter-spacing:-0.02em;
 }
-h1{font-size:30px;font-weight:750}
-h2{font-size:16.5px;font-weight:700;letter-spacing:-0.015em}
-h3{font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em;font-weight:700}
+h1{font-size:26px;font-weight:700}
+h2{font-size:15px;font-weight:680;letter-spacing:-0.01em}
+h3{font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;font-weight:680}
 .page-heading{
   display:flex;
   justify-content:space-between;
   align-items:flex-start;
   gap:24px;
-  margin-bottom:26px;
+  margin-bottom:24px;
 }
 .eyebrow,.brand-kicker{
-  color:var(--brand);
+  color:var(--muted);
   font-size:11px;
-  font-weight:750;
-  letter-spacing:0.14em;
+  font-weight:680;
+  letter-spacing:0.12em;
   text-transform:uppercase;
-  margin:0 0 8px;
+  margin:0 0 6px;
 }
 .lede,.muted,.subtitle{color:var(--muted)}
-.lede,.subtitle{margin:0 0 14px;max-width:64ch;font-size:14px;line-height:1.55}
+.lede,.subtitle{margin:0 0 12px;max-width:64ch;font-size:13.5px;line-height:1.55}
 
 /* Metrics Dashboard Grid */
 .metrics{
   display:grid;
   grid-template-columns:repeat(4,1fr);
-  gap:16px;
-  margin-bottom:28px;
+  gap:14px;
+  margin-bottom:24px;
 }
 .metric,.panel,.auth-card,.enrollment-dialog{
   background:var(--panel);
   border:1px solid var(--line);
-  border-radius:var(--radius-xl);
-  box-shadow:var(--shadow-md);
+  border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-sm);
   position:relative;
 }
 .metric{
-  padding:20px 22px 18px;
+  padding:16px 18px 15px;
   overflow:hidden;
-  background-image:linear-gradient(180deg, rgba(30, 41, 59, 0.35) 0%, rgba(15, 23, 42, 0.8) 100%);
-  border-color:rgba(51, 65, 85, 0.5);
-  transition:border-color 0.15s ease,transform 0.15s ease;
+  background-image:linear-gradient(180deg, rgba(28, 33, 40, 0.45) 0%, rgba(18, 21, 26, 0.9) 100%);
+  border-color:var(--line);
+  transition:border-color 0.15s ease;
 }
 .metric:hover{
-  border-color:rgba(62, 224, 197, 0.3);
-  transform:translateY(-1px);
-}
-.metric::after{
-  content:"";
-  position:absolute;
-  inset:auto 0 0;
-  height:2px;
-  background:linear-gradient(90deg, transparent 0%, var(--brand) 50%, transparent 100%);
-  opacity:0.8;
+  border-color:var(--line-light);
 }
 .metric span{
   display:block;
   color:var(--muted);
   font-size:11.5px;
-  font-weight:680;
-  letter-spacing:0.07em;
+  font-weight:650;
+  letter-spacing:0.05em;
   text-transform:uppercase;
-  margin-bottom:10px;
+  margin-bottom:8px;
 }
 .metric strong{
-  font-size:27px;
-  font-weight:750;
-  letter-spacing:-0.03em;
+  font-size:24px;
+  font-weight:700;
+  letter-spacing:-0.025em;
   color:var(--ink-heading);
 }
 
 /* Panels & Layout Grids */
-.grid-two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;margin-bottom:28px}
+.grid-two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:24px}
 .panel{
-  padding:24px;
-  margin-bottom:28px;
-  background-image:linear-gradient(180deg, rgba(30, 41, 59, 0.25) 0%, rgba(15, 23, 42, 0.7) 100%);
+  padding:20px;
+  margin-bottom:24px;
+  background-image:linear-gradient(180deg, rgba(28, 33, 40, 0.3) 0%, rgba(18, 21, 26, 0.85) 100%);
 }
 .danger-panel{
   border-color:var(--danger-line);
-  background-image:linear-gradient(180deg, rgba(136, 19, 55, 0.25) 0%, rgba(15, 23, 42, 0.8) 100%);
+  background-image:linear-gradient(180deg, rgba(95, 28, 36, 0.2) 0%, rgba(18, 21, 26, 0.9) 100%);
 }
 .section-title{
   display:flex;
   justify-content:space-between;
   gap:14px;
   align-items:center;
-  margin-bottom:18px;
+  margin-bottom:16px;
   padding-bottom:4px;
 }
 .section-title h2{margin:0}
 .section-title a{
-  color:var(--brand);
-  font-weight:680;
-  font-size:13px;
+  color:var(--muted);
+  font-weight:600;
+  font-size:12.5px;
   text-decoration:none;
   transition:color 0.12s ease;
 }
-.section-title a:hover{color:var(--brand-hover);text-decoration:underline}
+.section-title a:hover{color:var(--ink-heading);text-decoration:underline}
 
 /* Tables */
 .table-wrap{
   overflow-x:auto;
   border:1px solid var(--line);
-  border-radius:var(--radius-lg);
-  background:rgba(11, 17, 30, 0.85);
-  box-shadow:inset 0 1px 1px rgba(255,255,255,0.03);
+  border-radius:var(--radius-md);
+  background:rgba(14, 17, 23, 0.9);
 }
 table{border-collapse:collapse;width:100%;min-width:760px;font-size:13.5px}
-th,td{text-align:left;padding:13px 16px;border-bottom:1px solid var(--line);vertical-align:middle}
+th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:middle}
 th{
   color:var(--muted);
   font-size:11px;
-  font-weight:700;
+  font-weight:680;
   text-transform:uppercase;
-  letter-spacing:0.08em;
-  background:rgba(15, 23, 42, 0.95);
+  letter-spacing:0.06em;
+  background:rgba(22, 26, 34, 0.95);
   border-bottom:1px solid var(--line-light);
 }
 tbody tr{transition:background-color 0.12s ease}
-tbody tr:hover{background:rgba(30, 41, 59, 0.4)}
+tbody tr:hover{background:rgba(38, 43, 53, 0.35)}
 tr:last-child td{border-bottom:0}
-.strong{font-weight:700;color:var(--ink-heading);text-decoration:none}
-a.strong:hover{color:var(--brand);text-decoration:underline}
-small{display:block;color:var(--muted);font-size:12px;margin-top:3px;font-family:var(--font-mono)}
+.strong{font-weight:680;color:var(--ink-heading);text-decoration:none}
+a.strong:hover{color:#ffffff;text-decoration:underline}
+small{display:block;color:var(--muted);font-size:12px;margin-top:2px;font-family:var(--font-mono)}
 
 /* Buttons */
 .button,button{
   appearance:none;
-  border:1px solid var(--brand);
-  background:var(--brand);
+  border:1px solid #ffffff;
+  background:#ffffff;
   border-radius:var(--radius-md);
-  color:var(--brand-ink);
+  color:#0b0d11;
   cursor:pointer;
   font:inherit;
   font-size:13px;
-  font-weight:700;
+  font-weight:680;
   letter-spacing:0.01em;
-  padding:8px 16px;
+  padding:7px 14px;
   text-decoration:none;
   display:inline-flex;
   align-items:center;
   justify-content:center;
   gap:6px;
   transition:all 0.14s ease;
-  min-height:36px;
+  min-height:34px;
 }
 .button:hover,button:hover{
-  background:var(--brand-hover);
-  border-color:var(--brand-hover);
-  transform:translateY(-1px);
-  box-shadow:var(--glow-brand);
+  background:#e2e8f0;
+  border-color:#e2e8f0;
 }
 .button.secondary,button.secondary{
-  background:rgba(30, 41, 59, 0.4);
+  background:var(--accent-gray);
   color:var(--ink);
   border-color:var(--line-light);
 }
 .button.secondary:hover,button.secondary:hover{
-  background:rgba(51, 65, 85, 0.6);
-  border-color:var(--brand);
-  color:var(--brand);
-  box-shadow:0 0 12px rgba(62,224,197,0.18);
+  background:var(--accent-gray-hover);
+  border-color:#4b5563;
+  color:var(--ink-heading);
 }
 .button.small,button.small{
   font-size:12px;
-  font-weight:650;
-  padding:5px 10px;
-  min-height:28px;
+  font-weight:600;
+  padding:4px 9px;
+  min-height:26px;
   border-radius:var(--radius-sm);
 }
 .button.copied,button.copied{
   background:var(--ok);
   border-color:var(--ok);
-  color:#04221c;
-  box-shadow:0 0 12px rgba(52,211,153,0.35);
+  color:#0e2819;
 }
 .danger{
   color:var(--danger-ink)!important;
@@ -1321,7 +1306,7 @@ small{display:block;color:var(--muted);font-size:12px;margin-top:3px;font-family
 }
 .danger:hover{
   border-color:var(--danger)!important;
-  box-shadow:0 0 0 1px rgba(244,63,94,0.4),0 0 16px rgba(244,63,94,0.25)!important;
+  box-shadow:0 0 0 1px rgba(248,113,113,0.3)!important;
 }
 
 /* Badges & Status */
@@ -1330,10 +1315,10 @@ small{display:block;color:var(--muted);font-size:12px;margin-top:3px;font-family
   display:inline-flex;
   align-items:center;
   font-size:11px;
-  font-weight:750;
-  padding:3px 10px;
+  font-weight:680;
+  padding:2px 9px;
   text-transform:capitalize;
-  letter-spacing:0.04em;
+  letter-spacing:0.03em;
   border:1px solid transparent;
   line-height:1.2;
 }
@@ -1341,10 +1326,9 @@ small{display:block;color:var(--muted);font-size:12px;margin-top:3px;font-family
   background:var(--ok-bg);
   color:var(--ok);
   border-color:var(--ok-line);
-  box-shadow:0 0 8px rgba(52,211,153,0.15);
 }
 .badge.offline{
-  background:rgba(30, 41, 59, 0.6);
+  background:rgba(38, 43, 53, 0.6);
   color:var(--muted);
   border-color:var(--line-light);
 }
@@ -1369,46 +1353,46 @@ small{display:block;color:var(--muted);font-size:12px;margin-top:3px;font-family
   display:grid;
   grid-template-columns:repeat(4,minmax(0,1fr));
   align-items:end;
-  gap:16px;
+  gap:14px;
 }
 label{
   display:flex;
   flex-direction:column;
-  gap:6px;
-  font-weight:650;
+  gap:5px;
+  font-weight:600;
   font-size:12.5px;
   color:var(--ink);
 }
 input,select,textarea{
   border:1px solid var(--line-light);
   border-radius:var(--radius-md);
-  padding:9px 12px;
+  padding:8px 11px;
   font:inherit;
   font-size:13.5px;
   color:var(--ink-heading);
   min-width:0;
-  background:rgba(9, 13, 22, 0.85);
-  transition:border-color 0.14s ease,box-shadow 0.14s ease;
+  background:rgba(11, 13, 17, 0.9);
+  transition:border-color 0.14s ease;
 }
-input:hover,select:hover{border-color:#475569}
+input:hover,select:hover{border-color:#4b5563}
 input:focus,select:focus{
   outline:none;
-  border-color:var(--brand);
-  box-shadow:0 0 0 3px rgba(62,224,197,0.2);
+  border-color:#94a3b8;
+  box-shadow:0 0 0 2px rgba(148, 163, 184, 0.2);
 }
 fieldset{
   border:1px solid var(--line);
   border-radius:var(--radius-md);
-  padding:10px 14px;
+  padding:8px 12px;
   margin:0;
-  background:rgba(9, 13, 22, 0.5);
+  background:rgba(11, 13, 17, 0.5);
 }
 legend{
-  padding:0 6px;
+  padding:0 5px;
   color:var(--muted);
   font-size:11px;
-  font-weight:700;
-  letter-spacing:0.08em;
+  font-weight:680;
+  letter-spacing:0.06em;
   text-transform:uppercase;
 }
 .check{
@@ -1417,57 +1401,144 @@ legend{
   align-items:center;
   font-weight:500;
   font-size:13px;
-  margin:4px 14px 4px 0;
+  margin:4px 12px 4px 0;
   cursor:pointer;
 }
-.check input{min-width:auto;accent-color:var(--brand);cursor:pointer}
-.stack{display:flex;flex-direction:column;gap:16px;max-width:520px}
+.check input{min-width:auto;accent-color:#ffffff;cursor:pointer}
+.stack{display:flex;flex-direction:column;gap:14px;max-width:500px}
 
 /* Lists & Details */
 .item-list,.plain-list{list-style:none;padding:0;margin:0}
-.item-list li{border-bottom:1px solid var(--line);padding:12px 0}
+.item-list li{border-bottom:1px solid var(--line);padding:10px 0}
 .item-list li:last-child{border:0}
 .item-list a{
   display:block;
   text-decoration:none;
   border-radius:var(--radius-md);
-  padding:6px 10px;
-  margin:0 -10px;
+  padding:6px 8px;
+  margin:0 -8px;
   transition:background-color 0.12s ease;
 }
-.item-list a:hover{background:rgba(30, 41, 59, 0.5)}
+.item-list a:hover{background:rgba(38, 43, 53, 0.4)}
 .empty{
   color:var(--muted);
-  padding:32px 16px;
+  padding:28px 16px;
   text-align:center;
   border:1px dashed var(--line-light);
-  border-radius:var(--radius-lg);
-  background:rgba(15, 23, 42, 0.4);
+  border-radius:var(--radius-md);
+  background:rgba(18, 21, 26, 0.4);
 }
 .details{
   display:grid;
   grid-template-columns:160px 1fr;
-  gap:12px 16px;
+  gap:10px 14px;
   margin:0;
   font-size:13.5px;
 }
 .details dt{
   color:var(--muted);
   font-size:11.5px;
-  font-weight:680;
+  font-weight:650;
   text-transform:uppercase;
-  letter-spacing:0.07em;
+  letter-spacing:0.06em;
 }
-.details dd{margin:0;font-weight:650;color:var(--ink-heading);overflow-wrap:anywhere}
-.tool-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
-.tool-grid div{
+.details dd{margin:0;font-weight:600;color:var(--ink-heading);overflow-wrap:anywhere}
+
+/* Tool Grid */
+.tool-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.tool-item{
   border:1px solid var(--line);
   border-radius:var(--radius-md);
-  padding:14px;
-  background:rgba(9, 13, 22, 0.6);
+  padding:12px 14px;
+  background:rgba(11, 13, 17, 0.7);
 }
-.tool-grid strong{color:var(--ink-heading);font-size:13.5px}
-.tool-grid span{display:block;color:var(--muted);font-size:12.5px;margin-top:4px}
+.tool-item strong{color:var(--ink-heading);font-size:13.5px}
+.tool-item span{display:block;color:var(--muted);font-size:12.5px;margin-top:3px}
+
+/* Runner Detail Specifics */
+.version-stat{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  padding:6px 10px;
+  border:1px solid var(--line);
+  border-radius:var(--radius-md);
+  background:rgba(11, 13, 17, 0.5);
+}
+.form-stat-label{
+  font-size:11px;
+  font-weight:650;
+  color:var(--muted);
+  text-transform:uppercase;
+  letter-spacing:0.05em;
+}
+.version-stat strong{
+  font-size:13.5px;
+  color:var(--ink-heading);
+}
+.policy-status-foot{margin-top:12px;font-size:12.5px}
+.danger-zone{
+  margin-top:18px;
+  padding-top:16px;
+  border-top:1px solid var(--line);
+}
+.workspace-card{
+  border:1px solid var(--line);
+  border-radius:var(--radius-md);
+  padding:16px;
+  margin-bottom:14px;
+  background:rgba(11, 13, 17, 0.7);
+}
+.workspace-actions{
+  margin-top:14px;
+  padding-top:12px;
+  border-top:1px solid var(--line);
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+}
+.validation-tag{font-size:12.5px;font-weight:600}
+.inline-delete-form{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+}
+.inline-delete-form label{
+  flex-direction:row;
+  align-items:center;
+  gap:6px;
+  font-size:12px;
+  color:var(--muted);
+}
+.inline-delete-form input{
+  padding:4px 8px;
+  font-size:12px;
+  max-width:180px;
+}
+.add-workspace-box{
+  margin-top:20px;
+  padding-top:18px;
+  border-top:1px solid var(--line);
+}
+.add-workspace-box h3{
+  margin-bottom:12px;
+}
+.full-host-label{
+  grid-column:span 2;
+}
+.check-line{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  font-weight:500;
+  font-size:12.5px;
+  color:var(--muted);
+}
+.empty-item{
+  padding:12px 0;
+  font-style:italic;
+}
+
 .mono,.secret-url,.secret-card code{
   font-family:var(--font-mono);
   font-size:13px;
@@ -1484,15 +1555,7 @@ legend{
   border:0;
 }
 .hidden{display:none}
-.workspace-card{
-  border:1px solid var(--line);
-  border-radius:var(--radius-lg);
-  padding:18px;
-  margin-bottom:16px;
-  background:rgba(9, 13, 22, 0.7);
-  box-shadow:inset 0 1px 1px rgba(255,255,255,0.02);
-}
-.scope-line{font-family:var(--font-mono);font-size:13px;color:var(--brand)}
+.scope-line{font-family:var(--font-mono);font-size:13px;color:var(--muted)}
 
 /* Auth / Full-Page Cards */
 .auth-body{
@@ -1501,58 +1564,57 @@ legend{
   min-height:100vh;
   padding:40px 20px;
 }
-.auth-shell{width:min(480px,100%)}
+.auth-shell{width:min(460px,100%)}
 .auth-card{
-  padding:36px 32px 32px;
+  padding:32px 28px 28px;
   box-shadow:var(--shadow-lg);
-  background-image:linear-gradient(180deg, rgba(30, 41, 59, 0.4) 0%, rgba(15, 23, 42, 0.9) 100%);
+  background-image:linear-gradient(180deg, rgba(28, 33, 40, 0.4) 0%, rgba(18, 21, 26, 0.95) 100%);
 }
 .brand-kicker{margin-bottom:6px}
 .secret-url,.secret-card code{
   display:block;
   overflow-wrap:anywhere;
-  padding:14px;
+  padding:12px;
   border-radius:var(--radius-md);
   background:#090d16;
   border:1px solid var(--line-light);
-  color:var(--brand);
-  margin:0 0 20px;
+  color:#ffffff;
+  margin:0 0 18px;
 }
 .error-card{border-color:var(--danger-line)}
-.enrollment-shell{padding-top:48px;padding-bottom:64px}
+.enrollment-shell{padding-top:44px;padding-bottom:56px}
 .enrollment-dialog{
   display:block;
-  width:min(940px,100%);
+  width:min(900px,100%);
   margin:0 auto;
-  padding:32px;
+  padding:28px;
   color:inherit;
   border:1px solid var(--line-light);
   box-shadow:var(--shadow-lg);
 }
-.tabs{display:flex;flex-wrap:wrap;gap:8px;margin:20px 0}
+.tabs{display:flex;flex-wrap:wrap;gap:6px;margin:18px 0}
 .tabs [role=tab]{
-  background:rgba(15, 23, 42, 0.8);
+  background:rgba(22, 26, 34, 0.8);
   color:var(--muted);
   border:1px solid var(--line-light);
   border-radius:999px;
-  padding:7px 16px;
-  font-weight:650;
+  padding:6px 14px;
+  font-weight:600;
   font-size:12.5px;
 }
 .tabs [role=tab][aria-selected=true]{
   color:var(--brand-ink);
   background:var(--brand);
   border-color:var(--brand);
-  box-shadow:0 0 14px rgba(62,224,197,0.3);
 }
-.tabs [role=tabpanel]{flex:1 1 100%;margin-top:10px}
+.tabs [role=tabpanel]{flex:1 1 100%;margin-top:8px}
 pre{
   overflow:auto;
-  padding:16px;
-  border-radius:var(--radius-lg);
-  background:#070b12;
+  padding:14px;
+  border-radius:var(--radius-md);
+  background:#090d14;
   border:1px solid var(--line-light);
-  color:#99f6e4;
+  color:#f1f5f9;
   font-family:var(--font-mono);
   font-size:13px;
   line-height:1.5;
@@ -1562,11 +1624,11 @@ pre{
   background:var(--warn-bg);
   color:var(--warn);
   border-radius:var(--radius-md);
-  padding:12px 16px;
+  padding:10px 14px;
   font-size:13px;
 }
 :focus-visible{
-  outline:2px solid var(--brand);
+  outline:2px solid #ffffff;
   outline-offset:2px;
 }
 
@@ -1588,17 +1650,17 @@ pre{
   .brand{align-self:flex-start}
   .top-actions{width:100%}
   .top-actions .button{flex:1;text-align:center}
-  nav{overflow-x:auto;width:100%;margin-bottom:24px}
+  nav{overflow-x:auto;width:100%;margin-bottom:20px}
   .metrics,.grid-two,.form-grid{grid-template-columns:1fr 1fr}
-  .panel,.auth-card{padding:18px}
+  .panel,.auth-card{padding:16px}
   .actions{min-width:210px}
   .tool-grid,.details{grid-template-columns:1fr}
-  h1{font-size:26px}
+  h1{font-size:24px}
 }
 @media(max-width:480px){
   .metrics,.grid-two,.form-grid{grid-template-columns:1fr}
-  h1{font-size:24px}
-  nav a{padding:8px 12px}
+  h1{font-size:22px}
+  nav a{padding:6px 10px}
 }
 </style>`; }
 function adminScript(): string { return `<script>var ZH_UI_TEXT=${JSON.stringify(ZH_UI_TEXT)};function translateTextNodes(root){var walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode:function(node){if(!node.nodeValue||!node.nodeValue.trim())return NodeFilter.FILTER_REJECT;for(var el=node.parentElement;el;el=el.parentElement){if(el.hasAttribute('data-no-i18n')||el.tagName==='CODE'||el.tagName==='PRE'||el.tagName==='SCRIPT'||el.tagName==='STYLE'||el.tagName==='INPUT'||el.tagName==='TEXTAREA')return NodeFilter.FILTER_REJECT}return NodeFilter.FILTER_ACCEPT}});var nodes=[];while(walker.nextNode())nodes.push(walker.currentNode);nodes.forEach(function(node){var text=node.nodeValue||'';var trimmed=text.trim();var mapped=ZH_UI_TEXT[trimmed];if(text.indexOf('coding:')>=0)return;if(mapped)node.nodeValue=text.replace(trimmed,mapped);else Object.keys(ZH_UI_TEXT).sort(function(a,b){return b.length-a.length}).forEach(function(key){if(node.nodeValue&&node.nodeValue.indexOf(key)>=0)node.nodeValue=node.nodeValue.split(key).join(ZH_UI_TEXT[key])})})}function translateAttributes(root){['aria-label','alt','placeholder','title'].forEach(function(name){root.querySelectorAll('['+name+']').forEach(function(element){if(element.closest('[data-no-i18n]'))return;var value=element.getAttribute(name)||'';Object.keys(ZH_UI_TEXT).sort(function(a,b){return b.length-a.length}).forEach(function(key){if(value.indexOf(key)>=0)value=value.split(key).join(ZH_UI_TEXT[key])});element.setAttribute(name,value)})})}function applyLocale(locale){var zh=locale==='zh-CN';document.documentElement.lang=zh?'zh-CN':'en';document.querySelectorAll('[data-lang-toggle]').forEach(function(item){var active=item.getAttribute('data-lang-toggle')===locale;item.setAttribute('aria-current',active?'true':'false')});if(zh){translateTextNodes(document.body);translateAttributes(document);var title=document.title;Object.keys(ZH_UI_TEXT).sort(function(a,b){return b.length-a.length}).forEach(function(key){if(title.indexOf(key)>=0)title=title.split(key).join(ZH_UI_TEXT[key])});document.title=title}}function requestedLocale(){var query=new URLSearchParams(location.search).get('lang');if(query==='zh-CN'||query==='zh')return 'zh-CN';if(query==='en')return 'en';var match=/runmesh_lang=(zh-CN|en)/.exec(document.cookie||'');if(match)return match[1];return navigator.language&&navigator.language.toLowerCase().startsWith('zh')?'zh-CN':'en'}function rememberLocale(locale){document.cookie='runmesh_lang='+locale+'; Max-Age=31536000; Path=/; SameSite=Lax'}document.querySelectorAll('[data-lang-toggle]').forEach(function(link){link.addEventListener('click',function(event){var locale=link.getAttribute('data-lang-toggle')||'en';rememberLocale(locale);if(locale==='zh-CN'&&new URLSearchParams(location.search).get('lang')!=='zh-CN'){event.preventDefault();var url=new URL(location.href);url.searchParams.set('lang','zh-CN');location.href=url.toString()}else if(locale==='en'&&new URLSearchParams(location.search).has('lang')){event.preventDefault();var url=new URL(location.href);url.searchParams.set('lang','en');location.href=url.toString()}})});var locale=requestedLocale();if(new URLSearchParams(location.search).has('lang'))rememberLocale(locale);applyLocale(locale);function copyText(text){if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text);return}var area=document.createElement('textarea');area.value=text;area.setAttribute('readonly','');area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.select();document.execCommand('copy');area.remove()}document.querySelectorAll('[data-copy]').forEach(function(button){button.addEventListener('click',function(){copyText(button.getAttribute('data-copy')||'');button.textContent=document.documentElement.lang==='zh-CN'?'已复制':'Copied';button.classList.add('copied')})});document.querySelectorAll('[data-tab]').forEach(function(tab){tab.addEventListener('click',function(){var target=tab.getAttribute('data-tab');document.querySelectorAll('[data-tab]').forEach(function(item){item.setAttribute('aria-selected',String(item===tab));item.tabIndex=item===tab?0:-1});document.querySelectorAll('[data-panel]').forEach(function(panel){panel.hidden=panel.getAttribute('data-panel')!==target})});tab.addEventListener('keydown',function(event){if(event.key==='ArrowLeft'||event.key==='ArrowRight'){var tabs=Array.prototype.slice.call(document.querySelectorAll('[data-tab]'));var next=tabs[(tabs.indexOf(tab)+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length];next.focus();next.click()}})});</script>`; }
