@@ -718,10 +718,16 @@ export async function pushRunnerPolicy(env: WorkerEnv, runnerId: string, mutatio
   return env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/policy", { method: "POST", headers, body }));
 }
 async function beginRunnerPolicyMutation(env: WorkerEnv, runnerId: string, mutationId: string): Promise<Response> {
-  const body = JSON.stringify({ mutation_id: mutationId });
+  const body = JSON.stringify({ mutation_id: mutationId, runner_id: runnerId });
   const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/begin-policy-mutation", body);
   return env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/begin-policy-mutation", { method: "POST", headers, body }));
 }
+async function markRunnerPolicyCommitted(env: WorkerEnv, runnerId: string, mutationId: string, phase: "committed_pending" | "offline_pending"): Promise<Response> {
+  const body = JSON.stringify({ mutation_id: mutationId, phase });
+  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/mark-policy-committed", body);
+  return env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/mark-policy-committed", { method: "POST", headers, body }));
+}
+
 async function cancelRunnerPolicyMutation(env: WorkerEnv, runnerId: string, mutationId: string): Promise<Response> {
   const body = JSON.stringify({ mutation_id: mutationId });
   const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/cancel-policy-mutation", body);
@@ -745,30 +751,21 @@ async function mutateRunnerPolicy(env: WorkerEnv, runnerId: string, mutation: { 
     } catch { return new Response("policy mutation state is uncertain; Runner remains safely fenced", { status: 503 }); }
     return changed;
   }
+  const mutationState = await runnerMutationState(env, runnerId, mutationId).catch(() => undefined);
+  if (mutationState?.mutation_committed !== true) return new Response("policy mutation outcome is uncertain; Runner remains safely fenced", { status: 503 });
+  const phase = mutationState.policy_status === "offline_pending" ? "offline_pending" : "committed_pending";
+  try {
+    const committed = await markRunnerPolicyCommitted(env, runnerId, mutationId, phase);
+    if (!committed.ok) return new Response("policy mutation outcome is uncertain; Runner remains safely fenced", { status: 503 });
+  } catch { return new Response("policy mutation outcome is uncertain; Runner remains safely fenced", { status: 503 }); }
   try {
     const pushed = await pushRunnerPolicy(env, runnerId, mutationId);
     if (!pushed.ok && pushed.status !== 204 && pushed.status !== 503) return pushed;
   } catch { /* desired policy remains pending for reconnect */ }
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    const state = await runnerMutationState(env, runnerId, mutationId).catch(() => undefined);
-    const admission = await runnerAdmissionState(env, runnerId).catch(() => undefined);
-    if (state?.mutation_committed === true && state.policy_status === "applied"
-      && typeof state.applied_revision === "number" && state.applied_revision > 0
-      && typeof state.active_checksum === "string" && /^[a-f0-9]{64}$/.test(state.active_checksum)
-      && state.desired_revision === state.applied_revision && state.runner_reported_revision === state.applied_revision
-      && state.desired_checksum === state.active_checksum && state.active_checksum === state.runner_reported_checksum
-      && admission?.fenced === false && admission.reconciled === true && admission.mutationId === null
-      && admission.activeRevision === state.applied_revision && admission.activeChecksum === state.active_checksum
-      && admission.desiredRevision === state.desired_revision && admission.desiredChecksum === state.desired_checksum) return changed;
-    await new Promise<void>((resolve) => setTimeout(resolve, 50));
-  }
-  return new Response("policy mutation is committed but still pending; Runner remains safely fenced", { status: 503 });
-}
-async function runnerAdmissionState(env: WorkerEnv, runnerId: string): Promise<Record<string, unknown> | undefined> {
-  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "GET", "/admission-state", "");
-  const response = await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/admission-state", { method: "GET", headers }));
-  return response.ok ? record(await json(response)) : undefined;
+  // A committed desired policy is successful even while its Runner is offline
+  // or validating it. Browser requests redirect normally; token API callers get
+  // an explicit accepted response rather than a false transient failure.
+  return new Response(changed.body, { status: 202, headers: changed.headers });
 }
 async function forwardRunnerRpc(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
   const segments = url.pathname.split("/").filter(Boolean);

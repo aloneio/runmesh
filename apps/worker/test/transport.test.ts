@@ -124,6 +124,100 @@ describe("Worker runner transport", () => {
     expect(cancelled.status).toBe(409);
     socket?.close();
   });
+  it("allows committed offline policies to supersede while preserving precommit exclusivity", async () => {
+    const object = env.RUNNER.get(env.RUNNER.idFromName(runnerId));
+    const secret = "test-internal-control-secret-not-for-production";
+    const post = async (path: string, body: Record<string, unknown>): Promise<Response> => {
+      const text = JSON.stringify(body);
+      const headers = await internalHeaders(secret, "POST", path, text);
+      return object.fetch(new Request(`https://runner.internal${path}`, { method: "POST", headers, body: text }));
+    };
+    const admission = async (): Promise<Record<string, unknown>> => {
+      const headers = await internalHeaders(secret, "GET", "/admission-state", "");
+      const response = await object.fetch(new Request("https://runner.internal/admission-state", { headers }));
+      return response.json() as Promise<Record<string, unknown>>;
+    };
+
+    // A newly instantiated, offline RunnerDO is in restart reconciliation. A
+    // mutation must be able to replace that fence without restoring admission.
+    expect((await post("/begin-policy-mutation", { mutation_id: "restart-offline", runner_id: runnerId })).status).toBe(204);
+    await expect(admission()).resolves.toMatchObject({ fenced: true, mutationId: "restart-offline", mutationPhase: "precommit" });
+    expect((await post("/begin-policy-mutation", { mutation_id: "precommit-conflict", runner_id: runnerId })).status).toBe(409);
+
+    // An uncommitted offline precommit can be cancelled, but cancellation keeps
+    // the live-admission fence closed because no session identity can be restored.
+    const cancelled = await post("/cancel-policy-mutation", { mutation_id: "restart-offline" });
+    expect(cancelled.status).toBe(204);
+    await expect(admission()).resolves.toMatchObject({ fenced: true, mutationId: null, mutationPhase: "idle" });
+
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
+    expect((await post("/begin-policy-mutation", { mutation_id: "offline-first", runner_id: runnerId })).status).toBe(204);
+    await runInDurableObject(registry, (instance) => expect(instance.createManagedWorkspace(runnerId, {
+      workspace_id: "offline-one", display_name: "Offline one", root_path: "/tmp", enabled: true,
+      permissions: { read: true, edit: false, shell: false, job_control: false },
+    }, Date.now(), "offline-first")).toBeDefined());
+    expect((await post("/mark-policy-committed", { mutation_id: "offline-first", phase: "offline_pending" })).status).toBe(204);
+
+    // The current desired immutable revision is committed, so the next offline
+    // edit supersedes it instead of deadlocking behind an obsolete mutation ID.
+    expect((await post("/begin-policy-mutation", { mutation_id: "offline-second", runner_id: runnerId })).status).toBe(204);
+    await runInDurableObject(registry, (instance) => expect(instance.createManagedWorkspace(runnerId, {
+      workspace_id: "offline-two", display_name: "Offline two", root_path: "/var/tmp", enabled: true,
+      permissions: { read: true, edit: false, shell: false, job_control: false },
+    }, Date.now(), "offline-second")).toBeDefined());
+    expect((await post("/mark-policy-committed", { mutation_id: "offline-second", phase: "offline_pending" })).status).toBe(204);
+    await expect(admission()).resolves.toMatchObject({ fenced: true, mutationId: "offline-second", mutationPhase: "offline_pending" });
+  });
+
+  it("keeps invalid and stale acknowledgements from replacing the current desired mutation", async () => {
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName(`policy-supersede-${crypto.randomUUID()}`));
+    const now = Date.now();
+    await runInDurableObject(registry, (instance) => {
+      expect(instance.addRunner("policy-supersede", "Policy supersede", now)).toBeDefined();
+      const runner = instance.getRunner("policy-supersede");
+      const credentialVersion = runner?.credential_version ?? 0;
+      const epoch = instance.beginConnection("policy-supersede", {
+        runner_id: "policy-supersede", runner_version: "test", platform: "test", architecture: "test",
+        capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: [], labels: {} },
+      }, { min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION }, "policy-session", credentialVersion, now + 1);
+      expect(epoch).toEqual(expect.any(Number));
+      const initial = instance.getDesiredPolicySnapshot("policy-supersede");
+      expect(initial).toBeDefined();
+      expect(instance.acknowledgePolicy("policy-supersede", epoch as number, credentialVersion, {
+        desired_revision: initial?.revision as number, desired_checksum: initial?.checksum as string,
+        applied_revision: initial?.revision as number, applied_checksum: initial?.checksum as string,
+        runner_reported_policy_revision: initial?.revision as number, runner_reported_policy_checksum: initial?.checksum as string,
+        status: "applied", workspace_status: [],
+      }, now + 2)).toBe("applied");
+
+      expect(instance.createManagedWorkspace("policy-supersede", {
+        workspace_id: "invalid-root", display_name: "Invalid root", root_path: "/missing", enabled: true,
+        permissions: { read: true, edit: false, shell: false, job_control: false },
+      }, now + 3, "invalid-first")).toBeDefined();
+      const invalid = instance.getDesiredPolicySnapshot("policy-supersede");
+      expect(instance.acknowledgePolicy("policy-supersede", epoch as number, credentialVersion, {
+        desired_revision: invalid?.revision as number, desired_checksum: invalid?.checksum as string,
+        applied_revision: initial?.revision as number, applied_checksum: initial?.checksum as string,
+        runner_reported_policy_revision: initial?.revision as number, runner_reported_policy_checksum: initial?.checksum as string,
+        status: "invalid", workspace_status: [{ workspace_id: "invalid-root", status: "missing" }],
+      }, now + 4)).toBe("invalid");
+      expect(instance.getRunner("policy-supersede")).toMatchObject({ policy_status: "invalid", applied_policy_revision: initial?.revision });
+
+      expect(instance.setRunnerPermissions("policy-supersede", { read: false, edit: false, shell: false, job_control: false }, now + 5, "invalid-second")).toBeDefined();
+      expect(instance.getRunnerMutationState("policy-supersede", "invalid-first").mutation_committed).toBe(false);
+      expect(instance.getRunnerMutationState("policy-supersede", "invalid-second").mutation_committed).toBe(true);
+      // A delayed ACK for the invalid policy is recognized as stale and cannot
+      // overwrite the new desired identity or its mutation ownership.
+      expect(instance.acknowledgePolicy("policy-supersede", epoch as number, credentialVersion, {
+        desired_revision: invalid?.revision as number, desired_checksum: invalid?.checksum as string,
+        applied_revision: initial?.revision as number, applied_checksum: initial?.checksum as string,
+        runner_reported_policy_revision: initial?.revision as number, runner_reported_policy_checksum: initial?.checksum as string,
+        status: "invalid", workspace_status: [{ workspace_id: "invalid-root", status: "missing" }],
+      }, now + 6)).toBe("stale");
+      expect(instance.getRunner("policy-supersede")).toMatchObject({ policy_status: "pending" });
+      expect(instance.getSnapshotAuthorization("policy-supersede")).toMatchObject({ ok: false });
+    });
+  });
   it("rejects invalid identifiers and invalid authentication", async () => {
     await expect(SELF.fetch("https://worker.test/runner/connect?runner_id=%2Fbad", { headers: { Upgrade: "websocket", Authorization: `Bearer ${token}` } })).resolves.toMatchObject({ status: 400 });
     await expect(SELF.fetch(`https://worker.test/runner/connect?runner_id=${runnerId}`, { headers: { Upgrade: "websocket", Authorization: "Bearer incorrect-token-0123456789" } })).resolves.toMatchObject({ status: 401 });
