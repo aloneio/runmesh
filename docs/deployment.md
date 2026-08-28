@@ -44,7 +44,7 @@ npx wrangler deploy --config wrangler.jsonc
 1. Open the deployed root URL and create the first administrator password immediately. Setup is atomic first-success-wins; there is no bootstrap-password secret.
 2. Log in and open **Admin → Runners**. Add a safe Runner ID (or let the dashboard generate one) and a human-facing `display_name`. The display name is displayed to operators and by `runner_list`; the ID is the stable protocol identifier.
 3. Copy the enrollment code. It expires in 30 minutes and is single-use. **Regenerate enrollment** replaces any unused code for that Runner with a new one.
-4. On the host, first download and verify the portable Runner artifact and its manifest/signature. Then redeem the one-time code with the supported CLI and install the service:
+4. On the host, download the portable Runner `.tgz`, manifest, detached signature, signature descriptor, checksums, and informational keyring. Verify them with the trust keyring from an independently trusted source checkout, not with the keyring downloaded beside the artifact. Follow the complete [portable Runner verification and installation procedure](portable-runner-installation.md), then redeem the one-time code with the installed CLI and install the service:
 
    ```sh
    coding-runner enroll \
@@ -65,7 +65,7 @@ The dashboard displays safe Runner details and allows Runner rename, enrollment/
 
 ### Public bootstrap and package configuration
 
-Hosted bootstrap is disabled for this development preview. `/runner/releases/latest` and `/runner/releases/stable` report `distributable: false`, `package_name: ""`, `package_version: ""`, `package_spec: ""`, `artifact: null`, `artifacts: null`, and `published_at: null`. The generated scripts fail closed without consuming enrollment codes, accessing the network, running npm, or installing arbitrary packages. The recommended route is manual portable-artifact installation followed by the CLI enrollment/install steps above; automatic signed bootstrap, update, and rollback are roadmap items and are not implemented.
+Hosted bootstrap is disabled for this development preview. `/runner/releases/latest` and `/runner/releases/stable` report `distributable: false`, `package_name: ""`, `package_version: ""`, `package_spec: ""`, `artifact: null`, `artifacts: null`, and `published_at: null`. The generated scripts fail closed without consuming enrollment codes, accessing the network, running npm, or installing arbitrary packages. The supported manual route is the [portable Runner verification and installation procedure](portable-runner-installation.md), followed by CLI enrollment and service installation. Automatic signed bootstrap, update, and rollback are roadmap items and are not implemented.
 
 ## Local Runner profiles and service manifests
 

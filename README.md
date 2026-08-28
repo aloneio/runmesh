@@ -199,7 +199,7 @@ A deploy is a production-affecting operation. Review the exact commit, target ac
 
 The dashboard-generated enrollment code is short-lived, single-use, and invalidated when regenerated or redeemed. The Runner connects outward to the Worker over authenticated WebSocket; it does not expose an HTTP server.
 
-Hosted bootstrap is unavailable in `v0.1.0-dev.2`. `/runner/releases/latest` and `/runner/releases/stable` report `distributable: false`; they expose no package specification or artifact, and the generated installers fail closed. Download a verified portable artifact with its manifest and signature, verify it, then run `coding-runner enroll` followed by `coding-runner install`. Automatic signed bootstrap, update, and rollback are not included in this preview.
+Hosted bootstrap is unavailable in `v0.1.0-dev.2`. `/runner/releases/latest` and `/runner/releases/stable` report `distributable: false`; they expose no package specification or artifact, and the generated installers fail closed. Download the portable artifact plus its manifest, signature, and checksums, then follow the complete [portable Runner verification and installation procedure](docs/portable-runner-installation.md). Signature verification must use the trust keyring from an independently trusted source checkout, never the keyring downloaded beside the artifact. After verification, run `coding-runner enroll` followed by `coding-runner install`. Automatic signed bootstrap, update, and rollback are not included in this preview.
 
 Fresh enrollment starts with zero Workspaces. Workspace roots are added explicitly by an administrator through the dashboard and delivered privately to the selected Runner as policy data. Re-enrollment changes connection credentials without inventing a Workspace from the current directory. Browser Emergency Lock requires typing the Runner ID and locks future policy permissions without automatically stopping existing Jobs.
 
@@ -230,6 +230,7 @@ Runmesh is not an operating-system sandbox, and this preview does not include te
 
 ## Documentation
 
+- [Portable Runner installation](docs/portable-runner-installation.md) — trusted-key verification, SHA-256 checks, local `.tgz` installation, and version confirmation.
 - [Deployment](docs/deployment.md) — administrator setup, Worker secrets, Runner enrollment, and migration cautions.
 - [Security](docs/security.md) — credentials, host-shell risk, policy enforcement, and threat boundaries.
 - [Architecture](docs/architecture.md) — components, trust boundaries, and data flow.
