@@ -152,20 +152,30 @@ describe("Worker runner transport", () => {
 
     const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
     expect((await post("/begin-policy-mutation", { mutation_id: "offline-first", runner_id: runnerId })).status).toBe(204);
-    await runInDurableObject(registry, (instance) => expect(instance.createManagedWorkspace(runnerId, {
-      workspace_id: "offline-one", display_name: "Offline one", root_path: "/tmp", enabled: true,
-      permissions: { read: true, edit: false, shell: false, job_control: false },
-    }, Date.now(), "offline-first")).toBeDefined());
-    expect((await post("/mark-policy-committed", { mutation_id: "offline-first", phase: "offline_pending" })).status).toBe(204);
+    const offlineFirst = await runInDurableObject(registry, (instance) => ({
+      workspace: instance.createManagedWorkspace(runnerId, {
+        workspace_id: "offline-one", display_name: "Offline one", root_path: "/tmp", enabled: true,
+        permissions: { read: true, edit: false, shell: false, job_control: false },
+      }, Date.now(), "offline-first"),
+    }));
+    expect(offlineFirst.workspace).toBeDefined();
+    const firstDesired = await runInDurableObject(registry, (instance) => instance.getDesiredPolicySnapshot(runnerId));
+    expect(firstDesired).toBeDefined();
+    expect((await post("/mark-policy-committed", { mutation_id: "offline-first", phase: "offline_pending", desired_revision: firstDesired?.revision, desired_checksum: firstDesired?.checksum })).status).toBe(204);
 
     // The current desired immutable revision is committed, so the next offline
     // edit supersedes it instead of deadlocking behind an obsolete mutation ID.
     expect((await post("/begin-policy-mutation", { mutation_id: "offline-second", runner_id: runnerId })).status).toBe(204);
-    await runInDurableObject(registry, (instance) => expect(instance.createManagedWorkspace(runnerId, {
-      workspace_id: "offline-two", display_name: "Offline two", root_path: "/var/tmp", enabled: true,
-      permissions: { read: true, edit: false, shell: false, job_control: false },
-    }, Date.now(), "offline-second")).toBeDefined());
-    expect((await post("/mark-policy-committed", { mutation_id: "offline-second", phase: "offline_pending" })).status).toBe(204);
+    const offlineSecond = await runInDurableObject(registry, (instance) => ({
+      workspace: instance.createManagedWorkspace(runnerId, {
+        workspace_id: "offline-two", display_name: "Offline two", root_path: "/var/tmp", enabled: true,
+        permissions: { read: true, edit: false, shell: false, job_control: false },
+      }, Date.now(), "offline-second"),
+    }));
+    expect(offlineSecond.workspace).toBeDefined();
+    const secondDesired = await runInDurableObject(registry, (instance) => instance.getDesiredPolicySnapshot(runnerId));
+    expect(secondDesired).toBeDefined();
+    expect((await post("/mark-policy-committed", { mutation_id: "offline-second", phase: "offline_pending", desired_revision: secondDesired?.revision, desired_checksum: secondDesired?.checksum })).status).toBe(204);
     await expect(admission()).resolves.toMatchObject({ fenced: true, mutationId: "offline-second", mutationPhase: "offline_pending" });
   });
 
