@@ -118,4 +118,4 @@ A new Go/Rust implementation should consume the JSON Schema and implement the sa
 
 ## Scope boundary
 
-This protocol does not add OAuth, AI/model calls, Cloudflare Sandbox, Cloudflare Containers, or GitHub Actions runtime. Public bootstrap scripts are Worker application endpoints outside the wire protocol; they require an operator-configured stable distribution spec and only render manual host activation commands. The dashboard may render local commands/manifest instructions but does not execute host commands.
+This protocol does not add OAuth, AI/model calls, Cloudflare Sandbox, Cloudflare Containers, or GitHub Actions runtime. Public bootstrap scripts are Worker application endpoints outside the wire protocol and are unavailable in `v0.1.0-dev.2`; they fail closed rather than accepting a package specification or activating a host. Operators use a verified portable artifact, then the dashboard-provided one-time `coding-runner enroll` command and `coding-runner install`. The dashboard may render local commands/manifest instructions but does not execute host commands.
