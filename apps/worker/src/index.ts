@@ -693,6 +693,7 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Environment details unavailable while offline.": "离线时无法获取环境详情。",
   "Runner permission profile": "Runner 权限配置",
   "Changes remain pending until the connected Runner validates and applies the revision.": "变更会保持待处理，直到已连接的 Runner 校验并应用该版本。",
+  "Emergency control": "紧急控制",
   "Save profile": "保存配置",
   "Emergency Lock does not automatically stop existing Jobs.": "紧急锁定不会自动停止已有任务。",
   "Emergency lock all permissions": "紧急锁定所有权限",
@@ -905,7 +906,7 @@ function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly 
   const state = typeof runner.state === "string" ? runner.state : "offline";
   const publicInfo = record(runner.public_info);
   const tools = record(environment?.tools);
-  const toolRows = tools === undefined ? `<p class="muted">Environment details unavailable while offline.</p>` : `<div class="tool-grid">${Object.entries(tools).map(([name, value]) => { const item = record(value); return `<div class="tool-item"><strong>${escapeHtml(name)}</strong><span>${item?.available === true ? `Available${typeof item.version === "string" ? ` · ${escapeHtml(item.version)}` : ""}` : "Unavailable"}</span></div>`; }).join("")}</div>`;
+  const toolRows = tools === undefined ? `<p class="muted">Environment details unavailable while offline.</p>` : `<div class="tool-grid">${Object.entries(tools).map(([name, value]) => { const item = record(value); const isAvail = item?.available === true; return `<div class="tool-item"><div class="tool-name-row"><strong class="tool-name">${escapeHtml(name)}</strong><span class="badge tool-badge ${isAvail ? "online" : "offline"}">${isAvail ? "Available" : "Unavailable"}</span></div>${isAvail && typeof item?.version === "string" ? `<span class="tool-version mono">${escapeHtml(item.version)}</span>` : ""}</div>`; }).join("")}</div>`;
   const policyStatus = runner.policy_status === "applied" || runner.policy_status === "invalid" ? runner.policy_status : "pending";
   const workspaceRows = workspaces.map((workspace) => managedWorkspaceForm(runnerId, record(workspace), csrf)).join("") || `<li class="muted empty-item">No managed workspaces configured.</li>`;
   const updateChannel = runner.update_channel === "pinned" ? "pinned" : "stable";
@@ -918,7 +919,7 @@ function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly 
   const permissions = record(runner.runner_permissions);
   const desiredRevision = typeof runner.desired_policy_revision === "number" ? String(runner.desired_policy_revision) : "0";
   const appliedRevision = typeof runner.applied_policy_revision === "number" ? String(runner.applied_policy_revision) : "—";
-  return `<section class="page-heading"><div><p class="eyebrow">Runner details</p><h1>${escapeHtml(displayName)}</h1><p class="lede">Control-plane workspace roots appear only in this authenticated administrator view.</p></div><a class="button secondary" href="/admin/runners">Back to runners</a></section><div class="metrics"><div class="metric"><span>Status</span><strong>${statusBadge(state)}</strong></div><div class="metric"><span>Runner ID</span><strong class="mono">${escapeHtml(runnerId)}</strong></div><div class="metric"><span>Policy status</span><strong>${escapeHtml(policyStatus)} · ${escapeHtml(appliedRevision)} / ${escapeHtml(desiredRevision)}</strong></div><div class="metric"><span>Last seen</span><strong>${escapeHtml(time(typeof runner.last_heartbeat_ms === "number" ? runner.last_heartbeat_ms : null))}</strong></div></div><div class="grid-two"><section class="panel"><h2>Safe metadata</h2><dl class="details"><dt>Platform</dt><dd>${escapeHtml(typeof publicInfo?.platform === "string" ? publicInfo.platform : "Unknown")}</dd><dt>Architecture</dt><dd>${escapeHtml(typeof publicInfo?.architecture === "string" ? publicInfo.architecture : "Unknown")}</dd><dt>Hostname</dt><dd>${escapeHtml(typeof publicInfo?.hostname === "string" ? publicInfo.hostname : "Unknown")}</dd><dt>Runner version</dt><dd>${escapeHtml(currentVersion)}</dd><dt>Stable/latest version</dt><dd>${escapeHtml(latestVersion)}</dd><dt>Protocol compatibility</dt><dd>${escapeHtml(protocolRange)} · ${escapeHtml(protocolCompatibility)}</dd></dl></section><section class="panel"><h2>Version policy</h2><p class="muted">Policy is recorded for operators; package download, update, and rollback remain deferred.</p>${distributionNotice}<form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/version-policy" class="form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Channel<select name="update_channel"><option value="stable"${updateChannel === "stable" ? " selected" : ""}>Stable</option><option value="pinned"${updateChannel === "pinned" ? " selected" : ""}>Pinned</option></select></label><label>Desired version<input name="desired_runner_version" value="${escapeHtml(desiredVersion)}" placeholder="1.2.3" pattern="[0-9]+\\.[0-9]+\\.[0-9]+"></label><div class="version-stat"><span class="form-stat-label">Current</span><strong>${escapeHtml(currentVersion)}</strong></div><div class="version-stat"><span class="form-stat-label">Latest</span><strong>${escapeHtml(latestVersion)}</strong></div><button class="button">Save version policy</button></form><p class="muted policy-status-foot">Status: ${escapeHtml(String(runner.update_status ?? "unknown"))}</p></section><section class="panel"><h2>Environment tools</h2>${toolRows}</section></div><div class="grid-two"><section class="panel"><h2>Runner permission profile</h2><p class="muted">Changes remain pending until the connected Runner validates and applies the revision.</p>${permissionForm(runnerId, permissions, csrf)}<div class="danger-zone"><p class="muted">Emergency Lock does not automatically stop existing Jobs.</p><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/emergency-lock" class="stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Type the Runner ID to confirm emergency lock<input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required></label><button class="button danger">Emergency lock all permissions</button></form></div></section><section class="panel"><h2>Active jobs</h2>${jobTable(jobs.filter(record) as Record<string, unknown>[])}</section></div><section class="panel"><div class="section-title"><h2>Managed workspaces</h2><span class="muted">Each save increments the desired policy revision.</span></div><ul class="plain-list workspace-list">${workspaceRows}</ul><div class="add-workspace-box"><h3>Add workspace</h3>${managedWorkspaceForm(runnerId, undefined, csrf)}</div></section>`;
+  return `<section class="detail-header"><div class="detail-title-group"><div class="detail-title-row"><h1 class="detail-title">${escapeHtml(displayName)}</h1>${statusBadge(state)}</div><p class="detail-id mono">${escapeHtml(runnerId)}</p></div><div class="detail-header-actions"><a class="button secondary" href="/admin/runners">Back to runners</a></div></section><div class="metrics" aria-label="Runner summary"><div class="metric"><span>Status</span><strong>${statusBadge(state)}</strong></div><div class="metric"><span>Runner ID</span><strong class="mono mono-truncate">${escapeHtml(runnerId)}</strong></div><div class="metric"><span>Policy status</span><strong>${escapeHtml(policyStatus)} · ${escapeHtml(appliedRevision === "—" && policyStatus === "applied" ? desiredRevision : appliedRevision)} / ${escapeHtml(desiredRevision)}</strong></div><div class="metric"><span>Last seen</span><strong>${escapeHtml(time(typeof runner.last_heartbeat_ms === "number" ? runner.last_heartbeat_ms : null))}</strong></div></div><div class="grid-two"><section class="panel"><h2>Safe metadata</h2><dl class="details"><dt>Platform</dt><dd>${escapeHtml(typeof publicInfo?.platform === "string" ? publicInfo.platform : "Unknown")}</dd><dt>Architecture</dt><dd>${escapeHtml(typeof publicInfo?.architecture === "string" ? publicInfo.architecture : "Unknown")}</dd><dt>Hostname</dt><dd>${escapeHtml(typeof publicInfo?.hostname === "string" ? publicInfo.hostname : "Unknown")}</dd><dt>Runner version</dt><dd>${escapeHtml(currentVersion)}</dd><dt>Stable/latest version</dt><dd>${escapeHtml(latestVersion)}</dd><dt>Protocol compatibility</dt><dd>${escapeHtml(protocolRange)} · ${escapeHtml(protocolCompatibility)}</dd></dl></section><section class="panel"><h2>Version policy</h2><p class="muted">Policy is recorded for operators; package download, update, and rollback remain deferred.</p>${distributionNotice}<form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/version-policy" class="form-grid version-policy-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Channel<select name="update_channel"><option value="stable"${updateChannel === "stable" ? " selected" : ""}>Stable</option><option value="pinned"${updateChannel === "pinned" ? " selected" : ""}>Pinned</option></select></label><label>Desired version<input name="desired_runner_version" value="${escapeHtml(desiredVersion)}" placeholder="1.2.3" pattern="[0-9]+\\.[0-9]+\\.[0-9]+"></label><div class="version-stat"><span class="form-stat-label">Current</span><strong>${escapeHtml(currentVersion)}</strong></div><div class="version-stat"><span class="form-stat-label">Latest</span><strong>${escapeHtml(latestVersion)}</strong></div><button class="button">Save version policy</button></form><p class="muted policy-status-foot">Status: ${escapeHtml(String(runner.update_status ?? "unknown"))}</p></section><section class="panel"><h2>Environment tools</h2>${toolRows}</section></div><div class="grid-two"><section class="panel"><h2>Runner permission profile</h2><p class="muted">Changes remain pending until the connected Runner validates and applies the revision.</p>${permissionForm(runnerId, permissions, csrf)}<div class="danger-zone"><h3>Emergency control</h3><p class="muted">Emergency Lock does not automatically stop existing Jobs.</p><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/emergency-lock" class="stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Type the Runner ID to confirm emergency lock<input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required></label><button class="button danger">Emergency lock all permissions</button></form></div></section><section class="panel"><h2>Active jobs</h2>${jobTable(jobs.filter(record) as Record<string, unknown>[])}</section></div><section class="panel"><div class="section-title"><h2>Managed workspaces</h2><span class="muted">Each save increments the desired policy revision.</span></div><ul class="plain-list workspace-list">${workspaceRows}</ul><div class="add-workspace-box"><h3>Add workspace</h3>${managedWorkspaceForm(runnerId, undefined, csrf)}</div></section>`;
 }
 function permissionForm(runnerId: string, permissions: Record<string, unknown> | undefined, csrf: string): string {
   const current = (name: string): boolean => permissions?.[name] === true;
@@ -938,39 +939,40 @@ function managedWorkspaceForm(runnerId: string, workspace: Record<string, unknow
 }
 function adminStyles(): string { return `<style>
 :root{
-  color-scheme:dark;
-  --ink:#f8fafc;
-  --ink-heading:#ffffff;
-  --muted:#94a3b8;
-  --muted-dark:#64748b;
-  --line:#22262d;
-  --line-light:#2d333b;
-  --line-subtle:#1c2128;
-  --panel:#12151a;
-  --panel-card:#161a22;
-  --panel-elevated:#1c2128;
-  --panel-subtle:#181c24;
-  --canvas:#0b0d11;
-  --brand:#ffffff;
-  --brand-hover:#e2e8f0;
-  --brand-dim:#2d333b;
-  --brand-ink:#0b0d11;
-  --accent-gray:#262b35;
-  --accent-gray-hover:#313743;
-  --danger:#f87171;
-  --danger-ink:#fef2f2;
-  --danger-bg:#261316;
-  --danger-line:#5f1c24;
-  --warn:#fbbf24;
-  --warn-bg:#241d11;
-  --warn-line:#5c4210;
-  --ok:#4ade80;
-  --ok-bg:#0e2819;
-  --ok-line:#1b5730;
-  --shadow-sm:0 1px 2px rgba(0,0,0,0.3);
-  --shadow-md:0 4px 12px rgba(0,0,0,0.35);
-  --shadow-lg:0 12px 28px rgba(0,0,0,0.45);
-  --glow-subtle:0 0 0 1px rgba(255,255,255,0.06);
+  color-scheme:light;
+  --canvas:#f1f3f5;
+  --canvas-subtle:#e9ecef;
+  --panel:#ffffff;
+  --panel-card:#f8f9fa;
+  --panel-elevated:#ffffff;
+  --panel-subtle:#f1f3f5;
+  --line:#dee2e6;
+  --line-light:#e9ecef;
+  --line-subtle:#ced4da;
+  --ink:#212529;
+  --ink-heading:#111827;
+  --muted:#6c757d;
+  --muted-dark:#495057;
+  --brand:#212529;
+  --brand-hover:#343a40;
+  --brand-dim:#495057;
+  --brand-ink:#ffffff;
+  --accent-gray:#e9ecef;
+  --accent-gray-hover:#dee2e6;
+  --danger:#dc2626;
+  --danger-ink:#991b1b;
+  --danger-bg:#fef2f2;
+  --danger-line:#fecaca;
+  --warn:#b45309;
+  --warn-bg:#fffbeb;
+  --warn-line:#fde68a;
+  --ok:#15803d;
+  --ok-bg:#f0fdf4;
+  --ok-line:#bbf7d0;
+  --shadow-sm:0 1px 2px rgba(0,0,0,0.05);
+  --shadow-md:0 4px 6px -1px rgba(0,0,0,0.07),0 2px 4px -2px rgba(0,0,0,0.05);
+  --shadow-lg:0 10px 15px -3px rgba(0,0,0,0.08),0 4px 6px -4px rgba(0,0,0,0.04);
+  --glow-subtle:0 0 0 1px rgba(0,0,0,0.05);
   --radius-sm:6px;
   --radius-md:8px;
   --radius-lg:12px;
@@ -984,8 +986,8 @@ body{
   margin:0;
   background-color:var(--canvas);
   background-image:
-    radial-gradient(1000px 500px at 50% -5%, rgba(45, 51, 59, 0.25) 0%, transparent 60%),
-    linear-gradient(180deg, #0e1117 0%, var(--canvas) 100%);
+    radial-gradient(1000px 500px at 50% -5%, rgba(206, 212, 218, 0.4) 0%, transparent 60%),
+    linear-gradient(180deg, #f8f9fa 0%, var(--canvas) 100%);
   background-attachment:fixed;
   color:var(--ink);
   font:14px/1.55 var(--font-sans);
@@ -999,8 +1001,8 @@ body::before{
   inset:0;
   pointer-events:none;
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+    linear-gradient(rgba(0, 0, 0, 0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 0, 0, 0.02) 1px, transparent 1px);
   background-size:32px 32px;
   mask-image:linear-gradient(180deg, #000 0%, rgba(0,0,0,0.4) 40%, transparent 80%);
   z-index:0;
@@ -1021,14 +1023,14 @@ body::before{
   align-items:center;
   justify-content:space-between;
   gap:24px;
-  padding:20px 0 18px;
+  padding:18px 0 16px;
   border-bottom:1px solid var(--line);
 }
 .brand{
   color:var(--ink-heading);
   font-size:16px;
   font-weight:700;
-  letter-spacing:0.02em;
+  letter-spacing:0.01em;
   text-decoration:none;
   display:inline-flex;
   align-items:center;
@@ -1037,21 +1039,21 @@ body::before{
 .brand-copy{display:flex;flex-direction:column;line-height:1.15}
 .brand-copy span{font-size:17px;font-weight:750;letter-spacing:-0.01em;color:var(--ink-heading)}
 .brand-copy small{
-  margin:3px 0 0;
+  margin:2px 0 0;
   font-size:11px;
   font-weight:600;
-  letter-spacing:0.12em;
+  letter-spacing:0.08em;
   text-transform:uppercase;
   color:var(--muted);
 }
 .brand-logo{
   display:block;
-  width:34px;
-  height:34px;
+  width:32px;
+  height:32px;
   object-fit:contain;
   border-radius:var(--radius-md);
-  background:#090d16;
-  border:1px solid var(--line-light);
+  background:#ffffff;
+  border:1px solid var(--line);
   padding:2px;
 }
 .top-actions,.actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px}
@@ -1063,7 +1065,7 @@ body::before{
   padding:4px 6px;
   border:1px solid var(--line);
   border-radius:var(--radius-md);
-  background:rgba(22, 26, 34, 0.7);
+  background:#ffffff;
 }
 
 /* Language Switcher */
@@ -1074,8 +1076,8 @@ body::before{
   padding:3px;
   border:1px solid var(--line);
   border-radius:999px;
-  background:rgba(22, 26, 34, 0.85);
-  backdrop-filter:blur(8px);
+  background:#ffffff;
+  box-shadow:var(--shadow-sm);
 }
 .language-switch a{
   min-width:36px;
@@ -1105,12 +1107,12 @@ body::before{
 nav{
   display:flex;
   gap:4px;
-  margin:20px 0 28px;
+  margin:18px 0 24px;
   padding:4px;
-  background:rgba(22, 26, 34, 0.75);
+  background:#ffffff;
   border:1px solid var(--line);
   border-radius:var(--radius-lg);
-  backdrop-filter:blur(8px);
+  box-shadow:var(--shadow-sm);
   width:fit-content;
   max-width:100%;
 }
@@ -1137,33 +1139,74 @@ h1,h2,h3{
   color:var(--ink-heading);
   letter-spacing:-0.02em;
 }
-h1{font-size:26px;font-weight:700}
+h1{font-size:24px;font-weight:700}
 h2{font-size:15px;font-weight:680;letter-spacing:-0.01em}
-h3{font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;font-weight:680}
+h3{font-size:12.5px;color:var(--muted-dark);text-transform:uppercase;letter-spacing:0.06em;font-weight:680}
 .page-heading{
   display:flex;
   justify-content:space-between;
   align-items:flex-start;
   gap:24px;
-  margin-bottom:24px;
+  margin-bottom:20px;
 }
 .eyebrow,.brand-kicker{
   color:var(--muted);
   font-size:11px;
   font-weight:680;
-  letter-spacing:0.12em;
+  letter-spacing:0.08em;
   text-transform:uppercase;
-  margin:0 0 6px;
+  margin:0 0 4px;
 }
 .lede,.muted,.subtitle{color:var(--muted)}
-.lede,.subtitle{margin:0 0 12px;max-width:64ch;font-size:13.5px;line-height:1.55}
+.lede,.subtitle{margin:0 0 10px;max-width:64ch;font-size:13.5px;line-height:1.5}
+
+/* Runner Detail Header Optimization */
+.detail-header{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:20px;
+  margin-bottom:20px;
+  padding:16px 20px;
+  background:#ffffff;
+  border:1px solid var(--line);
+  border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-sm);
+}
+.detail-title-group{
+  display:flex;
+  flex-direction:column;
+  gap:3px;
+}
+.detail-title-row{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap;
+}
+.detail-title{
+  font-size:20px;
+  font-weight:700;
+  margin:0;
+  color:var(--ink-heading);
+}
+.detail-id{
+  font-size:12.5px;
+  color:var(--muted);
+  margin:0;
+}
+.detail-header-actions{
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
 
 /* Metrics Dashboard Grid */
 .metrics{
   display:grid;
   grid-template-columns:repeat(4,1fr);
-  gap:14px;
-  margin-bottom:24px;
+  gap:12px;
+  margin-bottom:20px;
 }
 .metric,.panel,.auth-card,.enrollment-dialog{
   background:var(--panel);
@@ -1173,53 +1216,61 @@ h3{font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:0
   position:relative;
 }
 .metric{
-  padding:16px 18px 15px;
+  padding:14px 16px 13px;
   overflow:hidden;
-  background-image:linear-gradient(180deg, rgba(28, 33, 40, 0.45) 0%, rgba(18, 21, 26, 0.9) 100%);
+  background:#ffffff;
   border-color:var(--line);
-  transition:border-color 0.15s ease;
+  transition:border-color 0.15s ease,box-shadow 0.15s ease;
 }
 .metric:hover{
-  border-color:var(--line-light);
+  border-color:var(--line-subtle);
+  box-shadow:var(--shadow-md);
 }
 .metric span{
   display:block;
   color:var(--muted);
-  font-size:11.5px;
+  font-size:11px;
   font-weight:650;
-  letter-spacing:0.05em;
+  letter-spacing:0.04em;
   text-transform:uppercase;
-  margin-bottom:8px;
+  margin-bottom:6px;
 }
 .metric strong{
-  font-size:24px;
+  font-size:22px;
   font-weight:700;
-  letter-spacing:-0.025em;
+  letter-spacing:-0.02em;
   color:var(--ink-heading);
+  display:block;
+}
+.mono-truncate{
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-size:17px!important;
 }
 
 /* Panels & Layout Grids */
-.grid-two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:24px}
+.grid-two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:20px}
 .panel{
-  padding:20px;
-  margin-bottom:24px;
-  background-image:linear-gradient(180deg, rgba(28, 33, 40, 0.3) 0%, rgba(18, 21, 26, 0.85) 100%);
+  padding:18px 20px;
+  margin-bottom:20px;
+  background:#ffffff;
 }
 .danger-panel{
   border-color:var(--danger-line);
-  background-image:linear-gradient(180deg, rgba(95, 28, 36, 0.2) 0%, rgba(18, 21, 26, 0.9) 100%);
+  background:#fffafa;
 }
 .section-title{
   display:flex;
   justify-content:space-between;
   gap:14px;
   align-items:center;
-  margin-bottom:16px;
+  margin-bottom:14px;
   padding-bottom:4px;
 }
 .section-title h2{margin:0}
 .section-title a{
-  color:var(--muted);
+  color:var(--muted-dark);
   font-weight:600;
   font-size:12.5px;
   text-decoration:none;
@@ -1232,39 +1283,39 @@ h3{font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:0
   overflow-x:auto;
   border:1px solid var(--line);
   border-radius:var(--radius-md);
-  background:rgba(14, 17, 23, 0.9);
+  background:#ffffff;
 }
 table{border-collapse:collapse;width:100%;min-width:760px;font-size:13.5px}
-th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:middle}
+th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line-light);vertical-align:middle}
 th{
-  color:var(--muted);
+  color:var(--muted-dark);
   font-size:11px;
   font-weight:680;
   text-transform:uppercase;
-  letter-spacing:0.06em;
-  background:rgba(22, 26, 34, 0.95);
-  border-bottom:1px solid var(--line-light);
+  letter-spacing:0.05em;
+  background:#f8f9fa;
+  border-bottom:1px solid var(--line);
 }
 tbody tr{transition:background-color 0.12s ease}
-tbody tr:hover{background:rgba(38, 43, 53, 0.35)}
+tbody tr:hover{background:#f8f9fa}
 tr:last-child td{border-bottom:0}
 .strong{font-weight:680;color:var(--ink-heading);text-decoration:none}
-a.strong:hover{color:#ffffff;text-decoration:underline}
+a.strong:hover{color:var(--brand);text-decoration:underline}
 small{display:block;color:var(--muted);font-size:12px;margin-top:2px;font-family:var(--font-mono)}
 
 /* Buttons */
 .button,button{
   appearance:none;
-  border:1px solid #ffffff;
-  background:#ffffff;
+  border:1px solid var(--brand);
+  background:var(--brand);
   border-radius:var(--radius-md);
-  color:#0b0d11;
+  color:#ffffff;
   cursor:pointer;
   font:inherit;
   font-size:13px;
-  font-weight:680;
+  font-weight:650;
   letter-spacing:0.01em;
-  padding:7px 14px;
+  padding:6px 14px;
   text-decoration:none;
   display:inline-flex;
   align-items:center;
@@ -1274,17 +1325,17 @@ small{display:block;color:var(--muted);font-size:12px;margin-top:2px;font-family
   min-height:34px;
 }
 .button:hover,button:hover{
-  background:#e2e8f0;
-  border-color:#e2e8f0;
+  background:var(--brand-hover);
+  border-color:var(--brand-hover);
 }
 .button.secondary,button.secondary{
-  background:var(--accent-gray);
+  background:#ffffff;
   color:var(--ink);
-  border-color:var(--line-light);
+  border-color:var(--line-subtle);
 }
 .button.secondary:hover,button.secondary:hover{
-  background:var(--accent-gray-hover);
-  border-color:#4b5563;
+  background:var(--accent-gray);
+  border-color:var(--muted-dark);
   color:var(--ink-heading);
 }
 .button.small,button.small{
@@ -1297,16 +1348,17 @@ small{display:block;color:var(--muted);font-size:12px;margin-top:2px;font-family
 .button.copied,button.copied{
   background:var(--ok);
   border-color:var(--ok);
-  color:#0e2819;
+  color:#ffffff;
 }
 .danger{
-  color:var(--danger-ink)!important;
-  border-color:var(--danger-line)!important;
-  background:var(--danger-bg)!important;
+  color:#ffffff!important;
+  border-color:var(--danger)!important;
+  background:var(--danger)!important;
 }
 .danger:hover{
-  border-color:var(--danger)!important;
-  box-shadow:0 0 0 1px rgba(248,113,113,0.3)!important;
+  background:#b91c1c!important;
+  border-color:#b91c1c!important;
+  box-shadow:0 0 0 2px rgba(220,38,38,0.2)!important;
 }
 
 /* Badges & Status */
@@ -1315,10 +1367,10 @@ small{display:block;color:var(--muted);font-size:12px;margin-top:2px;font-family
   display:inline-flex;
   align-items:center;
   font-size:11px;
-  font-weight:680;
+  font-weight:650;
   padding:2px 9px;
   text-transform:capitalize;
-  letter-spacing:0.03em;
+  letter-spacing:0.02em;
   border:1px solid transparent;
   line-height:1.2;
 }
@@ -1328,9 +1380,9 @@ small{display:block;color:var(--muted);font-size:12px;margin-top:2px;font-family
   border-color:var(--ok-line);
 }
 .badge.offline{
-  background:rgba(38, 43, 53, 0.6);
-  color:var(--muted);
-  border-color:var(--line-light);
+  background:var(--accent-gray);
+  color:var(--muted-dark);
+  border-color:var(--line);
 }
 .badge.stale,.badge.pending,.job-status.queued,.job-status.cancelling{
   background:var(--warn-bg);
@@ -1353,46 +1405,46 @@ small{display:block;color:var(--muted);font-size:12px;margin-top:2px;font-family
   display:grid;
   grid-template-columns:repeat(4,minmax(0,1fr));
   align-items:end;
-  gap:14px;
+  gap:12px;
 }
 label{
   display:flex;
   flex-direction:column;
-  gap:5px;
+  gap:4px;
   font-weight:600;
   font-size:12.5px;
-  color:var(--ink);
+  color:var(--ink-heading);
 }
 input,select,textarea{
-  border:1px solid var(--line-light);
+  border:1px solid var(--line-subtle);
   border-radius:var(--radius-md);
-  padding:8px 11px;
+  padding:7px 10px;
   font:inherit;
   font-size:13.5px;
   color:var(--ink-heading);
   min-width:0;
-  background:rgba(11, 13, 17, 0.9);
-  transition:border-color 0.14s ease;
+  background:#ffffff;
+  transition:border-color 0.14s ease,box-shadow 0.14s ease;
 }
-input:hover,select:hover{border-color:#4b5563}
+input:hover,select:hover{border-color:var(--muted-dark)}
 input:focus,select:focus{
   outline:none;
-  border-color:#94a3b8;
-  box-shadow:0 0 0 2px rgba(148, 163, 184, 0.2);
+  border-color:var(--ink-heading);
+  box-shadow:0 0 0 2px rgba(33, 37, 41, 0.15);
 }
 fieldset{
   border:1px solid var(--line);
   border-radius:var(--radius-md);
   padding:8px 12px;
   margin:0;
-  background:rgba(11, 13, 17, 0.5);
+  background:#f8f9fa;
 }
 legend{
   padding:0 5px;
-  color:var(--muted);
+  color:var(--muted-dark);
   font-size:11px;
   font-weight:680;
-  letter-spacing:0.06em;
+  letter-spacing:0.05em;
   text-transform:uppercase;
 }
 .check{
@@ -1404,12 +1456,12 @@ legend{
   margin:4px 12px 4px 0;
   cursor:pointer;
 }
-.check input{min-width:auto;accent-color:#ffffff;cursor:pointer}
-.stack{display:flex;flex-direction:column;gap:14px;max-width:500px}
+.check input{min-width:auto;accent-color:var(--brand);cursor:pointer}
+.stack{display:flex;flex-direction:column;gap:12px;max-width:500px}
 
 /* Lists & Details */
 .item-list,.plain-list{list-style:none;padding:0;margin:0}
-.item-list li{border-bottom:1px solid var(--line);padding:10px 0}
+.item-list li{border-bottom:1px solid var(--line-light);padding:9px 0}
 .item-list li:last-child{border:0}
 .item-list a{
   display:block;
@@ -1419,14 +1471,14 @@ legend{
   margin:0 -8px;
   transition:background-color 0.12s ease;
 }
-.item-list a:hover{background:rgba(38, 43, 53, 0.4)}
+.item-list a:hover{background:var(--accent-gray)}
 .empty{
   color:var(--muted);
-  padding:28px 16px;
+  padding:24px 16px;
   text-align:center;
-  border:1px dashed var(--line-light);
+  border:1px dashed var(--line);
   border-radius:var(--radius-md);
-  background:rgba(18, 21, 26, 0.4);
+  background:#f8f9fa;
 }
 .details{
   display:grid;
@@ -1440,7 +1492,7 @@ legend{
   font-size:11.5px;
   font-weight:650;
   text-transform:uppercase;
-  letter-spacing:0.06em;
+  letter-spacing:0.04em;
 }
 .details dd{margin:0;font-weight:600;color:var(--ink-heading);overflow-wrap:anywhere}
 
@@ -1449,55 +1501,70 @@ legend{
 .tool-item{
   border:1px solid var(--line);
   border-radius:var(--radius-md);
-  padding:12px 14px;
-  background:rgba(11, 13, 17, 0.7);
-}
-.tool-item strong{color:var(--ink-heading);font-size:13.5px}
-.tool-item span{display:block;color:var(--muted);font-size:12.5px;margin-top:3px}
-
-/* Runner Detail Specifics */
-.version-stat{
+  padding:10px 12px;
+  background:#f8f9fa;
   display:flex;
   flex-direction:column;
   gap:4px;
+}
+.tool-name-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+}
+.tool-name{color:var(--ink-heading);font-size:13px;font-weight:650}
+.tool-badge{font-size:10px;padding:1px 7px}
+.tool-version{font-size:11.5px;color:var(--muted)}
+
+/* Runner Detail Specifics */
+.version-policy-form{margin-top:12px}
+.version-stat{
+  display:flex;
+  flex-direction:column;
+  gap:2px;
   padding:6px 10px;
   border:1px solid var(--line);
   border-radius:var(--radius-md);
-  background:rgba(11, 13, 17, 0.5);
+  background:#f8f9fa;
 }
 .form-stat-label{
-  font-size:11px;
+  font-size:10.5px;
   font-weight:650;
   color:var(--muted);
   text-transform:uppercase;
-  letter-spacing:0.05em;
+  letter-spacing:0.04em;
 }
 .version-stat strong{
-  font-size:13.5px;
+  font-size:13px;
   color:var(--ink-heading);
 }
-.policy-status-foot{margin-top:12px;font-size:12.5px}
+.policy-status-foot{margin-top:10px;font-size:12.5px}
 .danger-zone{
-  margin-top:18px;
-  padding-top:16px;
+  margin-top:16px;
+  padding-top:14px;
   border-top:1px solid var(--line);
+}
+.danger-zone h3{
+  margin:0 0 6px;
+  color:var(--danger-ink);
 }
 .workspace-card{
   border:1px solid var(--line);
   border-radius:var(--radius-md);
-  padding:16px;
-  margin-bottom:14px;
-  background:rgba(11, 13, 17, 0.7);
+  padding:14px 16px;
+  margin-bottom:12px;
+  background:#f8f9fa;
 }
 .workspace-actions{
-  margin-top:14px;
-  padding-top:12px;
+  margin-top:12px;
+  padding-top:10px;
   border-top:1px solid var(--line);
   display:flex;
   justify-content:space-between;
   align-items:center;
 }
-.validation-tag{font-size:12.5px;font-weight:600}
+.validation-tag{font-size:12px;font-weight:600}
 .inline-delete-form{
   display:inline-flex;
   align-items:center;
@@ -1508,7 +1575,7 @@ legend{
   align-items:center;
   gap:6px;
   font-size:12px;
-  color:var(--muted);
+  color:var(--muted-dark);
 }
 .inline-delete-form input{
   padding:4px 8px;
@@ -1516,12 +1583,14 @@ legend{
   max-width:180px;
 }
 .add-workspace-box{
-  margin-top:20px;
-  padding-top:18px;
-  border-top:1px solid var(--line);
+  margin-top:18px;
+  padding:16px;
+  border:1px dashed var(--line-subtle);
+  border-radius:var(--radius-md);
+  background:#f8f9fa;
 }
 .add-workspace-box h3{
-  margin-bottom:12px;
+  margin:0 0 12px;
 }
 .full-host-label{
   grid-column:span 2;
@@ -1532,10 +1601,10 @@ legend{
   gap:6px;
   font-weight:500;
   font-size:12.5px;
-  color:var(--muted);
+  color:var(--muted-dark);
 }
 .empty-item{
-  padding:12px 0;
+  padding:10px 0;
   font-style:italic;
 }
 
@@ -1555,7 +1624,7 @@ legend{
   border:0;
 }
 .hidden{display:none}
-.scope-line{font-family:var(--font-mono);font-size:13px;color:var(--muted)}
+.scope-line{font-family:var(--font-mono);font-size:13px;color:var(--muted-dark)}
 
 /* Auth / Full-Page Cards */
 .auth-body{
@@ -1564,43 +1633,46 @@ legend{
   min-height:100vh;
   padding:40px 20px;
 }
-.auth-shell{width:min(460px,100%)}
+.auth-shell{width:min(440px,100%)}
 .auth-card{
   padding:32px 28px 28px;
   box-shadow:var(--shadow-lg);
-  background-image:linear-gradient(180deg, rgba(28, 33, 40, 0.4) 0%, rgba(18, 21, 26, 0.95) 100%);
+  background:#ffffff;
+  border:1px solid var(--line);
 }
-.brand-kicker{margin-bottom:6px}
+.brand-kicker{margin-bottom:4px}
 .secret-url,.secret-card code{
   display:block;
   overflow-wrap:anywhere;
   padding:12px;
   border-radius:var(--radius-md);
-  background:#090d16;
-  border:1px solid var(--line-light);
-  color:#ffffff;
-  margin:0 0 18px;
+  background:#f8f9fa;
+  border:1px solid var(--line);
+  color:var(--ink-heading);
+  margin:0 0 16px;
 }
-.error-card{border-color:var(--danger-line)}
-.enrollment-shell{padding-top:44px;padding-bottom:56px}
+.error-card{border-color:var(--danger-line);background:#fffafa}
+.enrollment-shell{padding-top:40px;padding-bottom:50px}
 .enrollment-dialog{
   display:block;
-  width:min(900px,100%);
+  width:min(880px,100%);
   margin:0 auto;
   padding:28px;
   color:inherit;
-  border:1px solid var(--line-light);
+  border:1px solid var(--line);
   box-shadow:var(--shadow-lg);
+  background:#ffffff;
 }
-.tabs{display:flex;flex-wrap:wrap;gap:6px;margin:18px 0}
+.tabs{display:flex;flex-wrap:wrap;gap:6px;margin:16px 0}
 .tabs [role=tab]{
-  background:rgba(22, 26, 34, 0.8);
-  color:var(--muted);
-  border:1px solid var(--line-light);
+  background:#f8f9fa;
+  color:var(--muted-dark);
+  border:1px solid var(--line);
   border-radius:999px;
-  padding:6px 14px;
+  padding:5px 14px;
   font-weight:600;
   font-size:12.5px;
+  cursor:pointer;
 }
 .tabs [role=tab][aria-selected=true]{
   color:var(--brand-ink);
@@ -1612,9 +1684,9 @@ pre{
   overflow:auto;
   padding:14px;
   border-radius:var(--radius-md);
-  background:#090d14;
-  border:1px solid var(--line-light);
-  color:#f1f5f9;
+  background:#f8f9fa;
+  border:1px solid var(--line);
+  color:var(--ink-heading);
   font-family:var(--font-mono);
   font-size:13px;
   line-height:1.5;
@@ -1628,7 +1700,7 @@ pre{
   font-size:13px;
 }
 :focus-visible{
-  outline:2px solid #ffffff;
+  outline:2px solid var(--brand);
   outline-offset:2px;
 }
 
@@ -1646,20 +1718,22 @@ pre{
 }
 @media(max-width:800px){
   .shell{padding:0 18px 40px}
-  .topbar,.page-heading{align-items:stretch;flex-direction:column}
+  .topbar,.page-heading,.detail-header{align-items:stretch;flex-direction:column}
   .brand{align-self:flex-start}
   .top-actions{width:100%}
   .top-actions .button{flex:1;text-align:center}
-  nav{overflow-x:auto;width:100%;margin-bottom:20px}
+  nav{overflow-x:auto;width:100%;margin-bottom:18px}
   .metrics,.grid-two,.form-grid{grid-template-columns:1fr 1fr}
-  .panel,.auth-card{padding:16px}
+  .panel,.auth-card,.detail-header{padding:16px}
   .actions{min-width:210px}
   .tool-grid,.details{grid-template-columns:1fr}
-  h1{font-size:24px}
+  h1{font-size:22px}
+  .detail-title{font-size:18px}
 }
 @media(max-width:480px){
   .metrics,.grid-two,.form-grid{grid-template-columns:1fr}
-  h1{font-size:22px}
+  h1{font-size:20px}
+  .detail-title{font-size:17px}
   nav a{padding:6px 10px}
 }
 </style>`; }
