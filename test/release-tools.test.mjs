@@ -11,6 +11,15 @@ const repositoryRoot = resolve(new URL("..", import.meta.url).pathname);
 const productVersion = JSON.parse(await readFile(join(repositoryRoot, "package.json"), "utf8")).version;
 async function fixture() { const root = await mkdtemp(join(tmpdir(), "runmesh-release-tools-")); return { root, cleanup: () => rm(root, { recursive: true, force: true }) }; }
 
+test("pins manually-dispatched releases to the triggering dev commit", async () => {
+  const workflow = await readFile(join(repositoryRoot, ".github", "workflows", "release.yml"), "utf8");
+  assert.equal(workflow.includes("if: github.ref == 'refs/heads/dev'"), true);
+  assert.equal(workflow.includes("ref: ${{ github.sha }}"), true);
+  assert.equal(workflow.includes('test "$GITHUB_REF" = "refs/heads/dev"'), true);
+  assert.equal(workflow.includes('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"'), true);
+  assert.equal(workflow.includes('git merge-base --is-ancestor "$GITHUB_SHA" origin/dev'), true);
+});
+
 test("builds a single portable development artifact manifest from the product version", async () => {
   const f = await fixture();
   try {
