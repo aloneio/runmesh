@@ -72,13 +72,13 @@ jobs:
           set -euo pipefail
           published_at="$(date --utc --date="@$(git log -1 --format=%ct)" +%Y-%m-%dT%H:%M:%SZ)"
           node scripts/release-manifest.mjs release/assets "$RELEASE_VERSION" "$(git rev-parse HEAD)" "$published_at"
-          (cd release/assets && sha256sum *.tgz manifest.json > SHA256SUMS)
       - name: Sign and verify manifest
         run: |
           set -euo pipefail
           node scripts/release-signature.mjs sign release/assets/manifest.json release/assets/manifest.sig release/assets/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
           node scripts/release-signature.mjs verify release/assets/manifest.json release/assets/manifest.sig release/assets/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
           cp release/trust-keyring.json LICENSE NOTICE THIRD_PARTY_NOTICES.md release/assets/
+          (cd release/assets && sha256sum *.tgz manifest.json > SHA256SUMS)
       - name: Verify tag and release do not already exist
         env:
           GH_TOKEN: ${{ github.token }}
@@ -108,6 +108,7 @@ jobs:
           set -euo pipefail
           mkdir release/download
           gh release download "v${RELEASE_VERSION}" --repo "$GITHUB_REPOSITORY" --dir release/download
-          (cd release/download && sha256sum -c SHA256SUMS)
-          node scripts/release-signature.mjs verify release/download/manifest.json release/download/manifest.sig release/download/manifest.signature.json release/download/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
+          node scripts/release-verify.mjs release/download/manifest.json release/download/manifest.sig release/download/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID" "$RELEASE_VERSION"
+          (cd release/download && grep -vE '(^|[[:space:]])trust-keyring\.json$' SHA256SUMS | sha256sum -c -)
+          cmp release/download/trust-keyring.json release/trust-keyring.json
           RELEASE_VERSION="$RELEASE_VERSION" tar -xOf "release/download/runmesh-runner-${RELEASE_VERSION}.tgz" package/package.json | RELEASE_VERSION="$RELEASE_VERSION" node -e 'let x="";process.stdin.on("data",d=>x+=d).on("end",()=>{if(JSON.parse(x).version!==process.env.RELEASE_VERSION)process.exit(1)})'

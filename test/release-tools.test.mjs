@@ -5,6 +5,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { buildManifest, releaseArtifactName, releaseTag, validateManifest } from "../scripts/release-manifest.mjs";
+import { verifyReleaseAssets } from "../scripts/release-verify.mjs";
 import { signReleaseManifest, verifyReleaseManifest } from "../scripts/release-signature.mjs";
 
 const repositoryRoot = resolve(new URL("..", import.meta.url).pathname);
@@ -17,7 +18,10 @@ test("pins manually-dispatched releases to the triggering dev commit", async () 
   assert.equal(workflow.includes("ref: ${{ github.sha }}"), true);
   assert.equal(workflow.includes('test "$GITHUB_REF" = "refs/heads/dev"'), true);
   assert.equal(workflow.includes('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"'), true);
-  assert.equal(workflow.includes('git merge-base --is-ancestor "$GITHUB_SHA" origin/dev'), true);
+  assert.equal(workflow.includes("node scripts/release-verify.mjs release/download/manifest.json"), true);
+  assert.equal(workflow.includes("release/download/trust-keyring.json \"$RELEASE_SIGNING_KEY_ID\""), false);
+  assert.equal(workflow.includes("cmp release/download/trust-keyring.json release/trust-keyring.json"), true);
+  assert.equal(workflow.includes("sha256sum *.tgz manifest.json > SHA256SUMS"), true);
 });
 
 test("builds a single portable development artifact manifest from the product version", async () => {
@@ -42,6 +46,32 @@ test("builds a single portable development artifact manifest from the product ve
   } finally { await f.cleanup(); }
 });
 
+test("verifies with an independent trusted keyring instead of an asset-supplied keyring", async () => {
+  const f = await fixture();
+  try {
+    const trusted = generateKeyPairSync("ed25519"); const attacker = generateKeyPairSync("ed25519"); const keyId = "test-key";
+    const trustedKeyring = join(f.root, "trusted-keyring.json"); const downloadedKeyring = join(f.root, "downloaded-keyring.json"); const manifest = join(f.root, "manifest.json"); const signature = join(f.root, "manifest.sig"); const descriptor = join(f.root, "manifest.signature.json");
+    const keyring = (publicKey) => JSON.stringify({ schema_version: 1, keys: [{ key_id: keyId, algorithm: "ed25519", public_key_pem: publicKey.export({ type: "spki", format: "pem" }) }] });
+    await writeFile(trustedKeyring, keyring(trusted.publicKey)); await writeFile(downloadedKeyring, keyring(attacker.publicKey)); await writeFile(manifest, JSON.stringify({ version: productVersion }));
+    await signReleaseManifest({ manifestPath: manifest, signaturePath: signature, descriptorPath: descriptor, keyringPath: trustedKeyring, keyId, privateKeyPem: trusted.privateKey.export({ type: "pkcs8", format: "pem" }) });
+    await verifyReleaseManifest({ manifestPath: manifest, signaturePath: signature, descriptorPath: descriptor, keyringPath: trustedKeyring, expectedKeyId: keyId });
+    await assert.rejects(verifyReleaseManifest({ manifestPath: manifest, signaturePath: signature, descriptorPath: descriptor, keyringPath: downloadedKeyring, expectedKeyId: keyId }), /verification failed/);
+  } finally { await f.cleanup(); }
+});
+test("rejects an artifact replaced after checksums are regenerated", async () => {
+  const f = await fixture();
+  try {
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519"); const keyId = "test-key";
+    const keyring = join(f.root, "trust-keyring.json"); const artifact = join(f.root, releaseArtifactName(productVersion)); const manifest = join(f.root, "manifest.json"); const signature = join(f.root, "manifest.sig"); const descriptor = join(f.root, "manifest.signature.json");
+    await writeFile(keyring, JSON.stringify({ schema_version: 1, keys: [{ key_id: keyId, algorithm: "ed25519", public_key_pem: publicKey.export({ type: "spki", format: "pem" }) }] }));
+    await writeFile(artifact, "original artifact");
+    const built = await buildManifest({ releaseDirectory: f.root, version: productVersion, commitSha: "a".repeat(40), publishedAt: "2026-08-27T00:00:00Z" });
+    await writeFile(manifest, JSON.stringify(built));
+    await signReleaseManifest({ manifestPath: manifest, signaturePath: signature, descriptorPath: descriptor, keyringPath: keyring, keyId, privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }) });
+    await writeFile(artifact, "tampered artifact");
+    await assert.rejects(verifyReleaseAssets({ manifestPath: manifest, signaturePath: signature, descriptorPath: descriptor, keyringPath: keyring, expectedKeyId: keyId, expectedVersion: productVersion }), /mismatch/);
+  } finally { await f.cleanup(); }
+});
 test("signs and rejects a tampered manifest with Ed25519", async () => {
   const f = await fixture();
   try {
