@@ -9,7 +9,7 @@ This branch uses Runmesh-specific layouts for new installations. Existing `remot
 Runner policy migration is additive and fail-closed. After schema repair, an old applied row is retained only when its complete immutable snapshot and desired/applied/reported revision/checksum identities can be validated. Otherwise the Registry creates a newer desired snapshot from current administrative configuration, clears trusted applied/reported identity, and marks the Runner pending or offline_pending until a fresh acknowledgement. The operation is idempotent and does not delete Runner, Client, Workspace, or Job data.
 
 1. Back up the deployed Worker and Registry Durable Object data.
-2. Configure `SETUP_TOKEN` or preferably `SETUP_TOKEN_HASH` before first setup on a new instance.
+2. Configure the setup token (`SETUP_TOKEN`) or preferably its SHA-256 verifier (`SETUP_TOKEN_HASH`) before first setup on a new instance.
 3. Deploy the Worker and allow its additive SQLite schema repair and policy migration to run.
 4. Inspect old Runner records and profiles. Do not treat local synchronized workspaces as central authorization.
 5. Enroll or re-enroll the Runner, then explicitly review managed Workspace paths and permissions in the Panel.
@@ -27,4 +27,4 @@ The old `remote-coding-runtime` package and system directory names remain compat
 
 ## Security changes
 
-Central policy must be acknowledged before authorization. Internal Worker/DO requests use versioned, timestamped, nonce-bound HMAC and duplicate nonces are rejected. Snapshot authorization for Runner/job metadata does not grant live host access; host operations require live Runner admission. Host shell is not a workspace sandbox. Setup requires the deployment setup token and administrator password.
+Central policy must be acknowledged before authorization. Internal Worker/DO requests use versioned, timestamped, nonce-bound HMAC and duplicate nonces are rejected. Snapshot authorization for Runner/job metadata does not grant live host access; host operations require live Runner admission. Setup requires the configured setup token and administrator password.

@@ -23,16 +23,17 @@ The deployed core uses only:
 - SQLite-backed `RegistryDO` and `RunnerDO` classes;
 - no KV, D1, R2, Queues, Sandbox, Containers, Dynamic Workers, tunnels, inbound service, OAuth, AI/model API, or GitHub Actions runtime.
 
-Configure the three server-side secrets before deployment:
+Configure the four server-side secrets before deployment:
 
 ```sh
 cd apps/worker
 npx wrangler secret put ADMIN_TOKEN
+npx wrangler secret put SETUP_TOKEN          # or configure SETUP_TOKEN_HASH instead
 npx wrangler secret put RUNNER_TOKEN_PEPPER
 npx wrangler secret put INTERNAL_CONTROL_SECRET
 ```
 
-`ADMIN_TOKEN` is only for the manual/programmatic Runner administration API. It is not an administrator-password replacement, browser cookie, MCP credential, or Runner enrollment code.
+The first administrator setup requires the configured `SETUP_TOKEN` or the SHA-256 verifier in `SETUP_TOKEN_HASH`; the setup token is never stored in RegistryDO or displayed by the dashboard. First setup is atomic and first-success-wins, so an uninitialized public instance must be protected by deployment access controls until the intended administrator completes setup. `ADMIN_TOKEN` is only for the manual/programmatic Runner administration API. It is not an administrator-password replacement, browser cookie, MCP credential, or Runner enrollment code.
 
 Deploy when the account and hostname are ready:
 

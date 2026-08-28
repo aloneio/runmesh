@@ -172,20 +172,28 @@ npm run check:licenses
 
 `npm run validate:worker` is a Wrangler dry-run. It does not deploy, test production Durable Object migrations, prove edge-log redaction, or verify external Internet clients.
 
-Before making the instance publicly reachable, configure these Worker secrets:
+Before making the instance publicly reachable, configure these four Worker secrets:
 
 ```sh
 cd apps/worker
 npx wrangler secret put ADMIN_TOKEN
-npx wrangler secret put SETUP_TOKEN          # or configure SETUP_TOKEN_HASH
+npx wrangler secret put SETUP_TOKEN          # or configure SETUP_TOKEN_HASH instead
 npx wrangler secret put RUNNER_TOKEN_PEPPER
 npx wrangler secret put INTERNAL_CONTROL_SECRET
 npx wrangler deploy --config wrangler.jsonc
 ```
 
-`SETUP_TOKEN` or `SETUP_TOKEN_HASH` is required for first administrator setup. First setup is atomic and first-success-wins, so an uninitialized public instance must be protected by deployment access controls until the intended administrator completes setup. `ADMIN_TOKEN` is an advanced programmatic Runner-management credential; it is not the browser session, MCP URL credential, or Runner credential.
+The first administrator setup requires the configured `SETUP_TOKEN` or the SHA-256 verifier in `SETUP_TOKEN_HASH`; the setup token is never stored in RegistryDO or displayed by the dashboard. First setup is atomic and first-success-wins, so an uninitialized public instance must be protected by deployment access controls until the intended administrator completes setup. `ADMIN_TOKEN` is only for the manual/programmatic Runner administration API. It is not an administrator-password replacement, browser cookie, MCP credential, or Runner enrollment code.
 
 Open the deployed root URL, set the administrator password with the setup token, and sign in. The dashboard then provides the normal flows to create and manage Runners, generate one-time enrollment codes, define managed Workspaces, review policy status, create MCP Clients, and rotate or revoke credentials.
+
+#### GitLab CI/CD deployment
+
+This repository does not deploy automatically on push. A GitLab deployment pipeline should be a protected, manually triggered job using the same pinned commit that was validated in GitLab CI. Configure masked/protected GitLab variables for `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`; use a narrowly scoped token limited to the target account and Workers deployment permissions.
+
+The deploy job must run the complete validation sequence before `npx wrangler deploy --config apps/worker/wrangler.jsonc --strict`. It must not print or store Worker secrets. Set Cloudflare Worker secrets separately with `wrangler secret put` or `wrangler secret bulk`; do not put application secrets in the repository or ordinary CI variables.
+
+A deploy is a production-affecting operation. Review the exact commit, target account, Worker name, Durable Object migration changes, and backup/recovery plan before manually starting it. Local `wrangler login` confirms only the currently authenticated account; it does not authorize deployment without an explicit operator action.
 
 ### Runner onboarding
 
