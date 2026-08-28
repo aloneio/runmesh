@@ -330,10 +330,9 @@ export class RunnerDO {
       const response = await this.registryRequest(attachment.runnerId, "/policy-ack", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, desired_revision: message.desired_revision, desired_checksum: message.desired_checksum, applied_revision: message.applied_revision, applied_checksum: message.applied_checksum, runner_reported_policy_revision: message.runner_reported_policy_revision, runner_reported_policy_checksum: message.runner_reported_policy_checksum, status: message.status, workspace_status: message.workspace_status }) });
       const responseBody = response.ok ? await response.json() as { ack_result?: unknown } : undefined;
       const ackResult = responseBody?.ack_result;
+      const before = await this.admission();
       if (!response.ok || (ackResult !== "applied" && ackResult !== "invalid" && ackResult !== "stale")) {
-        // A malformed/conflicting ACK is fail-closed, but must not claim ownership
-        // of a newer mutation or unnecessarily tear down a usable socket.
-        await this.fence("invalid-policy-ack");
+        if (before.mutationPhase === "precommit") await this.fence("invalid-policy-ack");
         return;
       }
       if (ackResult === "stale") return;
