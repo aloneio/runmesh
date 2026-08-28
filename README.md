@@ -191,7 +191,7 @@ Open the deployed root URL, set the administrator password with the setup token,
 
 This repository does not deploy automatically on push. A GitLab deployment pipeline should be a protected, manually triggered job using the same pinned commit that was validated in GitLab CI. Configure masked/protected GitLab variables for `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`; use a narrowly scoped token limited to the target account and Workers deployment permissions.
 
-The deploy job must run the complete validation sequence before `npx wrangler deploy --config apps/worker/wrangler.jsonc --strict`. It must not print or store Worker secrets. Set Cloudflare Worker secrets separately with `wrangler secret put` or `wrangler secret bulk`; do not put application secrets in the repository or ordinary CI variables.
+The deploy job must run the complete validation sequence before `npx wrangler deploy --config apps/worker/wrangler.jsonc --strict`; the resulting Worker is named `runmesh`. It must not print or store Worker secrets. Set Cloudflare Worker secrets separately with `wrangler secret put` or `wrangler secret bulk`; do not put application secrets in the repository or ordinary CI variables.
 
 A deploy is a production-affecting operation. Review the exact commit, target account, Worker name, Durable Object migration changes, and backup/recovery plan before manually starting it. Local `wrangler login` confirms only the currently authenticated account; it does not authorize deployment without an explicit operator action.
 

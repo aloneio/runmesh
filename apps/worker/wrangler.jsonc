@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "runmesh-worker",
+  "name": "runmesh",
   "main": "src/index.ts",
   "compatibility_date": "2026-04-02",
   "compatibility_flags": ["global_fetch_strictly_public", "nodejs_compat"],
