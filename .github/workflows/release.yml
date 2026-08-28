@@ -13,6 +13,7 @@ permissions:
 
 jobs:
   release:
+    if: github.ref == 'refs/heads/dev'
     name: signed development preview from dev
     runs-on: ubuntu-latest
     env:
@@ -20,18 +21,22 @@ jobs:
       RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
       RELEASE_SIGNING_KEY_ID: ${{ secrets.RELEASE_SIGNING_KEY_ID }}
     steps:
-      - name: Check out dev
+      - name: Check out triggering commit
         uses: actions/checkout@v4
         with:
-          ref: dev
+          ref: ${{ github.sha }}
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - name: Validate release identity and secrets
+      - name: Validate triggering commit, release identity, and secrets
         run: |
           set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/dev"
+          git fetch --no-tags origin dev
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/dev
           npm run generate:version
           npm run check:versions
           ROOT_VERSION="$(node -p 'require("./package.json").version')"
