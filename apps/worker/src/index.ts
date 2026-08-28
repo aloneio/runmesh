@@ -722,8 +722,8 @@ async function beginRunnerPolicyMutation(env: WorkerEnv, runnerId: string, mutat
   const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/begin-policy-mutation", body);
   return env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/begin-policy-mutation", { method: "POST", headers, body }));
 }
-async function markRunnerPolicyCommitted(env: WorkerEnv, runnerId: string, mutationId: string, phase: "committed_pending" | "offline_pending"): Promise<Response> {
-  const body = JSON.stringify({ mutation_id: mutationId, phase });
+async function markRunnerPolicyCommitted(env: WorkerEnv, runnerId: string, mutationId: string, phase: "committed_pending" | "offline_pending", desiredRevision: number, desiredChecksum: string): Promise<Response> {
+  const body = JSON.stringify({ mutation_id: mutationId, phase, desired_revision: desiredRevision, desired_checksum: desiredChecksum });
   const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/mark-policy-committed", body);
   return env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/mark-policy-committed", { method: "POST", headers, body }));
 }
@@ -755,7 +755,7 @@ async function mutateRunnerPolicy(env: WorkerEnv, runnerId: string, mutation: { 
   if (mutationState?.mutation_committed !== true) return new Response("policy mutation outcome is uncertain; Runner remains safely fenced", { status: 503 });
   const phase = mutationState.policy_status === "offline_pending" ? "offline_pending" : "committed_pending";
   try {
-    const committed = await markRunnerPolicyCommitted(env, runnerId, mutationId, phase);
+    const committed = await markRunnerPolicyCommitted(env, runnerId, mutationId, phase, typeof mutationState.desired_revision === "number" ? mutationState.desired_revision : 0, typeof mutationState.desired_checksum === "string" ? mutationState.desired_checksum : "");
     if (!committed.ok) return new Response("policy mutation outcome is uncertain; Runner remains safely fenced", { status: 503 });
   } catch { return new Response("policy mutation outcome is uncertain; Runner remains safely fenced", { status: 503 }); }
   try {
