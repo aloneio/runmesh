@@ -199,7 +199,7 @@ npx wrangler deploy --config wrangler.jsonc
 
 Dashboard 生成的 enrollment code 短期有效、单次使用，重新生成或成功兑换后立即失效。Runner 通过认证 WebSocket 主动连接 Worker，不暴露 HTTP server。
 
-在 `v0.1.0-dev.2` 中，hosted bootstrap 不可用。`/runner/releases/latest` 和 `/runner/releases/stable` 都返回 `distributable: false`，不提供 package spec 或 artifact，生成的安装脚本会 fail closed。请下载带 manifest 和 signature 的已验证 portable artifact，完成验证后运行 `coding-runner enroll`，再运行 `coding-runner install`。自动 signed bootstrap、更新和回滚尚未包含。
+在 `v0.1.0-dev.2` 中，hosted bootstrap 不可用。`/runner/releases/latest` 和 `/runner/releases/stable` 返回 `distributable: false`，不提供 package spec 或 artifact，生成的安装脚本会 fail closed。请下载 portable artifact 及其 manifest、signature、checksums，并按照[便携式 Runner 验证与安装流程](docs/portable-runner-installation.md)操作。签名验证必须使用独立可信源代码 checkout 中的 trust keyring，不能使用与 artifact 一起下载的 keyring。验证完成后运行 `coding-runner enroll`，再运行 `coding-runner install`。自动 signed bootstrap、更新和回滚尚未包含。
 
 全新注册从零 Workspace 开始。Workspace 根目录由管理员在 Dashboard 显式添加，再通过认证的 Runner-only policy frame 私下发送给对应 Runner；它不会进入 MCP、Workspace metadata、普通日志或公网 API。重新注册只更新连接凭据，不会从当前目录创建 Workspace。Emergency Lock 要求输入 Runner ID，并不会自动终止已经启动的 Job。
 
@@ -230,6 +230,7 @@ Runmesh 不是操作系统级 sandbox；当前预览版也不包含租户隔离�
 
 ## 文档导航
 
+- [便携式 Runner 安装](docs/portable-runner-installation.md) — 可信 key 验证、SHA-256 校验、本地 `.tgz` 安装和版本确认；
 - [部署](docs/deployment.md) — 管理员 setup、Worker secrets、Runner enrollment 和迁移注意事项；
 - [安全](docs/security.md) — 凭据、Host shell 风险、策略执行和威胁边界；
 - [架构](docs/architecture.md) — 组件、信任边界和数据流；
