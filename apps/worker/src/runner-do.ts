@@ -495,7 +495,7 @@ export class RunnerDO {
     }
     const operation = this.admissionWriteQueue.then(async () => {
       const refreshed = await this.admission();
-      const transition = refreshed.fenced
+      const transition = refreshed.fenced && refreshed.mutationId !== null
         ? refreshed.mutationId === mutationId ? "idempotent" : "conflict"
         : "start";
       if (transition === "conflict") return;

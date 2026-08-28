@@ -749,13 +749,32 @@ async function mutateRunnerPolicy(env: WorkerEnv, runnerId: string, mutation: { 
     const pushed = await pushRunnerPolicy(env, runnerId, mutationId);
     if (!pushed.ok && pushed.status !== 204 && pushed.status !== 503) return pushed;
   } catch { /* desired policy remains pending for reconnect */ }
-  return changed;
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const state = await runnerMutationState(env, runnerId, mutationId).catch(() => undefined);
+    const admission = await runnerAdmissionState(env, runnerId).catch(() => undefined);
+    if (state?.mutation_committed === true && state.policy_status === "applied"
+      && typeof state.applied_revision === "number" && state.applied_revision > 0
+      && typeof state.active_checksum === "string" && /^[a-f0-9]{64}$/.test(state.active_checksum)
+      && state.desired_revision === state.applied_revision && state.runner_reported_revision === state.applied_revision
+      && state.desired_checksum === state.active_checksum && state.active_checksum === state.runner_reported_checksum
+      && admission?.fenced === false && admission.reconciled === true && admission.mutationId === null
+      && admission.activeRevision === state.applied_revision && admission.activeChecksum === state.active_checksum
+      && admission.desiredRevision === state.desired_revision && admission.desiredChecksum === state.desired_checksum) return changed;
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+  }
+  return new Response("policy mutation is committed but still pending; Runner remains safely fenced", { status: 503 });
+}
+async function runnerAdmissionState(env: WorkerEnv, runnerId: string): Promise<Record<string, unknown> | undefined> {
+  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "GET", "/admission-state", "");
+  const response = await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/admission-state", { method: "GET", headers }));
+  return response.ok ? record(await json(response)) : undefined;
 }
 async function forwardRunnerRpc(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
   const segments = url.pathname.split("/").filter(Boolean);
   if (request.method !== "POST" || segments.length !== 4 || segments[0] !== "internal" || segments[1] !== "runners" || segments[3] !== "rpc" || !isSafeIdentifier(segments[2] ?? "")) return notFound();
   const body = await request.text();
-  if (!await verifyInternalRequest(request, env.INTERNAL_CONTROL_SECRET, body, (nonce, expiresAtMs) => consumeInternalNonce(env, nonce, expiresAtMs))) return notFound();
+  if (!await verifyInternalRequest(request, env.INTERNAL_CONTROL_SECRET, body, consumeInternalNonce.bind(undefined, env))) return notFound();
   const runnerId = segments[2] as string; const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/rpc", body);
   return env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/rpc", { method: "POST", headers, body }));
 }
