@@ -438,6 +438,11 @@ export class RegistryDO {
     } catch { return undefined; }
     return this.getMcpClient(input.client_id);
   }
+  public updateMcpClientScopes(clientId: string, scopes: readonly CodingScope[], nowMs: number): McpClientRecord | undefined {
+    if (!isSafeIdentifier(clientId) || !validScopes(scopes) || this.getMcpClient(clientId) === undefined) return undefined;
+    this.ctx.storage.sql.exec("UPDATE mcp_clients SET scopes_json = ?, updated_at_ms = ? WHERE client_id = ?", JSON.stringify(scopes), nowMs, clientId);
+    return this.getMcpClient(clientId);
+  }
   public renameMcpClient(clientId: string, label: string, nowMs: number): McpClientRecord | undefined {
     if (!isSafeIdentifier(clientId) || !validLabel(label)) return undefined;
     this.ctx.storage.sql.exec("UPDATE mcp_clients SET label = ?, updated_at_ms = ? WHERE client_id = ?", label, nowMs, clientId);
@@ -769,6 +774,7 @@ export class RegistryDO {
       this.ctx.storage.sql.exec("DELETE FROM managed_workspaces WHERE runner_id = ?", runnerId);
       this.ctx.storage.sql.exec("DELETE FROM jobs WHERE runner_id = ?", runnerId);
       this.ctx.storage.sql.exec("DELETE FROM runner_policy_versions WHERE runner_id = ?", runnerId);
+      this.ctx.storage.sql.exec("DELETE FROM runner_policy_migrations WHERE runner_id = ?", runnerId);
       this.ctx.storage.sql.exec("UPDATE mcp_clients SET active_runner_id = NULL, active_runner_updated_at_ms = ?, updated_at_ms = ? WHERE active_runner_id = ?", nowMs, nowMs, runnerId);
       this.ctx.storage.sql.exec("DELETE FROM runners WHERE runner_id = ?", runnerId);
     });
@@ -1056,6 +1062,7 @@ export class RegistryDO {
       if (method === "POST" && subaction === "rename") { const label = stringField(input, "label", 256); const client = label === undefined ? undefined : this.renameMcpClient(clientId, label, nowMs); return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client); }
       if (method === "POST" && subaction === "rotate") { const verifier = stringField(input, "secret_verifier", 64); const prefix = stringField(input, "secret_prefix", 16); const client = verifier === undefined || prefix === undefined ? undefined : this.rotateMcpClient(clientId, verifier, prefix, nowMs); return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client); }
       if (method === "POST" && subaction === "revoke") { const client = this.revokeMcpClient(clientId, nowMs); return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client); }
+      if (method === "POST" && subaction === "scopes") { const scopes = scopesField(input.scopes); const client = scopes === undefined ? undefined : this.updateMcpClientScopes(clientId, scopes, nowMs); return client === undefined ? new Response("invalid client scopes", { status: this.getMcpClient(clientId) === undefined ? 404 : 400 }) : Response.json(client); }
     }
     if (method === "GET" && action === "clients" && clientId !== undefined && segments[2] === "runner-overrides" && segments[3] === undefined) {
       return this.getMcpClient(clientId) === undefined ? new Response("not found", { status: 404 }) : Response.json({ client_id: clientId, overrides: this.listClientRunnerOverrides(clientId) });
