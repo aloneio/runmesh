@@ -17,7 +17,7 @@ This preview includes:
 
 This is a development preview. Target-environment validation remains necessary for cross-platform service behavior and deployed Cloudflare behavior. Hosted bootstrap, automatic Runner update, and rollback are not included. `shell` is a host capability, not an operating-system sandbox.
 
-Install and configure the control plane using the [README](../README.md) and [deployment guide](deployment.md). Community contributions are welcome; see [CONTRIBUTING.md](../CONTRIBUTING.md) for the complete contribution terms and process.
+Install and configure the control plane using the [README](../README.md) and [deployment guide](deployment.md). Community contributions are welcome; see the [contribution guide](../CONTRIBUTING.md) for the complete contribution terms and process.
 
 Release assets include the Runner package, manifest, detached Ed25519 signature, trust keyring, SHA-256 checksums, license, NOTICE, and third-party notices. Verify the signature and checksums before installation.
 
@@ -40,7 +40,7 @@ Commercial use requires separate written authorization. See [COMMERCIAL_LICENSE.
 
 这是开发预览版。跨平台服务行为和已部署 Cloudflare 行为仍需在目标环境中验证。Hosted bootstrap、Runner 自动更新和回滚尚未包含。`shell` 是宿主机能力，不是操作系统 sandbox。
 
-请参考 [README.zh-CN.md](../README.zh-CN.md) 和[部署文档](deployment.md)完成控制平面的安装和配置。欢迎社区贡献，请阅读 [CONTRIBUTING.zh-CN.md](../CONTRIBUTING.zh-CN.md) 了解完整的贡献条款和流程。
+请参考 [README.zh-CN.md](../README.zh-CN.md) 和[部署文档](deployment.md)完成控制平面的安装和配置。欢迎社区贡献，请阅读[贡献指南](../CONTRIBUTING.zh-CN.md)了解完整的贡献条款和流程。
 
 Release assets 包含 Runner package、manifest、Ed25519 detached signature、trust keyring、SHA-256 checksums、许可证、NOTICE 和第三方通知。安装前请验证签名和校验和。
 

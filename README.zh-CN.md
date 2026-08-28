@@ -172,20 +172,28 @@ npm run check:licenses
 
 `npm run validate:worker` 是 Wrangler dry-run，不会部署，也不能测试生产 Durable Object migration、edge log 脱敏或外部 Internet 客户端兼容性。
 
-让实例对公网开放前，配置以下 Worker secrets：
+让实例对公网开放前，配置以下四个 Worker secrets：
 
 ```sh
 cd apps/worker
 npx wrangler secret put ADMIN_TOKEN
-npx wrangler secret put SETUP_TOKEN          # 或配置 SETUP_TOKEN_HASH
+npx wrangler secret put SETUP_TOKEN          # 或改为配置 SETUP_TOKEN_HASH
 npx wrangler secret put RUNNER_TOKEN_PEPPER
 npx wrangler secret put INTERNAL_CONTROL_SECRET
 npx wrangler deploy --config wrangler.jsonc
 ```
 
-首次管理员 setup 必须提供 `SETUP_TOKEN` 或 `SETUP_TOKEN_HASH`。首次初始化采用原子化 first-success-wins，因此未初始化的公网实例必须先使用部署访问控制保护，直到预期管理员完成 setup。`ADMIN_TOKEN` 是高级程序化 Runner 管理凭据，不是浏览器 session、MCP URL 凭据或 Runner credential。
+首次管理员 setup 必须提供已配置的 `SETUP_TOKEN` 或 `SETUP_TOKEN_HASH` 中的 SHA-256 verifier；setup token 不会保存到 RegistryDO，也不会由 Dashboard 显示。首次初始化采用原子化 first-success-wins，因此未初始化的公网实例必须先使用部署访问控制保护，直到预期管理员完成 setup。`ADMIN_TOKEN` 仅用于手工/程序化 Runner 管理 API，不是管理员密码替代品、浏览器 cookie、MCP 凭据或 Runner enrollment code。
 
 打开部署后的根地址，使用 setup token 设置管理员密码并登录。随后 Dashboard 可用于创建和管理 Runner、生成一次性 enrollment code、定义 managed Workspace、查看 policy 状态、创建 MCP Client 以及轮换或撤销凭据。
+
+#### GitLab CI/CD 部署
+
+本仓库不会在 push 时自动部署。GitLab 部署 pipeline 应是受保护且手动触发的 job，并且只能部署已经在 GitLab CI 中验证过的同一个固定 commit。请在 GitLab 中配置 masked/protected variables：`CLOUDFLARE_API_TOKEN` 和 `CLOUDFLARE_ACCOUNT_ID`；token 权限应尽量收窄到目标账户和 Workers 部署操作。
+
+部署 job 必须在 `npx wrangler deploy --config apps/worker/wrangler.jsonc --strict` 前完成完整验证。不得打印或保存应用 secrets。请单独使用 `wrangler secret put` 或 `wrangler secret bulk` 设置 Cloudflare Worker secrets，不要把应用 secrets 放入仓库或普通 CI variables。
+
+部署会影响生产环境。手动启动前请复核精确 commit、目标账户、Worker 名称、Durable Object migration 变化以及备份/恢复方案。本地 `wrangler login` 只能证明当前登录账户，不代表已经执行部署授权。
 
 ### Runner 注册
 
