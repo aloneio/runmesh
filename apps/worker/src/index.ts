@@ -576,8 +576,250 @@ function sameOrigin(request: Request): boolean {
   try { return new URL(candidate).origin === origin; } catch { return false; }
 }
 
-function setupPage(): Response { const csrf = randomBase64Url(); return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane setup</title>${adminStyles()}</head><body class="auth-body"><main class="auth-shell"><section class="auth-card"><p class="brand-kicker">Runmesh</p><h1>Welcome to Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="lede">Create administrator password</p><form method="post" action="/setup" class="stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Setup token <input type="password" name="setup_token" autocomplete="one-time-code" required></label><label>Password <input type="password" name="password" autocomplete="new-password" required minlength="12"></label><label>Confirm password <input type="password" name="confirm_password" autocomplete="new-password" required minlength="12"></label><button>Initialize</button></form></section></main></body></html>`, [`${SETUP_CSRF_COOKIE}=${csrf}; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=${Math.floor(SETUP_CSRF_TTL_MS / 1_000)}`]); }
-function loginPage(): Response { const csrf = randomBase64Url(); return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane login</title>${adminStyles()}</head><body class="auth-body"><main class="auth-shell"><section class="auth-card"><p class="brand-kicker">Runmesh</p><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><form method="post" action="/login" class="stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Admin password <input type="password" name="password" autocomplete="current-password" required></label><button>Login</button></form></section></main></body></html>`, [`${LOGIN_CSRF_COOKIE}=${csrf}; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=${Math.floor(SETUP_CSRF_TTL_MS / 1_000)}`]); }
+const ZH_UI_TEXT: Record<string, string> = {
+  "Welcome to Runmesh": "欢迎使用 Runmesh",
+  "Agent Control Plane": "智能体控制平面",
+  "Create administrator password": "创建管理员密码",
+  "Setup token": "初始化令牌",
+  "Password": "密码",
+  "Confirm password": "确认密码",
+  "Initialize": "初始化",
+  "Admin password": "管理员密码",
+  "Login": "登录",
+  "Main navigation": "主导航",
+  "Dashboard": "仪表盘",
+  "Runners": "Runner",
+  "MCP Clients": "MCP 客户端",
+  "Settings": "设置",
+  "Control plane": "控制平面",
+  "A concise view of connected runtimes, clients, and recent work.": "集中查看已连接的运行时、客户端和最近任务。",
+  "Refresh": "刷新",
+  "Active MCP clients": "活跃 MCP 客户端",
+  "Online / total runners": "在线 / 总 Runner",
+  "Running jobs": "运行中任务",
+  "Recent jobs": "最近任务",
+  "Recent runners": "最近 Runner",
+  "Recent MCP clients": "最近 MCP 客户端",
+  "View all": "查看全部",
+  "Runner activity": "Runner 活动",
+  "Infrastructure": "基础设施",
+  "Manage safe runner metadata and one-time enrollment.": "管理安全的 Runner 元数据和一次性注册。",
+  "Add Runner": "添加 Runner",
+  "Enrollment codes expire after 30 minutes.": "注册码将在 30 分钟后过期。",
+  "Display name": "显示名称",
+  "Safe runner ID": "安全 Runner ID",
+  "optional": "可选",
+  "Create enrollment": "创建注册",
+  "Registered runners": "已注册 Runner",
+  "Status": "状态",
+  "Platform / architecture": "平台 / 架构",
+  "Workspaces": "工作区",
+  "Active jobs": "活跃任务",
+  "Last seen": "最后在线",
+  "Actions": "操作",
+  "View": "查看",
+  "Rename": "重命名",
+  "Rotate Credential": "轮换凭据",
+  "Type Runner ID to confirm": "输入 Runner ID 以确认",
+  "Type the Runner ID to confirm emergency lock": "输入 Runner ID 以确认紧急锁定",
+  "Revoke": "撤销",
+  "Delete": "删除",
+  "Install / Reinstall": "安装 / 重装",
+  "Integrations": "集成",
+  "Manage labels, scopes, runner routing, and one-time client secrets.": "管理标签、权限范围、Runner 路由和一次性客户端密钥。",
+  "Add MCP Client": "添加 MCP 客户端",
+  "Label": "标签",
+  "Scopes": "权限范围",
+  "Create one-time secret": "创建一次性密钥",
+  "MCP clients": "MCP 客户端",
+  "Active runner": "活跃 Runner",
+  "Last used": "最后使用",
+  "Reset Runner Selection": "重置 Runner 选择",
+  "Rotate": "轮换",
+  "MCP Client detail": "MCP 客户端详情",
+  "Runner-specific access can only further restrict the client's global scopes; it can never grant additional access.": "针对 Runner 的访问限制只能收紧客户端全局权限，不能额外授予权限。",
+  "Back to clients": "返回客户端",
+  "Global permissions": "全局权限",
+  "Base scopes": "基础权限范围",
+  "Save scopes": "保存权限范围",
+  "Client access on each Runner": "每个 Runner 上的客户端访问",
+  "Use Global means no additional restriction. Effective access is still limited by Runner and Workspace policy.": "使用全局表示不增加额外限制；有效权限仍受 Runner 与工作区策略约束。",
+  "Use global": "使用全局",
+  "Additional restriction": "附加限制",
+  "Save restriction": "保存限制",
+  "Reset": "重置",
+  "Workspace administration": "工作区管理",
+  "Keep operator notes here; credentials and secrets are never displayed.": "在此保留操作入口；凭据和密钥绝不会显示。",
+  "Change password": "修改密码",
+  "Current password": "当前密码",
+  "New password": "新密码",
+  "Confirm new password": "确认新密码",
+  "Operator notes": "操作说明",
+  "Deployment notes belong in your deployment system. This dashboard intentionally stores no notes or secrets.": "部署说明应保存在部署系统中；此控制台不会存储说明或密钥。",
+  "Log out": "退出登录",
+  "No runners yet.": "还没有 Runner。",
+  "No MCP clients yet.": "还没有 MCP 客户端。",
+  "No recent jobs.": "还没有最近任务。",
+  "No managed workspaces configured.": "尚未配置托管工作区。",
+  "Not selected": "未选择",
+  "Active": "活跃",
+  "Revoked": "已撤销",
+  "Job": "任务",
+  "Workspace": "工作区",
+  "Updated": "更新时间",
+  "Runner details": "Runner 详情",
+  "Control-plane workspace roots appear only in this authenticated administrator view.": "工作区根路径只会出现在此经过认证的管理员视图中。",
+  "Back to runners": "返回 Runner",
+  "Runner ID": "Runner ID",
+  "Policy status": "策略状态",
+  "Safe metadata": "安全元数据",
+  "Platform": "平台",
+  "Architecture": "架构",
+  "Hostname": "主机名",
+  "Runner version": "Runner 版本",
+  "Stable/latest version": "稳定 / 最新版本",
+  "Protocol compatibility": "协议兼容性",
+  "Version policy": "版本策略",
+  "Policy is recorded for operators; package download, update, and rollback remain deferred.": "策略会记录给操作员；包下载、更新和回滚仍为延期能力。",
+  "Hosted distribution is not configured. Portable artifact/manual version management only.": "尚未配置托管分发；仅支持便携制品和手动版本管理。",
+  "Channel": "频道",
+  "Stable": "稳定版",
+  "Pinned": "固定版本",
+  "Desired version": "期望版本",
+  "Current": "当前",
+  "Latest": "最新",
+  "Save version policy": "保存版本策略",
+  "Environment tools": "环境工具",
+  "Environment details unavailable while offline.": "离线时无法获取环境详情。",
+  "Runner permission profile": "Runner 权限配置",
+  "Changes remain pending until the connected Runner validates and applies the revision.": "变更会保持待处理，直到已连接的 Runner 校验并应用该版本。",
+  "Save profile": "保存配置",
+  "Emergency Lock does not automatically stop existing Jobs.": "紧急锁定不会自动停止已有任务。",
+  "Emergency lock all permissions": "紧急锁定所有权限",
+  "Managed workspaces": "托管工作区",
+  "Each save increments the desired policy revision.": "每次保存都会递增期望策略版本。",
+  "Add workspace": "添加工作区",
+  "Workspace ID": "工作区 ID",
+  "Absolute root path": "绝对根路径",
+  "Usage profile": "使用配置",
+  "Custom": "自定义",
+  "Read Only": "只读",
+  "Coding": "编码",
+  "Full-host confirmation": "整机访问确认",
+  "I understand this exposes the full host filesystem.": "我理解这会暴露完整宿主机文件系统。",
+  "Enabled": "启用",
+  "Disabled": "禁用",
+  "Allow": "允许",
+  "Deny": "拒绝",
+  "Save workspace": "保存工作区",
+  "Create workspace": "创建工作区",
+  "Delete workspace": "删除工作区",
+  "Manual portable-artifact enrollment": "手动便携制品注册",
+  "Enroll Runner manually": "手动注册 Runner",
+  "Hosted installers are disabled in this development preview. Download and verify the portable Runner artifact first. This one-time code expires in 30 minutes and will not be shown again.": "此开发预览版已禁用托管安装器。请先下载并校验便携 Runner 制品。此一次性代码将在 30 分钟后过期，且不会再次显示。",
+  "Operating system": "操作系统",
+  "Copy enrollment command": "复制注册命令",
+  "Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.": "不要分享此代码。它是一次性注册材料，不是管理员密码、MCP 密钥或长期凭据。",
+  "Regenerate enrollment": "重新生成注册",
+  "Done": "完成",
+  "MCP client created": "MCP 客户端已创建",
+  "MCP client rotated": "MCP 客户端已轮换",
+  "Copy this URL now. It will not be shown again.": "请立即复制此 URL。它不会再次显示。",
+  "Back to admin": "返回管理后台",
+  "Return": "返回",
+  "Invalid administrator password.": "管理员密码无效。",
+  "Please try again shortly.": "请稍后重试。",
+  "Invalid setup request.": "初始化请求无效。",
+  "Setup request was rejected.": "初始化请求已被拒绝。",
+  "Setup could not be completed. Try again.": "初始化无法完成，请重试。",
+  "Passwords must match and be at least 12 characters.": "两次密码必须一致且至少 12 个字符。",
+  "This instance is already initialized.": "此实例已初始化。",
+  "Invalid login request.": "登录请求无效。",
+  "Login request was rejected.": "登录请求已被拒绝。",
+  "Login could not be completed. Try again.": "登录无法完成，请重试。",
+  "Administrative request was rejected.": "管理请求已被拒绝。",
+  "MCP client was not found.": "未找到 MCP 客户端。",
+  "Runner was not found.": "未找到 Runner。",
+  "Client scopes are invalid.": "客户端权限范围无效。",
+  "Client scopes could not be updated.": "客户端权限范围无法更新。",
+  "Runner selection could not be reset.": "Runner 选择无法重置。",
+  "Runner identifier is invalid.": "Runner 标识无效。",
+  "Runner restriction could not be reset.": "Runner 限制无法重置。",
+  "Runner restriction is invalid.": "Runner 限制无效。",
+  "Runner restriction could not be saved.": "Runner 限制无法保存。",
+  "Client name is invalid.": "客户端名称无效。",
+  "Client update failed.": "客户端更新失败。",
+  "Client revoke failed.": "客户端撤销失败。",
+  "Client rotation failed.": "客户端轮换失败。",
+  "Password change is invalid.": "密码修改请求无效。",
+  "Current administrator password is invalid.": "当前管理员密码无效。",
+  "Password change could not be completed.": "密码修改无法完成。",
+  "Runner identifier or display name is invalid.": "Runner 标识或显示名称无效。",
+  "Runner could not be added.": "无法添加 Runner。",
+  "Runner update policy is invalid.": "Runner 更新策略无效。",
+  "Pinned Runner version must be an exact version.": "固定 Runner 版本必须是精确版本号。",
+  "Runner update policy could not be updated.": "Runner 更新策略无法更新。",
+  "Runner permissions are invalid.": "Runner 权限无效。",
+  "Runner permission profile could not be updated.": "Runner 权限配置无法更新。",
+  "Type the Runner ID to confirm emergency lock.": "输入 Runner ID 以确认紧急锁定。",
+  "Emergency lock could not be applied.": "紧急锁定无法应用。",
+  "Runner display name is invalid.": "Runner 显示名称无效。",
+  "Runner rename failed.": "Runner 重命名失败。",
+  "Type the Runner ID to confirm deletion.": "输入 Runner ID 以确认删除。",
+  "Runner deletion could not fence the Runner.": "Runner 删除无法先隔离该 Runner。",
+  "Runner deletion outcome is uncertain; Runner remains safely fenced.": "Runner 删除结果不确定；Runner 保持安全隔离。",
+  "Runner deletion failed; Runner remains safely fenced.": "Runner 删除失败；Runner 保持安全隔离。",
+  "Runner deletion state is uncertain; Runner remains safely fenced.": "Runner 删除状态不确定；Runner 保持安全隔离。",
+  "Runner delete failed.": "Runner 删除失败。",
+  "Type the Runner ID to confirm revocation.": "输入 Runner ID 以确认撤销。",
+  "Runner revocation could not fence the Runner.": "Runner 撤销无法先隔离该 Runner。",
+  "Runner revocation outcome is uncertain; Runner remains safely fenced.": "Runner 撤销结果不确定；Runner 保持安全隔离。",
+  "Runner revocation failed; Runner remains safely fenced.": "Runner 撤销失败；Runner 保持安全隔离。",
+  "Runner revocation state is uncertain; Runner remains safely fenced.": "Runner 撤销状态不确定；Runner 保持安全隔离。",
+  "Runner revoke failed.": "Runner 撤销失败。",
+  "Runner credential rotation could not fence the Runner.": "Runner 凭据轮换无法先隔离该 Runner。",
+  "Runner credential rotation outcome is uncertain; Runner remains safely fenced.": "Runner 凭据轮换结果不确定；Runner 保持安全隔离。",
+  "Runner credential rotation failed; Runner remains safely fenced.": "Runner 凭据轮换失败；Runner 保持安全隔离。",
+  "Runner credential rotation state is uncertain; Runner remains safely fenced.": "Runner 凭据轮换状态不确定；Runner 保持安全隔离。",
+  "Runner credential rotation failed.": "Runner 凭据轮换失败。",
+  "Workspace identifier is invalid.": "工作区标识无效。",
+  "Type the Workspace ID to confirm deletion.": "输入工作区 ID 以确认删除。",
+  "Workspace could not be deleted.": "工作区无法删除。",
+  "Workspace name or absolute root path is invalid.": "工作区名称或绝对根路径无效。",
+  "Full Host Workspace requires explicit confirmation.": "整机工作区需要明确确认。",
+  "Workspace permission profile is invalid.": "工作区权限配置无效。",
+  "Workspace could not be saved.": "工作区无法保存。",
+  "Client name or scopes are invalid.": "客户端名称或权限范围无效。",
+  "Client could not be created.": "客户端无法创建。",
+  "Enrollment code could not be generated.": "注册码无法生成。",
+  "Never": "从未",
+  "Unknown": "未知",
+  "Not configured": "未配置",
+  "Not enrolled": "未注册",
+  "Available": "可用",
+  "Unavailable": "不可用",
+  "online": "在线",
+  "offline": "离线",
+  "stale": "过期",
+  "pending": "待处理",
+  "invalid": "无效",
+  "queued": "排队中",
+  "running": "运行中",
+  "cancelling": "取消中",
+  "succeeded": "成功",
+  "completed": "已完成",
+  "failed": "失败",
+  "unknown": "未知",
+  "read": "读取",
+  "edit": "编辑",
+  "shell": "Shell",
+  "job control": "任务控制",
+};
+
+function languageSwitch(): string { return `<div class="language-switch" data-no-i18n aria-label="Language"><a href="?lang=en" data-lang-toggle="en" hreflang="en">EN</a><a href="?lang=zh-CN" data-lang-toggle="zh-CN" hreflang="zh-CN">中文</a></div>`; }
+
+function setupPage(): Response { const csrf = randomBase64Url(); return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane setup</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card"><p class="brand-kicker">Runmesh</p><h1>Welcome to Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="lede">Create administrator password</p><form method="post" action="/setup" class="stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Setup token <input type="password" name="setup_token" autocomplete="one-time-code" required></label><label>Password <input type="password" name="password" autocomplete="new-password" required minlength="12"></label><label>Confirm password <input type="password" name="confirm_password" autocomplete="new-password" required minlength="12"></label><button>Initialize</button></form></section></main>${adminScript()}</body></html>`, [`${SETUP_CSRF_COOKIE}=${csrf}; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=${Math.floor(SETUP_CSRF_TTL_MS / 1_000)}`]); }
+function loginPage(): Response { const csrf = randomBase64Url(); return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane login</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card"><p class="brand-kicker">Runmesh</p><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><form method="post" action="/login" class="stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Admin password <input type="password" name="password" autocomplete="current-password" required></label><button>Login</button></form></section></main>${adminScript()}</body></html>`, [`${LOGIN_CSRF_COOKIE}=${csrf}; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=${Math.floor(SETUP_CSRF_TTL_MS / 1_000)}`]); }
 type AdminData = { readonly clients: readonly McpClientRecord[]; readonly runners: readonly RunnerRecord[]; readonly jobs: readonly Record<string, unknown>[]; readonly snapshot: Record<string, unknown> };
 async function loadDashboardData(env: WorkerEnv): Promise<AdminData> {
   const [clientsResponse, runnersResponse, snapshotResponse] = await Promise.all([registryGet(env, "/auth/clients"), registryGet(env, "/dashboard"), registryGet(env, "/runners")]);
@@ -632,7 +874,7 @@ function adminPage(pathname: string, data: AdminData, csrf: string): string {
   const active = pathname === "/admin" ? "dashboard" : pathname.slice("/admin/".length);
   const nav = `<nav aria-label="Main navigation"><a class="${active === "dashboard" ? "active" : ""}" href="/admin">Dashboard</a><a class="${active === "runners" ? "active" : ""}" href="/admin/runners">Runners</a><a class="${active === "clients" ? "active" : ""}" href="/admin/clients">MCP Clients</a><a class="${active === "settings" ? "active" : ""}" href="/admin/settings">Settings</a></nav>`;
   const body = active === "runners" ? runnersPage(data, csrf) : active === "clients" ? clientsPage(data, csrf) : active === "settings" ? settingsPage(csrf) : overviewPage(data, csrf);
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><link rel="preload" href="/assets/logo.png" as="image" type="image/png"><title>${escapeHtml(active[0]?.toUpperCase() ?? "Dashboard")} · Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="ops-body"><div class="shell"><header class="topbar"><a class="brand" href="/admin"><img src="/assets/logo.png" alt="Runmesh · Agent Control Plane" class="brand-logo"><span class="brand-copy"><span>Runmesh</span><small>Agent Control Plane</small></span></a><div class="top-actions"><a class="button secondary" href="/admin/runners#add-runner">Add Runner</a><a class="button" href="/admin/clients#add-client">Add MCP Client</a></div></header>${nav}<main class="workspace">${body}</main></div>${adminScript()}</body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><link rel="preload" href="/assets/logo.png" as="image" type="image/png"><title>${escapeHtml(active[0]?.toUpperCase() ?? "Dashboard")} · Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="ops-body"><div class="shell"><header class="topbar"><a class="brand" href="/admin"><img src="/assets/logo.png" alt="Runmesh · Agent Control Plane" class="brand-logo"><span class="brand-copy"><span>Runmesh</span><small>Agent Control Plane</small></span></a><div class="top-actions">${languageSwitch()}<a class="button secondary" href="/admin/runners#add-runner">Add Runner</a><a class="button" href="/admin/clients#add-client">Add MCP Client</a></div></header>${nav}<main class="workspace">${body}</main></div>${adminScript()}</body></html>`;
 }
 function overviewPage(data: AdminData, csrf: string): string {
   const online = data.runners.filter((runner) => runner.state === "online").length;
@@ -695,17 +937,17 @@ function managedWorkspaceForm(runnerId: string, workspace: Record<string, unknow
   return `<li class="workspace-card"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/${existing ? "workspace-update" : "workspace-create"}" class="form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Workspace ID<input name="workspace_id" value="${escapeHtml(workspaceId)}" ${existing ? "readonly" : "required"} maxlength="128"></label><label>Display name<input name="display_name" value="${escapeHtml(displayName)}" required maxlength="256"></label><label>Absolute root path<input name="root_path" value="${escapeHtml(rootPath)}" required maxlength="4096"></label><label>Usage profile<select name="profile"><option value="custom">Custom</option><option value="read_only">Read Only</option><option value="coding">Coding</option></select></label><label>Full-host confirmation<input type="hidden" name="confirm_full_host" value="false"><input type="checkbox" name="confirm_full_host" value="true"> I understand this exposes the full host filesystem.</label><label>Enabled<select name="enabled"><option value="true"${enabled ? " selected" : ""}>Enabled</option><option value="false"${enabled ? "" : " selected"}>Disabled</option></select></label>${permissionSelect("read", current("read"))}${permissionSelect("edit", current("edit"))}${permissionSelect("shell", current("shell"))}${permissionSelect("job_control", current("job_control"))}<button class="button">${existing ? "Save workspace" : "Create workspace"}</button></form>${existing ? `<div class="top-actions"><span class="muted">Validation: ${escapeHtml(status)}</span><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/workspace-delete"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input type="hidden" name="workspace_id" value="${escapeHtml(workspaceId)}"><label>Type Workspace ID to confirm<input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required></label><button class="small danger">Delete workspace</button></form></div>` : ""}</li>`;
 }
 function adminStyles(): string { return `<style>
-:root{color-scheme:dark;--ink:#e8eef8;--muted:#8b9bb3;--line:#243044;--panel:#121a28;--canvas:#070b12;--brand:#3ee0c5;--brand-ink:#04221c;--danger:#ff6b7a;--warn:#f5c15a;--ok:#4ade80;--shadow:0 18px 48px #00000073;--glow:0 0 0 1px #3ee0c540,0 0 24px #3ee0c51f}*{box-sizing:border-box}html,body{min-height:100%}body{margin:0;background:radial-gradient(1200px 600px at 8% -10%,#12352f 0%,transparent 46%),radial-gradient(900px 500px at 110% 0%,#1a2744 0%,transparent 42%),linear-gradient(180deg,#0a1018 0%,var(--canvas) 38%);color:var(--ink);font:15px/1.5 "IBM Plex Sans",ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}body::before{content:"";position:fixed;inset:0;pointer-events:none;background-image:linear-gradient(rgba(62,224,197,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(62,224,197,.03) 1px,transparent 1px);background-size:48px 48px;mask-image:linear-gradient(180deg,#000 0 42%,transparent 100%)}.ops-body,.auth-body{position:relative}.shell{max-width:1440px;margin:auto;padding:0 28px 56px;position:relative}.workspace{padding-top:4px}.topbar{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:22px 0 18px;border-bottom:1px solid var(--line)}.brand{color:var(--ink);font-size:18px;font-weight:720;letter-spacing:.02em;text-decoration:none;display:inline-flex;align-items:center;gap:12px}.brand-copy{display:flex;flex-direction:column;line-height:1.1}.brand-copy small{margin:4px 0 0;font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}.brand-logo{display:block;width:38px;height:38px;object-fit:contain;border-radius:8px;background:#0c151f;box-shadow:var(--glow)}.top-actions,.actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.actions form{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px;border:1px solid var(--line);border-radius:10px;background:#0c131e}nav{display:flex;gap:6px;margin:18px 0 28px;padding:6px;background:#0c131e;border:1px solid var(--line);border-radius:12px;width:fit-content;max-width:100%}nav a{padding:9px 14px;color:var(--muted);text-decoration:none;border-radius:8px;font-weight:650;font-size:13px;letter-spacing:.02em}nav a:hover{color:var(--ink);background:#162033}nav a.active{color:var(--brand-ink);background:var(--brand);box-shadow:var(--glow)}h1,h2,h3{line-height:1.15;margin:0 0 8px;letter-spacing:-.03em}h1{font-size:34px;font-weight:720}h2{font-size:17px;font-weight:680}h3{font-size:14px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}.page-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:24px}.eyebrow,.brand-kicker{color:var(--brand);font-size:11px;font-weight:760;letter-spacing:.16em;text-transform:uppercase;margin:0 0 10px}.lede,.muted,.subtitle{color:var(--muted)}.lede,.subtitle{margin:0 0 16px;max-width:62ch}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px}.metric,.panel,.auth-card,.enrollment-dialog{background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);background-image:linear-gradient(180deg,#16203380,#121a2800)}.metric{padding:18px 18px 16px;position:relative;overflow:hidden}.metric::after{content:"";position:absolute;inset:auto 0 0;height:2px;background:linear-gradient(90deg,transparent,var(--brand),transparent)}.metric span{display:block;color:var(--muted);font-size:12px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px}.metric strong{font-size:28px;font-weight:720;letter-spacing:-.04em}.grid-two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-bottom:24px}.panel{padding:22px;margin-bottom:24px}.danger-panel{border-color:#5a2430;background-image:linear-gradient(180deg,#2a121880,#121a2800)}.section-title{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:16px}.section-title a{color:var(--brand);font-weight:680;text-decoration:none}.section-title a:hover{text-decoration:underline}.table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:#0c131e}table{border-collapse:collapse;width:100%;min-width:760px}th,td{text-align:left;padding:13px 14px;border-bottom:1px solid var(--line);vertical-align:top}th{color:#6f829c;font-size:11px;text-transform:uppercase;letter-spacing:.1em;background:#0a111b}tbody tr:hover{background:#16203380}tr:last-child td{border-bottom:0}.strong{font-weight:720;color:var(--ink)}a.strong:hover{color:var(--brand)}small{display:block;color:var(--muted);font-size:12px;margin-top:3px}.button,button{appearance:none;border:1px solid var(--brand);background:var(--brand);border-radius:8px;color:var(--brand-ink);cursor:pointer;font:inherit;font-weight:720;padding:9px 14px;text-decoration:none;display:inline-block;transition:transform .12s ease,box-shadow .12s ease,background .12s ease}.button:hover,button:hover{transform:translateY(-1px);box-shadow:var(--glow)}.button.secondary,button.secondary{background:transparent;color:var(--ink);border-color:#35506c}.button.secondary:hover,button.secondary:hover{border-color:var(--brand);color:var(--brand)}.button.small,button.small{font-size:12px;padding:6px 9px}.button.copied,button.copied{background:var(--ok);border-color:var(--ok);color:#04221c}.danger{color:#ffd5da!important;border-color:#7a2a36!important;background:#2a1218!important}.danger:hover{box-shadow:0 0 0 1px #ff6b7a66,0 0 18px #ff6b7a2e!important}.badge,.job-status{border-radius:999px;display:inline-block;font-size:11px;font-weight:760;padding:3px 9px;text-transform:capitalize;letter-spacing:.04em;border:1px solid transparent}.badge.online,.job-status.running{background:#0f2a1c;color:var(--ok);border-color:#1f6a43}.badge.offline{background:#1a2230;color:#9aabc4;border-color:#33445c}.badge.stale,.badge.pending,.job-status.queued,.job-status.cancelling{background:#2a2210;color:var(--warn);border-color:#7a5a18}.badge.invalid,.job-status.failed{background:#2a1218;color:var(--danger);border-color:#7a2a36}.job-status.succeeded,.job-status.completed{background:#0f2a1c;color:var(--ok);border-color:#1f6a43}.form-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-items:end;gap:14px}label{display:flex;flex-direction:column;gap:6px;font-weight:650;font-size:13px}input,select,textarea{border:1px solid #31445c;border-radius:8px;padding:9px 10px;font:inherit;color:var(--ink);min-width:0;background:#0b121c}input:hover,select:hover{border-color:#4a6788}input:focus,select:focus{border-color:var(--brand);box-shadow:0 0 0 3px #3ee0c526}fieldset{border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:0;background:#0c131e}legend{padding:0 6px;color:var(--muted);font-size:12px;letter-spacing:.08em;text-transform:uppercase}.check{display:inline-flex;flex-direction:row;align-items:center;font-weight:500;margin:4px 14px 4px 0}.check input{min-width:auto;accent-color:var(--brand)}.stack{display:flex;flex-direction:column;gap:14px;max-width:520px}.item-list,.plain-list{list-style:none;padding:0;margin:0}.item-list li{border-bottom:1px solid var(--line);padding:12px 0}.item-list li:last-child{border:0}.item-list a{display:block;text-decoration:none;border-radius:8px;padding:4px 6px;margin:0 -6px}.item-list a:hover{background:#162033}.empty{color:var(--muted);padding:28px 12px;text-align:center;border:1px dashed #31445c;border-radius:12px;background:#0c131e80}.details{display:grid;grid-template-columns:150px 1fr;gap:10px 14px;margin:0}.details dt{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}.details dd{margin:0;font-weight:650;overflow-wrap:anywhere}.tool-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.tool-grid div{border:1px solid var(--line);border-radius:10px;padding:12px;background:#0c131e}.tool-grid span{display:block;color:var(--muted);font-size:13px}.mono,.secret-url,.secret-card code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px}.sr-only{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.hidden{display:none}.workspace-card{border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:12px;background:#0c131e}.scope-line{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px}.auth-body{display:grid;place-items:center;min-height:100vh;padding:32px 16px}.auth-shell{width:min(460px,100%)}.auth-card{padding:32px 28px 28px}.brand-kicker{margin-bottom:8px}.secret-url,.secret-card code{display:block;overflow-wrap:anywhere;padding:12px;border-radius:10px;background:#0c131e;border:1px solid var(--line);margin:0 0 18px}.error-card{border-color:#5a2430}.enrollment-shell{padding-top:40px;padding-bottom:64px}.enrollment-dialog{display:block;width:min(920px,100%);margin:0 auto;padding:28px;color:inherit;border:1px solid var(--line)}.tabs{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0}.tabs [role=tab]{background:#0c131e;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:7px 14px}.tabs [role=tab][aria-selected=true]{color:var(--brand-ink);background:var(--brand);border-color:var(--brand)}.tabs [role=tabpanel]{flex:1 1 100%;margin-top:8px}pre{overflow:auto;padding:14px;border-radius:12px;background:#070b12;border:1px solid var(--line);color:#c9f7ee}.warning{border:1px solid #7a5a18;background:#2a2210;color:var(--warn);border-radius:10px;padding:12px 14px}:focus-visible{outline:3px solid #3ee0c5;outline-offset:2px}@media(max-width:800px){.shell{padding:0 16px 36px}.topbar,.page-heading{align-items:stretch;flex-direction:column}.brand{align-self:flex-start}.top-actions{width:100%}.top-actions .button{flex:1;text-align:center}nav{overflow-x:auto;width:100%;margin-bottom:22px}.metrics,.grid-two,.form-grid{grid-template-columns:1fr 1fr}.panel,.auth-card{padding:16px}.actions{min-width:210px}.tool-grid,.details{grid-template-columns:1fr}h1{font-size:28px}}@media(max-width:480px){.metrics,.grid-two,.form-grid{grid-template-columns:1fr}h1{font-size:26px}nav a{padding:9px 12px}}
+:root{color-scheme:dark;--ink:#e8eef8;--muted:#8b9bb3;--line:#243044;--panel:#121a28;--canvas:#070b12;--brand:#3ee0c5;--brand-ink:#04221c;--danger:#ff6b7a;--warn:#f5c15a;--ok:#4ade80;--shadow:0 18px 48px #00000073;--glow:0 0 0 1px #3ee0c540,0 0 24px #3ee0c51f}*{box-sizing:border-box}html,body{min-height:100%}body{margin:0;background:radial-gradient(1200px 600px at 8% -10%,#12352f 0%,transparent 46%),radial-gradient(900px 500px at 110% 0%,#1a2744 0%,transparent 42%),linear-gradient(180deg,#0a1018 0%,var(--canvas) 38%);color:var(--ink);font:15px/1.5 "IBM Plex Sans",ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}body::before{content:"";position:fixed;inset:0;pointer-events:none;background-image:linear-gradient(rgba(62,224,197,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(62,224,197,.03) 1px,transparent 1px);background-size:48px 48px;mask-image:linear-gradient(180deg,#000 0 42%,transparent 100%)}.ops-body,.auth-body{position:relative}.shell{max-width:1440px;margin:auto;padding:0 28px 56px;position:relative}.workspace{padding-top:4px}.topbar{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:22px 0 18px;border-bottom:1px solid var(--line)}.brand{color:var(--ink);font-size:18px;font-weight:720;letter-spacing:.02em;text-decoration:none;display:inline-flex;align-items:center;gap:12px}.brand-copy{display:flex;flex-direction:column;line-height:1.1}.brand-copy small{margin:4px 0 0;font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}.brand-logo{display:block;width:38px;height:38px;object-fit:contain;border-radius:8px;background:#0c151f;box-shadow:var(--glow)}.top-actions,.actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.language-switch{display:inline-flex;align-items:center;gap:3px;padding:4px;border:1px solid var(--line);border-radius:999px;background:#0c131e}.language-switch a{min-width:42px;padding:6px 10px;border-radius:999px;color:var(--muted);font-size:12px;font-weight:760;text-align:center;text-decoration:none}.language-switch a:hover{color:var(--ink);background:#162033}.language-switch a[aria-current=true]{color:var(--brand-ink);background:var(--brand)}.auth-body>.language-switch,.ops-body>.language-switch{position:fixed;top:18px;right:18px;z-index:1}.actions form{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px;border:1px solid var(--line);border-radius:10px;background:#0c131e}nav{display:flex;gap:6px;margin:18px 0 28px;padding:6px;background:#0c131e;border:1px solid var(--line);border-radius:12px;width:fit-content;max-width:100%}nav a{padding:9px 14px;color:var(--muted);text-decoration:none;border-radius:8px;font-weight:650;font-size:13px;letter-spacing:.02em}nav a:hover{color:var(--ink);background:#162033}nav a.active{color:var(--brand-ink);background:var(--brand);box-shadow:var(--glow)}h1,h2,h3{line-height:1.15;margin:0 0 8px;letter-spacing:-.03em}h1{font-size:34px;font-weight:720}h2{font-size:17px;font-weight:680}h3{font-size:14px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}.page-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:24px}.eyebrow,.brand-kicker{color:var(--brand);font-size:11px;font-weight:760;letter-spacing:.16em;text-transform:uppercase;margin:0 0 10px}.lede,.muted,.subtitle{color:var(--muted)}.lede,.subtitle{margin:0 0 16px;max-width:62ch}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px}.metric,.panel,.auth-card,.enrollment-dialog{background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);background-image:linear-gradient(180deg,#16203380,#121a2800)}.metric{padding:18px 18px 16px;position:relative;overflow:hidden}.metric::after{content:"";position:absolute;inset:auto 0 0;height:2px;background:linear-gradient(90deg,transparent,var(--brand),transparent)}.metric span{display:block;color:var(--muted);font-size:12px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px}.metric strong{font-size:28px;font-weight:720;letter-spacing:-.04em}.grid-two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-bottom:24px}.panel{padding:22px;margin-bottom:24px}.danger-panel{border-color:#5a2430;background-image:linear-gradient(180deg,#2a121880,#121a2800)}.section-title{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:16px}.section-title a{color:var(--brand);font-weight:680;text-decoration:none}.section-title a:hover{text-decoration:underline}.table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:#0c131e}table{border-collapse:collapse;width:100%;min-width:760px}th,td{text-align:left;padding:13px 14px;border-bottom:1px solid var(--line);vertical-align:top}th{color:#6f829c;font-size:11px;text-transform:uppercase;letter-spacing:.1em;background:#0a111b}tbody tr:hover{background:#16203380}tr:last-child td{border-bottom:0}.strong{font-weight:720;color:var(--ink)}a.strong:hover{color:var(--brand)}small{display:block;color:var(--muted);font-size:12px;margin-top:3px}.button,button{appearance:none;border:1px solid var(--brand);background:var(--brand);border-radius:8px;color:var(--brand-ink);cursor:pointer;font:inherit;font-weight:720;padding:9px 14px;text-decoration:none;display:inline-block;transition:transform .12s ease,box-shadow .12s ease,background .12s ease}.button:hover,button:hover{transform:translateY(-1px);box-shadow:var(--glow)}.button.secondary,button.secondary{background:transparent;color:var(--ink);border-color:#35506c}.button.secondary:hover,button.secondary:hover{border-color:var(--brand);color:var(--brand)}.button.small,button.small{font-size:12px;padding:6px 9px}.button.copied,button.copied{background:var(--ok);border-color:var(--ok);color:#04221c}.danger{color:#ffd5da!important;border-color:#7a2a36!important;background:#2a1218!important}.danger:hover{box-shadow:0 0 0 1px #ff6b7a66,0 0 18px #ff6b7a2e!important}.badge,.job-status{border-radius:999px;display:inline-block;font-size:11px;font-weight:760;padding:3px 9px;text-transform:capitalize;letter-spacing:.04em;border:1px solid transparent}.badge.online,.job-status.running{background:#0f2a1c;color:var(--ok);border-color:#1f6a43}.badge.offline{background:#1a2230;color:#9aabc4;border-color:#33445c}.badge.stale,.badge.pending,.job-status.queued,.job-status.cancelling{background:#2a2210;color:var(--warn);border-color:#7a5a18}.badge.invalid,.job-status.failed{background:#2a1218;color:var(--danger);border-color:#7a2a36}.job-status.succeeded,.job-status.completed{background:#0f2a1c;color:var(--ok);border-color:#1f6a43}.form-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-items:end;gap:14px}label{display:flex;flex-direction:column;gap:6px;font-weight:650;font-size:13px}input,select,textarea{border:1px solid #31445c;border-radius:8px;padding:9px 10px;font:inherit;color:var(--ink);min-width:0;background:#0b121c}input:hover,select:hover{border-color:#4a6788}input:focus,select:focus{border-color:var(--brand);box-shadow:0 0 0 3px #3ee0c526}fieldset{border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:0;background:#0c131e}legend{padding:0 6px;color:var(--muted);font-size:12px;letter-spacing:.08em;text-transform:uppercase}.check{display:inline-flex;flex-direction:row;align-items:center;font-weight:500;margin:4px 14px 4px 0}.check input{min-width:auto;accent-color:var(--brand)}.stack{display:flex;flex-direction:column;gap:14px;max-width:520px}.item-list,.plain-list{list-style:none;padding:0;margin:0}.item-list li{border-bottom:1px solid var(--line);padding:12px 0}.item-list li:last-child{border:0}.item-list a{display:block;text-decoration:none;border-radius:8px;padding:4px 6px;margin:0 -6px}.item-list a:hover{background:#162033}.empty{color:var(--muted);padding:28px 12px;text-align:center;border:1px dashed #31445c;border-radius:12px;background:#0c131e80}.details{display:grid;grid-template-columns:150px 1fr;gap:10px 14px;margin:0}.details dt{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}.details dd{margin:0;font-weight:650;overflow-wrap:anywhere}.tool-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.tool-grid div{border:1px solid var(--line);border-radius:10px;padding:12px;background:#0c131e}.tool-grid span{display:block;color:var(--muted);font-size:13px}.mono,.secret-url,.secret-card code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px}.sr-only{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.hidden{display:none}.workspace-card{border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:12px;background:#0c131e}.scope-line{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px}.auth-body{display:grid;place-items:center;min-height:100vh;padding:32px 16px}.auth-shell{width:min(460px,100%)}.auth-card{padding:32px 28px 28px}.brand-kicker{margin-bottom:8px}.secret-url,.secret-card code{display:block;overflow-wrap:anywhere;padding:12px;border-radius:10px;background:#0c131e;border:1px solid var(--line);margin:0 0 18px}.error-card{border-color:#5a2430}.enrollment-shell{padding-top:40px;padding-bottom:64px}.enrollment-dialog{display:block;width:min(920px,100%);margin:0 auto;padding:28px;color:inherit;border:1px solid var(--line)}.tabs{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0}.tabs [role=tab]{background:#0c131e;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:7px 14px}.tabs [role=tab][aria-selected=true]{color:var(--brand-ink);background:var(--brand);border-color:var(--brand)}.tabs [role=tabpanel]{flex:1 1 100%;margin-top:8px}pre{overflow:auto;padding:14px;border-radius:12px;background:#070b12;border:1px solid var(--line);color:#c9f7ee}.warning{border:1px solid #7a5a18;background:#2a2210;color:var(--warn);border-radius:10px;padding:12px 14px}:focus-visible{outline:3px solid #3ee0c5;outline-offset:2px}@media(max-width:800px){.shell{padding:0 16px 36px}.topbar,.page-heading{align-items:stretch;flex-direction:column}.brand{align-self:flex-start}.top-actions{width:100%}.top-actions .button{flex:1;text-align:center}nav{overflow-x:auto;width:100%;margin-bottom:22px}.metrics,.grid-two,.form-grid{grid-template-columns:1fr 1fr}.panel,.auth-card{padding:16px}.actions{min-width:210px}.tool-grid,.details{grid-template-columns:1fr}h1{font-size:28px}}@media(max-width:480px){.metrics,.grid-two,.form-grid{grid-template-columns:1fr}h1{font-size:26px}nav a{padding:9px 12px}}
 </style>`; }
-function adminScript(): string { return `<script>function copyText(text){if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text);return}var area=document.createElement('textarea');area.value=text;area.setAttribute('readonly','');area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.select();document.execCommand('copy');area.remove()}document.querySelectorAll('[data-copy]').forEach(function(button){button.addEventListener('click',function(){copyText(button.getAttribute('data-copy')||'');button.textContent='Copied';button.classList.add('copied')})});document.querySelectorAll('[data-tab]').forEach(function(tab){tab.addEventListener('click',function(){var target=tab.getAttribute('data-tab');document.querySelectorAll('[data-tab]').forEach(function(item){item.setAttribute('aria-selected',String(item===tab));item.tabIndex=item===tab?0:-1});document.querySelectorAll('[data-panel]').forEach(function(panel){panel.hidden=panel.getAttribute('data-panel')!==target})});tab.addEventListener('keydown',function(event){if(event.key==='ArrowLeft'||event.key==='ArrowRight'){var tabs=Array.prototype.slice.call(document.querySelectorAll('[data-tab]'));var next=tabs[(tabs.indexOf(tab)+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length];next.focus();next.click()}})});</script>`; }
+function adminScript(): string { return `<script>var ZH_UI_TEXT=${JSON.stringify(ZH_UI_TEXT)};function translateTextNodes(root){var walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode:function(node){if(!node.nodeValue||!node.nodeValue.trim())return NodeFilter.FILTER_REJECT;for(var el=node.parentElement;el;el=el.parentElement){if(el.hasAttribute('data-no-i18n')||el.tagName==='CODE'||el.tagName==='PRE'||el.tagName==='SCRIPT'||el.tagName==='STYLE'||el.tagName==='INPUT'||el.tagName==='TEXTAREA')return NodeFilter.FILTER_REJECT}return NodeFilter.FILTER_ACCEPT}});var nodes=[];while(walker.nextNode())nodes.push(walker.currentNode);nodes.forEach(function(node){var text=node.nodeValue||'';var trimmed=text.trim();var mapped=ZH_UI_TEXT[trimmed];if(text.indexOf('coding:')>=0)return;if(mapped)node.nodeValue=text.replace(trimmed,mapped);else Object.keys(ZH_UI_TEXT).sort(function(a,b){return b.length-a.length}).forEach(function(key){if(node.nodeValue&&node.nodeValue.indexOf(key)>=0)node.nodeValue=node.nodeValue.split(key).join(ZH_UI_TEXT[key])})})}function translateAttributes(root){['aria-label','alt','placeholder','title'].forEach(function(name){root.querySelectorAll('['+name+']').forEach(function(element){if(element.closest('[data-no-i18n]'))return;var value=element.getAttribute(name)||'';Object.keys(ZH_UI_TEXT).sort(function(a,b){return b.length-a.length}).forEach(function(key){if(value.indexOf(key)>=0)value=value.split(key).join(ZH_UI_TEXT[key])});element.setAttribute(name,value)})})}function applyLocale(locale){var zh=locale==='zh-CN';document.documentElement.lang=zh?'zh-CN':'en';document.querySelectorAll('[data-lang-toggle]').forEach(function(item){var active=item.getAttribute('data-lang-toggle')===locale;item.setAttribute('aria-current',active?'true':'false')});if(zh){translateTextNodes(document.body);translateAttributes(document);var title=document.title;Object.keys(ZH_UI_TEXT).sort(function(a,b){return b.length-a.length}).forEach(function(key){if(title.indexOf(key)>=0)title=title.split(key).join(ZH_UI_TEXT[key])});document.title=title}}function requestedLocale(){var query=new URLSearchParams(location.search).get('lang');if(query==='zh-CN'||query==='zh')return 'zh-CN';if(query==='en')return 'en';var match=/runmesh_lang=(zh-CN|en)/.exec(document.cookie||'');if(match)return match[1];return navigator.language&&navigator.language.toLowerCase().startsWith('zh')?'zh-CN':'en'}function rememberLocale(locale){document.cookie='runmesh_lang='+locale+'; Max-Age=31536000; Path=/; SameSite=Lax'}document.querySelectorAll('[data-lang-toggle]').forEach(function(link){link.addEventListener('click',function(event){var locale=link.getAttribute('data-lang-toggle')||'en';rememberLocale(locale);if(locale==='zh-CN'&&new URLSearchParams(location.search).get('lang')!=='zh-CN'){event.preventDefault();var url=new URL(location.href);url.searchParams.set('lang','zh-CN');location.href=url.toString()}else if(locale==='en'&&new URLSearchParams(location.search).has('lang')){event.preventDefault();var url=new URL(location.href);url.searchParams.set('lang','en');location.href=url.toString()}})});var locale=requestedLocale();if(new URLSearchParams(location.search).has('lang'))rememberLocale(locale);applyLocale(locale);function copyText(text){if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text);return}var area=document.createElement('textarea');area.value=text;area.setAttribute('readonly','');area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.select();document.execCommand('copy');area.remove()}document.querySelectorAll('[data-copy]').forEach(function(button){button.addEventListener('click',function(){copyText(button.getAttribute('data-copy')||'');button.textContent=document.documentElement.lang==='zh-CN'?'已复制':'Copied';button.classList.add('copied')})});document.querySelectorAll('[data-tab]').forEach(function(tab){tab.addEventListener('click',function(){var target=tab.getAttribute('data-tab');document.querySelectorAll('[data-tab]').forEach(function(item){item.setAttribute('aria-selected',String(item===tab));item.tabIndex=item===tab?0:-1});document.querySelectorAll('[data-panel]').forEach(function(panel){panel.hidden=panel.getAttribute('data-panel')!==target})});tab.addEventListener('keydown',function(event){if(event.key==='ArrowLeft'||event.key==='ArrowRight'){var tabs=Array.prototype.slice.call(document.querySelectorAll('[data-tab]'));var next=tabs[(tabs.indexOf(tab)+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length];next.focus();next.click()}})});</script>`; }
 function runnerEnrollmentPage(baseUrl: string, runnerId: string, code: string | undefined, csrf: string, _reEnroll = false): Response {
   if (code === undefined) return adminError(503, "Enrollment code could not be generated.");
   const enroll = `coding-runner enroll --server ${new URL("/runner/enroll", baseUrl).toString()} --code ${code}`;
   const command = `${enroll}\ncoding-runner install`;
   const tabs = Object.entries({ linux: command, macos: command, windows: command }).map(([platform, value], index) => `<button role="tab" id="tab-${platform}" aria-controls="panel-${platform}" aria-selected="${index === 0 ? "true" : "false"}" tabindex="${index === 0 ? "0" : "-1"}" data-tab="${platform}">${platform === "macos" ? "macOS" : platform === "windows" ? "Windows" : "Linux"}</button><section role="tabpanel" id="panel-${platform}" aria-labelledby="tab-${platform}" ${index === 0 ? "" : "hidden"} data-panel="${platform}"><pre><code>${escapeHtml(value)}</code></pre><button type="button" class="button secondary" data-copy="${escapeHtml(enroll)}">Copy enrollment command</button></section>`).join("");
-  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body"><main class="shell enrollment-shell"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><p class="eyebrow">Manual portable-artifact enrollment</p><h1 id="enrollment-title">Enroll Runner manually</h1><p class="lede">Hosted installers are disabled in this development preview. Download and verify the portable Runner artifact first. This one-time code expires in 30 minutes and will not be shown again.</p></div></section><p class="muted">Runner: <span class="mono">${escapeHtml(runnerId)}</span></p><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.</p><div class="top-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
+  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body">${languageSwitch()}<main class="shell enrollment-shell"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><p class="eyebrow">Manual portable-artifact enrollment</p><h1 id="enrollment-title">Enroll Runner manually</h1><p class="lede">Hosted installers are disabled in this development preview. Download and verify the portable Runner artifact first. This one-time code expires in 30 minutes and will not be shown again.</p></div></section><p class="muted">Runner: <span class="mono">${escapeHtml(runnerId)}</span></p><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.</p><div class="top-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
 }
-function secretCreatedPage(title: string, url: string): string { return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${escapeHtml(title)}</title>${adminStyles()}</head><body class="auth-body"><main class="auth-shell"><section class="auth-card secret-card"><p class="brand-kicker">Runmesh</p><h1>${escapeHtml(title)}</h1><p class="lede">Copy this URL now. It will not be shown again.</p><code>${escapeHtml(url)}</code><p><a class="button" href="/admin">Back to admin</a></p></section></main></body></html>`; }
+function secretCreatedPage(title: string, url: string): string { return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${escapeHtml(title)}</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card secret-card"><p class="brand-kicker">Runmesh</p><h1>${escapeHtml(title)}</h1><p class="lede">Copy this URL now. It will not be shown again.</p><code>${escapeHtml(url)}</code><p><a class="button" href="/admin">Back to admin</a></p></section></main>${adminScript()}</body></html>`; }
 function secretUrl(base: string, secret: string): string { const url = new URL(base); url.pathname = `/${secret}/mcp`; url.search = ""; return url.toString(); }
 function selectedScopes(form: FormData): CodingScope[] | undefined { const values = form.getAll("scopes"); const scopes = values.filter((value): value is CodingScope => value === "coding:read" || value === "coding:write" || value === "coding:exec"); return scopes.length === values.length && scopes.length > 0 && new Set(scopes).size === scopes.length ? scopes : undefined; }
 function validPassword(password: string): boolean { return password.length >= 12 && password.length <= 1_024; }
@@ -905,7 +1147,7 @@ async function authThrottleRecord(env: WorkerEnv, kind: "login" | "setup", succe
 function throttleError(retryAfterMs: number): Response {
   const headers = htmlHeaders();
   headers.set("retry-after", String(Math.max(1, Math.ceil(retryAfterMs / 1_000))));
-  return new Response("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><link rel=\"icon\" href=\"/assets/favicon.png\" type=\"image/png\"><title>Runmesh · Agent Control Plane</title></head><body><main><h1>Runmesh</h1><p>Agent Control Plane</p><p>Invalid administrator password.</p><p>Please try again shortly.</p></main></body></html>", { status: 403, headers });
+  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card error-card"><p class="brand-kicker">Runmesh</p><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="lede">Invalid administrator password.</p><p class="muted">Please try again shortly.</p><p><a class="button secondary" href="/">Return</a></p></section></main>${adminScript()}</body></html>`, { status: 403, headers });
 }
 async function formData(request: Request): Promise<FormData | undefined> { const length = request.headers.get("content-length"); if (length !== null && (!/^\d+$/.test(length) || Number(length) > MAX_ADMIN_BODY_BYTES)) { await discardBody(request); return undefined; } try { const form = await request.formData(); let size = 0; for (const [key, value] of form) { if (typeof value !== "string") return undefined; size += new TextEncoder().encode(key).byteLength + new TextEncoder().encode(value).byteLength; } return size <= MAX_ADMIN_BODY_BYTES ? form : undefined; } catch { return undefined; } }
 async function readAdminBody(request: Request): Promise<Record<string, unknown> | undefined> {
@@ -928,7 +1170,7 @@ function credentialHeaders(contentType: string): Headers { const headers = htmlH
 function html(value: string, cookies: readonly string[] = []): Response { const headers = htmlHeaders(); for (const cookie of cookies) headers.append("set-cookie", cookie); return new Response(value, { headers }); }
 function htmlHeaders(): Headers { return new Headers({ "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'", "x-content-type-options": "nosniff", "x-frame-options": "DENY" }); }
 function redirect(location: string, cookies: readonly string[] = []): Response { const headers = htmlHeaders(); headers.set("location", location); for (const cookie of cookies) headers.append("set-cookie", cookie); return new Response(null, { status: 303, headers }); }
-function adminError(status: number, message: string, cookies: readonly string[] = []): Response { const response = html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="auth-body"><main class="auth-shell"><section class="auth-card error-card"><p class="brand-kicker">Runmesh</p><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="lede">${escapeHtml(message)}</p><p><a class="button secondary" href="/">Return</a></p></section></main></body></html>`, cookies.length === 0 ? [] : cookies); return new Response(response.body, { status, headers: response.headers }); }
+function adminError(status: number, message: string, cookies: readonly string[] = []): Response { const response = html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card error-card"><p class="brand-kicker">Runmesh</p><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="lede">${escapeHtml(message)}</p><p><a class="button secondary" href="/">Return</a></p></section></main>${adminScript()}</body></html>`, cookies.length === 0 ? [] : cookies); return new Response(response.body, { status, headers: response.headers }); }
 function methodNotAllowed(allow: string): Response { return new Response("Method not allowed", { status: 405, headers: { allow } }); }
 function notFound(): Response { return new Response("Not found", { status: 404, headers: { "cache-control": "no-store" } }); }
 function escapeHtml(value: string): string { return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character] as string); }
