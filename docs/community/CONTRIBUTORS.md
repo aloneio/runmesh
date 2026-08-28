@@ -2,7 +2,7 @@
 
 Runmesh welcomes contributions. Copyright and attribution remain with each
 contributor, and accepted contributions are governed by the contribution terms
-in [CONTRIBUTING.md](CONTRIBUTING.md).
+in [CONTRIBUTING.md](../../.github/CONTRIBUTING.md).
 
 Attribution for accepted contributions is preserved through Git history, merged
 pull requests, and release notes. Contributors may request attribution
