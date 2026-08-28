@@ -74,7 +74,8 @@ interface AdmissionState {
   readonly preMutationActiveRevision: number | null;
   readonly preMutationActiveChecksum: string | null;
   readonly preMutationDesiredRevision: number | null;
-  readonly preMutationDesiredChecksum: string | null;  readonly lastReconciledAtMs: number | null;
+  readonly preMutationDesiredChecksum: string | null;
+  readonly lastReconciledAtMs: number | null;
 }
 const ADMISSION_STATE_KEY = "policy-admission-v1";
 const RESTART_RECONCILE_MUTATION_ID = "restart-reconcile";
@@ -109,8 +110,22 @@ export class RunnerDO {
           : "";
       } catch { /* invalid mutation IDs are rejected below */ }
       if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(mutationId)) return new Response("invalid mutation id", { status: 400 });
-      await this.fence(mutationId);
-      return new Response(null, { status: 204 });
+      const result = await this.beginPolicyMutation(mutationId);
+      return result === "started" || result === "idempotent"
+        ? new Response(null, { status: 204 })
+        : Response.json({ error: { code: "mutation_in_progress", message: "another Runner mutation is already in progress" } }, { status: 409 });
+    }
+    if (request.method === "GET" && new URL(request.url).pathname === "/admission-state") {
+      const body = await request.text();
+      if (!await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
+      return Response.json(await this.admission());
+    }
+    if (request.method === "POST" && new URL(request.url).pathname === "/cancel-policy-mutation") {
+      const body = await request.text();
+      if (!await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
+      const mutationId = mutationIdFromBody(body);
+      if (mutationId === undefined) return Response.json({ error: { code: "invalid_mutation_id", message: "mutation_id is required" } }, { status: 400 });
+      return this.cancelPolicyMutation(mutationId);
     }
     if (request.method === "POST" && new URL(request.url).pathname === "/policy") {
       const body = await request.text();
@@ -119,11 +134,12 @@ export class RunnerDO {
       try {
         const parsed = JSON.parse(body) as unknown;
         const value = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as Record<string, unknown>).mutation_id : undefined;
-        requestedMutationId = typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value) ? value : undefined;
-      } catch { /* an empty body remains valid for compatibility */ }
-      // Persist before any Registry or socket await: a concurrent protected RPC
-      // observes this fence even while policy delivery is in flight.
-      await this.fence(requestedMutationId ?? "policy-update");
+        requestedMutationId = typeof value === "string" && isMutationId(value) ? value : undefined;
+      } catch { /* an empty body remains valid only for explicit recovery */ }
+      const current = await this.admission();
+      if (requestedMutationId === undefined || !current.fenced || current.mutationId !== requestedMutationId) {
+        return Response.json({ error: { code: "mutation_mismatch", message: "policy mutation does not own the current fence" } }, { status: 409 });
+      }
       const socket = await this.currentRunnerSocket();
       if (socket === undefined) return Response.json({ error: { code: "runner_offline", message: "runner is not connected" } }, { status: 503 });
       const attachment = socket.deserializeAttachment() as ConnectionAttachment | null;
@@ -131,9 +147,16 @@ export class RunnerDO {
       const desired = await this.registryRequest(attachment.runnerId, "/desired-policy", { method: "GET" });
       if (desired.status === 404) return new Response(null, { status: 204 });
       if (!desired.ok) return Response.json({ error: { code: "registry_unavailable", message: "policy is unavailable" } }, { status: 503 });
-      const policy = await desired.json() as unknown;
+      const desiredValue = await desired.json() as unknown;
+      if (typeof desiredValue !== "object" || desiredValue === null || Array.isArray(desiredValue)) return Response.json({ error: { code: "invalid_policy", message: "registry returned an invalid policy" } }, { status: 502 });
+      const desiredRecord = desiredValue as Record<string, unknown>;
+      if (desiredRecord.mutation_id !== requestedMutationId) return Response.json({ error: { code: "mutation_mismatch", message: "desired policy belongs to another mutation" } }, { status: 409 });
+      const { mutation_id: _mutationId, ...policyValue } = desiredRecord;
+      const policy = policyValue as unknown;
       if (!isPolicy(policy)) return Response.json({ error: { code: "invalid_policy", message: "registry returned an invalid policy" } }, { status: 502 });
-      await this.persistAdmission({ ...(await this.admission()), desiredRevision: policy.revision, desiredChecksum: policy.checksum, mutationId: requestedMutationId ?? `policy-${policy.revision}`, fenced: true, reconciled: false });
+      const beforePersist = await this.admission();
+      if (!beforePersist.fenced || beforePersist.mutationId !== requestedMutationId) return Response.json({ error: { code: "mutation_mismatch", message: "policy mutation lost its fence" } }, { status: 409 });
+      await this.persistAdmission({ ...beforePersist, runnerId: attachment.runnerId, connectionEpoch: attachment.epoch, credentialVersion: attachment.credentialVersion, sessionId: attachment.sessionId, desiredRevision: policy.revision, desiredChecksum: policy.checksum, fenced: true, reconciled: false });
       const message: WireMessage = { type: "runner.policy_update", protocol_version: attachment.protocolVersion, request_id: `policy-${crypto.randomUUID()}`, runner_id: attachment.runnerId, policy };
       try { socket.send(encodeWireFrame(message)); } catch { return Response.json({ error: { code: "runner_offline", message: "runner is not connected" } }, { status: 503 }); }
       return new Response(null, { status: 204 });
@@ -141,7 +164,8 @@ export class RunnerDO {
     if (request.method === "POST" && new URL(request.url).pathname === "/revoke") {
       const body = await request.text();
       if (!await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
-      await this.fence("credential-revoked");
+      const mutationId = mutationIdFromBody(body);
+      if (mutationId === undefined || !await this.mutationOwnsFence(mutationId)) return Response.json({ error: { code: "mutation_mismatch", message: "revoke mutation does not own the current fence" } }, { status: 409 });
       for (const socket of this.ctx.getWebSockets("runner")) {
         this.rejectBridgeWaiters(socket, "credentials revoked");
         socket.close(4001, "credentials revoked");
@@ -151,7 +175,8 @@ export class RunnerDO {
     if (request.method === "POST" && new URL(request.url).pathname === "/delete") {
       const body = await request.text();
       if (!await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
-      await this.fence("runner-deleted");
+      const mutationId = mutationIdFromBody(body);
+      if (mutationId === undefined || !await this.mutationOwnsFence(mutationId)) return Response.json({ error: { code: "mutation_mismatch", message: "delete mutation does not own the current fence" } }, { status: 409 });
       for (const socket of this.ctx.getWebSockets("runner")) {
         this.rejectBridgeWaiters(socket, "runner deleted");
         socket.close(4001, "runner deleted");
@@ -237,11 +262,11 @@ export class RunnerDO {
       attachment.protocolVersion = negotiation.protocol_version;
       ws.serializeAttachment(attachment);
       await this.persistAdmission({
-        ...(await this.admission()), fenced: true, reconciled: false, runnerId: attachment.runnerId,
+        fenced: false, reconciled: true, runnerId: attachment.runnerId,
+        activeRevision: null, activeChecksum: null, desiredRevision: null, desiredChecksum: null,
         connectionEpoch: attachment.epoch, credentialVersion: attachment.credentialVersion, sessionId: attachment.sessionId,
-        desiredRevision: isPolicy(body.desired_policy) ? body.desired_policy.revision : null,
-        desiredChecksum: isPolicy(body.desired_policy) ? body.desired_policy.checksum : null,
-        activeRevision: null, activeChecksum: null, mutationId: null, lastReconciledAtMs: null,
+        mutationId: null, preMutationActiveRevision: null, preMutationActiveChecksum: null,
+        preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: Date.now(),
       });
       for (const existing of this.ctx.getWebSockets("runner")) {
         if (existing !== ws) {
@@ -460,6 +485,74 @@ export class RunnerDO {
     await operation;
   }
 
+  private async beginPolicyMutation(mutationId: string): Promise<"started" | "idempotent" | "conflict"> {
+    let result: "started" | "idempotent" | "conflict" = "conflict";
+    const initial = await this.admission();
+    if (initial.fenced && initial.mutationId === RESTART_RECONCILE_MUTATION_ID) {
+      const socket = await this.currentRunnerSocket();
+      const attachment = socket?.deserializeAttachment() as ConnectionAttachment | null;
+      if (socket === undefined || attachment === null || !await this.reconcileAdmissionAfterRestart(attachment)) return "conflict";
+    }
+    const operation = this.admissionWriteQueue.then(async () => {
+      const refreshed = await this.admission();
+      const transition = refreshed.fenced && refreshed.mutationId !== null
+        ? refreshed.mutationId === mutationId ? "idempotent" : "conflict"
+        : "start";
+      if (transition === "conflict") return;
+      if (transition === "idempotent") { result = "idempotent"; return; }
+      const capture = refreshed.reconciled && validPolicyIdentity(refreshed.activeRevision, refreshed.activeChecksum) && validPolicyIdentity(refreshed.desiredRevision, refreshed.desiredChecksum);
+      const next: AdmissionState = {
+        ...refreshed, fenced: true, reconciled: false, mutationId, activeRevision: null, activeChecksum: null, lastReconciledAtMs: null,
+        preMutationActiveRevision: capture ? refreshed.activeRevision : null,
+        preMutationActiveChecksum: capture ? refreshed.activeChecksum : null,
+        preMutationDesiredRevision: capture ? refreshed.desiredRevision : null,
+        preMutationDesiredChecksum: capture ? refreshed.desiredChecksum : null,
+      };
+      this.admissionState = next;
+      await this.ctx.storage.put(ADMISSION_STATE_KEY, next);
+      result = "started";
+    });
+    this.admissionWriteQueue = operation.catch(() => undefined);
+    await operation;
+    return result;
+  }
+
+  private async mutationOwnsFence(mutationId: string): Promise<boolean> {
+    const current = await this.admission();
+    return current.fenced && current.mutationId === mutationId;
+  }
+
+  private async cancelPolicyMutation(mutationId: string): Promise<Response> {
+    const before = await this.admission();
+    if (!before.fenced || before.mutationId === null) return Response.json({ error: { code: "no_active_mutation", message: "no active mutation fence" } }, { status: 409 });
+    if (before.mutationId !== mutationId) return Response.json({ error: { code: "mutation_mismatch", message: "mutation ID does not own the current fence" } }, { status: 409 });
+    if (mutationId === RESTART_RECONCILE_MUTATION_ID || before.runnerId === null || before.sessionId === null || before.connectionEpoch === null || before.credentialVersion === null) return Response.json({ error: { code: "mutation_uncertain", message: "mutation cannot be safely cancelled" } }, { status: 503 });
+    const stateResponse = await this.registryRequest(before.runnerId, `/mutation-state?mutation_id=${encodeURIComponent(mutationId)}`, { method: "GET" });
+    if (!stateResponse.ok) return Response.json({ error: { code: "registry_unavailable", message: "mutation state is unavailable" } }, { status: 503 });
+    const state = await stateResponse.json() as Record<string, unknown>;
+    if (state.runner_exists !== true || state.mutation_committed === true) return Response.json({ error: { code: "mutation_committed", message: "mutation has committed or Runner is gone" } }, { status: 409 });
+    if (state.policy_status !== "applied" || state.connection_epoch !== before.connectionEpoch || state.credential_version !== before.credentialVersion || state.session_id !== before.sessionId
+      || state.applied_revision !== before.preMutationActiveRevision || state.active_checksum !== before.preMutationActiveChecksum
+      || state.runner_reported_revision !== before.preMutationActiveRevision || state.runner_reported_checksum !== before.preMutationActiveChecksum
+      || state.desired_revision !== before.preMutationDesiredRevision || state.desired_checksum !== before.preMutationDesiredChecksum) {
+      return Response.json({ error: { code: "mutation_state_changed", message: "pre-mutation identity is no longer current" } }, { status: 409 });
+    }
+    const active = await this.registryRequest(before.runnerId, "/active-policy", { method: "GET" });
+    const policy = active.ok ? await active.json() as unknown : undefined;
+    if (!isPolicy(policy) || policy.revision !== before.preMutationActiveRevision || policy.checksum !== before.preMutationActiveChecksum) return Response.json({ error: { code: "mutation_state_changed", message: "active policy snapshot cannot be verified" } }, { status: 409 });
+    const socket = await this.currentRunnerSocket();
+    const attachment = socket?.deserializeAttachment() as ConnectionAttachment | null;
+    if (socket === undefined || attachment === null || attachment.runnerId !== before.runnerId || attachment.sessionId !== before.sessionId || attachment.epoch !== before.connectionEpoch || attachment.credentialVersion !== before.credentialVersion) return Response.json({ error: { code: "runner_unavailable", message: "Runner session is no longer current" } }, { status: 503 });
+    const next: AdmissionState = {
+      ...before, fenced: false, reconciled: true, activeRevision: before.preMutationActiveRevision, activeChecksum: before.preMutationActiveChecksum,
+      desiredRevision: before.preMutationDesiredRevision, desiredChecksum: before.preMutationDesiredChecksum, mutationId: null,
+      preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: Date.now(),
+    };
+    return await this.persistAdmissionIfCurrent(before, next)
+      ? new Response(null, { status: 204 })
+      : Response.json({ error: { code: "mutation_state_changed", message: "mutation changed while cancelling" } }, { status: 409 });
+  }
+
   private async fence(mutationId: string): Promise<void> {
     const current = await this.admission();
     const preserve = current.fenced && current.mutationId === mutationId;
@@ -553,6 +646,16 @@ export class RunnerDO {
     return headersPromise.then((headers) => this.env.REGISTRY.get(id).fetch(new Request(`https://registry.internal${path}`, { ...init, headers })));
   }
 }
+
+function mutationIdFromBody(body: string): string | undefined {
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
+    const mutationId = (parsed as Record<string, unknown>).mutation_id;
+    return typeof mutationId === "string" && isMutationId(mutationId) ? mutationId : undefined;
+  } catch { return undefined; }
+}
+function isMutationId(value: string): boolean { return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value); }
 
 function isCurrentPolicyReadiness(value: Record<string, unknown>, attachment: ConnectionAttachment, revision: unknown, checksum: unknown): revision is number {
   return value.ok === true && value.policy_status === "applied"

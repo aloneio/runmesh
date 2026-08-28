@@ -34,6 +34,20 @@ export type PolicyReadiness =
       readonly session_id: string;
     }
   | { readonly ok: false; readonly code: "policy_pending" | "stale_policy"; readonly reason: string };
+export interface RunnerMutationState {
+  readonly runner_exists: boolean;
+  readonly mutation_committed: boolean;
+  readonly desired_revision: number | null;
+  readonly desired_checksum: string | null;
+  readonly applied_revision: number | null;
+  readonly active_checksum: string | null;
+  readonly runner_reported_revision: number | null;
+  readonly runner_reported_checksum: string | null;
+  readonly policy_status: RunnerRecord["policy_status"] | null;
+  readonly connection_epoch: number | null;
+  readonly credential_version: number | null;
+  readonly session_id: string | null;
+}
 export type CodingScope = "coding:read" | "coding:write" | "coding:exec";
 const VALID_SCOPES = new Set<CodingScope>(["coding:read", "coding:write", "coding:exec"]);
 
@@ -250,6 +264,12 @@ export class RegistryDO {
         CREATE TABLE IF NOT EXISTS runner_policy_migrations (
           runner_id TEXT PRIMARY KEY, migrated_at_ms INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS runner_mutations (
+          runner_id TEXT NOT NULL, mutation_id TEXT NOT NULL, kind TEXT NOT NULL,
+          pre_credential_version INTEGER NOT NULL,
+          committed_at_ms INTEGER NOT NULL, PRIMARY KEY (runner_id, mutation_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_runner_mutations_runner ON runner_mutations(runner_id);
         CREATE TABLE IF NOT EXISTS workspaces (
           runner_id TEXT NOT NULL, workspace_id TEXT NOT NULL, workspace_json TEXT NOT NULL,
           updated_at_ms INTEGER NOT NULL, PRIMARY KEY (runner_id, workspace_id)
@@ -438,6 +458,11 @@ export class RegistryDO {
     } catch { return undefined; }
     return this.getMcpClient(input.client_id);
   }
+  public updateMcpClientScopes(clientId: string, scopes: readonly CodingScope[], nowMs: number): McpClientRecord | undefined {
+    if (!isSafeIdentifier(clientId) || !validScopes(scopes) || this.getMcpClient(clientId) === undefined) return undefined;
+    this.ctx.storage.sql.exec("UPDATE mcp_clients SET scopes_json = ?, updated_at_ms = ? WHERE client_id = ?", JSON.stringify(scopes), nowMs, clientId);
+    return this.getMcpClient(clientId);
+  }
   public renameMcpClient(clientId: string, label: string, nowMs: number): McpClientRecord | undefined {
     if (!isSafeIdentifier(clientId) || !validLabel(label)) return undefined;
     this.ctx.storage.sql.exec("UPDATE mcp_clients SET label = ?, updated_at_ms = ? WHERE client_id = ?", label, nowMs, clientId);
@@ -568,6 +593,34 @@ export class RegistryDO {
       active_checksum: runner.active_policy_checksum,
       runner_reported_policy_revision: runner.runner_reported_policy_revision,
       runner_reported_policy_checksum: runner.runner_reported_policy_checksum,
+      connection_epoch: runner.connection_epoch,
+      credential_version: runner.credential_version,
+      session_id: runner.session_id,
+    };
+  }
+
+  public getRunnerMutationState(runnerId: string, mutationId: string): RunnerMutationState {
+    if (!isSafeIdentifier(runnerId) || !validMutationId(mutationId)) return emptyMutationState();
+    const runner = this.runnerRow(runnerId);
+    if (runner === undefined) {
+      const deleted = this.mutationRow(runnerId, mutationId) !== undefined;
+      return { ...emptyMutationState(), mutation_committed: deleted };
+    }
+    const policyCommitted = this.ctx.storage.sql.exec<{ committed: number }>(
+      "SELECT 1 AS committed FROM runner_policy_versions WHERE runner_id = ? AND mutation_id = ? LIMIT 1", runnerId, mutationId,
+    ).toArray()[0] !== undefined;
+    const credentialMutation = this.mutationRow(runnerId, mutationId);
+    const credentialCommitted = credentialMutation !== undefined && runner.credential_version !== credentialMutation.pre_credential_version;
+    return {
+      runner_exists: true,
+      mutation_committed: policyCommitted || credentialCommitted,
+      desired_revision: runner.desired_policy_revision,
+      desired_checksum: runner.desired_policy_checksum,
+      applied_revision: runner.applied_policy_revision,
+      active_checksum: runner.active_policy_checksum,
+      runner_reported_revision: runner.runner_reported_policy_revision,
+      runner_reported_checksum: runner.runner_reported_policy_checksum,
+      policy_status: runner.policy_status,
       connection_epoch: runner.connection_epoch,
       credential_version: runner.credential_version,
       session_id: runner.session_id,
@@ -728,7 +781,8 @@ export class RegistryDO {
     return true;
   }
 
-  public registerRunner(runnerId: string, tokenVerifier: string, nowMs: number): void {
+  public registerRunner(runnerId: string, tokenVerifier: string, nowMs: number, mutationId?: string): void {
+    if (mutationId !== undefined) this.recordCredentialMutation(runnerId, mutationId, "credential_rotate", nowMs);
     this.ctx.storage.sql.exec(
       `INSERT INTO runners (runner_id, display_name, token_verifier, state, credential_version, updated_at_ms)
        VALUES (?, ?, ?, 'offline', 1, ?)
@@ -760,8 +814,9 @@ export class RegistryDO {
     this.ctx.storage.sql.exec("UPDATE runners SET display_name = ?, updated_at_ms = ? WHERE runner_id = ?", displayName, nowMs, runnerId);
     return this.getRunner(runnerId);
   }
-  public deleteRunner(runnerId: string, confirmation: string, nowMs: number): boolean {
-    if (!isSafeIdentifier(runnerId) || confirmation !== runnerId || this.runnerRow(runnerId) === undefined) return false;
+  public deleteRunner(runnerId: string, confirmation: string, nowMs: number, mutationId?: string): boolean {
+    if (!isSafeIdentifier(runnerId) || confirmation !== runnerId || this.runnerRow(runnerId) === undefined || !validOptionalMutationId(mutationId)) return false;
+    if (mutationId !== undefined) this.recordCredentialMutation(runnerId, mutationId, "runner_delete", nowMs);
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE runner_id = ?", runnerId);
       this.ctx.storage.sql.exec("DELETE FROM client_runner_overrides WHERE runner_id = ?", runnerId);
@@ -769,6 +824,7 @@ export class RegistryDO {
       this.ctx.storage.sql.exec("DELETE FROM managed_workspaces WHERE runner_id = ?", runnerId);
       this.ctx.storage.sql.exec("DELETE FROM jobs WHERE runner_id = ?", runnerId);
       this.ctx.storage.sql.exec("DELETE FROM runner_policy_versions WHERE runner_id = ?", runnerId);
+      this.ctx.storage.sql.exec("DELETE FROM runner_policy_migrations WHERE runner_id = ?", runnerId);
       this.ctx.storage.sql.exec("UPDATE mcp_clients SET active_runner_id = NULL, active_runner_updated_at_ms = ?, updated_at_ms = ? WHERE active_runner_id = ?", nowMs, nowMs, runnerId);
       this.ctx.storage.sql.exec("DELETE FROM runners WHERE runner_id = ?", runnerId);
     });
@@ -864,13 +920,16 @@ export class RegistryDO {
     });
     return true;
   }
-  public invalidateRunnerCredential(runnerId: string, nowMs: number): boolean {
+  public invalidateRunnerCredential(runnerId: string, nowMs: number, mutationId?: string): boolean {
+    if (!validOptionalMutationId(mutationId)) return false;
+    if (mutationId !== undefined) this.recordCredentialMutation(runnerId, mutationId, "credential_rotate", nowMs);
     const result = this.ctx.storage.sql.exec(`UPDATE runners SET credential_version = credential_version + 1, connection_epoch = connection_epoch + 1,
       token_verifier = '', state = 'offline', session_id = NULL, last_heartbeat_ms = NULL, updated_at_ms = ? WHERE runner_id = ?`, nowMs, runnerId);
     return result.rowsWritten === 1;
   }
-  public revokeRunner(runnerId: string, confirmation: string, nowMs: number): boolean {
-    if (!isSafeIdentifier(runnerId) || confirmation !== runnerId || this.runnerRow(runnerId) === undefined) return false;
+  public revokeRunner(runnerId: string, confirmation: string, nowMs: number, mutationId?: string): boolean {
+    if (!isSafeIdentifier(runnerId) || confirmation !== runnerId || this.runnerRow(runnerId) === undefined || !validOptionalMutationId(mutationId)) return false;
+    if (mutationId !== undefined) this.recordCredentialMutation(runnerId, mutationId, "credential_revoke", nowMs);
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec(`UPDATE runners SET credential_version = credential_version + 1, connection_epoch = connection_epoch + 1,
        token_verifier = '', state = 'offline', session_id = NULL, metadata_json = NULL, last_heartbeat_ms = NULL,
@@ -959,9 +1018,10 @@ export class RegistryDO {
     const action = segments[2]; const itemId = segments[3];
     if (runnerId === undefined || segments.length > 4) return new Response("not found", { status: 404 });
     if (request.method === "PUT" && action === undefined) {
-      const tokenVerifier = stringField(input, "token_verifier", 64);
-      if (tokenVerifier === undefined || !validVerifier(tokenVerifier)) return Response.json({ error: "invalid token verifier" }, { status: 400 });
-      this.registerRunner(runnerId, tokenVerifier, now); return new Response(null, { status: 204 });
+      const tokenVerifier = stringField(input, "token_verifier", 64); const mutationId = input.mutation_id === undefined ? undefined : mutationIdField(input);
+      if (tokenVerifier === undefined || !validVerifier(tokenVerifier) || (input.mutation_id !== undefined && mutationId === undefined)) return Response.json({ error: "invalid token verifier or mutation" }, { status: 400 });
+      if (mutationId !== undefined && this.runnerRow(runnerId) === undefined) return new Response("not found", { status: 404 });
+      this.registerRunner(runnerId, tokenVerifier, now, mutationId); return new Response(null, { status: 204 });
     }
     if (request.method === "POST" && action === "auth") {
       const token = stringField(input, "token", 512); if (token === undefined || /\s/.test(token)) return new Response("unauthorized", { status: 401 });
@@ -983,17 +1043,23 @@ export class RegistryDO {
       const displayName = stringField(input, "display_name", 256); const runner = displayName === undefined ? undefined : this.addRunner(runnerId, displayName, now);
       return runner === undefined ? new Response("conflict", { status: 409 }) : Response.json(runner);
     }
-    if (request.method === "DELETE" && action === undefined) { const confirmation = stringField(input, "confirmation", 128); return confirmation !== undefined && this.deleteRunner(runnerId, confirmation, now) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 }); }
+    if (request.method === "DELETE" && action === undefined) { const confirmation = stringField(input, "confirmation", 128); const mutationId = mutationIdField(input); return confirmation !== undefined && mutationId !== undefined && this.deleteRunner(runnerId, confirmation, now, mutationId) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 }); }
     if (request.method === "POST" && action === "rename") { const displayName = stringField(input, "display_name", 256); const runner = displayName === undefined ? undefined : this.renameRunner(runnerId, displayName, now); return runner === undefined ? new Response("not found", { status: 404 }) : Response.json(runner); }
     if (request.method === "POST" && action === "enrollments") { const enrollmentId = stringField(input, "enrollment_id", 43); const verifier = stringField(input, "verifier", 64); const enrollment = enrollmentId === undefined || verifier === undefined ? undefined : this.createRunnerEnrollment(runnerId, enrollmentId, verifier, now); return enrollment === undefined ? new Response("not found", { status: 404 }) : Response.json(enrollment); }
     if (request.method === "POST" && action === "rotate") {
+      const mutationId = mutationIdField(input);
       if (this.runnerRow(runnerId) === undefined) return new Response("not found", { status: 404 });
-      this.invalidateRunnerCredential(runnerId, now);
+      if (mutationId === undefined) return Response.json({ error: "mutation_id is required" }, { status: 400 });
+      this.invalidateRunnerCredential(runnerId, now, mutationId);
       return new Response(null, { status: 204 });
     }
     if (request.method === "POST" && action === "revoke") {
       const confirmation = stringField(input, "confirmation", 128); const mutationId = mutationIdField(input);
-      return confirmation !== undefined && confirmation === runnerId && mutationId !== undefined && this.revokeRunner(runnerId, confirmation, now) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 });
+      return confirmation !== undefined && confirmation === runnerId && mutationId !== undefined && this.revokeRunner(runnerId, confirmation, now, mutationId) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 });
+    }
+    if (request.method === "GET" && action === "mutation-state" && itemId === undefined) {
+      const mutationId = url.searchParams.get("mutation_id");
+      return mutationId !== null && validMutationId(mutationId) ? Response.json(this.getRunnerMutationState(runnerId, mutationId)) : Response.json({ error: "invalid mutation_id" }, { status: 400 });
     }
     if (request.method === "GET" && action === "active-policy" && itemId === undefined) {
       const policy = this.getActivePolicySnapshot(runnerId);
@@ -1008,9 +1074,9 @@ export class RegistryDO {
     if (request.method === "GET" && action === "policy-readiness" && itemId === undefined) return Response.json(this.getPolicyReadiness(runnerId));
     if (request.method === "GET" && action === "workspaces" && itemId === undefined) return Response.json({ runner_id: runnerId, workspaces: this.listWorkspaces(runnerId) });
     if (request.method === "POST" && action === "policy-ack") { const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const desiredRevision = integerField(input, "desired_revision"); const desiredChecksum = stringField(input, "desired_checksum", 64); const appliedRevision = nullableIntegerField(input, "applied_revision"); const appliedChecksum = nullableChecksumField(input, "applied_checksum"); const reportedRevision = nullableIntegerField(input, "runner_reported_policy_revision"); const reportedChecksum = nullableChecksumField(input, "runner_reported_policy_checksum"); const status = input.status; const statuses = workspaceStatusesField(input.workspace_status); if (epoch === undefined || credentialVersion === undefined || desiredRevision === undefined || desiredChecksum === undefined || appliedRevision === undefined || appliedChecksum === undefined || reportedRevision === undefined || reportedChecksum === undefined || (status !== "applied" && status !== "pending" && status !== "invalid") || statuses === undefined) return Response.json({ error: "invalid policy acknowledgement" }, { status: 400 }); return this.acknowledgePolicy(runnerId, epoch, credentialVersion, { desired_revision: desiredRevision, desired_checksum: desiredChecksum, applied_revision: appliedRevision, applied_checksum: appliedChecksum, runner_reported_policy_revision: reportedRevision, runner_reported_policy_checksum: reportedChecksum, status, workspace_status: statuses }, now) ? new Response(null, { status: 204 }) : new Response("stale policy acknowledgement", { status: 409 }); }
-    if (request.method === "GET" && action === "desired-policy" && itemId === undefined) { const policy = this.desiredPolicy(runnerId); return policy === undefined ? new Response("not found", { status: 404 }) : Response.json(policy); }
+    if (request.method === "GET" && action === "desired-policy" && itemId === undefined) { const policy = this.desiredPolicy(runnerId); const mutationId = policy === undefined ? undefined : this.ctx.storage.sql.exec<{ mutation_id: string | null }>("SELECT mutation_id FROM runner_policy_versions WHERE runner_id = ? AND revision = ?", runnerId, policy.revision).toArray()[0]?.mutation_id; return policy === undefined ? new Response("not found", { status: 404 }) : Response.json({ ...policy, mutation_id: mutationId ?? null }); }
     if (request.method === "GET" && action === "policy-versions" && itemId === undefined) return Response.json({ runner_id: runnerId, versions: this.listPolicyVersions(runnerId).map((version) => ({ revision: version.revision, checksum: version.checksum.slice(0, 12), status: version.status, created_at_ms: version.created_at_ms, acknowledged_at_ms: version.acknowledged_at_ms, source_revision: version.source_revision, mutation_id: version.mutation_id, validation_summary: version.validation_summary_json === null ? null : JSON.parse(version.validation_summary_json) })) });
-    if (request.method === "GET" && action === "policy-revision" && itemId === undefined) { const runner = this.getRunner(runnerId); return runner === undefined ? new Response("not found", { status: 404 }) : Response.json({ desired_policy_revision: runner.desired_policy_revision, desired_policy_checksum: runner.desired_policy_checksum, applied_policy_revision: runner.applied_policy_revision, active_policy_checksum: runner.active_policy_checksum, runner_reported_policy_revision: runner.runner_reported_policy_revision, runner_reported_policy_checksum: runner.runner_reported_policy_checksum, policy_status: runner.policy_status }); }
+    if (request.method === "GET" && action === "policy-revision" && itemId === undefined) { const runner = this.getRunner(runnerId); const mutationId = runner === undefined ? undefined : this.ctx.storage.sql.exec<{ mutation_id: string | null }>("SELECT mutation_id FROM runner_policy_versions WHERE runner_id = ? AND revision = ?", runnerId, runner.desired_policy_revision).toArray()[0]?.mutation_id; return runner === undefined ? new Response("not found", { status: 404 }) : Response.json({ desired_policy_revision: runner.desired_policy_revision, desired_policy_checksum: runner.desired_policy_checksum, desired_policy_mutation_id: mutationId ?? null, applied_policy_revision: runner.applied_policy_revision, active_policy_checksum: runner.active_policy_checksum, runner_reported_policy_revision: runner.runner_reported_policy_revision, runner_reported_policy_checksum: runner.runner_reported_policy_checksum, policy_status: runner.policy_status }); }
     if (request.method === "GET" && action === "jobs" && itemId === undefined) {
       const workspaceId = url.searchParams.get("workspace_id") ?? undefined;
       const status = url.searchParams.get("status") ?? undefined;
@@ -1056,6 +1122,7 @@ export class RegistryDO {
       if (method === "POST" && subaction === "rename") { const label = stringField(input, "label", 256); const client = label === undefined ? undefined : this.renameMcpClient(clientId, label, nowMs); return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client); }
       if (method === "POST" && subaction === "rotate") { const verifier = stringField(input, "secret_verifier", 64); const prefix = stringField(input, "secret_prefix", 16); const client = verifier === undefined || prefix === undefined ? undefined : this.rotateMcpClient(clientId, verifier, prefix, nowMs); return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client); }
       if (method === "POST" && subaction === "revoke") { const client = this.revokeMcpClient(clientId, nowMs); return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client); }
+      if (method === "POST" && subaction === "scopes") { const scopes = scopesField(input.scopes); const client = scopes === undefined ? undefined : this.updateMcpClientScopes(clientId, scopes, nowMs); return client === undefined ? new Response("invalid client scopes", { status: this.getMcpClient(clientId) === undefined ? 404 : 400 }) : Response.json(client); }
     }
     if (method === "GET" && action === "clients" && clientId !== undefined && segments[2] === "runner-overrides" && segments[3] === undefined) {
       return this.getMcpClient(clientId) === undefined ? new Response("not found", { status: 404 }) : Response.json({ client_id: clientId, overrides: this.listClientRunnerOverrides(clientId) });
@@ -1148,6 +1215,12 @@ export class RegistryDO {
   private settings(): AdminSettingsRow | undefined { return this.ctx.storage.sql.exec<AdminSettingsRow>("SELECT password_verifier, session_version, created_at_ms, updated_at_ms FROM admin_settings WHERE id = 1").toArray()[0]; }
   private authThrottleRow(kind: AuthThrottleKind): AuthThrottleRow | undefined { return this.ctx.storage.sql.exec<AuthThrottleRow>("SELECT id, failed_attempts, blocked_until_ms, updated_at_ms FROM auth_throttle WHERE id = ?", kind).toArray()[0]; }
   private getMcpClient(clientId: string): McpClientRecord | undefined { const row = this.ctx.storage.sql.exec<McpClientRow>("SELECT * FROM mcp_clients WHERE client_id = ?", clientId).toArray()[0]; return row === undefined ? undefined : decodeMcpClient(row); }
+  private mutationRow(runnerId: string, mutationId: string): { pre_credential_version: number } | undefined { return this.ctx.storage.sql.exec<{ pre_credential_version: number }>("SELECT pre_credential_version FROM runner_mutations WHERE runner_id = ? AND mutation_id = ?", runnerId, mutationId).toArray()[0]; }
+  private recordCredentialMutation(runnerId: string, mutationId: string, kind: "credential_rotate" | "credential_revoke" | "runner_delete", nowMs: number): void {
+    const runner = this.runnerRow(runnerId);
+    if (runner === undefined || !validMutationId(mutationId)) throw new Error("invalid credential mutation");
+    this.ctx.storage.sql.exec("INSERT OR IGNORE INTO runner_mutations (runner_id, mutation_id, kind, pre_credential_version, committed_at_ms) VALUES (?, ?, ?, ?, ?)", runnerId, mutationId, kind, runner.credential_version, nowMs);
+  }
   private runnerRow(runnerId: string): RunnerRow | undefined { return this.ctx.storage.sql.exec<RunnerRow>("SELECT * FROM runners WHERE runner_id = ?", runnerId).toArray()[0]; }
   private activeRunnerContext(runnerId: string, updatedAtMs: number | null): ActiveRunnerContext {
     const row = this.runnerRow(runnerId);
@@ -1194,6 +1267,8 @@ export class RegistryDO {
     if (!versionColumns.has("source_revision")) this.ctx.storage.sql.exec("ALTER TABLE runner_policy_versions ADD COLUMN source_revision INTEGER");
     if (!versionColumns.has("mutation_id")) this.ctx.storage.sql.exec("ALTER TABLE runner_policy_versions ADD COLUMN mutation_id TEXT");
     this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS runner_policy_migrations (runner_id TEXT PRIMARY KEY, migrated_at_ms INTEGER NOT NULL)");
+    this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS runner_mutations (runner_id TEXT NOT NULL, mutation_id TEXT NOT NULL, kind TEXT NOT NULL, pre_credential_version INTEGER NOT NULL, committed_at_ms INTEGER NOT NULL, PRIMARY KEY (runner_id, mutation_id))");
+    this.ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS idx_runner_mutations_runner ON runner_mutations(runner_id)");
     this.ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS idx_runner_policy_versions_retention ON runner_policy_versions(runner_id, revision DESC)");
 
     const mcpColumns = new Set(this.ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(mcp_clients)").toArray().map((column) => column.name));
@@ -1323,6 +1398,10 @@ function updateStatus(channel: RunnerUpdateChannel, desired: string | undefined,
   if (channel === "pinned") return desired !== undefined && current?.current_runner_version === desired ? "pinned" : "update_available";
   if (latest === undefined || current?.current_runner_version === undefined || current.current_runner_version === null) return "unknown";
   return current.current_runner_version === latest ? "up_to_date" : "update_available";
+}
+
+function emptyMutationState(): RunnerMutationState {
+  return { runner_exists: false, mutation_committed: false, desired_revision: null, desired_checksum: null, applied_revision: null, active_checksum: null, runner_reported_revision: null, runner_reported_checksum: null, policy_status: null, connection_epoch: null, credential_version: null, session_id: null };
 }
 
 function decodeRunner(row: RunnerRow): RunnerRecord {
