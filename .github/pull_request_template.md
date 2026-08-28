@@ -20,5 +20,5 @@
 
 ## Contribution confirmation
 
-- [ ] I have the right to submit this contribution and grant the rights described in [CONTRIBUTING.md](../CONTRIBUTING.md), while retaining copyright and attribution.
+- [ ] I have the right to submit this contribution and grant the rights described in [CONTRIBUTING.md](CONTRIBUTING.md), while retaining copyright and attribution.
 - [ ] If I am contributing for an employer or entity, I have authority to make this submission.

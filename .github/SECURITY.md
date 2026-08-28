@@ -43,7 +43,7 @@ passed after the initial private report without a mutually agreed extension.
 
 The software processes high-value local credentials and can operate on local
 workspaces. Follow the deployment and security guidance in
-[`docs/security.md`](docs/security.md), use least privilege, protect Runner
+[`docs/security.md`](../docs/security.md), use least privilege, protect Runner
 hosts, configure log redaction, and rotate credentials if exposure is
 suspected. The project license does not provide security warranties; see
-[`LICENSE`](LICENSE).
+[`LICENSE`](../LICENSE).

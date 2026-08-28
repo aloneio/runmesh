@@ -7,7 +7,7 @@ code contributions from individuals and organizations.
 ## Contribution terms
 
 Runmesh is source-available under the
-[PolyForm Noncommercial License 1.0.0](LICENSE). When you submit a pull request,
+[PolyForm Noncommercial License 1.0.0](../LICENSE). When you submit a pull request,
 patch, issue attachment, documentation change, test, design contribution, or
 other contribution to the official `aloneio/runmesh` repository, you confirm
 that:
@@ -29,7 +29,7 @@ change the PolyForm license for Runmesh itself and does not grant commercial-use
 rights to you, your employer, or another organization. Commercial production
 use, paid hosting, commercial SaaS, resale, white-label distribution, and
 commercial integration require written authorization; see
-[COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md).
+[COMMERCIAL_LICENSE.md](../docs/legal/COMMERCIAL_LICENSE.md).
 
 If you contribute for an employer or entity, your submission confirms that you
 have authority to make the submission and grant these rights. Do not submit
@@ -51,7 +51,7 @@ not have the right to share.
    impact in the pull request. The pull-request checklist repeats the key
    contribution confirmations.
 5. Follow [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) and
-   [GOVERNANCE.md](GOVERNANCE.md).
+   [GOVERNANCE.md](../docs/community/GOVERNANCE.md).
 
 ## Development expectations
 
