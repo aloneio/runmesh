@@ -1,6 +1,6 @@
 # 安全策略
 
-> 本文件是 [`SECURITY.md`](SECURITY.md) 的中文说明译文。如有不一致，以英文原文
+> 本文件是 [SECURITY.md](SECURITY.md) 的中文说明译文。如有不一致，以英文原文
 > 为准。
 
 ## 报告漏洞
@@ -36,6 +36,6 @@ Worker 控制平面、Runner、protocol 包、仪表板、bootstrap 路径、仓
 ## 运行安全
 
 软件会处理高价值本地凭证，也可以操作本地工作区。请遵循
-[`docs/security.md`](docs/security.md) 中的部署和安全指引，采用最小权限、保护 Runner
+[`docs/security.md`](../docs/security.md) 中的部署和安全指引，采用最小权限、保护 Runner
 主机、配置日志脱敏，并在怀疑泄露时轮换凭证。项目许可证不提供安全保证；请参阅
-[`LICENSE`](LICENSE)。
+[`LICENSE`](../LICENSE)。

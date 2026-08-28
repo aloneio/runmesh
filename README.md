@@ -30,7 +30,7 @@
 </p>
 
 > [!IMPORTANT]
-> Runmesh is **source-available under the PolyForm Noncommercial License 1.0.0**, not an OSI-approved open-source license. Commercial use requires separate written authorization; see [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md).
+> Runmesh is **source-available under the PolyForm Noncommercial License 1.0.0**, not an OSI-approved open-source license. Commercial use requires separate written authorization; see [COMMERCIAL_LICENSE.md](docs/legal/COMMERCIAL_LICENSE.md).
 
 > [!WARNING]
 > `shell` is a host-shell capability, not a sandbox. Commands can access files, network resources, environment variables, credentials, and processes available to the Runner service identity. Use a restricted VM or container for untrusted code, and do not give a Runner more authority than necessary.
@@ -236,13 +236,13 @@ Runmesh is not an operating-system sandbox, and this preview does not include te
 - [Runner transport](docs/runner-transport.md) — outbound WebSocket, protocol versions, heartbeat, sync, and Jobs.
 - [Protocol](docs/protocol.md) — typed wire messages, policy revisions, checksums, and limits.
 - [Migration](docs/migration.md) — additive schema changes, legacy profiles, and rollback precautions.
-- [SECURITY.md](SECURITY.md) — vulnerability reporting.
-- [CONTRIBUTING.md](CONTRIBUTING.md) — complete contribution terms and process.
+- [.github/SECURITY.md](.github/SECURITY.md) — vulnerability reporting.
+- [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md) — complete contribution terms and process.
 
 ## License and community
 
-Runmesh is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE). It is **not** OSI-approved open-source software. Commercial use or additional rights require a separate written agreement; see [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md).
+Runmesh is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE). It is **not** OSI-approved open-source software. Commercial use or additional rights require a separate written agreement; see [COMMERCIAL_LICENSE.md](docs/legal/COMMERCIAL_LICENSE.md).
 
-Community contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete contribution terms and process. See [NOTICE](NOTICE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for notices, [TRADEMARKS.md](TRADEMARKS.md) for name/logo guidance, and [SECURITY.md](SECURITY.md) for security reports.
+Community contributions are welcome. See [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md) for the complete contribution terms and process. See [NOTICE](NOTICE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for notices, [docs/legal/TRADEMARKS.md](docs/legal/TRADEMARKS.md) for name/logo guidance, and [.github/SECURITY.md](.github/SECURITY.md) for security reports.
 
 Runmesh is an independent implementation. Design research considered [coding-tools-mcp](https://github.com/xyTom/coding-tools-mcp), [volter-tunnel](https://github.com/volter-ai/volter-tunnel), [agent-mcp-gateway](https://github.com/Hiroshimeow/agent-mcp-gateway), and official Cloudflare/MCP documentation. These are research acknowledgements only; no referenced source or asset is claimed as included.

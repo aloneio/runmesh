@@ -1,6 +1,6 @@
 # 商业授权
 
-Runmesh 依据 [PolyForm Noncommercial License 1.0.0](LICENSE) 提供，并仅授权该许可证
+Runmesh 依据 [PolyForm Noncommercial License 1.0.0](../../LICENSE) 提供，并仅授权该许可证
 允许的用途。商业使用，或需要超出公开许可证的权利时，必须在为该目的使用、部署、分发或
 提供软件之前，向适用权利人取得单独书面协议。
 
@@ -13,8 +13,8 @@ Runmesh 依据 [PolyForm Noncommercial License 1.0.0](LICENSE) 提供，并仅�
 
 ## 社区贡献
 
-请查看 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md) 了解完整的贡献条款和流程。贡献行为本身不授予
-商业使用权。商业权限见 [COMMERCIAL_LICENSE.zh-CN.md](COMMERCIAL_LICENSE.zh-CN.md)。
+请查看 [CONTRIBUTING.zh-CN.md](../../.github/CONTRIBUTING.zh-CN.md) 了解完整的贡献条款和流程。贡献行为本身不授予
+商业权限见 [COMMERCIAL_LICENSE.zh-CN.md](COMMERCIAL_LICENSE.zh-CN.md)。
 
 软件许可证本身不授予商标使用许可；请参阅 [TRADEMARKS.zh-CN.md](TRADEMARKS.zh-CN.md)。
 第三方依赖及其通知继续受各自条款约束；请参阅

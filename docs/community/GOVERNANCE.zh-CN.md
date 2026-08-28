@@ -17,13 +17,13 @@ Runmesh 以源码可见、非商业社区版形式维护。项目欢迎个人和
 创建 Issue 或设计讨论，说明问题、替代方案、安全影响、兼容性影响和验证计划。
 
 维护者会尽量通过有技术依据的共识作出决定；无法达成共识时，由维护者决定并在 Issue 或 pull
-request 中记录相关理由。安全问题应使用 [SECURITY.zh-CN.md](SECURITY.zh-CN.md) 中的私密流程。
+request 中记录相关理由。安全问题应使用 [.github/SECURITY.zh-CN.md](../../.github/SECURITY.zh-CN.md) 中的私密流程。
 
 ## 贡献与权利
 
-请查看 [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md) 了解完整的贡献条款和流程。贡献者必须确认自己有权提交
+请查看 [CONTRIBUTING.zh-CN.md](../../.github/CONTRIBUTING.zh-CN.md) 了解完整的贡献条款和流程。贡献者必须确认自己有权提交
 工作，包括适用的雇主、承包、保密、依赖和专利义务。向 Runmesh 贡献不会授予贡献者或雇主商业使用权。
-商业权限见 [COMMERCIAL_LICENSE.zh-CN.md](COMMERCIAL_LICENSE.zh-CN.md)。
+商业权限见 [COMMERCIAL_LICENSE.zh-CN.md](../legal/COMMERCIAL_LICENSE.zh-CN.md)。
 
 ## 治理变更
 

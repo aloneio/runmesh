@@ -17,7 +17,7 @@ Runmesh 兼容”。此类使用不得暗示项目或其权利人的赞助、背
 - 修改项目徽标后作为你自己的标志使用；或
 - 注册或寻求取得容易混淆的商标、域名或账号权利。
 
-如分发修改后的版本，请选择明显可区分的名称，并说明它已被修改。保留所要求的许可证和署名通知；参阅 [NOTICE](NOTICE) 和 [THIRD_PARTY_NOTICES.zh-CN.md](THIRD_PARTY_NOTICES.zh-CN.md)。
+如分发修改后的版本，请选择明显可区分的名称，并说明它已被修改。保留所要求的许可证和署名通知；参阅 [NOTICE](../../NOTICE) 和 [THIRD_PARTY_NOTICES.zh-CN.md](THIRD_PARTY_NOTICES.zh-CN.md)。
 
 仓库中提及的第三方产品名称、徽标和商标属于各自所有人。本文件不是商标许可证或
 法律意见。若有特定品牌问题，请通过

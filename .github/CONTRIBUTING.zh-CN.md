@@ -5,7 +5,7 @@
 
 ## 贡献条款
 
-Runmesh 依据 [PolyForm Noncommercial License 1.0.0](LICENSE) 以源码可见形式提供。向官方
+Runmesh 依据 [PolyForm Noncommercial License 1.0.0](../LICENSE) 以源码可见形式提供。向官方
 `aloneio/runmesh` 仓库提交 pull request、patch、Issue 附件、文档、测试、设计贡献或其他贡献，
 即表示你确认：
 
@@ -18,7 +18,7 @@ Runmesh 依据 [PolyForm Noncommercial License 1.0.0](LICENSE) 以源码可见�
 
 贡献许可仅适用于所提交的贡献本身。它不改变 Runmesh 适用的 PolyForm 许可证，也不授予你、你的
 雇主或其他组织商业使用权。商业生产使用、收费托管、商业 SaaS、转售、白标分发和商业集成需要
-书面授权，请参阅 [COMMERCIAL_LICENSE.zh-CN.md](COMMERCIAL_LICENSE.zh-CN.md)。
+书面授权，请参阅 [COMMERCIAL_LICENSE.zh-CN.md](../docs/legal/COMMERCIAL_LICENSE.zh-CN.md)。
 
 如果你代表雇主或实体贡献，提交即表示你确认自己有权作出提交并授予上述权利。不要提交你无权
 分享的保密信息、凭据、个人数据或第三方材料。
@@ -32,7 +32,8 @@ Runmesh 依据 [PolyForm Noncommercial License 1.0.0](LICENSE) 以源码可见�
 3. 保持改动范围清晰，并更新受影响的测试和文档。
 4. 在 pull request 中说明问题、方案、验证结果、安全影响和兼容性影响。Pull request 检查表会再次
    提醒关键的贡献确认事项。
-5. 遵守 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) 和 [GOVERNANCE.zh-CN.md](GOVERNANCE.zh-CN.md)。
+5. 遵守 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) 和
+   [GOVERNANCE.zh-CN.md](../docs/community/GOVERNANCE.zh-CN.md)。
 
 ## 开发要求
 
