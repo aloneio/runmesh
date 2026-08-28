@@ -38,6 +38,7 @@ export type PolicyAcknowledgementResult = "applied" | "invalid" | "stale";
 
 export interface RunnerMutationState {
   readonly runner_exists: boolean;
+  readonly runner_state: RunnerConnectionState | null;
   readonly mutation_committed: boolean;
   readonly desired_revision: number | null;
   readonly desired_checksum: string | null;
@@ -617,6 +618,7 @@ export class RegistryDO {
     const credentialCommitted = credentialMutation !== undefined && runner.credential_version !== credentialMutation.pre_credential_version;
     return {
       runner_exists: true,
+      runner_state: runner.state,
       mutation_committed: policyCommitted || credentialCommitted,
       desired_revision: runner.desired_policy_revision,
       desired_checksum: runner.desired_policy_checksum,
@@ -1077,7 +1079,12 @@ export class RegistryDO {
       return Response.json({ runner_id: runnerId, revision: policy.revision, checksum: policy.checksum, workspaces: policy.workspaces.map((workspace) => ({ workspace_id: workspace.workspace_id, enabled: workspace.enabled, permissions: workspace.permissions })) });
     }
     if (request.method === "GET" && action === "snapshot-authorization" && itemId === undefined) return Response.json(this.getSnapshotAuthorization(runnerId));
-    if (request.method === "GET" && action === "policy-readiness" && itemId === undefined) return Response.json(this.getPolicyReadiness(runnerId));
+    if (request.method === "GET" && action === "policy-readiness" && itemId === undefined) {
+      const readiness = this.getPolicyReadiness(runnerId);
+      const runner = this.getRunner(runnerId);
+      const desiredPolicyMutationId = runner === undefined ? null : this.ctx.storage.sql.exec<{ mutation_id: string | null }>("SELECT mutation_id FROM runner_policy_versions WHERE runner_id = ? AND revision = ?", runnerId, runner.desired_policy_revision).toArray()[0]?.mutation_id ?? null;
+      return Response.json({ ...readiness, desired_policy_mutation_id: desiredPolicyMutationId });
+    }
     if (request.method === "GET" && action === "workspaces" && itemId === undefined) return Response.json({ runner_id: runnerId, workspaces: this.listWorkspaces(runnerId) });
     if (request.method === "POST" && action === "policy-ack") {
       const ack = this.policyAcknowledgementFromInput(runnerId, input, now);
@@ -1417,7 +1424,7 @@ function updateStatus(channel: RunnerUpdateChannel, desired: string | undefined,
 }
 
 function emptyMutationState(): RunnerMutationState {
-  return { runner_exists: false, mutation_committed: false, desired_revision: null, desired_checksum: null, applied_revision: null, active_checksum: null, runner_reported_revision: null, runner_reported_checksum: null, policy_status: null, connection_epoch: null, credential_version: null, session_id: null };
+  return { runner_exists: false, runner_state: null, mutation_committed: false, desired_revision: null, desired_checksum: null, applied_revision: null, active_checksum: null, runner_reported_revision: null, runner_reported_checksum: null, policy_status: null, connection_epoch: null, credential_version: null, session_id: null };
 }
 
 function decodeRunner(row: RunnerRow): RunnerRecord {
