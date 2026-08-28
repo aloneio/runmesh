@@ -572,7 +572,7 @@ async function verifyPreAuthCsrf(request: Request, form: FormData, name: string)
 function sameOrigin(request: Request): boolean {
   const origin = new URL(request.url).origin;
   const candidate = request.headers.get("origin") ?? request.headers.get("referer");
-  if (candidate === null) return true; // non-browser form clients still need SameSite + CSRF token.
+  if (candidate === null || candidate === "null") return true; // privacy browsers may submit Origin: null; the synchronizer token still remains mandatory.
   try { return new URL(candidate).origin === origin; } catch { return false; }
 }
 
