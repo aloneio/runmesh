@@ -44,14 +44,15 @@ export function profileDirectory(options: ProfileStoreOptions = {}): string {
   if (options.baseDir !== undefined) return options.baseDir;
   const platform = options.platform ?? process.platform;
   const home = options.home ?? homedir();
-  if (platform === "win32") return join(process.env.LOCALAPPDATA ?? join(home, "AppData", "Local"), "RemoteCodingRunner");
-  if (platform === "darwin") return join(home, "Library", "Application Support", "RemoteCodingRunner");
-  return join(home, ".remote-coding-runner");
+  if (platform === "win32") return join(process.env.PROGRAMDATA ?? join(home, "AppData", "Local"), "Runmesh");
+  if (platform === "darwin") return join(home, "Library", "Application Support", "Runmesh");
+  return join(home, ".config", "runmesh");
 }
 export function profilePath(options: ProfileStoreOptions = {}): string {
   if (options.filePath !== undefined) return options.filePath;
   // A per-process explicit profile path keeps service and integration launches
   // isolated without making profiles relative to the current workspace.
+  if (options.baseDir === undefined && process.env.RUNMESH_RUNNER_PROFILE !== undefined) return process.env.RUNMESH_RUNNER_PROFILE;
   if (options.baseDir === undefined && process.env.CODING_RUNNER_PROFILE !== undefined) return process.env.CODING_RUNNER_PROFILE;
   return join(profileDirectory(options), "profile.json");
 }
