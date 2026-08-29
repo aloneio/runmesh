@@ -1,8 +1,8 @@
 import { chmod, mkdir, open, readFile, rename, rm } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { RunnerPolicySchema, policyWithoutChecksum, runnerPolicyChecksum, type RunnerPolicy } from "@aloneio/runmesh-protocol";
+import { defaultRunnerStateDir } from "./state-path.js";
 
 export interface PolicyStoreOptions {
   /** Test-only hook to prove a failed candidate write never replaces active policy. */
@@ -19,7 +19,7 @@ export class PolicyStore {
   public readonly activePath: string;
   public readonly previousPath: string;
 
-  public constructor(stateDir = join(homedir(), ".remote-coding-runner", "state"), private readonly options: PolicyStoreOptions = {}) {
+  public constructor(stateDir = defaultRunnerStateDir(), private readonly options: PolicyStoreOptions = {}) {
     this.directory = join(stateDir, "policy");
     this.activePath = join(this.directory, "active-policy.json");
     this.previousPath = join(this.directory, "previous-policy.json");
