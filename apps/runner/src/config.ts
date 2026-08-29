@@ -63,7 +63,7 @@ const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 export async function validateRunnerConfig(options: RawRunnerOptions): Promise<RunnerConfig> {
   const server = options.server?.trim();
-  const token = (options.token ?? process.env.CODING_RUNNER_TOKEN)?.trim();
+  const token = (options.token ?? process.env.RUNMESH_RUNNER_TOKEN ?? process.env.CODING_RUNNER_TOKEN)?.trim();
   const runnerId = options.runnerId?.trim();
   let parsedServer: URL | undefined;
   try { parsedServer = server === undefined ? undefined : new URL(server); } catch { parsedServer = undefined; }
