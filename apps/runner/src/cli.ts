@@ -43,7 +43,7 @@ export interface EnrollCliDependencies {
   readonly confirmPrivilegedHost?: boolean;
 }
 interface ParsedCommand { readonly command: string; readonly json: boolean; readonly values: Record<string, string | boolean | string[]>; readonly passthrough: string[]; }
-const HELP = "usage: coding-runner <start|enroll|status|doctor|workspace|env|install|stop|restart|uninstall> [options]\nworkspace: list | add --path <directory> [--allow-edit] [--allow-host-shell --i-understand-host-shell-is-not-sandboxed] | remove --id <workspace-id> | migrate --management-mode <central|legacy_manual>";
+const HELP = "usage: runmesh-runner <start|enroll|status|doctor|workspace|env|install|stop|restart|uninstall> [options]\nworkspace: list | add --path <directory> [--allow-edit] [--allow-host-shell --i-understand-host-shell-is-not-sandboxed] | remove --id <workspace-id> | migrate --management-mode <central|legacy_manual>";
 
 export async function runEnrollCli(argv: readonly string[], dependencies: EnrollCliDependencies = {}): Promise<void> {
   const output = dependencies.stdout ?? ((line) => process.stdout.write(`${line}\n`));
@@ -105,7 +105,7 @@ async function start(parsed: ParsedCommand, store: ProfileStore, error: (line: s
   const hasLegacyExplicit = raw.server !== undefined || raw.runnerId !== undefined || raw.token !== undefined || (raw.workspaces?.length ?? 0) > 0;
   const productWorkspaces = profile === undefined || profileManagementMode(profile) === "central" ? [] : workspaceOptions(profile);
   const server = raw.server ?? profile?.server_url;
-  const token = raw.token ?? process.env.CODING_RUNNER_TOKEN ?? profile?.token;
+  const token = raw.token ?? process.env.RUNMESH_RUNNER_TOKEN ?? process.env.CODING_RUNNER_TOKEN ?? profile?.token;
   const runnerId = raw.runnerId ?? profile?.runner_id;
   const maxConcurrentJobs = raw.maxConcurrentJobs ?? profile?.max_concurrent_jobs;
   const options: RawRunnerOptions = {
@@ -144,7 +144,7 @@ async function workspaceCommand(parsed: ParsedCommand, store: ProfileStore, outp
     return;
   }
   if (managementMode === "central") throw new Error("Configure managed Workspaces through the Runmesh Admin Panel.");
-  if (managementMode !== "legacy_manual") throw new Error("Runner profile management_mode is migration_required; run coding-runner workspace migrate --management-mode central or legacy_manual first.");
+  if (managementMode !== "legacy_manual") throw new Error("Runner profile management_mode is migration_required; run runmesh-runner workspace migrate --management-mode central or legacy_manual first.");
   if (action === "add") {
     const path = await canonicalDirectory(requiredString(parsed, "path"));
     const id = typeof parsed.values.id === "string" ? validateWorkspaceId(parsed.values.id) : defaultWorkspaceId(path, profile.workspaces);
@@ -164,7 +164,7 @@ async function workspaceCommand(parsed: ParsedCommand, store: ProfileStore, outp
     if (workspaces.length === profile.workspaces.length) throw new Error("workspace not found");
     await store.save({ ...profile, workspaces }); report(output, parsed.json, { removed: id }); return;
   }
-  throw new Error("usage: coding-runner workspace <list|add|remove|migrate>");
+  throw new Error("usage: runmesh-runner workspace <list|add|remove|migrate>");
 }
 export interface DoctorCheck {
   readonly name: string;
