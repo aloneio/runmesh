@@ -355,11 +355,9 @@ export class RunnerConnection {
     try {
       if (event.type === "started") {
         socket.send(encodeWireFrame({ type: "job.started", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: event.job.job_id, job, workspace: { workspace_id: event.job.workspace_id, persistence: "persistent", labels: {} }, started_at_ms: event.job.started_at_ms ?? event.job.updated_at_ms }));
-      } else if (event.type === "output" && event.stream !== undefined && event.data !== undefined) {
-        socket.send(encodeWireFrame({ type: "job.output", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: event.job.job_id, job_id: event.job.job_id, workspace_id: event.job.workspace_id, sequence: event.job.updated_at_ms, stream: event.stream, encoding: "utf-8", data: event.data }));
       } else if (event.type === "completed" && (event.job.status === "succeeded" || event.job.status === "failed" || event.job.status === "cancelled")) {
         socket.send(encodeWireFrame({ type: "job.completed", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: event.job.job_id, job, completed_at_ms: event.job.completed_at_ms ?? event.job.updated_at_ms, outcome: event.job.status, exit_code: event.job.exit_code }));
-      } else {
+      } else if (event.type === "status") {
         socket.send(encodeWireFrame({ type: "job.status", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: event.job.job_id, job }));
       }
     } catch { /* local persistence remains authoritative; transport is best effort */ }
