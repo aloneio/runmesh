@@ -579,6 +579,18 @@ function sameOrigin(request: Request): boolean {
 const ZH_UI_TEXT: Record<string, string> = {
   "Welcome to Runmesh": "欢迎使用 Runmesh",
   "Agent Control Plane": "智能体控制平面",
+  "Enter the Runmesh control plane": "进入 Runmesh 控制平面",
+  "Sign in to Runmesh": "登录 Runmesh",
+  "Set up Runmesh": "初始化 Runmesh",
+  "Control Plane": "控制平面",
+  "Mesh Nodes": "网格节点",
+  "Mesh Network Active": "网格网络已激活",
+  "Distributed runtime orchestration": "分布式运行时编排",
+  "Runner Nodes": "Runner 节点",
+  "Show password": "显示密码",
+  "Hide password": "隐藏密码",
+  "Signing in...": "正在登录...",
+  "Initializing...": "正在初始化...",
   "Create administrator password": "创建管理员密码",
   "Setup token": "初始化令牌",
   "Password": "密码",
@@ -817,10 +829,82 @@ const ZH_UI_TEXT: Record<string, string> = {
   "job control": "任务控制",
 };
 
+function meshMarkSvg(className = "mesh-mark"): string {
+  return `<svg class="${className}" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <circle cx="24" cy="24" r="19" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2 4" stroke-opacity="0.35"/>
+    <circle cx="24" cy="24" r="10" stroke="currentColor" stroke-width="1.5" stroke-opacity="0.5"/>
+    <circle cx="24" cy="5" r="2.5" fill="currentColor"/>
+    <circle cx="43" cy="24" r="2.5" fill="currentColor"/>
+    <circle cx="24" cy="43" r="2.5" fill="currentColor"/>
+    <circle cx="5" cy="24" r="2.5" fill="currentColor"/>
+    <circle cx="37.4" cy="10.6" r="2" fill="currentColor" fill-opacity="0.75"/>
+    <circle cx="37.4" cy="37.4" r="2" fill="currentColor" fill-opacity="0.75"/>
+    <circle cx="10.6" cy="37.4" r="2" fill="currentColor" fill-opacity="0.75"/>
+    <circle cx="10.6" cy="10.6" r="2" fill="currentColor" fill-opacity="0.75"/>
+    <circle cx="24" cy="24" r="3.5" fill="currentColor"/>
+    <path d="M24 5L24 43M5 24L43 24M10.6 10.6L37.4 37.4M10.6 37.4L37.4 10.6" stroke="currentColor" stroke-width="1" stroke-opacity="0.2"/>
+  </svg>`;
+}
+
+function meshVisualGraphic(): string {
+  return `<div class="mesh-network-visual" aria-hidden="true">
+    <div class="mesh-canvas-wrap">
+      <svg class="mesh-grid-svg" viewBox="0 0 440 440" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <radialGradient id="meshCenterGlow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="rgba(255,255,255,0.12)"/>
+            <stop offset="100%" stop-color="rgba(255,255,255,0)"/>
+          </radialGradient>
+        </defs>
+        <circle cx="220" cy="220" r="190" fill="url(#meshCenterGlow)"/>
+        <circle cx="220" cy="220" r="180" stroke="rgba(255,255,255,0.06)" stroke-width="1" stroke-dasharray="3 6"/>
+        <circle cx="220" cy="220" r="130" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+        <circle cx="220" cy="220" r="70" stroke="rgba(255,255,255,0.12)" stroke-width="1.2"/>
+        <!-- Interconnecting mesh lines -->
+        <path d="M220 90 L330 155 L330 285 L220 350 L110 285 L110 155 Z" stroke="rgba(255,255,255,0.15)" stroke-width="1.2"/>
+        <path d="M220 220 L220 90 M220 220 L330 155 M220 220 L330 285 M220 220 L220 350 M220 220 L110 285 M220 220 L110 155" stroke="rgba(255,255,255,0.1)" stroke-width="1"/>
+        <path d="M220 40 L220 90 M400 220 L330 155 M375 310 L330 285 M220 400 L220 350 M65 310 L110 285 M40 220 L110 155" stroke="rgba(255,255,255,0.06)" stroke-width="1" stroke-dasharray="2 3"/>
+
+        <!-- Outer satellite nodes -->
+        <circle cx="220" cy="40" r="3" fill="#888C93"/>
+        <circle cx="400" cy="220" r="3" fill="#888C93"/>
+        <circle cx="375" cy="310" r="3" fill="#888C93"/>
+        <circle cx="220" cy="400" r="3" fill="#888C93"/>
+        <circle cx="65" cy="310" r="3" fill="#888C93"/>
+        <circle cx="40" cy="220" r="3" fill="#888C93"/>
+
+        <!-- Primary Ring Nodes -->
+        <g class="mesh-node node-1"><circle cx="220" cy="90" r="5" fill="#22c55e"/><circle cx="220" cy="90" r="10" stroke="#22c55e" stroke-opacity="0.3" stroke-width="1.5"/></g>
+        <g class="mesh-node node-2"><circle cx="330" cy="155" r="4.5" fill="#22c55e"/><circle cx="330" cy="155" r="9" stroke="#22c55e" stroke-opacity="0.3" stroke-width="1.5"/></g>
+        <g class="mesh-node node-3"><circle cx="330" cy="285" r="4" fill="#a1a1aa"/><circle cx="330" cy="285" r="8" stroke="#a1a1aa" stroke-opacity="0.2" stroke-width="1.5"/></g>
+        <g class="mesh-node node-4"><circle cx="220" cy="350" r="4.5" fill="#22c55e"/><circle cx="220" cy="350" r="9" stroke="#22c55e" stroke-opacity="0.3" stroke-width="1.5"/></g>
+        <g class="mesh-node node-5"><circle cx="110" cy="285" r="4.5" fill="#22c55e"/><circle cx="110" cy="285" r="9" stroke="#22c55e" stroke-opacity="0.3" stroke-width="1.5"/></g>
+        <g class="mesh-node node-6"><circle cx="110" cy="155" r="4" fill="#a1a1aa"/><circle cx="110" cy="155" r="8" stroke="#a1a1aa" stroke-opacity="0.2" stroke-width="1.5"/></g>
+
+        <!-- Central Control DO Node -->
+        <circle cx="220" cy="220" r="8" fill="#F5F5F5"/>
+        <circle cx="220" cy="220" r="16" stroke="rgba(255,255,255,0.4)" stroke-width="1.5"/>
+        <circle cx="220" cy="220" r="24" stroke="rgba(255,255,255,0.15)" stroke-width="1" stroke-dasharray="3 3"/>
+      </svg>
+    </div>
+    <div class="mesh-visual-caption">
+      <div class="mesh-caption-badge"><span class="status-dot online"></span> <span>Mesh Network Active</span></div>
+      <p class="mesh-caption-sub">Distributed runtime orchestration</p>
+    </div>
+  </div>`;
+}
+
 function languageSwitch(): string { return `<div class="language-switch" data-no-i18n aria-label="Language"><a href="?lang=en" data-lang-toggle="en" hreflang="en">EN</a><a href="?lang=zh-CN" data-lang-toggle="zh-CN" hreflang="zh-CN">中文</a></div>`; }
 
-function setupPage(): Response { const csrf = randomBase64Url(); return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane setup</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card"><p class="brand-kicker">Runmesh</p><h1>Welcome to Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="lede">Create administrator password</p><form method="post" action="/setup" class="stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Setup token <input type="password" name="setup_token" autocomplete="one-time-code" required></label><label>Password <input type="password" name="password" autocomplete="new-password" required minlength="12"></label><label>Confirm password <input type="password" name="confirm_password" autocomplete="new-password" required minlength="12"></label><button>Initialize</button></form></section></main>${adminScript()}</body></html>`, [`${SETUP_CSRF_COOKIE}=${csrf}; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=${Math.floor(SETUP_CSRF_TTL_MS / 1_000)}`]); }
-function loginPage(): Response { const csrf = randomBase64Url(); return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane login</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card"><p class="brand-kicker">Runmesh</p><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><form method="post" action="/login" class="stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Admin password <input type="password" name="password" autocomplete="current-password" required></label><button>Login</button></form></section></main>${adminScript()}</body></html>`, [`${LOGIN_CSRF_COOKIE}=${csrf}; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=${Math.floor(SETUP_CSRF_TTL_MS / 1_000)}`]); }
+function setupPage(): Response {
+  const csrf = randomBase64Url();
+  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane setup</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<div class="login-layout"><aside class="login-brand-pane"><div class="login-brand-header"><div class="login-brand-title-wrap">${meshMarkSvg("login-brand-logo")}<span class="brand-name">Runmesh</span><span class="brand-tag">CONTROL PLANE</span></div><h2 class="login-brand-headline">Set up Runmesh</h2><p class="login-brand-desc">Create your administrator master password to begin managing distributed runtimes and MCP clients.</p></div>${meshVisualGraphic()}</aside><main class="login-form-pane"><div class="login-form-container"><div class="auth-header-mobile"><div class="login-brand-title-wrap">${meshMarkSvg("login-brand-logo")}<span class="brand-name">Runmesh</span></div></div><div class="login-title-group"><p class="brand-kicker">Runmesh</p><h1>Welcome to Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="lede">Create administrator password</p></div><form method="post" action="/setup" class="login-form stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><div class="input-group"><label for="setup_token">Setup token</label><div class="password-input-wrap"><input id="setup_token" type="password" name="setup_token" autocomplete="one-time-code" required><button type="button" class="pwd-toggle-btn" aria-label="Show password" tabindex="-1"><svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg></button></div></div><div class="input-group"><label for="password">Password</label><div class="password-input-wrap"><input id="password" type="password" name="password" autocomplete="new-password" required minlength="12"><button type="button" class="pwd-toggle-btn" aria-label="Show password" tabindex="-1"><svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg></button></div></div><div class="input-group"><label for="confirm_password">Confirm password</label><div class="password-input-wrap"><input id="confirm_password" type="password" name="confirm_password" autocomplete="new-password" required minlength="12"><button type="button" class="pwd-toggle-btn" aria-label="Show password" tabindex="-1"><svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg></button></div></div><button class="login-submit-btn">Initialize</button></form></div></main></div>${adminScript()}</body></html>`, [`${SETUP_CSRF_COOKIE}=${csrf}; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=${Math.floor(SETUP_CSRF_TTL_MS / 1_000)}`]);
+}
+
+function loginPage(): Response {
+  const csrf = randomBase64Url();
+  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane login</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<div class="login-layout"><aside class="login-brand-pane"><div class="login-brand-header"><div class="login-brand-title-wrap">${meshMarkSvg("login-brand-logo")}<span class="brand-name">Runmesh</span><span class="brand-tag">CONTROL PLANE</span></div><h2 class="login-brand-headline">Runner &amp; MCP Control Plane</h2><p class="login-brand-desc">Unified orchestration for distributed secure tool sandboxes, persistent agent runtimes, and MCP client bridges.</p></div>${meshVisualGraphic()}</aside><main class="login-form-pane"><div class="login-form-container"><div class="auth-header-mobile"><div class="login-brand-title-wrap">${meshMarkSvg("login-brand-logo")}<span class="brand-name">Runmesh</span></div></div><div class="login-title-group"><p class="brand-kicker">Runmesh</p><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="login-invite">Enter the Runmesh control plane</p></div><form method="post" action="/login" class="login-form stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><div class="input-group"><label for="admin_password">Admin password</label><div class="password-input-wrap"><input id="admin_password" type="password" name="password" autocomplete="current-password" required><button type="button" class="pwd-toggle-btn" aria-label="Show password" tabindex="-1"><svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg></button></div></div><button class="login-submit-btn">Login</button></form></div></main></div>${adminScript()}</body></html>`, [`${LOGIN_CSRF_COOKIE}=${csrf}; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=${Math.floor(SETUP_CSRF_TTL_MS / 1_000)}`]);
+}
 type AdminData = { readonly clients: readonly McpClientRecord[]; readonly runners: readonly RunnerRecord[]; readonly jobs: readonly Record<string, unknown>[]; readonly snapshot: Record<string, unknown> };
 async function loadDashboardData(env: WorkerEnv): Promise<AdminData> {
   const [clientsResponse, runnersResponse, snapshotResponse] = await Promise.all([registryGet(env, "/auth/clients"), registryGet(env, "/dashboard"), registryGet(env, "/runners")]);
@@ -862,70 +946,315 @@ async function runnerRpc(env: WorkerEnv, runnerId: string, method: string, param
 async function clientDetailPage(_env: WorkerEnv, client: Record<string, unknown>, runners: readonly RunnerRecord[], overrides: readonly Record<string, unknown>[], csrf: string): Promise<string> {
   const clientId = typeof client.client_id === "string" ? client.client_id : "unknown";
   const label = typeof client.label === "string" ? client.label : clientId;
+  const isRevoked = client.revoked_at_ms !== null;
   const overrideRows = runners.map((runner) => {
     const override = overrides.find((item) => item.runner_id === runner.runner_id);
     const permissions = record(override?.permissions);
-    return `<tr><td>${escapeHtml(runner.display_name)}</td><td>${override === undefined ? "Use global" : "Additional restriction"}</td><td colspan="4"><form method="post" action="/admin/clients/${encodeURIComponent(clientId)}/${override === undefined ? "override" : "override"}" class="form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input type="hidden" name="runner_id" value="${escapeHtml(runner.runner_id)}">${permissionSelect("read", permissions?.read === true)}${permissionSelect("edit", permissions?.edit === true)}${permissionSelect("shell", permissions?.shell === true)}${permissionSelect("job_control", permissions?.job_control === true)}<button class="small secondary">Save restriction</button>${override === undefined ? "" : `<button class="small danger" formaction="/admin/clients/${encodeURIComponent(clientId)}/reset-override">Reset</button>`}</form></td></tr>`;
+    const isCustom = override !== undefined;
+    return `<tr class="data-row">
+      <td>
+        <div class="table-primary-cell">
+          <span class="strong">${escapeHtml(runner.display_name)}</span>
+          <span class="sub-id mono">${escapeHtml(runner.runner_id)}</span>
+        </div>
+      </td>
+      <td>
+        <span class="mode-pill ${isCustom ? "custom" : "global"}">${isCustom ? "Additional restriction" : "Use global"}</span>
+      </td>
+      <td colspan="4">
+        <form method="post" action="/admin/clients/${encodeURIComponent(clientId)}/${override === undefined ? "override" : "override"}" class="override-form-row">
+          <input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">
+          <input type="hidden" name="runner_id" value="${escapeHtml(runner.runner_id)}">
+          <div class="perm-selects-wrap">
+            ${permissionSelect("read", permissions?.read === true)}
+            ${permissionSelect("edit", permissions?.edit === true)}
+            ${permissionSelect("shell", permissions?.shell === true)}
+            ${permissionSelect("job_control", permissions?.job_control === true)}
+          </div>
+          <div class="override-actions">
+            <button class="small secondary">Save restriction</button>
+            ${override === undefined ? "" : `<button class="small danger" formaction="/admin/clients/${encodeURIComponent(clientId)}/reset-override">Reset</button>`}
+          </div>
+        </form>
+      </td>
+    </tr>`;
   }).join("");
   const scopeValues = Array.isArray(client.scopes) ? client.scopes.filter((scope): scope is string => typeof scope === "string") : [];
-  const scopeEditor = `<form method="post" action="/admin/clients/${encodeURIComponent(clientId)}/scopes" class="form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><fieldset><legend>Base scopes</legend>${scopeCheckboxes(scopeValues)}</fieldset><button class="button secondary">Save scopes</button></form>`;
-  return `<section class="page-heading"><div><p class="eyebrow">MCP Client detail</p><h1>${escapeHtml(label)}</h1><p class="lede">Runner-specific access can only further restrict the client's global scopes; it can never grant additional access.</p></div><a class="button secondary" href="/admin/clients">Back to clients</a></section><section class="panel"><h2>Global permissions</h2><p class="muted scope-line">${escapeHtml(scopeValues.join(", "))}</p>${scopeEditor}</section><section class="panel"><h2>Client access on each Runner</h2><p class="muted">Use Global means no additional restriction. Effective access is still limited by Runner and Workspace policy.</p><div class="table-wrap"><table><thead><tr><th>Runner</th><th>Mode</th><th colspan="4">Additional restriction</th></tr></thead><tbody>${overrideRows || `<tr><td colspan="6" class="empty">No runners registered.</td></tr>`}</tbody></table></div></section>`;
+  const scopeEditor = `<form method="post" action="/admin/clients/${encodeURIComponent(clientId)}/scopes" class="form-grid scope-editor-form">
+    <input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">
+    <fieldset class="scope-fieldset">
+      <legend>Base scopes</legend>
+      <div class="scope-selector-row">
+        ${scopeCheckboxes(scopeValues)}
+      </div>
+    </fieldset>
+    <div class="form-submit-wrap">
+      <button class="button secondary">Save scopes</button>
+    </div>
+  </form>`;
+  return `<section class="detail-header">
+    <div class="detail-title-group">
+      <div class="detail-title-row">
+        <p class="eyebrow">MCP Client detail</p>
+        <h1 class="detail-title">${escapeHtml(label)}</h1>
+        ${statusBadge(isRevoked ? "offline" : "online")}
+      </div>
+      <p class="detail-id mono">${escapeHtml(clientId)}</p>
+      <p class="lede">Runner-specific access can only further restrict the client's global scopes; it can never grant additional access.</p>
+    </div>
+    <div class="detail-header-actions">
+      <a class="button secondary" href="/admin/clients">Back to clients</a>
+    </div>
+  </section>
+  <div class="grid-two">
+    <section class="panel">
+      <div class="section-title">
+        <h2>Global permissions</h2>
+      </div>
+      <div class="active-scopes-box">
+        <span class="form-stat-label">Effective Global Scopes</span>
+        <p class="muted scope-line">${escapeHtml(scopeValues.join(", "))}</p>
+      </div>
+      ${scopeEditor}
+    </section>
+    <section class="panel">
+      <div class="section-title">
+        <h2>Client Routing &amp; Status</h2>
+      </div>
+      <dl class="details">
+        <dt>Client ID</dt>
+        <dd class="mono">${escapeHtml(clientId)}</dd>
+        <dt>Active Runner</dt>
+        <dd><span class="routing-badge">${escapeHtml(activeRunnerLabel(client as unknown as McpClientRecord, runners))}</span></dd>
+        <dt>Last Used</dt>
+        <dd class="time-cell">${escapeHtml(time(typeof client.last_used_at_ms === "number" ? client.last_used_at_ms : null))}</dd>
+        <dt>Status</dt>
+        <dd>${isRevoked ? "Revoked" : "Active"}</dd>
+      </dl>
+    </section>
+  </div>
+  <section class="panel">
+    <div class="section-title">
+      <h2>Client access on each Runner</h2>
+      <span class="muted font-12">Use Global means no additional restriction. Effective access is still limited by Runner and Workspace policy.</span>
+    </div>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Runner</th>
+            <th>Mode</th>
+            <th colspan="4">Additional restriction</th>
+          </tr>
+        </thead>
+        <tbody>${overrideRows || `<tr><td colspan="6" class="empty"><div class="empty-state-box"><p>No runners registered.</p></div></td></tr>`}</tbody>
+      </table>
+    </div>
+  </section>`;
 }
 function adminPage(pathname: string, data: AdminData, csrf: string): string {
   const active = pathname === "/admin" ? "dashboard" : pathname.slice("/admin/".length);
-  const nav = `<nav aria-label="Main navigation"><a class="${active === "dashboard" ? "active" : ""}" href="/admin">Dashboard</a><a class="${active === "runners" ? "active" : ""}" href="/admin/runners">Runners</a><a class="${active === "clients" ? "active" : ""}" href="/admin/clients">MCP Clients</a><a class="${active === "settings" ? "active" : ""}" href="/admin/settings">Settings</a></nav>`;
+  const nav = `<nav class="control-nav" aria-label="Main navigation"><a class="${active === "dashboard" ? "active" : ""}" href="/admin">Dashboard</a><a class="${active === "runners" ? "active" : ""}" href="/admin/runners">Runners</a><a class="${active === "clients" ? "active" : ""}" href="/admin/clients">MCP Clients</a><a class="${active === "settings" ? "active" : ""}" href="/admin/settings">Settings</a></nav>`;
   const body = active === "runners" ? runnersPage(data, csrf) : active === "clients" ? clientsPage(data, csrf) : active === "settings" ? settingsPage(csrf) : overviewPage(data, csrf);
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><link rel="preload" href="/assets/logo.png" as="image" type="image/png"><title>${escapeHtml(active[0]?.toUpperCase() ?? "Dashboard")} · Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="ops-body"><div class="shell"><header class="topbar"><a class="brand" href="/admin"><img src="/assets/logo.png" alt="Runmesh · Agent Control Plane" class="brand-logo"><span class="brand-copy"><span>Runmesh</span><small>Agent Control Plane</small></span></a><div class="top-actions">${languageSwitch()}<a class="button secondary" href="/admin/runners#add-runner">Add Runner</a><a class="button" href="/admin/clients#add-client">Add MCP Client</a></div></header>${nav}<main class="workspace">${body}</main></div>${adminScript()}</body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><link rel="preload" href="/assets/logo.png" as="image" type="image/png"><title>${escapeHtml(active[0]?.toUpperCase() ?? "Dashboard")} · Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="ops-body"><header class="app-header"><div class="header-inner"><div class="header-left"><a class="brand" href="/admin">${meshMarkSvg("header-mesh-mark")}<span class="brand-copy"><span>Runmesh</span><small>Agent Control Plane</small></span></a>${nav}</div><div class="header-actions">${languageSwitch()}<a class="button secondary" href="/admin/runners#add-runner">Add Runner</a><a class="button" href="/admin/clients#add-client">Add MCP Client</a></div></div></header><div class="shell"><main class="workspace">${body}</main></div>${adminScript()}</body></html>`;
 }
 function overviewPage(data: AdminData, csrf: string): string {
   const online = data.runners.filter((runner) => runner.state === "online").length;
   const activeJobs = data.jobs.filter((job) => ["queued", "running", "cancelling"].includes(String(job.status))).length;
-  return `<section class="page-heading"><div><p class="eyebrow">Control plane</p><h1>Dashboard</h1><p class="lede">A concise view of connected runtimes, clients, and recent work.</p></div><a class="button secondary" href="/admin">Refresh</a></section><section class="metrics" aria-label="Summary"><div class="metric"><span>Active MCP clients</span><strong>${data.clients.filter((client) => client.revoked_at_ms === null).length}</strong></div><div class="metric"><span>Online / total runners</span><strong>${online} / ${data.runners.length}</strong></div><div class="metric"><span>Running jobs</span><strong>${activeJobs}</strong></div><div class="metric"><span>Recent jobs</span><strong>${data.jobs.length}</strong></div></section><div class="grid-two"><section class="panel"><div class="section-title"><h2>Recent runners</h2><a href="/admin/runners">View all</a></div>${runnerList(data.runners.slice(0, 5))}</section><section class="panel"><div class="section-title"><h2>Recent MCP clients</h2><a href="/admin/clients">View all</a></div>${clientList(data.clients.slice(0, 5))}</section></div><section class="panel"><div class="section-title"><h2>Recent jobs</h2><a href="/admin/runners">Runner activity</a></div>${jobTable(data.jobs.slice(0, 10))}</section><form class="hidden" method="post" action="/admin/logout"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"></form>`;
+  return `<section class="page-heading"><div><p class="eyebrow">Control plane</p><h1>Dashboard</h1><p class="lede">A concise view of connected runtimes, clients, and recent work.</p></div><a class="button secondary" href="/admin">Refresh</a></section><section class="metrics" aria-label="Summary"><div class="metric"><span class="metric-label">Active MCP clients</span><strong class="metric-value">${data.clients.filter((client) => client.revoked_at_ms === null).length}</strong><span class="metric-meta">${data.clients.length} configured</span></div><div class="metric"><span class="metric-label">Online / total runners</span><strong class="metric-value">${online} / ${data.runners.length}</strong><span class="metric-meta"><span class="status-dot ${online > 0 ? "online" : "offline"}"></span> ${online} connected</span></div><div class="metric"><span class="metric-label">Running jobs</span><strong class="metric-value">${activeJobs}</strong><span class="metric-meta">${activeJobs > 0 ? "In progress" : "Idle"}</span></div><div class="metric"><span class="metric-label">Recent jobs</span><strong class="metric-value">${data.jobs.length}</strong><span class="metric-meta">Recorded</span></div></section><div class="grid-two"><section class="panel"><div class="section-title"><h2>Recent runners</h2><a href="/admin/runners">View all</a></div>${runnerList(data.runners.slice(0, 5))}</section><section class="panel"><div class="section-title"><h2>Recent MCP clients</h2><a href="/admin/clients">View all</a></div>${clientList(data.clients.slice(0, 5))}</section></div><section class="panel"><div class="section-title"><h2>Recent jobs</h2><a href="/admin/runners">Runner activity</a></div>${jobTable(data.jobs.slice(0, 10))}</section><form class="hidden" method="post" action="/admin/logout"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"></form>`;
 }
 function runnersPage(data: AdminData, csrf: string): string {
-  const table = data.runners.map((runner) => `<tr><td><a class="strong" href="/admin/runners/${encodeURIComponent(runner.runner_id)}">${escapeHtml(runner.display_name)}</a><small>${escapeHtml(runner.runner_id)}</small></td><td>${statusBadge(runner.state)}</td><td>${escapeHtml(safePlatform(runner))}</td><td>${runnerWorkspaceCount(runner)}</td><td>${runnerActiveJobs(runner)}</td><td>${escapeHtml(time(runner.last_heartbeat_ms))}</td><td class="actions"><a class="button small secondary" href="/admin/runners/${encodeURIComponent(runner.runner_id)}">View</a><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/rename"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input name="display_name" value="${escapeHtml(runner.display_name)}" aria-label="Rename ${escapeHtml(runner.display_name)}" maxlength="256"><button class="small secondary">Rename</button></form><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/rotate"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Rotate Credential</button></form><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/revoke"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Type Runner ID to confirm<input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required></label><button class="small danger">Revoke</button></form><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/delete"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Type Runner ID to confirm<input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required></label><button class="small danger">Delete</button></form><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/enrollment"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Install / Reinstall</button></form></td></tr>`).join("") || `<tr><td colspan="7" class="empty">No runners yet.</td></tr>`;
-  return `<section class="page-heading"><div><p class="eyebrow">Infrastructure</p><h1>Runners</h1><p class="lede">Manage safe runner metadata and one-time enrollment.</p></div></section><section class="panel" id="add-runner"><div class="section-title"><h2>Add Runner</h2><span class="muted">Enrollment codes expire after 30 minutes.</span></div><form method="post" action="/admin/runners" class="form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Display name<input name="display_name" maxlength="256" required autocomplete="off"></label><label>Safe runner ID <span class="muted">optional</span><input name="runner_id" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" placeholder="generated-id"></label><button class="button">Create enrollment</button></form></section><section class="panel"><div class="table-wrap"><table><caption class="sr-only">Registered runners</caption><thead><tr><th>Display name</th><th>Status</th><th>Platform / architecture</th><th>Workspaces</th><th>Active jobs</th><th>Last seen</th><th>Actions</th></tr></thead><tbody>${table}</tbody></table></div></section>`;
+  const table = data.runners.map((runner) => `<tr class="data-row"><td><div class="table-primary-cell"><a class="strong" href="/admin/runners/${encodeURIComponent(runner.runner_id)}">${escapeHtml(runner.display_name)}</a><span class="sub-id mono">${escapeHtml(runner.runner_id)}</span></div></td><td>${statusBadge(runner.state)}</td><td><span class="platform-tag">${escapeHtml(safePlatform(runner))}</span></td><td class="num-cell">${runnerWorkspaceCount(runner)}</td><td class="num-cell">${runnerActiveJobs(runner)}</td><td class="time-cell">${escapeHtml(time(runner.last_heartbeat_ms))}</td><td class="actions"><div class="action-btn-group"><a class="button small secondary" href="/admin/runners/${encodeURIComponent(runner.runner_id)}">View</a><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/rename" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input name="display_name" value="${escapeHtml(runner.display_name)}" aria-label="Rename ${escapeHtml(runner.display_name)}" maxlength="256"><button class="small secondary">Rename</button></form><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/rotate" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Rotate Credential</button></form><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/revoke" class="inline-action-form danger-action"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Type Runner ID to confirm<input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required></label><button class="small danger">Revoke</button></form><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/delete" class="inline-action-form danger-action"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Type Runner ID to confirm<input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required></label><button class="small danger">Delete</button></form><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/enrollment" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Install / Reinstall</button></form></div></td></tr>`).join("") || `<tr><td colspan="7" class="empty"><div class="empty-state-box"><p>No runners yet.</p></div></td></tr>`;
+  return `<section class="page-heading"><div><p class="eyebrow">Infrastructure</p><h1>Runners</h1><p class="lede">Manage safe runner metadata and one-time enrollment.</p></div></section><section class="panel add-panel" id="add-runner"><div class="section-title"><h2>Add Runner</h2><span class="muted font-12">Enrollment codes expire after 30 minutes.</span></div><form method="post" action="/admin/runners" class="form-grid add-form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Display name<input name="display_name" maxlength="256" required autocomplete="off" placeholder="e.g. Production Runner 01"></label><label>Safe runner ID <span class="muted font-11">optional</span><input name="runner_id" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" placeholder="generated-id"></label><div class="form-submit-wrap"><button class="button">Create enrollment</button></div></form></section><section class="panel"><div class="table-wrap"><table class="data-table"><caption class="sr-only">Registered runners</caption><thead><tr><th>Display name</th><th>Status</th><th>Platform / architecture</th><th>Workspaces</th><th>Active jobs</th><th>Last seen</th><th>Actions</th></tr></thead><tbody>${table}</tbody></table></div></section>`;
 }
 function activeRunnerLabel(client: McpClientRecord, runners: readonly RunnerRecord[]): string { const runner = client.active_runner_id === null ? undefined : runners.find((item) => item.runner_id === client.active_runner_id); return runner === undefined ? "Not selected" : runner.display_name; }
 function clientsPage(data: AdminData, csrf: string): string {
-  const rows = data.clients.map((client) => `<tr><td><a class="strong" href="/admin/clients/${encodeURIComponent(client.client_id)}">${escapeHtml(client.label)}</a><small>${escapeHtml(client.client_id)}</small></td><td>${escapeHtml(client.scopes.join(", "))}</td><td>${escapeHtml(activeRunnerLabel(client, data.runners))}</td><td>${escapeHtml(time(client.last_used_at_ms))}</td><td>${client.revoked_at_ms === null ? statusBadge("online") : statusBadge("offline")}</td><td class="actions"><form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rename"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input name="label" value="${escapeHtml(client.label)}" aria-label="Rename ${escapeHtml(client.label)}" maxlength="256"><button class="small secondary">Rename</button></form>${client.revoked_at_ms === null ? `<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rotate"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Rotate</button></form>` : ""}<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/reset-runner"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Reset Runner Selection</button></form>${client.revoked_at_ms === null ? `<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/revoke"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small danger">Revoke</button></form>` : ""}</td></tr>`).join("") || `<tr><td colspan="6" class="empty">No MCP clients yet.</td></tr>`;
-  return `<section class="page-heading"><div><p class="eyebrow">Integrations</p><h1>MCP Clients</h1><p class="lede">Manage labels, scopes, runner routing, and one-time client secrets.</p></div></section><section class="panel" id="add-client"><div class="section-title"><h2>Add MCP Client</h2></div><form method="post" action="/admin/clients" class="form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Label<input name="label" maxlength="256" required></label><fieldset><legend>Scopes</legend>${scopeCheckboxes()}</fieldset><button class="button">Create one-time secret</button></form></section><section class="panel"><div class="table-wrap"><table><caption class="sr-only">MCP clients</caption><thead><tr><th>Label</th><th>Scopes</th><th>Active runner</th><th>Last used</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+  const rows = data.clients.map((client) => `<tr class="data-row"><td><div class="table-primary-cell"><a class="strong" href="/admin/clients/${encodeURIComponent(client.client_id)}">${escapeHtml(client.label)}</a><span class="sub-id mono">${escapeHtml(client.client_id)}</span></div></td><td><div class="scope-tags">${client.scopes.map((s) => `<span class="scope-pill">${escapeHtml(s)}</span>`).join("")}</div></td><td><span class="routing-badge">${escapeHtml(activeRunnerLabel(client, data.runners))}</span></td><td class="time-cell">${escapeHtml(time(client.last_used_at_ms))}</td><td>${client.revoked_at_ms === null ? statusBadge("online") : statusBadge("offline")}</td><td class="actions"><div class="action-btn-group"><form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rename" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input name="label" value="${escapeHtml(client.label)}" aria-label="Rename ${escapeHtml(client.label)}" maxlength="256"><button class="small secondary">Rename</button></form>${client.revoked_at_ms === null ? `<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rotate" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Rotate</button></form>` : ""}<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/reset-runner" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Reset Runner Selection</button></form>${client.revoked_at_ms === null ? `<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/revoke" class="inline-action-form danger-action"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small danger">Revoke</button></form>` : ""}</div></td></tr>`).join("") || `<tr><td colspan="6" class="empty"><div class="empty-state-box"><p>No MCP clients yet.</p></div></td></tr>`;
+  return `<section class="page-heading"><div><p class="eyebrow">Integrations</p><h1>MCP Clients</h1><p class="lede">Manage labels, scopes, runner routing, and one-time client secrets.</p></div></section><section class="panel add-panel" id="add-client"><div class="section-title"><h2>Add MCP Client</h2></div><form method="post" action="/admin/clients" class="form-grid add-client-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Label<input name="label" maxlength="256" required placeholder="e.g. Cursor / Claude Desktop"></label><fieldset><legend>Scopes</legend><div class="scope-selector-row">${scopeCheckboxes()}</div></fieldset><div class="form-submit-wrap"><button class="button">Create one-time secret</button></div></form></section><section class="panel"><div class="table-wrap"><table class="data-table"><caption class="sr-only">MCP clients</caption><thead><tr><th>Label</th><th>Scopes</th><th>Active runner</th><th>Last used</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
 }
-function settingsPage(csrf: string): string { return `<section class="page-heading"><div><p class="eyebrow">Workspace administration</p><h1>Settings</h1><p class="lede">Keep operator notes here; credentials and secrets are never displayed.</p></div></section><div class="grid-two"><section class="panel"><h2>Change password</h2><form method="post" action="/admin/password" class="stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Current password<input type="password" name="current_password" required autocomplete="current-password"></label><label>New password<input type="password" name="password" minlength="12" required autocomplete="new-password"></label><label>Confirm new password<input type="password" name="confirm_password" minlength="12" required autocomplete="new-password"></label><button class="button">Change password</button></form></section><section class="panel danger-panel"><h2>Operator notes</h2><p class="muted">Deployment notes belong in your deployment system. This dashboard intentionally stores no notes or secrets.</p><form method="post" action="/admin/logout" class="stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Log out</button></form></section></div>`; }
-function runnerList(runners: readonly RunnerRecord[]): string { return runners.length === 0 ? `<p class="empty">No runners yet.</p>` : `<ul class="item-list">${runners.map((runner) => `<li><a href="/admin/runners/${encodeURIComponent(runner.runner_id)}"><span class="strong">${escapeHtml(runner.display_name)}</span><small>${statusBadge(runner.state)} · ${escapeHtml(safePlatform(runner))}</small></a></li>`).join("")}</ul>`; }
-function clientList(clients: readonly McpClientRecord[]): string { return clients.length === 0 ? `<p class="empty">No MCP clients yet.</p>` : `<ul class="item-list">${clients.map((client) => `<li><span><span class="strong">${escapeHtml(client.label)}</span><small>${client.active_runner_id === null ? "Not selected" : escapeHtml(client.active_runner_id)} · ${client.revoked_at_ms === null ? "Active" : "Revoked"}</small><form class="hidden" method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rename"><input name="label" value="${escapeHtml(client.label)}"></form></span></li>`).join("")}</ul>`; }
-function jobTable(jobs: readonly Record<string, unknown>[]): string { return jobs.length === 0 ? `<p class="empty">No recent jobs.</p>` : `<div class="table-wrap"><table><thead><tr><th>Job</th><th>Workspace</th><th>Status</th><th>Updated</th></tr></thead><tbody>${jobs.map((job) => { const status = String(job.status ?? "unknown"); return `<tr><td class="mono">${escapeHtml(String(job.job_id ?? "unknown"))}</td><td>${escapeHtml(String(job.workspace_id ?? "unknown"))}</td><td><span class="badge job-status ${escapeHtml(status)}">${escapeHtml(status)}</span></td><td>${escapeHtml(time(typeof job.updated_at_ms === "number" ? job.updated_at_ms : null))}</td></tr>`; }).join("")}</tbody></table></div>`; }
-function statusBadge(state: string): string { const safe = ["online", "offline", "stale", "pending", "invalid"].includes(state) ? state : "offline"; return `<span class="badge ${safe}">${safe}</span>`; }
+function settingsPage(csrf: string): string { return `<section class="page-heading"><div><p class="eyebrow">Workspace administration</p><h1>Settings</h1><p class="lede">Keep operator notes here; credentials and secrets are never displayed.</p></div></section><div class="grid-two"><section class="panel"><div class="section-title"><h2>Change password</h2></div><form method="post" action="/admin/password" class="stack settings-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Current password<input type="password" name="current_password" required autocomplete="current-password"></label><label>New password<input type="password" name="password" minlength="12" required autocomplete="new-password"></label><label>Confirm new password<input type="password" name="confirm_password" minlength="12" required autocomplete="new-password"></label><button class="button">Change password</button></form></section><section class="panel danger-panel"><div class="section-title"><h2 class="danger-title">Operator notes</h2></div><p class="muted settings-note">Deployment notes belong in your deployment system. This dashboard intentionally stores no notes or secrets.</p><div class="logout-box"><form method="post" action="/admin/logout" class="stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Log out</button></form></div></section></div>`; }
+function runnerList(runners: readonly RunnerRecord[]): string { return runners.length === 0 ? `<p class="empty">No runners yet.</p>` : `<ul class="item-list">${runners.map((runner) => `<li><a href="/admin/runners/${encodeURIComponent(runner.runner_id)}" class="card-row"><div class="card-row-main"><span class="strong">${escapeHtml(runner.display_name)}</span><span class="card-row-sub">${statusBadge(runner.state)}<span class="meta-separator">·</span><span class="platform-meta">${escapeHtml(safePlatform(runner))}</span></span></div><div class="card-row-aside"><span class="row-arrow">→</span></div></a></li>`).join("")}</ul>`; }
+function clientList(clients: readonly McpClientRecord[]): string { return clients.length === 0 ? `<p class="empty">No MCP clients yet.</p>` : `<ul class="item-list">${clients.map((client) => `<li><a href="/admin/clients/${encodeURIComponent(client.client_id)}" class="card-row"><div class="card-row-main"><span class="strong">${escapeHtml(client.label)}</span><span class="card-row-sub"><span class="client-runner-meta">${client.active_runner_id === null ? "Not selected" : escapeHtml(client.active_runner_id)}</span><span class="meta-separator">·</span>${client.revoked_at_ms === null ? statusBadge("online") : statusBadge("offline")}</span></div><div class="card-row-aside"><span class="row-arrow">→</span></div></a><form class="hidden" method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rename"><input name="label" value="${escapeHtml(client.label)}"></form></li>`).join("")}</ul>`; }
+function jobTable(jobs: readonly Record<string, unknown>[]): string { return jobs.length === 0 ? `<p class="empty">No recent jobs.</p>` : `<div class="table-wrap"><table class="data-table"><thead><tr><th>Job</th><th>Workspace</th><th>Status</th><th>Updated</th></tr></thead><tbody>${jobs.map((job) => { const status = String(job.status ?? "unknown"); const safeStatus = statusClass(status); return `<tr class="data-row"><td class="mono job-id-cell">${escapeHtml(String(job.job_id ?? "unknown"))}</td><td><span class="workspace-pill">${escapeHtml(String(job.workspace_id ?? "unknown"))}</span></td><td><span class="badge job-status ${safeStatus}"><span class="status-dot ${safeStatus}"></span> ${escapeHtml(status)}</span></td><td class="time-cell">${escapeHtml(time(typeof job.updated_at_ms === "number" ? job.updated_at_ms : null))}</td></tr>`; }).join("")}</tbody></table></div>`; }
+function statusBadge(state: string): string { const safe = ["online", "offline", "stale", "pending", "invalid"].includes(state) ? state : "offline"; return `<span class="badge ${safe}"><span class="status-dot ${safe}"></span>${safe}</span>`; }
+function statusClass(status: string): string { return ["queued", "running", "cancelling", "cancelled", "succeeded", "completed", "failed", "unknown", "interrupted", "pending", "invalid", "offline", "online"].includes(status) ? status : "unknown"; }
 function safePlatform(runner: RunnerRecord): string { return runner.public_info === null ? "Not enrolled" : `${runner.public_info.platform} / ${runner.public_info.architecture}`; }
 function runnerWorkspaceCount(runner: RunnerRecord): string { const value = (runner as RunnerRecord & { workspace_count?: unknown }).workspace_count; return typeof value === "number" ? String(value) : "—"; }
 function runnerActiveJobs(runner: RunnerRecord): string { const value = (runner as RunnerRecord & { active_job_count?: unknown }).active_job_count; return typeof value === "number" ? String(value) : "—"; }
-function scopeCheckboxes(selected: readonly string[] = ["coding:read", "coding:write", "coding:exec"]): string { return ["coding:read", "coding:write", "coding:exec"].map((scope) => `<label class="check"><input type="checkbox" name="scopes" value="${scope}"${selected.includes(scope) ? " checked" : ""}> ${scope}</label>`).join(""); }
+function scopeCheckboxes(selected: readonly string[] = ["coding:read", "coding:write", "coding:exec"]): string { return ["coding:read", "coding:write", "coding:exec"].map((scope) => `<label class="check"><input type="checkbox" name="scopes" value="${scope}"${selected.includes(scope) ? " checked" : ""}> <span>${scope}</span></label>`).join(""); }
 function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly unknown[], jobs: readonly unknown[], environment: Record<string, unknown> | undefined, csrf: string, release: RunnerReleaseDescriptor & { readonly distributable: boolean }): string {
   const runnerId = typeof runner.runner_id === "string" ? runner.runner_id : "unknown";
   const displayName = typeof runner.display_name === "string" ? runner.display_name : runnerId;
   const state = typeof runner.state === "string" ? runner.state : "offline";
   const publicInfo = record(runner.public_info);
   const tools = record(environment?.tools);
-  const toolRows = tools === undefined ? `<p class="muted">Environment details unavailable while offline.</p>` : `<div class="tool-grid">${Object.entries(tools).map(([name, value]) => { const item = record(value); const isAvail = item?.available === true; return `<div class="tool-item"><div class="tool-name-row"><strong class="tool-name">${escapeHtml(name)}</strong><span class="badge tool-badge ${isAvail ? "online" : "offline"}">${isAvail ? "Available" : "Unavailable"}</span></div>${isAvail && typeof item?.version === "string" ? `<span class="tool-version mono">${escapeHtml(item.version)}</span>` : ""}</div>`; }).join("")}</div>`;
+  const toolRows = tools === undefined ? `<p class="muted empty-desc">Environment details unavailable while offline.</p>` : `<div class="tool-grid">${Object.entries(tools).map(([name, value]) => { const item = record(value); const isAvail = item?.available === true; return `<div class="tool-item"><div class="tool-name-row"><strong class="tool-name">${escapeHtml(name)}</strong>${isAvail ? `<span class="badge online"><span class="status-dot online"></span>Available</span>` : `<span class="badge offline"><span class="status-dot offline"></span>Unavailable</span>`}</div>${isAvail && typeof item?.version === "string" ? `<span class="tool-version mono">${escapeHtml(item.version)}</span>` : ""}</div>`; }).join("")}</div>`;
   const policyStatus = runner.policy_status === "applied" || runner.policy_status === "invalid" ? runner.policy_status : "pending";
   const workspaceRows = workspaces.map((workspace) => managedWorkspaceForm(runnerId, record(workspace), csrf)).join("") || `<li class="muted empty-item">No managed workspaces configured.</li>`;
   const updateChannel = runner.update_channel === "pinned" ? "pinned" : "stable";
   const currentVersion = typeof runner.current_runner_version === "string" ? runner.current_runner_version : typeof publicInfo?.runner_version === "string" ? publicInfo.runner_version : "Unknown";
   const latestVersion = typeof runner.latest_runner_version === "string" ? runner.latest_runner_version : release.distributable ? release.latest_version : "Not configured";
-  const distributionNotice = release.distributable ? "" : `<p class="muted">Hosted distribution is not configured. Portable artifact/manual version management only.</p>`;
+  const distributionNotice = release.distributable ? "" : `<p class="muted font-12">Hosted distribution is not configured. Portable artifact/manual version management only.</p>`;
   const desiredVersion = typeof runner.desired_runner_version === "string" ? runner.desired_runner_version : "";
   const protocolCompatibility = runner.protocol_compatibility === "compatible" || runner.protocol_compatibility === "incompatible" ? runner.protocol_compatibility : "unknown";
   const protocolRange = `${String(runner.protocol_min_version ?? "Unknown")}–${String(runner.protocol_max_version ?? "Unknown")}`;
   const permissions = record(runner.runner_permissions);
   const desiredRevision = typeof runner.desired_policy_revision === "number" ? String(runner.desired_policy_revision) : "0";
   const appliedRevision = typeof runner.applied_policy_revision === "number" ? String(runner.applied_policy_revision) : "—";
-  return `<section class="detail-header"><div class="detail-title-group"><div class="detail-title-row"><h1 class="detail-title">${escapeHtml(displayName)}</h1>${statusBadge(state)}</div><p class="detail-id mono">${escapeHtml(runnerId)}</p></div><div class="detail-header-actions"><a class="button secondary" href="/admin/runners">Back to runners</a></div></section><div class="metrics" aria-label="Runner summary"><div class="metric"><span>Status</span><strong>${statusBadge(state)}</strong></div><div class="metric"><span>Runner ID</span><strong class="mono mono-truncate">${escapeHtml(runnerId)}</strong></div><div class="metric"><span>Policy status</span><strong>${escapeHtml(policyStatus)} · ${escapeHtml(appliedRevision === "—" && policyStatus === "applied" ? desiredRevision : appliedRevision)} / ${escapeHtml(desiredRevision)}</strong></div><div class="metric"><span>Last seen</span><strong>${escapeHtml(time(typeof runner.last_heartbeat_ms === "number" ? runner.last_heartbeat_ms : null))}</strong></div></div><div class="grid-two"><section class="panel"><h2>Safe metadata</h2><dl class="details"><dt>Platform</dt><dd>${escapeHtml(typeof publicInfo?.platform === "string" ? publicInfo.platform : "Unknown")}</dd><dt>Architecture</dt><dd>${escapeHtml(typeof publicInfo?.architecture === "string" ? publicInfo.architecture : "Unknown")}</dd><dt>Hostname</dt><dd>${escapeHtml(typeof publicInfo?.hostname === "string" ? publicInfo.hostname : "Unknown")}</dd><dt>Runner version</dt><dd>${escapeHtml(currentVersion)}</dd><dt>Stable/latest version</dt><dd>${escapeHtml(latestVersion)}</dd><dt>Protocol compatibility</dt><dd>${escapeHtml(protocolRange)} · ${escapeHtml(protocolCompatibility)}</dd></dl></section><section class="panel"><h2>Version policy</h2><p class="muted">Policy is recorded for operators; package download, update, and rollback remain deferred.</p>${distributionNotice}<form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/version-policy" class="form-grid version-policy-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Channel<select name="update_channel"><option value="stable"${updateChannel === "stable" ? " selected" : ""}>Stable</option><option value="pinned"${updateChannel === "pinned" ? " selected" : ""}>Pinned</option></select></label><label>Desired version<input name="desired_runner_version" value="${escapeHtml(desiredVersion)}" placeholder="1.2.3" pattern="[0-9]+\\.[0-9]+\\.[0-9]+"></label><div class="version-stat"><span class="form-stat-label">Current</span><strong>${escapeHtml(currentVersion)}</strong></div><div class="version-stat"><span class="form-stat-label">Latest</span><strong>${escapeHtml(latestVersion)}</strong></div><button class="button">Save version policy</button></form><p class="muted policy-status-foot">Status: ${escapeHtml(String(runner.update_status ?? "unknown"))}</p></section><section class="panel"><h2>Environment tools</h2>${toolRows}</section></div><div class="grid-two"><section class="panel"><h2>Runner permission profile</h2><p class="muted">Changes remain pending until the connected Runner validates and applies the revision.</p>${permissionForm(runnerId, permissions, csrf)}<div class="danger-zone"><h3>Emergency control</h3><p class="muted">Emergency Lock does not automatically stop existing Jobs.</p><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/emergency-lock" class="stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Type the Runner ID to confirm emergency lock<input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required></label><button class="button danger">Emergency lock all permissions</button></form></div></section><section class="panel"><h2>Active jobs</h2>${jobTable(jobs.filter(record) as Record<string, unknown>[])}</section></div><section class="panel"><div class="section-title"><h2>Managed workspaces</h2><span class="muted">Each save increments the desired policy revision.</span></div><ul class="plain-list workspace-list">${workspaceRows}</ul><div class="add-workspace-box"><h3>Add workspace</h3>${managedWorkspaceForm(runnerId, undefined, csrf)}</div></section>`;
+  return `<section class="detail-header">
+    <div class="detail-title-group">
+      <div class="detail-title-row">
+        <p class="eyebrow">Runner details</p>
+        <h1 class="detail-title">${escapeHtml(displayName)}</h1>
+        ${statusBadge(state)}
+      </div>
+      <p class="detail-id mono">${escapeHtml(runnerId)}</p>
+      <p class="lede">Control-plane workspace roots appear only in this authenticated administrator view.</p>
+    </div>
+    <div class="detail-header-actions">
+      <a class="button secondary" href="/admin/runners">Back to runners</a>
+    </div>
+  </section>
+  <div class="metrics" aria-label="Runner summary">
+    <div class="metric">
+      <span class="metric-label">Status</span>
+      <strong class="metric-value">${statusBadge(state)}</strong>
+      <span class="metric-meta">${state === "online" ? "Socket connected" : "Disconnected"}</span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">Runner ID</span>
+      <strong class="metric-value mono mono-truncate" title="${escapeHtml(runnerId)}">${escapeHtml(runnerId)}</strong>
+      <span class="metric-meta">Unique runtime</span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">Policy status</span>
+      <strong class="metric-value">${escapeHtml(policyStatus)} · ${escapeHtml(appliedRevision === "—" && policyStatus === "applied" ? desiredRevision : appliedRevision)} / ${escapeHtml(desiredRevision)}</strong>
+      <span class="metric-meta">Revision applied / desired</span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">Last seen</span>
+      <strong class="metric-value font-16">${escapeHtml(time(typeof runner.last_heartbeat_ms === "number" ? runner.last_heartbeat_ms : null))}</strong>
+      <span class="metric-meta">Heartbeat</span>
+    </div>
+  </div>
+  <div class="grid-two">
+    <section class="panel">
+      <div class="section-title">
+        <h2>Safe metadata</h2>
+      </div>
+      <dl class="details">
+        <dt>Platform</dt>
+        <dd>${escapeHtml(typeof publicInfo?.platform === "string" ? publicInfo.platform : "Unknown")}</dd>
+        <dt>Architecture</dt>
+        <dd>${escapeHtml(typeof publicInfo?.architecture === "string" ? publicInfo.architecture : "Unknown")}</dd>
+        <dt>Hostname</dt>
+        <dd class="mono">${escapeHtml(typeof publicInfo?.hostname === "string" ? publicInfo.hostname : "Unknown")}</dd>
+        <dt>Runner version</dt>
+        <dd class="mono">${escapeHtml(currentVersion)}</dd>
+        <dt>Stable/latest version</dt>
+        <dd class="mono">${escapeHtml(latestVersion)}</dd>
+        <dt>Protocol compatibility</dt>
+        <dd>${escapeHtml(protocolRange)} · ${escapeHtml(protocolCompatibility)}</dd>
+      </dl>
+    </section>
+    <section class="panel">
+      <div class="section-title">
+        <h2>Version policy</h2>
+      </div>
+      <p class="muted font-12">Policy is recorded for operators; package download, update, and rollback remain deferred.</p>
+      ${distributionNotice}
+      <form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/version-policy" class="form-grid version-policy-form">
+        <input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">
+        <label>Channel
+          <select name="update_channel">
+            <option value="stable"${updateChannel === "stable" ? " selected" : ""}>Stable</option>
+            <option value="pinned"${updateChannel === "pinned" ? " selected" : ""}>Pinned</option>
+          </select>
+        </label>
+        <label>Desired version
+          <input name="desired_runner_version" value="${escapeHtml(desiredVersion)}" placeholder="1.2.3" pattern="[0-9]+\\.[0-9]+\\.[0-9]+">
+        </label>
+        <div class="version-stat">
+          <span class="form-stat-label">Current</span>
+          <strong class="mono">${escapeHtml(currentVersion)}</strong>
+        </div>
+        <div class="version-stat">
+          <span class="form-stat-label">Latest</span>
+          <strong class="mono">${escapeHtml(latestVersion)}</strong>
+        </div>
+        <div class="form-submit-wrap full-width-submit">
+          <button class="button">Save version policy</button>
+        </div>
+      </form>
+      <p class="muted policy-status-foot font-12">Status: <span class="mono">${escapeHtml(String(runner.update_status ?? "unknown"))}</span></p>
+    </section>
+    <section class="panel">
+      <div class="section-title">
+        <h2>Environment tools</h2>
+      </div>
+      ${toolRows}
+    </section>
+    <section class="panel">
+      <div class="section-title">
+        <h2>Active jobs</h2>
+      </div>
+      ${jobTable(jobs.filter(record) as Record<string, unknown>[])}
+    </section>
+  </div>
+  <div class="grid-two">
+    <section class="panel">
+      <div class="section-title">
+        <h2>Runner permission profile</h2>
+      </div>
+      <p class="muted font-12">Changes remain pending until the connected Runner validates and applies the revision.</p>
+      ${permissionForm(runnerId, permissions, csrf)}
+      <div class="danger-zone">
+        <div class="danger-header">
+          <h3>Emergency control</h3>
+        </div>
+        <p class="muted font-12">Emergency Lock does not automatically stop existing Jobs.</p>
+        <form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/emergency-lock" class="stack emergency-lock-form">
+          <input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">
+          <label>Type the Runner ID to confirm emergency lock
+            <input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required placeholder="${escapeHtml(runnerId)}">
+          </label>
+          <button class="button danger">Emergency lock all permissions</button>
+        </form>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="section-title">
+        <h2>Managed workspaces</h2>
+        <span class="muted font-12">Each save increments the desired policy revision.</span>
+      </div>
+      <ul class="plain-list workspace-list">
+        ${workspaceRows}
+      </ul>
+      <div class="add-workspace-box">
+        <div class="box-title-row">
+          <h3>Add workspace</h3>
+        </div>
+        ${managedWorkspaceForm(runnerId, undefined, csrf)}
+      </div>
+    </section>
+  </div>`;
 }
 function permissionForm(runnerId: string, permissions: Record<string, unknown> | undefined, csrf: string): string {
   const current = (name: string): boolean => permissions?.[name] === true;
-  return `<form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/permissions" class="form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">${permissionSelect("read", current("read"))}${permissionSelect("edit", current("edit"))}${permissionSelect("shell", current("shell"))}${permissionSelect("job_control", current("job_control"))}<button class="button">Save profile</button></form>`;
+  return `<form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/permissions" class="form-grid permission-profile-grid">
+    <input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">
+    <div class="perm-selects-row">
+      ${permissionSelect("read", current("read"))}
+      ${permissionSelect("edit", current("edit"))}
+      ${permissionSelect("shell", current("shell"))}
+      ${permissionSelect("job_control", current("job_control"))}
+    </div>
+    <div class="form-submit-wrap full-width-submit">
+      <button class="button">Save profile</button>
+    </div>
+  </form>`;
 }
-function permissionSelect(name: string, selected: boolean): string { return `<label>${escapeHtml(name.replaceAll("_", " "))}<select name="${escapeHtml(name)}"><option value="true"${selected ? " selected" : ""}>Allow</option><option value="false"${selected ? "" : " selected"}>Deny</option></select></label>`; }
+function permissionSelect(name: string, selected: boolean): string { return `<label class="perm-select-label"><span>${escapeHtml(name.replaceAll("_", " "))}</span><select name="${escapeHtml(name)}"><option value="true"${selected ? " selected" : ""}>Allow</option><option value="false"${selected ? "" : " selected"}>Deny</option></select></label>`; }
 function managedWorkspaceForm(runnerId: string, workspace: Record<string, unknown> | undefined, csrf: string): string {
   const existing = typeof workspace?.workspace_id === "string";
   const workspaceId = existing ? workspace?.workspace_id as string : "";
@@ -935,7 +1264,65 @@ function managedWorkspaceForm(runnerId: string, workspace: Record<string, unknow
   const current = (name: string): boolean => permissions?.[name] === true;
   const enabled = workspace?.enabled !== false;
   const status = typeof workspace?.validation_status === "string" ? workspace.validation_status : "pending";
-  return `<li class="workspace-card"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/${existing ? "workspace-update" : "workspace-create"}" class="form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Workspace ID<input name="workspace_id" value="${escapeHtml(workspaceId)}" ${existing ? "readonly" : "required"} maxlength="128"></label><label>Display name<input name="display_name" value="${escapeHtml(displayName)}" required maxlength="256"></label><label>Absolute root path<input name="root_path" value="${escapeHtml(rootPath)}" required maxlength="4096"></label><label>Usage profile<select name="profile"><option value="custom">Custom</option><option value="read_only">Read Only</option><option value="coding">Coding</option></select></label><label class="full-host-label">Full-host confirmation<input type="hidden" name="confirm_full_host" value="false"><span class="check-line"><input type="checkbox" name="confirm_full_host" value="true"> I understand this exposes the full host filesystem.</span></label><label>Enabled<select name="enabled"><option value="true"${enabled ? " selected" : ""}>Enabled</option><option value="false"${enabled ? "" : " selected"}>Disabled</option></select></label>${permissionSelect("read", current("read"))}${permissionSelect("edit", current("edit"))}${permissionSelect("shell", current("shell"))}${permissionSelect("job_control", current("job_control"))}<button class="button">${existing ? "Save workspace" : "Create workspace"}</button></form>${existing ? `<div class="top-actions workspace-actions"><span class="muted validation-tag">Validation: ${escapeHtml(status)}</span><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/workspace-delete" class="inline-delete-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input type="hidden" name="workspace_id" value="${escapeHtml(workspaceId)}"><label>Type Workspace ID to confirm<input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required></label><button class="small danger">Delete workspace</button></form></div>` : ""}</li>`;
+  return `<li class="workspace-card">
+    <form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/${existing ? "workspace-update" : "workspace-create"}" class="workspace-form">
+      <input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">
+      <div class="form-grid workspace-main-grid">
+        <label>Workspace ID
+          <input name="workspace_id" value="${escapeHtml(workspaceId)}" ${existing ? "readonly" : "required"} maxlength="128" placeholder="e.g. project-src">
+        </label>
+        <label>Display name
+          <input name="display_name" value="${escapeHtml(displayName)}" required maxlength="256" placeholder="e.g. Main Repository">
+        </label>
+        <label class="grid-span-2">Absolute root path
+          <input name="root_path" value="${escapeHtml(rootPath)}" required maxlength="4096" placeholder="/absolute/path/to/directory">
+        </label>
+        <label>Usage profile
+          <select name="profile">
+            <option value="custom">Custom</option>
+            <option value="read_only">Read Only</option>
+            <option value="coding">Coding</option>
+          </select>
+        </label>
+        <label>Enabled
+          <select name="enabled">
+            <option value="true"${enabled ? " selected" : ""}>Enabled</option>
+            <option value="false"${enabled ? "" : " selected"}>Disabled</option>
+          </select>
+        </label>
+        <label class="full-host-label">Full-host confirmation
+          <input type="hidden" name="confirm_full_host" value="false">
+          <span class="check-line">
+            <input type="checkbox" name="confirm_full_host" value="true">
+            <span>I understand this exposes the full host filesystem.</span>
+          </span>
+        </label>
+      </div>
+      <div class="workspace-perms-section">
+        <span class="form-stat-label">Workspace Permissions</span>
+        <div class="perm-selects-row">
+          ${permissionSelect("read", current("read"))}
+          ${permissionSelect("edit", current("edit"))}
+          ${permissionSelect("shell", current("shell"))}
+          ${permissionSelect("job_control", current("job_control"))}
+        </div>
+      </div>
+      <div class="workspace-btn-bar">
+        <button class="button">${existing ? "Save workspace" : "Create workspace"}</button>
+      </div>
+    </form>
+    ${existing ? `<div class="workspace-footer">
+      <span class="validation-tag status-pill ${statusClass(status)}">Validation: ${escapeHtml(status)}</span>
+      <form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/workspace-delete" class="inline-delete-form">
+        <input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">
+        <input type="hidden" name="workspace_id" value="${escapeHtml(workspaceId)}">
+        <label>Type Workspace ID to confirm
+          <input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required placeholder="${escapeHtml(workspaceId)}">
+        </label>
+        <button class="small danger">Delete workspace</button>
+      </form>
+    </div>` : ""}
+  </li>`;
 }
 function adminStyles(): string { return `<style>
 :root{
@@ -979,6 +1366,19 @@ function adminStyles(): string { return `<style>
   --radius-xl:14px;
   --font-sans:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   --font-mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
+
+  // Auth / Login Page Layout (Full-Screen Dark Mesh Control Plane Entry)
+  --auth-bg:#090a0f;
+  --auth-pane-bg:#12141a;
+  --auth-border:rgba(255,255,255,0.08);
+  --auth-text:#f3f4f6;
+  --auth-muted:#9ca3af;
+  --auth-input-bg:rgba(255,255,255,0.04);
+  --auth-input-border:rgba(255,255,255,0.12);
+  --auth-input-focus:rgba(255,255,255,0.25);
+  --auth-btn-bg:#f3f4f6;
+  --auth-btn-ink:#090a0f;
+  --auth-btn-hover:#ffffff;
 }
 *{box-sizing:border-box}
 html,body{min-height:100%}
@@ -1007,65 +1407,102 @@ body::before{
   mask-image:linear-gradient(180deg, #000 0%, rgba(0,0,0,0.4) 40%, transparent 80%);
   z-index:0;
 }
-.ops-body,.auth-body{position:relative;min-height:100vh}
+.ops-body{position:relative;min-height:100vh}
 .shell{
   max-width:1440px;
   margin:auto;
-  padding:0 32px 64px;
+  padding:24px 32px 64px;
   position:relative;
   z-index:1;
 }
-.workspace{padding-top:8px}
+.workspace{padding-top:4px}
 
-/* Topbar & Branding */
-.topbar{
+/* Header & Control Navigation */
+.app-header{
+  position:sticky;
+  top:0;
+  z-index:100;
+  background:rgba(255, 255, 255, 0.88);
+  backdrop-filter:blur(12px);
+  -webkit-backdrop-filter:blur(12px);
+  border-bottom:1px solid var(--line);
+  box-shadow:0 1px 2px rgba(0,0,0,0.03);
+}
+.header-inner{
+  max-width:1440px;
+  margin:auto;
+  padding:0 32px;
+  height:56px;
   display:flex;
   align-items:center;
   justify-content:space-between;
   gap:24px;
-  padding:18px 0 16px;
-  border-bottom:1px solid var(--line);
+}
+.header-left{
+  display:flex;
+  align-items:center;
+  gap:28px;
+  min-width:0;
 }
 .brand{
   color:var(--ink-heading);
-  font-size:16px;
+  font-size:15px;
   font-weight:700;
   letter-spacing:0.01em;
   text-decoration:none;
   display:inline-flex;
   align-items:center;
-  gap:12px;
+  gap:10px;
+  flex-shrink:0;
 }
-.brand-copy{display:flex;flex-direction:column;line-height:1.15}
-.brand-copy span{font-size:17px;font-weight:750;letter-spacing:-0.01em;color:var(--ink-heading)}
+.brand-copy{display:flex;flex-direction:column;line-height:1.1}
+.brand-copy span{font-size:15px;font-weight:750;letter-spacing:-0.01em;color:var(--ink-heading)}
 .brand-copy small{
   margin:2px 0 0;
-  font-size:11px;
+  font-size:10px;
   font-weight:600;
   letter-spacing:0.08em;
   text-transform:uppercase;
   color:var(--muted);
 }
-.brand-logo{
-  display:block;
-  width:32px;
-  height:32px;
-  object-fit:contain;
-  border-radius:var(--radius-md);
-  background:#ffffff;
-  border:1px solid var(--line);
-  padding:2px;
+.header-mesh-mark{
+  width:28px;
+  height:28px;
+  color:var(--brand);
+  flex-shrink:0;
 }
-.top-actions,.actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px}
-.actions form{
+.control-nav{
   display:flex;
-  flex-wrap:wrap;
-  gap:8px;
-  align-items:center;
-  padding:4px 6px;
-  border:1px solid var(--line);
+  gap:4px;
+  margin:0;
+  padding:3px;
+  background:var(--panel-subtle);
+  border:1px solid var(--line-light);
   border-radius:var(--radius-md);
-  background:#ffffff;
+  width:fit-content;
+}
+.control-nav a{
+  padding:5px 12px;
+  color:var(--muted-dark);
+  text-decoration:none;
+  border-radius:var(--radius-sm);
+  font-weight:600;
+  font-size:12.5px;
+  letter-spacing:0.01em;
+  transition:all 0.12s ease;
+  white-space:nowrap;
+}
+.control-nav a:hover{color:var(--ink-heading);background:rgba(255,255,255,0.7)}
+.control-nav a.active{
+  color:var(--brand-ink);
+  background:var(--brand);
+  box-shadow:var(--shadow-sm);
+}
+.header-actions{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-shrink:0;
 }
 
 /* Language Switcher */
@@ -1073,64 +1510,41 @@ body::before{
   display:inline-flex;
   align-items:center;
   gap:2px;
-  padding:3px;
+  padding:2px;
   border:1px solid var(--line);
   border-radius:999px;
   background:#ffffff;
   box-shadow:var(--shadow-sm);
 }
 .language-switch a{
-  min-width:36px;
-  padding:4px 10px;
+  min-width:32px;
+  padding:3px 8px;
   border-radius:999px;
   color:var(--muted);
-  font-size:11.5px;
+  font-size:11px;
   font-weight:650;
   letter-spacing:0.02em;
   text-align:center;
   text-decoration:none;
-  transition:all 0.15s ease;
+  transition:all 0.12s ease;
 }
 .language-switch a:hover{color:var(--ink-heading);background:var(--accent-gray)}
 .language-switch a[aria-current=true]{
   color:var(--brand-ink);
   background:var(--brand);
 }
-.auth-body>.language-switch,.ops-body>.language-switch{
+.auth-body>.language-switch{
   position:fixed;
   top:20px;
   right:20px;
-  z-index:10;
+  z-index:20;
+  background:rgba(18,20,26,0.8);
+  border-color:rgba(255,255,255,0.12);
+  backdrop-filter:blur(8px);
 }
-
-/* Navigation */
-nav{
-  display:flex;
-  gap:4px;
-  margin:18px 0 24px;
-  padding:4px;
-  background:#ffffff;
-  border:1px solid var(--line);
-  border-radius:var(--radius-lg);
-  box-shadow:var(--shadow-sm);
-  width:fit-content;
-  max-width:100%;
-}
-nav a{
-  padding:7px 15px;
-  color:var(--muted);
-  text-decoration:none;
-  border-radius:var(--radius-md);
-  font-weight:600;
-  font-size:13px;
-  letter-spacing:0.01em;
-  transition:all 0.14s ease;
-}
-nav a:hover{color:var(--ink-heading);background:var(--accent-gray)}
-nav a.active{
-  color:var(--brand-ink);
-  background:var(--brand);
-}
+.auth-body>.language-switch a{color:var(--auth-muted)}
+.auth-body>.language-switch a:hover{color:#fff;background:rgba(255,255,255,0.08)}
+.auth-body>.language-switch a[aria-current=true]{color:#000;background:#fff}
 
 /* Typography & Headings */
 h1,h2,h3{
@@ -1139,7 +1553,7 @@ h1,h2,h3{
   color:var(--ink-heading);
   letter-spacing:-0.02em;
 }
-h1{font-size:24px;font-weight:700}
+h1{font-size:22px;font-weight:700}
 h2{font-size:15px;font-weight:680;letter-spacing:-0.01em}
 h3{font-size:12.5px;color:var(--muted-dark);text-transform:uppercase;letter-spacing:0.06em;font-weight:680}
 .page-heading{
@@ -1159,8 +1573,11 @@ h3{font-size:12.5px;color:var(--muted-dark);text-transform:uppercase;letter-spac
 }
 .lede,.muted,.subtitle{color:var(--muted)}
 .lede,.subtitle{margin:0 0 10px;max-width:64ch;font-size:13.5px;line-height:1.5}
+.font-11{font-size:11px!important}
+.font-12{font-size:12px!important}
+.font-16{font-size:16px!important}
 
-/* Runner Detail Header Optimization */
+/* Detail Header */
 .detail-header{
   display:flex;
   justify-content:space-between;
@@ -1221,12 +1638,15 @@ h3{font-size:12.5px;color:var(--muted-dark);text-transform:uppercase;letter-spac
   background:#ffffff;
   border-color:var(--line);
   transition:border-color 0.15s ease,box-shadow 0.15s ease;
+  display:flex;
+  flex-direction:column;
+  justify-content:space-between;
 }
 .metric:hover{
   border-color:var(--line-subtle);
   box-shadow:var(--shadow-md);
 }
-.metric span{
+.metric-label,.metric span:first-child{
   display:block;
   color:var(--muted);
   font-size:11px;
@@ -1235,12 +1655,20 @@ h3{font-size:12.5px;color:var(--muted-dark);text-transform:uppercase;letter-spac
   text-transform:uppercase;
   margin-bottom:6px;
 }
-.metric strong{
+.metric-value,.metric strong{
   font-size:22px;
   font-weight:700;
   letter-spacing:-0.02em;
   color:var(--ink-heading);
   display:block;
+}
+.metric-meta{
+  display:inline-flex;
+  align-items:center;
+  gap:5px;
+  margin-top:6px;
+  font-size:11.5px;
+  color:var(--muted);
 }
 .mono-truncate{
   overflow:hidden;
@@ -1278,14 +1706,38 @@ h3{font-size:12.5px;color:var(--muted-dark);text-transform:uppercase;letter-spac
 }
 .section-title a:hover{color:var(--ink-heading);text-decoration:underline}
 
-/* Tables */
+/* Add Panels */
+.add-panel{
+  background:#fafbfc;
+  border:1px solid var(--line);
+}
+.add-form-grid,.add-client-grid{
+  display:flex;
+  align-items:flex-end;
+  gap:12px;
+  flex-wrap:wrap;
+}
+.add-form-grid label,.add-client-grid label{flex:1 1 200px}
+.add-client-grid fieldset{flex:2 1 300px}
+.form-submit-wrap{
+  display:flex;
+  align-items:flex-end;
+  margin-bottom:1px;
+}
+.full-width-submit{
+  width:100%;
+  margin-top:8px;
+}
+.full-width-submit button{width:100%}
+
+/* Tables & Data Rows */
 .table-wrap{
   overflow-x:auto;
   border:1px solid var(--line);
   border-radius:var(--radius-md);
   background:#ffffff;
 }
-table{border-collapse:collapse;width:100%;min-width:760px;font-size:13.5px}
+table,.data-table{border-collapse:collapse;width:100%;min-width:760px;font-size:13px}
 th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line-light);vertical-align:middle}
 th{
   color:var(--muted-dark);
@@ -1299,9 +1751,194 @@ th{
 tbody tr{transition:background-color 0.12s ease}
 tbody tr:hover{background:#f8f9fa}
 tr:last-child td{border-bottom:0}
+.table-primary-cell{
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+}
 .strong{font-weight:680;color:var(--ink-heading);text-decoration:none}
 a.strong:hover{color:var(--brand);text-decoration:underline}
-small{display:block;color:var(--muted);font-size:12px;margin-top:2px;font-family:var(--font-mono)}
+.sub-id,small{display:block;color:var(--muted);font-size:11.5px;font-family:var(--font-mono)}
+.num-cell{font-variant-numeric:tabular-nums;font-weight:600}
+.time-cell{font-family:var(--font-mono);font-size:11.5px;color:var(--muted)}
+.platform-tag{
+  display:inline-block;
+  padding:2px 7px;
+  background:var(--panel-card);
+  border:1px solid var(--line);
+  border-radius:var(--radius-sm);
+  font-size:11px;
+  font-family:var(--font-mono);
+  color:var(--muted-dark);
+}
+.routing-badge{
+  display:inline-block;
+  padding:2px 8px;
+  background:var(--accent-gray);
+  border:1px solid var(--line-subtle);
+  border-radius:var(--radius-sm);
+  font-size:11.5px;
+  font-weight:600;
+  color:var(--ink-heading);
+}
+
+/* Action Groups & Forms */
+.action-btn-group{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  flex-wrap:wrap;
+}
+.inline-action-form{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  margin:0;
+}
+.inline-action-form input{
+  padding:3px 8px;
+  font-size:12px;
+  height:26px;
+  max-width:140px;
+}
+.danger-action label{
+  font-size:11px;
+  color:var(--muted-dark);
+  font-weight:500;
+  display:inline-flex;
+  flex-direction:row;
+  align-items:center;
+  gap:4px;
+}
+.danger-action input{
+  max-width:110px;
+  border-color:var(--danger-line);
+}
+
+/* Client Detail Overrides & Scopes */
+.mode-pill{
+  display:inline-block;
+  padding:2px 7px;
+  border-radius:999px;
+  font-size:11px;
+  font-weight:650;
+}
+.mode-pill.global{background:var(--panel-card);border:1px solid var(--line);color:var(--muted-dark)}
+.mode-pill.custom{background:var(--warn-bg);border:1px solid var(--warn-line);color:var(--warn)}
+.override-form-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  width:100%;
+}
+.perm-selects-wrap{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+}
+.perm-select-label{
+  display:inline-flex;
+  flex-direction:row;
+  align-items:center;
+  gap:5px;
+  font-size:11.5px;
+  font-weight:600;
+  color:var(--muted-dark);
+}
+.perm-select-label select{
+  padding:2px 6px;
+  font-size:11.5px;
+  height:24px;
+  border-radius:var(--radius-sm);
+}
+.override-actions{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  flex-shrink:0;
+}
+.active-scopes-box{
+  padding:10px 12px;
+  background:var(--panel-card);
+  border:1px solid var(--line);
+  border-radius:var(--radius-md);
+  margin-bottom:14px;
+}
+.active-scopes-box .scope-line{margin:4px 0 0}
+.scope-tags{
+  display:flex;
+  gap:4px;
+  flex-wrap:wrap;
+}
+.scope-pill{
+  display:inline-block;
+  padding:1px 6px;
+  background:var(--panel-subtle);
+  border:1px solid var(--line-light);
+  border-radius:var(--radius-sm);
+  font-size:11px;
+  font-family:var(--font-mono);
+  color:var(--ink);
+}
+.scope-selector-row{
+  display:flex;
+  gap:12px;
+  align-items:center;
+  flex-wrap:wrap;
+}
+.scope-editor-form{
+  display:flex;
+  align-items:flex-end;
+  gap:12px;
+}
+.scope-fieldset{
+  flex:1;
+  background:var(--panel-card);
+}
+
+/* Card Lists */
+.card-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  text-decoration:none;
+  padding:8px 10px;
+  border-radius:var(--radius-md);
+  margin:0 -10px;
+  transition:background-color 0.12s ease;
+}
+.card-row:hover{background:var(--accent-gray)}
+.card-row-main{
+  display:flex;
+  flex-direction:column;
+  gap:3px;
+  min-width:0;
+}
+.card-row-sub{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  font-size:12px;
+  color:var(--muted);
+}
+.meta-separator{color:var(--line-subtle)}
+.platform-meta,.client-runner-meta{font-size:11.5px}
+.card-row-aside{
+  display:flex;
+  align-items:center;
+  color:var(--muted);
+}
+.row-arrow{
+  font-size:14px;
+  transition:transform 0.12s ease;
+}
+.card-row:hover .row-arrow{
+  transform:translateX(3px);
+  color:var(--brand);
+}
 
 /* Buttons */
 .button,button{
@@ -1323,6 +1960,7 @@ small{display:block;color:var(--muted);font-size:12px;margin-top:2px;font-family
   gap:6px;
   transition:all 0.14s ease;
   min-height:34px;
+  white-space:nowrap;
 }
 .button:hover,button:hover{
   background:var(--brand-hover);
@@ -1341,7 +1979,7 @@ small{display:block;color:var(--muted);font-size:12px;margin-top:2px;font-family
 .button.small,button.small{
   font-size:12px;
   font-weight:600;
-  padding:4px 9px;
+  padding:3px 8px;
   min-height:26px;
   border-radius:var(--radius-sm);
 }
@@ -1361,19 +1999,31 @@ small{display:block;color:var(--muted);font-size:12px;margin-top:2px;font-family
   box-shadow:0 0 0 2px rgba(220,38,38,0.2)!important;
 }
 
-/* Badges & Status */
+/* Badges, Status Dots & Status Pills */
 .badge,.job-status{
   border-radius:999px;
   display:inline-flex;
   align-items:center;
+  gap:5px;
   font-size:11px;
   font-weight:650;
-  padding:2px 9px;
+  padding:2px 8px;
   text-transform:capitalize;
   letter-spacing:0.02em;
   border:1px solid transparent;
   line-height:1.2;
 }
+.status-dot{
+  width:6px;
+  height:6px;
+  border-radius:50%;
+  display:inline-block;
+  flex-shrink:0;
+}
+.status-dot.online,.job-status.running .status-dot,.job-status.succeeded .status-dot,.job-status.completed .status-dot{background:#16a34a}
+.status-dot.offline,.status-dot.unknown,.job-status.unknown .status-dot{background:#9ca3af}
+.status-dot.stale,.status-dot.pending,.job-status.queued .status-dot,.job-status.cancelling .status-dot{background:#d97706}
+.status-dot.invalid,.job-status.failed .status-dot,.job-status.cancelled .status-dot,.job-status.interrupted .status-dot{background:#dc2626}
 .badge.online,.job-status.running{
   background:var(--ok-bg);
   color:var(--ok);
@@ -1389,7 +2039,7 @@ small{display:block;color:var(--muted);font-size:12px;margin-top:2px;font-family
   color:var(--warn);
   border-color:var(--warn-line);
 }
-.badge.invalid,.job-status.failed{
+.badge.invalid,.job-status.failed,.job-status.cancelled,.job-status.interrupted{
   background:var(--danger-bg);
   color:var(--danger);
   border-color:var(--danger-line);
@@ -1398,6 +2048,33 @@ small{display:block;color:var(--muted);font-size:12px;margin-top:2px;font-family
   background:var(--ok-bg);
   color:var(--ok);
   border-color:var(--ok-line);
+}
+.job-status.unknown{
+  background:var(--accent-gray);
+  color:var(--muted-dark);
+  border-color:var(--line);
+}
+.status-pill{
+  display:inline-block;
+  padding:2px 8px;
+  border-radius:var(--radius-sm);
+  font-size:11.5px;
+  font-weight:600;
+  border:1px solid var(--line);
+  background:var(--panel-card);
+}
+.status-pill.applied{border-color:var(--ok-line);background:var(--ok-bg);color:var(--ok)}
+.status-pill.invalid{border-color:var(--danger-line);background:var(--danger-bg);color:var(--danger)}
+.status-pill.pending{border-color:var(--warn-line);background:var(--warn-bg);color:var(--warn)}
+.workspace-pill{
+  display:inline-block;
+  padding:2px 7px;
+  border-radius:var(--radius-sm);
+  font-family:var(--font-mono);
+  font-size:11.5px;
+  background:var(--panel-card);
+  border:1px solid var(--line);
+  color:var(--ink);
 }
 
 /* Forms & Inputs */
@@ -1420,7 +2097,7 @@ input,select,textarea{
   border-radius:var(--radius-md);
   padding:7px 10px;
   font:inherit;
-  font-size:13.5px;
+  font-size:13px;
   color:var(--ink-heading);
   min-width:0;
   background:#ffffff;
@@ -1459,42 +2136,78 @@ legend{
 .check input{min-width:auto;accent-color:var(--brand);cursor:pointer}
 .stack{display:flex;flex-direction:column;gap:12px;max-width:500px}
 
-/* Lists & Details */
-.item-list,.plain-list{list-style:none;padding:0;margin:0}
-.item-list li{border-bottom:1px solid var(--line-light);padding:9px 0}
-.item-list li:last-child{border:0}
-.item-list a{
-  display:block;
-  text-decoration:none;
-  border-radius:var(--radius-md);
-  padding:6px 8px;
-  margin:0 -8px;
-  transition:background-color 0.12s ease;
+/* Runner Permission Profile & Workspaces */
+.permission-profile-grid{
+  display:flex;
+  flex-direction:column;
+  gap:12px;
 }
-.item-list a:hover{background:var(--accent-gray)}
-.empty{
-  color:var(--muted);
-  padding:24px 16px;
-  text-align:center;
-  border:1px dashed var(--line);
+.perm-selects-row{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:10px;
+  width:100%;
+}
+.workspace-list{list-style:none;padding:0;margin:0 0 16px}
+.workspace-card{
+  border:1px solid var(--line);
+  border-radius:var(--radius-md);
+  padding:14px 16px;
+  margin-bottom:12px;
+  background:#fafbfc;
+}
+.workspace-form{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+.workspace-main-grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:12px;
+  margin-bottom:12px;
+}
+.grid-span-2{grid-column:span 2}
+.workspace-perms-section{
+  padding-top:10px;
+  border-top:1px solid var(--line-light);
+  margin-bottom:12px;
+}
+.workspace-perms-section .form-stat-label{margin-bottom:8px;display:block}
+.workspace-btn-bar{
+  display:flex;
+  justify-content:flex-end;
+}
+.workspace-footer{
+  margin-top:12px;
+  padding-top:10px;
+  border-top:1px solid var(--line);
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:10px;
+}
+.add-workspace-box{
+  margin-top:18px;
+  padding:16px;
+  border:1px dashed var(--line-subtle);
   border-radius:var(--radius-md);
   background:#f8f9fa;
 }
-.details{
-  display:grid;
-  grid-template-columns:160px 1fr;
-  gap:10px 14px;
-  margin:0;
-  font-size:13.5px;
+.add-workspace-box h3{margin:0 0 12px}
+.full-host-label{
+  grid-column:span 2;
 }
-.details dt{
-  color:var(--muted);
-  font-size:11.5px;
-  font-weight:650;
-  text-transform:uppercase;
-  letter-spacing:0.04em;
+.check-line{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  font-weight:500;
+  font-size:12.5px;
+  color:var(--muted-dark);
 }
-.details dd{margin:0;font-weight:600;color:var(--ink-heading);overflow-wrap:anywhere}
+.empty-item{padding:10px 0;font-style:italic}
 
 /* Tool Grid */
 .tool-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
@@ -1514,11 +2227,14 @@ legend{
   gap:8px;
 }
 .tool-name{color:var(--ink-heading);font-size:13px;font-weight:650}
-.tool-badge{font-size:10px;padding:1px 7px}
 .tool-version{font-size:11.5px;color:var(--muted)}
 
-/* Runner Detail Specifics */
-.version-policy-form{margin-top:12px}
+/* Version Policy */
+.version-policy-form{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:10px;
+}
 .version-stat{
   display:flex;
   flex-direction:column;
@@ -1540,118 +2256,125 @@ legend{
   color:var(--ink-heading);
 }
 .policy-status-foot{margin-top:10px;font-size:12.5px}
+
+/* Danger Zone */
 .danger-zone{
   margin-top:16px;
   padding-top:14px;
   border-top:1px solid var(--line);
 }
-.danger-zone h3{
+.danger-zone h3,.danger-title{
   margin:0 0 6px;
   color:var(--danger-ink);
 }
-.workspace-card{
-  border:1px solid var(--line);
-  border-radius:var(--radius-md);
-  padding:14px 16px;
-  margin-bottom:12px;
-  background:#f8f9fa;
+.emergency-lock-form{margin-top:8px}
+
+/* Settings Page */
+.settings-form{max-width:400px}
+.settings-note{font-size:13px;line-height:1.5}
+.logout-box{margin-top:16px}
+
+/* Empty State Box */
+.empty-state-box{
+  padding:24px 16px;
+  text-align:center;
 }
-.workspace-actions{
-  margin-top:12px;
-  padding-top:10px;
-  border-top:1px solid var(--line);
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
-}
-.validation-tag{font-size:12px;font-weight:600}
-.inline-delete-form{
-  display:inline-flex;
-  align-items:center;
-  gap:8px;
-}
-.inline-delete-form label{
-  flex-direction:row;
-  align-items:center;
-  gap:6px;
-  font-size:12px;
-  color:var(--muted-dark);
-}
-.inline-delete-form input{
-  padding:4px 8px;
-  font-size:12px;
-  max-width:180px;
-}
-.add-workspace-box{
-  margin-top:18px;
-  padding:16px;
-  border:1px dashed var(--line-subtle);
+.empty-state-box p{margin:0;color:var(--muted)}
+.empty-desc{font-size:13px}
+
+/* Details & Lists */
+.item-list,.plain-list{list-style:none;padding:0;margin:0}
+.item-list li{border-bottom:1px solid var(--line-light);padding:2px 0}
+.item-list li:last-child{border:0}
+.empty{
+  color:var(--muted);
+  padding:24px 16px;
+  text-align:center;
+  border:1px dashed var(--line);
   border-radius:var(--radius-md);
   background:#f8f9fa;
 }
-.add-workspace-box h3{
-  margin:0 0 12px;
-}
-.full-host-label{
-  grid-column:span 2;
-}
-.check-line{
-  display:inline-flex;
-  align-items:center;
-  gap:6px;
-  font-weight:500;
-  font-size:12.5px;
-  color:var(--muted-dark);
-}
-.empty-item{
-  padding:10px 0;
-  font-style:italic;
-}
-
-.mono,.secret-url,.secret-card code{
-  font-family:var(--font-mono);
-  font-size:13px;
-  letter-spacing:-0.01em;
-}
-.sr-only{
-  position:absolute;
-  width:1px;
-  height:1px;
-  padding:0;
-  overflow:hidden;
-  clip:rect(0,0,0,0);
-  white-space:nowrap;
-  border:0;
-}
-.hidden{display:none}
-.scope-line{font-family:var(--font-mono);font-size:13px;color:var(--muted-dark)}
-
-/* Auth / Full-Page Cards */
-.auth-body{
+.details{
   display:grid;
-  place-items:center;
+  grid-template-columns:160px 1fr;
+  gap:10px 14px;
+  margin:0;
+  font-size:13px;
+}
+.details dt{
+  color:var(--muted);
+  font-size:11.5px;
+  font-weight:650;
+  text-transform:uppercase;
+  letter-spacing:0.04em;
+}
+.details dd{margin:0;font-weight:600;color:var(--ink-heading);overflow-wrap:anywhere}
+
+/* Secret & Enrollment Full-Page Dialogs */
+.auth-body{
+  display:flex;
+  align-items:center;
+  justify-content:center;
   min-height:100vh;
-  padding:40px 20px;
+  padding:0;
+  background:var(--auth-bg);
+  color:var(--auth-text);
 }
-.auth-shell{width:min(440px,100%)}
+.auth-shell{
+  width:min(440px,92%);
+  margin:auto;
+  position:relative;
+  z-index:2;
+}
 .auth-card{
-  padding:32px 28px 28px;
-  box-shadow:var(--shadow-lg);
-  background:#ffffff;
-  border:1px solid var(--line);
+  padding:32px 28px;
+  box-shadow:0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.4);
+  background:var(--auth-pane-bg);
+  border:1px solid var(--auth-border);
+  border-radius:var(--radius-lg);
+  color:var(--auth-text);
 }
-.brand-kicker{margin-bottom:4px}
+.auth-card h1{color:var(--auth-text)}
+.auth-card .lede{color:var(--auth-muted)}
+.secret-brand-row{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin-bottom:16px;
+}
+.secret-mesh-mark,.error-mesh-mark{
+  width:32px;
+  height:32px;
+  color:#ffffff;
+}
+.brand-name{
+  font-size:16px;
+  font-weight:750;
+  letter-spacing:-0.01em;
+  color:#ffffff;
+}
 .secret-url,.secret-card code{
   display:block;
   overflow-wrap:anywhere;
   padding:12px;
   border-radius:var(--radius-md);
-  background:#f8f9fa;
-  border:1px solid var(--line);
-  color:var(--ink-heading);
+  background:rgba(0,0,0,0.3);
+  border:1px solid var(--auth-border);
+  color:#ffffff;
   margin:0 0 16px;
+  font-family:var(--font-mono);
+  font-size:12.5px;
 }
-.error-card{border-color:var(--danger-line);background:#fffafa}
+.secret-actions{
+  display:flex;
+  gap:10px;
+}
+.secret-actions .button{background:#fff;color:#000;border-color:#fff}
+.secret-actions .button.secondary{background:transparent;color:#fff;border-color:var(--auth-border)}
+.error-card{
+  border-color:rgba(220,38,38,0.4);
+  background:#171012;
+}
 .enrollment-shell{padding-top:40px;padding-bottom:50px}
 .enrollment-dialog{
   display:block;
@@ -1662,6 +2385,24 @@ legend{
   border:1px solid var(--line);
   box-shadow:var(--shadow-lg);
   background:#ffffff;
+}
+.dialog-icon-row{margin-bottom:12px}
+.dialog-mark{width:36px;height:36px;color:var(--brand)}
+.enrollment-meta-box{
+  padding:12px 14px;
+  background:#f8f9fa;
+  border:1px solid var(--line);
+  border-radius:var(--radius-md);
+  margin-bottom:16px;
+  display:flex;
+  flex-direction:column;
+  gap:3px;
+}
+.dialog-actions{
+  display:flex;
+  justify-content:flex-end;
+  gap:10px;
+  margin-top:20px;
 }
 .tabs{display:flex;flex-wrap:wrap;gap:6px;margin:16px 0}
 .tabs [role=tab]{
@@ -1704,6 +2445,258 @@ pre{
   outline-offset:2px;
 }
 
+/* =========================================================================
+   Full-Screen Dark Mesh Login / Setup Entry Experience
+   ========================================================================= */
+.login-layout{
+  display:flex;
+  width:100vw;
+  min-height:100vh;
+  position:relative;
+  z-index:1;
+  background:var(--auth-bg);
+}
+.login-brand-pane{
+  flex:0 0 48%;
+  display:flex;
+  flex-direction:column;
+  justify-content:space-between;
+  padding:48px;
+  background:linear-gradient(135deg, #0e1117 0%, #07090c 100%);
+  border-right:1px solid var(--auth-border);
+  position:relative;
+  overflow:hidden;
+}
+.login-brand-pane::before{
+  content:"";
+  position:absolute;
+  inset:0;
+  background-image:
+    radial-gradient(circle at 20% 30%, rgba(34,197,94,0.06) 0%, transparent 50%),
+    radial-gradient(circle at 80% 80%, rgba(255,255,255,0.04) 0%, transparent 60%);
+  pointer-events:none;
+}
+.login-brand-header{
+  position:relative;
+  z-index:2;
+  max-width:440px;
+}
+.login-brand-title-wrap{
+  display:inline-flex;
+  align-items:center;
+  gap:10px;
+  margin-bottom:20px;
+}
+.login-brand-logo{
+  width:32px;
+  height:32px;
+  color:#ffffff;
+}
+.brand-tag{
+  font-size:9.5px;
+  font-weight:750;
+  letter-spacing:0.08em;
+  padding:2px 6px;
+  border-radius:var(--radius-sm);
+  background:rgba(255,255,255,0.1);
+  color:rgba(255,255,255,0.8);
+}
+.login-brand-headline{
+  font-size:22px;
+  font-weight:700;
+  color:#ffffff;
+  margin:0 0 10px;
+  letter-spacing:-0.02em;
+}
+.login-brand-desc{
+  font-size:13.5px;
+  line-height:1.6;
+  color:var(--auth-muted);
+  margin:0;
+}
+.mesh-network-visual{
+  position:relative;
+  z-index:2;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  margin:auto 0 0;
+  width:100%;
+}
+.mesh-canvas-wrap{
+  width:min(380px,100%);
+  aspect-ratio:1/1;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+.mesh-grid-svg{
+  width:100%;
+  height:100%;
+  filter:drop-shadow(0 0 20px rgba(0,0,0,0.6));
+}
+.mesh-visual-caption{
+  margin-top:16px;
+  text-align:center;
+}
+.mesh-caption-badge{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:3px 10px;
+  border-radius:999px;
+  background:rgba(255,255,255,0.06);
+  border:1px solid rgba(255,255,255,0.1);
+  font-size:11px;
+  font-weight:600;
+  color:#e4e4e7;
+}
+.mesh-caption-sub{
+  margin:4px 0 0;
+  font-size:11.5px;
+  color:var(--auth-muted);
+}
+
+/* Right Form Pane */
+.login-form-pane{
+  flex:1 1 52%;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:48px 32px;
+  background:var(--auth-bg);
+}
+.login-form-container{
+  width:min(380px, 100%);
+  display:flex;
+  flex-direction:column;
+}
+.auth-header-mobile{
+  display:none;
+  margin-bottom:24px;
+}
+.login-title-group{
+  margin-bottom:24px;
+}
+.login-title-group .brand-kicker{
+  color:rgba(255,255,255,0.4);
+  margin-bottom:2px;
+}
+.login-title-group h1{
+  color:#ffffff;
+  font-size:24px;
+  font-weight:700;
+  margin:0 0 4px;
+}
+.login-title-group .subtitle{
+  color:var(--auth-muted);
+  font-size:13px;
+  margin:0 0 6px;
+}
+.login-invite{
+  color:#e4e4e7;
+  font-size:13.5px;
+  margin:6px 0 0;
+}
+.login-form{
+  width:100%;
+  display:flex;
+  flex-direction:column;
+  gap:16px;
+}
+.input-group{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
+.input-group label{
+  color:#e4e4e7;
+  font-size:12.5px;
+  font-weight:600;
+}
+.password-input-wrap{
+  position:relative;
+  display:flex;
+  align-items:center;
+  width:100%;
+}
+.password-input-wrap input{
+  width:100%;
+  background:var(--auth-input-bg);
+  border:1px solid var(--auth-input-border);
+  border-radius:var(--radius-md);
+  color:#ffffff;
+  padding:9px 36px 9px 12px;
+  font-size:13.5px;
+  transition:all 0.14s ease;
+}
+.password-input-wrap input:focus{
+  border-color:var(--auth-input-focus);
+  background:rgba(255,255,255,0.07);
+  box-shadow:0 0 0 2px rgba(255,255,255,0.1);
+}
+.pwd-toggle-btn{
+  position:absolute;
+  right:6px;
+  top:50%;
+  transform:translateY(-50%);
+  background:transparent!important;
+  border:none!important;
+  padding:6px!important;
+  min-height:auto!important;
+  color:var(--auth-muted);
+  cursor:pointer;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  border-radius:var(--radius-sm);
+  transition:color 0.12s ease;
+}
+.pwd-toggle-btn:hover{color:#ffffff}
+.eye-icon{
+  width:16px;
+  height:16px;
+}
+.login-submit-btn{
+  margin-top:6px;
+  width:100%;
+  height:38px;
+  background:var(--auth-btn-bg);
+  color:var(--auth-btn-ink);
+  border:1px solid var(--auth-btn-bg);
+  border-radius:var(--radius-md);
+  font-size:13.5px;
+  font-weight:700;
+  cursor:pointer;
+  transition:all 0.14s ease;
+}
+.login-submit-btn:hover{
+  background:var(--auth-btn-hover);
+  border-color:var(--auth-btn-hover);
+}
+.login-submit-btn:disabled{
+  opacity:0.75;
+  cursor:not-allowed;
+}
+
+.mono,.secret-url,.secret-card code{
+  font-family:var(--font-mono);
+  font-size:13px;
+  letter-spacing:-0.01em;
+}
+.sr-only{
+  position:absolute;
+  width:1px;
+  height:1px;
+  padding:0;
+  overflow:hidden;
+  clip:rect(0,0,0,0);
+  white-space:nowrap;
+  border:0;
+}
+.hidden{display:none}
+.scope-line{font-family:var(--font-mono);font-size:13px;color:var(--muted-dark)}
+
 /* Responsive Breakpoints & Accessibility */
 @media(prefers-reduced-motion: reduce){
   *,*::before,*::after{
@@ -1712,40 +2705,57 @@ pre{
     transition-duration:0.01ms!important;
     scroll-behavior:auto!important;
   }
-  .button:hover,button:hover,.metric:hover{
+  .button:hover,button:hover,.metric:hover,.row-arrow{
     transform:none!important;
   }
 }
-@media(max-width:800px){
-  .shell{padding:0 18px 40px}
-  .topbar,.page-heading,.detail-header{align-items:stretch;flex-direction:column}
-  .brand{align-self:flex-start}
-  .top-actions{width:100%}
-  .top-actions .button{flex:1;text-align:center}
-  nav{overflow-x:auto;width:100%;margin-bottom:18px}
-  .metrics,.grid-two,.form-grid{grid-template-columns:1fr 1fr}
-  .panel,.auth-card,.detail-header{padding:16px}
-  .actions{min-width:210px}
-  .tool-grid,.details{grid-template-columns:1fr}
-  h1{font-size:22px}
-  .detail-title{font-size:18px}
+@media(max-width:920px){
+  .header-inner{padding:0 18px}
+  .header-left{gap:16px}
+  .control-nav a{padding:5px 9px;font-size:12px}
+  .metrics{grid-template-columns:repeat(2,1fr)}
+  .grid-two{grid-template-columns:1fr}
 }
-@media(max-width:480px){
-  .metrics,.grid-two,.form-grid{grid-template-columns:1fr}
+@media(max-width:800px){
+  .login-layout{flex-direction:column}
+  .login-brand-pane{display:none}
+  .login-form-pane{padding:48px 24px;width:100%}
+  .auth-header-mobile{display:block}
+  .shell{padding:16px 18px 40px}
+  .app-header{height:auto;padding:8px 0}
+  .header-inner{height:auto;flex-direction:column;align-items:stretch;gap:12px}
+  .header-left{flex-direction:column;align-items:flex-start;gap:10px}
+  .control-nav{width:100%;overflow-x:auto}
+  .header-actions{justify-content:space-between;width:100%}
+  .form-grid{grid-template-columns:1fr 1fr}
+  .panel,.auth-card,.detail-header{padding:16px}
+  .tool-grid,.details{grid-template-columns:1fr}
+  .perm-selects-row{grid-template-columns:repeat(2,1fr)}
+  .workspace-main-grid{grid-template-columns:1fr}
+  .grid-span-2{grid-column:span 1}
+}
+@media(max-width:540px){
+  .metrics{grid-template-columns:1fr}
+  .form-grid{grid-template-columns:1fr}
+  .perm-selects-row{grid-template-columns:1fr}
+  .version-policy-form{grid-template-columns:1fr}
   h1{font-size:20px}
   .detail-title{font-size:17px}
-  nav a{padding:6px 10px}
+  .action-btn-group{flex-direction:column;align-items:stretch}
+  .inline-action-form{width:100%}
+  .inline-action-form input{max-width:none;flex:1}
+  .override-form-row{flex-direction:column;align-items:stretch}
 }
 </style>`; }
-function adminScript(): string { return `<script>var ZH_UI_TEXT=${JSON.stringify(ZH_UI_TEXT)};function translateTextNodes(root){var walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode:function(node){if(!node.nodeValue||!node.nodeValue.trim())return NodeFilter.FILTER_REJECT;for(var el=node.parentElement;el;el=el.parentElement){if(el.hasAttribute('data-no-i18n')||el.tagName==='CODE'||el.tagName==='PRE'||el.tagName==='SCRIPT'||el.tagName==='STYLE'||el.tagName==='INPUT'||el.tagName==='TEXTAREA')return NodeFilter.FILTER_REJECT}return NodeFilter.FILTER_ACCEPT}});var nodes=[];while(walker.nextNode())nodes.push(walker.currentNode);nodes.forEach(function(node){var text=node.nodeValue||'';var trimmed=text.trim();var mapped=ZH_UI_TEXT[trimmed];if(text.indexOf('coding:')>=0)return;if(mapped)node.nodeValue=text.replace(trimmed,mapped);else Object.keys(ZH_UI_TEXT).sort(function(a,b){return b.length-a.length}).forEach(function(key){if(node.nodeValue&&node.nodeValue.indexOf(key)>=0)node.nodeValue=node.nodeValue.split(key).join(ZH_UI_TEXT[key])})})}function translateAttributes(root){['aria-label','alt','placeholder','title'].forEach(function(name){root.querySelectorAll('['+name+']').forEach(function(element){if(element.closest('[data-no-i18n]'))return;var value=element.getAttribute(name)||'';Object.keys(ZH_UI_TEXT).sort(function(a,b){return b.length-a.length}).forEach(function(key){if(value.indexOf(key)>=0)value=value.split(key).join(ZH_UI_TEXT[key])});element.setAttribute(name,value)})})}function applyLocale(locale){var zh=locale==='zh-CN';document.documentElement.lang=zh?'zh-CN':'en';document.querySelectorAll('[data-lang-toggle]').forEach(function(item){var active=item.getAttribute('data-lang-toggle')===locale;item.setAttribute('aria-current',active?'true':'false')});if(zh){translateTextNodes(document.body);translateAttributes(document);var title=document.title;Object.keys(ZH_UI_TEXT).sort(function(a,b){return b.length-a.length}).forEach(function(key){if(title.indexOf(key)>=0)title=title.split(key).join(ZH_UI_TEXT[key])});document.title=title}}function requestedLocale(){var query=new URLSearchParams(location.search).get('lang');if(query==='zh-CN'||query==='zh')return 'zh-CN';if(query==='en')return 'en';var match=/runmesh_lang=(zh-CN|en)/.exec(document.cookie||'');if(match)return match[1];return navigator.language&&navigator.language.toLowerCase().startsWith('zh')?'zh-CN':'en'}function rememberLocale(locale){document.cookie='runmesh_lang='+locale+'; Max-Age=31536000; Path=/; SameSite=Lax'}document.querySelectorAll('[data-lang-toggle]').forEach(function(link){link.addEventListener('click',function(event){var locale=link.getAttribute('data-lang-toggle')||'en';rememberLocale(locale);if(locale==='zh-CN'&&new URLSearchParams(location.search).get('lang')!=='zh-CN'){event.preventDefault();var url=new URL(location.href);url.searchParams.set('lang','zh-CN');location.href=url.toString()}else if(locale==='en'&&new URLSearchParams(location.search).has('lang')){event.preventDefault();var url=new URL(location.href);url.searchParams.set('lang','en');location.href=url.toString()}})});var locale=requestedLocale();if(new URLSearchParams(location.search).has('lang'))rememberLocale(locale);applyLocale(locale);function copyText(text){if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text);return}var area=document.createElement('textarea');area.value=text;area.setAttribute('readonly','');area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.select();document.execCommand('copy');area.remove()}document.querySelectorAll('[data-copy]').forEach(function(button){button.addEventListener('click',function(){copyText(button.getAttribute('data-copy')||'');button.textContent=document.documentElement.lang==='zh-CN'?'已复制':'Copied';button.classList.add('copied')})});document.querySelectorAll('[data-tab]').forEach(function(tab){tab.addEventListener('click',function(){var target=tab.getAttribute('data-tab');document.querySelectorAll('[data-tab]').forEach(function(item){item.setAttribute('aria-selected',String(item===tab));item.tabIndex=item===tab?0:-1});document.querySelectorAll('[data-panel]').forEach(function(panel){panel.hidden=panel.getAttribute('data-panel')!==target})});tab.addEventListener('keydown',function(event){if(event.key==='ArrowLeft'||event.key==='ArrowRight'){var tabs=Array.prototype.slice.call(document.querySelectorAll('[data-tab]'));var next=tabs[(tabs.indexOf(tab)+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length];next.focus();next.click()}})});</script>`; }
+function adminScript(): string { return `<script>var ZH_UI_TEXT=${JSON.stringify(ZH_UI_TEXT)};function translateTextNodes(root){var walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode:function(node){if(!node.nodeValue||!node.nodeValue.trim())return NodeFilter.FILTER_REJECT;for(var el=node.parentElement;el;el=el.parentElement){if(el.hasAttribute('data-no-i18n')||el.tagName==='CODE'||el.tagName==='PRE'||el.tagName==='SCRIPT'||el.tagName==='STYLE'||el.tagName==='INPUT'||el.tagName==='TEXTAREA')return NodeFilter.FILTER_REJECT}return NodeFilter.FILTER_ACCEPT}});var nodes=[];while(walker.nextNode())nodes.push(walker.currentNode);nodes.forEach(function(node){var text=node.nodeValue||'';var trimmed=text.trim();var mapped=ZH_UI_TEXT[trimmed];if(text.indexOf('coding:')>=0)return;if(mapped)node.nodeValue=text.replace(trimmed,mapped);else Object.keys(ZH_UI_TEXT).sort(function(a,b){return b.length-a.length}).forEach(function(key){if(node.nodeValue&&node.nodeValue.indexOf(key)>=0)node.nodeValue=node.nodeValue.split(key).join(ZH_UI_TEXT[key])})})}function translateAttributes(root){['aria-label','alt','placeholder','title'].forEach(function(name){root.querySelectorAll('['+name+']').forEach(function(element){if(element.closest('[data-no-i18n]'))return;var value=element.getAttribute(name)||'';Object.keys(ZH_UI_TEXT).sort(function(a,b){return b.length-a.length}).forEach(function(key){if(value.indexOf(key)>=0)value=value.split(key).join(ZH_UI_TEXT[key])});element.setAttribute(name,value)})})}function applyLocale(locale){var zh=locale==='zh-CN';document.documentElement.lang=zh?'zh-CN':'en';document.querySelectorAll('[data-lang-toggle]').forEach(function(item){var active=item.getAttribute('data-lang-toggle')===locale;item.setAttribute('aria-current',active?'true':'false')});if(zh){translateTextNodes(document.body);translateAttributes(document);var title=document.title;Object.keys(ZH_UI_TEXT).sort(function(a,b){return b.length-a.length}).forEach(function(key){if(title.indexOf(key)>=0)title=title.split(key).join(ZH_UI_TEXT[key])});document.title=title}}function requestedLocale(){var query=new URLSearchParams(location.search).get('lang');if(query==='zh-CN'||query==='zh')return 'zh-CN';if(query==='en')return 'en';var match=/runmesh_lang=(zh-CN|en)/.exec(document.cookie||'');if(match)return match[1];return navigator.language&&navigator.language.toLowerCase().startsWith('zh')?'zh-CN':'en'}function rememberLocale(locale){document.cookie='runmesh_lang='+locale+'; Max-Age=31536000; Path=/; SameSite=Lax'}document.querySelectorAll('[data-lang-toggle]').forEach(function(link){link.addEventListener('click',function(event){var locale=link.getAttribute('data-lang-toggle')||'en';rememberLocale(locale);if(locale==='zh-CN'&&new URLSearchParams(location.search).get('lang')!=='zh-CN'){event.preventDefault();var url=new URL(location.href);url.searchParams.set('lang','zh-CN');location.href=url.toString()}else if(locale==='en'&&new URLSearchParams(location.search).has('lang')){event.preventDefault();var url=new URL(location.href);url.searchParams.set('lang','en');location.href=url.toString()}})});var locale=requestedLocale();if(new URLSearchParams(location.search).has('lang'))rememberLocale(locale);applyLocale(locale);function copyText(text){if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text);return}var area=document.createElement('textarea');area.value=text;area.setAttribute('readonly','');area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.select();document.execCommand('copy');area.remove()}document.querySelectorAll('[data-copy]').forEach(function(button){button.addEventListener('click',function(){copyText(button.getAttribute('data-copy')||'');button.textContent=document.documentElement.lang==='zh-CN'?'已复制':'Copied';button.classList.add('copied')})});document.querySelectorAll('[data-tab]').forEach(function(tab){tab.addEventListener('click',function(){var target=tab.getAttribute('data-tab');document.querySelectorAll('[data-tab]').forEach(function(item){item.setAttribute('aria-selected',String(item===tab));item.tabIndex=item===tab?0:-1});document.querySelectorAll('[data-panel]').forEach(function(panel){panel.hidden=panel.getAttribute('data-panel')!==target})});tab.addEventListener('keydown',function(event){if(event.key==='ArrowLeft'||event.key==='ArrowRight'){var tabs=Array.prototype.slice.call(document.querySelectorAll('[data-tab]'));var next=tabs[(tabs.indexOf(tab)+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length];next.focus();next.click()}})});document.querySelectorAll('.pwd-toggle-btn').forEach(function(btn){btn.addEventListener('click',function(){var wrap=btn.closest('.password-input-wrap');if(!wrap)return;var input=wrap.querySelector('input');if(!input)return;var isPwd=input.type==='password';input.type=isPwd?'text':'password';var isZh=document.documentElement.lang==='zh-CN';var label=isPwd?(isZh?'隐藏密码':'Hide password'):(isZh?'显示密码':'Show password');btn.setAttribute('aria-label',label);btn.setAttribute('title',label);btn.innerHTML=isPwd?'<svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>':'<svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';})});document.querySelectorAll('form.login-form').forEach(function(form){form.addEventListener('submit',function(){var btn=form.querySelector('.login-submit-btn');if(!btn||btn.disabled)return;var isZh=document.documentElement.lang==='zh-CN';var isSetup=form.getAttribute('action')==='/setup';var loadingText=isSetup?(isZh?'正在初始化...':'Initializing...'):(isZh?'正在登录...':'Signing in...');var origWidth=btn.offsetWidth;btn.style.width=origWidth>0?(origWidth+'px'):'100%';btn.disabled=true;btn.textContent=loadingText;try{form.submit();}catch(e){}});});</script>`; }
 function runnerEnrollmentPage(baseUrl: string, runnerId: string, code: string | undefined, csrf: string, _reEnroll = false): Response {
   if (code === undefined) return adminError(503, "Enrollment code could not be generated.");
   const enroll = `coding-runner enroll --server ${new URL("/runner/enroll", baseUrl).toString()} --code ${code}`;
   const command = `${enroll}\ncoding-runner install`;
   const tabs = Object.entries({ linux: command, macos: command, windows: command }).map(([platform, value], index) => `<button role="tab" id="tab-${platform}" aria-controls="panel-${platform}" aria-selected="${index === 0 ? "true" : "false"}" tabindex="${index === 0 ? "0" : "-1"}" data-tab="${platform}">${platform === "macos" ? "macOS" : platform === "windows" ? "Windows" : "Linux"}</button><section role="tabpanel" id="panel-${platform}" aria-labelledby="tab-${platform}" ${index === 0 ? "" : "hidden"} data-panel="${platform}"><pre><code>${escapeHtml(value)}</code></pre><button type="button" class="button secondary" data-copy="${escapeHtml(enroll)}">Copy enrollment command</button></section>`).join("");
-  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body">${languageSwitch()}<main class="shell enrollment-shell"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><p class="eyebrow">Manual portable-artifact enrollment</p><h1 id="enrollment-title">Enroll Runner manually</h1><p class="lede">Hosted installers are disabled in this development preview. Download and verify the portable Runner artifact first. This one-time code expires in 30 minutes and will not be shown again.</p></div></section><p class="muted">Runner: <span class="mono">${escapeHtml(runnerId)}</span></p><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.</p><div class="top-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
+  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body">${languageSwitch()}<main class="shell enrollment-shell"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><div class="dialog-icon-row">${meshMarkSvg("dialog-mark")}</div><p class="eyebrow">Manual portable-artifact enrollment</p><h1 id="enrollment-title">Enroll Runner manually</h1><p class="lede">Hosted installers are disabled in this development preview. Download and verify the portable Runner artifact first. This one-time code expires in 30 minutes and will not be shown again.</p></div></section><div class="enrollment-meta-box"><span class="form-stat-label">Target Runner ID</span><span class="mono">${escapeHtml(runnerId)}</span></div><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.</p><div class="top-actions dialog-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
 }
-function secretCreatedPage(title: string, url: string): string { return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${escapeHtml(title)}</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card secret-card"><p class="brand-kicker">Runmesh</p><h1>${escapeHtml(title)}</h1><p class="lede">Copy this URL now. It will not be shown again.</p><code>${escapeHtml(url)}</code><p><a class="button" href="/admin">Back to admin</a></p></section></main>${adminScript()}</body></html>`; }
+function secretCreatedPage(title: string, url: string): string { return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${escapeHtml(title)}</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card secret-card"><div class="secret-brand-row">${meshMarkSvg("secret-mesh-mark")}<span class="brand-name">Runmesh</span></div><p class="brand-kicker">Runmesh</p><h1>${escapeHtml(title)}</h1><p class="lede">Copy this URL now. It will not be shown again.</p><code>${escapeHtml(url)}</code><div class="secret-actions"><button type="button" class="button" data-copy="${escapeHtml(url)}">Copy MCP URL</button><a class="button secondary" href="/admin">Back to admin</a></div></section></main>${adminScript()}</body></html>`; }
 function secretUrl(base: string, secret: string): string { const url = new URL(base); url.pathname = `/${secret}/mcp`; url.search = ""; return url.toString(); }
 function selectedScopes(form: FormData): CodingScope[] | undefined { const values = form.getAll("scopes"); const scopes = values.filter((value): value is CodingScope => value === "coding:read" || value === "coding:write" || value === "coding:exec"); return scopes.length === values.length && scopes.length > 0 && new Set(scopes).size === scopes.length ? scopes : undefined; }
 function validPassword(password: string): boolean { return password.length >= 12 && password.length <= 1_024; }
@@ -1945,7 +2955,7 @@ async function authThrottleRecord(env: WorkerEnv, kind: "login" | "setup", succe
 function throttleError(retryAfterMs: number): Response {
   const headers = htmlHeaders();
   headers.set("retry-after", String(Math.max(1, Math.ceil(retryAfterMs / 1_000))));
-  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card error-card"><p class="brand-kicker">Runmesh</p><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="lede">Invalid administrator password.</p><p class="muted">Please try again shortly.</p><p><a class="button secondary" href="/">Return</a></p></section></main>${adminScript()}</body></html>`, { status: 403, headers });
+  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card error-card"><div class="secret-brand-row">${meshMarkSvg("error-mesh-mark")}<span class="brand-name">Runmesh</span></div><p class="brand-kicker">Runmesh</p><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="lede">Invalid administrator password.</p><p class="muted">Please try again shortly.</p><p><a class="button secondary" href="/">Return</a></p></section></main>${adminScript()}</body></html>`, { status: 403, headers });
 }
 async function formData(request: Request): Promise<FormData | undefined> { const length = request.headers.get("content-length"); if (length !== null && (!/^\d+$/.test(length) || Number(length) > MAX_ADMIN_BODY_BYTES)) { await discardBody(request); return undefined; } try { const form = await request.formData(); let size = 0; for (const [key, value] of form) { if (typeof value !== "string") return undefined; size += new TextEncoder().encode(key).byteLength + new TextEncoder().encode(value).byteLength; } return size <= MAX_ADMIN_BODY_BYTES ? form : undefined; } catch { return undefined; } }
 async function readAdminBody(request: Request): Promise<Record<string, unknown> | undefined> {
@@ -1968,7 +2978,7 @@ function credentialHeaders(contentType: string): Headers { const headers = htmlH
 function html(value: string, cookies: readonly string[] = []): Response { const headers = htmlHeaders(); for (const cookie of cookies) headers.append("set-cookie", cookie); return new Response(value, { headers }); }
 function htmlHeaders(): Headers { return new Headers({ "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'", "x-content-type-options": "nosniff", "x-frame-options": "DENY" }); }
 function redirect(location: string, cookies: readonly string[] = []): Response { const headers = htmlHeaders(); headers.set("location", location); for (const cookie of cookies) headers.append("set-cookie", cookie); return new Response(null, { status: 303, headers }); }
-function adminError(status: number, message: string, cookies: readonly string[] = []): Response { const response = html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card error-card"><p class="brand-kicker">Runmesh</p><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="lede">${escapeHtml(message)}</p><p><a class="button secondary" href="/">Return</a></p></section></main>${adminScript()}</body></html>`, cookies.length === 0 ? [] : cookies); return new Response(response.body, { status, headers: response.headers }); }
+function adminError(status: number, message: string, cookies: readonly string[] = []): Response { const response = html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card error-card"><div class="secret-brand-row">${meshMarkSvg("error-mesh-mark")}<span class="brand-name">Runmesh</span></div><p class="brand-kicker">Runmesh</p><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="lede">${escapeHtml(message)}</p><p><a class="button secondary" href="/">Return</a></p></section></main>${adminScript()}</body></html>`, cookies.length === 0 ? [] : cookies); return new Response(response.body, { status, headers: response.headers }); }
 function methodNotAllowed(allow: string): Response { return new Response("Method not allowed", { status: 405, headers: { allow } }); }
 function notFound(): Response { return new Response("Not found", { status: 404, headers: { "cache-control": "no-store" } }); }
 function escapeHtml(value: string): string { return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character] as string); }
