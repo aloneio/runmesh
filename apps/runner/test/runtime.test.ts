@@ -4,8 +4,9 @@ import { join } from "node:path";
 import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS } from "@aloneio/runmesh-protocol";
 import { describe, expect, it } from "vitest";
 import { FilesystemService } from "../src/filesystem.js";
-import { JobManager } from "../src/jobs.js";
+import { JobManager, type JobEvent, type JobRecord } from "../src/jobs.js";
 import { PathPolicy } from "../src/path-policy.js";
+import { validateCentralWorkspacePolicy } from "../src/policy-config.js";
 import { RunnerRuntime } from "../src/runtime.js";
 import type { RunnerConfig, WorkspaceConfig } from "../src/config.js";
 
@@ -85,6 +86,37 @@ describe("workspace path policy", () => {
     } finally { await test.cleanup(); }
   });
 
+  it("streams a bounded directory page without materializing every entry", async () => {
+    const test = await fixture();
+    try {
+      await Promise.all(Array.from({ length: 300 }, (_, index) => writeFile(join(test.root, `entry-${String(index).padStart(3, "0")}.txt`), "x")));
+      const service = new FilesystemService(policy(test.workspace));
+      const first = await service.list({ workspace_id: test.workspace.workspaceId, path: ".", limit: 256 });
+      expect(first).toMatchObject({ entries: expect.any(Array), next_cursor: "256", truncated: true });
+      expect(first.entries).toHaveLength(256);
+      const second = await service.list({ workspace_id: test.workspace.workspaceId, path: ".", cursor: first.next_cursor, limit: 256 });
+      expect(second).toMatchObject({ next_cursor: null, truncated: false });
+      expect(second.entries).toHaveLength(44);
+    } finally { await test.cleanup(); }
+  });
+
+  it("rejects canonical central roots that overlap or nest", async () => {
+    const test = await fixture();
+    try {
+      const nested = join(test.root, "nested");
+      await mkdir(nested);
+      const result = await validateCentralWorkspacePolicy([
+        { workspace_id: "parent", root_path: test.root, enabled: true, permissions: { read: true, edit: false, shell: false, job_control: false } },
+        { workspace_id: "child", root_path: nested, enabled: true, permissions: { read: true, edit: false, shell: false, job_control: false } },
+      ]);
+      expect(result.workspaces).toEqual([]);
+      expect(result.status).toEqual([
+        { workspace_id: "parent", status: "invalid_path" },
+        { workspace_id: "child", status: "invalid_path" },
+      ]);
+    } finally { await test.cleanup(); }
+  });
+
   it("enforces readonly workspace writes and shell policy", async () => {
     const test = await fixture();
     try {
@@ -99,6 +131,23 @@ describe("workspace path policy", () => {
 });
 
 describe("persistent local jobs", () => {
+  it("atomically reserves concurrent job capacity across overlapping starts", async () => {
+    const test = await fixture();
+    try {
+      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state, maxConcurrentJobs: 1 });
+      await manager.initialize();
+      const [first, second] = await Promise.allSettled([
+        manager.start({ workspace_id: test.workspace.workspaceId, command: process.execPath, args: ["-e", "setTimeout(() => {}, 5000)"] }),
+        manager.start({ workspace_id: test.workspace.workspaceId, command: process.execPath, args: ["-e", "setTimeout(() => {}, 5000)"] }),
+      ]);
+      const fulfilled = [first, second].filter((result): result is PromiseFulfilledResult<Awaited<ReturnType<JobManager["start"]>>> => result.status === "fulfilled");
+      const rejected = [first, second].filter((result): result is PromiseRejectedResult => result.status === "rejected");
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect(String(rejected[0]?.reason)).toContain("max concurrent");
+      await manager.cancel(fulfilled[0]?.value.job_id);
+    } finally { await test.cleanup(); }
+  });
   it("persists metadata, captures paginated logs, and preserves jobs independently of a client", async () => {
     const test = await fixture();
     try {
@@ -120,13 +169,52 @@ describe("persistent local jobs", () => {
     } finally { await test.cleanup(); }
   });
 
+  it("syncs completed durable job metadata after the process exits", async () => {
+    const test = await fixture();
+    try {
+      const config: RunnerConfig = { server: "ws://127.0.0.1", token: "0123456789abcdef", runnerId: "runner-sync", workspaces: [test.workspace] };
+      const runtime = new RunnerRuntime({ config, stateDir: test.state });
+      await runtime.initialize();
+      const started = await runtime.dispatch("exec.start", { workspace_id: test.workspace.workspaceId, command: process.execPath, args: ["-e", "process.stdout.write('persisted')"], created_by_client_id: "client-a" }) as JobRecord;
+      await waitFor(() => runtime.jobs.get(started.job_id), (job) => job.status === "succeeded");
+      await expect(runtime.syncJobs()).resolves.toEqual([expect.objectContaining({ job_id: started.job_id, workspace_id: test.workspace.workspaceId, status: "succeeded", runner_id: "runner-sync" })]);
+      await expect(readFile(join(test.state, "jobs", started.job_id, "meta.json"), "utf8")).resolves.toContain('"status":"succeeded"');
+    } finally { await test.cleanup(); }
+  });
+  it("persists failed process starts as terminal records and emits them", async () => {
+    const test = await fixture();
+    const events: JobEvent[] = [];
+    try {
+      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state, onEvent: (event) => events.push(event) });
+      await manager.initialize();
+      const job = await manager.start({ workspace_id: "workspace-1", command: "definitely-not-an-executable" });
+      await waitFor(() => manager.get(job.job_id), (value) => value.status === "failed");
+      expect(manager.get(job.job_id)).toMatchObject({ status: "failed", completed_at_ms: expect.any(Number) });
+      await waitFor(() => events, (value) => value.some((event) => event.type === "completed" && event.job.job_id === job.job_id));
+      expect(events.some((event) => event.type === "completed" && event.job.job_id === job.job_id)).toBe(true);
+      await expect(readFile(join(test.state, "jobs", job.job_id, "meta.json"), "utf8")).resolves.toContain('"status":"failed"');
+    } finally { await test.cleanup(); }
+  });
+  it("emits and persists a job completion after a command exits", async () => {
+    const test = await fixture();
+    const events: JobEvent[] = [];
+    try {
+      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state, onEvent: (event) => events.push(event) });
+      await manager.initialize();
+      const job = await manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.exit(0)"] });
+      await waitFor(() => manager.get(job.job_id), (value) => value.status === "succeeded");
+      await waitFor(() => events, (value) => value.some((event) => event.type === "completed" && event.job.job_id === job.job_id));
+      expect(events.filter((event) => event.type === "completed" && event.job.job_id === job.job_id)).toHaveLength(1);
+      await expect(readFile(join(test.state, "jobs", job.job_id, "meta.json"), "utf8")).resolves.toContain('"status":"succeeded"');
+    } finally { await test.cleanup(); }
+  });
   it("records failed commands, accepts stdin, and cancels detached long-running processes", async () => {
     const test = await fixture();
     try {
       const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state });
       await manager.initialize();
-      const failed = await manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.exit(7)"] });
-      expect(await waitFor(() => manager.get(failed.job_id), (value) => value.status === "failed")).toMatchObject({ exit_code: 7 });
+      const job = await manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.exit(7)"] });
+      expect(await waitFor(() => manager.get(job.job_id), (value) => value.status === "failed")).toMatchObject({ exit_code: 7 });
       const input = await manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.stdin.once('data', d => { process.stdout.write(d); process.exit(0) })"] });
       await manager.input(input.job_id, "hello stdin\n");
       await waitFor(() => manager.get(input.job_id), (value) => value.status === "succeeded");

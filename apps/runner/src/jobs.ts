@@ -1,7 +1,7 @@
 import { open, mkdir, readFile, readdir, rename, rm, stat as fileStat, writeFile } from "node:fs/promises";
 import { PROTOCOL_CURRENT_VERSION } from "@aloneio/runmesh-protocol";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { defaultRunnerStateDir } from "./state-path.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { WorkspaceConfig } from "./config.js";
@@ -90,10 +90,14 @@ export class JobManager {
   private readonly persistChains = new Map<string, Promise<void>>();
   private readonly finishing = new Map<string, Promise<void>>();
   private readonly terminationDelivered = new Set<string>();
+  /** Serializes retention pruning so concurrent job completions cannot remove the same record or directory twice. */
+  private retentionChain: Promise<void> = Promise.resolve();
+  /** Serializes admission through the async pre-spawn window. */
+  private startChain: Promise<void> = Promise.resolve();
 
   public constructor(options: JobManagerOptions) {
     this.policy = options.policy;
-    this.stateDir = options.stateDir ?? join(homedir(), ".remote-coding-runner", "state");
+    this.stateDir = options.stateDir ?? defaultRunnerStateDir();
     this.jobsDir = join(this.stateDir, "jobs");
     this.runnerStatePath = join(this.stateDir, "runner.json");
     this.runnerId = options.runnerId ?? "runner";
@@ -108,6 +112,7 @@ export class JobManager {
   public async initialize(): Promise<void> {
     await mkdir(this.jobsDir, { recursive: true, mode: 0o700 });
     await atomicJson(this.runnerStatePath, { runner_id: this.runnerId, workspaces: this.policy.list().map((workspace) => workspace.workspaceId), updated_at_ms: Date.now(), version: 1 });
+    const aliveJobIds = new Set<string>();
     for (const entry of await readdir(this.jobsDir, { withFileTypes: true })) {
       if (!entry.isDirectory() || !safeJobId(entry.name)) continue;
       const metaPath = join(this.jobsDir, entry.name, "meta.json");
@@ -116,9 +121,11 @@ export class JobManager {
       if (job === undefined) continue;
       let restored = job;
       if (isActive(job)) {
-        // Deliberately inspect exactly once: a second PID probe can observe a
-        // different process and turn a PID-reuse race into a false conclusion.
+        // Inspect each recovered process exactly once. A second PID probe can
+        // observe a different process and turn a PID-reuse race into a false
+        // conclusion during retention pruning.
         const inspection = await inspectProcess(job.pid, job.process_start_fingerprint);
+        if (inspection.alive && inspection.fingerprintMatches !== false) aliveJobIds.add(job.job_id);
         const recovery_liveness: RecoveryLiveness = {
           checked_at_ms: Date.now(), alive: inspection.alive, fingerprint_matches: inspection.fingerprintMatches,
         };
@@ -139,12 +146,6 @@ export class JobManager {
       this.jobs.set(restored.job_id, restored);
     }
     this.totalLogBytes = await this.measureLogBytes();
-    const aliveJobIds = new Set<string>();
-    for (const job of [...this.jobs.values()]) {
-      if (!isActive(job)) continue;
-      const inspection = await inspectProcess(job.pid, job.process_start_fingerprint);
-      if (inspection.alive && inspection.fingerprintMatches !== false) aliveJobIds.add(job.job_id);
-    }
     await this.pruneRetainedJobs(this.maxRetainedJobs, aliveJobIds);
   }
 
@@ -191,6 +192,18 @@ export class JobManager {
   }
 
   public async start(input: unknown): Promise<JobRecord> {
+    return this.reserveStart(() => this.startReserved(input));
+  }
+
+  private async reserveStart<T>(operation: () => Promise<T>): Promise<T> {
+    const prior = this.startChain;
+    let release!: () => void;
+    this.startChain = new Promise<void>((resolve) => { release = resolve; });
+    await prior;
+    try { return await operation(); } finally { release(); }
+  }
+
+  private async startReserved(input: unknown): Promise<JobRecord> {
     await this.pruneRetainedJobs(this.maxRetainedJobs - 1);
     if (this.jobs.size >= this.maxRetainedJobs) throw new Error(`max retained jobs (${this.maxRetainedJobs}) reached while active jobs are retained`);
     if (this.activeCount() >= this.maxConcurrentJobs) throw new Error(`max concurrent jobs (${this.maxConcurrentJobs}) reached`);
@@ -229,6 +242,10 @@ export class JobManager {
       const failed = { ...job, status: "failed" as const, updated_at_ms: Date.now(), completed_at_ms: Date.now() };
       this.jobs.set(job.job_id, failed);
       await this.persist(failed);
+      // A spawn/open failure still creates a durable terminal Job record. Emit
+      // it so an online Runner can synchronize the failure to Registry even
+      // though no running event was possible.
+      this.onEvent({ type: "completed", job: failed });
       throw error;
     }
 
@@ -242,8 +259,16 @@ export class JobManager {
     this.jobs.set(job.job_id, running);
     this.processes.set(job.job_id, child);
     await Promise.all([stdout.close(), stderr.close()]);
-    await this.persist(running);
-    this.onEvent({ type: "started", job: running });
+    const beforeRunningPersist = this.jobs.get(job.job_id);
+    if (beforeRunningPersist === undefined || !isActive(beforeRunningPersist)) return this.get(job.job_id);
+    // Persist the latest in-memory record rather than the initial `running`
+    // snapshot: very fast children and output-cap updates can finish while the
+    // log descriptors are closing. Never let that stale snapshot overwrite a
+    // terminal record.
+    await this.persist(beforeRunningPersist);
+    const afterRunningPersist = this.jobs.get(job.job_id);
+    if (afterRunningPersist === undefined || !isActive(afterRunningPersist)) return this.get(job.job_id);
+    this.onEvent({ type: "started", job: afterRunningPersist });
 
     // A fingerprint is an additional PID-reuse guard, not an availability
     // prerequisite. Do not allow this later write to resurrect a terminal job.
@@ -446,6 +471,18 @@ export class JobManager {
 
   /** Delete only terminal records, preserving active/recovery evidence. */
   private async pruneRetainedJobs(retainedLimit = this.maxRetainedJobs, aliveJobIds: ReadonlySet<string> = new Set()): Promise<void> {
+    const prior = this.retentionChain;
+    let release!: () => void;
+    this.retentionChain = new Promise<void>((resolve) => { release = resolve; });
+    await prior;
+    try {
+      await this.pruneRetainedJobsNow(retainedLimit, aliveJobIds);
+    } finally {
+      release();
+    }
+  }
+
+  private async pruneRetainedJobsNow(retainedLimit: number, aliveJobIds: ReadonlySet<string>): Promise<void> {
     const removable = [...this.jobs.values()]
       .filter((job) => !isActive(job) && !aliveJobIds.has(job.job_id))
       .sort((a, b) => a.updated_at_ms - b.updated_at_ms || a.job_id.localeCompare(b.job_id));
@@ -539,8 +576,8 @@ export class JobManager {
     this.processes.delete(jobId);
     this.terminationDelivered.delete(jobId);
     await this.persist(completed);
-    await this.pruneRetainedJobs();
     this.onEvent({ type: "completed", job: completed });
+    await this.pruneRetainedJobs();
   }
 
   private async flushLogs(jobId: string): Promise<void> {
