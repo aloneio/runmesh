@@ -21,12 +21,10 @@ import {
   verifyPassword,
 } from "./security.js";
 import { readCappedFormData, readCappedText as readBodyText } from "./body.js";
-import { PRODUCT_VERSION } from "./generated-version.js";
 
 export { RegistryDO, RunnerDO };
 
 const MAX_ADMIN_BODY_BYTES = 16_384;
-const MAX_ENROLLMENT_BODY_BYTES = 4_096;
 const ADMIN_SESSION_COOKIE = "__Host-runmesh_admin_session";
 const ADMIN_CSRF_COOKIE = "__Host-runmesh_admin_csrf";
 const SETUP_CSRF_COOKIE = "__Host-runmesh_setup_csrf";
@@ -85,146 +83,52 @@ async function asset(request: Request, env: WorkerEnv): Promise<Response> {
 }
 
 export interface RunnerReleaseEnvironment {
-  readonly RUNMESH_RELEASE_VERSION?: string;
-  readonly RUNMESH_RELEASE_ARTIFACT_URL?: string;
-  readonly RUNNER_ARTIFACT_SHA256?: string;
-  /** Deprecated package configuration fields retained for deployment compatibility. */
+  /** @deprecated Hosted bootstrap is unavailable in v0.1.0-dev.2; this value is ignored. */
   readonly RUNNER_PACKAGE_SPEC?: string;
+  /** @deprecated Hosted bootstrap is unavailable in v0.1.0-dev.2; this value is ignored. */
   readonly ALLOW_LEGACY_UNSIGNED_BOOTSTRAP?: string;
+  /** @deprecated Hosted bootstrap is unavailable in v0.1.0-dev.2; this value is ignored. */
   readonly RUNNER_PACKAGE_NAME?: string;
+  /** @deprecated Hosted bootstrap is unavailable in v0.1.0-dev.2; this value is ignored. */
   readonly RUNNER_PACKAGE_VERSION?: string;
+  /** @deprecated Hosted bootstrap is unavailable in v0.1.0-dev.2; this value is ignored. */
+  readonly RUNNER_ARTIFACT_SHA256?: string;
+  /** @deprecated Hosted bootstrap is unavailable in v0.1.0-dev.2; this value is ignored. */
   readonly RUNNER_ARTIFACTS_JSON?: string;
 }
 
-export function runnerReleaseDescriptor(env: RunnerReleaseEnvironment): RunnerReleaseDescriptor & { readonly distributable: boolean } {
-  const configuredVersion = env.RUNMESH_RELEASE_VERSION;
-  const version = configuredVersion !== undefined && validRunnerVersion(configuredVersion) ? configuredVersion : PRODUCT_VERSION;
-  const artifactUrl = validReleaseUrl(env.RUNMESH_RELEASE_ARTIFACT_URL)
-    ?? `https://github.com/aloneio/runmesh/releases/download/v${encodeURIComponent(version)}/runmesh-runner-${encodeURIComponent(version)}.tgz`;
-  const checksum = validSha256(env.RUNNER_ARTIFACT_SHA256);
+/** Hosted distribution is deliberately unavailable for this preview. */
+export function runnerReleaseDescriptor(_env: RunnerReleaseEnvironment): RunnerReleaseDescriptor & { readonly distributable: boolean } {
   return {
-    channel: "stable", current_version: PRODUCT_VERSION, latest_version: version,
-    package_name: "@aloneio/runmesh-runner", package_version: version, package_spec: artifactUrl,
-    artifact: { source: artifactUrl, ...(checksum === undefined ? {} : { checksum: { algorithm: "sha256", value: checksum } }) },
-    artifacts: null, distributable: true,
-    protocol: { min_version: PROTOCOL_MIN_VERSION, max_version: PROTOCOL_CURRENT_VERSION },
+    channel: "stable", package_name: "", package_version: "", package_spec: "", current_version: "", latest_version: "", artifact: null, artifacts: null,
+    distributable: false, protocol: { min_version: PROTOCOL_MIN_VERSION, max_version: PROTOCOL_CURRENT_VERSION },
   };
 }
-function validReleaseUrl(value: string | undefined): string | undefined {
-  if (value === undefined || value.length > 2_048) return undefined;
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && url.username === "" && url.password === "" && url.search === "" && url.hash === "" && url.pathname.endsWith(".tgz") ? url.toString() : undefined;
-  } catch { return undefined; }
-}
-function validSha256(value: string | undefined): string | undefined { return value !== undefined && /^[a-f0-9]{64}$/i.test(value) ? value.toLowerCase() : undefined; }
 function runnerRelease(request: Request, env: WorkerEnv): Response {
   if (request.method !== "GET" && request.method !== "HEAD") { void discardBody(request); return methodNotAllowed("GET, HEAD"); }
   const descriptor = runnerReleaseDescriptor(env);
   return new Response(JSON.stringify({ ...descriptor, schema_version: 1, published_at: null }), { headers: publicInstallerHeaders("application/json; charset=utf-8") });
 }
-function runnerInstallScript(request: Request, url: URL): Response {
+function runnerInstallScript(request: Request, _url: URL): Response {
   if (request.method !== "GET" && request.method !== "HEAD") { void discardBody(request); return methodNotAllowed("GET, HEAD"); }
-  const origin = shellSingleQuoted(url.origin);
   const content = `#!/usr/bin/env sh
 set -eu
-SERVER_ORIGIN='${origin}'
-usage() { printf '%s\n' "usage: curl -fsSL $SERVER_ORIGIN/runner/install.sh | sudo sh -s -- <one-time-enrollment-code> [--re-enroll]" >&2; }
-die() { printf '%s\n' "Runmesh Runner install error: $*" >&2; exit 1; }
-CODE=\${1:-}
-REENROLL=0
-if [ "\${2:-}" = "--re-enroll" ]; then REENROLL=1; fi
-if [ "$#" -lt 1 ] || [ "$#" -gt 2 ] || { [ "$#" -eq 2 ] && [ "\${2:-}" != "--re-enroll" ]; }; then usage; exit 2; fi
-case "$CODE" in *[!A-Za-z0-9_-]*|'') die "a one-time enrollment code must be the first command argument";; esac
-if [ "\${#CODE}" -lt 20 ] || [ "\${#CODE}" -gt 256 ]; then die "a one-time enrollment code must be the first command argument"; fi
-case "$(uname -s)" in
-  Linux) PROFILE="/etc/runmesh/profile.json"; MANIFEST="/etc/systemd/system/runmesh-runner.service";;
-  Darwin) PROFILE="/Library/Application Support/Runmesh/profile.json"; MANIFEST="/Library/LaunchDaemons/io.alone.runmesh.runner.plist";;
-  *) die "unsupported operating system; use the Runmesh Runner PowerShell installer on Windows";;
-esac
-if [ "$REENROLL" -ne 1 ] && { [ -f "$PROFILE" ] || [ -f "$MANIFEST" ]; }; then die "an existing Runmesh Runner profile or service was detected; re-run with --re-enroll only after reviewing the existing installation"; fi
-[ "$(id -u)" -eq 0 ] || die "system installation requires administrator/root privileges; pipe the installer to sudo sh"
-command -v node >/dev/null 2>&1 || die "Node.js 20 or newer must already be installed"
-command -v npm >/dev/null 2>&1 || die "npm must already be installed with Node.js 20 or newer"
-command -v curl >/dev/null 2>&1 || die "curl is required"
-NODE_MAJOR="$(node -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || true)"
-case "$NODE_MAJOR" in ''|*[!0-9]*) die "could not determine the installed Node.js version";; esac
-[ "$NODE_MAJOR" -ge 20 ] || die "Node.js 20 or newer must already be installed"
-RELEASE="$(curl -fsSL --proto '=https' --tlsv1.2 "$SERVER_ORIGIN/runner/releases/latest")" || die "could not retrieve the Runmesh Runner release descriptor"
-RELEASE_FIELDS="$(printf '%s' "$RELEASE" | node -e 'let x="";process.stdin.on("data",d=>x+=d).on("end",()=>{try{const r=JSON.parse(x),v=String(r.package_version||""),s=String(r.package_spec||""),u=new URL(s),c=r.artifact&&r.artifact.checksum&&r.artifact.checksum.value||"";if(r.distributable!==true||!/^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$/.test(v)||u.protocol!=="https:"||u.username||u.password||u.search||u.hash||!u.pathname.endsWith(".tgz")||(!/^[a-f0-9]{64}$/i.test(c)&&c!==""))process.exit(1);process.stdout.write(v+"\\n"+s+"\\n"+c.toLowerCase())}catch{process.exit(1)}})')" || die "the deployed Worker has no valid distributable Runmesh Runner release"
-VERSION="$(printf '%s\n' "$RELEASE_FIELDS" | sed -n '1p')"
-PACKAGE_SPEC="$(printf '%s\n' "$RELEASE_FIELDS" | sed -n '2p')"
-CHECKSUM="$(printf '%s\n' "$RELEASE_FIELDS" | sed -n '3p')"
-TMP_DIR="$(mktemp -d "\${TMPDIR:-/tmp}/runmesh-runner-install.XXXXXX")"
-trap 'rm -rf "$TMP_DIR"' EXIT HUP INT TERM
-ARTIFACT="$TMP_DIR/runmesh-runner-$VERSION.tgz"
-curl -fsSL --proto '=https' --tlsv1.2 "$PACKAGE_SPEC" -o "$ARTIFACT" || die "could not download the pinned Runmesh Runner release"
-if [ -n "$CHECKSUM" ]; then ACTUAL="$(sha256sum "$ARTIFACT" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$ARTIFACT" | awk '{print $1}')"; [ "$ACTUAL" = "$CHECKSUM" ] || die "Runmesh Runner release SHA-256 verification failed"; fi
-VERSION_ROOT="/opt/runmesh/versions/$VERSION"
-mkdir -p "$VERSION_ROOT"
-npm install --global --ignore-scripts --prefix "$VERSION_ROOT" "$ARTIFACT" || die "npm could not install the Runmesh Runner release"
-RUNNER="$VERSION_ROOT/bin/runmesh-runner"
-[ -x "$RUNNER" ] || die "npm did not install the runmesh-runner executable"
-ln -sfn "$VERSION_ROOT" /opt/runmesh/current
-if [ "$REENROLL" -eq 1 ]; then "$RUNNER" enroll --server "$SERVER_ORIGIN/runner/enroll" --code "$CODE" --re-enroll; else "$RUNNER" enroll --server "$SERVER_ORIGIN/runner/enroll" --code "$CODE"; fi
-"$RUNNER" install --executable-path "$RUNNER"
-printf '%s\n' 'Runmesh Runner installed and activated.'
+printf '%s\n' \
+  'error: Hosted bootstrap is not available in this development preview.' \
+  'Download and verify the portable Runner artifact, then use coding-runner enroll and coding-runner install.' >&2
+exit 1
 `;
   return new Response(content, { headers: publicInstallerHeaders("text/x-shellscript; charset=utf-8") });
 }
-function runnerInstallPowerShell(request: Request, url: URL): Response {
+function runnerInstallPowerShell(request: Request, _url: URL): Response {
   if (request.method !== "GET" && request.method !== "HEAD") { void discardBody(request); return methodNotAllowed("GET, HEAD"); }
-  const origin = powerShellSingleQuoted(url.origin);
   const content = `$ErrorActionPreference = 'Stop'
-param(
-  [Parameter(Mandatory = $true, Position = 0)]
-  [ValidatePattern('^[A-Za-z0-9_-]{20,256}$')]
-  [string]$EnrollmentCode,
-  [switch]$ReEnroll
-)
-$ServerOrigin = '${origin}'
-if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Runmesh Runner system installation requires an elevated Administrator PowerShell session.' }
-if (-not (Get-Command node -ErrorAction SilentlyContinue) -or -not (Get-Command npm -ErrorAction SilentlyContinue)) { throw 'Node.js 20 or newer and npm must already be installed.' }
-$NodeMajor = [int]((& node -p "process.versions.node.split('.')[0]").Trim())
-if ($NodeMajor -lt 20) { throw 'Node.js 20 or newer must already be installed.' }
-$ProfilePath = Join-Path $env:ProgramData 'Runmesh\profile.json'
-$ManifestPath = Join-Path $env:ProgramData 'Runmesh\RunmeshRunner.xml'
-$InstallRoot = Join-Path $env:ProgramFiles 'Runmesh'
-if (-not $ReEnroll -and ((Test-Path -LiteralPath $ProfilePath) -or (Test-Path -LiteralPath $ManifestPath))) { throw 'An existing Runmesh Runner profile or service was detected; re-run with -ReEnroll only after reviewing the existing installation.' }
-$Release = Invoke-RestMethod -Uri "$ServerOrigin/runner/releases/latest" -Method Get
-$Version = [string]$Release.package_version
-$PackageSpec = [string]$Release.package_spec
-$Uri = $null
-if ($Release.distributable -ne $true -or $Version -notmatch '^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$' -or -not [Uri]::TryCreate($PackageSpec, [UriKind]::Absolute, [ref]$Uri) -or $Uri.Scheme -ne 'https' -or $Uri.UserInfo -ne '' -or $Uri.Query -ne '' -or $Uri.Fragment -ne '' -or -not $Uri.AbsolutePath.EndsWith('.tgz')) { throw 'The deployed Worker has no valid distributable Runmesh Runner release.' }
-$VersionRoot = Join-Path $InstallRoot "versions\$Version"
-$TempRoot = Join-Path $env:TEMP "runmesh-runner-install-$([Guid]::NewGuid().ToString('N'))"
-New-Item -ItemType Directory -Force -Path $VersionRoot, $TempRoot | Out-Null
-$Artifact = Join-Path $TempRoot "runmesh-runner-$Version.tgz"
-Invoke-WebRequest -Uri $PackageSpec -OutFile $Artifact -UseBasicParsing
-$Checksum = if ($Release.artifact -and $Release.artifact.checksum) { [string]$Release.artifact.checksum.value } else { '' }
-if ($Checksum -ne '' -and (Get-FileHash -LiteralPath $Artifact -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Checksum.ToLowerInvariant()) { throw 'Runmesh Runner release SHA-256 verification failed.' }
-try {
-  & npm install --global --ignore-scripts --prefix $VersionRoot $Artifact
-  if ($LASTEXITCODE -ne 0) { throw 'npm could not install the Runmesh Runner release.' }
-  $Candidates = @((Join-Path $VersionRoot 'runmesh-runner.cmd'), (Join-Path $VersionRoot 'bin\runmesh-runner.cmd'), (Join-Path $VersionRoot 'node_modules\.bin\runmesh-runner.cmd'))
-  $Runner = $Candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-  if (-not $Runner) { throw 'npm did not install the runmesh-runner executable.' }
-  $CurrentRoot = Join-Path $InstallRoot 'current'
-  if (Test-Path -LiteralPath $CurrentRoot) { Remove-Item -LiteralPath $CurrentRoot -Force -Recurse }
-  New-Item -ItemType Junction -Path $CurrentRoot -Target $VersionRoot | Out-Null
-  $EnrollArgs = @('enroll', '--server', "$ServerOrigin/runner/enroll", '--code', $EnrollmentCode)
-  if ($ReEnroll) { $EnrollArgs += '--re-enroll' }
-  & $Runner @EnrollArgs
-  if ($LASTEXITCODE -ne 0) { throw 'Runmesh Runner enrollment failed.' }
-  & $Runner install --executable-path $Runner
-  if ($LASTEXITCODE -ne 0) { throw 'Runmesh Runner service installation failed.' }
-  Write-Output 'Runmesh Runner installed and activated.'
-} finally { Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction SilentlyContinue }
+Set-StrictMode -Version Latest
+Write-Error 'Hosted bootstrap is not available in this development preview. Download and verify the portable Runner artifact, then use coding-runner enroll and coding-runner install.'
+exit 1
 `;
   return new Response(content, { headers: publicInstallerHeaders("text/plain; charset=utf-8") });
 }
-function shellSingleQuoted(value: string): string { return value.replaceAll("'", "'\\\"'\\\"'"); }
-function powerShellSingleQuoted(value: string): string { return value.replaceAll("'", "''"); }
 function publicInstallerHeaders(contentType: string): Headers {
   return new Headers({ "content-type": contentType, "cache-control": "public, max-age=300", "referrer-policy": "no-referrer", "x-content-type-options": "nosniff", "x-frame-options": "DENY", "permissions-policy": "geolocation=(), microphone=(), camera=()" });
 }
@@ -254,9 +158,11 @@ function safeDisplayText(value: unknown, max: number): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= max && !/[\u0000-\u001f\u007f<>]/.test(value);
 }
 async function readEnrollmentBody(request: Request): Promise<Record<string, unknown> | undefined> {
-  const body = await readBodyText(request, MAX_ENROLLMENT_BODY_BYTES);
-  if (body === undefined) return undefined;
-  try { return record(body.length === 0 ? undefined : JSON.parse(body) as unknown); } catch { return undefined; }
+  const length = request.headers.get("content-length");
+  if (length !== null && (!/^\d+$/.test(length) || Number(length) > 4_096)) { await discardBody(request); return undefined; }
+  const body = typeof request.body === "undefined" ? undefined : await request.text();
+  if (body !== undefined && new TextEncoder().encode(body).byteLength > 4_096) return undefined;
+  try { return record(body === undefined ? undefined : JSON.parse(body) as unknown); } catch { return undefined; }
 }
 function enrollmentError(): Response { return new Response("invalid enrollment", { status: 401, headers: credentialHeaders("text/plain; charset=utf-8") }); }
 
@@ -2842,9 +2748,10 @@ pre{
 function adminScript(): string { return `<script>var ZH_UI_TEXT=${JSON.stringify(ZH_UI_TEXT)};function translateTextNodes(root){var walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode:function(node){if(!node.nodeValue||!node.nodeValue.trim())return NodeFilter.FILTER_REJECT;for(var el=node.parentElement;el;el=el.parentElement){if(el.hasAttribute('data-no-i18n')||el.tagName==='CODE'||el.tagName==='PRE'||el.tagName==='SCRIPT'||el.tagName==='STYLE'||el.tagName==='INPUT'||el.tagName==='TEXTAREA')return NodeFilter.FILTER_REJECT}return NodeFilter.FILTER_ACCEPT}});var nodes=[];while(walker.nextNode())nodes.push(walker.currentNode);nodes.forEach(function(node){var text=node.nodeValue||'';var trimmed=text.trim();var mapped=ZH_UI_TEXT[trimmed];if(text.indexOf('coding:')>=0)return;if(mapped)node.nodeValue=text.replace(trimmed,mapped);else Object.keys(ZH_UI_TEXT).sort(function(a,b){return b.length-a.length}).forEach(function(key){if(node.nodeValue&&node.nodeValue.indexOf(key)>=0)node.nodeValue=node.nodeValue.split(key).join(ZH_UI_TEXT[key])})})}function translateAttributes(root){['aria-label','alt','placeholder','title'].forEach(function(name){root.querySelectorAll('['+name+']').forEach(function(element){if(element.closest('[data-no-i18n]'))return;var value=element.getAttribute(name)||'';Object.keys(ZH_UI_TEXT).sort(function(a,b){return b.length-a.length}).forEach(function(key){if(value.indexOf(key)>=0)value=value.split(key).join(ZH_UI_TEXT[key])});element.setAttribute(name,value)})})}function applyLocale(locale){var zh=locale==='zh-CN';document.documentElement.lang=zh?'zh-CN':'en';document.querySelectorAll('[data-lang-toggle]').forEach(function(item){var active=item.getAttribute('data-lang-toggle')===locale;item.setAttribute('aria-current',active?'true':'false')});if(zh){translateTextNodes(document.body);translateAttributes(document);var title=document.title;Object.keys(ZH_UI_TEXT).sort(function(a,b){return b.length-a.length}).forEach(function(key){if(title.indexOf(key)>=0)title=title.split(key).join(ZH_UI_TEXT[key])});document.title=title}}function requestedLocale(){var query=new URLSearchParams(location.search).get('lang');if(query==='zh-CN'||query==='zh')return 'zh-CN';if(query==='en')return 'en';var match=/runmesh_lang=(zh-CN|en)/.exec(document.cookie||'');if(match)return match[1];return navigator.language&&navigator.language.toLowerCase().startsWith('zh')?'zh-CN':'en'}function rememberLocale(locale){document.cookie='runmesh_lang='+locale+'; Max-Age=31536000; Path=/; SameSite=Lax'}document.querySelectorAll('[data-lang-toggle]').forEach(function(link){link.addEventListener('click',function(event){var locale=link.getAttribute('data-lang-toggle')||'en';rememberLocale(locale);if(locale==='zh-CN'&&new URLSearchParams(location.search).get('lang')!=='zh-CN'){event.preventDefault();var url=new URL(location.href);url.searchParams.set('lang','zh-CN');location.href=url.toString()}else if(locale==='en'&&new URLSearchParams(location.search).has('lang')){event.preventDefault();var url=new URL(location.href);url.searchParams.set('lang','en');location.href=url.toString()}})});var locale=requestedLocale();if(new URLSearchParams(location.search).has('lang'))rememberLocale(locale);applyLocale(locale);function copyText(text){if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text);return}var area=document.createElement('textarea');area.value=text;area.setAttribute('readonly','');area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.select();document.execCommand('copy');area.remove()}document.querySelectorAll('[data-copy]').forEach(function(button){button.addEventListener('click',function(){copyText(button.getAttribute('data-copy')||'');button.textContent=document.documentElement.lang==='zh-CN'?'已复制':'Copied';button.classList.add('copied')})});document.querySelectorAll('[data-tab]').forEach(function(tab){tab.addEventListener('click',function(){var target=tab.getAttribute('data-tab');document.querySelectorAll('[data-tab]').forEach(function(item){item.setAttribute('aria-selected',String(item===tab));item.tabIndex=item===tab?0:-1});document.querySelectorAll('[data-panel]').forEach(function(panel){panel.hidden=panel.getAttribute('data-panel')!==target})});tab.addEventListener('keydown',function(event){if(event.key==='ArrowLeft'||event.key==='ArrowRight'){var tabs=Array.prototype.slice.call(document.querySelectorAll('[data-tab]'));var next=tabs[(tabs.indexOf(tab)+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length];next.focus();next.click()}})});document.querySelectorAll('.pwd-toggle-btn').forEach(function(btn){btn.addEventListener('click',function(){var wrap=btn.closest('.password-input-wrap');if(!wrap)return;var input=wrap.querySelector('input');if(!input)return;var isPwd=input.type==='password';input.type=isPwd?'text':'password';var isZh=document.documentElement.lang==='zh-CN';var label=isPwd?(isZh?'隐藏密码':'Hide password'):(isZh?'显示密码':'Show password');btn.setAttribute('aria-label',label);btn.setAttribute('title',label);btn.innerHTML=isPwd?'<svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>':'<svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';})});document.querySelectorAll('form.login-form').forEach(function(form){form.addEventListener('submit',function(){var btn=form.querySelector('.login-submit-btn');if(!btn||btn.disabled)return;var isZh=document.documentElement.lang==='zh-CN';var isSetup=form.getAttribute('action')==='/setup';var loadingText=isSetup?(isZh?'正在初始化...':'Initializing...'):(isZh?'正在登录...':'Signing in...');var origWidth=btn.offsetWidth;btn.style.width=origWidth>0?(origWidth+'px'):'100%';btn.disabled=true;btn.textContent=loadingText;try{form.submit();}catch(e){}});});</script>`; }
 function runnerEnrollmentPage(baseUrl: string, runnerId: string, code: string | undefined, csrf: string, _reEnroll = false): Response {
   if (code === undefined) return adminError(503, "Enrollment code could not be generated.");
-  const command = `curl -fsSL ${new URL("/runner/install.sh", baseUrl).toString()} | sudo sh -s -- ${code}`;
-  const tabs = Object.entries({ linux: command, macos: command, windows: command }).map(([platform, value], index) => `<button role="tab" id="tab-${platform}" aria-controls="panel-${platform}" aria-selected="${index === 0 ? "true" : "false"}" tabindex="${index === 0 ? "0" : "-1"}" data-tab="${platform}">${platform === "macos" ? "macOS" : platform === "windows" ? "Windows" : "Linux"}</button><section role="tabpanel" id="panel-${platform}" aria-labelledby="tab-${platform}" ${index === 0 ? "" : "hidden"} data-panel="${platform}"><pre><code>${escapeHtml(value)}</code></pre><button type="button" class="button secondary" data-copy="${escapeHtml(value)}">Copy install command</button></section>`).join("");
-  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Runner enrollment</title>${adminStyles()}</head><body class="ops-body">${languageSwitch()}<main class="shell enrollment-shell"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><p class="eyebrow">Runmesh Runner one-click installation</p><h1 id="enrollment-title">Install Runmesh Runner</h1><p class="lede">This command downloads the pinned Runmesh Runner release, verifies its checksum when configured, enrolls this host, and installs the service. The one-time code expires in 30 minutes and will not be shown again.</p></div></section><p class="muted">Runner: <span class="mono">${escapeHtml(runnerId)}</span></p><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><p class="warning">Run only on the intended host. The command contains a single-use enrollment code; never share or log it. Node.js 20+ and an elevated administrator/root shell are required.</p><div class="top-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
+  const enroll = `coding-runner enroll --server ${new URL("/runner/enroll", baseUrl).toString()} --code ${code}`;
+  const command = `${enroll}\ncoding-runner install`;
+  const tabs = Object.entries({ linux: command, macos: command, windows: command }).map(([platform, value], index) => `<button role="tab" id="tab-${platform}" aria-controls="panel-${platform}" aria-selected="${index === 0 ? "true" : "false"}" tabindex="${index === 0 ? "0" : "-1"}" data-tab="${platform}">${platform === "macos" ? "macOS" : platform === "windows" ? "Windows" : "Linux"}</button><section role="tabpanel" id="panel-${platform}" aria-labelledby="tab-${platform}" ${index === 0 ? "" : "hidden"} data-panel="${platform}"><pre><code>${escapeHtml(value)}</code></pre><button type="button" class="button secondary" data-copy="${escapeHtml(enroll)}">Copy enrollment command</button></section>`).join("");
+  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body">${languageSwitch()}<main class="shell enrollment-shell"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><div class="dialog-icon-row">${meshMarkSvg("dialog-mark")}</div><p class="eyebrow">Manual portable-artifact enrollment</p><h1 id="enrollment-title">Enroll Runner manually</h1><p class="lede">Hosted installers are disabled in this development preview. Download and verify the portable Runner artifact first. This one-time code expires in 30 minutes and will not be shown again.</p></div></section><div class="enrollment-meta-box"><span class="form-stat-label">Target Runner ID</span><span class="mono">${escapeHtml(runnerId)}</span></div><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.</p><div class="top-actions dialog-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
 }
 function secretCreatedPage(title: string, url: string): string { return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${escapeHtml(title)}</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card secret-card"><div class="secret-brand-row">${meshMarkSvg("secret-mesh-mark")}<span class="brand-name">Runmesh</span></div><p class="brand-kicker">Runmesh</p><h1>${escapeHtml(title)}</h1><p class="lede">Copy this URL now. It will not be shown again.</p><code>${escapeHtml(url)}</code><div class="secret-actions"><button type="button" class="button" data-copy="${escapeHtml(url)}">Copy MCP URL</button><a class="button secondary" href="/admin">Back to admin</a></div></section></main>${adminScript()}</body></html>`; }
 function secretUrl(base: string, secret: string): string { const url = new URL(base); url.pathname = `/${secret}/mcp`; url.search = ""; return url.toString(); }
