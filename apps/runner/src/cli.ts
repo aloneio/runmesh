@@ -101,7 +101,8 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
 
 async function start(parsed: ParsedCommand, store: ProfileStore, error: (line: string) => void, dependencies: CliDependencies): Promise<void> {
   const raw = parseRunnerArgs(parsed.passthrough);
-  const profile = await store.load();
+  const profilePath = typeof parsed.values.profilePath === "string" ? parsed.values.profilePath : undefined;
+  const profile = profilePath === undefined ? await store.load() : await new ProfileStore({ filePath: profilePath }).load();
   const hasLegacyExplicit = raw.server !== undefined || raw.runnerId !== undefined || raw.token !== undefined || (raw.workspaces?.length ?? 0) > 0;
   const productWorkspaces = profile === undefined || profileManagementMode(profile) === "central" ? [] : workspaceOptions(profile);
   const server = raw.server ?? profile?.server_url;
