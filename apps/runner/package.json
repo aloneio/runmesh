@@ -22,6 +22,7 @@
     }
   },
   "bin": {
+    "runmesh-runner": "./dist/coding-runner.cjs",
     "coding-runner": "./dist/coding-runner.cjs"
   },
   "files": ["dist", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"],
