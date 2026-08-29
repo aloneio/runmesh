@@ -29,6 +29,7 @@ const workerEnv = {
 describe.sequential("real local MCP → Worker → Runner RPC", () => {
   let requestId = 10;
   let workspace = "";
+  let readonlyWorkspace = "";
   let root = "";
   let workerPersist = "";
   let runnerState = "";
@@ -43,9 +44,11 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
   beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), "mcp-runner-e2e-"));
     workspace = join(root, "workspace");
+    readonlyWorkspace = join(root, "readonly-workspace");
     workerPersist = join(root, "wrangler-state");
     runnerState = join(root, "runner-state");
     await mkdir(workspace, { recursive: true });
+    await mkdir(readonlyWorkspace, { recursive: true });
     await writeFile(join(workspace, "note.txt"), "hello from a real local runner\n");
     await writeFile(join(workspace, "utf8.txt"), "Hello你好😀éWorld", "utf8");
 
@@ -79,7 +82,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(savedProfile.workspaces).toEqual([]);
 
     runner = spawn("npx", [
-      "tsx", "apps/runner/src/cli.ts", "start", "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
+      "tsx", "apps/runner/src/cli.ts", "start", "--profile", enrolledProfile, "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
     ], {
       cwd: projectRoot(), env: { ...process.env, CODING_RUNNER_PROFILE: enrolledProfile }, stdio: ["ignore", "pipe", "pipe"], detached: true,
     });
@@ -90,12 +93,12 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(runnerPermissionResponse.status).toBe(303);
     const workspaceResponse = await submitForm(`/admin/runners/${runnerId}/workspace-create`, { csrf_token: policyCsrf, workspace_id: "workspace-1", display_name: "Coding workspace", root_path: workspace, enabled: "true", profile: "coding", read: "true", edit: "true", shell: "true", job_control: "true" }, policyAdminJar);
     expect(workspaceResponse.status).toBe(303);
-    const readonlyResponse = await submitForm(`/admin/runners/${runnerId}/workspace-create`, { csrf_token: policyCsrf, workspace_id: "readonly-1", display_name: "Read only workspace", root_path: workspace, enabled: "true", profile: "read_only", read: "true", edit: "false", shell: "false", job_control: "false" }, policyAdminJar);
+    const readonlyResponse = await submitForm(`/admin/runners/${runnerId}/workspace-create`, { csrf_token: policyCsrf, workspace_id: "readonly-1", display_name: "Read only workspace", root_path: readonlyWorkspace, enabled: "true", profile: "read_only", read: "true", edit: "false", shell: "false", job_control: "false" }, policyAdminJar);
     expect(readonlyResponse.status).toBe(303);
     await waitFor(async () => {
       const status = await fetch(`${workerUrl}/admin/runners/${runnerId}`, { headers: { cookie: cookieHeader(policyAdminJar) } });
       const html = await status.text();
-      return html.includes("Policy status") && html.includes("applied");
+      return /Policy status<\/span>\s*<strong[^>]*>applied\s*·/.test(html);
     }, 15_000, runnerLog);
     expect((await mcpTool("runner_select", { runner_id: runnerId }, clientA)).isError).not.toBe(true);
     expect((await mcpTool("runner_select", { runner_id: runnerId }, clientB)).isError).not.toBe(true);
@@ -209,7 +212,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     // detached persistent job and registry snapshot remain available.
     await stop(runner);
     runner = spawn("npx", [
-      "tsx", "apps/runner/src/cli.ts", "start", "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
+      "tsx", "apps/runner/src/cli.ts", "start", "--profile", enrolledProfile, "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
     ], {
       cwd: projectRoot(), env: { ...process.env, CODING_RUNNER_PROFILE: enrolledProfile }, stdio: ["ignore", "pipe", "pipe"], detached: true,
     });
