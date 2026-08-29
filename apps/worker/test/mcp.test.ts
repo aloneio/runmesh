@@ -435,6 +435,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(runnerDetail.status).toBe(200);
     const runnerDetailHtml = await runnerDetail.text();
     expect(runnerDetailHtml).toContain("Version policy"); expect(runnerDetailHtml).toContain("Stable/latest version"); expect(runnerDetailHtml).toContain("value=\"1.2.0\""); expect(runnerDetailHtml).toContain("Pinned");
+    expect(runnerDetailHtml).toContain("<!doctype html>"); expect(runnerDetailHtml).toContain('<meta name="color-scheme" content="light dark">'); expect(runnerDetailHtml).toContain('class="app-header"'); expect(runnerDetailHtml).toContain('class="active" aria-current="page" href="/admin/runners"'); expect(runnerDetailHtml).toContain('data-theme-toggle'); expect(runnerDetailHtml).toContain("localStorage.getItem('runmesh-theme')"); expect(runnerDetailHtml).toContain(':root[data-theme="dark"]'); expect(runnerDetailHtml).not.toContain("token_verifier");
     const dashboard = await SELF.fetch("https://worker.test/admin", { headers: { cookie: cookies(adminJar) } });
     expect(dashboard.headers.get("cache-control")).toBe("no-store");
     expect(dashboard.headers.get("content-security-policy")).toContain("script-src 'unsafe-inline'");
@@ -445,6 +446,15 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(dashboardHtml).toContain('class="button secondary" href="/admin">Refresh</a>');
     expect(dashboardHtml).not.toContain("data-refresh");
     expect(dashboardHtml).not.toContain("token_verifier"); expect(dashboardHtml).not.toContain("workspace_root");
+    const clientId = /\/admin\/clients\/(client-[a-f0-9]+)\/rename/.exec(dashboardHtml)?.[1];
+    expect(clientId).toBeDefined();
+    const scopesDetail = await SELF.fetch(`https://worker.test/admin/clients/${clientId as string}/scopes/detail`, { headers: { cookie: cookies(adminJar) } });
+    expect(scopesDetail.status).toBe(200);
+    const scopesDetailHtml = await scopesDetail.text();
+    expect(scopesDetailHtml).toContain("<!doctype html>"); expect(scopesDetailHtml).toContain('class="app-header"'); expect(scopesDetailHtml).toContain('class="active" aria-current="page" href="/admin/clients"'); expect(scopesDetailHtml).toContain("Base scopes"); expect(scopesDetailHtml).toContain("Each base scope has a distinct ceiling"); expect(scopesDetailHtml).toContain('data-theme-toggle'); expect(scopesDetailHtml).toContain('name="csrf_token"');
+    const rejectedScopesDetailPost = await SELF.fetch(`https://worker.test/admin/clients/${clientId as string}/scopes/detail`, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", cookie: cookies(adminJar), origin: "https://worker.test" }, body: new URLSearchParams([["csrf_token", csrf], ["scopes", "coding:read"]]) });
+    expect(rejectedScopesDetailPost.status).toBe(404);
+    await expect(runInDurableObject(clientsRegistry, (instance) => instance.listMcpClients().find((client) => client.client_id === clientId))).resolves.toMatchObject({ scopes: ["coding:read", "coding:write"] });
     await expect(runInDurableObject(clientsRegistry, (instance) => instance.redeemRunnerEnrollment(
       "f".repeat(64),
       "e".repeat(64),
