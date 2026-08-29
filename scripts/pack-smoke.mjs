@@ -15,13 +15,13 @@ try {
   await exec("npm", ["install", "--ignore-scripts", "--offline", join(root, runner)], { cwd: root, env: { ...process.env, npm_config_cache: cache } });
   const packageRoot = join(root, "node_modules", "@aloneio", "runmesh-runner");
   const manifest = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
-  if (manifest.private === true || manifest.bin?.["coding-runner"] !== "./dist/coding-runner.cjs" || Object.keys(manifest.dependencies ?? {}).length !== 0) throw new Error("Runner tarball is not self-contained");
+  if (manifest.private === true || manifest.bin?.["runmesh-runner"] !== "./dist/coding-runner.cjs" || Object.keys(manifest.dependencies ?? {}).length !== 0) throw new Error("Runner tarball is not self-contained");
   for (const file of ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"]) await readFile(join(packageRoot, file));
-  const bin = process.platform === "win32" ? join(root, "node_modules", ".bin", "coding-runner.cmd") : join(root, "node_modules", ".bin", "coding-runner");
+  const bin = process.platform === "win32" ? join(root, "node_modules", ".bin", "runmesh-runner.cmd") : join(root, "node_modules", ".bin", "runmesh-runner");
   const version = await exec(bin, ["--version"], { cwd: root });
   if (version.stdout.trim() !== manifest.version) throw new Error(`packaged CLI version mismatch: ${version.stdout.trim()}`);
   const help = await exec(bin, ["--help"], { cwd: root });
-  if (!help.stdout.includes("usage: coding-runner")) throw new Error("packaged CLI help is invalid");
+  if (!help.stdout.includes("usage: runmesh-runner")) throw new Error("packaged CLI help is invalid");
   const doctor = await exec(bin, ["doctor", "--json"], { cwd: root }).catch((error) => error);
   const parsed = JSON.parse(String(doctor.stdout ?? ""));
   if (!Array.isArray(parsed.checks)) throw new Error("packaged doctor did not produce JSON checks");
