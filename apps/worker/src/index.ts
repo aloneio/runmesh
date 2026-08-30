@@ -71,7 +71,11 @@ async function handleRequest(request: Request, env: WorkerEnv, _ctx: ExecutionCo
 async function asset(request: Request, env: WorkerEnv): Promise<Response> {
   if (request.method !== "GET" && request.method !== "HEAD") { await discardBody(request); return methodNotAllowed("GET, HEAD"); }
   if (env.ASSETS === undefined) return notFound();
-  return env.ASSETS.fetch(request);
+  // Keep the public `/assets/*` URL stable while resolving files from the
+  // configured asset directory (whose binding root is `/`).
+  const assetUrl = new URL(request.url);
+  assetUrl.pathname = assetUrl.pathname.replace(/^\/assets(?=\/|$)/, "") || "/";
+  return env.ASSETS.fetch(new Request(assetUrl, request));
 }
 
 export interface RunnerReleaseEnvironment {
@@ -487,7 +491,7 @@ async function handleBrowserWorkspaceAction(env: WorkerEnv, form: FormData, runn
   }
   const displayName = form.get("display_name"); const rootPath = form.get("root_path");
   if (typeof displayName !== "string" || !validLabel(displayName) || typeof rootPath !== "string" || !isAbsolutePath(rootPath)) return adminError(400, "Workspace name or absolute root path is invalid.");
-  if (isFullHostPath(rootPath) && form.get("confirm_full_host") !== "true") return adminError(400, "Full Host Workspace requires explicit confirmation.");
+  if (isFullHostPath(rootPath) && !form.getAll("confirm_full_host").includes("true")) return adminError(400, "Full Host Workspace requires explicit confirmation.");
   const configured = configuredWorkspacePreset(form.get("profile"));
   const permissions = configured ?? permissionsFromForm(form);
   if (permissions === undefined) return adminError(400, "Workspace permission profile is invalid.");
@@ -570,12 +574,17 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Signing in...": "正在登录...",
   "Initializing...": "正在初始化...",
   "Create administrator password": "创建管理员密码",
+  "Create your administrator master password to begin managing distributed runtimes and MCP clients.": "创建管理员主密码，以开始管理分布式运行时和 MCP 客户端。",
+  "Runner & MCP Control Plane": "Runner 与 MCP 控制平面",
+  "Unified orchestration for distributed secure tool sandboxes, persistent agent runtimes, and MCP client bridges.": "统一编排分布式安全工具沙箱、持久化智能体运行时和 MCP 客户端桥接。",
   "Setup token": "初始化令牌",
   "Password": "密码",
   "Confirm password": "确认密码",
   "Initialize": "初始化",
   "Admin password": "管理员密码",
   "Login": "登录",
+  "login": "登录",
+  "setup": "初始化",
   "Main navigation": "主导航",
   "Dashboard": "仪表盘",
   "Runners": "Runner",
@@ -626,6 +635,7 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Last used": "最后使用",
   "Reset Runner Selection": "重置 Runner 选择",
   "Rotate": "轮换",
+  "MCP Client": "MCP 客户端",
   "MCP Client detail": "MCP 客户端详情",
   "Runner-specific access can only further restrict the client's global scopes; it can never grant additional access.": "针对 Runner 的访问限制只能收紧客户端全局权限，不能额外授予权限。",
   "Back to clients": "返回客户端",
@@ -701,6 +711,7 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Coding": "编码",
   "Full-host confirmation": "整机访问确认",
   "I understand this exposes the full host filesystem.": "我理解这会暴露完整宿主机文件系统。",
+  "Type Workspace ID to confirm": "输入工作区 ID 以确认",
   "Enabled": "启用",
   "Disabled": "禁用",
   "Allow": "允许",
@@ -710,7 +721,13 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Delete workspace": "删除工作区",
   "Manual portable-artifact enrollment": "手动便携制品注册",
   "Enroll Runner manually": "手动注册 Runner",
+  "Enroll Runner": "注册 Runner",
+  "Target Runner ID": "目标 Runner ID",
+  "One-time enrollment code": "一次性注册代码",
   "Hosted installers are disabled in this development preview. Download and verify the portable Runner artifact first. This one-time code expires in 30 minutes and will not be shown again.": "此开发预览版已禁用托管安装器。请先下载并校验便携 Runner 制品。此一次性代码将在 30 分钟后过期，且不会再次显示。",
+  "The fixed signed hosted release is not enabled on this deployment. Download and verify the portable Runner artifact first, then paste this code only into the local prompt requested by --code-stdin. This one-time code expires in 30 minutes and will not be shown again.": "当前部署未启用固定签名托管版本。请先下载并校验便携 Runner 制品，然后仅将此代码粘贴到 --code-stdin 所要求的本地提示中。此一次性代码将在 30 分钟后过期，且不会再次显示。",
+  "The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. This one-time code expires in 30 minutes and will not be shown again.": "安装器会先校验固定签名的 Runner 制品，再在本地请求此一次性代码。代码不会放入此命令、URL 或进程参数中。此一次性代码将在 30 分钟后过期，且不会再次显示。",
+  "Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.": "请仅在完成校验后将其粘贴到本地提示中；代码不会包含在复制的命令里。",
   "Operating system": "操作系统",
   "Copy enrollment command": "复制注册命令",
   "Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.": "不要分享此代码。它是一次性注册材料，不是管理员密码、MCP 密钥或长期凭据。",
@@ -718,6 +735,9 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Done": "完成",
   "MCP client created": "MCP 客户端已创建",
   "MCP client rotated": "MCP 客户端已轮换",
+  "enrollment": "注册",
+  "Signed fixed-preview enrollment": "签名固定预览版注册",
+  "Copy installer command": "复制安装器命令",
   "Copy this URL now. It will not be shown again.": "请立即复制此 URL。它不会再次显示。",
   "Back to admin": "返回管理后台",
   "Return": "返回",
@@ -808,9 +828,52 @@ const ZH_UI_TEXT: Record<string, string> = {
   "edit": "编辑",
   "shell": "Shell",
   "job control": "任务控制",
+  "Summary": "摘要",
+  "Runner summary": "Runner 摘要",
+  "configured": "已配置",
+  "connected": "已连接",
+  "In progress": "进行中",
+  "Idle": "空闲",
+  "Recorded": "已记录",
+  "Socket connected": "Socket 已连接",
+  "Disconnected": "已断开",
+  "Unique runtime": "唯一运行时",
+  "Revision applied / desired": "已应用 / 期望版本",
+  "Heartbeat": "心跳",
+  "Policy is recorded for operators; package download, update, and rollback remain deferred.": "策略会记录供操作员查看；软件包下载、更新和回滚暂缓处理。",
+  "Hosted distribution is not configured. Portable artifact/manual version management only.": "托管分发尚未配置；当前仅支持便携制品和手动版本管理。",
+  "Effective Global Scopes": "生效的全局权限范围",
+  "Each base scope has a distinct ceiling:": "每个基础权限范围都有独立上限：",
+  "Each base scope has a distinct ceiling: coding:read permits inspection, coding:write permits approved edits, and coding:exec permits Host shell and Job control. Runner and Workspace policy can only reduce these permissions.": "每个基础权限范围都有独立上限：coding:read 允许查看，coding:write 允许已批准的编辑，coding:exec 允许使用主机 Shell 和任务控制。Runner 与工作区策略只能收紧这些权限。",
+  " permits inspection, ": " 允许查看，",
+  " permits approved edits, and ": " 允许已批准的编辑，并且 ",
+  " permits Host shell and Job control. Runner and Workspace policy can only reduce these permissions.": " 允许使用主机 Shell 和任务控制。Runner 与工作区策略只能收紧这些权限。",
+  "Client Routing & Status": "客户端路由与状态",
+  "Client ID": "客户端 ID",
+  "Active Runner": "活跃 Runner",
+  "Last Used": "最后使用",
+  "Workspace Permissions": "工作区权限",
+  "Unknown–Unknown · unknown": "未知–未知 · 未知",
+  "Copy MCP URL": "复制 MCP URL",
+  "No runners registered.": "尚未注册 Runner。",
+  "Inspect workspaces and read files.": "检查工作区并读取文件。",
+  "Apply approved edits.": "应用已批准的编辑。",
+  "Use Host shell and control Jobs.": "使用主机 Shell 并控制任务。",
+  "Runmesh · Agent Control Plane": "Runmesh · 智能体控制平面",
 };
 
+function brandLogo(className: string, alt = "Runmesh · Agent Control Plane"): string {
+  return `<img class="${className}" src="/assets/logo.png" alt="${escapeHtml(alt)}" width="1672" height="941" decoding="async">`;
+}
+
 function meshMarkSvg(className = "mesh-mark"): string {
+  // Keep the decorative mesh mark for illustrations, but use the shipped
+  // product wordmark anywhere users identify the application. The previous
+  // redesign rendered a synthetic SVG in these slots and never used logo.png.
+  if (className === "header-mesh-mark") return brandLogo("header-mesh-mark");
+  if (className === "login-brand-logo") return brandLogo("login-brand-logo");
+  if (className === "secret-mesh-mark") return brandLogo("secret-mesh-mark");
+  if (className === "error-mesh-mark") return brandLogo("error-mesh-mark");
   return `<svg class="${className}" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <circle cx="24" cy="24" r="19" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2 4" stroke-opacity="0.35"/>
     <circle cx="24" cy="24" r="10" stroke="currentColor" stroke-width="1.5" stroke-opacity="0.5"/>
@@ -877,14 +940,20 @@ function meshVisualGraphic(): string {
 
 function languageSwitch(): string { return `<div class="language-switch" data-no-i18n aria-label="Language"><a href="?lang=en" data-lang-toggle="en" hreflang="en">EN</a><a href="?lang=zh-CN" data-lang-toggle="zh-CN" hreflang="zh-CN">中文</a></div>`; }
 
+function passwordToggle(): string {
+  return `<button type="button" class="pwd-toggle-btn" aria-label="Show password">
+    <svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+  </button>`;
+}
+
 function setupPage(): Response {
   const csrf = randomBase64Url();
-  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane setup</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<div class="login-layout"><aside class="login-brand-pane"><div class="login-brand-header"><div class="login-brand-title-wrap">${meshMarkSvg("login-brand-logo")}<span class="brand-name">Runmesh</span><span class="brand-tag">CONTROL PLANE</span></div><h2 class="login-brand-headline">Set up Runmesh</h2><p class="login-brand-desc">Create your administrator master password to begin managing distributed runtimes and MCP clients.</p></div>${meshVisualGraphic()}</aside><main class="login-form-pane"><div class="login-form-container"><div class="auth-header-mobile"><div class="login-brand-title-wrap">${meshMarkSvg("login-brand-logo")}<span class="brand-name">Runmesh</span></div></div><div class="login-title-group"><p class="brand-kicker">Runmesh</p><h1>Welcome to Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="lede">Create administrator password</p></div><form method="post" action="/setup" class="login-form stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><div class="input-group"><label for="setup_token">Setup token</label><div class="password-input-wrap"><input id="setup_token" type="password" name="setup_token" autocomplete="one-time-code" required><button type="button" class="pwd-toggle-btn" aria-label="Show password" tabindex="-1"><svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg></button></div></div><div class="input-group"><label for="password">Password</label><div class="password-input-wrap"><input id="password" type="password" name="password" autocomplete="new-password" required minlength="12"><button type="button" class="pwd-toggle-btn" aria-label="Show password" tabindex="-1"><svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg></button></div></div><div class="input-group"><label for="confirm_password">Confirm password</label><div class="password-input-wrap"><input id="confirm_password" type="password" name="confirm_password" autocomplete="new-password" required minlength="12"><button type="button" class="pwd-toggle-btn" aria-label="Show password" tabindex="-1"><svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg></button></div></div><button class="login-submit-btn">Initialize</button></form></div></main></div>${adminScript()}</body></html>`, [`${SETUP_CSRF_COOKIE}=${csrf}; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=${Math.floor(SETUP_CSRF_TTL_MS / 1_000)}`]);
+  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane setup</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<div class="login-layout"><aside class="login-brand-pane"><div class="login-brand-header"><div class="login-brand-title-wrap">${meshMarkSvg("login-brand-logo")}<span class="brand-name">Runmesh</span><span class="brand-tag">CONTROL PLANE</span></div><h2 class="login-brand-headline">Set up Runmesh</h2><p class="login-brand-desc">Create your administrator master password to begin managing distributed runtimes and MCP clients.</p></div>${meshVisualGraphic()}</aside><main class="login-form-pane"><div class="login-form-container"><div class="auth-header-mobile"><div class="login-brand-title-wrap">${meshMarkSvg("login-brand-logo")}<span class="brand-name">Runmesh</span></div></div><div class="login-title-group"><p class="brand-kicker">Runmesh</p><h1>Welcome to Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="lede">Create administrator password</p></div><form method="post" action="/setup" class="login-form stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><div class="input-group"><label for="setup_token">Setup token</label><div class="password-input-wrap"><input id="setup_token" type="password" name="setup_token" autocomplete="one-time-code" required>${passwordToggle()}</div></div><div class="input-group"><label for="password">Password</label><div class="password-input-wrap"><input id="password" type="password" name="password" autocomplete="new-password" required minlength="12">${passwordToggle()}</div></div><div class="input-group"><label for="confirm_password">Confirm password</label><div class="password-input-wrap"><input id="confirm_password" type="password" name="confirm_password" autocomplete="new-password" required minlength="12">${passwordToggle()}</div></div><button class="login-submit-btn">Initialize</button></form></div></main></div>${adminScript()}</body></html>`, [`${SETUP_CSRF_COOKIE}=${csrf}; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=${Math.floor(SETUP_CSRF_TTL_MS / 1_000)}`]);
 }
 
 function loginPage(): Response {
   const csrf = randomBase64Url();
-  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane login</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<div class="login-layout"><aside class="login-brand-pane"><div class="login-brand-header"><div class="login-brand-title-wrap">${meshMarkSvg("login-brand-logo")}<span class="brand-name">Runmesh</span><span class="brand-tag">CONTROL PLANE</span></div><h2 class="login-brand-headline">Runner &amp; MCP Control Plane</h2><p class="login-brand-desc">Unified orchestration for distributed secure tool sandboxes, persistent agent runtimes, and MCP client bridges.</p></div>${meshVisualGraphic()}</aside><main class="login-form-pane"><div class="login-form-container"><div class="auth-header-mobile"><div class="login-brand-title-wrap">${meshMarkSvg("login-brand-logo")}<span class="brand-name">Runmesh</span></div></div><div class="login-title-group"><p class="brand-kicker">Runmesh</p><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="login-invite">Enter the Runmesh control plane</p></div><form method="post" action="/login" class="login-form stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><div class="input-group"><label for="admin_password">Admin password</label><div class="password-input-wrap"><input id="admin_password" type="password" name="password" autocomplete="current-password" required><button type="button" class="pwd-toggle-btn" aria-label="Show password" tabindex="-1"><svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg></button></div></div><button class="login-submit-btn">Login</button></form></div></main></div>${adminScript()}</body></html>`, [`${LOGIN_CSRF_COOKIE}=${csrf}; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=${Math.floor(SETUP_CSRF_TTL_MS / 1_000)}`]);
+  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane login</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<div class="login-layout"><aside class="login-brand-pane"><div class="login-brand-header"><div class="login-brand-title-wrap">${meshMarkSvg("login-brand-logo")}<span class="brand-name">Runmesh</span><span class="brand-tag">CONTROL PLANE</span></div><h2 class="login-brand-headline">Runner &amp; MCP Control Plane</h2><p class="login-brand-desc">Unified orchestration for distributed secure tool sandboxes, persistent agent runtimes, and MCP client bridges.</p></div>${meshVisualGraphic()}</aside><main class="login-form-pane"><div class="login-form-container"><div class="auth-header-mobile"><div class="login-brand-title-wrap">${meshMarkSvg("login-brand-logo")}<span class="brand-name">Runmesh</span></div></div><div class="login-title-group"><p class="brand-kicker">Runmesh</p><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="login-invite">Enter the Runmesh control plane</p></div><form method="post" action="/login" class="login-form stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><div class="input-group"><label for="admin_password">Admin password</label><div class="password-input-wrap"><input id="admin_password" type="password" name="password" autocomplete="current-password" required>${passwordToggle()}</div></div><button class="login-submit-btn">Login</button></form></div></main></div>${adminScript()}</body></html>`, [`${LOGIN_CSRF_COOKIE}=${csrf}; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=${Math.floor(SETUP_CSRF_TTL_MS / 1_000)}`]);
 }
 type AdminData = { readonly clients: readonly McpClientRecord[]; readonly runners: readonly RunnerRecord[]; readonly jobs: readonly Record<string, unknown>[]; readonly snapshot: Record<string, unknown> };
 async function loadDashboardData(env: WorkerEnv): Promise<AdminData> {
@@ -961,7 +1030,7 @@ async function clientDetailPage(_env: WorkerEnv, client: Record<string, unknown>
     </tr>`;
   }).join("");
   const scopeValues = Array.isArray(client.scopes) ? client.scopes.filter((scope): scope is string => typeof scope === "string") : [];
-  const scopeEditor = `<form method="post" action="/admin/clients/${encodeURIComponent(clientId)}/scopes" class="form-grid scope-editor-form">
+  const scopeEditor = `<form method="post" action="/admin/clients/${encodeURIComponent(clientId)}/scopes" class="scope-editor-form">
     <input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">
     <fieldset class="scope-fieldset">
       <legend>Base scopes</legend>
@@ -1255,6 +1324,8 @@ function managedWorkspaceForm(runnerId: string, workspace: Record<string, unknow
   const rootPath = typeof workspace?.root_path === "string" ? workspace.root_path : "";
   const permissions = record(workspace?.permissions);
   const current = (name: string): boolean => permissions?.[name] === true;
+  const profile = workspaceProfile(permissions);
+  const fullHostConfirmed = isFullHostPath(rootPath);
   const enabled = workspace?.enabled !== false;
   const status = typeof workspace?.validation_status === "string" ? workspace.validation_status : "pending";
   return `<li class="workspace-card">
@@ -1272,9 +1343,9 @@ function managedWorkspaceForm(runnerId: string, workspace: Record<string, unknow
         </label>
         <label>Usage profile
           <select name="profile">
-            <option value="custom">Custom</option>
-            <option value="read_only">Read Only</option>
-            <option value="coding">Coding</option>
+            <option value="custom"${profile === "custom" ? " selected" : ""}>Custom</option>
+            <option value="read_only"${profile === "read_only" ? " selected" : ""}>Read Only</option>
+            <option value="coding"${profile === "coding" ? " selected" : ""}>Coding</option>
           </select>
         </label>
         <label>Enabled
@@ -1286,7 +1357,7 @@ function managedWorkspaceForm(runnerId: string, workspace: Record<string, unknow
         <label class="full-host-label">Full-host confirmation
           <input type="hidden" name="confirm_full_host" value="false">
           <span class="check-line">
-            <input type="checkbox" name="confirm_full_host" value="true">
+            <input type="checkbox" name="confirm_full_host" value="true"${fullHostConfirmed ? " checked" : ""}>
             <span>I understand this exposes the full host filesystem.</span>
           </span>
         </label>
@@ -1316,6 +1387,11 @@ function managedWorkspaceForm(runnerId: string, workspace: Record<string, unknow
       </form>
     </div>` : ""}
   </li>`;
+}
+function workspaceProfile(permissions: Record<string, unknown> | undefined): "custom" | "read_only" | "coding" {
+  if (permissions?.read === true && permissions.edit !== true && permissions.shell !== true && permissions.job_control !== true) return "read_only";
+  if (permissions?.read === true && permissions.edit === true && permissions.shell === true && permissions.job_control === true) return "coding";
+  return "custom";
 }
 function adminStyles(): string { return `<style>
 :root{
@@ -1503,7 +1579,7 @@ body::before{
   gap:10px;
   flex-shrink:0;
 }
-.brand-copy{display:flex;flex-direction:column;line-height:1.1}
+.brand-copy{display:none}
 .brand-copy span{font-size:15px;font-weight:750;letter-spacing:-0.01em;color:var(--ink-heading)}
 .brand-copy small{
   margin:2px 0 0;
@@ -1514,9 +1590,15 @@ body::before{
   color:var(--muted);
 }
 .header-mesh-mark{
-  width:28px;
-  height:28px;
-  color:var(--brand);
+  display:block;
+  width:170px;
+  height:50px;
+  object-fit:cover;
+  object-position:center 50%;
+  padding:2px 6px;
+  border-radius:6px;
+  background:#fff;
+  box-shadow:var(--shadow-sm);
   flex-shrink:0;
 }
 .control-nav{
@@ -1759,13 +1841,13 @@ h3{font-size:12.5px;color:var(--muted-dark);text-transform:uppercase;letter-spac
   background:var(--panel-card);
   border:1px solid var(--line);
 }
-.add-form-grid,.add-client-grid{
+.form-grid.add-form-grid,.form-grid.add-client-grid{
   display:flex;
   align-items:flex-end;
   gap:12px;
   flex-wrap:wrap;
 }
-.add-form-grid label,.add-client-grid label{flex:1 1 200px}
+.form-grid.add-form-grid > label,.form-grid.add-client-grid > label:not(.check){flex:1 1 200px}
 .add-client-grid fieldset{flex:2 1 300px}
 .form-submit-wrap{
   display:flex;
@@ -1776,6 +1858,7 @@ h3{font-size:12.5px;color:var(--muted-dark);text-transform:uppercase;letter-spac
   width:100%;
   margin-top:8px;
 }
+.form-grid .full-width-submit{grid-column:1 / -1}
 .full-width-submit button{width:100%}
 
 /* Tables & Data Rows */
@@ -1785,6 +1868,16 @@ h3{font-size:12.5px;color:var(--muted-dark);text-transform:uppercase;letter-spac
   border-radius:var(--radius-md);
   background:var(--panel);
 }
+.table-wrap::after{
+  content:"Scroll horizontally to see more";
+  display:none;
+  padding:6px 10px;
+  color:var(--muted);
+  font-size:11px;
+  border-top:1px solid var(--line-light);
+  background:var(--panel-card);
+}
+html[lang="zh-CN"] .table-wrap::after{content:"左右滑动查看更多"}
 table,.data-table{border-collapse:collapse;width:100%;min-width:760px;font-size:13px}
 th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line-light);vertical-align:middle}
 th{
@@ -1938,12 +2031,14 @@ a.strong:hover{color:var(--brand);text-decoration:underline}
   flex-wrap:wrap;
 }
 .scope-editor-form{
-  display:flex;
-  align-items:flex-end;
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:end;
   gap:12px;
 }
 .scope-fieldset{
   flex:1;
+  min-width:0;
   background:var(--panel-card);
 }
 
@@ -2239,6 +2334,16 @@ legend{
   flex-wrap:wrap;
   gap:10px;
 }
+.inline-delete-form{
+  display:flex;
+  align-items:flex-end;
+  flex-wrap:wrap;
+  gap:8px;
+  min-width:0;
+  margin:0;
+}
+.inline-delete-form label{min-width:0;flex:1 1 180px}
+.inline-delete-form input{max-width:100%}
 .add-workspace-box{
   margin-top:18px;
   padding:16px;
@@ -2394,10 +2499,17 @@ legend{
   margin-bottom:16px;
 }
 .secret-mesh-mark,.error-mesh-mark{
-  width:32px;
-  height:32px;
-  color:#ffffff;
+  display:block;
+  width:210px;
+  height:62px;
+  object-fit:cover;
+  object-position:center 50%;
+  padding:2px 7px;
+  border-radius:6px;
+  background:#fff;
+  box-shadow:var(--shadow-sm);
 }
+.secret-brand-row .brand-name{display:none}
 .brand-name{
   font-size:16px;
   font-weight:750;
@@ -2426,9 +2538,34 @@ legend{
   border-color:rgba(220,38,38,0.4);
   background:#171012;
 }
-.enrollment-shell{padding-top:40px;padding-bottom:50px}
+.enrollment-header{
+  width:min(1180px,calc(100% - 40px));
+  margin:18px auto 0;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+}
+.enrollment-brand{display:block;flex-shrink:0}
+.enrollment-brand-logo{
+  display:block;
+  width:170px;
+  height:50px;
+  object-fit:cover;
+  object-position:center 50%;
+  padding:2px 6px;
+  border-radius:6px;
+  background:#fff;
+  box-shadow:var(--shadow-sm);
+}
+.enrollment-header-actions{display:flex;align-items:center;gap:8px}
+.enrollment-shell{padding-top:24px;padding-bottom:50px}
 .enrollment-dialog{
   display:block;
+  position:static;
+  inset:auto;
+  height:auto;
+  max-width:100%;
   width:min(880px,100%);
   margin:0 auto;
   padding:28px;
@@ -2474,6 +2611,9 @@ legend{
 .tabs [role=tabpanel]{flex:1 1 100%;margin-top:8px}
 pre{
   overflow:auto;
+  max-width:100%;
+  min-width:0;
+  box-sizing:border-box;
   padding:14px;
   border-radius:var(--radius-md);
   background:var(--panel-card);
@@ -2539,10 +2679,17 @@ pre{
   margin-bottom:20px;
 }
 .login-brand-logo{
-  width:32px;
-  height:32px;
-  color:#ffffff;
+  display:block;
+  width:260px;
+  height:76px;
+  object-fit:cover;
+  object-position:center 50%;
+  padding:3px 9px;
+  border-radius:7px;
+  background:#fff;
+  box-shadow:var(--shadow-sm);
 }
+.login-brand-title-wrap .brand-name,.login-brand-title-wrap .brand-tag{display:none}
 .brand-tag{
   font-size:9.5px;
   font-weight:750;
@@ -2768,43 +2915,137 @@ pre{
   .metrics{grid-template-columns:repeat(2,1fr)}
   .grid-two{grid-template-columns:1fr}
 }
+@media(max-width:1100px){
+  .header-inner{gap:12px}
+  .header-left{gap:12px}
+  .header-actions{gap:6px}
+  .header-actions .button{padding-left:9px;padding-right:9px;font-size:12px}
+}
+@media(max-width:1100px) and (min-width:1001px){
+  .header-left{flex:1 1 auto;min-width:0;overflow:hidden}
+  .control-nav{flex:0 1 auto;min-width:0;width:fit-content;overflow-x:auto;white-space:nowrap;scrollbar-width:none}
+  .control-nav::-webkit-scrollbar{display:none;height:0}
+}
+@media(max-width:1000px) and (min-width:801px){
+  .header-inner{height:auto;flex-direction:column;align-items:stretch;gap:8px;padding:6px 18px}
+  .header-left{flex-direction:row;align-items:center;gap:12px;min-width:0;overflow:hidden}
+  .control-nav{flex:1 1 auto;min-width:0;width:auto;overflow-x:auto;white-space:nowrap;scrollbar-width:none}
+  .control-nav::-webkit-scrollbar{display:none;height:0}
+  .header-actions{justify-content:flex-start;width:100%;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
+  .header-actions > *{flex-shrink:0}
+}
 @media(max-width:800px){
   .login-layout{flex-direction:column}
   .login-brand-pane{display:none}
-  .login-form-pane{padding:48px 24px;width:100%}
+  .login-form-pane{padding:32px 20px;width:100%;align-items:flex-start}
   .auth-header-mobile{display:block}
-  .shell{padding:16px 18px 40px}
-  .app-header{height:auto;padding:8px 0}
-  .header-inner{height:auto;flex-direction:column;align-items:stretch;gap:12px}
-  .header-left{flex-direction:column;align-items:flex-start;gap:10px}
-  .control-nav{width:100%;overflow-x:auto}
-  .header-actions{justify-content:space-between;width:100%;flex-wrap:wrap}
+  .shell{padding:16px 14px 40px}
+  .app-header{height:auto;padding:6px 0}
+  .header-inner{height:auto;flex-direction:column;align-items:stretch;gap:8px;padding-left:14px;padding-right:14px}
+  .header-left{flex-direction:row;align-items:center;gap:8px;min-width:0;overflow:hidden}
+  .header-mesh-mark{width:148px;height:44px;padding:2px 5px}
+  .control-nav{flex:1 1 auto;min-width:0;width:auto;overflow-x:auto;white-space:nowrap;scrollbar-width:none}
+  .control-nav::-webkit-scrollbar,.header-actions::-webkit-scrollbar{display:none;height:0}
+  .control-nav a{padding-left:9px;padding-right:9px}
+  .header-actions{justify-content:flex-start;width:100%;flex-wrap:wrap;overflow:visible;row-gap:6px;padding-bottom:0}
+  .header-actions > *{flex-shrink:0}
+  .header-actions .button{font-size:11.5px;padding:5px 9px}
+  .header-actions > a.button{flex:1 1 auto;min-width:0}
+  .section-title{align-items:flex-start;flex-direction:column;gap:6px}
+  .section-title > .muted{max-width:100%}
   .check{margin-right:0;align-items:flex-start}
   .form-grid{grid-template-columns:1fr 1fr}
   .panel,.auth-card,.detail-header{padding:16px}
   .tool-grid,.details{grid-template-columns:1fr}
   .perm-selects-row{grid-template-columns:repeat(2,1fr)}
-  .workspace-main-grid{grid-template-columns:1fr}
-  .grid-span-2{grid-column:span 1}
+  .grid-two > *,.panel,.workspace-card,.workspace-form,.workspace-main-grid,.workspace-perms-section,.workspace-footer{min-width:0;max-width:100%}
+  .workspace-main-grid{grid-template-columns:minmax(0,1fr)}
+  .grid-span-2,.full-host-label{grid-column:1 / -1}
+  .detail-id,.mono-truncate{overflow-wrap:anywhere;word-break:break-word;white-space:normal}
+  .page-heading,.detail-header{flex-wrap:wrap}
+  .detail-header-actions{width:100%;justify-content:flex-start}
+  .table-wrap::after{display:block}
+  .scope-editor-form{grid-template-columns:1fr;align-items:stretch}
+  .scope-editor-form .form-submit-wrap{margin-top:0}
+  .version-policy-form{grid-template-columns:1fr}
+  .form-grid.add-form-grid,.form-grid.add-client-grid{flex-direction:column;align-items:stretch}
+  .form-grid.add-form-grid > label,.form-grid.add-client-grid > label:not(.check),.form-grid.add-client-grid fieldset,.form-grid.add-form-grid .form-submit-wrap,.form-grid.add-client-grid .form-submit-wrap{width:100%;flex:1 1 auto}
+  .add-client-grid fieldset .scope-selector-row{align-items:flex-start}
+  .login-brand-logo{width:190px;height:58px}
+  .secret-mesh-mark,.error-mesh-mark{width:190px;height:56px}
+  .enrollment-header{width:calc(100% - 28px);margin-top:12px;gap:10px;flex-wrap:wrap}
+  .enrollment-brand-logo{width:148px;height:44px;padding:2px 5px}
+  .enrollment-header-actions{gap:6px;margin-left:auto}
+  .enrollment-shell{padding-top:16px}
+  .enrollment-dialog{position:static;inset:auto;height:auto;max-width:100%;min-width:0;padding:18px;overflow:hidden}
+  .enrollment-dialog .page-heading,.enrollment-dialog .enrollment-meta-box,.enrollment-dialog [role="tabpanel"]{min-width:0;max-width:100%}
+  .enrollment-dialog .mono{overflow-wrap:anywhere;word-break:break-word}
+  .enrollment-dialog pre{width:100%;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;overflow-x:hidden}
+  .enrollment-dialog pre code{white-space:inherit;overflow-wrap:inherit;word-break:inherit}
 }
 @media(max-width:540px){
+  .header-left{flex-wrap:wrap;row-gap:8px}
+  .header-left .control-nav{flex:1 1 100%;width:100%;overflow-x:visible}
+  .action-btn-group{flex-wrap:nowrap}
+  .action-btn-group > *{flex:0 0 auto}
+  .action-btn-group .danger-action label{white-space:nowrap}
   .metrics{grid-template-columns:1fr}
   .form-grid{grid-template-columns:1fr}
   .perm-selects-row{grid-template-columns:1fr}
-  .version-policy-form{grid-template-columns:1fr}
   h1{font-size:20px}
   .detail-title{font-size:17px}
-  .action-btn-group{flex-direction:column;align-items:stretch}
-  .inline-action-form{width:100%}
-  .inline-action-form input{max-width:none;flex:1}
-  .scope-editor-form{align-items:stretch;flex-direction:column}
+  .scope-editor-form{grid-template-columns:1fr;align-items:stretch}
   .scope-editor-form .button{width:100%}
   .override-form-row{flex-direction:column;align-items:stretch}
   .table-wrap{max-width:100%}
   .form-grid{grid-template-columns:1fr}
 }
 </style>`; }
-function adminScript(): string { return `<script>(function(){var key='runmesh-theme';var values=['system','light','dark'];function preference(){try{var value=localStorage.getItem(key);return values.indexOf(value)>=0?value:'system'}catch(_){return 'system'}}function label(value){var zh=document.documentElement.lang==='zh-CN';if(!zh)return 'Theme: '+value;return value==='light'?'主题：浅色':value==='dark'?'主题：深色':'主题：跟随系统'}function apply(value){if(value==='light'||value==='dark')document.documentElement.dataset.theme=value;else delete document.documentElement.dataset.theme;document.querySelectorAll('[data-theme-toggle]').forEach(function(button){var text=label(value);button.textContent=text;button.setAttribute('aria-label',text)})}document.querySelectorAll('[data-theme-toggle]').forEach(function(button){button.addEventListener('click',function(){var current=preference();var next=values[(values.indexOf(current)+1)%values.length];try{localStorage.setItem(key,next)}catch(_){}apply(next)})});apply(preference())})();var ZH_UI_TEXT=${JSON.stringify(ZH_UI_TEXT)};function translateTextNodes(root){var walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode:function(node){if(!node.nodeValue||!node.nodeValue.trim())return NodeFilter.FILTER_REJECT;for(var el=node.parentElement;el;el=el.parentElement){if(el.hasAttribute('data-no-i18n')||el.tagName==='CODE'||el.tagName==='PRE'||el.tagName==='SCRIPT'||el.tagName==='STYLE'||el.tagName==='INPUT'||el.tagName==='TEXTAREA')return NodeFilter.FILTER_REJECT}return NodeFilter.FILTER_ACCEPT}});var nodes=[];while(walker.nextNode())nodes.push(walker.currentNode);nodes.forEach(function(node){var text=node.nodeValue||'';var trimmed=text.trim();var mapped=ZH_UI_TEXT[trimmed];if(text.indexOf('coding:')>=0)return;if(mapped)node.nodeValue=text.replace(trimmed,mapped);else Object.keys(ZH_UI_TEXT).sort(function(a,b){return b.length-a.length}).forEach(function(key){if(node.nodeValue&&node.nodeValue.indexOf(key)>=0)node.nodeValue=node.nodeValue.split(key).join(ZH_UI_TEXT[key])})})}function translateAttributes(root){['aria-label','alt','placeholder','title'].forEach(function(name){root.querySelectorAll('['+name+']').forEach(function(element){if(element.closest('[data-no-i18n]'))return;var value=element.getAttribute(name)||'';Object.keys(ZH_UI_TEXT).sort(function(a,b){return b.length-a.length}).forEach(function(key){if(value.indexOf(key)>=0)value=value.split(key).join(ZH_UI_TEXT[key])});element.setAttribute(name,value)})})}function applyLocale(locale){var zh=locale==='zh-CN';document.documentElement.lang=zh?'zh-CN':'en';document.querySelectorAll('[data-lang-toggle]').forEach(function(item){var active=item.getAttribute('data-lang-toggle')===locale;item.setAttribute('aria-current',active?'true':'false')});if(zh){translateTextNodes(document.body);translateAttributes(document);var title=document.title;Object.keys(ZH_UI_TEXT).sort(function(a,b){return b.length-a.length}).forEach(function(key){if(title.indexOf(key)>=0)title=title.split(key).join(ZH_UI_TEXT[key])});document.title=title}var theme=document.querySelector('[data-theme-toggle]');if(theme){var value=preference();var text=label(value);theme.textContent=text;theme.setAttribute('aria-label',text)}}function requestedLocale(){var query=new URLSearchParams(location.search).get('lang');if(query==='zh-CN'||query==='zh')return 'zh-CN';if(query==='en')return 'en';var match=/runmesh_lang=(zh-CN|en)/.exec(document.cookie||'');if(match)return match[1];return navigator.language&&navigator.language.toLowerCase().startsWith('zh')?'zh-CN':'en'}function rememberLocale(locale){document.cookie='runmesh_lang='+locale+'; Max-Age=31536000; Path=/; SameSite=Lax'}document.querySelectorAll('[data-lang-toggle]').forEach(function(link){link.addEventListener('click',function(event){var locale=link.getAttribute('data-lang-toggle')||'en';rememberLocale(locale);if(locale==='zh-CN'&&new URLSearchParams(location.search).get('lang')!=='zh-CN'){event.preventDefault();var url=new URL(location.href);url.searchParams.set('lang','zh-CN');location.href=url.toString()}else if(locale==='en'&&new URLSearchParams(location.search).has('lang')){event.preventDefault();var url=new URL(location.href);url.searchParams.set('lang','en');location.href=url.toString()}})});var locale=requestedLocale();if(new URLSearchParams(location.search).has('lang'))rememberLocale(locale);applyLocale(locale);function copyText(text){if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text);return}var area=document.createElement('textarea');area.value=text;area.setAttribute('readonly','');area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.select();document.execCommand('copy');area.remove()}document.querySelectorAll('[data-copy]').forEach(function(button){button.addEventListener('click',function(){copyText(button.getAttribute('data-copy')||'');button.textContent=document.documentElement.lang==='zh-CN'?'已复制':'Copied';button.classList.add('copied')})});document.querySelectorAll('[data-tab]').forEach(function(tab){tab.addEventListener('click',function(){var target=tab.getAttribute('data-tab');document.querySelectorAll('[data-tab]').forEach(function(item){item.setAttribute('aria-selected',String(item===tab));item.tabIndex=item===tab?0:-1});document.querySelectorAll('[data-panel]').forEach(function(panel){panel.hidden=panel.getAttribute('data-panel')!==target})});tab.addEventListener('keydown',function(event){if(event.key==='ArrowLeft'||event.key==='ArrowRight'){var tabs=Array.prototype.slice.call(document.querySelectorAll('[data-tab]'));var next=tabs[(tabs.indexOf(tab)+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length];next.focus();next.click()}})});document.querySelectorAll('.pwd-toggle-btn').forEach(function(btn){btn.addEventListener('click',function(){var wrap=btn.closest('.password-input-wrap');if(!wrap)return;var input=wrap.querySelector('input');if(!input)return;var isPwd=input.type==='password';input.type=isPwd?'text':'password';var isZh=document.documentElement.lang==='zh-CN';var label=isPwd?(isZh?'隐藏密码':'Hide password'):(isZh?'显示密码':'Show password');btn.setAttribute('aria-label',label);btn.setAttribute('title',label);btn.innerHTML=isPwd?'<svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>':'<svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';})});document.querySelectorAll('form.login-form').forEach(function(form){form.addEventListener('submit',function(){var btn=form.querySelector('.login-submit-btn');if(!btn||btn.disabled)return;var isZh=document.documentElement.lang==='zh-CN';var isSetup=form.getAttribute('action')==='/setup';var loadingText=isSetup?(isZh?'正在初始化...':'Initializing...'):(isZh?'正在登录...':'Signing in...');var origWidth=btn.offsetWidth;btn.style.width=origWidth>0?(origWidth+'px'):'100%';btn.disabled=true;btn.textContent=loadingText;try{form.submit();}catch(e){}});});</script>`; }
+function adminScript(): string {
+  const translationJson = JSON.stringify(ZH_UI_TEXT);
+  return `<script>
+(function(){
+var key='runmesh-theme';
+var values=['system','light','dark'];
+function preference(){try{var value=localStorage.getItem(key);return values.indexOf(value)>=0?value:'system'}catch(_){return 'system'}}
+function label(value){var zh=document.documentElement.lang==='zh-CN';if(!zh)return 'Theme: '+value;return value==='light'?'主题：浅色':value==='dark'?'主题：深色':'主题：跟随系统'}
+function updateThemeLabel(value){document.querySelectorAll('[data-theme-toggle]').forEach(function(button){var text=label(value);button.textContent=text;button.setAttribute('aria-label',text)})}
+function applyTheme(value){if(value==='light'||value==='dark')document.documentElement.dataset.theme=value;else delete document.documentElement.dataset.theme;updateThemeLabel(value)}
+var ZH_UI_TEXT=${translationJson};function translateKnown(value){
+  var trimmed=value.trim();
+  if(!trimmed)return value;
+  var rawMapped=ZH_UI_TEXT[value];
+  if(rawMapped)return rawMapped;
+  var mapped=ZH_UI_TEXT[trimmed];
+  if(mapped)return value.replace(trimmed,mapped);
+  var suffix=' configured';
+  if(trimmed.slice(-suffix.length)===suffix&&/^[0-9]+$/.test(trimmed.slice(0,-suffix.length)))return value.replace(trimmed,trimmed.slice(0,-suffix.length)+' 已配置');
+  suffix=' connected';
+  if(trimmed.slice(-suffix.length)===suffix&&/^[0-9]+$/.test(trimmed.slice(0,-suffix.length)))return value.replace(trimmed,trimmed.slice(0,-suffix.length)+' 已连接');
+  if(trimmed.indexOf('Status:')===0)return value.replace(trimmed,'状态：'+statusText(trimmed.slice(7).trim()));
+  if(trimmed.indexOf('Validation:')===0)return value.replace(trimmed,'验证：'+statusText(trimmed.slice(11).trim()));
+  var separator=' · ';
+  var separatorAt=trimmed.indexOf(separator);
+  if(separatorAt>0){var status=trimmed.slice(0,separatorAt);if(ZH_UI_TEXT[status])return value.replace(trimmed,statusText(status)+' · '+trimmed.slice(separatorAt+separator.length))}
+  return value;
+}
+function translateTextNodes(root){var walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode:function(node){if(!node.nodeValue||!node.nodeValue.trim())return NodeFilter.FILTER_REJECT;for(var el=node.parentElement;el;el=el.parentElement){if(el.hasAttribute('data-no-i18n')||el.tagName==='CODE'||el.tagName==='PRE'||el.tagName==='SCRIPT'||el.tagName==='STYLE'||el.tagName==='INPUT'||el.tagName==='TEXTAREA')return NodeFilter.FILTER_REJECT}return NodeFilter.FILTER_ACCEPT}});var nodes=[];while(walker.nextNode())nodes.push(walker.currentNode);nodes.forEach(function(node){node.nodeValue=translateKnown(node.nodeValue||'')})}
+function translateAttributes(root){['aria-label','alt','placeholder','title'].forEach(function(name){root.querySelectorAll('['+name+']').forEach(function(element){if(element.closest('[data-no-i18n]'))return;var value=element.getAttribute(name)||'';var translated=translateKnown(value);if(translated===value&&value.indexOf('Rename ')===0)translated='重命名 '+value.slice(7);element.setAttribute(name,translated)})})}
+function statusText(value){return ZH_UI_TEXT[value]||value}
+function applyLocale(locale){var zh=locale==='zh-CN';document.documentElement.lang=zh?'zh-CN':'en';document.querySelectorAll('[data-lang-toggle]').forEach(function(item){var active=item.getAttribute('data-lang-toggle')===locale;item.setAttribute('aria-current',active?'true':'false')});if(zh){translateTextNodes(document.body);translateAttributes(document);var title=document.title;var titleParts=['MCP client created','MCP client rotated','MCP Client','Runmesh · Agent Control Plane','Agent Control Plane','Dashboard','Runners','MCP Clients','Settings','login','setup','enrollment'];titleParts.forEach(function(part){if(ZH_UI_TEXT[part])title=title.split(part).join(ZH_UI_TEXT[part])});document.title=title}updateThemeLabel(preference())}
+function requestedLocale(){var query=new URLSearchParams(location.search).get('lang');if(query==='zh-CN'||query==='zh')return 'zh-CN';if(query==='en')return 'en';var match=/runmesh_lang=(zh-CN|en)/.exec(document.cookie||'');if(match)return match[1];return navigator.language&&navigator.language.toLowerCase().startsWith('zh')?'zh-CN':'en'}
+function rememberLocale(locale){document.cookie='runmesh_lang='+locale+'; Max-Age=31536000; Path=/; SameSite=Lax'}
+document.querySelectorAll('[data-theme-toggle]').forEach(function(button){button.addEventListener('click',function(){var current=preference();var next=values[(values.indexOf(current)+1)%values.length];try{localStorage.setItem(key,next)}catch(_){}applyTheme(next)})});
+document.querySelectorAll('[data-lang-toggle]').forEach(function(link){link.addEventListener('click',function(event){var locale=link.getAttribute('data-lang-toggle')||'en';rememberLocale(locale);if(locale==='zh-CN'&&new URLSearchParams(location.search).get('lang')!=='zh-CN'){event.preventDefault();var url=new URL(location.href);url.searchParams.set('lang','zh-CN');location.href=url.toString()}else if(locale==='en'&&new URLSearchParams(location.search).has('lang')){event.preventDefault();var url=new URL(location.href);url.searchParams.set('lang','en');location.href=url.toString()}})});
+var locale=requestedLocale();if(new URLSearchParams(location.search).has('lang'))rememberLocale(locale);applyLocale(locale);
+function copyText(text){if(navigator.clipboard&&navigator.clipboard.writeText)return navigator.clipboard.writeText(text);var area=document.createElement('textarea');area.value=text;area.setAttribute('readonly','');area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.select();try{document.execCommand('copy')}catch(_){}area.remove();return Promise.resolve()}
+document.querySelectorAll('[data-copy]').forEach(function(button){button.addEventListener('click',function(){var result=copyText(button.getAttribute('data-copy')||'');var mark=function(){button.textContent=document.documentElement.lang==='zh-CN'?'已复制':'Copied';button.classList.add('copied')};if(result&&typeof result.then==='function')result.then(mark,function(){});else mark()})});
+document.querySelectorAll('[data-tab]').forEach(function(tab){tab.addEventListener('click',function(){var target=tab.getAttribute('data-tab');document.querySelectorAll('[data-tab]').forEach(function(item){item.setAttribute('aria-selected',String(item===tab));item.tabIndex=item===tab?0:-1});document.querySelectorAll('[data-panel]').forEach(function(panel){panel.hidden=panel.getAttribute('data-panel')!==target})});tab.addEventListener('keydown',function(event){if(event.key==='ArrowLeft'||event.key==='ArrowRight'){var tabs=Array.prototype.slice.call(document.querySelectorAll('[data-tab]'));var next=tabs[(tabs.indexOf(tab)+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length];next.focus();next.click()}})});
+document.querySelectorAll('.pwd-toggle-btn').forEach(function(btn){btn.addEventListener('click',function(){var wrap=btn.closest('.password-input-wrap');if(!wrap)return;var input=wrap.querySelector('input');if(!input)return;var isPwd=input.type==='password';input.type=isPwd?'text':'password';var isZh=document.documentElement.lang==='zh-CN';var buttonLabel=isPwd?(isZh?'隐藏密码':'Hide password'):(isZh?'显示密码':'Show password');btn.setAttribute('aria-label',buttonLabel);btn.setAttribute('title',buttonLabel);btn.innerHTML=isPwd?'<svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>':'<svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>'})});
+document.querySelectorAll('form.login-form').forEach(function(form){form.addEventListener('submit',function(){var btn=form.querySelector('.login-submit-btn');if(!btn||btn.disabled)return;var isZh=document.documentElement.lang==='zh-CN';var isSetup=form.getAttribute('action')==='/setup';var loadingText=isSetup?(isZh?'正在初始化...':'Initializing...'):(isZh?'正在登录...':'Signing in...');var origWidth=btn.offsetWidth;btn.style.width=origWidth>0?(origWidth+'px'):'100%';btn.disabled=true;btn.textContent=loadingText;try{form.submit()}catch(e){}})});
+})();
+</script>`;
+}
 function runnerEnrollmentPage(env: RunnerReleaseEnvironment, baseUrl: string, runnerId: string, code: string | undefined, csrf: string, _reEnroll = false): Response {
   if (code === undefined) return adminError(503, "Enrollment code could not be generated.");
   const release = runnerReleaseDescriptor(env);
@@ -2819,7 +3060,7 @@ function runnerEnrollmentPage(env: RunnerReleaseEnvironment, baseUrl: string, ru
   const instruction = bootstrap
     ? "The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments."
     : "The fixed signed hosted release is not enabled on this deployment. Download and verify the portable Runner artifact first, then paste this code only into the local prompt requested by --code-stdin.";
-  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><script>try{var t=localStorage.getItem('runmesh-theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(_){}</script><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body">${languageSwitch()}${themeControl()}<main class="shell enrollment-shell"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><div class="dialog-icon-row">${meshMarkSvg("dialog-mark")}</div><p class="eyebrow">${title}</p><h1 id="enrollment-title">Enroll Runner</h1><p class="lede">${instruction} This one-time code expires in 30 minutes and will not be shown again.</p></div></section><div class="enrollment-meta-box"><span class="form-stat-label">Target Runner ID</span><span class="mono">${escapeHtml(runnerId)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">One-time enrollment code</span><code class="mono" data-no-i18n>${escapeHtml(code)}</code><span class="muted font-12">Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.</span></div><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.</p><div class="top-actions dialog-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
+  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><script>try{var t=localStorage.getItem('runmesh-theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(_){}</script><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body enrollment-body"><header class="enrollment-header"><a class="enrollment-brand" href="/admin" aria-label="Runmesh · Agent Control Plane">${brandLogo("enrollment-brand-logo")}</a><div class="enrollment-header-actions">${languageSwitch()}${themeControl()}</div></header><main class="shell enrollment-shell"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><div class="dialog-icon-row">${meshMarkSvg("dialog-mark")}</div><p class="eyebrow">${title}</p><h1 id="enrollment-title">Enroll Runner</h1><p class="lede">${instruction} This one-time code expires in 30 minutes and will not be shown again.</p></div></section><div class="enrollment-meta-box"><span class="form-stat-label">Target Runner ID</span><span class="mono">${escapeHtml(runnerId)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">One-time enrollment code</span><code class="mono" data-no-i18n>${escapeHtml(code)}</code><span class="muted font-12">Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.</span></div><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.</p><div class="top-actions dialog-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
 }
 function secretCreatedPage(title: string, url: string): string { return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${escapeHtml(title)}</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card secret-card"><div class="secret-brand-row">${meshMarkSvg("secret-mesh-mark")}<span class="brand-name">Runmesh</span></div><p class="brand-kicker">Runmesh</p><h1>${escapeHtml(title)}</h1><p class="lede">Copy this URL now. It will not be shown again.</p><code>${escapeHtml(url)}</code><div class="secret-actions"><button type="button" class="button" data-copy="${escapeHtml(url)}">Copy MCP URL</button><a class="button secondary" href="/admin">Back to admin</a></div></section></main>${adminScript()}</body></html>`; }
 function secretUrl(base: string, secret: string): string { const url = new URL(base); url.pathname = `/${secret}/mcp`; url.search = ""; return url.toString(); }
@@ -3040,7 +3281,7 @@ function csrfCookie(value: string): string { return `${ADMIN_CSRF_COOKIE}=${valu
 function clearCookie(name: string): string { return `${name}=; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=0`; }
 function credentialHeaders(contentType: string): Headers { const headers = htmlHeaders(); headers.set("content-type", contentType); return headers; }
 function html(value: string, cookies: readonly string[] = []): Response { const headers = htmlHeaders(); for (const cookie of cookies) headers.append("set-cookie", cookie); return new Response(value, { headers }); }
-function htmlHeaders(): Headers { return new Headers({ "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'", "x-content-type-options": "nosniff", "x-frame-options": "DENY" }); }
+function htmlHeaders(): Headers { return new Headers({ "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer", "content-security-policy": "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'", "x-content-type-options": "nosniff", "x-frame-options": "DENY" }); }
 function redirect(location: string, cookies: readonly string[] = []): Response { const headers = htmlHeaders(); headers.set("location", location); for (const cookie of cookies) headers.append("set-cookie", cookie); return new Response(null, { status: 303, headers }); }
 function adminError(status: number, message: string, cookies: readonly string[] = []): Response { const response = html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card error-card"><div class="secret-brand-row">${meshMarkSvg("error-mesh-mark")}<span class="brand-name">Runmesh</span></div><p class="brand-kicker">Runmesh</p><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="lede">${escapeHtml(message)}</p><p><a class="button secondary" href="/">Return</a></p></section></main>${adminScript()}</body></html>`, cookies.length === 0 ? [] : cookies); return new Response(response.body, { status, headers: response.headers }); }
 function methodNotAllowed(allow: string): Response { return new Response("Method not allowed", { status: 405, headers: { allow } }); }
@@ -3050,3 +3291,4 @@ function time(value: number | null): string { return value === null ? "Never" : 
 async function json(response: Response): Promise<unknown> { try { return await response.json(); } catch { return undefined; } }
 function arrayField(value: unknown): unknown[] { return Array.isArray(value) ? value : []; }
 function record(value: unknown): Record<string, unknown> | undefined { return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }
+
