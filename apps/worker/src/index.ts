@@ -2987,6 +2987,10 @@ pre{
 @media(max-width:540px){
   .header-left{flex-wrap:wrap;row-gap:8px}
   .header-left .control-nav{flex:1 1 100%;width:100%;overflow-x:visible;flex-wrap:wrap;row-gap:2px}
+  .card-row{align-items:flex-start;gap:8px;min-width:0}
+  .card-row-main{min-width:0;max-width:100%}
+  .card-row-sub{display:flex;flex-wrap:wrap;min-width:0;max-width:100%;row-gap:3px}
+  .platform-meta,.client-runner-meta{min-width:0;max-width:100%;overflow-wrap:anywhere;word-break:break-word}
   .action-btn-group{flex-wrap:nowrap}
   .action-btn-group > *{flex:0 0 auto}
   .action-btn-group .danger-action label{white-space:nowrap}
