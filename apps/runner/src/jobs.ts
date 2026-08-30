@@ -251,8 +251,8 @@ export class JobManager {
     } catch (error) {
       await Promise.all([stdout?.close().catch(() => undefined), stderr?.close().catch(() => undefined)]);
       const failed = { ...job, status: "failed" as const, updated_at_ms: Date.now(), completed_at_ms: Date.now() };
-      this.jobs.set(job.job_id, failed);
       await this.persist(failed);
+      this.jobs.set(job.job_id, failed);
       // A spawn/open failure still creates a durable terminal Job record. Emit
       // it so an online Runner can synchronize the failure to Registry even
       // though no running event was possible.
@@ -564,20 +564,21 @@ export class JobManager {
     const prior = this.jobs.get(jobId);
     if (prior === undefined || !isActive(prior)) return;
     await this.flushLogs(jobId);
-    const deliveredCancellation = prior.status === "cancelling" && (this.terminationDelivered.has(jobId) || prior.cancellation_delivered_at_ms !== null);
+    const current = this.jobs.get(jobId) ?? prior;
+    const deliveredCancellation = current.status === "cancelling" && (this.terminationDelivered.has(jobId) || current.cancellation_delivered_at_ms !== null);
     // A code-zero exit is a successful process completion even if cancel raced
     // with it. Cancellation is reserved for a delivered termination with an
     // abnormal/signal exit, so status does not overstate what happened.
     const status: LocalJobStatus = spawnFailed ? "failed" : code === 0 ? "succeeded" : deliveredCancellation ? "cancelled" : "failed";
     const completed: JobRecord = {
-      ...prior, status, updated_at_ms: Date.now(), completed_at_ms: Date.now(),
+      ...current, status, updated_at_ms: Date.now(), completed_at_ms: Date.now(),
       exit_code: status === "cancelled" ? null : code, signal,
-      cancellation_delivered_at_ms: prior.cancellation_delivered_at_ms,
+      cancellation_delivered_at_ms: current.cancellation_delivered_at_ms,
     };
+    await this.persist(completed);
     this.jobs.set(jobId, completed);
     this.processes.delete(jobId);
     this.terminationDelivered.delete(jobId);
-    await this.persist(completed);
     this.onEvent({ type: "completed", job: completed });
     await this.pruneRetainedJobs();
   }
@@ -604,7 +605,11 @@ export class JobManager {
   private persist(job: JobRecord): Promise<void> {
     const path = join(this.jobDir(job.job_id), "meta.json");
     const prior = this.persistChains.get(job.job_id) ?? Promise.resolve();
-    const next = prior.catch(() => undefined).then(() => atomicJson(path, job));
+    const next = prior.catch(() => undefined).then(async () => {
+      const current = this.jobs.get(job.job_id);
+      if (isActive(job) && current !== undefined && !isActive(current)) return;
+      await atomicJson(path, job);
+    });
     this.persistChains.set(job.job_id, next);
     return next.finally(() => {
       if (this.persistChains.get(job.job_id) === next) this.persistChains.delete(job.job_id);
