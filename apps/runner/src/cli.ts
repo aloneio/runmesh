@@ -32,6 +32,9 @@ export interface CliDependencies {
   readonly policyRevision?: () => Promise<{ readonly desired?: number; readonly applied?: number } | undefined>;
   /** Injectable exit-code seam for doctor failures; production sets process.exitCode. */
   readonly setExitCode?: (code: number) => void;
+  readonly readStdin?: () => Promise<string>;
+  /** Test-only continuation after enrollment; production CLI returns immediately. */
+  readonly afterEnroll?: () => Promise<void>;
 }
 export interface EnrollCliDependencies {
   readonly store?: ProfileStore;
@@ -41,9 +44,33 @@ export interface EnrollCliDependencies {
   readonly servicePlatform?: ServicePlatform;
   readonly executionMode?: ExecutionMode;
   readonly confirmPrivilegedHost?: boolean;
+  /** Injectable stdin source; production consumes stdin exactly once. */
+  readonly readStdin?: () => Promise<string>;
 }
 interface ParsedCommand { readonly command: string; readonly json: boolean; readonly values: Record<string, string | boolean | string[]>; readonly passthrough: string[]; }
-const HELP = "usage: runmesh-runner <start|enroll|status|doctor|workspace|env|install|stop|restart|uninstall> [options]\nworkspace: list | add --path <directory> [--allow-edit] [--allow-host-shell --i-understand-host-shell-is-not-sandboxed] | remove --id <workspace-id> | migrate --management-mode <central|legacy_manual>";
+const HELP = "usage: runmesh-runner <start|enroll|status|doctor|workspace|env|install|stop|restart|uninstall> [options]\nenroll: --server <https-url> (--code <one-time-code> | --code-stdin)\nworkspace: list | add --path <directory> [--allow-edit] [--allow-host-shell --i-understand-host-shell-is-not-sandboxed] | remove --id <workspace-id> | migrate --management-mode <central|legacy_manual>";
+
+async function enrollmentCode(parsed: ParsedCommand, readStdin: (() => Promise<string>) | undefined): Promise<string> {
+  const fromArgument = typeof parsed.values.code === "string" ? parsed.values.code : undefined;
+  if (parsed.values.codeStdin === true && fromArgument !== undefined) throw new Error("--code and --code-stdin cannot be used together");
+  if (parsed.values.codeStdin !== true) return requiredString(parsed, "code");
+  const source = readStdin ?? (() => new Promise<string>((resolve, reject) => {
+    let value = ""; let settled = false;
+    const finish = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      process.stdin.removeListener("data", onData); process.stdin.removeListener("error", onError); process.stdin.removeListener("end", onEnd);
+      if (error === undefined) resolve(value); else reject(error);
+    };
+    const onData = (chunk: string): void => { value += chunk; if (value.length > 512) { process.stdin.pause(); finish(new Error("--code-stdin input is too long")); } };
+    const onError = (): void => finish(new Error("--code-stdin input could not be read"));
+    const onEnd = (): void => finish();
+    process.stdin.setEncoding("utf8"); process.stdin.on("data", onData); process.stdin.once("error", onError); process.stdin.once("end", onEnd);
+  }));
+  const code = (await source()).trim();
+  if (code.length === 0) throw new Error("--code-stdin requires a one-time enrollment code");
+  return code;
+}
 
 export async function runEnrollCli(argv: readonly string[], dependencies: EnrollCliDependencies = {}): Promise<void> {
   const output = dependencies.stdout ?? ((line) => process.stdout.write(`${line}\n`));
@@ -52,7 +79,7 @@ export async function runEnrollCli(argv: readonly string[], dependencies: Enroll
   const store = dependencies.store ?? storeFor(parsed, dependencies.servicePlatform);
   try {
     const result = await enrollRunner({
-      server: requiredString(parsed, "server"), code: requiredString(parsed, "code"), reEnroll: parsed.values.reEnroll === true, insecureLocal: parsed.values.insecureLocal === true,
+      server: requiredString(parsed, "server"), code: await enrollmentCode(parsed, dependencies.readStdin), reEnroll: parsed.values.reEnroll === true, insecureLocal: parsed.values.insecureLocal === true,
       ...(typeof parsed.values.executionMode === "string" ? { executionMode: parsed.values.executionMode as ExecutionMode } : dependencies.executionMode === undefined ? {} : { executionMode: dependencies.executionMode }),
       ...(parsed.values.confirmPrivilegedHost === true || dependencies.confirmPrivilegedHost === true ? { confirmPrivilegedHost: true } : {}),
       ...(typeof parsed.values.cwd === "string" ? { cwd: parsed.values.cwd } : {}),
@@ -70,11 +97,14 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
   if (argv.length === 1 && argv[0] === "--version") { output(RUNNER_VERSION); return; }
   const parsed = parseProductArgs(argv);
   const store = dependencies.store ?? storeFor(parsed, dependencies.servicePlatform);
+  let enrolledDuringThisInvocation = false;
   try {
     if (parsed.command === "start") return start(parsed, store, error, dependencies);
     if (parsed.command === "enroll") {
-      const server = requiredString(parsed, "server"); const code = requiredString(parsed, "code");
+      const server = requiredString(parsed, "server"); const code = await enrollmentCode(parsed, dependencies.readStdin);
       const result = await enrollRunner({ server, code, reEnroll: parsed.values.reEnroll === true, insecureLocal: parsed.values.insecureLocal === true, ...(typeof parsed.values.executionMode === "string" ? { executionMode: parsed.values.executionMode as ExecutionMode } : {}), ...(parsed.values.confirmPrivilegedHost === true ? { confirmPrivilegedHost: true } : {}), ...(typeof parsed.values.cwd === "string" ? { cwd: parsed.values.cwd } : {}), store, ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch }) });
+      enrolledDuringThisInvocation = true;
+      if (dependencies.afterEnroll !== undefined) await dependencies.afterEnroll();
       report(output, parsed.json, { enrolled: true, runner_id: result.profile.runner_id, workspace_count: result.profile.workspaces.length });
       return;
     }
@@ -96,7 +126,12 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
     if (parsed.command === "install" || parsed.command === "stop" || parsed.command === "restart") { await serviceCommand(parsed, store, output, dependencies); return; }
     if (parsed.command === "uninstall") { await uninstall(parsed, store, output, dependencies); return; }
     throw new Error(HELP);
-  } catch (cause) { error(cause instanceof Error ? cause.message : String(cause)); throw cause; }
+  } catch (cause) {
+    if (enrolledDuringThisInvocation) {
+      try { await store.remove(); } catch { /* Do not mask the primary failure; remote code redemption is irreversible. */ }
+    }
+    error(cause instanceof Error ? cause.message : String(cause)); throw cause;
+  }
 }
 
 async function start(parsed: ParsedCommand, store: ProfileStore, error: (line: string) => void, dependencies: CliDependencies): Promise<void> {
@@ -317,6 +352,7 @@ export function parseProductArgs(argv: readonly string[]): ParsedCommand {
     if (arg === "--re-enroll") { values.reEnroll = true; continue; }
     if (arg === "--user") { values.user = true; continue; }
     if (arg === "--confirm-privileged-host") { values.confirmPrivilegedHost = true; continue; }
+    if (arg === "--code-stdin") { values.codeStdin = true; continue; }
     const key = arg === "--execution-mode" ? "executionMode" : arg === "--management-mode" ? "managementMode" : arg === "--server" ? "server" : arg === "--code" ? "code" : arg === "--cwd" ? "cwd" : arg === "--id" ? "id" : arg === "--path" ? "path" : arg === "--executable-path" ? "executablePath" : arg === "--profile" ? "profilePath" : undefined;
     const value = rest[index + 1]; if (key === undefined || value === undefined || value.startsWith("--")) throw new Error(`unknown or incomplete option: ${arg}`);
     values[key] = value; index += 1;
@@ -325,7 +361,7 @@ export function parseProductArgs(argv: readonly string[]): ParsedCommand {
 }
 function storeFor(parsed: ParsedCommand, platform?: ServicePlatform): ProfileStore {
   if (typeof parsed.values.profilePath === "string") return new ProfileStore({ filePath: parsed.values.profilePath });
-  if (parsed.values.user === true || process.env.CODING_RUNNER_PROFILE !== undefined) return new ProfileStore();
+  if (parsed.values.user === true || process.env.RUNMESH_RUNNER_PROFILE !== undefined || process.env.CODING_RUNNER_PROFILE !== undefined) return new ProfileStore();
   const layout = serviceLayout({ ...(platform === undefined ? {} : { platform }), mode: "system" });
   return new ProfileStore({ filePath: join(layout.configRoot, "profile.json") });
 }
