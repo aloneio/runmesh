@@ -851,8 +851,10 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Policy is recorded for operators; package download, update, and rollback remain deferred.": "策略会记录供操作员查看；软件包下载、更新和回滚暂缓处理。",
   "Hosted distribution is not configured. Portable artifact/manual version management only.": "托管分发尚未配置；当前仅支持便携制品和手动版本管理。",
   "Effective Global Scopes": "生效的全局权限范围",
-  "Each base scope has a distinct ceiling:": "每个基础权限范围都有独立上限：",
-  "Each base scope has a distinct ceiling: coding:read permits inspection, coding:write permits approved edits, and coding:exec permits Host shell and Job control. Runner and Workspace policy can only reduce these permissions.": "每个基础权限范围都有独立上限：coding:read 允许查看，coding:write 允许已批准的编辑，coding:exec 允许使用主机 Shell 和任务控制。Runner 与工作区策略只能收紧这些权限。",
+  "Read": "读取",
+  "Write": "写入",
+  "Exec": "执行",
+  "Each base scope has a distinct ceiling: Read permits inspection, Write permits approved edits, and Exec permits Host shell and Job control. Runner and Workspace policy can only reduce these permissions.": "每个基础权限范围都有独立上限：Read 允许查看，Write 允许已批准的编辑，Exec 允许使用主机 Shell 和任务控制。Runner 与工作区策略只能收紧这些权限。",
   " permits inspection, ": " 允许查看，",
   " permits approved edits, and ": " 允许已批准的编辑，并且 ",
   " permits Host shell and Job control. Runner and Workspace policy can only reduce these permissions.": " 允许使用主机 Shell 和任务控制。Runner 与工作区策略只能收紧这些权限。",
@@ -1136,9 +1138,9 @@ async function clientDetailPage(_env: WorkerEnv, client: Record<string, unknown>
       </div>
       <div class="active-scopes-box">
         <span class="form-stat-label">Effective Global Scopes</span>
-        <p class="muted scope-line">${escapeHtml(scopeValues.join(", "))}</p>
+        <p class="muted scope-line">${escapeHtml(scopeValues.map(displayScopeLabel).join(", "))}</p>
       </div>
-      <p class="muted scope-help">Each base scope has a distinct ceiling: <span class="mono">coding:read</span> permits inspection, <span class="mono">coding:write</span> permits approved edits, and <span class="mono">coding:exec</span> permits Host shell and Job control. Runner and Workspace policy can only reduce these permissions.</p>
+      <p class="muted scope-help">Each base scope has a distinct ceiling: <span class="mono">Read</span> permits inspection, <span class="mono">Write</span> permits approved edits, and <span class="mono">Exec</span> permits Host shell and Job control. Runner and Workspace policy can only reduce these permissions.</p>
       ${scopeEditor}
     </section>
     <section class="panel">
@@ -1196,7 +1198,7 @@ function runnersPage(data: AdminData, csrf: string): string {
 }
 function activeRunnerLabel(client: McpClientRecord, runners: readonly RunnerRecord[]): string { const runner = client.active_runner_id === null ? undefined : runners.find((item) => item.runner_id === client.active_runner_id); return runner === undefined ? "Not selected" : runner.display_name; }
 function clientsPage(data: AdminData, csrf: string): string {
-  const rows = data.clients.map((client) => `<tr class="data-row"><td><div class="table-primary-cell"><a class="strong" href="/admin/clients/${encodeURIComponent(client.client_id)}">${escapeHtml(client.label)}</a><span class="sub-id mono">${escapeHtml(client.client_id)}</span></div></td><td><div class="scope-tags">${client.scopes.map((s) => `<span class="scope-pill">${escapeHtml(s)}</span>`).join("")}</div></td><td><span class="routing-badge">${escapeHtml(activeRunnerLabel(client, data.runners))}</span></td><td class="time-cell">${escapeHtml(time(client.last_used_at_ms))}</td><td>${client.revoked_at_ms === null ? statusBadge("online") : statusBadge("offline")}</td><td class="actions"><div class="action-btn-group"><a class="button small secondary" href="/admin/clients/${encodeURIComponent(client.client_id)}">View</a><form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rename" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input name="label" value="${escapeHtml(client.label)}" aria-label="Rename ${escapeHtml(client.label)}" maxlength="256"><button class="small secondary">Rename</button></form>${client.revoked_at_ms === null ? `<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rotate" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Rotate</button></form>` : ""}<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/reset-runner" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Reset Runner Selection</button></form>${client.revoked_at_ms === null ? `<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/revoke" class="inline-action-form danger-action"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small danger">Revoke</button></form>` : ""}</div></td></tr>`).join("") || `<tr><td colspan="6" class="empty"><div class="empty-state-box"><p>No MCP clients yet.</p></div></td></tr>`;
+  const rows = data.clients.map((client) => `<tr class="data-row"><td><div class="table-primary-cell"><a class="strong" href="/admin/clients/${encodeURIComponent(client.client_id)}">${escapeHtml(client.label)}</a><span class="sub-id mono">${escapeHtml(client.client_id)}</span></div></td><td><div class="scope-tags">${client.scopes.map((s) => `<span class="scope-pill">${escapeHtml(displayScopeLabel(s))}</span>`).join("")}</div></td><td><span class="routing-badge">${escapeHtml(activeRunnerLabel(client, data.runners))}</span></td><td class="time-cell">${escapeHtml(time(client.last_used_at_ms))}</td><td>${client.revoked_at_ms === null ? statusBadge("online") : statusBadge("offline")}</td><td class="actions"><div class="action-btn-group"><a class="button small secondary" href="/admin/clients/${encodeURIComponent(client.client_id)}">View</a><form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rename" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input name="label" value="${escapeHtml(client.label)}" aria-label="Rename ${escapeHtml(client.label)}" maxlength="256"><button class="small secondary">Rename</button></form>${client.revoked_at_ms === null ? `<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rotate" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Rotate</button></form>` : ""}<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/reset-runner" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Reset Runner Selection</button></form>${client.revoked_at_ms === null ? `<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/revoke" class="inline-action-form danger-action"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small danger">Revoke</button></form>` : ""}</div></td></tr>`).join("") || `<tr><td colspan="6" class="empty"><div class="empty-state-box"><p>No MCP clients yet.</p></div></td></tr>`;
   return `<section class="page-heading"><div><p class="eyebrow">Integrations</p><h1>MCP Clients</h1><p class="lede">Manage labels, scopes, runner routing, and one-time client secrets.</p></div></section><section class="panel add-panel" id="add-client"><div class="section-title"><h2>Add MCP Client</h2></div><form method="post" action="/admin/clients" class="form-grid add-client-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Label<input name="label" maxlength="256" required placeholder="e.g. Cursor / Claude Desktop"></label><fieldset><legend>Scopes</legend><div class="scope-selector-row">${scopeCheckboxes()}</div></fieldset><div class="form-submit-wrap"><button class="button">Create one-time secret</button></div></form></section><section class="panel"><div class="table-wrap"><table class="data-table"><caption class="sr-only">MCP clients</caption><thead><tr><th>Label</th><th>Scopes</th><th>Active runner</th><th>Last used</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
 }
 function settingsPage(csrf: string): string { return `<section class="page-heading"><div><p class="eyebrow">Workspace administration</p><h1>Settings</h1><p class="lede">Keep operator notes here; credentials and secrets are never displayed.</p></div></section><div class="grid-two"><section class="panel"><div class="section-title"><h2>Change password</h2></div><form method="post" action="/admin/password" class="stack settings-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Current password<input type="password" name="current_password" required autocomplete="current-password"></label><label>New password<input type="password" name="password" minlength="12" required autocomplete="new-password"></label><label>Confirm new password<input type="password" name="confirm_password" minlength="12" required autocomplete="new-password"></label><button class="button">Change password</button></form></section><section class="panel danger-panel"><div class="section-title"><h2 class="danger-title">Operator notes</h2></div><p class="muted settings-note">Deployment notes belong in your deployment system. This dashboard intentionally stores no notes or secrets.</p><div class="logout-box"><form method="post" action="/admin/logout" class="stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Log out</button></form></div></section></div>`; }
@@ -1208,13 +1210,30 @@ function statusClass(status: string): string { return ["queued", "running", "can
 function safePlatform(runner: RunnerRecord): string { return runner.public_info === null ? "Not enrolled" : `${runner.public_info.platform} / ${runner.public_info.architecture}`; }
 function runnerWorkspaceCount(runner: RunnerRecord): string { const value = (runner as RunnerRecord & { workspace_count?: unknown }).workspace_count; return typeof value === "number" ? String(value) : "—"; }
 function runnerActiveJobs(runner: RunnerRecord): string { const value = (runner as RunnerRecord & { active_job_count?: unknown }).active_job_count; return typeof value === "number" ? String(value) : "—"; }
+function displayScopeLabel(scope: string): string {
+  switch (scope) {
+    case "coding:read":
+      return "Read";
+    case "coding:write":
+      return "Write";
+    case "coding:exec":
+      return "Exec";
+    default:
+      return scope.startsWith("coding:") ? scope.slice("coding:".length) : scope;
+  }
+}
 function scopeCheckboxes(selected: readonly string[] = ["coding:read", "coding:write", "coding:exec"]): string {
   const descriptions: Record<CodingScope, string> = {
     "coding:read": "Inspect workspaces and read files.",
     "coding:write": "Apply approved edits.",
     "coding:exec": "Use Host shell and control Jobs.",
   };
-  return (["coding:read", "coding:write", "coding:exec"] as const).map((scope) => `<label class="check"><input type="checkbox" name="scopes" value="${scope}"${selected.includes(scope) ? " checked" : ""}> <span><strong>${scope}</strong><small>${descriptions[scope]}</small></span></label>`).join("");
+  const titles: Record<CodingScope, string> = {
+    "coding:read": "Read",
+    "coding:write": "Write",
+    "coding:exec": "Exec",
+  };
+  return (["coding:read", "coding:write", "coding:exec"] as const).map((scope) => `<label class="check"><input type="checkbox" name="scopes" value="${scope}"${selected.includes(scope) ? " checked" : ""}> <span><strong>${titles[scope]}</strong><small>${descriptions[scope]}</small></span></label>`).join("");
 }
 function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly unknown[], jobs: readonly unknown[], environment: Record<string, unknown> | undefined, csrf: string, release: RunnerReleaseDescriptor & { readonly distributable: boolean }): string {
   const runnerId = typeof runner.runner_id === "string" ? runner.runner_id : "unknown";
