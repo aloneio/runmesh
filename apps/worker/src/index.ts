@@ -2986,7 +2986,7 @@ pre{
 }
 @media(max-width:540px){
   .header-left{flex-wrap:wrap;row-gap:8px}
-  .header-left .control-nav{flex:1 1 100%;width:100%;overflow-x:visible}
+  .header-left .control-nav{flex:1 1 100%;width:100%;overflow-x:visible;flex-wrap:wrap;row-gap:2px}
   .action-btn-group{flex-wrap:nowrap}
   .action-btn-group > *{flex:0 0 auto}
   .action-btn-group .danger-action label{white-space:nowrap}
@@ -3033,7 +3033,7 @@ var ZH_UI_TEXT=${translationJson};function translateKnown(value){
 function translateTextNodes(root){var walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode:function(node){if(!node.nodeValue||!node.nodeValue.trim())return NodeFilter.FILTER_REJECT;for(var el=node.parentElement;el;el=el.parentElement){if(el.hasAttribute('data-no-i18n')||el.tagName==='CODE'||el.tagName==='PRE'||el.tagName==='SCRIPT'||el.tagName==='STYLE'||el.tagName==='INPUT'||el.tagName==='TEXTAREA')return NodeFilter.FILTER_REJECT}return NodeFilter.FILTER_ACCEPT}});var nodes=[];while(walker.nextNode())nodes.push(walker.currentNode);nodes.forEach(function(node){node.nodeValue=translateKnown(node.nodeValue||'')})}
 function translateAttributes(root){['aria-label','alt','placeholder','title'].forEach(function(name){root.querySelectorAll('['+name+']').forEach(function(element){if(element.closest('[data-no-i18n]'))return;var value=element.getAttribute(name)||'';var translated=translateKnown(value);if(translated===value&&value.indexOf('Rename ')===0)translated='重命名 '+value.slice(7);element.setAttribute(name,translated)})})}
 function statusText(value){return ZH_UI_TEXT[value]||value}
-function applyLocale(locale){var zh=locale==='zh-CN';document.documentElement.lang=zh?'zh-CN':'en';document.querySelectorAll('[data-lang-toggle]').forEach(function(item){var active=item.getAttribute('data-lang-toggle')===locale;item.setAttribute('aria-current',active?'true':'false')});if(zh){translateTextNodes(document.body);translateAttributes(document);var title=document.title;var titleParts=['MCP client created','MCP client rotated','MCP Client','Runmesh · Agent Control Plane','Agent Control Plane','Dashboard','Runners','MCP Clients','Clients','Settings','login','setup','enrollment'];titleParts.forEach(function(part){if(ZH_UI_TEXT[part])title=title.split(part).join(ZH_UI_TEXT[part])});document.title=title}updateThemeLabel(preference())}
+function applyLocale(locale){var zh=locale==='zh-CN';document.documentElement.lang=zh?'zh-CN':'en';document.querySelectorAll('[data-lang-toggle]').forEach(function(item){var active=item.getAttribute('data-lang-toggle')===locale;item.setAttribute('aria-current',active?'true':'false')});if(zh){translateTextNodes(document.body);translateAttributes(document);var title=document.title;var titleParts=['MCP client created','MCP client rotated','MCP Clients','MCP Client','Runmesh · Agent Control Plane','Agent Control Plane','Dashboard','Runners','Clients','Settings','login','setup','enrollment'];titleParts.forEach(function(part){if(ZH_UI_TEXT[part])title=title.split(part).join(ZH_UI_TEXT[part])});document.title=title}updateThemeLabel(preference())}
 function requestedLocale(){var query=new URLSearchParams(location.search).get('lang');if(query==='zh-CN'||query==='zh')return 'zh-CN';if(query==='en')return 'en';var match=/runmesh_lang=(zh-CN|en)/.exec(document.cookie||'');if(match)return match[1];return navigator.language&&navigator.language.toLowerCase().startsWith('zh')?'zh-CN':'en'}
 function rememberLocale(locale){document.cookie='runmesh_lang='+locale+'; Max-Age=31536000; Path=/; SameSite=Lax'}
 document.querySelectorAll('[data-theme-toggle]').forEach(function(button){button.addEventListener('click',function(){var current=preference();var next=values[(values.indexOf(current)+1)%values.length];try{localStorage.setItem(key,next)}catch(_){}applyTheme(next)})});
@@ -3292,4 +3292,3 @@ function time(value: number | null): string { return value === null ? "Never" : 
 async function json(response: Response): Promise<unknown> { try { return await response.json(); } catch { return undefined; } }
 function arrayField(value: unknown): unknown[] { return Array.isArray(value) ? value : []; }
 function record(value: unknown): Record<string, unknown> | undefined { return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }
-
