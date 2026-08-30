@@ -2,7 +2,7 @@
 
 ## Current baseline
 
-This branch uses Runmesh-specific layouts for new installations. Existing `remote-coding-runtime` paths are retained only for migration detection; they are not new-install defaults. Existing profiles without `execution_mode` are treated as legacy privileged-host profiles; they are not silently rewritten. Re-enrollment changes credentials and connection metadata only. Hosted bootstrap is unavailable in `v0.1.0-dev.2`: download and verify a portable artifact, then use the Panel-generated one-time code with `coding-runner enroll` followed by `coding-runner install`.
+This branch uses Runmesh-specific layouts for new installations. Existing `remote-coding-runtime` paths are retained only for migration detection; they are not new-install defaults. Existing profiles without `execution_mode` are treated as legacy privileged-host profiles; they are not silently rewritten. Re-enrollment changes credentials and connection metadata only. Hosted bootstrap is implemented as a fixed signed-preview mechanism but remains disabled by default because this repository does not assert that the `v0.1.0-dev.2` release exists. Once an operator publishes and independently verifies that exact release, the Worker may be explicitly acknowledged with `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.0-dev.2`; until then download and verify a portable artifact, then use `coding-runner enroll --code-stdin` followed by `coding-runner install`.
 
 ## Migration behavior
 
