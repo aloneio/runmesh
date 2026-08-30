@@ -199,7 +199,7 @@ A deploy is a production-affecting operation. Review the exact commit, target ac
 
 The dashboard-generated enrollment code is short-lived, single-use, and invalidated when regenerated or redeemed. The Runner connects outward to the Worker over authenticated WebSocket; it does not expose an HTTP server.
 
-Hosted bootstrap is unavailable in `v0.1.0-dev.2`. `/runner/releases/latest` and `/runner/releases/stable` report `distributable: false`; they expose no package specification or artifact, and the generated installers fail closed. Download the portable artifact plus its manifest, signature, and checksums, then follow the complete [portable Runner verification and installation procedure](docs/portable-runner-installation.md). Signature verification must use the trust keyring from an independently trusted source checkout, never the keyring downloaded beside the artifact. After verification, run `coding-runner enroll` followed by `coding-runner install`. Automatic signed bootstrap, update, and rollback are not included in this preview.
+Hosted bootstrap is implemented as a fixed signed-preview mechanism but remains disabled by default in `v0.1.0-dev.2`: the repository does not assert that a `v0.1.0-dev.2` GitHub release exists. `/runner/releases/latest` and `/runner/releases/stable` return `distributable: false` until an operator has published and independently verified that exact immutable release and explicitly enables only `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.0-dev.2` in the Worker deployment. The enabled installer pins the version, GitHub release URLs, key ID, and Ed25519 public key; it verifies manifest/signature/descriptor/artifact size/SHA-256 before a scripts-disabled local-tarball install. It never trusts a downloaded keyring, an npm spec, `latest`, or arbitrary URL. The Admin page's copied command contains no code; it prompts locally after verification and sends it only with `coding-runner enroll --code-stdin`. The HTTPS Worker script is the one-command bootstrap trust root and cannot detect a compromised Worker response itself; use the independent [portable Runner verification and installation procedure](docs/portable-runner-installation.md) for high-assurance installation.
 
 Fresh enrollment starts with zero Workspaces. Workspace roots are added explicitly by an administrator through the dashboard and delivered privately to the selected Runner as policy data. Re-enrollment changes connection credentials without inventing a Workspace from the current directory. Browser Emergency Lock requires typing the Runner ID and locks future policy permissions without automatically stopping existing Jobs.
 
@@ -214,7 +214,7 @@ Fresh enrollment starts with zero Workspaces. Workspace roots are added explicit
 
 ## Not included in v0.1.0-dev.2
 
-This development preview includes policy-gated workspace access, sticky Runner selection, persistent local Jobs, offline Registry snapshots, authenticated Runner transport, and MCP Client base-scope editing. The following capabilities are outside the current preview and are roadmap candidates rather than compatibility commitments: Audit Log, Policy history/rollback UI, automatic Runner update/rollback, complete signed hosted bootstrap, SBOM publication, Reset runtime, enterprise multi-tenancy, and real-host macOS/Windows service E2E.
+This development preview includes policy-gated workspace access, sticky Runner selection, persistent local Jobs, offline Registry snapshots, authenticated Runner transport, MCP Client base-scope editing, and a disabled-by-default fixed signed hosted-bootstrap implementation. Automatic Runner update/rollback, SBOM publication, Reset runtime, enterprise multi-tenancy, and real-host macOS/Windows service E2E remain roadmap candidates rather than compatibility commitments.
 
 Before operational use, administrators should validate the target deployment and host:
 
@@ -222,9 +222,9 @@ Before operational use, administrators should validate the target deployment and
 - external MCP client behavior and infrastructure handling of secret-bearing URL paths;
 - manual verified-portable-artifact installation and service provisioning on the target OS;
 - native service lifecycle and least-privilege behavior on macOS and Windows;
-- artifact manifest/signature verification and their own recovery procedures.
+- fixed-release signature/artifact verification, the Worker bootstrap trust boundary, and their own recovery procedures.
 
-Hosted bootstrap is unavailable in this preview. Use a manually verified portable artifact; automatic Runner update/download/rollback remains outside this preview.
+Hosted bootstrap is disabled by default unless the exact fixed signed release has been published, independently verified, and explicitly acknowledged in the Worker deployment. Use a manually verified portable artifact until then; automatic Runner update/download/rollback remains outside this preview.
 
 Runmesh is not an operating-system sandbox, and this preview does not include tenant isolation, automatic failover, inbound SSH, a public Runner HTTP server, a hosted IDE, billing, Teams/organizations, MCP Tasks, PTY/Web Terminal, browser automation, an AI agent, RAG, or a model gateway. Those exclusions describe the current preview scope, not a permanent compatibility commitment.
 

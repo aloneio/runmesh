@@ -9,7 +9,7 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   release:
@@ -72,43 +72,21 @@ jobs:
           set -euo pipefail
           published_at="$(date --utc --date="@$(git log -1 --format=%ct)" +%Y-%m-%dT%H:%M:%SZ)"
           node scripts/release-manifest.mjs release/assets "$RELEASE_VERSION" "$(git rev-parse HEAD)" "$published_at"
-      - name: Sign and verify manifest
+          npm sbom --workspace=@aloneio/runmesh-runner --package-lock-only --sbom-format=spdx > release/assets/sbom.spdx.json
+          (cd release/assets && sha256sum *.tgz manifest.json sbom.spdx.json > SHA256SUMS)
+      - name: Sign and verify manifest and local release assets
         run: |
           set -euo pipefail
           node scripts/release-signature.mjs sign release/assets/manifest.json release/assets/manifest.sig release/assets/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
           node scripts/release-signature.mjs verify release/assets/manifest.json release/assets/manifest.sig release/assets/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
           cp release/trust-keyring.json LICENSE NOTICE THIRD_PARTY_NOTICES.md release/assets/
-          (cd release/assets && sha256sum *.tgz manifest.json > SHA256SUMS)
-      - name: Verify tag and release do not already exist
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          ! git rev-parse "refs/tags/v${RELEASE_VERSION}" >/dev/null 2>&1
-          ! gh release view "v${RELEASE_VERSION}" >/dev/null 2>&1
-      - name: Create annotated tag and development prerelease
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          git config user.name "aloneio"
-          git config user.email "git@aloneio.aleeas.com"
-          git tag -a "v${RELEASE_VERSION}" -m "Runmesh v${RELEASE_VERSION} development preview"
-          git push origin "v${RELEASE_VERSION}"
-          gh release create "v${RELEASE_VERSION}" release/assets/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$(git rev-parse HEAD)" \
-            --title "Runmesh v${RELEASE_VERSION}" \
-            --prerelease \
-            --notes-file docs/release-notes.md
-      - name: Re-download and verify published assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          mkdir release/download
-          gh release download "v${RELEASE_VERSION}" --repo "$GITHUB_REPOSITORY" --dir release/download
-          node scripts/release-verify.mjs release/download/manifest.json release/download/manifest.sig release/download/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID" "$RELEASE_VERSION"
-          (cd release/download && grep -vE '(^|[[:space:]])trust-keyring\.json$' SHA256SUMS | sha256sum -c -)
-          cmp release/download/trust-keyring.json release/trust-keyring.json
-          RELEASE_VERSION="$RELEASE_VERSION" tar -xOf "release/download/runmesh-runner-${RELEASE_VERSION}.tgz" package/package.json | RELEASE_VERSION="$RELEASE_VERSION" node -e 'let x="";process.stdin.on("data",d=>x+=d).on("end",()=>{if(JSON.parse(x).version!==process.env.RELEASE_VERSION)process.exit(1)})'
+          (cd release/assets && sha256sum *.tgz manifest.json manifest.sig manifest.signature.json sbom.spdx.json LICENSE NOTICE THIRD_PARTY_NOTICES.md trust-keyring.json > SHA256SUMS)
+          node scripts/release-verify.mjs release/assets/manifest.json release/assets/manifest.sig release/assets/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID" "$RELEASE_VERSION"
+          (cd release/assets && grep -vE '(^|[[:space:]])trust-keyring\.json$' SHA256SUMS | sha256sum -c -)
+      - name: Verify release asset output and preserve it as an unpublished CI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: runmesh-signed-preview-${{ env.RELEASE_VERSION }}
+          path: release/assets
+          if-no-files-found: error
+          retention-days: 14

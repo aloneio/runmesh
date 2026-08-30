@@ -303,8 +303,9 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const html = await response.text();
     expect(html).toContain("Manual portable-artifact enrollment");
     expect(html).toContain("coding-runner enroll");
-    expect(html).not.toContain("curl -fsSL");
-    const code = /--code ([A-Za-z0-9_-]{43})/.exec(html)?.[1];
+    expect(html).toContain("--code-stdin");
+    expect(html).not.toContain("curl --fail --location");
+    const code = /<span class="form-stat-label">One-time enrollment code<\/span><code class="mono" data-no-i18n>([A-Za-z0-9_-]{43})<\/code>/.exec(html)?.[1];
     if (code === undefined) throw new Error("browser enrollment code absent");
     return code;
   }
