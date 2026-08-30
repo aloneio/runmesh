@@ -31,6 +31,9 @@ const ADMIN_CSRF_COOKIE = "__Host-runmesh_admin_csrf";
 const SETUP_CSRF_COOKIE = "__Host-runmesh_setup_csrf";
 const LOGIN_CSRF_COOKIE = "__Host-runmesh_login_csrf";
 const MCP_SECRET_RE = /^[A-Za-z0-9_-]{43}$/;
+// Keep the brand asset behind one stable path so the final customer-supplied
+// SVG can replace the working copy without touching any page templates.
+const BRAND_LOGO_ASSET = "/assets/logo-transparent.svg";
 
 export interface RunnerReleaseDescriptor extends FixedReleaseDescriptor {
   readonly protocol: { readonly min_version: number; readonly max_version: number };
@@ -45,7 +48,7 @@ export default {
 async function handleRequest(request: Request, env: WorkerEnv, _ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname === "/health") return Response.json({ ok: true, service: "runmesh-agent-control-plane" });
-  if (url.pathname === "/assets/logo.png" || url.pathname === "/assets/favicon.png") return asset(request, env);
+  if (url.pathname === "/assets/logo.png" || url.pathname === BRAND_LOGO_ASSET || url.pathname === "/assets/favicon.png") return asset(request, env);
   if (url.pathname === "/runner/install.sh") return runnerInstallScript(request, url, env);
   if (url.pathname === "/runner/install.ps1") return runnerInstallPowerShell(request, url, env);
   if (url.pathname === "/runner/releases/latest" || url.pathname === "/runner/releases/stable") return runnerRelease(request, env);
@@ -577,6 +580,8 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Create your administrator master password to begin managing distributed runtimes and MCP clients.": "创建管理员主密码，以开始管理分布式运行时和 MCP 客户端。",
   "Runner & MCP Control Plane": "Runner 与 MCP 控制平面",
   "Unified orchestration for distributed secure tool sandboxes, persistent agent runtimes, and MCP client bridges.": "统一编排分布式安全工具沙箱、持久化智能体运行时和 MCP 客户端桥接。",
+  "RUNMESH / CONTROL PLANE": "RUNMESH / 控制平面",
+  "Runmesh network visualization": "Runmesh 网络可视化",
   "Setup token": "初始化令牌",
   "Password": "密码",
   "Confirm password": "确认密码",
@@ -721,16 +726,18 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Create workspace": "创建工作区",
   "Delete workspace": "删除工作区",
   "Manual portable-artifact enrollment": "手动便携制品注册",
+  "Manual Runner enrollment and install": "手动注册并安装 Runner",
   "Enroll Runner manually": "手动注册 Runner",
   "Enroll Runner": "注册 Runner",
   "Target Runner ID": "目标 Runner ID",
   "One-time enrollment code": "一次性注册代码",
   "Hosted installers are disabled in this development preview. Download and verify the portable Runner artifact first. This one-time code expires in 30 minutes and will not be shown again.": "此开发预览版已禁用托管安装器。请先下载并校验便携 Runner 制品。此一次性代码将在 30 分钟后过期，且不会再次显示。",
-  "The fixed signed hosted release is not enabled on this deployment. Download and verify the portable Runner artifact first, then paste this code only into the local prompt requested by --code-stdin. This one-time code expires in 30 minutes and will not be shown again.": "当前部署未启用固定签名托管版本。请先下载并校验便携 Runner 制品，然后仅将此代码粘贴到 --code-stdin 所要求的本地提示中。此一次性代码将在 30 分钟后过期，且不会再次显示。",
+  "The fixed signed hosted release is not enabled on this deployment. Install the verified portable Runner artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. The install step runs only after enrollment succeeds. This one-time code expires in 30 minutes and will not be shown again.": "当前部署未启用固定签名托管版本。请先安装已校验的便携 Runner 制品，再运行下面的单行命令。命令会在本地请求此代码；粘贴后按 Enter，只有注册成功才会继续安装。此一次性代码将在 30 分钟后过期，且不会再次显示。",
   "The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. This one-time code expires in 30 minutes and will not be shown again.": "安装器会先校验固定签名的 Runner 制品，再在本地请求此一次性代码。代码不会放入此命令、URL 或进程参数中。此一次性代码将在 30 分钟后过期，且不会再次显示。",
   "Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.": "请仅在完成校验后将其粘贴到本地提示中；代码不会包含在复制的命令里。",
   "Operating system": "操作系统",
   "Copy enrollment command": "复制注册命令",
+  "Copy enrollment and install command": "复制注册并安装命令",
   "Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.": "不要分享此代码。它是一次性注册材料，不是管理员密码、MCP 密钥或长期凭据。",
   "Regenerate enrollment": "重新生成注册",
   "Done": "完成",
@@ -864,17 +871,14 @@ const ZH_UI_TEXT: Record<string, string> = {
 };
 
 function brandLogo(className: string, alt = "Runmesh · Agent Control Plane"): string {
-  return `<img class="${className}" src="/assets/logo.png" alt="${escapeHtml(alt)}" width="1672" height="941" decoding="async">`;
+  return `<img class="${className}" src="${BRAND_LOGO_ASSET}" alt="${escapeHtml(alt)}" width="1672" height="941" decoding="async">`;
 }
 
 function meshMarkSvg(className = "mesh-mark"): string {
-  // Keep the decorative mesh mark for illustrations, but use the shipped
-  // product wordmark anywhere users identify the application. The previous
-  // redesign rendered a synthetic SVG in these slots and never used logo.png.
-  if (className === "header-mesh-mark") return brandLogo("header-mesh-mark");
-  if (className === "login-brand-logo") return brandLogo("login-brand-logo");
-  if (className === "secret-mesh-mark") return brandLogo("secret-mesh-mark");
-  if (className === "error-mesh-mark") return brandLogo("error-mesh-mark");
+  // Use the same replaceable SVG wordmark everywhere the product is named.
+  // The final customer-provided SVG can therefore replace one asset without
+  // requiring another template or route change.
+  if (["header-mesh-mark", "login-brand-logo", "secret-mesh-mark", "error-mesh-mark", "dialog-mark"].includes(className)) return brandLogo(className);
   return `<svg class="${className}" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <circle cx="24" cy="24" r="19" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2 4" stroke-opacity="0.35"/>
     <circle cx="24" cy="24" r="10" stroke="currentColor" stroke-width="1.5" stroke-opacity="0.5"/>
@@ -892,45 +896,14 @@ function meshMarkSvg(className = "mesh-mark"): string {
 }
 
 function meshVisualGraphic(): string {
-  return `<div class="mesh-network-visual" aria-hidden="true">
+  return `<div class="mesh-network-visual" role="img" aria-label="Runmesh network visualization">
     <div class="mesh-canvas-wrap">
-      <svg class="mesh-grid-svg" viewBox="0 0 440 440" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <radialGradient id="meshCenterGlow" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stop-color="rgba(255,255,255,0.12)"/>
-            <stop offset="100%" stop-color="rgba(255,255,255,0)"/>
-          </radialGradient>
-        </defs>
-        <circle cx="220" cy="220" r="190" fill="url(#meshCenterGlow)"/>
-        <circle cx="220" cy="220" r="180" stroke="rgba(255,255,255,0.06)" stroke-width="1" stroke-dasharray="3 6"/>
-        <circle cx="220" cy="220" r="130" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
-        <circle cx="220" cy="220" r="70" stroke="rgba(255,255,255,0.12)" stroke-width="1.2"/>
-        <!-- Interconnecting mesh lines -->
-        <path d="M220 90 L330 155 L330 285 L220 350 L110 285 L110 155 Z" stroke="rgba(255,255,255,0.15)" stroke-width="1.2"/>
-        <path d="M220 220 L220 90 M220 220 L330 155 M220 220 L330 285 M220 220 L220 350 M220 220 L110 285 M220 220 L110 155" stroke="rgba(255,255,255,0.1)" stroke-width="1"/>
-        <path d="M220 40 L220 90 M400 220 L330 155 M375 310 L330 285 M220 400 L220 350 M65 310 L110 285 M40 220 L110 155" stroke="rgba(255,255,255,0.06)" stroke-width="1" stroke-dasharray="2 3"/>
-
-        <!-- Outer satellite nodes -->
-        <circle cx="220" cy="40" r="3" fill="#888C93"/>
-        <circle cx="400" cy="220" r="3" fill="#888C93"/>
-        <circle cx="375" cy="310" r="3" fill="#888C93"/>
-        <circle cx="220" cy="400" r="3" fill="#888C93"/>
-        <circle cx="65" cy="310" r="3" fill="#888C93"/>
-        <circle cx="40" cy="220" r="3" fill="#888C93"/>
-
-        <!-- Primary Ring Nodes -->
-        <g class="mesh-node node-1"><circle cx="220" cy="90" r="5" fill="#22c55e"/><circle cx="220" cy="90" r="10" stroke="#22c55e" stroke-opacity="0.3" stroke-width="1.5"/></g>
-        <g class="mesh-node node-2"><circle cx="330" cy="155" r="4.5" fill="#22c55e"/><circle cx="330" cy="155" r="9" stroke="#22c55e" stroke-opacity="0.3" stroke-width="1.5"/></g>
-        <g class="mesh-node node-3"><circle cx="330" cy="285" r="4" fill="#a1a1aa"/><circle cx="330" cy="285" r="8" stroke="#a1a1aa" stroke-opacity="0.2" stroke-width="1.5"/></g>
-        <g class="mesh-node node-4"><circle cx="220" cy="350" r="4.5" fill="#22c55e"/><circle cx="220" cy="350" r="9" stroke="#22c55e" stroke-opacity="0.3" stroke-width="1.5"/></g>
-        <g class="mesh-node node-5"><circle cx="110" cy="285" r="4.5" fill="#22c55e"/><circle cx="110" cy="285" r="9" stroke="#22c55e" stroke-opacity="0.3" stroke-width="1.5"/></g>
-        <g class="mesh-node node-6"><circle cx="110" cy="155" r="4" fill="#a1a1aa"/><circle cx="110" cy="155" r="8" stroke="#a1a1aa" stroke-opacity="0.2" stroke-width="1.5"/></g>
-
-        <!-- Central Control DO Node -->
-        <circle cx="220" cy="220" r="8" fill="#F5F5F5"/>
-        <circle cx="220" cy="220" r="16" stroke="rgba(255,255,255,0.4)" stroke-width="1.5"/>
-        <circle cx="220" cy="220" r="24" stroke="rgba(255,255,255,0.15)" stroke-width="1" stroke-dasharray="3 3"/>
-      </svg>
+      <div class="mesh-orbit mesh-orbit-outer"></div>
+      <div class="mesh-orbit mesh-orbit-inner"></div>
+      <div class="mesh-visual-logo-wrap">${brandLogo("mesh-visual-logo", "")}</div>
+      <span class="mesh-node mesh-node-a"></span><span class="mesh-node mesh-node-b"></span>
+      <span class="mesh-node mesh-node-c"></span><span class="mesh-node mesh-node-d"></span>
+      <span class="mesh-node mesh-node-e"></span><span class="mesh-node mesh-node-f"></span>
     </div>
     <div class="mesh-visual-caption">
       <div class="mesh-caption-badge"><span class="status-dot online"></span> <span>Mesh Network Active</span></div>
@@ -947,14 +920,27 @@ function passwordToggle(): string {
   </button>`;
 }
 
+function authEntryDocument(kind: "login" | "setup", csrf: string): string {
+  const setup = kind === "setup";
+  const brandHeadline = setup ? "Set up Runmesh" : "Runner &amp; MCP Control Plane";
+  const brandDescription = setup
+    ? "Create your administrator master password to begin managing distributed runtimes and MCP clients."
+    : "Unified orchestration for distributed secure tool sandboxes, persistent agent runtimes, and MCP client bridges.";
+  const title = setup ? "Runmesh · Agent Control Plane setup" : "Runmesh · Agent Control Plane login";
+  const form = setup
+    ? `<div class="input-group"><label for="setup_token">Setup token</label><div class="password-input-wrap"><input id="setup_token" type="password" name="setup_token" autocomplete="one-time-code" required>${passwordToggle()}</div></div><div class="input-group"><label for="password">Password</label><div class="password-input-wrap"><input id="password" type="password" name="password" autocomplete="new-password" required minlength="12">${passwordToggle()}</div></div><div class="input-group"><label for="confirm_password">Confirm password</label><div class="password-input-wrap"><input id="confirm_password" type="password" name="confirm_password" autocomplete="new-password" required minlength="12">${passwordToggle()}</div></div>`
+    : `<div class="input-group"><label for="admin_password">Admin password</label><div class="password-input-wrap"><input id="admin_password" type="password" name="password" autocomplete="current-password" required>${passwordToggle()}</div></div>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${title}</title>${adminStyles()}</head><body class="auth-body login-entry-body">${languageSwitch()}<div class="login-layout"><aside class="login-brand-pane"><div class="login-brand-header"><a class="login-brand-title-wrap" href="/" aria-label="Runmesh · Agent Control Plane">${brandLogo("login-brand-logo")}</a><p class="brand-kicker">RUNMESH / CONTROL PLANE</p><h2 class="login-brand-headline">${brandHeadline}</h2><p class="login-brand-desc">${brandDescription}</p></div>${meshVisualGraphic()}</aside><main class="login-form-pane"><div class="login-form-container"><div class="auth-header-mobile"><a class="login-brand-title-wrap" href="/" aria-label="Runmesh · Agent Control Plane">${brandLogo("login-brand-logo")}</a></div><div class="login-title-group"><p class="brand-kicker">Runmesh</p><h1>${setup ? "Welcome to Runmesh" : "Runmesh"}</h1><p class="subtitle">Agent Control Plane</p><p class="login-invite">${setup ? "Create administrator password" : "Enter the Runmesh control plane"}</p></div><form method="post" action="/${setup ? "setup" : "login"}" class="login-form stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">${form}<button class="login-submit-btn">${setup ? "Initialize" : "Login"}</button></form></div></main></div>${adminScript()}</body></html>`;
+}
+
 function setupPage(): Response {
   const csrf = randomBase64Url();
-  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane setup</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<div class="login-layout"><aside class="login-brand-pane"><div class="login-brand-header"><div class="login-brand-title-wrap">${meshMarkSvg("login-brand-logo")}<span class="brand-name">Runmesh</span><span class="brand-tag">CONTROL PLANE</span></div><h2 class="login-brand-headline">Set up Runmesh</h2><p class="login-brand-desc">Create your administrator master password to begin managing distributed runtimes and MCP clients.</p></div>${meshVisualGraphic()}</aside><main class="login-form-pane"><div class="login-form-container"><div class="auth-header-mobile"><div class="login-brand-title-wrap">${meshMarkSvg("login-brand-logo")}<span class="brand-name">Runmesh</span></div></div><div class="login-title-group"><p class="brand-kicker">Runmesh</p><h1>Welcome to Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="lede">Create administrator password</p></div><form method="post" action="/setup" class="login-form stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><div class="input-group"><label for="setup_token">Setup token</label><div class="password-input-wrap"><input id="setup_token" type="password" name="setup_token" autocomplete="one-time-code" required>${passwordToggle()}</div></div><div class="input-group"><label for="password">Password</label><div class="password-input-wrap"><input id="password" type="password" name="password" autocomplete="new-password" required minlength="12">${passwordToggle()}</div></div><div class="input-group"><label for="confirm_password">Confirm password</label><div class="password-input-wrap"><input id="confirm_password" type="password" name="confirm_password" autocomplete="new-password" required minlength="12">${passwordToggle()}</div></div><button class="login-submit-btn">Initialize</button></form></div></main></div>${adminScript()}</body></html>`, [`${SETUP_CSRF_COOKIE}=${csrf}; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=${Math.floor(SETUP_CSRF_TTL_MS / 1_000)}`]);
+  return html(authEntryDocument("setup", csrf), [`${SETUP_CSRF_COOKIE}=${csrf}; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=${Math.floor(SETUP_CSRF_TTL_MS / 1_000)}`]);
 }
 
 function loginPage(): Response {
   const csrf = randomBase64Url();
-  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane login</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<div class="login-layout"><aside class="login-brand-pane"><div class="login-brand-header"><div class="login-brand-title-wrap">${meshMarkSvg("login-brand-logo")}<span class="brand-name">Runmesh</span><span class="brand-tag">CONTROL PLANE</span></div><h2 class="login-brand-headline">Runner &amp; MCP Control Plane</h2><p class="login-brand-desc">Unified orchestration for distributed secure tool sandboxes, persistent agent runtimes, and MCP client bridges.</p></div>${meshVisualGraphic()}</aside><main class="login-form-pane"><div class="login-form-container"><div class="auth-header-mobile"><div class="login-brand-title-wrap">${meshMarkSvg("login-brand-logo")}<span class="brand-name">Runmesh</span></div></div><div class="login-title-group"><p class="brand-kicker">Runmesh</p><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="login-invite">Enter the Runmesh control plane</p></div><form method="post" action="/login" class="login-form stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><div class="input-group"><label for="admin_password">Admin password</label><div class="password-input-wrap"><input id="admin_password" type="password" name="password" autocomplete="current-password" required>${passwordToggle()}</div></div><button class="login-submit-btn">Login</button></form></div></main></div>${adminScript()}</body></html>`, [`${LOGIN_CSRF_COOKIE}=${csrf}; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=${Math.floor(SETUP_CSRF_TTL_MS / 1_000)}`]);
+  return html(authEntryDocument("login", csrf), [`${LOGIN_CSRF_COOKIE}=${csrf}; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=${Math.floor(SETUP_CSRF_TTL_MS / 1_000)}`]);
 }
 type AdminData = { readonly clients: readonly McpClientRecord[]; readonly runners: readonly RunnerRecord[]; readonly jobs: readonly Record<string, unknown>[]; readonly snapshot: Record<string, unknown> };
 async function loadDashboardData(env: WorkerEnv): Promise<AdminData> {
@@ -1106,9 +1092,8 @@ async function clientDetailPage(_env: WorkerEnv, client: Record<string, unknown>
 }
 function adminDocument(title: string, body: string, active: "dashboard" | "runners" | "clients" | "settings"): string {
   const nav = `<nav class="control-nav" aria-label="Main navigation"><a class="${active === "dashboard" ? "active" : ""}"${active === "dashboard" ? ' aria-current="page"' : ""} href="/admin">Dashboard</a><a class="${active === "runners" ? "active" : ""}"${active === "runners" ? ' aria-current="page"' : ""} href="/admin/runners">Runners</a><a class="${active === "clients" ? "active" : ""}"${active === "clients" ? ' aria-current="page"' : ""} href="/admin/clients">MCP Clients</a><a class="${active === "settings" ? "active" : ""}"${active === "settings" ? ' aria-current="page"' : ""} href="/admin/settings">Settings</a></nav>`;
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><script>try{var t=localStorage.getItem('runmesh-theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(_){}</script><link rel="icon" href="/assets/favicon.png" type="image/png"><link rel="preload" href="/assets/logo.png" as="image" type="image/png"><title>${escapeHtml(title)} · Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="ops-body"><a class="skip-link" href="#main-content">Skip to main content</a><header class="app-header"><div class="header-inner"><div class="header-left"><a class="brand" href="/admin">${meshMarkSvg("header-mesh-mark")}<span class="brand-copy"><span>Runmesh</span><small>Agent Control Plane</small></span></a>${nav}</div><div class="header-actions">${languageSwitch()}${themeControl()}<a class="button secondary" href="/admin/runners#add-runner">Add Runner</a><a class="button" href="/admin/clients#add-client">Add MCP Client</a></div></div></header><div class="shell"><main class="workspace" id="main-content" tabindex="-1">${body}</main></div>${adminScript()}</body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><link rel="preload" href="${BRAND_LOGO_ASSET}" as="image" type="image/svg+xml"><title>${escapeHtml(title)} · Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="ops-body"><a class="skip-link" href="#main-content">Skip to main content</a><header class="app-header"><div class="header-inner"><div class="header-left"><a class="brand" href="/admin">${meshMarkSvg("header-mesh-mark")}<span class="brand-copy"><span>Runmesh</span><small>Agent Control Plane</small></span></a>${nav}</div><div class="header-actions">${languageSwitch()}</div></div></header><div class="shell"><main class="workspace" id="main-content" tabindex="-1">${body}</main></div>${adminScript()}</body></html>`;
 }
-function themeControl(): string { return `<button type="button" class="theme-control" data-theme-toggle aria-label="Theme: system" aria-live="polite">Theme: system</button>`; }
 function adminPage(pathname: string, data: AdminData, csrf: string): string {
   const active = pathname === "/admin" ? "dashboard" : pathname.slice("/admin/".length) as "runners" | "clients" | "settings";
   const body = active === "runners" ? runnersPage(data, csrf) : active === "clients" ? clientsPage(data, csrf) : active === "settings" ? settingsPage(csrf) : overviewPage(data, csrf);
@@ -1125,7 +1110,7 @@ function runnersPage(data: AdminData, csrf: string): string {
 }
 function activeRunnerLabel(client: McpClientRecord, runners: readonly RunnerRecord[]): string { const runner = client.active_runner_id === null ? undefined : runners.find((item) => item.runner_id === client.active_runner_id); return runner === undefined ? "Not selected" : runner.display_name; }
 function clientsPage(data: AdminData, csrf: string): string {
-  const rows = data.clients.map((client) => `<tr class="data-row"><td><div class="table-primary-cell"><a class="strong" href="/admin/clients/${encodeURIComponent(client.client_id)}">${escapeHtml(client.label)}</a><span class="sub-id mono">${escapeHtml(client.client_id)}</span></div></td><td><div class="scope-tags">${client.scopes.map((s) => `<span class="scope-pill">${escapeHtml(s)}</span>`).join("")}</div></td><td><span class="routing-badge">${escapeHtml(activeRunnerLabel(client, data.runners))}</span></td><td class="time-cell">${escapeHtml(time(client.last_used_at_ms))}</td><td>${client.revoked_at_ms === null ? statusBadge("online") : statusBadge("offline")}</td><td class="actions"><div class="action-btn-group"><form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rename" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input name="label" value="${escapeHtml(client.label)}" aria-label="Rename ${escapeHtml(client.label)}" maxlength="256"><button class="small secondary">Rename</button></form>${client.revoked_at_ms === null ? `<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rotate" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Rotate</button></form>` : ""}<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/reset-runner" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Reset Runner Selection</button></form>${client.revoked_at_ms === null ? `<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/revoke" class="inline-action-form danger-action"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small danger">Revoke</button></form>` : ""}</div></td></tr>`).join("") || `<tr><td colspan="6" class="empty"><div class="empty-state-box"><p>No MCP clients yet.</p></div></td></tr>`;
+  const rows = data.clients.map((client) => `<tr class="data-row"><td><div class="table-primary-cell"><a class="strong" href="/admin/clients/${encodeURIComponent(client.client_id)}">${escapeHtml(client.label)}</a><span class="sub-id mono">${escapeHtml(client.client_id)}</span></div></td><td><div class="scope-tags">${client.scopes.map((s) => `<span class="scope-pill">${escapeHtml(s)}</span>`).join("")}</div></td><td><span class="routing-badge">${escapeHtml(activeRunnerLabel(client, data.runners))}</span></td><td class="time-cell">${escapeHtml(time(client.last_used_at_ms))}</td><td>${client.revoked_at_ms === null ? statusBadge("online") : statusBadge("offline")}</td><td class="actions"><div class="action-btn-group"><a class="button small secondary" href="/admin/clients/${encodeURIComponent(client.client_id)}">View</a><form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rename" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input name="label" value="${escapeHtml(client.label)}" aria-label="Rename ${escapeHtml(client.label)}" maxlength="256"><button class="small secondary">Rename</button></form>${client.revoked_at_ms === null ? `<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rotate" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Rotate</button></form>` : ""}<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/reset-runner" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Reset Runner Selection</button></form>${client.revoked_at_ms === null ? `<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/revoke" class="inline-action-form danger-action"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small danger">Revoke</button></form>` : ""}</div></td></tr>`).join("") || `<tr><td colspan="6" class="empty"><div class="empty-state-box"><p>No MCP clients yet.</p></div></td></tr>`;
   return `<section class="page-heading"><div><p class="eyebrow">Integrations</p><h1>MCP Clients</h1><p class="lede">Manage labels, scopes, runner routing, and one-time client secrets.</p></div></section><section class="panel add-panel" id="add-client"><div class="section-title"><h2>Add MCP Client</h2></div><form method="post" action="/admin/clients" class="form-grid add-client-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Label<input name="label" maxlength="256" required placeholder="e.g. Cursor / Claude Desktop"></label><fieldset><legend>Scopes</legend><div class="scope-selector-row">${scopeCheckboxes()}</div></fieldset><div class="form-submit-wrap"><button class="button">Create one-time secret</button></div></form></section><section class="panel"><div class="table-wrap"><table class="data-table"><caption class="sr-only">MCP clients</caption><thead><tr><th>Label</th><th>Scopes</th><th>Active runner</th><th>Last used</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
 }
 function settingsPage(csrf: string): string { return `<section class="page-heading"><div><p class="eyebrow">Workspace administration</p><h1>Settings</h1><p class="lede">Keep operator notes here; credentials and secrets are never displayed.</p></div></section><div class="grid-two"><section class="panel"><div class="section-title"><h2>Change password</h2></div><form method="post" action="/admin/password" class="stack settings-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Current password<input type="password" name="current_password" required autocomplete="current-password"></label><label>New password<input type="password" name="password" minlength="12" required autocomplete="new-password"></label><label>Confirm new password<input type="password" name="confirm_password" minlength="12" required autocomplete="new-password"></label><button class="button">Change password</button></form></section><section class="panel danger-panel"><div class="section-title"><h2 class="danger-title">Operator notes</h2></div><p class="muted settings-note">Deployment notes belong in your deployment system. This dashboard intentionally stores no notes or secrets.</p><div class="logout-box"><form method="post" action="/admin/logout" class="stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Log out</button></form></div></section></div>`; }
@@ -1396,7 +1381,7 @@ function workspaceProfile(permissions: Record<string, unknown> | undefined): "cu
 }
 function adminStyles(): string { return `<style>
 :root{
-  color-scheme:light dark;
+  color-scheme:light;
   --canvas:#f1f3f5;
   --canvas-subtle:#e9ecef;
   --panel:#ffffff;
@@ -1444,67 +1429,19 @@ function adminStyles(): string { return `<style>
   --font-sans:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   --font-mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
 
-  /* Auth / Login Page Layout (Full-Screen Dark Mesh Control Plane Entry) */
-  --auth-bg:#090a0f;
-  --auth-pane-bg:#12141a;
-  --auth-border:rgba(255,255,255,0.08);
-  --auth-text:#f3f4f6;
-  --auth-muted:#9ca3af;
-  --auth-input-bg:rgba(255,255,255,0.04);
-  --auth-input-border:rgba(255,255,255,0.12);
-  --auth-input-focus:rgba(255,255,255,0.25);
-  --auth-btn-bg:#f3f4f6;
-  --auth-btn-ink:#090a0f;
-  --auth-btn-hover:#ffffff;
+  /* Auth / Login Page Layout (light only) */
+  --auth-bg:#f6f8fb;
+  --auth-pane-bg:#ffffff;
+  --auth-border:#dfe5ec;
+  --auth-text:#17212b;
+  --auth-muted:#667383;
+  --auth-input-bg:#ffffff;
+  --auth-input-border:#cbd5e1;
+  --auth-input-focus:#fb5a1b;
+  --auth-btn-bg:#17212b;
+  --auth-btn-ink:#ffffff;
+  --auth-btn-hover:#293746;
 }
-:root[data-theme="light"]{color-scheme:light}
-:root[data-theme="dark"]{
-  color-scheme:dark;
-  --canvas:#0b1220;
-  --canvas-subtle:#0d1728;
-  --panel:#111a2b;
-  --panel-card:#0d1728;
-  --panel-elevated:#17233a;
-  --panel-subtle:#17233a;
-  --surface-hover:#1b2a43;
-  --header-bg:rgba(11,18,32,0.9);
-  --header-hover:rgba(30,41,59,0.9);
-  --grid-line:rgba(226,237,249,0.045);
-  --focus-ring:rgba(147,197,253,0.4);
-  --line:#2b3b55;
-  --line-light:#24344d;
-  --line-subtle:#49617f;
-  --ink:#e6edf7;
-  --ink-heading:#f8fafc;
-  --muted:#a9b7ca;
-  --muted-dark:#c5d1e2;
-  --brand:#60a5fa;
-  --brand-hover:#93c5fd;
-  --brand-dim:#bfdbfe;
-  --brand-ink:#07111f;
-  --accent-gray:#1a2a42;
-  --accent-gray-hover:#243b5c;
-  --danger:#fb7185;
-  --danger-hover:#fda4af;
-  --danger-ink:#fecdd3;
-  --danger-bg:#3e1821;
-  --danger-panel:#28151c;
-  --danger-line:#7f2637;
-  --warn:#fbbf24;
-  --warn-bg:#3b2d0d;
-  --warn-line:#805e16;
-  --ok:#4ade80;
-  --ok-bg:#123322;
-  --ok-line:#23693d;
-  --shadow-sm:0 1px 2px rgba(0,0,0,0.35);
-  --shadow-md:0 8px 20px rgba(0,0,0,0.28);
-  --shadow-lg:0 18px 36px rgba(0,0,0,0.35);
-  --glow-subtle:0 0 0 1px rgba(226,237,249,0.06);
-}
-@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){
-  color-scheme:dark;
-  --canvas:#0b1220;--canvas-subtle:#0d1728;--panel:#111a2b;--panel-card:#0d1728;--panel-elevated:#17233a;--panel-subtle:#17233a;--surface-hover:#1b2a43;--header-bg:rgba(11,18,32,0.9);--header-hover:rgba(30,41,59,0.9);--grid-line:rgba(226,237,249,0.045);--focus-ring:rgba(147,197,253,0.4);--line:#2b3b55;--line-light:#24344d;--line-subtle:#49617f;--ink:#e6edf7;--ink-heading:#f8fafc;--muted:#a9b7ca;--muted-dark:#c5d1e2;--brand:#60a5fa;--brand-hover:#93c5fd;--brand-dim:#bfdbfe;--brand-ink:#07111f;--accent-gray:#1a2a42;--accent-gray-hover:#243b5c;--danger:#fb7185;--danger-hover:#fda4af;--danger-ink:#fecdd3;--danger-bg:#3e1821;--danger-panel:#28151c;--danger-line:#7f2637;--warn:#fbbf24;--warn-bg:#3b2d0d;--warn-line:#805e16;--ok:#4ade80;--ok-bg:#123322;--ok-line:#23693d;--shadow-sm:0 1px 2px rgba(0,0,0,0.35);--shadow-md:0 8px 20px rgba(0,0,0,0.28);--shadow-lg:0 18px 36px rgba(0,0,0,0.35);--glow-subtle:0 0 0 1px rgba(226,237,249,0.06);
-}}
 *{box-sizing:border-box}
 html,body{min-height:100%}
 body{
@@ -1669,13 +1606,13 @@ body::before{
   top:20px;
   right:20px;
   z-index:20;
-  background:rgba(18,20,26,0.8);
-  border-color:rgba(255,255,255,0.12);
+  background:rgba(255,255,255,0.9);
+  border-color:var(--line);
   backdrop-filter:blur(8px);
 }
-.auth-body>.language-switch a{color:var(--auth-muted)}
-.auth-body>.language-switch a:hover{color:#fff;background:rgba(255,255,255,0.08)}
-.auth-body>.language-switch a[aria-current=true]{color:#000;background:#fff}
+.auth-body>.language-switch a{color:var(--muted)}
+.auth-body>.language-switch a:hover{color:var(--ink-heading);background:var(--accent-gray)}
+.auth-body>.language-switch a[aria-current=true]{color:var(--brand-ink);background:var(--brand)}
 
 /* Typography & Headings */
 h1,h2,h3{
@@ -2477,6 +2414,7 @@ legend{
   background:var(--auth-bg);
   color:var(--auth-text);
 }
+.auth-body::before{display:none}
 .auth-shell{
   width:min(440px,92%);
   margin:auto;
@@ -2485,7 +2423,7 @@ legend{
 }
 .auth-card{
   padding:32px 28px;
-  box-shadow:0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.4);
+  box-shadow:0 20px 45px rgba(23,33,43,0.12);
   background:var(--auth-pane-bg);
   border:1px solid var(--auth-border);
   border-radius:var(--radius-lg);
@@ -2507,7 +2445,7 @@ legend{
   object-position:center 50%;
   padding:2px 7px;
   border-radius:6px;
-  background:#fff;
+  background:transparent;
   box-shadow:var(--shadow-sm);
 }
 .secret-brand-row .brand-name{display:none}
@@ -2515,16 +2453,16 @@ legend{
   font-size:16px;
   font-weight:750;
   letter-spacing:-0.01em;
-  color:#ffffff;
+  color:var(--ink-heading);
 }
 .secret-url,.secret-card code{
   display:block;
   overflow-wrap:anywhere;
   padding:12px;
   border-radius:var(--radius-md);
-  background:rgba(0,0,0,0.3);
-  border:1px solid var(--auth-border);
-  color:#ffffff;
+  background:var(--panel-card);
+  border:1px solid var(--line);
+  color:var(--ink-heading);
   margin:0 0 16px;
   font-family:var(--font-mono);
   font-size:12.5px;
@@ -2533,11 +2471,11 @@ legend{
   display:flex;
   gap:10px;
 }
-.secret-actions .button{background:#fff;color:#000;border-color:#fff}
-.secret-actions .button.secondary{background:transparent;color:#fff;border-color:var(--auth-border)}
+.secret-actions .button{background:var(--brand);color:var(--brand-ink);border-color:var(--brand)}
+.secret-actions .button.secondary{background:var(--panel);color:var(--ink-heading);border-color:var(--line-subtle)}
 .error-card{
-  border-color:rgba(220,38,38,0.4);
-  background:#171012;
+  border-color:var(--danger-line);
+  background:var(--danger-panel);
 }
 .enrollment-header{
   width:min(1180px,calc(100% - 40px));
@@ -2638,7 +2576,7 @@ pre{
 }
 
 /* =========================================================================
-   Full-Screen Dark Mesh Login / Setup Entry Experience
+   Authentication entry base styles (overridden by the light-only surface below)
    ========================================================================= */
 .login-layout{
   display:flex;
@@ -2897,7 +2835,7 @@ pre{
 .scope-line{font-family:var(--font-mono);font-size:13px;color:var(--muted-dark)}
 
 /* Responsive Breakpoints & Accessibility */
-.skip-link{position:absolute;left:12px;top:-48px;z-index:200;padding:8px 12px;background:var(--panel-elevated);border:1px solid var(--line);border-radius:var(--radius-sm);color:var(--ink-heading);text-decoration:none}.skip-link:focus{top:12px}.theme-control{display:inline-flex;align-items:center;justify-content:center;min-height:34px;padding:6px 10px;background:var(--panel-elevated);color:var(--ink-heading);border:1px solid var(--line-subtle);border-radius:var(--radius-md);font:inherit;font-size:12px;font-weight:650;cursor:pointer;transition:background-color .16s ease,border-color .16s ease,color .16s ease}.theme-control:hover{background:var(--surface-hover);border-color:var(--brand)}
+.skip-link{position:absolute;left:12px;top:-48px;z-index:200;padding:8px 12px;background:var(--panel-elevated);border:1px solid var(--line);border-radius:var(--radius-sm);color:var(--ink-heading);text-decoration:none}.skip-link:focus{top:12px}
 @media(prefers-reduced-motion: reduce){
   *,*::before,*::after{
     animation-duration:0.01ms!important;
@@ -3005,18 +2943,58 @@ pre{
   .table-wrap{max-width:100%}
   .form-grid{grid-template-columns:1fr}
 }
+/* Light-only authentication entry.  Keep this block last so the auth surface
+   cannot inherit the legacy dark entry styles above or an OS colour scheme. */
+:root{color-scheme:light}
+.auth-body.login-entry-body{display:block;min-height:100vh;padding:0;background:var(--auth-bg);color:var(--auth-text)}
+.auth-body::before{display:none}
+.auth-body>.language-switch{background:rgba(255,255,255,.92);border-color:var(--line);box-shadow:0 8px 24px rgba(23,33,43,.08)}
+.auth-body>.language-switch a{color:var(--muted)}
+.auth-body>.language-switch a:hover{color:var(--ink-heading);background:var(--accent-gray)}
+.auth-body>.language-switch a[aria-current=true]{color:#fff;background:#c2410c}
+.login-layout{display:grid;grid-template-columns:minmax(0,1.08fr) minmax(420px,.92fr);width:100%;min-height:100vh;background:#fff}
+.login-brand-pane{min-height:100vh;padding:clamp(34px,6vw,88px) clamp(28px,6vw,88px) 42px;background:linear-gradient(145deg,#fff 0%,#f7f9fc 68%,#edf2f7 100%);border-right:1px solid #e1e7ee;display:flex;flex-direction:column;justify-content:space-between;position:relative;overflow:hidden}
+.login-brand-pane::before{content:"";position:absolute;inset:-20%;pointer-events:none;background:radial-gradient(circle at 18% 20%,rgba(251,90,27,.12),transparent 32%),radial-gradient(circle at 86% 86%,rgba(14,30,42,.07),transparent 34%)}
+.login-brand-header{position:relative;z-index:2;max-width:520px}
+.login-brand-title-wrap{display:inline-flex;align-items:center;gap:10px;margin:0 0 27px;text-decoration:none}
+.login-brand-logo{display:block;width:min(360px,100%);height:112px;object-fit:cover;object-position:center 50%;padding:0;border-radius:0;background:transparent;box-shadow:none}
+.login-brand-title-wrap .brand-name,.login-brand-title-wrap .brand-tag{display:none}
+.login-brand-header .brand-kicker{color:#c2410c;margin-bottom:12px}
+.login-brand-headline{max-width:470px;margin:0 0 12px;color:#17212b;font-size:clamp(26px,3.2vw,42px);line-height:1.1;letter-spacing:-.04em}
+.login-brand-desc{max-width:48ch;margin:0;color:#617082;font-size:15px;line-height:1.7}
+.mesh-network-visual{position:relative;z-index:2;display:flex;flex-direction:column;align-items:center;margin:auto 0 0;width:100%}
+.mesh-canvas-wrap{position:relative;width:min(430px,100%);aspect-ratio:1;display:flex;align-items:center;justify-content:center}
+.mesh-orbit{position:absolute;border:1px solid rgba(14,30,42,.12);border-radius:50%;transform:rotate(-18deg);transform-origin:center;animation:mesh-orbit-spin 18s linear infinite}
+.mesh-orbit::after{content:"";position:absolute;top:-5px;left:50%;width:9px;height:9px;border-radius:50%;background:#fb5a1b;box-shadow:0 0 0 6px rgba(251,90,27,.12)}
+.mesh-orbit-outer{inset:7%;border-style:dashed;border-color:rgba(14,30,42,.16)}
+.mesh-orbit-outer::after{top:10%;left:auto;right:4%}
+.mesh-orbit-inner{inset:22%;animation-duration:12s;animation-direction:reverse;border-color:rgba(251,90,27,.22)}
+.mesh-orbit-inner::after{top:auto;bottom:-5px;left:18%;background:#0e1e2a;box-shadow:0 0 0 6px rgba(14,30,42,.1)}
+.mesh-visual-logo-wrap{position:absolute;inset:32% 8%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.9);border:1px solid rgba(14,30,42,.1);border-radius:22px;box-shadow:0 22px 50px rgba(14,30,42,.12),0 0 0 10px rgba(255,255,255,.55);animation:mesh-logo-breathe 4.5s ease-in-out infinite}
+.mesh-visual-logo{display:block;width:100%;height:100%;object-fit:cover;object-position:center 50%;padding:0 12px;background:transparent}
+.mesh-node{position:absolute;width:11px;height:11px;border-radius:50%;background:#fb5a1b;box-shadow:0 0 0 6px rgba(251,90,27,.13);animation:mesh-node-pulse 2.8s ease-in-out infinite}
+.mesh-node-a{top:15%;left:50%}.mesh-node-b{top:29%;right:13%;animation-delay:.35s}.mesh-node-c{bottom:20%;right:18%;animation-delay:.7s}.mesh-node-d{bottom:12%;left:49%;animation-delay:1.05s}.mesh-node-e{bottom:23%;left:14%;animation-delay:1.4s}.mesh-node-f{top:30%;left:12%;animation-delay:1.75s;background:#0e1e2a;box-shadow:0 0 0 6px rgba(14,30,42,.1)}
+.mesh-visual-caption{margin-top:15px;text-align:center}.mesh-caption-badge{display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border-radius:999px;background:#fff;border:1px solid #dfe5ec;color:#344454;font-size:11px;font-weight:700;box-shadow:0 5px 16px rgba(23,33,43,.06)}.mesh-caption-sub{margin:6px 0 0;color:#718094;font-size:12px}
+.login-form-pane{display:flex;align-items:center;justify-content:center;padding:54px clamp(28px,7vw,104px);background:#fff}
+.login-form-container{width:min(430px,100%);display:flex;flex-direction:column}
+.auth-header-mobile{display:none;margin-bottom:24px}
+.login-title-group{margin-bottom:30px}.login-title-group .brand-kicker{color:#c2410c;margin-bottom:8px}.login-title-group h1{color:#17212b;font-size:32px;line-height:1.12;margin:0 0 7px;letter-spacing:-.04em}.login-title-group .subtitle{color:#647487;font-size:14px;margin:0 0 10px}.login-invite{color:#4d5c6d;font-size:15px;margin:8px 0 0}
+ .login-form{width:100%;display:flex;flex-direction:column;gap:18px}.input-group{display:flex;flex-direction:column;gap:7px}.input-group label{color:#344454;font-size:13px;font-weight:700}.password-input-wrap{position:relative;display:flex;align-items:center;width:100%}.password-input-wrap input{width:100%;height:48px;background:#fff;border:1px solid #cbd5e1;border-radius:10px;color:#17212b;padding:11px 42px 11px 14px;font-size:14px;transition:border-color .14s ease,box-shadow .14s ease}.password-input-wrap input:hover{border-color:#9aaabd}.password-input-wrap input:focus{border-color:#c2410c;background:#fff;box-shadow:0 0 0 4px rgba(194,65,12,.14);outline:none}.pwd-toggle-btn{position:absolute;right:7px;top:50%;transform:translateY(-50%);background:transparent!important;border:0!important;padding:7px!important;min-height:auto!important;color:#7b8998;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:7px;transition:color .12s ease}.pwd-toggle-btn:hover{color:#17212b}.eye-icon{width:18px;height:18px}.login-submit-btn{margin-top:8px;width:100%;height:48px;background:#17212b;color:#fff;border:1px solid #17212b;border-radius:10px;font-size:14px;font-weight:750;cursor:pointer;box-shadow:0 8px 18px rgba(23,33,43,.18);transition:background-color .14s ease,border-color .14s ease,transform .14s ease,box-shadow .14s ease}.login-submit-btn:hover{background:#293746;border-color:#293746;box-shadow:0 10px 22px rgba(23,33,43,.24);transform:translateY(-1px)}.login-submit-btn:disabled{opacity:.72;cursor:not-allowed;transform:none}
+ .enrollment-brand-logo,.secret-mesh-mark,.error-mesh-mark,.dialog-mark{object-fit:cover;object-position:center 50%;background:transparent;box-shadow:none}
+ .dialog-mark{width:64px;height:36px;padding:0}
+ @media(min-width:801px) and (max-height:760px){.login-brand-pane{padding-top:28px;padding-bottom:22px}.login-brand-title-wrap{margin-bottom:14px}.login-brand-logo{width:270px;height:82px}.login-brand-headline{font-size:29px}.login-brand-desc{font-size:13px}.mesh-canvas-wrap{width:min(310px,32vw)}.mesh-visual-caption{margin-top:8px}}
+@keyframes mesh-orbit-spin{to{transform:rotate(342deg)}}
+@keyframes mesh-logo-breathe{0%,100%{transform:scale(.98);box-shadow:0 22px 50px rgba(14,30,42,.12),0 0 0 10px rgba(255,255,255,.55)}50%{transform:scale(1.015);box-shadow:0 28px 58px rgba(14,30,42,.16),0 0 0 12px rgba(251,90,27,.07)}}
+@keyframes mesh-node-pulse{0%,100%{transform:scale(.82);opacity:.68}50%{transform:scale(1.16);opacity:1}}
+@media(prefers-reduced-motion:reduce){.mesh-orbit,.mesh-visual-logo-wrap,.mesh-node{animation:none}}
+@media(max-width:800px){.login-layout{display:block;min-height:100vh}.login-brand-pane{min-height:auto;padding:30px 24px 24px;border-right:0;border-bottom:1px solid #e1e7ee}.login-brand-logo{width:min(280px,86vw);height:86px}.login-brand-title-wrap{margin-bottom:20px}.login-brand-headline{font-size:26px}.login-brand-desc{font-size:14px}.mesh-network-visual{margin-top:20px}.mesh-canvas-wrap{width:min(280px,78vw)}.mesh-visual-caption{margin-top:9px}.login-form-pane{padding:38px 24px 52px;align-items:flex-start}.auth-header-mobile{display:none}.login-form-container{max-width:500px;margin:0 auto}.login-title-group h1{font-size:28px}}
+@media(max-width:480px){.auth-body>.language-switch{top:12px;right:12px}.login-brand-pane{padding:24px 18px 20px}.login-brand-logo{width:230px;height:72px}.login-brand-headline{font-size:23px}.mesh-canvas-wrap{width:235px}.login-form-pane{padding:32px 18px 42px}.login-title-group{margin-bottom:24px}.login-title-group h1{font-size:25px}}
 </style>`; }
-function adminScript(): string {
-  const translationJson = JSON.stringify(ZH_UI_TEXT);
-  return `<script>
-(function(){
-var key='runmesh-theme';
-var values=['system','light','dark'];
-function preference(){try{var value=localStorage.getItem(key);return values.indexOf(value)>=0?value:'system'}catch(_){return 'system'}}
-function label(value){var zh=document.documentElement.lang==='zh-CN';if(!zh)return 'Theme: '+value;return value==='light'?'主题：浅色':value==='dark'?'主题：深色':'主题：跟随系统'}
-function updateThemeLabel(value){document.querySelectorAll('[data-theme-toggle]').forEach(function(button){var text=label(value);button.textContent=text;button.setAttribute('aria-label',text)})}
-function applyTheme(value){if(value==='light'||value==='dark')document.documentElement.dataset.theme=value;else delete document.documentElement.dataset.theme;updateThemeLabel(value)}
-var ZH_UI_TEXT=${translationJson};function translateKnown(value){
+ function adminScript(): string {
+   const translationJson = JSON.stringify(ZH_UI_TEXT);
+   return `<script>
+ (function(){
+ var ZH_UI_TEXT=${translationJson};function translateKnown(value){
   var trimmed=value.trim();
   if(!trimmed)return value;
   var rawMapped=ZH_UI_TEXT[value];
@@ -3037,11 +3015,10 @@ var ZH_UI_TEXT=${translationJson};function translateKnown(value){
 function translateTextNodes(root){var walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode:function(node){if(!node.nodeValue||!node.nodeValue.trim())return NodeFilter.FILTER_REJECT;for(var el=node.parentElement;el;el=el.parentElement){if(el.hasAttribute('data-no-i18n')||el.tagName==='CODE'||el.tagName==='PRE'||el.tagName==='SCRIPT'||el.tagName==='STYLE'||el.tagName==='INPUT'||el.tagName==='TEXTAREA')return NodeFilter.FILTER_REJECT}return NodeFilter.FILTER_ACCEPT}});var nodes=[];while(walker.nextNode())nodes.push(walker.currentNode);nodes.forEach(function(node){node.nodeValue=translateKnown(node.nodeValue||'')})}
 function translateAttributes(root){['aria-label','alt','placeholder','title'].forEach(function(name){root.querySelectorAll('['+name+']').forEach(function(element){if(element.closest('[data-no-i18n]'))return;var value=element.getAttribute(name)||'';var translated=translateKnown(value);if(translated===value&&value.indexOf('Rename ')===0)translated='重命名 '+value.slice(7);element.setAttribute(name,translated)})})}
 function statusText(value){return ZH_UI_TEXT[value]||value}
-function applyLocale(locale){var zh=locale==='zh-CN';document.documentElement.lang=zh?'zh-CN':'en';document.querySelectorAll('[data-lang-toggle]').forEach(function(item){var active=item.getAttribute('data-lang-toggle')===locale;item.setAttribute('aria-current',active?'true':'false')});if(zh){translateTextNodes(document.body);translateAttributes(document);var title=document.title;var titleParts=['MCP client created','MCP client rotated','MCP Clients','MCP Client','Runmesh · Agent Control Plane','Agent Control Plane','Dashboard','Runners','Clients','Settings','login','setup','enrollment'];titleParts.forEach(function(part){if(ZH_UI_TEXT[part])title=title.split(part).join(ZH_UI_TEXT[part])});document.title=title}updateThemeLabel(preference())}
+ function applyLocale(locale){var zh=locale==='zh-CN';document.documentElement.lang=zh?'zh-CN':'en';document.querySelectorAll('[data-lang-toggle]').forEach(function(item){var active=item.getAttribute('data-lang-toggle')===locale;item.setAttribute('aria-current',active?'true':'false')});if(zh){translateTextNodes(document.body);translateAttributes(document);var title=document.title;var titleParts=['MCP client created','MCP client rotated','MCP Clients','MCP Client','Runmesh · Agent Control Plane','Agent Control Plane','Dashboard','Runners','Clients','Settings','login','setup','enrollment'];titleParts.forEach(function(part){if(ZH_UI_TEXT[part])title=title.split(part).join(ZH_UI_TEXT[part])});document.title=title}}
 function requestedLocale(){var query=new URLSearchParams(location.search).get('lang');if(query==='zh-CN'||query==='zh')return 'zh-CN';if(query==='en')return 'en';var match=/runmesh_lang=(zh-CN|en)/.exec(document.cookie||'');if(match)return match[1];return navigator.language&&navigator.language.toLowerCase().startsWith('zh')?'zh-CN':'en'}
 function rememberLocale(locale){document.cookie='runmesh_lang='+locale+'; Max-Age=31536000; Path=/; SameSite=Lax'}
-document.querySelectorAll('[data-theme-toggle]').forEach(function(button){button.addEventListener('click',function(){var current=preference();var next=values[(values.indexOf(current)+1)%values.length];try{localStorage.setItem(key,next)}catch(_){}applyTheme(next)})});
-document.querySelectorAll('[data-lang-toggle]').forEach(function(link){link.addEventListener('click',function(event){var locale=link.getAttribute('data-lang-toggle')||'en';rememberLocale(locale);if(locale==='zh-CN'&&new URLSearchParams(location.search).get('lang')!=='zh-CN'){event.preventDefault();var url=new URL(location.href);url.searchParams.set('lang','zh-CN');location.href=url.toString()}else if(locale==='en'&&new URLSearchParams(location.search).has('lang')){event.preventDefault();var url=new URL(location.href);url.searchParams.set('lang','en');location.href=url.toString()}})});
+ document.querySelectorAll('[data-lang-toggle]').forEach(function(link){link.addEventListener('click',function(event){var locale=link.getAttribute('data-lang-toggle')||'en';rememberLocale(locale);if(locale==='zh-CN'&&new URLSearchParams(location.search).get('lang')!=='zh-CN'){event.preventDefault();var url=new URL(location.href);url.searchParams.set('lang','zh-CN');location.href=url.toString()}else if(locale==='en'&&new URLSearchParams(location.search).has('lang')){event.preventDefault();var url=new URL(location.href);url.searchParams.set('lang','en');location.href=url.toString()}})});
 var locale=requestedLocale();if(new URLSearchParams(location.search).has('lang'))rememberLocale(locale);applyLocale(locale);
 function copyText(text){if(navigator.clipboard&&navigator.clipboard.writeText)return navigator.clipboard.writeText(text);var area=document.createElement('textarea');area.value=text;area.setAttribute('readonly','');area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.select();try{document.execCommand('copy')}catch(_){}area.remove();return Promise.resolve()}
 document.querySelectorAll('[data-copy]').forEach(function(button){button.addEventListener('click',function(){var result=copyText(button.getAttribute('data-copy')||'');var mark=function(){button.textContent=document.documentElement.lang==='zh-CN'?'已复制':'Copied';button.classList.add('copied')};if(result&&typeof result.then==='function')result.then(mark,function(){});else mark()})});
@@ -3058,16 +3035,20 @@ function runnerEnrollmentPage(env: RunnerReleaseEnvironment, baseUrl: string, ru
   const shellCommand = `curl --fail --location --proto '=https' --tlsv1.2 ${new URL("/runner/install.sh", baseUrl).toString()} | sudo sh`;
   const powerShellCommand = `Invoke-WebRequest -UseBasicParsing ${new URL("/runner/install.ps1", baseUrl).toString()} | Invoke-Expression`;
   const manualEnroll = `coding-runner enroll --server ${new URL("/runner/enroll", baseUrl).toString()} --code-stdin`;
-  const manualCommand = `${manualEnroll}\ncoding-runner install`;
-  const commands = bootstrap ? { linux: shellCommand, macos: shellCommand, windows: powerShellCommand } : { linux: manualCommand, macos: manualCommand, windows: manualCommand };
-  const tabs = Object.entries(commands).map(([platform, value], index) => `<button role="tab" id="tab-${platform}" aria-controls="panel-${platform}" aria-selected="${index === 0 ? "true" : "false"}" tabindex="${index === 0 ? "0" : "-1"}" data-tab="${platform}">${platform === "macos" ? "macOS" : platform === "windows" ? "Windows" : "Linux"}</button><section role="tabpanel" id="panel-${platform}" aria-labelledby="tab-${platform}" ${index === 0 ? "" : "hidden"} data-panel="${platform}"><pre><code>${escapeHtml(value)}</code></pre><button type="button" class="button secondary" data-copy="${escapeHtml(value)}">Copy ${bootstrap ? "installer" : "enrollment"} command</button></section>`).join("");
-  const title = bootstrap ? "Signed fixed-preview enrollment" : "Manual portable-artifact enrollment";
+  const manualCommands = {
+    linux: `${manualEnroll} && coding-runner install`,
+    macos: `${manualEnroll} && coding-runner install`,
+    windows: `${manualEnroll}; if ($LASTEXITCODE -eq 0) { coding-runner install }`,
+  };
+  const commands = bootstrap ? { linux: shellCommand, macos: shellCommand, windows: powerShellCommand } : manualCommands;
+  const tabs = Object.entries(commands).map(([platform, value], index) => `<button role="tab" id="tab-${platform}" aria-controls="panel-${platform}" aria-selected="${index === 0 ? "true" : "false"}" tabindex="${index === 0 ? "0" : "-1"}" data-tab="${platform}">${platform === "macos" ? "macOS" : platform === "windows" ? "Windows" : "Linux"}</button><section role="tabpanel" id="panel-${platform}" aria-labelledby="tab-${platform}" ${index === 0 ? "" : "hidden"} data-panel="${platform}"><pre><code>${escapeHtml(value)}</code></pre><button type="button" class="button secondary" data-copy="${escapeHtml(value)}">Copy ${bootstrap ? "installer" : "enrollment and install"} command</button></section>`).join("");
+  const title = bootstrap ? "Signed fixed-preview enrollment" : "Manual Runner enrollment and install";
   const instruction = bootstrap
     ? "The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments."
-    : "The fixed signed hosted release is not enabled on this deployment. Download and verify the portable Runner artifact first, then paste this code only into the local prompt requested by --code-stdin.";
-  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><script>try{var t=localStorage.getItem('runmesh-theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(_){}</script><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body enrollment-body"><header class="enrollment-header"><a class="enrollment-brand" href="/admin" aria-label="Runmesh · Agent Control Plane">${brandLogo("enrollment-brand-logo")}</a><div class="enrollment-header-actions">${languageSwitch()}${themeControl()}</div></header><main class="shell enrollment-shell"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><div class="dialog-icon-row">${meshMarkSvg("dialog-mark")}</div><p class="eyebrow">${title}</p><h1 id="enrollment-title">Enroll Runner</h1><p class="lede">${instruction} This one-time code expires in 30 minutes and will not be shown again.</p></div></section><div class="enrollment-meta-box"><span class="form-stat-label">Target Runner ID</span><span class="mono">${escapeHtml(runnerId)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">One-time enrollment code</span><code class="mono" data-no-i18n>${escapeHtml(code)}</code><span class="muted font-12">Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.</span></div><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.</p><div class="top-actions dialog-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
+    : "The fixed signed hosted release is not enabled on this deployment. Install the verified portable Runner artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. The install step runs only after enrollment succeeds.";
+  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body enrollment-body"><header class="enrollment-header"><a class="enrollment-brand" href="/admin" aria-label="Runmesh · Agent Control Plane">${brandLogo("enrollment-brand-logo")}</a><div class="enrollment-header-actions">${languageSwitch()}</div></header><main class="shell enrollment-shell"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><div class="dialog-icon-row">${meshMarkSvg("dialog-mark")}</div><p class="eyebrow">${title}</p><h1 id="enrollment-title">Enroll Runner</h1><p class="lede">${instruction} This one-time code expires in 30 minutes and will not be shown again.</p></div></section><div class="enrollment-meta-box"><span class="form-stat-label">Target Runner ID</span><span class="mono">${escapeHtml(runnerId)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">One-time enrollment code</span><code class="mono" data-no-i18n>${escapeHtml(code)}</code><span class="muted font-12">Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.</span></div><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.</p><div class="top-actions dialog-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
 }
-function secretCreatedPage(title: string, url: string): string { return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${escapeHtml(title)}</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card secret-card"><div class="secret-brand-row">${meshMarkSvg("secret-mesh-mark")}<span class="brand-name">Runmesh</span></div><p class="brand-kicker">Runmesh</p><h1>${escapeHtml(title)}</h1><p class="lede">Copy this URL now. It will not be shown again.</p><code>${escapeHtml(url)}</code><div class="secret-actions"><button type="button" class="button" data-copy="${escapeHtml(url)}">Copy MCP URL</button><a class="button secondary" href="/admin">Back to admin</a></div></section></main>${adminScript()}</body></html>`; }
+function secretCreatedPage(title: string, url: string): string { return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${escapeHtml(title)}</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card secret-card"><div class="secret-brand-row">${meshMarkSvg("secret-mesh-mark")}<span class="brand-name">Runmesh</span></div><p class="brand-kicker">Runmesh</p><h1>${escapeHtml(title)}</h1><p class="lede">Copy this URL now. It will not be shown again.</p><code>${escapeHtml(url)}</code><div class="secret-actions"><button type="button" class="button" data-copy="${escapeHtml(url)}">Copy MCP URL</button><a class="button secondary" href="/admin">Back to admin</a></div></section></main>${adminScript()}</body></html>`; }
 function secretUrl(base: string, secret: string): string { const url = new URL(base); url.pathname = `/${secret}/mcp`; url.search = ""; return url.toString(); }
 function selectedScopes(form: FormData): CodingScope[] | undefined { const values = form.getAll("scopes"); const scopes = values.filter((value): value is CodingScope => value === "coding:read" || value === "coding:write" || value === "coding:exec"); return scopes.length === values.length && scopes.length > 0 && new Set(scopes).size === scopes.length ? scopes : undefined; }
 function validPassword(password: string): boolean { return password.length >= 12 && password.length <= 1_024; }
@@ -3267,7 +3248,7 @@ async function authThrottleRecord(env: WorkerEnv, kind: "login" | "setup", succe
 function throttleError(retryAfterMs: number): Response {
   const headers = htmlHeaders();
   headers.set("retry-after", String(Math.max(1, Math.ceil(retryAfterMs / 1_000))));
-  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card error-card"><div class="secret-brand-row">${meshMarkSvg("error-mesh-mark")}<span class="brand-name">Runmesh</span></div><p class="brand-kicker">Runmesh</p><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="lede">Invalid administrator password.</p><p class="muted">Please try again shortly.</p><p><a class="button secondary" href="/">Return</a></p></section></main>${adminScript()}</body></html>`, { status: 403, headers });
+  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card error-card"><div class="secret-brand-row">${meshMarkSvg("error-mesh-mark")}<span class="brand-name">Runmesh</span></div><p class="brand-kicker">Runmesh</p><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="lede">Invalid administrator password.</p><p class="muted">Please try again shortly.</p><p><a class="button secondary" href="/">Return</a></p></section></main>${adminScript()}</body></html>`, { status: 403, headers });
 }
 async function formData(request: Request): Promise<FormData | undefined> { return readCappedFormData(request, MAX_ADMIN_BODY_BYTES); }
 async function readAdminBody(request: Request): Promise<Record<string, unknown> | undefined> {
@@ -3288,7 +3269,7 @@ function credentialHeaders(contentType: string): Headers { const headers = htmlH
 function html(value: string, cookies: readonly string[] = []): Response { const headers = htmlHeaders(); for (const cookie of cookies) headers.append("set-cookie", cookie); return new Response(value, { headers }); }
 function htmlHeaders(): Headers { return new Headers({ "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer", "content-security-policy": "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'", "x-content-type-options": "nosniff", "x-frame-options": "DENY" }); }
 function redirect(location: string, cookies: readonly string[] = []): Response { const headers = htmlHeaders(); headers.set("location", location); for (const cookie of cookies) headers.append("set-cookie", cookie); return new Response(null, { status: 303, headers }); }
-function adminError(status: number, message: string, cookies: readonly string[] = []): Response { const response = html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card error-card"><div class="secret-brand-row">${meshMarkSvg("error-mesh-mark")}<span class="brand-name">Runmesh</span></div><p class="brand-kicker">Runmesh</p><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="lede">${escapeHtml(message)}</p><p><a class="button secondary" href="/">Return</a></p></section></main>${adminScript()}</body></html>`, cookies.length === 0 ? [] : cookies); return new Response(response.body, { status, headers: response.headers }); }
+function adminError(status: number, message: string, cookies: readonly string[] = []): Response { const response = html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card error-card"><div class="secret-brand-row">${meshMarkSvg("error-mesh-mark")}<span class="brand-name">Runmesh</span></div><p class="brand-kicker">Runmesh</p><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="lede">${escapeHtml(message)}</p><p><a class="button secondary" href="/">Return</a></p></section></main>${adminScript()}</body></html>`, cookies.length === 0 ? [] : cookies); return new Response(response.body, { status, headers: response.headers }); }
 function methodNotAllowed(allow: string): Response { return new Response("Method not allowed", { status: 405, headers: { allow } }); }
 function notFound(): Response { return new Response("Not found", { status: 404, headers: { "cache-control": "no-store" } }); }
 function escapeHtml(value: string): string { return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character] as string); }
