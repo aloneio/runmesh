@@ -117,7 +117,7 @@ case "$(uname -s)" in
   Darwin) PROFILE='/Library/Application Support/Runmesh/profile.json'; SERVICE_MANIFEST='/Library/LaunchDaemons/io.alone.runmesh.runner.plist' ;;
   *) printf '%s\n' 'error: Linux or macOS is required' >&2; exit 1;;
 esac
-for command_name in curl node npm stty readlink; do command -v "$command_name" >/dev/null 2>&1 || { printf '%s\n' "error: $command_name is required" >&2; exit 1; }; done
+for command_name in curl node npm stty readlink grep; do command -v "$command_name" >/dev/null 2>&1 || { printf '%s\n' "error: $command_name is required" >&2; exit 1; }; done
 NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
 case "$NODE_MAJOR" in ''|*[!0-9]*) printf '%s\n' 'error: unable to determine Node.js version' >&2; exit 1;; esac
 if [ "$NODE_MAJOR" -lt 20 ]; then printf '%s\n' 'error: Node.js 20 or newer is required' >&2; exit 1; fi
@@ -126,9 +126,13 @@ if has_path "$INSTALL_ROOT/current" || has_path "$INSTALL_ROOT/versions/$VERSION
 TMP="$(mktemp -d /tmp/runmesh-installer.XXXXXX)"
 STAGE="$INSTALL_ROOT/versions/$VERSION.staging.$$"
 CURRENT_NEW="$INSTALL_ROOT/current.new"
+FINAL="$INSTALL_ROOT/versions/$VERSION"
 TTY_ECHO_DISABLED=0
 FINAL_CREATED=0
 CURRENT_CREATED=0
+ENROLLMENT_ATTEMPTED=0
+# The preflight above rejects an existing profile, so a profile present after
+# enrollment belongs to this new attempt and is safe to remove on rollback.
 cleanup_tty() { if [ "$TTY_ECHO_DISABLED" -eq 1 ]; then stty echo < /dev/tty 2>/dev/null || true; TTY_ECHO_DISABLED=0; fi; }
 cleanup() { cleanup_tty; rm -rf "$TMP"; }
 rollback() {
@@ -136,6 +140,7 @@ rollback() {
   cleanup_tty
   if [ "$CURRENT_CREATED" -eq 1 ] && [ -L "$CURRENT_NEW" ]; then rm -f "$CURRENT_NEW"; fi
   if [ "$CURRENT_CREATED" -eq 1 ] && [ -L "$INSTALL_ROOT/current" ] && [ "$(readlink "$INSTALL_ROOT/current")" = "$FINAL" ]; then "$INSTALL_ROOT/current/bin/coding-runner" uninstall --profile "$PROFILE" --purge --yes --json >/dev/null 2>&1 || true; rm -f "$INSTALL_ROOT/current"; fi
+  if [ "$ENROLLMENT_ATTEMPTED" -eq 1 ] && [ -f "$PROFILE" ]; then rm -f "$PROFILE"; fi
   if [ -L "$INSTALL_ROOT/current" ] && [ "$(readlink "$INSTALL_ROOT/current")" = "$FINAL" ]; then rm -f "$INSTALL_ROOT/current"; fi
   if [ -L "$CURRENT_NEW" ]; then rm -f "$CURRENT_NEW"; fi
   if [ "$FINAL_CREATED" -eq 1 ]; then rm -rf "$FINAL"; fi
@@ -147,7 +152,8 @@ on_exit() {
   rc=$?
   if [ "$rc" -eq 0 ]; then cleanup; else rollback "$rc"; fi
 }
-trap on_exit EXIT HUP INT TERM
+trap on_exit EXIT
+trap 'rollback 1' HUP INT TERM
 download() { curl --fail --location --proto '=https' --tlsv1.2 --retry 0 --output "$TMP/$1" "$RELEASE_BASE/$1"; }
 download manifest.json
 download manifest.sig
@@ -173,8 +179,12 @@ TTY_ECHO_DISABLED=1
 if ! IFS= read -r ENROLLMENT_CODE < /dev/tty; then printf '\n%s\n' 'error: unable to read enrollment code from terminal' >&2; exit 1; fi
 cleanup_tty
 printf '\n' >/dev/tty
-printf '%s\n' "$ENROLLMENT_CODE" | "$RUNNER" enroll --profile "$PROFILE" --server "$ENROLLMENT_URL" --code-stdin
+ENROLLMENT_INPUT="$TMP/enrollment-code"
+printf '%s\n' "$ENROLLMENT_CODE" > "$ENROLLMENT_INPUT"
 unset ENROLLMENT_CODE
+ENROLLMENT_ATTEMPTED=1
+"$RUNNER" enroll --profile "$PROFILE" --server "$ENROLLMENT_URL" --code-stdin < "$ENROLLMENT_INPUT"
+rm -f "$ENROLLMENT_INPUT"
 mv "$STAGE" "$FINAL"
 FINAL_CREATED=1
 ln -s "$FINAL" "$INSTALL_ROOT/current.new"
@@ -209,6 +219,9 @@ if ((Test-Path -LiteralPath $CurrentRoot) -or (Test-Path -LiteralPath $VersionRo
 $TempRoot = Join-Path ([IO.Path]::GetTempPath()) ('runmesh-installer-' + [guid]::NewGuid().ToString('N'))
 $Stage = Join-Path $VersionsRoot ($Version + '.staging.' + $PID)
 $ServiceAttempted = $false
+$EnrollmentAttempted = $false
+# Preflight rejects an existing profile; any profile after enrollment is ours
+# and can be removed if a later install step fails.
 $Succeeded = $false
 $CurrentRunner = $null
 New-Item -ItemType Directory -Path $TempRoot -Force | Out-Null
@@ -236,6 +249,7 @@ __VERIFIER__
   $CodePointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureCode)
   try { $EnrollmentCode = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($CodePointer) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($CodePointer) }
   if ([string]::IsNullOrWhiteSpace($EnrollmentCode)) { throw 'An enrollment code is required.' }
+  $EnrollmentAttempted = $true
   $EnrollmentCode | & $Runner.FullName enroll --profile $Profile --server $EnrollmentUrl --code-stdin
   $EnrollmentCode = $null
   $SecureCode = $null
@@ -252,6 +266,7 @@ __VERIFIER__
 } finally {
   if (-not $Succeeded) {
     if ($ServiceAttempted -and $null -ne $CurrentRunner -and (Test-Path -LiteralPath $CurrentRunner)) { try { & $CurrentRunner uninstall --profile $Profile --purge --yes --json *> $null } catch {} }
+    if ($EnrollmentAttempted -and (Test-Path -LiteralPath $Profile)) { try { Remove-Item -LiteralPath $Profile -Force } catch {} }
     foreach ($Path in @($CurrentNew, $CurrentRoot, $Stage, $VersionRoot)) { if (Test-Path -LiteralPath $Path) { try { Remove-Item -LiteralPath $Path -Recurse -Force } catch {} } }
   }
   if (Test-Path -LiteralPath $TempRoot) { try { Remove-Item -LiteralPath $TempRoot -Recurse -Force } catch {} }
