@@ -59,10 +59,20 @@ async function enrollmentCode(parsed: ParsedCommand, readStdin: (() => Promise<s
     const finish = (error?: Error): void => {
       if (settled) return;
       settled = true;
+      process.stdin.pause();
       process.stdin.removeListener("data", onData); process.stdin.removeListener("error", onError); process.stdin.removeListener("end", onEnd);
       if (error === undefined) resolve(value); else reject(error);
     };
-    const onData = (chunk: string): void => { value += chunk; if (value.length > 512) { process.stdin.pause(); finish(new Error("--code-stdin input is too long")); } };
+    // Enrollment is entered one line at a time in the manual flow. Resolving
+    // on the first newline keeps `--code-stdin` usable from a TTY (Enter is a
+    // natural completion signal) while still accepting a normal pipe, whose
+    // EOF path remains supported for hosted installers.
+    const onData = (chunk: string): void => {
+      value += chunk;
+      if (value.length > 512) { finish(new Error("--code-stdin input is too long")); return; }
+      const lineEnd = value.search(/[\r\n]/);
+      if (lineEnd >= 0) { value = value.slice(0, lineEnd); finish(); }
+    };
     const onError = (): void => finish(new Error("--code-stdin input could not be read"));
     const onEnd = (): void => finish();
     process.stdin.setEncoding("utf8"); process.stdin.on("data", onData); process.stdin.once("error", onError); process.stdin.once("end", onEnd);
