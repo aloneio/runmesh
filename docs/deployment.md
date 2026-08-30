@@ -44,16 +44,7 @@ npx wrangler deploy --config wrangler.jsonc
 1. Open the deployed root URL and create the first administrator password immediately. Setup is atomic first-success-wins; there is no bootstrap-password secret.
 2. Log in and open **Admin → Runners**. Add a safe Runner ID (or let the dashboard generate one) and a human-facing `display_name`. The display name is displayed to operators and by `runner_list`; the ID is the stable protocol identifier.
 3. Copy the enrollment code. It expires in 30 minutes and is single-use. **Regenerate enrollment** replaces any unused code for that Runner with a new one.
-4. On the host, download the portable Runner `.tgz`, manifest, detached signature, signature descriptor, checksums, and informational keyring. Verify them with the trust keyring from an independently trusted source checkout, not with the keyring downloaded beside the artifact. Follow the complete [portable Runner verification and installation procedure](portable-runner-installation.md), then redeem the one-time code with the installed CLI and install the service:
-
-   ```sh
-   coding-runner enroll \
-     --server https://mcp.example.com/runner/enroll \
-     --code '<one-time-enrollment-code>'
-   coding-runner install
-   ```
-
-   Enrollment obtains the Runner ID and long-lived Runner credential from the response; the command accepts no `--runner-id`. It saves a centrally managed machine profile with zero local workspaces and does not use the current directory. Configure approved Workspace roots and permissions in the Admin Panel; centralized Runner profiles reject local `workspace add/remove`.
+4. If the authenticated Admin enrollment page labels the fixed signed preview as available, copy its OS-specific installer command. It contains no code; after release verification and staging, the local script asks you to paste the code and forwards it only through `coding-runner enroll --code-stdin`. Otherwise use the manual [portable Runner verification and installation procedure](portable-runner-installation.md), then redeem the one-time code through `coding-runner enroll --code-stdin` and install the service. Never put an enrollment code in a command line, URL, shell history, or configuration.
 5. In **Admin → MCP Clients**, create a client label and least-privilege scopes. Copy the generated one-time MCP URL and configure it directly in the MCP client:
 
    ```text
@@ -65,7 +56,7 @@ The dashboard displays safe Runner details and allows Runner rename, enrollment/
 
 ### Public bootstrap and package configuration
 
-Hosted bootstrap is disabled for this development preview. `/runner/releases/latest` and `/runner/releases/stable` report `distributable: false`, `package_name: ""`, `package_version: ""`, `package_spec: ""`, `artifact: null`, `artifacts: null`, and `published_at: null`. The generated scripts fail closed without consuming enrollment codes, accessing the network, running npm, or installing arbitrary packages. The supported manual route is the [portable Runner verification and installation procedure](portable-runner-installation.md), followed by CLI enrollment and service installation. Automatic signed bootstrap, update, and rollback are roadmap items and are not implemented.
+Hosted bootstrap is disabled by default for this development preview because no exact signed `v0.1.0-dev.2` GitHub release is asserted by the repository. `/runner/releases/latest` and `/runner/releases/stable` therefore report `distributable: false` unless the Worker deployment is explicitly acknowledged with `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.0-dev.2` **after** publishing and independently verifying the fixed immutable release. The acknowledgement is an equality gate, not a configurable URL, package name, npm spec, checksum, or version source. When disabled, the generated scripts fail closed without consuming enrollment codes. When enabled, they use only source-pinned GitHub URLs and an embedded Ed25519 public key to verify `manifest.json`, its detached signature/descriptor, `SHA256SUMS`, and the fixed local tarball before npm installs it with scripts disabled. The downloaded keyring is never a trust root. See the complete [portable Runner verification and installation procedure](portable-runner-installation.md), including the one-command Worker trust limitation and high-assurance offline route. Automatic update and rollback remain outside this preview.
 
 ## Local Runner profiles and service manifests
 

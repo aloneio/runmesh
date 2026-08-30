@@ -199,7 +199,7 @@ npx wrangler deploy --config wrangler.jsonc
 
 Dashboard 生成的 enrollment code 短期有效、单次使用，重新生成或成功兑换后立即失效。Runner 通过认证 WebSocket 主动连接 Worker，不暴露 HTTP server。
 
-在 `v0.1.0-dev.2` 中，hosted bootstrap 不可用。`/runner/releases/latest` 和 `/runner/releases/stable` 返回 `distributable: false`，不提供 package spec 或 artifact，生成的安装脚本会 fail closed。请下载 portable artifact 及其 manifest、signature、checksums，并按照[便携式 Runner 验证与安装流程](docs/portable-runner-installation.md)操作。签名验证必须使用独立可信源代码 checkout 中的 trust keyring，不能使用与 artifact 一起下载的 keyring。验证完成后运行 `coding-runner enroll`，再运行 `coding-runner install`。自动 signed bootstrap、更新和回滚尚未包含。
+在 `v0.1.0-dev.2` 中，hosted bootstrap 已实现为固定 signed preview 机制，但默认关闭：仓库不声称 `v0.1.0-dev.2` GitHub release 已存在。只有在操作者发布并独立验证该精确 immutable release 后，Worker 部署显式设置 `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.0-dev.2`，`/runner/releases/latest` 和 `/runner/releases/stable` 才会报告 `distributable: true`。该 gate 不是可配置 URL、package、npm spec、checksum 或任意版本来源。启用后安装器固定版本、GitHub release URL、key ID 和 Ed25519 公钥，在 npm 本地 tarball 安装（禁用 scripts）前验证 manifest/signature/descriptor/artifact size/SHA-256；绝不信任下载的 keyring、`latest`、npm registry 或任意 URL。Dashboard 复制的命令不含 code；验证完成后脚本在本机提示，并仅通过 `coding-runner enroll --code-stdin` 传递 code。Worker HTTPS 返回的脚本是一键 bootstrap 信任根，自身无法发现 Worker 响应被替换；高保证场景请使用[便携式 Runner 验证与安装流程](docs/portable-runner-installation.md)中的独立离线路径。
 
 全新注册从零 Workspace 开始。Workspace 根目录由管理员在 Dashboard 显式添加，再通过认证的 Runner-only policy frame 私下发送给对应 Runner；它不会进入 MCP、Workspace metadata、普通日志或公网 API。重新注册只更新连接凭据，不会从当前目录创建 Workspace。Emergency Lock 要求输入 Runner ID，并不会自动终止已经启动的 Job。
 
@@ -214,7 +214,7 @@ Dashboard 生成的 enrollment code 短期有效、单次使用，重新生成�
 
 ## 本开发预览版尚未包含
 
-本开发预览版包含策略保护的 Workspace 访问、粘性 Runner 选择、持久 Job、离线 Registry 快照、认证 Runner 传输，以及 MCP Client base-scope 在线编辑。以下能力不在当前预览版范围内，属于候选路线图而非兼容性承诺：Audit Log、Policy history/rollback UI、自动 Runner 更新/回滚、完整 signed hosted bootstrap、SBOM 发布、Reset runtime、企业多租户，以及 macOS/Windows 实机服务 E2E。
+本开发预览版包含策略保护的 Workspace 访问、粘性 Runner 选择、持久 Job、离线 Registry 快照、认证 Runner 传输、MCP Client base-scope 在线编辑，以及默认关闭的固定 signed hosted bootstrap 实现。自动 Runner 更新/回滚、SBOM 发布、Reset runtime、企业多租户、macOS/Windows 实机服务 E2E 仍属于候选路线图而非兼容性承诺。
 
 投入运行前，管理员应在目标环境验证：
 
@@ -222,9 +222,9 @@ Dashboard 生成的 enrollment code 短期有效、单次使用，重新生成�
 - 外部 MCP 客户端行为，以及基础设施对包含凭据的 URL path 的日志处理；
 - 手工验证 portable artifact 后的安装与目标操作系统服务 provision；
 - macOS 与 Windows 的原生服务生命周期和低权限行为；
-- artifact manifest/signature 校验和自身的恢复流程。
+- 固定 release 的 signature/artifact 验证、Worker bootstrap 信任边界及其恢复流程。
 
-本预览版中的 hosted bootstrap 不可用。请使用手工验证的 portable artifact；自动 Runner 更新、下载和回滚不在当前预览版范围内。
+本预览版的 hosted bootstrap 默认关闭；只有精确 fixed signed release 已发布、独立验证并在 Worker 部署中显式确认后才会启用。在此之前请使用手工验证的 portable artifact；自动 Runner 更新、下载和回滚不在当前预览版范围内。
 
 Runmesh 不是操作系统级 sandbox；当前预览版也不包含租户隔离、自动 failover、入站 SSH、公网 Runner HTTP server、Hosted IDE、计费、Teams/组织、MCP Tasks、PTY/Web Terminal、浏览器自动化、AI Agent、RAG 或模型网关。这些描述的是当前预览版范围，不是永久性的兼容性承诺。
 

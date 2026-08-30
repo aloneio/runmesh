@@ -21,6 +21,7 @@ import {
   verifyPassword,
 } from "./security.js";
 import { readCappedFormData, readCappedText as readBodyText } from "./body.js";
+import { fixedReleaseDescriptor, renderPosixInstaller, renderPowerShellInstaller, signedReleaseIsAvailable, type FixedReleaseDescriptor } from "./installer.js";
 
 export { RegistryDO, RunnerDO };
 
@@ -31,16 +32,7 @@ const SETUP_CSRF_COOKIE = "__Host-runmesh_setup_csrf";
 const LOGIN_CSRF_COOKIE = "__Host-runmesh_login_csrf";
 const MCP_SECRET_RE = /^[A-Za-z0-9_-]{43}$/;
 
-export interface RunnerReleaseDescriptor {
-  readonly channel: "stable";
-  readonly current_version: string;
-  readonly latest_version: string;
-  readonly package_name: string;
-  readonly package_version: string;
-  readonly package_spec: string;
-  readonly artifacts: Readonly<Record<"linux-x64" | "linux-arm64" | "darwin-x64" | "darwin-arm64" | "windows-x64", { readonly url: string; readonly sha256: string }>> | null;
-  /** Backward-compatible source/checksum view for the configured package. */
-  readonly artifact: { readonly source: string; readonly checksum?: { readonly algorithm: "sha256"; readonly value: string } } | null;
+export interface RunnerReleaseDescriptor extends FixedReleaseDescriptor {
   readonly protocol: { readonly min_version: number; readonly max_version: number };
 }
 
@@ -54,8 +46,8 @@ async function handleRequest(request: Request, env: WorkerEnv, _ctx: ExecutionCo
   const url = new URL(request.url);
   if (url.pathname === "/health") return Response.json({ ok: true, service: "runmesh-agent-control-plane" });
   if (url.pathname === "/assets/logo.png" || url.pathname === "/assets/favicon.png") return asset(request, env);
-  if (url.pathname === "/runner/install.sh") return runnerInstallScript(request, url);
-  if (url.pathname === "/runner/install.ps1") return runnerInstallPowerShell(request, url);
+  if (url.pathname === "/runner/install.sh") return runnerInstallScript(request, url, env);
+  if (url.pathname === "/runner/install.ps1") return runnerInstallPowerShell(request, url, env);
   if (url.pathname === "/runner/releases/latest" || url.pathname === "/runner/releases/stable") return runnerRelease(request, env);
   if (isMcpPath(url.pathname)) return handleMcpSecret(request, env, url);
   if (url.pathname === "/mcp") return notFound();
@@ -83,48 +75,42 @@ async function asset(request: Request, env: WorkerEnv): Promise<Response> {
 }
 
 export interface RunnerReleaseEnvironment {
-  /** @deprecated Hosted bootstrap is unavailable in v0.1.0-dev.2; this value is ignored. */
-  readonly RUNNER_PACKAGE_SPEC?: string;
-  /** @deprecated Hosted bootstrap is unavailable in v0.1.0-dev.2; this value is ignored. */
-  readonly ALLOW_LEGACY_UNSIGNED_BOOTSTRAP?: string;
-  /** @deprecated Hosted bootstrap is unavailable in v0.1.0-dev.2; this value is ignored. */
-  readonly RUNNER_PACKAGE_NAME?: string;
-  /** @deprecated Hosted bootstrap is unavailable in v0.1.0-dev.2; this value is ignored. */
-  readonly RUNNER_PACKAGE_VERSION?: string;
-  /** @deprecated Hosted bootstrap is unavailable in v0.1.0-dev.2; this value is ignored. */
-  readonly RUNNER_ARTIFACT_SHA256?: string;
-  /** @deprecated Hosted bootstrap is unavailable in v0.1.0-dev.2; this value is ignored. */
-  readonly RUNNER_ARTIFACTS_JSON?: string;
+  /**
+   * Explicit deployment acknowledgement set only after the immutable fixed
+   * GitHub prerelease has been published and independently verified. Other
+   * values fail closed; URLs, packages and version strings are never accepted.
+   */
+  readonly RUNMESH_SIGNED_RELEASE_AVAILABLE?: string;
 }
 
-/** Hosted distribution is deliberately unavailable for this preview. */
-export function runnerReleaseDescriptor(_env: RunnerReleaseEnvironment): RunnerReleaseDescriptor & { readonly distributable: boolean } {
-  return {
-    channel: "stable", package_name: "", package_version: "", package_spec: "", current_version: "", latest_version: "", artifact: null, artifacts: null,
-    distributable: false, protocol: { min_version: PROTOCOL_MIN_VERSION, max_version: PROTOCOL_CURRENT_VERSION },
-  };
+export function runnerReleaseDescriptor(env: RunnerReleaseEnvironment): RunnerReleaseDescriptor {
+  return { ...fixedReleaseDescriptor(signedReleaseIsAvailable(env.RUNMESH_SIGNED_RELEASE_AVAILABLE)), protocol: { min_version: PROTOCOL_MIN_VERSION, max_version: PROTOCOL_CURRENT_VERSION } };
 }
 function runnerRelease(request: Request, env: WorkerEnv): Response {
   if (request.method !== "GET" && request.method !== "HEAD") { void discardBody(request); return methodNotAllowed("GET, HEAD"); }
   const descriptor = runnerReleaseDescriptor(env);
   return new Response(JSON.stringify({ ...descriptor, schema_version: 1, published_at: null }), { headers: publicInstallerHeaders("application/json; charset=utf-8") });
 }
-function runnerInstallScript(request: Request, _url: URL): Response {
+function runnerInstallScript(request: Request, url: URL, env: WorkerEnv): Response {
   if (request.method !== "GET" && request.method !== "HEAD") { void discardBody(request); return methodNotAllowed("GET, HEAD"); }
-  const content = `#!/usr/bin/env sh
+  const descriptor = runnerReleaseDescriptor(env);
+  const content = descriptor.distributable
+    ? renderPosixInstaller(url.origin)
+    : `#!/usr/bin/env sh
 set -eu
-printf '%s\n' \
-  'error: Hosted bootstrap is not available in this development preview.' \
-  'Download and verify the portable Runner artifact, then use coding-runner enroll and coding-runner install.' >&2
+printf '%s\\n' 'error: The fixed signed Runmesh v0.1.0-dev.2 release is not enabled on this deployment.' 'Use the manual verified portable-artifact route until the exact immutable release is available.' >&2
 exit 1
 `;
   return new Response(content, { headers: publicInstallerHeaders("text/x-shellscript; charset=utf-8") });
 }
-function runnerInstallPowerShell(request: Request, _url: URL): Response {
+function runnerInstallPowerShell(request: Request, url: URL, env: WorkerEnv): Response {
   if (request.method !== "GET" && request.method !== "HEAD") { void discardBody(request); return methodNotAllowed("GET, HEAD"); }
-  const content = `$ErrorActionPreference = 'Stop'
+  const descriptor = runnerReleaseDescriptor(env);
+  const content = descriptor.distributable
+    ? renderPowerShellInstaller(url.origin)
+    : `$ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-Write-Error 'Hosted bootstrap is not available in this development preview. Download and verify the portable Runner artifact, then use coding-runner enroll and coding-runner install.'
+Write-Error 'The fixed signed Runmesh v0.1.0-dev.2 release is not enabled on this deployment. Use the manual verified portable-artifact route until the exact immutable release is available.'
 exit 1
 `;
   return new Response(content, { headers: publicInstallerHeaders("text/plain; charset=utf-8") });
@@ -158,10 +144,7 @@ function safeDisplayText(value: unknown, max: number): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= max && !/[\u0000-\u001f\u007f<>]/.test(value);
 }
 async function readEnrollmentBody(request: Request): Promise<Record<string, unknown> | undefined> {
-  const length = request.headers.get("content-length");
-  if (length !== null && (!/^\d+$/.test(length) || Number(length) > 4_096)) { await discardBody(request); return undefined; }
-  const body = typeof request.body === "undefined" ? undefined : await request.text();
-  if (body !== undefined && new TextEncoder().encode(body).byteLength > 4_096) return undefined;
+  const body = await readBodyText(request, 4_096);
   try { return record(body === undefined ? undefined : JSON.parse(body) as unknown); } catch { return undefined; }
 }
 function enrollmentError(): Response { return new Response("invalid enrollment", { status: 401, headers: credentialHeaders("text/plain; charset=utf-8") }); }
@@ -379,7 +362,7 @@ async function createBrowserRunner(env: WorkerEnv, form: FormData, baseUrl: stri
   if (!isSafeIdentifier(runnerId) || typeof displayName !== "string" || !validLabel(displayName)) return adminError(400, "Runner identifier or display name is invalid.");
   const response = await runnerRegistryRequest(env, runnerId, "/add", "POST", JSON.stringify({ display_name: displayName }));
   if (!response.ok) return adminError(response.status === 409 ? 409 : 400, "Runner could not be added.");
-  return runnerEnrollmentPage(baseUrl, runnerId, await createEnrollmentCode(env, runnerId), String(form.get("csrf_token") ?? ""));
+  return runnerEnrollmentPage(env, baseUrl, runnerId, await createEnrollmentCode(env, runnerId), String(form.get("csrf_token") ?? ""));
 }
 async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, baseUrl: string, runnerId: string, action: "rename" | "rotate" | "revoke" | "delete" | "enrollment" | "permissions" | "version-policy" | "emergency-lock" | "workspace-create" | "workspace-update" | "workspace-delete"): Promise<Response> {
   if (action === "version-policy") {
@@ -474,9 +457,9 @@ async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, baseUrl
       return adminError(response.status === 404 ? 404 : 400, "Runner credential rotation failed.");
     }
     if (canFence) { try { await revokeRunnerTransport(env, runnerId, mutationId); } catch { /* credential generation invalidates old transport */ } }
-    return runnerEnrollmentPage(baseUrl, runnerId, await createEnrollmentCode(env, runnerId), String(form.get("csrf_token") ?? ""), true);
+    return runnerEnrollmentPage(env, baseUrl, runnerId, await createEnrollmentCode(env, runnerId), String(form.get("csrf_token") ?? ""), true);
   }
-  return runnerEnrollmentPage(baseUrl, runnerId, await createEnrollmentCode(env, runnerId), String(form.get("csrf_token") ?? ""), true);
+  return runnerEnrollmentPage(env, baseUrl, runnerId, await createEnrollmentCode(env, runnerId), String(form.get("csrf_token") ?? ""), true);
 }
 async function consumeInternalNonce(env: WorkerEnv, nonce: string, expiresAtMs: number): Promise<boolean> {
   const body = JSON.stringify({ nonce, expires_at_ms: expiresAtMs });
@@ -2822,12 +2805,21 @@ pre{
 }
 </style>`; }
 function adminScript(): string { return `<script>(function(){var key='runmesh-theme';var values=['system','light','dark'];function preference(){try{var value=localStorage.getItem(key);return values.indexOf(value)>=0?value:'system'}catch(_){return 'system'}}function label(value){var zh=document.documentElement.lang==='zh-CN';if(!zh)return 'Theme: '+value;return value==='light'?'主题：浅色':value==='dark'?'主题：深色':'主题：跟随系统'}function apply(value){if(value==='light'||value==='dark')document.documentElement.dataset.theme=value;else delete document.documentElement.dataset.theme;document.querySelectorAll('[data-theme-toggle]').forEach(function(button){var text=label(value);button.textContent=text;button.setAttribute('aria-label',text)})}document.querySelectorAll('[data-theme-toggle]').forEach(function(button){button.addEventListener('click',function(){var current=preference();var next=values[(values.indexOf(current)+1)%values.length];try{localStorage.setItem(key,next)}catch(_){}apply(next)})});apply(preference())})();var ZH_UI_TEXT=${JSON.stringify(ZH_UI_TEXT)};function translateTextNodes(root){var walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode:function(node){if(!node.nodeValue||!node.nodeValue.trim())return NodeFilter.FILTER_REJECT;for(var el=node.parentElement;el;el=el.parentElement){if(el.hasAttribute('data-no-i18n')||el.tagName==='CODE'||el.tagName==='PRE'||el.tagName==='SCRIPT'||el.tagName==='STYLE'||el.tagName==='INPUT'||el.tagName==='TEXTAREA')return NodeFilter.FILTER_REJECT}return NodeFilter.FILTER_ACCEPT}});var nodes=[];while(walker.nextNode())nodes.push(walker.currentNode);nodes.forEach(function(node){var text=node.nodeValue||'';var trimmed=text.trim();var mapped=ZH_UI_TEXT[trimmed];if(text.indexOf('coding:')>=0)return;if(mapped)node.nodeValue=text.replace(trimmed,mapped);else Object.keys(ZH_UI_TEXT).sort(function(a,b){return b.length-a.length}).forEach(function(key){if(node.nodeValue&&node.nodeValue.indexOf(key)>=0)node.nodeValue=node.nodeValue.split(key).join(ZH_UI_TEXT[key])})})}function translateAttributes(root){['aria-label','alt','placeholder','title'].forEach(function(name){root.querySelectorAll('['+name+']').forEach(function(element){if(element.closest('[data-no-i18n]'))return;var value=element.getAttribute(name)||'';Object.keys(ZH_UI_TEXT).sort(function(a,b){return b.length-a.length}).forEach(function(key){if(value.indexOf(key)>=0)value=value.split(key).join(ZH_UI_TEXT[key])});element.setAttribute(name,value)})})}function applyLocale(locale){var zh=locale==='zh-CN';document.documentElement.lang=zh?'zh-CN':'en';document.querySelectorAll('[data-lang-toggle]').forEach(function(item){var active=item.getAttribute('data-lang-toggle')===locale;item.setAttribute('aria-current',active?'true':'false')});if(zh){translateTextNodes(document.body);translateAttributes(document);var title=document.title;Object.keys(ZH_UI_TEXT).sort(function(a,b){return b.length-a.length}).forEach(function(key){if(title.indexOf(key)>=0)title=title.split(key).join(ZH_UI_TEXT[key])});document.title=title}var theme=document.querySelector('[data-theme-toggle]');if(theme){var value=preference();var text=label(value);theme.textContent=text;theme.setAttribute('aria-label',text)}}function requestedLocale(){var query=new URLSearchParams(location.search).get('lang');if(query==='zh-CN'||query==='zh')return 'zh-CN';if(query==='en')return 'en';var match=/runmesh_lang=(zh-CN|en)/.exec(document.cookie||'');if(match)return match[1];return navigator.language&&navigator.language.toLowerCase().startsWith('zh')?'zh-CN':'en'}function rememberLocale(locale){document.cookie='runmesh_lang='+locale+'; Max-Age=31536000; Path=/; SameSite=Lax'}document.querySelectorAll('[data-lang-toggle]').forEach(function(link){link.addEventListener('click',function(event){var locale=link.getAttribute('data-lang-toggle')||'en';rememberLocale(locale);if(locale==='zh-CN'&&new URLSearchParams(location.search).get('lang')!=='zh-CN'){event.preventDefault();var url=new URL(location.href);url.searchParams.set('lang','zh-CN');location.href=url.toString()}else if(locale==='en'&&new URLSearchParams(location.search).has('lang')){event.preventDefault();var url=new URL(location.href);url.searchParams.set('lang','en');location.href=url.toString()}})});var locale=requestedLocale();if(new URLSearchParams(location.search).has('lang'))rememberLocale(locale);applyLocale(locale);function copyText(text){if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text);return}var area=document.createElement('textarea');area.value=text;area.setAttribute('readonly','');area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.select();document.execCommand('copy');area.remove()}document.querySelectorAll('[data-copy]').forEach(function(button){button.addEventListener('click',function(){copyText(button.getAttribute('data-copy')||'');button.textContent=document.documentElement.lang==='zh-CN'?'已复制':'Copied';button.classList.add('copied')})});document.querySelectorAll('[data-tab]').forEach(function(tab){tab.addEventListener('click',function(){var target=tab.getAttribute('data-tab');document.querySelectorAll('[data-tab]').forEach(function(item){item.setAttribute('aria-selected',String(item===tab));item.tabIndex=item===tab?0:-1});document.querySelectorAll('[data-panel]').forEach(function(panel){panel.hidden=panel.getAttribute('data-panel')!==target})});tab.addEventListener('keydown',function(event){if(event.key==='ArrowLeft'||event.key==='ArrowRight'){var tabs=Array.prototype.slice.call(document.querySelectorAll('[data-tab]'));var next=tabs[(tabs.indexOf(tab)+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length];next.focus();next.click()}})});document.querySelectorAll('.pwd-toggle-btn').forEach(function(btn){btn.addEventListener('click',function(){var wrap=btn.closest('.password-input-wrap');if(!wrap)return;var input=wrap.querySelector('input');if(!input)return;var isPwd=input.type==='password';input.type=isPwd?'text':'password';var isZh=document.documentElement.lang==='zh-CN';var label=isPwd?(isZh?'隐藏密码':'Hide password'):(isZh?'显示密码':'Show password');btn.setAttribute('aria-label',label);btn.setAttribute('title',label);btn.innerHTML=isPwd?'<svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>':'<svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';})});document.querySelectorAll('form.login-form').forEach(function(form){form.addEventListener('submit',function(){var btn=form.querySelector('.login-submit-btn');if(!btn||btn.disabled)return;var isZh=document.documentElement.lang==='zh-CN';var isSetup=form.getAttribute('action')==='/setup';var loadingText=isSetup?(isZh?'正在初始化...':'Initializing...'):(isZh?'正在登录...':'Signing in...');var origWidth=btn.offsetWidth;btn.style.width=origWidth>0?(origWidth+'px'):'100%';btn.disabled=true;btn.textContent=loadingText;try{form.submit();}catch(e){}});});</script>`; }
-function runnerEnrollmentPage(baseUrl: string, runnerId: string, code: string | undefined, csrf: string, _reEnroll = false): Response {
+function runnerEnrollmentPage(env: RunnerReleaseEnvironment, baseUrl: string, runnerId: string, code: string | undefined, csrf: string, _reEnroll = false): Response {
   if (code === undefined) return adminError(503, "Enrollment code could not be generated.");
-  const enroll = `coding-runner enroll --server ${new URL("/runner/enroll", baseUrl).toString()} --code ${code}`;
-  const command = `${enroll}\ncoding-runner install`;
-  const tabs = Object.entries({ linux: command, macos: command, windows: command }).map(([platform, value], index) => `<button role="tab" id="tab-${platform}" aria-controls="panel-${platform}" aria-selected="${index === 0 ? "true" : "false"}" tabindex="${index === 0 ? "0" : "-1"}" data-tab="${platform}">${platform === "macos" ? "macOS" : platform === "windows" ? "Windows" : "Linux"}</button><section role="tabpanel" id="panel-${platform}" aria-labelledby="tab-${platform}" ${index === 0 ? "" : "hidden"} data-panel="${platform}"><pre><code>${escapeHtml(value)}</code></pre><button type="button" class="button secondary" data-copy="${escapeHtml(enroll)}">Copy enrollment command</button></section>`).join("");
-  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body">${languageSwitch()}<main class="shell enrollment-shell"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><div class="dialog-icon-row">${meshMarkSvg("dialog-mark")}</div><p class="eyebrow">Manual portable-artifact enrollment</p><h1 id="enrollment-title">Enroll Runner manually</h1><p class="lede">Hosted installers are disabled in this development preview. Download and verify the portable Runner artifact first. This one-time code expires in 30 minutes and will not be shown again.</p></div></section><div class="enrollment-meta-box"><span class="form-stat-label">Target Runner ID</span><span class="mono">${escapeHtml(runnerId)}</span></div><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.</p><div class="top-actions dialog-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
+  const release = runnerReleaseDescriptor(env);
+  const bootstrap = release.distributable;
+  const shellCommand = `curl --fail --location --proto '=https' --tlsv1.2 ${new URL("/runner/install.sh", baseUrl).toString()} | sudo sh`;
+  const powerShellCommand = `Invoke-WebRequest -UseBasicParsing ${new URL("/runner/install.ps1", baseUrl).toString()} | Invoke-Expression`;
+  const manualEnroll = `coding-runner enroll --server ${new URL("/runner/enroll", baseUrl).toString()} --code-stdin`;
+  const manualCommand = `${manualEnroll}\ncoding-runner install`;
+  const commands = bootstrap ? { linux: shellCommand, macos: shellCommand, windows: powerShellCommand } : { linux: manualCommand, macos: manualCommand, windows: manualCommand };
+  const tabs = Object.entries(commands).map(([platform, value], index) => `<button role="tab" id="tab-${platform}" aria-controls="panel-${platform}" aria-selected="${index === 0 ? "true" : "false"}" tabindex="${index === 0 ? "0" : "-1"}" data-tab="${platform}">${platform === "macos" ? "macOS" : platform === "windows" ? "Windows" : "Linux"}</button><section role="tabpanel" id="panel-${platform}" aria-labelledby="tab-${platform}" ${index === 0 ? "" : "hidden"} data-panel="${platform}"><pre><code>${escapeHtml(value)}</code></pre><button type="button" class="button secondary" data-copy="${escapeHtml(value)}">Copy ${bootstrap ? "installer" : "enrollment"} command</button></section>`).join("");
+  const title = bootstrap ? "Signed fixed-preview enrollment" : "Manual portable-artifact enrollment";
+  const instruction = bootstrap
+    ? "The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments."
+    : "The fixed signed hosted release is not enabled on this deployment. Download and verify the portable Runner artifact first, then paste this code only into the local prompt requested by --code-stdin.";
+  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><script>try{var t=localStorage.getItem('runmesh-theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(_){}</script><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body">${languageSwitch()}${themeControl()}<main class="shell enrollment-shell"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><div class="dialog-icon-row">${meshMarkSvg("dialog-mark")}</div><p class="eyebrow">${title}</p><h1 id="enrollment-title">Enroll Runner</h1><p class="lede">${instruction} This one-time code expires in 30 minutes and will not be shown again.</p></div></section><div class="enrollment-meta-box"><span class="form-stat-label">Target Runner ID</span><span class="mono">${escapeHtml(runnerId)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">One-time enrollment code</span><code class="mono" data-no-i18n>${escapeHtml(code)}</code><span class="muted font-12">Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.</span></div><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.</p><div class="top-actions dialog-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
 }
 function secretCreatedPage(title: string, url: string): string { return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${escapeHtml(title)}</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card secret-card"><div class="secret-brand-row">${meshMarkSvg("secret-mesh-mark")}<span class="brand-name">Runmesh</span></div><p class="brand-kicker">Runmesh</p><h1>${escapeHtml(title)}</h1><p class="lede">Copy this URL now. It will not be shown again.</p><code>${escapeHtml(url)}</code><div class="secret-actions"><button type="button" class="button" data-copy="${escapeHtml(url)}">Copy MCP URL</button><a class="button secondary" href="/admin">Back to admin</a></div></section></main>${adminScript()}</body></html>`; }
 function secretUrl(base: string, secret: string): string { const url = new URL(base); url.pathname = `/${secret}/mcp`; url.search = ""; return url.toString(); }
