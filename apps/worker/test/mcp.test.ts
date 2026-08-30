@@ -305,6 +305,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(setupCsrf).toBe(setupCookie);
     expect(initial.headers.get("cache-control")).toBe("no-store");
     expect(initial.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(initial.headers.get("content-security-policy")).toContain("img-src 'self' data:");
     expect(initial.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
 
     const rejectedCsrf = await submit("https://worker.test/setup", { setup_token: setupToken, password, confirm_password: password }, new Map(), false);
@@ -413,8 +414,25 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
   });
 
   it("renders responsive dashboard sections, safe runner data, client routing, and one-time enrollment commands", async () => {
+    const logoAsset = await SELF.fetch("https://worker.test/assets/logo.png");
+    expect(logoAsset.status).toBe(200);
+    expect(logoAsset.headers.get("content-type")).toMatch(/^image\/png/i);
+    expect((await logoAsset.arrayBuffer()).byteLength).toBeGreaterThan(1_000);
+    const faviconAsset = await SELF.fetch("https://worker.test/assets/favicon.png", { method: "HEAD" });
+    expect(faviconAsset.status).toBe(200);
+    expect(faviconAsset.headers.get("content-type")).toMatch(/^image\/png/i);
     const loginPage = await SELF.fetch("https://worker.test/");
-    const loginCsrf = formToken(await loginPage.text());
+    const loginHtml = await loginPage.text();
+    const logoTag = /<img\b[^>]*\bsrc=["']\/assets\/logo\.png["'][^>]*>/i;
+    const logoTagWithAlt = /<img\b(?=[^>]*\bsrc=["']\/assets\/logo\.png["'])(?=[^>]*\balt=["'][^"']+["'])[^>]*>/i;
+    expect(loginHtml).toMatch(logoTag);
+    expect(loginHtml).toMatch(logoTagWithAlt);
+    const passwordToggleTags = [...loginHtml.matchAll(/<button\b[^>]*\bpwd-toggle-btn\b[^>]*>/gi)].map((match) => match[0]);
+    expect(passwordToggleTags.length).toBeGreaterThan(0);
+    expect(passwordToggleTags.every((tag) => !/\btabindex\s*=\s*["']-1["']/i.test(tag))).toBe(true);
+    expect(loginHtml).toContain('M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z');
+    expect(loginHtml).not.toContain('M1 12s4-8 11-8 11 8 11 8-11 8-11 8-11-8-11-8z');
+    const loginCsrf = formToken(loginHtml);
     const loginCookie = cookieFrom(loginPage, "__Host-runmesh_login_csrf");
     const loggedIn = await submit("https://worker.test/login", { csrf_token: loginCsrf, password }, jar([["__Host-runmesh_login_csrf", loginCookie]]));
     const csrf = cookieFrom(loggedIn, "__Host-runmesh_admin_csrf");
@@ -422,10 +440,20 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     const created = await submit("https://worker.test/admin/runners", { csrf_token: csrf, display_name: "Safe runner", runner_id: "dashboard-runner" }, adminJar);
     expect(created.status).toBe(200);
     const enrollment = await created.text();
+    expect(enrollment).toContain('class="enrollment-header"');
+    expect(enrollment).toMatch(logoTag);
+    expect(enrollment).toContain('class="enrollment-brand-logo"');
     expect(enrollment).toContain("Linux"); expect(enrollment).toContain("macOS"); expect(enrollment).toContain("Windows");
     expect(enrollment).toContain("Manual portable-artifact enrollment"); expect(enrollment).toContain("coding-runner enroll"); expect(enrollment).toContain("--code-stdin"); expect(enrollment).toContain("coding-runner install"); expect(enrollment).not.toContain("curl --fail --location"); expect(enrollment).not.toContain("Invoke-WebRequest");
     expect(enrollment).toContain("data-copy"); expect(enrollment).toContain("expires in 30 minutes");
     expect(enrollment).toContain("One-time enrollment code");
+    const enrollmentUiText = parseUiTextMap(enrollment);
+    expect(enrollmentUiText["Enroll Runner"]).toBe("注册 Runner");
+    expect(enrollmentUiText["Target Runner ID"]).toBe("目标 Runner ID");
+    expect(enrollmentUiText["One-time enrollment code"]).toBe("一次性注册代码");
+    expect(enrollmentUiText["Signed fixed-preview enrollment"]).toBe("签名固定预览版注册");
+    expect(enrollmentUiText["Copy installer command"]).toBe("复制安装器命令");
+    expect(enrollmentUiText["Paste it only into the local prompt after verification; it is deliberately excluded from copied commands."]).toContain("本地提示");
     for (const copied of enrollment.matchAll(/data-copy="([^"]*)"/g)) expect(copied[1]).not.toContain("--code ");
     expect(enrollment).not.toContain("--re-enroll"); expect(enrollment).not.toContain("-ReEnroll");
     expect(enrollment).not.toContain("--runner-id"); expect(enrollment).not.toContain("ADMIN_TOKEN"); expect(enrollment).not.toMatch(/CODING_RUNNER_TOKEN|MCP_SECRET/i);
@@ -444,22 +472,64 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     const runnerDetailHtml = await runnerDetail.text();
     expect(runnerDetailHtml).toContain("Version policy"); expect(runnerDetailHtml).toContain("Stable/latest version"); expect(runnerDetailHtml).toContain("value=\"1.2.0\""); expect(runnerDetailHtml).toContain("Pinned");
     expect(runnerDetailHtml).toContain("<!doctype html>"); expect(runnerDetailHtml).toContain('<meta name="color-scheme" content="light dark">'); expect(runnerDetailHtml).toContain('class="app-header"'); expect(runnerDetailHtml).toContain('class="active" aria-current="page" href="/admin/runners"'); expect(runnerDetailHtml).toContain('data-theme-toggle'); expect(runnerDetailHtml).toContain("localStorage.getItem('runmesh-theme')"); expect(runnerDetailHtml).toContain(':root[data-theme="dark"]'); expect(runnerDetailHtml).not.toContain("token_verifier");
+    expect(runnerDetailHtml).toMatch(logoTag); expect(runnerDetailHtml).toMatch(logoTagWithAlt);
     const dashboard = await SELF.fetch("https://worker.test/admin", { headers: { cookie: cookies(adminJar) } });
     expect(dashboard.headers.get("cache-control")).toBe("no-store");
     expect(dashboard.headers.get("content-security-policy")).toContain("script-src 'unsafe-inline'");
     const dashboardHtml = await dashboard.text();
     for (const section of ["Dashboard", "MCP Clients", "Runners", "Settings", "Active MCP clients", "Online / total runners", "Running jobs", "Recent jobs", "Add Runner", "Add MCP Client"]) expect(dashboardHtml).toContain(section);
+    expect(dashboardHtml).toMatch(logoTag); expect(dashboardHtml).toMatch(logoTagWithAlt);
     expect(dashboardHtml).toContain('data-lang-toggle="zh-CN"'); expect(dashboardHtml).toContain("var ZH_UI_TEXT="); expect(dashboardHtml).toContain("智能体控制平面"); expect(dashboardHtml).toContain("translateTextNodes"); expect(dashboardHtml).toContain("runmesh_lang");
     expect(dashboardHtml).toContain("@media(max-width:800px)"); expect(dashboardHtml).toContain("navigator.clipboard");
     expect(dashboardHtml).toContain('class="button secondary" href="/admin">Refresh</a>');
     expect(dashboardHtml).not.toContain("data-refresh");
     expect(dashboardHtml).not.toContain("token_verifier"); expect(dashboardHtml).not.toContain("workspace_root");
+    const adminScriptText = inlineScriptContaining(dashboardHtml, "function applyLocale");
+    const localeOffset = adminScriptText.indexOf("function applyLocale");
+    const firstThemeClosure = adminScriptText.indexOf("})();");
+    const localeBodyEnd = adminScriptText.indexOf("function requestedLocale", localeOffset);
+    const localeBody = adminScriptText.slice(localeOffset, localeBodyEnd < 0 ? undefined : localeBodyEnd);
+    const legacyThemeHelpersAreUsed = /\b(?:preference|label)\s*\(/.test(localeBody);
+    const themeHelpersRemainInScope = firstThemeClosure < 0 || localeOffset < firstThemeClosure || !legacyThemeHelpersAreUsed || /\b(?:function\s+preference|function\s+label|(?:var|let|const)\s+(?:preference|label))\b/.test(adminScriptText.slice(firstThemeClosure + 4, localeOffset));
+    expect(themeHelpersRemainInScope).toBe(true);
+    const zhUiText = parseUiTextMap(dashboardHtml);
+    expect(zhUiText["MCP Client"]).toBe("MCP 客户端");
+    const descriptionTranslations: readonly [string, RegExp][] = [
+      ["Inspect workspaces and read files.", /\b(?:Inspect|workspaces|read|files)\b/i],
+      ["Apply approved edits.", /\b(?:Apply|approved|edits)\b/i],
+      ["Use Host shell and control Jobs.", /\b(?:Use|control|Jobs)\b/i],
+    ];
+    for (const [source, englishWords] of descriptionTranslations) {
+      const translated = zhUiText[source];
+      expect(translated, `missing Chinese translation for ${source}`).toBeDefined();
+      if (typeof translated === "string") expect(translated).not.toMatch(englishWords);
+    }
+    for (const mixed of ["Inspect workspaces and 读取 files.", "Apply approved 编辑s.", "Use Host shell and control 任务s.", "Use Host shell and 控制 Jobs."]) expect(dashboardHtml).not.toContain(mixed);
     const clientId = /\/admin\/clients\/(client-[a-f0-9]+)\/rename/.exec(dashboardHtml)?.[1];
     expect(clientId).toBeDefined();
     const scopesDetail = await SELF.fetch(`https://worker.test/admin/clients/${clientId as string}/scopes/detail`, { headers: { cookie: cookies(adminJar) } });
     expect(scopesDetail.status).toBe(200);
     const scopesDetailHtml = await scopesDetail.text();
     expect(scopesDetailHtml).toContain("<!doctype html>"); expect(scopesDetailHtml).toContain('class="app-header"'); expect(scopesDetailHtml).toContain('class="active" aria-current="page" href="/admin/clients"'); expect(scopesDetailHtml).toContain("Base scopes"); expect(scopesDetailHtml).toContain("Each base scope has a distinct ceiling"); expect(scopesDetailHtml).toContain('data-theme-toggle'); expect(scopesDetailHtml).toContain('name="csrf_token"');
+    expect(scopesDetailHtml).toMatch(logoTag); expect(scopesDetailHtml).toMatch(logoTagWithAlt);
+    const detailScopeFormClass = /<form\b[^>]*class=["']([^"']*\bscope-editor-form\b[^"']*)["'][^>]*>/i.exec(scopesDetailHtml)?.[1] ?? "";
+    const detailStyles = /<style>([\s\S]*?)<\/style>/i.exec(scopesDetailHtml)?.[1] ?? "";
+    const normalizedStyles = detailStyles.replace(/\s+/g, " ");
+    const formGridRuleOffset = normalizedStyles.indexOf(".form-grid{");
+    const scopeFlexRuleAfterGrid = formGridRuleOffset >= 0 && /\.scope-editor-form\s*\{[^}]*display\s*:\s*flex\b/.test(normalizedStyles.slice(formGridRuleOffset));
+    expect(!/\bform-grid\b/.test(detailScopeFormClass) || scopeFlexRuleAfterGrid).toBe(true);
+    expect(normalizedStyles).toMatch(/\.table-wrap\s*\{[^}]*overflow-x\s*:\s*auto/);
+    expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*800px\)/);
+    expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*540px\)/);
+    expect(normalizedStyles).toMatch(/\.scope-editor-form\s*\{[^}]*grid-template-columns\s*:\s*1fr/);
+    expect(normalizedStyles).toMatch(/\.enrollment-dialog\s+pre\s*\{[^}]*white-space\s*:\s*pre-wrap/);
+    expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*1000px\)\s*and\s*\(min-width\s*:\s*801px\)/);
+    expect(normalizedStyles).toMatch(/\.header-actions\s*\{[^}]*overflow-x\s*:\s*auto/);
+    expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*800px\)[\s\S]*?\.header-actions\s*\{[^}]*flex-wrap\s*:\s*wrap[^}]*overflow\s*:\s*visible/);
+    expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*540px\)[\s\S]*?\.header-left\s*\{[^}]*flex-wrap\s*:\s*wrap/);
+    expect(normalizedStyles).toMatch(/\.header-left\s+\.control-nav\s*\{[^}]*width\s*:\s*100%[^}]*overflow-x\s*:\s*visible/);
+    expect(normalizedStyles).not.toMatch(/@media\s*\(max-width\s*:\s*540px\)[\s\S]*?\.action-btn-group\s*\{[^}]*flex-direction\s*:\s*column/);
+    expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*540px\)[\s\S]*?\.action-btn-group\s*\{[^}]*flex-wrap\s*:\s*nowrap/);
     const rejectedScopesDetailPost = await SELF.fetch(`https://worker.test/admin/clients/${clientId as string}/scopes/detail`, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", cookie: cookies(adminJar), origin: "https://worker.test" }, body: new URLSearchParams([["csrf_token", csrf], ["scopes", "coding:read"]]) });
     expect(rejectedScopesDetailPost.status).toBe(404);
     await expect(runInDurableObject(clientsRegistry, (instance) => instance.listMcpClients().find((client) => client.client_id === clientId))).resolves.toMatchObject({ scopes: ["coding:read", "coding:write"] });
@@ -501,7 +571,21 @@ async function mcp(url: string, body: unknown): Promise<Response> { return SELF.
 async function readMcp(response: Response): Promise<unknown> { const text = await response.text(); if (!response.headers.get("content-type")?.includes("text/event-stream")) return JSON.parse(text) as unknown; const data = text.split("\n").find((line) => line.trimStart().startsWith("data:"))?.trimStart().slice(5).trim(); return data === undefined ? undefined : JSON.parse(data) as unknown; }
 function formToken(html: string): string { const token = /name="csrf_token" value="([A-Za-z0-9_-]+)"/.exec(html)?.[1]; if (token === undefined) throw new Error("csrf token absent"); return token; }
 function oneTimeSecretUrl(html: string): string { const url = /<code>(https:\/\/worker\.test\/[A-Za-z0-9_-]{43}\/mcp)<\/code>/.exec(html)?.[1]; if (url === undefined) throw new Error("secret URL absent"); return url; }
+function inlineScriptContaining(html: string, marker: string): string {
+  const script = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map((match) => match[1] ?? "").find((value) => value.includes(marker));
+  if (script === undefined) throw new Error(`inline script marker absent: ${marker}`);
+  return script;
+}
+function parseUiTextMap(html: string): Record<string, string> {
+  const script = inlineScriptContaining(html, "var ZH_UI_TEXT=");
+  const encoded = /var\s+ZH_UI_TEXT\s*=\s*([\s\S]*?);\s*function\s+\w+/.exec(script)?.[1];
+  if (encoded === undefined) throw new Error("Chinese UI text map absent");
+  const parsed: unknown = JSON.parse(encoded);
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Chinese UI text map is invalid");
+  return parsed as Record<string, string>;
+}
 function cookieFrom(response: Response, name: string): string { const setCookie = response.headers.get("set-cookie") ?? ""; const value = new RegExp(`${name}=([^;]+)`).exec(setCookie)?.[1]; if (value === undefined) throw new Error(`cookie ${name} absent`); return value; }
 function jar(entries: readonly (readonly [string, string])[]): CookieJar { return new Map(entries); }
 function cookies(values: CookieJar): string { return [...values].map(([name, value]) => `${name}=${value}`).join("; "); }
 async function submit(url: string, values: Record<string, string>, valuesJar: CookieJar, origin = true): Promise<Response> { return SELF.fetch(url, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", cookie: cookies(valuesJar), ...(origin ? { origin: "https://worker.test" } : {}) }, body: new URLSearchParams(values) }); }
+
