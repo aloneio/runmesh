@@ -439,7 +439,7 @@ async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, baseUrl
     const mutationId = `credential-rotated-${crypto.randomUUID()}`;
     const runnerResponse = await runnerRegistryRequest(env, runnerId, "", "GET", "");
     const runner = runnerResponse.ok ? record(await json(runnerResponse)) : undefined;
-    const canFence = runnerResponse.ok && Number(runner?.connection_epoch ?? 0) > 0 && typeof runner?.session_id === "string" && runner?.policy_status === "applied" && typeof runner?.applied_policy_revision === "number" && typeof runner?.active_policy_checksum === "string";
+    const canFence = runnerResponse.ok && Number(runner?.connection_epoch ?? 0) > 0 && Number(runner?.credential_version ?? 0) > 0 && typeof runner?.session_id === "string" && runner.session_id.length > 0 && runner?.state === "online";
     if (canFence) {
       const fenced = await fenceRunnerTransport(env, runnerId, mutationId);
       if (!fenced.ok) return adminError(503, "Runner credential rotation could not fence the Runner.");
@@ -2959,8 +2959,8 @@ async function registerRunner(env: WorkerEnv, runnerId: string, input: Record<st
     try { existingResponse = await runnerRegistryRequest(env, runnerId, "", "GET", ""); } catch { return new Response("registry unavailable", { status: 503 }); }
     if (!existingResponse.ok && existingResponse.status !== 404) return new Response("registry unavailable", { status: 503 });
     const existing = existingResponse.ok;
-    const existingRecord = existing ? record(await json(existingResponse)) : undefined;
-    const canFenceExisting = existing && Number(existingRecord?.connection_epoch ?? 0) > 0 && typeof existingRecord?.session_id === "string" && existingRecord?.policy_status === "applied" && typeof existingRecord?.applied_policy_revision === "number" && typeof existingRecord?.active_policy_checksum === "string";
+    const runner = existing ? record(await json(existingResponse)) : undefined;
+    const canFenceExisting = existing && Number(runner?.connection_epoch ?? 0) > 0 && Number(runner?.credential_version ?? 0) > 0 && typeof runner?.session_id === "string" && runner.session_id.length > 0 && runner?.state === "online";
   if (canFenceExisting) {
     const fenced = await fenceRunnerTransport(env, runnerId, mutationId);
     if (!fenced.ok) return new Response("runner unavailable", { status: 503 });
