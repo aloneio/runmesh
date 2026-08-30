@@ -494,6 +494,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(themeHelpersRemainInScope).toBe(true);
     const zhUiText = parseUiTextMap(dashboardHtml);
     expect(zhUiText["MCP Client"]).toBe("MCP 客户端");
+    expect(zhUiText["Clients"]).toBe("MCP 客户端");
     const descriptionTranslations: readonly [string, RegExp][] = [
       ["Inspect workspaces and read files.", /\b(?:Inspect|workspaces|read|files)\b/i],
       ["Apply approved edits.", /\b(?:Apply|approved|edits)\b/i],
