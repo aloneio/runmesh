@@ -1,9 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { build } from "esbuild";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { buildManifest, releaseArtifactName, releaseTag, validateManifest } from "../scripts/release-manifest.mjs";
 import { verifyReleaseAssets } from "../scripts/release-verify.mjs";
 import { signReleaseManifest, verifyReleaseManifest } from "../scripts/release-signature.mjs";
@@ -18,10 +21,13 @@ test("pins manually-dispatched releases to the triggering dev commit", async () 
   assert.equal(workflow.includes("ref: ${{ github.sha }}"), true);
   assert.equal(workflow.includes('test "$GITHUB_REF" = "refs/heads/dev"'), true);
   assert.equal(workflow.includes('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"'), true);
-  assert.equal(workflow.includes("node scripts/release-verify.mjs release/download/manifest.json"), true);
+  assert.equal(workflow.includes("node scripts/release-verify.mjs release/assets/manifest.json"), true);
   assert.equal(workflow.includes("release/download/trust-keyring.json \"$RELEASE_SIGNING_KEY_ID\""), false);
-  assert.equal(workflow.includes("cmp release/download/trust-keyring.json release/trust-keyring.json"), true);
-  assert.equal(workflow.includes("sha256sum *.tgz manifest.json > SHA256SUMS"), true);
+  assert.equal(workflow.includes("actions/upload-artifact@v4"), true);
+  assert.equal(workflow.includes("contents: read"), true);
+  assert.equal(workflow.includes("gh release create"), false);
+  assert.equal(workflow.includes('git push origin "v${RELEASE_VERSION}"'), false);
+  assert.equal(workflow.includes("sha256sum *.tgz manifest.json manifest.sig manifest.signature.json sbom.spdx.json LICENSE NOTICE THIRD_PARTY_NOTICES.md trust-keyring.json > SHA256SUMS"), true);
 });
 
 test("builds a single portable development artifact manifest from the product version", async () => {
@@ -70,6 +76,30 @@ test("rejects an artifact replaced after checksums are regenerated", async () =>
     await signReleaseManifest({ manifestPath: manifest, signaturePath: signature, descriptorPath: descriptor, keyringPath: keyring, keyId, privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }) });
     await writeFile(artifact, "tampered artifact");
     await assert.rejects(verifyReleaseAssets({ manifestPath: manifest, signaturePath: signature, descriptorPath: descriptor, keyringPath: keyring, expectedKeyId: keyId, expectedVersion: productVersion }), /mismatch/);
+  } finally { await f.cleanup(); }
+});
+test("embeds the independently reviewed fixed release key and immutable installer contract", async () => {
+  const f = await fixture();
+  try {
+    const outfile = join(f.root, "installer.mjs");
+    await build({ entryPoints: [join(repositoryRoot, "apps/worker/src/installer.ts")], outfile, bundle: true, platform: "node", format: "esm", target: "node20" });
+    const installer = await import(`${pathToFileURL(outfile).href}?${Date.now()}`);
+      const keyring = JSON.parse(await readFile(join(repositoryRoot, "release/trust-keyring.json"), "utf8"));
+      const key = keyring.keys.find((item) => item.key_id === installer.FIXED_RELEASE_KEY_ID);
+      assert.equal(installer.FIXED_RELEASE_VERSION, productVersion);
+    assert.equal(key?.public_key_pem, installer.FIXED_RELEASE_PUBLIC_KEY_PEM);
+    assert.equal(installer.FIXED_ARTIFACT_URL, `https://github.com/aloneio/runmesh/releases/download/v${productVersion}/runmesh-runner-${productVersion}.tgz`);
+    const shell = installer.renderPosixInstaller("https://worker.test");
+    const powershell = installer.renderPowerShellInstaller("https://worker.test");
+    for (const text of [shell, powershell]) {
+      assert.equal(text.includes("trust-keyring.json"), false);
+      assert.equal(text.includes("@latest"), false);
+      assert.equal(text.includes("npmjs.com"), false);
+      assert.equal(text.includes("signature does not verify"), true);
+      assert.equal(text.includes("artifact size or SHA-256 mismatch"), true);
+      assert.equal(text.includes("manifest.signature.json"), true);
+      assert.equal(text.includes("SHA256SUMS"), true);
+    }
   } finally { await f.cleanup(); }
 });
 test("signs and rejects a tampered manifest with Ed25519", async () => {
