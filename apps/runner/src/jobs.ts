@@ -226,6 +226,7 @@ export class JobManager {
     let stdout: Awaited<ReturnType<typeof open>> | undefined;
     let stderr: Awaited<ReturnType<typeof open>> | undefined;
     let child: ChildProcess;
+    let running: JobRecord;
     try {
       stdout = await open(this.logPath(job.job_id, "stdout"), "a", 0o600);
       stderr = await open(this.logPath(job.job_id, "stderr"), "a", 0o600);
@@ -236,6 +237,16 @@ export class JobManager {
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       });
+      // Publish the active record and attach all listeners in the same
+      // synchronous turn as spawn. A child can exit before the next await;
+      // finish must then observe an active job rather than the queued record.
+      running = {
+        ...job, status: "running", pid: child.pid ?? null, started_at_ms: Date.now(), updated_at_ms: Date.now(),
+      };
+      this.jobs.set(job.job_id, running);
+      this.processes.set(job.job_id, child);
+      child.once("error", () => { void this.finish(job.job_id, null, null, true).catch(() => undefined); });
+      child.once("close", (code, signal) => { void this.finish(job.job_id, code, signal, false).catch(() => undefined); });
       this.attachLogCapture(job.job_id, child);
     } catch (error) {
       await Promise.all([stdout?.close().catch(() => undefined), stderr?.close().catch(() => undefined)]);
@@ -249,15 +260,6 @@ export class JobManager {
       throw error;
     }
 
-    // Listeners are attached before any asynchronous metadata/fingerprint work,
-    // so asynchronous ENOENT and very fast close events cannot be missed.
-    child.once("error", () => { void this.finish(job.job_id, null, null, true).catch(() => undefined); });
-    child.once("close", (code, signal) => { void this.finish(job.job_id, code, signal, false).catch(() => undefined); });
-    const running: JobRecord = {
-      ...job, status: "running", pid: child.pid ?? null, started_at_ms: Date.now(), updated_at_ms: Date.now(),
-    };
-    this.jobs.set(job.job_id, running);
-    this.processes.set(job.job_id, child);
     await Promise.all([stdout.close(), stderr.close()]);
     const beforeRunningPersist = this.jobs.get(job.job_id);
     if (beforeRunningPersist === undefined || !isActive(beforeRunningPersist)) return this.get(job.job_id);
