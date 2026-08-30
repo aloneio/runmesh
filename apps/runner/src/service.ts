@@ -131,7 +131,7 @@ export function serviceLayout(options: ServiceAdapterOptions = {}): ServiceLayou
       const stateRoot = options.dataRoot ?? "/var/lib/runmesh";
       const logRoot = options.logRoot ?? "/var/log/runmesh";
       const manifestPath = join(options.manifestDir ?? "/etc/systemd/system", LINUX_SERVICE_NAME);
-      return { installRoot, configRoot, stateRoot, logRoot, manifestPath, executablePath: options.executablePath ?? join(installRoot, "current", "coding-runner") };
+      return { installRoot, configRoot, stateRoot, logRoot, manifestPath, executablePath: options.executablePath ?? join(installRoot, "current", "bin", "coding-runner") };
     }
     if (platform === "darwin") {
       const installRoot = options.installRoot ?? "/opt/runmesh";
@@ -139,7 +139,7 @@ export function serviceLayout(options: ServiceAdapterOptions = {}): ServiceLayou
       const stateRoot = options.dataRoot ?? join(configRoot, "state");
       const logRoot = options.logRoot ?? join(configRoot, "logs");
       const manifestPath = join(options.manifestDir ?? "/Library/LaunchDaemons", `${MACOS_LABEL}.plist`);
-      return { installRoot, configRoot, stateRoot, logRoot, manifestPath, executablePath: options.executablePath ?? join(installRoot, "current", "coding-runner") };
+      return { installRoot, configRoot, stateRoot, logRoot, manifestPath, executablePath: options.executablePath ?? join(installRoot, "current", "bin", "coding-runner") };
     }
     const installRoot = options.installRoot ?? "C:\\Program Files\\Runmesh";
     const configRoot = options.configRoot ?? "C:\\ProgramData\\Runmesh";
