@@ -529,6 +529,8 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*800px\)[\s\S]*?\.header-actions\s*\{[^}]*flex-wrap\s*:\s*wrap[^}]*overflow\s*:\s*visible/);
     expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*540px\)[\s\S]*?\.header-left\s*\{[^}]*flex-wrap\s*:\s*wrap/);
     expect(normalizedStyles).toMatch(/\.header-left\s+\.control-nav\s*\{[^}]*width\s*:\s*100%[^}]*overflow-x\s*:\s*visible[^}]*flex-wrap\s*:\s*wrap/);
+    expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*540px\)[\s\S]*?\.card-row-sub\s*\{[^}]*flex-wrap\s*:\s*wrap/);
+    expect(normalizedStyles).toMatch(/\.client-runner-meta\s*\{[^}]*overflow-wrap\s*:\s*anywhere/);
     expect(normalizedStyles).not.toMatch(/@media\s*\(max-width\s*:\s*540px\)[\s\S]*?\.action-btn-group\s*\{[^}]*flex-direction\s*:\s*column/);
     expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*540px\)[\s\S]*?\.action-btn-group\s*\{[^}]*flex-wrap\s*:\s*nowrap/);
     const rejectedScopesDetailPost = await SELF.fetch(`https://worker.test/admin/clients/${clientId as string}/scopes/detail`, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", cookie: cookies(adminJar), origin: "https://worker.test" }, body: new URLSearchParams([["csrf_token", csrf], ["scopes", "coding:read"]]) });
