@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS,
+  FIXED_RELEASE_VERSION,
   canonicalPublicOrigin,
   powershellQuote,
   renderPowerShellInstaller,
@@ -8,6 +9,7 @@ import {
   resolvePublicOrigin,
   shellQuote,
 } from "../src/installer.js";
+import { runnerEnrollmentPage } from "../src/index.js";
 
 describe("hosted installer origin and template safety", () => {
   it("canonicalizes only strict HTTPS authorities", () => {
@@ -66,5 +68,26 @@ describe("hosted installer origin and template safety", () => {
   it("keeps redirect allowlist finite and HTTPS-only", () => {
     expect(FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS.length).toBeGreaterThan(1);
     expect(FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS.every((value) => value.startsWith("https://"))).toBe(true);
+  });
+
+  it("keeps enrollment codes out of copied commands and rejects Host confusion", async () => {
+    const code = "A".repeat(43);
+    const page = runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }, "https://worker.example", "runner-test", code, "csrf");
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    // The code is shown once for the operator, but it must never be present
+    // in a command/clipboard payload or passed as an argv value.
+    expect(html).toContain(code);
+    expect(html).not.toContain(`--code ${code}`);
+    expect(html).toContain("--code-stdin");
+
+    const rejected = runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }, "https://evil.example", "runner-test", code, "csrf");
+    expect(rejected.status).toBe(421);
+
+    const hosted = runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example", RUNMESH_SIGNED_RELEASE_AVAILABLE: FIXED_RELEASE_VERSION }, "https://worker.example", "runner-test", code, "csrf");
+    expect(hosted.status).toBe(200);
+    const hostedHtml = await hosted.text();
+    expect(hostedHtml).not.toContain(`--code ${code}`);
+    expect(hostedHtml).toContain("Copy installer command");
   });
 });

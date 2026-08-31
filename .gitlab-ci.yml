@@ -36,6 +36,7 @@ verify:
     - npm run check:licenses
     - npm run build
     - npm run validate:worker -- --dry-run
+    - npm run validate:worker -- --dry-run --env production
     - npm run pack:smoke
     - npm run test:e2e
   rules:
@@ -58,7 +59,7 @@ cloudflare_deploy:
     # validated by this pipeline.
     - git fetch --no-tags origin "$CI_COMMIT_BRANCH"
     - test "$(git rev-parse FETCH_HEAD)" = "$CI_COMMIT_SHA"
-    - npm exec --offline -- wrangler deploy --config apps/worker/wrangler.jsonc --strict
+    - npm exec --offline -- wrangler deploy --config apps/worker/wrangler.jsonc --env production --strict
   environment:
     name: production
   resource_group: cloudflare-production
