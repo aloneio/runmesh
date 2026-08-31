@@ -253,6 +253,7 @@ describe("persistent local jobs", () => {
 
   it("waits for fast-exit terminal metadata before returning from start", async () => {
     const test = await fixture();
+    const events: JobEvent[] = [];
     let releaseRunningWrite!: () => void;
     const runningWriteGate = new Promise<void>((resolve) => { releaseRunningWrite = resolve; });
     let releaseTerminalWrite!: () => void;
@@ -261,14 +262,14 @@ describe("persistent local jobs", () => {
     let released = false;
     let startPromise: Promise<JobRecord> | undefined;
     try {
-      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state });
+      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state, onEvent: (event) => events.push(event) });
       const internals = manager as unknown as { persist: (record: JobRecord) => Promise<void> };
       const originalPersist = internals.persist.bind(manager);
       let targetJobId: string | undefined;
       internals.persist = async (record) => {
         if (targetJobId === undefined && record.status === "queued") targetJobId = record.job_id;
         // Hold the start() running snapshot long enough for the child close
-        // callback to publish a terminal record and enter its own write.
+        // callback to prepare a terminal record and enter its own write.
         if (record.job_id === targetJobId && record.status === "running") await runningWriteGate;
         if (record.job_id === targetJobId && ["succeeded", "failed"].includes(record.status)) {
           terminalWriteStarted = true;
@@ -284,6 +285,11 @@ describe("persistent local jobs", () => {
         new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 50)),
       ]);
       expect(settled).toBe(false);
+      // Terminal publication is behind the metadata durability barrier. While
+      // the terminal write is held, the in-memory record must remain active and
+      // no completed event may escape to Registry.
+      expect(manager.get(targetJobId!).status).toBe("running");
+      expect(events.filter((event) => event.job.job_id === targetJobId && event.type === "completed")).toHaveLength(0);
       released = true;
       releaseRunningWrite();
       releaseTerminalWrite();

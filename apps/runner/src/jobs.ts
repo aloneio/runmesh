@@ -313,8 +313,8 @@ export class JobManager {
       const current = this.jobs.get(job.job_id);
       if (current !== undefined && current.status !== "queued") return current;
       const failed = { ...job, status: "failed" as const, updated_at_ms: Date.now(), completed_at_ms: Date.now() };
-      this.jobs.set(job.job_id, failed);
       await this.persist(failed);
+      this.jobs.set(job.job_id, failed);
       // A spawn/open failure still creates a durable terminal Job record. Emit
       // it so an online Runner can synchronize the failure to Registry even
       // though no running event was possible.
@@ -341,6 +341,15 @@ export class JobManager {
     await this.persist(beforeRunningPersist);
     const afterRunningPersist = this.jobs.get(job.job_id);
     if (afterRunningPersist === undefined || !isActive(afterRunningPersist)) {
+      await this.waitForTerminal(job.job_id);
+      return this.get(job.job_id);
+    }
+    // A fast child can have closed while the running snapshot was being
+    // persisted. With terminal publication behind its durability barrier, the
+    // in-memory record may still look active until `finishOnce` completes; do
+    // not return that stale running result (or emit `started`) in that window.
+    const observedChild = this.processes.get(job.job_id);
+    if (this.finishing.has(job.job_id) || observedChild?.exitCode !== null || observedChild?.signalCode !== null) {
       await this.waitForTerminal(job.job_id);
       return this.get(job.job_id);
     }
@@ -514,10 +523,9 @@ export class JobManager {
   /** Wait until the local child and its terminal metadata persistence finish. */
   private async waitForTerminal(jobId: string): Promise<void> {
     for (;;) {
-      // finishOnce publishes the terminal record in memory before awaiting its
-      // atomic metadata write. Observe the in-flight task first; otherwise a
-      // caller can return a terminal result while meta.json still contains the
-      // previous running/cancelling snapshot.
+      // finishOnce publishes the terminal record only after its atomic metadata
+      // write succeeds. Observe the in-flight task first so callers do not
+      // return a terminal result before that durability barrier settles.
       const finishing = this.finishing.get(jobId);
       if (finishing !== undefined) {
         await finishing;
@@ -745,9 +753,9 @@ export class JobManager {
 
   /**
    * Wait until metadata writes already queued for the observed jobs are on
-   * disk. Terminal state is published in memory before its write completes so
-   * process listeners stay synchronous; callers that advertise a durable sync
-   * must close that small window before serializing the snapshot.
+   * disk. Terminal state publication is itself behind its metadata durability
+   * barrier; callers that advertise a durable sync still close any writes
+   * queued for active snapshots before serializing the snapshot.
    */
   public async flushPersistence(): Promise<void> {
     for (;;) {
@@ -883,10 +891,10 @@ export class JobManager {
       exit_code: status === "cancelled" ? null : code, signal,
       cancellation_delivered_at_ms: cancellationDeliveredAt,
     };
+    await this.persist(completed);
     this.jobs.set(jobId, completed);
     this.processes.delete(jobId);
     this.terminationDelivered.delete(jobId);
-    await this.persist(completed);
     this.onEvent({ type: "completed", job: completed });
     await this.pruneRetainedJobs();
   }
