@@ -532,7 +532,11 @@ function trustedGitDirectory(path: string, worktree: string, allowMissing: boole
         continue;
       }
       if (!info.isDirectory() || info.isSymbolicLink()) return false;
-      if (process.platform !== "win32" && (info.mode & 0o022) !== 0) return false;
+      // A sticky world-writable parent such as /tmp is safe for an already
+      // private child: the sticky bit prevents an unrelated user from
+      // replacing or removing that child. The PATH entry itself (and any
+      // non-sticky writable ancestor) must still remain private.
+      if (process.platform !== "win32" && !trustedPosixDirectoryMode(info.mode, current !== candidate)) return false;
       nearestExisting ??= current;
       const parent = dirname(current);
       if (parent === current) break;
@@ -542,7 +546,7 @@ function trustedGitDirectory(path: string, worktree: string, allowMissing: boole
     canonicalExisting = realpathSync.native(nearestExisting);
     const canonicalInfo = lstatSync(canonicalExisting);
     if (!canonicalInfo.isDirectory() || canonicalInfo.isSymbolicLink()) return false;
-    if (process.platform !== "win32" && (canonicalInfo.mode & 0o022) !== 0) return false;
+    if (process.platform !== "win32" && !trustedPosixDirectoryMode(canonicalInfo.mode, missingSuffix)) return false;
     if (process.platform !== "win32") {
       // Resolve the worktree once as well so a symlinked spelling cannot evade
       // the lexical exclusion above. A missing optional suffix is rejected if
@@ -574,6 +578,14 @@ function trustedGitDirectory(path: string, worktree: string, allowMissing: boole
     // existing ancestor passed the ownership/symlink checks.
     return false;
   }
+}
+
+function trustedPosixDirectoryMode(mode: number, allowStickyAncestor: boolean): boolean {
+  if ((mode & 0o022) === 0) return true;
+  // Only the conventional sticky world-writable directories (for example
+  // /tmp, mode 01777) may be ancestors. A group-writable directory without
+  // other-writable protection is not safe even when it has a sticky bit.
+  return allowStickyAncestor && (mode & 0o1002) === 0o1002;
 }
 
 function isErrnoCode(error: unknown, code: string): boolean {
