@@ -114,8 +114,12 @@ export function canonicalPublicOrigin(value: string): string {
  * rendering a script from attacker-controlled authority data.
  */
 export function resolvePublicOrigin(request: Request, configuredOrigin?: string): string {
-  let requestOrigin: string;
-  try { requestOrigin = canonicalPublicOrigin(new URL(request.url).origin); } catch { throw new Error("request origin is not a valid public HTTPS origin"); }
+  let requestUrl: URL;
+  try { requestUrl = new URL(request.url); } catch { throw new Error("request URL is malformed"); }
+  // A configured public origin may be used behind an internal HTTP reverse
+  // proxy. The request authority is still checked via Host when available,
+  // but its scheme is never copied into a generated public URL.
+  if (requestUrl.username !== "" || requestUrl.password !== "") throw new Error("request URL must not contain credentials");
   const configured = configuredOrigin === undefined ? undefined : canonicalPublicOrigin(configuredOrigin);
   const hostHeader = request.headers.get("host");
   const hostOrigin = hostHeader === null ? undefined : canonicalPublicOrigin(`https://${hostHeader}`);
@@ -128,6 +132,8 @@ export function resolvePublicOrigin(request: Request, configuredOrigin?: string)
     if (hostOrigin !== undefined && hostOrigin !== configured) throw new Error("request Host does not match the configured public origin");
     return configured;
   }
+  let requestOrigin: string;
+  try { requestOrigin = canonicalPublicOrigin(requestUrl.origin); } catch { throw new Error("request origin is not a valid public HTTPS origin"); }
   if (hostOrigin !== undefined && hostOrigin !== requestOrigin) throw new Error("request Host does not match the request origin");
   return requestOrigin;
 }
@@ -196,6 +202,9 @@ const POSIX_TEMPLATE = String.raw`#!/usr/bin/env sh
 # embedded Ed25519 public key and never trusts a downloaded keyring.
 set -eu
 umask 077
+# Do not let inherited runtime/package-manager configuration alter a privileged
+# install. The operator's PATH is still required to point at trusted binaries.
+unset NODE_OPTIONS NODE_PATH CURL_HOME CURLRC NPM_CONFIG_USERCONFIG NPM_CONFIG_GLOBALCONFIG npm_config_userconfig npm_config_globalconfig 2>/dev/null || true
 VERSION='__VERSION__'
 RELEASE_BASE='__RELEASE_BASE__'
 ARTIFACT='__ARTIFACT_NAME__'
@@ -256,7 +265,7 @@ download() {
     attempt=$((attempt + 1))
     headers="$TMP/$name.headers"
     status_file="$TMP/$name.status"
-    if curl --fail --silent --show-error --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 0 --max-redirs 0 --dump-header "$headers" --output "$TMP/$name" --write-out '%{http_code}' "$url" > "$status_file"; then
+    if curl -q --fail --silent --show-error --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 0 --max-redirs 0 --dump-header "$headers" --output "$TMP/$name" --write-out '%{http_code}' "$url" > "$status_file"; then
       curl_rc=0
     else
       curl_rc=$?
@@ -303,6 +312,7 @@ node --input-type=module - "$TMP" <<'RUNMESH_VERIFY'
 __VERIFIER__
 RUNMESH_VERIFY
 mkdir -p "$INSTALL_ROOT/versions"
+if ! mkdir "$STAGE"; then printf '%s\n' 'error: installer staging path is already in use' >&2; exit 1; fi
 npm install --global --ignore-scripts --offline --no-audit --no-fund --prefix "$STAGE" "$TMP/$ARTIFACT"
 RUNNER="$STAGE/bin/coding-runner"
 RUNMESH_RUNNER="$STAGE/bin/runmesh-runner"
@@ -335,6 +345,16 @@ printf '%s\n' "Runmesh Runner $VERSION installed and enrolled."
 
 const POWERSHELL_TEMPLATE = String.raw`$ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+# Ignore inherited Node/npm/curl configuration and resolve only real executable
+# commands. The operator's PATH must still be trusted on the host.
+$env:NODE_OPTIONS = $null
+$env:NODE_PATH = $null
+$env:CURL_HOME = $null
+$env:CURLRC = $null
+$env:NPM_CONFIG_USERCONFIG = $null
+$env:NPM_CONFIG_GLOBALCONFIG = $null
+$env:npm_config_userconfig = $null
+$env:npm_config_globalconfig = $null
 # Windows PowerShell 5.1 does not eagerly load System.Net.Http. Load it
 # explicitly before constructing HttpClientHandler so the fixed installer has
 # the same pre-follow redirect guarantees on PowerShell 5.1 and 7+.
@@ -350,8 +370,12 @@ $AllowedReleaseOrigins = @(__RELEASE_REDIRECT_ORIGINS_PS__)
 $InstallRoot = Join-Path $env:ProgramFiles 'Runmesh'
 $Principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run from an elevated Administrator PowerShell session.' }
-if (-not (Get-Command node -ErrorAction SilentlyContinue) -or -not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) { throw 'Node.js 20 or newer and npm are required.' }
-$NodeMajor = [int]((& node --version).Trim().TrimStart('v').Split('.')[0])
+$NodeCommand = Get-Command node -CommandType Application -ErrorAction SilentlyContinue
+$NpmCommand = Get-Command npm.cmd -CommandType Application -ErrorAction SilentlyContinue
+if ($null -eq $NodeCommand -or $null -eq $NpmCommand) { throw 'Node.js 20 or newer and npm are required.' }
+$NodePath = if ([string]::IsNullOrEmpty([string]$NodeCommand.Source)) { [string]$NodeCommand.Path } else { [string]$NodeCommand.Source }
+$NpmPath = if ([string]::IsNullOrEmpty([string]$NpmCommand.Source)) { [string]$NpmCommand.Path } else { [string]$NpmCommand.Source }
+$NodeMajor = [int]((& $NodePath --version).Trim().TrimStart('v').Split('.')[0])
 if ($NodeMajor -lt 20) { throw 'Node.js 20 or newer is required.' }
 $VersionsRoot = Join-Path $InstallRoot 'versions'
 $VersionRoot = Join-Path $VersionsRoot $Version
@@ -371,6 +395,9 @@ $CurrentRunner = $null
 $HttpHandler = $null
 $HttpClient = $null
 New-Item -ItemType Directory -Path $TempRoot -Force | Out-Null
+[IO.File]::WriteAllText((Join-Path $TempRoot 'empty.npmrc'), '')
+$env:NPM_CONFIG_USERCONFIG = Join-Path $TempRoot 'empty.npmrc'
+$env:npm_config_userconfig = $env:NPM_CONFIG_USERCONFIG
 try {
   # Invoke-WebRequest/-MaximumRedirection are intentionally not used for the
   # release fetch: their automatic redirect behavior cannot be pinned before
@@ -419,10 +446,10 @@ try {
   }
   @'
 __VERIFIER__
-'@ | node --input-type=module - $TempRoot
+'@ | & $NodePath --input-type=module - $TempRoot
   if ($LASTEXITCODE -ne 0) { throw 'Release verification failed.' }
   New-Item -ItemType Directory -Path $VersionsRoot -Force | Out-Null
-  npm.cmd install --global --ignore-scripts --offline --no-audit --no-fund --prefix $Stage (Join-Path $TempRoot $ArtifactName)
+  & $NpmPath install --global --ignore-scripts --offline --no-audit --no-fund --prefix $Stage (Join-Path $TempRoot $ArtifactName)
   if ($LASTEXITCODE -ne 0) { throw 'Verified local tarball installation failed.' }
   $Runner = Get-ChildItem -LiteralPath $Stage -Filter 'coding-runner.cmd' -File -Recurse | Select-Object -First 1
   $RunmeshRunner = Get-ChildItem -LiteralPath $Stage -Filter 'runmesh-runner.cmd' -File -Recurse | Select-Object -First 1
