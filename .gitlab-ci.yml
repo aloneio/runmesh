@@ -9,7 +9,7 @@ workflow:
     - if: '$CI_PIPELINE_SOURCE == "web"'
     - when: never
 
-image: node:22-bookworm
+image: node:22-bookworm@sha256:8a34c4ab3ea2c5cd194f07e317b2a8f09461d3c8b05c4e34c8ccd56d56024c4d
 
 variables:
   npm_config_cache: "$CI_PROJECT_DIR/.npm"
@@ -48,7 +48,7 @@ cloudflare_deploy:
   stage: deploy
   needs:
     - job: verify
-  image: node:22-bookworm
+  image: node:22-bookworm@sha256:8a34c4ab3ea2c5cd194f07e317b2a8f09461d3c8b05c4e34c8ccd56d56024c4d
   script:
     - npm ci
     - npm run check:versions
