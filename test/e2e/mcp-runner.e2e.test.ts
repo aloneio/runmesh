@@ -202,7 +202,10 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
 
   it("lets Client B discover and query a Client A job through the offline registry snapshot before reconnecting", async () => {
     const started = await mcpTool("shell", {
-      workspace_id: "workspace-1", command: nodeCommand("setTimeout(() => process.stdout.write('completed-after-cross-client-reconnect\\n'), 5000)"), background: true,
+      // Keep the detached child alive until the test explicitly releases it
+      // after the Runner restart. A fixed sleep can finish before the Runner
+      // is stopped on a fast CI host, turning recovery into a timing race.
+      workspace_id: "workspace-1", command: nodeCommand("const fs = require('node:fs'); const poll = setInterval(() => { if (fs.existsSync('recovery-finish')) { clearInterval(poll); process.stdout.write('completed-after-cross-client-reconnect\\n'); } }, 50)"), background: true,
     }, clientA);
     const jobId = started.structuredContent?.job_id;
     expect(typeof jobId).toBe("string");
@@ -229,7 +232,8 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     });
     runnerOutput = collectOutput(runner);
     await waitFor(async () => (await mcpTool("runner_list", {}, clientA)).structuredContent?.runners?.some((item: { runner_id?: string; state?: string }) => item.runner_id === runnerId && item.state === "online"), 15_000, runnerOutput);
-    await delay(5_200);
+    await writeFile(join(workspace, "recovery-finish"), "finish\\n");
+    await waitFor(async () => (await mcpTool("job", { action: "get", job_id: jobId as string }, clientB)).structuredContent?.status === "interrupted", 10_000);
     const completedSnapshot = await mcpTool("job", { action: "get", job_id: jobId as string }, clientB);
     expect(completedSnapshot.structuredContent?.status).toBe("interrupted");
 
