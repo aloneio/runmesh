@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 type ToolResult = {
   readonly content?: { readonly type: string; readonly text: string }[];
@@ -17,6 +18,13 @@ type FormFields = Record<string, string | readonly string[]>;
 const workerPort = await freePort();
 const workerUrl = `http://127.0.0.1:${workerPort}`;
 const runnerId = "e2e-runner";
+// Invoke the checked-in workspace CLIs through Node directly. npm/npx are
+// platform-specific shell shims on Windows and can leave a detached wrapper
+// alive after the actual child exits, making the fixture hang during cleanup.
+const projectDirectory = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+const wranglerCli = resolve(projectDirectory, "node_modules", "wrangler", "bin", "wrangler.js");
+const tsxCli = resolve(projectDirectory, "node_modules", "tsx", "dist", "cli.mjs");
+const childSpawnOptions = process.platform === "win32" ? { windowsHide: true } : {};
 const adminToken = "e2e-admin-token-0123456789abcdef";
 const adminPassword = "e2e-administrator-password";
 const workerEnv = {
@@ -52,8 +60,8 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     await writeFile(join(workspace, "note.txt"), "hello from a real local runner\n");
     await writeFile(join(workspace, "utf8.txt"), "Hello你好😀éWorld", "utf8");
 
-    worker = spawn("npx", ["wrangler", "dev", "--local", "--config", "apps/worker/wrangler.jsonc", "--port", String(workerPort), "--persist-to", workerPersist, ...workerVars()], {
-      cwd: projectRoot(), env: { ...process.env, ...workerEnv }, stdio: ["ignore", "pipe", "pipe"], detached: true,
+    worker = spawn(process.execPath, [wranglerCli, "dev", "--local", "--config", "apps/worker/wrangler.jsonc", "--port", String(workerPort), "--persist-to", workerPersist, "--show-interactive-dev-session=false", ...workerVars()], {
+      cwd: projectDirectory, env: { ...process.env, ...workerEnv }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
     });
     const workerLog = collectOutput(worker);
     await waitForWorker(workerLog);
@@ -66,9 +74,10 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     // Exercise the real source CLI against the Worker enrollment endpoint using
     // its isolated profile, then start from that saved profile (no service manager).
     enrolledProfile = join(root, "enrolled-profile.json");
-    const enrollmentCli = spawn("npx", ["tsx", "apps/runner/src/cli.ts", "enroll", "--server", `${workerUrl}/runner/enroll`, "--code", enrollmentCode, "--insecure-local", "--cwd", workspace, "--profile", enrolledProfile, "--json"], {
-      cwd: projectRoot(), env: { ...process.env, CODING_RUNNER_PROFILE: enrolledProfile }, stdio: ["ignore", "pipe", "pipe"], detached: true,
+    const enrollmentCli = spawn(process.execPath, [tsxCli, "apps/runner/src/coding-runner-entry.ts", "enroll", "--server", `${workerUrl}/runner/enroll`, "--code-stdin", "--insecure-local", "--cwd", workspace, "--profile", enrolledProfile, "--json"], {
+      cwd: projectDirectory, env: { ...process.env, CODING_RUNNER_PROFILE: enrolledProfile }, stdio: ["pipe", "pipe", "pipe"], detached: true, ...childSpawnOptions,
     });
+    enrollmentCli.stdin?.end(`${enrollmentCode}\n`);
     const enrollmentCliLog = collectOutput(enrollmentCli);
     await waitForExit(enrollmentCli, 15_000, enrollmentCliLog);
     expect(enrollmentCli.exitCode).toBe(0);
@@ -81,10 +90,10 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const savedProfile = JSON.parse(profile) as Record<string, unknown>;
     expect(savedProfile.workspaces).toEqual([]);
 
-    runner = spawn("npx", [
-      "tsx", "apps/runner/src/cli.ts", "start", "--profile", enrolledProfile, "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
+    runner = spawn(process.execPath, [
+      tsxCli, "apps/runner/src/coding-runner-entry.ts", "start", "--profile", enrolledProfile, "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
     ], {
-      cwd: projectRoot(), env: { ...process.env, CODING_RUNNER_PROFILE: enrolledProfile }, stdio: ["ignore", "pipe", "pipe"], detached: true,
+      cwd: projectDirectory, env: { ...process.env, CODING_RUNNER_PROFILE: enrolledProfile }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
     });
     const runnerLog = collectOutput(runner);
     runnerOutput = runnerLog;
@@ -102,12 +111,12 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     }, 15_000, runnerLog);
     expect((await mcpTool("runner_select", { runner_id: runnerId }, clientA)).isError).not.toBe(true);
     expect((await mcpTool("runner_select", { runner_id: runnerId }, clientB)).isError).not.toBe(true);
-  }, 30_000);
+  }, 90_000);
 
   afterAll(async () => {
     await stop(runner); await stop(worker);
-    if (root) await rm(root, { recursive: true, force: true });
-  }, 15_000);
+    if (root) await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  }, 30_000);
 
   it("enrolls from the browser-issued one-time code, saves an isolated profile, starts, and performs a real read", async () => {
     expect(enrollmentCode).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -211,10 +220,10 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     // Restart the Runner process after the deliberate transport-only gap; its
     // detached persistent job and registry snapshot remain available.
     await stop(runner);
-    runner = spawn("npx", [
-      "tsx", "apps/runner/src/cli.ts", "start", "--profile", enrolledProfile, "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
+    runner = spawn(process.execPath, [
+      tsxCli, "apps/runner/src/coding-runner-entry.ts", "start", "--profile", enrolledProfile, "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
     ], {
-      cwd: projectRoot(), env: { ...process.env, CODING_RUNNER_PROFILE: enrolledProfile }, stdio: ["ignore", "pipe", "pipe"], detached: true,
+      cwd: projectDirectory, env: { ...process.env, CODING_RUNNER_PROFILE: enrolledProfile }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
     });
     runnerOutput = collectOutput(runner);
     await waitFor(async () => (await mcpTool("runner_list", {}, clientA)).structuredContent?.runners?.some((item: { runner_id?: string; state?: string }) => item.runner_id === runnerId && item.state === "online"), 15_000, runnerOutput);
@@ -302,10 +311,16 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(response.status).toBe(200);
     const html = await response.text();
     expect(html).toContain("Manual portable-artifact enrollment");
-    expect(html).toContain("coding-runner enroll");
+    expect(html).toContain("RUNNER=/opt/runmesh/current/bin/coding-runner");
+    expect(html).toContain("C:\\Program Files\\Runmesh\\current\\coding-runner.cmd");
+    expect(html).toContain("--code-stdin");
+    expect(html).toContain("--executable-path");
     expect(html).not.toContain("curl -fsSL");
-    const code = /--code ([A-Za-z0-9_-]{43})/.exec(html)?.[1];
+    const code = /<span class="form-stat-label">One-time enrollment code<\/span><code class="mono">([A-Za-z0-9_-]{43})<\/code>/u.exec(html)?.[1];
     if (code === undefined) throw new Error("browser enrollment code absent");
+    // The one-time code is rendered in its own protected value block and must
+    // never be embedded in either platform's copied command.
+    expect(html).not.toMatch(new RegExp(`--code(?:=|\\s+)${code}`, "u"));
     return code;
   }
   async function setupAdminAndClients(): Promise<{ readonly clientA: McpClient; readonly clientB: McpClient }> {
@@ -405,7 +420,16 @@ async function readMcp(response: Response): Promise<JsonRpc> {
   if (data === undefined) throw new Error(`MCP response did not contain data: ${text}`);
   return JSON.parse(data) as JsonRpc;
 }
-function nodeCommand(script: string): string { return `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`; }
+function nodeCommand(script: string): string {
+  // The shell RPC intentionally exercises the host shell. JSON.stringify is
+  // valid command-line quoting for POSIX shells, but PowerShell treats the
+  // resulting backslash-escaped Windows path as a literal (invalid) path and
+  // parses `-e` as a separate expression. Use PowerShell's single-quote
+  // escaping on Windows so the same fixture invokes Node on both platforms.
+  if (process.platform === "win32") return `& ${powerShellQuote(process.execPath)} -e ${powerShellQuote(script)}`;
+  return `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`;
+}
+function powerShellQuote(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
 function formToken(html: string): string {
   const token = /name="csrf_token" value="([A-Za-z0-9_-]{43})"/.exec(html)?.[1];
   if (token === undefined) throw new Error("CSRF token absent");
@@ -424,14 +448,13 @@ function cookieFrom(response: Response, name: string): string {
 function cookieJar(entries: readonly (readonly [string, string])[]): CookieJar { return new Map(entries); }
 function cookieHeader(cookies: CookieJar): string { return [...cookies].map(([name, value]) => `${name}=${value}`).join("; "); }
 function workerVars(): string[] { return Object.entries(workerEnv).flatMap(([name, value]) => ["--var", `${name}:${value}`]); }
-function projectRoot(): string { return resolve(new URL("../..", import.meta.url).pathname); }
 async function waitFor(predicate: () => boolean | Promise<boolean>, timeout: number, detail: (() => string) | undefined = undefined): Promise<void> {
   const end = Date.now() + timeout;
   while (Date.now() < end) { if (await predicate()) return; await delay(100); }
   const output = detail?.() ?? "";
   throw new Error(`timed out after ${timeout}ms${output ? `\n${output}` : ""}`);
 }
-async function waitForWorker(detail: () => string): Promise<void> { await waitFor(async () => (await fetch(`${workerUrl}/health`).catch(() => undefined))?.ok === true, 15_000, detail); }
+async function waitForWorker(detail: () => string): Promise<void> { await waitFor(async () => (await fetch(`${workerUrl}/health`).catch(() => undefined))?.ok === true, 60_000, detail); }
 async function waitForExit(child: ChildProcess, timeout: number, detail: () => string): Promise<void> {
   await Promise.race([
     new Promise<void>((resolveExit) => child.once("exit", () => resolveExit())),
@@ -448,7 +471,17 @@ function collectOutput(child: ChildProcess): () => string {
 function delay(ms: number): Promise<void> { return new Promise((resolveDelay) => setTimeout(resolveDelay, ms)); }
 async function stop(child: ChildProcess | undefined): Promise<void> {
   if (child === undefined || child.exitCode !== null || child.killed) return;
-  try { if (child.pid !== undefined) process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); }
+  if (child.pid !== undefined && process.platform === "win32") {
+    // npx.cmd launches a cmd.exe/Node process tree on Windows. Killing only
+    // the shell wrapper leaves Wrangler/Runner descendants alive and keeps
+    // the temp persistence directory locked, causing EBUSY in afterAll.
+    try {
+      const { spawnSync } = await import("node:child_process");
+      spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    } catch { child.kill("SIGTERM"); }
+  } else {
+    try { if (child.pid !== undefined) process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); }
+  }
   await Promise.race([new Promise<void>((resolveExit) => child.once("exit", () => resolveExit())), delay(5_000)]);
   if (child.exitCode === null && !child.killed) {
     try { if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); }

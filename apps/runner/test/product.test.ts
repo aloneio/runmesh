@@ -6,8 +6,8 @@ import { runCli, runEnrollCli, parseProductArgs } from "../src/cli.js";
 import { RunnerConnection, classifyConnectionFailure } from "../src/connection.js";
 import { RUNNER_VERSION } from "../src/version.js";
 import { enrollRunner } from "../src/enrollment.js";
-import { ProfileStore, defaultWorkspaceId } from "../src/profile.js";
-import { createServiceManager, installServiceManifest, isManagedService, removeServiceManifest, renderService, serviceLayout, type ServiceManifestFilesystem } from "../src/service.js";
+import { ProfileStore, defaultWorkspaceId, validateProfile } from "../src/profile.js";
+import { createServiceManager, createServiceProvisioner, installServiceManifest, isManagedService, removeServiceManifest, renderService, serviceLayout, serviceProfilePath, type ServiceManifestFilesystem } from "../src/service.js";
 
 async function fixture(): Promise<{ root: string; store: ProfileStore; cleanup: () => Promise<void> }> {
   const root = await mkdtemp(join(tmpdir(), "runner-product-"));
@@ -23,7 +23,9 @@ describe("runner product profile and enrollment", () => {
       await test.store.save(profile(join(test.root, "workspace")));
       const raw = await readFile(test.store.filePath, "utf8");
       expect(raw).toContain("0123456789abcdef");
-      expect((await stat(test.store.filePath)).mode & 0o777).toBe(0o600);
+      // Windows ACLs are not represented by the POSIX mode bits exposed by
+      // Node's stat(); the service provisioner covers the native ACL path.
+      if (process.platform !== "win32") expect((await stat(test.store.filePath)).mode & 0o777).toBe(0o600);
       expect(defaultWorkspaceId("/tmp/workspace", [{ id: "workspace", path: "/tmp/a", writable: true, shell: true }])).toBe("workspace-2");
       const lines: string[] = [];
       await runCli(["status", "--json"], { store: test.store, stdout: (line) => lines.push(line) });
@@ -65,14 +67,36 @@ describe("runner product profile and enrollment", () => {
       await expect(test.store.load()).resolves.toMatchObject({ runner_id: "runner-e2e", token: "real-cli-token-must-not-print", workspaces: [] });
     } finally { await test.cleanup(); }
   });
+  it("accepts enrollment codes from stdin without putting them in argv", async () => {
+    const test = await fixture();
+    try {
+      const lines: string[] = [];
+      const code = "b".repeat(43);
+      await runEnrollCli(["--server", "https://example.test/runner/enroll", "--code-stdin", "--json"], {
+        store: test.store,
+        readStdin: async () => `${code}\n`,
+        stdout: (line) => lines.push(line),
+        fetch: async (_url, init) => {
+          expect(init?.body).toContain(code);
+          return new Response(JSON.stringify({ runner_id: "runner-stdin", server_url: "https://example.test/runner/connect", token: "stdin-token-0123456789" }), { status: 200 });
+        },
+      });
+      expect(lines.join("\n")).toContain("runner-stdin");
+      expect(await test.store.load()).toMatchObject({ runner_id: "runner-stdin" });
+      expect(parseProductArgs(["enroll", "--server", "https://example.test/runner/enroll", "--code-stdin"]).values).toMatchObject({ codeStdin: true });
+      await expect(runEnrollCli(["--server", "https://example.test/runner/enroll", "--code", code, "--code-stdin"], { store: test.store, readStdin: async () => code })).rejects.toThrow("cannot be used together");
+    } finally { await test.cleanup(); }
+  });
 
   it("rejects cleartext enrollment except explicit loopback development", async () => {
     const test = await fixture();
     try {
       await expect(enrollRunner({ server: "http://example.test/runner/enroll", code: "a".repeat(43), cwd: join(test.root, "workspace"), store: test.store, fetch: async () => new Response() })).rejects.toThrow("https:// is required");
+      await expect(enrollRunner({ server: "https://user:password@example.test/runner/enroll", code: "a".repeat(43), store: test.store, fetch: async () => new Response() })).rejects.toThrow("credentials");
       const result = await enrollRunner({ server: "http://127.0.0.1/runner/enroll", code: "a".repeat(43), insecureLocal: true, cwd: join(test.root, "workspace"), store: test.store, fetch: async () => new Response(JSON.stringify({ runner_id: "runner-1", server_url: "http://127.0.0.1/runner/connect", token: "fedcba9876543210" }), { status: 200 }) });
       expect(result.profile).toMatchObject({ runner_id: "runner-1", server_url: "ws://127.0.0.1/runner/connect", insecure_local: true });
       await expect(test.store.load()).resolves.toMatchObject({ insecure_local: true });
+      expect(validateProfile({ ...result.profile, server_url: "wss://user:password@example.test/runner/connect" })).toBeUndefined();
     } finally { await test.cleanup(); }
   });
 });
@@ -108,7 +132,7 @@ describe("runner product CLI and service safety", () => {
     expect(linux).toMatchObject({ executionMode: "dedicated_user" });
     expect(linux.content).toContain("User=runmesh");
     expect(linux.content).toContain("Group=runmesh");
-    expect(linux.content).toContain("ExecStart=/opt/runmesh/current/coding-runner start");
+    expect(linux.content).toContain("ExecStart=/opt/runmesh/current/bin/coding-runner start");
     expect(linux.content).toContain("RUNMESH_RUNNER_PROFILE=/etc/runmesh/profile.json");
     expect(linux.content).not.toContain("coding-runner start\n");
     const macos = renderService({ platform: "darwin", mode: "system" });
@@ -120,6 +144,50 @@ describe("runner product CLI and service safety", () => {
     const privileged = renderService({ platform: "win32", mode: "system", executionMode: "privileged_host" });
     expect(privileged.content).toContain("<UserId>SYSTEM</UserId>");
     expect(Buffer.from(windows.content, "utf8").toString("utf8")).toBe(windows.content);
+  });
+  it("escapes systemd specifiers and control characters in generated values", () => {
+    const manifest = renderService({
+      platform: "linux", mode: "user", executablePath: "/opt/run%mesh/coding runner",
+      profilePath: "/tmp/profile%name\nnext", stateDir: "/tmp/state\tname",
+    });
+    expect(manifest.content).toContain("ExecStart=/opt/run%%mesh/coding\\x20runner start");
+    expect(manifest.content).toContain('RUNMESH_RUNNER_PROFILE=/tmp/profile%%name\\x0anext');
+    expect(manifest.content).toContain("--state-dir /tmp/state\\x09name");
+    expect(manifest.content).not.toContain("profile%name");
+  });
+  it("includes fail-closed checks for Windows ACL commands", async () => {
+    const calls: Array<{ file: string; args: readonly string[] }> = [];
+    const provisioner = createServiceProvisioner({
+      platform: "win32",
+      executor: { execute: async (file, args) => { calls.push({ file, args }); return { exitCode: 0 }; } },
+    });
+    const layout = serviceLayout({ platform: "win32", mode: "system" });
+    await provisioner.provision(renderService({ platform: "win32", mode: "system" }), serviceProfilePath(layout));
+    const script = calls.at(-1)?.args.at(-1) ?? "";
+    expect(script).toContain("$ErrorActionPreference = 'Stop'");
+    expect(script).toContain("if ($LASTEXITCODE -ne 0) { throw 'icacls failed' }");
+  });
+  it("does not treat a Windows Task Scheduler Ready state as running", async () => {
+    const managerFor = (state: string) => createServiceManager({
+      platform: "win32", mode: "system",
+      executor: { execute: async (_file, args) => args.includes("/FO") ? { exitCode: 0, stdout: `Status: ${state}\nRun As User: NT AUTHORITY\\LOCAL SERVICE` } : { exitCode: 0 } },
+    });
+    const manifest = renderService({ platform: "win32", mode: "system" });
+    await expect(managerFor("Ready").status?.(manifest)).resolves.toMatchObject({ installed: true, active: false });
+    await expect(managerFor("Running").status?.(manifest)).resolves.toMatchObject({ installed: true, active: true, identity: "NT AUTHORITY\\LOCAL SERVICE" });
+  });
+  it("quotes Windows task arguments with trailing backslashes safely", () => {
+    const executablePath = String.raw`C:\Program Files\Runmesh\current\coding-runner.cmd`;
+    const profilePath = String.raw`C:\Program Files\Runmesh\config\profile` + "\\";
+    const stateDir = String.raw`C:\Program Files\Runmesh\state` + "\\";
+    const manifest = renderService({ platform: "win32", mode: "system", executablePath, profilePath, stateDir });
+    const argumentsText = (/<Arguments>([^<]*)<\/Arguments>/u.exec(manifest.content)?.[1] ?? "").replaceAll("&quot;", '"');
+    // A trailing separator inside a quoted Windows argument must be doubled
+    // before the closing quote; otherwise the parser treats that quote as
+    // escaped and hands the service an incorrect path.
+    expect(argumentsText).toContain(`--profile "${profilePath}${"\\"}"`);
+    expect(argumentsText).toContain(`--state-dir "${stateDir}${"\\"}"`);
+    expect(argumentsText).not.toContain(`--profile "${profilePath}"`);
   });
   it("requires explicit confirmation for privileged host services without breaking legacy profiles", async () => {
     const test = await fixture();
@@ -140,16 +208,17 @@ describe("runner product CLI and service safety", () => {
     const test = await fixture();
     try {
       await test.store.save({ ...profile(join(test.root, "workspace")), execution_mode: "dedicated_user" });
-      const content = renderService({ platform: "linux", mode: "system", profilePath: test.store.filePath, executionMode: "dedicated_user" }).content;
+      const doctorPlatform = process.platform === "win32" ? "win32" : "linux";
+      const content = renderService({ platform: doctorPlatform, mode: "system", profilePath: test.store.filePath, executionMode: "dedicated_user" }).content;
       const filesystem: ServiceManifestFilesystem = { read: async () => content, write: async () => undefined, remove: async () => undefined };
       const manager = {
-        platform: "linux" as const, mode: "system" as const,
+        platform: doctorPlatform, mode: "system" as const,
         install: async () => undefined, stop: async () => undefined, restart: async () => undefined, uninstall: async () => undefined,
         status: async () => ({ installed: true, active: true, identity: "runmesh" }),
       };
       const lines: string[] = []; const exitCodes: number[] = [];
       await runCli(["doctor", "--json"], {
-        store: test.store, stdout: (line) => lines.push(line), servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager,
+        store: test.store, stdout: (line) => lines.push(line), servicePlatform: doctorPlatform, serviceFilesystem: filesystem, serviceManager: manager,
         discoverShellRuntime: async () => ({ kind: "bash", executable: "/bin/bash", buildInvocation: (command) => ({ file: "/bin/bash", args: ["-lc", command] }) }),
         environment: new (await import("../src/runtime.js")).EnvironmentInfoService({ probe: async (command) => command === "python3" || command === "python" || command === "docker" ? undefined : `${command} version` }),
         policyRevision: async () => ({ desired: 3, applied: 3 }), setExitCode: (code) => exitCodes.push(code),
@@ -160,7 +229,17 @@ describe("runner product CLI and service safety", () => {
       expect(result.checks.filter((check) => check.name === "tool:python" || check.name === "tool:docker").map((check) => ({ name: check.name, status: check.status }))).toEqual([{ name: "tool:python", status: "warning" }, { name: "tool:docker", status: "warning" }]);
       expect(exitCodes).toEqual([]);
       const failingExitCodes: number[] = [];
-      await runCli(["doctor", "--json"], { store: new ProfileStore({ baseDir: join(test.root, "missing-profile") }), stdout: () => undefined, servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, setExitCode: (code) => failingExitCodes.push(code) });
+      // Keep the exit-code seam check independent of host process discovery.
+      // Without these injected probes the second doctor invocation would
+      // start real PowerShell/tool probes on Windows and can exceed Vitest's
+      // default five-second test timeout.
+      await runCli(["doctor", "--json"], {
+        store: new ProfileStore({ baseDir: join(test.root, "missing-profile") }), stdout: () => undefined,
+        servicePlatform: doctorPlatform, serviceFilesystem: filesystem, serviceManager: manager,
+        discoverShellRuntime: async () => undefined,
+        environment: new (await import("../src/runtime.js")).EnvironmentInfoService({ probe: async () => undefined }),
+        setExitCode: (code) => failingExitCodes.push(code),
+      });
       expect(failingExitCodes).toEqual([1]);
     } finally { await test.cleanup(); }
   });
@@ -173,22 +252,40 @@ describe("runner product CLI and service safety", () => {
       const manager = createServiceManager({ platform: "linux", mode: "system", executor: { execute: async (file, args) => { commands.push([file, ...args].join(" ")); return { exitCode: 0 }; } } });
       const deniedErrors: string[] = [];
       await expect(runCli(["install"], { store: test.store, stderr: (line) => deniedErrors.push(line), servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, isAdministrator: () => false })).rejects.toThrow("administrator/root");
+      await test.store.save(profile(join(test.root, "workspace")));
       const installOutput: string[] = [];
       await runCli(["install", "--json"], { store: test.store, stdout: (line) => installOutput.push(line), servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, serviceProvisioner: { platform: "linux", provision: async () => ({ identity: "runmesh", profileSecured: true }) }, isAdministrator: () => true });
       expect(commands).toEqual(["systemctl daemon-reload", "systemctl enable --now runmesh-runner.service", "systemctl is-active --quiet runmesh-runner.service"]);
-      expect([...contents.values()][0]).toContain("ExecStart=/opt/runmesh/current/coding-runner start");
+      expect([...contents.values()][0]).toContain("ExecStart=/opt/runmesh/current/bin/coding-runner start");
+      } finally { await test.cleanup(); }
+  });
+  it("refuses to activate a service when its profile cannot be secured", async () => {
+    const test = await fixture();
+    try {
+      const contents = new Map<string, string>();
+      const filesystem: ServiceManifestFilesystem = { read: async (path) => contents.get(path), write: async (path, content) => { contents.set(path, content); }, remove: async (path) => { contents.delete(path); } };
+      const manager = createServiceManager({ platform: "linux", mode: "system", executor: { execute: async () => ({ exitCode: 0 }) } });
+      const provisioner = { platform: "linux" as const, provision: async () => ({ identity: "runmesh", profileSecured: false, detail: "profile is not present yet" }) };
+      await test.store.save(profile(join(test.root, "workspace")));
+      await expect(runCli(["install"], { store: test.store, servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, serviceProvisioner: provisioner, isAdministrator: () => true })).rejects.toThrow("profile is not present yet");
+      expect(contents.size).toBe(0);
     } finally { await test.cleanup(); }
   });
   it("renders hashed system service manifests and refuses unrelated overwrite/removal", async () => {
     const test = await fixture();
     try {
-      const manifest = renderService({ platform: "linux", mode: "user", home: test.root });
+      // Use target-platform-shaped fixture roots. A Windows host path is not a
+      // valid absolute POSIX path when rendering a Linux/macOS manifest.
+      const fixtureHome = "/tmp/runmesh-test-home";
+      const manifest = renderService({ platform: "linux", mode: "user", home: fixtureHome });
       expect(manifest.content).toContain("ExecStart="); expect(isManagedService(manifest.content)).toBe(true);
-      await installServiceManifest(manifest);
-      await writeFile(manifest.path, "not ours");
-      await expect(installServiceManifest(manifest)).rejects.toThrow("unmanaged");
-      await expect(removeServiceManifest(manifest)).rejects.toThrow("unmanaged");
-      expect(renderService({ platform: "darwin", home: test.root }).content).toContain("io.alone.runmesh.runner");
+      const contents = new Map<string, string>();
+      const filesystem: ServiceManifestFilesystem = { read: async (path) => contents.get(path), write: async (path, content) => { contents.set(path, content); }, remove: async (path) => { contents.delete(path); } };
+      await installServiceManifest(manifest, filesystem);
+      await filesystem.write(manifest.path, "not ours");
+      await expect(installServiceManifest(manifest, filesystem)).rejects.toThrow("unmanaged");
+      await expect(removeServiceManifest(manifest, filesystem)).rejects.toThrow("unmanaged");
+      expect(renderService({ platform: "darwin", home: fixtureHome }).content).toContain("io.alone.runmesh.runner");
       expect(renderService({ platform: "win32", home: test.root }).content).toContain("Task");
     } finally { await test.cleanup(); }
   });

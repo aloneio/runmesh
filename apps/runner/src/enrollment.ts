@@ -70,6 +70,7 @@ function enrollmentEndpoint(value: string, insecureLocal: boolean): string {
   let url: URL;
   try { url = new URL(value); } catch { throw new Error("--server must be an https:// enrollment URL"); }
   const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]";
+  if (url.username !== "" || url.password !== "" || url.search !== "" || url.hash !== "") throw new Error("--server must not contain credentials, query parameters, or a fragment");
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback && insecureLocal)) throw new Error("https:// is required; use --insecure-local only for loopback http:// enrollment");
   if (url.pathname !== "/runner/enroll") url.pathname = url.pathname.endsWith("/") ? `${url.pathname}runner/enroll` : `${url.pathname}/runner/enroll`;
   url.search = "";
@@ -79,6 +80,7 @@ function connectionUrl(value: string): string {
   let url: URL;
   try { url = new URL(value); } catch { throw new Error("enrollment response has an invalid server URL"); }
   const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]";
+  if (url.username !== "" || url.password !== "" || url.search !== "" || url.hash !== "") throw new Error("enrollment response has an unsafe server URL");
   if (url.protocol === "https:") url.protocol = "wss:";
   else if (url.protocol === "http:" && loopback) url.protocol = "ws:";
   else if (url.protocol !== "wss:" && url.protocol !== "ws:") throw new Error("enrollment response has an invalid server URL");

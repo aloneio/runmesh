@@ -1,7 +1,8 @@
 import { readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const repositoryRoot = resolve(new URL("..", import.meta.url).pathname);
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const version = JSON.parse(await readFile(resolve(repositoryRoot, "package.json"), "utf8")).version;
 if (typeof version !== "string" || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
   throw new Error("invalid root product version");

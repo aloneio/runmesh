@@ -5,7 +5,6 @@ import {
   PROTOCOL_CURRENT_VERSION,
   PROTOCOL_MIN_VERSION,
   runnerPolicyChecksum,
-  type CapabilityMetadata,
   type RunnerMetadata,
   type RunnerPolicyAck,
   type RunnerWelcome,
@@ -13,6 +12,7 @@ import {
   type RpcRequest,
   type WireMessage,
 } from "@aloneio/runmesh-protocol";
+import type { CapabilityMetadata } from "./protocol-types.js";
 import WebSocket from "ws";
 import { reconnectDelayMs } from "./backoff.js";
 import { PolicyStore } from "./policy-store.js";
@@ -205,12 +205,26 @@ export class RunnerConnection {
           return;
         }
         if (message.type === "runner.welcome") {
+          // A delayed welcome from a superseded socket must never promote the
+          // old transport back to online or install timers that belong to the
+          // current session. This can happen when a pre-welcome socket errors
+          // while the reconnect loop is already opening a replacement.
+          if (this.socket !== socket || this.stopped) {
+            socket.close(4000, "stale connection");
+            return;
+          }
           welcomed = true;
           this.onStateChange("online");
           if (message.desired_policy !== undefined) this.queueDesiredPolicy(socket, message.desired_policy);
-          void this.sendSync(socket);
-          this.heartbeatTimer = setInterval(() => this.sendHeartbeat(socket), this.heartbeatMs);
-          this.syncTimer = setInterval(() => { void this.sendSync(socket); }, this.syncMs);
+          void this.sendSync(socket).catch(() => undefined);
+          this.heartbeatTimer = setInterval(() => {
+            if (this.socket !== socket || this.stopped) return;
+            try { this.sendHeartbeat(socket); } catch { /* close handler drives reconnect */ }
+          }, this.heartbeatMs);
+          this.syncTimer = setInterval(() => {
+            if (this.socket !== socket || this.stopped) return;
+            void this.sendSync(socket).catch(() => undefined);
+          }, this.syncMs);
           // Stay pending until close so start() reconnects only after a real session ends.
           return;
         }
@@ -237,12 +251,18 @@ export class RunnerConnection {
         if (!welcomed) fail(error);
       });
       socket.once("close", (code: number, reason: Buffer) => {
-        if (this.heartbeatTimer !== undefined) clearInterval(this.heartbeatTimer);
-        if (this.syncTimer !== undefined) clearInterval(this.syncTimer);
-        this.heartbeatTimer = undefined;
-        this.syncTimer = undefined;
+        // A socket that failed before `open` can emit `close` after the
+        // reconnect loop has already installed a newer socket. Never clear
+        // the newer session's heartbeat/sync timers from that stale event.
+        const currentSocket = this.socket === socket;
+        if (currentSocket) {
+          if (this.heartbeatTimer !== undefined) clearInterval(this.heartbeatTimer);
+          if (this.syncTimer !== undefined) clearInterval(this.syncTimer);
+          this.heartbeatTimer = undefined;
+          this.syncTimer = undefined;
+        }
         this.rejectPendingForSocket(socket, new Error("runner connection closed"));
-        if (this.socket === socket) this.socket = undefined;
+        if (currentSocket) this.socket = undefined;
         const closeReason = reason.toString("utf8");
         const failure = classifyConnectionFailure({ closeCode: code, reason: closeReason }) === "authentication"
           ? new RunnerAuthenticationError("runner credentials were revoked or rejected")
@@ -294,27 +314,29 @@ export class RunnerConnection {
   }
 
   private sendPolicyAck(socket: WebSocket, status: RunnerPolicyAck["status"], workspaceStatus: RunnerPolicyAck["workspace_status"]): void {
-    if (socket.readyState !== WebSocket.OPEN) return;
+    if (socket !== this.socket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
     const reportedRevision = this.appliedPolicyRevision;
     const reportedChecksum = this.appliedPolicyChecksum;
     socket.send(encodeWireFrame({ type: "runner.policy_ack", protocol_version: PROTOCOL_CURRENT_VERSION, runner_id: this.config.runnerId, desired_revision: this.desiredPolicyRevision, desired_checksum: this.desiredPolicyChecksum, applied_revision: this.appliedPolicyRevision, applied_checksum: this.appliedPolicyChecksum, runner_reported_policy_revision: reportedRevision, runner_reported_policy_checksum: reportedChecksum, status, workspace_status: workspaceStatus }));
   }
 
   private sendHeartbeat(socket: WebSocket): void {
-    if (socket.readyState !== WebSocket.OPEN) return;
-    socket.send(encodeWireFrame({
-      type: "runner.heartbeat",
-      protocol_version: PROTOCOL_CURRENT_VERSION,
-      runner_id: this.config.runnerId,
-      sent_at_ms: Date.now(),
-      active_job_ids: this.runtime.jobs.list().filter((job) => ["queued", "running", "cancelling"].includes(job.status)).map((job) => job.job_id),
-    }));
+    if (socket !== this.socket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
+    try {
+      socket.send(encodeWireFrame({
+        type: "runner.heartbeat",
+        protocol_version: PROTOCOL_CURRENT_VERSION,
+        runner_id: this.config.runnerId,
+        sent_at_ms: Date.now(),
+        active_job_ids: this.runtime.jobs.list().filter((job) => ["queued", "running", "cancelling"].includes(job.status)).map((job) => job.job_id),
+      }));
+    } catch { /* close handler drives reconnect */ }
   }
 
   private async sendSync(socket: WebSocket): Promise<void> {
-    if (socket.readyState !== WebSocket.OPEN) return;
+    if (socket !== this.socket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
     const jobs = await this.runtime.syncJobs();
-    if (socket.readyState !== WebSocket.OPEN) return;
+    if (socket !== this.socket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
     const sync: RunnerSync = {
       type: "runner.sync",
       protocol_version: PROTOCOL_CURRENT_VERSION,
@@ -324,7 +346,7 @@ export class RunnerConnection {
       workspaces: this.runtime.syncWorkspaceMetadata(),
       jobs,
     };
-    socket.send(encodeWireFrame(sync));
+    try { socket.send(encodeWireFrame(sync)); } catch { /* close handler drives reconnect */ }
   }
 
   private async respondToRpc(socket: WebSocket, request: RpcRequest): Promise<void> {

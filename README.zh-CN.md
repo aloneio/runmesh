@@ -176,11 +176,11 @@ npm run check:licenses
 
 ```sh
 cd apps/worker
-npx wrangler secret put ADMIN_TOKEN
-npx wrangler secret put SETUP_TOKEN          # 或改为配置 SETUP_TOKEN_HASH
-npx wrangler secret put RUNNER_TOKEN_PEPPER
-npx wrangler secret put INTERNAL_CONTROL_SECRET
-npx wrangler deploy --config wrangler.jsonc
+npm exec --offline -- wrangler secret put ADMIN_TOKEN
+npm exec --offline -- wrangler secret put SETUP_TOKEN          # 或改为配置 SETUP_TOKEN_HASH
+npm exec --offline -- wrangler secret put RUNNER_TOKEN_PEPPER
+npm exec --offline -- wrangler secret put INTERNAL_CONTROL_SECRET
+npm exec --offline -- wrangler deploy --config wrangler.jsonc
 ```
 
 首次管理员 setup 必须提供已配置的 `SETUP_TOKEN` 或 `SETUP_TOKEN_HASH` 中的 SHA-256 verifier；setup token 不会保存到 RegistryDO，也不会由 Dashboard 显示。首次初始化采用原子化 first-success-wins，因此未初始化的公网实例必须先使用部署访问控制保护，直到预期管理员完成 setup。`ADMIN_TOKEN` 仅用于手工/程序化 Runner 管理 API，不是管理员密码替代品、浏览器 cookie、MCP 凭据或 Runner enrollment code。
@@ -191,7 +191,7 @@ npx wrangler deploy --config wrangler.jsonc
 
 本仓库不会在 push 时自动部署。GitLab 部署 pipeline 应是受保护且手动触发的 job，并且只能部署已经在 GitLab CI 中验证过的同一个固定 commit。请在 GitLab 中配置 masked/protected variables：`CLOUDFLARE_API_TOKEN` 和 `CLOUDFLARE_ACCOUNT_ID`；token 权限应尽量收窄到目标账户和 Workers 部署操作。
 
-部署 job 必须在 `npx wrangler deploy --config apps/worker/wrangler.jsonc --strict` 前完成完整验证；部署后的 Worker 名称为 `runmesh`。不得打印或保存应用 secrets。请单独使用 `wrangler secret put` 或 `wrangler secret bulk` 设置 Cloudflare Worker secrets，不要把应用 secrets 放入仓库或普通 CI variables。
+部署 job 必须在 `npm exec --offline -- wrangler deploy --config apps/worker/wrangler.jsonc --strict` 前完成完整验证；部署后的 Worker 名称为 `runmesh`。不得打印或保存应用 secrets。请单独使用 `wrangler secret put` 或 `wrangler secret bulk` 设置 Cloudflare Worker secrets，不要把应用 secrets 放入仓库或普通 CI variables。
 
 部署会影响生产环境。手动启动前请复核精确 commit、目标账户、Worker 名称、Durable Object migration 变化以及备份/恢复方案。本地 `wrangler login` 只能证明当前登录账户，不代表已经执行部署授权。
 
