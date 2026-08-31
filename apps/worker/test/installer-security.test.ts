@@ -32,6 +32,7 @@ describe("hosted installer origin and template safety", () => {
     const request = new Request("https://public.example/runner/install.sh", { headers: { host: "public.example" } });
     expect(resolvePublicOrigin(request, "https://PUBLIC.example/")).toBe("https://public.example");
     expect(resolvePublicOrigin(new Request("https://internal.worker/runner/install.sh", { headers: { host: "public.example" } }), "https://public.example")).toBe("https://public.example");
+    expect(resolvePublicOrigin(new Request("http://internal.worker/runner/install.sh", { headers: { host: "public.example" } }), "https://public.example")).toBe("https://public.example");
     expect(() => resolvePublicOrigin(new Request("https://public.example/runner/install.sh", { headers: { host: "evil.example" } }), "https://public.example")).toThrow();
     expect(() => resolvePublicOrigin(new Request("https://public.example/runner/install.sh", { headers: { host: "x.test';id;#" } }), "https://public.example")).toThrow();
     expect(() => resolvePublicOrigin(new Request("https://public.example/runner/install.sh", { headers: { host: "evil.example" } }))).toThrow();

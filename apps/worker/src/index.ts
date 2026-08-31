@@ -165,6 +165,12 @@ async function handleRunnerEnrollment(request: Request, env: WorkerEnv): Promise
   const code = typeof input?.enrollment_code === "string" && /^[A-Za-z0-9_-]{43}$/.test(input.enrollment_code) ? input.enrollment_code : undefined;
   const publicInfo = runnerPublicInfo(input?.runner_public_info);
   if (code === undefined || publicInfo === undefined || typeof env.RUNNER_TOKEN_PEPPER !== "string" || env.RUNNER_TOKEN_PEPPER.length === 0 || typeof env.INTERNAL_CONTROL_SECRET !== "string" || env.INTERNAL_CONTROL_SECRET.length === 0) return enrollmentError();
+  // Resolve the endpoint that will be persisted before consuming the one-time
+  // code. This prevents a successful enrollment from returning an attacker-
+  // controlled or unusable reconnect URL when the request arrived through a
+  // misconfigured proxy.
+  let publicOrigin: string;
+  try { publicOrigin = resolveConnectionOrigin(request, env.RUNMESH_PUBLIC_ORIGIN); } catch { return installerOriginUnavailable(); }
   const verifier = await sha256Hex(code);
   // Resolve the target before redeeming so the RunnerDO can acquire its
   // mutation fence. A direct redeem fallback would let an old socket remain
@@ -214,8 +220,8 @@ async function handleRunnerEnrollment(request: Request, env: WorkerEnv): Promise
   const committed = await runnerMutationState(env, runnerId, mutationId).catch(() => undefined);
   if (committed?.mutation_committed !== true) return enrollmentUnavailable();
   try { await revokeRunnerTransport(env, runnerId, mutationId); } catch { /* new credential remains authoritative */ }
-  const url = new URL(request.url); url.pathname = "/runner/connect"; url.search = "";
-  return Response.json({ runner_id: runnerId, server_url: url.toString(), token }, { headers: credentialHeaders("application/json; charset=utf-8") });
+  const connectUrl = new URL("/runner/connect", publicOrigin).toString();
+  return Response.json({ runner_id: runnerId, server_url: connectUrl, token }, { headers: credentialHeaders("application/json; charset=utf-8") });
 }
 function runnerPublicInfo(value: unknown): RunnerPublicInfo | undefined {
   const item = record(value);
@@ -331,7 +337,7 @@ async function handleLanding(request: Request, env: WorkerEnv, url: URL): Promis
 async function submitSetup(request: Request, env: WorkerEnv): Promise<Response> {
   const form = await formData(request);
   if (form === undefined) return adminError(400, "Invalid setup request.");
-  if (!await verifyPreAuthCsrf(request, form, SETUP_CSRF_COOKIE)) return adminError(403, "Setup request was rejected.");
+  if (!await verifyPreAuthCsrf(request, form, SETUP_CSRF_COOKIE, env)) return adminError(403, "Setup request was rejected.");
   const throttle = await authThrottleCheck(env, "setup");
   if (throttle === undefined) return adminError(503, "Setup could not be completed. Try again.");
   if (!throttle.allowed) return throttleError(throttle.retry_after_ms);
@@ -356,7 +362,7 @@ async function submitSetup(request: Request, env: WorkerEnv): Promise<Response> 
 async function submitLogin(request: Request, env: WorkerEnv): Promise<Response> {
   const form = await formData(request);
   if (form === undefined) return adminError(400, "Invalid login request.");
-  if (!await verifyPreAuthCsrf(request, form, LOGIN_CSRF_COOKIE)) return adminError(403, "Login request was rejected.");
+  if (!await verifyPreAuthCsrf(request, form, LOGIN_CSRF_COOKIE, env)) return adminError(403, "Login request was rejected.");
   const throttle = await authThrottleCheck(env, "login");
   if (throttle === undefined) return adminError(503, "Login could not be completed. Try again.");
   if (!throttle.allowed) return throttleError(throttle.retry_after_ms);
@@ -418,13 +424,13 @@ async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: URL): P
   }
   if (request.method !== "POST") { await discardBody(request); return methodNotAllowed("GET, POST"); }
   const form = await formData(request);
-  if (form === undefined || !await verifyAdminPost(request, form, session)) return adminError(403, "Administrative request was rejected.");
+  if (form === undefined || !await verifyAdminPost(request, form, session, env)) return adminError(403, "Administrative request was rejected.");
   // Generated enrollment/MCP URLs must use the deployment's canonical public
   // origin when configured. Local development intentionally has no config and
   // may use HTTP; copied manual commands still quote this derived origin.
   let publicOrigin: string;
   try {
-    publicOrigin = env.RUNMESH_PUBLIC_ORIGIN === undefined ? new URL(request.url).origin : resolvePublicOrigin(request, env.RUNMESH_PUBLIC_ORIGIN);
+    publicOrigin = resolveConnectionOrigin(request, env.RUNMESH_PUBLIC_ORIGIN);
   } catch { return installerOriginUnavailable(); }
   if (url.pathname === "/admin/logout") {
     await registryPost(env, "/auth/sessions/logout", { session_hash: session.hash });
@@ -668,18 +674,45 @@ async function adminSession(request: Request, env: WorkerEnv): Promise<{ hash: s
   const csrfHash = record(response.ok ? await json(response) : undefined)?.csrf_hash;
   return typeof csrfHash === "string" && /^[0-9a-f]{64}$/.test(csrfHash) ? { hash, csrf_hash: csrfHash } : undefined;
 }
-async function verifyAdminPost(request: Request, form: FormData, session: { csrf_hash: string }): Promise<boolean> {
-  if (!sameOrigin(request)) return false;
+async function verifyAdminPost(request: Request, form: FormData, session: { csrf_hash: string }, env: WorkerEnv): Promise<boolean> {
+  if (!sameOrigin(request, env.RUNMESH_PUBLIC_ORIGIN)) return false;
   const supplied = form.get("csrf_token"); const cookie = cookieValue(request, ADMIN_CSRF_COOKIE);
   return typeof supplied === "string" && typeof cookie === "string" && constantTimeEqual(supplied, cookie) && constantTimeEqual(await sha256Hex(supplied), session.csrf_hash);
 }
-async function verifyPreAuthCsrf(request: Request, form: FormData, name: string): Promise<boolean> {
-  if (!sameOrigin(request)) return false;
+async function verifyPreAuthCsrf(request: Request, form: FormData, name: string, env: WorkerEnv): Promise<boolean> {
+  if (!sameOrigin(request, env.RUNMESH_PUBLIC_ORIGIN)) return false;
   const supplied = form.get("csrf_token"); const cookie = cookieValue(request, name);
   return typeof supplied === "string" && typeof cookie === "string" && constantTimeEqual(supplied, cookie);
 }
-function sameOrigin(request: Request): boolean {
-  const origin = new URL(request.url).origin;
+/**
+ * Resolve the origin used for browser-generated links and CSRF checks. Hosted
+ * deployments must configure a canonical HTTPS origin; local development may
+ * use HTTP only on an explicit loopback address so an arbitrary Host header
+ * can never become a persisted credential endpoint.
+ */
+function resolveConnectionOrigin(request: Request, configuredOrigin?: string): string {
+  if (configuredOrigin !== undefined) return resolvePublicOrigin(request, configuredOrigin);
+  let url: URL;
+  try { url = new URL(request.url); } catch { throw new Error("request URL is malformed"); }
+  if (url.protocol === "https:") return resolvePublicOrigin(request);
+  if (url.protocol !== "http:" || url.username !== "" || url.password !== "" || !isLoopbackHostname(url.hostname)) throw new Error("an HTTPS or loopback HTTP origin is required");
+  const hostHeader = request.headers.get("host");
+  if (hostHeader !== null) {
+    if (/^[\u0000-\u0020\u007f\\\/?#@]/u.test(hostHeader) || /[\u0000-\u0020\u007f\\\/?#@]/u.test(hostHeader)) throw new Error("request Host is malformed");
+    let hostUrl: URL;
+    try { hostUrl = new URL(`http://${hostHeader}`); } catch { throw new Error("request Host is malformed"); }
+    if (hostUrl.username !== "" || hostUrl.password !== "" || hostUrl.pathname !== "/" || hostUrl.search !== "" || hostUrl.hash !== "" || !isLoopbackHostname(hostUrl.hostname) || normalizeHostname(hostUrl.hostname) !== normalizeHostname(url.hostname) || hostUrl.port !== url.port) throw new Error("request Host does not match the loopback origin");
+  }
+  return url.origin;
+}
+function normalizeHostname(value: string): string { return value.toLowerCase().replace(/^\[/, "").replace(/\]$/, ""); }
+function isLoopbackHostname(value: string): boolean {
+  const hostname = normalizeHostname(value);
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+}
+function sameOrigin(request: Request, configuredOrigin?: string): boolean {
+  let origin: string;
+  try { origin = resolveConnectionOrigin(request, configuredOrigin); } catch { return false; }
   const candidate = request.headers.get("origin") ?? request.headers.get("referer");
   if (candidate === null || candidate === "null") return true; // privacy browsers may submit Origin: null; the synchronizer token still remains mandatory.
   try { return new URL(candidate).origin === origin; } catch { return false; }
@@ -816,7 +849,7 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Version policy": "版本策略",
   "Runmesh Runner one-click installation": "Runmesh Runner 一键安装",
   "Install Runmesh Runner": "安装 Runmesh Runner",
-  "This command downloads the pinned Runmesh Runner release, verifies its checksum when configured, enrolls this host, and installs the service. The one-time code expires in 30 minutes and will not be shown again.": "此命令会下载固定版本的 Runmesh Runner、在已配置时校验 checksum、注册当前主机并安装服务。一次性代码将在 30 分钟后过期，且不会再次显示。",
+  "This command downloads the pinned Runmesh Runner release, verifies its manifest, signature, and checksum, enrolls this host, and installs the service. The one-time code expires in 30 minutes and will not be shown again.": "此命令会下载固定版本的 Runmesh Runner，并校验其清单、签名和 checksum，然后注册当前主机并安装服务。一次性代码将在 30 分钟后过期，且不会再次显示。",
   "Run only on the intended host. The command contains a single-use enrollment code; never share or log it. Node.js 20+ and an elevated administrator/root shell are required.": "请只在目标主机上运行。命令包含单次使用的注册代码，请勿分享或记录。需要 Node.js 20+ 以及管理员/root 权限 Shell。",
   "Copy install command": "复制安装命令",
   "Channel": "频道",
@@ -3106,11 +3139,29 @@ function runnerEnrollmentPage(env: RunnerReleaseEnvironment, baseUrl: string, ru
   const shellInstallerUrl = shellQuote(new URL("/runner/install.sh", publicBase).toString());
   const powerShellInstallerUrl = powershellQuote(new URL("/runner/install.ps1", publicBase).toString());
   // The copied bootstrap command is itself a code-fetching trust boundary:
-  // refuse redirects before piping any response into a privileged shell. The
-  // installer script performs its own pinned multi-hop checks for GitHub
+  // download to a private temporary file and check the fetch status before a
+  // privileged interpreter sees any bytes. Automatic redirects are disabled;
+  // the installer script performs its own pinned multi-hop checks for GitHub
   // assets after it starts.
-  const shellCommand = `curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 0 ${shellInstallerUrl} | sudo sh`;
-  const powerShellCommand = `Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 -Uri ${powerShellInstallerUrl} | Invoke-Expression`;
+  const shellCommand = `set -eu
+installer="$(mktemp)"
+trap 'rm -f "$installer"' EXIT
+curl -q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 0 --max-time 60 --max-filesize 262144 --output "$installer" ${shellInstallerUrl}
+test -s "$installer"
+sudo sh "$installer"`;
+  const powerShellCommand = `$ErrorActionPreference = 'Stop'
+$installer = Join-Path ([IO.Path]::GetTempPath()) ('runmesh-installer-' + [guid]::NewGuid().ToString('N') + '.ps1')
+try {
+  $response = Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 -TimeoutSec 60 -ErrorAction Stop -OutFile $installer -Uri ${powerShellInstallerUrl}
+  $status = [int]$response.StatusCode
+  if ($status -lt 200 -or $status -ge 300) { throw \"Installer download returned HTTP $status.\" }
+  if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw 'Installer download did not produce a file.' }
+  $length = (Get-Item -LiteralPath $installer).Length
+  if ($length -le 0 -or $length -gt 262144) { throw 'Installer download size is invalid.' }
+  & ([scriptblock]::Create([IO.File]::ReadAllText($installer)))
+} finally {
+  Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
+}`;
   const server = new URL("/runner/enroll", publicBase).toString();
   const shellServer = shellQuote(server);
   const powershellServer = powershellQuote(server);

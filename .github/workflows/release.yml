@@ -91,9 +91,6 @@ jobs:
           set -euo pipefail
           published_at="$(date --utc --date="@$(git log -1 --format=%ct)" +%Y-%m-%dT%H:%M:%SZ)"
           node scripts/release-manifest.mjs release/assets "$RELEASE_VERSION" "$(git rev-parse HEAD)" "$published_at"
-          # Keep the SBOM scoped to the packed Runner workspace and its lock
-          # file; do not accidentally describe the entire monorepo.
-          npm sbom --workspace=@aloneio/runmesh-runner --package-lock-only --sbom-format=spdx > release/assets/sbom.spdx.json
       - name: Sign and verify manifest and local release assets
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
@@ -103,7 +100,7 @@ jobs:
           node scripts/release-signature.mjs sign release/assets/manifest.json release/assets/manifest.sig release/assets/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
           node scripts/release-signature.mjs verify release/assets/manifest.json release/assets/manifest.sig release/assets/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
           cp release/trust-keyring.json LICENSE NOTICE THIRD_PARTY_NOTICES.md release/assets/
-          (cd release/assets && sha256sum *.tgz manifest.json manifest.sig manifest.signature.json sbom.spdx.json LICENSE NOTICE THIRD_PARTY_NOTICES.md trust-keyring.json > SHA256SUMS)
+          (cd release/assets && sha256sum *.tgz manifest.json manifest.sig manifest.signature.json LICENSE NOTICE THIRD_PARTY_NOTICES.md trust-keyring.json > SHA256SUMS)
           # Verify the exact bytes that will be uploaded before creating the
           # immutable tag/release. The post-publication check remains as an
           # independent transport/infrastructure verification.
@@ -191,7 +188,7 @@ jobs:
             --jq '.object.type')"
           test "$target_sha" = "$GITHUB_SHA"
           test "$target_type" = commit
-      - name: Create development prerelease
+      - name: Create development draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -199,9 +196,75 @@ jobs:
           gh release create "v${RELEASE_VERSION}" release/assets/* \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
+            --draft \
             --title "Runmesh v${RELEASE_VERSION}" \
             --prerelease \
             --notes-file docs/release-notes.md
+      - name: Verify draft release assets before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="v${RELEASE_VERSION}"
+          draft_dir="release/draft-download"
+          rm -rf "$draft_dir"
+          mkdir -p "$draft_dir"
+          draft_json="release/draft-release.json"
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,tagName,assets > "$draft_json"
+          DRAFT_JSON="$draft_json" RELEASE_VERSION="$RELEASE_VERSION" node --input-type=module -e '
+            import { readFile } from "node:fs/promises";
+            const release = JSON.parse(await readFile(process.env.DRAFT_JSON, "utf8"));
+            const expectedTag = `v${process.env.RELEASE_VERSION}`;
+            if (release.tagName !== expectedTag || release.isDraft !== true || release.isPrerelease !== true) {
+              throw new Error(`draft release metadata is invalid for ${expectedTag}`);
+            }
+            const expected = new Set([
+              `runmesh-runner-${process.env.RELEASE_VERSION}.tgz`,
+              "manifest.json",
+              "manifest.sig",
+              "manifest.signature.json",
+              "SHA256SUMS",
+              "LICENSE",
+              "NOTICE",
+              "THIRD_PARTY_NOTICES.md",
+              "trust-keyring.json",
+            ]);
+            const names = (release.assets ?? []).map((asset) => asset?.name);
+            if (names.length !== expected.size || new Set(names).size !== names.length || names.some((name) => !expected.has(name))) {
+              throw new Error(`draft release assets are incomplete or unexpected: ${names.join(",")}`);
+            }
+          '
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$draft_dir"
+          for asset in \
+            "runmesh-runner-${RELEASE_VERSION}.tgz" manifest.json manifest.sig manifest.signature.json \
+            SHA256SUMS LICENSE NOTICE THIRD_PARTY_NOTICES.md trust-keyring.json; do
+            test -f "$draft_dir/$asset"
+          done
+          test "$(find "$draft_dir" -maxdepth 1 -type f | wc -l)" -eq 9
+          node scripts/release-verify.mjs "$draft_dir/manifest.json" "$draft_dir/manifest.sig" "$draft_dir/manifest.signature.json" release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID" "$RELEASE_VERSION"
+          GITHUB_SHA="$GITHUB_SHA" node --input-type=module -e '
+            import { readFile } from "node:fs/promises";
+            const manifest = JSON.parse(await readFile(process.argv[1], "utf8"));
+            if (manifest.commit_sha !== process.env.GITHUB_SHA) {
+              throw new Error(`draft manifest commit ${manifest.commit_sha} does not match triggering commit ${process.env.GITHUB_SHA}`);
+            }
+          ' "$draft_dir/manifest.json"
+          (cd "$draft_dir" && grep -vE '(^|[[:space:]])trust-keyring\.json$' SHA256SUMS | sha256sum -c -)
+          cmp "$draft_dir/trust-keyring.json" release/trust-keyring.json
+          RELEASE_VERSION="$RELEASE_VERSION" tar -xOf "$draft_dir/runmesh-runner-${RELEASE_VERSION}.tgz" package/package.json | RELEASE_VERSION="$RELEASE_VERSION" node -e 'let x="";process.stdin.on("data",d=>x+=d).on("end",()=>{if(JSON.parse(x).version!==process.env.RELEASE_VERSION)process.exit(1)})'
+      - name: Publish verified development prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="v${RELEASE_VERSION}"
+          test "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true
+          gh release edit "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --draft=false \
+            --prerelease
+          test "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease --jq '[.isDraft,.isPrerelease] | @tsv')" = $'false\ttrue'
       - name: Re-download and verify published assets
         env:
           GH_TOKEN: ${{ github.token }}
