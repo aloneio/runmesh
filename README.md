@@ -189,13 +189,17 @@ The first administrator setup requires the configured `SETUP_TOKEN` or the SHA-2
 
 Open the deployed root URL, set the administrator password with the setup token, and sign in. The dashboard then provides the normal flows to create and manage Runners, generate one-time enrollment codes, define managed Workspaces, review policy status, create MCP Clients, and rotate or revoke credentials.
 
-#### GitLab CI/CD deployment
+#### Cloudflare Workers Builds (GitHub and GitLab)
 
-This repository does not deploy automatically on push. A GitLab deployment pipeline should be a protected, manually triggered job using the same pinned commit that was validated in GitLab CI. Configure masked/protected GitLab variables for `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`; use a narrowly scoped token limited to the target account and Workers deployment permissions.
+The GitHub and GitLab repositories are connected directly to the `runmesh` Worker through Cloudflare Workers Builds. Cloudflare performs the build and deployment with its managed connection; GitHub Actions and GitLab CI in this repository run the same verification suite and do not need `CLOUDFLARE_API_TOKEN` or `CLOUDFLARE_ACCOUNT_ID` variables.
 
-The deploy job must run the complete validation sequence before `npm exec --offline -- wrangler deploy --config apps/worker/wrangler.jsonc --env production --strict`; the resulting Worker is named `runmesh`. It must not print or store Worker secrets. Set Cloudflare Worker secrets separately with `wrangler secret put` or `wrangler secret bulk`; do not put application secrets in the repository or ordinary CI variables.
+For each Cloudflare repository connection, select the `dev` production branch, keep the repository root as the build root, and set the deploy command to:
 
-A deploy is a production-affecting operation. Review the exact commit, target account, Worker name, Durable Object migration changes, and backup/recovery plan before manually starting it. Local `wrangler login` confirms only the currently authenticated account; it does not authorize deployment without an explicit operator action.
+```sh
+npm exec --offline -- wrangler deploy --config apps/worker/wrangler.jsonc --env production --strict
+```
+
+The `--env production` flag is required so the canonical origin and signed-release gate in the checked-in production environment are deployed. Keep the four Worker runtime secrets in Cloudflare Variables & Secrets; never put them in GitLab/GitHub CI variables or source control. Review the exact commit, Worker name, Durable Object migration changes, and recovery plan before changing either Cloudflare connection.
 
 ### Runner onboarding
 
