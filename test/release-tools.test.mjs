@@ -73,8 +73,15 @@ test("pins manually-dispatched releases to the triggering dev commit", async () 
   assert.ok(ciActionRefs.every((ref) => /^[^@]+@[0-9a-f]{40}$/u.test(ref)), `mutable GitHub Action ref in ci.yml: ${ciActionRefs.join(", ")}`);
   assert.equal(ciWorkflow.includes("persist-credentials: false"), true);
   const gitlabWorkflow = (await readFile(join(repositoryRoot, ".gitlab-ci.yml"), "utf8")).replace(/\r\n/gu, "\n");
-  assert.equal(gitlabWorkflow.includes('git fetch --no-tags origin "$CI_COMMIT_BRANCH"'), true);
-  assert.equal(gitlabWorkflow.includes('test "$(git rev-parse FETCH_HEAD)" = "$CI_COMMIT_SHA"'), true);
+  // Cloudflare Workers Builds owns deployment for both connected repositories;
+  // GitLab CI mirrors GitHub's verification lane and must not require a
+  // separate Wrangler token or carry a competing deployment job.
+  assert.equal(gitlabWorkflow.includes("cloudflare_deploy:"), false);
+  assert.equal(gitlabWorkflow.includes("wrangler deploy"), false);
+  assert.equal(gitlabWorkflow.includes("CLOUDFLARE_API_TOKEN"), false);
+  for (const command of ["npm run validate:worker -- --dry-run", "npm run validate:worker -- --dry-run --env production", "npm run test:e2e"]) {
+    assert.equal(gitlabWorkflow.includes(command), true, `GitLab verify must include ${command}`);
+  }
 });
 
 test("keeps worker validation fail-closed when a false dry-run value is supplied", async () => {
