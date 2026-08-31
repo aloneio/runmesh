@@ -3217,11 +3217,23 @@ document.querySelectorAll('form.login-form').forEach(function(form){form.addEven
 })();
 </script>`;
 }
-function runnerEnrollmentPage(env: RunnerReleaseEnvironment, baseUrl: string, runnerId: string, code: string | undefined, csrf: string, _reEnroll = false): Response {
+export function runnerEnrollmentPage(env: RunnerReleaseEnvironment, baseUrl: string, runnerId: string, code: string | undefined, csrf: string, _reEnroll = false): Response {
   if (code === undefined) return adminError(503, "Enrollment code could not be generated.");
   const release = runnerReleaseDescriptor(env);
   const bootstrap = release.distributable;
-  const publicBase = bootstrap ? canonicalPublicOrigin(baseUrl) : new URL(baseUrl).origin;
+  // Validate the origin for both the hosted and manual paths.  The manual
+  // fallback still emits a server URL into a copyable command; deriving it
+  // with `new URL(...).origin` alone would allow a forged Host header to send
+  // the operator's one-time code to an attacker-controlled endpoint.
+  let publicBase: string;
+  try {
+    const parsed = new URL(baseUrl);
+    const headers = new Headers({ host: parsed.host });
+    publicBase = resolveConnectionOrigin(new Request(parsed.toString(), { headers }), env.RUNMESH_PUBLIC_ORIGIN);
+    if (bootstrap) publicBase = canonicalPublicOrigin(publicBase);
+  } catch {
+    return installerOriginUnavailable();
+  }
   const shellInstallerUrl = shellQuote(new URL("/runner/install.sh", publicBase).toString());
   const powerShellInstallerUrl = powershellQuote(new URL("/runner/install.ps1", publicBase).toString());
   // The copied bootstrap command is itself a code-fetching trust boundary:

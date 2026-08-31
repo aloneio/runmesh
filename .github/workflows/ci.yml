@@ -35,5 +35,6 @@ jobs:
       - run: npm run check:licenses
       - run: npm run build
       - run: npm run validate:worker -- --dry-run
+      - run: npm run validate:worker -- --dry-run --env production
       - run: npm run pack:smoke
       - run: npm run test:e2e
