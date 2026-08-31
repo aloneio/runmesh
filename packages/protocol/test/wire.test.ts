@@ -6,6 +6,7 @@ import {
   MAX_JSON_DEPTH,
   PROTOCOL_CURRENT_VERSION,
   ProtocolFrameError,
+  JsonValueSchema,
   RpcRequestSchema,
   runnerPolicyChecksum,
   decodeWireFrame,
@@ -160,6 +161,59 @@ describe("Runner-Worker protocol", () => {
     }
   });
 
+  it("does not satisfy required fields from a polluted Object.prototype", () => {
+    const inherited = {
+      protocol_version: PROTOCOL_CURRENT_VERSION,
+      request_id: "inherited-request",
+      type: "runner.hello",
+      runner: {
+        runner_id: "runner-inherited",
+        runner_version: "0.1.0",
+        platform: "linux",
+        architecture: "x64",
+        capabilities,
+      },
+      min_protocol_version: PROTOCOL_CURRENT_VERSION,
+      max_protocol_version: PROTOCOL_CURRENT_VERSION,
+    } as const;
+    const originals = new Map<string, PropertyDescriptor | undefined>();
+    try {
+      for (const [key, value] of Object.entries(inherited)) {
+        originals.set(key, Object.getOwnPropertyDescriptor(Object.prototype, key));
+        Object.defineProperty(Object.prototype, key, { configurable: true, value });
+      }
+      expect(() => decodeWireFrame("{}")).toThrow(ProtocolFrameError);
+    } finally {
+      for (const [key, descriptor] of originals) {
+        if (descriptor === undefined) delete (Object.prototype as Record<string, unknown>)[key];
+        else Object.defineProperty(Object.prototype, key, descriptor);
+      }
+    }
+  });
+
+  it("does not encode fields inherited from a polluted Object.prototype", () => {
+    const originals = new Map<string, PropertyDescriptor | undefined>();
+    try {
+      for (const [key, value] of Object.entries({
+        protocol_version: PROTOCOL_CURRENT_VERSION,
+        request_id: "inherited-request",
+        type: "runner.hello",
+        runner: messages[0].runner,
+        min_protocol_version: PROTOCOL_CURRENT_VERSION,
+        max_protocol_version: PROTOCOL_CURRENT_VERSION,
+      })) {
+        originals.set(key, Object.getOwnPropertyDescriptor(Object.prototype, key));
+        Object.defineProperty(Object.prototype, key, { configurable: true, value });
+      }
+      expect(() => encodeWireFrame({} as WireMessage)).toThrow(ProtocolFrameError);
+    } finally {
+      for (const [key, descriptor] of originals) {
+        if (descriptor === undefined) delete (Object.prototype as Record<string, unknown>)[key];
+        else Object.defineProperty(Object.prototype, key, descriptor);
+      }
+    }
+  });
+
   it("rejects an unknown message type", () => {
     expect(() =>
       decodeWireFrame(
@@ -183,6 +237,22 @@ describe("Runner-Worker protocol", () => {
     expect(() =>
       encodeWireFrame({ ...messages[5], result: cyclic } as WireMessage),
     ).toThrow(/invalid wire message/);
+  });
+
+  it("rejects JSON values whose hidden properties would be dropped on encode", () => {
+    const hidden = { visible: true } as Record<string, unknown>;
+    Object.defineProperty(hidden, "hidden", { value: true, enumerable: false });
+    const symbolKey = { visible: true } as Record<string, unknown>;
+    Object.defineProperty(symbolKey, Symbol("hidden"), { value: true, enumerable: true });
+    const arrayExtra = ["visible"] as unknown as Record<string, unknown>;
+    arrayExtra.extra = true;
+    const sparse = [] as unknown as Record<string, unknown>;
+    (sparse as unknown as unknown[]).length = 1;
+
+    for (const value of [hidden, symbolKey, arrayExtra, sparse]) {
+      expect(JsonValueSchema.safeParse(value).success).toBe(false);
+      expect(() => encodeWireFrame({ ...messages[5], result: value } as WireMessage)).toThrow(ProtocolFrameError);
+    }
   });
 
   it("enforces the UTF-8 payload limit on encode and decode", () => {

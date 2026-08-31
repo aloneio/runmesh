@@ -2,7 +2,7 @@
 
 Runmesh supports a **fixed signed bootstrap design**, but it is deliberately disabled by default in `v0.1.0-dev.2`. The repository currently does **not** assert that the corresponding `v0.1.0-dev.2` GitHub release exists. A deployment may expose hosted commands only after an operator has published and independently verified that exact immutable release, configures the canonical external HTTPS `RUNMESH_PUBLIC_ORIGIN`, and explicitly sets `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.0-dev.2` for the Worker deployment. Both conditions are required; setting the release acknowledgement alone never exposes the installer.
 
-`RUNMESH_PUBLIC_ORIGIN` is a non-secret Worker variable. Set it in the Wrangler `vars` configuration to an externally reachable origin such as `https://mcp.example.com`, with no path, query, fragment, credentials, whitespace, wildcard, or `http://` scheme. A trailing slash is normalized. Installer rendering and Admin actions that generate enrollment/MCP URLs reject a configured `Host` that does not match this origin; an invalid or missing origin keeps the release descriptor non-distributable. Local development can omit the variable, but it cannot enable hosted signed bootstrap.
+`RUNMESH_PUBLIC_ORIGIN` is a non-secret Worker variable. Set it in the Wrangler `vars` configuration to an externally reachable origin such as `https://mcp.example.com`, with no path, query, fragment, credentials, whitespace, wildcard, or `http://` scheme. A trailing slash is normalized. Installer rendering and browser/Admin POSTs reject a configured `Host` that does not match this origin; an invalid or missing origin keeps the release descriptor non-distributable. Local development can omit the variable, but it cannot enable hosted signed bootstrap.
 
 Until both prerequisites are satisfied, `/runner/releases/latest` and `/runner/releases/stable` return `distributable: false`, and `/runner/install.sh` and `/runner/install.ps1` fail closed. Do not treat a source change, an npm package, a branch artifact, or an arbitrary URL as release availability.
 
@@ -15,13 +15,15 @@ The one-command path (trust model A) treats the HTTPS Worker response that serve
 - signing key ID `runmesh-preview-2026-01`;
 - the reviewed Ed25519 public key from `release/trust-keyring.json`.
 
-Before installing, the script downloads only `manifest.json`, `manifest.sig`, `manifest.signature.json`, `SHA256SUMS`, and the fixed tarball. It verifies the detached Ed25519 signature, strict manifest project/version/tag/channel/protocol/commit/artifact fields, artifact size, SHA-256, and the additional checksum-file entry. It installs only that verified local tarball with npm scripts disabled. It never uses a downloaded `trust-keyring.json` as a trust root, consults an npm registry, accepts `latest`, or accepts a package name or caller-supplied URL.
+Before installing, the script downloads only `manifest.json`, `manifest.sig`, `manifest.signature.json`, `SHA256SUMS`, and the fixed tarball. Every accepted local release asset must be non-empty and no larger than 8 MiB (`8,388,608` bytes): POSIX uses the HTTP/curl limit where available and then checks the completed file, while PowerShell enforces the bound while streaming. A chunked POSIX response may therefore be rejected after bytes have reached the temporary directory, but it can never proceed to verification or installation above the cap. The authenticated artifact size must also be within that cap. It verifies the detached Ed25519 signature, strict manifest project/version/tag/channel/protocol/commit/artifact fields, artifact size, SHA-256, and the additional checksum-file entry. It installs only that verified local tarball with npm scripts disabled. It never uses a downloaded `trust-keyring.json` as a trust root, consults an npm registry, accepts `latest`, or accepts a package name or caller-supplied URL.
 
 A compromised Worker/bootstrap endpoint can replace the installer and its embedded key; a one-command script cannot detect that replacement itself. High-assurance environments must use the independent offline path below instead of executing a remote script.
 
 ## Enabled hosted-bootstrap commands
 
 Use these commands **only when the authenticated Admin enrollment page says the fixed signed preview is available** and the command URL uses the configured public origin. They contain no enrollment code. The script validates the artifact first, then asks locally for the single-use code and sends it only to `coding-runner enroll --code-stdin`; it is not put in the URL, copied command, or process arguments. If the request `Host` does not match `RUNMESH_PUBLIC_ORIGIN`, the Worker refuses to render the installer instead of embedding a different origin.
+
+The `262144`-byte limit in the download snippets below applies only to the Worker-served installer script. After that script starts, its embedded downloader applies the separate 8 MiB limit to each fixed GitHub release asset; the repository's `pack:smoke` gate packs the actual Runner tarball and fails if it exceeds that bound.
 
 Linux or macOS, from an elevated shell:
 
@@ -52,7 +54,7 @@ try {
 }
 ```
 
-The installers require Node.js 20+, npm, elevation, and a clean Runmesh installation. They refuse an existing `current`, same-version/staging root, canonical system profile, or service manifest. They stage the package under the versioned Runmesh root, validate both `coding-runner` and `runmesh-runner` entry points, and do not make an unverified `latest` update. Local artifact installation happens before code redemption, so verification and staging failures do not consume the code. If a later local service step fails, the installer best-effort uninstalls only its newly created managed service, removes the newly created profile, current pointer, and version root, and exits nonzero. There is no automatic package update or rollback: retain the prior verified package and managed `current`/service state for a manual recovery. Enrollment redemption itself is remote and single-use and cannot be restored; generate a replacement code before retrying.
+The installers require Node.js 20+, npm, elevation, and a clean Runmesh installation. They refuse an existing `current`, same-version/staging root, canonical system profile, or service manifest. They stage the package under the versioned Runmesh root, validate both `coding-runner` and `runmesh-runner` entry points, and do not make an unverified `latest` update. Before the privileged npm install, both POSIX and PowerShell installers point npm's user/global config and cache at empty paths inside the private temporary directory and run npm from that directory, so root, global, and caller-working-directory `.npmrc` files cannot change the install; `--offline` and `--ignore-scripts` remain explicit. Local artifact installation happens before code redemption, so verification and staging failures do not consume the code. If a later local service step fails, the installer best-effort uninstalls only its newly created managed service, removes the newly created profile, current pointer, and version root, and exits nonzero. There is no automatic package update or rollback: retain the prior verified package and managed `current`/service state for a manual recovery. Enrollment redemption itself is remote and single-use and cannot be restored; generate a replacement code before retrying.
 
 ## High-assurance offline verification path
 
@@ -160,7 +162,7 @@ node -e "const fs=require('node:fs'); const m=JSON.parse(fs.readFileSync(process
 
 ## Install from the verified local tarball
 
-Node.js 20 or newer is required. Install only from the local verified file; do not replace it with a package name or a moving URL. The managed service must use an executable installed under the Runmesh service layout, not an unrelated npm global prefix.
+Node.js 20 or newer is required. Install only from the local verified file; do not replace it with a package name or a moving URL. The managed service must use an executable installed under the Runmesh service layout, not an unrelated npm global prefix. The examples below run npm from a private empty temporary directory and pass empty user/global config files, so a root, global, or caller-working-directory npmrc cannot alter the privileged install; keep the explicit `--offline` and `--ignore-scripts` flags.
 
 ### Linux
 
@@ -168,15 +170,22 @@ Node.js 20 or newer is required. Install only from the local verified file; do n
 set -eu
 VERSION='<version>'
 ARTIFACT="$DOWNLOAD/runmesh-runner-$VERSION.tgz"
+NPM_CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/runmesh-npm-config.XXXXXX")"
+trap 'rm -rf "$NPM_CONFIG_DIR"' EXIT
+: > "$NPM_CONFIG_DIR/user.npmrc"
+: > "$NPM_CONFIG_DIR/global.npmrc"
 if [ -e /opt/runmesh/current ] || [ -L /opt/runmesh/current ] || [ -e "/opt/runmesh/versions/$VERSION" ]; then
   printf '%s\n' 'An existing Runmesh installation was found; stop and inspect it before installing.' >&2
   exit 1
 fi
 sudo mkdir -p "/opt/runmesh/versions/$VERSION"
-sudo npm install --global --ignore-scripts \
-  --offline --no-audit --no-fund \
-  --prefix "/opt/runmesh/versions/$VERSION" \
-  "$ARTIFACT"
+(
+  cd "$NPM_CONFIG_DIR"
+  sudo npm --userconfig "$NPM_CONFIG_DIR/user.npmrc" --globalconfig "$NPM_CONFIG_DIR/global.npmrc" install --global --ignore-scripts \
+    --offline --no-audit --no-fund \
+    --prefix "/opt/runmesh/versions/$VERSION" \
+    "$ARTIFACT"
+)
 sudo ln -s "/opt/runmesh/versions/$VERSION" /opt/runmesh/current.new
 sudo mv /opt/runmesh/current.new /opt/runmesh/current
 sudo "/opt/runmesh/current/bin/coding-runner" --version
@@ -195,15 +204,22 @@ Use the same versioned `/opt/runmesh` layout from an elevated shell:
 set -eu
 VERSION='<version>'
 ARTIFACT="$DOWNLOAD/runmesh-runner-$VERSION.tgz"
+NPM_CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/runmesh-npm-config.XXXXXX")"
+trap 'rm -rf "$NPM_CONFIG_DIR"' EXIT
+: > "$NPM_CONFIG_DIR/user.npmrc"
+: > "$NPM_CONFIG_DIR/global.npmrc"
 if [ -e /opt/runmesh/current ] || [ -L /opt/runmesh/current ] || [ -e "/opt/runmesh/versions/$VERSION" ]; then
   printf '%s\n' 'An existing Runmesh installation was found; stop and inspect it before installing.' >&2
   exit 1
 fi
 sudo mkdir -p "/opt/runmesh/versions/$VERSION"
-sudo npm install --global --ignore-scripts \
-  --offline --no-audit --no-fund \
-  --prefix "/opt/runmesh/versions/$VERSION" \
-  "$ARTIFACT"
+(
+  cd "$NPM_CONFIG_DIR"
+  sudo npm --userconfig "$NPM_CONFIG_DIR/user.npmrc" --globalconfig "$NPM_CONFIG_DIR/global.npmrc" install --global --ignore-scripts \
+    --offline --no-audit --no-fund \
+    --prefix "/opt/runmesh/versions/$VERSION" \
+    "$ARTIFACT"
+)
 sudo ln -s "/opt/runmesh/versions/$VERSION" /opt/runmesh/current.new
 sudo mv /opt/runmesh/current.new /opt/runmesh/current
 sudo "/opt/runmesh/current/bin/coding-runner" --help
@@ -219,10 +235,26 @@ $Version = '<version>'
 $Artifact = Join-Path $Download "runmesh-runner-$Version.tgz"
 $VersionRoot = "C:\Program Files\Runmesh\versions\$Version"
 $CurrentRoot = "C:\Program Files\Runmesh\current"
+$NpmConfigRoot = Join-Path ([IO.Path]::GetTempPath()) ('runmesh-npm-config-' + [guid]::NewGuid().ToString('N'))
+$EmptyUserConfig = Join-Path $NpmConfigRoot 'empty-user.npmrc'
+$EmptyGlobalConfig = Join-Path $NpmConfigRoot 'empty-global.npmrc'
 if ((Test-Path -LiteralPath $CurrentRoot) -or (Test-Path -LiteralPath $VersionRoot)) { throw 'An existing Runmesh installation was found; stop and inspect it before installing.' }
 New-Item -ItemType Directory -Force -Path $VersionRoot | Out-Null
-npm.cmd install --global --ignore-scripts --offline --no-audit --no-fund --prefix $VersionRoot $Artifact
-if ($LASTEXITCODE -ne 0) { throw 'Local Runner artifact installation failed.' }
+New-Item -ItemType Directory -Force -Path $NpmConfigRoot | Out-Null
+[IO.File]::WriteAllText($EmptyUserConfig, '')
+[IO.File]::WriteAllText($EmptyGlobalConfig, '')
+try {
+  Push-Location -LiteralPath $NpmConfigRoot
+  try {
+    npm.cmd --userconfig $EmptyUserConfig --globalconfig $EmptyGlobalConfig install --global --ignore-scripts --offline --no-audit --no-fund --prefix $VersionRoot $Artifact
+    $npmExitCode = $LASTEXITCODE
+  } finally {
+    Pop-Location
+  }
+  if ($npmExitCode -ne 0) { throw 'Local Runner artifact installation failed.' }
+} finally {
+  Remove-Item -LiteralPath $NpmConfigRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
 $Runner = Get-ChildItem -LiteralPath $VersionRoot -Filter 'coding-runner.cmd' -File -Recurse | Select-Object -First 1
 if ($null -eq $Runner) { throw 'coding-runner.cmd was not found under the versioned install root.' }
 & $Runner.FullName --version

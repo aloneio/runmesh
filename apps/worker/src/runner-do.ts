@@ -1,4 +1,5 @@
 import {
+  ProtocolFrameError,
   decodeWireFrame,
   encodeWireFrame,
   negotiateProtocolVersion,
@@ -11,7 +12,7 @@ import {
   validatePermissionSet,
   type WireMessage,
 } from "@aloneio/runmesh-protocol";
-import { bearerToken, internalHeaders, isSafeIdentifier, verifyInternalRequest } from "./security.js";
+import { bearerToken, internalHeaders, isConfiguredSecret, isSafeIdentifier, verifyInternalRequest } from "./security.js";
 import { PRODUCT_VERSION } from "./generated-version.js";
 import { readCappedText } from "./body.js";
 
@@ -36,6 +37,9 @@ interface ConnectionAttachment {
   sessionId: string;
   epoch: number;
   credentialVersion: number;
+  /** Opaque Registry identity for the runner_id lifecycle. Older Registry
+   * responses may omit it; in that case mutation preservation is disabled. */
+  lifecycleId: string | null;
   protocolVersion: number;
   authenticated: boolean;
   readonly helloDeadlineMs: number;
@@ -44,7 +48,7 @@ interface ConnectionAttachment {
 const HELLO_DEADLINE_MS = 10_000;
 const BRIDGE_TIMEOUT_MS = WORKER_BRIDGE_TIMEOUT_MS;
 const MAX_BRIDGE_IN_FLIGHT = 32;
-const MAX_BRIDGE_BODY_BYTES = 1_048_576;
+const MAX_BRIDGE_BODY_BYTES = 2 * 1024 * 1024;
 type BridgeReply = Extract<WireMessage, { type: "rpc.response" | "rpc.error" }>;
 type BridgeWaiter = { readonly resolve: (value: BridgeReply) => void; readonly timer: ReturnType<typeof setTimeout>; readonly socket: WebSocket };
 
@@ -61,6 +65,8 @@ interface AdmissionState {
   readonly desiredChecksum: string | null;
   readonly connectionEpoch: number | null;
   readonly credentialVersion: number | null;
+  /** Opaque Registry identity for the runner_id lifecycle. */
+  readonly lifecycleId: string | null;
   readonly sessionId: string | null;
   readonly mutationId: string | null;
   readonly mutationPhase: MutationPhase;
@@ -74,7 +80,7 @@ const ADMISSION_STATE_KEY = "policy-admission-v1";
 const RESTART_RECONCILE_MUTATION_ID = "restart-reconcile";
 const FENCED_ADMISSION: AdmissionState = {
   fenced: true, reconciled: false, runnerId: null, activeRevision: null, activeChecksum: null,
-  desiredRevision: null, desiredChecksum: null, connectionEpoch: null, credentialVersion: null,
+  desiredRevision: null, desiredChecksum: null, connectionEpoch: null, credentialVersion: null, lifecycleId: null,
   sessionId: null, mutationId: null, mutationPhase: "restart_reconcile", preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: null,
 };
 
@@ -97,6 +103,8 @@ function conservativeAdmission(next: AdmissionState): AdmissionState {
 
 export class RunnerDO {
   private readonly bridgeWaiters = new Map<string, BridgeWaiter>();
+  /** Guards duplicate/concurrent hello frames on one hibernating socket. */
+  private readonly helloInFlight = new WeakSet<WebSocket>();
   private admissionState: AdmissionState | undefined;
   private admissionWriteQueue: Promise<void> = Promise.resolve();
   private restartReconcilePromise: Promise<boolean> | undefined;
@@ -185,18 +193,26 @@ export class RunnerDO {
       const body = await readCappedText(request, MAX_BRIDGE_BODY_BYTES);
       if (body === undefined || !await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
       const mutationId = mutationIdFromBody(body);
+      const parsed = parseJsonObject(body);
+      // A registration can legitimately replace a deleted Registry row with
+      // a fresh lifecycle while this RunnerDO still owns the precommit fence.
+      // The Worker sets this explicit bit only for that create-after-delete
+      // cleanup path; ordinary credential rotation/revocation remains bound
+      // to the original lifecycle below.
+      const allowLifecycleChange = parsed?.allow_lifecycle_change === true;
       if (mutationId === undefined || !await this.mutationOwnsFence(mutationId)) return Response.json({ error: { code: "mutation_mismatch", message: "revoke mutation does not own the current fence" } }, { status: 409 });
       const before = await this.admission();
-      const committed = before.mutationPhase !== "precommit" || await this.recoverCredentialMutation(before);
+      // Revoke is a credential-transport finalizer, not a generic mutation
+      // cleanup hook.  Require the exact credential-ledger proof for every
+      // admission phase; a policy marker must never be enough to authorize
+      // socket destruction.  `allowLifecycleChange` only relaxes the opaque
+      // lifecycle comparison for the documented delete/recreate registration
+      // race; it cannot bypass the marker/generation check.
+      const committed = await this.recoverCredentialMutation(before, allowLifecycleChange);
       if (!committed) return Response.json({ error: { code: "mutation_uncommitted", message: "credential mutation is not committed" } }, { status: 409 });
-      for (const socket of this.ctx.getWebSockets("runner")) {
-        this.rejectBridgeWaiters(socket, "credentials revoked");
-        socket.close(4001, "credentials revoked");
-      }
-      const current = await this.admission();
-      if (current.mutationId === mutationId) {
-        await this.persistAdmissionIfCurrent(current, { ...current, fenced: true, reconciled: false, mutationId: null, mutationPhase: "restart_reconcile", activeRevision: null, activeChecksum: null, desiredRevision: null, desiredChecksum: null, connectionEpoch: null, credentialVersion: null, sessionId: null, preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: null });
-      }
+      const finalized = await this.finalizeOwnedMutation(mutationId, "credentials revoked");
+      if (finalized === "conflict") return Response.json({ error: { code: "mutation_mismatch", message: "mutation no longer owns the current fence" } }, { status: 409 });
+      if (finalized === "error") return Response.json({ error: { code: "mutation_finalize_failed", message: "mutation cleanup is uncertain" } }, { status: 503 });
       return new Response(null, { status: 204 });
     }
     if (request.method === "POST" && new URL(request.url).pathname === "/delete") {
@@ -204,12 +220,9 @@ export class RunnerDO {
       if (body === undefined || !await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
       const mutationId = mutationIdFromBody(body);
       if (mutationId === undefined || !await this.mutationOwnsFence(mutationId)) return Response.json({ error: { code: "mutation_mismatch", message: "delete mutation does not own the current fence" } }, { status: 409 });
-      for (const socket of this.ctx.getWebSockets("runner")) {
-        this.rejectBridgeWaiters(socket, "runner deleted");
-        socket.close(4001, "runner deleted");
-      }
-      await this.ctx.storage.delete(ADMISSION_STATE_KEY);
-      this.admissionState = { ...FENCED_ADMISSION };
+      const finalized = await this.finalizeOwnedMutation(mutationId, "runner deleted", true);
+      if (finalized === "conflict") return Response.json({ error: { code: "mutation_mismatch", message: "mutation no longer owns the current fence" } }, { status: 409 });
+      if (finalized === "error") return Response.json({ error: { code: "mutation_finalize_failed", message: "mutation cleanup is uncertain" } }, { status: 503 });
       return new Response(null, { status: 204 });
     }
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
@@ -217,7 +230,7 @@ export class RunnerDO {
     }
     const runnerId = parseRunnerPath(new URL(request.url).pathname);
     const token = bearerToken(request);
-    if (runnerId === undefined || token === undefined || this.env.RUNNER_TOKEN_PEPPER === undefined) {
+    if (runnerId === undefined || token === undefined || !isConfiguredSecret(this.env.RUNNER_TOKEN_PEPPER)) {
       return new Response("unauthorized", { status: 401 });
     }
     const authResponse = await this.registryRequest(runnerId, "/auth", {
@@ -225,8 +238,18 @@ export class RunnerDO {
       body: JSON.stringify({ token }),
     });
     if (!authResponse.ok) return new Response("unauthorized", { status: 401 });
-    const authBody = await authResponse.json() as { credential_version?: unknown };
-    if (typeof authBody.credential_version !== "number") return new Response("unauthorized", { status: 401 });
+    let authBody: { credential_version?: unknown };
+    try {
+      const parsed = await authResponse.json();
+      if (!isRecord(parsed)) return new Response("unauthorized", { status: 401 });
+      authBody = parsed;
+    } catch {
+      return new Response("unauthorized", { status: 401 });
+    }
+    // Registry identity counters are persisted integers. Do not let a
+    // malformed (fractional, non-finite, or unsafe) value enter the socket
+    // attachment and subsequently participate in equality/fencing checks.
+    if (!isSafeNonnegativeInteger(authBody.credential_version)) return new Response("unauthorized", { status: 401 });
 
     const pair = new WebSocketPair();
     const server = pair[1];
@@ -235,6 +258,7 @@ export class RunnerDO {
       sessionId: crypto.randomUUID(),
       epoch: 0,
       credentialVersion: authBody.credential_version,
+      lifecycleId: null,
       protocolVersion: 0,
       authenticated: true,
       helloDeadlineMs: Date.now() + HELLO_DEADLINE_MS,
@@ -260,6 +284,14 @@ export class RunnerDO {
       return;
     }
     if (message.type === "runner.hello") {
+      if (attachment.epoch !== 0 || this.helloInFlight.has(ws)) {
+        ws.close(1008, "duplicate hello");
+        return;
+      }
+      // Mark synchronously before the first await. Two frames delivered in
+      // the same event turn must not both allocate Registry epochs.
+      this.helloInFlight.add(ws);
+      try {
       if (message.runner.runner_id !== attachment.runnerId) {
         ws.close(1008, "runner id mismatch");
         return;
@@ -274,20 +306,48 @@ export class RunnerDO {
       }
       const epochResponse = await this.registryRequest(attachment.runnerId, "/connect", {
         method: "POST",
-        body: JSON.stringify({ metadata: message.runner, min_protocol_version: message.min_protocol_version, max_protocol_version: message.max_protocol_version, session_id: attachment.sessionId, credential_version: attachment.credentialVersion, now_ms: Date.now() }),
+        // The lifecycle nonce is allocated by Registry during /connect, so the
+        // handshake carries an explicit null placeholder and all subsequent
+        // transport requests carry the returned concrete value.
+        body: JSON.stringify({ metadata: message.runner, min_protocol_version: message.min_protocol_version, max_protocol_version: message.max_protocol_version, session_id: attachment.sessionId, lifecycle_id: null, credential_version: attachment.credentialVersion, now_ms: Date.now() }),
       });
       if (!epochResponse.ok) {
         ws.close(1008, "stale credentials");
         return;
       }
-      const body = await epochResponse.json() as { epoch?: unknown; desired_policy?: unknown };
-      if (typeof body.epoch !== "number") {
+      let body: { epoch?: unknown; lifecycle_id?: unknown; desired_policy?: unknown };
+      try {
+        const parsed = await epochResponse.json();
+        if (!isRecord(parsed)) {
+          ws.close(1011, "invalid registry response");
+          return;
+        }
+        body = parsed;
+      } catch {
+        ws.close(1011, "invalid registry response");
+        return;
+      }
+      // A connected socket must always carry a real, positive Registry epoch;
+      // zero is reserved for the pre-hello attachment state.
+      if (!isSafePositiveInteger(body.epoch)) {
         ws.close(1011, "invalid registry response");
         return;
       }
       attachment.epoch = body.epoch;
+      // A missing lifecycle identity is tolerated for rolling upgrades, but
+      // causes any persisted mutation owner to be discarded below. New
+      // Registry code always supplies this opaque value.
+      attachment.lifecycleId = validLifecycleId(body.lifecycle_id) ? body.lifecycle_id : null;
       attachment.protocolVersion = negotiation.protocol_version;
       ws.serializeAttachment(attachment);
+      // `/connect` allocates/publishes the epoch, but a delayed response can
+      // race a newer connection. Re-read the complete transport identity
+      // before binding admission or sending welcome so an old socket cannot
+      // become authorized after a replacement wins.
+      if (!(await this.isCurrent(attachment, true))) {
+        ws.close(4000, "replaced by newer session");
+        return;
+      }
       const beforeHello = await this.admission();
       const persistedHello = await this.persistHelloAdmission(beforeHello, attachment);
       if (!persistedHello) {
@@ -301,19 +361,30 @@ export class RunnerDO {
       for (const existing of this.ctx.getWebSockets("runner")) {
         if (existing !== ws) {
           const old = existing.deserializeAttachment() as ConnectionAttachment | null;
-          if (old?.runnerId === attachment.runnerId && old.epoch < attachment.epoch) existing.close(4000, "replaced by newer session");
+          if (old?.runnerId === attachment.runnerId
+            && ((old.lifecycleId ?? null) !== (attachment.lifecycleId ?? null) || old.epoch < attachment.epoch)) {
+            existing.close(4000, "replaced by newer session");
+          }
         }
       }
       const welcome: WireMessage = {
         type: "runner.welcome", protocol_version: negotiation.protocol_version, request_id: message.request_id,
         session_id: attachment.sessionId, negotiated_protocol_version: negotiation.protocol_version,
         worker: {
-          worker_id: this.env.WORKER_ID ?? "worker-local", worker_version: PRODUCT_VERSION,
+          worker_id: this.env.WORKER_ID ?? "runmesh", worker_version: PRODUCT_VERSION,
           capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: ["echo", "runner.info"], labels: { runtime: "cloudflare" } },
         },
         ...(isPolicy(body.desired_policy) ? { desired_policy: body.desired_policy } : {}),
       };
-      ws.send(encodeWireFrame(welcome));
+      try { ws.send(encodeWireFrame(welcome)); } catch {
+        // A concurrent revoke/delete may close the socket after the Registry
+        // handshake but before the welcome is published. Treat that as a
+        // normal stale transport rather than leaking an uncaught DO exception.
+        return;
+      }
+      } finally {
+        this.helloInFlight.delete(ws);
+      }
       return;
     }
     if (attachment.epoch === 0 || attachment.protocolVersion !== message.protocol_version || !(await this.isCurrent(attachment))) {
@@ -336,20 +407,20 @@ export class RunnerDO {
       return;
     }
     if (message.type === "job.started" || message.type === "job.status" || message.type === "job.completed") {
-      const response = await this.registryRequest(attachment.runnerId, "/event", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, message, now_ms: Date.now() }) });
+      const response = await this.registryRequest(attachment.runnerId, "/event", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, ...transportIdentityFields(attachment), message, now_ms: Date.now() }) });
       if (!response.ok) ws.close(4001, "stale session");
       return;
     }
     if (message.type === "runner.heartbeat") {
       if (message.runner_id !== attachment.runnerId) return ws.close(1008, "runner identity mismatch");
-      const response = await this.registryRequest(attachment.runnerId, "/heartbeat", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, now_ms: Date.now() }) });
+      const response = await this.registryRequest(attachment.runnerId, "/heartbeat", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, ...transportIdentityFields(attachment), now_ms: Date.now() }) });
       if (!response.ok) ws.close(4001, "credentials revoked");
       return;
     }
     if (message.type === "runner.policy_ack") {
       if (message.runner_id !== attachment.runnerId) return ws.close(1008, "runner identity mismatch");
       const expectedAdmission = { ...(await this.admission()) };
-      const response = await this.registryRequest(attachment.runnerId, "/policy-ack", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, desired_revision: message.desired_revision, desired_checksum: message.desired_checksum, applied_revision: message.applied_revision, applied_checksum: message.applied_checksum, runner_reported_policy_revision: message.runner_reported_policy_revision, runner_reported_policy_checksum: message.runner_reported_policy_checksum, status: message.status, workspace_status: message.workspace_status }) });
+      const response = await this.registryRequest(attachment.runnerId, "/policy-ack", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, ...transportIdentityFields(attachment), desired_revision: message.desired_revision, desired_checksum: message.desired_checksum, applied_revision: message.applied_revision, applied_checksum: message.applied_checksum, runner_reported_policy_revision: message.runner_reported_policy_revision, runner_reported_policy_checksum: message.runner_reported_policy_checksum, status: message.status, workspace_status: message.workspace_status }) });
       const responseBody = response.ok ? await response.json() as { ack_result?: unknown } : undefined;
       const ackResult = responseBody?.ack_result;
       if (!response.ok || (ackResult !== "applied" && ackResult !== "invalid" && ackResult !== "stale")) {
@@ -363,7 +434,7 @@ export class RunnerDO {
     }
     if (message.type === "runner.sync") {
       if (message.runner_id !== attachment.runnerId) return ws.close(1008, "runner identity mismatch");
-      const response = await this.registryRequest(attachment.runnerId, "/sync", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, message, now_ms: Date.now() }) });
+      const response = await this.registryRequest(attachment.runnerId, "/sync", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, ...transportIdentityFields(attachment), message, now_ms: Date.now() }) });
       if (!response.ok) ws.close(4001, "credentials revoked");
       return;
     }
@@ -371,7 +442,12 @@ export class RunnerDO {
       // Cloudflare only forwards a correlated frame to the connected local runner.
       // It never interprets filesystem or process RPCs; MCP-facing routing follows later.
       const result = message.method === "echo" ? message.params : message.method === "runner.info" ? { runner_id: attachment.runnerId, session_id: attachment.sessionId, state: "online" } : undefined;
-      ws.send(encodeWireFrame(result === undefined ? { type: "rpc.error", protocol_version: message.protocol_version, request_id: message.request_id, error: { code: "method_not_found", message: `Unsupported method: ${message.method}` } } : { type: "rpc.response", protocol_version: message.protocol_version, request_id: message.request_id, result }));
+      try {
+        ws.send(encodeWireFrame(result === undefined ? { type: "rpc.error", protocol_version: message.protocol_version, request_id: message.request_id, error: { code: "method_not_found", message: `Unsupported method: ${message.method}` } } : { type: "rpc.response", protocol_version: message.protocol_version, request_id: message.request_id, result }));
+      } catch {
+        // The socket can be revoked between the current-session check and the
+        // response write. Closing is already handled by the revocation path.
+      }
     }
   }
 
@@ -428,12 +504,16 @@ export class RunnerDO {
         resolve({ type: "rpc.error", protocol_version: attachment.protocolVersion, request_id: requestId, error: { code: "timeout", message: "runner RPC timed out" } });
       }, BRIDGE_TIMEOUT_MS);
       this.bridgeWaiters.set(requestId, { resolve, timer, socket });
-      try { socket.send(encodeWireFrame(parsed.data)); } catch {
+      try { socket.send(encodeWireFrame(parsed.data)); } catch (error) {
         clearTimeout(timer); this.bridgeWaiters.delete(requestId);
+        if (error instanceof ProtocolFrameError && error.code === "frame_too_large") {
+          resolve({ type: "rpc.error", protocol_version: attachment.protocolVersion, request_id: requestId, error: { code: "request_too_large", message: "runner RPC exceeds the wire-frame limit" } });
+          return;
+        }
         resolve({ type: "rpc.error", protocol_version: attachment.protocolVersion, request_id: requestId, error: { code: "runner_offline", message: "runner is not connected" } });
       }
     });
-    return reply.type === "rpc.response" ? Response.json(reply) : Response.json(reply, { status: reply.error.code === "timeout" ? 504 : 502 });
+    return reply.type === "rpc.response" ? Response.json(reply) : Response.json(reply, { status: reply.error.code === "timeout" ? 504 : reply.error.code === "request_too_large" ? 413 : 502 });
   }
 
   private rejectBridgeWaiters(socket: WebSocket, message: string): void {
@@ -449,11 +529,30 @@ export class RunnerDO {
   private async admitOrReconcileProtectedRpc(attachment: ConnectionAttachment, revision: number, checksum: string): Promise<boolean> {
     const admission = await this.admission();
     if (!admission.fenced && admission.reconciled) return this.admitsProtectedRpc(admission, attachment, revision, checksum);
-    if (admission.mutationId !== RESTART_RECONCILE_MUTATION_ID) return false;
-    if (this.restartReconcilePromise === undefined) {
-      this.restartReconcilePromise = this.reconcileAdmissionAfterRestart(attachment).finally(() => { this.restartReconcilePromise = undefined; });
+    if (admission.mutationId === RESTART_RECONCILE_MUTATION_ID) {
+      if (this.restartReconcilePromise === undefined) {
+        this.restartReconcilePromise = this.reconcileAdmissionAfterRestart(attachment).finally(() => { this.restartReconcilePromise = undefined; });
+      }
+      if (!await this.restartReconcilePromise) return false;
+    } else if (admission.mutationId !== null && (admission.mutationPhase === "committed_pending" || admission.mutationPhase === "offline_pending")) {
+      // Registry records the policy as applied before the hibernating DO has
+      // necessarily finished persisting its local admission transition. A
+      // protected RPC can therefore observe a short-lived fenced state even
+      // though the immutable Registry identity is already ready. Re-check the
+      // complete identity under the same conditional-write fence used by the
+      // policy-ack path; a newer mutation/session simply makes the write a
+      // no-op and the request remains fail-closed.
+      try {
+        await this.reconcileAdmission(attachment, admission);
+      } catch {
+        // Admission persistence is deliberately fail-closed. A transient
+        // storage failure must become a normal stale-policy response rather
+        // than escaping the bridge request as a Worker 500.
+        return false;
+      }
+    } else {
+      return false;
     }
-    if (!await this.restartReconcilePromise) return false;
     const final = await this.admission();
     return final.activeRevision !== null && final.activeChecksum !== null && this.admitsProtectedRpc(final, attachment, revision, checksum);
   }
@@ -474,6 +573,7 @@ export class RunnerDO {
       fenced: false, reconciled: true, runnerId: attachment.runnerId,
       activeRevision: revision, activeChecksum: checksum, desiredRevision: revision, desiredChecksum: checksum,
       connectionEpoch: attachment.epoch, credentialVersion: attachment.credentialVersion, sessionId: attachment.sessionId,
+      lifecycleId: attachment.lifecycleId,
       mutationId: null, mutationPhase: "idle", preMutationActiveRevision: null, preMutationActiveChecksum: null,
       preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: Date.now(),
     };
@@ -527,6 +627,25 @@ export class RunnerDO {
    */
   private async persistHelloAdmission(beforeHello: AdmissionState, attachment: ConnectionAttachment): Promise<boolean> {
     const isNewerConnection = (current: AdmissionState): boolean => {
+      // Connection/credential counters are scoped to a runner lifecycle and
+      // may reset when an id is deleted and recreated.  A different opaque
+      // lifecycle therefore cannot be ordered with the old counters; the
+      // authenticated /connect result is the authoritative new binding.
+      // (Within one lifecycle we retain the strict monotonic checks below.)
+      const currentLifecycle = current.lifecycleId ?? null;
+      const incomingLifecycle = attachment.lifecycleId ?? null;
+      // A newly deployed Registry may be the first component to provide the
+      // lifecycle nonce. Do not let a legacy admission epoch (which can reset
+      // after delete/recreate) reject that first known binding. Once both
+      // sides carry a nonce, a mismatch is a lifecycle boundary and cannot be
+      // ordered by the scoped counters.
+      if (currentLifecycle === null && incomingLifecycle !== null) return false;
+      // Never let a response that lost the lifecycle field downgrade an
+      // already-bound admission back to the legacy/null identity. The current
+      // Registry transport routes require the nonce, so such a socket cannot
+      // be authorized safely; close it as an obsolete connection.
+      if (currentLifecycle !== null && incomingLifecycle === null) return true;
+      if (currentLifecycle !== null && incomingLifecycle !== null && currentLifecycle !== incomingLifecycle) return false;
       if (current.credentialVersion !== null && current.credentialVersion > attachment.credentialVersion) return true;
       if (current.credentialVersion !== attachment.credentialVersion) return false;
       if (current.connectionEpoch !== null && current.connectionEpoch > attachment.epoch) return true;
@@ -539,7 +658,13 @@ export class RunnerDO {
       // by a delayed hello.
       const preserveMutation = current.fenced
         && current.mutationId !== null
-        && (current.runnerId === null || current.runnerId === attachment.runnerId)
+       && (current.runnerId === null || current.runnerId === attachment.runnerId)
+        // A runner_id can be deleted and recreated with the same credential
+        // and connection counters. Never carry a precommit owner across that
+        // lifecycle boundary; the opaque Registry nonce is authoritative.
+        && current.lifecycleId !== null
+        && attachment.lifecycleId !== null
+        && current.lifecycleId === attachment.lifecycleId
         && (current.credentialVersion === null || current.credentialVersion === attachment.credentialVersion);
       return {
         ...current,
@@ -558,6 +683,7 @@ export class RunnerDO {
         }),
         connectionEpoch: attachment.epoch,
         credentialVersion: attachment.credentialVersion,
+        lifecycleId: attachment.lifecycleId,
         sessionId: attachment.sessionId,
         mutationId: preserveMutation ? current.mutationId : RESTART_RECONCILE_MUTATION_ID,
         mutationPhase: preserveMutation ? current.mutationPhase : "restart_reconcile",
@@ -623,12 +749,17 @@ export class RunnerDO {
     return result;
   }
 
-  private async recoverCredentialMutation(expected: AdmissionState): Promise<boolean> {
+  private async recoverCredentialMutation(expected: AdmissionState, allowLifecycleChange = false): Promise<boolean> {
     if (!expected.fenced || expected.mutationPhase !== "precommit" || expected.mutationId === null || expected.runnerId === null) return false;
     const response = await this.registryRequest(expected.runnerId, `/mutation-state?mutation_id=${encodeURIComponent(expected.mutationId)}`, { method: "GET" });
     if (!response.ok) return false;
     const state = await response.json() as Record<string, unknown>;
-    return state.runner_exists === true && state.mutation_committed === true;
+    return state.runner_exists === true && state.mutation_committed === true && state.credential_mutation_committed === true
+      // New Registry responses carry the nonce. A legacy response without the
+      // field remains compatible. A lifecycle mismatch is accepted only for
+      // the explicit create-after-delete cleanup bit supplied by the Worker;
+      // ordinary credential mutations stay strictly lifecycle-bound.
+      && (allowLifecycleChange || expected.lifecycleId === null || state.lifecycle_id === undefined || state.lifecycle_id === expected.lifecycleId);
   }
 
   private async recoverCommittedPrecommit(expected: AdmissionState): Promise<boolean> {
@@ -636,7 +767,19 @@ export class RunnerDO {
     const response = await this.registryRequest(expected.runnerId, `/mutation-state?mutation_id=${encodeURIComponent(expected.mutationId)}`, { method: "GET" });
     if (!response.ok) return false;
     const state = await response.json() as Record<string, unknown>;
-    if (state.runner_exists !== true || state.mutation_committed !== true) return false;
+    // A committed delete leaves a tombstone in Registry but no Runner row.
+    // Clear the obsolete transport fence so a later registration can acquire
+    // the DO and establish a fresh lifecycle.  A missing row with an
+    // uncommitted marker is also safe to clear: there is no Registry
+    // credential/policy state that the precommit could authorize.  Keep the
+    // admission fenced while doing so; any stale socket is closed by the next
+    // committed registration cleanup.
+    if (state.runner_exists !== true) {
+      const reset: AdmissionState = { ...FENCED_ADMISSION };
+      return this.persistAdmissionIfCurrent(expected, reset);
+    }
+    if (state.mutation_committed !== true) return false;
+    if (expected.lifecycleId !== null && state.lifecycle_id !== undefined && state.lifecycle_id !== expected.lifecycleId) return false;
     const desiredRevision = state.desired_revision;
     const desiredChecksum = state.desired_checksum;
     if (typeof desiredRevision !== "number" || !Number.isSafeInteger(desiredRevision) || desiredRevision <= 0 || typeof desiredChecksum !== "string" || !/^[a-f0-9]{64}$/.test(desiredChecksum)) return false;
@@ -671,6 +814,64 @@ export class RunnerDO {
     return current.fenced && current.mutationId === mutationId;
   }
 
+  /**
+   * Close a credential/delete mutation only while its exact fence owner is
+   * still current.  Finalizers run through the same serialized admission
+   * write queue as begin/cancel/hello transitions: a newer mutation queued
+   * first wins the ownership check, while a later mutation waits until this
+   * finalizer has durably fenced/reset the state.  This prevents a delayed
+   * revoke or delete response from erasing a newer mutation's fence.
+   */
+  private async finalizeOwnedMutation(mutationId: string, closeReason: string, deleteState = false): Promise<"ok" | "conflict" | "error"> {
+    let result: "ok" | "conflict" = "conflict";
+    const operation = this.admissionWriteQueue.then(async () => {
+      // `mutationOwnsFence`/the recovery check above have initialized the
+      // in-memory state. Read it synchronously here so no event can slip
+      // between the ownership check and socket closure before this queued
+      // operation gets its turn.
+      const current = this.admissionState;
+      if (current === undefined || !current.fenced || current.mutationId !== mutationId) return;
+      let closeFailed = false;
+      for (const socket of this.ctx.getWebSockets("runner")) {
+        try {
+          this.rejectBridgeWaiters(socket, closeReason);
+          socket.close(4001, closeReason);
+        } catch {
+          // A failed close is an authorization failure: retain the mutation
+          // fence and report uncertainty rather than releasing credentials.
+          closeFailed = true;
+        }
+      }
+      if (closeFailed) throw new Error("RunnerDO socket cleanup failed");
+      if (deleteState) {
+        await this.ctx.storage.delete(ADMISSION_STATE_KEY);
+        this.admissionState = { ...FENCED_ADMISSION };
+      } else {
+        const next: AdmissionState = {
+          ...current, fenced: true, reconciled: false, mutationId: null, mutationPhase: "restart_reconcile",
+          activeRevision: null, activeChecksum: null, desiredRevision: null, desiredChecksum: null,
+          connectionEpoch: null, credentialVersion: null, sessionId: null,
+          preMutationActiveRevision: null, preMutationActiveChecksum: null,
+          preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: null,
+        };
+        await this.ctx.storage.put(ADMISSION_STATE_KEY, next);
+        this.admissionState = next;
+      }
+      result = "ok";
+    });
+    this.admissionWriteQueue = operation.catch(() => undefined);
+    try {
+      await operation;
+      return result;
+    } catch {
+      // A failed storage/transport finalization has an uncertain outcome.
+      // Keep the exact owner fenced so no caller can receive a credential.
+      const current = this.admissionState;
+      if (current !== undefined && current.mutationId === mutationId) this.admissionState = conservativeAdmission(current);
+      return "error";
+    }
+  }
+
   private async cancelPolicyMutation(mutationId: string): Promise<Response> {
     const before = await this.admission();
     if (!before.fenced || before.mutationId === null) return Response.json({ error: { code: "no_active_mutation", message: "no active mutation fence" } }, { status: 409 });
@@ -681,6 +882,10 @@ export class RunnerDO {
     if (!stateResponse.ok) return Response.json({ error: { code: "registry_unavailable", message: "mutation state is unavailable" } }, { status: 503 });
     const state = await stateResponse.json() as Record<string, unknown>;
     if (state.runner_exists !== true || state.mutation_committed === true) return Response.json({ error: { code: "mutation_committed", message: "mutation has committed or Runner is gone" } }, { status: 409 });
+    const beforeLifecycle = before.lifecycleId ?? null;
+    if (beforeLifecycle !== null && state.lifecycle_id !== undefined && state.lifecycle_id !== beforeLifecycle) {
+      return Response.json({ error: { code: "mutation_state_changed", message: "mutation belongs to another Runner lifecycle" } }, { status: 409 });
+    }
     // Offline cancellation has no current live identity to restore. It only
     // releases the precommit ownership; admission deliberately stays fenced.
     if (before.sessionId === null || before.connectionEpoch === null || before.credentialVersion === null || before.reconciled === false) {
@@ -701,7 +906,7 @@ export class RunnerDO {
     if (!isPolicy(policy) || policy.revision !== before.preMutationActiveRevision || policy.checksum !== before.preMutationActiveChecksum) return Response.json({ error: { code: "mutation_state_changed", message: "active policy snapshot cannot be verified" } }, { status: 409 });
     const socket = await this.currentRunnerSocket();
     const attachment = socket?.deserializeAttachment() as ConnectionAttachment | null;
-    if (socket === undefined || attachment === null || attachment.runnerId !== before.runnerId || attachment.sessionId !== before.sessionId || attachment.epoch !== before.connectionEpoch || attachment.credentialVersion !== before.credentialVersion) return Response.json({ error: { code: "runner_unavailable", message: "Runner session is no longer current" } }, { status: 503 });
+    if (socket === undefined || attachment === null || attachment.runnerId !== before.runnerId || (attachment.lifecycleId ?? null) !== (before.lifecycleId ?? null) || attachment.sessionId !== before.sessionId || attachment.epoch !== before.connectionEpoch || attachment.credentialVersion !== before.credentialVersion) return Response.json({ error: { code: "runner_unavailable", message: "Runner session is no longer current" } }, { status: 503 });
     const next: AdmissionState = {
       ...before, fenced: false, reconciled: true, activeRevision: before.preMutationActiveRevision, activeChecksum: before.preMutationActiveChecksum,
       desiredRevision: before.preMutationDesiredRevision, desiredChecksum: before.preMutationDesiredChecksum, mutationId: null, mutationPhase: "idle",
@@ -737,6 +942,8 @@ export class RunnerDO {
       && value.connection_epoch === attachment.epoch
       && value.credential_version === attachment.credentialVersion
       && value.session_id === attachment.sessionId
+      && (value.lifecycle_id === undefined
+        || (typeof value.lifecycle_id === "string" && validLifecycleId(value.lifecycle_id) && value.lifecycle_id === attachment.lifecycleId))
       && typeof revision === "number" && Number.isSafeInteger(revision) && revision > 0
       && typeof checksum === "string" && /^[a-f0-9]{64}$/.test(checksum);
     if (!ready) return;
@@ -747,6 +954,7 @@ export class RunnerDO {
       fenced: false, reconciled: true, runnerId: attachment.runnerId,
       activeRevision: revision, activeChecksum: checksum, desiredRevision: revision, desiredChecksum: checksum,
       connectionEpoch: attachment.epoch, credentialVersion: attachment.credentialVersion, sessionId: attachment.sessionId,
+      lifecycleId: attachment.lifecycleId,
       mutationId: null, mutationPhase: "idle", preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: Date.now(),
     };
     await this.persistAdmissionIfCurrent(before, next);
@@ -755,6 +963,7 @@ export class RunnerDO {
   private admitsProtectedRpc(state: AdmissionState, attachment: ConnectionAttachment, revision: number, checksum: string): boolean {
     return !state.fenced && state.reconciled
       && state.runnerId === attachment.runnerId
+      && (state.lifecycleId ?? null) === (attachment.lifecycleId ?? null)
       && state.connectionEpoch === attachment.epoch
       && state.credentialVersion === attachment.credentialVersion
       && state.sessionId === attachment.sessionId
@@ -763,16 +972,18 @@ export class RunnerDO {
   }
 
   private async currentRunnerSocket(): Promise<WebSocket | undefined> {
+    const admission = await this.admission();
     for (const socket of this.ctx.getWebSockets("runner")) {
       const attachment = socket.deserializeAttachment() as ConnectionAttachment | null;
-      if (attachment?.authenticated === true && attachment.epoch > 0 && attachment.protocolVersion > 0 && await this.isCurrent(attachment, true)) return socket;
+      if (attachment?.authenticated === true && attachment.epoch > 0 && attachment.protocolVersion > 0
+        && sameRunnerConnection(admission, attachment) && await this.isCurrent(attachment, true)) return socket;
     }
     return undefined;
   }
   private async markSocket(ws: WebSocket, state: "offline" | "stale"): Promise<void> {
     const attachment = ws.deserializeAttachment() as ConnectionAttachment | null;
     if (attachment === null || attachment.epoch === 0) return;
-    await this.registryRequest(attachment.runnerId, "/disconnect", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, state, now_ms: Date.now() }) });
+    await this.registryRequest(attachment.runnerId, "/disconnect", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, ...transportIdentityFields(attachment), state, now_ms: Date.now() }) });
   }
 
   private async scheduleHelloDeadline(): Promise<void> {
@@ -787,7 +998,7 @@ export class RunnerDO {
   private async isCurrent(attachment: ConnectionAttachment, requireOnline = false): Promise<boolean> {
     const response = await this.registryRequest(attachment.runnerId, "/session", {
       method: "POST",
-      body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, require_online: requireOnline }),
+      body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, ...transportIdentityFields(attachment), require_online: requireOnline }),
     });
     return response.ok;
   }
@@ -795,26 +1006,36 @@ export class RunnerDO {
   private async verifyInternalRequest(body: string, request: Request): Promise<boolean> {
     return verifyInternalRequest(request, this.env.INTERNAL_CONTROL_SECRET, body, async (nonce, expiresAtMs) => {
       const payload = JSON.stringify({ nonce, expires_at_ms: expiresAtMs });
-      const headers = await internalHeaders(this.env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/auth/internal-nonces", payload);
-      const response = await this.env.REGISTRY.get(this.env.REGISTRY.idFromName("registry")).fetch(new Request("https://registry.internal/auth/internal-nonces", { method: "POST", headers, body: payload }));
-      return response.status === 204;
+      if (!isConfiguredSecret(this.env.INTERNAL_CONTROL_SECRET)) return false;
+      try {
+        const headers = await internalHeaders(this.env.INTERNAL_CONTROL_SECRET, "POST", "/auth/internal-nonces", payload);
+        const response = await this.env.REGISTRY.get(this.env.REGISTRY.idFromName("registry")).fetch(new Request("https://registry.internal/auth/internal-nonces", { method: "POST", headers, body: payload }));
+        return response.status === 204;
+      } catch { return false; }
     });
   }
 
   private registryRequest(runnerId: string, action: string, init: RequestInit): Promise<Response> {
+    if (!isConfiguredSecret(this.env.INTERNAL_CONTROL_SECRET)) return Promise.resolve(new Response("control plane is not configured", { status: 503 }));
     const id = this.env.REGISTRY.idFromName("registry");
     const path = `/runners/${encodeURIComponent(runnerId)}${action}`;
     const body = typeof init.body === "string" ? init.body : "";
-    const headersPromise = internalHeaders(this.env.INTERNAL_CONTROL_SECRET ?? "", init.method ?? "GET", path, body);
-    return headersPromise.then((headers) => this.env.REGISTRY.get(id).fetch(new Request(`https://registry.internal${path}`, { ...init, headers })));
+    const headersPromise = internalHeaders(this.env.INTERNAL_CONTROL_SECRET, init.method ?? "GET", path, body);
+    return headersPromise
+      .then((headers) => this.env.REGISTRY.get(id).fetch(new Request(`https://registry.internal${path}`, { ...init, headers })))
+      .catch(() => new Response("registry unavailable", { status: 503 }));
   }
 }
 
 function parseJsonObject(body: string): Record<string, unknown> | undefined {
   try {
     const parsed = JSON.parse(body) as unknown;
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
+    return isRecord(parsed) ? parsed : undefined;
   } catch { return undefined; }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function mutationIdFromBody(body: string): string | undefined {
@@ -827,6 +1048,25 @@ function mutationIdFromBody(body: string): string | undefined {
 }
 function isMutationId(value: string): boolean { return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value); }
 
+function isSafeNonnegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isSafePositiveInteger(value: unknown): value is number {
+  return isSafeNonnegativeInteger(value) && value >= 1;
+}
+
+/** Identity fields attached to every RunnerDO→Registry transport mutation or
+ * session check. `null` keeps the wire shape stable during a rolling upgrade
+ * where an older Registry may not yet issue lifecycle identities; current
+ * Registry routes fail closed until both fields are valid. */
+function transportIdentityFields(attachment: Pick<ConnectionAttachment, "sessionId" | "lifecycleId">): { session_id: string; lifecycle_id: string | null } {
+  return {
+    session_id: attachment.sessionId,
+    lifecycle_id: validLifecycleId(attachment.lifecycleId) ? attachment.lifecycleId : null,
+  };
+}
+
 function isCurrentPolicyReadiness(value: Record<string, unknown>, attachment: ConnectionAttachment, revision: unknown, checksum: unknown): revision is number {
   return value.ok === true && value.policy_status === "applied"
     && typeof value.desired_revision === "number" && Number.isSafeInteger(value.desired_revision) && value.desired_revision > 0
@@ -837,12 +1077,17 @@ function isCurrentPolicyReadiness(value: Record<string, unknown>, attachment: Co
     && typeof value.runner_reported_policy_checksum === "string" && /^[a-f0-9]{64}$/.test(value.runner_reported_policy_checksum)
     && value.desired_revision === revision && value.runner_reported_policy_revision === revision
     && value.desired_checksum === checksum && value.runner_reported_policy_checksum === checksum
-    && value.connection_epoch === attachment.epoch && value.credential_version === attachment.credentialVersion && value.session_id === attachment.sessionId;
+    && value.connection_epoch === attachment.epoch && value.credential_version === attachment.credentialVersion && value.session_id === attachment.sessionId
+    // Older Registry responses may omit lifecycle_id during rolling deploys;
+    // tolerate omission, but reject an explicit malformed or mismatched value.
+    && (value.lifecycle_id === undefined
+      || (typeof value.lifecycle_id === "string" && validLifecycleId(value.lifecycle_id) && value.lifecycle_id === attachment.lifecycleId));
 }
 function validPolicyIdentity(revision: number | null, checksum: string | null): boolean { return revision !== null && Number.isSafeInteger(revision) && revision > 0 && checksum !== null && /^[a-f0-9]{64}$/.test(checksum); }
 
 function sameRunnerConnection(state: AdmissionState, attachment: ConnectionAttachment): boolean {
-  return state.runnerId === attachment.runnerId && state.connectionEpoch === attachment.epoch && state.credentialVersion === attachment.credentialVersion && state.sessionId === attachment.sessionId;
+  return state.runnerId === attachment.runnerId && (state.lifecycleId ?? null) === (attachment.lifecycleId ?? null)
+    && state.connectionEpoch === attachment.epoch && state.credentialVersion === attachment.credentialVersion && state.sessionId === attachment.sessionId;
 }
 
 function sameAdmissionState(left: AdmissionState, right: AdmissionState): boolean {
@@ -850,6 +1095,7 @@ function sameAdmissionState(left: AdmissionState, right: AdmissionState): boolea
     && left.activeRevision === right.activeRevision && left.activeChecksum === right.activeChecksum
     && left.desiredRevision === right.desiredRevision && left.desiredChecksum === right.desiredChecksum
     && left.connectionEpoch === right.connectionEpoch && left.credentialVersion === right.credentialVersion
+    && (left.lifecycleId ?? null) === (right.lifecycleId ?? null)
     && left.sessionId === right.sessionId && left.mutationId === right.mutationId && left.mutationPhase === right.mutationPhase && left.preMutationActiveRevision === right.preMutationActiveRevision && left.preMutationActiveChecksum === right.preMutationActiveChecksum && left.preMutationDesiredRevision === right.preMutationDesiredRevision && left.preMutationDesiredChecksum === right.preMutationDesiredChecksum && left.lastReconciledAtMs === right.lastReconciledAtMs;
 }
 
@@ -864,7 +1110,8 @@ function validAdmissionState(value: unknown): value is AdmissionState {
     && (state.desiredChecksum === null || typeof state.desiredChecksum === "string")
     && (state.connectionEpoch === null || Number.isSafeInteger(state.connectionEpoch))
     && (state.credentialVersion === null || Number.isSafeInteger(state.credentialVersion))
-    && (state.sessionId === null || typeof state.sessionId === "string")
+    && (state.lifecycleId === undefined || state.lifecycleId === null || validLifecycleId(state.lifecycleId))
+    && (state.sessionId === null || validSessionId(state.sessionId))
     && (state.mutationId === null || typeof state.mutationId === "string")
     && (state.mutationPhase === "idle" || state.mutationPhase === "precommit" || state.mutationPhase === "committed_pending" || state.mutationPhase === "offline_pending" || state.mutationPhase === "invalid" || state.mutationPhase === "restart_reconcile")
     && (state.preMutationActiveRevision === null || Number.isSafeInteger(state.preMutationActiveRevision))
@@ -872,6 +1119,14 @@ function validAdmissionState(value: unknown): value is AdmissionState {
     && (state.preMutationDesiredRevision === null || Number.isSafeInteger(state.preMutationDesiredRevision))
     && (state.preMutationDesiredChecksum === null || typeof state.preMutationDesiredChecksum === "string")
     && (state.lastReconciledAtMs === null || Number.isSafeInteger(state.lastReconciledAtMs));
+}
+
+function validLifecycleId(value: unknown): value is string {
+  return typeof value === "string" && value.length >= 16 && value.length <= 128 && /^[A-Za-z0-9._:-]+$/u.test(value);
+}
+
+function validSessionId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(value);
 }
 
 function isPolicy(value: unknown): value is { schema_version: 1; runner_id: string; revision: number; checksum: string; runner_permissions: { read: boolean; edit: boolean; shell: boolean; job_control: boolean }; workspaces: Array<{ workspace_id: string; root_path: string; enabled: boolean; permissions: { read: boolean; edit: boolean; shell: boolean; job_control: boolean } }> } {

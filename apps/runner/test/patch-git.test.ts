@@ -1,9 +1,10 @@
 import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PROTOCOL_CURRENT_VERSION, encodeWireFrame } from "@aloneio/runmesh-protocol";
 import { describe, expect, it } from "vitest";
-import { GitService } from "../src/git-service.js";
+import { GitService, trustedGitPathEntries, utf8SafePrefix } from "../src/git-service.js";
 import { PatchService } from "../src/patch-service.js";
 import { PathPolicy } from "../src/path-policy.js";
 import { RunnerRuntime } from "../src/runtime.js";
@@ -32,6 +33,24 @@ async function run(root: string, args: readonly string[]): Promise<void> {
     child.once("error", reject);
     child.once("close", (code) => code === 0 ? resolve() : reject(new Error(`git ${args.join(" ")} failed`)));
   });
+}
+function testGit(workspace: WorkspaceConfig, options: ConstructorParameters<typeof GitService>[1] = {}): GitService {
+  // The production isolated environment intentionally excludes user/cache
+  // PATH entries on Windows. The test host may only provide Git through the
+  // bundled runtime, so pass its absolute executable explicitly as a test
+  // seam; this does not weaken the production allow-list.
+  const executable = process.platform === "win32" ? windowsGitExecutable() : undefined;
+  return new GitService(new PathPolicy([workspace]), { ...(executable === undefined ? {} : { executable }), ...options });
+}
+function windowsGitExecutable(): string | undefined {
+  const source = process.env.Path ?? process.env.PATH ?? "";
+  for (const entry of source.split(";")) {
+    const trimmed = entry.trim();
+    if (trimmed === "") continue;
+    const candidate = join(trimmed, "git.exe");
+    if (existsSync(candidate)) return candidate;
+  }
+  return undefined;
 }
 async function patchArtifacts(root: string): Promise<readonly string[]> {
   return (await readdir(root)).filter((entry) => entry.includes(".remote-coding-runtime-") && (entry.endsWith(".tmp") || entry.endsWith(".bak")));
@@ -174,6 +193,46 @@ describe("fs.apply_patch", () => {
 });
 
 describe("git inspection", () => {
+  it("clips malformed UTF-8 at the first invalid byte without quadratic retries", () => {
+    const malformed = Buffer.concat([
+      Buffer.from("prefix😀", "utf8"),
+      Buffer.alloc(256 * 1024, 0x80),
+      Buffer.from("suffix", "utf8"),
+    ]);
+    // The safe-prefix scan must stop at the malformed continuation byte and
+    // never expose a replacement character or the bytes after it.
+    expect((malformed.subarray(0, Buffer.byteLength("prefix😀", "utf8"))).toString("utf8")).toBe("prefix😀");
+    // Exercise the production helper through the module's focused test seam.
+    const safe = utf8SafePrefix(malformed).toString("utf8");
+    expect(safe).toBe("prefix😀");
+  });
+
+  it.skipIf(process.platform === "win32")("filters symlinked and group/other-writable PATH Git directories", async () => {
+    const base = await mkdtemp(join(tmpdir(), "runner-git-path-"));
+    const workspace = join(base, "workspace");
+    const secure = join(base, "secure", "git", "bin");
+    const writable = join(base, "writable", "git", "bin");
+    const linked = join(base, "linked", "git", "bin");
+    const previousPath = process.env.PATH;
+    try {
+      await mkdir(workspace);
+      await mkdir(secure, { recursive: true });
+      await mkdir(writable, { recursive: true });
+      await mkdir(join(base, "target", "git", "bin"), { recursive: true });
+      await mkdir(join(base, "linked"), { recursive: true });
+      await symlink(join(base, "target", "git"), join(base, "linked", "git"));
+      await chmod(writable, 0o777);
+      process.env.PATH = [secure, writable, linked].join(":");
+      const entries = trustedGitPathEntries(workspace);
+      expect(entries).toContain(secure);
+      expect(entries).not.toContain(writable);
+      expect(entries).not.toContain(linked);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
   it("returns real structured status plus staged and unstaged diffs", async () => {
     const test = await fixture();
     try {
@@ -183,7 +242,7 @@ describe("git inspection", () => {
       await writeFile(join(test.root, "tracked.txt"), "old\n");
       await run(test.root, ["add", "tracked.txt"]); await run(test.root, ["commit", "-m", "initial"]);
       await writeFile(join(test.root, "tracked.txt"), "new\n");
-      const git = new GitService(new PathPolicy([test.workspace]));
+      const git = testGit(test.workspace);
       const status = await git.status({ workspace_id: test.workspace.workspaceId });
       expect(status).toMatchObject({ entries: [{ path: "tracked.txt", worktree_status: "M" }] });
       const unstaged = await git.diff({ workspace_id: test.workspace.workspaceId, path: "tracked.txt" });
@@ -205,7 +264,7 @@ describe("git inspection", () => {
       await writeFile(join(test.root, "sub", "tracked.txt"), "new\n");
       await writeFile(join(test.root, "literal[star].txt"), "new\n");
       await rm(join(test.root, "sub", "tracked.txt"));
-      const git = new GitService(new PathPolicy([test.workspace]));
+      const git = testGit(test.workspace);
       await expect(git.status({ workspace_id: test.workspace.workspaceId, path: "sub" })).resolves.toMatchObject({ path: "sub", entries: [{ path: "sub/tracked.txt", worktree_status: "D" }] });
       await expect(git.status({ workspace_id: test.workspace.workspaceId, path: "literal[star].txt" })).resolves.toMatchObject({ entries: [{ path: "literal[star].txt" }] });
       await expect(git.status({ workspace_id: test.workspace.workspaceId, path: "." })).resolves.toMatchObject({ path: "." });
@@ -218,7 +277,7 @@ describe("git inspection", () => {
     try {
       await run(test.root, ["init"]);
       await writeFile(join(test.root, "very-long-untracked-name.txt"), "x");
-      const git = new GitService(new PathPolicy([test.workspace]));
+      const git = testGit(test.workspace);
       const status = await git.status({ workspace_id: test.workspace.workspaceId, max_bytes: 3 });
       expect(status).toMatchObject({ entries: [], truncated: true });
       await writeFile(join(test.root, "emoji.txt"), "before\n");
@@ -238,7 +297,7 @@ describe("git inspection", () => {
       const executable = join(test.root, "slow-git.sh");
       await writeFile(executable, "#!/bin/sh\nsleep 5\n");
       await chmod(executable, 0o755);
-      const git = new GitService(new PathPolicy([test.workspace]), { executable, timeoutMs: 30, killGraceMs: 20, hardKillMs: 50 });
+      const git = testGit(test.workspace, { executable, timeoutMs: 30, killGraceMs: 20, hardKillMs: 50 });
       await expect(git.status({ workspace_id: test.workspace.workspaceId })).rejects.toMatchObject({ code: "git_timeout" });
     } finally { await test.cleanup(); }
   });
@@ -249,7 +308,7 @@ describe("git inspection", () => {
       await writeFile(join(test.root, "large.txt"), `${"before\n".repeat(2_000)}`);
       await run(test.root, ["add", "large.txt"]); await run(test.root, ["-c", "user.email=test@example.test", "-c", "user.name=Test", "commit", "-m", "initial"]);
       await writeFile(join(test.root, "large.txt"), `${"after\n".repeat(2_000)}`);
-      const result = await new GitService(new PathPolicy([test.workspace])).diff({ workspace_id: test.workspace.workspaceId, max_bytes: 512 });
+      const result = await testGit(test.workspace).diff({ workspace_id: test.workspace.workspaceId, max_bytes: 512 });
       expect(result).toMatchObject({ truncated: true });
       expect((result.diff as string).length).toBeLessThanOrEqual(512);
     } finally { await test.cleanup(); }

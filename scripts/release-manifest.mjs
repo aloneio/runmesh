@@ -1,14 +1,16 @@
 import { createHash } from "node:crypto";
-import { readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { readdir, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PRODUCT_VERSION } from "./product-version.mjs";
+import { MAX_RELEASE_ASSET_BYTES, readBoundedReleaseFile } from "./release-io.mjs";
 
 export const RELEASE_PROJECT = "runmesh";
 export const RELEASE_CHANNEL = "dev";
 export const RELEASE_MANIFEST_SCHEMA_VERSION = 1;
 export const RELEASE_PROTOCOL_MIN = 2;
 export const RELEASE_PROTOCOL_MAX = 2;
+export { MAX_RELEASE_ASSET_BYTES };
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 // The release workflow is deliberately scoped to development previews. Keep
@@ -44,9 +46,12 @@ export async function buildManifest({ releaseDirectory, version = PRODUCT_VERSIO
   const expectedName = releaseArtifactName(version);
   if (names.length !== 1 || names[0] !== expectedName) throw new Error(`release must contain exactly ${expectedName}`);
   const path = join(releaseDirectory, expectedName);
-  const bytes = await readFile(path);
-  const metadata = await stat(path);
-  if (!metadata.isFile() || metadata.size <= 0) throw new Error(`empty Runner artifact: ${expectedName}`);
+  let bytes;
+  try { bytes = await readBoundedReleaseFile(path, expectedName); }
+  catch (error) {
+    if (error instanceof Error && error.message.includes("release input limit")) throw error;
+    throw new Error(`empty or unreadable Runner artifact: ${expectedName}`, { cause: error });
+  }
   return validateManifest({
     schema_version: RELEASE_MANIFEST_SCHEMA_VERSION,
     project: RELEASE_PROJECT,
@@ -64,7 +69,7 @@ export async function buildManifest({ releaseDirectory, version = PRODUCT_VERSIO
       architecture: "portable",
       node_major_min: 20,
       url: releaseAssetUrl(version, expectedName),
-      size: metadata.size,
+      size: bytes.byteLength,
       sha256: createHash("sha256").update(bytes).digest("hex"),
     }],
   }, version);
@@ -97,6 +102,7 @@ export function validateManifest(value, expectedVersion = value?.version) {
     || artifact.url !== releaseAssetUrl(version, expectedName)
     || !Number.isSafeInteger(artifact.size)
     || artifact.size <= 0
+    || artifact.size > MAX_RELEASE_ASSET_BYTES
     || typeof artifact.sha256 !== "string"
     || !SHA256.test(artifact.sha256)) {
     throw new Error("invalid manifest artifact");
