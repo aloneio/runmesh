@@ -172,7 +172,7 @@ npm run check:licenses
 
 `npm run validate:worker` is a Wrangler dry-run. It does not deploy, test production Durable Object migrations, prove edge-log redaction, or verify external Internet clients.
 
-Before making the instance publicly reachable, configure these four Worker secrets:
+Before making the instance publicly reachable, configure these four Worker secrets and set the non-secret `RUNMESH_PUBLIC_ORIGIN` in the target Wrangler `vars` configuration **before** running the deploy command. It must be a canonical external HTTPS origin such as `https://mcp.example.com`; do not commit or enable `RUNMESH_SIGNED_RELEASE_AVAILABLE` unless the exact signed release has first been published and independently verified (the release gate is described below).
 
 ```sh
 cd apps/worker
@@ -183,7 +183,7 @@ npm exec --offline -- wrangler secret put INTERNAL_CONTROL_SECRET
 npm exec --offline -- wrangler deploy --config wrangler.jsonc
 ```
 
-Set the non-secret Worker variable `RUNMESH_PUBLIC_ORIGIN` in the Wrangler `vars` configuration before deployment. It must be a canonical external HTTPS origin such as `https://mcp.example.com` with no path, query, fragment, credentials, whitespace, wildcard, or `http://` scheme. A missing/invalid value keeps hosted bootstrap disabled; with it configured, installer rendering and Admin actions that generate enrollment/MCP URLs reject a mismatched `Host` rather than embedding an attacker-controlled origin. Local development may omit it, but hosted signed bootstrap cannot be enabled without it.
+`RUNMESH_PUBLIC_ORIGIN` must have no path, query, fragment, credentials, whitespace, wildcard, or `http://` scheme. A missing/invalid value keeps hosted bootstrap disabled; with it configured, installer rendering and browser/Admin POSTs reject a mismatched `Host` rather than embedding an attacker-controlled origin. Local development may omit it, but hosted signed bootstrap cannot be enabled without it. Keep the release acknowledgement unset by default; only after the exact release is independently verified may the same target vars configuration add `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.0-dev.2`.
 
 The first administrator setup requires the configured `SETUP_TOKEN` or the SHA-256 verifier in `SETUP_TOKEN_HASH`; the setup token is never stored in RegistryDO or displayed by the dashboard. First setup is atomic and first-success-wins, so an uninitialized public instance must be protected by deployment access controls until the intended administrator completes setup. `ADMIN_TOKEN` is only for the manual/programmatic Runner administration API. It is not an administrator-password replacement, browser cookie, MCP credential, or Runner enrollment code.
 

@@ -172,7 +172,7 @@ npm run check:licenses
 
 `npm run validate:worker` 是 Wrangler dry-run，不会部署，也不能测试生产 Durable Object migration、edge log 脱敏或外部 Internet 客户端兼容性。
 
-让实例对公网开放前，配置以下四个 Worker secrets：
+让实例对公网开放前，配置以下四个 Worker secrets，并在执行 deploy **之前**于目标 Wrangler `vars` 配置中设置非 secret 的 `RUNMESH_PUBLIC_ORIGIN`。它必须是 canonical external HTTPS origin，例如 `https://mcp.example.com`；除非精确 signed release 已先发布并独立验证，否则不要提交或启用 `RUNMESH_SIGNED_RELEASE_AVAILABLE`（下文有 release gate 说明）。
 
 ```sh
 cd apps/worker
@@ -183,7 +183,7 @@ npm exec --offline -- wrangler secret put INTERNAL_CONTROL_SECRET
 npm exec --offline -- wrangler deploy --config wrangler.jsonc
 ```
 
-部署前请在 Wrangler `vars` 配置中设置非 secret 的 Worker 变量 `RUNMESH_PUBLIC_ORIGIN`。它必须是 canonical external HTTPS origin，例如 `https://mcp.example.com`，不能包含 path、query、fragment、凭据、空白、wildcard 或 `http://` scheme；缺失/非法值会让 hosted bootstrap 保持关闭，已配置时 installer 渲染和生成 enrollment/MCP URL 的 Admin 操作会拒绝不匹配的 `Host`，不会嵌入攻击者控制的 origin。本地开发可省略该变量，但没有它不能启用 hosted signed bootstrap。
+`RUNMESH_PUBLIC_ORIGIN` 不能包含 path、query、fragment、凭据、空白、wildcard 或 `http://` scheme；缺失/非法值会让 hosted bootstrap 保持关闭，已配置时 installer 渲染和浏览器/Admin POST 会拒绝不匹配的 `Host`，不会嵌入攻击者控制的 origin。本地开发可省略该变量，但没有它不能启用 hosted signed bootstrap。默认不要设置 release acknowledgement；只有在精确 release 独立验证后，才可在同一目标 vars 配置中加入 `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.0-dev.2`。
 
 首次管理员 setup 必须提供已配置的 `SETUP_TOKEN` 或 `SETUP_TOKEN_HASH` 中的 SHA-256 verifier；setup token 不会保存到 RegistryDO，也不会由 Dashboard 显示。首次初始化采用原子化 first-success-wins，因此未初始化的公网实例必须先使用部署访问控制保护，直到预期管理员完成 setup。`ADMIN_TOKEN` 仅用于手工/程序化 Runner 管理 API，不是管理员密码替代品、浏览器 cookie、MCP 凭据或 Runner enrollment code。
 
