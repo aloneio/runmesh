@@ -98,7 +98,7 @@ MCP Tasks (`io.modelcontextprotocol/tasks`) is not claimed by this runtime. A fu
 Enrollment happens before the WebSocket protocol:
 
 1. The dashboard or Registry creates a 30-minute, single-use code for a Runner ID.
-2. `coding-runner enroll --server <https endpoint> --code-stdin` reads the one-time code from stdin and sends it, along with bounded public platform/version data, to `POST /runner/enroll`.
+2. `coding-runner enroll --server <https endpoint> --code-stdin` reads the one-time code from standard input and sends it with bounded public platform/version data to `POST /runner/enroll`. `--code` remains an explicit compatibility option, but generated installer commands never place the code in argv, URLs, environment variables, or copied commands.
 3. On one successful redemption, the Worker returns the Runner ID, WebSocket URL, and long-lived token; Registry stores only a peppered token verifier.
 4. `runner.hello` then authenticates the outbound Runner socket under that credential/version/epoch.
 
@@ -118,4 +118,4 @@ A new Go/Rust implementation should consume the JSON Schema and implement the sa
 
 ## Scope boundary
 
-This protocol does not add OAuth, AI/model calls, Cloudflare Sandbox, Cloudflare Containers, or GitHub Actions runtime. Public bootstrap scripts are Worker application endpoints outside the wire protocol and are unavailable in `v0.1.0-dev.2`; they fail closed rather than accepting a package specification or activating a host. Operators use a verified portable artifact, then the dashboard-provided one-time `coding-runner enroll` command and `coding-runner install`. The dashboard may render local commands/manifest instructions but does not execute host commands.
+This protocol does not add OAuth, AI/model calls, Cloudflare Sandbox, Cloudflare Containers, or GitHub Actions runtime. Public bootstrap scripts are Worker application endpoints outside the wire protocol. They remain fail-closed until an operator has published and independently verified the exact signed `v0.1.0-dev.2` assets, configures a canonical external HTTPS `RUNMESH_PUBLIC_ORIGIN`, and explicitly sets `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.0-dev.2`; both deployment conditions are required. When enabled, the code-free installer command retrieves only fixed GitHub release assets, verifies the embedded-key Ed25519 contract, installs the verified local tarball, then prompts locally for the single-use code and uses `--code-stdin`. The Worker-delivered script is the one-command bootstrap trust root; high-assurance operators use the independent portable-artifact verification path. Automatic update, data downgrade, and upgrade rollback are outside this preview.

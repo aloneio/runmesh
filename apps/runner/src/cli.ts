@@ -34,6 +34,8 @@ export interface CliDependencies {
   readonly setExitCode?: (code: number) => void;
   /** Injectable stdin source for the secret-safe `enroll --code-stdin` flow. */
   readonly readStdin?: () => Promise<string>;
+  /** Test-only continuation after enrollment; production CLI returns immediately. */
+  readonly afterEnroll?: () => Promise<void>;
 }
 export interface EnrollCliDependencies {
   readonly store?: ProfileStore;
@@ -78,6 +80,10 @@ function readEnrollmentStdin(): Promise<string> {
       process.stdin.removeListener("end", onEnd);
       if (error === undefined) resolve(value); else reject(error);
     };
+    // Enrollment is entered one line at a time in the manual flow. Resolving
+    // on the first newline keeps `--code-stdin` usable from a TTY (Enter is a
+    // natural completion signal) while still accepting a normal pipe, whose
+    // EOF path remains supported for hosted installers.
     const onData = (chunk: string | Buffer): void => {
       value += typeof chunk === "string" ? chunk : chunk.toString("utf8");
       if (value.length > 512) { finish(new Error("--code-stdin input is too long")); return; }
@@ -119,11 +125,14 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
   if (argv.length === 1 && argv[0] === "--version") { output(RUNNER_VERSION); return; }
   const parsed = parseProductArgs(argv);
   const store = dependencies.store ?? storeFor(parsed, dependencies.servicePlatform);
+  let enrolledDuringThisInvocation = false;
   try {
     if (parsed.command === "start") return start(parsed, store, error, dependencies);
     if (parsed.command === "enroll") {
       const server = requiredString(parsed, "server"); const code = await enrollmentCode(parsed, dependencies.readStdin);
       const result = await enrollRunner({ server, code, reEnroll: parsed.values.reEnroll === true, insecureLocal: parsed.values.insecureLocal === true, ...(typeof parsed.values.executionMode === "string" ? { executionMode: parsed.values.executionMode as ExecutionMode } : {}), ...(parsed.values.confirmPrivilegedHost === true ? { confirmPrivilegedHost: true } : {}), ...(typeof parsed.values.cwd === "string" ? { cwd: parsed.values.cwd } : {}), store, ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch }) });
+      enrolledDuringThisInvocation = true;
+      if (dependencies.afterEnroll !== undefined) await dependencies.afterEnroll();
       report(output, parsed.json, { enrolled: true, runner_id: result.profile.runner_id, workspace_count: result.profile.workspaces.length });
       return;
     }
@@ -145,7 +154,12 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
     if (parsed.command === "install" || parsed.command === "stop" || parsed.command === "restart") { await serviceCommand(parsed, store, output, dependencies); return; }
     if (parsed.command === "uninstall") { await uninstall(parsed, store, output, dependencies); return; }
     throw new Error(HELP);
-  } catch (cause) { error(cause instanceof Error ? cause.message : String(cause)); throw cause; }
+  } catch (cause) {
+    if (enrolledDuringThisInvocation) {
+      try { await store.remove(); } catch { /* Do not mask the primary failure; remote code redemption is irreversible. */ }
+    }
+    error(cause instanceof Error ? cause.message : String(cause)); throw cause;
+  }
 }
 
 async function start(parsed: ParsedCommand, store: ProfileStore, error: (line: string) => void, dependencies: CliDependencies): Promise<void> {
@@ -386,7 +400,7 @@ export function parseProductArgs(argv: readonly string[]): ParsedCommand {
 }
 function storeFor(parsed: ParsedCommand, platform?: ServicePlatform): ProfileStore {
   if (typeof parsed.values.profilePath === "string") return new ProfileStore({ filePath: parsed.values.profilePath });
-  if (parsed.values.user === true || process.env.CODING_RUNNER_PROFILE !== undefined) return new ProfileStore();
+  if (parsed.values.user === true || process.env.RUNMESH_RUNNER_PROFILE !== undefined || process.env.CODING_RUNNER_PROFILE !== undefined) return new ProfileStore();
   const layout = serviceLayout({ ...(platform === undefined ? {} : { platform }), mode: "system" });
   return new ProfileStore({ filePath: serviceProfilePath(layout) });
 }
