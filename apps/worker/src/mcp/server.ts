@@ -10,6 +10,7 @@ import { PRODUCT_VERSION } from "../generated-version.js";
 
 const CONTENT_LIMIT = 32 * 1024;
 const STRUCTURED_LIMIT = 64 * 1024;
+const utf8Encoder = new TextEncoder();
 const SUPPORTED_SCOPES = ["coding:read", "coding:write", "coding:exec"] as const;
 type CodingScope = (typeof SUPPORTED_SCOPES)[number];
 
@@ -543,14 +544,32 @@ async function json(response: Response): Promise<unknown> {
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function boundedText(value: unknown, max: number): string {
   const text = JSON.stringify(value, null, 2) ?? "null";
-  return text.length <= max ? text : `${text.slice(0, max)}\n… truncated by MCP response limit`;
+  if (utf8Encoder.encode(text).byteLength <= max) return text;
+  const marker = "\n… truncated by MCP response limit";
+  const markerBytes = utf8Encoder.encode(marker).byteLength;
+  return `${truncateUtf8(text, Math.max(0, max - markerBytes))}${marker}`;
 }
 function redactAndBound(value: unknown, max: number): unknown {
   const redacted = redact(value, new WeakSet());
   const serialized = JSON.stringify(redacted) ?? "null";
-  if (serialized.length <= max) return redacted;
-  return { truncated: true, data: serialized.slice(0, max), recovery_hint: "Use the tool's cursor, offset, or limit fields to paginate." };
+  if (utf8Encoder.encode(serialized).byteLength <= max) return redacted;
+  return { truncated: true, data: truncateUtf8(serialized, max), recovery_hint: "Use the tool's cursor, offset, or limit fields to paginate." };
 }
+
+/** Return a UTF-8 prefix without cutting a Unicode code point in half. */
+function truncateUtf8(value: string, maxBytes: number): string {
+  if (maxBytes <= 0 || value.length === 0) return "";
+  let bytes = 0;
+  let end = 0;
+  for (const codePoint of value) {
+    const codePointBytes = utf8Encoder.encode(codePoint).byteLength;
+    if (bytes + codePointBytes > maxBytes) break;
+    bytes += codePointBytes;
+    end += codePoint.length;
+  }
+  return value.slice(0, end);
+}
+
 function redact(value: unknown, seen: WeakSet<object>): unknown {
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean" || value === null) return value;
   if (Array.isArray(value)) return value.map((item) => redact(item, seen));
