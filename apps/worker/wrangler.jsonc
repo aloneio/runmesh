@@ -32,5 +32,38 @@
   ],
   "vars": {
     "WORKER_ID": "worker-local"
+  },
+  "env": {
+    "production": {
+      // Keep the protected production deploy on the maintained Worker name;
+      // Wrangler otherwise appends "-production" for a named environment.
+      "name": "runmesh",
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "REGISTRY",
+            "class_name": "RegistryDO"
+          },
+          {
+            "name": "RUNNER",
+            "class_name": "RunnerDO"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "tag": "v1",
+          "new_sqlite_classes": [
+            "RegistryDO",
+            "RunnerDO"
+          ]
+        }
+      ],
+      "vars": {
+        "WORKER_ID": "worker-production",
+        "RUNMESH_PUBLIC_ORIGIN": "https://runmesh.aloneio.workers.dev",
+        "RUNMESH_SIGNED_RELEASE_AVAILABLE": "0.1.0-dev.2"
+      }
+    }
   }
 }
