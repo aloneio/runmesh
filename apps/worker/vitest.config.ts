@@ -11,5 +11,11 @@ export default defineConfig({
       INTERNAL_CONTROL_SECRET: "test-internal-control-secret-not-for-production",
     } },
   })],
-  test: { pool: "@cloudflare/vitest-pool-workers" },
+  test: {
+    pool: "@cloudflare/vitest-pool-workers",
+    // Durable-object startup/KDF tests can exceed Vitest's five-second
+    // default on a cold Miniflare isolate. This is a test harness bound only.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
+  },
 });

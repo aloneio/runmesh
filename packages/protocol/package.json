@@ -35,7 +35,7 @@
     "test": "vitest run",
     "typecheck": "tsc -b --pretty false",
     "generate:schema": "tsx ./scripts/generate-schema.ts",
-    "prepack": "npm run build && npm run generate:schema && rm -f dist/.tsbuildinfo"
+    "prepack": "npm run build && npm run generate:schema && node ../../scripts/clean-tsbuildinfo.mjs dist"
   },
   "dependencies": {
     "zod": "^4.4.3"

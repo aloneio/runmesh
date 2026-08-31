@@ -33,7 +33,7 @@ Local Runner
 
 ## Enrollment and local control plane
 
-The dashboard adds a Runner with a stable safe ID and `display_name`, then creates a 30-minute, single-use enrollment code. Regeneration deletes any unused code for that Runner before inserting the replacement. `POST /runner/enroll` atomically redeems the code and returns a new Runner token; the packaged CLI's supported flow is `coding-runner enroll --server ... --code ...`, followed by `coding-runner install`. It stores a centrally managed local profile with zero workspaces; only the Admin Panel adds central workspace roots.
+The dashboard adds a Runner with a stable safe ID and `display_name`, then creates a 30-minute, single-use enrollment code. Regeneration deletes any unused code for that Runner before inserting the replacement. `POST /runner/enroll` atomically redeems the code and returns a new Runner token; the packaged CLI's supported flow is `coding-runner enroll --server ... --code-stdin`, followed by `coding-runner install`. It stores a centrally managed local profile with zero workspaces; only the Admin Panel adds central workspace roots.
 
 The dashboard displays a one-time manual enrollment command after the operator has separately downloaded and verified the portable artifact. Hosted bootstrap is unavailable in `v0.1.0-dev.2`; there is no automatic signed hosted distribution or update mechanism.
 

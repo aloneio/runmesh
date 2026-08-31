@@ -9,15 +9,29 @@
   "repository": { "type": "git", "url": "https://github.com/aloneio/runmesh.git", "directory": "apps/runner" },
   "homepage": "https://github.com/aloneio/runmesh",
   "bugs": { "url": "https://github.com/aloneio/runmesh/issues" },
-  "main": "./dist/index.js",
+  "main": "./dist/index.bundle.cjs",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.bundle.cjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.bundle.cjs"
+      },
+      "default": "./dist/index.bundle.cjs"
     },
     "./config": {
-      "types": "./dist/config.js",
+      "import": {
+        "types": "./dist/config.d.ts",
+        "default": "./dist/config.js"
+      },
+      "require": {
+        "types": "./dist/config.d.cts",
+        "default": "./dist/config.cjs"
+      },
       "default": "./dist/config.js"
     }
   },
@@ -27,13 +41,14 @@
   },
   "files": ["dist", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"],
   "scripts": {
-    "build": "tsc -b && node ../../scripts/build-runner-bundle.mjs ./src/cli.ts ./dist/coding-runner.cjs",
-    "prepack": "npm run build && rm -f dist/*.tsbuildinfo dist/.tsbuildinfo",
+    "build": "tsc -b && node ../../scripts/build-runner-declarations.mjs && node ../../scripts/clean-runner-bundles.mjs && node ../../scripts/build-runner-bundle.mjs ./src/coding-runner-entry.ts ./dist/coding-runner.cjs cjs && node ../../scripts/build-runner-bundle.mjs ./src/config.ts ./dist/config.cjs cjs && node ../../scripts/build-runner-bundle.mjs ./src/index.ts ./dist/index.bundle.cjs cjs",
+    "prepack": "npm run build && node ../../scripts/clean-tsbuildinfo.mjs dist",
     "pack:check": "npm run prepack && npm pack --dry-run",
     "test": "vitest run --config vitest.config.ts",
     "typecheck": "tsc -b --pretty false",
-    "start": "tsx src/cli.ts start"
+    "start": "tsx src/coding-runner-entry.ts start"
   },
+  "engines": { "node": ">=20" },
   "dependencies": {},
   "devDependencies": {
     "@aloneio/runmesh-protocol": "0.1.0-dev.2",

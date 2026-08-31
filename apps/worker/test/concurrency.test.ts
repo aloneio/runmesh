@@ -1,5 +1,5 @@
 import { env, runInDurableObject } from "cloudflare:test";
-import { PROTOCOL_CURRENT_VERSION, encodeWireFrame, runnerPolicyChecksum } from "@aloneio/runmesh-protocol";
+import { PROTOCOL_CURRENT_VERSION, PROTOCOL_MIN_VERSION, encodeWireFrame, runnerPolicyChecksum } from "@aloneio/runmesh-protocol";
 import { describe, expect, it, vi } from "vitest";
 
 interface Admission {
@@ -28,13 +28,74 @@ const attachment = { runnerId, sessionId: "session-7", epoch: 7, credentialVersi
 function state(mutationId: string, mutationPhase: Admission["mutationPhase"] = "committed_pending"): Admission {
   return { fenced: true, reconciled: false, runnerId, activeRevision: null, activeChecksum: null, desiredRevision: 8, desiredChecksum: checksum, connectionEpoch: 7, credentialVersion: 3, sessionId: "session-7", mutationId, mutationPhase, preMutationActiveRevision: 7, preMutationActiveChecksum: checksum, preMutationDesiredRevision: 7, preMutationDesiredChecksum: checksum, lastReconciledAtMs: null };
 }
-function socket(send = vi.fn()): WebSocket { return { deserializeAttachment: () => attachment, send, close: vi.fn() } as unknown as WebSocket; }
+function readyState(): Admission {
+  return { fenced: false, reconciled: true, runnerId, activeRevision: 7, activeChecksum: checksum, desiredRevision: 7, desiredChecksum: checksum, connectionEpoch: 7, credentialVersion: 3, sessionId: "session-7", mutationId: null, mutationPhase: "idle", preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: Date.now() };
+}
+function socket(send = vi.fn(), socketAttachment = attachment): WebSocket { return { deserializeAttachment: () => socketAttachment, serializeAttachment: vi.fn(), send, close: vi.fn() } as unknown as WebSocket; }
 async function withRunner(name: string, callback: (target: TestRunnerDO) => Promise<void>): Promise<void> {
   const stub = env.RUNNER.get(env.RUNNER.idFromName(`${name}-${crypto.randomUUID()}`));
   await runInDurableObject(stub, async (instance) => callback(instance as unknown as TestRunnerDO));
 }
 
 describe("RunnerDO concurrency finalization", () => {
+  it("does not let a delayed hello overwrite a concurrent policy fence", async () => {
+    await withRunner("hello-policy-race", async (target) => {
+      target.admissionState = readyState();
+      let releaseConnect!: () => void;
+      const connectBlocked = new Promise<void>((resolve) => { releaseConnect = resolve; });
+      let connectStarted!: () => void;
+      const connectRequested = new Promise<void>((resolve) => { connectStarted = resolve; });
+      target.registryRequest = async (_id, action) => {
+        if (action === "/connect") {
+          connectStarted();
+          await connectBlocked;
+          return Response.json({ epoch: 8 });
+        }
+        throw new Error(`unexpected ${action}`);
+      };
+      const hello: WireMessage = {
+        type: "runner.hello", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "hello-race", min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION,
+        runner: { runner_id: runnerId, runner_version: "test", platform: "test", architecture: "test", capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: [], labels: {} } },
+      };
+      const helloInFlight = target.webSocketMessage(socket(), encodeWireFrame(hello));
+      await connectRequested;
+      expect(await target.beginPolicyMutation("concurrent-policy", runnerId)).toBe("started");
+      releaseConnect();
+      await helloInFlight;
+      await expect(target.admission()).resolves.toMatchObject({ fenced: true, mutationId: "concurrent-policy", mutationPhase: "precommit", connectionEpoch: 8, sessionId: "session-7" });
+    });
+  });
+
+  it("does not let an older hello roll back a newer connection epoch", async () => {
+    await withRunner("hello-epoch-race", async (target) => {
+      target.admissionState = { ...readyState(), connectionEpoch: 9, sessionId: "new-session" };
+      target.registryRequest = async (_id, action) => action === "/connect" ? Response.json({ epoch: 8 }) : new Response(null, { status: 500 });
+      const oldAttachment = { ...attachment, sessionId: "old-session", epoch: 0 };
+      const oldSocket = socket(vi.fn(), oldAttachment);
+      const hello: WireMessage = {
+        type: "runner.hello", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "hello-old", min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION,
+        runner: { runner_id: runnerId, runner_version: "test", platform: "test", architecture: "test", capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: [], labels: {} } },
+      };
+      await target.webSocketMessage(oldSocket, encodeWireFrame(hello));
+      expect(oldSocket.close).toHaveBeenCalledWith(4000, "replaced by newer session");
+      await expect(target.admission()).resolves.toMatchObject({ connectionEpoch: 9, sessionId: "new-session" });
+    });
+  });
+
+  it("preserves a committed mutation's desired policy across a reconnect", async () => {
+    await withRunner("hello-mutation-state", async (target) => {
+      target.admissionState = state("committed-policy", "committed_pending");
+      target.registryRequest = async (_id, action) => action === "/connect" ? Response.json({ epoch: 8 }) : new Response(null, { status: 500 });
+      const reconnect = socket(vi.fn(), { ...attachment, sessionId: "reconnected", epoch: 0 });
+      const hello: WireMessage = {
+        type: "runner.hello", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "hello-mutation", min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION,
+        runner: { runner_id: runnerId, runner_version: "test", platform: "test", architecture: "test", capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: [], labels: {} } },
+      };
+      await target.webSocketMessage(reconnect, encodeWireFrame(hello));
+      await expect(target.admission()).resolves.toMatchObject({ fenced: true, mutationId: "committed-policy", mutationPhase: "committed_pending", desiredRevision: 8, desiredChecksum: checksum, connectionEpoch: 8, sessionId: "reconnected" });
+    });
+  });
+
   for (const result of ["applied", "invalid"] as const) {
     it(`preserves a newer precommit while an older ${result} ACK awaits Registry`, async () => {
       await withRunner(`ack-${result}`, async (target) => {

@@ -21,6 +21,8 @@ describe("runner configuration", () => {
     await expect(validateRunnerConfig({ server: "ws://example.test", token: "0123456789abcdef", runnerId: "runner-1" })).rejects.toThrow("wss://");
     await expect(validateRunnerConfig({ server: "ws://127.0.0.1:8787", token: "0123456789abcdef", runnerId: "runner-1" })).rejects.toThrow("insecure-local");
     await expect(validateRunnerConfig({ server: "wss://example.test", token: "short", runnerId: "runner-1" })).rejects.toThrow("token");
+    await expect(validateRunnerConfig({ server: "wss://user:password@example.test", token: "0123456789abcdef", runnerId: "runner-1" })).rejects.toThrow("credentials");
+    await expect(validateRunnerConfig({ server: "wss://example.test/path?token=leak", token: "0123456789abcdef", runnerId: "runner-1" })).rejects.toThrow("query");
   });
   it("rejects overlapping central workspace roots", async () => {
     const root = await mkdtemp(join(tmpdir(), "runmesh-runner-overlap-"));

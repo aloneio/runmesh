@@ -1,8 +1,9 @@
 import { readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { PRODUCT_VERSION } from "./product-version.mjs";
 
-const repositoryRoot = resolve(new URL("..", import.meta.url).pathname);
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const requestedVersion = process.argv[2];
 if (process.argv.length > 3 || (requestedVersion !== undefined && requestedVersion !== PRODUCT_VERSION)) {
   throw new Error(`version must be sourced from root package.json (${PRODUCT_VERSION})`);

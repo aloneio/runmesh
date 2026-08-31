@@ -1,8 +1,9 @@
 import { chmod, mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { RunnerPolicySchema, policyWithoutChecksum, runnerPolicyChecksum, type RunnerPolicy } from "@aloneio/runmesh-protocol";
+import { RunnerPolicySchema, policyWithoutChecksum, runnerPolicyChecksum } from "@aloneio/runmesh-protocol";
 import { defaultRunnerStateDir } from "./state-path.js";
+import type { RunnerPolicy } from "./protocol-types.js";
 
 export interface PolicyStoreOptions {
   /** Test-only hook to prove a failed candidate write never replaces active policy. */

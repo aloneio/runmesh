@@ -1,0 +1,3 @@
+# Keep repository text artifacts byte-stable across developer and CI hosts.
+* text=auto eol=lf
+*.png binary

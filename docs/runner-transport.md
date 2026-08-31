@@ -60,12 +60,23 @@ The supported local redemption flow is:
 ```sh
 coding-runner enroll \
   --server https://mcp.example.com/runner/enroll \
-  --code '<one-time-code>'
+  --code-stdin
+```
+
+Supply the code through a protected prompt instead of argv, for example:
+
+```bash
+printf '%s' 'One-time enrollment code: ' >&2
+read -r -s RUNMESH_ENROLLMENT_CODE
+printf '\n' >&2
+printf '%s\n' "$RUNMESH_ENROLLMENT_CODE" | coding-runner enroll \
+  --server https://mcp.example.com/runner/enroll --code-stdin
+unset RUNMESH_ENROLLMENT_CODE
 ```
 
 The Worker verifies the code, creates a new Runner token, stores only a peppered verifier, and returns the Runner ID, connection URL, and token once. The CLI writes the response into a local Runner profile and does not print/store the one-time code. Centrally managed enrollment starts with zero local workspaces; the Admin Panel delivers approved root paths only in authenticated policy frames.
 
-> **Enrollment behavior:** the dashboard displays only the manual portable-artifact flow: `coding-runner enroll --server ... --code ...` followed by `coding-runner install`. Hosted `/runner/install.sh` and `/runner/install.ps1` are disabled fail-closed in this development preview: they do not accept or consume a one-time code, access the network, invoke npm, or activate a host service.
+> **Enrollment behavior:** the dashboard displays only the manual portable-artifact flow: `coding-runner enroll --server ... --code-stdin` followed by `coding-runner install`. Hosted `/runner/install.sh` and `/runner/install.ps1` are disabled fail-closed in this development preview: they do not accept or consume a one-time code, access the network, invoke npm, or activate a host service.
 
 The established outbound transport is:
 

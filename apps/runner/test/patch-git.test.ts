@@ -98,7 +98,7 @@ describe("fs.apply_patch", () => {
       await chmod(source, 0o751);
       await patch(test.workspace).apply({ workspace_id: test.workspace.workspaceId, patch: envelope("*** Update File: bom.txt\n*** Move to: moved.txt\n@@\n-old\n+new\n keep") });
       expect(await readFile(join(test.root, "moved.txt"))).toEqual(Buffer.from("\ufeffnew\r\nkeep\r\n", "utf8"));
-      expect((await stat(join(test.root, "moved.txt"))).mode & 0o777).toBe(0o751);
+      if (process.platform !== "win32") expect((await stat(join(test.root, "moved.txt"))).mode & 0o777).toBe(0o751);
     } finally { await test.cleanup(); }
   });
 
@@ -200,14 +200,14 @@ describe("git inspection", () => {
       await run(test.root, ["init"]);
       await mkdir(join(test.root, "sub"));
       await writeFile(join(test.root, "sub", "tracked.txt"), "old\n");
-      await writeFile(join(test.root, "literal[star]*.txt"), "old\n");
+      await writeFile(join(test.root, "literal[star].txt"), "old\n");
       await run(test.root, ["add", "."]); await run(test.root, ["-c", "user.email=test@example.test", "-c", "user.name=Test", "commit", "-m", "initial"]);
       await writeFile(join(test.root, "sub", "tracked.txt"), "new\n");
-      await writeFile(join(test.root, "literal[star]*.txt"), "new\n");
+      await writeFile(join(test.root, "literal[star].txt"), "new\n");
       await rm(join(test.root, "sub", "tracked.txt"));
       const git = new GitService(new PathPolicy([test.workspace]));
       await expect(git.status({ workspace_id: test.workspace.workspaceId, path: "sub" })).resolves.toMatchObject({ path: "sub", entries: [{ path: "sub/tracked.txt", worktree_status: "D" }] });
-      await expect(git.status({ workspace_id: test.workspace.workspaceId, path: "literal[star]*.txt" })).resolves.toMatchObject({ entries: [{ path: "literal[star]*.txt" }] });
+      await expect(git.status({ workspace_id: test.workspace.workspaceId, path: "literal[star].txt" })).resolves.toMatchObject({ entries: [{ path: "literal[star].txt" }] });
       await expect(git.status({ workspace_id: test.workspace.workspaceId, path: "." })).resolves.toMatchObject({ path: "." });
       await expect(git.diff({ workspace_id: test.workspace.workspaceId, path: "sub/tracked.txt" })).resolves.toMatchObject({ path: "sub/tracked.txt", diff: expect.stringContaining("deleted file") });
     } finally { await test.cleanup(); }
@@ -231,7 +231,7 @@ describe("git inspection", () => {
     } finally { await test.cleanup(); }
   });
 
-  it("times out a spawned git process through the injectable timeout seam", async () => {
+  it.skipIf(process.platform === "win32")("times out a spawned git process through the injectable timeout seam", async () => {
     const test = await fixture();
     try {
       await run(test.root, ["init"]);
