@@ -176,14 +176,14 @@ npm run check:licenses
 
 ```sh
 cd apps/worker
-npm exec --offline -- wrangler secret put ADMIN_TOKEN
-npm exec --offline -- wrangler secret put SETUP_TOKEN          # 或改为配置 SETUP_TOKEN_HASH
-npm exec --offline -- wrangler secret put RUNNER_TOKEN_PEPPER
-npm exec --offline -- wrangler secret put INTERNAL_CONTROL_SECRET
-npm exec --offline -- wrangler deploy --config wrangler.jsonc
+npm exec --offline -- wrangler secret put ADMIN_TOKEN --env production
+npm exec --offline -- wrangler secret put SETUP_TOKEN --env production          # 或改为配置 SETUP_TOKEN_HASH
+npm exec --offline -- wrangler secret put RUNNER_TOKEN_PEPPER --env production
+npm exec --offline -- wrangler secret put INTERNAL_CONTROL_SECRET --env production
+npm exec --offline -- wrangler deploy --config wrangler.jsonc --env production
 ```
 
-`RUNMESH_PUBLIC_ORIGIN` 不能包含 path、query、fragment、凭据、空白、wildcard 或 `http://` scheme；缺失/非法值会让 hosted bootstrap 保持关闭，已配置时 installer 渲染和浏览器/Admin POST 会拒绝不匹配的 `Host`，不会嵌入攻击者控制的 origin。本地开发可省略该变量，但没有它不能启用 hosted signed bootstrap。默认不要设置 release acknowledgement；只有在精确 release 独立验证后，才可在同一目标 vars 配置中加入 `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.0-dev.2`。
+`RUNMESH_PUBLIC_ORIGIN` 不能包含 path、query、fragment、凭据、空白、wildcard 或 `http://` scheme；缺失/非法值会让 hosted bootstrap 保持关闭，已配置时 installer 渲染和浏览器/Admin POST 会拒绝不匹配的 `Host`，不会嵌入攻击者控制的 origin。仓库内的 `production` 环境已配置为 `https://runmesh.aloneio.workers.dev` 和独立核验过的固定 `v0.1.0-dev.2` release；环境部署后两个 gate 才会生效。fork 或其他域名必须先替换 origin 并重新核验再部署。本地默认环境仍保持 fail-closed。
 
 首次管理员 setup 必须提供已配置的 `SETUP_TOKEN` 或 `SETUP_TOKEN_HASH` 中的 SHA-256 verifier；setup token 不会保存到 RegistryDO，也不会由 Dashboard 显示。首次初始化采用原子化 first-success-wins，因此未初始化的公网实例必须先使用部署访问控制保护，直到预期管理员完成 setup。`ADMIN_TOKEN` 仅用于手工/程序化 Runner 管理 API，不是管理员密码替代品、浏览器 cookie、MCP 凭据或 Runner enrollment code。
 
@@ -193,7 +193,7 @@ npm exec --offline -- wrangler deploy --config wrangler.jsonc
 
 本仓库不会在 push 时自动部署。GitLab 部署 pipeline 应是受保护且手动触发的 job，并且只能部署已经在 GitLab CI 中验证过的同一个固定 commit。请在 GitLab 中配置 masked/protected variables：`CLOUDFLARE_API_TOKEN` 和 `CLOUDFLARE_ACCOUNT_ID`；token 权限应尽量收窄到目标账户和 Workers 部署操作。
 
-部署 job 必须在 `npm exec --offline -- wrangler deploy --config apps/worker/wrangler.jsonc --strict` 前完成完整验证；部署后的 Worker 名称为 `runmesh`。不得打印或保存应用 secrets。请单独使用 `wrangler secret put` 或 `wrangler secret bulk` 设置 Cloudflare Worker secrets，不要把应用 secrets 放入仓库或普通 CI variables。
+部署 job 必须在 `npm exec --offline -- wrangler deploy --config apps/worker/wrangler.jsonc --env production --strict` 前完成完整验证；部署后的 Worker 名称为 `runmesh`。不得打印或保存应用 secrets。请单独使用 `wrangler secret put` 或 `wrangler secret bulk` 设置 Cloudflare Worker secrets，不要把应用 secrets 放入仓库或普通 CI variables。
 
 部署会影响生产环境。手动启动前请复核精确 commit、目标账户、Worker 名称、Durable Object migration 变化以及备份/恢复方案。本地 `wrangler login` 只能证明当前登录账户，不代表已经执行部署授权。
 
@@ -201,7 +201,7 @@ npm exec --offline -- wrangler deploy --config wrangler.jsonc
 
 Dashboard 生成的 enrollment code 短期有效、单次使用，重新生成或成功兑换后立即失效。Runner 通过认证 WebSocket 主动连接 Worker，不暴露 HTTP server。
 
-在 `v0.1.0-dev.2` 中，hosted bootstrap 已实现为固定 signed preview 机制，但默认关闭：仓库不声称 `v0.1.0-dev.2` GitHub release 已存在。只有在操作者发布并独立验证该精确 immutable release、配置合法的 `RUNMESH_PUBLIC_ORIGIN`，并在 Worker 部署显式设置 `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.0-dev.2` 后，`/runner/releases/latest` 和 `/runner/releases/stable` 才会报告 `distributable: true`；两个条件缺一不可。该 gate 不是可配置 URL、package、npm spec、checksum 或任意版本来源，单独设置 release flag 不会启用分发。启用后安装器固定版本、GitHub release URL、key ID 和 Ed25519 公钥，在 npm 本地 tarball 安装（禁用 scripts）前验证 manifest/signature/descriptor/artifact size/SHA-256；绝不信任下载的 keyring、`latest`、npm registry 或任意 URL。Dashboard 复制的命令不含 code；验证完成后脚本在本机提示，并仅通过 `coding-runner enroll --code-stdin` 传递 code。Worker HTTPS 返回的脚本是一键 bootstrap 信任根，自身无法发现 Worker 响应被替换；高保证场景请使用[便携式 Runner 验证与安装流程](docs/portable-runner-installation.md)中的独立离线路径。
+在 `v0.1.0-dev.2` 中，hosted bootstrap 已实现为固定 signed preview 机制。默认环境仍关闭；仓库内 `production` 环境仅在合法 `RUNMESH_PUBLIC_ORIGIN` 与已独立核验后的 `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.0-dev.2` 两个 gate 同时满足时启用。任一缺失或非法时，`/runner/releases/latest` 和 `/runner/releases/stable` 都报告 `distributable: false`。该 gate 不是可配置 URL、package、npm spec、checksum 或任意版本来源，单独设置 release flag 不会启用分发。启用后安装器固定版本、GitHub release URL、key ID 和 Ed25519 公钥，在 npm 本地 tarball 安装（禁用 scripts）前验证 manifest/signature/descriptor/artifact size/SHA-256；绝不信任下载的 keyring、`latest`、npm registry 或任意 URL。Dashboard 复制的命令不含 code；验证完成后脚本在本机提示，并仅通过 `coding-runner enroll --code-stdin` 传递 code。Worker HTTPS 返回的脚本是一键 bootstrap 信任根，自身无法发现 Worker 响应被替换；高保证场景请使用[便携式 Runner 验证与安装流程](docs/portable-runner-installation.md)中的独立离线路径。
 
 全新注册从零 Workspace 开始。Workspace 根目录由管理员在 Dashboard 显式添加，再通过认证的 Runner-only policy frame 私下发送给对应 Runner；它不会进入 MCP、Workspace metadata、普通日志或公网 API。重新注册只更新连接凭据，不会从当前目录创建 Workspace。Emergency Lock 要求输入 Runner ID，并不会自动终止已经启动的 Job。
 

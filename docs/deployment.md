@@ -27,23 +27,30 @@ Configure the four server-side secrets before deployment:
 
 ```sh
 cd apps/worker
-npm exec --offline -- wrangler secret put ADMIN_TOKEN
-npm exec --offline -- wrangler secret put SETUP_TOKEN          # or configure SETUP_TOKEN_HASH instead
-npm exec --offline -- wrangler secret put RUNNER_TOKEN_PEPPER
-npm exec --offline -- wrangler secret put INTERNAL_CONTROL_SECRET
+npm exec --offline -- wrangler secret put ADMIN_TOKEN --env production
+npm exec --offline -- wrangler secret put SETUP_TOKEN --env production          # or configure SETUP_TOKEN_HASH instead
+npm exec --offline -- wrangler secret put RUNNER_TOKEN_PEPPER --env production
+npm exec --offline -- wrangler secret put INTERNAL_CONTROL_SECRET --env production
 ```
 
 Set the non-secret Worker variable `RUNMESH_PUBLIC_ORIGIN` in the `vars` section of `apps/worker/wrangler.jsonc` (or the equivalent environment-specific Wrangler configuration) before deployment. It must be the canonical externally reachable HTTPS origin, for example `https://mcp.example.com`: do not include a path, query, fragment, credentials, whitespace, wildcard, or an `http://` scheme. A trailing slash is normalized. When this variable is configured, the request `Host` used for browser CSRF/Admin POSTs, Admin-generated URLs, and hosted installer requests must match it; an internal proxy URL may differ, but an untrusted `Host` header must never be used as the public origin. Missing or invalid configuration keeps hosted bootstrap unavailable, while a mismatched request is rejected with a generic `421` response. Local development may omit the variable and use a loopback HTTP request origin, but the signed hosted path cannot be enabled without it.
 
-Leave `RUNMESH_SIGNED_RELEASE_AVAILABLE` unset in the default/development vars. Only after publishing and independently verifying the exact immutable `v0.1.0-dev.2` release may the target environment add the literal non-secret variable `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.0-dev.2` alongside `RUNMESH_PUBLIC_ORIGIN`; this is an explicit release gate, not a URL or version selector. Before enabling it, an authorized maintainer must check the repository's [immutable-release setting](https://docs.github.com/en/rest/repos/repos?apiVersion=latest#check-if-immutable-releases-are-enabled-for-a-repository) with an administration-read credential and require a successful response showing `enabled: true`; `401`, `403`, or `404` is a release blocker. The GitHub preview workflow intentionally does not request that elevated permission, so its successful run alone is not proof of immutability. The workflow is pinned to this same version because the hosted installer embeds its version, URLs, and signing key; update and independently review that installer contract before introducing a later release version. GitLab's protected deployment job does not set either variable automatically, so review the environment-specific Wrangler vars before the manual deploy.
+Leave `RUNMESH_SIGNED_RELEASE_AVAILABLE` unset in the default/development vars. The checked-in `production` environment contains the literal acknowledgement for the independently verified immutable `v0.1.0-dev.2` release alongside `RUNMESH_PUBLIC_ORIGIN`; this is an explicit release gate, not a URL or version selector. Before changing that acknowledgement or enabling it for another deployment, an authorized maintainer must check the repository's [immutable-release setting](https://docs.github.com/en/rest/repos/repos?apiVersion=latest#check-if-immutable-releases-are-enabled-for-a-repository) with an administration-read credential and require a successful response showing `enabled: true`; `401`, `403`, or `404` is a release blocker. The GitHub preview workflow intentionally does not request that elevated permission, so its successful run alone is not proof of immutability. The workflow is pinned to this same version because the hosted installer embeds its version, URLs, and signing key; update and independently review that installer contract before introducing a later release version. The protected GitLab deployment job selects the checked-in `production` environment; review or override its origin and release acknowledgement before a manual deploy.
 
 The first administrator setup requires the configured `SETUP_TOKEN` or the SHA-256 verifier in `SETUP_TOKEN_HASH`; the setup token is never stored in RegistryDO or displayed by the dashboard. First setup is atomic and first-success-wins, so an uninitialized public instance must be protected by deployment access controls until the intended administrator completes setup. `ADMIN_TOKEN` is only for the manual/programmatic Runner administration API. It is not an administrator-password replacement, browser cookie, MCP credential, or Runner enrollment code.
 
 Deploy when the account and hostname are ready. The Worker name is `runmesh`:
 
 ```sh
-npm exec --offline -- wrangler deploy --config wrangler.jsonc
+npm exec --offline -- wrangler deploy --config wrangler.jsonc --env production
 ```
+
+The checked-in `production` environment targets the maintained
+`runmesh.aloneio.workers.dev` deployment and enables the independently
+verified fixed signed Runner release. For a fork or a different hostname,
+replace `RUNMESH_PUBLIC_ORIGIN` in that environment with the canonical HTTPS
+origin before deploying; keep the release acknowledgement disabled until the
+matching immutable release has been independently verified.
 
 1. Open the deployed root URL and create the first administrator password immediately. Setup is atomic first-success-wins; there is no bootstrap-password secret.
 2. Log in and open **Admin → Runners**. Add a safe Runner ID (or let the dashboard generate one) and a human-facing `display_name`. The display name is displayed to operators and by `runner_list`; the ID is the stable protocol identifier.
@@ -81,7 +88,7 @@ The dashboard displays safe Runner details and allows Runner rename, enrollment/
 
 ### Public bootstrap and package configuration
 
-Hosted bootstrap is disabled by default for this development preview because no exact signed `v0.1.0-dev.2` GitHub release is asserted by the repository. `/runner/releases/latest` and `/runner/releases/stable` therefore report `distributable: false` unless **both** the Worker has a valid `RUNMESH_PUBLIC_ORIGIN` and the deployment is explicitly acknowledged with `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.0-dev.2` **after** publishing and independently verifying the fixed immutable release. The acknowledgement is an equality gate, not a configurable URL, package name, npm spec, checksum, or version source; setting it alone never enables distribution. Before setting it, verify the exact `v0.1.0-dev.2` tag/commit and the signed manifest/Runner tarball with `scripts/release-verify.mjs` and a trust keyring from an independently trusted checkout, then verify `SHA256SUMS` and the remaining notices/keyring separately. When disabled, the generated scripts fail closed without consuming enrollment codes. When enabled, they use only source-pinned GitHub URLs and an embedded Ed25519 public key to verify `manifest.json`, its detached signature/descriptor, `SHA256SUMS`, and the fixed local tarball before npm installs it with scripts disabled. The downloaded keyring is never a trust root. See the complete [portable Runner verification and installation procedure](portable-runner-installation.md), including the one-command Worker trust limitation and high-assurance offline route. Automatic update and rollback remain outside this preview.
+Hosted bootstrap is disabled by default for local/development environments. The checked-in `production` environment enables it only with the canonical `RUNMESH_PUBLIC_ORIGIN` and the exact `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.0-dev.2` acknowledgement, after the immutable release has been independently verified. `/runner/releases/latest` and `/runner/releases/stable` report `distributable: false` whenever either gate is missing or invalid. The acknowledgement is an equality gate, not a configurable URL, package name, npm spec, checksum, or version source. Before enabling it for another deployment, verify the exact `v0.1.0-dev.2` tag/commit and signed manifest/Runner tarball with `scripts/release-verify.mjs` and a trust keyring from an independently trusted checkout, then verify `SHA256SUMS` and the remaining notices/keyring separately. When disabled, generated scripts fail closed without consuming enrollment codes. When enabled, they use only source-pinned GitHub URLs and an embedded Ed25519 public key to verify `manifest.json`, its detached signature/descriptor, `SHA256SUMS`, and the fixed local tarball before npm installs it with scripts disabled. The downloaded keyring is never a trust root. See the complete [portable Runner verification and installation procedure](portable-runner-installation.md), including the one-command Worker trust limitation and high-assurance offline route. Automatic update and rollback remain outside this preview.
 
 ## Local Runner profiles and service manifests
 
