@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { resolveTrustedWindowsTool, trustedWindowsRoot } from "../../apps/runner/src/windows-tools.js";
 
 type ToolResult = {
   readonly content?: { readonly type: string; readonly text: string }[];
@@ -25,6 +26,7 @@ const projectDirectory = resolve(fileURLToPath(new URL("../..", import.meta.url)
 const wranglerCli = resolve(projectDirectory, "node_modules", "wrangler", "bin", "wrangler.js");
 const tsxCli = resolve(projectDirectory, "node_modules", "tsx", "dist", "cli.mjs");
 const childSpawnOptions = process.platform === "win32" ? { windowsHide: true } : {};
+const trustedTaskkill = process.platform === "win32" ? resolveTrustedWindowsTool("taskkill", trustedWindowsRoot()) : undefined;
 const adminToken = "e2e-admin-token-0123456789abcdef";
 const adminPassword = "e2e-administrator-password";
 const workerEnv = {
@@ -477,7 +479,8 @@ async function stop(child: ChildProcess | undefined): Promise<void> {
     // the temp persistence directory locked, causing EBUSY in afterAll.
     try {
       const { spawnSync } = await import("node:child_process");
-      spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+      if (trustedTaskkill === undefined) throw new Error("trusted Windows taskkill path is unavailable");
+      spawnSync(trustedTaskkill, ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
     } catch { child.kill("SIGTERM"); }
   } else {
     try { if (child.pid !== undefined) process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); }

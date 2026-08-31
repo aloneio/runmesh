@@ -1,8 +1,10 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, posix, win32 } from "node:path";
 import type { HostPlatform } from "./platform-types.js";
+import { resolveTrustedWindowsTool, trustedWindowsEnvironment, trustedWindowsRoot } from "./windows-tools.js";
 
 export type ServicePlatform = "linux" | "darwin" | "win32";
 export type ServiceMode = "user" | "system";
@@ -188,7 +190,17 @@ export function serviceProfilePath(layout: ServiceLayout): string {
   const path = /^[A-Za-z]:[\\/]/u.test(layout.configRoot) || layout.configRoot.startsWith("\\\\") ? win32 : posix;
   return path.join(layout.configRoot, "profile.json");
 }
-export function isDefaultSystemProfile(layout: ServiceLayout, profilePath: string): boolean { return profilePath === serviceProfilePath(layout); }
+export function isDefaultSystemProfile(layout: ServiceLayout, profilePath: string): boolean {
+  const expected = serviceProfilePath(layout);
+  // Windows paths are case-insensitive and callers may provide either slash
+  // convention. Compare normalized absolute paths so an equivalent spelling
+  // cannot accidentally disable the dedicated-service profile guard.
+  if (/^[A-Za-z]:[\\/]/u.test(expected) || expected.startsWith("\\\\")) {
+    return win32.isAbsolute(profilePath) && win32.normalize(profilePath).replace(/[\\/]+$/u, "").toLowerCase()
+      === win32.normalize(expected).replace(/[\\/]+$/u, "").toLowerCase();
+  }
+  return posix.normalize(profilePath) === posix.normalize(expected);
+}
 export function renderService(options: ServiceAdapterOptions = {}): ServiceManifest {
   const platform = options.platform ?? currentServicePlatform();
   const mode = serviceMode(options);
@@ -248,9 +260,18 @@ export const hostServiceManifestFilesystem: ServiceManifestFilesystem = {
   read: async (path) => readFile(path, "utf8").catch((error: unknown) => isErrno(error, "ENOENT") ? undefined : Promise.reject(error)),
   write: async (path, content) => {
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-    const temporary = `${path}.${process.pid}.tmp`;
-    await writeFile(temporary, content, { encoding: "utf8", mode: 0o600 });
-    await rename(temporary, path);
+    // Use a unique, exclusive temporary file. A PID-derived name can collide
+    // with a concurrent install (or be pre-created as a symlink), causing
+    // cross-write corruption or redirecting privileged manifest content.
+    const temporary = `${path}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
+      await rename(temporary, path);
+    } finally {
+      // A failed write/rename must not leave a privileged manifest snapshot or
+      // a reusable temp pathname behind.
+      await rm(temporary, { force: true }).catch(() => undefined);
+    }
   },
   remove: async (path) => { await rm(path); },
 };
@@ -279,7 +300,22 @@ export async function assertManagedServiceManifest(manifest: ServiceManifest, fi
 /** Host-command executor used only outside tests; tests provide a recording executor. */
 export const hostServiceCommandExecutor: ServiceCommandExecutor = {
   execute: (file, args) => new Promise((resolve, reject) => {
-    const child = spawn(file, [...args], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    // Service installation and lifecycle commands can run as root/SYSTEM.
+    // Never resolve their bare command names through an operator-controlled
+    // PATH (or inherit loader/runtime injection variables such as
+    // LD_PRELOAD/PYTHONPATH).  The native service tools used below live in
+    // these platform directories; a missing tool fails closed instead of
+    // executing an arbitrary same-name binary from the caller's environment.
+    const executable = process.platform === "win32" ? resolveTrustedWindowsTool(file) : file;
+    const child = spawn(executable, [...args], {
+      // Keep the cwd and environment in the inbox system directory as a
+      // defense in depth. The executable itself has already been resolved to
+      // an allow-listed absolute System32 path on Windows.
+      cwd: trustedServiceWorkingDirectory(),
+      env: trustedServiceEnvironment(),
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
     let stdout = ""; let stderr = "";
     child.stdout?.on("data", (value: Buffer) => { stdout = `${stdout}${value.toString("utf8")}`.slice(0, 4_096); });
     child.stderr?.on("data", (value: Buffer) => { stderr = `${stderr}${value.toString("utf8")}`.slice(0, 4_096); });
@@ -287,6 +323,18 @@ export const hostServiceCommandExecutor: ServiceCommandExecutor = {
     child.once("close", (code) => resolve({ exitCode: code ?? 1, stdout, stderr }));
   }),
 };
+
+function trustedServiceEnvironment(): NodeJS.ProcessEnv {
+  if (process.platform === "win32") {
+    const systemRoot = trustedWindowsRoot();
+    return trustedWindowsEnvironment(systemRoot);
+  }
+  return { PATH: process.platform === "darwin" ? "/usr/bin:/bin:/usr/sbin:/sbin" : "/usr/bin:/bin:/usr/sbin:/sbin", LANG: "C", LC_ALL: "C" };
+}
+function trustedServiceWorkingDirectory(): string {
+  if (process.platform !== "win32") return "/";
+  return `${trustedWindowsRoot()}\\System32`;
+}
 
 /**
  * Idempotent, platform-native setup for Runmesh-owned service state only.
@@ -367,7 +415,10 @@ function parseDarwinId(value: string | undefined): string | undefined { const ma
 function windowsProvisionScript(layout: ServiceLayout, profilePath: string): string {
   const quote = (value: string): string => `'${value.replaceAll("'", "''")}'`;
   const acl = (path: string, grants: readonly string[]): string =>
-    `& icacls ${quote(path)} /inheritance:r /grant:r ${grants.map(quote).join(" ")} | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'icacls failed' }; `;
+    // Reset first so a pre-existing install cannot retain an explicit
+    // Users/Everyone ACE that /grant:r alone would leave in place. Then turn
+    // inheritance off and grant only the service identities we require.
+    `& icacls ${quote(path)} /reset | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'icacls reset failed' }; & icacls ${quote(path)} /inheritance:r /grant:r ${grants.map(quote).join(" ")} | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'icacls failed' }; `;
   const roots = [layout.installRoot, layout.configRoot, layout.stateRoot, layout.logRoot].map(quote).join(", ");
   const readGrants = ["BUILTIN\\Administrators:(OI)(CI)F", "NT AUTHORITY\\SYSTEM:(OI)(CI)F", "NT AUTHORITY\\LOCAL SERVICE:(OI)(CI)RX"];
   const modifyGrants = ["BUILTIN\\Administrators:(OI)(CI)F", "NT AUTHORITY\\SYSTEM:(OI)(CI)F", "NT AUTHORITY\\LOCAL SERVICE:(OI)(CI)M"];
@@ -377,9 +428,8 @@ function windowsProvisionScript(layout: ServiceLayout, profilePath: string): str
     + acl(layout.configRoot, readGrants)
     + acl(layout.stateRoot, modifyGrants)
     + acl(layout.logRoot, modifyGrants)
-    + `if (Test-Path -LiteralPath ${quote(profilePath)}) { `
-    + acl(profilePath, profileGrants)
-    + `}`;
+    + `if (-not (Test-Path -LiteralPath ${quote(profilePath)} -PathType Leaf)) { throw 'runner profile is not present' }; `
+    + acl(profilePath, profileGrants);
 }
 
 /** Explicit, injectable machine service adapters. No adapter falls back to a user service. */
@@ -430,7 +480,13 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
     install: async (manifest) => { await execute("schtasks", ["/Create", "/TN", WINDOWS_TASK_NAME, "/XML", manifest.path, "/F"]); await execute("schtasks", ["/Run", "/TN", WINDOWS_TASK_NAME]); await execute("schtasks", ["/Query", "/TN", WINDOWS_TASK_NAME]); },
     stop: async () => execute("schtasks", ["/End", "/TN", WINDOWS_TASK_NAME]),
     restart: async () => { await execute("schtasks", ["/End", "/TN", WINDOWS_TASK_NAME]); await execute("schtasks", ["/Run", "/TN", WINDOWS_TASK_NAME]); },
-    uninstall: async () => execute("schtasks", ["/Delete", "/TN", WINDOWS_TASK_NAME, "/F"]),
+    uninstall: async () => {
+      // `/Delete` does not terminate an already-running task. Best-effort
+      // termination prevents an old Runner from retaining a credential after
+      // uninstall; a not-running task is harmless and should not block delete.
+      await executor.execute("schtasks", ["/End", "/TN", WINDOWS_TASK_NAME]);
+      await execute("schtasks", ["/Delete", "/TN", WINDOWS_TASK_NAME, "/F"]);
+    },
       status: async () => {
         const installed = await executor.execute("schtasks", ["/Query", "/TN", WINDOWS_TASK_NAME]);
         // `schtasks /FO LIST /V` localizes both field names and state values.

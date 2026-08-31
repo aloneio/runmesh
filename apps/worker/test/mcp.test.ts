@@ -453,6 +453,10 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     const enrollment = await created.text();
     expect(enrollment).toContain("Linux"); expect(enrollment).toContain("macOS"); expect(enrollment).toContain("Windows");
     expect(enrollment).toContain("Manual portable-artifact enrollment"); expect(enrollment).toContain("RUNNER=/opt/runmesh/current/bin/coding-runner"); expect(enrollment).toContain("C:\\Program Files\\Runmesh\\current\\coding-runner.cmd"); expect(enrollment).toContain("--code-stdin"); expect(enrollment).toContain("One-time enrollment code"); expect(enrollment).not.toMatch(/--code [A-Za-z0-9_-]{20,}/u); expect(enrollment).toContain("--executable-path"); expect(enrollment).not.toContain("curl -fsSL"); expect(enrollment).not.toContain("Invoke-RestMethod");
+    // The generated server URL is shell/PowerShell quoted before it is placed
+    // in the copyable command, preventing Host-header metacharacters from
+    // becoming a second command when an operator pastes the snippet.
+    expect(enrollment).toContain("--server &#039;https://worker.test/runner/enroll&#039; --code-stdin");
     expect(enrollment).toContain("data-copy"); expect(enrollment).toContain("expires in 30 minutes");
     expect(enrollment).not.toContain("--re-enroll"); expect(enrollment).not.toContain("-ReEnroll");
     expect(enrollment).not.toContain("--runner-id"); expect(enrollment).not.toContain("ADMIN_TOKEN"); expect(enrollment).not.toMatch(/CODING_RUNNER_TOKEN|MCP_SECRET/i);

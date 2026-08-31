@@ -11,6 +11,20 @@ export const SETUP_CSRF_TTL_MS = 10 * 60 * 1_000;
 export const MCP_SECRET_BYTES = 32;
 
 const encoder = new TextEncoder();
+// HTTP credentials must not contain C0/C1 control bytes or DEL.  Printable
+// punctuation remains valid for backwards compatibility with manually chosen
+// deployment secrets, while values that a header implementation may interpret
+// as framing/whitespace are rejected consistently at the boundary.
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
+
+export function containsControlCharacter(value: string): boolean {
+  return CONTROL_CHARACTER_PATTERN.test(value);
+}
+
+/** A configured secret must be a non-empty string before it reaches WebCrypto. */
+export function isConfiguredSecret(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
 
 export function isSafeIdentifier(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
@@ -27,7 +41,7 @@ export function bearerToken(request: Request): string | undefined {
   const match = /^Bearer[ \t]+([^ \t]+)[ \t]*$/i.exec(value);
   if (match === null || match[1] === undefined) return undefined;
   const token = match[1];
-  return encoder.encode(token).byteLength <= MAX_BEARER_TOKEN_BYTES ? token : undefined;
+  return !containsControlCharacter(token) && encoder.encode(token).byteLength <= MAX_BEARER_TOKEN_BYTES ? token : undefined;
 }
 
 export interface InternalSignatureOptions {
@@ -48,6 +62,7 @@ export async function internalHeaders(
   body: string,
   options: InternalSignatureOptions = {},
 ): Promise<HeadersInit> {
+  if (!isConfiguredSecret(secret)) throw new Error("internal control secret must be configured");
   const timestamp = options.timestamp ?? Date.now();
   const nonce = options.nonce ?? randomHex(32);
   const bodyHash = await sha256Hex(body);
@@ -76,7 +91,7 @@ export async function verifyInternalRequest(
   consumeNonce: InternalNonceConsumer,
   nowMs = Date.now(),
 ): Promise<boolean> {
-  if (secret === undefined || secret.length === 0) return false;
+  if (!isConfiguredSecret(secret)) return false;
   const version = request.headers.get(INTERNAL_SIGNATURE_VERSION_HEADER);
   const timestampText = request.headers.get(INTERNAL_TIMESTAMP_HEADER);
   const nonce = request.headers.get(INTERNAL_NONCE_HEADER);
@@ -110,7 +125,7 @@ export async function verifySetupToken(
   setupToken: string | undefined,
   setupTokenHash: string | undefined,
 ): Promise<boolean> {
-  if (typeof supplied !== "string" || supplied.length === 0 || supplied.length > 1_024) return false;
+  if (typeof supplied !== "string" || supplied.length === 0 || supplied.length > 1_024 || containsControlCharacter(supplied)) return false;
   if (setupTokenHash !== undefined) {
     if (!/^[0-9a-fA-F]{64}$/.test(setupTokenHash)) return false;
     return constantTimeEqual(await sha256Hex(supplied), setupTokenHash.toLowerCase());

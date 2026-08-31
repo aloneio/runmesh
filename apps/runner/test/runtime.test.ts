@@ -18,7 +18,22 @@ async function fixture(): Promise<{ root: string; outside: string; state: string
   const state = join(base, "state");
   await mkdir(root); await mkdir(outside); await mkdir(state);
   const workspace = { workspaceId: "workspace-1", rootPath: await realpath(root), readonly: false, shell: false };
-  return { root, outside, state, workspace, cleanup: () => rm(base, { recursive: true, force: true }) };
+  const cleanup = async (): Promise<void> => {
+    // Windows can keep a just-closed child cwd handle for a short interval.
+    // Retry only the transient sharing violation so test cleanup never masks
+    // the assertion that actually failed.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await rm(base, { recursive: true, force: true });
+        return;
+      } catch (error) {
+        const code = typeof error === "object" && error !== null && "code" in error ? (error as { readonly code?: unknown }).code : undefined;
+        if (process.platform !== "win32" || !["EBUSY", "EPERM"].includes(String(code)) || attempt >= 20) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+  };
+  return { root, outside, state, workspace, cleanup };
 }
 function policy(workspace: WorkspaceConfig): PathPolicy { return new PathPolicy([workspace]); }
 async function waitFor<T>(get: () => T, predicate: (value: T) => boolean, timeout = 5_000): Promise<T> {
@@ -135,6 +150,15 @@ describe("workspace path policy", () => {
       const second = await service.list({ workspace_id: test.workspace.workspaceId, path: ".", cursor: first.next_cursor, limit: 256 });
       expect(second).toMatchObject({ next_cursor: null, truncated: false });
       expect(second.entries).toHaveLength(44);
+    } finally { await test.cleanup(); }
+  });
+
+  it("rejects directory cursors outside the bounded scan window", async () => {
+    const test = await fixture();
+    try {
+      const service = new FilesystemService(policy(test.workspace));
+      await expect(service.list({ workspace_id: test.workspace.workspaceId, path: ".", cursor: 100_001 })).rejects.toThrow(/invalid pagination value/);
+      await expect(service.list({ workspace_id: test.workspace.workspaceId, path: ".", cursor: "100001" })).rejects.toThrow(/invalid pagination value/);
     } finally { await test.cleanup(); }
   });
 
@@ -364,7 +388,9 @@ describe("persistent local jobs", () => {
       await expect(manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.exit(0)"] })).rejects.toThrow("synthetic metadata write failure");
       expect(internals.jobs.size).toBe(0);
       internals.persist = originalPersist;
-      await expect(manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.exit(0)"] })).resolves.toMatchObject({ status: "succeeded" });
+      const second = await manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.exit(0)"] });
+      const settled = await waitFor(() => manager.get(second.job_id), (value) => !["queued", "running", "cancelling"].includes(value.status));
+      expect(settled).toMatchObject({ status: "succeeded" });
     } finally { await test.cleanup(); }
   });
 
@@ -1185,6 +1211,10 @@ describe("persistent local jobs", () => {
       const second = await manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.exit(1)"] });
       await waitFor(() => manager.get(first.job_id), (job) => job.status === "succeeded");
       await waitFor(() => manager.get(second.job_id), (job) => job.status === "failed");
+      // The in-memory terminal transition is published before its atomic
+      // metadata write. Flush it before deliberately editing meta.json so a
+      // late completion write cannot overwrite this recovery fixture.
+      await manager.flushPersistence();
       expect(await manager.listReconciled({ status: "succeeded", limit: 1 })).toMatchObject([{ job_id: first.job_id, status: "succeeded" }]);
       expect(manager.list({ limit: 1 })).toHaveLength(1);
       const metaPath = join(test.state, "jobs", first.job_id, "meta.json");

@@ -2,7 +2,9 @@
 
 ## Current baseline
 
-This branch uses Runmesh-specific layouts for new installations. Existing `remote-coding-runtime` paths are retained only for migration detection; they are not new-install defaults. Existing profiles without `execution_mode` are treated as legacy privileged-host profiles; they are not silently rewritten. Re-enrollment changes credentials and connection metadata only. Hosted bootstrap is unavailable in `v0.1.0-dev.2`: download and verify a portable artifact, then use the Panel-generated one-time code with `coding-runner enroll` followed by `coding-runner install`.
+This branch uses Runmesh-specific layouts for new installations. The Runner does not automatically discover, import, or move legacy `remote-coding-runtime` / `RemoteCodingRunner` profiles, state directories, or service manifests; those names are manual migration references only, not automatic compatibility paths. Before installing the Runmesh service, inspect, back up, and stop or disable any legacy service. Either perform a fresh enrollment or explicitly point the CLI at a reviewed profile with `--profile`, `RUNMESH_RUNNER_PROFILE`, or `CODING_RUNNER_PROFILE`.
+
+Profiles that omit `execution_mode` or `management_mode` are reported as `migration_required`; they are not silently treated as privileged-host or legacy-manual profiles. Choose `dedicated_user` or explicitly acknowledge `privileged_host` with `--confirm-privileged-host` before system installation, and run `coding-runner workspace migrate --management-mode central` or `coding-runner workspace migrate --management-mode legacy_manual` to choose the workspace authority model. Re-enrollment changes connection credentials and metadata only and does not migrate old workspace roots automatically. Hosted bootstrap is unavailable in `v0.1.0-dev.2`: download and verify a portable artifact, then use the Panel-generated one-time code with `coding-runner enroll` followed by `coding-runner install`.
 
 ## Migration behavior
 
@@ -23,7 +25,7 @@ Application rollback is safe only when the previous Worker code remains compatib
 
 ## Compatibility
 
-The old `remote-coding-runtime` package and system directory names remain compatibility paths only for migration detection in this release. New package names are `@aloneio/runmesh-protocol` and `@aloneio/runmesh-runner`. The compact public MCP catalog includes `inspect` in addition to the previous eight-tool surface; legacy narrow RPC names remain internal.
+The old `remote-coding-runtime` package and system-directory names are not auto-detected or migrated in this release. Treat them as manual migration inputs only: back up their profile and state, stop or disable the old service, and explicitly select a reviewed profile or perform a fresh enrollment. New package names are `@aloneio/runmesh-protocol` and `@aloneio/runmesh-runner`. The compact public MCP catalog includes `inspect` in addition to the previous eight-tool surface; legacy narrow RPC names remain internal.
 
 ## Security changes
 
