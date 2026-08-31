@@ -17,7 +17,6 @@ concurrency:
 
 jobs:
   release:
-    if: github.ref == 'refs/heads/dev'
     name: signed development preview from dev
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -28,12 +27,12 @@ jobs:
       RELEASE_SIGNING_KEY_ID: ${{ secrets.RELEASE_SIGNING_KEY_ID }}
     steps:
       - name: Check out triggering commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -64,6 +63,8 @@ jobs:
           test "$(node -p 'require("./packages/protocol/package.json").version')" = "$RELEASE_VERSION"
           node scripts/release-signature.mjs validate-key release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
       - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npm audit --omit=dev --audit-level=high
       - run: npm run check:versions
       - run: npm run check:format
       - run: git diff --check
@@ -110,6 +111,11 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$GH_TOKEN"
+          # Re-check the protected branch tip immediately before publishing;
+          # long-running test/build gates may otherwise release an older SHA
+          # after new code lands on dev.
+          git fetch --no-tags origin dev
+          test "$(git rev-parse origin/dev)" = "$GITHUB_SHA"
           tag="v${RELEASE_VERSION}"
           # A local tag check alone is racy and can miss tags that were created
           # after checkout. Probe the remote API explicitly and treat only a

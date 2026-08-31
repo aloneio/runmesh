@@ -8,9 +8,11 @@ import {
   ADMIN_SESSION_TTL_MS,
   SETUP_CSRF_TTL_MS,
   bearerToken,
+  containsControlCharacter,
   constantTimeEqual,
   generateRunnerToken,
   internalHeaders,
+  isConfiguredSecret,
   isSafeIdentifier,
   passwordVerifier,
   randomBase64Url,
@@ -25,7 +27,7 @@ import { readCappedBytes, readCappedFormData, readCappedText as readBodyText } f
 export { RegistryDO, RunnerDO };
 
 const MAX_ADMIN_BODY_BYTES = 16_384;
-const MAX_INTERNAL_RPC_BODY_BYTES = 1_048_576;
+const MAX_INTERNAL_RPC_BODY_BYTES = 2 * 1024 * 1024;
 // Match the SDK's documented maximum while enforcing it even when a client
 // omits Content-Length (chunked request bodies must not reach request.json()
 // unbounded).
@@ -57,11 +59,26 @@ export default {
 
 async function handleRequest(request: Request, env: WorkerEnv, _ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
-  if (url.pathname === "/health") return Response.json({ ok: true, service: "runmesh-agent-control-plane" });
+  if (url.pathname === "/health") {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      await discardBody(request);
+      return methodNotAllowed("GET, HEAD");
+    }
+    return Response.json({ ok: true, service: "runmesh-agent-control-plane" });
+  }
   if (url.pathname === "/assets/logo.png" || url.pathname === "/assets/favicon.png") return asset(request, env);
   if (url.pathname === "/runner/install.sh") return runnerInstallScript(request, url);
   if (url.pathname === "/runner/install.ps1") return runnerInstallPowerShell(request, url);
   if (url.pathname === "/runner/releases/latest" || url.pathname === "/runner/releases/stable") return runnerRelease(request, env);
+  // Keep health/static/public release probes available during provisioning, but
+  // fail closed with an explicit 503 before any WebCrypto call when the
+  // internal Worker↔Durable-Object secret is missing or empty. Without this
+  // gate, WebCrypto rejects an empty HMAC key and browser/MCP routes surface a
+  // generic 500 (and some background paths can become unhandled rejections).
+  if (requiresInternalControl(url.pathname) && !isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) {
+    await discardBody(request);
+    return new Response("control plane is not configured", { status: 503, headers: { "cache-control": "no-store" } });
+  }
   if (isMcpPath(url.pathname)) return handleMcpSecret(request, env, url);
   if (url.pathname === "/mcp") return notFound();
   if (url.pathname.startsWith("/internal/runners/")) return forwardRunnerRpc(request, env, url);
@@ -84,7 +101,11 @@ async function handleRequest(request: Request, env: WorkerEnv, _ctx: ExecutionCo
 async function asset(request: Request, env: WorkerEnv): Promise<Response> {
   if (request.method !== "GET" && request.method !== "HEAD") { await discardBody(request); return methodNotAllowed("GET, HEAD"); }
   if (env.ASSETS === undefined) return notFound();
-  return env.ASSETS.fetch(request);
+  // Keep the public `/assets/*` URL stable while resolving files from the
+  // configured asset directory (whose binding root is `/`).
+  const assetUrl = new URL(request.url);
+  assetUrl.pathname = assetUrl.pathname.replace(/^\/assets(?=\/|$)/, "") || "/";
+  return env.ASSETS.fetch(new Request(assetUrl, request));
 }
 
 export interface RunnerReleaseEnvironment {
@@ -142,14 +163,57 @@ async function handleRunnerEnrollment(request: Request, env: WorkerEnv): Promise
   const input = await readEnrollmentBody(request);
   const code = typeof input?.enrollment_code === "string" && /^[A-Za-z0-9_-]{43}$/.test(input.enrollment_code) ? input.enrollment_code : undefined;
   const publicInfo = runnerPublicInfo(input?.runner_public_info);
-  if (code === undefined || publicInfo === undefined || env.RUNNER_TOKEN_PEPPER === undefined) return enrollmentError();
+  if (code === undefined || publicInfo === undefined || !isConfiguredSecret(env.RUNNER_TOKEN_PEPPER) || !isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) return enrollmentError();
+  const verifier = await sha256Hex(code);
+  // Credential replacement through enrollment must fence the RunnerDO before
+  // Registry advances the credential/epoch.  Resolve the pending code first;
+  // the lookup is internal/HMAC-authenticated and returns only the target ID.
+  // Do not fall back to an unfenced redemption if this step is unavailable.
+  let targetResponse: Response;
+  try { targetResponse = await registryPost(env, "/enrollments/lookup", { verifier }); } catch { return enrollmentUnavailable(); }
+  if (!targetResponse.ok) return targetResponse.status >= 500 ? enrollmentUnavailable() : enrollmentError();
+  let target: Record<string, unknown> | undefined;
+  try { target = record(await json(targetResponse)); } catch { return enrollmentUnavailable(); }
+  const runnerId = typeof target?.runner_id === "string" && isSafeIdentifier(target.runner_id) ? target.runner_id : undefined;
+  if (runnerId === undefined) return enrollmentError();
+
+  const mutationId = `credential-enrolled-${crypto.randomUUID()}`;
+  let fenced: Response;
+  try { fenced = await fenceRunnerTransport(env, runnerId, mutationId); } catch { return enrollmentUnavailable(); }
+  if (!fenced.ok) return fenced.status === 409 ? new Response("Runner credential mutation is already in progress", { status: 409, headers: credentialHeaders("text/plain; charset=utf-8") }) : enrollmentUnavailable();
+
   const token = generateRunnerToken();
-  const response = await registryPost(env, "/enrollments/redeem", {
-    verifier: await sha256Hex(code), token_verifier: await runnerTokenVerifier(token, env.RUNNER_TOKEN_PEPPER), runner_public_info: publicInfo,
-  });
-  const body = response.ok ? record(await json(response)) : undefined;
-  const runnerId = body?.runner_id;
-  if (typeof runnerId !== "string") return enrollmentError();
+  let response: Response;
+  try {
+    response = await registryPost(env, "/enrollments/redeem", {
+      verifier, token_verifier: await runnerTokenVerifier(token, env.RUNNER_TOKEN_PEPPER), runner_public_info: publicInfo, mutation_id: mutationId,
+    });
+  } catch {
+    // A lost response after the Registry transaction may still mean the
+    // credential was replaced. Recover only from the durable mutation ledger;
+    // otherwise leave the RunnerDO fenced and report an explicit uncertainty.
+    const state = await runnerMutationState(env, runnerId, mutationId).catch(() => undefined);
+    if (state?.mutation_committed === true) { try { await revokeRunnerTransport(env, runnerId, mutationId); } catch { /* fail closed */ } }
+    return enrollmentUnavailable();
+  }
+  if (!response.ok) {
+    const state = await runnerMutationState(env, runnerId, mutationId).catch(() => undefined);
+    if (state?.mutation_committed === true) {
+      try { await revokeRunnerTransport(env, runnerId, mutationId); } catch { /* Registry credential is authoritative */ }
+      return enrollmentUnavailable();
+    }
+    try {
+      const cancelled = await cancelRunnerPolicyMutation(env, runnerId, mutationId);
+      if (!cancelled.ok) return enrollmentUnavailable();
+    } catch { return enrollmentUnavailable(); }
+    return response.status >= 500 ? enrollmentUnavailable() : enrollmentError();
+  }
+  let body: Record<string, unknown> | undefined;
+  try { body = record(await json(response)); } catch { return enrollmentUnavailable(); }
+  if (body?.runner_id !== runnerId) return enrollmentUnavailable();
+  const committed = await runnerMutationState(env, runnerId, mutationId).catch(() => undefined);
+  if (committed?.mutation_committed !== true) return enrollmentUnavailable();
+  try { await revokeRunnerTransport(env, runnerId, mutationId); } catch { /* new credential remains authoritative */ }
   const url = new URL(request.url); url.pathname = "/runner/connect"; url.search = "";
   return Response.json({ runner_id: runnerId, server_url: url.toString(), token }, { headers: credentialHeaders("application/json; charset=utf-8") });
 }
@@ -173,6 +237,7 @@ async function readEnrollmentBody(request: Request): Promise<Record<string, unkn
   try { return record(body === undefined ? undefined : JSON.parse(body) as unknown); } catch { return undefined; }
 }
 function enrollmentError(): Response { return new Response("invalid enrollment", { status: 401, headers: credentialHeaders("text/plain; charset=utf-8") }); }
+function enrollmentUnavailable(): Response { return new Response("enrollment service unavailable; Runner remains safely fenced", { status: 503, headers: credentialHeaders("text/plain; charset=utf-8") }); }
 
 /** The URL segment is the only MCP credential. Authorization headers are ignored. */
 async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
@@ -218,9 +283,34 @@ function isMcpPath(pathname: string): boolean {
   return parts.length === 2 && parts[1] === "mcp";
 }
 
+function requiresInternalControl(pathname: string): boolean {
+  return pathname === "/"
+    || pathname === "/setup"
+    || pathname === "/login"
+    || pathname === "/runner/enroll"
+    || pathname === "/runner/connect"
+    || pathname === "/admin"
+    || pathname.startsWith("/admin/")
+    || isMcpPath(pathname);
+}
+
 async function handleLanding(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
-  const initialized = await registryGet(env, "/auth/status").then((response) => response.ok ? response.json() as Promise<{ initialized?: unknown }> : undefined);
-  if (initialized?.initialized !== true) {
+  // `/auth/status` is the gate that decides whether the setup or login page
+  // is exposed.  A non-2xx response or malformed body cannot be interpreted
+  // as "not initialized": doing so would turn a control-plane outage into a
+  // misleading setup page.  Fail closed and make the operator retry once the
+  // Registry is healthy again.
+  const statusResponse = await registryGet(env, "/auth/status");
+  if (!statusResponse.ok) {
+    await discardBody(request);
+    return registryStatusUnavailable();
+  }
+  const initialized = record(await json(statusResponse));
+  if (initialized === undefined || typeof initialized.initialized !== "boolean") {
+    await discardBody(request);
+    return registryStatusUnavailable();
+  }
+  if (initialized.initialized !== true) {
     if (url.pathname !== "/" && url.pathname !== "/setup") { if (request.method !== "GET") await discardBody(request); return notFound(); }
     if (request.method === "GET") return setupPage();
     if (request.method === "POST") return submitSetup(request, env);
@@ -446,7 +536,14 @@ async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, baseUrl
       } catch { return adminError(503, "Runner deletion state is uncertain; Runner remains safely fenced."); }
       return adminError(response.status === 404 ? 404 : 400, "Runner delete failed.");
     }
-    await deleteRunnerTransport(env, runnerId, mutationId);
+    try {
+      await deleteRunnerTransport(env, runnerId, mutationId);
+    } catch {
+      // Registry deletion is authoritative, but a failed RunnerDO cleanup is
+      // an uncertain transport state.  Never report a successful redirect
+      // when the DO rejected or could not process the delete fence.
+      return adminError(503, "Runner deletion outcome is uncertain; Runner remains safely fenced.");
+    }
     return redirect("/admin");
   }
   if (action === "revoke") {
@@ -471,41 +568,63 @@ async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, baseUrl
   if (action === "rotate") {
     const mutationId = `credential-rotated-${crypto.randomUUID()}`;
     const runnerResponse = await runnerRegistryRequest(env, runnerId, "", "GET", "");
-    const runner = runnerResponse.ok ? record(await json(runnerResponse)) : undefined;
-    const canFence = runnerResponse.ok && Number(runner?.connection_epoch ?? 0) > 0 && Number(runner?.credential_version ?? 0) > 0 && typeof runner?.session_id === "string" && runner.session_id.length > 0 && runner?.state === "online";
-    if (canFence) {
-      const fenced = await fenceRunnerTransport(env, runnerId, mutationId);
-      if (!fenced.ok) return adminError(503, "Runner credential rotation could not fence the Runner.");
-    }
+    // Registry heartbeat state can lag a still-live RunnerDO socket (for
+    // example after a transient heartbeat failure).  Credential rotation must
+    // acquire the DO fence for every existing Runner, not only rows currently
+    // labelled `online`; otherwise the old socket can keep forwarding until a
+    // later heartbeat notices the new credential generation.
+    // A failed lookup is not proof that the Runner is absent: it may be a
+    // transient Registry/DO failure.  Never continue to `/rotate` without a
+    // successful lookup and fence, otherwise a credential change can commit
+    // while an old socket remains authorized until its next heartbeat.
+    if (!runnerResponse.ok) return adminError(runnerResponse.status === 404 ? 404 : 503, "Runner credential rotation could not verify the Runner.");
+    const fenced = await fenceRunnerTransport(env, runnerId, mutationId);
+    if (!fenced.ok) return adminError(503, "Runner credential rotation could not fence the Runner.");
     let response: Response;
     try { response = await runnerRegistryRequest(env, runnerId, "/rotate", "POST", JSON.stringify({ mutation_id: mutationId })); } catch { return adminError(503, "Runner credential rotation outcome is uncertain; Runner remains safely fenced."); }
     if (!response.ok) {
       if (![400, 404, 409].includes(response.status)) return adminError(503, "Runner credential rotation outcome is uncertain; Runner remains safely fenced.");
-      if (canFence) {
-        try {
-          const cancelled = await cancelRunnerPolicyMutation(env, runnerId, mutationId);
-          if (!cancelled.ok) return adminError(503, "Runner credential rotation failed; Runner remains safely fenced.");
-        } catch { return adminError(503, "Runner credential rotation state is uncertain; Runner remains safely fenced."); }
-      }
+      try {
+        const cancelled = await cancelRunnerPolicyMutation(env, runnerId, mutationId);
+        if (!cancelled.ok) return adminError(503, "Runner credential rotation failed; Runner remains safely fenced.");
+      } catch { return adminError(503, "Runner credential rotation state is uncertain; Runner remains safely fenced."); }
       return adminError(response.status === 404 ? 404 : 400, "Runner credential rotation failed.");
     }
-    if (canFence) { try { await revokeRunnerTransport(env, runnerId, mutationId); } catch { /* credential generation invalidates old transport */ } }
+    try { await revokeRunnerTransport(env, runnerId, mutationId); } catch { /* credential generation invalidates old transport */ }
     return runnerEnrollmentPage(baseUrl, runnerId, await createEnrollmentCode(env, runnerId), String(form.get("csrf_token") ?? ""), true);
   }
   return runnerEnrollmentPage(baseUrl, runnerId, await createEnrollmentCode(env, runnerId), String(form.get("csrf_token") ?? ""), true);
 }
 async function consumeInternalNonce(env: WorkerEnv, nonce: string, expiresAtMs: number): Promise<boolean> {
   const body = JSON.stringify({ nonce, expires_at_ms: expiresAtMs });
-  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/auth/internal-nonces", body);
-  const response = await env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(
-    new Request("https://registry.internal/auth/internal-nonces", { method: "POST", headers, body }),
-  );
-  return response.status === 204;
+  const headers = await signedInternalHeaders(env, "POST", "/auth/internal-nonces", body);
+  if (headers === undefined) return false;
+  try {
+    const response = await env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(
+      new Request("https://registry.internal/auth/internal-nonces", { method: "POST", headers, body }),
+    );
+    return response.status === 204;
+  } catch { return false; }
+}
+
+async function signedInternalHeaders(env: WorkerEnv, method: string, path: string, body: string): Promise<HeadersInit | undefined> {
+  if (!isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) return undefined;
+  try { return await internalHeaders(env.INTERNAL_CONTROL_SECRET, method, path, body); } catch { return undefined; }
+}
+function controlPlaneUnavailable(): Response {
+  return new Response("control plane is not configured", { status: 503, headers: { "cache-control": "no-store" } });
+}
+function registryStatusUnavailable(): Response {
+  return new Response("control plane status unavailable", { status: 503, headers: { "cache-control": "no-store" } });
 }
 
 async function registryRequest(env: WorkerEnv, path: string, method: string, body: string): Promise<Response> {
-  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", method, path, body);
-  return env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method, body, headers }));
+  const headers = await signedInternalHeaders(env, method, path, body);
+  if (headers === undefined) return controlPlaneUnavailable();
+  try {
+    const init: RequestInit = { method, headers, ...(body.length === 0 || method === "GET" || method === "HEAD" ? {} : { body }) };
+    return await env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, init));
+  } catch { return new Response("registry unavailable", { status: 503 }); }
 }
 
 async function handleBrowserWorkspaceAction(env: WorkerEnv, form: FormData, runnerId: string, action: "workspace-create" | "workspace-update" | "workspace-delete"): Promise<Response> {
@@ -954,8 +1073,9 @@ async function runnerEnvironment(env: WorkerEnv, runnerId: string): Promise<Reco
 }
 async function runnerRpc(env: WorkerEnv, runnerId: string, method: string, params: Record<string, unknown>, policyRevision?: number, policyChecksum?: string): Promise<Response> {
   const body = JSON.stringify({ method, params, ...(policyRevision === undefined || policyChecksum === undefined ? {} : { policy_revision: policyRevision, expected_policy_revision: policyRevision, expected_policy_checksum: policyChecksum }) });
-  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/rpc", body);
-  return env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/rpc", { method: "POST", headers, body }));
+  const headers = await signedInternalHeaders(env, "POST", "/rpc", body);
+  if (headers === undefined) return controlPlaneUnavailable();
+  try { return await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/rpc", { method: "POST", headers, body })); } catch { return new Response("runner unavailable", { status: 503 }); }
 }
 async function clientDetailPage(_env: WorkerEnv, client: Record<string, unknown>, runners: readonly RunnerRecord[], overrides: readonly Record<string, unknown>[], csrf: string): Promise<string> {
   const clientId = typeof client.client_id === "string" ? client.client_id : "unknown";
@@ -2765,6 +2885,13 @@ function adminScript(): string { return `<script>var ZH_UI_TEXT=${JSON.stringify
 function runnerEnrollmentPage(baseUrl: string, runnerId: string, code: string | undefined, csrf: string, _reEnroll = false): Response {
   if (code === undefined) return adminError(503, "Enrollment code could not be generated.");
   const server = new URL("/runner/enroll", baseUrl).toString();
+  // `baseUrl` is derived from the incoming request URL.  Although this page is
+  // admin-gated, a Host header can still contain shell metacharacters on some
+  // edge/local runtimes.  Quote the generated server argument for both command
+  // languages so a copied enrollment snippet can never execute attacker-
+  // controlled text as a second command.
+  const shellServer = shellQuote(server);
+  const powershellServer = powershellQuote(server);
   // Keep the one-time code out of generated shell argv and copy buffers. The
   // operator enters it at a protected prompt and the CLI reads it from stdin.
   const posixCommand = `set -euo pipefail
@@ -2773,7 +2900,7 @@ test -x "$RUNNER"
 printf '%s' 'One-time enrollment code: ' >&2
 read -r -s RUNMESH_ENROLLMENT_CODE
 printf '\\n' >&2
-printf '%s\\n' "$RUNMESH_ENROLLMENT_CODE" | sudo "$RUNNER" enroll --server ${server} --code-stdin
+printf '%s\\n' "$RUNMESH_ENROLLMENT_CODE" | sudo "$RUNNER" enroll --server ${shellServer} --code-stdin
 unset RUNMESH_ENROLLMENT_CODE
 sudo "$RUNNER" install --executable-path "$RUNNER"
 sudo "$RUNNER" doctor --json`;
@@ -2781,12 +2908,20 @@ sudo "$RUNNER" doctor --json`;
 $ErrorActionPreference = 'Stop'
 $RunnerPath = 'C:\\Program Files\\Runmesh\\current\\coding-runner.cmd' # replace with the verified absolute shim path if different
 if (-not (Test-Path -LiteralPath $RunnerPath -PathType Leaf)) { throw 'Set RunnerPath to the verified coding-runner.cmd path.' }
-$EnrollmentCode = Read-Host 'One-time enrollment code'
+$SecureEnrollmentCode = Read-Host 'One-time enrollment code' -AsSecureString
+$CodePointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureEnrollmentCode)
 try {
-  $EnrollmentCode | & $RunnerPath enroll --server ${server} --code-stdin
+  $EnrollmentCode = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($CodePointer)
+} finally {
+  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($CodePointer)
+}
+try {
+  $EnrollmentCode | & $RunnerPath enroll --server ${powershellServer} --code-stdin
   if ($LASTEXITCODE -ne 0) { throw 'Runner enrollment failed.' }
 } finally {
-  Remove-Variable EnrollmentCode -ErrorAction SilentlyContinue
+  $EnrollmentCode = $null
+  $SecureEnrollmentCode = $null
+  Remove-Variable EnrollmentCode, SecureEnrollmentCode -ErrorAction SilentlyContinue
 }
 & $RunnerPath install --executable-path $RunnerPath
 if ($LASTEXITCODE -ne 0) { throw 'Runner service installation failed.' }
@@ -2796,6 +2931,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Runner doctor check failed.' }`;
   const tabs = Object.entries(commands).map(([platform, value], index) => `<button role="tab" id="tab-${platform}" aria-controls="panel-${platform}" aria-selected="${index === 0 ? "true" : "false"}" tabindex="${index === 0 ? "0" : "-1"}" data-tab="${platform}">${platform === "macos" ? "macOS" : platform === "windows" ? "Windows" : "Linux"}</button><section role="tabpanel" id="panel-${platform}" aria-labelledby="tab-${platform}" ${index === 0 ? "" : "hidden"} data-panel="${platform}"><pre><code>${escapeHtml(value)}</code></pre><button type="button" class="button secondary" data-copy="${escapeHtml(value)}">Copy enrollment command</button></section>`).join("");
   return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body">${languageSwitch()}<main class="shell enrollment-shell"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><div class="dialog-icon-row">${meshMarkSvg("dialog-mark")}</div><p class="eyebrow">Manual portable-artifact enrollment</p><h1 id="enrollment-title">Enroll Runner manually</h1><p class="lede">Hosted installers are disabled in this development preview. Download and verify the portable Runner artifact first. This one-time code expires in 30 minutes and will not be shown again.</p></div></section><div class="enrollment-meta-box"><span class="form-stat-label">Target Runner ID</span><span class="mono">${escapeHtml(runnerId)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">One-time enrollment code</span><code class="mono">${escapeHtml(code)}</code></div><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential. Enter it only at the prompt in the command below.</p><div class="top-actions dialog-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
 }
+function shellQuote(value: string): string { return `'${value.replaceAll("'", "'\"'\"'")}'`; }
+function powershellQuote(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
 function secretCreatedPage(title: string, url: string): string { return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${escapeHtml(title)}</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card secret-card"><div class="secret-brand-row">${meshMarkSvg("secret-mesh-mark")}<span class="brand-name">Runmesh</span></div><p class="brand-kicker">Runmesh</p><h1>${escapeHtml(title)}</h1><p class="lede">Copy this URL now. It will not be shown again.</p><code>${escapeHtml(url)}</code><div class="secret-actions"><button type="button" class="button" data-copy="${escapeHtml(url)}">Copy MCP URL</button><a class="button secondary" href="/admin">Back to admin</a></div></section></main>${adminScript()}</body></html>`; }
 function secretUrl(base: string, secret: string): string { const url = new URL(base); url.pathname = `/${secret}/mcp`; url.search = ""; return url.toString(); }
 function selectedScopes(form: FormData): CodingScope[] | undefined { const values = form.getAll("scopes"); const scopes = values.filter((value): value is CodingScope => value === "coding:read" || value === "coding:write" || value === "coding:exec"); return scopes.length === values.length && scopes.length > 0 && new Set(scopes).size === scopes.length ? scopes : undefined; }
@@ -2805,24 +2942,28 @@ function validRunnerVersion(value: string): boolean { return /^\d+\.\d+\.\d+(?:-
 
 export async function pushRunnerPolicy(env: WorkerEnv, runnerId: string, mutationId?: string): Promise<Response> {
   const body = JSON.stringify(mutationId === undefined ? {} : { mutation_id: mutationId });
-  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/policy", body);
-  return env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/policy", { method: "POST", headers, body }));
+  const headers = await signedInternalHeaders(env, "POST", "/policy", body);
+  if (headers === undefined) return controlPlaneUnavailable();
+  try { return await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/policy", { method: "POST", headers, body })); } catch { return new Response("runner unavailable", { status: 503 }); }
 }
 async function beginRunnerPolicyMutation(env: WorkerEnv, runnerId: string, mutationId: string): Promise<Response> {
   const body = JSON.stringify({ mutation_id: mutationId, runner_id: runnerId });
-  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/begin-policy-mutation", body);
-  return env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/begin-policy-mutation", { method: "POST", headers, body }));
+  const headers = await signedInternalHeaders(env, "POST", "/begin-policy-mutation", body);
+  if (headers === undefined) return controlPlaneUnavailable();
+  try { return await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/begin-policy-mutation", { method: "POST", headers, body })); } catch { return new Response("runner unavailable", { status: 503 }); }
 }
 async function markRunnerPolicyCommitted(env: WorkerEnv, runnerId: string, mutationId: string, phase: "committed_pending" | "offline_pending", desiredRevision: number, desiredChecksum: string): Promise<Response> {
   const body = JSON.stringify({ mutation_id: mutationId, phase, desired_revision: desiredRevision, desired_checksum: desiredChecksum });
-  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/mark-policy-committed", body);
-  return env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/mark-policy-committed", { method: "POST", headers, body }));
+  const headers = await signedInternalHeaders(env, "POST", "/mark-policy-committed", body);
+  if (headers === undefined) return controlPlaneUnavailable();
+  try { return await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/mark-policy-committed", { method: "POST", headers, body })); } catch { return new Response("runner unavailable", { status: 503 }); }
 }
 
 async function cancelRunnerPolicyMutation(env: WorkerEnv, runnerId: string, mutationId: string): Promise<Response> {
   const body = JSON.stringify({ mutation_id: mutationId });
-  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/cancel-policy-mutation", body);
-  return env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/cancel-policy-mutation", { method: "POST", headers, body }));
+  const headers = await signedInternalHeaders(env, "POST", "/cancel-policy-mutation", body);
+  if (headers === undefined) return controlPlaneUnavailable();
+  try { return await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/cancel-policy-mutation", { method: "POST", headers, body })); } catch { return new Response("runner unavailable", { status: 503 }); }
 }
 async function mutateRunnerPolicy(env: WorkerEnv, runnerId: string, mutation: { readonly path: string; readonly method: "POST" | "PUT" | "DELETE"; readonly payload: Record<string, unknown> }): Promise<Response> {
   const mutationId = `mutation-${crypto.randomUUID()}`;
@@ -2866,13 +3007,15 @@ async function forwardRunnerRpc(request: Request, env: WorkerEnv, url: URL): Pro
   // cannot exhaust Worker memory.
   const body = await readBodyText(request, MAX_INTERNAL_RPC_BODY_BYTES);
   if (body === undefined || !await verifyInternalRequest(request, env.INTERNAL_CONTROL_SECRET, body, consumeInternalNonce.bind(undefined, env))) return notFound();
-  const runnerId = segments[2] as string; const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/rpc", body);
-  return env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/rpc", { method: "POST", headers, body }));
+  const runnerId = segments[2] as string;
+  const headers = await signedInternalHeaders(env, "POST", "/rpc", body);
+  if (headers === undefined) return notFound();
+  try { return await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/rpc", { method: "POST", headers, body })); } catch { return new Response("runner unavailable", { status: 503 }); }
 }
 
 async function handleRunnerAdmin(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
   if (!isRunnerAdminRequest(request, env)) { await discardBody(request); return new Response("unauthorized", { status: 401 }); }
-  if (env.INTERNAL_CONTROL_SECRET === undefined || env.RUNNER_TOKEN_PEPPER === undefined) { await discardBody(request); return new Response("admin control plane is not configured", { status: 503 }); }
+  if (!isConfiguredSecret(env.INTERNAL_CONTROL_SECRET) || !isConfiguredSecret(env.RUNNER_TOKEN_PEPPER)) { await discardBody(request); return new Response("admin control plane is not configured", { status: 503 }); }
   const segments = url.pathname.split("/").filter(Boolean); const runnerId = segments[2]; const action = segments[3];
   if (segments.length === 2 && request.method === "POST") {
     const input = await readAdminBody(request); const id = typeof input?.runner_id === "string" && isSafeIdentifier(input.runner_id) ? input.runner_id : undefined;
@@ -2923,22 +3066,29 @@ async function deleteRunnerWithAdminToken(env: WorkerEnv, runnerId: string, inpu
     } catch { return new Response("Runner remains safely fenced", { status: 503 }); }
     return new Response("runner delete failed", { status: response.status });
   }
-  await deleteRunnerTransport(env, runnerId, mutationId);
+  try {
+    await deleteRunnerTransport(env, runnerId, mutationId);
+  } catch {
+    return new Response("runner deletion outcome is uncertain; Runner remains safely fenced", { status: 503 });
+  }
   return new Response(null, { status: 204 });
 }
 
 async function registerRunner(env: WorkerEnv, runnerId: string, input: Record<string, unknown> | undefined): Promise<Response> {
   const supplied = input?.token;
-  if (supplied !== undefined && (typeof supplied !== "string" || supplied.length < 32 || supplied.length > 512 || /\s/.test(supplied))) return Response.json({ error: "token must be 32-512 non-whitespace characters" }, { status: 400 });
+  if (supplied !== undefined && (typeof supplied !== "string" || supplied.length < 32 || supplied.length > 512 || /\s/.test(supplied) || containsControlCharacter(supplied))) return Response.json({ error: "token must be 32-512 non-whitespace characters" }, { status: 400 });
   const token = typeof supplied === "string" ? supplied : generateRunnerToken(); const pepper = env.RUNNER_TOKEN_PEPPER;
-  if (pepper === undefined) return new Response("admin control plane is not configured", { status: 503 });
+  if (!isConfiguredSecret(pepper) || !isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) return new Response("admin control plane is not configured", { status: 503 });
     const mutationId = `credential-rotated-${crypto.randomUUID()}`;
     let existingResponse: Response;
     try { existingResponse = await runnerRegistryRequest(env, runnerId, "", "GET", ""); } catch { return new Response("registry unavailable", { status: 503 }); }
     if (!existingResponse.ok && existingResponse.status !== 404) return new Response("registry unavailable", { status: 503 });
     const existing = existingResponse.ok;
-    const runner = existing ? record(await json(existingResponse)) : undefined;
-    const canFenceExisting = existing && Number(runner?.connection_epoch ?? 0) > 0 && Number(runner?.credential_version ?? 0) > 0 && typeof runner?.session_id === "string" && runner.session_id.length > 0 && runner?.state === "online";
+    // A stale/offline Registry row may still have a live socket in RunnerDO.
+    // Always establish the DO fence before replacing credentials for an
+    // existing Runner; the DO can safely retain a fenced offline state when no
+    // socket is present.
+    const canFenceExisting = existing;
   if (canFenceExisting) {
     const fenced = await fenceRunnerTransport(env, runnerId, mutationId);
     if (!fenced.ok) return new Response("runner unavailable", { status: 503 });
@@ -2959,22 +3109,34 @@ async function registerRunner(env: WorkerEnv, runnerId: string, input: Record<st
   return Response.json({ runner_id: runnerId, token }, { headers: credentialHeaders("application/json; charset=utf-8") });
 }
 async function fenceRunnerTransport(env: WorkerEnv, runnerId: string, mutationId: string): Promise<Response> {
-  const body = JSON.stringify({ mutation_id: mutationId });
-  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/begin-policy-mutation", body);
-  return env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/begin-policy-mutation", { method: "POST", headers, body }));
+  // Bind the fence to the known Runner identity even when Registry currently
+  // reports it offline. This lets a restarted/lagging DO recover the
+  // credential mutation and close any still-attached socket deterministically.
+  const body = JSON.stringify({ mutation_id: mutationId, runner_id: runnerId });
+  const headers = await signedInternalHeaders(env, "POST", "/begin-policy-mutation", body);
+  if (headers === undefined) return controlPlaneUnavailable();
+  try { return await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/begin-policy-mutation", { method: "POST", headers, body })); } catch { return new Response("runner unavailable", { status: 503 }); }
 }
 async function revokeRunnerTransport(env: WorkerEnv, runnerId: string, mutationId: string): Promise<void> {
   const body = JSON.stringify({ mutation_id: mutationId });
-  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/revoke", body);
+  const headers = await signedInternalHeaders(env, "POST", "/revoke", body);
+  if (headers === undefined) throw new Error("control plane is not configured");
   await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/revoke", { method: "POST", headers, body }));
 }
 async function deleteRunnerTransport(env: WorkerEnv, runnerId: string, mutationId: string): Promise<void> {
   const body = JSON.stringify({ mutation_id: mutationId });
-  const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/delete", body);
-  await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/delete", { method: "POST", headers, body }));
+  const headers = await signedInternalHeaders(env, "POST", "/delete", body);
+  if (headers === undefined) throw new Error("control plane is not configured");
+  const response = await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/delete", { method: "POST", headers, body }));
+  if (!response.ok) throw new Error(`RunnerDO delete rejected with status ${response.status}`);
 }
-function isRunnerAdminRequest(request: Request, env: WorkerEnv): boolean { const token = bearerToken(request); return token !== undefined && env.ADMIN_TOKEN !== undefined && constantTimeEqual(token, env.ADMIN_TOKEN); }
-async function runnerRegistryRequest(env: WorkerEnv, runnerId: string, action: string, method: string, body: string): Promise<Response> { const path = `/runners/${encodeURIComponent(runnerId)}${action}`; const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET as string, method, path, body); return env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method, ...(body.length === 0 ? {} : { body }), headers })); }
+function isRunnerAdminRequest(request: Request, env: WorkerEnv): boolean { const token = bearerToken(request); return token !== undefined && isConfiguredSecret(env.ADMIN_TOKEN) && constantTimeEqual(token, env.ADMIN_TOKEN); }
+async function runnerRegistryRequest(env: WorkerEnv, runnerId: string, action: string, method: string, body: string): Promise<Response> {
+  const path = `/runners/${encodeURIComponent(runnerId)}${action}`;
+  const headers = await signedInternalHeaders(env, method, path, body);
+  if (headers === undefined) return controlPlaneUnavailable();
+  try { return await env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method, ...(body.length === 0 ? {} : { body }), headers })); } catch { return new Response("registry unavailable", { status: 503 }); }
+}
 
 async function runnerMutationState(env: WorkerEnv, runnerId: string, mutationId: string): Promise<Record<string, unknown> | undefined> {
   const response = await registryGet(env, `/runners/${encodeURIComponent(runnerId)}/mutation-state?mutation_id=${encodeURIComponent(mutationId)}`);
@@ -2982,8 +3144,8 @@ async function runnerMutationState(env: WorkerEnv, runnerId: string, mutationId:
 }
 
 async function verifyMcpClient(env: WorkerEnv, secretVerifier: string): Promise<VerifiedMcpClient | undefined> { const response = await registryPost(env, "/auth/mcp/verify", { secret_verifier: secretVerifier }); const body = response.ok ? record(await json(response)) : undefined; if (body === undefined || typeof body.client_id !== "string" || typeof body.label !== "string" || typeof body.secret_version !== "number" || !Array.isArray(body.scopes) || body.scopes.some((scope) => scope !== "coding:read" && scope !== "coding:write" && scope !== "coding:exec")) return undefined; return { client_id: body.client_id, label: body.label, secret_version: body.secret_version, scopes: body.scopes as CodingScope[] }; }
-async function registryGet(env: WorkerEnv, path: string): Promise<Response> { const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "GET", path, ""); return env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { headers })); }
-async function registryPost(env: WorkerEnv, path: string, payload: Record<string, unknown>): Promise<Response> { const body = JSON.stringify(payload); const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", path, body); return env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method: "POST", headers, body })); }
+async function registryGet(env: WorkerEnv, path: string): Promise<Response> { return registryRequest(env, path, "GET", ""); }
+async function registryPost(env: WorkerEnv, path: string, payload: Record<string, unknown>): Promise<Response> { return registryRequest(env, path, "POST", JSON.stringify(payload)); }
 type PreAuthThrottle = { readonly allowed: boolean; readonly retry_after_ms: number };
 async function authThrottleCheck(env: WorkerEnv, kind: "login" | "setup"): Promise<PreAuthThrottle | undefined> {
   const response = await registryPost(env, "/auth/throttle/check", { kind });
@@ -3018,7 +3180,7 @@ function csrfCookie(value: string): string { return `${ADMIN_CSRF_COOKIE}=${valu
 function clearCookie(name: string): string { return `${name}=; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=0`; }
 function credentialHeaders(contentType: string): Headers { const headers = htmlHeaders(); headers.set("content-type", contentType); return headers; }
 function html(value: string, cookies: readonly string[] = []): Response { const headers = htmlHeaders(); for (const cookie of cookies) headers.append("set-cookie", cookie); return new Response(value, { headers }); }
-function htmlHeaders(): Headers { return new Headers({ "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'", "x-content-type-options": "nosniff", "x-frame-options": "DENY" }); }
+function htmlHeaders(): Headers { return new Headers({ "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer", "content-security-policy": "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'", "x-content-type-options": "nosniff", "x-frame-options": "DENY" }); }
 function redirect(location: string, cookies: readonly string[] = []): Response { const headers = htmlHeaders(); headers.set("location", location); for (const cookie of cookies) headers.append("set-cookie", cookie); return new Response(null, { status: 303, headers }); }
 function adminError(status: number, message: string, cookies: readonly string[] = []): Response { const response = html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card error-card"><div class="secret-brand-row">${meshMarkSvg("error-mesh-mark")}<span class="brand-name">Runmesh</span></div><p class="brand-kicker">Runmesh</p><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="lede">${escapeHtml(message)}</p><p><a class="button secondary" href="/">Return</a></p></section></main>${adminScript()}</body></html>`, cookies.length === 0 ? [] : cookies); return new Response(response.body, { status, headers: response.headers }); }
 function methodNotAllowed(allow: string): Response { return new Response("Method not allowed", { status: 405, headers: { allow } }); }

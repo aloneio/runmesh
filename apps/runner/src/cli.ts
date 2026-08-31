@@ -4,11 +4,12 @@ import { access, lstat, realpath, rm } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { parseRunnerArgs, validateRunnerConfig, type RawRunnerOptions } from "./config.js";
 import { RunnerConnection } from "./connection.js";
-import { enrollRunner } from "./enrollment.js";
+import { enrollRunner, isEnrollmentOutcomeUnknown } from "./enrollment.js";
 import { ProfileStore, defaultWorkspaceId, profileExecutionMode, profileManagementMode, redactedProfile, workspaceOptions, type RunnerProfile, type StoredWorkspace } from "./profile.js";
 import { EnvironmentInfoService, discoverShellRuntime, type ShellRuntime } from "./runtime.js";
 import { RUNNER_VERSION } from "./version.js";
 import { assertManagedServiceManifest, createServiceManager, createServiceProvisioner, hostServiceManifestFilesystem, installServiceManifest, isManagedService, removeServiceManifest, renderService, serviceLayout, serviceProfilePath, type ExecutionMode, type ServiceManagerAdapter, type ServiceManifest, type ServiceManifestFilesystem, type ServicePlatform, type ServiceProvisioner } from "./service.js";
+import { resolveTrustedWindowsTool, trustedWindowsEnvironment, trustedWindowsRoot } from "./windows-tools.js";
 
 export interface CliDependencies {
   readonly store?: ProfileStore;
@@ -34,6 +35,8 @@ export interface CliDependencies {
   readonly setExitCode?: (code: number) => void;
   /** Injectable stdin source for the secret-safe `enroll --code-stdin` flow. */
   readonly readStdin?: () => Promise<string>;
+  /** Optional post-enrollment activation hook (also used by integration tests). */
+  readonly afterEnroll?: () => Promise<void>;
 }
 export interface EnrollCliDependencies {
   readonly store?: ProfileStore;
@@ -45,6 +48,8 @@ export interface EnrollCliDependencies {
   readonly confirmPrivilegedHost?: boolean;
   /** Injectable stdin source for the secret-safe `enroll --code-stdin` flow. */
   readonly readStdin?: () => Promise<string>;
+  /** Optional post-enrollment activation hook. */
+  readonly afterEnroll?: () => Promise<void>;
 }
 interface ParsedCommand { readonly command: string; readonly json: boolean; readonly values: Record<string, string | boolean | string[]>; readonly passthrough: string[]; }
 const HELP = "usage: runmesh-runner <start|enroll|status|doctor|workspace|env|install|stop|restart|uninstall> [options]\nenroll: --server <https-url> (--code <one-time-code> | --code-stdin)\nworkspace: list | add --path <directory> [--allow-edit] [--allow-host-shell --i-understand-host-shell-is-not-sandboxed] | remove --id <workspace-id> | migrate --management-mode <central|legacy_manual>";
@@ -94,22 +99,77 @@ function readEnrollmentStdin(): Promise<string> {
   });
 }
 
+/**
+ * Remove a profile only when it is still the profile observed by this
+ * enrollment attempt.  A second CLI process may have completed a newer
+ * enrollment while the first process was handling an uncertain response;
+ * unconditional rm() would otherwise delete that valid credential.
+ *
+ * This is deliberately a best-effort compare-before-remove.  ProfileStore has
+ * no portable atomic compare-and-delete primitive, so callers should still
+ * serialize enrollment operations when strict cross-process exclusion is
+ * required.  The identity check closes the common late-cleanup race without
+ * changing ProfileStore's on-disk format.
+ */
+async function removeEnrollmentProfileIfCurrent(store: ProfileStore, expected: RunnerProfile | undefined): Promise<boolean> {
+  try {
+    const current = await store.load();
+    if (expected === undefined ? current !== undefined : !sameEnrollmentProfile(current, expected)) return false;
+    await store.remove();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sameEnrollmentProfile(left: RunnerProfile | undefined, right: RunnerProfile): boolean {
+  // Compare the complete validated snapshot, not merely credential identity:
+  // a concurrent workspace-policy update must not be discarded by cleanup.
+  return left !== undefined && JSON.stringify(left) === JSON.stringify(right);
+}
+
+function enrollmentFailureMessage(detail: string, credentialsConsumed: boolean, outcomeUnknown: boolean, profileRemoved: boolean): string {
+  if (!credentialsConsumed && !outcomeUnknown) return detail;
+  const cleanup = profileRemoved
+    ? "the local profile was removed"
+    : "the local profile could not be removed; do not use the existing profile until its credential is verified";
+  if (credentialsConsumed) return `${detail}; enrollment credentials were consumed and ${cleanup}; generate a new enrollment code and retry`;
+  return `${detail}; ${cleanup} because the enrollment outcome is unknown; generate a new enrollment code and retry`;
+}
+
 export async function runEnrollCli(argv: readonly string[], dependencies: EnrollCliDependencies = {}): Promise<void> {
   const output = dependencies.stdout ?? ((line) => process.stdout.write(`${line}\n`));
   const error = dependencies.stderr ?? ((line) => process.stderr.write(`${line}\n`));
   const parsed = parseProductArgs(["enroll", ...argv]);
   const store = dependencies.store ?? storeFor(parsed, dependencies.servicePlatform);
+  let previousProfile: RunnerProfile | undefined;
+  let enrolled = false;
+  let enrolledProfile: RunnerProfile | undefined;
   try {
+    const server = requiredString(parsed, "server");
+    const code = await enrollmentCode(parsed, dependencies.readStdin);
+    previousProfile = await store.load();
     const result = await enrollRunner({
-      server: requiredString(parsed, "server"), code: await enrollmentCode(parsed, dependencies.readStdin), reEnroll: parsed.values.reEnroll === true, insecureLocal: parsed.values.insecureLocal === true,
+      server, code, reEnroll: parsed.values.reEnroll === true, insecureLocal: parsed.values.insecureLocal === true,
       ...(typeof parsed.values.executionMode === "string" ? { executionMode: parsed.values.executionMode as ExecutionMode } : dependencies.executionMode === undefined ? {} : { executionMode: dependencies.executionMode }),
       ...(parsed.values.confirmPrivilegedHost === true || dependencies.confirmPrivilegedHost === true ? { confirmPrivilegedHost: true } : {}),
       ...(typeof parsed.values.cwd === "string" ? { cwd: parsed.values.cwd } : {}),
       ...(dependencies.store === undefined ? { store } : { store: dependencies.store }),
       ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch }),
     });
+    enrolled = true;
+    enrolledProfile = result.profile;
+    if (dependencies.afterEnroll !== undefined) await dependencies.afterEnroll();
     report(output, parsed.json, { enrolled: true, runner_id: result.profile.runner_id, workspace_count: result.profile.workspaces.length });
-  } catch (cause) { error(cause instanceof Error ? cause.message : String(cause)); throw cause; }
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    const outcomeUnknown = isEnrollmentOutcomeUnknown(cause);
+    const profileRemoved = enrolled || outcomeUnknown
+      ? await removeEnrollmentProfileIfCurrent(store, enrolledProfile ?? previousProfile)
+      : false;
+    error(enrollmentFailureMessage(detail, enrolled, outcomeUnknown, profileRemoved));
+    throw cause;
+  }
 }
 
 export async function runCli(argv: readonly string[], dependencies: CliDependencies = {}): Promise<void> {
@@ -119,11 +179,18 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
   if (argv.length === 1 && argv[0] === "--version") { output(RUNNER_VERSION); return; }
   const parsed = parseProductArgs(argv);
   const store = dependencies.store ?? storeFor(parsed, dependencies.servicePlatform);
+  let previousProfile: RunnerProfile | undefined;
+  let enrolledDuringThisInvocation = false;
+  let enrolledProfile: RunnerProfile | undefined;
   try {
     if (parsed.command === "start") return start(parsed, store, error, dependencies);
     if (parsed.command === "enroll") {
       const server = requiredString(parsed, "server"); const code = await enrollmentCode(parsed, dependencies.readStdin);
+      previousProfile = await store.load();
       const result = await enrollRunner({ server, code, reEnroll: parsed.values.reEnroll === true, insecureLocal: parsed.values.insecureLocal === true, ...(typeof parsed.values.executionMode === "string" ? { executionMode: parsed.values.executionMode as ExecutionMode } : {}), ...(parsed.values.confirmPrivilegedHost === true ? { confirmPrivilegedHost: true } : {}), ...(typeof parsed.values.cwd === "string" ? { cwd: parsed.values.cwd } : {}), store, ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch }) });
+      enrolledDuringThisInvocation = true;
+      enrolledProfile = result.profile;
+      if (dependencies.afterEnroll !== undefined) await dependencies.afterEnroll();
       report(output, parsed.json, { enrolled: true, runner_id: result.profile.runner_id, workspace_count: result.profile.workspaces.length });
       return;
     }
@@ -145,7 +212,17 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
     if (parsed.command === "install" || parsed.command === "stop" || parsed.command === "restart") { await serviceCommand(parsed, store, output, dependencies); return; }
     if (parsed.command === "uninstall") { await uninstall(parsed, store, output, dependencies); return; }
     throw new Error(HELP);
-  } catch (cause) { error(cause instanceof Error ? cause.message : String(cause)); throw cause; }
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    const outcomeUnknown = parsed.command === "enroll" && isEnrollmentOutcomeUnknown(cause);
+    const profileRemoved = parsed.command === "enroll" && (enrolledDuringThisInvocation || outcomeUnknown)
+      ? await removeEnrollmentProfileIfCurrent(store, enrolledProfile ?? previousProfile)
+      : false;
+    const message = parsed.command === "enroll"
+      ? enrollmentFailureMessage(detail, enrolledDuringThisInvocation, outcomeUnknown, profileRemoved)
+      : detail;
+    error(message); throw cause;
+  }
 }
 
 async function start(parsed: ParsedCommand, store: ProfileStore, error: (line: string) => void, dependencies: CliDependencies): Promise<void> {
@@ -386,7 +463,7 @@ export function parseProductArgs(argv: readonly string[]): ParsedCommand {
 }
 function storeFor(parsed: ParsedCommand, platform?: ServicePlatform): ProfileStore {
   if (typeof parsed.values.profilePath === "string") return new ProfileStore({ filePath: parsed.values.profilePath });
-  if (parsed.values.user === true || process.env.CODING_RUNNER_PROFILE !== undefined) return new ProfileStore();
+  if (parsed.values.user === true || process.env.RUNMESH_RUNNER_PROFILE !== undefined || process.env.CODING_RUNNER_PROFILE !== undefined) return new ProfileStore();
   const layout = serviceLayout({ ...(platform === undefined ? {} : { platform }), mode: "system" });
   return new ProfileStore({ filePath: serviceProfilePath(layout) });
 }
@@ -406,7 +483,17 @@ function assertSystemInstallationPrivilege(manifest: ServiceManifest, dependenci
   const elevated = dependencies.isAdministrator ?? (() => {
     if (manifest.platform !== "win32") return process.getuid?.() === 0;
     // `net session` returns success only from an elevated Windows token.
-    return spawnSync("net", ["session"], { stdio: "ignore", windowsHide: true }).status === 0;
+    // Use the absolute inbox utility path.  Windows CreateProcess searches
+    // the current directory before PATH even when PATH has been scrubbed;
+    // resolving a bare `net.exe` here would let a same-directory binary run
+    // in the administrator's context during install/uninstall.
+    const systemRoot = trustedWindowsRoot();
+    const executable = process.platform === "win32" ? resolveTrustedWindowsTool("net.exe", systemRoot) : "net";
+    return spawnSync(executable, ["session"], {
+      stdio: "ignore",
+      windowsHide: true,
+      ...(process.platform === "win32" ? { cwd: `${systemRoot}\\System32`, env: trustedWindowsEnvironment(systemRoot) } : {}),
+    }).status === 0;
   });
   if (!elevated()) throw new Error("system Runner installation requires administrator/root privileges; rerun from an elevated administrator/root shell");
 }

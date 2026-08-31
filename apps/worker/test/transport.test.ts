@@ -1,7 +1,8 @@
 import { env, SELF, runInDurableObject } from "cloudflare:test";
 import { WORKER_BRIDGE_TIMEOUT_MS, PROTOCOL_CURRENT_VERSION, PROTOCOL_MIN_VERSION, decodeWireFrame, encodeWireFrame, type WireMessage } from "@aloneio/runmesh-protocol";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { INTERNAL_CONTROL_HEADER, INTERNAL_SIGNATURE_SKEW_MS, internalHeaders } from "../src/security.js";
+import { RegistryDO, RunnerDO } from "../src/index.js";
 
 
 describe("Worker runner transport", () => {
@@ -56,6 +57,69 @@ describe("Worker runner transport", () => {
     const expired = await internalHeaders(secret, "GET", "/runners", "", { timestamp: now - INTERNAL_SIGNATURE_SKEW_MS - 1, nonce: "e".repeat(64) });
     expect((await registry.fetch("https://registry.internal/runners", { headers: expired })).status).toBe(404);
     expect(headers[INTERNAL_CONTROL_HEADER]).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("requires a RunnerDO mutation fence before replacing an existing credential", async () => {
+    const runnerId = `route-fence-${crypto.randomUUID()}`;
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName(`route-fence-${crypto.randomUUID()}`));
+    await runInDurableObject(registry, (instance) => {
+      expect(instance.registerRunner(runnerId, "a".repeat(64), Date.now())).toBe(true);
+    });
+    const body = JSON.stringify({ token_verifier: "b".repeat(64) });
+    const path = `/runners/${encodeURIComponent(runnerId)}`;
+    const headers = await internalHeaders("test-internal-control-secret-not-for-production", "PUT", path, body);
+    const response = await registry.fetch(new Request(`https://registry.internal${path}`, { method: "PUT", headers, body }));
+    expect(response.status).toBe(400);
+  });
+
+  it("fails closed when the Registry status is unavailable or malformed", async () => {
+    const original = RegistryDO.prototype.fetch;
+    let mode: "malformed" | "unavailable" | "initialized" = "malformed";
+    const spy = vi.spyOn(RegistryDO.prototype, "fetch").mockImplementation(function (this: RegistryDO, request: Request) {
+      if (new URL(request.url).pathname === "/auth/status") {
+        if (mode === "malformed") return Promise.resolve(new Response("{malformed", { status: 200 }));
+        if (mode === "unavailable") return Promise.resolve(new Response("registry unavailable", { status: 502 }));
+        return Promise.resolve(Response.json({ initialized: true }));
+      }
+      return original.call(this, request);
+    });
+    try {
+      await expect(SELF.fetch("https://worker.test/")).resolves.toMatchObject({ status: 503 });
+      mode = "unavailable";
+      await expect(SELF.fetch("https://worker.test/")).resolves.toMatchObject({ status: 503 });
+      mode = "initialized";
+      const login = await SELF.fetch("https://worker.test/");
+      expect(login.status).toBe(200);
+      await expect(login.text()).resolves.toContain("Admin password");
+    } finally {
+      spy.mockRestore();
+    }
+    // A healthy, uninitialized Registry still serves setup normally after the
+    // injected failure is removed (the initialized case above covers login).
+    const healthy = await SELF.fetch("https://worker.test/");
+    expect(healthy.status).toBe(200);
+  });
+
+  it("reports uncertain deletion when RunnerDO rejects transport cleanup", async () => {
+    const id = `delete-transport-${crypto.randomUUID()}`;
+    const runnerToken = "abcdef0123456789abcdef0123456789";
+    expect((await enroll(id, runnerToken)).status).toBe(200);
+    const original = RunnerDO.prototype.fetch;
+    const spy = vi.spyOn(RunnerDO.prototype, "fetch").mockImplementation(function (this: RunnerDO, request: Request) {
+      if (new URL(request.url).pathname === "/delete") return Promise.resolve(new Response("simulated failure", { status: 503 }));
+      return original.call(this, request);
+    });
+    try {
+      const response = await SELF.fetch(`https://worker.test/admin/runners/${id}/delete`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ confirmation: id }),
+      });
+      expect(response.status).toBe(503);
+      await expect(response.text()).resolves.toContain("uncertain");
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("rejects direct RegistryDO fetches without its internal proof", async () => {
