@@ -6,7 +6,7 @@ interface Admission {
   fenced: boolean; reconciled: boolean; runnerId: string | null;
   activeRevision: number | null; activeChecksum: string | null;
   desiredRevision: number | null; desiredChecksum: string | null;
-  connectionEpoch: number | null; credentialVersion: number | null; sessionId: string | null;
+  connectionEpoch: number | null; credentialVersion: number | null; lifecycleId: string | null; sessionId: string | null;
   mutationId: string | null; mutationPhase: "idle" | "precommit" | "committed_pending" | "offline_pending" | "invalid" | "restart_reconcile";
   preMutationActiveRevision: number | null; preMutationActiveChecksum: string | null;
   preMutationDesiredRevision: number | null; preMutationDesiredChecksum: string | null;
@@ -24,12 +24,12 @@ interface TestRunnerDO {
 
 const runnerId = "race-runner";
 const checksum = "a".repeat(64);
-const attachment = { runnerId, sessionId: "session-7", epoch: 7, credentialVersion: 3, protocolVersion: PROTOCOL_CURRENT_VERSION, authenticated: true, helloDeadlineMs: Date.now() + 60_000 };
+const attachment = { runnerId, sessionId: "session-7", epoch: 7, credentialVersion: 3, lifecycleId: "lifecycle-race-7", protocolVersion: PROTOCOL_CURRENT_VERSION, authenticated: true, helloDeadlineMs: Date.now() + 60_000 };
 function state(mutationId: string, mutationPhase: Admission["mutationPhase"] = "committed_pending"): Admission {
-  return { fenced: true, reconciled: false, runnerId, activeRevision: null, activeChecksum: null, desiredRevision: 8, desiredChecksum: checksum, connectionEpoch: 7, credentialVersion: 3, sessionId: "session-7", mutationId, mutationPhase, preMutationActiveRevision: 7, preMutationActiveChecksum: checksum, preMutationDesiredRevision: 7, preMutationDesiredChecksum: checksum, lastReconciledAtMs: null };
+  return { fenced: true, reconciled: false, runnerId, activeRevision: null, activeChecksum: null, desiredRevision: 8, desiredChecksum: checksum, connectionEpoch: 7, credentialVersion: 3, lifecycleId: "lifecycle-race-7", sessionId: "session-7", mutationId, mutationPhase, preMutationActiveRevision: 7, preMutationActiveChecksum: checksum, preMutationDesiredRevision: 7, preMutationDesiredChecksum: checksum, lastReconciledAtMs: null };
 }
 function readyState(): Admission {
-  return { fenced: false, reconciled: true, runnerId, activeRevision: 7, activeChecksum: checksum, desiredRevision: 7, desiredChecksum: checksum, connectionEpoch: 7, credentialVersion: 3, sessionId: "session-7", mutationId: null, mutationPhase: "idle", preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: Date.now() };
+  return { fenced: false, reconciled: true, runnerId, activeRevision: 7, activeChecksum: checksum, desiredRevision: 7, desiredChecksum: checksum, connectionEpoch: 7, credentialVersion: 3, lifecycleId: "lifecycle-race-7", sessionId: "session-7", mutationId: null, mutationPhase: "idle", preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: Date.now() };
 }
 function socket(send = vi.fn(), socketAttachment = attachment): WebSocket { return { deserializeAttachment: () => socketAttachment, serializeAttachment: vi.fn(), send, close: vi.fn() } as unknown as WebSocket; }
 async function withRunner(name: string, callback: (target: TestRunnerDO) => Promise<void>): Promise<void> {
@@ -49,15 +49,16 @@ describe("RunnerDO concurrency finalization", () => {
         if (action === "/connect") {
           connectStarted();
           await connectBlocked;
-          return Response.json({ epoch: 8 });
+          return Response.json({ epoch: 8, lifecycle_id: attachment.lifecycleId });
         }
+        if (action === "/session") return new Response(null, { status: 204 });
         throw new Error(`unexpected ${action}`);
       };
       const hello: WireMessage = {
         type: "runner.hello", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "hello-race", min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION,
         runner: { runner_id: runnerId, runner_version: "test", platform: "test", architecture: "test", capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: [], labels: {} } },
       };
-      const helloInFlight = target.webSocketMessage(socket(), encodeWireFrame(hello));
+      const helloInFlight = target.webSocketMessage(socket(vi.fn(), { ...attachment, epoch: 0 }), encodeWireFrame(hello));
       await connectRequested;
       expect(await target.beginPolicyMutation("concurrent-policy", runnerId)).toBe("started");
       releaseConnect();
@@ -69,7 +70,11 @@ describe("RunnerDO concurrency finalization", () => {
   it("does not let an older hello roll back a newer connection epoch", async () => {
     await withRunner("hello-epoch-race", async (target) => {
       target.admissionState = { ...readyState(), connectionEpoch: 9, sessionId: "new-session" };
-      target.registryRequest = async (_id, action) => action === "/connect" ? Response.json({ epoch: 8 }) : new Response(null, { status: 500 });
+      target.registryRequest = async (_id, action) => {
+        if (action === "/connect") return Response.json({ epoch: 8, lifecycle_id: attachment.lifecycleId });
+        if (action === "/session") return new Response(null, { status: 204 });
+        return new Response(null, { status: 500 });
+      };
       const oldAttachment = { ...attachment, sessionId: "old-session", epoch: 0 };
       const oldSocket = socket(vi.fn(), oldAttachment);
       const hello: WireMessage = {
@@ -85,7 +90,11 @@ describe("RunnerDO concurrency finalization", () => {
   it("preserves a committed mutation's desired policy across a reconnect", async () => {
     await withRunner("hello-mutation-state", async (target) => {
       target.admissionState = state("committed-policy", "committed_pending");
-      target.registryRequest = async (_id, action) => action === "/connect" ? Response.json({ epoch: 8 }) : new Response(null, { status: 500 });
+      target.registryRequest = async (_id, action) => {
+        if (action === "/connect") return Response.json({ epoch: 8, lifecycle_id: attachment.lifecycleId });
+        if (action === "/session") return new Response(null, { status: 204 });
+        return new Response(null, { status: 500 });
+      };
       const reconnect = socket(vi.fn(), { ...attachment, sessionId: "reconnected", epoch: 0 });
       const hello: WireMessage = {
         type: "runner.hello", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "hello-mutation", min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION,
@@ -153,7 +162,7 @@ describe("RunnerDO concurrency finalization", () => {
     it(`finalizes a committed ${mutationId} fence`, async () => {
       await withRunner(mutationId, async (target) => {
         target.admissionState = state(mutationId, "precommit"); target.verifyInternalRequest = async () => true;
-        target.registryRequest = async (_id, action) => action.startsWith("/mutation-state") ? Response.json({ runner_exists: true, mutation_committed: true }) : new Response(null, { status: 500 });
+        target.registryRequest = async (_id, action) => action.startsWith("/mutation-state") ? Response.json({ runner_exists: true, mutation_committed: true, credential_mutation_committed: true }) : new Response(null, { status: 500 });
         const response = await target.fetch(new Request("https://runner.internal/revoke", { method: "POST", body: JSON.stringify({ mutation_id: mutationId }) }));
         expect(response.status).toBe(204);
         await expect(target.admission()).resolves.toMatchObject({ mutationId: null, mutationPhase: "restart_reconcile" });
@@ -161,6 +170,90 @@ describe("RunnerDO concurrency finalization", () => {
       });
     });
   }
+
+  it("does not let a policy marker authorize the credential revoke finalizer", async () => {
+    await withRunner("revoke-policy-marker", async (target) => {
+      target.admissionState = state("policy-marker", "precommit");
+      target.verifyInternalRequest = async () => true;
+      target.registryRequest = async (_id, action) => action.startsWith("/mutation-state")
+        ? Response.json({ runner_exists: true, mutation_committed: true, credential_mutation_committed: false, lifecycle_id: "lifecycle-race-7" })
+        : new Response(null, { status: 500 });
+      const response = await target.fetch(new Request("https://runner.internal/revoke", { method: "POST", body: JSON.stringify({ mutation_id: "policy-marker" }) }));
+      expect(response.status).toBe(409);
+      await expect(target.admission()).resolves.toMatchObject({ fenced: true, mutationId: "policy-marker", mutationPhase: "precommit" });
+    });
+  });
+
+  it("does not finalize revoke from a non-precommit admission phase", async () => {
+    await withRunner("revoke-non-precommit", async (target) => {
+      target.admissionState = state("policy-committed", "committed_pending");
+      target.verifyInternalRequest = async () => true;
+      target.registryRequest = async (_id, action) => action.startsWith("/mutation-state")
+        ? Response.json({ runner_exists: true, mutation_committed: true, credential_mutation_committed: true, lifecycle_id: "lifecycle-race-7" })
+        : new Response(null, { status: 500 });
+      const response = await target.fetch(new Request("https://runner.internal/revoke", { method: "POST", body: JSON.stringify({ mutation_id: "policy-committed" }) }));
+      expect(response.status).toBe(409);
+      await expect(target.admission()).resolves.toMatchObject({ fenced: true, mutationId: "policy-committed", mutationPhase: "committed_pending" });
+    });
+  });
+
+  it("does not let a delayed revoke finalizer clear a newer mutation fence", async () => {
+    await withRunner("revoke-finalizer-race", async (target) => {
+      target.admissionState = state("old-revoke", "precommit");
+      target.verifyInternalRequest = async () => true;
+      let releaseRecovery!: () => void;
+      const recoveryBlocked = new Promise<void>((resolve) => { releaseRecovery = resolve; });
+      let firstRecovery!: () => void;
+      const firstRecoveryStarted = new Promise<void>((resolve) => { firstRecovery = resolve; });
+      let recoveryCalls = 0;
+      target.registryRequest = async (_id, action) => {
+        if (action.startsWith("/mutation-state")) {
+          recoveryCalls += 1;
+          if (recoveryCalls === 1) {
+            firstRecovery();
+            await recoveryBlocked;
+          }
+          return Response.json({ runner_exists: true, runner_state: "offline", mutation_committed: true, credential_mutation_committed: true, lifecycle_id: "lifecycle-race-7", desired_revision: 8, desired_checksum: checksum });
+        }
+        throw new Error(`unexpected ${action}`);
+      };
+      const oldFinalizer = target.fetch(new Request("https://runner.internal/revoke", { method: "POST", body: JSON.stringify({ mutation_id: "old-revoke" }) }));
+      await firstRecoveryStarted;
+      // beginPolicyMutation must recover the old precommit first, then acquire
+      // the fence for the newer mutation while the old Registry check is still
+      // awaiting. The delayed revoke is queued behind that newer owner.
+      expect(await target.beginPolicyMutation("new-revoke", runnerId)).toBe("started");
+      releaseRecovery();
+      await expect(oldFinalizer).resolves.toMatchObject({ status: 409 });
+      await expect(target.admission()).resolves.toMatchObject({ fenced: true, mutationId: "new-revoke", mutationPhase: "precommit" });
+    });
+  });
+
+  it("does not let a delayed delete finalizer clear a newer mutation fence", async () => {
+    await withRunner("delete-finalizer-race", async (target) => {
+      target.admissionState = state("old-delete", "committed_pending");
+      target.verifyInternalRequest = async () => true;
+      const originalAdmission = target.admission.bind(target);
+      let firstAdmission!: () => void;
+      const firstAdmissionStarted = new Promise<void>((resolve) => { firstAdmission = resolve; });
+      let admissionCalls = 0;
+      target.admission = async () => {
+        admissionCalls += 1;
+        if (admissionCalls === 1) {
+          firstAdmission();
+          // Yield once so the newer mutation can enqueue its admission write
+          // before the delayed delete resumes its ownership check.
+          await Promise.resolve();
+        }
+        return originalAdmission();
+      };
+      const oldFinalizer = target.fetch(new Request("https://runner.internal/delete", { method: "POST", body: JSON.stringify({ mutation_id: "old-delete" }) }));
+      await firstAdmissionStarted;
+      expect(await target.beginPolicyMutation("new-delete", runnerId)).toBe("started");
+      await expect(oldFinalizer).resolves.toMatchObject({ status: 409 });
+      await expect(target.admission()).resolves.toMatchObject({ fenced: true, mutationId: "new-delete", mutationPhase: "precommit" });
+    });
+  });
 });
 
 function policy(revision: number) {

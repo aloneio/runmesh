@@ -88,19 +88,49 @@ export const JsonValueSchema: z.ZodType<JsonValue> = z.any().superRefine(
       seen.add(objectValue);
 
       if (Array.isArray(objectValue)) {
-        for (const item of objectValue) {
-          pending.push({ value: item, depth: current.depth + 1 });
+        // JSON.stringify silently drops symbol/non-index properties on arrays
+        // and turns holes into null.  Wire values must not change shape during
+        // encoding, so reject those cases explicitly instead of hashing or
+        // transmitting a different value than the caller validated.
+        if (objectValue.length > MAX_JSON_NODES) {
+          context.addIssue({ code: "custom", message: "JSON arrays have too many items" });
+          return;
+        }
+        for (const key of Reflect.ownKeys(objectValue)) {
+          if (key === "length") continue;
+          if (typeof key !== "string" || !isCanonicalArrayIndex(key) || Number(key) >= objectValue.length) {
+            context.addIssue({ code: "custom", message: "JSON arrays may contain only indexed items" });
+            return;
+          }
+        }
+        for (let index = 0; index < objectValue.length; index += 1) {
+          if (!Object.prototype.hasOwnProperty.call(objectValue, index)) {
+            context.addIssue({ code: "custom", message: "JSON arrays cannot contain holes" });
+            return;
+          }
+          const descriptor = Object.getOwnPropertyDescriptor(objectValue, String(index));
+          if (descriptor === undefined || !("value" in descriptor)) {
+            context.addIssue({ code: "custom", message: "JSON arrays cannot contain accessors" });
+            return;
+          }
+          pending.push({ value: descriptor.value, depth: current.depth + 1 });
         }
         continue;
       }
-      if (Object.getPrototypeOf(objectValue) !== Object.prototype) {
+      const prototype = Object.getPrototypeOf(objectValue);
+      if (prototype !== Object.prototype && prototype !== null) {
         context.addIssue({ code: "custom", message: "JSON objects must be plain objects" });
         return;
       }
-      for (const descriptor of Object.values(
-        Object.getOwnPropertyDescriptors(objectValue),
-      )) {
-        if (!("value" in descriptor)) {
+      for (const key of Reflect.ownKeys(objectValue)) {
+        // JSON.stringify ignores symbols and non-enumerable properties.  Do
+        // not let those hidden values pass validation and disappear on wire.
+        if (typeof key !== "string" || !Object.prototype.propertyIsEnumerable.call(objectValue, key)) {
+          context.addIssue({ code: "custom", message: "JSON objects may contain only enumerable string properties" });
+          return;
+        }
+        const descriptor = Object.getOwnPropertyDescriptor(objectValue, key);
+        if (descriptor === undefined || !("value" in descriptor)) {
           context.addIssue({ code: "custom", message: "JSON objects cannot contain accessors" });
           return;
         }
@@ -109,6 +139,15 @@ export const JsonValueSchema: z.ZodType<JsonValue> = z.any().superRefine(
     }
   },
 );
+
+/** Array index names that JSON.stringify treats as array elements. */
+function isCanonicalArrayIndex(value: string): boolean {
+  const index = Number(value);
+  return Number.isSafeInteger(index)
+    && index >= 0
+    && index < 4_294_967_295
+    && String(index) === value;
+}
 
 export const ProtocolVersionSchema = z.number().int().positive();
 const ExtensionsSchema = z.record(z.string().min(1).max(128), JsonValueSchema);

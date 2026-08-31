@@ -16,6 +16,12 @@ export const FIXED_SIGNATURE_URL = `${FIXED_RELEASE_BASE_URL}/manifest.sig`;
 export const FIXED_SIGNATURE_DESCRIPTOR_URL = `${FIXED_RELEASE_BASE_URL}/manifest.signature.json`;
 export const FIXED_CHECKSUMS_URL = `${FIXED_RELEASE_BASE_URL}/SHA256SUMS`;
 
+// Bound every fixed release asset before signature verification. The current
+// Runner package is about 0.5 MiB; leave room for ordinary growth while still
+// preventing an over-sized allowed-origin response from filling a host's
+// temporary filesystem.
+export const MAX_RELEASE_ASSET_BYTES = 8 * 1024 * 1024;
+
 export interface FixedReleaseDescriptor {
   readonly channel: "dev";
   readonly distributable: boolean;
@@ -158,7 +164,7 @@ export function powershellQuote(value: string): string { return `'${powershellLi
 
 /* This source deliberately has no trust-keyring download. */
 const VERIFY_RELEASE = String.raw`import { createHash, createPublicKey, verify } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { open } from "node:fs/promises";
 import { join } from "node:path";
 const directory = process.argv[2];
 const version = "__VERSION__";
@@ -166,24 +172,56 @@ const keyId = "__KEY_ID__";
 const artifactName = "__ARTIFACT_NAME__";
 const artifactUrl = "__ARTIFACT_URL__";
 const publicKeyPem = __PUBLIC_KEY_PEM__;
+const maxReleaseAssetBytes = __MAX_RELEASE_ASSET_BYTES__;
 const fail = (message) => { throw new Error("release verification failed: " + message); };
-const parse = async (name) => { try { return JSON.parse(await readFile(join(directory, name), "utf8")); } catch { fail("invalid " + name); } };
-const manifestBytes = await readFile(join(directory, "manifest.json"));
-const descriptor = await parse("manifest.signature.json");
+const boundedRead = async (name, encoding) => {
+  const path = join(directory, name);
+  let handle;
+  try { handle = await open(path, "r"); } catch { fail("invalid " + name); }
+  try {
+    const metadata = await handle.stat().catch(() => fail("invalid " + name));
+    if (!metadata.isFile() || !Number.isSafeInteger(metadata.size) || metadata.size <= 0) fail("invalid " + name);
+    if (metadata.size > maxReleaseAssetBytes) fail(name + " exceeds the fixed size limit");
+    const chunks = [];
+    let total = 0;
+    while (total <= maxReleaseAssetBytes) {
+      // Read at most one byte past the cap so growth after stat cannot cause
+      // an unbounded allocation before the size check runs.
+      const remaining = maxReleaseAssetBytes + 1 - total;
+      const chunk = Buffer.allocUnsafe(Math.min(65536, remaining));
+      const result = await handle.read(chunk, 0, chunk.byteLength, null).catch(() => fail("invalid " + name));
+      if (result.bytesRead === 0) break;
+      chunks.push(result.bytesRead === chunk.byteLength ? chunk : chunk.subarray(0, result.bytesRead));
+      total += result.bytesRead;
+      if (total > maxReleaseAssetBytes) fail(name + " exceeds the fixed size limit");
+    }
+    // Re-stat the same descriptor after EOF as well. An append that lands
+    // immediately after the final read would otherwise evade the initial
+    // size check even though the path was held open safely throughout.
+    const finalMetadata = await handle.stat().catch(() => fail("invalid " + name));
+    if (!finalMetadata.isFile() || !Number.isSafeInteger(finalMetadata.size) || finalMetadata.size <= 0) fail(name + " changed while being read");
+    if (finalMetadata.size > maxReleaseAssetBytes) fail(name + " exceeds the fixed size limit");
+    if (total !== metadata.size || total !== finalMetadata.size) fail(name + " changed while being read");
+    const bytes = Buffer.concat(chunks, total);
+    return encoding === undefined ? bytes : bytes.toString(encoding);
+  } finally { await handle.close().catch(() => {}); }
+};
+const parseBytes = (name, bytes) => { try { return JSON.parse(bytes.toString("utf8")); } catch { fail("invalid " + name); } };
+const manifestBytes = await boundedRead("manifest.json");
+const descriptor = parseBytes("manifest.signature.json", await boundedRead("manifest.signature.json"));
 if (descriptor?.schema_version !== 1 || descriptor.algorithm !== "ed25519" || descriptor.key_id !== keyId || descriptor.encoding !== "base64" || descriptor.signed_file !== "manifest.json") fail("invalid signature descriptor");
-const encodedSignature = (await readFile(join(directory, "manifest.sig"), "utf8")).trim();
+const encodedSignature = (await boundedRead("manifest.sig", "utf8")).trim();
 if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encodedSignature)) fail("signature is not canonical base64");
 const signature = Buffer.from(encodedSignature, "base64");
 if (signature.length !== 64 || signature.toString("base64") !== encodedSignature || !verify(null, manifestBytes, createPublicKey(publicKeyPem), signature)) fail("signature does not verify");
-const manifest = await parse("manifest.json");
+const manifest = parseBytes("manifest.json", manifestBytes);
 const artifact = Array.isArray(manifest?.artifacts) && manifest.artifacts.length === 1 ? manifest.artifacts[0] : undefined;
 if (manifest?.schema_version !== 1 || manifest.project !== "runmesh" || manifest.version !== version || manifest.tag !== "v" + version || manifest.channel !== "dev" || manifest.prerelease !== true || !/^[0-9a-f]{40}$/.test(manifest.commit_sha) || manifest.protocol_min !== 2 || manifest.protocol_max !== 2 || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(manifest.published_at)) fail("manifest fields are not the fixed preview contract");
-if (artifact?.name !== artifactName || artifact.platform !== "node" || artifact.architecture !== "portable" || artifact.node_major_min !== 20 || artifact.url !== artifactUrl || !Number.isSafeInteger(artifact.size) || artifact.size <= 0 || !/^[0-9a-f]{64}$/.test(artifact.sha256)) fail("manifest artifact is invalid");
-const artifactPath = join(directory, artifactName);
-const metadata = await stat(artifactPath);
-const digest = createHash("sha256").update(await readFile(artifactPath)).digest("hex");
-if (!metadata.isFile() || metadata.size !== artifact.size || digest !== artifact.sha256) fail("artifact size or SHA-256 mismatch");
-const sums = await readFile(join(directory, "SHA256SUMS"), "utf8");
+if (artifact?.name !== artifactName || artifact.platform !== "node" || artifact.architecture !== "portable" || artifact.node_major_min !== 20 || artifact.url !== artifactUrl || !Number.isSafeInteger(artifact.size) || artifact.size <= 0 || artifact.size > maxReleaseAssetBytes || !/^[0-9a-f]{64}$/.test(artifact.sha256)) fail("manifest artifact is invalid");
+const artifactBytes = await boundedRead(artifactName);
+const digest = createHash("sha256").update(artifactBytes).digest("hex");
+if (artifactBytes.byteLength !== artifact.size || digest !== artifact.sha256) fail("artifact size or SHA-256 mismatch");
+const sums = await boundedRead("SHA256SUMS", "utf8");
 if (!sums.split(/\r?\n/).some((line) => line === digest + "  " + artifactName || line === digest + " *" + artifactName)) fail("SHA256SUMS does not match authenticated artifact");
 `;
 
@@ -193,6 +231,7 @@ function verifierSource(): string {
     .replaceAll("__KEY_ID__", FIXED_RELEASE_KEY_ID)
     .replaceAll("__ARTIFACT_NAME__", FIXED_ARTIFACT_NAME)
     .replaceAll("__ARTIFACT_URL__", FIXED_ARTIFACT_URL)
+    .replaceAll("__MAX_RELEASE_ASSET_BYTES__", String(MAX_RELEASE_ASSET_BYTES))
     .replace("__PUBLIC_KEY_PEM__", JSON.stringify(FIXED_RELEASE_PUBLIC_KEY_PEM));
 }
 
@@ -226,6 +265,17 @@ TMP="$(mktemp -d /tmp/runmesh-installer.XXXXXX)"
 STAGE="$INSTALL_ROOT/versions/$VERSION.staging.$$"
 CURRENT_NEW="$INSTALL_ROOT/current.new"
 FINAL="$INSTALL_ROOT/versions/$VERSION"
+# Keep privileged npm completely inside the private temporary directory. npm
+# otherwise consults the invoking root user's, global, and current-directory
+# npmrc files, any of which could change where or how a package is installed.
+NPM_CONFIG_USERCONFIG="$TMP/npm-user.npmrc"
+NPM_CONFIG_GLOBALCONFIG="$TMP/npm-global.npmrc"
+NPM_CONFIG_CACHE="$TMP/npm-cache"
+: > "$NPM_CONFIG_USERCONFIG"
+: > "$NPM_CONFIG_GLOBALCONFIG"
+mkdir "$NPM_CONFIG_CACHE"
+export NPM_CONFIG_USERCONFIG NPM_CONFIG_GLOBALCONFIG NPM_CONFIG_CACHE
+export npm_config_userconfig="$NPM_CONFIG_USERCONFIG" npm_config_globalconfig="$NPM_CONFIG_GLOBALCONFIG" npm_config_cache="$NPM_CONFIG_CACHE"
 TTY_ECHO_DISABLED=0
 FINAL_CREATED=0
 CURRENT_CREATED=0
@@ -265,7 +315,7 @@ download() {
     attempt=$((attempt + 1))
     headers="$TMP/$name.headers"
     status_file="$TMP/$name.status"
-    if curl -q --fail --silent --show-error --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 0 --max-redirs 0 --dump-header "$headers" --output "$TMP/$name" --write-out '%{http_code}' "$url" > "$status_file"; then
+    if curl -q --fail --silent --show-error --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 0 --max-redirs 0 --max-filesize __MAX_RELEASE_ASSET_BYTES__ --dump-header "$headers" --output "$TMP/$name" --write-out '%{http_code}' "$url" > "$status_file"; then
       curl_rc=0
     else
       curl_rc=$?
@@ -293,6 +343,14 @@ RUNMESH_REDIRECT_CHECK
         ;;
       2??)
         if [ "$curl_rc" -ne 0 ]; then printf '%s\n' 'error: release download failed' >&2; exit 1; fi
+        if ! node -e '
+          const { statSync } = require("node:fs");
+          const metadata = statSync(process.argv[1]);
+          if (!metadata.isFile() || metadata.size <= 0 || metadata.size > __MAX_RELEASE_ASSET_BYTES__) process.exit(1);
+        ' "$TMP/$name"; then
+          printf '%s\n' 'error: release asset exceeds the fixed size limit' >&2
+          exit 1
+        fi
         rm -f "$headers" "$status_file"
         break
         ;;
@@ -313,7 +371,10 @@ __VERIFIER__
 RUNMESH_VERIFY
 mkdir -p "$INSTALL_ROOT/versions"
 if ! mkdir "$STAGE"; then printf '%s\n' 'error: installer staging path is already in use' >&2; exit 1; fi
-npm install --global --ignore-scripts --offline --no-audit --no-fund --prefix "$STAGE" "$TMP/$ARTIFACT"
+(
+  cd "$TMP"
+  npm --userconfig "$NPM_CONFIG_USERCONFIG" --globalconfig "$NPM_CONFIG_GLOBALCONFIG" install --global --ignore-scripts --offline --no-audit --no-fund --prefix "$STAGE" "$TMP/$ARTIFACT"
+)
 RUNNER="$STAGE/bin/coding-runner"
 RUNMESH_RUNNER="$STAGE/bin/runmesh-runner"
 [ -x "$RUNNER" ] || { printf '%s\n' 'error: verified package did not install coding-runner' >&2; exit 1; }
@@ -353,8 +414,10 @@ $env:CURL_HOME = $null
 $env:CURLRC = $null
 $env:NPM_CONFIG_USERCONFIG = $null
 $env:NPM_CONFIG_GLOBALCONFIG = $null
+$env:NPM_CONFIG_CACHE = $null
 $env:npm_config_userconfig = $null
 $env:npm_config_globalconfig = $null
+$env:npm_config_cache = $null
 # Windows PowerShell 5.1 does not eagerly load System.Net.Http. Load it
 # explicitly before constructing HttpClientHandler so the fixed installer has
 # the same pre-follow redirect guarantees on PowerShell 5.1 and 7+.
@@ -395,9 +458,22 @@ $CurrentRunner = $null
 $HttpHandler = $null
 $HttpClient = $null
 New-Item -ItemType Directory -Path $TempRoot -Force | Out-Null
-[IO.File]::WriteAllText((Join-Path $TempRoot 'empty.npmrc'), '')
-$env:NPM_CONFIG_USERCONFIG = Join-Path $TempRoot 'empty.npmrc'
+$EmptyUserConfig = Join-Path $TempRoot 'empty-user.npmrc'
+$EmptyGlobalConfig = Join-Path $TempRoot 'empty-global.npmrc'
+$NpmCache = Join-Path $TempRoot 'npm-cache'
+# Point both npm config layers and its cache at private, empty paths. The
+# install also runs from TempRoot, which has no caller-controlled project
+# npmrc; this prevents root/global/cwd configuration from changing a
+# privileged offline install.
+[IO.File]::WriteAllText($EmptyUserConfig, '')
+[IO.File]::WriteAllText($EmptyGlobalConfig, '')
+New-Item -ItemType Directory -Path $NpmCache -Force | Out-Null
+$env:NPM_CONFIG_USERCONFIG = $EmptyUserConfig
+$env:NPM_CONFIG_GLOBALCONFIG = $EmptyGlobalConfig
+$env:NPM_CONFIG_CACHE = $NpmCache
 $env:npm_config_userconfig = $env:NPM_CONFIG_USERCONFIG
+$env:npm_config_globalconfig = $env:NPM_CONFIG_GLOBALCONFIG
+$env:npm_config_cache = $env:NPM_CONFIG_CACHE
 try {
   # Invoke-WebRequest/-MaximumRedirection are intentionally not used for the
   # release fetch: their automatic redirect behavior cannot be pinned before
@@ -426,12 +502,20 @@ try {
           continue
         }
         if (-not $response.IsSuccessStatusCode) { throw "Release download returned HTTP $status." }
+        $contentLength = $response.Content.Headers.ContentLength
+        if ($null -ne $contentLength -and $contentLength -gt __MAX_RELEASE_ASSET_BYTES__) { throw 'Release asset exceeds the fixed size limit.' }
         $stream = $null
         $file = $null
         try {
           $stream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
           $file = [IO.File]::Create((Join-Path $TempRoot $Name))
-          $stream.CopyTo($file)
+          $buffer = New-Object byte[] 65536
+          [long]$total = 0
+          while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            $total += $read
+            if ($total -gt __MAX_RELEASE_ASSET_BYTES__) { throw 'Release asset exceeds the fixed size limit.' }
+            $file.Write($buffer, 0, $read)
+          }
         } finally {
           if ($null -ne $file) { $file.Dispose() }
           if ($null -ne $stream) { $stream.Dispose() }
@@ -449,7 +533,12 @@ __VERIFIER__
 '@ | & $NodePath --input-type=module - $TempRoot
   if ($LASTEXITCODE -ne 0) { throw 'Release verification failed.' }
   New-Item -ItemType Directory -Path $VersionsRoot -Force | Out-Null
-  & $NpmPath install --global --ignore-scripts --offline --no-audit --no-fund --prefix $Stage (Join-Path $TempRoot $ArtifactName)
+  Push-Location -LiteralPath $TempRoot
+  try {
+    & $NpmPath --userconfig $EmptyUserConfig --globalconfig $EmptyGlobalConfig install --global --ignore-scripts --offline --no-audit --no-fund --prefix $Stage (Join-Path $TempRoot $ArtifactName)
+  } finally {
+    Pop-Location
+  }
   if ($LASTEXITCODE -ne 0) { throw 'Verified local tarball installation failed.' }
   $Runner = Get-ChildItem -LiteralPath $Stage -Filter 'coding-runner.cmd' -File -Recurse | Select-Object -First 1
   $RunmeshRunner = Get-ChildItem -LiteralPath $Stage -Filter 'runmesh-runner.cmd' -File -Recurse | Select-Object -First 1
@@ -496,6 +585,7 @@ function replaceInstallerTemplate(template: string, enrollmentUrl: string, liter
     .replaceAll("__RELEASE_BASE__", literal(FIXED_RELEASE_BASE_URL))
     .replaceAll("__ARTIFACT_NAME__", literal(FIXED_ARTIFACT_NAME))
     .replaceAll("__ENROLLMENT_URL__", literal(enrollmentUrl))
+    .replaceAll("__MAX_RELEASE_ASSET_BYTES__", String(MAX_RELEASE_ASSET_BYTES))
     .replace("__RELEASE_REDIRECT_ORIGINS_JSON__", JSON.stringify(FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS))
     .replace("__RELEASE_REDIRECT_ORIGINS_PS__", FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS.map((value) => powershellQuote(value)).join(", "))
     .replace("__VERIFIER__", verifierSource());
