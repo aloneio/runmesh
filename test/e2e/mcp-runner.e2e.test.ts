@@ -202,7 +202,10 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
 
   it("lets Client B discover and query a Client A job through the offline registry snapshot before reconnecting", async () => {
     const started = await mcpTool("shell", {
-      workspace_id: "workspace-1", command: nodeCommand("setTimeout(() => process.stdout.write('completed-after-cross-client-reconnect\\n'), 5000)"), background: true,
+      // Keep the detached child alive well beyond the transport/restart
+      // sequence. A five-second child can finish before the Runner is stopped
+      // on a fast CI host, turning the recovery assertion into a timing race.
+      workspace_id: "workspace-1", command: nodeCommand("setTimeout(() => process.stdout.write('completed-after-cross-client-reconnect\\n'), 30_000)"), background: true,
     }, clientA);
     const jobId = started.structuredContent?.job_id;
     expect(typeof jobId).toBe("string");
