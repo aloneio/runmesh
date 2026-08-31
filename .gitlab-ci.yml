@@ -1,6 +1,5 @@
 stages:
   - verify
-  - deploy
 
 workflow:
   rules:
@@ -43,33 +42,4 @@ verify:
     - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "dev"'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_PIPELINE_SOURCE == "web"'
-    - when: never
-
-cloudflare_deploy:
-  stage: deploy
-  needs:
-    - job: verify
-  image: node:22-bookworm@sha256:8a34c4ab3ea2c5cd194f07e317b2a8f09461d3c8b05c4e34c8ccd56d56024c4d
-  script:
-    - npm ci
-    - npm run check:versions
-    - npm run typecheck
-    # A manual deploy may be started after a newer commit lands on dev. Refuse
-    # to deploy a pipeline SHA that is no longer the branch tip that was
-    # validated by this pipeline.
-    - git fetch --no-tags origin "$CI_COMMIT_BRANCH"
-    - test "$(git rev-parse FETCH_HEAD)" = "$CI_COMMIT_SHA"
-    - npm exec --offline -- wrangler deploy --config apps/worker/wrangler.jsonc --env production --strict
-  environment:
-    name: production
-  resource_group: cloudflare-production
-  when: manual
-  allow_failure: false
-  rules:
-    # Keep the production deploy out of ordinary push/MR verification
-    # pipelines. It remains an explicit, protected Web action so a missing
-    # Cloudflare credential cannot turn a green verification run into a
-    # misleadingly blocked or warning pipeline.
-    - if: '$CI_COMMIT_BRANCH == "dev" && $CI_PIPELINE_SOURCE == "web"'
-      when: manual
     - when: never
