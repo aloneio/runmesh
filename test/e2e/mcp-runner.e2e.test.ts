@@ -311,12 +311,19 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(response.status).toBe(200);
     const html = await response.text();
     expect(html).toContain("Manual portable-artifact enrollment");
+    expect(html).toContain("Manual Runner enrollment and install");
     expect(html).toContain("RUNNER=/opt/runmesh/current/bin/coding-runner");
     expect(html).toContain("C:\\Program Files\\Runmesh\\current\\coding-runner.cmd");
+    expect(html).toContain('sudo &quot;$RUNNER&quot; enroll');
+    expect(html).toContain('&amp; $RunnerPath enroll');
+    expect(html).toContain('sudo &quot;$RUNNER&quot; install');
+    expect(html).toContain('&amp; $RunnerPath install');
     expect(html).toContain("--code-stdin");
     expect(html).toContain("--executable-path");
     expect(html).not.toContain("curl -fsSL");
-    const code = /<span class="form-stat-label">One-time enrollment code<\/span><code class="mono">([A-Za-z0-9_-]{43})<\/code>/u.exec(html)?.[1];
+    expect(html).not.toContain("curl --fail --location");
+    expect(html).not.toContain("Invoke-WebRequest");
+    const code = /<span class="form-stat-label">One-time enrollment code<\/span><code class="mono" data-no-i18n>([A-Za-z0-9_-]{43})<\/code>/.exec(html)?.[1];
     if (code === undefined) throw new Error("browser enrollment code absent");
     // The one-time code is rendered in its own protected value block and must
     // never be embedded in either platform's copied command.

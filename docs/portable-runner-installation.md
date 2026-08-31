@@ -1,26 +1,53 @@
-# Portable Runner artifact verification and installation
+# Portable Runner installation and hosted bootstrap
 
-This page describes the manual, reproducible installation path for a Runmesh Runner `.tgz` release asset. Hosted bootstrap, automatic download, update, and rollback are not included in `v0.1.0-dev.2`.
+Runmesh supports a **fixed signed bootstrap design**, but it is deliberately disabled by default in `v0.1.0-dev.2`. The repository currently does **not** assert that the corresponding `v0.1.0-dev.2` GitHub release exists. A deployment may expose hosted commands only after an operator has published and independently verified that exact immutable release, configures the canonical external HTTPS `RUNMESH_PUBLIC_ORIGIN`, and explicitly sets `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.0-dev.2` for the Worker deployment. Both conditions are required; setting the release acknowledgement alone never exposes the installer.
 
-## Trust root
+`RUNMESH_PUBLIC_ORIGIN` is a non-secret Worker variable. Set it in the Wrangler `vars` configuration to an externally reachable origin such as `https://mcp.example.com`, with no path, query, fragment, credentials, whitespace, wildcard, or `http://` scheme. A trailing slash is normalized. Installer rendering and Admin actions that generate enrollment/MCP URLs reject a configured `Host` that does not match this origin; an invalid or missing origin keeps the release descriptor non-distributable. Local development can omit the variable, but it cannot enable hosted signed bootstrap.
 
-Do not trust a `trust-keyring.json` merely because it was downloaded beside the artifact. Start from a reviewed Runmesh source checkout at the release commit, or another independently authenticated copy of:
+Until both prerequisites are satisfied, `/runner/releases/latest` and `/runner/releases/stable` return `distributable: false`, and `/runner/install.sh` and `/runner/install.ps1` fail closed. Do not treat a source change, an npm package, a branch artifact, or an arbitrary URL as release availability.
+
+## Trust model
+
+The one-command path (trust model A) treats the HTTPS Worker response that serves the installer as its bootstrap trust root. The installer pins all of the following in source:
+
+- version `0.1.0-dev.2` and tag `v0.1.0-dev.2`;
+- the exact GitHub release-asset URLs and `runmesh-runner-0.1.0-dev.2.tgz` name;
+- signing key ID `runmesh-preview-2026-01`;
+- the reviewed Ed25519 public key from `release/trust-keyring.json`.
+
+Before installing, the script downloads only `manifest.json`, `manifest.sig`, `manifest.signature.json`, `SHA256SUMS`, and the fixed tarball. It verifies the detached Ed25519 signature, strict manifest project/version/tag/channel/protocol/commit/artifact fields, artifact size, SHA-256, and the additional checksum-file entry. It installs only that verified local tarball with npm scripts disabled. It never uses a downloaded `trust-keyring.json` as a trust root, consults an npm registry, accepts `latest`, or accepts a package name or caller-supplied URL.
+
+A compromised Worker/bootstrap endpoint can replace the installer and its embedded key; a one-command script cannot detect that replacement itself. High-assurance environments must use the independent offline path below instead of executing a remote script.
+
+## Enabled hosted-bootstrap commands
+
+Use these commands **only when the authenticated Admin enrollment page says the fixed signed preview is available** and the command URL uses the configured public origin. They contain no enrollment code. The script validates the artifact first, then asks locally for the single-use code and sends it only to `coding-runner enroll --code-stdin`; it is not put in the URL, copied command, or process arguments. If the request `Host` does not match `RUNMESH_PUBLIC_ORIGIN`, the Worker refuses to render the installer instead of embedding a different origin.
+
+Linux or macOS, from an elevated shell:
+
+```sh
+curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 0 'https://your-runmesh.example/runner/install.sh' | sudo sh
+```
+
+Windows, from an elevated PowerShell session:
+
+```powershell
+Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 -Uri 'https://your-runmesh.example/runner/install.ps1' | Invoke-Expression
+```
+
+The installers require Node.js 20+, npm, elevation, and a clean Runmesh installation. They refuse an existing `current`, same-version/staging root, canonical system profile, or service manifest. They stage the package under the versioned Runmesh root, validate both `coding-runner` and `runmesh-runner` entry points, and do not make an unverified `latest` update. Local artifact installation happens before code redemption, so verification and staging failures do not consume the code. If a later local service step fails, the installer best-effort uninstalls only its newly created managed service, removes the newly created profile, current pointer, and version root, and exits nonzero. There is no automatic package update or rollback: retain the prior verified package and managed `current`/service state for a manual recovery. Enrollment redemption itself is remote and single-use and cannot be restored; generate a replacement code before retrying.
+
+## High-assurance offline verification path
+
+For an independently verifiable installation, obtain a reviewed source checkout or other separately authenticated copy of:
 
 ```text
 release/trust-keyring.json
 ```
 
-Record the expected signing key ID from that trusted checkout. The current preview key ID is:
+The current preview key ID is `runmesh-preview-2026-01`. A keyring downloaded beside a release artifact is informational only; compare it with the independent keyring after verification, never before.
 
-```text
-runmesh-preview-2026-01
-```
-
-The downloaded `trust-keyring.json` is informational. Compare it byte-for-byte with the trusted checkout only after verifying the manifest with the trusted checkout keyring.
-
-## Download
-
-Download these assets for the selected prerelease into an empty directory:
+Download the prospective release assets into an empty directory while keeping the trusted source checkout separate:
 
 ```text
 runmesh-runner-<version>.tgz
@@ -34,12 +61,11 @@ NOTICE
 THIRD_PARTY_NOTICES.md
 ```
 
-Keep the trusted source checkout outside that download directory.
+Keep the trusted source checkout outside that download directory. Verify the assets with the checkout's trusted keyring; the keyring downloaded beside the artifact is informational only.
 
 ## Verify the signature and checksums
 
-From the trusted source checkout, set the download directory and expected key ID. The
-POSIX commands below are intended for Linux, macOS, `bash`, or `zsh`:
+From the trusted source checkout, set the download directory and expected key ID. The POSIX commands below are intended for Linux, macOS, `bash`, or `zsh`:
 
 ```bash
 set -eu
@@ -66,11 +92,10 @@ node scripts/release-verify.mjs \
     exit 1
   fi
 )
-
 cmp "$DOWNLOAD/trust-keyring.json" "$TRUSTED_KEYRING"
 ```
 
-Stop if any command fails. `release-verify.mjs` verifies the manifest signature with `TRUSTED_KEYRING`, validates the manifest schema/version, and compares the local tarball size and SHA-256 digest to the authenticated `manifest.artifacts[]` entry. It never trusts the downloaded keyring as a trust root. `SHA256SUMS` is an additional convenience check.
+Stop on any failure. `release-verify.mjs` verifies the signature using only `TRUSTED_KEYRING`, validates the release contract, and checks the artifact size and digest from the authenticated manifest.
 
 Confirm that the manifest identifies the expected version and source commit before installation:
 
@@ -138,7 +163,12 @@ sudo npm install --global --ignore-scripts \
 sudo ln -s "/opt/runmesh/versions/$VERSION" /opt/runmesh/current.new
 sudo mv /opt/runmesh/current.new /opt/runmesh/current
 sudo "/opt/runmesh/current/bin/coding-runner" --version
+sudo "/opt/runmesh/current/bin/coding-runner" --help
 ```
+
+Use an equivalent verified local path on Windows and inspect the actual `coding-runner.cmd` npm shim before using it for a service. Do not delete an existing `current` link/junction to make room for an install.
+
+After local verification, run the platform-specific enrollment and service activation steps below without putting the code in argv, shell history, configuration, or a URL.
 
 ### macOS
 
@@ -241,4 +271,4 @@ if ($LASTEXITCODE -ne 0) { throw 'Runner doctor check failed.' }
 `coding-runner --version` must equal the manifest version, and `doctor --json`
 must return structured checks. The enrollment code is single-use and is not a
 long-term Runner credential; never place it in logs, shell history, issue
-reports, or configuration management.
+reports, or configuration management. The resulting long-lived Runner token is private profile material.

@@ -88,6 +88,41 @@ describe("runner product profile and enrollment", () => {
     } finally { await test.cleanup(); }
   });
 
+  it("accepts a code from stdin without outputting the code or token", async () => {
+    const test = await fixture();
+    try {
+      const code = "b".repeat(43); const lines: string[] = []; const errors: string[] = [];
+      expect(parseProductArgs(["enroll", "--server", "https://example.test/runner/enroll", "--code-stdin"]).values).toMatchObject({ codeStdin: true });
+      await runEnrollCli(["--server", "https://example.test/runner/enroll", "--code-stdin", "--json"], {
+        store: test.store, stdout: (line) => lines.push(line), stderr: (line) => errors.push(line), readStdin: async () => ` ${code}\n`,
+        fetch: async () => new Response(JSON.stringify({ runner_id: "stdin-runner", server_url: "https://example.test/runner/connect", token: "stdin-token-must-not-print" }), { status: 200 }),
+      });
+      expect(lines.join("\\n")).toContain("stdin-runner");
+      expect(lines.join("\\n")).not.toContain(code); expect(lines.join("\\n")).not.toContain("stdin-token-must-not-print"); expect(errors).toEqual([]);
+      await expect(test.store.load()).resolves.toMatchObject({ runner_id: "stdin-runner", token: "stdin-token-must-not-print" });
+    } finally { await test.cleanup(); }
+  });
+  it("rejects empty, invalid, and conflicting stdin enrollment input", async () => {
+    const test = await fixture();
+    try {
+      const error = () => undefined;
+      await expect(runEnrollCli(["--server", "https://example.test/runner/enroll", "--code-stdin"], { store: test.store, stderr: error, readStdin: async () => "   ", fetch: async () => new Response() })).rejects.toThrow("--code-stdin requires");
+      await expect(runEnrollCli(["--server", "https://example.test/runner/enroll", "--code-stdin", "--code", "a".repeat(43)], { store: test.store, stderr: error, readStdin: async () => "b".repeat(43), fetch: async () => new Response() })).rejects.toThrow("cannot be used together");
+      await expect(runEnrollCli(["--server", "https://example.test/runner/enroll", "--code-stdin"], { store: test.store, stderr: error, readStdin: async () => "invalid code", fetch: async () => new Response() })).rejects.toThrow("one-time enrollment code");
+    } finally { await test.cleanup(); }
+  });
+
+  it("removes a newly enrolled profile if the same CLI operation later fails", async () => {
+    const test = await fixture();
+    try {
+      await expect(runCli(["enroll", "--server", "https://example.test/runner/enroll", "--code-stdin", "--profile", test.store.filePath], {
+        store: test.store, stderr: () => undefined, readStdin: async () => "c".repeat(43), afterEnroll: async () => { throw new Error("post-enrollment activation failed"); },
+        fetch: async () => new Response(JSON.stringify({ runner_id: "rollback-runner", server_url: "https://example.test/runner/connect", token: "rollback-token-must-be-removed" }), { status: 200 }),
+      })).rejects.toThrow("post-enrollment activation failed");
+      await expect(test.store.load()).resolves.toBeUndefined();
+    } finally { await test.cleanup(); }
+  });
+
   it("rejects cleartext enrollment except explicit loopback development", async () => {
     const test = await fixture();
     try {
@@ -130,6 +165,8 @@ describe("runner product CLI and service safety", () => {
     const linux = renderService({ platform: "linux", mode: "system" });
     expect(serviceLayout({ platform: "linux", mode: "system" })).toMatchObject({ installRoot: "/opt/runmesh", configRoot: "/etc/runmesh", stateRoot: "/var/lib/runmesh", logRoot: "/var/log/runmesh", manifestPath: "/etc/systemd/system/runmesh-runner.service" });
     expect(linux).toMatchObject({ executionMode: "dedicated_user" });
+    expect(serviceLayout({ platform: "linux", mode: "system" }).executablePath).toBe("/opt/runmesh/current/bin/coding-runner");
+    expect(serviceLayout({ platform: "darwin", mode: "system" }).executablePath).toBe("/opt/runmesh/current/bin/coding-runner");
     expect(linux.content).toContain("User=runmesh");
     expect(linux.content).toContain("Group=runmesh");
     expect(linux.content).toContain("ExecStart=/opt/runmesh/current/bin/coding-runner start");

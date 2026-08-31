@@ -865,7 +865,8 @@ export class JobManager {
     // snapshot can never resurrect an already terminal identity decision.
     const prior = this.jobs.get(jobId);
     if (prior === undefined || !isActive(prior)) return;
-    const deliveredCancellation = prior.status === "cancelling" && (pendingDelivered || this.terminationDelivered.has(jobId) || prior.cancellation_delivered_at_ms !== null);
+    const current = this.jobs.get(jobId) ?? prior;
+    const deliveredCancellation = current.status === "cancelling" && (pendingDelivered || this.terminationDelivered.has(jobId) || current.cancellation_delivered_at_ms !== null);
     // A code-zero exit is a successful process completion even if cancel raced
     // with it. Cancellation is reserved for a delivered termination with an
     // abnormal/signal exit, so status does not overstate what happened.
@@ -876,9 +877,9 @@ export class JobManager {
     // terminal record so a restart cannot reinterpret a delivered request as
     // an ordinary interruption. This also applies when the process exits 0
     // after a delivered cancellation race.
-    const cancellationDeliveredAt = prior.cancellation_delivered_at_ms ?? (deliveredCancellation ? Date.now() : null);
+    const cancellationDeliveredAt = current.cancellation_delivered_at_ms ?? (deliveredCancellation ? Date.now() : null);
     const completed: JobRecord = {
-      ...prior, status, updated_at_ms: Date.now(), completed_at_ms: Date.now(),
+      ...current, status, updated_at_ms: Date.now(), completed_at_ms: Date.now(),
       exit_code: status === "cancelled" ? null : code, signal,
       cancellation_delivered_at_ms: cancellationDeliveredAt,
     };
@@ -947,7 +948,11 @@ export class JobManager {
   private persist(job: JobRecord): Promise<void> {
     const path = join(this.jobDir(job.job_id), "meta.json");
     const prior = this.persistChains.get(job.job_id) ?? Promise.resolve();
-    const next = prior.catch(() => undefined).then(() => atomicJson(path, job));
+    const next = prior.catch(() => undefined).then(async () => {
+      const current = this.jobs.get(job.job_id);
+      if (isActive(job) && current !== undefined && !isActive(current)) return;
+      await atomicJson(path, job);
+    });
     this.persistChains.set(job.job_id, next);
     return next.finally(() => {
       if (this.persistChains.get(job.job_id) === next) this.persistChains.delete(job.job_id);

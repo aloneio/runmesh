@@ -848,16 +848,26 @@ export class RegistryDO {
     });
     return { enrollment_id: enrollmentId, runner_id: runnerId, expires_at_ms: expiresAtMs };
   }
-  public async redeemRunnerEnrollment(verifier: string, tokenVerifier: string, publicInfo: RunnerPublicInfo, nowMs: number): Promise<{ runner_id: string } | undefined> {
-    if (!validVerifier(verifier) || !validVerifier(tokenVerifier) || !validRunnerPublicInfo(publicInfo)) return undefined;
+  public lookupRunnerEnrollment(verifier: string, nowMs: number): { runner_id: string } | undefined {
+    if (!validVerifier(verifier)) return undefined;
+    const row = this.ctx.storage.sql.exec<Pick<EnrollmentRow, "runner_id" | "expires_at_ms" | "used_at_ms">>(
+      "SELECT runner_id, expires_at_ms, used_at_ms FROM runner_enrollments WHERE verifier = ?", verifier,
+    ).toArray()[0];
+    if (row === undefined || row.used_at_ms !== null || row.expires_at_ms <= nowMs || this.runnerRow(row.runner_id) === undefined) return undefined;
+    return { runner_id: row.runner_id };
+  }
+  public async redeemRunnerEnrollment(verifier: string, tokenVerifier: string, publicInfo: RunnerPublicInfo, nowMs: number, mutationId?: string): Promise<{ runner_id: string } | undefined> {
+    if (!validVerifier(verifier) || !validVerifier(tokenVerifier) || !validRunnerPublicInfo(publicInfo) || !validOptionalMutationId(mutationId)) return undefined;
     return this.ctx.storage.transactionSync(() => {
       const row = this.ctx.storage.sql.exec<EnrollmentRow>(
         "SELECT * FROM runner_enrollments WHERE verifier = ? AND used_at_ms IS NULL AND expires_at_ms > ?", verifier, nowMs,
       ).toArray()[0];
       if (row === undefined) return undefined;
+      if (this.runnerRow(row.runner_id) === undefined) return undefined;
+      if (mutationId !== undefined) this.recordCredentialMutation(row.runner_id, mutationId, "credential_enroll", nowMs);
       const changed = this.ctx.storage.sql.exec("UPDATE runner_enrollments SET used_at_ms = ? WHERE enrollment_id = ? AND used_at_ms IS NULL AND expires_at_ms > ?", nowMs, row.enrollment_id, nowMs);
       if (changed.rowsWritten !== 1) return undefined;
-      this.ctx.storage.sql.exec(
+      const updated = this.ctx.storage.sql.exec(
         `UPDATE runners SET token_verifier = ?, credential_version = credential_version + 1, connection_epoch = connection_epoch + 1,
          state = 'offline', session_id = NULL, metadata_json = NULL, public_info_json = ?, current_runner_version = ?,
          protocol_min_version = ?, protocol_max_version = ?, protocol_compatibility = ?, update_status = ?, last_heartbeat_ms = NULL,
@@ -867,7 +877,7 @@ export class RegistryDO {
         updateStatus(this.runnerRow(row.runner_id)?.update_channel ?? "stable", this.runnerRow(row.runner_id)?.desired_runner_version ?? undefined, this.runnerRow(row.runner_id)?.latest_runner_version ?? undefined, { current_runner_version: publicInfo.runner_version, protocol_compatibility: protocolCompatibility(publicInfo.protocol_version, publicInfo.protocol_version) }),
         nowMs, row.runner_id,
       );
-      return this.runnerRow(row.runner_id) === undefined ? undefined : { runner_id: row.runner_id };
+      return updated.rowsWritten === 1 && this.runnerRow(row.runner_id) !== undefined ? { runner_id: row.runner_id } : undefined;
     });
   }
   public async authenticateRunner(runnerId: string, token: string): Promise<{ credential_version: number } | undefined> {
@@ -1015,9 +1025,16 @@ export class RegistryDO {
     const input = rawBody.length === 0 ? {} : parseJsonObject(rawBody);
     if (input === undefined) return Response.json({ error: "invalid JSON object" }, { status: 400 });
     const now = Date.now();
+    if (request.method === "POST" && segments.length === 2 && segments[0] === "enrollments" && segments[1] === "lookup") {
+      const verifier = stringField(input, "verifier", 64);
+      const target = verifier === undefined ? undefined : this.lookupRunnerEnrollment(verifier, now);
+      return target === undefined ? new Response("invalid enrollment", { status: 401 }) : Response.json(target);
+    }
     if (request.method === "POST" && segments.length === 2 && segments[0] === "enrollments" && segments[1] === "redeem") {
       const verifier = stringField(input, "verifier", 64); const tokenVerifier = stringField(input, "token_verifier", 64); const publicInfo = runnerPublicInfoField(input.runner_public_info);
-      const redeemed = verifier === undefined || tokenVerifier === undefined || publicInfo === undefined ? undefined : await this.redeemRunnerEnrollment(verifier, tokenVerifier, publicInfo, now);
+      const mutationId = input.mutation_id === undefined ? undefined : mutationIdField(input);
+      if (input.mutation_id !== undefined && mutationId === undefined) return Response.json({ error: "invalid mutation id" }, { status: 400 });
+      const redeemed = verifier === undefined || tokenVerifier === undefined || publicInfo === undefined ? undefined : await this.redeemRunnerEnrollment(verifier, tokenVerifier, publicInfo, now, mutationId);
       return redeemed === undefined ? new Response("invalid enrollment", { status: 401 }) : Response.json(redeemed);
     }
     if (segments[0] === "auth") return this.handleAuth(request.method, segments.slice(1), input, now, url);
@@ -1240,7 +1257,7 @@ export class RegistryDO {
   private authThrottleRow(kind: AuthThrottleKind): AuthThrottleRow | undefined { return this.ctx.storage.sql.exec<AuthThrottleRow>("SELECT id, failed_attempts, blocked_until_ms, updated_at_ms FROM auth_throttle WHERE id = ?", kind).toArray()[0]; }
   private getMcpClient(clientId: string): McpClientRecord | undefined { const row = this.ctx.storage.sql.exec<McpClientRow>("SELECT * FROM mcp_clients WHERE client_id = ?", clientId).toArray()[0]; return row === undefined ? undefined : decodeMcpClient(row); }
   private mutationRow(runnerId: string, mutationId: string): { pre_credential_version: number } | undefined { return this.ctx.storage.sql.exec<{ pre_credential_version: number }>("SELECT pre_credential_version FROM runner_mutations WHERE runner_id = ? AND mutation_id = ?", runnerId, mutationId).toArray()[0]; }
-  private recordCredentialMutation(runnerId: string, mutationId: string, kind: "credential_rotate" | "credential_revoke" | "runner_delete", nowMs: number): void {
+  private recordCredentialMutation(runnerId: string, mutationId: string, kind: "credential_enroll" | "credential_rotate" | "credential_revoke" | "runner_delete", nowMs: number): void {
     const runner = this.runnerRow(runnerId);
     if (runner === undefined || !validMutationId(mutationId)) throw new Error("invalid credential mutation");
     this.ctx.storage.sql.exec("INSERT OR IGNORE INTO runner_mutations (runner_id, mutation_id, kind, pre_credential_version, committed_at_ms) VALUES (?, ?, ?, ?, ?)", runnerId, mutationId, kind, runner.credential_version, nowMs);

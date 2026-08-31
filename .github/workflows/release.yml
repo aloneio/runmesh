@@ -9,6 +9,8 @@ on:
         type: string
 
 permissions:
+  # Publishing the annotated tag and prerelease requires repository contents
+  # write access. All other permissions remain unset by default.
   contents: write
 
 concurrency:
@@ -89,7 +91,10 @@ jobs:
           set -euo pipefail
           published_at="$(date --utc --date="@$(git log -1 --format=%ct)" +%Y-%m-%dT%H:%M:%SZ)"
           node scripts/release-manifest.mjs release/assets "$RELEASE_VERSION" "$(git rev-parse HEAD)" "$published_at"
-      - name: Sign and verify manifest
+          # Keep the SBOM scoped to the packed Runner workspace and its lock
+          # file; do not accidentally describe the entire monorepo.
+          npm sbom --workspace=@aloneio/runmesh-runner --package-lock-only --sbom-format=spdx > release/assets/sbom.spdx.json
+      - name: Sign and verify manifest and local release assets
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
         run: |
@@ -98,12 +103,19 @@ jobs:
           node scripts/release-signature.mjs sign release/assets/manifest.json release/assets/manifest.sig release/assets/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
           node scripts/release-signature.mjs verify release/assets/manifest.json release/assets/manifest.sig release/assets/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
           cp release/trust-keyring.json LICENSE NOTICE THIRD_PARTY_NOTICES.md release/assets/
-          (cd release/assets && sha256sum *.tgz manifest.json manifest.sig manifest.signature.json LICENSE NOTICE THIRD_PARTY_NOTICES.md trust-keyring.json > SHA256SUMS)
+          (cd release/assets && sha256sum *.tgz manifest.json manifest.sig manifest.signature.json sbom.spdx.json LICENSE NOTICE THIRD_PARTY_NOTICES.md trust-keyring.json > SHA256SUMS)
           # Verify the exact bytes that will be uploaded before creating the
           # immutable tag/release. The post-publication check remains as an
           # independent transport/infrastructure verification.
           node scripts/release-verify.mjs release/assets/manifest.json release/assets/manifest.sig release/assets/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID" "$RELEASE_VERSION"
           (cd release/assets && sha256sum -c SHA256SUMS)
+      - name: Preserve signed preview assets as an unpublished CI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: runmesh-signed-preview-${{ env.RELEASE_VERSION }}
+          path: release/assets
+          if-no-files-found: error
+          retention-days: 14
       - name: Verify tag and release do not already exist
         env:
           GH_TOKEN: ${{ github.token }}
