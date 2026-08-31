@@ -15,7 +15,7 @@ import {
   type RunnerMetadata,
   type RunnerPolicy,
 } from "@aloneio/runmesh-protocol";
-import { constantTimeEqual, isSafeIdentifier, runnerTokenVerifier, verifyInternalRequest } from "./security.js";
+import { containsControlCharacter, constantTimeEqual, isConfiguredSecret, isSafeIdentifier, runnerTokenVerifier, verifyInternalRequest } from "./security.js";
 import { readCappedText } from "./body.js";
 
 export type RunnerConnectionState = "online" | "offline" | "stale";
@@ -32,6 +32,8 @@ export type PolicyReadiness =
       readonly runner_reported_policy_checksum: string;
       readonly connection_epoch: number;
       readonly credential_version: number;
+      /** Opaque runner-id lifecycle identity for transport fencing. */
+      readonly lifecycle_id: string | null;
       readonly session_id: string;
     }
   | { readonly ok: false; readonly code: "policy_pending" | "stale_policy"; readonly reason: string };
@@ -39,7 +41,17 @@ export type PolicyAcknowledgementResult = "applied" | "invalid" | "stale";
 
 export interface RunnerMutationState {
   readonly runner_exists: boolean;
+  /** Opaque identity for the current runner_id lifecycle. Internal callers
+   * use this to prevent a delayed mutation from a deleted/recreated Runner
+   * being attached to the new row. It is never exposed in public Runner
+   * metadata. */
+  readonly lifecycle_id: string | null;
   readonly runner_state: RunnerConnectionState | null;
+  /** True only when the requested mutation is backed by a committed
+   * credential-ledger marker for the current lifecycle/generation. The
+   * broader mutation_committed field also includes policy mutations, so
+   * transport credential finalizers must use this narrower proof. */
+  readonly credential_mutation_committed: boolean;
   readonly mutation_committed: boolean;
   readonly desired_revision: number | null;
   readonly desired_checksum: string | null;
@@ -176,6 +188,8 @@ type RunnerRow = {
   state: RunnerConnectionState;
   connection_epoch: number;
   credential_version: number;
+  /** Internal identity for one runner-id lifecycle; never exposed to callers. */
+  lifecycle_id: string;
   management_mode: "central" | "legacy_local";
   session_id: string | null;
   metadata_json: string | null;
@@ -206,6 +220,13 @@ type PolicyVersionRow = {
   created_at_ms: number; acknowledged_at_ms: number | null; validation_summary_json: string | null;
   source_revision: number | null; mutation_id: string | null;
 };
+type PolicyMutationKind = "workspace_create" | "workspace_update" | "workspace_delete" | "permissions" | "emergency_lock";
+type PolicyMutationRow = { runner_id: string; mutation_id: string; kind: PolicyMutationKind; fingerprint: string; revision: number; committed_at_ms: number };
+/** Credential mutations share one durable idempotency ledger. Enrollment is
+ * distinct from an administrator rotation for new writes, while the marker
+ * matcher below accepts the historical rotate spelling during rollout. */
+type CredentialMutationKind = "credential_rotate" | "credential_enroll" | "credential_revoke" | "runner_delete" | "runner_create";
+type CredentialMutationRow = { kind: CredentialMutationKind; pre_credential_version: number; lifecycle_id: string };
 
 type WorkspaceRow = { workspace_json: string };
 type ManagedWorkspaceRow = {
@@ -248,7 +269,8 @@ export class RegistryDO {
       this.ctx.storage.sql.exec(`
         CREATE TABLE IF NOT EXISTS runners (
           runner_id TEXT PRIMARY KEY, display_name TEXT NOT NULL, token_verifier TEXT NOT NULL, state TEXT NOT NULL,
-          connection_epoch INTEGER NOT NULL DEFAULT 0, credential_version INTEGER NOT NULL DEFAULT 1, management_mode TEXT NOT NULL DEFAULT 'legacy_local',
+          connection_epoch INTEGER NOT NULL DEFAULT 0, credential_version INTEGER NOT NULL DEFAULT 1,
+          lifecycle_id TEXT NOT NULL DEFAULT '', management_mode TEXT NOT NULL DEFAULT 'legacy_local',
           session_id TEXT, metadata_json TEXT, public_info_json TEXT, last_heartbeat_ms INTEGER, last_sync_sequence INTEGER,
           desired_policy_revision INTEGER NOT NULL DEFAULT 0, desired_policy_checksum TEXT, applied_policy_revision INTEGER, active_policy_checksum TEXT,
           runner_reported_policy_revision INTEGER, runner_reported_policy_checksum TEXT, policy_status TEXT NOT NULL DEFAULT 'pending',
@@ -270,10 +292,16 @@ export class RegistryDO {
         );
         CREATE TABLE IF NOT EXISTS runner_mutations (
           runner_id TEXT NOT NULL, mutation_id TEXT NOT NULL, kind TEXT NOT NULL,
-          pre_credential_version INTEGER NOT NULL,
+          pre_credential_version INTEGER NOT NULL, lifecycle_id TEXT NOT NULL DEFAULT '',
           committed_at_ms INTEGER NOT NULL, PRIMARY KEY (runner_id, mutation_id)
         );
         CREATE INDEX IF NOT EXISTS idx_runner_mutations_runner ON runner_mutations(runner_id);
+        CREATE TABLE IF NOT EXISTS runner_policy_mutations (
+          runner_id TEXT NOT NULL, mutation_id TEXT NOT NULL, kind TEXT NOT NULL,
+          fingerprint TEXT NOT NULL, revision INTEGER NOT NULL, committed_at_ms INTEGER NOT NULL,
+          PRIMARY KEY (runner_id, mutation_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_runner_policy_mutations_runner ON runner_policy_mutations(runner_id);
         CREATE TABLE IF NOT EXISTS workspaces (
           runner_id TEXT NOT NULL, workspace_id TEXT NOT NULL, workspace_json TEXT NOT NULL,
           updated_at_ms INTEGER NOT NULL, PRIMARY KEY (runner_id, workspace_id)
@@ -572,7 +600,7 @@ export class RegistryDO {
     if (runner === undefined) return { ok: false, code: "stale_policy", reason: "runner is missing" };
     const checksum = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
     const revision = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
-    if (runner.state !== "online" || !revision(runner.connection_epoch) || !revision(runner.credential_version) || typeof runner.session_id !== "string" || runner.session_id.length === 0) {
+    if (runner.state !== "online" || !revision(runner.connection_epoch) || !revision(runner.credential_version) || typeof runner.session_id !== "string" || !validSessionId(runner.session_id)) {
       return { ok: false, code: "stale_policy", reason: "runner session is not current" };
     }
     if (runner.policy_status !== "applied") return { ok: false, code: "policy_pending", reason: "policy is not applied" };
@@ -584,6 +612,10 @@ export class RegistryDO {
       || runner.desired_policy_checksum !== runner.active_policy_checksum || runner.active_policy_checksum !== runner.runner_reported_policy_checksum) {
       return { ok: false, code: "stale_policy", reason: "policy identity mismatch" };
     }
+    // A malformed/legacy-empty lifecycle cannot safely authorize a protected
+    // transport session. The schema migration normally fills this value, but
+    // fail closed if a partially upgraded row is encountered.
+    if (!validLifecycleId(runner.lifecycle_id)) return { ok: false, code: "stale_policy", reason: "runner lifecycle identity is unavailable" };
     const active = this.getActivePolicySnapshot(runnerId);
     const desired = this.getDesiredPolicySnapshot(runnerId);
     if (active === undefined || desired === undefined || active.revision !== runner.applied_policy_revision || active.checksum !== runner.active_policy_checksum
@@ -601,6 +633,7 @@ export class RegistryDO {
       runner_reported_policy_checksum: runner.runner_reported_policy_checksum,
       connection_epoch: runner.connection_epoch,
       credential_version: runner.credential_version,
+      lifecycle_id: runner.lifecycle_id,
       session_id: runner.session_id,
     };
   }
@@ -609,17 +642,38 @@ export class RegistryDO {
     if (!isSafeIdentifier(runnerId) || !validMutationId(mutationId)) return emptyMutationState();
     const runner = this.runnerRow(runnerId);
     if (runner === undefined) {
-      const deleted = this.mutationRow(runnerId, mutationId) !== undefined;
-      return { ...emptyMutationState(), mutation_committed: deleted };
+      // A tombstone is retained for runner_delete so a lost delete response
+      // can be recovered. Credential rotate/revoke markers must not look
+      // committed once the Runner row is gone.
+      const deleted = this.mutationRow(runnerId, mutationId);
+      return { ...emptyMutationState(), mutation_committed: deleted?.kind === "runner_delete" };
     }
+    // Only the current desired revision is considered committed here. A
+    // historical policy mutation may remain in the idempotency ledger after a
+    // newer desired revision supersedes it; exposing it as the current
+    // mutation would let delayed ACK/recovery traffic claim stale ownership.
     const policyCommitted = runner.desired_policy_revision > 0 && this.ctx.storage.sql.exec<{ committed: number }>(
       "SELECT 1 AS committed FROM runner_policy_versions WHERE runner_id = ? AND revision = ? AND mutation_id = ? LIMIT 1", runnerId, runner.desired_policy_revision, mutationId,
     ).toArray()[0] !== undefined;
     const credentialMutation = this.mutationRow(runnerId, mutationId);
-    const credentialCommitted = credentialMutation !== undefined && runner.credential_version !== credentialMutation.pre_credential_version;
+    const credentialCommitted = credentialMutation !== undefined
+      && validLifecycleId(runner.lifecycle_id)
+      && validLifecycleId(credentialMutation.lifecycle_id)
+      && credentialMutation.lifecycle_id === runner.lifecycle_id
+      && credentialMutation.kind !== "runner_delete"
+      // A runner_create marker is committed at its synthetic pre-version (0)
+      // only while the newly-created row is still awaiting enrollment. Once
+      // an enrollment/rotation advances the credential generation, an old
+      // create finalizer must no longer be able to claim the mutation or clear
+      // the replacement transport fence.
+      && (credentialMutation.kind === "runner_create"
+        ? runner.credential_version === credentialMutation.pre_credential_version
+        : runner.credential_version === credentialMutation.pre_credential_version + 1);
     return {
       runner_exists: true,
+      lifecycle_id: validLifecycleId(runner.lifecycle_id) ? runner.lifecycle_id : null,
       runner_state: runner.state,
+      credential_mutation_committed: credentialCommitted,
       mutation_committed: policyCommitted || credentialCommitted,
       desired_revision: runner.desired_policy_revision,
       desired_checksum: runner.desired_policy_checksum,
@@ -710,39 +764,67 @@ export class RegistryDO {
   }
   public createManagedWorkspace(runnerId: string, input: { workspace_id: string; display_name: string; root_path: string; enabled: boolean; permissions: PermissionSet }, nowMs: number, mutationId?: string): WorkspaceRecord | undefined {
     if (this.runnerRow(runnerId) === undefined || !validWorkspaceInput(input) || !validOptionalMutationId(mutationId)) return undefined;
+    const fingerprint = policyMutationFingerprint("workspace_create", input);
     try {
       this.ctx.storage.transactionSync(() => {
+        const mutation = mutationId === undefined ? "new" : this.policyMutationStatus(runnerId, mutationId, "workspace_create", fingerprint);
+        if (mutation === "conflict") throw new Error("policy mutation conflict");
+        if (mutation === "committed") return;
         this.ctx.storage.sql.exec(`INSERT INTO managed_workspaces (runner_id, workspace_id, display_name, root_path, enabled, permissions_json, created_at_ms, updated_at_ms, revision)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`, runnerId, input.workspace_id, input.display_name, input.root_path, input.enabled ? 1 : 0, JSON.stringify(input.permissions), nowMs, nowMs);
-        this.bumpDesiredPolicy(runnerId, nowMs, mutationId);
+        const revision = this.bumpDesiredPolicy(runnerId, nowMs, mutationId);
+        if (mutationId !== undefined) this.recordPolicyMutation(runnerId, mutationId, "workspace_create", fingerprint, revision, nowMs);
       });
     } catch { return undefined; }
     return this.getManagedWorkspace(runnerId, input.workspace_id);
   }
   public updateManagedWorkspace(runnerId: string, workspaceId: string, input: { display_name: string; root_path: string; enabled: boolean; permissions: PermissionSet }, nowMs: number, mutationId?: string): WorkspaceRecord | undefined {
-    if (!isSafeIdentifier(workspaceId) || !validWorkspaceInput({ workspace_id: workspaceId, ...input }) || this.getManagedWorkspace(runnerId, workspaceId) === undefined || !validOptionalMutationId(mutationId)) return undefined;
-    this.ctx.storage.transactionSync(() => {
-      this.ctx.storage.sql.exec(`UPDATE managed_workspaces SET display_name = ?, root_path = ?, enabled = ?, permissions_json = ?, updated_at_ms = ?, revision = revision + 1, validation_status = NULL
-        WHERE runner_id = ? AND workspace_id = ?`, input.display_name, input.root_path, input.enabled ? 1 : 0, JSON.stringify(input.permissions), nowMs, runnerId, workspaceId);
-      this.bumpDesiredPolicy(runnerId, nowMs, mutationId);
-    });
+    if (!isSafeIdentifier(workspaceId) || !validWorkspaceInput({ workspace_id: workspaceId, ...input }) || !validOptionalMutationId(mutationId) || this.runnerRow(runnerId) === undefined) return undefined;
+    const fingerprint = policyMutationFingerprint("workspace_update", { workspace_id: workspaceId, ...input });
+    try {
+      this.ctx.storage.transactionSync(() => {
+        const mutation = mutationId === undefined ? "new" : this.policyMutationStatus(runnerId, mutationId, "workspace_update", fingerprint);
+        if (mutation === "conflict") throw new Error("policy mutation conflict");
+        if (mutation === "committed") return;
+        if (this.getManagedWorkspace(runnerId, workspaceId) === undefined) throw new Error("workspace not found");
+        this.ctx.storage.sql.exec(`UPDATE managed_workspaces SET display_name = ?, root_path = ?, enabled = ?, permissions_json = ?, updated_at_ms = ?, revision = revision + 1, validation_status = NULL
+          WHERE runner_id = ? AND workspace_id = ?`, input.display_name, input.root_path, input.enabled ? 1 : 0, JSON.stringify(input.permissions), nowMs, runnerId, workspaceId);
+        const revision = this.bumpDesiredPolicy(runnerId, nowMs, mutationId);
+        if (mutationId !== undefined) this.recordPolicyMutation(runnerId, mutationId, "workspace_update", fingerprint, revision, nowMs);
+      });
+    } catch { return undefined; }
     return this.getManagedWorkspace(runnerId, workspaceId);
   }
   public deleteManagedWorkspace(runnerId: string, workspaceId: string, nowMs: number, mutationId?: string): boolean {
     if (!isSafeIdentifier(workspaceId) || !validOptionalMutationId(mutationId)) return false;
     return this.ctx.storage.transactionSync(() => {
+      const fingerprint = policyMutationFingerprint("workspace_delete", { workspace_id: workspaceId });
+      const mutation = mutationId === undefined ? "new" : this.policyMutationStatus(runnerId, mutationId, "workspace_delete", fingerprint);
+      if (mutation === "conflict") return false;
+      if (mutation === "committed") return true;
       const result = this.ctx.storage.sql.exec("DELETE FROM managed_workspaces WHERE runner_id = ? AND workspace_id = ?", runnerId, workspaceId);
       if (result.rowsWritten !== 1) return false;
-      this.bumpDesiredPolicy(runnerId, nowMs, mutationId);
+      const revision = this.bumpDesiredPolicy(runnerId, nowMs, mutationId);
+      if (mutationId !== undefined) this.recordPolicyMutation(runnerId, mutationId, "workspace_delete", fingerprint, revision, nowMs);
       return true;
     });
   }
   public setRunnerPermissions(runnerId: string, permissions: PermissionSet, nowMs: number, mutationId?: string): RunnerRecord | undefined {
     if (this.runnerRow(runnerId) === undefined || !validPermissionSet(permissions) || !validOptionalMutationId(mutationId)) return undefined;
-    this.ctx.storage.transactionSync(() => {
-      this.ctx.storage.sql.exec("UPDATE runners SET runner_permissions_json = ?, updated_at_ms = ? WHERE runner_id = ?", JSON.stringify(permissions), nowMs, runnerId);
-      this.bumpDesiredPolicy(runnerId, nowMs, mutationId);
-    });
+    return this.setRunnerPermissionsWithKind(runnerId, permissions, nowMs, mutationId, "permissions");
+  }
+  private setRunnerPermissionsWithKind(runnerId: string, permissions: PermissionSet, nowMs: number, mutationId: string | undefined, kind: "permissions" | "emergency_lock"): RunnerRecord | undefined {
+    const fingerprint = policyMutationFingerprint(kind, { permissions });
+    try {
+      this.ctx.storage.transactionSync(() => {
+        const mutation = mutationId === undefined ? "new" : this.policyMutationStatus(runnerId, mutationId, kind, fingerprint);
+        if (mutation === "conflict") throw new Error("policy mutation conflict");
+        if (mutation === "committed") return;
+        this.ctx.storage.sql.exec("UPDATE runners SET runner_permissions_json = ?, updated_at_ms = ? WHERE runner_id = ?", JSON.stringify(permissions), nowMs, runnerId);
+        const revision = this.bumpDesiredPolicy(runnerId, nowMs, mutationId);
+        if (mutationId !== undefined) this.recordPolicyMutation(runnerId, mutationId, kind, fingerprint, revision, nowMs);
+      });
+    } catch { return undefined; }
     return this.getRunner(runnerId);
   }
   /**
@@ -758,9 +840,9 @@ export class RegistryDO {
     );
     return this.getRunner(runnerId);
   }
-  public emergencyLockRunner(runnerId: string, confirmation: string, nowMs: number, mutationId?: string): RunnerRecord | undefined { return confirmation === runnerId ? this.setRunnerPermissions(runnerId, LOCKED_PERMISSIONS, nowMs, mutationId) : undefined; }
-  public acknowledgePolicy(runnerId: string, epoch: number, credentialVersion: number, input: { desired_revision: number; desired_checksum: string; applied_revision: number | null; applied_checksum: string | null; runner_reported_policy_revision: number | null; runner_reported_policy_checksum: string | null; status: "applied" | "pending" | "invalid"; workspace_status: readonly { workspace_id: string; status: WorkspaceValidationStatus }[] }, nowMs: number): PolicyAcknowledgementResult | undefined {
-    if (!this.sessionIsCurrent(runnerId, epoch, credentialVersion, true) || input.workspace_status.length > 64 || !uniqueIds(input.workspace_status.map((item) => item.workspace_id)) || input.workspace_status.some((item) => !isSafeIdentifier(item.workspace_id))) return undefined;
+  public emergencyLockRunner(runnerId: string, confirmation: string, nowMs: number, mutationId?: string): RunnerRecord | undefined { return confirmation === runnerId ? this.setRunnerPermissionsWithKind(runnerId, LOCKED_PERMISSIONS, nowMs, mutationId, "emergency_lock") : undefined; }
+  public acknowledgePolicy(runnerId: string, epoch: number, credentialVersion: number, input: { desired_revision: number; desired_checksum: string; applied_revision: number | null; applied_checksum: string | null; runner_reported_policy_revision: number | null; runner_reported_policy_checksum: string | null; status: "applied" | "pending" | "invalid"; workspace_status: readonly { workspace_id: string; status: WorkspaceValidationStatus }[] }, nowMs: number, lifecycleId?: string | null, sessionId?: string | null): PolicyAcknowledgementResult | undefined {
+    if (!this.sessionIsCurrent(runnerId, epoch, credentialVersion, true, lifecycleId, sessionId) || input.workspace_status.length > 64 || !uniqueIds(input.workspace_status.map((item) => item.workspace_id)) || input.workspace_status.some((item) => !isSafeIdentifier(item.workspace_id))) return undefined;
     const runner = this.runnerRow(runnerId);
     const desired = runner === undefined ? undefined : this.desiredPolicy(runnerId);
     if (runner === undefined || desired === undefined) return undefined;
@@ -774,43 +856,124 @@ export class RegistryDO {
     if (input.status === "applied" && (input.applied_revision !== input.desired_revision || input.applied_checksum !== input.desired_checksum || input.workspace_status.some((item) => item.status !== "valid"))) return undefined;
     if (input.status !== "applied" && input.applied_revision !== runner.applied_policy_revision && !(input.applied_revision === null && runner.applied_policy_revision === null)) return undefined;
     if (input.status === "invalid" && input.applied_revision !== runner.applied_policy_revision) return undefined;
-    this.ctx.storage.transactionSync(() => {
+    const result = this.ctx.storage.transactionSync<PolicyAcknowledgementResult | undefined>(() => {
       const current = this.runnerRow(runnerId);
-      if (current === undefined || current.desired_policy_revision !== input.desired_revision || current.desired_policy_checksum !== input.desired_checksum) throw new Error("stale policy acknowledgement");
+      // The initial session check above is only an optimistic read. A revoke,
+      // reconnect, heartbeat timeout, or newer connection can win before this
+      // transaction starts. Re-check the complete session fence while holding
+      // the transaction so an old Runner cannot acknowledge policy for a newer
+      // credential/connection and make protected RPCs appear ready.
+      if (current === undefined || current.connection_epoch !== epoch || current.credential_version !== credentialVersion || current.state !== "online" || !matchesTransportIdentity(current, lifecycleId, sessionId)
+        || current.desired_policy_revision !== input.desired_revision || current.desired_policy_checksum !== input.desired_checksum) return undefined;
       const version = this.ctx.storage.sql.exec<PolicyVersionRow>("SELECT * FROM runner_policy_versions WHERE runner_id = ? AND revision = ?", runnerId, input.desired_revision).toArray()[0];
-      if (version === undefined || version.checksum !== input.desired_checksum) throw new Error("missing desired policy version");
+      if (version === undefined || version.checksum !== input.desired_checksum) return undefined;
+      // Keep the identity predicate in the conditional write as well as the
+      // transaction read. The transaction currently serializes Registry
+      // calls, but the SQL fence makes the invariant survive a future refactor
+      // (and prevents an old socket from acknowledging a replacement session
+      // if the read/write split ever becomes asynchronous). Legacy direct
+      // callers may omit both identity fields; production routes always pass
+      // both and therefore take the exact-match branch.
+      const hasTransportIdentity = lifecycleId !== undefined && lifecycleId !== null && sessionId !== undefined && sessionId !== null;
+      const fence = ` AND connection_epoch = ? AND credential_version = ? AND state = 'online' AND desired_policy_revision = ? AND desired_policy_checksum = ?${hasTransportIdentity ? " AND lifecycle_id = ? AND session_id = ?" : ""}`;
+      const fenceIdentityArgs = hasTransportIdentity ? [lifecycleId, sessionId] : [];
       if (input.status === "invalid") {
-        this.ctx.storage.sql.exec("UPDATE runners SET runner_reported_policy_revision = ?, runner_reported_policy_checksum = ?, policy_status = ?, policy_acked_at_ms = ?, policy_error_code = ?, updated_at_ms = ? WHERE runner_id = ?", input.runner_reported_policy_revision, input.runner_reported_policy_checksum, input.status, nowMs, "policy_validation_failed", nowMs, runnerId);
+        const updated = this.ctx.storage.sql.exec(`UPDATE runners SET runner_reported_policy_revision = ?, runner_reported_policy_checksum = ?, policy_status = ?, policy_acked_at_ms = ?, policy_error_code = ?, updated_at_ms = ? WHERE runner_id = ?${fence}`, input.runner_reported_policy_revision, input.runner_reported_policy_checksum, input.status, nowMs, "policy_validation_failed", nowMs, runnerId, epoch, credentialVersion, input.desired_revision, input.desired_checksum, ...fenceIdentityArgs);
+        if (updated.rowsWritten !== 1) return undefined;
       } else {
-        this.ctx.storage.sql.exec("UPDATE runners SET applied_policy_revision = ?, active_policy_checksum = ?, runner_reported_policy_revision = ?, runner_reported_policy_checksum = ?, policy_status = ?, policy_acked_at_ms = ?, updated_at_ms = ? WHERE runner_id = ?", input.applied_revision, input.applied_checksum, input.runner_reported_policy_revision, input.runner_reported_policy_checksum, input.status, nowMs, nowMs, runnerId);
+        const updated = this.ctx.storage.sql.exec(`UPDATE runners SET applied_policy_revision = ?, active_policy_checksum = ?, runner_reported_policy_revision = ?, runner_reported_policy_checksum = ?, policy_status = ?, policy_acked_at_ms = ?, updated_at_ms = ? WHERE runner_id = ?${fence}`, input.applied_revision, input.applied_checksum, input.runner_reported_policy_revision, input.runner_reported_policy_checksum, input.status, nowMs, nowMs, runnerId, epoch, credentialVersion, input.desired_revision, input.desired_checksum, ...fenceIdentityArgs);
+        if (updated.rowsWritten !== 1) return undefined;
       }
       this.ctx.storage.sql.exec("UPDATE runner_policy_versions SET status = ?, acknowledged_at_ms = ?, validation_summary_json = ? WHERE runner_id = ? AND revision = ?", input.status, nowMs, JSON.stringify(input.workspace_status), runnerId, input.desired_revision);
       for (const item of input.workspace_status) this.ctx.storage.sql.exec("UPDATE managed_workspaces SET validation_status = ? WHERE runner_id = ? AND workspace_id = ?", item.status, runnerId, item.workspace_id);
+      return input.status === "applied" ? "applied" : "invalid";
     });
-    return input.status === "applied" ? "applied" : "invalid";
+    return result;
   }
 
-  public registerRunner(runnerId: string, tokenVerifier: string, nowMs: number, mutationId?: string): void {
-    if (mutationId !== undefined) this.recordCredentialMutation(runnerId, mutationId, "credential_rotate", nowMs);
-    this.ctx.storage.sql.exec(
-      `INSERT INTO runners (runner_id, display_name, token_verifier, state, credential_version, updated_at_ms)
-       VALUES (?, ?, ?, 'offline', 1, ?)
-       ON CONFLICT(runner_id) DO UPDATE SET token_verifier = excluded.token_verifier,
-         display_name = CASE WHEN runners.display_name = '' THEN excluded.display_name ELSE runners.display_name END,
-         credential_version = runners.credential_version + 1, connection_epoch = runners.connection_epoch + 1,
-         state = 'offline', session_id = NULL, metadata_json = NULL,
-         last_heartbeat_ms = NULL, last_sync_sequence = NULL,
-         policy_status = CASE WHEN desired_policy_revision = 0 THEN 'applied' ELSE 'pending' END, updated_at_ms = excluded.updated_at_ms`, runnerId, runnerId, tokenVerifier, nowMs,
-    );
-    this.markPolicyMigrationComplete(runnerId, nowMs);
+  public registerRunner(runnerId: string, tokenVerifier: string, nowMs: number, mutationId?: string): boolean {
+    // Credential replacement is retried after a lost Worker/Registry
+    // response. Keep the marker and the credential update in one transaction;
+    // a replay of the same mutation must not advance the generation again.
+    return this.ctx.storage.transactionSync(() => {
+      const existing = this.runnerRow(runnerId);
+      if (mutationId !== undefined) {
+        if (!validMutationId(mutationId)) return false;
+        if (existing !== undefined) {
+          const recorded = this.recordCredentialMutation(runnerId, mutationId, "credential_rotate", nowMs);
+          if (recorded === "conflict") return false;
+          if (recorded === "committed") {
+            // Idempotency is tied to the original token payload.  Returning
+            // success for the same mutation with a different verifier would
+            // make the Worker hand out a token that Registry never stored.
+            const current = this.runnerRow(runnerId);
+            return current !== undefined && constantTimeEqual(current.token_verifier, tokenVerifier);
+          }
+        } else {
+          // A registration mutation may create a row after the Worker has
+          // fenced a stale RunnerDO whose Registry row was already deleted.
+          // Record a lifecycle-bound marker in the same transaction as the
+          // insert.  The synthetic pre-version (0) makes the marker
+          // immediately committed for the initial credential version (1), so
+          // a retry with the same mutation cannot rotate the newly-created
+          // credential a second time.  A tombstone with the same mutation ID
+          // is rejected rather than being allowed to cross a delete/recreate
+          // lifecycle boundary.
+          if (this.mutationRow(runnerId, mutationId) !== undefined) return false;
+          const lifecycleId = crypto.randomUUID();
+          this.ctx.storage.sql.exec(
+            `INSERT INTO runners (runner_id, display_name, token_verifier, state, credential_version, lifecycle_id, updated_at_ms)
+             VALUES (?, ?, ?, 'offline', 1, ?, ?)`, runnerId, runnerId, tokenVerifier, lifecycleId, nowMs,
+          );
+          this.ctx.storage.sql.exec(
+            "INSERT INTO runner_mutations (runner_id, mutation_id, kind, pre_credential_version, lifecycle_id, committed_at_ms) VALUES (?, ?, 'credential_rotate', 0, ?, ?)",
+            runnerId, mutationId, lifecycleId, nowMs,
+          );
+          this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE runner_id = ? AND used_at_ms IS NULL", runnerId);
+          this.markPolicyMigrationComplete(runnerId, nowMs);
+          return true;
+        }
+      }
+      this.ctx.storage.sql.exec(
+        `INSERT INTO runners (runner_id, display_name, token_verifier, state, credential_version, lifecycle_id, updated_at_ms)
+         VALUES (?, ?, ?, 'offline', 1, ?, ?)
+         ON CONFLICT(runner_id) DO UPDATE SET token_verifier = excluded.token_verifier,
+           display_name = CASE WHEN runners.display_name = '' THEN excluded.display_name ELSE runners.display_name END,
+           credential_version = runners.credential_version + 1, connection_epoch = runners.connection_epoch + 1,
+           state = 'offline', session_id = NULL, metadata_json = NULL,
+           last_heartbeat_ms = NULL, last_sync_sequence = NULL,
+           policy_status = CASE WHEN desired_policy_revision = 0 THEN 'applied' ELSE 'pending' END, updated_at_ms = excluded.updated_at_ms`, runnerId, runnerId, tokenVerifier, crypto.randomUUID(), nowMs,
+       );
+       // Pending enrollment codes are credential-replacement capabilities;
+       // invalidate them whenever an API registration/rotation wins.
+       this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE runner_id = ? AND used_at_ms IS NULL", runnerId);
+       this.markPolicyMigrationComplete(runnerId, nowMs);
+      return true;
+    });
   }
-  public addRunner(runnerId: string, displayName: string, nowMs: number): RunnerRecord | undefined {
-    if (!isSafeIdentifier(runnerId) || !validLabel(displayName)) return undefined;
+  public addRunner(runnerId: string, displayName: string, nowMs: number, mutationId?: string): RunnerRecord | undefined {
+    if (!isSafeIdentifier(runnerId) || !validLabel(displayName) || !validOptionalMutationId(mutationId)) return undefined;
     try {
       this.ctx.storage.transactionSync(() => {
+        const existing = this.runnerRow(runnerId);
+        if (existing !== undefined) {
+          // A lost /add response may be retried with the same mutation.  Only
+          // replay the exact creation marker for the same lifecycle and label;
+          // never turn an arbitrary existing row into an idempotent success.
+          if (mutationId === undefined) throw new Error("runner already exists");
+          const marker = this.mutationRow(runnerId, mutationId);
+          if (marker === undefined || marker.kind !== "runner_create" || !validLifecycleId(existing.lifecycle_id) || marker.lifecycle_id !== existing.lifecycle_id || existing.display_name !== displayName || existing.credential_version !== marker.pre_credential_version) throw new Error("runner creation conflict");
+          return;
+        }
+        if (mutationId !== undefined && this.mutationRow(runnerId, mutationId) !== undefined) throw new Error("runner creation tombstone conflict");
+        const lifecycleId = crypto.randomUUID();
         this.ctx.storage.sql.exec(
-          `INSERT INTO runners (runner_id, display_name, token_verifier, state, management_mode, credential_version, desired_policy_revision, desired_policy_checksum, policy_status, runner_permissions_json, updated_at_ms)
-           VALUES (?, ?, '', 'offline', 'central', 0, 0, NULL, 'pending', ?, ?)`, runnerId, displayName, JSON.stringify(READ_ONLY_PERMISSIONS), nowMs,
+          `INSERT INTO runners (runner_id, display_name, token_verifier, state, management_mode, credential_version, lifecycle_id, desired_policy_revision, desired_policy_checksum, policy_status, runner_permissions_json, updated_at_ms)
+           VALUES (?, ?, '', 'offline', 'central', 0, ?, 0, NULL, 'pending', ?, ?)`, runnerId, displayName, lifecycleId, JSON.stringify(READ_ONLY_PERMISSIONS), nowMs,
+        );
+        if (mutationId !== undefined) this.ctx.storage.sql.exec(
+          "INSERT INTO runner_mutations (runner_id, mutation_id, kind, pre_credential_version, lifecycle_id, committed_at_ms) VALUES (?, ?, 'runner_create', 0, ?, ?)",
+          runnerId, mutationId, lifecycleId, nowMs,
         );
         this.createPolicySnapshot(runnerId, 1, nowMs, null, "runner-created");
         this.markPolicyMigrationComplete(runnerId, nowMs);
@@ -825,19 +988,24 @@ export class RegistryDO {
   }
   public deleteRunner(runnerId: string, confirmation: string, nowMs: number, mutationId?: string): boolean {
     if (!isSafeIdentifier(runnerId) || confirmation !== runnerId || this.runnerRow(runnerId) === undefined || !validOptionalMutationId(mutationId)) return false;
-    if (mutationId !== undefined) this.recordCredentialMutation(runnerId, mutationId, "runner_delete", nowMs);
-    this.ctx.storage.transactionSync(() => {
+    return this.ctx.storage.transactionSync(() => {
+      if (mutationId !== undefined) {
+        const recorded = this.recordCredentialMutation(runnerId, mutationId, "runner_delete", nowMs);
+        if (recorded === "conflict") return false;
+        if (recorded === "committed") return true;
+      }
       this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE runner_id = ?", runnerId);
       this.ctx.storage.sql.exec("DELETE FROM client_runner_overrides WHERE runner_id = ?", runnerId);
       this.ctx.storage.sql.exec("DELETE FROM workspaces WHERE runner_id = ?", runnerId);
       this.ctx.storage.sql.exec("DELETE FROM managed_workspaces WHERE runner_id = ?", runnerId);
       this.ctx.storage.sql.exec("DELETE FROM jobs WHERE runner_id = ?", runnerId);
       this.ctx.storage.sql.exec("DELETE FROM runner_policy_versions WHERE runner_id = ?", runnerId);
+      this.ctx.storage.sql.exec("DELETE FROM runner_policy_mutations WHERE runner_id = ?", runnerId);
       this.ctx.storage.sql.exec("DELETE FROM runner_policy_migrations WHERE runner_id = ?", runnerId);
       this.ctx.storage.sql.exec("UPDATE mcp_clients SET active_runner_id = NULL, active_runner_updated_at_ms = ?, updated_at_ms = ? WHERE active_runner_id = ?", nowMs, nowMs, runnerId);
       this.ctx.storage.sql.exec("DELETE FROM runners WHERE runner_id = ?", runnerId);
+      return true;
     });
-    return true;
   }
   public createRunnerEnrollment(runnerId: string, enrollmentId: string, verifier: string, nowMs: number): { enrollment_id: string; runner_id: string; expires_at_ms: number } | undefined {
     if (!isSafeIdentifier(runnerId) || !/^[A-Za-z0-9_-]{43}$/.test(enrollmentId) || !validVerifier(verifier) || this.runnerRow(runnerId) === undefined) return undefined;
@@ -848,13 +1016,20 @@ export class RegistryDO {
     });
     return { enrollment_id: enrollmentId, runner_id: runnerId, expires_at_ms: expiresAtMs };
   }
+  /**
+   * Resolve a pending enrollment code to its Runner before consuming it.
+   *
+   * The Worker uses this short-lived lookup to acquire the RunnerDO fence
+   * before replacing credentials.  It is an internal, HMAC-authenticated
+   * route; the raw enrollment code is never returned and only its verifier is
+   * accepted here.
+   */
   public lookupRunnerEnrollment(verifier: string, nowMs: number): { runner_id: string } | undefined {
     if (!validVerifier(verifier)) return undefined;
-    const row = this.ctx.storage.sql.exec<Pick<EnrollmentRow, "runner_id" | "expires_at_ms" | "used_at_ms">>(
-      "SELECT runner_id, expires_at_ms, used_at_ms FROM runner_enrollments WHERE verifier = ?", verifier,
+    const row = this.ctx.storage.sql.exec<Pick<EnrollmentRow, "runner_id">>(
+      "SELECT runner_id FROM runner_enrollments WHERE verifier = ? AND used_at_ms IS NULL AND expires_at_ms > ?", verifier, nowMs,
     ).toArray()[0];
-    if (row === undefined || row.used_at_ms !== null || row.expires_at_ms <= nowMs || this.runnerRow(row.runner_id) === undefined) return undefined;
-    return { runner_id: row.runner_id };
+    return row !== undefined && this.runnerRow(row.runner_id) !== undefined ? { runner_id: row.runner_id } : undefined;
   }
   public async redeemRunnerEnrollment(verifier: string, tokenVerifier: string, publicInfo: RunnerPublicInfo, nowMs: number, mutationId?: string): Promise<{ runner_id: string } | undefined> {
     if (!validVerifier(verifier) || !validVerifier(tokenVerifier) || !validRunnerPublicInfo(publicInfo) || !validOptionalMutationId(mutationId)) return undefined;
@@ -862,54 +1037,131 @@ export class RegistryDO {
       const row = this.ctx.storage.sql.exec<EnrollmentRow>(
         "SELECT * FROM runner_enrollments WHERE verifier = ? AND used_at_ms IS NULL AND expires_at_ms > ?", verifier, nowMs,
       ).toArray()[0];
-      if (row === undefined) return undefined;
-      if (this.runnerRow(row.runner_id) === undefined) return undefined;
-      if (mutationId !== undefined) this.recordCredentialMutation(row.runner_id, mutationId, "credential_enroll", nowMs);
+      if (row === undefined) {
+        // A successful enrollment consumes the one-time row.  On a lost
+        // response, a retry with the same mutation must still be recoverable,
+        // but only when the consumed row carries the same verifier and the
+        // current Runner lifecycle/credential generation proves the mutation
+        // committed.  Never recover solely by mutation id: that would let a
+        // caller replay an id against a different enrollment code.
+        if (mutationId === undefined) return undefined;
+        const committed = this.consumedEnrollmentMutation(mutationId, verifier);
+        if (committed === undefined) return undefined;
+        const recorded = this.recordCredentialMutation(committed.runner_id, mutationId, "credential_enroll", nowMs);
+        const current = this.runnerRow(committed.runner_id);
+        return recorded === "committed" && current !== undefined && constantTimeEqual(current.token_verifier, tokenVerifier)
+          ? { runner_id: committed.runner_id } : undefined;
+      }
+      const runner = this.runnerRow(row.runner_id);
+      if (runner === undefined) return undefined;
+      if (mutationId !== undefined) {
+        // Keep enrollment credential replacement on the same idempotent
+        // mutation ledger as rotate/revoke.  The WorkerDO fence is acquired
+        // before this transaction, so an attached old socket cannot race the
+        // credential change and continue serving protected RPCs.
+        const recorded = this.recordCredentialMutation(row.runner_id, mutationId, "credential_enroll", nowMs);
+        if (recorded === "conflict") return undefined;
+        if (recorded === "committed") {
+          // A replay with a different token verifier must not be reported as a
+          // successful enrollment: the original verifier is the credential
+          // that Registry committed and is the only one the Worker may return.
+          if (!constantTimeEqual(runner.token_verifier, tokenVerifier)) return undefined;
+          // A committed marker with no consumed row represents a legacy
+          // partial transaction (the marker was written before the one-time
+          // row was marked used). Complete only that row; if a used row is
+          // already present, leave any newer pending enrollment untouched and
+          // return the idempotent result above instead.
+          const consumed = this.ctx.storage.sql.exec<{ enrollment_id: string }>(
+            "SELECT enrollment_id FROM runner_enrollments WHERE runner_id = ? AND verifier = ? AND used_at_ms IS NOT NULL ORDER BY used_at_ms DESC LIMIT 1", row.runner_id, verifier,
+          ).toArray()[0];
+          if (consumed !== undefined) return { runner_id: row.runner_id };
+          const anyConsumed = this.ctx.storage.sql.exec<{ enrollment_id: string }>(
+            "SELECT enrollment_id FROM runner_enrollments WHERE runner_id = ? AND used_at_ms IS NOT NULL LIMIT 1", row.runner_id,
+          ).toArray()[0];
+          if (anyConsumed !== undefined) return undefined;
+          this.ctx.storage.sql.exec("UPDATE runner_enrollments SET used_at_ms = ? WHERE enrollment_id = ? AND used_at_ms IS NULL", nowMs, row.enrollment_id);
+          this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE runner_id = ? AND used_at_ms IS NULL", row.runner_id);
+          return { runner_id: row.runner_id };
+        }
+      }
       const changed = this.ctx.storage.sql.exec("UPDATE runner_enrollments SET used_at_ms = ? WHERE enrollment_id = ? AND used_at_ms IS NULL AND expires_at_ms > ?", nowMs, row.enrollment_id, nowMs);
       if (changed.rowsWritten !== 1) return undefined;
-      const updated = this.ctx.storage.sql.exec(
+      this.ctx.storage.sql.exec(
         `UPDATE runners SET token_verifier = ?, credential_version = credential_version + 1, connection_epoch = connection_epoch + 1,
          state = 'offline', session_id = NULL, metadata_json = NULL, public_info_json = ?, current_runner_version = ?,
          protocol_min_version = ?, protocol_max_version = ?, protocol_compatibility = ?, update_status = ?, last_heartbeat_ms = NULL,
          last_sync_sequence = NULL, updated_at_ms = ? WHERE runner_id = ?`,
         tokenVerifier, JSON.stringify(publicInfo), publicInfo.runner_version, publicInfo.protocol_version, publicInfo.protocol_version,
         protocolCompatibility(publicInfo.protocol_version, publicInfo.protocol_version),
-        updateStatus(this.runnerRow(row.runner_id)?.update_channel ?? "stable", this.runnerRow(row.runner_id)?.desired_runner_version ?? undefined, this.runnerRow(row.runner_id)?.latest_runner_version ?? undefined, { current_runner_version: publicInfo.runner_version, protocol_compatibility: protocolCompatibility(publicInfo.protocol_version, publicInfo.protocol_version) }),
-        nowMs, row.runner_id,
-      );
-      return updated.rowsWritten === 1 && this.runnerRow(row.runner_id) !== undefined ? { runner_id: row.runner_id } : undefined;
+         updateStatus(runner.update_channel ?? "stable", runner.desired_runner_version ?? undefined, runner.latest_runner_version ?? undefined, { current_runner_version: publicInfo.runner_version, protocol_compatibility: protocolCompatibility(publicInfo.protocol_version, publicInfo.protocol_version) }),
+         nowMs, row.runner_id,
+       );
+       // A Runner normally has only one pending code, but clear any duplicate
+       // or stale rows as part of the credential replacement so an older code
+       // cannot immediately rotate the new credential again.
+       this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE runner_id = ? AND used_at_ms IS NULL", row.runner_id);
+       return this.runnerRow(row.runner_id) === undefined ? undefined : { runner_id: row.runner_id };
     });
   }
   public async authenticateRunner(runnerId: string, token: string): Promise<{ credential_version: number } | undefined> {
-    if (this.env.RUNNER_TOKEN_PEPPER === undefined) return undefined;
+    if (!isConfiguredSecret(this.env.RUNNER_TOKEN_PEPPER)) return undefined;
     const tokenVerifier = await runnerTokenVerifier(token, this.env.RUNNER_TOKEN_PEPPER);
     const row = this.ctx.storage.sql.exec<Pick<RunnerRow, "token_verifier" | "credential_version">>("SELECT token_verifier, credential_version FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
     return row !== undefined && row.token_verifier.length > 0 && constantTimeEqual(row.token_verifier, tokenVerifier) ? { credential_version: row.credential_version } : undefined;
   }
   public beginConnection(runnerId: string, metadata: RunnerMetadata, protocol: { min_protocol_version: number; max_protocol_version: number }, sessionId: string, credentialVersion: number, nowMs: number): number | undefined {
     const compatibility = protocolCompatibility(protocol.min_protocol_version, protocol.max_protocol_version);
-    const prior = this.runnerRow(runnerId);
-    this.ctx.storage.sql.exec(
-      `UPDATE runners SET state = 'online', connection_epoch = connection_epoch + 1, session_id = ?, metadata_json = ?,
-       current_runner_version = ?, protocol_min_version = ?, protocol_max_version = ?, protocol_compatibility = ?,
-       update_status = ?, last_heartbeat_ms = ?, last_sync_sequence = NULL,
-       policy_status = CASE WHEN desired_policy_revision = 0 THEN 'applied' ELSE 'pending' END, updated_at_ms = ? WHERE runner_id = ? AND credential_version = ?`,
-      sessionId, JSON.stringify(metadata), metadata.runner_version, protocol.min_protocol_version, protocol.max_protocol_version, compatibility,
-      updateStatus(prior?.update_channel ?? "stable", prior?.desired_runner_version ?? undefined, prior?.latest_runner_version ?? undefined, { ...prior, current_runner_version: metadata.runner_version, protocol_compatibility: compatibility }),
-      nowMs, nowMs, runnerId, credentialVersion,
-    );
-    return this.getRunner(runnerId)?.credential_version === credentialVersion ? this.getRunner(runnerId)?.connection_epoch : undefined;
+    // Allocate the epoch and publish the session in one transaction. Reading
+    // the row, then querying it again after UPDATE, lets two simultaneous
+    // connects both observe the *later* epoch and would leave both sockets
+    // authorized as the same session.
+    return this.ctx.storage.transactionSync(() => {
+      const prior = this.runnerRow(runnerId);
+      if (prior === undefined || prior.credential_version !== credentialVersion || !validLifecycleId(prior.lifecycle_id) || !validSessionId(sessionId) || !Number.isSafeInteger(prior.connection_epoch) || prior.connection_epoch < 0) return undefined;
+      const nextEpoch = prior.connection_epoch + 1;
+      const changed = this.ctx.storage.sql.exec(
+        `UPDATE runners SET state = 'online', connection_epoch = ?, session_id = ?, metadata_json = ?,
+         current_runner_version = ?, protocol_min_version = ?, protocol_max_version = ?, protocol_compatibility = ?,
+         update_status = ?, last_heartbeat_ms = ?, last_sync_sequence = NULL,
+         policy_status = CASE WHEN desired_policy_revision = 0 THEN 'applied' ELSE 'pending' END, updated_at_ms = ?
+         WHERE runner_id = ? AND credential_version = ? AND connection_epoch = ?`,
+        nextEpoch, sessionId, JSON.stringify(metadata), metadata.runner_version, protocol.min_protocol_version, protocol.max_protocol_version, compatibility,
+        updateStatus(prior.update_channel ?? "stable", prior.desired_runner_version ?? undefined, prior.latest_runner_version ?? undefined, { ...prior, current_runner_version: metadata.runner_version, protocol_compatibility: compatibility }),
+        nowMs, nowMs, runnerId, credentialVersion, prior.connection_epoch,
+      );
+      return changed.rowsWritten === 1 ? nextEpoch : undefined;
+    });
   }
-  public sessionIsCurrent(runnerId: string, epoch: number, credentialVersion: number, requireOnline = false): boolean {
-    const row = this.ctx.storage.sql.exec<Pick<RunnerRow, "connection_epoch" | "credential_version" | "state">>("SELECT connection_epoch, credential_version, state FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
-    return row?.connection_epoch === epoch && row.credential_version === credentialVersion && (!requireOnline || row.state === "online");
+  public sessionIsCurrent(runnerId: string, epoch: number, credentialVersion: number, requireOnline = false, lifecycleId?: string | null, sessionId?: string | null): boolean {
+    if (!validTransportIdentity(lifecycleId, sessionId)) return false;
+    const row = this.ctx.storage.sql.exec<Pick<RunnerRow, "connection_epoch" | "credential_version" | "state" | "lifecycle_id" | "session_id">>("SELECT connection_epoch, credential_version, state, lifecycle_id, session_id FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
+    return row?.connection_epoch === epoch && row.credential_version === credentialVersion && (!requireOnline || row.state === "online") && matchesTransportIdentity(row, lifecycleId, sessionId);
   }
-  public recordHeartbeat(runnerId: string, epoch: number, credentialVersion: number, nowMs: number): boolean {
-    this.ctx.storage.sql.exec("UPDATE runners SET state = 'online', last_heartbeat_ms = ?, updated_at_ms = ? WHERE runner_id = ? AND connection_epoch = ? AND credential_version = ?", nowMs, nowMs, runnerId, epoch, credentialVersion);
-    return this.sessionIsCurrent(runnerId, epoch, credentialVersion, true);
+  public recordHeartbeat(runnerId: string, epoch: number, credentialVersion: number, nowMs: number, lifecycleId?: string | null, sessionId?: string | null): boolean {
+    if (!validTransportIdentity(lifecycleId, sessionId)) return false;
+    if (lifecycleId === undefined || lifecycleId === null) {
+      this.ctx.storage.sql.exec("UPDATE runners SET state = 'online', last_heartbeat_ms = ?, updated_at_ms = ? WHERE runner_id = ? AND connection_epoch = ? AND credential_version = ?", nowMs, nowMs, runnerId, epoch, credentialVersion);
+    } else if (sessionId === undefined || sessionId === null) {
+      this.ctx.storage.sql.exec("UPDATE runners SET state = 'online', last_heartbeat_ms = ?, updated_at_ms = ? WHERE runner_id = ? AND connection_epoch = ? AND credential_version = ? AND lifecycle_id = ?", nowMs, nowMs, runnerId, epoch, credentialVersion, lifecycleId);
+    } else {
+      this.ctx.storage.sql.exec("UPDATE runners SET state = 'online', last_heartbeat_ms = ?, updated_at_ms = ? WHERE runner_id = ? AND connection_epoch = ? AND credential_version = ? AND lifecycle_id = ? AND session_id = ?", nowMs, nowMs, runnerId, epoch, credentialVersion, lifecycleId, sessionId);
+    }
+    return this.sessionIsCurrent(runnerId, epoch, credentialVersion, true, lifecycleId, sessionId);
   }
-  public markDisconnected(runnerId: string, epoch: number, credentialVersion: number, state: Exclude<RunnerConnectionState, "online">, nowMs: number): void {
-    this.ctx.storage.sql.exec("UPDATE runners SET state = ?, session_id = NULL, updated_at_ms = ? WHERE runner_id = ? AND connection_epoch = ? AND credential_version = ?", state, nowMs, runnerId, epoch, credentialVersion);
+  public markDisconnected(runnerId: string, epoch: number, credentialVersion: number, state: Exclude<RunnerConnectionState, "online">, nowMs: number, lifecycleId?: string | null, sessionId?: string | null): void {
+    // Connection counters reset when a runner_id is recreated. When a newer
+    // RunnerDO knows the opaque lifecycle nonce, require it here so a delayed
+    // close callback from the deleted lifecycle cannot mark the replacement
+    // row offline. Omitting the optional value preserves rolling-upgrade
+    // compatibility with older RunnerDO callers.
+    if (!validTransportIdentity(lifecycleId, sessionId)) return;
+    if (lifecycleId === undefined || lifecycleId === null) {
+      this.ctx.storage.sql.exec("UPDATE runners SET state = ?, session_id = NULL, updated_at_ms = ? WHERE runner_id = ? AND connection_epoch = ? AND credential_version = ?", state, nowMs, runnerId, epoch, credentialVersion);
+    } else if (sessionId === undefined || sessionId === null) {
+      this.ctx.storage.sql.exec("UPDATE runners SET state = ?, session_id = NULL, updated_at_ms = ? WHERE runner_id = ? AND connection_epoch = ? AND credential_version = ? AND lifecycle_id = ?", state, nowMs, runnerId, epoch, credentialVersion, lifecycleId);
+    } else {
+      this.ctx.storage.sql.exec("UPDATE runners SET state = ?, session_id = NULL, updated_at_ms = ? WHERE runner_id = ? AND connection_epoch = ? AND credential_version = ? AND lifecycle_id = ? AND session_id = ?", state, nowMs, runnerId, epoch, credentialVersion, lifecycleId, sessionId);
+    }
   }
   public syncRunner(
     runnerId: string,
@@ -920,11 +1172,23 @@ export class RegistryDO {
     syncSequence: number,
     nowMs: number,
     requireOnline = true,
+    lifecycleId?: string | null,
+    sessionId?: string | null,
   ): boolean {
-    if (!this.sessionIsCurrent(runnerId, epoch, credentialVersion, requireOnline)) return false;
-    const prior = this.ctx.storage.sql.exec<Pick<RunnerRow, "last_sync_sequence">>("SELECT last_sync_sequence FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
-    if (prior?.last_sync_sequence !== null && prior?.last_sync_sequence !== undefined && syncSequence <= prior.last_sync_sequence) return false;
-    this.ctx.storage.transactionSync(() => {
+    // Keep this public method fail-closed even when called by an internal test
+    // seam or a future route that bypasses RunnerSyncSchema. Unsafe numbers can
+    // compare equal after IEEE-754 rounding and permanently stall sequence
+    // advancement in SQLite.
+    if (!safeNonnegativeInteger(epoch) || !safeNonnegativeInteger(credentialVersion) || !safeNonnegativeInteger(syncSequence) || !safeNonnegativeInteger(nowMs) || !validTransportIdentity(lifecycleId, sessionId)) return false;
+    // The preflight session check is only an optimistic fast path. Keep the
+    // fence and sequence comparison inside the same transaction as the
+    // snapshot writes so a credential revoke/reconnect cannot race an already
+    // admitted sync and then have its stale workspace/job data committed.
+    return this.ctx.storage.transactionSync(() => {
+      const current = this.runnerRow(runnerId);
+      if (current === undefined || current.connection_epoch !== epoch || current.credential_version !== credentialVersion || (requireOnline && current.state !== "online") || !matchesTransportIdentity(current, lifecycleId, sessionId)) return false;
+      const prior = current.last_sync_sequence;
+      if (prior !== null && prior !== undefined && (!safeNonnegativeInteger(prior) || syncSequence <= prior)) return false;
       const workspaceIds = new Set(workspaces.map((workspace) => workspace.workspace_id));
       for (const workspace of workspaces) this.ctx.storage.sql.exec(
         `INSERT INTO workspaces (runner_id, workspace_id, workspace_json, updated_at_ms) VALUES (?, ?, ?, ?)
@@ -935,34 +1199,69 @@ export class RegistryDO {
       for (const job of jobs) this.upsertJob(runnerId, { ...job, runner_id: runnerId }, nowMs);
       this.deleteMissingWorkspaces(runnerId, workspaceIds);
       this.pruneTerminalJobs(runnerId);
-      this.ctx.storage.sql.exec("UPDATE runners SET last_sync_sequence = ?, updated_at_ms = ? WHERE runner_id = ?", syncSequence, nowMs, runnerId);
+      // Keep the session fence on the commit as a second line of defence. The
+      // transaction-level read above normally serializes this update, but the
+      // conditional write makes the invariant explicit and prevents a future
+      // refactor from turning a stale snapshot into a successful sync.
+      const updated = this.ctx.storage.sql.exec(
+        lifecycleId === undefined || lifecycleId === null
+          ? "UPDATE runners SET last_sync_sequence = ?, updated_at_ms = ? WHERE runner_id = ? AND connection_epoch = ? AND credential_version = ? AND (? = 0 OR state = 'online')"
+          : sessionId === undefined || sessionId === null
+            ? "UPDATE runners SET last_sync_sequence = ?, updated_at_ms = ? WHERE runner_id = ? AND connection_epoch = ? AND credential_version = ? AND lifecycle_id = ? AND (? = 0 OR state = 'online')"
+            : "UPDATE runners SET last_sync_sequence = ?, updated_at_ms = ? WHERE runner_id = ? AND connection_epoch = ? AND credential_version = ? AND lifecycle_id = ? AND session_id = ? AND (? = 0 OR state = 'online')",
+        ...(lifecycleId === undefined || lifecycleId === null
+          ? [syncSequence, nowMs, runnerId, epoch, credentialVersion, requireOnline ? 1 : 0]
+          : sessionId === undefined || sessionId === null
+            ? [syncSequence, nowMs, runnerId, epoch, credentialVersion, lifecycleId, requireOnline ? 1 : 0]
+            : [syncSequence, nowMs, runnerId, epoch, credentialVersion, lifecycleId, sessionId, requireOnline ? 1 : 0]),
+      );
+      return updated.rowsWritten === 1;
     });
-    return true;
   }
   public invalidateRunnerCredential(runnerId: string, nowMs: number, mutationId?: string): boolean {
     if (!validOptionalMutationId(mutationId)) return false;
-    if (mutationId !== undefined) this.recordCredentialMutation(runnerId, mutationId, "credential_rotate", nowMs);
-    const result = this.ctx.storage.sql.exec(`UPDATE runners SET credential_version = credential_version + 1, connection_epoch = connection_epoch + 1,
-      token_verifier = '', state = 'offline', session_id = NULL, last_heartbeat_ms = NULL, updated_at_ms = ? WHERE runner_id = ?`, nowMs, runnerId);
-    return result.rowsWritten === 1;
+    return this.ctx.storage.transactionSync(() => {
+      if (this.runnerRow(runnerId) === undefined) return false;
+      if (mutationId !== undefined) {
+        const recorded = this.recordCredentialMutation(runnerId, mutationId, "credential_rotate", nowMs);
+        if (recorded === "conflict") return false;
+        if (recorded === "committed") return true;
+      }
+      const result = this.ctx.storage.sql.exec(`UPDATE runners SET credential_version = credential_version + 1, connection_epoch = connection_epoch + 1,
+        token_verifier = '', state = 'offline', session_id = NULL, last_heartbeat_ms = NULL, updated_at_ms = ? WHERE runner_id = ?`, nowMs, runnerId);
+      if (result.rowsWritten === 1) this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE runner_id = ? AND used_at_ms IS NULL", runnerId);
+      return result.rowsWritten === 1;
+    });
   }
   public revokeRunner(runnerId: string, confirmation: string, nowMs: number, mutationId?: string): boolean {
     if (!isSafeIdentifier(runnerId) || confirmation !== runnerId || this.runnerRow(runnerId) === undefined || !validOptionalMutationId(mutationId)) return false;
-    if (mutationId !== undefined) this.recordCredentialMutation(runnerId, mutationId, "credential_revoke", nowMs);
-    this.ctx.storage.transactionSync(() => {
+    return this.ctx.storage.transactionSync(() => {
+      if (mutationId !== undefined) {
+        const recorded = this.recordCredentialMutation(runnerId, mutationId, "credential_revoke", nowMs);
+        if (recorded === "conflict") return false;
+        if (recorded === "committed") return true;
+      }
       this.ctx.storage.sql.exec(`UPDATE runners SET credential_version = credential_version + 1, connection_epoch = connection_epoch + 1,
        token_verifier = '', state = 'offline', session_id = NULL, metadata_json = NULL, last_heartbeat_ms = NULL,
        last_sync_sequence = NULL, updated_at_ms = ? WHERE runner_id = ?`, nowMs, runnerId);
+      this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE runner_id = ? AND used_at_ms IS NULL", runnerId);
+      return true;
     });
-    return true;
   }
-  public recordJobEvent(runnerId: string, epoch: number, credentialVersion: number, message: unknown, nowMs: number, requireOnline = true): boolean {
-    if (!this.sessionIsCurrent(runnerId, epoch, credentialVersion, requireOnline)) return false;
+  public recordJobEvent(runnerId: string, epoch: number, credentialVersion: number, message: unknown, nowMs: number, requireOnline = true, lifecycleId?: string | null, sessionId?: string | null): boolean {
+    if (!safeNonnegativeInteger(epoch) || !safeNonnegativeInteger(credentialVersion) || !safeNonnegativeInteger(nowMs) || !validTransportIdentity(lifecycleId, sessionId)) return false;
     const event = parseJobEvent(message);
     if (event === undefined || event.job.runner_id !== runnerId) return false;
-    this.upsertJob(runnerId, { ...event.job, runner_id: runnerId }, nowMs);
-    this.pruneTerminalJobs(runnerId);
-    return true;
+    // As with syncRunner, re-check the session fence while committing the
+    // event. Otherwise an old socket can write a terminal/started event after
+    // credential rotation or a newer connection has taken ownership.
+    return this.ctx.storage.transactionSync(() => {
+      const current = this.runnerRow(runnerId);
+      if (current === undefined || current.connection_epoch !== epoch || current.credential_version !== credentialVersion || (requireOnline && current.state !== "online") || !matchesTransportIdentity(current, lifecycleId, sessionId)) return false;
+      this.upsertJob(runnerId, { ...event.job, runner_id: runnerId }, nowMs);
+      this.pruneTerminalJobs(runnerId);
+      return true;
+    });
   }
   public getRunner(runnerId: string): RunnerRecord | undefined {
     const staleBefore = Date.now() - 45_000;
@@ -1028,12 +1327,15 @@ export class RegistryDO {
     if (request.method === "POST" && segments.length === 2 && segments[0] === "enrollments" && segments[1] === "lookup") {
       const verifier = stringField(input, "verifier", 64);
       const target = verifier === undefined ? undefined : this.lookupRunnerEnrollment(verifier, now);
-      return target === undefined ? new Response("invalid enrollment", { status: 401 }) : Response.json(target);
+      return target === undefined ? new Response("not found", { status: 404 }) : Response.json(target);
     }
     if (request.method === "POST" && segments.length === 2 && segments[0] === "enrollments" && segments[1] === "redeem") {
       const verifier = stringField(input, "verifier", 64); const tokenVerifier = stringField(input, "token_verifier", 64); const publicInfo = runnerPublicInfoField(input.runner_public_info);
       const mutationId = input.mutation_id === undefined ? undefined : mutationIdField(input);
-      if (input.mutation_id !== undefined && mutationId === undefined) return Response.json({ error: "invalid mutation id" }, { status: 400 });
+      // Public Worker redemption must always be paired with a RunnerDO fence;
+      // keeping the optional argument on the direct method only preserves old
+      // unit/test callers and cannot provide a production downgrade path.
+      if (mutationId === undefined) return Response.json({ error: "mutation_id is required" }, { status: 400 });
       const redeemed = verifier === undefined || tokenVerifier === undefined || publicInfo === undefined ? undefined : await this.redeemRunnerEnrollment(verifier, tokenVerifier, publicInfo, now, mutationId);
       return redeemed === undefined ? new Response("invalid enrollment", { status: 401 }) : Response.json(redeemed);
     }
@@ -1046,27 +1348,59 @@ export class RegistryDO {
     if (request.method === "PUT" && action === undefined) {
       const tokenVerifier = stringField(input, "token_verifier", 64); const mutationId = input.mutation_id === undefined ? undefined : mutationIdField(input);
       if (tokenVerifier === undefined || !validVerifier(tokenVerifier) || (input.mutation_id !== undefined && mutationId === undefined)) return Response.json({ error: "invalid token verifier or mutation" }, { status: 400 });
-      if (mutationId !== undefined && this.runnerRow(runnerId) === undefined) return new Response("not found", { status: 404 });
-      this.registerRunner(runnerId, tokenVerifier, now, mutationId); return new Response(null, { status: 204 });
+      const existingRunner = this.runnerRow(runnerId);
+      // A credential replacement must be fenced by RunnerDO.  The public
+      // internal route is HMAC-authenticated, but an older Worker or a
+      // manually replayed request must not be able to update an existing row
+      // without the mutation identity that binds the Registry transaction to
+      // that fence.  Creation is the only operation that may omit it.
+      if (existingRunner !== undefined && mutationId === undefined) return Response.json({ error: "mutation_id is required for credential replacement" }, { status: 400 });
+      return this.registerRunner(runnerId, tokenVerifier, now, mutationId)
+        ? new Response(null, { status: 204 })
+        : new Response("mutation conflict", { status: 409 });
     }
     if (request.method === "POST" && action === "auth") {
-      const token = stringField(input, "token", 512); if (token === undefined || /\s/.test(token)) return new Response("unauthorized", { status: 401 });
+      const token = stringField(input, "token", 512); if (token === undefined || /\s/.test(token) || containsControlCharacter(token)) return new Response("unauthorized", { status: 401 });
       const authenticated = await this.authenticateRunner(runnerId, token); return authenticated === undefined ? new Response("unauthorized", { status: 401 }) : Response.json(authenticated);
     }
     if (request.method === "POST" && action === "connect") {
       const sessionId = stringField(input, "session_id", 128); const credentialVersion = integerField(input, "credential_version"); const nowMs = integerField(input, "now_ms"); const metadata = RunnerMetadataSchema.safeParse(input.metadata); const protocolMin = integerField(input, "min_protocol_version"); const protocolMax = integerField(input, "max_protocol_version");
       if (!metadata.success || sessionId === undefined || credentialVersion === undefined || nowMs === undefined || protocolMin === undefined || protocolMax === undefined || protocolMin < 1 || protocolMin > protocolMax || protocolMax > 1_000) return Response.json({ error: "invalid connection metadata" }, { status: 400 });
       const epoch = this.beginConnection(runnerId, metadata.data, { min_protocol_version: protocolMin, max_protocol_version: protocolMax }, sessionId, credentialVersion, nowMs);
+      const row = epoch === undefined ? undefined : this.runnerRow(runnerId);
       const policy = epoch === undefined ? undefined : this.desiredPolicy(runnerId);
-      return epoch === undefined ? new Response("stale credentials", { status: 409 }) : Response.json({ epoch, desired_policy: policy });
+      return epoch === undefined ? new Response("stale credentials", { status: 409 }) : Response.json({ epoch, lifecycle_id: row?.lifecycle_id || null, desired_policy: policy });
     }
-    if (request.method === "POST" && action === "heartbeat") { const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const nowMs = integerField(input, "now_ms"); if (epoch === undefined || credentialVersion === undefined || nowMs === undefined) return Response.json({ error: "invalid heartbeat" }, { status: 400 }); return this.recordHeartbeat(runnerId, epoch, credentialVersion, nowMs) ? new Response(null, { status: 204 }) : new Response("stale session", { status: 409 }); }
-    if (request.method === "POST" && action === "session") { const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); return epoch !== undefined && credentialVersion !== undefined && this.sessionIsCurrent(runnerId, epoch, credentialVersion, input.require_online === true) ? new Response(null, { status: 204 }) : new Response("stale session", { status: 409 }); }
-    if (request.method === "POST" && action === "disconnect") { const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const nowMs = integerField(input, "now_ms"); if (epoch === undefined || credentialVersion === undefined || nowMs === undefined || (input.state !== "offline" && input.state !== "stale")) return Response.json({ error: "invalid disconnect" }, { status: 400 }); this.markDisconnected(runnerId, epoch, credentialVersion, input.state, nowMs); return new Response(null, { status: 204 }); }
-    if (request.method === "POST" && action === "sync") { const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const nowMs = integerField(input, "now_ms"); const message = RunnerSyncSchema.safeParse(input.message); if (!message.success || epoch === undefined || credentialVersion === undefined || nowMs === undefined || message.data.runner_id !== runnerId || message.data.workspaces.length > MAX_SYNC_ITEMS || message.data.jobs.length > MAX_SYNC_ITEMS || !uniqueIds(message.data.workspaces.map((workspace) => workspace.workspace_id)) || !uniqueIds(message.data.jobs.map((job) => job.job_id))) return Response.json({ error: "invalid sync" }, { status: 400 }); return this.syncRunner(runnerId, epoch, credentialVersion, message.data.workspaces, message.data.jobs, message.data.sync_sequence, nowMs) ? new Response(null, { status: 204 }) : new Response("stale sync or session", { status: 409 }); }
-    if (request.method === "POST" && action === "event") { const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const nowMs = integerField(input, "now_ms"); if (epoch === undefined || credentialVersion === undefined || nowMs === undefined || !this.recordJobEvent(runnerId, epoch, credentialVersion, input.message, nowMs)) return new Response("stale session or invalid event", { status: 409 }); return new Response(null, { status: 204 }); }
+    if (request.method === "POST" && action === "heartbeat") {
+      const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const nowMs = integerField(input, "now_ms"); const identity = parseTransportIdentity(input);
+      if (epoch === undefined || credentialVersion === undefined || nowMs === undefined || !identity.valid) return Response.json({ error: "invalid heartbeat" }, { status: 400 });
+      return this.recordHeartbeat(runnerId, epoch, credentialVersion, nowMs, identity.lifecycleId, identity.sessionId) ? new Response(null, { status: 204 }) : new Response("stale session", { status: 409 });
+    }
+    if (request.method === "POST" && action === "session") {
+      const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const identity = parseTransportIdentity(input);
+      if (epoch === undefined || credentialVersion === undefined || !identity.valid) return Response.json({ error: "invalid session identity" }, { status: 400 });
+      return this.sessionIsCurrent(runnerId, epoch, credentialVersion, input.require_online === true, identity.lifecycleId, identity.sessionId) ? new Response(null, { status: 204 }) : new Response("stale session", { status: 409 });
+    }
+    if (request.method === "POST" && action === "disconnect") {
+      const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const nowMs = integerField(input, "now_ms"); const identity = parseTransportIdentity(input);
+      if (epoch === undefined || credentialVersion === undefined || nowMs === undefined || (input.state !== "offline" && input.state !== "stale") || !identity.valid) return Response.json({ error: "invalid disconnect" }, { status: 400 });
+      this.markDisconnected(runnerId, epoch, credentialVersion, input.state, nowMs, identity.lifecycleId, identity.sessionId); return new Response(null, { status: 204 });
+    }
+    if (request.method === "POST" && action === "sync") {
+      const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const nowMs = integerField(input, "now_ms"); const message = RunnerSyncSchema.safeParse(input.message); const identity = parseTransportIdentity(input);
+      if (!message.success || epoch === undefined || credentialVersion === undefined || nowMs === undefined || !identity.valid || message.data.runner_id !== runnerId || message.data.workspaces.length > MAX_SYNC_ITEMS || message.data.jobs.length > MAX_SYNC_ITEMS || !uniqueIds(message.data.workspaces.map((workspace) => workspace.workspace_id)) || !uniqueIds(message.data.jobs.map((job) => job.job_id))) return Response.json({ error: "invalid sync" }, { status: 400 });
+      return this.syncRunner(runnerId, epoch, credentialVersion, message.data.workspaces, message.data.jobs, message.data.sync_sequence, nowMs, true, identity.lifecycleId, identity.sessionId) ? new Response(null, { status: 204 }) : new Response("stale sync or session", { status: 409 });
+    }
+    if (request.method === "POST" && action === "event") {
+      const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const nowMs = integerField(input, "now_ms"); const identity = parseTransportIdentity(input);
+      if (epoch === undefined || credentialVersion === undefined || nowMs === undefined || !identity.valid) return Response.json({ error: "invalid event identity" }, { status: 400 });
+      if (!this.recordJobEvent(runnerId, epoch, credentialVersion, input.message, nowMs, true, identity.lifecycleId, identity.sessionId)) return new Response("stale session or invalid event", { status: 409 });
+      return new Response(null, { status: 204 });
+    }
     if (request.method === "POST" && action === "add") {
-      const displayName = stringField(input, "display_name", 256); const runner = displayName === undefined ? undefined : this.addRunner(runnerId, displayName, now);
+      const displayName = stringField(input, "display_name", 256); const mutationId = input.mutation_id === undefined ? undefined : mutationIdField(input);
+      if (input.mutation_id !== undefined && mutationId === undefined) return Response.json({ error: "invalid mutation_id" }, { status: 400 });
+      const runner = displayName === undefined ? undefined : this.addRunner(runnerId, displayName, now, mutationId);
       return runner === undefined ? new Response("conflict", { status: 409 }) : Response.json(runner);
     }
     if (request.method === "DELETE" && action === undefined) { const confirmation = stringField(input, "confirmation", 128); const mutationId = mutationIdField(input); return confirmation !== undefined && mutationId !== undefined && this.deleteRunner(runnerId, confirmation, now, mutationId) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 }); }
@@ -1076,8 +1410,9 @@ export class RegistryDO {
       const mutationId = mutationIdField(input);
       if (this.runnerRow(runnerId) === undefined) return new Response("not found", { status: 404 });
       if (mutationId === undefined) return Response.json({ error: "mutation_id is required" }, { status: 400 });
-      this.invalidateRunnerCredential(runnerId, now, mutationId);
-      return new Response(null, { status: 204 });
+      return this.invalidateRunnerCredential(runnerId, now, mutationId)
+        ? new Response(null, { status: 204 })
+        : new Response("mutation conflict", { status: 409 });
     }
     if (request.method === "POST" && action === "revoke") {
       const confirmation = stringField(input, "confirmation", 128); const mutationId = mutationIdField(input);
@@ -1105,6 +1440,7 @@ export class RegistryDO {
     }
     if (request.method === "GET" && action === "workspaces" && itemId === undefined) return Response.json({ runner_id: runnerId, workspaces: this.listWorkspaces(runnerId) });
     if (request.method === "POST" && action === "policy-ack") {
+      if (!parseTransportIdentity(input).valid) return Response.json({ error: "invalid policy acknowledgement identity" }, { status: 400 });
       const ack = this.policyAcknowledgementFromInput(runnerId, input, now);
       if (ack === undefined) return Response.json({ error: "invalid policy acknowledgement" }, { status: 409 });
       return Response.json({ ack_result: ack });
@@ -1126,9 +1462,9 @@ export class RegistryDO {
   }
 
   private policyAcknowledgementFromInput(runnerId: string, input: InternalInput, nowMs: number): PolicyAcknowledgementResult | undefined {
-    const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const desiredRevision = integerField(input, "desired_revision"); const desiredChecksum = stringField(input, "desired_checksum", 64); const appliedRevision = nullableIntegerField(input, "applied_revision"); const appliedChecksum = nullableChecksumField(input, "applied_checksum"); const reportedRevision = nullableIntegerField(input, "runner_reported_policy_revision"); const reportedChecksum = nullableChecksumField(input, "runner_reported_policy_checksum"); const status = input.status; const statuses = workspaceStatusesField(input.workspace_status);
-    if (epoch === undefined || credentialVersion === undefined || desiredRevision === undefined || desiredChecksum === undefined || appliedRevision === undefined || appliedChecksum === undefined || reportedRevision === undefined || reportedChecksum === undefined || (status !== "applied" && status !== "pending" && status !== "invalid") || statuses === undefined) return undefined;
-    return this.acknowledgePolicy(runnerId, epoch, credentialVersion, { desired_revision: desiredRevision, desired_checksum: desiredChecksum, applied_revision: appliedRevision, applied_checksum: appliedChecksum, runner_reported_policy_revision: reportedRevision, runner_reported_policy_checksum: reportedChecksum, status, workspace_status: statuses }, nowMs);
+    const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const desiredRevision = integerField(input, "desired_revision"); const desiredChecksum = stringField(input, "desired_checksum", 64); const appliedRevision = nullableIntegerField(input, "applied_revision"); const appliedChecksum = nullableChecksumField(input, "applied_checksum"); const reportedRevision = nullableIntegerField(input, "runner_reported_policy_revision"); const reportedChecksum = nullableChecksumField(input, "runner_reported_policy_checksum"); const status = input.status; const statuses = workspaceStatusesField(input.workspace_status); const identity = parseTransportIdentity(input);
+    if (epoch === undefined || credentialVersion === undefined || desiredRevision === undefined || desiredChecksum === undefined || appliedRevision === undefined || appliedChecksum === undefined || reportedRevision === undefined || reportedChecksum === undefined || (status !== "applied" && status !== "pending" && status !== "invalid") || statuses === undefined || !identity.valid) return undefined;
+    return this.acknowledgePolicy(runnerId, epoch, credentialVersion, { desired_revision: desiredRevision, desired_checksum: desiredChecksum, applied_revision: appliedRevision, applied_checksum: appliedChecksum, runner_reported_policy_revision: reportedRevision, runner_reported_policy_checksum: reportedChecksum, status, workspace_status: statuses }, nowMs, identity.lifecycleId, identity.sessionId);
   }
 
   private async handleAuth(method: string, segments: string[], input: InternalInput, nowMs: number, url: URL): Promise<Response> {
@@ -1256,11 +1592,74 @@ export class RegistryDO {
   private settings(): AdminSettingsRow | undefined { return this.ctx.storage.sql.exec<AdminSettingsRow>("SELECT password_verifier, session_version, created_at_ms, updated_at_ms FROM admin_settings WHERE id = 1").toArray()[0]; }
   private authThrottleRow(kind: AuthThrottleKind): AuthThrottleRow | undefined { return this.ctx.storage.sql.exec<AuthThrottleRow>("SELECT id, failed_attempts, blocked_until_ms, updated_at_ms FROM auth_throttle WHERE id = ?", kind).toArray()[0]; }
   private getMcpClient(clientId: string): McpClientRecord | undefined { const row = this.ctx.storage.sql.exec<McpClientRow>("SELECT * FROM mcp_clients WHERE client_id = ?", clientId).toArray()[0]; return row === undefined ? undefined : decodeMcpClient(row); }
-  private mutationRow(runnerId: string, mutationId: string): { pre_credential_version: number } | undefined { return this.ctx.storage.sql.exec<{ pre_credential_version: number }>("SELECT pre_credential_version FROM runner_mutations WHERE runner_id = ? AND mutation_id = ?", runnerId, mutationId).toArray()[0]; }
-  private recordCredentialMutation(runnerId: string, mutationId: string, kind: "credential_enroll" | "credential_rotate" | "credential_revoke" | "runner_delete", nowMs: number): void {
+  /** Find a consumed enrollment tied to a mutation and verifier for retry
+   * recovery after the pending row has been marked used. */
+  private consumedEnrollmentMutation(mutationId: string, verifier: string): (CredentialMutationRow & { runner_id: string }) | undefined {
+    const rows = this.ctx.storage.sql.exec<CredentialMutationRow & { runner_id: string }>(
+      `SELECT m.runner_id, m.kind, m.pre_credential_version, m.lifecycle_id
+       FROM runner_mutations AS m
+       INNER JOIN runner_enrollments AS e ON e.runner_id = m.runner_id
+       WHERE m.mutation_id = ? AND e.verifier = ? AND e.used_at_ms IS NOT NULL
+       ORDER BY e.used_at_ms DESC`, mutationId, verifier,
+    ).toArray();
+    for (const row of rows) {
+      if (row.kind !== "credential_enroll" && row.kind !== "credential_rotate") continue;
+      const runner = this.runnerRow(row.runner_id);
+      if (runner !== undefined && validLifecycleId(runner.lifecycle_id) && runner.lifecycle_id === row.lifecycle_id && runner.credential_version === row.pre_credential_version + 1) return row;
+    }
+    return undefined;
+  }
+
+  private mutationRow(runnerId: string, mutationId: string): CredentialMutationRow | undefined {
+    return this.ctx.storage.sql.exec<CredentialMutationRow>(
+      "SELECT kind, pre_credential_version, lifecycle_id FROM runner_mutations WHERE runner_id = ? AND mutation_id = ?", runnerId, mutationId,
+    ).toArray()[0];
+  }
+  private recordCredentialMutation(runnerId: string, mutationId: string, kind: CredentialMutationKind, nowMs: number): "new" | "committed" | "conflict" {
     const runner = this.runnerRow(runnerId);
     if (runner === undefined || !validMutationId(mutationId)) throw new Error("invalid credential mutation");
-    this.ctx.storage.sql.exec("INSERT OR IGNORE INTO runner_mutations (runner_id, mutation_id, kind, pre_credential_version, committed_at_ms) VALUES (?, ?, ?, ?, ?)", runnerId, mutationId, kind, runner.credential_version, nowMs);
+    // A missing lifecycle identity indicates an incomplete/unsafe legacy row;
+    // fail closed rather than letting an empty marker match it.
+    if (!validLifecycleId(runner.lifecycle_id)) return "conflict";
+    const existing = this.mutationRow(runnerId, mutationId);
+    if (existing !== undefined) {
+      // Mutation IDs are scoped to a single Runner lifecycle. A tombstone from
+      // a deleted Runner must never be allowed to mutate a newly-created row
+      // that happens to reuse the same runner_id.
+      if (!validLifecycleId(existing.lifecycle_id) || existing.lifecycle_id !== runner.lifecycle_id) return "conflict";
+      // Before the enrollment-specific kind was introduced, enrollment
+      // redemptions were recorded as credential_rotate. Treat that legacy
+      // spelling as equivalent only when the new caller is an enrollment;
+      // unrelated rotate/revoke/delete mutations remain strict conflicts.
+      if (existing.kind !== kind && !(existing.kind === "credential_rotate" && kind === "credential_enroll")) return "conflict";
+      // Credential mutations advance credential_version. A matching
+      // post-version proves the first transaction committed; a legacy marker
+      // with the same version is retried safely below. Deletion is different:
+      // it removes the Runner row instead of advancing a version, so an
+      // existing row always means the delete still needs to run.
+      // Legacy versions recorded a delete marker before running the row
+      // deletion transaction, so a marker can survive while the row remains
+      // present if that transaction was interrupted.  Retry that partial
+      // delete only for the same credential generation; never let an old
+      // delete marker erase a credential that was rotated afterwards.
+      if (existing.kind === "runner_delete") return runner.credential_version === existing.pre_credential_version ? "new" : "conflict";
+      if (existing.kind === "runner_create") return "conflict";
+      if (runner.credential_version === existing.pre_credential_version + 1) return "committed";
+      return runner.credential_version === existing.pre_credential_version ? "new" : "conflict";
+    }
+    this.ctx.storage.sql.exec("INSERT INTO runner_mutations (runner_id, mutation_id, kind, pre_credential_version, lifecycle_id, committed_at_ms) VALUES (?, ?, ?, ?, ?, ?)", runnerId, mutationId, kind, runner.credential_version, runner.lifecycle_id, nowMs);
+    return "new";
+  }
+  private policyMutationRow(runnerId: string, mutationId: string): PolicyMutationRow | undefined {
+    return this.ctx.storage.sql.exec<PolicyMutationRow>("SELECT runner_id, mutation_id, kind, fingerprint, revision, committed_at_ms FROM runner_policy_mutations WHERE runner_id = ? AND mutation_id = ?", runnerId, mutationId).toArray()[0];
+  }
+  private policyMutationStatus(runnerId: string, mutationId: string, kind: PolicyMutationKind, fingerprint: string): "new" | "committed" | "conflict" {
+    const existing = this.policyMutationRow(runnerId, mutationId);
+    if (existing === undefined) return "new";
+    return existing.kind === kind && existing.fingerprint === fingerprint ? "committed" : "conflict";
+  }
+  private recordPolicyMutation(runnerId: string, mutationId: string, kind: PolicyMutationKind, fingerprint: string, revision: number, nowMs: number): void {
+    this.ctx.storage.sql.exec("INSERT INTO runner_policy_mutations (runner_id, mutation_id, kind, fingerprint, revision, committed_at_ms) VALUES (?, ?, ?, ?, ?, ?)", runnerId, mutationId, kind, fingerprint, revision, nowMs);
   }
   private runnerRow(runnerId: string): RunnerRow | undefined { return this.ctx.storage.sql.exec<RunnerRow>("SELECT * FROM runners WHERE runner_id = ?", runnerId).toArray()[0]; }
   private activeRunnerContext(runnerId: string, updatedAtMs: number | null): ActiveRunnerContext {
@@ -1276,6 +1675,7 @@ export class RegistryDO {
       else this.ctx.storage.sql.exec("UPDATE runners SET token_verifier = '' WHERE token_verifier IS NULL");
     }
     if (!columns.has("credential_version")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN credential_version INTEGER NOT NULL DEFAULT 1");
+    if (!columns.has("lifecycle_id")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN lifecycle_id TEXT NOT NULL DEFAULT ''");
     if (!columns.has("display_name")) { this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN display_name TEXT"); this.ctx.storage.sql.exec("UPDATE runners SET display_name = runner_id WHERE display_name IS NULL OR display_name = ''"); }
     if (!columns.has("public_info_json")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN public_info_json TEXT");
     if (!columns.has("last_sync_sequence")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN last_sync_sequence INTEGER");
@@ -1303,13 +1703,30 @@ export class RegistryDO {
     this.ctx.storage.sql.exec("UPDATE runners SET update_channel = 'stable' WHERE update_channel IS NULL OR update_channel NOT IN ('stable', 'pinned')");
     this.ctx.storage.sql.exec("UPDATE runners SET protocol_compatibility = 'unknown' WHERE protocol_compatibility IS NULL OR protocol_compatibility NOT IN ('unknown', 'compatible', 'incompatible')");
     this.ctx.storage.sql.exec("UPDATE runners SET update_status = 'unknown' WHERE update_status IS NULL OR update_status NOT IN ('unknown', 'up_to_date', 'update_available', 'pinned', 'incompatible')");
+    // A runner_id can be deleted and later recreated. Keep an opaque,
+    // per-lifecycle nonce so credential mutation IDs cannot cross that
+    // boundary. Existing rows from older schemas receive a fresh nonce.
+    const lifecycleRows = this.ctx.storage.sql.exec<{ runner_id: string; lifecycle_id: string | null }>("SELECT runner_id, lifecycle_id FROM runners WHERE lifecycle_id IS NULL OR lifecycle_id = ''").toArray();
+    for (const row of lifecycleRows) this.ctx.storage.sql.exec("UPDATE runners SET lifecycle_id = ? WHERE runner_id = ? AND (lifecycle_id IS NULL OR lifecycle_id = '')", crypto.randomUUID(), row.runner_id);
 
     const versionColumns = new Set(this.ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(runner_policy_versions)").toArray().map((column) => column.name));
     if (!versionColumns.has("source_revision")) this.ctx.storage.sql.exec("ALTER TABLE runner_policy_versions ADD COLUMN source_revision INTEGER");
     if (!versionColumns.has("mutation_id")) this.ctx.storage.sql.exec("ALTER TABLE runner_policy_versions ADD COLUMN mutation_id TEXT");
     this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS runner_policy_migrations (runner_id TEXT PRIMARY KEY, migrated_at_ms INTEGER NOT NULL)");
-    this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS runner_mutations (runner_id TEXT NOT NULL, mutation_id TEXT NOT NULL, kind TEXT NOT NULL, pre_credential_version INTEGER NOT NULL, committed_at_ms INTEGER NOT NULL, PRIMARY KEY (runner_id, mutation_id))");
+    this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS runner_mutations (runner_id TEXT NOT NULL, mutation_id TEXT NOT NULL, kind TEXT NOT NULL, pre_credential_version INTEGER NOT NULL, lifecycle_id TEXT NOT NULL DEFAULT '', committed_at_ms INTEGER NOT NULL, PRIMARY KEY (runner_id, mutation_id))");
+    const mutationColumns = new Set(this.ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(runner_mutations)").toArray().map((column) => column.name));
+    if (!mutationColumns.has("lifecycle_id")) this.ctx.storage.sql.exec("ALTER TABLE runner_mutations ADD COLUMN lifecycle_id TEXT NOT NULL DEFAULT ''");
+    // Backfill markers that belong to a still-present Runner. Markers whose
+    // Runner was deleted remain tombstones for lost-response recovery, but get
+    // an unmatchable legacy nonce so they cannot affect a recreated Runner.
+    const legacyMutations = this.ctx.storage.sql.exec<{ runner_id: string; mutation_id: string; lifecycle_id: string | null }>("SELECT runner_id, mutation_id, lifecycle_id FROM runner_mutations WHERE lifecycle_id IS NULL OR lifecycle_id = ''").toArray();
+    for (const row of legacyMutations) {
+      const current = this.ctx.storage.sql.exec<{ lifecycle_id: string }>("SELECT lifecycle_id FROM runners WHERE runner_id = ?", row.runner_id).toArray()[0];
+      this.ctx.storage.sql.exec("UPDATE runner_mutations SET lifecycle_id = ? WHERE runner_id = ? AND mutation_id = ? AND (lifecycle_id IS NULL OR lifecycle_id = '')", current?.lifecycle_id ?? `legacy-${crypto.randomUUID()}`, row.runner_id, row.mutation_id);
+    }
     this.ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS idx_runner_mutations_runner ON runner_mutations(runner_id)");
+    this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS runner_policy_mutations (runner_id TEXT NOT NULL, mutation_id TEXT NOT NULL, kind TEXT NOT NULL, fingerprint TEXT NOT NULL, revision INTEGER NOT NULL, committed_at_ms INTEGER NOT NULL, PRIMARY KEY (runner_id, mutation_id))");
+    this.ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS idx_runner_policy_mutations_runner ON runner_policy_mutations(runner_id)");
     this.ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS idx_runner_policy_versions_retention ON runner_policy_versions(runner_id, revision DESC)");
 
     const mcpColumns = new Set(this.ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(mcp_clients)").toArray().map((column) => column.name));
@@ -1391,10 +1808,12 @@ export class RegistryDO {
   private markPolicyMigrationComplete(runnerId: string, nowMs: number): void {
     this.ctx.storage.sql.exec("INSERT OR IGNORE INTO runner_policy_migrations (runner_id, migrated_at_ms) VALUES (?, ?)", runnerId, nowMs);
   }
-  private bumpDesiredPolicy(runnerId: string, nowMs: number, mutationId?: string): void {
+  private bumpDesiredPolicy(runnerId: string, nowMs: number, mutationId?: string): number {
     const runner = this.runnerRow(runnerId);
     if (runner === undefined) throw new Error("runner not found");
-    this.createPolicySnapshot(runnerId, Math.max(1, runner.desired_policy_revision + 1), nowMs, runner.desired_policy_revision > 0 ? runner.desired_policy_revision : null, mutationId ?? crypto.randomUUID());
+    const revision = Math.max(1, runner.desired_policy_revision + 1);
+    this.createPolicySnapshot(runnerId, revision, nowMs, runner.desired_policy_revision > 0 ? runner.desired_policy_revision : null, mutationId ?? crypto.randomUUID());
+    return revision;
   }
   private createPolicySnapshot(runnerId: string, revision: number, nowMs: number, sourceRevision: number | null, mutationId: string): void {
     const runner = this.runnerRow(runnerId);
@@ -1417,7 +1836,7 @@ export class RegistryDO {
     for (const row of rows) if (!ids.has(row.id)) this.ctx.storage.sql.exec("DELETE FROM workspaces WHERE runner_id = ? AND workspace_id = ?", runnerId, row.id);
   }
   private upsertJob(runnerId: string, job: Record<string, unknown>, nowMs: number): void {
-    const updated = typeof job.updated_at_ms === "number" ? job.updated_at_ms : nowMs;
+    const updated = safeNonnegativeInteger(job.updated_at_ms) ? job.updated_at_ms : nowMs;
     this.ctx.storage.sql.exec(`INSERT INTO jobs (runner_id, job_id, job_json, updated_at_ms) VALUES (?, ?, ?, ?)
       ON CONFLICT(runner_id, job_id) DO UPDATE SET job_json = CASE WHEN excluded.updated_at_ms >= jobs.updated_at_ms THEN excluded.job_json ELSE jobs.job_json END, updated_at_ms = MAX(jobs.updated_at_ms, excluded.updated_at_ms)`, runnerId, job.job_id, JSON.stringify(job), updated);
   }
@@ -1430,7 +1849,40 @@ export class RegistryDO {
 }
 
 function authThrottleKind(value: unknown): AuthThrottleKind | undefined { return value === "login" || value === "setup" ? value : undefined; }
-function validRunnerVersion(value: string): boolean { return /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(value); }
+function validRunnerVersion(value: string): boolean { return value.length > 0 && value.length <= 256 && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(value); }
+function validLifecycleId(value: string): boolean { return value.length >= 16 && value.length <= 128 && /^[A-Za-z0-9._:-]+$/u.test(value); }
+function validSessionId(value: string): boolean { return isSafeIdentifier(value); }
+function validTransportIdentity(lifecycleId?: string | null, sessionId?: string | null): boolean {
+  const lifecycleMissing = lifecycleId === undefined || lifecycleId === null;
+  const sessionMissing = sessionId === undefined || sessionId === null;
+  // Preserve the legacy direct-call seam only when *both* identity fields are
+  // omitted. A partially supplied pair would silently downgrade the fence to
+  // one dimension, so reject it even for internal method callers.
+  if (lifecycleMissing !== sessionMissing) return false;
+  return lifecycleMissing || (typeof lifecycleId === "string" && typeof sessionId === "string" && validLifecycleId(lifecycleId) && validSessionId(sessionId));
+}
+// Keep parsed fields required (rather than optional properties) so
+// `exactOptionalPropertyTypes` cannot accidentally turn an omitted identity
+// into an implicitly-authorized `undefined`. Direct method seams remain
+// backwards-compatible with omitted identity arguments; production routes
+// require both raw fields to be present and valid strings below.
+type ParsedTransportIdentity = { readonly valid: boolean; readonly lifecycleId: string | undefined; readonly sessionId: string | undefined };
+function parseTransportIdentity(input: InternalInput): ParsedTransportIdentity {
+  const rawLifecycle = input.lifecycle_id;
+  const rawSession = input.session_id;
+  const lifecycleId = typeof rawLifecycle === "string" ? rawLifecycle : undefined;
+  const sessionId = typeof rawSession === "string" ? rawSession : undefined;
+  // Missing/null/non-string fields intentionally fail closed. Only direct
+  // method calls may omit identity for rolling-upgrade compatibility.
+  const valid = typeof rawLifecycle === "string" && validLifecycleId(rawLifecycle)
+    && typeof rawSession === "string" && validSessionId(rawSession);
+  return { valid, lifecycleId, sessionId };
+}
+function matchesTransportIdentity(row: Pick<RunnerRow, "lifecycle_id" | "session_id"> | undefined, lifecycleId?: string | null, sessionId?: string | null): boolean {
+  return row !== undefined && validTransportIdentity(lifecycleId, sessionId)
+    && (lifecycleId === undefined || lifecycleId === null || row.lifecycle_id === lifecycleId)
+    && (sessionId === undefined || sessionId === null || row.session_id === sessionId);
+}
 function validUpdateChannel(value: unknown): value is RunnerUpdateChannel { return value === "stable" || value === "pinned"; }
 function validUpdateStatus(value: unknown): value is RunnerUpdateStatus { return value === "unknown" || value === "up_to_date" || value === "update_available" || value === "pinned" || value === "incompatible"; }
 function protocolCompatibility(minVersion: number, maxVersion: number): RunnerProtocolCompatibility { return minVersion <= PROTOCOL_CURRENT_VERSION && maxVersion >= PROTOCOL_MIN_VERSION ? "compatible" : "incompatible"; }
@@ -1442,7 +1894,7 @@ function updateStatus(channel: RunnerUpdateChannel, desired: string | undefined,
 }
 
 function emptyMutationState(): RunnerMutationState {
-  return { runner_exists: false, runner_state: null, mutation_committed: false, desired_revision: null, desired_checksum: null, applied_revision: null, active_checksum: null, runner_reported_revision: null, runner_reported_checksum: null, policy_status: null, connection_epoch: null, credential_version: null, session_id: null };
+  return { runner_exists: false, lifecycle_id: null, runner_state: null, credential_mutation_committed: false, mutation_committed: false, desired_revision: null, desired_checksum: null, applied_revision: null, active_checksum: null, runner_reported_revision: null, runner_reported_checksum: null, policy_status: null, connection_epoch: null, credential_version: null, session_id: null };
 }
 
 function decodeRunner(row: RunnerRow): RunnerRecord {
@@ -1476,6 +1928,7 @@ function parseJsonObject(body: string): InternalInput | undefined { try { const 
 function stringField(input: InternalInput, field: string, maxLength: number): string | undefined { const value = input[field]; return typeof value === "string" && value.length > 0 && value.length <= maxLength ? value : undefined; }
 function integerField(input: InternalInput, field: string): number | undefined { const value = input[field]; return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined; }
 function nullableIntegerField(input: InternalInput, field: string): number | null | undefined { const value = input[field]; return value === null ? null : typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined; }
+function safeNonnegativeInteger(value: unknown): value is number { return typeof value === "number" && Number.isSafeInteger(value) && value >= 0; }
 function nullableChecksumField(input: InternalInput, field: string): string | null | undefined { const value = input[field]; return value === null ? null : typeof value === "string" && /^[a-f0-9]{64}$/.test(value) ? value : undefined; }
 function runnerPublicInfoField(value: unknown): RunnerPublicInfo | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -1491,12 +1944,22 @@ function permissionSetField(value: unknown): PermissionSet | undefined {
 }
 function parsePermissionSet(value: string): PermissionSet | undefined { try { return permissionSetField(JSON.parse(value) as unknown); } catch { return undefined; } }
 function validPermissionSet(value: unknown): value is PermissionSet { return permissionSetField(value) !== undefined; }
-function validWorkspaceInput(value: { workspace_id: string; display_name: string; root_path: string; enabled: boolean; permissions: PermissionSet }): boolean { return isSafeIdentifier(value.workspace_id) && validLabel(value.display_name) && value.root_path.length > 0 && value.root_path.length <= 4_096 && !value.root_path.includes("\0") && validPermissionSet(value.permissions); }
+function absoluteWorkspaceRoot(value: string): boolean {
+  // The Runner's path policy resolves user paths beneath a configured root;
+  // accepting a relative root here would defer a known-invalid configuration
+  // until the Runner starts. Support POSIX, drive-letter, and UNC forms so the
+  // same validation works for policies authored on either platform.
+  return value.startsWith("/") || value.startsWith("\\\\") || /^[A-Za-z]:[\\/]/u.test(value);
+}
+function validWorkspaceInput(value: { workspace_id: string; display_name: string; root_path: string; enabled: boolean; permissions: PermissionSet }): boolean {
+  return isSafeIdentifier(value.workspace_id) && validLabel(value.display_name) && value.root_path.length > 0 && value.root_path.length <= 4_096
+    && absoluteWorkspaceRoot(value.root_path) && !/[\u0000-\u001f\u007f]/u.test(value.root_path) && validPermissionSet(value.permissions);
+}
 function validPolicyJson(value: { runner_permissions?: unknown; workspaces?: unknown }): boolean {
   return permissionSetField(value.runner_permissions) !== undefined && Array.isArray(value.workspaces) && value.workspaces.length <= 64 && new Set(value.workspaces.map((workspace) => typeof workspace === "object" && workspace !== null && !Array.isArray(workspace) ? (workspace as Record<string, unknown>).workspace_id : undefined)).size === value.workspaces.length && value.workspaces.every((workspace) => {
     if (typeof workspace !== "object" || workspace === null || Array.isArray(workspace)) return false;
     const item = workspace as Record<string, unknown>;
-    return typeof item.workspace_id === "string" && isSafeIdentifier(item.workspace_id) && typeof item.root_path === "string" && item.root_path.length > 0 && item.root_path.length <= 4_096 && !item.root_path.includes("\0") && typeof item.enabled === "boolean" && permissionSetField(item.permissions) !== undefined;
+    return typeof item.workspace_id === "string" && isSafeIdentifier(item.workspace_id) && typeof item.root_path === "string" && item.root_path.length > 0 && item.root_path.length <= 4_096 && absoluteWorkspaceRoot(item.root_path) && !/[\u0000-\u001f\u007f]/u.test(item.root_path) && typeof item.enabled === "boolean" && permissionSetField(item.permissions) !== undefined;
   });
 }
 function workspaceStatusesField(value: unknown): Array<{ workspace_id: string; status: WorkspaceValidationStatus }> | undefined {
@@ -1510,6 +1973,18 @@ function validVerifier(value: string): boolean { return /^[0-9a-f]{64}$/.test(va
 function validMutationId(value: unknown): value is string { return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value); }
 function validOptionalMutationId(value: string | undefined): boolean { return value === undefined || validMutationId(value); }
 function mutationIdField(input: InternalInput): string | undefined { return validMutationId(input.mutation_id) ? input.mutation_id : undefined; }
+function policyMutationFingerprint(kind: PolicyMutationKind, value: Record<string, unknown>): string {
+  // Inputs are already bounded/validated by the public mutators. Pick fields
+  // explicitly so retries remain stable even if a caller serializes the same
+  // object with a different key order.
+  if (kind === "workspace_create" || kind === "workspace_update") {
+    const permissions = value.permissions as PermissionSet;
+    return JSON.stringify({ kind, workspace_id: value.workspace_id, display_name: value.display_name, root_path: value.root_path, enabled: value.enabled, permissions: { read: permissions.read, edit: permissions.edit, shell: permissions.shell, job_control: permissions.job_control } });
+  }
+  if (kind === "workspace_delete") return JSON.stringify({ kind, workspace_id: value.workspace_id });
+  const permissions = value.permissions as PermissionSet;
+  return JSON.stringify({ kind, permissions: { read: permissions.read, edit: permissions.edit, shell: permissions.shell, job_control: permissions.job_control } });
+}
 function validLabel(value: string): boolean { return value.trim().length >= 1 && value.length <= 256; }
 function validRunnerPublicInfo(value: RunnerPublicInfo): boolean { return value.platform.length > 0 && value.platform.length <= 128 && value.architecture.length > 0 && value.architecture.length <= 128 && value.hostname.length > 0 && value.hostname.length <= 256 && value.runner_version.length > 0 && value.runner_version.length <= 256 && Number.isSafeInteger(value.protocol_version) && value.protocol_version > 0 && value.protocol_version <= 1_000; }
 function validScopes(value: readonly CodingScope[]): boolean { return value.length > 0 && value.length <= 3 && new Set(value).size === value.length && value.every((scope) => VALID_SCOPES.has(scope)); }

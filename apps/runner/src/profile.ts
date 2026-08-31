@@ -1,6 +1,8 @@
-import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { chmod, chown, lstat, mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, posix, win32 } from "node:path";
+import { dirname, join, parse, posix, relative, resolve, sep, win32 } from "node:path";
+import { randomUUID } from "node:crypto";
 import type { ExecutionMode } from "./service.js";
 import type { WorkspaceOption } from "./config.js";
 import type { HostPlatform } from "./platform-types.js";
@@ -40,6 +42,11 @@ export interface RunnerProfile {
 export interface ProfileStoreOptions { readonly baseDir?: string; readonly filePath?: string; readonly platform?: HostPlatform; readonly home?: string; }
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const MAX_WORKSPACES = 64;
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
+// The validated profile is small (64 workspaces with bounded fields).  Keep a
+// hard byte ceiling before JSON parsing so a tampered profile cannot force an
+// unbounded allocation in the long-lived Runner process.
+const MAX_PROFILE_BYTES = 2 * 1024 * 1024;
 
 export function profileDirectory(options: ProfileStoreOptions = {}): string {
   if (options.baseDir !== undefined) return options.baseDir;
@@ -62,10 +69,18 @@ export function profilePath(options: ProfileStoreOptions = {}): string {
 
 export class ProfileStore {
   private readonly path: string;
-  public constructor(options: ProfileStoreOptions = {}) { this.path = profilePath(options); }
-  public get filePath(): string { return this.path; }
+  /** Resolve once so a caller changing cwd cannot redirect a later load/save. */
+  private readonly absolutePath: string;
+  private readonly platform: HostPlatform;
+  public constructor(options: ProfileStoreOptions = {}) {
+    this.platform = options.platform ?? process.platform;
+    this.path = profilePath(options);
+    this.absolutePath = absoluteProfilePath(this.path, this.platform);
+  }
+  /** Service manifests must not depend on the service manager's working cwd. */
+  public get filePath(): string { return this.absolutePath; }
   public async load(): Promise<RunnerProfile | undefined> {
-    const raw = await readFile(this.path, "utf8").catch((error: unknown) => { if (isErrno(error, "ENOENT")) return undefined; throw error; });
+    const raw = await readPrivateProfile(this.absolutePath, this.platform).catch((error: unknown) => { if (isErrno(error, "ENOENT")) return undefined; throw error; });
     if (raw === undefined) return undefined;
     let value: unknown;
     try { value = JSON.parse(raw) as unknown; } catch { throw new Error("runner profile is not valid JSON"); }
@@ -74,30 +89,189 @@ export class ProfileStore {
   public async save(profile: RunnerProfile): Promise<void> {
     const valid = validateProfile(profile);
     if (valid === undefined) throw new Error("runner profile is invalid");
-    const directory = dirname(this.path);
-    await mkdir(directory, { recursive: true, mode: 0o700 });
-    try { await chmod(directory, 0o700); } catch { /* Windows has no POSIX mode */ }
-    const temporary = join(directory, `.profile-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`);
-    await writeFile(temporary, `${JSON.stringify(valid, null, 2)}\n`, { mode: 0o600 });
-    try { await chmod(temporary, 0o600); } catch { /* Windows has no POSIX mode */ }
-    await rename(temporary, this.path);
-    try { await chmod(this.path, 0o600); } catch { /* Windows has no POSIX mode */ }
+    const target = this.absolutePath;
+    const directory = dirname(target);
+    // Walk every existing component and reject symlink/junction directories.
+    // A recursive mkdir() followed by chmod() would otherwise follow a
+    // pre-created profile-directory symlink and write credentials elsewhere.
+    const directoryInfo = await ensureProfileDirectory(directory);
+    const directoryMode = this.platform === "win32" ? 0o700 : profileDirectoryMode(directoryInfo.mode & 0o777);
+    await this.chmodPrivate(directory, directoryMode, "directory");
+    const existing = await lstat(target).catch((error: unknown) => isErrno(error, "ENOENT") ? undefined : Promise.reject(error));
+    if (existing !== undefined && (!existing.isFile() || existing.isSymbolicLink())) throw new Error("runner profile is not a regular file");
+    const fileMode = this.platform === "win32" ? 0o600 : profileFileMode(existing?.mode === undefined ? undefined : existing.mode & 0o777);
+    // Use an unpredictable, exclusive temporary name.  A predictable path
+    // combined with a plain write would let another local principal place a
+    // symlink before enrollment writes the credential-bearing profile.
+    const temporary = join(directory, `.profile-${randomUUID()}.tmp`);
+    try {
+      await writeFile(temporary, `${JSON.stringify(valid, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+      if (this.platform !== "win32") {
+        await this.chmodPrivate(temporary, fileMode, "file");
+        // Dedicated system services intentionally use root:runmesh 0640 so
+        // the service account can read the profile. Preserve that ownership
+        // across an atomic re-enrollment replacement; otherwise save() would
+        // silently create a root-only 0600 file and strand the service.
+        if (existing !== undefined && typeof existing.uid === "number" && typeof existing.gid === "number") {
+          // A freshly-created temporary file normally already has the caller's
+          // ownership. Avoid an unnecessary chown (which requires privilege on
+          // many POSIX systems), but preserve a service-managed root:group
+          // profile when the replacement inode would otherwise differ.
+          const temporaryInfo = await lstat(temporary);
+          if (temporaryInfo.uid !== existing.uid || temporaryInfo.gid !== existing.gid) {
+            await chown(temporary, existing.uid, existing.gid);
+            await this.chmodPrivate(temporary, fileMode, "file");
+          }
+        }
+      } else await this.chmodPrivate(temporary, 0o600, "file");
+      await rename(temporary, target);
+      await this.chmodPrivate(target, fileMode, "file");
+    } finally {
+      // A failed write/chmod/rename must not leave a readable stale profile
+      // fragment in the configuration directory.
+      await rm(temporary, { force: true }).catch(() => undefined);
+    }
   }
-  public async remove(): Promise<void> { await rm(this.path, { force: true }); }
+  public async remove(): Promise<void> { await rm(this.absolutePath, { force: true }); }
   public async permissions(): Promise<{ readonly directory_mode?: number; readonly file_mode?: number }> {
     const result: { directory_mode?: number; file_mode?: number } = {};
-    const directory = await stat(dirname(this.path)).catch(() => undefined);
-    const file = await stat(this.path).catch(() => undefined);
+    // Do not follow a profile symlink while reporting security diagnostics;
+    // otherwise doctor could report the target's mode for an attacker-selected
+    // file and make an unsafe profile look healthy.
+    const directory = await lstat(dirname(this.absolutePath)).catch(() => undefined);
+    const file = await lstat(this.absolutePath).catch(() => undefined);
     if (directory !== undefined) result.directory_mode = directory.mode & 0o777;
     if (file !== undefined) result.file_mode = file.mode & 0o777;
     return result;
   }
+  private async chmodPrivate(path: string, mode: number, kind: "directory" | "file"): Promise<void> {
+    try {
+      await chmod(path, mode);
+    } catch (error) {
+      // Windows ACLs are managed by the service provisioner; POSIX mode
+      // failures must abort enrollment rather than silently publishing a
+      // world-readable token profile.
+      if (this.platform !== "win32") throw error;
+      return;
+    }
+    if (this.platform !== "win32") {
+      const current = await lstat(path);
+      if (current.isSymbolicLink() || (kind === "directory" ? !current.isDirectory() : !current.isFile()) || (current.mode & 0o777) !== mode) {
+        throw new Error(`could not secure runner profile path: ${path}`);
+      }
+    }
+  }
+}
+
+async function readPrivateProfile(path: string, platform: HostPlatform): Promise<string> {
+  const directory = await lstat(dirname(path));
+  if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error("runner profile directory is not a regular directory");
+  if (platform !== "win32" && (directory.mode & 0o022) !== 0) throw new Error("runner profile directory is writable by group or others");
+  const before = await lstat(path);
+  if (before.isSymbolicLink() || !before.isFile()) throw new Error("runner profile is not a regular file");
+  if (before.size > MAX_PROFILE_BYTES) throw new Error(`runner profile exceeds ${MAX_PROFILE_BYTES} bytes`);
+  if (platform !== "win32" && !canReadProfileMode(before.mode & 0o777, before.gid, before.uid)) throw new Error("runner profile is not private");
+  // O_NOFOLLOW closes the final-component symlink race on POSIX. Windows has
+  // no portable equivalent in Node, so the lstat plus descriptor identity
+  // check remains the best available guard there.
+  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) throw new Error("runner profile changed while being opened");
+    if (opened.size > MAX_PROFILE_BYTES) throw new Error(`runner profile exceeds ${MAX_PROFILE_BYTES} bytes`);
+    if (platform !== "win32" && !canReadProfileMode(opened.mode & 0o777, opened.gid, opened.uid)) throw new Error("runner profile is not private");
+    // Allocate only the observed size plus one byte.  The sentinel detects a
+    // concurrent growth without ever allocating an attacker-controlled size.
+    const buffer = Buffer.alloc(opened.size + 1);
+    let offset = 0;
+    while (offset < buffer.byteLength) {
+      const { bytesRead } = await handle.read(buffer, offset, buffer.byteLength - offset, offset);
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+    // A final descriptor stat closes the size-growth/shrink window after the
+    // read. Without it, a concurrent writer could append one byte (the extra
+    // sentinel slot) and have that mixed snapshot parsed as a profile.
+    const final = await handle.stat();
+    if (!final.isFile() || final.dev !== opened.dev || final.ino !== opened.ino || final.size !== opened.size || offset !== opened.size) {
+      throw new Error("runner profile changed while being read");
+    }
+    if (offset > MAX_PROFILE_BYTES) throw new Error(`runner profile exceeds ${MAX_PROFILE_BYTES} bytes`);
+    return buffer.subarray(0, offset).toString("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Create/validate the profile directory without following a symlinked
+ * component. `mkdir({recursive:true})` alone follows such a component before
+ * the caller gets a chance to inspect it, which can redirect credential
+ * material into an attacker-selected tree.
+ */
+async function ensureProfileDirectory(path: string): Promise<import("node:fs").Stats> {
+  const normalized = resolve(path);
+  const root = parse(normalized).root;
+  if (normalized === root) throw new Error("runner profile directory must not be a filesystem root");
+  const components = relative(root, normalized).split(sep).filter((part) => part.length > 0);
+  let current = root;
+  for (const component of components) {
+    current = join(current, component);
+    let info = await lstat(current).catch((error: unknown) => isErrno(error, "ENOENT") ? undefined : Promise.reject(error));
+    if (info === undefined) {
+      try { await mkdir(current, { mode: 0o700 }); }
+      catch (error) {
+        // Another process may have created the component between lstat and
+        // mkdir. Re-inspect it below; never assume EEXIST names a directory.
+        if (!isErrno(error, "EEXIST")) throw error;
+      }
+      info = await lstat(current);
+    }
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("runner profile directory is not a regular directory");
+  }
+  return lstat(normalized);
+}
+
+/** Keep a dedicated service's group traversal while removing any write bits. */
+function profileDirectoryMode(mode: number): number {
+  const safe = mode & 0o777;
+  // Existing profile directories may be 0750 after service provisioning. A
+  // re-enrollment must retain that group-read/execute access; all other
+  // group/other write permissions are tightened to owner-only.
+  if ((safe & 0o022) !== 0) return 0o700;
+  // Keep the exact dedicated-service shape (0750) whenever either group
+  // traversal bit was present.  Returning 0740/0710 here would be secure in
+  // isolation but would make `doctor` disagree with the provisioner's
+  // contract and could strand a service after re-enrollment.
+  return (safe & 0o050) !== 0 ? 0o750 : 0o700;
+}
+
+/**
+ * Profile files are owner-private (0600) or, for a dedicated service account,
+ * group-readable (0640). Never preserve other-read or group-write bits.
+ */
+function profileFileMode(mode: number | undefined): number {
+  if (mode === undefined) return 0o600;
+  return (mode & 0o040) !== 0 ? 0o640 : 0o600;
+}
+
+function canReadProfileMode(mode: number, gid: number, uid: number): boolean {
+  // No world permissions and no group write: profile contents are credential
+  // material. Owner read is mandatory; group-read is allowed only when this
+  // process is the owner or is actually a member of the profile's group.
+  if ((mode & 0o007) !== 0 || (mode & 0o020) !== 0 || (mode & 0o400) === 0) return false;
+  if ((mode & 0o040) === 0) return true;
+  if (typeof process.getuid === "function" && process.getuid() === uid) return true;
+  if (typeof process.getuid === "function" && process.getuid() === 0) return true;
+  if (typeof process.getgid === "function" && process.getgid() === gid) return true;
+  try { return typeof process.getgroups === "function" && process.getgroups().includes(gid); }
+  catch { return false; }
 }
 
 export function validateProfile(value: unknown): RunnerProfile | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const item = value as Record<string, unknown>;
-  if (item.version !== 1 || !validServerUrl(item.server_url, item.insecure_local === true) || !validString(item.runner_id, 1, 128) || !SAFE_ID.test(item.runner_id as string) || !validString(item.token, 16, 4_096) || /\s/.test(item.token as string)) return undefined;
+  if (item.version !== 1 || !validServerUrl(item.server_url, item.insecure_local === true) || !validString(item.runner_id, 1, 128) || !SAFE_ID.test(item.runner_id as string) || !validString(item.token, 16, 4_096) || /\s/.test(item.token as string) || CONTROL_CHARACTER_PATTERN.test(item.token as string)) return undefined;
   if (!Array.isArray(item.workspaces) || item.workspaces.length > MAX_WORKSPACES) return undefined;
   const workspaces: StoredWorkspace[] = [];
   const seen = new Set<string>();
@@ -131,14 +305,22 @@ function withMaxConcurrentJobs(profile: RunnerProfile, value: unknown): RunnerPr
 function validString(value: unknown, min: number, max: number): value is string { return typeof value === "string" && value.length >= min && value.length <= max && !/[\r\n]/.test(value); }
 function validServerUrl(value: unknown, insecureLocal: boolean): value is string {
   if (!validString(value, 2, 2_048)) return false;
+  if (CONTROL_CHARACTER_PATTERN.test(value)) return false;
   try {
     const url = new URL(value);
     const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]";
     const safe = url.username === "" && url.password === "" && url.search === "" && url.hash === "";
-    return safe && (url.protocol === "wss:" || (url.protocol === "ws:" && loopback && insecureLocal));
+    if (!safe || !(url.protocol === "wss:" || (url.protocol === "ws:" && loopback && insecureLocal))) return false;
+    return url.toString().length <= 2_048;
   } catch { return false; }
 }
 function isErrno(error: unknown, code: string): boolean { return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === code; }
+
+/** Resolve explicit profile paths with the target host's path semantics. */
+function absoluteProfilePath(value: string, platform: HostPlatform): string {
+  const path = platform === "win32" ? win32 : posix;
+  return path.normalize(path.isAbsolute(value) ? value : path.resolve(value));
+}
 
 export function profileExecutionMode(profile: RunnerProfile | undefined): ProfileExecutionMode | undefined {
   if (profile === undefined) return undefined;

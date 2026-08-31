@@ -1,8 +1,9 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { MAX_RELEASE_ASSET_BYTES } from "./release-io.mjs";
 
 const exec = promisify(execFile);
 // On Windows npm is exposed as a .cmd shim rather than a native executable;
@@ -16,6 +17,10 @@ try {
   const packed = await exec(npmExecutable, ["pack", "--workspace=@aloneio/runmesh-runner", "--pack-destination", root], { cwd: process.cwd(), ...npmExecOptions });
   const runner = packed.stdout.trim().split("\n").pop();
   if (!runner?.endsWith(".tgz")) throw new Error("npm pack did not return a Runner tarball");
+  const packedMetadata = await stat(join(root, runner));
+  if (!packedMetadata.isFile() || packedMetadata.size <= 0 || packedMetadata.size > MAX_RELEASE_ASSET_BYTES) {
+    throw new Error(`Runner tarball exceeds the fixed hosted-installer size limit (${MAX_RELEASE_ASSET_BYTES} bytes)`);
+  }
   await exec(npmExecutable, ["init", "-y"], { cwd: root, ...npmExecOptions });
   await exec(npmExecutable, ["install", "--ignore-scripts", "--offline", join(root, runner)], { cwd: root, env: { ...process.env, npm_config_cache: cache }, ...npmExecOptions });
   const packageRoot = join(root, "node_modules", "@aloneio", "runmesh-runner");

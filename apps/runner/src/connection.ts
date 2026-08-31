@@ -58,6 +58,7 @@ export class RunnerConnection {
   private readonly policyStore: PolicyStore;
   private socket: WebSocket | undefined;
   private stopped = false;
+  private lifecycleGeneration = 0;
   private reconnectAttempt = 0;
   private syncSequence = 0;
   private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
@@ -68,7 +69,21 @@ export class RunnerConnection {
   private desiredPolicyChecksum = "";
   private policyApplyGeneration = 0;
   private readonly pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
-  private policyApplyQueue: Promise<void> = Promise.resolve();
+  /**
+   * Policy validation/activation can perform filesystem I/O and therefore may
+   * remain pending for an arbitrary amount of time. Keep FIFO ordering for a
+   * single WebSocket, but never let a stalled operation from a superseded
+   * transport block policy delivery on the replacement socket.
+   */
+  private readonly policyApplyQueues = new WeakMap<WebSocket, Promise<void>>();
+  /**
+   * A sync snapshot is asynchronous (job recovery/persistence may yield), so
+   * timer, welcome, and policy-apply triggers must share one FIFO. Without a
+   * queue an older snapshot can finish after a newer one and receive the
+   * larger sync_sequence, causing Registry to accept it as authoritative.
+   */
+  private syncQueue: Promise<void> = Promise.resolve();
+  private syncQueueSocket: WebSocket | undefined;
 
   public constructor(options: RunnerConnectionOptions) {
     this.config = options.config;
@@ -90,8 +105,14 @@ export class RunnerConnection {
   }
 
   public async start(): Promise<void> {
+    const generation = ++this.lifecycleGeneration;
+    this.stopped = false;
     await this.runtime.initialize();
+    // `stop()` may be called while local state/policy is loading. Do not
+    // blindly clear that stop request after the await and open a socket anyway.
+    if (this.stopped || generation !== this.lifecycleGeneration) return;
     const persisted = await this.policyStore.load(this.config.runnerId);
+    if (this.stopped || generation !== this.lifecycleGeneration) return;
     if (persisted !== undefined) {
       const restored = await candidateWorkspaces(persisted);
       this.runtime.applyPolicy(restored);
@@ -100,8 +121,7 @@ export class RunnerConnection {
       this.desiredPolicyRevision = persisted.revision;
       this.desiredPolicyChecksum = persisted.checksum;
     }
-    this.stopped = false;
-    while (!this.stopped) {
+    while (!this.stopped && generation === this.lifecycleGeneration) {
       this.onStateChange("connecting");
       try {
         await this.connectOnce();
@@ -120,6 +140,7 @@ export class RunnerConnection {
   }
 
   public stop(): void {
+    this.lifecycleGeneration += 1;
     this.stopped = true;
     if (this.heartbeatTimer !== undefined) clearInterval(this.heartbeatTimer);
     if (this.syncTimer !== undefined) clearInterval(this.syncTimer);
@@ -194,7 +215,8 @@ export class RunnerConnection {
           min_protocol_version: PROTOCOL_MIN_VERSION,
           max_protocol_version: PROTOCOL_CURRENT_VERSION,
         };
-        socket.send(encodeWireFrame(hello));
+        try { socket.send(encodeWireFrame(hello)); }
+        catch (error) { fail(error instanceof Error ? error : new Error("failed to send runner hello")); }
       });
       socket.on("message", (value: WebSocket.RawData) => {
         let message: WireMessage;
@@ -213,6 +235,13 @@ export class RunnerConnection {
             socket.close(4000, "stale connection");
             return;
           }
+          // A welcome is a one-shot handshake. Accepting a duplicate would
+          // install another heartbeat/sync timer on the same socket and could
+          // advance the Registry sync sequence out of order.
+          if (welcomed) {
+            socket.close(1008, "duplicate welcome");
+            return;
+          }
           welcomed = true;
           this.onStateChange("online");
           if (message.desired_policy !== undefined) this.queueDesiredPolicy(socket, message.desired_policy);
@@ -228,13 +257,21 @@ export class RunnerConnection {
           // Stay pending until close so start() reconnects only after a real session ends.
           return;
         }
+        // A socket is not authorized until its welcome handshake has completed
+        // and it is still the connection tracked by this Runner.  In
+        // particular, do not let a pre-welcome or superseded socket issue an
+        // `rpc.request` against a policy restored from a previous session.
+        if (!welcomed || this.socket !== socket || this.stopped) {
+          socket.close(4000, "stale connection");
+          return;
+        }
         if (message.type === "runner.policy_update") {
           if (message.runner_id !== this.config.runnerId) { socket.close(1008, "runner identity mismatch"); return; }
           this.queueDesiredPolicy(socket, message.policy);
           return;
         }
         if (message.type === "rpc.request") {
-          void this.respondToRpc(socket, message);
+          void this.respondToRpc(socket, message, () => welcomed && this.socket === socket && !this.stopped);
           return;
         }
         if (message.type === "rpc.response" || message.type === "rpc.error") {
@@ -277,21 +314,55 @@ export class RunnerConnection {
   }
 
   private queueDesiredPolicy(socket: WebSocket, policy: NonNullable<RunnerWelcome["desired_policy"]>): void {
-    this.policyApplyQueue = this.policyApplyQueue.then(() => this.applyDesiredPolicy(socket, policy)).catch(() => undefined);
+    const previous = this.policyApplyQueues.get(socket) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(() => this.applyDesiredPolicy(socket, policy));
+    // Consume failures so one bad policy candidate cannot poison later updates
+    // on this socket. `next` is still returned nowhere by design: policy
+    // application is best-effort and the ACK is the observable result.
+    this.policyApplyQueues.set(socket, next.catch(() => undefined));
   }
 
   private async applyDesiredPolicy(socket: WebSocket, policy: NonNullable<RunnerWelcome["desired_policy"]>): Promise<void> {
+    // A policy can sit behind an older candidate in the per-socket queue. If
+    // that transport is replaced before the candidate reaches the front, do
+    // not let the stale candidate advance the global desired revision; doing
+    // so could fence a valid lower revision received on the new session.
+    if (this.stopped || socket !== this.socket || socket.readyState !== WebSocket.OPEN) return;
     if (policy.runner_id !== this.config.runnerId || policy.checksum !== runnerPolicyChecksum({ schema_version: policy.schema_version, runner_id: policy.runner_id, revision: policy.revision, runner_permissions: policy.runner_permissions, workspaces: policy.workspaces })) {
       return;
     }
     if (policy.revision < this.desiredPolicyRevision) return;
     if (policy.revision === this.desiredPolicyRevision && policy.checksum !== this.desiredPolicyChecksum) return;
+    // The desired fields record what the control plane asked for; they do not
+    // prove that this process ever activated the same snapshot. A socket can
+    // close after PolicyStore.activate() but before runtime.applyPolicy(),
+    // leaving live authorization behind the persisted desired revision.
+    // Re-apply an unchanged desired snapshot until the live applied identity
+    // matches it; otherwise a reconnect would short-circuit forever.
+    if (policy.revision === this.desiredPolicyRevision
+      && policy.checksum === this.desiredPolicyChecksum
+      && this.appliedPolicyRevision === policy.revision
+      && this.appliedPolicyChecksum === policy.checksum) {
+      // Registry marks a reconnecting runner as `pending` until it receives a
+      // fresh acknowledgement for the current transport epoch.  The local
+      // policy is already active in this case, so re-activating it would add
+      // unnecessary disk churn; still validate and re-ack the immutable
+      // snapshot, otherwise the Registry can remain pending forever.
+      const generation = ++this.policyApplyGeneration;
+      const validation = await validateCentralWorkspacePolicy(policy.workspaces as CentralWorkspacePolicy[]);
+      if (generation !== this.policyApplyGeneration || this.stopped || socket !== this.socket || socket.readyState !== WebSocket.OPEN
+        || policy.revision !== this.desiredPolicyRevision || policy.checksum !== this.desiredPolicyChecksum) return;
+      const invalid = validation.status.some((item) => item.status !== "valid");
+      this.sendPolicyAck(socket, invalid ? "invalid" : "applied", validation.status);
+      await this.sendSync(socket);
+      return;
+    }
     const generation = this.policyApplyGeneration + 1;
     this.policyApplyGeneration = generation;
     this.desiredPolicyRevision = policy.revision;
     this.desiredPolicyChecksum = policy.checksum;
     const validation = await validateCentralWorkspacePolicy(policy.workspaces as CentralWorkspacePolicy[]);
-    if (generation !== this.policyApplyGeneration || socket !== this.socket || socket.readyState !== WebSocket.OPEN || policy.revision !== this.desiredPolicyRevision) return;
+    if (generation !== this.policyApplyGeneration || this.stopped || socket !== this.socket || socket.readyState !== WebSocket.OPEN || policy.revision !== this.desiredPolicyRevision) return;
     const invalid = validation.status.some((item) => item.status !== "valid");
     if (invalid) {
       this.sendPolicyAck(socket, "invalid", validation.status);
@@ -301,7 +372,7 @@ export class RunnerConnection {
     try {
       const effective = effectivePolicyWorkspaces(policy, validation.workspaces);
       await this.policyStore.activate(policy);
-      if (generation !== this.policyApplyGeneration || socket !== this.socket || socket.readyState !== WebSocket.OPEN || policy.revision !== this.desiredPolicyRevision) return;
+      if (generation !== this.policyApplyGeneration || this.stopped || socket !== this.socket || socket.readyState !== WebSocket.OPEN || policy.revision !== this.desiredPolicyRevision) return;
       // Disk activation is complete before changing the live authorization policy.
       this.runtime.applyPolicy(effective);
       this.appliedPolicyRevision = policy.revision;
@@ -317,7 +388,9 @@ export class RunnerConnection {
     if (socket !== this.socket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
     const reportedRevision = this.appliedPolicyRevision;
     const reportedChecksum = this.appliedPolicyChecksum;
-    socket.send(encodeWireFrame({ type: "runner.policy_ack", protocol_version: PROTOCOL_CURRENT_VERSION, runner_id: this.config.runnerId, desired_revision: this.desiredPolicyRevision, desired_checksum: this.desiredPolicyChecksum, applied_revision: this.appliedPolicyRevision, applied_checksum: this.appliedPolicyChecksum, runner_reported_policy_revision: reportedRevision, runner_reported_policy_checksum: reportedChecksum, status, workspace_status: workspaceStatus }));
+    try {
+      socket.send(encodeWireFrame({ type: "runner.policy_ack", protocol_version: PROTOCOL_CURRENT_VERSION, runner_id: this.config.runnerId, desired_revision: this.desiredPolicyRevision, desired_checksum: this.desiredPolicyChecksum, applied_revision: this.appliedPolicyRevision, applied_checksum: this.appliedPolicyChecksum, runner_reported_policy_revision: reportedRevision, runner_reported_policy_checksum: reportedChecksum, status, workspace_status: workspaceStatus }));
+    } catch { /* close handler drives reconnect */ }
   }
 
   private sendHeartbeat(socket: WebSocket): void {
@@ -333,7 +406,22 @@ export class RunnerConnection {
     } catch { /* close handler drives reconnect */ }
   }
 
-  private async sendSync(socket: WebSocket): Promise<void> {
+  private sendSync(socket: WebSocket): Promise<void> {
+    // Never let a stalled snapshot from a dead socket block the first sync on
+    // a replacement connection. The old promise may still settle eventually,
+    // but its sendSyncNow identity checks make it a no-op for the new session.
+    if (this.syncQueueSocket !== socket) {
+      this.syncQueueSocket = socket;
+      this.syncQueue = Promise.resolve();
+    }
+    const next = this.syncQueue.catch(() => undefined).then(() => this.sendSyncNow(socket));
+    // Keep the queue alive after an individual snapshot failure while still
+    // returning the failure to the caller for its normal best-effort handling.
+    this.syncQueue = next.catch(() => undefined);
+    return next;
+  }
+
+  private async sendSyncNow(socket: WebSocket): Promise<void> {
     if (socket !== this.socket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
     const jobs = await this.runtime.syncJobs();
     if (socket !== this.socket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
@@ -349,15 +437,18 @@ export class RunnerConnection {
     try { socket.send(encodeWireFrame(sync)); } catch { /* close handler drives reconnect */ }
   }
 
-  private async respondToRpc(socket: WebSocket, request: RpcRequest): Promise<void> {
+  private async respondToRpc(socket: WebSocket, request: RpcRequest, sessionCurrent: () => boolean): Promise<void> {
     try {
+      if (!sessionCurrent()) return;
       const expectedRevision = this.appliedPolicyRevision;
       if (request.method !== "echo" && request.method !== "runner.info" && (expectedRevision === null || request.policy_revision === undefined || request.policy_revision !== expectedRevision)) throw new Error("stale_policy");
       const result = request.method === "echo" ? request.params : request.method === "runner.info" ? this.metadata : await this.runtime.dispatch(request.method, request.params);
-      if (socket.readyState === WebSocket.OPEN) socket.send(encodeWireFrame({ type: "rpc.response", protocol_version: request.protocol_version, request_id: request.request_id, result: result as RpcRequest["params"] }));
+      if (sessionCurrent() && socket.readyState === WebSocket.OPEN) socket.send(encodeWireFrame({ type: "rpc.response", protocol_version: request.protocol_version, request_id: request.request_id, result: result as RpcRequest["params"] }));
     } catch (error) {
       const details = rpcError(error);
-      if (socket.readyState === WebSocket.OPEN) socket.send(encodeWireFrame({ type: "rpc.error", protocol_version: request.protocol_version, request_id: request.request_id, error: { code: details.code, message: details.message, ...(details.details === undefined ? {} : { details: details.details as RpcRequest["params"] }) } }));
+      if (sessionCurrent() && socket.readyState === WebSocket.OPEN) {
+        try { socket.send(encodeWireFrame({ type: "rpc.error", protocol_version: request.protocol_version, request_id: request.request_id, error: { code: details.code, message: details.message, ...(details.details === undefined ? {} : { details: details.details as RpcRequest["params"] }) } })); } catch { /* close handler drives reconnect */ }
+      }
     }
   }
 

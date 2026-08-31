@@ -1,7 +1,8 @@
 import { env, SELF, runInDurableObject } from "cloudflare:test";
 import { WORKER_BRIDGE_TIMEOUT_MS, PROTOCOL_CURRENT_VERSION, PROTOCOL_MIN_VERSION, decodeWireFrame, encodeWireFrame, type WireMessage } from "@aloneio/runmesh-protocol";
-import { beforeEach, describe, expect, it } from "vitest";
-import { INTERNAL_CONTROL_HEADER, INTERNAL_SIGNATURE_SKEW_MS, internalHeaders } from "../src/security.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { INTERNAL_CONTROL_HEADER, INTERNAL_SIGNATURE_SKEW_MS, internalHeaders, randomBase64Url, sha256Hex } from "../src/security.js";
+import { RegistryDO, RunnerDO } from "../src/index.js";
 
 
 describe("Worker runner transport", () => {
@@ -56,6 +57,277 @@ describe("Worker runner transport", () => {
     const expired = await internalHeaders(secret, "GET", "/runners", "", { timestamp: now - INTERNAL_SIGNATURE_SKEW_MS - 1, nonce: "e".repeat(64) });
     expect((await registry.fetch("https://registry.internal/runners", { headers: expired })).status).toBe(404);
     expect(headers[INTERNAL_CONTROL_HEADER]).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("requires a RunnerDO mutation fence before replacing an existing credential", async () => {
+    const runnerId = `route-fence-${crypto.randomUUID()}`;
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName(`route-fence-${crypto.randomUUID()}`));
+    await runInDurableObject(registry, (instance) => {
+      expect(instance.registerRunner(runnerId, "a".repeat(64), Date.now())).toBe(true);
+    });
+    const body = JSON.stringify({ token_verifier: "b".repeat(64) });
+    const path = `/runners/${encodeURIComponent(runnerId)}`;
+    const headers = await internalHeaders("test-internal-control-secret-not-for-production", "PUT", path, body);
+    const response = await registry.fetch(new Request(`https://registry.internal${path}`, { method: "PUT", headers, body }));
+    expect(response.status).toBe(400);
+  });
+
+  it("fails closed when the Registry status is unavailable or malformed", async () => {
+    const original = RegistryDO.prototype.fetch;
+    let mode: "malformed" | "unavailable" | "initialized" = "malformed";
+    const spy = vi.spyOn(RegistryDO.prototype, "fetch").mockImplementation(function (this: RegistryDO, request: Request) {
+      if (new URL(request.url).pathname === "/auth/status") {
+        if (mode === "malformed") return Promise.resolve(new Response("{malformed", { status: 200 }));
+        if (mode === "unavailable") return Promise.resolve(new Response("registry unavailable", { status: 502 }));
+        return Promise.resolve(Response.json({ initialized: true }));
+      }
+      return original.call(this, request);
+    });
+    try {
+      await expect(SELF.fetch("https://worker.test/")).resolves.toMatchObject({ status: 503 });
+      mode = "unavailable";
+      await expect(SELF.fetch("https://worker.test/")).resolves.toMatchObject({ status: 503 });
+      mode = "initialized";
+      const login = await SELF.fetch("https://worker.test/");
+      expect(login.status).toBe(200);
+      await expect(login.text()).resolves.toContain("Admin password");
+    } finally {
+      spy.mockRestore();
+    }
+    // A healthy, uninitialized Registry still serves setup normally after the
+    // injected failure is removed (the initialized case above covers login).
+    const healthy = await SELF.fetch("https://worker.test/");
+    expect(healthy.status).toBe(200);
+  });
+
+  it("reports uncertain deletion when RunnerDO rejects transport cleanup", async () => {
+    const id = `delete-transport-${crypto.randomUUID()}`;
+    const runnerToken = "abcdef0123456789abcdef0123456789";
+    expect((await enroll(id, runnerToken)).status).toBe(200);
+    const original = RunnerDO.prototype.fetch;
+    const spy = vi.spyOn(RunnerDO.prototype, "fetch").mockImplementation(function (this: RunnerDO, request: Request) {
+      if (new URL(request.url).pathname === "/delete") return Promise.resolve(new Response("simulated failure", { status: 503 }));
+      return original.call(this, request);
+    });
+    try {
+      const response = await SELF.fetch(`https://worker.test/admin/runners/${id}/delete`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ confirmation: id }),
+      });
+      expect(response.status).toBe(503);
+      await expect(response.text()).resolves.toContain("uncertain");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("fences a stale pre-hello socket before reusing a deleted runner id", async () => {
+    const id = `recreate-${crypto.randomUUID()}`;
+    const oldToken = "abcdef0123456789abcdef0123456789";
+    const newToken = "0123456789abcdef0123456789abcdef";
+    expect((await enroll(id, oldToken)).status).toBe(200);
+    const upgrade = await SELF.fetch(`https://worker.test/runner/connect?runner_id=${id}`, { headers: { Upgrade: "websocket", Authorization: `Bearer ${oldToken}` } });
+    expect(upgrade.status).toBe(101);
+    const socket = upgrade.webSocket;
+    expect(socket).not.toBeNull();
+    socket?.accept();
+
+    const original = RunnerDO.prototype.fetch;
+    const spy = vi.spyOn(RunnerDO.prototype, "fetch").mockImplementation(function (this: RunnerDO, request: Request) {
+      if (new URL(request.url).pathname === "/delete") return Promise.resolve(new Response("simulated cleanup failure", { status: 503 }));
+      return original.call(this, request);
+    });
+    try {
+      const deleted = await SELF.fetch(`https://worker.test/admin/runners/${id}/delete`, {
+        method: "POST", headers: { Authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ confirmation: id }),
+      });
+      expect(deleted.status).toBe(503);
+    } finally { spy.mockRestore(); }
+
+    // Registry has no row now, but the old authenticated socket is still held
+    // by RunnerDO. A fresh registration must fence and clean that socket before
+    // returning the new credential.
+    const recreated = await enroll(id, newToken);
+    expect(recreated.status).toBe(200);
+    const frame = new Promise<WireMessage>((resolve) => socket?.addEventListener("message", (event) => resolve(decodeWireFrame(String(event.data))), { once: true }));
+    socket?.send(encodeWireFrame({
+      type: "runner.hello", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "stale-hello", min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION,
+      runner: { runner_id: id, runner_version: "old", platform: "test", architecture: "test", capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: [], labels: {} } },
+    }));
+    await expect(Promise.race([frame, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("stale socket received a welcome")), 1_000))])).rejects.toThrow("stale socket received a welcome");
+    socket?.close();
+  });
+
+  it("allows registration when delete/recreate wins between the pre-fence read and PUT", async () => {
+    const id = `register-race-${crypto.randomUUID()}`;
+    const oldToken = "abcdef0123456789abcdef0123456789";
+    const newToken = "0123456789abcdef0123456789abcdef";
+    expect((await enroll(id, oldToken)).status).toBe(200);
+    const original = RegistryDO.prototype.fetch;
+    let deleted = false;
+    const spy = vi.spyOn(RegistryDO.prototype, "fetch").mockImplementation(async function (this: RegistryDO, request: Request) {
+      const response = await original.call(this, request);
+      const path = new URL(request.url).pathname;
+      if (!deleted && request.method === "GET" && path === `/runners/${encodeURIComponent(id)}` && response.ok) {
+        deleted = true;
+        expect(this.deleteRunner(id, id, Date.now(), `register-race-delete-${crypto.randomUUID()}`)).toBe(true);
+      }
+      return response;
+    });
+    try {
+      const recreated = await enroll(id, newToken);
+      expect(recreated.status).toBe(200);
+      expect(deleted).toBe(true);
+      const auth = await SELF.fetch(`https://worker.test/runner/connect?runner_id=${id}`, { headers: { Upgrade: "websocket", Authorization: `Bearer ${newToken}` } });
+      expect(auth.status).toBe(101);
+      auth.webSocket?.accept();
+      auth.webSocket?.close();
+      const stale = await SELF.fetch(`https://worker.test/runner/connect?runner_id=${id}`, { headers: { Upgrade: "websocket", Authorization: `Bearer ${oldToken}` } });
+      expect(stale.status).toBe(401);
+    } finally { spy.mockRestore(); }
+  });
+
+  it("finalizes registration across a delete/recreate lifecycle while fencing the old connected socket", async () => {
+    const id = `register-lifecycle-race-${crypto.randomUUID()}`;
+    const oldToken = "abcdef0123456789abcdef0123456789";
+    const newToken = "0123456789abcdef0123456789abcdef";
+    expect((await enroll(id, oldToken)).status).toBe(200);
+
+    const upgrade = await SELF.fetch(`https://worker.test/runner/connect?runner_id=${id}`, {
+      headers: { Upgrade: "websocket", Authorization: `Bearer ${oldToken}` },
+    });
+    expect(upgrade.status).toBe(101);
+    const socket = upgrade.webSocket;
+    expect(socket).not.toBeNull();
+    socket?.accept();
+    const welcome = new Promise<void>((resolve) => socket?.addEventListener("message", () => resolve(), { once: true }));
+    socket?.send(encodeWireFrame({
+      type: "runner.hello", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "lifecycle-race-hello", min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION,
+      runner: { runner_id: id, runner_version: "old", platform: "test", architecture: "test", capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: [], labels: {} } },
+    }));
+    await welcome;
+    const closed = new Promise<void>((resolve) => socket?.addEventListener("close", () => resolve(), { once: true }));
+
+    const original = RegistryDO.prototype.fetch;
+    let deleted = false;
+    const spy = vi.spyOn(RegistryDO.prototype, "fetch").mockImplementation(async function (this: RegistryDO, request: Request) {
+      const response = await original.call(this, request);
+      const path = new URL(request.url).pathname;
+      if (!deleted && request.method === "GET" && path === `/runners/${encodeURIComponent(id)}` && response.ok) {
+        deleted = true;
+        // Leave the old RunnerDO admission bound to its original lifecycle;
+        // the subsequent registration must prove the new marker before its
+        // allow_lifecycle_change finalizer can close this socket.
+        expect(this.deleteRunner(id, id, Date.now(), `register-lifecycle-delete-${crypto.randomUUID()}`)).toBe(true);
+      }
+      return response;
+    });
+    try {
+      const recreated = await enroll(id, newToken);
+      expect(recreated.status).toBe(200);
+      expect(deleted).toBe(true);
+      await expect(Promise.race([closed, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("old lifecycle socket was not fenced")), 1_000))])).resolves.toBeUndefined();
+      const auth = await SELF.fetch(`https://worker.test/runner/connect?runner_id=${id}`, { headers: { Upgrade: "websocket", Authorization: `Bearer ${newToken}` } });
+      expect(auth.status).toBe(101);
+      auth.webSocket?.accept();
+      auth.webSocket?.close();
+      const stale = await SELF.fetch(`https://worker.test/runner/connect?runner_id=${id}`, { headers: { Upgrade: "websocket", Authorization: `Bearer ${oldToken}` } });
+      expect(stale.status).toBe(401);
+    } finally { spy.mockRestore(); socket?.close(); }
+  });
+
+  it("does not return an enrollment credential when RunnerDO revoke cleanup is uncertain", async () => {
+    const id = `enroll-revoke-${crypto.randomUUID()}`;
+    const code = randomBase64Url();
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
+    const now = Date.now();
+    await runInDurableObject(registry, async (instance) => {
+      expect(instance.addRunner(id, "Enrollment revoke cleanup", now)).toBeDefined();
+      expect(instance.createRunnerEnrollment(id, randomBase64Url(), await sha256Hex(code), now)).toBeDefined();
+    });
+    const original = RunnerDO.prototype.fetch;
+    const spy = vi.spyOn(RunnerDO.prototype, "fetch").mockImplementation(function (this: RunnerDO, request: Request) {
+      if (new URL(request.url).pathname === "/revoke") return Promise.resolve(new Response("simulated revoke failure", { status: 503 }));
+      return original.call(this, request);
+    });
+    try {
+      const response = await SELF.fetch("https://worker.test/runner/enroll", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enrollment_code: code, runner_public_info: { platform: "linux", architecture: "x64", hostname: "host", runner_version: "1.0", protocol_version: 2 } }),
+      });
+      expect(response.status).toBe(503);
+      expect(await response.text()).not.toContain('"token"');
+    } finally { spy.mockRestore(); }
+  });
+
+  it("rejects credential mutation replays whose token verifier differs", async () => {
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName(`credential-replay-${crypto.randomUUID()}`));
+    const runnerId = `credential-replay-${crypto.randomUUID()}`;
+    const mutationId = `credential-replay-${crypto.randomUUID()}`;
+    const now = Date.now();
+    await runInDurableObject(registry, (instance, state) => {
+      expect(instance.addRunner(runnerId, "Credential replay", now)).toBeDefined();
+      expect(instance.registerRunner(runnerId, "a".repeat(64), now + 1, mutationId)).toBe(true);
+      expect(instance.registerRunner(runnerId, "b".repeat(64), now + 2, mutationId)).toBe(false);
+      expect(state.storage.sql.exec<{ token_verifier: string }>("SELECT token_verifier FROM runners WHERE runner_id = ?", runnerId).toArray()[0]?.token_verifier).toBe("a".repeat(64));
+      expect(instance.registerRunner(runnerId, "c".repeat(64), now + 3, `credential-replay-next-${crypto.randomUUID()}`)).toBe(true);
+    });
+    await expect(runInDurableObject(registry, (instance) => instance.getRunnerMutationState(runnerId, mutationId))).resolves.toMatchObject({ mutation_committed: false, credential_version: 2 });
+  });
+
+  it("rejects enrollment mutation replays whose token verifier differs", async () => {
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName(`enrollment-replay-${crypto.randomUUID()}`));
+    const runnerId = `enrollment-replay-${crypto.randomUUID()}`;
+    const code = randomBase64Url(); const verifier = await sha256Hex(code);
+    const mutationId = `enrollment-replay-${crypto.randomUUID()}`;
+    const info = { platform: "linux", architecture: "x64", hostname: "host", runner_version: "1.0.0", protocol_version: 2 };
+    const now = Date.now();
+    await runInDurableObject(registry, async (instance) => {
+      expect(instance.addRunner(runnerId, "Enrollment replay", now)).toBeDefined();
+      expect(instance.createRunnerEnrollment(runnerId, randomBase64Url(), verifier, now)).toBeDefined();
+      await expect(instance.redeemRunnerEnrollment(verifier, "a".repeat(64), info, now + 1, mutationId)).resolves.toEqual({ runner_id: runnerId });
+    });
+    await expect(runInDurableObject(registry, (instance) => instance.redeemRunnerEnrollment(verifier, "b".repeat(64), info, now + 2, mutationId))).resolves.toBeUndefined();
+  });
+
+  it("does not keep a runner_create marker committed after enrollment advances credentials", async () => {
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName(`runner-create-marker-${crypto.randomUUID()}`));
+    const runnerId = `runner-create-marker-${crypto.randomUUID()}`;
+    const createMutation = `runner-create-${crypto.randomUUID()}`;
+    const code = randomBase64Url();
+    const verifier = await sha256Hex(code);
+    const now = Date.now();
+    const info = { platform: "linux", architecture: "x64", hostname: "host", runner_version: "1.0.0", protocol_version: 2 };
+    await runInDurableObject(registry, async (instance) => {
+      expect(instance.addRunner(runnerId, "Create marker", now, createMutation)).toBeDefined();
+      expect(instance.getRunnerMutationState(runnerId, createMutation)).toMatchObject({ mutation_committed: true, credential_version: 0 });
+      expect(instance.createRunnerEnrollment(runnerId, randomBase64Url(), verifier, now)).toBeDefined();
+      await expect(instance.redeemRunnerEnrollment(verifier, "a".repeat(64), info, now + 1, `enrollment-${crypto.randomUUID()}`)).resolves.toEqual({ runner_id: runnerId });
+      expect(instance.addRunner(runnerId, "Create marker", now + 2, createMutation)).toBeUndefined();
+    });
+    await expect(runInDurableObject(registry, (instance) => instance.getRunnerMutationState(runnerId, createMutation))).resolves.toMatchObject({ mutation_committed: false, credential_version: 1 });
+  });
+
+  it("does not replay a legacy delete marker after the credential generation advances", async () => {
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName(`runner-delete-marker-${crypto.randomUUID()}`));
+    const runnerId = `runner-delete-marker-${crypto.randomUUID()}`;
+    const deleteMutation = `runner-delete-${crypto.randomUUID()}`;
+    const rotateMutation = `credential-rotate-${crypto.randomUUID()}`;
+    const now = Date.now();
+    await runInDurableObject(registry, (instance, state) => {
+      expect(instance.registerRunner(runnerId, "a".repeat(64), now)).toBe(true);
+      const row = state.storage.sql.exec<{ lifecycle_id: string; credential_version: number }>("SELECT lifecycle_id, credential_version FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
+      expect(row).toBeDefined();
+      // Simulate the pre-transaction marker written by older Registry code.
+      state.storage.sql.exec(
+        "INSERT INTO runner_mutations (runner_id, mutation_id, kind, pre_credential_version, lifecycle_id, committed_at_ms) VALUES (?, ?, 'runner_delete', ?, ?, ?)",
+        runnerId, deleteMutation, row?.credential_version, row?.lifecycle_id, now + 1,
+      );
+      expect(instance.registerRunner(runnerId, "b".repeat(64), now + 2, rotateMutation)).toBe(true);
+      expect(instance.deleteRunner(runnerId, runnerId, now + 3, deleteMutation)).toBe(false);
+      expect(instance.getRunner(runnerId)).toBeDefined();
+    });
   });
 
   it("rejects direct RegistryDO fetches without its internal proof", async () => {

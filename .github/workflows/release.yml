@@ -19,7 +19,6 @@ concurrency:
 
 jobs:
   release:
-    if: github.ref == 'refs/heads/dev'
     name: signed development preview from dev
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -30,12 +29,12 @@ jobs:
       RELEASE_SIGNING_KEY_ID: ${{ secrets.RELEASE_SIGNING_KEY_ID }}
     steps:
       - name: Check out triggering commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -60,12 +59,22 @@ jobs:
           npm run check:versions
           ROOT_VERSION="$(node -p 'require("./package.json").version')"
           test "$RELEASE_VERSION" = "$ROOT_VERSION"
+          # This workflow and the hosted installer are the fixed
+          # v0.1.0-dev.2 preview contract. Refuse a future version until its
+          # installer constants, key, and independent review are rotated.
+          test "$RELEASE_VERSION" = "0.1.0-dev.2"
           test -n "$RELEASE_SIGNING_KEY_ID"
+          # The hosted installer embeds this reviewed key ID for the fixed
+          # v0.1.0-dev.2 contract; a different valid key would make the
+          # published asset unverifiable by the installer.
+          test "$RELEASE_SIGNING_KEY_ID" = "runmesh-preview-2026-01"
           test "$(node -p 'require("./apps/runner/package.json").version')" = "$RELEASE_VERSION"
           test "$(node -p 'require("./apps/worker/package.json").version')" = "$RELEASE_VERSION"
           test "$(node -p 'require("./packages/protocol/package.json").version')" = "$RELEASE_VERSION"
           node scripts/release-signature.mjs validate-key release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
       - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npm audit --omit=dev --audit-level=high
       - run: npm run check:versions
       - run: npm run check:format
       - run: git diff --check
@@ -74,6 +83,14 @@ jobs:
       - run: npm run test:e2e
       - run: npm run test:release-tools
       - run: npm run build
+      - name: Refuse build-generated tracked mutations
+        run: |
+          set -euo pipefail
+          # The manifest commit must describe every source byte used to build
+          # the package. Generated output belongs in ignored dist paths; any
+          # tracked mutation means the checkout was stale or the build is not
+          # reproducible from GITHUB_SHA.
+          git diff --exit-code
       - run: npm run validate:worker -- --dry-run
       - run: npm run check:licenses
       - run: npm run pack:smoke
@@ -85,6 +102,22 @@ jobs:
           npm pack --workspace=@aloneio/runmesh-runner --pack-destination release/assets
           packed="$(find release/assets -maxdepth 1 -name '*.tgz' -print -quit)"
           test -n "$packed"
+          # Check the exact bytes that will be signed and uploaded. The
+          # pack:smoke gate exercises a separate pack, so keep this final
+          # artifact check here as the authoritative hosted-installer bound.
+          node -e '
+            const { statSync } = require("node:fs");
+            const path = process.argv[1];
+            const size = statSync(path).size;
+            if (!Number.isSafeInteger(size) || size <= 0 || size > 8 * 1024 * 1024) {
+              throw new Error(`release Runner artifact size is outside the 8 MiB bound: ${size}`);
+            }
+            console.log(`release Runner artifact size: ${size} bytes`);
+          ' "$packed"
+          # npm prepack also regenerates the protocol schema; do not let a
+          # tracked generated-file drift enter an artifact whose manifest
+          # still claims the triggering commit.
+          git diff --exit-code
           mv "$packed" "release/assets/runmesh-runner-${RELEASE_VERSION}.tgz"
       - name: Generate deterministic manifest and checksums
         run: |
@@ -107,7 +140,7 @@ jobs:
           node scripts/release-verify.mjs release/assets/manifest.json release/assets/manifest.sig release/assets/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID" "$RELEASE_VERSION"
           (cd release/assets && sha256sum -c SHA256SUMS)
       - name: Preserve signed preview assets as an unpublished CI artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: runmesh-signed-preview-${{ env.RELEASE_VERSION }}
           path: release/assets
@@ -119,6 +152,11 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$GH_TOKEN"
+          # Re-check the protected branch tip immediately before publishing;
+          # long-running test/build gates may otherwise release an older SHA
+          # after new code lands on dev.
+          git fetch --no-tags origin dev
+          test "$(git rev-parse origin/dev)" = "$GITHUB_SHA"
           tag="v${RELEASE_VERSION}"
           # A local tag check alone is racy and can miss tags that were created
           # after checkout. Probe the remote API explicitly and treat only a
@@ -250,6 +288,7 @@ jobs:
             }
           ' "$draft_dir/manifest.json"
           (cd "$draft_dir" && grep -vE '(^|[[:space:]])trust-keyring\.json$' SHA256SUMS | sha256sum -c -)
+          cmp "$draft_dir/SHA256SUMS" release/assets/SHA256SUMS
           cmp "$draft_dir/trust-keyring.json" release/trust-keyring.json
           RELEASE_VERSION="$RELEASE_VERSION" tar -xOf "$draft_dir/runmesh-runner-${RELEASE_VERSION}.tgz" package/package.json | RELEASE_VERSION="$RELEASE_VERSION" node -e 'let x="";process.stdin.on("data",d=>x+=d).on("end",()=>{if(JSON.parse(x).version!==process.env.RELEASE_VERSION)process.exit(1)})'
       - name: Publish verified development prerelease
@@ -257,7 +296,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # Re-check the protected dev tip immediately before making the
+          # draft public; a new commit may have landed while the draft was
+          # being uploaded and independently verified.
+          git fetch --no-tags origin dev
+          test "$(git rev-parse origin/dev)" = "$GITHUB_SHA"
           tag="v${RELEASE_VERSION}"
+          # Re-check that the annotated tag still resolves to this exact
+          # triggering commit after the draft was created.  --verify-tag only
+          # checks that a tag exists; it does not bind the release to a target
+          # commit if a privileged actor force-updates the ref in the meantime.
+          encoded_tag="$(node -p 'encodeURIComponent(process.argv[1])' "$tag")"
+          tag_object_type="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${encoded_tag}" --jq '.object.type')"
+          tag_object_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${encoded_tag}" --jq '.object.sha')"
+          test "$tag_object_type" = tag
+          test "$tag_object_sha" = "${tag_object_sha,,}" && [[ "$tag_object_sha" =~ ^[0-9a-f]{40}$ ]]
+          target_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object_sha}" --jq '.object.sha')"
+          target_type="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object_sha}" --jq '.object.type')"
+          test "$target_type" = commit
+          test "$target_sha" = "$GITHUB_SHA"
           test "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true
           gh release edit "$tag" \
             --repo "$GITHUB_REPOSITORY" \
@@ -283,5 +340,6 @@ jobs:
           # The downloaded keyring is checked byte-for-byte against the source
           # checkout below; do not treat its unsigned checksum as a trust root.
           (cd release/download && grep -vE '(^|[[:space:]])trust-keyring\.json$' SHA256SUMS | sha256sum -c -)
+          cmp release/download/SHA256SUMS release/assets/SHA256SUMS
           cmp release/download/trust-keyring.json release/trust-keyring.json
           RELEASE_VERSION="$RELEASE_VERSION" tar -xOf "release/download/runmesh-runner-${RELEASE_VERSION}.tgz" package/package.json | RELEASE_VERSION="$RELEASE_VERSION" node -e 'let x="";process.stdin.on("data",d=>x+=d).on("end",()=>{if(JSON.parse(x).version!==process.env.RELEASE_VERSION)process.exit(1)})'

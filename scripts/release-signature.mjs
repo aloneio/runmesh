@@ -1,14 +1,15 @@
 import { createPrivateKey, createPublicKey, sign, verify } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readBoundedReleaseFile } from "./release-io.mjs";
 
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 const KEY_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 export async function loadTrustedReleaseKey(keyringPath, keyId) {
   if (typeof keyId !== "string" || !KEY_ID.test(keyId)) throw new Error("release signing key ID is invalid");
-  const parsed = JSON.parse(await readFile(keyringPath, "utf8"));
+  const parsed = JSON.parse(await readBoundedReleaseFile(keyringPath, "trusted release keyring").then((bytes) => bytes.toString("utf8")));
   if (!isTrustKeyring(parsed)) throw new Error("release trust keyring has an invalid schema");
   const key = parsed.keys.find((candidate) => candidate.key_id === keyId);
   if (key === undefined) throw new Error("release signing key ID is missing from the trust keyring");
@@ -24,21 +25,25 @@ export async function signReleaseManifest({ manifestPath, signaturePath, descrip
   try { privateKey = createPrivateKey(privateKeyPem); } catch { throw new Error("RELEASE_SIGNING_KEY is not a valid private key"); }
   if (privateKey.asymmetricKeyType !== "ed25519") throw new Error("RELEASE_SIGNING_KEY must be an Ed25519 private key");
   if (!createPublicKey(privateKey).export({ type: "spki", format: "der" }).equals(createPublicKey(trusted.public_key_pem).export({ type: "spki", format: "der" }))) throw new Error("RELEASE_SIGNING_KEY does not match the selected trust-keyring key");
-  const signature = sign(null, await readFile(manifestPath), privateKey);
+  const signature = sign(null, await readBoundedReleaseFile(manifestPath, "release manifest"), privateKey);
   await writeFile(signaturePath, `${signature.toString("base64")}\n`, "utf8");
   await writeFile(descriptorPath, `${JSON.stringify({ schema_version: 1, algorithm: "ed25519", key_id: trusted.key_id, encoding: "base64", signed_file: "manifest.json" }, null, 2)}\n`, "utf8");
 }
 
 export async function verifyReleaseManifest({ manifestPath, signaturePath, descriptorPath, keyringPath, expectedKeyId }) {
-  const descriptor = JSON.parse(await readFile(descriptorPath, "utf8"));
+  const descriptor = JSON.parse(await readBoundedReleaseFile(descriptorPath, "release signature descriptor").then((bytes) => bytes.toString("utf8")));
   if (!isSignatureDescriptor(descriptor)) throw new Error("release signature descriptor has an invalid schema");
   if (expectedKeyId !== undefined && descriptor.key_id !== expectedKeyId) throw new Error("release signature key ID does not match the selected key");
   const trusted = await loadTrustedReleaseKey(keyringPath, descriptor.key_id);
-  const encoded = (await readFile(signaturePath, "utf8")).trim();
+  const encoded = (await readBoundedReleaseFile(signaturePath, "release signature").then((bytes) => bytes.toString("utf8"))).trim();
   if (!BASE64.test(encoded)) throw new Error("release signature is not canonical base64");
   const signature = Buffer.from(encoded, "base64");
   if (signature.length !== 64 || signature.toString("base64") !== encoded) throw new Error("release signature is malformed");
-  if (!verify(null, await readFile(manifestPath), createPublicKey(trusted.public_key_pem), signature)) throw new Error("release manifest signature verification failed");
+  const manifestBytes = await readBoundedReleaseFile(manifestPath, "release manifest");
+  if (!verify(null, manifestBytes, createPublicKey(trusted.public_key_pem), signature)) throw new Error("release manifest signature verification failed");
+  // Return the exact bytes that were authenticated so callers do not need to
+  // read the manifest a second time (which could create a local TOCTOU window).
+  return manifestBytes;
 }
 
 function isTrustKeyring(value) { if (!isObject(value) || value.schema_version !== 1 || !Array.isArray(value.keys) || value.keys.length === 0) return false; const ids = new Set(); return value.keys.every((key) => isTrustedKey(key) && !ids.has(key.key_id) && (ids.add(key.key_id), true)); }
