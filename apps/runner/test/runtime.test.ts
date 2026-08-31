@@ -18,7 +18,11 @@ async function fixture(): Promise<{ root: string; outside: string; state: string
   const state = join(base, "state");
   await mkdir(root); await mkdir(outside); await mkdir(state);
   const workspace = { workspaceId: "workspace-1", rootPath: await realpath(root), readonly: false, shell: false };
-  return { root, outside, state, workspace, cleanup: () => rm(base, { recursive: true, force: true }) };
+  // Windows can keep a just-exited child process' cwd handle alive for a
+  // short interval after its `close` event. Use Node's bounded native retry
+  // rather than making every test sleep or weakening its assertions.
+  const cleanup = (): Promise<void> => rm(base, { recursive: true, force: true, maxRetries: 8, retryDelay: 25 });
+  return { root, outside, state, workspace, cleanup };
 }
 function policy(workspace: WorkspaceConfig): PathPolicy { return new PathPolicy([workspace]); }
 async function waitFor<T>(get: () => T, predicate: (value: T) => boolean, timeout = 5_000): Promise<T> {
@@ -364,7 +368,11 @@ describe("persistent local jobs", () => {
       await expect(manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.exit(0)"] })).rejects.toThrow("synthetic metadata write failure");
       expect(internals.jobs.size).toBe(0);
       internals.persist = originalPersist;
-      await expect(manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.exit(0)"] })).resolves.toMatchObject({ status: "succeeded" });
+      const restarted = await manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.exit(0)"] });
+      // Child startup/close is asynchronous on Windows; assert the same
+      // successful terminal outcome without requiring start() to race the
+      // process exit synchronously.
+      await expect(waitFor(() => manager.get(restarted.job_id), (value) => value.status === "succeeded")).resolves.toMatchObject({ status: "succeeded" });
     } finally { await test.cleanup(); }
   });
 
@@ -400,8 +408,11 @@ describe("persistent local jobs", () => {
         readonly processes: Map<string, ChildProcess>;
       };
       await manager.initialize();
-      const originalClose = internals.closeLogHandles;
-      internals.closeLogHandles = async () => { throw new Error("synthetic descriptor close failure"); };
+      const originalClose = internals.closeLogHandles.bind(manager);
+      // Close the real handles first, then report a synthetic failure. This
+      // exercises the best-effort error path without leaving descriptors for
+      // the test runner's garbage collector to reclaim.
+      internals.closeLogHandles = async (...args) => { await originalClose(...args); throw new Error("synthetic descriptor close failure"); };
       job = await manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "setInterval(() => {}, 10000)"] });
       internals.closeLogHandles = originalClose;
       expect(job.status).toBe("running");

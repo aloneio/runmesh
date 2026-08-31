@@ -24,20 +24,9 @@ export interface WorkerEnv {
   SETUP_TOKEN_HASH?: string;
   RUNNER_TOKEN_PEPPER?: string;
   INTERNAL_CONTROL_SECRET?: string;
-  RUNMESH_RELEASE_VERSION?: string;
-  RUNMESH_RELEASE_MANIFEST_URL?: string;
-  RUNMESH_RELEASE_SIGNATURE_URL?: string;
-  RUNMESH_RELEASE_SIGNATURE_DESCRIPTOR_URL?: string;
-  RUNMESH_RELEASE_KEY_ID?: string;
-  /** A stable, externally resolvable npm package@version or HTTPS .tgz package URL for the public bootstrap installers. */
-  ALLOW_LEGACY_UNSIGNED_BOOTSTRAP?: string;
-  RUNNER_PACKAGE_SPEC?: string;
-  /** Required with a URL package spec; otherwise inferred from an npm package@version spec. */
-  RUNNER_PACKAGE_NAME?: string;
-  RUNNER_PACKAGE_VERSION?: string;
-  readonly RUNNER_ARTIFACT_SHA256?: string;
-  /** Optional immutable per-platform release artifacts. */
-  readonly RUNNER_ARTIFACTS_JSON?: string;
+  RUNMESH_SIGNED_RELEASE_AVAILABLE?: string;
+  /** Canonical external HTTPS origin used in hosted installer commands. */
+  RUNMESH_PUBLIC_ORIGIN?: string;
   /** Static assets served by the Worker asset binding. */
   ASSETS?: Fetcher;
 }

@@ -1,6 +1,7 @@
 import { env, SELF, runInDurableObject } from "cloudflare:test";
 import { passwordVerifier, randomBase64Url, sha256Hex, verifySetupToken } from "../src/security.js";
 import { runnerReleaseDescriptor } from "../src/index.js";
+import { FIXED_ARTIFACT_URL, FIXED_RELEASE_KEY_ID, FIXED_RELEASE_PUBLIC_KEY_PEM, FIXED_RELEASE_VERSION, renderPosixInstaller, renderPowerShellInstaller } from "../src/installer.js";
 import { describe, expect, it } from "vitest";
 
 const password = "administrator-password-for-tests";
@@ -164,9 +165,11 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     });
   });
 
-  it("keeps the descriptor unpublished despite legacy distribution configuration", async () => {
-    const release = runnerReleaseDescriptor({ RUNNER_PACKAGE_SPEC: "@acme/coding-runner@1.2.3", ALLOW_LEGACY_UNSIGNED_BOOTSTRAP: "true", RUNNER_PACKAGE_NAME: "@acme/coding-runner", RUNNER_PACKAGE_VERSION: "1.2.3", RUNNER_ARTIFACT_SHA256: "a".repeat(64) });
-    expect(release).toMatchObject({ distributable: false, current_version: "", latest_version: "", package_name: "", package_version: "", package_spec: "", artifact: null, artifacts: null });
+  it("keeps hosted distribution fail-closed unless the exact fixed release acknowledgement is set", async () => {
+    const release = runnerReleaseDescriptor({ RUNMESH_SIGNED_RELEASE_AVAILABLE: "not-a-version" });
+    expect(release).toMatchObject({ channel: "dev", distributable: false, current_version: "", package_name: "", package_spec: "", artifact: null, manifest_url: null, release_key_id: null });
+    const enabled = runnerReleaseDescriptor({ RUNMESH_SIGNED_RELEASE_AVAILABLE: FIXED_RELEASE_VERSION, RUNMESH_PUBLIC_ORIGIN: "https://worker.test" });
+    expect(enabled).toMatchObject({ channel: "dev", distributable: true, current_version: FIXED_RELEASE_VERSION, latest_version: FIXED_RELEASE_VERSION, package_spec: FIXED_ARTIFACT_URL, release_key_id: FIXED_RELEASE_KEY_ID });
   });
 
   it("deletes the migration marker so a recreated Runner starts a fresh lifecycle", async () => {
@@ -204,7 +207,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(await runInDurableObject(registry, (instance) => instance.getRunner("enrolled-runner"))).not.toHaveProperty("token_verifier");
   });
 
-  it("serves public secret-free cached bootstrap scripts and a bounded release descriptor", async () => {
+  it("serves public secret-free fixed bootstrap templates while availability remains fail closed", async () => {
     const shell = await SELF.fetch("https://worker.test/runner/install.sh");
     const powershell = await SELF.fetch("https://worker.test/runner/install.ps1");
     const release = await SELF.fetch("https://worker.test/runner/releases/latest");
@@ -219,24 +222,27 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     const shellText = await shell.text(); const powershellText = await powershell.text();
     for (const text of [shellText, powershellText]) {
       expect(text).not.toMatch(/ADMIN_TOKEN|MCP_SECRET|CODING_RUNNER_TOKEN|Bearer /i);
-      expect(text).not.toMatch(/sudo|git clone|github\.com\/.*main/i);
+      expect(text).toContain("not enabled on this deployment");
+      expect(text).not.toMatch(/npm install|--code\s+[A-Za-z0-9_-]{20,}|trust-keyring\.json/i);
     }
-    expect(shellText).toContain("Hosted bootstrap is not available");
-    expect(powershellText).toContain("Hosted bootstrap is not available");
-    expect(shellText).not.toMatch(/curl|wget|npm|enroll(ment)?[_ -]?code/i);
-    expect(powershellText).not.toMatch(/Invoke-RestMethod|Invoke-WebRequest|npm|enroll(ment)?[_ -]?code/i);
-    expect(await release.json()).toMatchObject({ channel: "stable", distributable: false, package_name: "", package_spec: "", current_version: "", latest_version: "", package_version: "", artifact: null, artifacts: null, published_at: null, protocol: { min_version: 2, max_version: 2 } });
+    expect(await release.json()).toMatchObject({ channel: "dev", distributable: false, package_name: "", package_spec: "", artifact: null, manifest_url: null, release_key_id: null, protocol: { min_version: 2, max_version: 2 } });
     const stable = await SELF.fetch("https://worker.test/runner/releases/stable");
     expect(stable.status).toBe(200);
-    expect(await stable.json()).toMatchObject({ channel: "stable", package_name: "", current_version: "", latest_version: "", package_version: "", artifact: null, artifacts: null, published_at: null, protocol: { min_version: 2, max_version: 2 } });
-    for (const configured of [
-      { RUNNER_PACKAGE_SPEC: "@acme/coding-runner@1.2.3", ALLOW_LEGACY_UNSIGNED_BOOTSTRAP: "true" },
-      { RUNNER_PACKAGE_SPEC: "https://downloads.example.test/runner-1.2.3.tgz", RUNNER_PACKAGE_NAME: "@acme/coding-runner", RUNNER_PACKAGE_VERSION: "1.2.3", ALLOW_LEGACY_UNSIGNED_BOOTSTRAP: "true" },
-      { RUNNER_PACKAGE_SPEC: "https://downloads.example.test/runner-1.2.3.tgz", RUNNER_PACKAGE_NAME: "@acme/coding-runner", RUNNER_PACKAGE_VERSION: "1.2.3", RUNNER_ARTIFACT_SHA256: "a".repeat(64), ALLOW_LEGACY_UNSIGNED_BOOTSTRAP: "true" },
-      { RUNNER_PACKAGE_SPEC: "@acme/coding-runner@latest", ALLOW_LEGACY_UNSIGNED_BOOTSTRAP: "true" },
-      { RUNNER_PACKAGE_SPEC: "https://downloads.example.test/main/runner.tgz", RUNNER_PACKAGE_NAME: "@acme/coding-runner", RUNNER_PACKAGE_VERSION: "1.2.3", RUNNER_ARTIFACT_SHA256: "a".repeat(64), ALLOW_LEGACY_UNSIGNED_BOOTSTRAP: "true" },
-      { RUNNER_PACKAGE_SPEC: "https://github.com/acme/runner/archive/main.tgz", RUNNER_PACKAGE_NAME: "@acme/coding-runner", RUNNER_PACKAGE_VERSION: "1.2.3", RUNNER_ARTIFACT_SHA256: "a".repeat(64), ALLOW_LEGACY_UNSIGNED_BOOTSTRAP: "true" },
-    ]) expect(runnerReleaseDescriptor(configured)).toMatchObject({ distributable: false, package_name: "", package_version: "", package_spec: "", artifact: null, artifacts: null });
+    expect(await stable.json()).toMatchObject({ channel: "dev", distributable: false, artifact: null });
+  });
+
+  it("renders immutable signed installers with embedded key verification and no code input surface", () => {
+    const shell = renderPosixInstaller("https://worker.test"); const powershell = renderPowerShellInstaller("https://worker.test");
+    for (const text of [shell, powershell]) {
+      expect(text).toContain(FIXED_RELEASE_VERSION); expect(text).toContain(FIXED_RELEASE_KEY_ID); expect(text).toContain(FIXED_RELEASE_PUBLIC_KEY_PEM.trim().replaceAll("\n", "\\n")); expect(text).toContain(FIXED_ARTIFACT_URL);
+      expect(text).toContain("manifest.json"); expect(text).toContain("manifest.sig"); expect(text).toContain("manifest.signature.json"); expect(text).toContain("SHA256SUMS"); expect(text).toContain("signature does not verify"); expect(text).toContain("artifact size or SHA-256 mismatch");
+      expect(text).toContain("--purge --yes"); expect(text).toContain("runmesh-runner");
+      expect(text).not.toMatch(/trust-keyring\.json|@latest|npmjs\.com|--code\s+[A-Za-z0-9_-]{20,}/i);
+    }
+    expect(shell).toContain("--code-stdin"); expect(shell).toContain("/dev/tty"); expect(shell).toContain("stty -echo"); expect(shell).toContain("FINAL=\"$INSTALL_ROOT/versions/$VERSION\""); expect(shell).toContain("ENROLLMENT_ATTEMPTED=0"); expect(shell).toContain("trap on_exit EXIT"); expect(shell).toContain("trap 'rollback 1' HUP INT TERM"); expect(shell).toContain("command_name in curl node npm stty readlink grep"); expect(shell).toContain('> "$ENROLLMENT_INPUT"'); expect(shell).toContain(' < "$ENROLLMENT_INPUT"'); expect(shell).not.toMatch(/printf '[^']*' \"\$ENROLLMENT_CODE\" \|/); expect(shell).toContain("npm install --global --ignore-scripts");
+    expect(shell).toContain("runmesh-runner"); expect(shell).toContain("current/bin/coding-runner"); expect(shell).toContain('--profile "$PROFILE"');
+    expect(powershell).toContain("Read-Host"); expect(powershell).toContain("-AsSecureString"); expect(powershell).toContain("Invoke-WebRequest"); expect(powershell).toContain("$EnrollmentAttempted = $false"); expect(powershell).toContain("$EnrollmentAttempted = $true"); expect(powershell).toContain("npm.cmd install --global --ignore-scripts");
+    expect(powershell).toContain("runmesh-runner"); expect(powershell).toContain("ProgramData");
   });
 
   it("returns enrollment credentials once with no-store headers and never puts a token in admin HTML", async () => {
@@ -299,6 +305,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(setupCsrf).toBe(setupCookie);
     expect(initial.headers.get("cache-control")).toBe("no-store");
     expect(initial.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(initial.headers.get("content-security-policy")).toContain("img-src 'self' data:");
     expect(initial.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
 
     const rejectedCsrf = await submit("https://worker.test/setup", { setup_token: setupToken, password, confirm_password: password }, new Map(), false);
@@ -442,8 +449,27 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
   });
 
   it("renders responsive dashboard sections, safe runner data, client routing, and one-time enrollment commands", async () => {
+    const logoAsset = await SELF.fetch("https://worker.test/assets/logo-transparent.svg");
+    expect(logoAsset.status).toBe(200);
+    expect(logoAsset.headers.get("content-type")).toMatch(/^image\/svg\+xml/i);
+    const logoSvg = await logoAsset.text();
+    expect(logoSvg.trimStart()).toMatch(/^<svg\b/i);
+    expect(logoSvg).toContain("</svg>");
+    const faviconAsset = await SELF.fetch("https://worker.test/assets/favicon.png", { method: "HEAD" });
+    expect(faviconAsset.status).toBe(200);
+    expect(faviconAsset.headers.get("content-type")).toMatch(/^image\/png/i);
     const loginPage = await SELF.fetch("https://worker.test/");
-    const loginCsrf = formToken(await loginPage.text());
+    const loginHtml = await loginPage.text();
+    const logoTag = /<img\b[^>]*\bsrc=["']\/assets\/logo-transparent\.svg["'][^>]*>/i;
+    const logoTagWithAlt = /<img\b(?=[^>]*\bsrc=["']\/assets\/logo-transparent\.svg["'])(?=[^>]*\balt=["'][^"']+["'])[^>]*>/i;
+    expect(loginHtml).toMatch(logoTag);
+    expect(loginHtml).toMatch(logoTagWithAlt);
+    const passwordToggleTags = [...loginHtml.matchAll(/<button\b[^>]*\bpwd-toggle-btn\b[^>]*>/gi)].map((match) => match[0]);
+    expect(passwordToggleTags.length).toBeGreaterThan(0);
+    expect(passwordToggleTags.every((tag) => !/\btabindex\s*=\s*["']-1["']/i.test(tag))).toBe(true);
+    expect(loginHtml).toContain('M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z');
+    expect(loginHtml).not.toContain('M1 12s4-8 11-8 11 8 11 8-11 8-11 8-11-8-11-8z');
+    const loginCsrf = formToken(loginHtml);
     const loginCookie = cookieFrom(loginPage, "__Host-runmesh_login_csrf");
     const loggedIn = await submit("https://worker.test/login", { csrf_token: loginCsrf, password }, jar([["__Host-runmesh_login_csrf", loginCookie]]));
     const csrf = cookieFrom(loggedIn, "__Host-runmesh_admin_csrf");
@@ -451,15 +477,28 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     const created = await submit("https://worker.test/admin/runners", { csrf_token: csrf, display_name: "Safe runner", runner_id: "dashboard-runner" }, adminJar);
     expect(created.status).toBe(200);
     const enrollment = await created.text();
+    expect(enrollment).toContain('class="enrollment-header"');
+    expect(enrollment).toMatch(logoTag);
+    expect(enrollment).toContain('class="enrollment-brand-logo"');
     expect(enrollment).toContain("Linux"); expect(enrollment).toContain("macOS"); expect(enrollment).toContain("Windows");
-    expect(enrollment).toContain("Manual portable-artifact enrollment"); expect(enrollment).toContain("RUNNER=/opt/runmesh/current/bin/coding-runner"); expect(enrollment).toContain("C:\\Program Files\\Runmesh\\current\\coding-runner.cmd"); expect(enrollment).toContain("--code-stdin"); expect(enrollment).toContain("One-time enrollment code"); expect(enrollment).not.toMatch(/--code [A-Za-z0-9_-]{20,}/u); expect(enrollment).toContain("--executable-path"); expect(enrollment).not.toContain("curl -fsSL"); expect(enrollment).not.toContain("Invoke-RestMethod");
+    expect(enrollment).toContain("Manual portable-artifact enrollment"); expect(enrollment).toContain("Manual Runner enrollment and install"); expect(enrollment).toContain("RUNNER=/opt/runmesh/current/bin/coding-runner"); expect(enrollment).toContain("C:\\Program Files\\Runmesh\\current\\coding-runner.cmd"); expect(enrollment).toContain('sudo &quot;$RUNNER&quot; enroll'); expect(enrollment).toContain('sudo &quot;$RUNNER&quot; install'); expect(enrollment).toContain("&amp; $RunnerPath enroll"); expect(enrollment).toContain("&amp; $RunnerPath install"); expect(enrollment).toContain("--code-stdin"); expect(enrollment).toContain("single-line command"); expect(enrollment).toContain("One-time enrollment code"); expect(enrollment).not.toMatch(/--code [A-Za-z0-9_-]{20,}/u); expect(enrollment).toContain("--executable-path"); expect(enrollment).not.toContain("curl -fsSL"); expect(enrollment).not.toContain("curl --fail --location"); expect(enrollment).not.toContain("Invoke-RestMethod"); expect(enrollment).not.toContain("Invoke-WebRequest");
     expect(enrollment).toContain("data-copy"); expect(enrollment).toContain("expires in 30 minutes");
+    expect(enrollment).toContain("One-time enrollment code");
+    const enrollmentUiText = parseUiTextMap(enrollment);
+    expect(enrollmentUiText["Enroll Runner"]).toBe("注册 Runner");
+    expect(enrollmentUiText["Target Runner ID"]).toBe("目标 Runner ID");
+    expect(enrollmentUiText["One-time enrollment code"]).toBe("一次性注册代码");
+    expect(enrollmentUiText["Signed fixed-preview enrollment"]).toBe("签名固定预览版注册");
+    expect(enrollmentUiText["Manual Runner enrollment and install"]).toBe("手动注册并安装 Runner");
+    expect(enrollmentUiText["Copy enrollment and install command"]).toBe("复制注册并安装命令");
+    expect(enrollmentUiText["Paste it only into the local prompt after verification; it is deliberately excluded from copied commands."]).toContain("本地提示");
+    for (const copied of enrollment.matchAll(/data-copy="([^"]*)"/g)) expect(copied[1]).not.toContain("--code ");
     expect(enrollment).not.toContain("--re-enroll"); expect(enrollment).not.toContain("-ReEnroll");
     expect(enrollment).not.toContain("--runner-id"); expect(enrollment).not.toContain("ADMIN_TOKEN"); expect(enrollment).not.toMatch(/CODING_RUNNER_TOKEN|MCP_SECRET/i);
     const rotatedEnrollment = await submit("https://worker.test/admin/runners/dashboard-runner/rotate", { csrf_token: csrf }, adminJar);
     expect(rotatedEnrollment.status).toBe(200);
     const rotatedText = await rotatedEnrollment.text();
-    expect(rotatedText).toContain("Manual portable-artifact enrollment");
+    expect(rotatedText).toContain("Manual Runner enrollment and install");
     const stablePolicy = await submit("https://worker.test/admin/runners/dashboard-runner/version-policy", { csrf_token: csrf, update_channel: "stable", desired_runner_version: "" }, adminJar);
     expect(stablePolicy.status).toBe(303);
     const clientsRegistry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
@@ -470,16 +509,74 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(runnerDetail.status).toBe(200);
     const runnerDetailHtml = await runnerDetail.text();
     expect(runnerDetailHtml).toContain("Version policy"); expect(runnerDetailHtml).toContain("Stable/latest version"); expect(runnerDetailHtml).toContain("value=\"1.2.0\""); expect(runnerDetailHtml).toContain("Pinned");
+    expect(runnerDetailHtml).toContain("<!doctype html>"); expect(runnerDetailHtml).toContain('<meta name="color-scheme" content="light">'); expect(runnerDetailHtml).toContain('class="app-header"'); expect(runnerDetailHtml).toContain('class="active" aria-current="page" href="/admin/runners"'); expect(runnerDetailHtml).not.toContain('data-theme-toggle'); expect(runnerDetailHtml).not.toContain("localStorage.getItem('runmesh-theme')"); expect(runnerDetailHtml).not.toContain(':root[data-theme="dark"]'); expect(runnerDetailHtml).not.toContain("Add Runner</a>"); expect(runnerDetailHtml).not.toContain("Add MCP Client</a>"); expect(runnerDetailHtml).not.toContain("token_verifier");
+    const headerLogoSvgTag = /<svg\b[^>]*\bclass=["'][^"']*\bheader-mesh-mark\b[^"']*["'][^>]*role=["']img["'][^>]*aria-label=["'][^"']+["'][^>]*>/i;
+    expect(runnerDetailHtml).toMatch(headerLogoSvgTag);
+    expect(runnerDetailHtml).not.toMatch(/<header\b[^>]*\bapp-header\b[^>]*>[\s\S]*?<img\b/i);
     const dashboard = await SELF.fetch("https://worker.test/admin", { headers: { cookie: cookies(adminJar) } });
     expect(dashboard.headers.get("cache-control")).toBe("no-store");
     expect(dashboard.headers.get("content-security-policy")).toContain("script-src 'unsafe-inline'");
     const dashboardHtml = await dashboard.text();
     for (const section of ["Dashboard", "MCP Clients", "Runners", "Settings", "Active MCP clients", "Online / total runners", "Running jobs", "Recent jobs", "Add Runner", "Add MCP Client"]) expect(dashboardHtml).toContain(section);
+    expect(dashboardHtml).toContain('"Clients":"MCP 客户端"');
+    expect(dashboardHtml).toMatch(headerLogoSvgTag);
+    expect(dashboardHtml).not.toMatch(/<header\b[^>]*\bapp-header\b[^>]*>[\s\S]*?<img\b/i);
     expect(dashboardHtml).toContain('data-lang-toggle="zh-CN"'); expect(dashboardHtml).toContain("var ZH_UI_TEXT="); expect(dashboardHtml).toContain("智能体控制平面"); expect(dashboardHtml).toContain("translateTextNodes"); expect(dashboardHtml).toContain("runmesh_lang");
     expect(dashboardHtml).toContain("@media(max-width:800px)"); expect(dashboardHtml).toContain("navigator.clipboard");
     expect(dashboardHtml).toContain('class="button secondary" href="/admin">Refresh</a>');
     expect(dashboardHtml).not.toContain("data-refresh");
     expect(dashboardHtml).not.toContain("token_verifier"); expect(dashboardHtml).not.toContain("workspace_root");
+    const adminScriptText = inlineScriptContaining(dashboardHtml, "function applyLocale");
+    const localeOffset = adminScriptText.indexOf("function applyLocale");
+    const localeBodyEnd = adminScriptText.indexOf("function requestedLocale", localeOffset);
+    const localeBody = adminScriptText.slice(localeOffset, localeBodyEnd < 0 ? undefined : localeBodyEnd);
+    expect(adminScriptText).not.toContain("runmesh-theme");
+    expect(adminScriptText).not.toContain("data-theme-toggle");
+    expect(localeBody).not.toMatch(/\b(?:preference|applyTheme|updateThemeLabel)\s*\(/);
+    const zhUiText = parseUiTextMap(dashboardHtml);
+    expect(zhUiText["MCP Client"]).toBe("MCP 客户端");
+    const descriptionTranslations: readonly [string, RegExp][] = [
+      ["Inspect workspaces and read files.", /\b(?:Inspect|workspaces|read|files)\b/i],
+      ["Apply approved edits.", /\b(?:Apply|approved|edits)\b/i],
+      ["Use Host shell and control Jobs.", /\b(?:Use|control|Jobs)\b/i],
+    ];
+    for (const [source, englishWords] of descriptionTranslations) {
+      const translated = zhUiText[source];
+      expect(translated, `missing Chinese translation for ${source}`).toBeDefined();
+      if (typeof translated === "string") expect(translated).not.toMatch(englishWords);
+    }
+    for (const mixed of ["Inspect workspaces and 读取 files.", "Apply approved 编辑s.", "Use Host shell and control 任务s.", "Use Host shell and 控制 Jobs."]) expect(dashboardHtml).not.toContain(mixed);
+    const clientId = /\/admin\/clients\/(client-[a-f0-9]+)\/rename/.exec(dashboardHtml)?.[1];
+    expect(clientId).toBeDefined();
+    const scopesDetail = await SELF.fetch(`https://worker.test/admin/clients/${clientId as string}/scopes/detail`, { headers: { cookie: cookies(adminJar) } });
+    expect(scopesDetail.status).toBe(200);
+    const scopesDetailHtml = await scopesDetail.text();
+    expect(scopesDetailHtml).toContain("<!doctype html>"); expect(scopesDetailHtml).toContain('class="app-header"'); expect(scopesDetailHtml).toContain('class="active" aria-current="page" href="/admin/clients"'); expect(scopesDetailHtml).toContain("Base scopes"); expect(scopesDetailHtml).toContain("Each base scope has a distinct ceiling"); expect(scopesDetailHtml).not.toContain('data-theme-toggle'); expect(scopesDetailHtml).not.toContain('runmesh-theme'); expect(scopesDetailHtml).toContain('name="csrf_token"');
+    expect(scopesDetailHtml).toMatch(headerLogoSvgTag);
+    expect(scopesDetailHtml).not.toMatch(/<header\b[^>]*\bapp-header\b[^>]*>[\s\S]*?<img\b/i);
+    const detailScopeFormClass = /<form\b[^>]*class=["']([^"']*\bscope-editor-form\b[^"']*)["'][^>]*>/i.exec(scopesDetailHtml)?.[1] ?? "";
+    const detailStyles = /<style>([\s\S]*?)<\/style>/i.exec(scopesDetailHtml)?.[1] ?? "";
+    const normalizedStyles = detailStyles.replace(/\s+/g, " ");
+    const formGridRuleOffset = normalizedStyles.indexOf(".form-grid{");
+    const scopeFlexRuleAfterGrid = formGridRuleOffset >= 0 && /\.scope-editor-form\s*\{[^}]*display\s*:\s*flex\b/.test(normalizedStyles.slice(formGridRuleOffset));
+    expect(!/\bform-grid\b/.test(detailScopeFormClass) || scopeFlexRuleAfterGrid).toBe(true);
+    expect(normalizedStyles).toMatch(/\.table-wrap\s*\{[^}]*overflow-x\s*:\s*auto/);
+    expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*800px\)/);
+    expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*540px\)/);
+    expect(normalizedStyles).toMatch(/\.scope-editor-form\s*\{[^}]*grid-template-columns\s*:\s*1fr/);
+    expect(normalizedStyles).toMatch(/\.enrollment-dialog\s+pre\s*\{[^}]*white-space\s*:\s*pre-wrap/);
+    expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*1000px\)\s*and\s*\(min-width\s*:\s*801px\)/);
+    expect(normalizedStyles).toMatch(/\.header-actions\s*\{[^}]*overflow-x\s*:\s*auto/);
+    expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*800px\)[\s\S]*?\.header-actions\s*\{[^}]*flex-wrap\s*:\s*wrap[^}]*overflow\s*:\s*visible/);
+    expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*540px\)[\s\S]*?\.header-left\s*\{[^}]*flex-wrap\s*:\s*wrap/);
+    expect(normalizedStyles).toMatch(/\.header-left\s+\.control-nav\s*\{[^}]*width\s*:\s*100%[^}]*overflow-x\s*:\s*visible[^}]*flex-wrap\s*:\s*wrap/);
+    expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*540px\)[\s\S]*?\.card-row-sub\s*\{[^}]*flex-wrap\s*:\s*wrap/);
+    expect(normalizedStyles).toMatch(/\.client-runner-meta\s*\{[^}]*overflow-wrap\s*:\s*anywhere/);
+    expect(normalizedStyles).not.toMatch(/@media\s*\(max-width\s*:\s*540px\)[\s\S]*?\.action-btn-group\s*\{[^}]*flex-direction\s*:\s*column/);
+    expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*540px\)[\s\S]*?\.action-btn-group\s*\{[^}]*flex-wrap\s*:\s*nowrap/);
+    const rejectedScopesDetailPost = await SELF.fetch(`https://worker.test/admin/clients/${clientId as string}/scopes/detail`, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", cookie: cookies(adminJar), origin: "https://worker.test" }, body: new URLSearchParams([["csrf_token", csrf], ["scopes", "coding:read"]]) });
+    expect(rejectedScopesDetailPost.status).toBe(404);
+    await expect(runInDurableObject(clientsRegistry, (instance) => instance.listMcpClients().find((client) => client.client_id === clientId))).resolves.toMatchObject({ scopes: ["coding:read", "coding:write"] });
     await expect(runInDurableObject(clientsRegistry, (instance) => instance.redeemRunnerEnrollment(
       "f".repeat(64),
       "e".repeat(64),
@@ -488,7 +585,9 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     ))).resolves.toBeUndefined();
     expect(dashboardHtml).not.toContain("<img src=x onerror=alert(1)>");
     const clients = await SELF.fetch("https://worker.test/admin/clients", { headers: { cookie: cookies(adminJar) } });
-    expect(await clients.text()).toContain("Reset Runner Selection");
+    const clientsHtml = await clients.text();
+    expect(clientsHtml).toContain("Reset Runner Selection");
+    expect(clientsHtml).toMatch(new RegExp(`<a class="button small secondary" href="/admin/clients/${clientId}">View</a>`));
   });
 
   it("invalidates every old session after password change", async () => {
@@ -518,6 +617,19 @@ async function mcp(url: string, body: unknown): Promise<Response> { return SELF.
 async function readMcp(response: Response): Promise<unknown> { const text = await response.text(); if (!response.headers.get("content-type")?.includes("text/event-stream")) return JSON.parse(text) as unknown; const data = text.split("\n").find((line) => line.trimStart().startsWith("data:"))?.trimStart().slice(5).trim(); return data === undefined ? undefined : JSON.parse(data) as unknown; }
 function formToken(html: string): string { const token = /name="csrf_token" value="([A-Za-z0-9_-]+)"/.exec(html)?.[1]; if (token === undefined) throw new Error("csrf token absent"); return token; }
 function oneTimeSecretUrl(html: string): string { const url = /<code>(https:\/\/worker\.test\/[A-Za-z0-9_-]{43}\/mcp)<\/code>/.exec(html)?.[1]; if (url === undefined) throw new Error("secret URL absent"); return url; }
+function inlineScriptContaining(html: string, marker: string): string {
+  const script = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map((match) => match[1] ?? "").find((value) => value.includes(marker));
+  if (script === undefined) throw new Error(`inline script marker absent: ${marker}`);
+  return script;
+}
+function parseUiTextMap(html: string): Record<string, string> {
+  const script = inlineScriptContaining(html, "var ZH_UI_TEXT=");
+  const encoded = /var\s+ZH_UI_TEXT\s*=\s*([\s\S]*?);\s*function\s+\w+/.exec(script)?.[1];
+  if (encoded === undefined) throw new Error("Chinese UI text map absent");
+  const parsed: unknown = JSON.parse(encoded);
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Chinese UI text map is invalid");
+  return parsed as Record<string, string>;
+}
 function cookieFrom(response: Response, name: string): string { const setCookie = response.headers.get("set-cookie") ?? ""; const value = new RegExp(`${name}=([^;]+)`).exec(setCookie)?.[1]; if (value === undefined) throw new Error(`cookie ${name} absent`); return value; }
 function jar(entries: readonly (readonly [string, string])[]): CookieJar { return new Map(entries); }
 function cookies(values: CookieJar): string { return [...values].map(([name, value]) => `${name}=${value}`).join("; "); }
