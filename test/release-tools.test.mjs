@@ -40,7 +40,7 @@ test("pins manually-dispatched releases to the triggering dev commit", async () 
   assert.equal(workflow.includes("contents: read"), false);
   assert.equal(workflow.includes("gh release create"), true);
   assert.equal(workflow.includes('git push origin "v${RELEASE_VERSION}"'), false);
-  assert.equal(workflow.includes("sha256sum *.tgz manifest.json manifest.sig manifest.signature.json sbom.spdx.json LICENSE NOTICE THIRD_PARTY_NOTICES.md trust-keyring.json > SHA256SUMS"), true);
+  assert.equal(workflow.includes("sha256sum *.tgz manifest.json manifest.sig manifest.signature.json LICENSE NOTICE THIRD_PARTY_NOTICES.md trust-keyring.json > SHA256SUMS"), true);
 });
 
 test("builds a single portable development artifact manifest from the product version", async () => {

@@ -26,13 +26,30 @@ Use these commands **only when the authenticated Admin enrollment page says the 
 Linux or macOS, from an elevated shell:
 
 ```sh
-curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 0 'https://your-runmesh.example/runner/install.sh' | sudo sh
+set -eu
+installer="$(mktemp)"
+trap 'rm -f "$installer"' EXIT
+curl -q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 0 --max-time 60 --max-filesize 262144 --output "$installer" 'https://your-runmesh.example/runner/install.sh'
+test -s "$installer"
+sudo sh "$installer"
 ```
 
 Windows, from an elevated PowerShell session:
 
 ```powershell
-Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 -Uri 'https://your-runmesh.example/runner/install.ps1' | Invoke-Expression
+$ErrorActionPreference = 'Stop'
+$installer = Join-Path ([IO.Path]::GetTempPath()) ('runmesh-installer-' + [guid]::NewGuid().ToString('N') + '.ps1')
+try {
+  $response = Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 -TimeoutSec 60 -ErrorAction Stop -OutFile $installer -Uri 'https://your-runmesh.example/runner/install.ps1'
+  $status = [int]$response.StatusCode
+  if ($status -lt 200 -or $status -ge 300) { throw "Installer download returned HTTP $status." }
+  if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw 'Installer download did not produce a file.' }
+  $length = (Get-Item -LiteralPath $installer).Length
+  if ($length -le 0 -or $length -gt 262144) { throw 'Installer download size is invalid.' }
+  & ([scriptblock]::Create([IO.File]::ReadAllText($installer)))
+} finally {
+  Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
+}
 ```
 
 The installers require Node.js 20+, npm, elevation, and a clean Runmesh installation. They refuse an existing `current`, same-version/staging root, canonical system profile, or service manifest. They stage the package under the versioned Runmesh root, validate both `coding-runner` and `runmesh-runner` entry points, and do not make an unverified `latest` update. Local artifact installation happens before code redemption, so verification and staging failures do not consume the code. If a later local service step fails, the installer best-effort uninstalls only its newly created managed service, removes the newly created profile, current pointer, and version root, and exits nonzero. There is no automatic package update or rollback: retain the prior verified package and managed `current`/service state for a manual recovery. Enrollment redemption itself is remote and single-use and cannot be restored; generate a replacement code before retrying.
