@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { PRODUCT_VERSION } from "./product-version.mjs";
 
-const repositoryRoot = resolve(new URL("..", import.meta.url).pathname);
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packagePaths = ["apps/runner/package.json", "apps/worker/package.json", "packages/protocol/package.json"];
 const readJson = async (relativePath) => JSON.parse(await readFile(resolve(repositoryRoot, relativePath), "utf8"));
 const errors = [];

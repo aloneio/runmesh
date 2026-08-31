@@ -16,6 +16,7 @@ import {
   type RunnerPolicy,
 } from "@aloneio/runmesh-protocol";
 import { constantTimeEqual, isSafeIdentifier, runnerTokenVerifier, verifyInternalRequest } from "./security.js";
+import { readCappedText } from "./body.js";
 
 export type RunnerConnectionState = "online" | "offline" | "stale";
 
@@ -1453,7 +1454,7 @@ function safeRunnerContext(runner: RunnerRecord, updatedAtMs: number | null): Ac
 function parseJobEvent(value: unknown): { job: { job_id: string; runner_id?: string | undefined } } | undefined { if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined; const input = value as { type?: unknown }; const parsed = input.type === "job.started" ? JobStartedSchema.safeParse(value) : input.type === "job.status" ? JobStatusMessageSchema.safeParse(value) : input.type === "job.completed" ? JobCompletedSchema.safeParse(value) : undefined; return parsed?.success ? { job: parsed.data.job } : undefined; }
 function uniqueIds(values: readonly string[]): boolean { return new Set(values).size === values.length; }
 function parseRunnerId(value: string | undefined): string | undefined { if (value === undefined) return undefined; try { const decoded = decodeURIComponent(value); return isSafeIdentifier(decoded) && IdentifierSchema.safeParse(decoded).success ? decoded : undefined; } catch { return undefined; } }
-async function readCappedBody(request: Request): Promise<string | undefined> { const length = request.headers.get("content-length"); if (length !== null && (!/^\d+$/.test(length) || Number(length) > MAX_INTERNAL_BODY_BYTES)) return undefined; const body = await request.text(); return new TextEncoder().encode(body).byteLength <= MAX_INTERNAL_BODY_BYTES ? body : undefined; }
+async function readCappedBody(request: Request): Promise<string | undefined> { return readCappedText(request, MAX_INTERNAL_BODY_BYTES); }
 function parseJsonObject(body: string): InternalInput | undefined { try { const value = JSON.parse(body) as unknown; return typeof value === "object" && value !== null && !Array.isArray(value) ? value as InternalInput : undefined; } catch { return undefined; } }
 function stringField(input: InternalInput, field: string, maxLength: number): string | undefined { const value = input[field]; return typeof value === "string" && value.length > 0 && value.length <= maxLength ? value : undefined; }
 function integerField(input: InternalInput, field: string): number | undefined { const value = input[field]; return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined; }

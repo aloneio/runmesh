@@ -5,7 +5,7 @@ This document describes the implemented deployment and operator paths. The dashb
 ## Local validation (not deployment)
 
 ```sh
-npm install
+npm ci
 npm test
 npm run typecheck
 npm run build
@@ -27,10 +27,10 @@ Configure the four server-side secrets before deployment:
 
 ```sh
 cd apps/worker
-npx wrangler secret put ADMIN_TOKEN
-npx wrangler secret put SETUP_TOKEN          # or configure SETUP_TOKEN_HASH instead
-npx wrangler secret put RUNNER_TOKEN_PEPPER
-npx wrangler secret put INTERNAL_CONTROL_SECRET
+npm exec --offline -- wrangler secret put ADMIN_TOKEN
+npm exec --offline -- wrangler secret put SETUP_TOKEN          # or configure SETUP_TOKEN_HASH instead
+npm exec --offline -- wrangler secret put RUNNER_TOKEN_PEPPER
+npm exec --offline -- wrangler secret put INTERNAL_CONTROL_SECRET
 ```
 
 The first administrator setup requires the configured `SETUP_TOKEN` or the SHA-256 verifier in `SETUP_TOKEN_HASH`; the setup token is never stored in RegistryDO or displayed by the dashboard. First setup is atomic and first-success-wins, so an uninitialized public instance must be protected by deployment access controls until the intended administrator completes setup. `ADMIN_TOKEN` is only for the manual/programmatic Runner administration API. It is not an administrator-password replacement, browser cookie, MCP credential, or Runner enrollment code.
@@ -38,20 +38,30 @@ The first administrator setup requires the configured `SETUP_TOKEN` or the SHA-2
 Deploy when the account and hostname are ready. The Worker name is `runmesh`:
 
 ```sh
-npx wrangler deploy --config wrangler.jsonc
+npm exec --offline -- wrangler deploy --config wrangler.jsonc
 ```
 
 1. Open the deployed root URL and create the first administrator password immediately. Setup is atomic first-success-wins; there is no bootstrap-password secret.
 2. Log in and open **Admin → Runners**. Add a safe Runner ID (or let the dashboard generate one) and a human-facing `display_name`. The display name is displayed to operators and by `runner_list`; the ID is the stable protocol identifier.
 3. Copy the enrollment code. It expires in 30 minutes and is single-use. **Regenerate enrollment** replaces any unused code for that Runner with a new one.
-4. On the host, download the portable Runner `.tgz`, manifest, detached signature, signature descriptor, checksums, and informational keyring. Verify them with the trust keyring from an independently trusted source checkout, not with the keyring downloaded beside the artifact. Follow the complete [portable Runner verification and installation procedure](portable-runner-installation.md), then redeem the one-time code with the installed CLI and install the service:
+4. On the host, download all assets listed in the [portable Runner verification and installation procedure](portable-runner-installation.md), including the `.tgz`, manifest, detached signature, signature descriptor, checksums, informational keyring, and release license/notice files. Verify them with the trust keyring from an independently trusted source checkout, not with the keyring downloaded beside the artifact. Follow the complete procedure, then redeem the one-time code with the installed CLI and install the service:
 
-   ```sh
-   coding-runner enroll \
-     --server https://mcp.example.com/runner/enroll \
-     --code '<one-time-enrollment-code>'
-   coding-runner install
+   ```bash
+    set -euo pipefail
+    RUNNER=/opt/runmesh/current/bin/coding-runner
+    printf '%s' 'One-time enrollment code: ' >&2
+    read -r -s RUNMESH_ENROLLMENT_CODE
+    printf '\n' >&2
+    printf '%s\n' "$RUNMESH_ENROLLMENT_CODE" | sudo "$RUNNER" enroll \
+      --server https://mcp.example.com/runner/enroll \
+      --code-stdin
+    unset RUNMESH_ENROLLMENT_CODE
+    sudo "$RUNNER" install --executable-path "$RUNNER"
    ```
+
+   On Windows PowerShell, use `Read-Host` and pipe the value to
+   `coding-runner enroll --code-stdin`; do not put the one-time code in the
+   command line or a script file.
 
    Enrollment obtains the Runner ID and long-lived Runner credential from the response; the command accepts no `--runner-id`. It saves a centrally managed machine profile with zero local workspaces and does not use the current directory. Configure approved Workspace roots and permissions in the Admin Panel; centralized Runner profiles reject local `workspace add/remove`.
 5. In **Admin → MCP Clients**, create a client label and least-privilege scopes. Copy the generated one-time MCP URL and configure it directly in the MCP client:

@@ -20,11 +20,16 @@ import {
   verifySetupToken,
   verifyPassword,
 } from "./security.js";
-import { readCappedFormData, readCappedText as readBodyText } from "./body.js";
+import { readCappedBytes, readCappedFormData, readCappedText as readBodyText } from "./body.js";
 
 export { RegistryDO, RunnerDO };
 
 const MAX_ADMIN_BODY_BYTES = 16_384;
+const MAX_INTERNAL_RPC_BODY_BYTES = 1_048_576;
+// Match the SDK's documented maximum while enforcing it even when a client
+// omits Content-Length (chunked request bodies must not reach request.json()
+// unbounded).
+const MAX_MCP_BODY_BYTES = 4 * 1024 * 1024;
 const ADMIN_SESSION_COOKIE = "__Host-runmesh_admin_session";
 const ADMIN_CSRF_COOKIE = "__Host-runmesh_admin_csrf";
 const SETUP_CSRF_COOKIE = "__Host-runmesh_setup_csrf";
@@ -160,8 +165,11 @@ function safeDisplayText(value: unknown, max: number): value is string {
 async function readEnrollmentBody(request: Request): Promise<Record<string, unknown> | undefined> {
   const length = request.headers.get("content-length");
   if (length !== null && (!/^\d+$/.test(length) || Number(length) > 4_096)) { await discardBody(request); return undefined; }
-  const body = typeof request.body === "undefined" ? undefined : await request.text();
-  if (body !== undefined && new TextEncoder().encode(body).byteLength > 4_096) return undefined;
+  // Do not use request.text() here: when Content-Length is absent or forged it
+  // buffers the entire stream before the size check, allowing an unauthenticated
+  // enrollment request to consume unbounded Worker memory. The capped reader
+  // enforces the limit while consuming the stream and cancels oversized bodies.
+  const body = await readBodyText(request, 4_096);
   try { return record(body === undefined ? undefined : JSON.parse(body) as unknown); } catch { return undefined; }
 }
 function enrollmentError(): Response { return new Response("invalid enrollment", { status: 401, headers: credentialHeaders("text/plain; charset=utf-8") }); }
@@ -194,7 +202,15 @@ async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL): Prom
       legacy: "stateless",
     },
   );
-  return handler.fetch(new Request(rewritten, request), { authInfo: auth });
+  let forwarded: Request;
+  if (request.method === "POST") {
+    const body = await readCappedBytes(request, MAX_MCP_BODY_BYTES);
+    if (body === undefined) return new Response("request body too large", { status: 413, headers: publicInstallerHeaders("text/plain; charset=utf-8") });
+    forwarded = new Request(rewritten, { method: request.method, headers: request.headers, body: body.buffer as ArrayBuffer });
+  } else {
+    forwarded = new Request(rewritten, request);
+  }
+  return handler.fetch(forwarded, { authInfo: auth });
 }
 
 function isMcpPath(pathname: string): boolean {
@@ -456,7 +472,7 @@ async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, baseUrl
     const mutationId = `credential-rotated-${crypto.randomUUID()}`;
     const runnerResponse = await runnerRegistryRequest(env, runnerId, "", "GET", "");
     const runner = runnerResponse.ok ? record(await json(runnerResponse)) : undefined;
-    const canFence = runnerResponse.ok && Number(runner?.connection_epoch ?? 0) > 0 && typeof runner?.session_id === "string" && runner?.policy_status === "applied" && typeof runner?.applied_policy_revision === "number" && typeof runner?.active_policy_checksum === "string";
+    const canFence = runnerResponse.ok && Number(runner?.connection_epoch ?? 0) > 0 && Number(runner?.credential_version ?? 0) > 0 && typeof runner?.session_id === "string" && runner.session_id.length > 0 && runner?.state === "online";
     if (canFence) {
       const fenced = await fenceRunnerTransport(env, runnerId, mutationId);
       if (!fenced.ok) return adminError(503, "Runner credential rotation could not fence the Runner.");
@@ -2748,10 +2764,37 @@ pre{
 function adminScript(): string { return `<script>var ZH_UI_TEXT=${JSON.stringify(ZH_UI_TEXT)};function translateTextNodes(root){var walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode:function(node){if(!node.nodeValue||!node.nodeValue.trim())return NodeFilter.FILTER_REJECT;for(var el=node.parentElement;el;el=el.parentElement){if(el.hasAttribute('data-no-i18n')||el.tagName==='CODE'||el.tagName==='PRE'||el.tagName==='SCRIPT'||el.tagName==='STYLE'||el.tagName==='INPUT'||el.tagName==='TEXTAREA')return NodeFilter.FILTER_REJECT}return NodeFilter.FILTER_ACCEPT}});var nodes=[];while(walker.nextNode())nodes.push(walker.currentNode);nodes.forEach(function(node){var text=node.nodeValue||'';var trimmed=text.trim();var mapped=ZH_UI_TEXT[trimmed];if(text.indexOf('coding:')>=0)return;if(mapped)node.nodeValue=text.replace(trimmed,mapped);else Object.keys(ZH_UI_TEXT).sort(function(a,b){return b.length-a.length}).forEach(function(key){if(node.nodeValue&&node.nodeValue.indexOf(key)>=0)node.nodeValue=node.nodeValue.split(key).join(ZH_UI_TEXT[key])})})}function translateAttributes(root){['aria-label','alt','placeholder','title'].forEach(function(name){root.querySelectorAll('['+name+']').forEach(function(element){if(element.closest('[data-no-i18n]'))return;var value=element.getAttribute(name)||'';Object.keys(ZH_UI_TEXT).sort(function(a,b){return b.length-a.length}).forEach(function(key){if(value.indexOf(key)>=0)value=value.split(key).join(ZH_UI_TEXT[key])});element.setAttribute(name,value)})})}function applyLocale(locale){var zh=locale==='zh-CN';document.documentElement.lang=zh?'zh-CN':'en';document.querySelectorAll('[data-lang-toggle]').forEach(function(item){var active=item.getAttribute('data-lang-toggle')===locale;item.setAttribute('aria-current',active?'true':'false')});if(zh){translateTextNodes(document.body);translateAttributes(document);var title=document.title;Object.keys(ZH_UI_TEXT).sort(function(a,b){return b.length-a.length}).forEach(function(key){if(title.indexOf(key)>=0)title=title.split(key).join(ZH_UI_TEXT[key])});document.title=title}}function requestedLocale(){var query=new URLSearchParams(location.search).get('lang');if(query==='zh-CN'||query==='zh')return 'zh-CN';if(query==='en')return 'en';var match=/runmesh_lang=(zh-CN|en)/.exec(document.cookie||'');if(match)return match[1];return navigator.language&&navigator.language.toLowerCase().startsWith('zh')?'zh-CN':'en'}function rememberLocale(locale){document.cookie='runmesh_lang='+locale+'; Max-Age=31536000; Path=/; SameSite=Lax'}document.querySelectorAll('[data-lang-toggle]').forEach(function(link){link.addEventListener('click',function(event){var locale=link.getAttribute('data-lang-toggle')||'en';rememberLocale(locale);if(locale==='zh-CN'&&new URLSearchParams(location.search).get('lang')!=='zh-CN'){event.preventDefault();var url=new URL(location.href);url.searchParams.set('lang','zh-CN');location.href=url.toString()}else if(locale==='en'&&new URLSearchParams(location.search).has('lang')){event.preventDefault();var url=new URL(location.href);url.searchParams.set('lang','en');location.href=url.toString()}})});var locale=requestedLocale();if(new URLSearchParams(location.search).has('lang'))rememberLocale(locale);applyLocale(locale);function copyText(text){if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text);return}var area=document.createElement('textarea');area.value=text;area.setAttribute('readonly','');area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.select();document.execCommand('copy');area.remove()}document.querySelectorAll('[data-copy]').forEach(function(button){button.addEventListener('click',function(){copyText(button.getAttribute('data-copy')||'');button.textContent=document.documentElement.lang==='zh-CN'?'已复制':'Copied';button.classList.add('copied')})});document.querySelectorAll('[data-tab]').forEach(function(tab){tab.addEventListener('click',function(){var target=tab.getAttribute('data-tab');document.querySelectorAll('[data-tab]').forEach(function(item){item.setAttribute('aria-selected',String(item===tab));item.tabIndex=item===tab?0:-1});document.querySelectorAll('[data-panel]').forEach(function(panel){panel.hidden=panel.getAttribute('data-panel')!==target})});tab.addEventListener('keydown',function(event){if(event.key==='ArrowLeft'||event.key==='ArrowRight'){var tabs=Array.prototype.slice.call(document.querySelectorAll('[data-tab]'));var next=tabs[(tabs.indexOf(tab)+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length];next.focus();next.click()}})});document.querySelectorAll('.pwd-toggle-btn').forEach(function(btn){btn.addEventListener('click',function(){var wrap=btn.closest('.password-input-wrap');if(!wrap)return;var input=wrap.querySelector('input');if(!input)return;var isPwd=input.type==='password';input.type=isPwd?'text':'password';var isZh=document.documentElement.lang==='zh-CN';var label=isPwd?(isZh?'隐藏密码':'Hide password'):(isZh?'显示密码':'Show password');btn.setAttribute('aria-label',label);btn.setAttribute('title',label);btn.innerHTML=isPwd?'<svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>':'<svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';})});document.querySelectorAll('form.login-form').forEach(function(form){form.addEventListener('submit',function(){var btn=form.querySelector('.login-submit-btn');if(!btn||btn.disabled)return;var isZh=document.documentElement.lang==='zh-CN';var isSetup=form.getAttribute('action')==='/setup';var loadingText=isSetup?(isZh?'正在初始化...':'Initializing...'):(isZh?'正在登录...':'Signing in...');var origWidth=btn.offsetWidth;btn.style.width=origWidth>0?(origWidth+'px'):'100%';btn.disabled=true;btn.textContent=loadingText;try{form.submit();}catch(e){}});});</script>`; }
 function runnerEnrollmentPage(baseUrl: string, runnerId: string, code: string | undefined, csrf: string, _reEnroll = false): Response {
   if (code === undefined) return adminError(503, "Enrollment code could not be generated.");
-  const enroll = `coding-runner enroll --server ${new URL("/runner/enroll", baseUrl).toString()} --code ${code}`;
-  const command = `${enroll}\ncoding-runner install`;
-  const tabs = Object.entries({ linux: command, macos: command, windows: command }).map(([platform, value], index) => `<button role="tab" id="tab-${platform}" aria-controls="panel-${platform}" aria-selected="${index === 0 ? "true" : "false"}" tabindex="${index === 0 ? "0" : "-1"}" data-tab="${platform}">${platform === "macos" ? "macOS" : platform === "windows" ? "Windows" : "Linux"}</button><section role="tabpanel" id="panel-${platform}" aria-labelledby="tab-${platform}" ${index === 0 ? "" : "hidden"} data-panel="${platform}"><pre><code>${escapeHtml(value)}</code></pre><button type="button" class="button secondary" data-copy="${escapeHtml(enroll)}">Copy enrollment command</button></section>`).join("");
-  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body">${languageSwitch()}<main class="shell enrollment-shell"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><div class="dialog-icon-row">${meshMarkSvg("dialog-mark")}</div><p class="eyebrow">Manual portable-artifact enrollment</p><h1 id="enrollment-title">Enroll Runner manually</h1><p class="lede">Hosted installers are disabled in this development preview. Download and verify the portable Runner artifact first. This one-time code expires in 30 minutes and will not be shown again.</p></div></section><div class="enrollment-meta-box"><span class="form-stat-label">Target Runner ID</span><span class="mono">${escapeHtml(runnerId)}</span></div><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.</p><div class="top-actions dialog-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
+  const server = new URL("/runner/enroll", baseUrl).toString();
+  // Keep the one-time code out of generated shell argv and copy buffers. The
+  // operator enters it at a protected prompt and the CLI reads it from stdin.
+  const posixCommand = `set -euo pipefail
+RUNNER=/opt/runmesh/current/bin/coding-runner # replace with the verified absolute path if different
+test -x "$RUNNER"
+printf '%s' 'One-time enrollment code: ' >&2
+read -r -s RUNMESH_ENROLLMENT_CODE
+printf '\\n' >&2
+printf '%s\\n' "$RUNMESH_ENROLLMENT_CODE" | sudo "$RUNNER" enroll --server ${server} --code-stdin
+unset RUNMESH_ENROLLMENT_CODE
+sudo "$RUNNER" install --executable-path "$RUNNER"
+sudo "$RUNNER" doctor --json`;
+  const windowsCommand = `# Run this in an elevated PowerShell session
+$ErrorActionPreference = 'Stop'
+$RunnerPath = 'C:\\Program Files\\Runmesh\\current\\coding-runner.cmd' # replace with the verified absolute shim path if different
+if (-not (Test-Path -LiteralPath $RunnerPath -PathType Leaf)) { throw 'Set RunnerPath to the verified coding-runner.cmd path.' }
+$EnrollmentCode = Read-Host 'One-time enrollment code'
+try {
+  $EnrollmentCode | & $RunnerPath enroll --server ${server} --code-stdin
+  if ($LASTEXITCODE -ne 0) { throw 'Runner enrollment failed.' }
+} finally {
+  Remove-Variable EnrollmentCode -ErrorAction SilentlyContinue
+}
+& $RunnerPath install --executable-path $RunnerPath
+if ($LASTEXITCODE -ne 0) { throw 'Runner service installation failed.' }
+& $RunnerPath doctor --json
+if ($LASTEXITCODE -ne 0) { throw 'Runner doctor check failed.' }`;
+  const commands = { linux: posixCommand, macos: posixCommand, windows: windowsCommand };
+  const tabs = Object.entries(commands).map(([platform, value], index) => `<button role="tab" id="tab-${platform}" aria-controls="panel-${platform}" aria-selected="${index === 0 ? "true" : "false"}" tabindex="${index === 0 ? "0" : "-1"}" data-tab="${platform}">${platform === "macos" ? "macOS" : platform === "windows" ? "Windows" : "Linux"}</button><section role="tabpanel" id="panel-${platform}" aria-labelledby="tab-${platform}" ${index === 0 ? "" : "hidden"} data-panel="${platform}"><pre><code>${escapeHtml(value)}</code></pre><button type="button" class="button secondary" data-copy="${escapeHtml(value)}">Copy enrollment command</button></section>`).join("");
+  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body">${languageSwitch()}<main class="shell enrollment-shell"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><div class="dialog-icon-row">${meshMarkSvg("dialog-mark")}</div><p class="eyebrow">Manual portable-artifact enrollment</p><h1 id="enrollment-title">Enroll Runner manually</h1><p class="lede">Hosted installers are disabled in this development preview. Download and verify the portable Runner artifact first. This one-time code expires in 30 minutes and will not be shown again.</p></div></section><div class="enrollment-meta-box"><span class="form-stat-label">Target Runner ID</span><span class="mono">${escapeHtml(runnerId)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">One-time enrollment code</span><code class="mono">${escapeHtml(code)}</code></div><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential. Enter it only at the prompt in the command below.</p><div class="top-actions dialog-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
 }
 function secretCreatedPage(title: string, url: string): string { return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${escapeHtml(title)}</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card secret-card"><div class="secret-brand-row">${meshMarkSvg("secret-mesh-mark")}<span class="brand-name">Runmesh</span></div><p class="brand-kicker">Runmesh</p><h1>${escapeHtml(title)}</h1><p class="lede">Copy this URL now. It will not be shown again.</p><code>${escapeHtml(url)}</code><div class="secret-actions"><button type="button" class="button" data-copy="${escapeHtml(url)}">Copy MCP URL</button><a class="button secondary" href="/admin">Back to admin</a></div></section></main>${adminScript()}</body></html>`; }
 function secretUrl(base: string, secret: string): string { const url = new URL(base); url.pathname = `/${secret}/mcp`; url.search = ""; return url.toString(); }
@@ -2818,8 +2861,11 @@ async function mutateRunnerPolicy(env: WorkerEnv, runnerId: string, mutation: { 
 async function forwardRunnerRpc(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
   const segments = url.pathname.split("/").filter(Boolean);
   if (request.method !== "POST" || segments.length !== 4 || segments[0] !== "internal" || segments[1] !== "runners" || segments[3] !== "rpc" || !isSafeIdentifier(segments[2] ?? "")) return notFound();
-  const body = await request.text();
-  if (!await verifyInternalRequest(request, env.INTERNAL_CONTROL_SECRET, body, consumeInternalNonce.bind(undefined, env))) return notFound();
+  // This route is reachable before authentication. Cap the stream before
+  // buffering it for HMAC verification so an unauthenticated large request
+  // cannot exhaust Worker memory.
+  const body = await readBodyText(request, MAX_INTERNAL_RPC_BODY_BYTES);
+  if (body === undefined || !await verifyInternalRequest(request, env.INTERNAL_CONTROL_SECRET, body, consumeInternalNonce.bind(undefined, env))) return notFound();
   const runnerId = segments[2] as string; const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET ?? "", "POST", "/rpc", body);
   return env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/rpc", { method: "POST", headers, body }));
 }
@@ -2891,8 +2937,8 @@ async function registerRunner(env: WorkerEnv, runnerId: string, input: Record<st
     try { existingResponse = await runnerRegistryRequest(env, runnerId, "", "GET", ""); } catch { return new Response("registry unavailable", { status: 503 }); }
     if (!existingResponse.ok && existingResponse.status !== 404) return new Response("registry unavailable", { status: 503 });
     const existing = existingResponse.ok;
-    const existingRecord = existing ? record(await json(existingResponse)) : undefined;
-    const canFenceExisting = existing && Number(existingRecord?.connection_epoch ?? 0) > 0 && typeof existingRecord?.session_id === "string" && existingRecord?.policy_status === "applied" && typeof existingRecord?.applied_policy_revision === "number" && typeof existingRecord?.active_policy_checksum === "string";
+    const runner = existing ? record(await json(existingResponse)) : undefined;
+    const canFenceExisting = existing && Number(runner?.connection_epoch ?? 0) > 0 && Number(runner?.credential_version ?? 0) > 0 && typeof runner?.session_id === "string" && runner.session_id.length > 0 && runner?.state === "online";
   if (canFenceExisting) {
     const fenced = await fenceRunnerTransport(env, runnerId, mutationId);
     if (!fenced.ok) return new Response("runner unavailable", { status: 503 });

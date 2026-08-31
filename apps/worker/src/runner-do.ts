@@ -13,6 +13,7 @@ import {
 } from "@aloneio/runmesh-protocol";
 import { bearerToken, internalHeaders, isSafeIdentifier, verifyInternalRequest } from "./security.js";
 import { PRODUCT_VERSION } from "./generated-version.js";
+import { readCappedText } from "./body.js";
 
 export interface WorkerEnv {
   REGISTRY: DurableObjectNamespace;
@@ -88,6 +89,23 @@ const FENCED_ADMISSION: AdmissionState = {
   sessionId: null, mutationId: null, mutationPhase: "restart_reconcile", preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: null,
 };
 
+/** Conservative in-memory state after an uncertain admission-state write. */
+function conservativeAdmission(next: AdmissionState): AdmissionState {
+  return {
+    ...next,
+    fenced: true,
+    reconciled: false,
+    activeRevision: null,
+    activeChecksum: null,
+    lastReconciledAtMs: null,
+    // Preserve an in-flight mutation owner when present so recovery/cancel
+    // cannot be raced by a second mutation. An ordinary policy state gets the
+    // restart marker and must be reconciled from Registry before admission.
+    mutationId: next.mutationId ?? RESTART_RECONCILE_MUTATION_ID,
+    mutationPhase: next.mutationId === null ? "restart_reconcile" : next.mutationPhase,
+  };
+}
+
 export class RunnerDO {
   private readonly bridgeWaiters = new Map<string, BridgeWaiter>();
   private admissionState: AdmissionState | undefined;
@@ -103,8 +121,8 @@ export class RunnerDO {
 
   public async fetch(request: Request): Promise<Response> {
     if (request.method === "POST" && new URL(request.url).pathname === "/begin-policy-mutation") {
-      const body = await request.text();
-      if (!await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
+      const body = await readCappedText(request, MAX_BRIDGE_BODY_BYTES);
+      if (body === undefined || !await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
       const parsed = parseJsonObject(body);
       const mutationId = mutationIdFromBody(body);
       const requestedRunnerId = typeof parsed?.runner_id === "string" && isSafeIdentifier(parsed.runner_id) ? parsed.runner_id : undefined;
@@ -115,25 +133,25 @@ export class RunnerDO {
         : Response.json({ error: { code: "mutation_in_progress", message: "another Runner mutation is already in progress" } }, { status: 409 });
     }
     if (request.method === "GET" && new URL(request.url).pathname === "/admission-state") {
-      const body = await request.text();
-      if (!await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
+      const body = await readCappedText(request, MAX_BRIDGE_BODY_BYTES);
+      if (body === undefined || !await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
       return Response.json(await this.admission());
     }
     if (request.method === "POST" && new URL(request.url).pathname === "/cancel-policy-mutation") {
-      const body = await request.text();
-      if (!await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
+      const body = await readCappedText(request, MAX_BRIDGE_BODY_BYTES);
+      if (body === undefined || !await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
       const mutationId = mutationIdFromBody(body);
       if (mutationId === undefined) return Response.json({ error: { code: "invalid_mutation_id", message: "mutation_id is required" } }, { status: 400 });
       return this.cancelPolicyMutation(mutationId);
     }
     if (request.method === "POST" && new URL(request.url).pathname === "/mark-policy-committed") {
-      const body = await request.text();
-      if (!await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
+      const body = await readCappedText(request, MAX_BRIDGE_BODY_BYTES);
+      if (body === undefined || !await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
       return this.markPolicyCommitted(body);
     }
     if (request.method === "POST" && new URL(request.url).pathname === "/policy") {
-      const body = await request.text();
-      if (!await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
+      const body = await readCappedText(request, MAX_BRIDGE_BODY_BYTES);
+      if (body === undefined || !await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
       let requestedMutationId: string | undefined;
       try {
         const parsed = JSON.parse(body) as unknown;
@@ -175,8 +193,8 @@ export class RunnerDO {
       return new Response(null, { status: 204 });
     }
     if (request.method === "POST" && new URL(request.url).pathname === "/revoke") {
-      const body = await request.text();
-      if (!await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
+      const body = await readCappedText(request, MAX_BRIDGE_BODY_BYTES);
+      if (body === undefined || !await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
       const mutationId = mutationIdFromBody(body);
       if (mutationId === undefined || !await this.mutationOwnsFence(mutationId)) return Response.json({ error: { code: "mutation_mismatch", message: "revoke mutation does not own the current fence" } }, { status: 409 });
       const before = await this.admission();
@@ -193,8 +211,8 @@ export class RunnerDO {
       return new Response(null, { status: 204 });
     }
     if (request.method === "POST" && new URL(request.url).pathname === "/delete") {
-      const body = await request.text();
-      if (!await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
+      const body = await readCappedText(request, MAX_BRIDGE_BODY_BYTES);
+      if (body === undefined || !await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
       const mutationId = mutationIdFromBody(body);
       if (mutationId === undefined || !await this.mutationOwnsFence(mutationId)) return Response.json({ error: { code: "mutation_mismatch", message: "delete mutation does not own the current fence" } }, { status: 409 });
       for (const socket of this.ctx.getWebSockets("runner")) {
@@ -282,15 +300,15 @@ export class RunnerDO {
       attachment.protocolVersion = negotiation.protocol_version;
       ws.serializeAttachment(attachment);
       const beforeHello = await this.admission();
-      await this.persistAdmission({
-        ...beforeHello, fenced: true, reconciled: false, runnerId: attachment.runnerId,
-        activeRevision: null, activeChecksum: null, desiredRevision: null, desiredChecksum: null,
-        connectionEpoch: attachment.epoch, credentialVersion: attachment.credentialVersion, sessionId: attachment.sessionId,
-        mutationId: beforeHello.fenced && beforeHello.mutationId !== null ? beforeHello.mutationId : RESTART_RECONCILE_MUTATION_ID,
-        mutationPhase: beforeHello.fenced && beforeHello.mutationPhase !== "idle" ? beforeHello.mutationPhase : "restart_reconcile",
-        preMutationActiveRevision: beforeHello.preMutationActiveRevision, preMutationActiveChecksum: beforeHello.preMutationActiveChecksum,
-        preMutationDesiredRevision: beforeHello.preMutationDesiredRevision, preMutationDesiredChecksum: beforeHello.preMutationDesiredChecksum, lastReconciledAtMs: null,
-      });
+      const persistedHello = await this.persistHelloAdmission(beforeHello, attachment);
+      if (!persistedHello) {
+        // Registry connection epochs are monotonic. A hello that completed
+        // after a newer socket must not send a welcome or keep an obsolete
+        // session alive; doing so would make every protected RPC fail closed
+        // until another reconnect and could overwrite mutation bookkeeping.
+        ws.close(4000, "replaced by newer session");
+        return;
+      }
       for (const existing of this.ctx.getWebSockets("runner")) {
         if (existing !== ws) {
           const old = existing.deserializeAttachment() as ConnectionAttachment | null;
@@ -389,8 +407,8 @@ export class RunnerDO {
 
   private async forwardInternalRpc(request: Request): Promise<Response> {
     if (request.method !== "POST" || new URL(request.url).pathname !== "/rpc") return new Response("not found", { status: 404 });
-    const body = await request.text();
-    if (new TextEncoder().encode(body).byteLength > MAX_BRIDGE_BODY_BYTES || !await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
+    const body = await readCappedText(request, MAX_BRIDGE_BODY_BYTES);
+    if (body === undefined || !await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
     let input: { method?: unknown; params?: unknown; policy_revision?: unknown; expected_policy_revision?: unknown; expected_policy_checksum?: unknown };
     try { input = JSON.parse(body) as { method?: unknown; params?: unknown; policy_revision?: unknown; expected_policy_revision?: unknown; expected_policy_checksum?: unknown }; } catch { return Response.json({ error: { code: "invalid_request", message: "invalid JSON object" } }, { status: 400 }); }
     if (typeof input !== "object" || input === null || Array.isArray(input)) return Response.json({ error: { code: "invalid_request", message: "invalid JSON object" } }, { status: 400 });
@@ -478,8 +496,19 @@ export class RunnerDO {
     const operation = this.admissionWriteQueue.then(async () => {
       const current = await this.admission();
       if (!sameAdmissionState(current, expected)) return;
-      this.admissionState = next;
-      await this.ctx.storage.put(ADMISSION_STATE_KEY, next);
+      try {
+        // Commit the durable value before publishing an in-memory authorization
+        // state. If storage rejects, publishing `next` first could leave an
+        // unfenced/reconciled state live until the Durable Object restarts.
+        await this.ctx.storage.put(ADMISSION_STATE_KEY, next);
+        this.admissionState = next;
+      } catch (error) {
+        // A failed write has an uncertain outcome. Keep this isolate fenced so
+        // protected RPCs fail closed; restart reconciliation will verify the
+        // Registry identity before reopening admission.
+        this.admissionState = conservativeAdmission(next);
+        throw error;
+      }
       applied = true;
     });
     this.admissionWriteQueue = operation.catch(() => undefined);
@@ -500,13 +529,69 @@ export class RunnerDO {
     return this.admissionState;
   }
 
-  private async persistAdmission(next: AdmissionState): Promise<void> {
-    const operation = this.admissionWriteQueue.then(async () => {
-      this.admissionState = next;
-      await this.ctx.storage.put(ADMISSION_STATE_KEY, next);
-    });
-    this.admissionWriteQueue = operation.catch(() => undefined);
-    await operation;
+  /**
+   * Bind a newly authenticated socket to admission state without clobbering
+   * a policy/credential mutation that may have acquired the fence while the
+   * Registry /connect request was in flight.  The hello path used to enqueue
+   * an unconditional write based on a stale snapshot, allowing that write to
+   * overwrite a newer mutation owner.
+   */
+  private async persistHelloAdmission(beforeHello: AdmissionState, attachment: ConnectionAttachment): Promise<boolean> {
+    const isNewerConnection = (current: AdmissionState): boolean => {
+      if (current.credentialVersion !== null && current.credentialVersion > attachment.credentialVersion) return true;
+      if (current.credentialVersion !== attachment.credentialVersion) return false;
+      if (current.connectionEpoch !== null && current.connectionEpoch > attachment.epoch) return true;
+      return current.connectionEpoch === attachment.epoch && current.sessionId !== null && current.sessionId !== attachment.sessionId;
+    };
+    const apply = (current: AdmissionState): AdmissionState => {
+      // Keep a mutation owned by this Runner/credential across a reconnect.
+      // In particular, a committed_pending/offline_pending mutation's desired
+      // revision is still needed for delivery/recovery and must not be cleared
+      // by a delayed hello.
+      const preserveMutation = current.fenced
+        && current.mutationId !== null
+        && (current.runnerId === null || current.runnerId === attachment.runnerId)
+        && (current.credentialVersion === null || current.credentialVersion === attachment.credentialVersion);
+      return {
+        ...current,
+        fenced: true,
+        reconciled: false,
+        runnerId: attachment.runnerId,
+        activeRevision: null,
+        activeChecksum: null,
+        ...(preserveMutation ? {} : {
+          desiredRevision: null,
+          desiredChecksum: null,
+          preMutationActiveRevision: null,
+          preMutationActiveChecksum: null,
+          preMutationDesiredRevision: null,
+          preMutationDesiredChecksum: null,
+        }),
+        connectionEpoch: attachment.epoch,
+        credentialVersion: attachment.credentialVersion,
+        sessionId: attachment.sessionId,
+        mutationId: preserveMutation ? current.mutationId : RESTART_RECONCILE_MUTATION_ID,
+        mutationPhase: preserveMutation ? current.mutationPhase : "restart_reconcile",
+        lastReconciledAtMs: null,
+      };
+    };
+
+    if (isNewerConnection(beforeHello)) return false;
+
+    // Preserve the existing conditional write semantics for the common case.
+    // If another mutation changed the state while /connect was awaiting the
+    // Registry, merge the socket identity into that newer state instead of
+    // writing the stale hello snapshot over it.
+    if (await this.persistAdmissionIfCurrent(beforeHello, apply(beforeHello))) return true;
+    const current = await this.admission();
+    if (isNewerConnection(current)) return false;
+    if (await this.persistAdmissionIfCurrent(current, apply(current))) return true;
+    // A concurrent writer may have won the final conditional write. Only keep
+    // this socket alive when the resulting state still records its exact
+    // identity; an unbound/fenced state should force a fresh hello rather than
+    // sending a welcome that can never pass protected-RPC admission.
+    const final = await this.admission();
+    return !isNewerConnection(final) && sameRunnerConnection(final, attachment);
   }
 
   private async beginPolicyMutation(mutationId: string, requestedRunnerId?: string): Promise<"started" | "idempotent" | "conflict"> {

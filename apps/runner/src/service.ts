@@ -1,7 +1,8 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
-import { dirname, join, win32 } from "node:path";
+import { dirname, posix, win32 } from "node:path";
+import type { HostPlatform } from "./platform-types.js";
 
 export type ServicePlatform = "linux" | "darwin" | "win32";
 export type ServiceMode = "user" | "system";
@@ -104,7 +105,7 @@ const MACOS_LABEL = "io.alone.runmesh.runner";
 const WINDOWS_TASK_NAME = "RunmeshRunner";
 const DEDICATED_SERVICE_USER = "runmesh";
 
-export function currentServicePlatform(platform: NodeJS.Platform = process.platform): ServicePlatform { return platform === "darwin" ? "darwin" : platform === "linux" ? "linux" : "win32"; }
+export function currentServicePlatform(platform: HostPlatform = process.platform): ServicePlatform { return platform === "darwin" ? "darwin" : platform === "linux" ? "linux" : "win32"; }
 export function serviceMode(options: ServiceAdapterOptions = {}): ServiceMode { return options.mode ?? (options.system === false ? "user" : "system"); }
 export function serviceExecutionMode(options: Pick<ServiceAdapterOptions, "executionMode"> = {}): ExecutionMode {
   const mode = options.executionMode ?? "dedicated_user";
@@ -123,23 +124,33 @@ export function serviceLayout(options: ServiceAdapterOptions = {}): ServiceLayou
   const platform = options.platform ?? currentServicePlatform();
   const mode = serviceMode(options);
   const home = options.home ?? homedir();
-  const path = platform === "win32" ? win32 : { join };
+  // Render a target platform's paths even when the CLI is being exercised on a
+  // different host (for example, release tests render Linux manifests on
+  // Windows). Using the host `join` here would produce backslashes in POSIX
+  // paths and make otherwise valid manifests unusable.
+  const path = platform === "win32" ? win32 : posix;
   if (mode === "system") {
     if (platform === "linux") {
       const installRoot = options.installRoot ?? "/opt/runmesh";
       const configRoot = options.configRoot ?? "/etc/runmesh";
       const stateRoot = options.dataRoot ?? "/var/lib/runmesh";
       const logRoot = options.logRoot ?? "/var/log/runmesh";
-      const manifestPath = join(options.manifestDir ?? "/etc/systemd/system", LINUX_SERVICE_NAME);
-      return { installRoot, configRoot, stateRoot, logRoot, manifestPath, executablePath: options.executablePath ?? join(installRoot, "current", "coding-runner") };
+      const manifestPath = path.join(options.manifestDir ?? "/etc/systemd/system", LINUX_SERVICE_NAME);
+      // npm's POSIX global layout places package bin shims under `<prefix>/bin`.
+      // Keep the generated system unit pointed at the executable that the
+      // portable installation procedure actually stages.
+      return { installRoot, configRoot, stateRoot, logRoot, manifestPath, executablePath: options.executablePath ?? path.join(installRoot, "current", "bin", "coding-runner") };
     }
     if (platform === "darwin") {
       const installRoot = options.installRoot ?? "/opt/runmesh";
       const configRoot = options.configRoot ?? "/Library/Application Support/Runmesh";
-      const stateRoot = options.dataRoot ?? join(configRoot, "state");
-      const logRoot = options.logRoot ?? join(configRoot, "logs");
-      const manifestPath = join(options.manifestDir ?? "/Library/LaunchDaemons", `${MACOS_LABEL}.plist`);
-      return { installRoot, configRoot, stateRoot, logRoot, manifestPath, executablePath: options.executablePath ?? join(installRoot, "current", "coding-runner") };
+      const stateRoot = options.dataRoot ?? path.join(configRoot, "state");
+      const logRoot = options.logRoot ?? path.join(configRoot, "logs");
+      const manifestPath = path.join(options.manifestDir ?? "/Library/LaunchDaemons", `${MACOS_LABEL}.plist`);
+      // npm's POSIX global layout places package bin shims under `<prefix>/bin`.
+      // Keep the generated launchd daemon pointed at the executable staged by
+      // the portable installation procedure.
+      return { installRoot, configRoot, stateRoot, logRoot, manifestPath, executablePath: options.executablePath ?? path.join(installRoot, "current", "bin", "coding-runner") };
     }
     const installRoot = options.installRoot ?? "C:\\Program Files\\Runmesh";
     const configRoot = options.configRoot ?? "C:\\ProgramData\\Runmesh";
@@ -149,18 +160,18 @@ export function serviceLayout(options: ServiceAdapterOptions = {}): ServiceLayou
     return { installRoot, configRoot, stateRoot, logRoot, manifestPath, executablePath: options.executablePath ?? path.join(installRoot, "current", "coding-runner.cmd") };
   }
   if (platform === "linux") {
-    const installRoot = options.installRoot ?? join(home, ".local", "share", "runmesh");
-    const configRoot = options.configRoot ?? join(home, ".config", "runmesh");
-    const stateRoot = options.dataRoot ?? join(home, ".local", "state", "runmesh");
-    const logRoot = options.logRoot ?? join(stateRoot, "logs");
-    return { installRoot, configRoot, stateRoot, logRoot, manifestPath: join(options.manifestDir ?? join(home, ".config", "systemd", "user"), LINUX_SERVICE_NAME), executablePath: options.executablePath ?? join(installRoot, "current", "coding-runner") };
+    const installRoot = options.installRoot ?? path.join(home, ".local", "share", "runmesh");
+    const configRoot = options.configRoot ?? path.join(home, ".config", "runmesh");
+    const stateRoot = options.dataRoot ?? path.join(home, ".local", "state", "runmesh");
+    const logRoot = options.logRoot ?? path.join(stateRoot, "logs");
+      return { installRoot, configRoot, stateRoot, logRoot, manifestPath: path.join(options.manifestDir ?? path.join(home, ".config", "systemd", "user"), LINUX_SERVICE_NAME), executablePath: options.executablePath ?? path.join(installRoot, "current", "bin", "coding-runner") };
   }
   if (platform === "darwin") {
-    const installRoot = options.installRoot ?? join(home, ".local", "share", "runmesh");
-    const configRoot = options.configRoot ?? join(home, "Library", "Application Support", "Runmesh");
-    const stateRoot = options.dataRoot ?? join(configRoot, "state");
-    const logRoot = options.logRoot ?? join(configRoot, "logs");
-    return { installRoot, configRoot, stateRoot, logRoot, manifestPath: join(options.manifestDir ?? join(home, "Library", "LaunchAgents"), `${MACOS_LABEL}.plist`), executablePath: options.executablePath ?? join(installRoot, "current", "coding-runner") };
+    const installRoot = options.installRoot ?? path.join(home, ".local", "share", "runmesh");
+    const configRoot = options.configRoot ?? path.join(home, "Library", "Application Support", "Runmesh");
+    const stateRoot = options.dataRoot ?? path.join(configRoot, "state");
+    const logRoot = options.logRoot ?? path.join(configRoot, "logs");
+      return { installRoot, configRoot, stateRoot, logRoot, manifestPath: path.join(options.manifestDir ?? path.join(home, "Library", "LaunchAgents"), `${MACOS_LABEL}.plist`), executablePath: options.executablePath ?? path.join(installRoot, "current", "bin", "coding-runner") };
   }
   const local = process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local");
   const installRoot = options.installRoot ?? path.join(local, "Runmesh");
@@ -171,7 +182,12 @@ export function serviceLayout(options: ServiceAdapterOptions = {}): ServiceLayou
 }
 
 export function servicePath(options: ServiceAdapterOptions = {}): string { return serviceLayout(options).manifestPath; }
-export function serviceProfilePath(layout: ServiceLayout): string { return join(layout.configRoot, "profile.json"); }
+export function serviceProfilePath(layout: ServiceLayout): string {
+  // `win32.isAbsolute('/etc/runmesh')` is also true on Node, so detect a
+  // Windows drive/UNC root explicitly instead of using the host semantics.
+  const path = /^[A-Za-z]:[\\/]/u.test(layout.configRoot) || layout.configRoot.startsWith("\\\\") ? win32 : posix;
+  return path.join(layout.configRoot, "profile.json");
+}
 export function isDefaultSystemProfile(layout: ServiceLayout, profilePath: string): boolean { return profilePath === serviceProfilePath(layout); }
 export function renderService(options: ServiceAdapterOptions = {}): ServiceManifest {
   const platform = options.platform ?? currentServicePlatform();
@@ -350,13 +366,20 @@ function nextDarwinId(value: string | undefined): string {
 function parseDarwinId(value: string | undefined): string | undefined { const match = /\b(\d+)\b/u.exec(value ?? ""); return match?.[1]; }
 function windowsProvisionScript(layout: ServiceLayout, profilePath: string): string {
   const quote = (value: string): string => `'${value.replaceAll("'", "''")}'`;
+  const acl = (path: string, grants: readonly string[]): string =>
+    `& icacls ${quote(path)} /inheritance:r /grant:r ${grants.map(quote).join(" ")} | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'icacls failed' }; `;
   const roots = [layout.installRoot, layout.configRoot, layout.stateRoot, layout.logRoot].map(quote).join(", ");
-  return `$paths = @(${roots}); foreach ($path in $paths) { New-Item -ItemType Directory -Force -LiteralPath $path | Out-Null }; `
-    + `& icacls ${quote(layout.installRoot)} /inheritance:r /grant:r 'BUILTIN\\Administrators:(OI)(CI)F' 'NT AUTHORITY\\SYSTEM:(OI)(CI)F' 'NT AUTHORITY\\LOCAL SERVICE:(OI)(CI)RX' | Out-Null; `
-    + `& icacls ${quote(layout.configRoot)} /inheritance:r /grant:r 'BUILTIN\\Administrators:(OI)(CI)F' 'NT AUTHORITY\\SYSTEM:(OI)(CI)F' 'NT AUTHORITY\\LOCAL SERVICE:(OI)(CI)RX' | Out-Null; `
-    + `& icacls ${quote(layout.stateRoot)} /inheritance:r /grant:r 'BUILTIN\\Administrators:(OI)(CI)F' 'NT AUTHORITY\\SYSTEM:(OI)(CI)F' 'NT AUTHORITY\\LOCAL SERVICE:(OI)(CI)M' | Out-Null; `
-    + `& icacls ${quote(layout.logRoot)} /inheritance:r /grant:r 'BUILTIN\\Administrators:(OI)(CI)F' 'NT AUTHORITY\\SYSTEM:(OI)(CI)F' 'NT AUTHORITY\\LOCAL SERVICE:(OI)(CI)M' | Out-Null; `
-    + `if (Test-Path -LiteralPath ${quote(profilePath)}) { & icacls ${quote(profilePath)} /inheritance:r /grant:r 'BUILTIN\\Administrators:F' 'NT AUTHORITY\\SYSTEM:F' 'NT AUTHORITY\\LOCAL SERVICE:R' | Out-Null }`;
+  const readGrants = ["BUILTIN\\Administrators:(OI)(CI)F", "NT AUTHORITY\\SYSTEM:(OI)(CI)F", "NT AUTHORITY\\LOCAL SERVICE:(OI)(CI)RX"];
+  const modifyGrants = ["BUILTIN\\Administrators:(OI)(CI)F", "NT AUTHORITY\\SYSTEM:(OI)(CI)F", "NT AUTHORITY\\LOCAL SERVICE:(OI)(CI)M"];
+  const profileGrants = ["BUILTIN\\Administrators:F", "NT AUTHORITY\\SYSTEM:F", "NT AUTHORITY\\LOCAL SERVICE:R"];
+  return `$ErrorActionPreference = 'Stop'; Set-StrictMode -Version Latest; $paths = @(${roots}); foreach ($path in $paths) { New-Item -ItemType Directory -Force -LiteralPath $path | Out-Null }; `
+    + acl(layout.installRoot, readGrants)
+    + acl(layout.configRoot, readGrants)
+    + acl(layout.stateRoot, modifyGrants)
+    + acl(layout.logRoot, modifyGrants)
+    + `if (Test-Path -LiteralPath ${quote(profilePath)}) { `
+    + acl(profilePath, profileGrants)
+    + `}`;
 }
 
 /** Explicit, injectable machine service adapters. No adapter falls back to a user service. */
@@ -408,10 +431,29 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
     stop: async () => execute("schtasks", ["/End", "/TN", WINDOWS_TASK_NAME]),
     restart: async () => { await execute("schtasks", ["/End", "/TN", WINDOWS_TASK_NAME]); await execute("schtasks", ["/Run", "/TN", WINDOWS_TASK_NAME]); },
     uninstall: async () => execute("schtasks", ["/Delete", "/TN", WINDOWS_TASK_NAME, "/F"]),
-    status: async () => {
-      const installed = await executor.execute("schtasks", ["/Query", "/TN", WINDOWS_TASK_NAME]);
-      const detail = await executor.execute("schtasks", ["/Query", "/TN", WINDOWS_TASK_NAME, "/FO", "LIST", "/V"]);
-      const active = detail.exitCode === 0 && /(?:Status:\s*Running|Status:\s*Ready)/iu.test(detail.stdout ?? "");
+      status: async () => {
+        const installed = await executor.execute("schtasks", ["/Query", "/TN", WINDOWS_TASK_NAME]);
+        // `schtasks /FO LIST /V` localizes both field names and state values.
+        // Query the Task Scheduler API through PowerShell first and serialize
+        // the numeric enum (Running = 4), which is locale-independent. Keep a
+        // conservative text fallback for hosts without the ScheduledTasks
+        // module and for injected legacy executors.
+        const invariant = await executor.execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "$task=Get-ScheduledTask -TaskName 'RunmeshRunner' -ErrorAction Stop; $info=Get-ScheduledTaskInfo -TaskName 'RunmeshRunner' -ErrorAction Stop; [pscustomobject]@{ state=[int]$task.State; identity=[string]$task.Principal.UserId } | ConvertTo-Json -Compress"]);
+        let invariantState: { readonly state?: unknown; readonly identity?: unknown } | undefined;
+        try {
+          const parsed = JSON.parse((invariant.stdout ?? "").trim()) as unknown;
+          if (typeof parsed === "object" && parsed !== null) invariantState = parsed as { readonly state?: unknown; readonly identity?: unknown };
+        } catch { /* use the text fallback below */ }
+        if (invariant.exitCode === 0 && invariantState !== undefined && (typeof invariantState.state === "number" || typeof invariantState.state === "string")) {
+          const state = typeof invariantState.state === "number" ? invariantState.state : Number(invariantState.state);
+          const identity = typeof invariantState.identity === "string" ? invariantState.identity.trim() : "";
+          return { installed: installed.exitCode === 0, active: state === 4, ...(identity === "" ? {} : { identity }), ...(invariant.stderr === undefined || invariant.stderr.trim() === "" ? {} : { detail: invariant.stderr.trim().slice(0, 512) }) };
+        }
+        const detail = await executor.execute("schtasks", ["/Query", "/TN", WINDOWS_TASK_NAME, "/FO", "LIST", "/V"]);
+      // Task Scheduler reports `Ready` for an installed task that is not
+      // currently executing. Treat only `Running` as active; conflating the
+      // two makes `doctor` report a stopped/crashed Runner as healthy.
+      const active = detail.exitCode === 0 && /Status:\s*Running/iu.test(detail.stdout ?? "");
       const identity = /Run As User:\s*(.+)/iu.exec(detail.stdout ?? "")?.[1]?.trim();
       return { installed: installed.exitCode === 0, active, ...(identity === undefined || identity === "" ? {} : { identity }), ...(detail.stderr === undefined || detail.stderr.trim() === "" ? {} : { detail: detail.stderr.trim().slice(0, 512) }) };
     },
@@ -437,8 +479,53 @@ export function serviceCommands(action: "install" | "start" | "stop" | "restart"
 function privilegedIdentity(platform: ServicePlatform): string { return platform === "win32" ? "SYSTEM" : "root"; }
 function isAbsoluteForPlatform(value: string, platform: ServicePlatform): boolean { return platform === "win32" ? win32.isAbsolute(value) : value.startsWith("/"); }
 function safeServiceIdentity(value: string): boolean { return /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/.test(value); }
-function escapeSystemdArgument(value: string): string { return value.replaceAll("\\", "\\\\").replaceAll("\n", "").replaceAll(" ", "\\x20").replaceAll('"', "\\\""); }
-function escapeSystemdEnvironment(value: string): string { return value.replaceAll("\\", "\\\\").replaceAll('"', "\\\"").replaceAll("\n", ""); }
+function escapeSystemdArgument(value: string): string { return escapeSystemdValue(value, true); }
+function escapeSystemdEnvironment(value: string): string { return escapeSystemdValue(value, false); }
+/** Escape systemd unit-file values without allowing specifier or line injection. */
+function escapeSystemdValue(value: string, escapeSpaces: boolean): string {
+  let escaped = "";
+  for (const character of value) {
+    const code = character.codePointAt(0) as number;
+    if (character === "%") escaped += "%%";
+    else if (character === "\\") escaped += "\\\\";
+    else if (character === '"') escaped += "\\\"";
+    else if (character === " " && escapeSpaces) escaped += "\\x20";
+    else if (code < 0x20 || code === 0x7f) escaped += `\\x${code.toString(16).padStart(2, "0")}`;
+    else escaped += character;
+  }
+  return escaped;
+}
 function escapeXml(value: string): string { return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&apos;"); }
-function windowsArguments(values: readonly string[]): string { return values.map((value) => /[\s"]/u.test(value) ? `"${value.replaceAll('"', '\\"')}"` : value).join(" "); }
+/**
+ * Quote one argument for the command-line string consumed by a Windows
+ * scheduled task.  Backslashes immediately before a quote (including the
+ * closing quote) must be doubled according to CommandLineToArgvW rules;
+ * otherwise a path such as `C:\\Program Files\\Runmesh\\` loses its final
+ * separator or absorbs the closing quote. Empty arguments are quoted too.
+ */
+function quoteWindowsArgument(value: string): string {
+  if (value.length > 0 && !/[\s"]/u.test(value)) return value;
+  let result = '"';
+  let backslashes = 0;
+  for (const character of value) {
+    if (character === "\\") {
+      backslashes += 1;
+      continue;
+    }
+    if (character === '"') {
+      result += "\\".repeat(backslashes * 2 + 1);
+      result += '"';
+      backslashes = 0;
+      continue;
+    }
+    result += "\\".repeat(backslashes);
+    result += character;
+    backslashes = 0;
+  }
+  // Escape backslashes before the terminating quote, which is itself
+  // syntactically significant to the Windows command-line parser.
+  result += "\\".repeat(backslashes * 2);
+  return `${result}"`;
+}
+function windowsArguments(values: readonly string[]): string { return values.map(quoteWindowsArgument).join(" "); }
 function isErrno(error: unknown, code: string): boolean { return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === code; }

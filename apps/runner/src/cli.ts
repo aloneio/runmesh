@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { access, lstat, realpath, rm } from "node:fs/promises";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { parseRunnerArgs, validateRunnerConfig, type RawRunnerOptions } from "./config.js";
 import { RunnerConnection } from "./connection.js";
 import { enrollRunner } from "./enrollment.js";
 import { ProfileStore, defaultWorkspaceId, profileExecutionMode, profileManagementMode, redactedProfile, workspaceOptions, type RunnerProfile, type StoredWorkspace } from "./profile.js";
 import { EnvironmentInfoService, discoverShellRuntime, type ShellRuntime } from "./runtime.js";
 import { RUNNER_VERSION } from "./version.js";
-import { assertManagedServiceManifest, createServiceManager, createServiceProvisioner, hostServiceManifestFilesystem, installServiceManifest, isManagedService, removeServiceManifest, renderService, serviceLayout, type ExecutionMode, type ServiceManagerAdapter, type ServiceManifest, type ServiceManifestFilesystem, type ServicePlatform, type ServiceProvisioner } from "./service.js";
+import { assertManagedServiceManifest, createServiceManager, createServiceProvisioner, hostServiceManifestFilesystem, installServiceManifest, isManagedService, removeServiceManifest, renderService, serviceLayout, serviceProfilePath, type ExecutionMode, type ServiceManagerAdapter, type ServiceManifest, type ServiceManifestFilesystem, type ServicePlatform, type ServiceProvisioner } from "./service.js";
 
 export interface CliDependencies {
   readonly store?: ProfileStore;
@@ -32,6 +32,8 @@ export interface CliDependencies {
   readonly policyRevision?: () => Promise<{ readonly desired?: number; readonly applied?: number } | undefined>;
   /** Injectable exit-code seam for doctor failures; production sets process.exitCode. */
   readonly setExitCode?: (code: number) => void;
+  /** Injectable stdin source for the secret-safe `enroll --code-stdin` flow. */
+  readonly readStdin?: () => Promise<string>;
 }
 export interface EnrollCliDependencies {
   readonly store?: ProfileStore;
@@ -41,9 +43,56 @@ export interface EnrollCliDependencies {
   readonly servicePlatform?: ServicePlatform;
   readonly executionMode?: ExecutionMode;
   readonly confirmPrivilegedHost?: boolean;
+  /** Injectable stdin source for the secret-safe `enroll --code-stdin` flow. */
+  readonly readStdin?: () => Promise<string>;
 }
 interface ParsedCommand { readonly command: string; readonly json: boolean; readonly values: Record<string, string | boolean | string[]>; readonly passthrough: string[]; }
-const HELP = "usage: runmesh-runner <start|enroll|status|doctor|workspace|env|install|stop|restart|uninstall> [options]\nworkspace: list | add --path <directory> [--allow-edit] [--allow-host-shell --i-understand-host-shell-is-not-sandboxed] | remove --id <workspace-id> | migrate --management-mode <central|legacy_manual>";
+const HELP = "usage: runmesh-runner <start|enroll|status|doctor|workspace|env|install|stop|restart|uninstall> [options]\nenroll: --server <https-url> (--code <one-time-code> | --code-stdin)\nworkspace: list | add --path <directory> [--allow-edit] [--allow-host-shell --i-understand-host-shell-is-not-sandboxed] | remove --id <workspace-id> | migrate --management-mode <central|legacy_manual>";
+
+/**
+ * Read a one-time enrollment code without placing it in argv, a URL, or the
+ * shell command history. The first line is sufficient; EOF is also accepted
+ * for pipe-based installers. A caller can inject the source for tests and for
+ * hosts that provide a secret-input prompt of their own.
+ */
+async function enrollmentCode(parsed: ParsedCommand, readStdin?: () => Promise<string>): Promise<string> {
+  const fromArgument = typeof parsed.values.code === "string" ? parsed.values.code : undefined;
+  if (parsed.values.codeStdin === true && fromArgument !== undefined) throw new Error("--code and --code-stdin cannot be used together");
+  if (parsed.values.codeStdin !== true) return requiredString(parsed, "code");
+  const source = readStdin ?? readEnrollmentStdin;
+  const code = (await source()).trim();
+  if (code.length === 0) throw new Error("--code-stdin requires a one-time enrollment code");
+  return code;
+}
+
+function readEnrollmentStdin(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let value = "";
+    let settled = false;
+    const finish = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      process.stdin.pause();
+      process.stdin.removeListener("data", onData);
+      process.stdin.removeListener("error", onError);
+      process.stdin.removeListener("end", onEnd);
+      if (error === undefined) resolve(value); else reject(error);
+    };
+    const onData = (chunk: string | Buffer): void => {
+      value += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+      if (value.length > 512) { finish(new Error("--code-stdin input is too long")); return; }
+      const lineEnd = value.search(/[\r\n]/u);
+      if (lineEnd >= 0) { value = value.slice(0, lineEnd); finish(); }
+    };
+    const onError = (): void => finish(new Error("--code-stdin input could not be read"));
+    const onEnd = (): void => finish();
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", onData);
+    process.stdin.once("error", onError);
+    process.stdin.once("end", onEnd);
+    process.stdin.resume();
+  });
+}
 
 export async function runEnrollCli(argv: readonly string[], dependencies: EnrollCliDependencies = {}): Promise<void> {
   const output = dependencies.stdout ?? ((line) => process.stdout.write(`${line}\n`));
@@ -52,7 +101,7 @@ export async function runEnrollCli(argv: readonly string[], dependencies: Enroll
   const store = dependencies.store ?? storeFor(parsed, dependencies.servicePlatform);
   try {
     const result = await enrollRunner({
-      server: requiredString(parsed, "server"), code: requiredString(parsed, "code"), reEnroll: parsed.values.reEnroll === true, insecureLocal: parsed.values.insecureLocal === true,
+      server: requiredString(parsed, "server"), code: await enrollmentCode(parsed, dependencies.readStdin), reEnroll: parsed.values.reEnroll === true, insecureLocal: parsed.values.insecureLocal === true,
       ...(typeof parsed.values.executionMode === "string" ? { executionMode: parsed.values.executionMode as ExecutionMode } : dependencies.executionMode === undefined ? {} : { executionMode: dependencies.executionMode }),
       ...(parsed.values.confirmPrivilegedHost === true || dependencies.confirmPrivilegedHost === true ? { confirmPrivilegedHost: true } : {}),
       ...(typeof parsed.values.cwd === "string" ? { cwd: parsed.values.cwd } : {}),
@@ -73,7 +122,7 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
   try {
     if (parsed.command === "start") return start(parsed, store, error, dependencies);
     if (parsed.command === "enroll") {
-      const server = requiredString(parsed, "server"); const code = requiredString(parsed, "code");
+      const server = requiredString(parsed, "server"); const code = await enrollmentCode(parsed, dependencies.readStdin);
       const result = await enrollRunner({ server, code, reEnroll: parsed.values.reEnroll === true, insecureLocal: parsed.values.insecureLocal === true, ...(typeof parsed.values.executionMode === "string" ? { executionMode: parsed.values.executionMode as ExecutionMode } : {}), ...(parsed.values.confirmPrivilegedHost === true ? { confirmPrivilegedHost: true } : {}), ...(typeof parsed.values.cwd === "string" ? { cwd: parsed.values.cwd } : {}), store, ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch }) });
       report(output, parsed.json, { enrolled: true, runner_id: result.profile.runner_id, workspace_count: result.profile.workspaces.length });
       return;
@@ -258,8 +307,19 @@ async function serviceCommand(parsed: ParsedCommand, store: ProfileStore, output
   if (manager.platform !== manifest.platform || manager.mode !== manifest.mode) throw new Error("service manager does not match the requested service mode");
   if (parsed.command === "install") {
     assertSystemInstallationPrivilege(manifest, dependencies);
+    // A service manifest always points at the persisted Runner profile. Do not
+    // install/activate a service that is known to have no credentials; it
+    // would otherwise enter a restart loop and report a misleading success.
+    if (await store.load() === undefined) throw new Error("runner is not enrolled; run enroll before installing the service");
     const provisioner = dependencies.serviceProvisioner ?? createServiceProvisioner({ platform: manifest.platform });
     const provisioned = await provisioner.provision(manifest, store.filePath);
+    // Dedicated system services must be able to read the profile as the
+    // service identity. The native provisioners return false when the profile
+    // is absent (or could not be secured); fail before writing/activating the
+    // manifest instead of creating a service that cannot start.
+    if (manifest.mode === "system" && manifest.executionMode === "dedicated_user" && !provisioned.profileSecured) {
+      throw new Error(provisioned.detail ?? "Runner profile could not be secured for the dedicated service identity; enroll before installing the service");
+    }
     await installServiceManifest(manifest, dependencies.serviceFilesystem, { confirmPrivilegedHost: parsed.values.confirmPrivilegedHost === true });
     await manager.install(manifest);
     report(output, parsed.json, { action: "install", manifest: manifest.path, mode: manifest.mode, identity: provisioned.identity, profile_secured: provisioned.profileSecured, commands: serviceCommandNames("install", manifest) });
@@ -317,6 +377,7 @@ export function parseProductArgs(argv: readonly string[]): ParsedCommand {
     if (arg === "--re-enroll") { values.reEnroll = true; continue; }
     if (arg === "--user") { values.user = true; continue; }
     if (arg === "--confirm-privileged-host") { values.confirmPrivilegedHost = true; continue; }
+    if (arg === "--code-stdin") { values.codeStdin = true; continue; }
     const key = arg === "--execution-mode" ? "executionMode" : arg === "--management-mode" ? "managementMode" : arg === "--server" ? "server" : arg === "--code" ? "code" : arg === "--cwd" ? "cwd" : arg === "--id" ? "id" : arg === "--path" ? "path" : arg === "--executable-path" ? "executablePath" : arg === "--profile" ? "profilePath" : undefined;
     const value = rest[index + 1]; if (key === undefined || value === undefined || value.startsWith("--")) throw new Error(`unknown or incomplete option: ${arg}`);
     values[key] = value; index += 1;
@@ -327,7 +388,7 @@ function storeFor(parsed: ParsedCommand, platform?: ServicePlatform): ProfileSto
   if (typeof parsed.values.profilePath === "string") return new ProfileStore({ filePath: parsed.values.profilePath });
   if (parsed.values.user === true || process.env.CODING_RUNNER_PROFILE !== undefined) return new ProfileStore();
   const layout = serviceLayout({ ...(platform === undefined ? {} : { platform }), mode: "system" });
-  return new ProfileStore({ filePath: join(layout.configRoot, "profile.json") });
+  return new ProfileStore({ filePath: serviceProfilePath(layout) });
 }
 async function serviceManifestFor(parsed: ParsedCommand, store: ProfileStore, platform?: ServicePlatform): Promise<ServiceManifest> {
   const profile = await store.load();
@@ -368,11 +429,10 @@ function urlCheck(value: string, insecureLocal = false): { ok: boolean; detail?:
   try {
     const url = new URL(value);
     const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]";
-    return url.protocol === "wss:" || (url.protocol === "ws:" && loopback && insecureLocal) ? { ok: true } : { ok: false, detail: "wss:// is required except explicit loopback development" };
+    const safe = url.username === "" && url.password === "" && url.search === "" && url.hash === "";
+    return safe && (url.protocol === "wss:" || (url.protocol === "ws:" && loopback && insecureLocal)) ? { ok: true } : { ok: false, detail: "wss:// is required and URL credentials/query/fragment are not allowed" };
   } catch { return { ok: false, detail: "invalid URL" }; }
 }
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message.slice(0, 512) : String(error).slice(0, 512); }
 function formatMode(mode: number | undefined): string { return mode === undefined ? "missing" : `0${mode.toString(8)}`; }
 function installDisconnectControl(runner: RunnerConnection, file: string): void { let busy = false; const interval = setInterval(async () => { if (busy) return; busy = true; try { await access(file); await rm(file, { force: true }); runner.disconnectForTest(); } catch { /* absent */ } finally { busy = false; } }, 50); interval.unref(); }
-
-if (process.argv[1] !== undefined && (import.meta.url === new URL(`file://${process.argv[1]}`).href || process.env.RUNMESH_RUNNER_BUNDLE === "1")) runCli(process.argv.slice(2)).catch(() => { process.exitCode = 1; });
