@@ -98,7 +98,7 @@ MCP Tasks (`io.modelcontextprotocol/tasks`) is not claimed by this runtime. A fu
 Enrollment happens before the WebSocket protocol:
 
 1. The dashboard or Registry creates a 30-minute, single-use code for a Runner ID.
-2. `coding-runner enroll --server <https endpoint> --code <code>` sends the code and bounded public platform/version data to `POST /runner/enroll`.
+2. `coding-runner enroll --server <https endpoint> --code-stdin` reads the one-time code from stdin and sends it, along with bounded public platform/version data, to `POST /runner/enroll`.
 3. On one successful redemption, the Worker returns the Runner ID, WebSocket URL, and long-lived token; Registry stores only a peppered token verifier.
 4. `runner.hello` then authenticates the outbound Runner socket under that credential/version/epoch.
 

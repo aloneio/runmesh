@@ -11,14 +11,20 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: runmesh-release-${{ inputs.version }}
+  cancel-in-progress: false
+
 jobs:
   release:
     if: github.ref == 'refs/heads/dev'
     name: signed development preview from dev
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment:
+      name: release
     env:
       RELEASE_VERSION: ${{ inputs.version }}
-      RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
       RELEASE_SIGNING_KEY_ID: ${{ secrets.RELEASE_SIGNING_KEY_ID }}
     steps:
       - name: Check out triggering commit
@@ -26,6 +32,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -34,14 +41,23 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/dev"
+          test "$GITHUB_REPOSITORY" = "aloneio/runmesh"
           git fetch --no-tags origin dev
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           git merge-base --is-ancestor "$GITHUB_SHA" origin/dev
+          # A preview release is always for the current protected dev tip. Do
+          # not allow a manually dispatched run to publish an older ancestor
+          # after newer code has landed on the branch.
+          test "$(git rev-parse origin/dev)" = "$GITHUB_SHA"
           npm run generate:version
+          # The generated version module is committed release input, not a
+          # workflow-local mutation. Refuse to publish if the triggering commit
+          # left it stale; otherwise this step could silently release bytes that
+          # are not represented by GITHUB_SHA.
+          git diff --exit-code -- apps/worker/src/generated-version.ts
           npm run check:versions
           ROOT_VERSION="$(node -p 'require("./package.json").version')"
           test "$RELEASE_VERSION" = "$ROOT_VERSION"
-          test -n "$RELEASE_SIGNING_KEY"
           test -n "$RELEASE_SIGNING_KEY_ID"
           test "$(node -p 'require("./apps/runner/package.json").version')" = "$RELEASE_VERSION"
           test "$(node -p 'require("./apps/worker/package.json").version')" = "$RELEASE_VERSION"
@@ -50,6 +66,7 @@ jobs:
       - run: npm ci
       - run: npm run check:versions
       - run: npm run check:format
+      - run: git diff --check
       - run: npm run typecheck
       - run: npm run test:unit
       - run: npm run test:e2e
@@ -73,31 +90,103 @@ jobs:
           published_at="$(date --utc --date="@$(git log -1 --format=%ct)" +%Y-%m-%dT%H:%M:%SZ)"
           node scripts/release-manifest.mjs release/assets "$RELEASE_VERSION" "$(git rev-parse HEAD)" "$published_at"
       - name: Sign and verify manifest
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
         run: |
           set -euo pipefail
+          test -n "$RELEASE_SIGNING_KEY"
           node scripts/release-signature.mjs sign release/assets/manifest.json release/assets/manifest.sig release/assets/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
           node scripts/release-signature.mjs verify release/assets/manifest.json release/assets/manifest.sig release/assets/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
           cp release/trust-keyring.json LICENSE NOTICE THIRD_PARTY_NOTICES.md release/assets/
-          (cd release/assets && sha256sum *.tgz manifest.json > SHA256SUMS)
+          (cd release/assets && sha256sum *.tgz manifest.json manifest.sig manifest.signature.json LICENSE NOTICE THIRD_PARTY_NOTICES.md trust-keyring.json > SHA256SUMS)
+          # Verify the exact bytes that will be uploaded before creating the
+          # immutable tag/release. The post-publication check remains as an
+          # independent transport/infrastructure verification.
+          node scripts/release-verify.mjs release/assets/manifest.json release/assets/manifest.sig release/assets/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID" "$RELEASE_VERSION"
+          (cd release/assets && sha256sum -c SHA256SUMS)
       - name: Verify tag and release do not already exist
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          ! git rev-parse "refs/tags/v${RELEASE_VERSION}" >/dev/null 2>&1
-          ! gh release view "v${RELEASE_VERSION}" >/dev/null 2>&1
-      - name: Create annotated tag and development prerelease
+          test -n "$GH_TOKEN"
+          tag="v${RELEASE_VERSION}"
+          # A local tag check alone is racy and can miss tags that were created
+          # after checkout. Probe the remote API explicitly and treat only a
+          # genuine 404 as "does not exist"; auth, rate-limit, and transport
+          # failures must stop the release instead of being interpreted as an
+          # absent release.
+          api_status() {
+            local url="$1" status
+            if ! status="$(curl --silent --show-error --connect-timeout 10 --max-time 30 --output /dev/null --write-out '%{http_code}' \
+              --header "Accept: application/vnd.github+json" \
+              --header "Authorization: Bearer ${GH_TOKEN}" \
+              "$url")"; then
+              echo "GitHub API request failed: $url" >&2
+              return 1
+            fi
+            case "$status" in
+              2??|404) printf '%s\n' "$status" ;;
+              *) echo "GitHub API request returned HTTP $status: $url" >&2; return 1 ;;
+            esac
+          }
+          encoded_tag="$(node -p 'encodeURIComponent(process.argv[1])' "$tag")"
+          tag_status="$(api_status "https://api.github.com/repos/${GITHUB_REPOSITORY}/git/ref/tags/${encoded_tag}")"
+          if [ "$tag_status" != 404 ]; then
+            echo "Remote tag already exists: $tag" >&2
+            exit 1
+          fi
+          release_status="$(api_status "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${encoded_tag}")"
+          if [ "$release_status" != 404 ]; then
+            echo "GitHub Release already exists for tag: $tag" >&2
+            exit 1
+          fi
+      - name: Create annotated release tag
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git config user.name "aloneio"
-          git config user.email "git@aloneio.aleeas.com"
-          git tag -a "v${RELEASE_VERSION}" -m "Runmesh v${RELEASE_VERSION} development preview"
-          git push origin "v${RELEASE_VERSION}"
+          tag="v${RELEASE_VERSION}"
+          # gh release create creates a lightweight tag when the tag is absent.
+          # Preserve the established release contract by creating the annotated
+          # Git tag object and ref explicitly, while keeping checkout credentials
+          # disabled. This tag is annotated (the manifest remains the signed
+          # artifact trust root); no Git signing key is available in CI.
+          tag_object_sha="$(gh api --method POST \
+            --header 'Accept: application/vnd.github+json' \
+            "repos/${GITHUB_REPOSITORY}/git/tags" \
+            --field "tag=${tag}" \
+            --field "message=Runmesh ${tag} development preview" \
+            --field "object=${GITHUB_SHA}" \
+            --field 'type=commit' \
+            --jq '.sha')"
+          test "$tag_object_sha" = "${tag_object_sha,,}" \
+            && [[ "$tag_object_sha" =~ ^[0-9a-f]{40}$ ]]
+          ref_object_sha="$(gh api --method POST \
+            --header 'Accept: application/vnd.github+json' \
+            "repos/${GITHUB_REPOSITORY}/git/refs" \
+            --field "ref=refs/tags/${tag}" \
+            --field "sha=${tag_object_sha}" \
+            --jq '.object.sha')"
+          test "$ref_object_sha" = "$tag_object_sha"
+          target_sha="$(gh api \
+            --header 'Accept: application/vnd.github+json' \
+            "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object_sha}" \
+            --jq '.object.sha')"
+          target_type="$(gh api \
+            --header 'Accept: application/vnd.github+json' \
+            "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object_sha}" \
+            --jq '.object.type')"
+          test "$target_sha" = "$GITHUB_SHA"
+          test "$target_type" = commit
+      - name: Create development prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
           gh release create "v${RELEASE_VERSION}" release/assets/* \
             --repo "$GITHUB_REPOSITORY" \
-            --target "$(git rev-parse HEAD)" \
+            --verify-tag \
             --title "Runmesh v${RELEASE_VERSION}" \
             --prerelease \
             --notes-file docs/release-notes.md
@@ -109,6 +198,15 @@ jobs:
           mkdir release/download
           gh release download "v${RELEASE_VERSION}" --repo "$GITHUB_REPOSITORY" --dir release/download
           node scripts/release-verify.mjs release/download/manifest.json release/download/manifest.sig release/download/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID" "$RELEASE_VERSION"
+          GITHUB_SHA="$GITHUB_SHA" node --input-type=module -e '
+            import { readFile } from "node:fs/promises";
+            const manifest = JSON.parse(await readFile("release/download/manifest.json", "utf8"));
+            if (manifest.commit_sha !== process.env.GITHUB_SHA) {
+              throw new Error(`published manifest commit ${manifest.commit_sha} does not match triggering commit ${process.env.GITHUB_SHA}`);
+            }
+          '
+          # The downloaded keyring is checked byte-for-byte against the source
+          # checkout below; do not treat its unsigned checksum as a trust root.
           (cd release/download && grep -vE '(^|[[:space:]])trust-keyring\.json$' SHA256SUMS | sha256sum -c -)
           cmp release/download/trust-keyring.json release/trust-keyring.json
           RELEASE_VERSION="$RELEASE_VERSION" tar -xOf "release/download/runmesh-runner-${RELEASE_VERSION}.tgz" package/package.json | RELEASE_VERSION="$RELEASE_VERSION" node -e 'let x="";process.stdin.on("data",d=>x+=d).on("end",()=>{if(JSON.parse(x).version!==process.env.RELEASE_VERSION)process.exit(1)})'

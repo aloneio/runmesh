@@ -351,6 +351,41 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     const wrongSecret = await SELF.fetch("https://worker.test/not-a-valid-secret/mcp", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(toolsList()) });
     expect(wrongSecret.status).toBe(404);
 
+    // The MCP SDK has its own Content-Length check, but chunked requests can
+    // omit that header. Verify the Worker enforces the same bound while
+    // consuming the stream before handing it to request.json().
+    const oversizedMcpBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(4 * 1024 * 1024));
+        controller.enqueue(new Uint8Array(1));
+        controller.close();
+      },
+    });
+    const oversized = await SELF.fetch(secretUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+      body: oversizedMcpBody,
+    });
+    expect(oversized.status).toBe(413);
+
+    // A valid chunked request (without Content-Length) must still reach the
+    // SDK after the Worker buffers it for the bounded-body check.
+    const chunkedBytes = new TextEncoder().encode(JSON.stringify(toolsList()));
+    const chunkedMcpBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const midpoint = Math.max(1, Math.floor(chunkedBytes.byteLength / 2));
+        controller.enqueue(chunkedBytes.slice(0, midpoint));
+        controller.enqueue(chunkedBytes.slice(midpoint));
+        controller.close();
+      },
+    });
+    const chunked = await SELF.fetch(secretUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+      body: chunkedMcpBody,
+    });
+    expect(chunked.status).toBe(200);
+
     const list = await mcp(secretUrl, toolsList());
     expect(list.status).toBe(200);
     const listBody = await readMcp(list) as { result?: { tools?: { name: string }[] } };
@@ -417,7 +452,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(created.status).toBe(200);
     const enrollment = await created.text();
     expect(enrollment).toContain("Linux"); expect(enrollment).toContain("macOS"); expect(enrollment).toContain("Windows");
-    expect(enrollment).toContain("Manual portable-artifact enrollment"); expect(enrollment).toContain("coding-runner enroll"); expect(enrollment).toContain("coding-runner install"); expect(enrollment).not.toContain("curl -fsSL"); expect(enrollment).not.toContain("Invoke-RestMethod");
+    expect(enrollment).toContain("Manual portable-artifact enrollment"); expect(enrollment).toContain("RUNNER=/opt/runmesh/current/bin/coding-runner"); expect(enrollment).toContain("C:\\Program Files\\Runmesh\\current\\coding-runner.cmd"); expect(enrollment).toContain("--code-stdin"); expect(enrollment).toContain("One-time enrollment code"); expect(enrollment).not.toMatch(/--code [A-Za-z0-9_-]{20,}/u); expect(enrollment).toContain("--executable-path"); expect(enrollment).not.toContain("curl -fsSL"); expect(enrollment).not.toContain("Invoke-RestMethod");
     expect(enrollment).toContain("data-copy"); expect(enrollment).toContain("expires in 30 minutes");
     expect(enrollment).not.toContain("--re-enroll"); expect(enrollment).not.toContain("-ReEnroll");
     expect(enrollment).not.toContain("--runner-id"); expect(enrollment).not.toContain("ADMIN_TOKEN"); expect(enrollment).not.toMatch(/CODING_RUNNER_TOKEN|MCP_SECRET/i);

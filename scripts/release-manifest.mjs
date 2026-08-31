@@ -11,8 +11,19 @@ export const RELEASE_PROTOCOL_MIN = 2;
 export const RELEASE_PROTOCOL_MAX = 2;
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
-const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+// The release workflow is deliberately scoped to development previews. Keep
+// the SemVer numeric rules strict (no leading zeroes) and require the `dev`
+// prerelease lane so a stable version cannot be published accidentally from
+// the preview workflow.
+const SEMVER_IDENTIFIER = "(?:0|[1-9]\\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)";
+const SEMVER = new RegExp(`^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)-dev(?:\\.${SEMVER_IDENTIFIER})*(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$`);
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+function validTimestamp(value) {
+  return typeof value === "string"
+    && TIMESTAMP.test(value)
+    && !Number.isNaN(Date.parse(value))
+    && new Date(value).toISOString().replace(".000Z", "Z") === value;
+}
 
 export function releaseVersion(value) {
   if (typeof value !== "string" || !SEMVER.test(value)) throw new Error("release version is invalid");
@@ -28,7 +39,7 @@ export function releaseAssetUrl(version, name) {
 export async function buildManifest({ releaseDirectory, version = PRODUCT_VERSION, commitSha, publishedAt }) {
   if (version !== PRODUCT_VERSION) throw new Error(`release version must match root package.json (${PRODUCT_VERSION})`);
   if (!COMMIT_SHA.test(commitSha)) throw new Error("commit_sha must be a lowercase 40-character Git SHA");
-  if (!TIMESTAMP.test(publishedAt) || Number.isNaN(Date.parse(publishedAt))) throw new Error("published_at must be a UTC ISO timestamp without milliseconds");
+  if (!validTimestamp(publishedAt)) throw new Error("published_at must be a valid UTC ISO timestamp without milliseconds");
   const names = (await readdir(releaseDirectory)).filter((name) => name.endsWith(".tgz")).sort();
   const expectedName = releaseArtifactName(version);
   if (names.length !== 1 || names[0] !== expectedName) throw new Error(`release must contain exactly ${expectedName}`);
@@ -71,7 +82,7 @@ export function validateManifest(value, expectedVersion = value?.version) {
     || !COMMIT_SHA.test(value.commit_sha)
     || value.protocol_min !== RELEASE_PROTOCOL_MIN
     || value.protocol_max !== RELEASE_PROTOCOL_MAX
-    || !TIMESTAMP.test(value.published_at)
+    || !validTimestamp(value.published_at)
     || !Array.isArray(value.artifacts)
     || value.artifacts.length !== 1) {
     throw new Error("invalid Runmesh development manifest");

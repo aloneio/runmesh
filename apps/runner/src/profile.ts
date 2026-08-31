@@ -1,8 +1,9 @@
 import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, posix, win32 } from "node:path";
 import type { ExecutionMode } from "./service.js";
 import type { WorkspaceOption } from "./config.js";
+import type { HostPlatform } from "./platform-types.js";
 
 export type ProfileExecutionMode = ExecutionMode | "migration_required";
 /**
@@ -36,7 +37,7 @@ export interface RunnerProfile {
   /** Machine service identity. Omitted pre-release profiles require explicit migration before service installation. */
   readonly execution_mode?: ProfileExecutionMode;
 }
-export interface ProfileStoreOptions { readonly baseDir?: string; readonly filePath?: string; readonly platform?: NodeJS.Platform; readonly home?: string; }
+export interface ProfileStoreOptions { readonly baseDir?: string; readonly filePath?: string; readonly platform?: HostPlatform; readonly home?: string; }
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const MAX_WORKSPACES = 64;
 
@@ -44,9 +45,10 @@ export function profileDirectory(options: ProfileStoreOptions = {}): string {
   if (options.baseDir !== undefined) return options.baseDir;
   const platform = options.platform ?? process.platform;
   const home = options.home ?? homedir();
-  if (platform === "win32") return join(process.env.PROGRAMDATA ?? join(home, "AppData", "Local"), "Runmesh");
-  if (platform === "darwin") return join(home, "Library", "Application Support", "Runmesh");
-  return join(home, ".config", "runmesh");
+  const path = platform === "win32" ? win32 : posix;
+  if (platform === "win32") return path.join(process.env.PROGRAMDATA ?? path.join(home, "AppData", "Local"), "Runmesh");
+  if (platform === "darwin") return path.join(home, "Library", "Application Support", "Runmesh");
+  return path.join(home, ".config", "runmesh");
 }
 export function profilePath(options: ProfileStoreOptions = {}): string {
   if (options.filePath !== undefined) return options.filePath;
@@ -54,7 +56,8 @@ export function profilePath(options: ProfileStoreOptions = {}): string {
   // isolated without making profiles relative to the current workspace.
   if (options.baseDir === undefined && process.env.RUNMESH_RUNNER_PROFILE !== undefined) return process.env.RUNMESH_RUNNER_PROFILE;
   if (options.baseDir === undefined && process.env.CODING_RUNNER_PROFILE !== undefined) return process.env.CODING_RUNNER_PROFILE;
-  return join(profileDirectory(options), "profile.json");
+  const path = (options.platform ?? process.platform) === "win32" ? win32 : posix;
+  return path.join(profileDirectory(options), "profile.json");
 }
 
 export class ProfileStore {
@@ -94,7 +97,7 @@ export class ProfileStore {
 export function validateProfile(value: unknown): RunnerProfile | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const item = value as Record<string, unknown>;
-  if (item.version !== 1 || !validServerUrl(item.server_url, item.insecure_local === true) || !validString(item.runner_id, 1, 128) || !SAFE_ID.test(item.runner_id as string) || !validString(item.token, 16, 4_096)) return undefined;
+  if (item.version !== 1 || !validServerUrl(item.server_url, item.insecure_local === true) || !validString(item.runner_id, 1, 128) || !SAFE_ID.test(item.runner_id as string) || !validString(item.token, 16, 4_096) || /\s/.test(item.token as string)) return undefined;
   if (!Array.isArray(item.workspaces) || item.workspaces.length > MAX_WORKSPACES) return undefined;
   const workspaces: StoredWorkspace[] = [];
   const seen = new Set<string>();
@@ -131,7 +134,8 @@ function validServerUrl(value: unknown, insecureLocal: boolean): value is string
   try {
     const url = new URL(value);
     const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]";
-    return url.protocol === "wss:" || (url.protocol === "ws:" && loopback && insecureLocal);
+    const safe = url.username === "" && url.password === "" && url.search === "" && url.hash === "";
+    return safe && (url.protocol === "wss:" || (url.protocol === "ws:" && loopback && insecureLocal));
   } catch { return false; }
 }
 function isErrno(error: unknown, code: string): boolean { return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === code; }

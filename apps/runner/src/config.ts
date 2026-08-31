@@ -74,6 +74,9 @@ export async function validateRunnerConfig(options: RawRunnerOptions): Promise<R
   if (parsedServer.protocol !== "wss:" && !(loopback && options.insecureLocal === true)) {
     throw new Error("wss:// is required; use --insecure-local only for loopback ws://");
   }
+  if (parsedServer.username !== "" || parsedServer.password !== "" || parsedServer.search !== "" || parsedServer.hash !== "") {
+    throw new Error("--server must not contain credentials, query parameters, or a fragment");
+  }
   if (token === undefined || token.length < 16 || /[\s]/.test(token)) throw new Error("--token must be at least 16 non-whitespace characters");
   if (runnerId === undefined || !SAFE_ID.test(runnerId)) throw new Error("--runner-id must be a safe protocol identifier");
   if (options.maxConcurrentJobs !== undefined && (!Number.isSafeInteger(options.maxConcurrentJobs) || options.maxConcurrentJobs < 1 || options.maxConcurrentJobs > 64)) {

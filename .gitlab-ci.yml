@@ -51,7 +51,7 @@ cloudflare_deploy:
     - npm ci
     - npm run check:versions
     - npm run typecheck
-    - npx wrangler deploy --config apps/worker/wrangler.jsonc --strict
+    - npm exec --offline -- wrangler deploy --config apps/worker/wrangler.jsonc --strict
   environment:
     name: production
   resource_group: cloudflare-production

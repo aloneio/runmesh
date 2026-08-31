@@ -5,5 +5,9 @@ coverage/
 *.tsbuildinfo
 .env
 .env.*
+.dev.vars
+.dev.vars.*
+release/assets/
+release/download/
 .DS_Store
 .pi-loop.json.lock

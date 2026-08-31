@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { hostname } from "node:os";
-import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS, type JobMetadata } from "@aloneio/runmesh-protocol";
+import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS } from "@aloneio/runmesh-protocol";
 import type { RunnerConfig } from "./config.js";
 import { GitService } from "./git-service.js";
 import { FilesystemService } from "./filesystem.js";
@@ -8,6 +8,8 @@ import { JobManager, type JobEvent, type JobRecord } from "./jobs.js";
 import { PatchService } from "./patch-service.js";
 import { PathPolicy, PathPolicyError } from "./path-policy.js";
 import { RpcRuntimeError } from "./errors.js";
+import type { JobMetadata } from "./protocol-types.js";
+import type { HostPlatform } from "./platform-types.js";
 
 export interface ShellRuntime {
   readonly kind: "bash" | "powershell";
@@ -17,21 +19,28 @@ export interface ShellRuntime {
 }
 
 export interface ShellRuntimeOptions {
-  readonly platform?: NodeJS.Platform;
+  readonly platform?: HostPlatform;
   readonly probe?: (command: string, args: readonly string[]) => Promise<string | undefined>;
 }
 
+// PowerShell cold-starts are materially slower than the other local probes on
+// Windows (especially on CI or a freshly provisioned host). Keep generic tool
+// discovery fast, but give shell discovery enough time to avoid reporting a
+// false `shell_unavailable` result while the executable is still starting.
+const GENERAL_PROBE_TIMEOUT_MS = 1_000;
+const SHELL_PROBE_TIMEOUT_MS = 5_000;
+
 export async function discoverShellRuntime(options: ShellRuntimeOptions = {}): Promise<ShellRuntime | undefined> {
   const platform = options.platform ?? process.platform;
-  const probe = options.probe ?? probeVersion;
+  const probe = options.probe ?? ((command, args) => probeVersion(command, args, SHELL_PROBE_TIMEOUT_MS));
   const candidates = platform === "win32"
     ? [["pwsh.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"]] as const, ["powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"]] as const]
     : [["/bin/bash", ["--version"]] as const, ["/usr/bin/bash", ["--version"]] as const];
   for (const [executable, args] of candidates) {
     const version = await probe(executable, args);
     if (version === undefined) continue;
-    if (platform === "win32") return { kind: "powershell", executable, ...(version === undefined ? {} : { version: version.slice(0, 512) }), buildInvocation: (command) => ({ file: executable, args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command] }) };
-    return { kind: "bash", executable, ...(version === undefined ? {} : { version: version.split("\n", 1)[0]?.slice(0, 512) }), buildInvocation: (command) => ({ file: executable, args: ["-lc", command] }) };
+    if (platform === "win32") return { kind: "powershell", executable, ...(version === undefined ? {} : { version: version.trim().slice(0, 512) }), buildInvocation: (command) => ({ file: executable, args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command] }) };
+    return { kind: "bash", executable, ...(version === undefined ? {} : { version: version.trim().split("\n", 1)[0]?.slice(0, 512) }), buildInvocation: (command) => ({ file: executable, args: ["-lc", command] }) };
   }
   return undefined;
 }
@@ -68,7 +77,7 @@ export class EnvironmentInfoService {
 }
 async function discoveredTool(probe: (command: string, args: readonly string[]) => Promise<string | undefined>, command: string, args: readonly string[]): Promise<EnvironmentToolInfo> { const version = await probe(command, args); return version === undefined ? { available: false } : { available: true, version }; }
 async function firstDiscoveredTool(probe: (command: string, args: readonly string[]) => Promise<string | undefined>, candidates: readonly (readonly [string, readonly string[]])[]): Promise<EnvironmentToolInfo> { for (const [command, args] of candidates) { const result = await discoveredTool(probe, command, args); if (result.available) return result; } return { available: false }; }
-function probeVersion(command: string, args: readonly string[]): Promise<string | undefined> { return new Promise((resolve) => { let settled = false; let output = ""; const child = spawn(command, [...args], { shell: false, stdio: ["ignore", "pipe", "pipe"], windowsHide: true }); const finish = (value: string | undefined): void => { if (settled) return; settled = true; clearTimeout(timer); resolve(value); }; const timer = setTimeout(() => { child.kill("SIGKILL"); finish(undefined); }, 1_000); const collect = (chunk: Buffer): void => { output = `${output}${chunk.toString()}`.slice(0, 1_024); }; child.stdout?.on("data", collect); child.stderr?.on("data", collect); child.once("error", () => finish(undefined)); child.once("close", (code) => finish(code === 0 ? output.trim().slice(0, 512) || undefined : undefined)); }); }
+function probeVersion(command: string, args: readonly string[], timeoutMs = GENERAL_PROBE_TIMEOUT_MS): Promise<string | undefined> { return new Promise((resolve) => { let settled = false; let output = ""; const child = spawn(command, [...args], { shell: false, stdio: ["ignore", "pipe", "pipe"], windowsHide: true }); const finish = (value: string | undefined): void => { if (settled) return; settled = true; clearTimeout(timer); resolve(value); }; const timer = setTimeout(() => { child.kill("SIGKILL"); finish(undefined); }, timeoutMs); const collect = (chunk: Buffer): void => { output = `${output}${chunk.toString()}`.slice(0, 1_024); }; child.stdout?.on("data", collect); child.stderr?.on("data", collect); child.once("error", () => finish(undefined)); child.once("close", (code) => finish(code === 0 ? output.trim().slice(0, 512) || undefined : undefined)); }); }
 
 export interface RunnerRuntimeOptions {
   readonly config: RunnerConfig;
@@ -142,7 +151,9 @@ export class RunnerRuntime {
     }
   }
   public async syncJobs(): Promise<JobMetadata[]> {
-    return (await this.jobs.listReconciled({ limit: 100 })).map((job) => ({ job_id: job.job_id, workspace_id: job.workspace_id, status: job.status, created_at_ms: job.created_at_ms, updated_at_ms: job.updated_at_ms, ...(job.created_by_client_id === null ? {} : { created_by_client_id: job.created_by_client_id }), runner_id: this.config.runnerId }));
+    const jobs = await this.jobs.listReconciled({ limit: 100 });
+    await this.jobs.flushPersistence();
+    return jobs.map((job) => ({ job_id: job.job_id, workspace_id: job.workspace_id, status: job.status, created_at_ms: job.created_at_ms, updated_at_ms: job.updated_at_ms, ...(job.created_by_client_id === null ? {} : { created_by_client_id: job.created_by_client_id }), runner_id: this.config.runnerId }));
   }
   private assertJobsReadable(workspaceId: unknown): void {
     if (workspaceId === undefined) {

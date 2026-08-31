@@ -14,13 +14,18 @@ export async function readCappedBytes(request: Request, maxBytes: number): Promi
       if (next.done) break;
       size += next.value.byteLength;
       if (size > maxBytes) {
-        await reader.cancel();
+        await cancelReader(reader);
         return undefined;
       }
       chunks.push(next.value);
     }
   } catch {
+    // A failed stream may still hold an underlying source. Best-effort
+    // cancellation keeps malformed/disconnected requests from lingering.
+    await cancelReader(reader);
     return undefined;
+  } finally {
+    try { reader.releaseLock(); } catch { /* already released */ }
   }
   const bytes = new Uint8Array(size);
   let offset = 0;
@@ -43,7 +48,7 @@ export async function readCappedText(request: Request, maxBytes: number): Promis
 
 export async function readCappedFormData(request: Request, maxBytes: number): Promise<FormData | undefined> {
   const contentTypeHeader = request.headers.get("content-type") ?? "";
-  const [rawType, ...parameters] = contentTypeHeader.split(";");
+  const rawType = contentTypeHeader.split(";", 1)[0] ?? "";
   const contentType = (rawType ?? "").trim().toLowerCase();
   const body = await readCappedBytes(request, maxBytes);
   if (body === undefined) return undefined;
@@ -58,16 +63,21 @@ export async function readCappedFormData(request: Request, maxBytes: number): Pr
     }
   }
   if (contentType !== "multipart/form-data") return undefined;
-  const boundary = parameters.map((parameter) => parameter.trim()).find((parameter) => parameter.toLowerCase().startsWith("boundary="))?.slice("boundary=".length).trim();
-  if (boundary === undefined || boundary.length === 0) return undefined;
   try {
-    const headers = new Headers({ "content-type": `multipart/form-data; boundary=${boundary}` });
+    // Preserve the complete media-type header. In particular, RFC-compliant
+    // quoted boundaries (and semicolons inside a quoted boundary) must not be
+    // split or passed through with their quotes stripped incorrectly.
+    const headers = new Headers({ "content-type": contentTypeHeader });
     const parsed = await new Request(request.url, { method: "POST", headers, body: body.buffer as ArrayBuffer }).formData();
     for (const value of parsed.values()) if (typeof value !== "string") return undefined;
     return parsed;
   } catch {
     return undefined;
   }
+}
+
+async function cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
+  try { await reader.cancel(); } catch { /* cancellation is best effort */ }
 }
 
 async function cancelBody(request: Request): Promise<void> {

@@ -4,11 +4,12 @@ import { generateKeyPairSync } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { buildManifest, releaseArtifactName, releaseTag, validateManifest } from "../scripts/release-manifest.mjs";
 import { verifyReleaseAssets } from "../scripts/release-verify.mjs";
 import { signReleaseManifest, verifyReleaseManifest } from "../scripts/release-signature.mjs";
 
-const repositoryRoot = resolve(new URL("..", import.meta.url).pathname);
+const repositoryRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const productVersion = JSON.parse(await readFile(join(repositoryRoot, "package.json"), "utf8")).version;
 async function fixture() { const root = await mkdtemp(join(tmpdir(), "runmesh-release-tools-")); return { root, cleanup: () => rm(root, { recursive: true, force: true }) }; }
 
@@ -16,12 +17,22 @@ test("pins manually-dispatched releases to the triggering dev commit", async () 
   const workflow = await readFile(join(repositoryRoot, ".github", "workflows", "release.yml"), "utf8");
   assert.equal(workflow.includes("if: github.ref == 'refs/heads/dev'"), true);
   assert.equal(workflow.includes("ref: ${{ github.sha }}"), true);
+  assert.equal(workflow.includes("timeout-minutes: 45"), true);
+  assert.equal(workflow.includes('test "$GITHUB_REPOSITORY" = "aloneio/runmesh"'), true);
   assert.equal(workflow.includes('test "$GITHUB_REF" = "refs/heads/dev"'), true);
   assert.equal(workflow.includes('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"'), true);
+  assert.equal(workflow.includes('test "$(git rev-parse origin/dev)" = "$GITHUB_SHA"'), true);
+  assert.equal(workflow.includes("https://api.github.com/repos/"), true);
+  assert.equal(workflow.includes('test -n "$GH_TOKEN"'), true);
   assert.equal(workflow.includes("node scripts/release-verify.mjs release/download/manifest.json"), true);
+  assert.equal(workflow.includes("does not match triggering commit"), true);
+  assert.equal(workflow.includes("RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}\n    RELEASE_SIGNING_KEY_ID"), false);
+  assert.equal(workflow.includes("env:\n          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}"), true);
   assert.equal(workflow.includes("release/download/trust-keyring.json \"$RELEASE_SIGNING_KEY_ID\""), false);
   assert.equal(workflow.includes("cmp release/download/trust-keyring.json release/trust-keyring.json"), true);
-  assert.equal(workflow.includes("sha256sum *.tgz manifest.json > SHA256SUMS"), true);
+  assert.equal(workflow.includes("sha256sum *.tgz manifest.json manifest.sig manifest.signature.json LICENSE NOTICE THIRD_PARTY_NOTICES.md trust-keyring.json > SHA256SUMS"), true);
+  assert.equal(workflow.includes("node scripts/release-verify.mjs release/assets/manifest.json release/assets/manifest.sig"), true);
+  assert.equal(workflow.includes("(cd release/assets && sha256sum -c SHA256SUMS)"), true);
 });
 
 test("builds a single portable development artifact manifest from the product version", async () => {
@@ -42,6 +53,9 @@ test("builds a single portable development artifact manifest from the product ve
       sha256: "949071a9bf3f3499241d75a0b5e93ac800158e12d3a456f8520c315f4cd6c07f",
     });
     assert.throws(() => validateManifest({ ...manifest, tag: `v${productVersion}-tampered` }, productVersion));
+    assert.throws(() => validateManifest({ ...manifest, published_at: "2026-02-30T00:00:00Z" }, productVersion), /invalid Runmesh development manifest/);
+    assert.throws(() => releaseTag("1.2.3"), /release version is invalid/);
+    assert.throws(() => releaseTag("01.2.3-dev.1"), /release version is invalid/);
     await assert.rejects(buildManifest({ releaseDirectory: f.root, version: "9.9.9", commitSha: "a".repeat(40), publishedAt: "2026-08-27T00:00:00Z" }), /must match root package\.json/);
   } finally { await f.cleanup(); }
 });
