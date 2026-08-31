@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { dirname } from "node:path";
 import { hostname } from "node:os";
 import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS } from "@aloneio/runmesh-protocol";
 import type { RunnerConfig } from "./config.js";
@@ -10,6 +11,7 @@ import { PathPolicy, PathPolicyError } from "./path-policy.js";
 import { RpcRuntimeError } from "./errors.js";
 import type { JobMetadata } from "./protocol-types.js";
 import type { HostPlatform } from "./platform-types.js";
+import { trustedWindowsEnvironment, trustedWindowsRoot, resolveTrustedWindowsTool } from "./windows-tools.js";
 
 export interface ShellRuntime {
   readonly kind: "bash" | "powershell";
@@ -34,7 +36,13 @@ export async function discoverShellRuntime(options: ShellRuntimeOptions = {}): P
   const platform = options.platform ?? process.platform;
   const probe = options.probe ?? ((command, args) => probeVersion(command, args, SHELL_PROBE_TIMEOUT_MS));
   const candidates = platform === "win32"
-    ? [["pwsh.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"]] as const, ["powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"]] as const]
+    // The injectable probe is retained for deterministic tests and trusted
+    // embedders.  Production discovery uses the absolute inbox PowerShell
+    // path; a bare `powershell.exe` would search a caller-controlled cwd/PATH
+    // before the system directory during Runner startup.
+    ? (options.probe === undefined
+      ? [[resolveTrustedWindowsTool("powershell", trustedWindowsRoot()), ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"]] as const]
+      : [["pwsh.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"]] as const, ["powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"]] as const])
     : [["/bin/bash", ["--version"]] as const, ["/usr/bin/bash", ["--version"]] as const];
   for (const [executable, args] of candidates) {
     const version = await probe(executable, args);
@@ -77,7 +85,51 @@ export class EnvironmentInfoService {
 }
 async function discoveredTool(probe: (command: string, args: readonly string[]) => Promise<string | undefined>, command: string, args: readonly string[]): Promise<EnvironmentToolInfo> { const version = await probe(command, args); return version === undefined ? { available: false } : { available: true, version }; }
 async function firstDiscoveredTool(probe: (command: string, args: readonly string[]) => Promise<string | undefined>, candidates: readonly (readonly [string, readonly string[]])[]): Promise<EnvironmentToolInfo> { for (const [command, args] of candidates) { const result = await discoveredTool(probe, command, args); if (result.available) return result; } return { available: false }; }
-function probeVersion(command: string, args: readonly string[], timeoutMs = GENERAL_PROBE_TIMEOUT_MS): Promise<string | undefined> { return new Promise((resolve) => { let settled = false; let output = ""; const child = spawn(command, [...args], { shell: false, stdio: ["ignore", "pipe", "pipe"], windowsHide: true }); const finish = (value: string | undefined): void => { if (settled) return; settled = true; clearTimeout(timer); resolve(value); }; const timer = setTimeout(() => { child.kill("SIGKILL"); finish(undefined); }, timeoutMs); const collect = (chunk: Buffer): void => { output = `${output}${chunk.toString()}`.slice(0, 1_024); }; child.stdout?.on("data", collect); child.stderr?.on("data", collect); child.once("error", () => finish(undefined)); child.once("close", (code) => finish(code === 0 ? output.trim().slice(0, 512) || undefined : undefined)); }); }
+function probeVersion(command: string, args: readonly string[], timeoutMs = GENERAL_PROBE_TIMEOUT_MS): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let output = "";
+    // Environment discovery is a diagnostic operation, but it still starts
+    // processes.  Never inherit Runner credentials, NODE_OPTIONS, or a
+    // workspace-controlled PATH/cwd into these probes.  The fixed PATH keeps
+    // bare tool names useful for standard installations while preventing a
+    // same-name executable in the workspace from running during startup or
+    // `env.info`.
+    const child = spawn(command, [...args], {
+      cwd: trustedProbeCwd(),
+      env: trustedProbeEnvironment(),
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    const finish = (value: string | undefined): void => { if (settled) return; settled = true; clearTimeout(timer); resolve(value); };
+    const timer = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* already exited */ } finish(undefined); }, timeoutMs);
+    const collect = (chunk: Buffer): void => { output = `${output}${chunk.toString()}`.slice(0, 1_024); };
+    child.stdout?.on("data", collect);
+    child.stderr?.on("data", collect);
+    child.once("error", () => finish(undefined));
+    child.once("close", (code) => finish(code === 0 ? output.trim().slice(0, 512) || undefined : undefined));
+  });
+}
+
+function trustedProbeCwd(): string {
+  return process.platform === "win32" ? `${trustedWindowsRoot()}\\System32` : "/";
+}
+
+function trustedProbeEnvironment(): NodeJS.ProcessEnv {
+  if (process.platform === "win32") {
+    const root = trustedWindowsRoot();
+    const base = trustedWindowsEnvironment(root);
+    // npm.cmd is normally beside node.exe.  Keep that one trusted install
+    // location available without restoring the caller's arbitrary PATH.
+    const nodeDirectory = dirname(process.execPath);
+    const path = `${nodeDirectory};${root}\\System32;${root}\\System32\\Wbem;${root}\\System32\\WindowsPowerShell\\v1.0`;
+    return { ...base, Path: path, PATH: path, TEMP: `${root}\\Temp`, TMP: `${root}\\Temp`, NPM_CONFIG_IGNORE_SCRIPTS: "true", NPM_CONFIG_AUDIT: "false", NPM_CONFIG_FUND: "false", NPM_CONFIG_USERCONFIG: "NUL", NPM_CONFIG_GLOBALCONFIG: "NUL" };
+  }
+  const nodeDirectory = dirname(process.execPath);
+  const path = `${nodeDirectory}:/usr/bin:/bin`;
+  return { PATH: path, Path: path, LANG: "C", LC_ALL: "C", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_ATTR_NOSYSTEM: "1", GIT_OPTIONAL_LOCKS: "0", GIT_PAGER: "cat", GIT_TERMINAL_PROMPT: "0", GIT_EXTERNAL_DIFF: "", NPM_CONFIG_IGNORE_SCRIPTS: "true", NPM_CONFIG_AUDIT: "false", NPM_CONFIG_FUND: "false", NPM_CONFIG_USERCONFIG: "/dev/null", NPM_CONFIG_GLOBALCONFIG: "/dev/null" };
+}
 
 export interface RunnerRuntimeOptions {
   readonly config: RunnerConfig;

@@ -87,6 +87,149 @@ describe("runner product profile and enrollment", () => {
       await expect(runEnrollCli(["--server", "https://example.test/runner/enroll", "--code", code, "--code-stdin"], { store: test.store, readStdin: async () => code })).rejects.toThrow("cannot be used together");
     } finally { await test.cleanup(); }
   });
+  it("removes the profile when post-enrollment activation fails after irreversible redemption", async () => {
+    const test = await fixture();
+    try {
+      const original = profile(join(test.root, "workspace"));
+      const errors: string[] = [];
+      await test.store.save(original);
+      await expect(runCli(["enroll", "--server", "https://example.test/runner/enroll", "--code-stdin", "--re-enroll"], {
+        store: test.store,
+        readStdin: async () => `${"c".repeat(43)}\n`,
+        afterEnroll: async () => { throw new Error("post-enrollment activation failed"); },
+        stderr: (line) => errors.push(line),
+        fetch: async () => new Response(JSON.stringify({ runner_id: "rollback-runner", server_url: "https://example.test/runner/connect", token: "rollback-token-0123456789" }), { status: 200 }),
+      })).rejects.toThrow("post-enrollment activation failed");
+      await expect(test.store.load()).resolves.toBeUndefined();
+      expect(errors.join("\n")).toContain("credentials were consumed");
+      expect(errors.join("\n")).toContain("generate a new enrollment code");
+    } finally { await test.cleanup(); }
+  });
+
+  it("does not remove a profile replaced by a concurrent enrollment during cleanup", async () => {
+    const test = await fixture();
+    try {
+      await test.store.save(profile(join(test.root, "workspace")));
+      await expect(runCli(["enroll", "--server", "https://example.test/runner/enroll", "--code", "c".repeat(43), "--re-enroll"], {
+        store: test.store,
+        afterEnroll: async () => {
+          await test.store.save({ ...profile(join(test.root, "workspace")), runner_id: "concurrent-runner", token: "concurrent-token-0123456789" });
+          throw new Error("post-enrollment activation failed");
+        },
+        fetch: async () => new Response(JSON.stringify({ runner_id: "first-runner", server_url: "https://example.test/runner/connect", token: "first-token-0123456789" }), { status: 200 }),
+      })).rejects.toThrow("post-enrollment activation failed");
+      await expect(test.store.load()).resolves.toMatchObject({ runner_id: "concurrent-runner", token: "concurrent-token-0123456789" });
+    } finally { await test.cleanup(); }
+  });
+
+  it("clears a stale profile and reports an unknown outcome when enrollment transport fails", async () => {
+    const test = await fixture();
+    try {
+      await test.store.save(profile(join(test.root, "workspace")));
+      const errors: string[] = [];
+      await expect(runCli(["enroll", "--server", "https://example.test/runner/enroll", "--code", "d".repeat(43), "--re-enroll"], {
+        store: test.store,
+        stderr: (line) => errors.push(line),
+        fetch: async () => { throw new Error("socket reset"); },
+      })).rejects.toThrow("outcome is unknown");
+      await expect(test.store.load()).resolves.toBeUndefined();
+      expect(errors.join("\n")).toContain("local profile was removed");
+      expect(errors.join("\n")).toContain("generate a new enrollment code");
+    } finally { await test.cleanup(); }
+  });
+
+  it("preserves a profile written by a concurrent enrollment after an unknown response", async () => {
+    const test = await fixture();
+    try {
+      await test.store.save(profile(join(test.root, "workspace")));
+      await expect(runCli(["enroll", "--server", "https://example.test/runner/enroll", "--code", "d".repeat(43), "--re-enroll"], {
+        store: test.store,
+        fetch: async () => {
+          await test.store.save({ ...profile(join(test.root, "workspace")), runner_id: "concurrent-runner", token: "concurrent-token-0123456789" });
+          throw new Error("socket reset");
+        },
+      })).rejects.toThrow("outcome is unknown");
+      await expect(test.store.load()).resolves.toMatchObject({ runner_id: "concurrent-runner", token: "concurrent-token-0123456789" });
+    } finally { await test.cleanup(); }
+  });
+
+  it("keeps the previous profile for a definitive enrollment rejection", async () => {
+    const test = await fixture();
+    try {
+      const original = profile(join(test.root, "workspace"));
+      await test.store.save(original);
+      const errors: string[] = [];
+      await expect(runEnrollCli(["--server", "https://example.test/runner/enroll", "--code", "e".repeat(43), "--re-enroll"], {
+        store: test.store,
+        stderr: (line) => errors.push(line),
+        fetch: async () => new Response("invalid enrollment", { status: 401 }),
+      })).rejects.toThrow("enrollment failed (401)");
+      await expect(test.store.load()).resolves.toMatchObject({ runner_id: original.runner_id, token: original.token });
+      expect(errors).toEqual(["enrollment failed (401)"]);
+    } finally { await test.cleanup(); }
+  });
+
+  it("keeps the profile when another enrollment already owns the Runner fence", async () => {
+    const test = await fixture();
+    try {
+      const original = profile(join(test.root, "workspace"));
+      await test.store.save(original);
+      const errors: string[] = [];
+      await expect(runEnrollCli(["--server", "https://example.test/runner/enroll", "--code", "g".repeat(43), "--re-enroll"], {
+        store: test.store,
+        stderr: (line) => errors.push(line),
+        fetch: async () => new Response("Runner credential mutation is already in progress", { status: 409 }),
+      })).rejects.toThrow("already in progress");
+      await expect(test.store.load()).resolves.toMatchObject({ runner_id: original.runner_id, token: original.token });
+      expect(errors).toEqual(["enrollment is already in progress for this Runner; wait for it to finish and retry"]);
+    } finally { await test.cleanup(); }
+  });
+
+  it("treats redirects as an unknown enrollment outcome", async () => {
+    const test = await fixture();
+    try {
+      await test.store.save(profile(join(test.root, "workspace")));
+      const errors: string[] = [];
+      await expect(runEnrollCli(["--server", "https://example.test/runner/enroll", "--code", "h".repeat(43), "--re-enroll"], {
+        store: test.store,
+        stderr: (line) => errors.push(line),
+        fetch: async () => new Response(null, { status: 302, headers: { location: "https://example.test/runner/enroll" } }),
+      })).rejects.toThrow("outcome is unknown");
+      await expect(test.store.load()).resolves.toBeUndefined();
+      expect(errors.join("\n")).toContain("local profile was removed");
+    } finally { await test.cleanup(); }
+  });
+
+  it("treats an invalid response status as an unknown enrollment outcome", async () => {
+    const test = await fixture();
+    try {
+      await test.store.save(profile(join(test.root, "workspace")));
+      const errors: string[] = [];
+      const invalidStatus = { ok: false, status: 0 } as Response;
+      await expect(runEnrollCli(["--server", "https://example.test/runner/enroll", "--code", "i".repeat(43), "--re-enroll"], {
+        store: test.store,
+        stderr: (line) => errors.push(line),
+        fetch: async () => invalidStatus,
+      })).rejects.toThrow("outcome is unknown");
+      await expect(test.store.load()).resolves.toBeUndefined();
+      expect(errors.join("\n")).toContain("local profile was removed");
+    } finally { await test.cleanup(); }
+  });
+
+  it("clears the previous profile when a success response cannot be trusted", async () => {
+    const test = await fixture();
+    try {
+      await test.store.save(profile(join(test.root, "workspace")));
+      const errors: string[] = [];
+      await expect(runEnrollCli(["--server", "https://example.test/runner/enroll", "--code", "f".repeat(43), "--re-enroll"], {
+        store: test.store,
+        stderr: (line) => errors.push(line),
+        fetch: async () => new Response("not-json", { status: 200 }),
+      })).rejects.toThrow("outcome is unknown");
+      await expect(test.store.load()).resolves.toBeUndefined();
+      expect(errors.join("\n")).toContain("local profile was removed");
+    } finally { await test.cleanup(); }
+  });
 
   it("rejects cleartext enrollment except explicit loopback development", async () => {
     const test = await fixture();

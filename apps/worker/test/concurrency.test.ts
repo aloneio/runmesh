@@ -6,7 +6,7 @@ interface Admission {
   fenced: boolean; reconciled: boolean; runnerId: string | null;
   activeRevision: number | null; activeChecksum: string | null;
   desiredRevision: number | null; desiredChecksum: string | null;
-  connectionEpoch: number | null; credentialVersion: number | null; sessionId: string | null;
+  connectionEpoch: number | null; credentialVersion: number | null; lifecycleId: string | null; sessionId: string | null;
   mutationId: string | null; mutationPhase: "idle" | "precommit" | "committed_pending" | "offline_pending" | "invalid" | "restart_reconcile";
   preMutationActiveRevision: number | null; preMutationActiveChecksum: string | null;
   preMutationDesiredRevision: number | null; preMutationDesiredChecksum: string | null;
@@ -24,12 +24,12 @@ interface TestRunnerDO {
 
 const runnerId = "race-runner";
 const checksum = "a".repeat(64);
-const attachment = { runnerId, sessionId: "session-7", epoch: 7, credentialVersion: 3, protocolVersion: PROTOCOL_CURRENT_VERSION, authenticated: true, helloDeadlineMs: Date.now() + 60_000 };
+const attachment = { runnerId, sessionId: "session-7", epoch: 7, credentialVersion: 3, lifecycleId: "lifecycle-race-7", protocolVersion: PROTOCOL_CURRENT_VERSION, authenticated: true, helloDeadlineMs: Date.now() + 60_000 };
 function state(mutationId: string, mutationPhase: Admission["mutationPhase"] = "committed_pending"): Admission {
-  return { fenced: true, reconciled: false, runnerId, activeRevision: null, activeChecksum: null, desiredRevision: 8, desiredChecksum: checksum, connectionEpoch: 7, credentialVersion: 3, sessionId: "session-7", mutationId, mutationPhase, preMutationActiveRevision: 7, preMutationActiveChecksum: checksum, preMutationDesiredRevision: 7, preMutationDesiredChecksum: checksum, lastReconciledAtMs: null };
+  return { fenced: true, reconciled: false, runnerId, activeRevision: null, activeChecksum: null, desiredRevision: 8, desiredChecksum: checksum, connectionEpoch: 7, credentialVersion: 3, lifecycleId: "lifecycle-race-7", sessionId: "session-7", mutationId, mutationPhase, preMutationActiveRevision: 7, preMutationActiveChecksum: checksum, preMutationDesiredRevision: 7, preMutationDesiredChecksum: checksum, lastReconciledAtMs: null };
 }
 function readyState(): Admission {
-  return { fenced: false, reconciled: true, runnerId, activeRevision: 7, activeChecksum: checksum, desiredRevision: 7, desiredChecksum: checksum, connectionEpoch: 7, credentialVersion: 3, sessionId: "session-7", mutationId: null, mutationPhase: "idle", preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: Date.now() };
+  return { fenced: false, reconciled: true, runnerId, activeRevision: 7, activeChecksum: checksum, desiredRevision: 7, desiredChecksum: checksum, connectionEpoch: 7, credentialVersion: 3, lifecycleId: "lifecycle-race-7", sessionId: "session-7", mutationId: null, mutationPhase: "idle", preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: Date.now() };
 }
 function socket(send = vi.fn(), socketAttachment = attachment): WebSocket { return { deserializeAttachment: () => socketAttachment, serializeAttachment: vi.fn(), send, close: vi.fn() } as unknown as WebSocket; }
 async function withRunner(name: string, callback: (target: TestRunnerDO) => Promise<void>): Promise<void> {
@@ -49,15 +49,16 @@ describe("RunnerDO concurrency finalization", () => {
         if (action === "/connect") {
           connectStarted();
           await connectBlocked;
-          return Response.json({ epoch: 8 });
+          return Response.json({ epoch: 8, lifecycle_id: attachment.lifecycleId });
         }
+        if (action === "/session") return new Response(null, { status: 204 });
         throw new Error(`unexpected ${action}`);
       };
       const hello: WireMessage = {
         type: "runner.hello", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "hello-race", min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION,
         runner: { runner_id: runnerId, runner_version: "test", platform: "test", architecture: "test", capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: [], labels: {} } },
       };
-      const helloInFlight = target.webSocketMessage(socket(), encodeWireFrame(hello));
+      const helloInFlight = target.webSocketMessage(socket(vi.fn(), { ...attachment, epoch: 0 }), encodeWireFrame(hello));
       await connectRequested;
       expect(await target.beginPolicyMutation("concurrent-policy", runnerId)).toBe("started");
       releaseConnect();
@@ -69,7 +70,11 @@ describe("RunnerDO concurrency finalization", () => {
   it("does not let an older hello roll back a newer connection epoch", async () => {
     await withRunner("hello-epoch-race", async (target) => {
       target.admissionState = { ...readyState(), connectionEpoch: 9, sessionId: "new-session" };
-      target.registryRequest = async (_id, action) => action === "/connect" ? Response.json({ epoch: 8 }) : new Response(null, { status: 500 });
+      target.registryRequest = async (_id, action) => {
+        if (action === "/connect") return Response.json({ epoch: 8, lifecycle_id: attachment.lifecycleId });
+        if (action === "/session") return new Response(null, { status: 204 });
+        return new Response(null, { status: 500 });
+      };
       const oldAttachment = { ...attachment, sessionId: "old-session", epoch: 0 };
       const oldSocket = socket(vi.fn(), oldAttachment);
       const hello: WireMessage = {
@@ -85,7 +90,11 @@ describe("RunnerDO concurrency finalization", () => {
   it("preserves a committed mutation's desired policy across a reconnect", async () => {
     await withRunner("hello-mutation-state", async (target) => {
       target.admissionState = state("committed-policy", "committed_pending");
-      target.registryRequest = async (_id, action) => action === "/connect" ? Response.json({ epoch: 8 }) : new Response(null, { status: 500 });
+      target.registryRequest = async (_id, action) => {
+        if (action === "/connect") return Response.json({ epoch: 8, lifecycle_id: attachment.lifecycleId });
+        if (action === "/session") return new Response(null, { status: 204 });
+        return new Response(null, { status: 500 });
+      };
       const reconnect = socket(vi.fn(), { ...attachment, sessionId: "reconnected", epoch: 0 });
       const hello: WireMessage = {
         type: "runner.hello", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "hello-mutation", min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION,

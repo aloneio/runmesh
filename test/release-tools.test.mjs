@@ -1,27 +1,32 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { buildManifest, releaseArtifactName, releaseTag, validateManifest } from "../scripts/release-manifest.mjs";
 import { verifyReleaseAssets } from "../scripts/release-verify.mjs";
 import { signReleaseManifest, verifyReleaseManifest } from "../scripts/release-signature.mjs";
+import { resolveTrustedTaskkillPath } from "../scripts/windows-tools.mjs";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
+const execFileAsync = promisify(execFile);
 const productVersion = JSON.parse(await readFile(join(repositoryRoot, "package.json"), "utf8")).version;
 async function fixture() { const root = await mkdtemp(join(tmpdir(), "runmesh-release-tools-")); return { root, cleanup: () => rm(root, { recursive: true, force: true }) }; }
 
 test("pins manually-dispatched releases to the triggering dev commit", async () => {
-  const workflow = await readFile(join(repositoryRoot, ".github", "workflows", "release.yml"), "utf8");
-  assert.equal(workflow.includes("if: github.ref == 'refs/heads/dev'"), true);
+  const workflow = (await readFile(join(repositoryRoot, ".github", "workflows", "release.yml"), "utf8")).replace(/\r\n/gu, "\n");
+  assert.equal(workflow.includes("if: github.ref == 'refs/heads/dev'"), false);
   assert.equal(workflow.includes("ref: ${{ github.sha }}"), true);
   assert.equal(workflow.includes("timeout-minutes: 45"), true);
   assert.equal(workflow.includes('test "$GITHUB_REPOSITORY" = "aloneio/runmesh"'), true);
   assert.equal(workflow.includes('test "$GITHUB_REF" = "refs/heads/dev"'), true);
   assert.equal(workflow.includes('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"'), true);
   assert.equal(workflow.includes('test "$(git rev-parse origin/dev)" = "$GITHUB_SHA"'), true);
+  assert.equal(workflow.lastIndexOf('git fetch --no-tags origin dev') > workflow.indexOf('Verify tag and release do not already exist'), true);
   assert.equal(workflow.includes("https://api.github.com/repos/"), true);
   assert.equal(workflow.includes('test -n "$GH_TOKEN"'), true);
   assert.equal(workflow.includes("node scripts/release-verify.mjs release/download/manifest.json"), true);
@@ -33,6 +38,36 @@ test("pins manually-dispatched releases to the triggering dev commit", async () 
   assert.equal(workflow.includes("sha256sum *.tgz manifest.json manifest.sig manifest.signature.json LICENSE NOTICE THIRD_PARTY_NOTICES.md trust-keyring.json > SHA256SUMS"), true);
   assert.equal(workflow.includes("node scripts/release-verify.mjs release/assets/manifest.json release/assets/manifest.sig"), true);
   assert.equal(workflow.includes("(cd release/assets && sha256sum -c SHA256SUMS)"), true);
+  const actionRefs = [...workflow.matchAll(/^\s+(?:-\s+)?uses:\s+([^\s#]+)/gmu)].map((match) => match[1]);
+  assert.ok(actionRefs.length > 0);
+  assert.ok(actionRefs.every((ref) => /^[^@]+@[0-9a-f]{40}$/u.test(ref)), `mutable GitHub Action ref: ${actionRefs.join(", ")}`);
+  const ciWorkflow = (await readFile(join(repositoryRoot, ".github", "workflows", "ci.yml"), "utf8")).replace(/\r\n/gu, "\n");
+  const ciActionRefs = [...ciWorkflow.matchAll(/^\s+(?:-\s+)?uses:\s+([^\s#]+)/gmu)].map((match) => match[1]);
+  assert.ok(ciActionRefs.length > 0);
+  assert.ok(ciActionRefs.every((ref) => /^[^@]+@[0-9a-f]{40}$/u.test(ref)), `mutable GitHub Action ref in ci.yml: ${ciActionRefs.join(", ")}`);
+  const gitlabWorkflow = (await readFile(join(repositoryRoot, ".gitlab-ci.yml"), "utf8")).replace(/\r\n/gu, "\n");
+  assert.equal(gitlabWorkflow.includes('git fetch --no-tags origin "$CI_COMMIT_BRANCH"'), true);
+  assert.equal(gitlabWorkflow.includes('test "$(git rev-parse FETCH_HEAD)" = "$CI_COMMIT_SHA"'), true);
+});
+
+test("keeps worker validation fail-closed when a false dry-run value is supplied", async () => {
+  await assert.rejects(
+    execFileAsync(process.execPath, [join(repositoryRoot, "scripts", "validate-worker.mjs"), "--dry-run", "false"], {
+      cwd: repositoryRoot,
+      windowsHide: true,
+    }),
+    (error) => error?.code === 1 && /always runs Wrangler in dry-run mode/u.test(String(error?.stderr ?? error?.message ?? "")),
+  );
+});
+
+test("uses a verified absolute Windows taskkill path for process-tree cleanup", async () => {
+  assert.equal(resolveTrustedTaskkillPath({ SystemRoot: "D:\\WinNT" }), "D:\\WinNT\\System32\\taskkill.exe");
+  assert.throws(() => resolveTrustedTaskkillPath({ SystemRoot: "D:\\Temp" }), /invalid synthetic Windows system root/u);
+  for (const script of ["validate-worker.mjs", "run-e2e.mjs"]) {
+    const source = (await readFile(join(repositoryRoot, "scripts", script), "utf8")).replace(/\r\n/gu, "\n");
+    assert.equal(source.includes('execFile("taskkill.exe"'), false, `${script} must not resolve taskkill through PATH`);
+    assert.equal(source.includes("execFile(taskkill,"), true, `${script} must use the trusted absolute path`);
+  }
 });
 
 test("builds a single portable development artifact manifest from the product version", async () => {
