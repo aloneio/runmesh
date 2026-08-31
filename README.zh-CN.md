@@ -189,13 +189,17 @@ npm exec --offline -- wrangler deploy --config wrangler.jsonc --env production
 
 打开部署后的根地址，使用 setup token 设置管理员密码并登录。随后 Dashboard 可用于创建和管理 Runner、生成一次性 enrollment code、定义 managed Workspace、查看 policy 状态、创建 MCP Client 以及轮换或撤销凭据。
 
-#### GitLab CI/CD 部署
+#### Cloudflare Workers Builds（GitHub 与 GitLab）
 
-本仓库不会在 push 时自动部署。GitLab 部署 pipeline 应是受保护且手动触发的 job，并且只能部署已经在 GitLab CI 中验证过的同一个固定 commit。请在 GitLab 中配置 masked/protected variables：`CLOUDFLARE_API_TOKEN` 和 `CLOUDFLARE_ACCOUNT_ID`；token 权限应尽量收窄到目标账户和 Workers 部署操作。
+GitHub 和 GitLab 仓库都已直接连接到 Cloudflare 的 `runmesh` Worker，由 Cloudflare Workers Builds 负责构建和自动部署；仓库中的 GitHub Actions 与 GitLab CI 运行相同的验证套件，不需要 `CLOUDFLARE_API_TOKEN` 或 `CLOUDFLARE_ACCOUNT_ID` variables。
 
-部署 job 必须在 `npm exec --offline -- wrangler deploy --config apps/worker/wrangler.jsonc --env production --strict` 前完成完整验证；部署后的 Worker 名称为 `runmesh`。不得打印或保存应用 secrets。请单独使用 `wrangler secret put` 或 `wrangler secret bulk` 设置 Cloudflare Worker secrets，不要把应用 secrets 放入仓库或普通 CI variables。
+对每个 Cloudflare 仓库连接，将生产分支设为 `dev`、构建根目录保持为仓库根目录，并把 deploy command 设置为：
 
-部署会影响生产环境。手动启动前请复核精确 commit、目标账户、Worker 名称、Durable Object migration 变化以及备份/恢复方案。本地 `wrangler login` 只能证明当前登录账户，不代表已经执行部署授权。
+```sh
+npm exec --offline -- wrangler deploy --config apps/worker/wrangler.jsonc --env production --strict
+```
+
+必须保留 `--env production`，这样仓库内 production environment 中的 canonical origin 和 signed-release gate 才会被部署。四个 Worker runtime secrets 请保存在 Cloudflare Variables & Secrets 中，绝不要放入 GitLab/GitHub CI variables 或源码。修改任一 Cloudflare connection 前，请复核精确 commit、Worker 名称、Durable Object migration 变化以及恢复方案。
 
 ### Runner 注册
 
