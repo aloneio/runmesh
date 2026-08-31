@@ -1,7 +1,7 @@
 export { reconnectDelayMs, RECONNECT_DELAYS_MS } from "./backoff.js";
 export { parseRunnerArgs, validateRunnerConfig } from "./config.js";
 export { runCli, runEnrollCli, parseProductArgs } from "./cli.js";
-export { enrollRunner } from "./enrollment.js";
+export { enrollRunner, EnrollmentConflictError, EnrollmentOutcomeUnknownError, ENROLLMENT_OUTCOME_UNKNOWN_MESSAGE, isEnrollmentOutcomeUnknown } from "./enrollment.js";
 export { ProfileStore, defaultWorkspaceId, profileDirectory, profileExecutionMode, profilePath, redactedProfile, validateProfile, workspaceOptions } from "./profile.js";
 export { classifyConnectionFailure, discoverCapabilities, RunnerAuthenticationError, RunnerConnection } from "./connection.js";
 export { currentServicePlatform, createServiceManager, createServiceProvisioner, dedicatedServiceIdentity, hashContent, hostServiceCommandExecutor, installServiceManifest, isManagedService, removeServiceManifest, renderService, serviceCommands, serviceLayout, servicePath, serviceProfilePath, serviceMode, serviceExecutionMode, assertManagedServiceManifest } from "./service.js";

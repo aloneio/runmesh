@@ -1,8 +1,8 @@
 import { env, SELF, runInDurableObject } from "cloudflare:test";
 import { passwordVerifier, randomBase64Url, sha256Hex, verifySetupToken } from "../src/security.js";
-import { runnerReleaseDescriptor } from "../src/index.js";
+import { RegistryDO, RunnerDO, runnerReleaseDescriptor } from "../src/index.js";
 import { FIXED_ARTIFACT_URL, FIXED_RELEASE_KEY_ID, FIXED_RELEASE_PUBLIC_KEY_PEM, FIXED_RELEASE_VERSION, renderPosixInstaller, renderPowerShellInstaller } from "../src/installer.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const password = "administrator-password-for-tests";
 const setupToken = "test-setup-token-0123456789abcdef";
@@ -239,9 +239,9 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
       expect(text).toContain("--purge --yes"); expect(text).toContain("runmesh-runner");
       expect(text).not.toMatch(/trust-keyring\.json|@latest|npmjs\.com|--code\s+[A-Za-z0-9_-]{20,}/i);
     }
-    expect(shell).toContain("--code-stdin"); expect(shell).toContain("/dev/tty"); expect(shell).toContain("stty -echo"); expect(shell).toContain("FINAL=\"$INSTALL_ROOT/versions/$VERSION\""); expect(shell).toContain("ENROLLMENT_ATTEMPTED=0"); expect(shell).toContain("trap on_exit EXIT"); expect(shell).toContain("trap 'rollback 1' HUP INT TERM"); expect(shell).toContain("command_name in curl node npm stty readlink grep"); expect(shell).toContain('> "$ENROLLMENT_INPUT"'); expect(shell).toContain(' < "$ENROLLMENT_INPUT"'); expect(shell).not.toMatch(/printf '[^']*' \"\$ENROLLMENT_CODE\" \|/); expect(shell).toContain("npm install --global --ignore-scripts");
+    expect(shell).toContain("--code-stdin"); expect(shell).toContain("/dev/tty"); expect(shell).toContain("stty -echo"); expect(shell).toContain("FINAL=\"$INSTALL_ROOT/versions/$VERSION\""); expect(shell).toContain("ENROLLMENT_ATTEMPTED=0"); expect(shell).toContain("trap on_exit EXIT"); expect(shell).toContain("trap 'rollback 1' HUP INT TERM"); expect(shell).toContain("command_name in curl node npm stty readlink grep"); expect(shell).toContain('> "$ENROLLMENT_INPUT"'); expect(shell).toContain(' < "$ENROLLMENT_INPUT"'); expect(shell).not.toMatch(/printf '[^']*' \"\$ENROLLMENT_CODE\" \|/); expect(shell).toContain("install --global --ignore-scripts --offline");
     expect(shell).toContain("runmesh-runner"); expect(shell).toContain("current/bin/coding-runner"); expect(shell).toContain('--profile "$PROFILE"');
-    expect(powershell).toContain("Read-Host"); expect(powershell).toContain("-AsSecureString"); expect(powershell).toContain("Invoke-WebRequest"); expect(powershell).toContain("$EnrollmentAttempted = $false"); expect(powershell).toContain("$EnrollmentAttempted = $true"); expect(powershell).toContain("npm.cmd install --global --ignore-scripts");
+    expect(powershell).toContain("Read-Host"); expect(powershell).toContain("-AsSecureString"); expect(powershell).toContain("Add-Type -AssemblyName System.Net.Http"); expect(powershell).toContain("AllowAutoRedirect = $false"); expect(powershell).toContain("$EnrollmentAttempted = $false"); expect(powershell).toContain("$EnrollmentAttempted = $true"); expect(powershell).toContain("& $NpmPath --userconfig $EmptyUserConfig --globalconfig $EmptyGlobalConfig install --global --ignore-scripts --offline");
     expect(powershell).toContain("runmesh-runner"); expect(powershell).toContain("ProgramData");
   });
 
@@ -482,6 +482,10 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(enrollment).toContain('class="enrollment-brand-logo"');
     expect(enrollment).toContain("Linux"); expect(enrollment).toContain("macOS"); expect(enrollment).toContain("Windows");
     expect(enrollment).toContain("Manual portable-artifact enrollment"); expect(enrollment).toContain("Manual Runner enrollment and install"); expect(enrollment).toContain("RUNNER=/opt/runmesh/current/bin/coding-runner"); expect(enrollment).toContain("C:\\Program Files\\Runmesh\\current\\coding-runner.cmd"); expect(enrollment).toContain('sudo &quot;$RUNNER&quot; enroll'); expect(enrollment).toContain('sudo &quot;$RUNNER&quot; install'); expect(enrollment).toContain("&amp; $RunnerPath enroll"); expect(enrollment).toContain("&amp; $RunnerPath install"); expect(enrollment).toContain("--code-stdin"); expect(enrollment).toContain("single-line command"); expect(enrollment).toContain("One-time enrollment code"); expect(enrollment).not.toMatch(/--code [A-Za-z0-9_-]{20,}/u); expect(enrollment).toContain("--executable-path"); expect(enrollment).not.toContain("curl -fsSL"); expect(enrollment).not.toContain("curl --fail --location"); expect(enrollment).not.toContain("Invoke-RestMethod"); expect(enrollment).not.toContain("Invoke-WebRequest");
+    // The generated server URL is shell/PowerShell quoted before it is placed
+    // in the copyable command, preventing Host-header metacharacters from
+    // becoming a second command when an operator pastes the snippet.
+    expect(enrollment).toContain("--server &#039;https://worker.test/runner/enroll&#039; --code-stdin");
     expect(enrollment).toContain("data-copy"); expect(enrollment).toContain("expires in 30 minutes");
     expect(enrollment).toContain("One-time enrollment code");
     const enrollmentUiText = parseUiTextMap(enrollment);
@@ -499,6 +503,21 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(rotatedEnrollment.status).toBe(200);
     const rotatedText = await rotatedEnrollment.text();
     expect(rotatedText).toContain("Manual Runner enrollment and install");
+    const runnerInternalPaths: string[] = [];
+    const originalRunnerFetch = RunnerDO.prototype.fetch;
+    const runnerFetchSpy = vi.spyOn(RunnerDO.prototype, "fetch").mockImplementation(function (this: RunnerDO, request: Request) {
+      runnerInternalPaths.push(new URL(request.url).pathname);
+      return originalRunnerFetch.call(this, request);
+    });
+    let regeneratedText = "";
+    try {
+      const regenerated = await submit("https://worker.test/admin/runners/dashboard-runner/enrollment", { csrf_token: csrf }, adminJar);
+      expect(regenerated.status).toBe(200);
+      regeneratedText = await regenerated.text();
+    } finally { runnerFetchSpy.mockRestore(); }
+    expect(regeneratedText).toContain("One-time enrollment code");
+    expect(runnerInternalPaths).toContain("/begin-policy-mutation");
+    expect(runnerInternalPaths).toContain("/cancel-policy-mutation");
     const stablePolicy = await submit("https://worker.test/admin/runners/dashboard-runner/version-policy", { csrf_token: csrf, update_channel: "stable", desired_runner_version: "" }, adminJar);
     expect(stablePolicy.status).toBe(303);
     const clientsRegistry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
@@ -588,6 +607,80 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     const clientsHtml = await clients.text();
     expect(clientsHtml).toContain("Reset Runner Selection");
     expect(clientsHtml).toMatch(new RegExp(`<a class="button small secondary" href="/admin/clients/${clientId}">View</a>`));
+
+    // A Registry write can time out after committing the one-time code. The
+    // enrollment action must therefore retain the DO fence and avoid a
+    // cancel that could release a mutation owned by a later request.
+    const failedRunnerId = `dashboard-enrollment-failure-${crypto.randomUUID().replaceAll("-", "")}`;
+    const failedCreated = await submit("https://worker.test/admin/runners", { csrf_token: csrf, display_name: "Enrollment failure", runner_id: failedRunnerId }, adminJar);
+    expect(failedCreated.status).toBe(200);
+    const runnerInternalPathsOnFailure: string[] = [];
+    const originalRegistryFetch = RegistryDO.prototype.fetch;
+    const originalRunnerFetchOnFailure = RunnerDO.prototype.fetch;
+    const registryFetchSpy = vi.spyOn(RegistryDO.prototype, "fetch").mockImplementation(function (this: RegistryDO, request: Request) {
+      const pathname = new URL(request.url).pathname;
+      if (pathname === `/runners/${failedRunnerId}/enrollments` && request.method === "POST") return Promise.resolve(new Response("registry timeout", { status: 503 }));
+      return originalRegistryFetch.call(this, request);
+    });
+    const runnerFetchSpyOnFailure = vi.spyOn(RunnerDO.prototype, "fetch").mockImplementation(function (this: RunnerDO, request: Request) {
+      runnerInternalPathsOnFailure.push(new URL(request.url).pathname);
+      return originalRunnerFetchOnFailure.call(this, request);
+    });
+    try {
+      const failedEnrollment = await submit(`https://worker.test/admin/runners/${failedRunnerId}/enrollment`, { csrf_token: csrf }, adminJar);
+      expect(failedEnrollment.status).toBe(503);
+      expect(await failedEnrollment.text()).toContain("safely fenced");
+    } finally {
+      registryFetchSpy.mockRestore();
+      runnerFetchSpyOnFailure.mockRestore();
+    }
+    expect(runnerInternalPathsOnFailure).toContain("/begin-policy-mutation");
+    expect(runnerInternalPathsOnFailure).not.toContain("/cancel-policy-mutation");
+    const failedRunnerStub = env.RUNNER.get(env.RUNNER.idFromName(failedRunnerId));
+    await expect(runInDurableObject(failedRunnerStub, (instance) => (instance as unknown as { admission: () => Promise<Record<string, unknown>> }).admission())).resolves.toMatchObject({
+      fenced: true,
+      mutationPhase: "precommit",
+      mutationId: expect.any(String),
+    });
+  });
+
+  it("fences a stale socket when the browser recreates a deleted runner ID", async () => {
+    const loginPage = await SELF.fetch("https://worker.test/");
+    const loginHtml = await loginPage.text();
+    const loginCsrf = formToken(loginHtml);
+    const loginCookie = cookieFrom(loginPage, "__Host-runmesh_login_csrf");
+    const loggedIn = await submit("https://worker.test/login", { csrf_token: loginCsrf, password }, jar([["__Host-runmesh_login_csrf", loginCookie]]));
+    expect(loggedIn.status).toBe(303);
+    const csrf = cookieFrom(loggedIn, "__Host-runmesh_admin_csrf");
+    const adminJar = jar([["__Host-runmesh_admin_session", cookieFrom(loggedIn, "__Host-runmesh_admin_session")], ["__Host-runmesh_admin_csrf", csrf]]);
+    const runnerId = `browser-recreate-${crypto.randomUUID().replaceAll("-", "")}`;
+    const created = await submit("https://worker.test/admin/runners", { csrf_token: csrf, display_name: "Browser recreate", runner_id: runnerId }, adminJar);
+    expect(created.status).toBe(200);
+    const code = enrollmentCode(await created.text());
+    const enrolled = await SELF.fetch("https://worker.test/runner/enroll", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enrollment_code: code, runner_public_info: { platform: "linux", architecture: "x64", hostname: "host", runner_version: "1.0.0", protocol_version: 2 } }),
+    });
+    expect(enrolled.status).toBe(200);
+    const token = (await enrolled.json() as { token?: unknown }).token;
+    expect(typeof token).toBe("string");
+    const upgrade = await SELF.fetch(`https://worker.test/runner/connect?runner_id=${runnerId}`, { headers: { Upgrade: "websocket", Authorization: `Bearer ${token as string}` } });
+    expect(upgrade.status).toBe(101);
+    const socket = upgrade.webSocket;
+    expect(socket).not.toBeNull();
+    socket?.accept();
+    const closed = new Promise<void>((resolve) => socket?.addEventListener("close", () => resolve(), { once: true }));
+
+    // Simulate a committed Registry delete whose RunnerDO cleanup was lost.
+    // The old pre-hello socket remains attached to the same DO instance.
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
+    await runInDurableObject(registry, (instance) => {
+      expect(instance.deleteRunner(runnerId, runnerId, Date.now(), `browser-delete-${crypto.randomUUID()}`)).toBe(true);
+    });
+    const recreated = await submit("https://worker.test/admin/runners", { csrf_token: csrf, display_name: "Browser recreate", runner_id: runnerId }, adminJar);
+    expect(recreated.status).toBe(200);
+    await expect(Promise.race([closed, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("stale browser socket was not closed")), 1_000))])).resolves.toBeUndefined();
+    socket?.close();
   });
 
   it("invalidates every old session after password change", async () => {
@@ -616,6 +709,7 @@ function toolsList(): Record<string, unknown> { return { jsonrpc: "2.0", id: 1, 
 async function mcp(url: string, body: unknown): Promise<Response> { return SELF.fetch(url, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: "Bearer deliberately-ignored" }, body: JSON.stringify(body) }); }
 async function readMcp(response: Response): Promise<unknown> { const text = await response.text(); if (!response.headers.get("content-type")?.includes("text/event-stream")) return JSON.parse(text) as unknown; const data = text.split("\n").find((line) => line.trimStart().startsWith("data:"))?.trimStart().slice(5).trim(); return data === undefined ? undefined : JSON.parse(data) as unknown; }
 function formToken(html: string): string { const token = /name="csrf_token" value="([A-Za-z0-9_-]+)"/.exec(html)?.[1]; if (token === undefined) throw new Error("csrf token absent"); return token; }
+function enrollmentCode(html: string): string { const code = /<code class="mono"[^>]*>([A-Za-z0-9_-]{43})<\/code>/.exec(html)?.[1]; if (code === undefined) throw new Error("enrollment code absent"); return code; }
 function oneTimeSecretUrl(html: string): string { const url = /<code>(https:\/\/worker\.test\/[A-Za-z0-9_-]{43}\/mcp)<\/code>/.exec(html)?.[1]; if (url === undefined) throw new Error("secret URL absent"); return url; }
 function inlineScriptContaining(html: string, marker: string): string {
   const script = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map((match) => match[1] ?? "").find((value) => value.includes(marker));

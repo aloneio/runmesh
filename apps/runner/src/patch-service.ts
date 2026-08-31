@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, link, open, rename, rm } from "node:fs/promises";
-import { dirname, relative, sep } from "node:path";
-import { PathPolicy } from "./path-policy.js";
+import { basename, dirname, join, relative, sep, win32 } from "node:path";
+import { PathPolicy, type PathSnapshot } from "./path-policy.js";
 import { RpcRuntimeError } from "./errors.js";
 
 const MAX_PATCH_BYTES = 1_048_576;
@@ -14,6 +14,10 @@ const MAX_HUNKS = 512;
 const MAX_HUNK_LINES = 4_096;
 const MAX_MATCH_COMPARISONS = 2_000_000;
 const MAX_PATH_ATTEMPTS = 16;
+// Content replacement must never carry privilege-changing mode bits from an
+// untrusted source file into the newly-created inode.  Ordinary rwx bits are
+// still preserved so executable scripts retain their intended mode.
+const REGULAR_FILE_MODE_MASK = 0o0777;
 const SHA256 = /^[a-f0-9]{64}$/;
 
 type PatchLineKind = "add" | "delete" | "context";
@@ -35,6 +39,12 @@ type ResolvedPath = {
   readonly relativePath: string;
   readonly workspaceId: string;
 };
+type ResolvedPolicyPath = Awaited<ReturnType<PathPolicy["resolve"]>>;
+type ParentBoundary = {
+  readonly resolved: ResolvedPolicyPath;
+  readonly snapshot: PathSnapshot;
+};
+type TargetBoundary = ParentBoundary;
 type Baseline = {
   readonly path: ResolvedPath;
   readonly exists: boolean;
@@ -42,6 +52,11 @@ type Baseline = {
   readonly mode: number | null;
   readonly size: number | null;
   readonly bytes?: Buffer;
+  /** Identity of the target's parent directory captured with the baseline. */
+  readonly parentBoundary?: ParentBoundary;
+  /** Identity of an existing target, preventing a Windows leaf swap from
+   * being followed between lstat and open (where O_NOFOLLOW is unavailable). */
+  readonly targetBoundary?: TargetBoundary;
 };
 type TextFile = {
   readonly bom: boolean;
@@ -76,6 +91,8 @@ export interface ApplyPatchOptions {
   readonly beforeCommit?: () => void | Promise<void>;
   /** Test-only seam, invoked before each filesystem install. */
   readonly beforeInstall?: (path: string, action: "write" | "delete") => void | Promise<void>;
+  /** Test-only seam invoked after baseline/parent checks and immediately before install. */
+  readonly beforeInstallCommit?: (path: string, action: "write" | "delete") => void | Promise<void>;
   /** Test-only seam for exercising retained-backup recovery reporting. */
   readonly beforeBackupCleanup?: (backupPath: string) => void | Promise<void>;
 }
@@ -85,6 +102,14 @@ export interface ApplyPatchOptions {
  * The parser and installer are local implementations; no external patch tool is
  * invoked. Filesystem rename semantics are per-path atomic, with backups held
  * until the complete install succeeds.
+ *
+ * Node's portable fs promises API does not expose openat/renameat-style
+ * directory-relative mutation (nor Windows reparse-safe directory handles).
+ * Parent identities are therefore snapshotted, canonical paths are used for
+ * staging/backup/install, and each path is verified before/after mutation.
+ * A hostile local writer can still win the narrow interval between the final
+ * verification and the kernel path syscall; deployments needing a strict
+ * no-race guarantee must add an OS sandbox or native handle-relative adapter.
  */
 export class PatchService {
   public constructor(
@@ -166,23 +191,23 @@ export class PatchService {
   private async captureBaselines(operations: readonly ResolvedOperation[]): Promise<ReadonlyMap<string, Baseline>> {
     const paths = new Map<string, ResolvedPath>();
     for (const operation of operations) {
-      if (operation.source !== undefined) paths.set(operation.source.relativePath, operation.source);
-      if (operation.target !== undefined) paths.set(operation.target.relativePath, operation.target);
+      if (operation.source !== undefined) paths.set(pathKey(operation.source.relativePath), operation.source);
+      if (operation.target !== undefined) paths.set(pathKey(operation.target.relativePath), operation.target);
     }
     const captured = new Map<string, Baseline>();
     let totalBytes = 0;
     for (const path of paths.values()) {
-      const baseline = await captureBaseline(path);
+      const baseline = await captureBaseline(path, this.policy);
       totalBytes += baseline.bytes?.byteLength ?? 0;
       if (totalBytes > MAX_TOTAL_BASELINE_BYTES) {
         throw new RpcRuntimeError("file_too_large", `patch baseline files exceed ${MAX_TOTAL_BASELINE_BYTES} bytes in total`);
       }
-      captured.set(path.relativePath, baseline);
+      captured.set(pathKey(path.relativePath), baseline);
     }
 
     for (const operation of operations) {
-      const source = operation.source === undefined ? undefined : captured.get(operation.source.relativePath);
-      const target = operation.target === undefined ? undefined : captured.get(operation.target.relativePath);
+      const source = operation.source === undefined ? undefined : captured.get(pathKey(operation.source.relativePath));
+      const target = operation.target === undefined ? undefined : captured.get(pathKey(operation.target.relativePath));
       if ((operation.kind === "update" || operation.kind === "delete" || operation.kind === "move") && (source === undefined || !source.exists)) {
         throw conflict("missing_file", `source file does not exist: ${operation.path}`, { path: operation.path });
       }
@@ -208,7 +233,7 @@ export class PatchService {
       }
       for (const [userPath, expected] of Object.entries(expectedHashes)) {
         const resolved = toResolved(await this.policy.resolve(params.workspace_id, userPath, "write"));
-        const baseline = baselines.get(resolved.relativePath);
+        const baseline = baselines.get(pathKey(resolved.relativePath));
         if (baseline === undefined) {
           throw new RpcRuntimeError("invalid_params", `expected_hashes path is not changed by patch: ${userPath}`);
         }
@@ -222,7 +247,7 @@ export class PatchService {
       const operation = operations[0] as ResolvedOperation;
       const primary = operation.source ?? operation.target;
       if (primary === undefined) throw new RpcRuntimeError("invalid_params", "patch has no target");
-      const baseline = baselines.get(primary.relativePath);
+      const baseline = baselines.get(pathKey(primary.relativePath));
       if (baseline === undefined) throw new RpcRuntimeError("invalid_params", "patch has no baseline");
       checkExpectedHash(params.expected_hash, baseline, primary.relativePath);
     }
@@ -238,7 +263,7 @@ export class PatchService {
       const target = operation.target === undefined ? undefined : requiredBaseline(baselines, operation.target);
       if (operation.kind === "add") {
         const destination = requiredPath(operation.target);
-        planned.set(destination.relativePath, {
+        planned.set(pathKey(destination.relativePath), {
           path: destination,
           baseline: requiredBaseline(baselines, destination),
           action: "write",
@@ -250,7 +275,7 @@ export class PatchService {
       if (operation.kind === "delete") {
         const sourcePath = requiredPath(operation.source);
         parseText(source?.bytes as Buffer, sourcePath.relativePath);
-        planned.set(sourcePath.relativePath, { path: sourcePath, baseline: source as Baseline, action: "delete" });
+        planned.set(pathKey(sourcePath.relativePath), { path: sourcePath, baseline: source as Baseline, action: "delete" });
         continue;
       }
       const sourcePath = requiredPath(operation.source);
@@ -261,15 +286,22 @@ export class PatchService {
         : applyHunks(sourceText, operation.hunks, sourcePath.relativePath);
       const sourceMode = source?.mode;
       if (sourceMode === null || sourceMode === undefined) throw conflict("missing_file", `source file does not exist: ${operation.path}`);
-      planned.set(destination.relativePath, {
+      // A pure rename preserves the existing inode and therefore its mode is
+      // intentional.  Any operation that writes a replacement inode must
+      // clear setuid/setgid/sticky bits; otherwise a privileged source file
+      // could make a remote content edit install a privileged executable.
+      const replacementMode = operation.kind === "move" && operation.hunks.length === 0
+        ? sourceMode
+        : sourceMode & REGULAR_FILE_MODE_MASK;
+      planned.set(pathKey(destination.relativePath), {
         path: destination,
         baseline: target as Baseline,
         action: "write",
         bytes: content,
-        mode: sourceMode,
+        mode: replacementMode,
       });
-      if (sourcePath.relativePath !== destination.relativePath) {
-        planned.set(sourcePath.relativePath, { path: sourcePath, baseline: source as Baseline, action: "delete" });
+      if (pathKey(sourcePath.relativePath) !== pathKey(destination.relativePath)) {
+        planned.set(pathKey(sourcePath.relativePath), { path: sourcePath, baseline: source as Baseline, action: "delete" });
       }
     }
     return [...planned.values()];
@@ -286,8 +318,9 @@ export class PatchService {
         // The central policy has already checked every target ancestry. The
         // parent directory must exist: implicit directory creation would turn
         // a path-policy race into an unreviewed write surface.
-        await assertExistingParent(change.path.path);
-        const temporaryPath = await writeTemporary(change.path.path, change.bytes as Buffer, change.mode ?? 0o644);
+        await assertExistingParent(change.path.path, change.baseline.parentBoundary);
+        await verifyParentBoundary(this.policy, change.baseline.parentBoundary);
+        const temporaryPath = await writeTemporary(change.path.path, change.bytes as Buffer, change.mode ?? 0o644, this.policy, change.baseline.parentBoundary);
         prepared.push({ ...change, temporaryPath });
       }
       return prepared;
@@ -304,11 +337,12 @@ export class PatchService {
   private async recheckBaseline(baseline: Baseline): Promise<void> {
     // Resolve through the central policy again immediately before mutations,
     // so a newly introduced symlink or readonly restriction is not bypassed.
+    await verifyParentBoundary(this.policy, baseline.parentBoundary);
     const refreshed = await this.policy.resolve(baseline.path.workspaceId, baseline.path.relativePath, "write");
     if (refreshed.path !== baseline.path.path) {
       throw conflict("baseline_changed", `path changed while patch was prepared: ${baseline.path.relativePath}`, { path: baseline.path.relativePath });
     }
-    const current = await captureBaseline(baseline.path);
+    const current = await captureBaseline(baseline.path, this.policy);
     if (!sameBaseline(baseline, current)) {
       throw conflict("baseline_changed", `file changed while patch was prepared: ${baseline.path.relativePath}`, {
         path: baseline.path.relativePath,
@@ -330,25 +364,35 @@ export class PatchService {
         // baseline. Re-read the current path immediately before moving its
         // original so the rollback never restores over a new external write.
         await this.recheckBaseline(change.baseline);
-        if (change.action === "write") await assertExistingParent(change.path.path);
+        if (change.action === "write") await assertExistingParent(change.path.path, change.baseline.parentBoundary);
+        await verifyParentBoundary(this.policy, change.baseline.parentBoundary);
+        await verifyTargetBoundary(this.policy, change.baseline.targetBoundary);
+        await this.options.beforeInstallCommit?.(change.path.relativePath, change.action);
+        // The commit seam models a local rename/junction race immediately
+        // before the first mutating syscall. Re-checking the parent identity
+        // closes that deterministic window; the remaining race between this
+        // check and a path-based syscall is documented below.
+        await verifyParentBoundary(this.policy, change.baseline.parentBoundary);
+        await verifyTargetBoundary(this.policy, change.baseline.targetBoundary);
         if (change.baseline.exists) {
-          const backupPath = await moveToBackup(change.path.path);
+          const backupPath = await moveToBackup(change.path.path, this.policy, change.baseline.parentBoundary, change.baseline.targetBoundary);
           state.backupMoved = true;
           (state as { backupPath?: string }).backupPath = backupPath;
         }
         if (change.action === "write") {
           // link(2) is exclusive: it refuses a new target created after the
           // original moved to its backup, unlike rename() which overwrites it.
-          await installNoReplace(change.temporaryPath as string, change.path.path);
+          await installNoReplace(change.temporaryPath as string, change.path.path, this.policy, change.baseline.parentBoundary);
           state.installed = true;
           (state as { installedHash?: string }).installedHash = hash(change.bytes as Buffer);
         } else {
           state.installed = true;
         }
-        await fsyncDirectory(dirname(change.path.path));
+        await verifyParentBoundary(this.policy, change.baseline.parentBoundary);
+        await fsyncDirectory(dirname(anchoredPath(change.path.path, change.baseline.parentBoundary)), this.policy, change.baseline.parentBoundary);
       }
     } catch (error) {
-      const recovery = await rollback(states);
+      const recovery = await rollback(states, this.policy);
       await this.removeTemporary(changes);
       if (recovery.length > 0) {
         throw new RpcRuntimeError("patch_rollback_failed", "patch installation failed and rollback was incomplete", {
@@ -366,19 +410,26 @@ export class PatchService {
       if (state.backupPath !== undefined) {
         try {
           await this.options.beforeBackupCleanup?.(state.backupPath);
+          await verifyParentBoundary(this.policy, state.change.baseline.parentBoundary);
           await rm(state.backupPath, { force: true });
         } catch (error) {
           warnings.push({ path: state.change.path.relativePath, backup_path: state.backupPath, error: message(error) });
         }
       }
-      await fsyncDirectory(dirname(state.change.path.path));
+      await fsyncDirectory(dirname(anchoredPath(state.change.path.path, state.change.baseline.parentBoundary)), this.policy, state.change.baseline.parentBoundary);
     }
     return warnings;
   }
 
   private async removeTemporary(changes: readonly PreparedChange[]): Promise<void> {
     await Promise.all(changes.map(async (change) => {
-      if (change.temporaryPath !== undefined) await rm(change.temporaryPath, { force: true }).catch(() => undefined);
+      if (change.temporaryPath !== undefined) {
+        // If the parent identity no longer matches, leave the temporary file
+        // for operator cleanup rather than deleting an attacker-selected path.
+        await verifyParentBoundary(this.policy, change.baseline.parentBoundary)
+          .then(() => rm(change.temporaryPath as string, { force: true }))
+          .catch(() => undefined);
+      }
     }));
   }
 }
@@ -655,22 +706,69 @@ function renderText(file: TextFile): Buffer {
   return Buffer.from(`${file.bom ? "\ufeff" : ""}${file.lines.join(file.newline)}${file.endsWithNewline ? file.newline : ""}`, "utf8");
 }
 
-async function captureBaseline(path: ResolvedPath): Promise<Baseline> {
+async function captureBaseline(path: ResolvedPath, policy?: PathPolicy): Promise<Baseline> {
+  const parentBoundary = policy === undefined ? undefined : await captureParentBoundary(policy, path);
+  let targetBoundary: TargetBoundary | undefined;
+  const targetResolved: ResolvedPolicyPath | undefined = policy === undefined ? undefined : { workspace: policy.getWorkspace(path.workspaceId), path: path.path };
+  if (policy !== undefined) {
+    try {
+      const snapshot = await policy.snapshot(targetResolved as ResolvedPolicyPath);
+      targetBoundary = { resolved: targetResolved as ResolvedPolicyPath, snapshot };
+    } catch (error) {
+      if (!isErrno(error, "ENOENT")) throw error;
+    }
+  }
   try {
-    const opened = await readRegularFileCapped(path.path, path.relativePath);
-    return { path, exists: true, hash: hash(opened.bytes), mode: opened.mode, size: opened.size, bytes: opened.bytes };
+    const opened = await readRegularFileCapped(path.path, path.relativePath, policy, parentBoundary, targetBoundary, targetResolved);
+    const finalTargetSnapshot = opened.targetSnapshot ?? targetBoundary?.snapshot;
+    const finalTargetBoundary = targetResolved === undefined || finalTargetSnapshot === undefined
+      ? undefined
+      : { resolved: targetResolved, snapshot: finalTargetSnapshot };
+    return {
+      path, exists: true, hash: hash(opened.bytes), mode: opened.mode, size: opened.size, bytes: opened.bytes,
+      ...(parentBoundary === undefined ? {} : { parentBoundary }),
+      ...(finalTargetBoundary === undefined ? {} : { targetBoundary: finalTargetBoundary }),
+    };
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") return { path, exists: false, hash: null, mode: null, size: null };
+    if (code === "ENOENT") {
+      if (policy !== undefined) await verifyParentBoundary(policy, parentBoundary);
+      return {
+        path, exists: false, hash: null, mode: null, size: null,
+        ...(parentBoundary === undefined ? {} : { parentBoundary }),
+      };
+    }
     if (code === "ELOOP") throw new RpcRuntimeError("symlink_write", `symlink paths are not allowed: ${path.relativePath}`);
     throw error;
   }
 }
 
-async function readRegularFileCapped(path: string, relativePath: string): Promise<{ readonly bytes: Buffer; readonly mode: number; readonly size: number }> {
-  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+async function readRegularFileCapped(
+  path: string,
+  relativePath: string,
+  policy?: PathPolicy,
+  parentBoundary?: ParentBoundary,
+  targetBoundary?: TargetBoundary,
+  targetResolved?: ResolvedPolicyPath,
+): Promise<{ readonly bytes: Buffer; readonly mode: number; readonly size: number; readonly targetSnapshot?: PathSnapshot }> {
+  const handle = await openNoFollow(path);
   try {
     const info = await handle.stat();
+    if (policy !== undefined) await verifyParentBoundary(policy, parentBoundary);
+    let targetSnapshot = targetBoundary?.snapshot;
+    if (policy !== undefined && targetResolved !== undefined) {
+      // Always perform a post-open target snapshot, even when the initial
+      // target was absent. This prevents a Windows leaf symlink created in the
+      // lstat/open interval from being followed as an apparently new file.
+      const currentTarget = await policy.snapshot(targetResolved);
+      if (targetBoundary !== undefined && !sameSnapshotIdentity(currentTarget, targetBoundary.snapshot)) {
+        throw new RpcRuntimeError("path_changed", `file changed while it was opened: ${relativePath}`);
+      }
+      targetSnapshot = currentTarget;
+    }
+    if (targetSnapshot !== undefined && (info.dev !== targetSnapshot.device || info.ino !== targetSnapshot.inode)) {
+      throw new RpcRuntimeError("path_changed", `file changed while it was opened: ${relativePath}`);
+    }
     if (!info.isFile()) throw new RpcRuntimeError("invalid_path", `path is not a regular file: ${relativePath}`);
     // Inspect through the opened descriptor before allocating. This prevents a
     // large file swapped in after a path lstat from bypassing the cap.
@@ -683,14 +781,78 @@ async function readRegularFileCapped(path: string, relativePath: string): Promis
       offset += bytesRead;
     }
     if (offset > MAX_TEXT_FILE_BYTES) throw new RpcRuntimeError("file_too_large", `file exceeds ${MAX_TEXT_FILE_BYTES} bytes: ${relativePath}`);
-    return { bytes: Buffer.from(buffer.subarray(0, offset)), mode: info.mode & 0o7777, size: offset };
+    return { bytes: Buffer.from(buffer.subarray(0, offset)), mode: info.mode & 0o7777, size: offset, ...(targetSnapshot === undefined ? {} : { targetSnapshot }) };
   } finally {
     await handle.close();
   }
 }
 
+async function openNoFollow(path: string): Promise<Awaited<ReturnType<typeof open>>> {
+  try {
+    // O_NOFOLLOW closes the final-component race on POSIX. Windows has no
+    // portable Node flag for this, so lstat is retained as a best-effort leaf
+    // guard and the parent snapshot is verified around every operation.
+    const info = await lstat(path);
+    if (info.isSymbolicLink()) throw new RpcRuntimeError("symlink_write", "symlink paths are not allowed");
+    return await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  } catch (error) {
+    if (error instanceof RpcRuntimeError) throw error;
+    if ((error as NodeJS.ErrnoException).code === "ELOOP") throw new RpcRuntimeError("symlink_write", "symlink paths are not allowed");
+    throw error;
+  }
+}
+
+async function captureParentBoundary(policy: PathPolicy, path: ResolvedPath): Promise<ParentBoundary> {
+  const parentRelative = dirname(path.relativePath).replace(/\\/g, "/") || ".";
+  let resolved: Awaited<ReturnType<PathPolicy["resolve"]>>;
+  try {
+    resolved = await policy.resolve(path.workspaceId, parentRelative, "write");
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) throw conflict("invalid_path", "target parent directory does not exist", { path: path.relativePath });
+    throw error;
+  }
+  let snapshot: PathSnapshot;
+  try {
+    snapshot = await policy.snapshot(resolved);
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) throw conflict("invalid_path", "target parent directory does not exist", { path: path.relativePath });
+    throw error;
+  }
+  if (snapshot.type !== "directory") throw conflict("invalid_path", `target parent directory is not a directory: ${parentRelative}`, { path: path.relativePath });
+  return { resolved, snapshot };
+}
+
+async function verifyParentBoundary(policy: PathPolicy | undefined, boundary: ParentBoundary | undefined): Promise<void> {
+  if (policy !== undefined && boundary !== undefined) await policy.verifySnapshot(boundary.resolved, boundary.snapshot);
+}
+
+async function verifyTargetBoundary(policy: PathPolicy | undefined, boundary: TargetBoundary | undefined): Promise<void> {
+  if (policy !== undefined && boundary !== undefined) await policy.verifySnapshot(boundary.resolved, boundary.snapshot);
+}
+
 function sameBaseline(left: Baseline, right: Baseline): boolean {
-  return left.exists === right.exists && left.hash === right.hash && left.mode === right.mode && left.size === right.size;
+  return left.exists === right.exists && left.hash === right.hash && left.mode === right.mode && left.size === right.size
+    && sameParentBoundary(left.parentBoundary, right.parentBoundary)
+    && sameParentBoundary(left.targetBoundary, right.targetBoundary);
+}
+
+function sameParentBoundary(left: ParentBoundary | undefined, right: ParentBoundary | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return sameSnapshotIdentity(left.snapshot, right.snapshot);
+}
+
+function sameSnapshotIdentity(left: PathSnapshot, right: PathSnapshot): boolean {
+  return sameCanonicalPath(left.canonicalPath, right.canonicalPath)
+    && left.device === right.device && left.inode === right.inode
+    && (left.rootCanonicalPath === undefined || right.rootCanonicalPath === undefined || sameCanonicalPath(left.rootCanonicalPath, right.rootCanonicalPath))
+    && (left.rootDevice === undefined || right.rootDevice === undefined || left.rootDevice === right.rootDevice)
+    && (left.rootInode === undefined || right.rootInode === undefined || left.rootInode === right.rootInode);
+}
+
+function sameCanonicalPath(left: string, right: string): boolean {
+  return process.platform === "win32"
+    ? win32.normalize(left).toLowerCase() === win32.normalize(right).toLowerCase()
+    : left === right;
 }
 
 function checkExpectedHash(value: unknown, baseline: Baseline, path: string): void {
@@ -706,10 +868,16 @@ function checkExpectedHash(value: unknown, baseline: Baseline, path: string): vo
   }
 }
 
-async function writeTemporary(target: string, bytes: Buffer, mode: number): Promise<string> {
-  const temporary = `${target}.remote-coding-runtime-${randomUUID()}.tmp`;
+async function writeTemporary(target: string, bytes: Buffer, mode: number, policy?: PathPolicy, parentBoundary?: ParentBoundary): Promise<string> {
+  // Anchor temporary creation to the canonical parent captured with the
+  // baseline. If the lexical ancestor is replaced by a junction between the
+  // check and open(), this path either remains the original directory or fails
+  // closed; it cannot silently create the staging file in the junction target.
+  const anchoredTarget = anchoredPath(target, parentBoundary);
+  const temporary = `${anchoredTarget}.remote-coding-runtime-${randomUUID()}.tmp`;
   const handle = await open(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0), mode);
   try {
+    if (policy !== undefined) await verifyParentBoundary(policy, parentBoundary);
     await handle.writeFile(bytes);
     await handle.chmod(mode);
     await handle.sync().catch(() => undefined);
@@ -719,26 +887,33 @@ async function writeTemporary(target: string, bytes: Buffer, mode: number): Prom
   return temporary;
 }
 
-async function moveToBackup(target: string): Promise<string> {
+async function moveToBackup(target: string, policy?: PathPolicy, parentBoundary?: ParentBoundary, targetBoundary?: TargetBoundary): Promise<string> {
+  const anchoredTarget = anchoredPath(target, parentBoundary);
   for (let attempt = 0; attempt < MAX_PATH_ATTEMPTS; attempt += 1) {
-    const backupPath = backupName(target);
+    const backupPath = backupName(anchoredTarget);
     let linked = false;
     try {
+      if (policy !== undefined) await verifyParentBoundary(policy, parentBoundary);
+      await verifyTargetBoundary(policy, targetBoundary);
       // link(2) creates the backup exclusively, unlike rename which would
       // silently replace a pre-existing (possibly attacker-created) name.
       // The source and backup share the same parent/filesystem, so this is a
       // durable equivalent to moving the original before installation.
-      await link(target, backupPath);
+      await link(anchoredTarget, backupPath);
       linked = true;
-      await rm(target, { force: false });
+      if (policy !== undefined) await verifyParentBoundary(policy, parentBoundary);
+      await verifyTargetBoundary(policy, targetBoundary);
+      await rm(anchoredTarget, { force: false });
+      if (policy !== undefined) await verifyParentBoundary(policy, parentBoundary);
       return backupPath;
     } catch (error) {
       if (linked) {
         try {
+          if (policy !== undefined) await verifyParentBoundary(policy, parentBoundary);
           await rm(backupPath, { force: false });
         } catch (cleanupError) {
           throw new RpcRuntimeError("patch_rollback_failed", "could not remove a backup after installation failed", {
-            recovery: [{ path: target, backup_path: backupPath, error: message(cleanupError) }],
+            recovery: [{ path: anchoredTarget, backup_path: backupPath, error: message(cleanupError) }],
           });
         }
       }
@@ -748,10 +923,11 @@ async function moveToBackup(target: string): Promise<string> {
   throw new RpcRuntimeError("patch_install_failed", "could not reserve an exclusive backup path");
 }
 
-async function assertExistingParent(target: string): Promise<void> {
+async function assertExistingParent(target: string, parentBoundary?: ParentBoundary): Promise<void> {
+  const anchoredTarget = anchoredPath(target, parentBoundary);
   let info;
   try {
-    info = await lstat(dirname(target));
+    info = await lstat(dirname(anchoredTarget));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") throw conflict("invalid_path", "target parent directory does not exist");
     throw error;
@@ -759,31 +935,36 @@ async function assertExistingParent(target: string): Promise<void> {
   if (!info.isDirectory() || info.isSymbolicLink()) throw conflict("invalid_path", "target parent directory is not a regular directory");
 }
 
-async function installNoReplace(temporaryPath: string, target: string): Promise<void> {
-  await link(temporaryPath, target);
+async function installNoReplace(temporaryPath: string, target: string, policy?: PathPolicy, parentBoundary?: ParentBoundary): Promise<void> {
+  if (policy !== undefined) await verifyParentBoundary(policy, parentBoundary);
+  await link(temporaryPath, anchoredPath(target, parentBoundary));
+  if (policy !== undefined) await verifyParentBoundary(policy, parentBoundary);
   await rm(temporaryPath, { force: false });
 }
 
-async function rollback(states: readonly InstallState[]): Promise<Record<string, unknown>[]> {
+async function rollback(states: readonly InstallState[], policy?: PathPolicy): Promise<Record<string, unknown>[]> {
   const failures: Record<string, unknown>[] = [];
   for (const state of [...states].reverse()) {
     if (!state.backupMoved && !state.installed) continue;
     const { change } = state;
     try {
-      const current = await captureBaseline(change.path);
+      await verifyParentBoundary(policy, change.baseline.parentBoundary);
+      const current = await captureBaseline(change.path, policy);
       if (state.backupMoved) {
         // Do not erase a post-baseline writer during recovery. Retain the
         // backup and return its exact recovery path to the caller instead.
         if (current.exists && (!state.installed || current.hash !== state.installedHash)) {
           throw new Error("target changed after patch installation");
         }
-        if (current.exists) await rm(change.path.path, { force: false });
-        await rename(state.backupPath as string, change.path.path);
+        if (current.exists) await rm(anchoredPath(change.path.path, change.baseline.parentBoundary), { force: false });
+        await verifyParentBoundary(policy, change.baseline.parentBoundary);
+        await rename(state.backupPath as string, anchoredPath(change.path.path, change.baseline.parentBoundary));
       } else if (state.installed && change.action === "write") {
         if (!current.exists || current.hash !== state.installedHash) throw new Error("target changed after patch installation");
-        await rm(change.path.path, { force: false });
+        await verifyParentBoundary(policy, change.baseline.parentBoundary);
+        await rm(anchoredPath(change.path.path, change.baseline.parentBoundary), { force: false });
       }
-      await fsyncDirectory(dirname(change.path.path));
+      await fsyncDirectory(dirname(anchoredPath(change.path.path, change.baseline.parentBoundary)), policy, change.baseline.parentBoundary);
     } catch (error) {
       failures.push({
         path: change.path.relativePath,
@@ -797,9 +978,10 @@ async function rollback(states: readonly InstallState[]): Promise<Record<string,
   return failures;
 }
 
-async function fsyncDirectory(directory: string): Promise<void> {
+async function fsyncDirectory(directory: string, policy?: PathPolicy, parentBoundary?: ParentBoundary): Promise<void> {
   let handle;
   try {
+    if (policy !== undefined) await verifyParentBoundary(policy, parentBoundary);
     handle = await open(directory, "r");
     await handle.sync();
   } catch {
@@ -808,6 +990,11 @@ async function fsyncDirectory(directory: string): Promise<void> {
   } finally {
     await handle?.close().catch(() => undefined);
   }
+}
+
+function anchoredPath(target: string, parentBoundary: ParentBoundary | undefined): string {
+  if (parentBoundary === undefined) return target;
+  return join(parentBoundary.snapshot.canonicalPath, basename(target));
 }
 
 function toResolved(value: { workspace: { workspaceId: string; rootPath: string }; path: string }): ResolvedPath {
@@ -823,38 +1010,42 @@ function rejectConflictingPaths(operations: readonly ResolvedOperation[]): void 
   const targets = new Set<string>();
   for (const operation of operations) {
     if (operation.source !== undefined) {
-      if (sources.has(operation.source.relativePath)) throw new RpcRuntimeError("invalid_patch", `duplicate source path: ${operation.source.relativePath}`);
-      sources.add(operation.source.relativePath);
+      const key = pathKey(operation.source.relativePath);
+      if (sources.has(key)) throw new RpcRuntimeError("invalid_patch", `duplicate source path: ${operation.source.relativePath}`);
+      sources.add(key);
     }
     if (operation.target !== undefined) {
-      if (targets.has(operation.target.relativePath)) throw new RpcRuntimeError("invalid_patch", `duplicate target path: ${operation.target.relativePath}`);
-      targets.add(operation.target.relativePath);
+      const key = pathKey(operation.target.relativePath);
+      if (targets.has(key)) throw new RpcRuntimeError("invalid_patch", `duplicate target path: ${operation.target.relativePath}`);
+      targets.add(key);
     }
   }
   for (const operation of operations) {
-    if (operation.source !== undefined && operation.target === undefined && targets.has(operation.source.relativePath)) {
+    if (operation.source !== undefined && operation.target === undefined && targets.has(pathKey(operation.source.relativePath))) {
       throw new RpcRuntimeError("invalid_patch", "patch source and target paths conflict");
     }
-    if (operation.source === undefined || operation.target === undefined || operation.source.relativePath === operation.target.relativePath) continue;
-    if (targets.has(operation.source.relativePath) || sources.has(operation.target.relativePath)) {
+    if (operation.source === undefined || operation.target === undefined || pathKey(operation.source.relativePath) === pathKey(operation.target.relativePath)) continue;
+    if (targets.has(pathKey(operation.source.relativePath)) || sources.has(pathKey(operation.target.relativePath))) {
       throw new RpcRuntimeError("invalid_patch", "patch source and target paths conflict");
     }
   }
 }
 
 function operationResult(operation: ResolvedOperation, changes: readonly Record<string, unknown>[]): Record<string, unknown> {
-  const paths = [operation.source?.relativePath, operation.target?.relativePath].filter((path): path is string => path !== undefined);
+  const paths = [operation.source?.relativePath, operation.target?.relativePath]
+    .filter((path): path is string => path !== undefined)
+    .map(pathKey);
   return {
     operation: operation.kind === "update" && operation.destination !== undefined ? "move" : operation.kind,
     path: operation.source?.relativePath ?? operation.target?.relativePath,
     ...(operation.destination === undefined ? {} : { destination: operation.target?.relativePath }),
     status: "applied",
-    results: changes.filter((change) => paths.includes(change.path as string)),
+    results: changes.filter((change) => typeof change.path === "string" && paths.includes(pathKey(change.path))),
   };
 }
 
 function requiredBaseline(baselines: ReadonlyMap<string, Baseline>, path: ResolvedPath): Baseline {
-  const baseline = baselines.get(path.relativePath);
+  const baseline = baselines.get(pathKey(path.relativePath));
   if (baseline === undefined) throw new Error("missing staged baseline");
   return baseline;
 }
@@ -871,3 +1062,18 @@ function object(value: unknown): Record<string, unknown> {
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function message(error: unknown): string { return error instanceof Error ? error.message.slice(0, 1_024) : "filesystem operation failed"; }
 function backupName(path: string): string { return `${path}.remote-coding-runtime-${randomUUID()}.bak`; }
+/**
+ * Windows path lookup is case-insensitive and trims trailing dots/spaces on
+ * ordinary NTFS components. Keep internal transaction keys aligned with that
+ * lookup so aliases such as `Foo`/`foo` cannot bypass conflict detection or
+ * cause two staged changes to target one inode. POSIX keeps case-sensitive
+ * semantics intact.
+ */
+function pathKey(path: string): string {
+  const normalized = path.replace(/[\\/]+/g, "/");
+  if (process.platform !== "win32") return normalized;
+  return normalized.split("/").map((part) => part.replace(/[ .]+$/u, "")).join("/").toLowerCase();
+}
+function isErrno(error: unknown, code: string): boolean {
+  return typeof error === "object" && error !== null && "code" in error && (error as { readonly code?: unknown }).code === code;
+}

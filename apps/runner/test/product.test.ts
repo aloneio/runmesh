@@ -1,12 +1,14 @@
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { join, resolve, win32 } from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { decodeWireFrame, runnerPolicyChecksum } from "@aloneio/runmesh-protocol";
 import { runCli, runEnrollCli, parseProductArgs } from "../src/cli.js";
 import { RunnerConnection, classifyConnectionFailure } from "../src/connection.js";
 import { RUNNER_VERSION } from "../src/version.js";
 import { enrollRunner } from "../src/enrollment.js";
 import { ProfileStore, defaultWorkspaceId, validateProfile } from "../src/profile.js";
+import { PolicyStore } from "../src/policy-store.js";
 import { createServiceManager, createServiceProvisioner, installServiceManifest, isManagedService, removeServiceManifest, renderService, serviceLayout, serviceProfilePath, type ServiceManifestFilesystem } from "../src/service.js";
 
 async function fixture(): Promise<{ root: string; store: ProfileStore; cleanup: () => Promise<void> }> {
@@ -15,8 +17,70 @@ async function fixture(): Promise<{ root: string; store: ProfileStore; cleanup: 
   return { root, store: new ProfileStore({ baseDir: join(root, "profile") }), cleanup: () => rm(root, { recursive: true, force: true }) };
 }
 const profile = (path: string) => ({ version: 1 as const, server_url: "wss://runner.example.test/runner/connect", runner_id: "runner-1", token: "0123456789abcdef", execution_mode: "dedicated_user" as const, workspaces: [{ id: "workspace", path, writable: true, shell: true }] });
+const runnerPolicy = (runnerId: string, revision: number) => {
+  const unsigned = { schema_version: 1 as const, runner_id: runnerId, revision, runner_permissions: { read: true, edit: true, shell: true, job_control: true }, workspaces: [] as [] };
+  return { ...unsigned, checksum: runnerPolicyChecksum(unsigned) };
+};
 
 describe("runner product profile and enrollment", () => {
+  it("serializes concurrent policy activation and keeps previous policy aligned", async () => {
+    const test = await fixture();
+    let holdConcurrent = false;
+    let firstEntered = false;
+    let secondEntered = false;
+    let resolveFirstEntered!: () => void;
+    const firstEnteredPromise = new Promise<void>((resolve) => { resolveFirstEntered = resolve; });
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const store = new PolicyStore(join(test.root, "state"));
+    // Interpose at the start of the private activation body so this test does
+    // not depend on platform-specific filesystem latency before the first
+    // operation reaches its coordination point.
+    type ActivateVerified = (policy: Parameters<PolicyStore["activate"]>[0]) => Promise<void>;
+    const internals = store as unknown as { activateVerified: ActivateVerified };
+    const originalActivateVerified = internals.activateVerified.bind(store);
+    internals.activateVerified = async (policy) => {
+      if (holdConcurrent) {
+        if (!firstEntered) {
+          firstEntered = true;
+          resolveFirstEntered();
+          await firstGate;
+        } else {
+          secondEntered = true;
+        }
+      }
+      return originalActivateVerified(policy);
+    };
+    let first: Promise<void> | undefined;
+    let second: Promise<void> | undefined;
+    try {
+      const initial = runnerPolicy("policy-queue-runner", 1);
+      const next = runnerPolicy("policy-queue-runner", 2);
+      const latest = runnerPolicy("policy-queue-runner", 3);
+      await store.activate(initial);
+      holdConcurrent = true;
+      first = store.activate(next);
+      // Filesystem setup before the hook is asynchronous (and can be slow on
+      // Windows), so synchronize on the hook rather than polling event-loop turns.
+      await Promise.race([
+        firstEnteredPromise,
+        first.then(() => { throw new Error("first activation was not gated"); }, (error) => { throw error; }),
+      ]);
+      second = store.activate(latest);
+      // The second hook must remain behind the first activation. Without the
+      // store FIFO it reaches the hook and can rename active-policy.json first.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(secondEntered).toBe(false);
+      releaseFirst();
+      await Promise.all([first, second]);
+      await expect(store.load("policy-queue-runner")).resolves.toMatchObject({ revision: 3, checksum: latest.checksum });
+      await expect(readFile(store.previousPath, "utf8").then((value) => JSON.parse(value) as Record<string, unknown>)).resolves.toMatchObject({ revision: 2, checksum: next.checksum });
+    } finally {
+      releaseFirst();
+      await Promise.allSettled([first, second].filter((promise): promise is Promise<void> => promise !== undefined));
+      await test.cleanup();
+    }
+  });
   it("writes atomic private redacted profile data and suffixes workspace ids", async () => {
     const test = await fixture();
     try {
@@ -33,13 +97,77 @@ describe("runner product profile and enrollment", () => {
       expect(lines.join("\n")).not.toContain("0123456789abcdef");
     } finally { await test.cleanup(); }
   });
+  it.skipIf(process.platform === "win32")("rejects a symlinked profile directory", async () => {
+    const root = await mkdtemp(join(tmpdir(), "runner-profile-link-"));
+    const outside = await mkdtemp(join(tmpdir(), "runner-profile-outside-"));
+    try {
+      await symlink(outside, join(root, "profile"));
+      const store = new ProfileStore({ filePath: join(root, "profile", "profile.json") });
+      await expect(store.save(profile(join(root, "workspace")))).rejects.toThrow(/profile directory/);
+      await expect(readFile(join(outside, "profile.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+  it.skipIf(process.platform === "win32")("preserves dedicated-service 0750/0640 profile access across re-enrollment", async () => {
+    const test = await fixture();
+    try {
+      await test.store.save(profile(join(test.root, "workspace")));
+      await chmod(join(test.root, "profile"), 0o750);
+      await chmod(test.store.filePath, 0o640);
+      await expect(test.store.load()).resolves.toMatchObject({ runner_id: "runner-1" });
+      await test.store.save({ ...profile(join(test.root, "workspace")), runner_id: "runner-reenrolled" });
+      expect((await stat(join(test.root, "profile"))).mode & 0o777).toBe(0o750);
+      expect((await stat(test.store.filePath)).mode & 0o777).toBe(0o640);
+      await expect(test.store.load()).resolves.toMatchObject({ runner_id: "runner-reenrolled" });
+    } finally { await test.cleanup(); }
+  });
   it("posts one-time code with public information and saves a zero-workspace machine profile without outputting token", async () => {
     const test = await fixture();
     try {
       const calls: RequestInit[] = [];
       const result = await enrollRunner({ server: "https://example.test/runner/enroll", code: "a".repeat(43), cwd: join(test.root, "workspace"), store: test.store, fetch: async (_url, init) => { calls.push(init ?? {}); return new Response(JSON.stringify({ runner_id: "runner-1", server_url: "https://example.test/runner/connect", token: "fedcba9876543210" }), { status: 200 }); } });
-      expect(calls).toHaveLength(1); expect(calls[0]?.body).toContain("enrollment_code");
+      expect(calls).toHaveLength(1); expect(calls[0]?.body).toContain("enrollment_code"); expect(calls[0]?.redirect).toBe("error");
       expect(result.profile).toMatchObject({ server_url: "wss://example.test/runner/connect", workspaces: [] });
+    } finally { await test.cleanup(); }
+  });
+  it("binds the returned connection to the enrollment origin and path", async () => {
+    for (const serverUrl of ["https://evil.example/runner/connect", "https://example.test/admin/connect"]) {
+      const test = await fixture();
+      try {
+        await expect(enrollRunner({
+          server: "https://example.test/runner/enroll", code: "a".repeat(43), store: test.store,
+          fetch: async () => new Response(JSON.stringify({ runner_id: "runner-bound", server_url: serverUrl, token: "bound-token-0123456789" }), { status: 200 }),
+        })).rejects.toThrow("outcome is unknown");
+        await expect(test.store.load()).resolves.toBeUndefined();
+      } finally { await test.cleanup(); }
+    }
+    const test = await fixture();
+    try {
+      const requests: string[] = [];
+      await enrollRunner({
+        server: "https://example.test/runner/enroll/", code: "a".repeat(43), store: test.store,
+        fetch: async (url) => {
+          requests.push(String(url));
+          return new Response(JSON.stringify({ runner_id: "runner-bound", server_url: "https://example.test/runner/connect", token: "bound-token-0123456789" }), { status: 200 });
+        },
+      });
+      expect(requests).toEqual(["https://example.test/runner/enroll"]);
+    } finally { await test.cleanup(); }
+  });
+  it("rejects enrollment responses over the UTF-8 byte cap", async () => {
+    const test = await fixture();
+    try {
+      // 16,384 four-byte code points stay below the character cap but exceed
+      // 64 KiB once encoded as UTF-8 (including the JSON envelope).
+      const body = JSON.stringify({ runner_id: "runner-large", server_url: "https://example.test/runner/connect", token: "large-token-0123456789", padding: "\u{1F600}".repeat(16_384) });
+      expect(new TextEncoder().encode(body).byteLength).toBeGreaterThan(64 * 1024);
+      await expect(enrollRunner({
+        server: "https://example.test/runner/enroll", code: "a".repeat(43), store: test.store,
+        fetch: async () => new Response(body, { status: 200 }),
+      })).rejects.toThrow("outcome is unknown");
+      await expect(test.store.load()).resolves.toBeUndefined();
     } finally { await test.cleanup(); }
   });
   it("re-enrollment replaces connection credentials without adding a workspace", async () => {
@@ -85,6 +213,174 @@ describe("runner product profile and enrollment", () => {
       expect(await test.store.load()).toMatchObject({ runner_id: "runner-stdin" });
       expect(parseProductArgs(["enroll", "--server", "https://example.test/runner/enroll", "--code-stdin"]).values).toMatchObject({ codeStdin: true });
       await expect(runEnrollCli(["--server", "https://example.test/runner/enroll", "--code", code, "--code-stdin"], { store: test.store, readStdin: async () => code })).rejects.toThrow("cannot be used together");
+    } finally { await test.cleanup(); }
+  });
+  it("removes the profile when post-enrollment activation fails after irreversible redemption", async () => {
+    const test = await fixture();
+    try {
+      const original = profile(join(test.root, "workspace"));
+      const errors: string[] = [];
+      await test.store.save(original);
+      await expect(runCli(["enroll", "--server", "https://example.test/runner/enroll", "--code-stdin", "--re-enroll"], {
+        store: test.store,
+        readStdin: async () => `${"c".repeat(43)}\n`,
+        afterEnroll: async () => { throw new Error("post-enrollment activation failed"); },
+        stderr: (line) => errors.push(line),
+        fetch: async () => new Response(JSON.stringify({ runner_id: "rollback-runner", server_url: "https://example.test/runner/connect", token: "rollback-token-0123456789" }), { status: 200 }),
+      })).rejects.toThrow("post-enrollment activation failed");
+      await expect(test.store.load()).resolves.toBeUndefined();
+      expect(errors.join("\n")).toContain("credentials were consumed");
+      expect(errors.join("\n")).toContain("generate a new enrollment code");
+    } finally { await test.cleanup(); }
+  });
+
+  it("does not remove a profile replaced by a concurrent enrollment during cleanup", async () => {
+    const test = await fixture();
+    try {
+      await test.store.save(profile(join(test.root, "workspace")));
+      await expect(runCli(["enroll", "--server", "https://example.test/runner/enroll", "--code", "c".repeat(43), "--re-enroll"], {
+        store: test.store,
+        afterEnroll: async () => {
+          await test.store.save({ ...profile(join(test.root, "workspace")), runner_id: "concurrent-runner", token: "concurrent-token-0123456789" });
+          throw new Error("post-enrollment activation failed");
+        },
+        fetch: async () => new Response(JSON.stringify({ runner_id: "first-runner", server_url: "https://example.test/runner/connect", token: "first-token-0123456789" }), { status: 200 }),
+      })).rejects.toThrow("post-enrollment activation failed");
+      await expect(test.store.load()).resolves.toMatchObject({ runner_id: "concurrent-runner", token: "concurrent-token-0123456789" });
+    } finally { await test.cleanup(); }
+  });
+
+  it("clears a stale profile and reports an unknown outcome when enrollment transport fails", async () => {
+    const test = await fixture();
+    try {
+      await test.store.save(profile(join(test.root, "workspace")));
+      const errors: string[] = [];
+      await expect(runCli(["enroll", "--server", "https://example.test/runner/enroll", "--code", "d".repeat(43), "--re-enroll"], {
+        store: test.store,
+        stderr: (line) => errors.push(line),
+        fetch: async () => { throw new Error("socket reset"); },
+      })).rejects.toThrow("outcome is unknown");
+      await expect(test.store.load()).resolves.toBeUndefined();
+      expect(errors.join("\n")).toContain("local profile was removed");
+      expect(errors.join("\n")).toContain("generate a new enrollment code");
+    } finally { await test.cleanup(); }
+  });
+
+  it("preserves a profile written by a concurrent enrollment after an unknown response", async () => {
+    const test = await fixture();
+    try {
+      await test.store.save(profile(join(test.root, "workspace")));
+      await expect(runCli(["enroll", "--server", "https://example.test/runner/enroll", "--code", "d".repeat(43), "--re-enroll"], {
+        store: test.store,
+        fetch: async () => {
+          await test.store.save({ ...profile(join(test.root, "workspace")), runner_id: "concurrent-runner", token: "concurrent-token-0123456789" });
+          throw new Error("socket reset");
+        },
+      })).rejects.toThrow("outcome is unknown");
+      await expect(test.store.load()).resolves.toMatchObject({ runner_id: "concurrent-runner", token: "concurrent-token-0123456789" });
+    } finally { await test.cleanup(); }
+  });
+
+  it("does not delete a profile created concurrently when enrollment started empty", async () => {
+    const test = await fixture();
+    try {
+      const concurrent = { ...profile(join(test.root, "workspace")), runner_id: "concurrent-empty-runner", token: "concurrent-empty-token-0123456789" };
+      const save = test.store.save.bind(test.store);
+      const load = test.store.load.bind(test.store);
+      let loads = 0;
+      // Model a stale read in the cleanup window: both pre-enrollment reads
+      // (and the old helper's ownership check) report no profile even though a
+      // separate enrollment writes one immediately after the request starts.
+      vi.spyOn(test.store, "load").mockImplementation(async () => {
+        loads += 1;
+        return loads <= 3 ? undefined : load();
+      });
+      await expect(runCli(["enroll", "--server", "https://example.test/runner/enroll", "--code", "e".repeat(43)], {
+        store: test.store,
+        fetch: async () => {
+          await save(concurrent);
+          throw new Error("socket reset");
+        },
+      })).rejects.toThrow("outcome is unknown");
+      await expect(load()).resolves.toMatchObject({ runner_id: concurrent.runner_id, token: concurrent.token });
+    } finally { await test.cleanup(); }
+  });
+
+  it("keeps the previous profile for a definitive enrollment rejection", async () => {
+    const test = await fixture();
+    try {
+      const original = profile(join(test.root, "workspace"));
+      await test.store.save(original);
+      const errors: string[] = [];
+      await expect(runEnrollCli(["--server", "https://example.test/runner/enroll", "--code", "e".repeat(43), "--re-enroll"], {
+        store: test.store,
+        stderr: (line) => errors.push(line),
+        fetch: async () => new Response("invalid enrollment", { status: 401 }),
+      })).rejects.toThrow("enrollment failed (401)");
+      await expect(test.store.load()).resolves.toMatchObject({ runner_id: original.runner_id, token: original.token });
+      expect(errors).toEqual(["enrollment failed (401)"]);
+    } finally { await test.cleanup(); }
+  });
+
+  it("keeps the profile when another enrollment already owns the Runner fence", async () => {
+    const test = await fixture();
+    try {
+      const original = profile(join(test.root, "workspace"));
+      await test.store.save(original);
+      const errors: string[] = [];
+      await expect(runEnrollCli(["--server", "https://example.test/runner/enroll", "--code", "g".repeat(43), "--re-enroll"], {
+        store: test.store,
+        stderr: (line) => errors.push(line),
+        fetch: async () => new Response("Runner credential mutation is already in progress", { status: 409 }),
+      })).rejects.toThrow("already in progress");
+      await expect(test.store.load()).resolves.toMatchObject({ runner_id: original.runner_id, token: original.token });
+      expect(errors).toEqual(["enrollment is already in progress for this Runner; wait for it to finish and retry"]);
+    } finally { await test.cleanup(); }
+  });
+
+  it("treats redirects as an unknown enrollment outcome", async () => {
+    const test = await fixture();
+    try {
+      await test.store.save(profile(join(test.root, "workspace")));
+      const errors: string[] = [];
+      await expect(runEnrollCli(["--server", "https://example.test/runner/enroll", "--code", "h".repeat(43), "--re-enroll"], {
+        store: test.store,
+        stderr: (line) => errors.push(line),
+        fetch: async () => new Response(null, { status: 302, headers: { location: "https://example.test/runner/enroll" } }),
+      })).rejects.toThrow("outcome is unknown");
+      await expect(test.store.load()).resolves.toBeUndefined();
+      expect(errors.join("\n")).toContain("local profile was removed");
+    } finally { await test.cleanup(); }
+  });
+
+  it("treats an invalid response status as an unknown enrollment outcome", async () => {
+    const test = await fixture();
+    try {
+      await test.store.save(profile(join(test.root, "workspace")));
+      const errors: string[] = [];
+      const invalidStatus = { ok: false, status: 0 } as Response;
+      await expect(runEnrollCli(["--server", "https://example.test/runner/enroll", "--code", "i".repeat(43), "--re-enroll"], {
+        store: test.store,
+        stderr: (line) => errors.push(line),
+        fetch: async () => invalidStatus,
+      })).rejects.toThrow("outcome is unknown");
+      await expect(test.store.load()).resolves.toBeUndefined();
+      expect(errors.join("\n")).toContain("local profile was removed");
+    } finally { await test.cleanup(); }
+  });
+
+  it("clears the previous profile when a success response cannot be trusted", async () => {
+    const test = await fixture();
+    try {
+      await test.store.save(profile(join(test.root, "workspace")));
+      const errors: string[] = [];
+      await expect(runEnrollCli(["--server", "https://example.test/runner/enroll", "--code", "f".repeat(43), "--re-enroll"], {
+        store: test.store,
+        stderr: (line) => errors.push(line),
+        fetch: async () => new Response("not-json", { status: 200 }),
+      })).rejects.toThrow("outcome is unknown");
+      await expect(test.store.load()).resolves.toBeUndefined();
+      expect(errors.join("\n")).toContain("local profile was removed");
     } finally { await test.cleanup(); }
   });
 
@@ -182,6 +478,27 @@ describe("runner product CLI and service safety", () => {
     expect(privileged.content).toContain("<UserId>SYSTEM</UserId>");
     expect(Buffer.from(windows.content, "utf8").toString("utf8")).toBe(windows.content);
   });
+  it("rejects legacy service commands that try to override profile or state paths", () => {
+    for (const command of [
+      "/opt/runmesh/current/bin/coding-runner start --profile /tmp/attacker-profile",
+      "/opt/runmesh/current/bin/coding-runner start --state-dir=/tmp/attacker-state",
+    ]) {
+      expect(() => renderService({ platform: "linux", mode: "system", command })).toThrow("cannot override --profile or --state-dir");
+    }
+    const safe = renderService({ platform: "linux", mode: "system", command: "/opt/runmesh/current/bin/coding-runner start --json" });
+    expect(safe.content).toContain("--profile /etc/runmesh/profile.json");
+    expect(safe.content).toContain("--state-dir /var/lib/runmesh");
+  });
+  it("normalizes profile and state paths before rendering a service command", () => {
+    const profileStore = new ProfileStore({ filePath: "relative-profile.json" });
+    const expectedStorePath = process.platform === "win32" ? win32.resolve("relative-profile.json") : resolve("relative-profile.json");
+    expect(profileStore.filePath).toBe(expectedStorePath);
+    const manifest = renderService({ platform: "win32", mode: "user", profilePath: "relative-profile.json", stateDir: "relative-state" });
+    expect(manifest.content).toContain(win32.resolve("relative-profile.json"));
+    expect(manifest.content).toContain(win32.resolve("relative-state"));
+    expect(manifest.content).not.toContain("--profile relative-profile.json");
+    expect(manifest.content).not.toContain("--state-dir relative-state");
+  });
   it("escapes systemd specifiers and control characters in generated values", () => {
     const manifest = renderService({
       platform: "linux", mode: "user", executablePath: "/opt/run%mesh/coding runner",
@@ -212,6 +529,90 @@ describe("runner product CLI and service safety", () => {
     const manifest = renderService({ platform: "win32", mode: "system" });
     await expect(managerFor("Ready").status?.(manifest)).resolves.toMatchObject({ installed: true, active: false });
     await expect(managerFor("Running").status?.(manifest)).resolves.toMatchObject({ installed: true, active: true, identity: "NT AUTHORITY\\LOCAL SERVICE" });
+  });
+  it("re-applies an unchanged desired policy after activation is interrupted before live publish", async () => {
+    const workspaces: [] = [];
+    const policyBase = {
+      schema_version: 1 as const,
+      runner_id: "policy-reapply-runner",
+      revision: 1,
+      runner_permissions: { read: true, edit: true, shell: true, job_control: true },
+      workspaces,
+    };
+    const desired = { ...policyBase, checksum: runnerPolicyChecksum(policyBase) };
+    const firstSocket = { readyState: 1, send: vi.fn() };
+    const replacementSocket = { readyState: 1, send: vi.fn() };
+    const applied: unknown[][] = [];
+    let activationCount = 0;
+    const runtime = {
+      applyPolicy: (value: unknown[]) => { applied.push(value); },
+      syncJobs: async () => [],
+      syncWorkspaceMetadata: () => [],
+    } as unknown as import("../src/runtime.js").RunnerRuntime;
+    const policyStore = {
+      activate: async () => {
+        activationCount += 1;
+        // Simulate the transport being superseded after durable activation but
+        // before the live runtime policy is published.
+        if (activationCount === 1) (connection as unknown as { socket: unknown }).socket = replacementSocket;
+      },
+      load: async () => undefined,
+    } as unknown as import("../src/policy-store.js").PolicyStore;
+    const connection = new RunnerConnection({
+      config: { server: "wss://runner.example.test/runner/connect", runnerId: policyBase.runner_id, token: "0123456789abcdef", workspaces: [] },
+      runtime,
+      policyStore,
+    });
+    const internals = connection as unknown as {
+      socket: unknown;
+      applyDesiredPolicy: (socket: unknown, policy: typeof desired) => Promise<void>;
+    };
+    internals.socket = firstSocket;
+    await internals.applyDesiredPolicy(firstSocket, desired);
+    expect(applied).toHaveLength(0);
+    internals.socket = replacementSocket;
+    await internals.applyDesiredPolicy(replacementSocket, desired);
+    expect(applied).toHaveLength(1);
+  });
+  it("re-acknowledges an already-active policy after a reconnect", async () => {
+    const policyBase = {
+      schema_version: 1 as const,
+      runner_id: "policy-reconnect-runner",
+      revision: 1,
+      runner_permissions: { read: true, edit: true, shell: true, job_control: true },
+      workspaces: [] as [],
+    };
+    const desired = { ...policyBase, checksum: runnerPolicyChecksum(policyBase) };
+    const socket = { readyState: 1, send: vi.fn() };
+    const runtime = {
+      syncJobs: async () => [],
+      syncWorkspaceMetadata: () => [],
+      applyPolicy: vi.fn(),
+    } as unknown as import("../src/runtime.js").RunnerRuntime;
+    const policyStore = { activate: vi.fn(), load: async () => undefined } as unknown as import("../src/policy-store.js").PolicyStore;
+    const connection = new RunnerConnection({
+      config: { server: "wss://runner.example.test/runner/connect", runnerId: policyBase.runner_id, token: "0123456789abcdef", workspaces: [] },
+      runtime,
+      policyStore,
+    });
+    const internals = connection as unknown as {
+      socket: unknown;
+      desiredPolicyRevision: number;
+      desiredPolicyChecksum: string;
+      appliedPolicyRevision: number | null;
+      appliedPolicyChecksum: string | null;
+      applyDesiredPolicy: (socket: unknown, policy: typeof desired) => Promise<void>;
+    };
+    internals.socket = socket;
+    internals.desiredPolicyRevision = desired.revision;
+    internals.desiredPolicyChecksum = desired.checksum;
+    internals.appliedPolicyRevision = desired.revision;
+    internals.appliedPolicyChecksum = desired.checksum;
+    await internals.applyDesiredPolicy(socket, desired);
+    expect(policyStore.activate).not.toHaveBeenCalled();
+    const frames = socket.send.mock.calls.map(([value]: [string]) => decodeWireFrame(value));
+    expect(frames.some((frame) => frame.type === "runner.policy_ack" && frame.status === "applied" && frame.applied_revision === desired.revision && frame.applied_checksum === desired.checksum)).toBe(true);
+    expect(frames.some((frame) => frame.type === "runner.sync")).toBe(true);
   });
   it("quotes Windows task arguments with trailing backslashes safely", () => {
     const executablePath = String.raw`C:\Program Files\Runmesh\current\coding-runner.cmd`;

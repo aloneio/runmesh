@@ -1,20 +1,20 @@
 import { createHash } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { validateManifest } from "./release-manifest.mjs";
+import { readBoundedReleaseFile } from "./release-io.mjs";
 import { verifyReleaseManifest } from "./release-signature.mjs";
 
 export async function verifyReleaseAssets({ manifestPath, signaturePath, descriptorPath, keyringPath, expectedKeyId, expectedVersion }) {
-  await verifyReleaseManifest({ manifestPath, signaturePath, descriptorPath, keyringPath, expectedKeyId });
-  const manifest = validateManifest(JSON.parse(await readFile(manifestPath, "utf8")), expectedVersion);
+  const manifestBytes = await verifyReleaseManifest({ manifestPath, signaturePath, descriptorPath, keyringPath, expectedKeyId });
+  const manifest = validateManifest(JSON.parse(manifestBytes.toString("utf8")), expectedVersion);
   const directory = dirname(manifestPath);
   for (const artifact of manifest.artifacts) {
     const path = join(directory, artifact.name);
     if (basename(path) !== artifact.name) throw new Error(`release artifact name is unsafe: ${artifact.name}`);
-    const metadata = await stat(path);
-    if (!metadata.isFile() || metadata.size !== artifact.size) throw new Error(`release artifact size mismatch: ${artifact.name}`);
-    const digest = createHash("sha256").update(await readFile(path)).digest("hex");
+    const bytes = await readBoundedReleaseFile(path, artifact.name);
+    if (bytes.byteLength !== artifact.size) throw new Error(`release artifact size mismatch: ${artifact.name}`);
+    const digest = createHash("sha256").update(bytes).digest("hex");
     if (digest !== artifact.sha256) throw new Error(`release artifact SHA-256 mismatch: ${artifact.name}`);
   }
   return manifest;
