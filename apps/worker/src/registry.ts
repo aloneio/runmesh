@@ -1019,15 +1019,33 @@ export class RegistryDO {
       return true;
     });
   }
-  public createRunnerEnrollment(runnerId: string, enrollmentId: string, verifier: string, nowMs: number, configuredExecutionMode?: RunnerExecutionMode, confirmPrivilegedHost = false): { enrollment_id: string; runner_id: string; expires_at_ms: number } | undefined {
-    if (!isSafeIdentifier(runnerId) || !/^[A-Za-z0-9_-]{43}$/.test(enrollmentId) || !validVerifier(verifier) || !validOptionalExecutionMode(configuredExecutionMode) || (configuredExecutionMode === "privileged_host" && !confirmPrivilegedHost) || this.runnerRow(runnerId) === undefined) return undefined;
+  public createRunnerEnrollment(runnerId: string, enrollmentId: string, verifier: string, nowMs: number, configuredExecutionMode?: RunnerExecutionMode, confirmPrivilegedHost = false, expectedConfiguredExecutionMode?: RunnerExecutionMode | null, expectedLifecycleId?: string): { enrollment_id: string; runner_id: string; expires_at_ms: number } | undefined {
+    // The expected values are an optional compare-and-swap guard used by the
+    // browser action path.  Keep them trailing/optional so older direct
+    // callers and already-issued enrollment code remain compatible.
+    if (!isSafeIdentifier(runnerId) || !/^[A-Za-z0-9_-]{43}$/.test(enrollmentId) || !validVerifier(verifier) || !validOptionalExecutionMode(configuredExecutionMode) || (configuredExecutionMode === "privileged_host" && !confirmPrivilegedHost) || !validExpectedExecutionMode(expectedConfiguredExecutionMode) || (expectedLifecycleId !== undefined && !validLifecycleId(expectedLifecycleId))) return undefined;
     const expiresAtMs = nowMs + RUNNER_ENROLLMENT_TTL_MS;
     try {
       this.ctx.storage.transactionSync(() => {
+        const current = this.runnerRow(runnerId);
+        if (current === undefined) throw new Error("runner not found");
+        // A mode read and the subsequent enrollment write may be separated by
+        // a RunnerDO fence/network round trip.  Check both the trusted mode
+        // and lifecycle while holding the Registry transaction so an old
+        // request cannot downgrade a newer mode or write into a recreated
+        // runner-id lifecycle.  `null` is an intentional legacy expectation;
+        // `undefined` means an old direct caller did not request a guard.
+        if (expectedConfiguredExecutionMode !== undefined && current.configured_execution_mode !== expectedConfiguredExecutionMode) throw new Error("runner execution mode changed");
+        if (expectedLifecycleId !== undefined && current.lifecycle_id !== expectedLifecycleId) throw new Error("runner lifecycle changed");
         // Persist the administrator's selection in the same transaction as
         // the one-time code.  A failed insert therefore cannot leave the
         // Runner advertising a mode for a code that was never issued.
-        if (configuredExecutionMode !== undefined) this.ctx.storage.sql.exec("UPDATE runners SET configured_execution_mode = ?, updated_at_ms = ? WHERE runner_id = ?", configuredExecutionMode, nowMs, runnerId);
+        if (configuredExecutionMode !== undefined) {
+          const update = expectedLifecycleId === undefined
+            ? this.ctx.storage.sql.exec("UPDATE runners SET configured_execution_mode = ?, updated_at_ms = ? WHERE runner_id = ?", configuredExecutionMode, nowMs, runnerId)
+            : this.ctx.storage.sql.exec("UPDATE runners SET configured_execution_mode = ?, updated_at_ms = ? WHERE runner_id = ? AND lifecycle_id = ?", configuredExecutionMode, nowMs, runnerId, expectedLifecycleId);
+          if (update.rowsWritten !== 1) throw new Error("runner execution mode compare-and-swap failed");
+        }
         this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE runner_id = ? AND used_at_ms IS NULL", runnerId);
         this.ctx.storage.sql.exec("INSERT INTO runner_enrollments (enrollment_id, runner_id, verifier, created_at_ms, expires_at_ms) VALUES (?, ?, ?, ?, ?)", enrollmentId, runnerId, verifier, nowMs, expiresAtMs);
       });
@@ -1428,8 +1446,17 @@ export class RegistryDO {
     if (request.method === "POST" && action === "enrollments") {
       const enrollmentId = stringField(input, "enrollment_id", 43); const verifier = stringField(input, "verifier", 64);
       const configuredExecutionMode = requestedExecutionMode(input); const confirmation = requestedPrivilegedConfirmation(input);
-      if (configuredExecutionMode === null || confirmation === null || (configuredExecutionMode === "privileged_host" && confirmation !== true)) return Response.json({ error: "invalid execution mode or privileged-host confirmation" }, { status: 400 });
-      const enrollment = enrollmentId === undefined || verifier === undefined ? undefined : this.createRunnerEnrollment(runnerId, enrollmentId, verifier, now, configuredExecutionMode, confirmation === true);
+      const expectedMode = requestedExpectedExecutionMode(input); const expectedLifecycleId = requestedExpectedLifecycleId(input);
+      const hasExpectedMode = Object.prototype.hasOwnProperty.call(input, "expected_configured_execution_mode");
+      const hasExpectedLifecycle = Object.prototype.hasOwnProperty.call(input, "expected_lifecycle_id");
+      // Any internal caller that supplies a mode for an existing Runner must
+      // also supply both CAS components.  Requests from an older Worker may
+      // still omit the mode entirely (which only creates a code); they must
+      // not be allowed to replay a legacy default and overwrite a newer
+      // administrator choice.
+      if (configuredExecutionMode !== undefined && (!hasExpectedMode || !hasExpectedLifecycle)) return Response.json({ error: "expected runner state is required for execution-mode changes" }, { status: 409 });
+      if (hasExpectedMode !== hasExpectedLifecycle || configuredExecutionMode === null || confirmation === null || (configuredExecutionMode === "privileged_host" && confirmation !== true) || expectedMode === "invalid" || expectedLifecycleId === null) return Response.json({ error: "invalid execution mode, confirmation, or expected runner state" }, { status: 400 });
+      const enrollment = enrollmentId === undefined || verifier === undefined ? undefined : this.createRunnerEnrollment(runnerId, enrollmentId, verifier, now, configuredExecutionMode, confirmation === true, expectedMode, expectedLifecycleId);
       return enrollment === undefined ? new Response("not found", { status: 404 }) : Response.json(enrollment);
     }
     if (request.method === "POST" && action === "rotate") {
@@ -1914,6 +1941,7 @@ function validUpdateChannel(value: unknown): value is RunnerUpdateChannel { retu
 function validUpdateStatus(value: unknown): value is RunnerUpdateStatus { return value === "unknown" || value === "up_to_date" || value === "update_available" || value === "pinned" || value === "incompatible"; }
 function validExecutionMode(value: unknown): value is RunnerExecutionMode { return value === "dedicated_user" || value === "privileged_host"; }
 function validOptionalExecutionMode(value: unknown): value is RunnerExecutionMode | undefined { return value === undefined || validExecutionMode(value); }
+function validExpectedExecutionMode(value: unknown): value is RunnerExecutionMode | null | undefined { return value === undefined || value === null || validExecutionMode(value); }
 /** Parse an optional authenticated mode field.  `null` is an invalid sentinel
  * so callers can distinguish a missing legacy field from malformed input. */
 function requestedExecutionMode(input: InternalInput): RunnerExecutionMode | undefined | null {
@@ -1925,6 +1953,21 @@ function requestedExecutionMode(input: InternalInput): RunnerExecutionMode | und
   if (hasPrimary && !validExecutionMode(primary) || hasAlias && !validExecutionMode(alias)) return null;
   if (hasPrimary && hasAlias && primary !== alias) return null;
   return (hasPrimary ? primary : alias) as RunnerExecutionMode;
+}
+/** Parse the optional Registry CAS mode guard.  `null` is meaningful: it
+ * explicitly expects a legacy row that has not yet chosen a mode, whereas an
+ * omitted field preserves compatibility with older internal callers. */
+function requestedExpectedExecutionMode(input: InternalInput): RunnerExecutionMode | null | undefined | "invalid" {
+  if (!Object.prototype.hasOwnProperty.call(input, "expected_configured_execution_mode")) return undefined;
+  const value = input.expected_configured_execution_mode;
+  return value === null ? null : validExecutionMode(value) ? value : "invalid";
+}
+/** Parse the optional lifecycle CAS guard without accepting a caller-supplied
+ * empty/invalid identity. */
+function requestedExpectedLifecycleId(input: InternalInput): string | undefined | null {
+  if (!Object.prototype.hasOwnProperty.call(input, "expected_lifecycle_id")) return undefined;
+  const value = input.expected_lifecycle_id;
+  return typeof value === "string" && validLifecycleId(value) ? value : null;
 }
 function requestedPrivilegedConfirmation(input: InternalInput): boolean | undefined | null {
   if (!Object.prototype.hasOwnProperty.call(input, "confirm_privileged_host")) return undefined;

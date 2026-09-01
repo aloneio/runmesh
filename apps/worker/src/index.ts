@@ -511,6 +511,17 @@ async function changePassword(env: WorkerEnv, form: FormData): Promise<Response>
 
 type ConsoleExecutionMode = RunnerExecutionMode;
 type ExecutionModeSelection = { readonly mode: ConsoleExecutionMode; readonly confirmed: boolean };
+type RunnerExecutionSnapshot = {
+  readonly runner: Record<string, unknown>;
+  readonly configuredMode: ConsoleExecutionMode | "migration_required";
+  readonly lifecycleId: string;
+};
+type RunnerExecutionSnapshotResult = { readonly status: number; readonly snapshot?: RunnerExecutionSnapshot };
+type RunnerExecutionExpectation = { readonly configuredMode: ConsoleExecutionMode | null; readonly lifecycleId: string };
+
+function expectedConfiguredMode(snapshot: RunnerExecutionSnapshot): ConsoleExecutionMode | null {
+  return snapshot.configuredMode === "migration_required" ? null : snapshot.configuredMode;
+}
 
 /**
  * Parse a fresh administrator service-mode choice at the authenticated form
@@ -573,28 +584,68 @@ function runnerReportedExecutionMode(runner: { readonly metadata?: unknown; read
   return "unknown";
 }
 
+/**
+ * Read the Registry-owned mode together with the opaque lifecycle identity
+ * used by transport fencing.  The ordinary Runner projection intentionally
+ * omits lifecycle_id; the authenticated mutation-state route is the narrow
+ * internal seam that lets browser mutations reject a stale delete/recreate
+ * response without exposing the value to dashboard/MCP callers.
+ */
+async function runnerExecutionSnapshot(env: WorkerEnv, runnerId: string, mutationId: string): Promise<RunnerExecutionSnapshotResult> {
+  let runnerResponse: Response;
+  try { runnerResponse = await runnerRegistryRequest(env, runnerId, "", "GET", ""); }
+  catch { return { status: 503 }; }
+  if (!runnerResponse.ok) return { status: runnerResponse.status };
+  let runner: Record<string, unknown> | undefined;
+  try { runner = record(await json(runnerResponse)); }
+  catch { return { status: 502 }; }
+  if (runner === undefined || runner.runner_id !== runnerId) return { status: 502 };
+  const mutationState = await runnerMutationState(env, runnerId, mutationId).catch(() => undefined);
+  if (mutationState?.runner_exists !== true || typeof mutationState.lifecycle_id !== "string" || mutationState.lifecycle_id.length === 0) return { status: 503 };
+  return { status: 200, snapshot: { runner, configuredMode: runnerConfiguredExecutionMode(runner), lifecycleId: mutationState.lifecycle_id } };
+}
+
+/** Release a pre-commit fence when a stale action is rejected before it can
+ * touch Registry credentials or enrollment state.  If cancellation cannot be
+ * proven, callers deliberately keep the fence and return a safe 503. */
+async function releaseUncommittedRunnerFence(env: WorkerEnv, runnerId: string, mutationId: string): Promise<boolean> {
+  try {
+    const cancelled = await cancelRunnerPolicyMutation(env, runnerId, mutationId);
+    return cancelled.ok;
+  } catch { return false; }
+}
+
 /** Action forms remain fail-closed for a legacy row while the table can show
  * the required explicit migration state instead of mislabeling it dedicated. */
-function runnerActionExecutionMode(runner: { readonly configured_execution_mode?: unknown; readonly metadata?: unknown; readonly public_info?: unknown }): ConsoleExecutionMode {
+function runnerActionExecutionMode(runner: { readonly configured_execution_mode?: unknown; readonly metadata?: unknown; readonly public_info?: unknown }): ConsoleExecutionMode | undefined {
   const mode = runnerConfiguredExecutionMode(runner);
-  return mode === "migration_required" ? "dedicated_user" : mode;
+  // A legacy row must not render a pre-selected restricted mode.  Although
+  // dedicated_user is the safe fallback for new API callers, selecting it for
+  // an old row is itself a migration decision and must be made deliberately;
+  // otherwise a stale/self-reported privileged row could be silently
+  // downgraded simply by submitting the default action form.
+  return mode === "migration_required" ? undefined : mode;
 }
 
 const PRIVILEGED_HOST_WARNING = "Runner will run as root, SYSTEM, or the platform-equivalent highest-privilege identity. Shell commands can access files, processes, network, environment variables, credentials, and system services reachable by that service identity. Install only on a trusted dedicated machine, VM, or container. Runner 将以 root、SYSTEM 或平台等效最高权限运行。Shell 命令可以访问该服务身份可访问的文件、进程、网络、环境变量、凭据和系统服务。仅应安装在受信任的专用机器、虚拟机或容器中。";
 
 /**
- * Render mode fields for an authenticated action. Legacy rows default to the
- * restricted mode and make the high-privilege choice visible; configured rows
- * carry the server-owned choice through the form. The enrollment result uses
- * the non-interactive variant to carry the already confirmed choice through
- * the one-time regeneration form.
+ * Render mode fields for an authenticated action. Legacy rows intentionally
+ * render an unselected mode so the administrator must make an explicit
+ * migration choice; configured rows carry the server-owned choice through the
+ * form. The enrollment result uses the non-interactive variant to carry the
+ * already confirmed choice through the one-time regeneration form.
  */
-function executionModeFormFields(mode: ConsoleExecutionMode, csrf: string, interactive = false, requirePrivilegedConfirmation = mode === "privileged_host"): string {
-  if (!interactive) return `<input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input type="hidden" name="execution_mode" value="${mode}">${mode === "privileged_host" ? `<input type="hidden" name="confirm_privileged_host" value="true">` : ""}`;
-  const safeMode = mode === "privileged_host" ? "privileged_host" : "dedicated_user";
+function executionModeFormFields(mode: ConsoleExecutionMode | undefined, csrf: string, interactive = false, requirePrivilegedConfirmation = mode === "privileged_host"): string {
+  if (!interactive) {
+    if (mode === undefined) return `<input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">`;
+    return `<input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input type="hidden" name="execution_mode" value="${mode}">${mode === "privileged_host" ? `<input type="hidden" name="confirm_privileged_host" value="true">` : ""}`;
+  }
+  const safeMode = mode === "privileged_host" ? "privileged_host" : mode === "dedicated_user" ? "dedicated_user" : undefined;
   const confirmationRequired = safeMode === "privileged_host" && requirePrivilegedConfirmation;
   const priorConfirmation = safeMode === "privileged_host" && !confirmationRequired;
-  return `<input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><fieldset class="execution-mode-inline" data-execution-mode-form data-reuse-privileged-confirmation="${priorConfirmation ? "true" : "false"}"><legend>Execution mode</legend><label>Mode<select name="execution_mode" aria-label="Execution mode"><option value="dedicated_user"${safeMode === "dedicated_user" ? " selected" : ""}>dedicated_user · restricted service account</option><option value="privileged_host"${safeMode === "privileged_host" ? " selected" : ""}>privileged_host · highest host privilege</option></select></label><label class="check"><input type="checkbox" name="confirm_privileged_host" value="true" data-privileged-confirmation${confirmationRequired ? " required" : ""}><span>${priorConfirmation ? "High-privilege mode was already authorized for this Runner." : "I understand and authorize the high-privilege installation."}</span></label><p class="warning privileged-host-warning"${safeMode === "privileged_host" ? "" : " hidden"}>${escapeHtml(PRIVILEGED_HOST_WARNING)}</p></fieldset>`;
+  const placeholder = safeMode === undefined ? `<option value="" selected>Choose execution mode (required for legacy Runner)</option>` : "";
+  return `<input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><fieldset class="execution-mode-inline" data-execution-mode-form data-reuse-privileged-confirmation="${priorConfirmation ? "true" : "false"}"><legend>Execution mode</legend><label>Mode<select name="execution_mode" aria-label="Execution mode"${safeMode === undefined ? " required" : ""}>${placeholder}<option value="dedicated_user"${safeMode === "dedicated_user" ? " selected" : ""}>dedicated_user · restricted service account</option><option value="privileged_host"${safeMode === "privileged_host" ? " selected" : ""}>privileged_host · highest host privilege</option></select></label><label class="check"><input type="checkbox" name="confirm_privileged_host" value="true" data-privileged-confirmation${confirmationRequired ? " required" : ""}><span>${priorConfirmation ? "High-privilege mode was already authorized for this Runner." : "I understand and authorize the high-privilege installation."}</span></label><p class="warning privileged-host-warning"${safeMode === "privileged_host" ? "" : " hidden"}>${escapeHtml(PRIVILEGED_HOST_WARNING)}</p></fieldset>`;
 }
 
 async function createBrowserRunner(env: WorkerEnv, form: FormData, baseUrl: string): Promise<Response> {
@@ -628,7 +679,9 @@ async function createBrowserRunner(env: WorkerEnv, form: FormData, baseUrl: stri
   }
   const committed = await runnerMutationState(env, runnerId, mutationId).catch(() => undefined);
   if (committed?.mutation_committed !== true) return adminError(503, "Runner creation outcome is uncertain; Runner remains safely fenced.");
-  const code = await createEnrollmentCode(env, runnerId, selection);
+  const lifecycleId = typeof committed.lifecycle_id === "string" && committed.lifecycle_id.length > 0 ? committed.lifecycle_id : undefined;
+  if (lifecycleId === undefined) return adminError(503, "Runner enrollment state is uncertain; Runner remains safely fenced.");
+  const code = await createEnrollmentCode(env, runnerId, selection, { configuredMode: selection.mode, lifecycleId });
   if (code === undefined) return adminError(503, "Runner enrollment code could not be created.");
   // /add creates an offline central row (credential_version 0), so revoke is
   // used here as a transport finalizer: it closes any stale sockets and clears
@@ -717,20 +770,21 @@ async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, baseUrl
   }
   if (action === "rotate") {
     const mutationId = `credential-rotated-${crypto.randomUUID()}`;
-    let runnerResponse: Response;
-    try { runnerResponse = await runnerRegistryRequest(env, runnerId, "", "GET", ""); }
-    catch { return adminError(503, "Runner credential rotation could not read the Runner state."); }
-    if (!runnerResponse.ok && runnerResponse.status !== 404) return adminError(503, "Runner credential rotation could not read the Runner state.");
-    if (runnerResponse.status === 404) return adminError(404, "Runner was not found.");
-    const runner = record(await json(runnerResponse));
-    if (runner === undefined || runner.runner_id !== runnerId) return adminError(503, "Runner credential rotation could not read the Runner state.");
-    const selection = executionModeForExistingRunner(form, runner);
+    const initialState = await runnerExecutionSnapshot(env, runnerId, mutationId);
+    if (initialState.snapshot === undefined) return adminError(initialState.status === 404 ? 404 : 503, initialState.status === 404 ? "Runner was not found." : "Runner credential rotation could not read the Runner state.");
+    const selection = executionModeForExistingRunner(form, initialState.snapshot.runner);
     if (selection === undefined) return adminError(400, "Runner execution mode must be selected explicitly; privileged-host mode also requires confirmation.");
     // Registry state can lag a live RunnerDO/socket (for example after a
     // heartbeat timeout). Acquire the fence after resolving the trusted mode
     // so a stale/legacy browser form cannot mutate configuration first.
     const fenced = await fenceRunnerTransport(env, runnerId, mutationId);
     if (!fenced.ok) return adminError(503, "Runner credential rotation could not fence the Runner.");
+    const fencedState = await runnerExecutionSnapshot(env, runnerId, mutationId);
+    if (fencedState.snapshot === undefined || fencedState.snapshot.lifecycleId !== initialState.snapshot.lifecycleId || fencedState.snapshot.configuredMode !== initialState.snapshot.configuredMode) {
+      const released = await releaseUncommittedRunnerFence(env, runnerId, mutationId);
+      if (!released) return adminError(503, "Runner credential rotation state is uncertain; Runner remains safely fenced.");
+      return adminError(fencedState.status === 404 ? 404 : 409, fencedState.status === 404 ? "Runner was not found." : "Runner state changed; reload the Runner page and retry.");
+    }
     let response: Response;
     try { response = await runnerRegistryRequest(env, runnerId, "/rotate", "POST", JSON.stringify({ mutation_id: mutationId })); } catch { return adminError(503, "Runner credential rotation outcome is uncertain; Runner remains safely fenced."); }
     if (!response.ok) {
@@ -745,21 +799,17 @@ async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, baseUrl
     // enrollment code. Releasing it first would let a concurrent delete,
     // rotation, or reconnect race in and make the displayed code belong to a
     // different Runner generation.
-    const code = await createEnrollmentCode(env, runnerId, selection);
+    const code = await createEnrollmentCode(env, runnerId, selection, { configuredMode: expectedConfiguredMode(fencedState.snapshot), lifecycleId: fencedState.snapshot.lifecycleId });
     if (code === undefined) return adminError(503, "Enrollment code could not be generated; Runner remains safely fenced.");
     try { await revokeRunnerTransport(env, runnerId, mutationId, true); }
     catch { return adminError(503, "Runner credential cleanup is uncertain; Runner remains safely fenced."); }
     return runnerEnrollmentPage(env, baseUrl, runnerId, code, String(form.get("csrf_token") ?? ""), true, selection.mode, selection.confirmed);
   }
   if (action === "enrollment") {
-    let runnerResponse: Response;
-    try { runnerResponse = await runnerRegistryRequest(env, runnerId, "", "GET", ""); }
-    catch { return adminError(503, "Runner enrollment could not read the Runner state."); }
-    if (runnerResponse.status === 404) return adminError(404, "Runner was not found.");
-    if (!runnerResponse.ok) return adminError(503, "Runner enrollment could not read the Runner state.");
-    const runner = record(await json(runnerResponse));
-    if (runner === undefined || runner.runner_id !== runnerId) return adminError(503, "Runner enrollment could not read the Runner state.");
-    const selection = executionModeForExistingRunner(form, runner);
+    const mutationId = `runner-enrollment-${crypto.randomUUID()}`;
+    const initialState = await runnerExecutionSnapshot(env, runnerId, mutationId);
+    if (initialState.snapshot === undefined) return adminError(initialState.status === 404 ? 404 : 503, initialState.status === 404 ? "Runner was not found." : "Runner enrollment could not read the Runner state.");
+    const selection = executionModeForExistingRunner(form, initialState.snapshot.runner);
     if (selection === undefined) return adminError(400, "Runner execution mode must be selected explicitly; privileged-host mode also requires confirmation.");
     // Enrollment-code regeneration does not change the credential generation,
     // but it is still a capability mutation. Hold the RunnerDO fence while
@@ -767,13 +817,18 @@ async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, baseUrl
     // the page describe a different lifecycle. Since no credential ledger
     // marker is committed by createEnrollmentCode, release this policy-style
     // fence with cancel rather than the credential-only /revoke finalizer.
-    const mutationId = `runner-enrollment-${crypto.randomUUID()}`;
     let fenced: Response;
     try { fenced = await beginRunnerPolicyMutation(env, runnerId, mutationId); }
     catch { return adminError(503, "Runner enrollment could not fence the Runner."); }
     if (!fenced.ok) return adminError(503, "Runner enrollment could not fence the Runner.");
+    const fencedState = await runnerExecutionSnapshot(env, runnerId, mutationId);
+    if (fencedState.snapshot === undefined || fencedState.snapshot.lifecycleId !== initialState.snapshot.lifecycleId || fencedState.snapshot.configuredMode !== initialState.snapshot.configuredMode) {
+      const released = await releaseUncommittedRunnerFence(env, runnerId, mutationId);
+      if (!released) return adminError(503, "Runner enrollment state is uncertain; Runner remains safely fenced.");
+      return adminError(fencedState.status === 404 ? 404 : 409, fencedState.status === 404 ? "Runner was not found." : "Runner state changed; reload the Runner page and retry.");
+    }
     let code: string | undefined;
-    try { code = await createEnrollmentCode(env, runnerId, selection); } catch { code = undefined; }
+    try { code = await createEnrollmentCode(env, runnerId, selection, { configuredMode: expectedConfiguredMode(fencedState.snapshot), lifecycleId: fencedState.snapshot.lifecycleId }); } catch { code = undefined; }
     // A failed/ambiguous Registry response may still have committed the
     // one-time code. Do not release the fence in that case: no code is shown,
     // and a later reconciliation can safely determine the outcome.
@@ -851,11 +906,12 @@ function permissionsFromForm(form: FormData): { read: boolean; edit: boolean; sh
 function isFullHostPath(value: string): boolean { return value === "/" || /^[A-Za-z]:[\\/]?$/.test(value); }
 function isAbsolutePath(value: string): boolean { return value.length > 0 && value.length <= 4_096 && !value.includes("\0") && (/^\//.test(value) || /^[A-Za-z]:[\\/]/.test(value) || /^\\\\/.test(value)); }
 
-async function createEnrollmentCode(env: WorkerEnv, runnerId: string, selection?: ExecutionModeSelection): Promise<string | undefined> {
+async function createEnrollmentCode(env: WorkerEnv, runnerId: string, selection?: ExecutionModeSelection, expected?: RunnerExecutionExpectation): Promise<string | undefined> {
   const code = randomBase64Url();
   const response = await runnerRegistryRequest(env, runnerId, "/enrollments", "POST", JSON.stringify({
     enrollment_id: randomBase64Url(), verifier: await sha256Hex(code),
     ...(selection === undefined ? {} : { execution_mode: selection.mode, confirm_privileged_host: selection.confirmed }),
+    ...(expected === undefined ? {} : { expected_configured_execution_mode: expected.configuredMode, expected_lifecycle_id: expected.lifecycleId }),
   }));
   return response.ok ? code : undefined;
 }
