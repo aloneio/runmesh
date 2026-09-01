@@ -1305,6 +1305,16 @@ export class RegistryDO {
     const row = this.ctx.storage.sql.exec<RunnerRow>("SELECT * FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
     return row === undefined ? undefined : decodeRunner(row);
   }
+  /** Return the ordinary Runner projection and its internal lifecycle identity
+   * from one RegistryDO turn.  Browser mutation callers use this atomic seam
+   * for their execution-mode CAS; the lifecycle value is never included in
+   * the normal Runner/MCP projections. */
+  public getRunnerExecutionState(runnerId: string): { readonly runner: RunnerRecord; readonly lifecycle_id: string } | undefined {
+    const staleBefore = Date.now() - 45_000;
+    this.ctx.storage.sql.exec(`UPDATE runners SET state = 'stale', updated_at_ms = ? WHERE runner_id = ? AND state = 'online' AND last_heartbeat_ms < ?`, Date.now(), runnerId, staleBefore);
+    const row = this.ctx.storage.sql.exec<RunnerRow>("SELECT * FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
+    return row === undefined || !validLifecycleId(row.lifecycle_id) ? undefined : { runner: decodeRunner(row), lifecycle_id: row.lifecycle_id };
+  }
   public listWorkspaces(runnerId: string): unknown[] { return this.ctx.storage.sql.exec<WorkspaceRow>("SELECT workspace_json FROM workspaces WHERE runner_id = ? ORDER BY workspace_id", runnerId).toArray().map((row) => JSON.parse(row.workspace_json) as unknown); }
   public listJobs(runnerId: string, filters: { readonly workspace_id?: string; readonly status?: string; readonly limit?: number } = {}): unknown[] {
     const limit = Math.min(Math.max(filters.limit ?? 100, 1), 100);
@@ -1474,6 +1484,10 @@ export class RegistryDO {
     if (request.method === "GET" && action === "mutation-state" && itemId === undefined) {
       const mutationId = url.searchParams.get("mutation_id");
       return mutationId !== null && validMutationId(mutationId) ? Response.json(this.getRunnerMutationState(runnerId, mutationId)) : Response.json({ error: "invalid mutation_id" }, { status: 400 });
+    }
+    if (request.method === "GET" && action === "execution-state" && itemId === undefined) {
+      const state = this.getRunnerExecutionState(runnerId);
+      return state === undefined ? new Response("not found", { status: 404 }) : Response.json(state);
     }
     if (request.method === "GET" && action === "active-policy" && itemId === undefined) {
       const policy = this.getActivePolicySnapshot(runnerId);

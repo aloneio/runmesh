@@ -154,6 +154,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
       expect(instance.addRunner(runnerId, "CAS runner", now, `runner-create-${crypto.randomUUID()}`, "dedicated_user")).toBeDefined();
       const firstLifecycle = state.storage.sql.exec<{ lifecycle_id: string }>("SELECT lifecycle_id FROM runners WHERE runner_id = ?", runnerId).toArray()[0]?.lifecycle_id;
       expect(firstLifecycle).toBeDefined();
+      expect(instance.getRunnerExecutionState(runnerId)).toMatchObject({ runner: { runner_id: runnerId, configured_execution_mode: "dedicated_user" }, lifecycle_id: firstLifecycle });
       // A guarded transition is allowed when the expected trusted mode still
       // matches, but an old form cannot subsequently overwrite the new mode.
       expect(instance.createRunnerEnrollment(runnerId, randomBase64Url(), "a".repeat(64), now + 1, "privileged_host", true, "dedicated_user", firstLifecycle)).toBeDefined();
@@ -509,10 +510,29 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     }, adminJar);
     expect(dedicatedCreated.status).toBe(200);
     const migrated = await submit(`https://worker.test/admin/runners/${dedicatedId}/enrollment`, {
-      csrf_token: csrf, execution_mode: "privileged_host", confirm_privileged_host: "true",
+      csrf_token: csrf, expected_execution_mode: "dedicated_user", execution_mode: "privileged_host", confirm_privileged_host: "true",
     }, adminJar);
     expect(migrated.status).toBe(200);
     await expect(runInDurableObject(registry, (instance) => instance.getRunner(dedicatedId))).resolves.toMatchObject({ configured_execution_mode: "privileged_host" });
+    // A result page rendered before the migration must not be able to replay
+    // its old dedicated_user choice and silently downgrade the Runner.
+    const staleDedicatedForm = await submit(`https://worker.test/admin/runners/${dedicatedId}/enrollment`, {
+      csrf_token: csrf, execution_mode: "dedicated_user",
+    }, adminJar);
+    expect(staleDedicatedForm.status).toBe(400);
+    await expect(runInDurableObject(registry, (instance) => instance.getRunner(dedicatedId))).resolves.toMatchObject({ configured_execution_mode: "privileged_host" });
+
+    // Likewise, an old privileged result page cannot re-upgrade a Runner
+    // after an administrator deliberately moved it to the restricted mode.
+    const downgraded = await submit(`https://worker.test/admin/runners/${privilegedId}/enrollment`, {
+      csrf_token: csrf, expected_execution_mode: "privileged_host", execution_mode: "dedicated_user",
+    }, adminJar);
+    expect(downgraded.status).toBe(200);
+    const stalePrivilegedForm = await submit(`https://worker.test/admin/runners/${privilegedId}/enrollment`, {
+      csrf_token: csrf, execution_mode: "privileged_host", confirm_privileged_host: "true",
+    }, adminJar);
+    expect(stalePrivilegedForm.status).toBe(400);
+    await expect(runInDurableObject(registry, (instance) => instance.getRunner(privilegedId))).resolves.toMatchObject({ configured_execution_mode: "dedicated_user" });
 
     // A legacy row has no trusted mode and therefore cannot be migrated by an
     // old form that omitted the administrator's explicit selection.
@@ -522,6 +542,8 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(await legacyPage.text()).toContain("Choose execution mode (required for legacy Runner)");
     const legacyAction = await submit(`https://worker.test/admin/runners/${legacyId}/enrollment`, { csrf_token: csrf }, adminJar);
     expect(legacyAction.status).toBe(400);
+    const legacyExplicitOldForm = await submit(`https://worker.test/admin/runners/${legacyId}/enrollment`, { csrf_token: csrf, execution_mode: "dedicated_user" }, adminJar);
+    expect(legacyExplicitOldForm.status).toBe(400);
     await expect(runInDurableObject(registry, (instance) => instance.getRunner(legacyId))).resolves.toMatchObject({ configured_execution_mode: null });
   });
 
