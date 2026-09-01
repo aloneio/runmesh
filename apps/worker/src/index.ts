@@ -1,7 +1,7 @@
 import { createMcpHandler } from "agents/mcp/server";
 import { PROTOCOL_CURRENT_VERSION, PROTOCOL_MIN_VERSION } from "@aloneio/runmesh-protocol";
 import { createCodingMcpServer, type McpAuth } from "./mcp/server.js";
-import { RegistryDO, type McpClientRecord, type RunnerPublicInfo, type RunnerRecord, type VerifiedMcpClient } from "./registry.js";
+import { RegistryDO, type McpClientRecord, type RunnerExecutionMode, type RunnerPublicInfo, type RunnerRecord, type VerifiedMcpClient } from "./registry.js";
 import { RunnerDO, type WorkerEnv } from "./runner-do.js";
 import type { CodingScope } from "./registry.js";
 import {
@@ -235,7 +235,16 @@ async function handleRunnerEnrollment(request: Request, env: WorkerEnv): Promise
 function runnerPublicInfo(value: unknown): RunnerPublicInfo | undefined {
   const item = record(value);
   if (item === undefined || !safeDisplayText(item.platform, 128) || !safeDisplayText(item.architecture, 128) || !safeDisplayText(item.hostname, 256) || !safeDisplayText(item.runner_version, 256) || typeof item.protocol_version !== "number") return undefined;
-  const info: RunnerPublicInfo = { platform: item.platform, architecture: item.architecture, hostname: item.hostname, runner_version: item.runner_version, protocol_version: item.protocol_version };
+  const info: RunnerPublicInfo = {
+    platform: item.platform,
+    architecture: item.architecture,
+    hostname: item.hostname,
+    runner_version: item.runner_version,
+    protocol_version: item.protocol_version,
+    ...(item.execution_mode === "dedicated_user" || item.execution_mode === "privileged_host" ? { execution_mode: item.execution_mode } : {}),
+    ...(typeof item.service_identity === "string" && safeDisplayText(item.service_identity, 512) ? { service_identity: item.service_identity } : {}),
+    ...(item.privilege_state === "privileged" || item.privilege_state === "restricted" || item.privilege_state === "mismatch" || item.privilege_state === "unknown" ? { privilege_state: item.privilege_state } : {}),
+  };
   return Number.isSafeInteger(info.protocol_version) && info.protocol_version > 0 && info.protocol_version <= 1_000 ? info : undefined;
 }
 function safeDisplayText(value: unknown, max: number): value is string {
@@ -415,17 +424,19 @@ async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: URL): P
     const csrf = cookieValue(request, ADMIN_CSRF_COOKIE);
     if (csrf === undefined || !constantTimeEqual(await sha256Hex(csrf), session.csrf_hash)) return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
     const runnerId = runnerDetail[1] as string;
-    const [runnerResponse, workspaceResponse, jobsResponse, environment, releaseResponse] = await Promise.all([
+    const [runnerResponse, workspaceResponse, jobsResponse, policyVersionsResponse, environment, releaseResponse] = await Promise.all([
       registryGet(env, `/runners/${encodeURIComponent(runnerId)}`),
       registryGet(env, `/auth/runners/${encodeURIComponent(runnerId)}/managed-workspaces`),
       registryGet(env, `/runners/${encodeURIComponent(runnerId)}/jobs?status=running&limit=20`),
+      registryGet(env, `/runners/${encodeURIComponent(runnerId)}/policy-versions`),
       runnerEnvironment(env, runnerId),
       Promise.resolve(runnerReleaseDescriptor(env)),
     ]);
     const runner = runnerResponse.ok ? record(await json(runnerResponse)) : undefined;
     const workspaces = workspaceResponse.ok ? arrayField(record(await json(workspaceResponse))?.workspaces) : [];
     const jobs = jobsResponse.ok ? arrayField(record(await json(jobsResponse))?.jobs) : [];
-    return runner === undefined ? adminError(404, "Runner was not found.") : html(adminDocument(`${typeof runner.display_name === "string" ? runner.display_name : runnerId} · Runner`, runnerDetailPage(runner, workspaces, jobs, environment, csrf, releaseResponse), "runners"));
+    const policyVersions = policyVersionsResponse.ok ? arrayField(record(await json(policyVersionsResponse))?.versions) : [];
+    return runner === undefined ? adminError(404, "Runner was not found.") : html(adminDocument(`${typeof runner.display_name === "string" ? runner.display_name : runnerId} · Runner`, runnerDetailPage(runner, workspaces, jobs, environment, csrf, releaseResponse, policyVersions), "runners"));
   }
   if (request.method !== "POST") { await discardBody(request); return methodNotAllowed("GET, POST"); }
   const form = await formData(request);
@@ -498,8 +509,169 @@ async function changePassword(env: WorkerEnv, form: FormData): Promise<Response>
   return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
 }
 
+type ConsoleExecutionMode = RunnerExecutionMode;
+type ExecutionModeSelection = { readonly mode: ConsoleExecutionMode; readonly confirmed: boolean };
+type RunnerExecutionSnapshot = {
+  readonly runner: Record<string, unknown>;
+  readonly configuredMode: ConsoleExecutionMode | "migration_required";
+  readonly lifecycleId: string;
+};
+type RunnerExecutionSnapshotResult = { readonly status: number; readonly snapshot?: RunnerExecutionSnapshot };
+type RunnerExecutionExpectation = { readonly configuredMode: ConsoleExecutionMode | null; readonly lifecycleId: string };
+type EnrollmentCodeResult =
+  | { readonly ok: true; readonly code: string }
+  | { readonly ok: false; readonly status: number; readonly deterministic: boolean };
+
+function expectedConfiguredMode(snapshot: RunnerExecutionSnapshot): ConsoleExecutionMode | null {
+  return snapshot.configuredMode === "migration_required" ? null : snapshot.configuredMode;
+}
+
+/**
+ * Parse a fresh administrator service-mode choice at the authenticated form
+ * boundary.  A missing field is treated as the restricted choice only for a
+ * new Runner (where this preserves old API clients).  Existing Runner actions
+ * use executionModeForExistingRunner below so an old form cannot silently
+ * rewrite a trusted mode.
+ */
+function executionModeFromForm(form: FormData, missingMode: ConsoleExecutionMode): ExecutionModeSelection | undefined {
+  const raw = form.get("execution_mode");
+  let mode: ConsoleExecutionMode;
+  if (raw === null) mode = missingMode;
+  else if (raw === "dedicated_user" || raw === "privileged_host") mode = raw;
+  else return undefined;
+  const confirmed = form.getAll("confirm_privileged_host").some((value) => value === "true");
+  if (mode === "privileged_host" && !confirmed) return undefined;
+  return { mode, confirmed: mode === "privileged_host" && confirmed };
+}
+
+/**
+ * Resolve an action form against the server-owned Registry choice.  The
+ * execution mode is configuration, not Runner-authored telemetry: a missing
+ * field preserves an already configured mode, while an unconfigured legacy
+ * row must make an explicit choice.  Reusing an existing privileged choice is
+ * intentional—the administrator already acknowledged that high-risk mode at
+ * installation/migration—so credential rotation and code regeneration do not
+ * become a second privilege prompt.  A fresh transition to privileged_host
+ * still requires the acknowledgement in the submitted form.
+ */
+function executionModeForExistingRunner(form: FormData, runner: { readonly configured_execution_mode?: unknown; readonly metadata?: unknown; readonly public_info?: unknown }): ExecutionModeSelection | undefined {
+  const configured = runnerConfiguredExecutionMode(runner);
+  const raw = form.get("execution_mode");
+  const confirmed = form.getAll("confirm_privileged_host").some((value) => value === "true");
+  const expectedRaw = form.get("expected_execution_mode");
+  const expected = expectedRaw === null
+    ? undefined
+    : expectedRaw === "dedicated_user" || expectedRaw === "privileged_host" || expectedRaw === "migration_required" ? expectedRaw : "invalid";
+  const actualMarker = configured === "migration_required" ? "migration_required" : configured;
+  if (expected === "invalid" || (expected !== undefined && expected !== actualMarker)) return undefined;
+  // Forms from before the mode binding was introduced have no expected marker.
+  // Preserve their same-mode compatibility, but never let an old explicit
+  // destination overwrite a mode that changed after the page was rendered.
+  // A legacy row has no trusted mode at all, so an explicit destination must
+  // carry the new migration marker before it can be accepted.
+  if (expected === undefined && raw !== null && (configured === "migration_required" || raw !== configured)) return undefined;
+  if (raw === null) {
+    if (configured === "migration_required") return undefined;
+    return { mode: configured, confirmed: configured === "privileged_host" };
+  }
+  if (raw !== "dedicated_user" && raw !== "privileged_host") return undefined;
+  if (raw === "privileged_host" && !confirmed && configured !== "privileged_host") return undefined;
+  return { mode: raw, confirmed: raw === "privileged_host" };
+}
+
+/**
+ * Read the server-owned administrator choice. `metadata` and `public_info`
+ * are Runner-authored values, so they remain diagnostics only and can never
+ * authorize a privileged installation. A legacy null value requires an
+ * explicit migration choice.
+ */
+export function runnerConfiguredExecutionMode(_runner: { readonly configured_execution_mode?: unknown; readonly metadata?: unknown; readonly public_info?: unknown }): ConsoleExecutionMode | "migration_required" {
+  return _runner.configured_execution_mode === "dedicated_user" || _runner.configured_execution_mode === "privileged_host"
+    ? _runner.configured_execution_mode : "migration_required";
+}
+
+/** Runner-authored evidence is useful for diagnostics, but is not config. */
+function runnerReportedExecutionMode(runner: { readonly metadata?: unknown; readonly public_info?: unknown }): ConsoleExecutionMode | "unknown" {
+  const metadata = record(runner.metadata);
+  if (metadata?.execution_mode === "dedicated_user" || metadata?.execution_mode === "privileged_host") return metadata.execution_mode;
+  const info = record(runner.public_info);
+  if (info?.execution_mode === "dedicated_user" || info?.execution_mode === "privileged_host") return info.execution_mode;
+  return "unknown";
+}
+
+/**
+ * Read the Registry-owned mode together with the opaque lifecycle identity
+ * used by transport fencing.  The Registry returns both from one Durable
+ * Object turn so a delete/recreate cannot be interleaved between the two
+ * values.  The ordinary Runner projection intentionally omits lifecycle_id;
+ * this authenticated internal seam never exposes it to dashboard/MCP callers.
+ */
+async function runnerExecutionSnapshot(env: WorkerEnv, runnerId: string): Promise<RunnerExecutionSnapshotResult> {
+  let runnerResponse: Response;
+  try { runnerResponse = await runnerRegistryRequest(env, runnerId, "/execution-state", "GET", ""); }
+  catch { return { status: 503 }; }
+  if (!runnerResponse.ok) return { status: runnerResponse.status };
+  let body: Record<string, unknown> | undefined;
+  try { body = record(await json(runnerResponse)); }
+  catch { return { status: 502 }; }
+  const runner = record(body?.runner);
+  const lifecycleId = body?.lifecycle_id;
+  if (runner === undefined || runner.runner_id !== runnerId || typeof lifecycleId !== "string" || lifecycleId.length === 0) return { status: 502 };
+  return { status: 200, snapshot: { runner, configuredMode: runnerConfiguredExecutionMode(runner), lifecycleId } };
+}
+
+/** Release a pre-commit fence when a stale action is rejected before it can
+ * touch Registry credentials or enrollment state.  If cancellation cannot be
+ * proven, callers deliberately keep the fence and return a safe 503. */
+async function releaseUncommittedRunnerFence(env: WorkerEnv, runnerId: string, mutationId: string): Promise<boolean> {
+  try {
+    const cancelled = await cancelRunnerPolicyMutation(env, runnerId, mutationId);
+    return cancelled.ok;
+  } catch { return false; }
+}
+
+/** Action forms remain fail-closed for a legacy row while the table can show
+ * the required explicit migration state instead of mislabeling it dedicated. */
+function runnerActionExecutionMode(runner: { readonly configured_execution_mode?: unknown; readonly metadata?: unknown; readonly public_info?: unknown }): ConsoleExecutionMode | undefined {
+  const mode = runnerConfiguredExecutionMode(runner);
+  // A legacy row must not render a pre-selected restricted mode.  Although
+  // dedicated_user is the safe fallback for new API callers, selecting it for
+  // an old row is itself a migration decision and must be made deliberately;
+  // otherwise a stale/self-reported privileged row could be silently
+  // downgraded simply by submitting the default action form.
+  return mode === "migration_required" ? undefined : mode;
+}
+
+const PRIVILEGED_HOST_WARNING = "Runner will run as root, SYSTEM, or the platform-equivalent highest-privilege identity. Shell commands can access files, processes, network, environment variables, credentials, and system services reachable by that service identity. Install only on a trusted dedicated machine, VM, or container. Runner 将以 root、SYSTEM 或平台等效最高权限运行。Shell 命令可以访问该服务身份可访问的文件、进程、网络、环境变量、凭据和系统服务。仅应安装在受信任的专用机器、虚拟机或容器中。";
+
+/**
+ * Render mode fields for an authenticated action. Legacy rows intentionally
+ * render an unselected mode so the administrator must make an explicit
+ * migration choice; configured rows carry the server-owned choice through the
+ * form. The enrollment result uses the non-interactive variant only to bind
+ * the form to the mode observed when that one-time code was rendered; the
+ * destination mode is never replayed from a hidden field.
+ */
+function executionModeFormFields(mode: ConsoleExecutionMode | undefined, csrf: string, interactive = false, requirePrivilegedConfirmation = mode === "privileged_host"): string {
+  if (!interactive) {
+    const expected = mode ?? "migration_required";
+    return `<input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input type="hidden" name="expected_execution_mode" value="${expected}">`;
+  }
+  const safeMode = mode === "privileged_host" ? "privileged_host" : mode === "dedicated_user" ? "dedicated_user" : undefined;
+  const expected = safeMode ?? "migration_required";
+  const confirmationRequired = safeMode === "privileged_host" && requirePrivilegedConfirmation;
+  const priorConfirmation = safeMode === "privileged_host" && !confirmationRequired;
+  const placeholder = safeMode === undefined ? `<option value="" selected>Choose execution mode (required for legacy Runner)</option>` : "";
+  return `<input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input type="hidden" name="expected_execution_mode" value="${expected}"><fieldset class="execution-mode-inline" data-execution-mode-form data-reuse-privileged-confirmation="${priorConfirmation ? "true" : "false"}"><legend>Execution mode</legend><label>Mode<select name="execution_mode" aria-label="Execution mode"${safeMode === undefined ? " required" : ""}>${placeholder}<option value="dedicated_user"${safeMode === "dedicated_user" ? " selected" : ""}>dedicated_user · restricted service account</option><option value="privileged_host"${safeMode === "privileged_host" ? " selected" : ""}>privileged_host · highest host privilege</option></select></label><label class="check"><input type="checkbox" name="confirm_privileged_host" value="true" data-privileged-confirmation${confirmationRequired ? " required" : ""}><span>${priorConfirmation ? "High-privilege mode was already authorized for this Runner." : "I understand and authorize the high-privilege installation."}</span></label><p class="warning privileged-host-warning"${safeMode === "privileged_host" ? "" : " hidden"}>${escapeHtml(PRIVILEGED_HOST_WARNING)}</p></fieldset>`;
+}
+
 async function createBrowserRunner(env: WorkerEnv, form: FormData, baseUrl: string): Promise<Response> {
   const submittedId = form.get("runner_id"); const displayName = form.get("display_name");
+  // Older API clients did not send an execution mode. Keep those requests
+  // on the explicitly restricted path, while the dashboard form always sends
+  // the recommended privileged_host value and its separate acknowledgement.
+  const selection = executionModeFromForm(form, "dedicated_user");
+  if (selection === undefined) return adminError(400, "Runner execution mode or privileged-host confirmation is invalid.");
   const runnerId = typeof submittedId === "string" && submittedId.trim().length > 0 ? submittedId : `runner-${crypto.randomUUID().replaceAll("-", "")}`;
   if (!isSafeIdentifier(runnerId) || typeof displayName !== "string" || !validLabel(displayName)) return adminError(400, "Runner identifier or display name is invalid.");
   const mutationId = `runner-create-${crypto.randomUUID()}`;
@@ -515,7 +687,7 @@ async function createBrowserRunner(env: WorkerEnv, form: FormData, baseUrl: stri
   if (!fenced.ok) return adminError(503, "Runner creation could not fence the Runner.");
 
   let response: Response;
-  try { response = await runnerRegistryRequest(env, runnerId, "/add", "POST", JSON.stringify({ display_name: displayName, mutation_id: mutationId })); }
+  try { response = await runnerRegistryRequest(env, runnerId, "/add", "POST", JSON.stringify({ display_name: displayName, mutation_id: mutationId, execution_mode: selection.mode, confirm_privileged_host: selection.confirmed })); }
   catch { response = new Response("registry unavailable", { status: 503 }); }
   if (!response.ok) {
     const settled = await settleRunnerMutation(env, runnerId, mutationId, true);
@@ -524,8 +696,18 @@ async function createBrowserRunner(env: WorkerEnv, form: FormData, baseUrl: stri
   }
   const committed = await runnerMutationState(env, runnerId, mutationId).catch(() => undefined);
   if (committed?.mutation_committed !== true) return adminError(503, "Runner creation outcome is uncertain; Runner remains safely fenced.");
-  const code = await createEnrollmentCode(env, runnerId);
-  if (code === undefined) return adminError(503, "Runner enrollment code could not be created.");
+  const lifecycleId = typeof committed.lifecycle_id === "string" && committed.lifecycle_id.length > 0 ? committed.lifecycle_id : undefined;
+  if (lifecycleId === undefined) return adminError(503, "Runner enrollment state is uncertain; Runner remains safely fenced.");
+  const codeResult = await createEnrollmentCode(env, runnerId, selection, { configuredMode: selection.mode, lifecycleId });
+  if (!codeResult.ok) {
+    if (codeResult.deterministic) {
+      const settled = await settleRunnerMutation(env, runnerId, mutationId, true);
+      if (settled === "uncertain") return adminError(503, "Runner enrollment code state is uncertain; Runner remains safely fenced.");
+      return adminError(codeResult.status === 404 ? 404 : 409, codeResult.status === 404 ? "Runner enrollment target was not found." : "Runner state changed; reload the Runner page and retry.");
+    }
+    return adminError(503, "Runner enrollment code could not be created; Runner remains safely fenced.");
+  }
+  const code = codeResult.code;
   // /add creates an offline central row (credential_version 0), so revoke is
   // used here as a transport finalizer: it closes any stale sockets and clears
   // the fence without changing the central row or its enrollment semantics.
@@ -533,7 +715,7 @@ async function createBrowserRunner(env: WorkerEnv, form: FormData, baseUrl: stri
   // rotation must not slip between finalization and code issuance.
   try { await revokeRunnerTransport(env, runnerId, mutationId, true); }
   catch { return adminError(503, "Runner creation cleanup is uncertain; Runner remains safely fenced."); }
-  return runnerEnrollmentPage(env, baseUrl, runnerId, code, String(form.get("csrf_token") ?? ""));
+  return runnerEnrollmentPage(env, baseUrl, runnerId, code, String(form.get("csrf_token") ?? ""), false, selection.mode, selection.confirmed);
 }
 async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, baseUrl: string, runnerId: string, action: "rename" | "rotate" | "revoke" | "delete" | "enrollment" | "permissions" | "version-policy" | "emergency-lock" | "workspace-create" | "workspace-update" | "workspace-delete"): Promise<Response> {
   if (action === "version-policy") {
@@ -613,14 +795,21 @@ async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, baseUrl
   }
   if (action === "rotate") {
     const mutationId = `credential-rotated-${crypto.randomUUID()}`;
-    const runnerResponse = await runnerRegistryRequest(env, runnerId, "", "GET", "");
-    if (!runnerResponse.ok && runnerResponse.status !== 404) return adminError(503, "Runner credential rotation could not read the Runner state.");
+    const initialState = await runnerExecutionSnapshot(env, runnerId);
+    if (initialState.snapshot === undefined) return adminError(initialState.status === 404 ? 404 : 503, initialState.status === 404 ? "Runner was not found." : "Runner credential rotation could not read the Runner state.");
+    const selection = executionModeForExistingRunner(form, initialState.snapshot.runner);
+    if (selection === undefined) return adminError(400, "Runner execution mode must be selected explicitly; privileged-host mode also requires confirmation.");
     // Registry state can lag a live RunnerDO/socket (for example after a
-    // heartbeat timeout), and a 404 can race a concurrent recreate. Fence the
-    // DO even when the initial row lookup is missing; this keeps a stale
-    // pre-hello socket isolated if /rotate observes a newly-created row.
+    // heartbeat timeout). Acquire the fence after resolving the trusted mode
+    // so a stale/legacy browser form cannot mutate configuration first.
     const fenced = await fenceRunnerTransport(env, runnerId, mutationId);
     if (!fenced.ok) return adminError(503, "Runner credential rotation could not fence the Runner.");
+    const fencedState = await runnerExecutionSnapshot(env, runnerId);
+    if (fencedState.snapshot === undefined || fencedState.snapshot.lifecycleId !== initialState.snapshot.lifecycleId || fencedState.snapshot.configuredMode !== initialState.snapshot.configuredMode) {
+      const released = await releaseUncommittedRunnerFence(env, runnerId, mutationId);
+      if (!released) return adminError(503, "Runner credential rotation state is uncertain; Runner remains safely fenced.");
+      return adminError(fencedState.status === 404 ? 404 : 409, fencedState.status === 404 ? "Runner was not found." : "Runner state changed; reload the Runner page and retry.");
+    }
     let response: Response;
     try { response = await runnerRegistryRequest(env, runnerId, "/rotate", "POST", JSON.stringify({ mutation_id: mutationId })); } catch { return adminError(503, "Runner credential rotation outcome is uncertain; Runner remains safely fenced."); }
     if (!response.ok) {
@@ -635,35 +824,62 @@ async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, baseUrl
     // enrollment code. Releasing it first would let a concurrent delete,
     // rotation, or reconnect race in and make the displayed code belong to a
     // different Runner generation.
-    const code = await createEnrollmentCode(env, runnerId);
-    if (code === undefined) return adminError(503, "Enrollment code could not be generated; Runner remains safely fenced.");
+    const codeResult = await createEnrollmentCode(env, runnerId, selection, { configuredMode: expectedConfiguredMode(fencedState.snapshot), lifecycleId: fencedState.snapshot.lifecycleId });
+    if (!codeResult.ok) {
+      if (codeResult.deterministic) {
+        const settled = await settleRunnerMutation(env, runnerId, mutationId, true);
+        if (settled === "uncertain") return adminError(503, "Enrollment code state is uncertain; Runner remains safely fenced.");
+        return adminError(codeResult.status === 404 ? 404 : 409, codeResult.status === 404 ? "Runner was not found." : "Runner state changed; reload the Runner page and retry.");
+      }
+      return adminError(503, "Enrollment code could not be generated; Runner remains safely fenced.");
+    }
+    const code = codeResult.code;
     try { await revokeRunnerTransport(env, runnerId, mutationId, true); }
     catch { return adminError(503, "Runner credential cleanup is uncertain; Runner remains safely fenced."); }
-    return runnerEnrollmentPage(env, baseUrl, runnerId, code, String(form.get("csrf_token") ?? ""), true);
+    return runnerEnrollmentPage(env, baseUrl, runnerId, code, String(form.get("csrf_token") ?? ""), true, selection.mode, selection.confirmed);
   }
   if (action === "enrollment") {
+    const mutationId = `runner-enrollment-${crypto.randomUUID()}`;
+    const initialState = await runnerExecutionSnapshot(env, runnerId);
+    if (initialState.snapshot === undefined) return adminError(initialState.status === 404 ? 404 : 503, initialState.status === 404 ? "Runner was not found." : "Runner enrollment could not read the Runner state.");
+    const selection = executionModeForExistingRunner(form, initialState.snapshot.runner);
+    if (selection === undefined) return adminError(400, "Runner execution mode must be selected explicitly; privileged-host mode also requires confirmation.");
     // Enrollment-code regeneration does not change the credential generation,
     // but it is still a capability mutation. Hold the RunnerDO fence while
     // replacing the one-time code so a concurrent delete/rotate cannot make
     // the page describe a different lifecycle. Since no credential ledger
     // marker is committed by createEnrollmentCode, release this policy-style
     // fence with cancel rather than the credential-only /revoke finalizer.
-    const mutationId = `runner-enrollment-${crypto.randomUUID()}`;
     let fenced: Response;
     try { fenced = await beginRunnerPolicyMutation(env, runnerId, mutationId); }
     catch { return adminError(503, "Runner enrollment could not fence the Runner."); }
     if (!fenced.ok) return adminError(503, "Runner enrollment could not fence the Runner.");
-    let code: string | undefined;
-    try { code = await createEnrollmentCode(env, runnerId); } catch { code = undefined; }
+    const fencedState = await runnerExecutionSnapshot(env, runnerId);
+    if (fencedState.snapshot === undefined || fencedState.snapshot.lifecycleId !== initialState.snapshot.lifecycleId || fencedState.snapshot.configuredMode !== initialState.snapshot.configuredMode) {
+      const released = await releaseUncommittedRunnerFence(env, runnerId, mutationId);
+      if (!released) return adminError(503, "Runner enrollment state is uncertain; Runner remains safely fenced.");
+      return adminError(fencedState.status === 404 ? 404 : 409, fencedState.status === 404 ? "Runner was not found." : "Runner state changed; reload the Runner page and retry.");
+    }
+    let codeResult: EnrollmentCodeResult;
+    try { codeResult = await createEnrollmentCode(env, runnerId, selection, { configuredMode: expectedConfiguredMode(fencedState.snapshot), lifecycleId: fencedState.snapshot.lifecycleId }); }
+    catch { codeResult = { ok: false, status: 503, deterministic: false }; }
     // A failed/ambiguous Registry response may still have committed the
     // one-time code. Do not release the fence in that case: no code is shown,
     // and a later reconciliation can safely determine the outcome.
-    if (code === undefined) return adminError(503, "Enrollment code creation is uncertain; Runner remains safely fenced.");
+    if (!codeResult.ok) {
+      if (codeResult.deterministic) {
+        const released = await releaseUncommittedRunnerFence(env, runnerId, mutationId);
+        if (!released) return adminError(503, "Enrollment code state is uncertain; Runner remains safely fenced.");
+        return adminError(codeResult.status === 404 ? 404 : 409, codeResult.status === 404 ? "Runner was not found." : "Runner state changed; reload the Runner page and retry.");
+      }
+      return adminError(503, "Enrollment code creation is uncertain; Runner remains safely fenced.");
+    }
+    const code = codeResult.code;
     try {
       const cancelled = await cancelRunnerPolicyMutation(env, runnerId, mutationId);
       if (!cancelled.ok) return adminError(503, "Enrollment code cleanup is uncertain; Runner remains safely fenced.");
     } catch { return adminError(503, "Enrollment code cleanup is uncertain; Runner remains safely fenced."); }
-    return runnerEnrollmentPage(env, baseUrl, runnerId, code, String(form.get("csrf_token") ?? ""), true);
+    return runnerEnrollmentPage(env, baseUrl, runnerId, code, String(form.get("csrf_token") ?? ""), true, selection.mode, selection.confirmed);
   }
   return adminError(404, "Runner enrollment action is not available.");
 }
@@ -732,10 +948,14 @@ function permissionsFromForm(form: FormData): { read: boolean; edit: boolean; sh
 function isFullHostPath(value: string): boolean { return value === "/" || /^[A-Za-z]:[\\/]?$/.test(value); }
 function isAbsolutePath(value: string): boolean { return value.length > 0 && value.length <= 4_096 && !value.includes("\0") && (/^\//.test(value) || /^[A-Za-z]:[\\/]/.test(value) || /^\\\\/.test(value)); }
 
-async function createEnrollmentCode(env: WorkerEnv, runnerId: string): Promise<string | undefined> {
+async function createEnrollmentCode(env: WorkerEnv, runnerId: string, selection?: ExecutionModeSelection, expected?: RunnerExecutionExpectation): Promise<EnrollmentCodeResult> {
   const code = randomBase64Url();
-  const response = await runnerRegistryRequest(env, runnerId, "/enrollments", "POST", JSON.stringify({ enrollment_id: randomBase64Url(), verifier: await sha256Hex(code) }));
-  return response.ok ? code : undefined;
+  const response = await runnerRegistryRequest(env, runnerId, "/enrollments", "POST", JSON.stringify({
+    enrollment_id: randomBase64Url(), verifier: await sha256Hex(code),
+    ...(selection === undefined ? {} : { execution_mode: selection.mode, confirm_privileged_host: selection.confirmed }),
+    ...(expected === undefined ? {} : { expected_configured_execution_mode: expected.configuredMode, expected_lifecycle_id: expected.lifecycleId }),
+  }));
+  return response.ok ? { ok: true, code } : { ok: false, status: response.status, deterministic: [400, 404, 409].includes(response.status) };
 }
 
 async function createClient(env: WorkerEnv, form: FormData, baseUrl: string): Promise<Response> {
@@ -1440,8 +1660,20 @@ function overviewPage(data: AdminData, csrf: string): string {
   return `<section class="page-heading"><div><p class="eyebrow">Control plane</p><h1>Dashboard</h1><p class="lede">A concise view of connected runtimes, clients, and recent work.</p></div><a class="button secondary" href="/admin">Refresh</a></section><section class="metrics" aria-label="Summary"><div class="metric"><span class="metric-label">Active MCP clients</span><strong class="metric-value">${data.clients.filter((client) => client.revoked_at_ms === null).length}</strong><span class="metric-meta">${data.clients.length} configured</span></div><div class="metric"><span class="metric-label">Online / total runners</span><strong class="metric-value">${online} / ${data.runners.length}</strong><span class="metric-meta"><span class="status-dot ${online > 0 ? "online" : "offline"}"></span> ${online} connected</span></div><div class="metric"><span class="metric-label">Running jobs</span><strong class="metric-value">${activeJobs}</strong><span class="metric-meta">${activeJobs > 0 ? "In progress" : "Idle"}</span></div><div class="metric"><span class="metric-label">Recent jobs</span><strong class="metric-value">${data.jobs.length}</strong><span class="metric-meta">Recorded</span></div></section><div class="grid-two"><section class="panel"><div class="section-title"><h2>Recent runners</h2><a href="/admin/runners">View all</a></div>${runnerList(data.runners.slice(0, 5))}</section><section class="panel"><div class="section-title"><h2>Recent MCP clients</h2><a href="/admin/clients">View all</a></div>${clientList(data.clients.slice(0, 5))}</section></div><section class="panel"><div class="section-title"><h2>Recent jobs</h2><a href="/admin/runners">Runner activity</a></div>${jobTable(data.jobs.slice(0, 10))}</section><form class="hidden" method="post" action="/admin/logout"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"></form>`;
 }
 function runnersPage(data: AdminData, csrf: string): string {
-  const table = data.runners.map((runner) => `<tr class="data-row"><td><div class="table-primary-cell"><a class="strong" href="/admin/runners/${encodeURIComponent(runner.runner_id)}">${escapeHtml(runner.display_name)}</a><span class="sub-id mono">${escapeHtml(runner.runner_id)}</span></div></td><td>${statusBadge(runner.state)}</td><td><span class="platform-tag">${escapeHtml(safePlatform(runner))}</span></td><td class="num-cell">${runnerWorkspaceCount(runner)}</td><td class="num-cell">${runnerActiveJobs(runner)}</td><td class="time-cell">${escapeHtml(time(runner.last_heartbeat_ms))}</td><td class="actions"><div class="action-btn-group"><a class="button small secondary" href="/admin/runners/${encodeURIComponent(runner.runner_id)}">View</a><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/rename" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input name="display_name" value="${escapeHtml(runner.display_name)}" aria-label="Rename ${escapeHtml(runner.display_name)}" maxlength="256"><button class="small secondary">Rename</button></form><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/rotate" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Rotate Credential</button></form><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/revoke" class="inline-action-form danger-action"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Type Runner ID to confirm<input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required></label><button class="small danger">Revoke</button></form><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/delete" class="inline-action-form danger-action"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Type Runner ID to confirm<input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required></label><button class="small danger">Delete</button></form><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/enrollment" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Install / Reinstall</button></form></div></td></tr>`).join("") || `<tr><td colspan="7" class="empty"><div class="empty-state-box"><p>No runners yet.</p></div></td></tr>`;
-  return `<section class="page-heading"><div><p class="eyebrow">Infrastructure</p><h1>Runners</h1><p class="lede">Manage safe runner metadata and one-time enrollment.</p></div></section><section class="panel add-panel" id="add-runner"><div class="section-title"><h2>Add Runner</h2><span class="muted font-12">Enrollment codes expire after 30 minutes.</span></div><form method="post" action="/admin/runners" class="form-grid add-form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Display name<input name="display_name" maxlength="256" required autocomplete="off" placeholder="e.g. Production Runner 01"></label><label>Safe runner ID <span class="muted font-11">optional</span><input name="runner_id" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" placeholder="generated-id"></label><div class="form-submit-wrap"><button class="button">Create enrollment</button></div></form></section><section class="panel"><div class="table-wrap"><table class="data-table"><caption class="sr-only">Registered runners</caption><thead><tr><th>Display name</th><th>Status</th><th>Platform / architecture</th><th>Workspaces</th><th>Active jobs</th><th>Last seen</th><th>Actions</th></tr></thead><tbody>${table}</tbody></table></div></section>`;
+  const table = data.runners.map((runner) => {
+    const configuredMode = runnerConfiguredExecutionMode(runner);
+    const mode = runnerActionExecutionMode(runner);
+    const modeLabel = configuredMode === "migration_required" ? "migration_required" : configuredMode;
+    // Keep the mode choice in each mutating form.  A stale page or an older
+    // browser cannot silently replay a privileged self-report.  For a Runner
+    // whose trusted mode is already privileged, reuse the one-time
+    // administrator acknowledgement; switching a restricted/legacy Runner
+    // to privileged_host still requires a fresh checkbox.
+    const modeFields = executionModeFormFields(mode, csrf, true, configuredMode !== "privileged_host");
+    return `<tr class="data-row"><td><div class="table-primary-cell"><a class="strong" href="/admin/runners/${encodeURIComponent(runner.runner_id)}">${escapeHtml(runner.display_name)}</a><span class="sub-id mono">${escapeHtml(runner.runner_id)}</span></div></td><td>${statusBadge(runner.state)}</td><td><span class="platform-tag">${escapeHtml(safePlatform(runner))}</span></td><td><span class="mono font-12">${escapeHtml(modeLabel)}</span>${configuredMode === "migration_required" ? "<span class=\"warning-text\"> · explicit migration required</span>" : ""}</td><td class="num-cell">${runnerWorkspaceCount(runner)}</td><td class="num-cell">${runnerActiveJobs(runner)}</td><td class="time-cell">${escapeHtml(time(runner.last_heartbeat_ms))}</td><td class="actions"><div class="action-btn-group"><a class="button small secondary" href="/admin/runners/${encodeURIComponent(runner.runner_id)}">View</a><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/rename" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input name="display_name" value="${escapeHtml(runner.display_name)}" aria-label="Rename ${escapeHtml(runner.display_name)}" maxlength="256"><button class="small secondary">Rename</button></form><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/rotate" class="inline-action-form">${modeFields}<button class="small secondary">Rotate Credential</button></form><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/revoke" class="inline-action-form danger-action"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Type Runner ID to confirm<input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required></label><button class="small danger">Revoke</button></form><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/delete" class="inline-action-form danger-action"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Type Runner ID to confirm<input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required></label><button class="small danger">Delete</button></form><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/enrollment" class="inline-action-form">${modeFields}<button class="small secondary">Install / Reinstall</button></form></div></td></tr>`;
+  }).join("") || `<tr><td colspan="8" class="empty"><div class="empty-state-box"><p>No runners yet.</p></div></td></tr>`;
+  const warning = PRIVILEGED_HOST_WARNING;
+  return `<section class="page-heading"><div><p class="eyebrow">Infrastructure</p><h1>Runners</h1><p class="lede">Manage safe runner metadata and one-time enrollment.</p></div></section><section class="panel add-panel" id="add-runner"><div class="section-title"><h2>Add Runner</h2><span class="muted font-12">Enrollment codes expire after 30 minutes.</span></div><form method="post" action="/admin/runners" class="form-grid add-form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Display name<input name="display_name" maxlength="256" required autocomplete="off" placeholder="e.g. Production Runner 01"></label><label>Safe runner ID <span class="muted font-11">optional</span><input name="runner_id" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" placeholder="generated-id"></label><fieldset class="execution-mode-fieldset"><legend>System Runner execution mode</legend><label class="check"><input type="radio" name="execution_mode" value="privileged_host" checked data-execution-mode="privileged_host"><span><strong>整机控制 / 高权限模式（推荐用于受信任的自托管机器）</strong><small>Linux root · macOS root LaunchDaemon · Windows SYSTEM / HighestAvailable</small></span></label><label class="check"><input type="radio" name="execution_mode" value="dedicated_user" data-execution-mode="dedicated_user"><span><strong>受限服务账户模式（dedicated_user）</strong><small>Use a dedicated restricted service identity for narrower host access.</small></span></label><p class="warning privileged-host-warning">${escapeHtml(warning)}</p><label class="check"><input type="checkbox" name="confirm_privileged_host" value="true" data-privileged-confirmation><span>I understand and authorize this one-time high-privilege installation acknowledgement.</span></label></fieldset><div class="form-submit-wrap"><button class="button">Create enrollment</button></div></form></section><section class="panel"><div class="table-wrap"><table class="data-table"><caption class="sr-only">Registered runners</caption><thead><tr><th>Display name</th><th>Status</th><th>Platform / architecture</th><th>Execution mode</th><th>Workspaces</th><th>Active jobs</th><th>Last seen</th><th>Actions</th></tr></thead><tbody>${table}</tbody></table></div></section>`;
 }
 function activeRunnerLabel(client: McpClientRecord, runners: readonly RunnerRecord[]): string { const runner = client.active_runner_id === null ? undefined : runners.find((item) => item.runner_id === client.active_runner_id); return runner === undefined ? "Not selected" : runner.display_name; }
 function clientsPage(data: AdminData, csrf: string): string {
@@ -1453,8 +1685,9 @@ function runnerList(runners: readonly RunnerRecord[]): string { return runners.l
 function clientList(clients: readonly McpClientRecord[]): string { return clients.length === 0 ? `<p class="empty">No MCP clients yet.</p>` : `<ul class="item-list">${clients.map((client) => `<li><a href="/admin/clients/${encodeURIComponent(client.client_id)}" class="card-row"><div class="card-row-main"><span class="strong">${escapeHtml(client.label)}</span><span class="card-row-sub"><span class="client-runner-meta">${client.active_runner_id === null ? "Not selected" : escapeHtml(client.active_runner_id)}</span><span class="meta-separator">·</span>${client.revoked_at_ms === null ? statusBadge("online") : statusBadge("offline")}</span></div><div class="card-row-aside"><span class="row-arrow">→</span></div></a><form class="hidden" method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rename"><input name="label" value="${escapeHtml(client.label)}"></form></li>`).join("")}</ul>`; }
 function jobTable(jobs: readonly Record<string, unknown>[]): string { return jobs.length === 0 ? `<p class="empty">No recent jobs.</p>` : `<div class="table-wrap"><table class="data-table"><thead><tr><th>Job</th><th>Workspace</th><th>Status</th><th>Updated</th></tr></thead><tbody>${jobs.map((job) => { const status = String(job.status ?? "unknown"); const safeStatus = statusClass(status); return `<tr class="data-row"><td class="mono job-id-cell">${escapeHtml(String(job.job_id ?? "unknown"))}</td><td><span class="workspace-pill">${escapeHtml(String(job.workspace_id ?? "unknown"))}</span></td><td><span class="badge job-status ${safeStatus}"><span class="status-dot ${safeStatus}"></span> ${escapeHtml(status)}</span></td><td class="time-cell">${escapeHtml(time(typeof job.updated_at_ms === "number" ? job.updated_at_ms : null))}</td></tr>`; }).join("")}</tbody></table></div>`; }
 function statusBadge(state: string): string { const safe = ["online", "offline", "stale", "pending", "invalid"].includes(state) ? state : "offline"; return `<span class="badge ${safe}"><span class="status-dot ${safe}"></span>${safe}</span>`; }
-function statusClass(status: string): string { return ["queued", "running", "cancelling", "cancelled", "succeeded", "completed", "failed", "unknown", "interrupted", "pending", "invalid", "offline", "online"].includes(status) ? status : "unknown"; }
+function statusClass(status: string): string { return ["queued", "running", "cancelling", "cancelled", "succeeded", "completed", "failed", "unknown", "interrupted", "pending", "invalid", "offline", "online", "valid", "permission_denied", "not_directory", "invalid_path", "missing"].includes(status) ? status : "unknown"; }
 function safePlatform(runner: RunnerRecord): string { return runner.public_info === null ? "Not enrolled" : `${runner.public_info.platform} / ${runner.public_info.architecture}`; }
+function shortChecksum(value: unknown): string { return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value) ? `${value.slice(0, 12)}…` : "—"; }
 function runnerWorkspaceCount(runner: RunnerRecord): string { const value = (runner as RunnerRecord & { workspace_count?: unknown }).workspace_count; return typeof value === "number" ? String(value) : "—"; }
 function runnerActiveJobs(runner: RunnerRecord): string { const value = (runner as RunnerRecord & { active_job_count?: unknown }).active_job_count; return typeof value === "number" ? String(value) : "—"; }
 function displayScopeLabel(scope: string): string {
@@ -1482,10 +1715,11 @@ function scopeCheckboxes(selected: readonly string[] = ["coding:read", "coding:w
   };
   return (["coding:read", "coding:write", "coding:exec"] as const).map((scope) => `<label class="check"><input type="checkbox" name="scopes" value="${scope}"${selected.includes(scope) ? " checked" : ""}> <span><strong>${titles[scope]}</strong><small>${descriptions[scope]}</small></span></label>`).join("");
 }
-function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly unknown[], jobs: readonly unknown[], environment: Record<string, unknown> | undefined, csrf: string, release: RunnerReleaseDescriptor & { readonly distributable: boolean }): string {
+function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly unknown[], jobs: readonly unknown[], environment: Record<string, unknown> | undefined, csrf: string, release: RunnerReleaseDescriptor & { readonly distributable: boolean }, policyVersions: readonly unknown[] = []): string {
   const runnerId = typeof runner.runner_id === "string" ? runner.runner_id : "unknown";
   const displayName = typeof runner.display_name === "string" ? runner.display_name : runnerId;
   const state = typeof runner.state === "string" ? runner.state : "offline";
+  const metadata = record(runner.metadata);
   const publicInfo = record(runner.public_info);
   const tools = record(environment?.tools);
   const toolRows = tools === undefined ? `<p class="muted empty-desc">Environment details unavailable while offline.</p>` : `<div class="tool-grid">${Object.entries(tools).map(([name, value]) => { const item = record(value); const isAvail = item?.available === true; return `<div class="tool-item"><div class="tool-name-row"><strong class="tool-name">${escapeHtml(name)}</strong>${isAvail ? `<span class="badge online"><span class="status-dot online"></span>Available</span>` : `<span class="badge offline"><span class="status-dot offline"></span>Unavailable</span>`}</div>${isAvail && typeof item?.version === "string" ? `<span class="tool-version mono">${escapeHtml(item.version)}</span>` : ""}</div>`; }).join("")}</div>`;
@@ -1501,6 +1735,52 @@ function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly 
   const permissions = record(runner.runner_permissions);
   const desiredRevision = typeof runner.desired_policy_revision === "number" ? String(runner.desired_policy_revision) : "0";
   const appliedRevision = typeof runner.applied_policy_revision === "number" ? String(runner.applied_policy_revision) : "—";
+  // Only a server-owned Registry value may establish the configured mode.
+  // Runner metadata/public_info below are retained as untrusted diagnostics.
+  const executionMode = runnerConfiguredExecutionMode(runner);
+  const reportedExecutionMode = runnerReportedExecutionMode(runner);
+  const privilegeState = metadata?.privilege_state === "privileged" || metadata?.privilege_state === "restricted" || metadata?.privilege_state === "mismatch" || metadata?.privilege_state === "unknown"
+    ? metadata.privilege_state
+    : publicInfo?.privilege_state === "privileged" || publicInfo?.privilege_state === "restricted" || publicInfo?.privilege_state === "mismatch" || publicInfo?.privilege_state === "unknown" ? publicInfo.privilege_state : "unknown";
+  const serviceIdentity = typeof metadata?.service_identity === "string" && metadata.service_identity.length > 0
+    ? metadata.service_identity
+    : typeof publicInfo?.service_identity === "string" && publicInfo.service_identity.length > 0 ? publicInfo.service_identity : "Unknown";
+  const reportedRevision = typeof runner.runner_reported_policy_revision === "number" ? String(runner.runner_reported_policy_revision) : "—";
+  const desiredChecksum = shortChecksum(runner.desired_policy_checksum);
+  const activeChecksum = shortChecksum(runner.active_policy_checksum);
+  const reportedChecksum = shortChecksum(runner.runner_reported_policy_checksum);
+  const latestPolicy = policyVersions.map(record).filter((item): item is Record<string, unknown> => item !== undefined).sort((left, right) => Number(right.revision ?? 0) - Number(left.revision ?? 0))[0];
+  const validationSummary = Array.isArray(latestPolicy?.validation_summary) ? latestPolicy.validation_summary.map(record).filter((item): item is Record<string, unknown> => item !== undefined) : [];
+  const workspaceValidation: Record<string, unknown>[] = validationSummary.length > 0 ? validationSummary : workspaces.reduce<Record<string, unknown>[]>((items, item) => {
+    const value = record(item);
+    if (value !== undefined) items.push({ workspace_id: value.workspace_id, status: value.validation_status });
+    return items;
+  }, []);
+  const hasOsAccessDenial = workspaceValidation.some((item) => item.reason === "os_access_denied");
+  const hasFullHostWorkspace = workspaces.some((item) => isFullHostPath(typeof record(item)?.root_path === "string" ? String(record(item)?.root_path) : ""));
+  const revisionLag = (typeof runner.desired_policy_revision === "number" && (runner.applied_policy_revision === null || typeof runner.applied_policy_revision !== "number" || runner.desired_policy_revision > runner.applied_policy_revision)) || (typeof runner.desired_policy_revision === "number" && (runner.runner_reported_policy_revision === null || typeof runner.runner_reported_policy_revision !== "number" || runner.desired_policy_revision > runner.runner_reported_policy_revision));
+  const identityMismatch = privilegeState === "mismatch";
+  const unverifiedPrivilegedReport = reportedExecutionMode === "privileged_host" && executionMode !== "privileged_host";
+  const configuredButNotRestarted = runner.service_manifest_changed === true && runner.service_restarted !== true;
+  const warnings = [
+    identityMismatch ? "Runner-reported privilege state is mismatch; verify the service identity before granting access." : "",
+    executionMode === "migration_required" ? "No trusted administrator execution-mode selection is recorded; choose and confirm a mode before (re)installing." : "",
+    unverifiedPrivilegedReport ? "Runner reports privileged_host, but that self-report is not authorization; re-enroll only after an administrator explicitly confirms the desired mode." : "",
+    executionMode === "dedicated_user" && hasFullHostWorkspace ? "dedicated_user is configured while a full-host workspace is enabled; migrate the service or narrow the workspace." : "",
+    revisionLag ? "Desired policy revision is ahead of the applied or Runner-reported revision." : "",
+    hasOsAccessDenial ? "Workspace validation reported os_access_denied; review the service identity and migrate to privileged_host or grant the required OS access." : "",
+    configuredButNotRestarted ? "The managed service manifest changed but the Runner process was not restarted." : "",
+    state === "online" && workspaceValidation.filter((item) => item.status === "valid").length === 0 ? "Runner is online but has zero valid workspaces." : "",
+  ].filter(Boolean);
+  const diagnosticRows = workspaceValidation.map((item) => {
+    const id = typeof item.workspace_id === "string" ? item.workspace_id : "unknown";
+    const status = typeof item.status === "string" ? item.status : "unknown";
+    const reason = typeof item.reason === "string" ? ` · ${item.reason}` : "";
+    const stage = typeof item.validation_stage === "string" ? ` · ${item.validation_stage}` : "";
+    const remediation = typeof item.remediation_code === "string" ? ` · ${item.remediation_code}` : "";
+    return `<li><span class="mono">${escapeHtml(id)}</span><span class="validation-tag status-pill ${statusClass(status)}">${escapeHtml(status)}</span><span class="muted font-12">${escapeHtml(`${reason}${stage}${remediation}`)}</span></li>`;
+  }).join("") || `<li class="muted empty-item">No validation result has been reported yet.</li>`;
+  const warningRows = warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("");
   return `<section class="detail-header">
     <div class="detail-title-group">
       <div class="detail-title-row">
@@ -1551,11 +1831,45 @@ function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly 
         <dd class="mono">${escapeHtml(typeof publicInfo?.hostname === "string" ? publicInfo.hostname : "Unknown")}</dd>
         <dt>Runner version</dt>
         <dd class="mono">${escapeHtml(currentVersion)}</dd>
+        <dt>Runner-reported execution mode</dt>
+        <dd class="mono">${escapeHtml(reportedExecutionMode)}</dd>
+        <dt>Service identity</dt>
+        <dd class="mono">${escapeHtml(serviceIdentity)}</dd>
+        <dt>Runner-reported privilege state</dt>
+        <dd class="mono">${escapeHtml(privilegeState)}</dd>
         <dt>Stable/latest version</dt>
         <dd class="mono">${escapeHtml(latestVersion)}</dd>
         <dt>Protocol compatibility</dt>
         <dd>${escapeHtml(protocolRange)} · ${escapeHtml(protocolCompatibility)}</dd>
       </dl>
+    </section>
+    <section class="panel">
+      <div class="section-title">
+        <h2>Service and policy diagnostics</h2>
+      </div>
+      <dl class="details">
+        <dt>Configured execution mode (administrator)</dt>
+        <dd class="mono">${escapeHtml(executionMode)}</dd>
+        <dt>Reported service identity</dt>
+        <dd class="mono">${escapeHtml(serviceIdentity)}</dd>
+        <dt>Runner-reported privilege state</dt>
+        <dd class="mono">${escapeHtml(privilegeState)}</dd>
+        <dt>Desired policy revision</dt>
+        <dd class="mono">${escapeHtml(desiredRevision)}</dd>
+        <dt>Active / applied policy revision</dt>
+        <dd class="mono">${escapeHtml(appliedRevision)}</dd>
+        <dt>Runner reported revision</dt>
+        <dd class="mono">${escapeHtml(reportedRevision)}</dd>
+        <dt>Desired checksum</dt>
+        <dd class="mono">${escapeHtml(desiredChecksum)}</dd>
+        <dt>Active checksum</dt>
+        <dd class="mono">${escapeHtml(activeChecksum)}</dd>
+        <dt>Runner reported checksum</dt>
+        <dd class="mono">${escapeHtml(reportedChecksum)}</dd>
+      </dl>
+      ${warningRows === "" ? "" : `<ul class="warning diagnostic-warning-list">${warningRows}</ul>`}
+      <h3 class="diagnostic-subheading">Workspace validation status</h3>
+      <ul class="plain-list diagnostic-list">${diagnosticRows}</ul>
     </section>
     <section class="panel">
       <div class="section-title">
@@ -2225,6 +2539,45 @@ a.strong:hover{color:var(--brand-hover);text-decoration:underline}
   font-size:12px;
   height:28px;
   max-width:140px;
+}
+.execution-mode-inline{
+  display:inline-flex;
+  align-items:center;
+  gap:5px;
+  padding:4px 6px;
+  min-width:230px;
+  position:relative;
+  background:var(--panel-card);
+}
+.execution-mode-inline legend{font-size:10px}
+.execution-mode-inline label:not(.check){
+  display:inline-flex;
+  flex-direction:row;
+  align-items:center;
+  gap:4px;
+  font-size:11px;
+  white-space:nowrap;
+}
+.execution-mode-inline select{
+  height:27px;
+  padding:2px 5px;
+  font-size:11px;
+  max-width:190px;
+}
+.execution-mode-inline .check{
+  margin:0;
+  font-size:11px;
+  white-space:nowrap;
+}
+.execution-mode-inline .check span{display:inline}
+.execution-mode-inline .privileged-host-warning{
+  position:absolute;
+  z-index:5;
+  width:min(440px,80vw);
+  margin:30px 0 0;
+  padding:7px 9px;
+  font-size:11px;
+  line-height:1.35;
 }
 .danger-action label{
   font-size:11.5px;
@@ -2909,14 +3262,30 @@ pre{
   font-size:13px;
   line-height:1.5;
 }
-.warning{
+ .warning{
   border:1px solid var(--warn-line);
   background:var(--warn-bg);
   color:var(--warn);
   border-radius:var(--radius-md);
   padding:10px 14px;
-  font-size:13px;
-}
+   font-size:13px;
+ }
+ .notice{
+   border:1px solid var(--line);
+   background:var(--panel-subtle);
+   color:var(--muted-dark);
+   border-radius:var(--radius-md);
+   padding:10px 14px;
+   font-size:13px;
+ }
+ .diagnostic-warning-list{margin:14px 0 0;padding:10px 14px 10px 30px}
+ .diagnostic-subheading{margin:18px 0 8px;font-size:13px;color:var(--ink-heading)}
+ .diagnostic-list{display:flex;flex-direction:column;gap:7px}
+ .diagnostic-list li{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:5px 0;border-bottom:1px solid var(--line-light)}
+ .diagnostic-list li:last-child{border-bottom:0}
+ .execution-mode-fieldset{grid-column:1 / -1;display:grid;gap:4px}
+ .execution-mode-fieldset .privileged-host-warning{margin:8px 0}
+ .execution-mode-fieldset [data-privileged-confirmation]{accent-color:var(--brand)}
 :focus-visible{
   outline:2px solid var(--brand);
   outline-offset:2px;
@@ -3213,12 +3582,16 @@ function copyText(text){if(navigator.clipboard&&navigator.clipboard.writeText)re
 document.querySelectorAll('[data-copy]').forEach(function(button){button.addEventListener('click',function(){var result=copyText(button.getAttribute('data-copy')||'');var mark=function(){button.textContent=document.documentElement.lang==='zh-CN'?'已复制':'Copied';button.classList.add('copied')};if(result&&typeof result.then==='function')result.then(mark,function(){});else mark()})});
 document.querySelectorAll('[data-tab]').forEach(function(tab){tab.addEventListener('click',function(){var target=tab.getAttribute('data-tab');document.querySelectorAll('[data-tab]').forEach(function(item){item.setAttribute('aria-selected',String(item===tab));item.tabIndex=item===tab?0:-1});document.querySelectorAll('[data-panel]').forEach(function(panel){panel.hidden=panel.getAttribute('data-panel')!==target})});tab.addEventListener('keydown',function(event){if(event.key==='ArrowLeft'||event.key==='ArrowRight'){var tabs=Array.prototype.slice.call(document.querySelectorAll('[data-tab]'));var next=tabs[(tabs.indexOf(tab)+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length];next.focus();next.click()}})});
 document.querySelectorAll('.pwd-toggle-btn').forEach(function(btn){btn.addEventListener('click',function(){var wrap=btn.closest('.password-input-wrap');if(!wrap)return;var input=wrap.querySelector('input');if(!input)return;var isPwd=input.type==='password';input.type=isPwd?'text':'password';var isZh=document.documentElement.lang==='zh-CN';var buttonLabel=isPwd?(isZh?'隐藏密码':'Hide password'):(isZh?'显示密码':'Show password');btn.setAttribute('aria-label',buttonLabel);btn.setAttribute('title',buttonLabel);btn.innerHTML=isPwd?'<svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>':'<svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>'})});
-document.querySelectorAll('form.login-form').forEach(function(form){form.addEventListener('submit',function(){var btn=form.querySelector('.login-submit-btn');if(!btn||btn.disabled)return;var isZh=document.documentElement.lang==='zh-CN';var isSetup=form.getAttribute('action')==='/setup';var loadingText=isSetup?(isZh?'正在初始化...':'Initializing...'):(isZh?'正在登录...':'Signing in...');var origWidth=btn.offsetWidth;btn.style.width=origWidth>0?(origWidth+'px'):'100%';btn.disabled=true;btn.textContent=loadingText;try{form.submit()}catch(e){}})});
-})();
+ document.querySelectorAll('form.login-form').forEach(function(form){form.addEventListener('submit',function(){var btn=form.querySelector('.login-submit-btn');if(!btn||btn.disabled)return;var isZh=document.documentElement.lang==='zh-CN';var isSetup=form.getAttribute('action')==='/setup';var loadingText=isSetup?(isZh?'正在初始化...':'Initializing...'):(isZh?'正在登录...':'Signing in...');var origWidth=btn.offsetWidth;btn.style.width=origWidth>0?(origWidth+'px'):'100%';btn.disabled=true;btn.textContent=loadingText;try{form.submit()}catch(e){}})});
+ function syncExecutionMode(form){var selected=form.querySelector('input[name="execution_mode"]:checked');if(!selected)selected=form.querySelector('select[name="execution_mode"]');var privileged=!!selected&&selected.value==='privileged_host';var confirmation=form.querySelector('[data-privileged-confirmation]');var warning=form.querySelector('.privileged-host-warning');var modeFieldset=form.querySelector('[data-execution-mode-form]');var reuse=!!modeFieldset&&modeFieldset.getAttribute('data-reuse-privileged-confirmation')==='true';if(confirmation)confirmation.required=privileged&&!reuse;if(warning)warning.hidden=!privileged}
+ document.querySelectorAll('form').forEach(function(form){var controls=form.querySelectorAll('input[name="execution_mode"],select[name="execution_mode"]');if(!controls.length)return;controls.forEach(function(input){input.addEventListener('change',function(){syncExecutionMode(form)})});syncExecutionMode(form)});
+ })();
 </script>`;
 }
-export function runnerEnrollmentPage(env: RunnerReleaseEnvironment, baseUrl: string, runnerId: string, code: string | undefined, csrf: string, _reEnroll = false): Response {
+export function runnerEnrollmentPage(env: RunnerReleaseEnvironment, baseUrl: string, runnerId: string, code: string | undefined, csrf: string, _reEnroll = false, executionMode: ConsoleExecutionMode = "dedicated_user", confirmPrivilegedHost = false): Response {
   if (code === undefined) return adminError(503, "Enrollment code could not be generated.");
+  if (executionMode !== "dedicated_user" && executionMode !== "privileged_host") return adminError(400, "Runner execution mode is invalid.");
+  if (executionMode === "privileged_host" && !confirmPrivilegedHost) return adminError(400, "Privileged-host enrollment requires the one-time risk acknowledgement.");
   const release = runnerReleaseDescriptor(env);
   const bootstrap = release.distributable;
   // Validate the origin for both the hosted and manual paths.  The manual
@@ -3263,6 +3636,9 @@ try {
   const server = new URL("/runner/enroll", publicBase).toString();
   const shellServer = shellQuote(server);
   const powershellServer = powershellQuote(server);
+  const modeFlags = executionMode === "privileged_host" ? "--execution-mode privileged_host --confirm-privileged-host" : "--execution-mode dedicated_user";
+  const modeLabel = executionMode === "privileged_host" ? "整机控制 / 高权限模式（privileged_host）" : "受限服务账户模式（dedicated_user）";
+  const privilegedWarning = "Runner 将以 root、SYSTEM 或平台等效最高权限运行。Shell 命令可以访问该服务身份可访问的文件、进程、网络、环境变量、凭据和系统服务。仅应安装在受信任的专用机器、虚拟机或容器中。";
   const manualCommands = {
     linux: `set -euo pipefail
 RUNNER=/opt/runmesh/current/bin/coding-runner # replace with the verified absolute path if different
@@ -3270,9 +3646,9 @@ test -x "$RUNNER"
 printf '%s' 'One-time enrollment code: ' >&2
 read -r -s RUNMESH_ENROLLMENT_CODE
 printf '\\n' >&2
-printf '%s\\n' "$RUNMESH_ENROLLMENT_CODE" | sudo "$RUNNER" enroll --server ${shellServer} --code-stdin
+printf '%s\\n' "$RUNMESH_ENROLLMENT_CODE" | sudo "$RUNNER" enroll --server ${shellServer} --code-stdin ${modeFlags}
 unset RUNMESH_ENROLLMENT_CODE
-sudo "$RUNNER" install --executable-path "$RUNNER"
+sudo "$RUNNER" install ${modeFlags} --executable-path "$RUNNER"
 sudo "$RUNNER" doctor --json`,
     macos: `set -euo pipefail
 RUNNER=/opt/runmesh/current/bin/coding-runner # replace with the verified absolute path if different
@@ -3280,9 +3656,9 @@ test -x "$RUNNER"
 printf '%s' 'One-time enrollment code: ' >&2
 read -r -s RUNMESH_ENROLLMENT_CODE
 printf '\\n' >&2
-printf '%s\\n' "$RUNMESH_ENROLLMENT_CODE" | sudo "$RUNNER" enroll --server ${shellServer} --code-stdin
+printf '%s\\n' "$RUNMESH_ENROLLMENT_CODE" | sudo "$RUNNER" enroll --server ${shellServer} --code-stdin ${modeFlags}
 unset RUNMESH_ENROLLMENT_CODE
-sudo "$RUNNER" install --executable-path "$RUNNER"
+sudo "$RUNNER" install ${modeFlags} --executable-path "$RUNNER"
 sudo "$RUNNER" doctor --json`,
     windows: `# Run this in an elevated PowerShell session
 $ErrorActionPreference = 'Stop'
@@ -3290,23 +3666,27 @@ $RunnerPath = 'C:\\Program Files\\Runmesh\\current\\coding-runner.cmd' # replace
 if (-not (Test-Path -LiteralPath $RunnerPath -PathType Leaf)) { throw 'Set RunnerPath to the verified coding-runner.cmd path.' }
 $EnrollmentCode = Read-Host 'One-time enrollment code'
 try {
-  $EnrollmentCode | & $RunnerPath enroll --server ${powershellServer} --code-stdin
+  $EnrollmentCode | & $RunnerPath enroll --server ${powershellServer} --code-stdin ${modeFlags}
   if ($LASTEXITCODE -ne 0) { throw 'Runner enrollment failed.' }
 } finally {
   Remove-Variable EnrollmentCode -ErrorAction SilentlyContinue
 }
-& $RunnerPath install --executable-path $RunnerPath
+& $RunnerPath install ${modeFlags} --executable-path $RunnerPath
 if ($LASTEXITCODE -ne 0) { throw 'Runner service installation failed.' }
 & $RunnerPath doctor --json
 if ($LASTEXITCODE -ne 0) { throw 'Runner doctor check failed.' }`,
   };
-  const commands = bootstrap ? { linux: shellCommand, macos: shellCommand, windows: powerShellCommand } : manualCommands;
-  const tabs = Object.entries(commands).map(([platform, value], index) => `<button role="tab" id="tab-${platform}" aria-controls="panel-${platform}" aria-selected="${index === 0 ? "true" : "false"}" tabindex="${index === 0 ? "0" : "-1"}" data-tab="${platform}">${platform === "macos" ? "macOS" : platform === "windows" ? "Windows" : "Linux"}</button><section role="tabpanel" id="panel-${platform}" aria-labelledby="tab-${platform}" ${index === 0 ? "" : "hidden"} data-panel="${platform}"><pre><code>${escapeHtml(value)}</code></pre><button type="button" class="button secondary" data-copy="${escapeHtml(value)}">Copy ${bootstrap ? "installer" : "enrollment and install"} command</button></section>`).join("");
-  const title = bootstrap ? "Signed fixed-preview enrollment" : "Manual portable-artifact enrollment";
-  const instruction = bootstrap
-    ? "The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments."
-    : "Manual Runner enrollment and install uses a verified portable artifact. The fixed signed hosted release is not enabled on this deployment. Install the artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. The install step runs only after enrollment succeeds.";
-  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body enrollment-body"><header class="enrollment-header"><a class="enrollment-brand" href="/admin" aria-label="Runmesh · Agent Control Plane">${brandLogo("enrollment-brand-logo")}</a><div class="enrollment-header-actions">${languageSwitch()}</div></header><main class="shell enrollment-shell"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><div class="dialog-icon-row">${meshMarkSvg("dialog-mark")}</div><p class="eyebrow">${title}</p><h1 id="enrollment-title">Enroll Runner</h1><p class="lede">${instruction} This one-time code expires in 30 minutes and will not be shown again.</p></div></section><div class="enrollment-meta-box"><span class="form-stat-label">Target Runner ID</span><span class="mono">${escapeHtml(runnerId)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">One-time enrollment code</span><code class="mono" data-no-i18n>${escapeHtml(code)}</code><span class="muted font-12">Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.</span></div><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.</p><div class="top-actions dialog-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
+  // The hosted fixed installer is intentionally privileged-only.  A
+  // dedicated_user selection must use the explicit manual path so it cannot
+  // silently change the service identity.
+  const commands = bootstrap && executionMode === "privileged_host" ? { linux: shellCommand, macos: shellCommand, windows: powerShellCommand } : manualCommands;
+  const tabs = Object.entries(commands).map(([platform, value], index) => `<button role="tab" id="tab-${platform}" aria-controls="panel-${platform}" aria-selected="${index === 0 ? "true" : "false"}" tabindex="${index === 0 ? "0" : "-1"}" data-tab="${platform}">${platform === "macos" ? "macOS" : platform === "windows" ? "Windows" : "Linux"}</button><section role="tabpanel" id="panel-${platform}" aria-labelledby="tab-${platform}" ${index === 0 ? "" : "hidden"} data-panel="${platform}"><pre><code>${escapeHtml(value)}</code></pre><button type="button" class="button secondary" data-copy="${escapeHtml(value)}">Copy ${commands === manualCommands ? "enrollment and install" : "installer"} command</button></section>`).join("");
+  const title = commands === manualCommands ? "Manual portable-artifact enrollment" : "Signed fixed-preview enrollment";
+  const instruction = commands === manualCommands
+    ? `Manual Runner enrollment and install uses a verified portable artifact. Install the artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. Selected execution mode: ${modeLabel}. The recommended execution mode is privileged_host; dedicated_user remains available for explicit isolation cases. The install step runs only after enrollment succeeds.`
+    : `The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. Selected execution mode: ${modeLabel}. The recommended execution mode is privileged_host; dedicated_user remains available for explicit isolation cases.`;
+  const warningBlock = executionMode === "privileged_host" ? `<p class="warning privileged-host-warning">${escapeHtml(privilegedWarning)} You must keep the one-time confirmation in the local install command.</p>` : `<p class="notice">Selected restricted service account mode: dedicated_user. The hosted privileged installer is not used.</p>`;
+  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body enrollment-body"><header class="enrollment-header"><a class="enrollment-brand" href="/admin" aria-label="Runmesh · Agent Control Plane">${brandLogo("enrollment-brand-logo")}</a><div class="enrollment-header-actions">${languageSwitch()}</div></header><main class="shell enrollment-shell"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><div class="dialog-icon-row">${meshMarkSvg("dialog-mark")}</div><p class="eyebrow">${title}</p><h1 id="enrollment-title">Enroll Runner</h1><p class="lede">${instruction} This one-time code expires in 30 minutes and will not be shown again.</p></div></section><div class="enrollment-meta-box"><span class="form-stat-label">Target Runner ID</span><span class="mono">${escapeHtml(runnerId)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">Selected execution mode</span><span class="mono">${escapeHtml(modeLabel)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">One-time enrollment code</span><code class="mono" data-no-i18n>${escapeHtml(code)}</code><span class="muted font-12">Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.</span></div><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div>${warningBlock}<p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.</p><div class="top-actions dialog-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment">${executionModeFormFields(executionMode, csrf)}<button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
 }
   function secretCreatedPage(title: string, url: string): string { return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${escapeHtml(title)}</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card secret-card"><div class="secret-brand-row">${meshMarkSvg("secret-mesh-mark")}<span class="brand-name">Runmesh</span></div><p class="brand-kicker">Runmesh</p><h1>${escapeHtml(title)}</h1><p class="lede">Copy this URL now. It will not be shown again.</p><code>${escapeHtml(url)}</code><div class="secret-actions"><button type="button" class="button" data-copy="${escapeHtml(url)}">Copy MCP URL</button><a class="button secondary" href="/admin">Back to admin</a></div></section></main>${adminScript()}</body></html>`; }
 function secretUrl(base: string, secret: string): string { const url = new URL(base); url.pathname = `/${secret}/mcp`; url.search = ""; return url.toString(); }
