@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, chown, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, win32 } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -9,7 +9,7 @@ import { RUNNER_VERSION } from "../src/version.js";
 import { enrollRunner } from "../src/enrollment.js";
 import { ProfileStore, defaultWorkspaceId, validateProfile } from "../src/profile.js";
 import { PolicyStore } from "../src/policy-store.js";
-import { createServiceManager, createServiceProvisioner, installServiceManifest, isManagedService, removeServiceManifest, renderService, serviceLayout, serviceProfilePath, type ServiceManifestFilesystem } from "../src/service.js";
+import { createServiceManager, createServiceProvisioner, hashContent, installServiceManifest, isManagedService, managedServiceManifestFromContent, removeServiceManifest, renderService, rewriteManagedServiceExecutionMode, serviceLayout, serviceProfilePath, type ServiceManifest, type ServiceManifestFilesystem } from "../src/service.js";
 
 async function fixture(): Promise<{ root: string; store: ProfileStore; cleanup: () => Promise<void> }> {
   const root = await mkdtemp(join(tmpdir(), "runner-product-"));
@@ -491,7 +491,42 @@ describe("runner product CLI and service safety", () => {
     expect(windows.content).not.toContain("<UserId>SYSTEM</UserId>");
     const privileged = renderService({ platform: "win32", mode: "system", executionMode: "privileged_host" });
     expect(privileged.content).toContain("<UserId>SYSTEM</UserId>");
+    expect(privileged.content).toContain("<RunLevel>HighestAvailable</RunLevel>");
+    expect(windows.content).toContain("<RunLevel>LeastPrivilege</RunLevel>");
+    const linuxPrivileged = renderService({ platform: "linux", mode: "system", executionMode: "privileged_host" });
+    expect(linuxPrivileged.content).not.toContain("User=runmesh");
+    expect(linuxPrivileged.content).not.toContain("Group=runmesh");
+    const macosPrivileged = renderService({ platform: "darwin", mode: "system", executionMode: "privileged_host" });
+    expect(macosPrivileged.content).not.toContain("<key>UserName</key>");
     expect(Buffer.from(windows.content, "utf8").toString("utf8")).toBe(windows.content);
+  });
+  it("preserves managed service custom settings while changing only execution identity", () => {
+    const custom = renderService({
+      platform: "linux",
+      mode: "system",
+      executionMode: "dedicated_user",
+      serviceUser: "build-runner",
+      serviceGroup: "build-ops",
+      executablePath: "/srv/runmesh/bin/custom-runner",
+    });
+    const customBody = custom.content.slice(custom.content.indexOf("\n") + 1).replaceAll("\n", "\r\n");
+    const crlf = `# runmesh-runner-managed:${hashContent(customBody)}\r\n${customBody}`;
+    expect(isManagedService(crlf)).toBe(true);
+    const privileged = rewriteManagedServiceExecutionMode(
+      renderService({ platform: "linux", mode: "system", executionMode: "privileged_host" }),
+      crlf,
+      "privileged_host",
+    );
+    expect(privileged.content).toContain("ExecStart=/srv/runmesh/bin/custom-runner");
+    expect(privileged.content).not.toContain("User=build-runner");
+    expect(privileged.content).not.toContain("Group=build-ops");
+    expect(privileged.content).toContain("\r\n");
+    expect(isManagedService(privileged.content)).toBe(true);
+    const dedicated = rewriteManagedServiceExecutionMode(custom, privileged.content, "dedicated_user");
+    expect(dedicated.content).toContain("User=runmesh");
+    expect(dedicated.content).toContain("Group=runmesh");
+    expect(dedicated.content).toContain("ExecStart=/srv/runmesh/bin/custom-runner");
+    expect(managedServiceManifestFromContent(custom, dedicated.content, "dedicated_user").hash).toBe(dedicated.hash);
   });
   it("rejects legacy service commands that try to override profile or state paths", () => {
     for (const command of [
@@ -544,6 +579,86 @@ describe("runner product CLI and service safety", () => {
     const manifest = renderService({ platform: "win32", mode: "system" });
     await expect(managerFor("Ready").status?.(manifest)).resolves.toMatchObject({ installed: true, active: false });
     await expect(managerFor("Running").status?.(manifest)).resolves.toMatchObject({ installed: true, active: true, identity: "NT AUTHORITY\\LOCAL SERVICE" });
+  });
+  it("marks native service status probes unreliable on permission/tool failures", async () => {
+    const manifest = renderService({ platform: "linux", mode: "system" });
+    const manager = createServiceManager({
+      platform: "linux",
+      mode: "system",
+      executor: {
+        execute: async (_file, args) => args.includes("show")
+          ? { exitCode: 1, stderr: "Failed to connect to bus: Access denied" }
+          : { exitCode: 1, stderr: "Failed to connect to bus: Access denied" },
+      },
+    });
+    await expect(manager.status?.(manifest)).resolves.toMatchObject({ installed: false, active: false, reliable: false });
+  });
+  it("recognizes normal systemd absent and disabled states as reliable", async () => {
+    const manifest = renderService({ platform: "linux", mode: "system" });
+    const absent = createServiceManager({
+      platform: "linux",
+      mode: "system",
+      executor: {
+        execute: async (_file, args) => args.includes("is-enabled")
+          ? { exitCode: 1, stdout: "not-found\n" }
+          : args.includes("show")
+            ? { exitCode: 1, stderr: "Unit runmesh-runner.service could not be found." }
+            : { exitCode: 3 },
+      },
+    });
+    await expect(absent.status?.(manifest)).resolves.toMatchObject({ installed: false, active: false, registered: false, reliable: true });
+    const disabled = createServiceManager({
+      platform: "linux",
+      mode: "system",
+      executor: {
+        execute: async (_file, args) => args.includes("is-enabled")
+          ? { exitCode: 1, stdout: "disabled\n" }
+          : args.includes("show")
+            ? { exitCode: 0, stdout: "runmesh\n" }
+            : { exitCode: 3 },
+      },
+    });
+    await expect(disabled.status?.(manifest)).resolves.toMatchObject({ installed: false, active: false, registered: true, reliable: true, identity: "runmesh" });
+    const absentExitFour = createServiceManager({
+      platform: "linux",
+      mode: "system",
+      executor: {
+        execute: async (_file, args) => args.includes("is-enabled")
+          ? { exitCode: 1, stdout: "not-found\n" }
+          : args.includes("show")
+            ? { exitCode: 1, stderr: "Unit runmesh-runner.service could not be found." }
+            : { exitCode: 4 },
+      },
+    });
+    await expect(absentExitFour.status?.(manifest)).resolves.toMatchObject({ installed: false, active: false, registered: false, reliable: true });
+  });
+  it("restores a disabled systemd registration without touching masked or linked states", async () => {
+    const manifest = renderService({ platform: "linux", mode: "system" });
+    const calls: string[] = [];
+    const enabled = createServiceManager({
+      platform: "linux",
+      mode: "system",
+      executor: { execute: async (file, args) => {
+        calls.push([file, ...args].join(" "));
+        return args.includes("is-enabled") ? { exitCode: 0, stdout: "enabled\n" } : { exitCode: 0 };
+      } },
+    });
+    await enabled.disable?.(manifest);
+    expect(calls).toEqual(["systemctl daemon-reload", "systemctl is-enabled runmesh-runner.service", "systemctl disable runmesh-runner.service"]);
+
+    for (const state of ["masked", "linked"] as const) {
+      calls.length = 0;
+      const manager = createServiceManager({
+        platform: "linux",
+        mode: "system",
+        executor: { execute: async (file, args) => {
+          calls.push([file, ...args].join(" "));
+          return args.includes("is-enabled") ? { exitCode: 1, stdout: `${state}\n` } : { exitCode: 0 };
+        } },
+      });
+      await manager.disable?.(manifest);
+      expect(calls).toEqual(["systemctl daemon-reload", "systemctl is-enabled runmesh-runner.service"]);
+    }
   });
   it("re-applies an unchanged desired policy after activation is interrupted before live publish", async () => {
     const workspaces: [] = [];
@@ -647,7 +762,15 @@ describe("runner product CLI and service safety", () => {
     try {
       const contents = new Map<string, string>();
       const filesystem: ServiceManifestFilesystem = { read: async (path) => contents.get(path), write: async (path, content) => { contents.set(path, content); }, remove: async (path) => { contents.delete(path); } };
-      const manager = createServiceManager({ platform: "linux", mode: "system", executor: { execute: async () => ({ exitCode: 0 }) } });
+      const managerAdapter = createServiceManager({ platform: "linux", mode: "system", executor: { execute: async () => ({ exitCode: 0 }) } });
+      let serviceInstalled = false;
+      const manager = {
+        ...managerAdapter,
+        install: async (manifest: ServiceManifest) => { serviceInstalled = true; await managerAdapter.install(manifest); },
+        status: async (manifest: ServiceManifest) => serviceInstalled
+          ? { installed: true, active: true, identity: manifest.executionMode === "privileged_host" ? "root" : "runmesh" }
+          : { installed: false, active: false },
+      };
       await test.store.save({ ...profile(join(test.root, "workspace")), execution_mode: "dedicated_user" });
       const serviceProvisioner = { platform: "linux" as const, provision: async () => ({ identity: "runmesh", profileSecured: true }) };
       await expect(runCli(["install", "--execution-mode", "privileged_host"], { store: test.store, stdout: () => undefined, stderr: () => undefined, servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, serviceProvisioner, isAdministrator: () => true })).rejects.toThrow("confirm-privileged-host");
@@ -655,6 +778,240 @@ describe("runner product CLI and service safety", () => {
       expect([...contents.values()][0]).not.toContain("User=runmesh");
       await test.store.save(profile(join(test.root, "workspace")));
       await expect(runCli(["install"], { store: test.store, stdout: () => undefined, stderr: () => undefined, servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, serviceProvisioner, isAdministrator: () => true })).resolves.toBeUndefined();
+    } finally { await test.cleanup(); }
+  });
+  it("migrates a dedicated service to privileged host mode without losing profile state", async () => {
+    const test = await fixture();
+    try {
+      const original = {
+        ...profile(join(test.root, "workspace")),
+        runner_id: "migration-runner",
+        max_concurrent_jobs: 4,
+        insecure_local: true,
+        management_mode: "central" as const,
+      };
+      await test.store.save(original);
+
+      const contents = new Map<string, string>();
+      const filesystem: ServiceManifestFilesystem = {
+        read: async (path) => contents.get(path),
+        write: async (path, content) => { contents.set(path, content); },
+        remove: async (path) => { contents.delete(path); },
+      };
+      const oldManifest = renderService({ platform: "linux", mode: "system", profilePath: test.store.filePath, executionMode: "dedicated_user" });
+      contents.set(oldManifest.path, oldManifest.content);
+      let reportedPrivilegedIdentity = "root";
+      const manager = {
+        platform: "linux" as const,
+        mode: "system" as const,
+        install: vi.fn(async (_manifest: ServiceManifest) => undefined),
+        stop: vi.fn(async (_manifest: ServiceManifest) => undefined),
+        restart: vi.fn(async (_manifest: ServiceManifest) => undefined),
+        uninstall: vi.fn(async (_manifest: ServiceManifest) => undefined),
+        status: vi.fn(async (manifest: ServiceManifest) => ({
+          installed: true,
+          active: true,
+          identity: manifest.executionMode === "dedicated_user" ? "runmesh" : reportedPrivilegedIdentity,
+        })),
+      };
+      const serviceProvisioner = {
+        platform: "linux" as const,
+        provision: async (_manifest: ServiceManifest) => ({ identity: "root", profileSecured: true }),
+      };
+      const common = {
+        store: test.store,
+        servicePlatform: "linux" as const,
+        serviceFilesystem: filesystem,
+        serviceManager: manager,
+        serviceProvisioner,
+        isAdministrator: () => true,
+        confirmPrivilegedHost: true,
+        stderr: () => undefined,
+      };
+
+      const firstOutput: string[] = [];
+      await runCli(["migrate", "--execution-mode", "privileged_host", "--confirm-privileged-host", "--json"], { ...common, stdout: (line) => firstOutput.push(line) });
+      const migrated = await test.store.load();
+      expect(migrated).toEqual({ ...original, execution_mode: "privileged_host" });
+      const migratedManifest = contents.get(oldManifest.path) ?? "";
+      expect(migratedManifest).not.toBe(oldManifest.content);
+      expect(migratedManifest).not.toContain("User=runmesh");
+      expect(JSON.parse(firstOutput[0] ?? "{}")).toMatchObject({
+        action: "migrate",
+        execution_mode: "privileged_host",
+        manifest_changed: true,
+        restarted: true,
+        actual_service_identity: "root",
+        privilege_state: "privileged",
+      });
+      expect(manager.restart).toHaveBeenCalledTimes(1);
+      expect(manager.restart.mock.calls[0]?.[0].executionMode).toBe("privileged_host");
+
+      // Repeating the same migration is safe and must not restart an already
+      // matching service just because the command was requested again.
+      const stableManifest = migratedManifest;
+      const secondOutput: string[] = [];
+      await runCli(["migrate", "--execution-mode", "privileged_host", "--confirm-privileged-host", "--json"], { ...common, stdout: (line) => secondOutput.push(line) });
+      expect(contents.get(oldManifest.path)).toBe(stableManifest);
+      expect(manager.restart).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(secondOutput[0] ?? "{}")).toMatchObject({ manifest_changed: false, restarted: false, privilege_state: "privileged" });
+
+      // A native service manager that reports the wrong identity must fail
+      // closed; the rollback path restores the prior lifecycle state.
+      reportedPrivilegedIdentity = "runmesh";
+      await expect(runCli(["migrate", "--execution-mode", "privileged_host", "--confirm-privileged-host"], common)).rejects.toThrow("identity does not match execution mode");
+      expect(await test.store.load()).toEqual({ ...original, execution_mode: "privileged_host" });
+      expect(contents.get(oldManifest.path)).toBe(stableManifest);
+      expect(manager.restart).toHaveBeenCalledTimes(2); // one migration + one rollback
+    } finally { await test.cleanup(); }
+  });
+  it("targets the existing managed mode for legacy lifecycle commands without silently migrating it", async () => {
+    const test = await fixture();
+    try {
+      const { execution_mode: _omitted, ...legacyProfile } = profile(join(test.root, "workspace"));
+      await test.store.save(legacyProfile);
+      const contents = new Map<string, string>();
+      const oldManifest = renderService({ platform: "linux", mode: "system", profilePath: test.store.filePath, executionMode: "privileged_host" });
+      contents.set(oldManifest.path, oldManifest.content);
+      const stopped: ServiceManifest[] = [];
+      const manager = {
+        platform: "linux" as const,
+        mode: "system" as const,
+        install: async () => undefined,
+        stop: async (manifest: ServiceManifest) => { stopped.push(manifest); },
+        restart: async () => undefined,
+        uninstall: async () => undefined,
+      };
+      const filesystem: ServiceManifestFilesystem = { read: async (path) => contents.get(path), write: async (path, content) => { contents.set(path, content); }, remove: async (path) => { contents.delete(path); } };
+      await runCli(["stop"], { store: test.store, servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, isAdministrator: () => true });
+      expect(stopped).toHaveLength(1);
+      expect(stopped[0]?.executionMode).toBe("privileged_host");
+      expect(await test.store.load()).not.toHaveProperty("execution_mode");
+    } finally { await test.cleanup(); }
+  });
+  it("does not take over or remove a native service when its managed manifest is missing", async () => {
+    const test = await fixture();
+    try {
+      const original = profile(join(test.root, "workspace"));
+      await test.store.save(original);
+      const filesystem: ServiceManifestFilesystem = { read: async () => undefined, write: async () => undefined, remove: async () => undefined };
+      const manager = {
+        platform: "linux" as const,
+        mode: "system" as const,
+        install: vi.fn(async () => undefined),
+        stop: vi.fn(async () => undefined),
+        restart: vi.fn(async () => undefined),
+        uninstall: vi.fn(async () => undefined),
+        status: vi.fn(async () => ({ installed: true, active: true, identity: "runmesh" })),
+      };
+      const provisioner = { platform: "linux" as const, provision: vi.fn(async () => ({ identity: "runmesh", profileSecured: true })) };
+      await expect(runCli(["install"], { store: test.store, servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, serviceProvisioner: provisioner, isAdministrator: () => true })).rejects.toThrow("managed manifest");
+      expect(manager.install).not.toHaveBeenCalled();
+      expect(manager.uninstall).not.toHaveBeenCalled();
+      expect(provisioner.provision).not.toHaveBeenCalled();
+      expect(await test.store.load()).toEqual(original);
+    } finally { await test.cleanup(); }
+  });
+  it("refuses a disabled or masked native registration even when it is not enabled/active", async () => {
+    const test = await fixture();
+    try {
+      await test.store.save(profile(join(test.root, "workspace")));
+      const filesystem: ServiceManifestFilesystem = { read: async () => undefined, write: async () => undefined, remove: async () => undefined };
+      const manager = {
+        platform: "linux" as const,
+        mode: "system" as const,
+        install: vi.fn(async () => undefined),
+        stop: vi.fn(async () => undefined),
+        restart: vi.fn(async () => undefined),
+        uninstall: vi.fn(async () => undefined),
+        // `registered` captures disabled/masked/linked units that
+        // `installed` (enablement) and `active` intentionally report false.
+        status: vi.fn(async () => ({ registered: true, installed: false, active: false, reliable: true })),
+      };
+      const provisioner = { platform: "linux" as const, provision: vi.fn(async () => ({ identity: "runmesh", profileSecured: true })) };
+      await expect(runCli(["install"], { store: test.store, servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, serviceProvisioner: provisioner, isAdministrator: () => true })).rejects.toThrow("managed manifest");
+      expect(manager.install).not.toHaveBeenCalled();
+      expect(provisioner.provision).not.toHaveBeenCalled();
+    } finally { await test.cleanup(); }
+  });
+  it.skipIf(process.platform === "win32" || process.getuid?.() !== 0)("rejects a non-root-owned private system profile", async () => {
+    const test = await fixture();
+    try {
+      const store = new ProfileStore({ filePath: test.store.filePath, enforceServiceOwnership: true, serviceGroupId: 0 });
+      await store.save({ ...profile(join(test.root, "workspace")), execution_mode: "privileged_host" });
+      await chown(store.filePath, 65_534, 65_534);
+      await expect(store.load()).rejects.toThrow(/owned by root/);
+      await expect(store.checkServiceOwnership("privileged_host")).resolves.toMatchObject({ ok: false, checked: true, expected_uid: 0 });
+    } finally { await test.cleanup(); }
+  });
+  it.skipIf(process.platform === "win32" || process.getuid?.() !== 0)("forces root-owned 0600 profile bytes for a legacy rollback", async () => {
+    const test = await fixture();
+    try {
+      // Use a non-canonical path with the ownership contract explicitly
+      // enabled so this remains isolated from the host's /etc/runmesh state.
+      const store = new ProfileStore({ filePath: test.store.filePath, enforceServiceOwnership: true, serviceGroupId: 1 });
+      await store.save(profile(join(test.root, "workspace")));
+      await chown(join(test.root, "profile"), 0, 1);
+      await chmod(join(test.root, "profile"), 0o750);
+      await chown(store.filePath, 0, 1);
+      await chmod(store.filePath, 0o640);
+      await store.save({ ...profile(join(test.root, "workspace")), execution_mode: "privileged_host" }, { privateOwnerOnly: true });
+      const directory = await stat(join(test.root, "profile"));
+      const file = await stat(store.filePath);
+      expect(directory.uid).toBe(0);
+      expect(directory.gid).toBe(0);
+      expect(directory.mode & 0o777).toBe(0o700);
+      expect(file.uid).toBe(0);
+      expect(file.gid).toBe(0);
+      expect(file.mode & 0o777).toBe(0o600);
+    } finally { await test.cleanup(); }
+  });
+  it("refuses installation when the native service status is unreliable", async () => {
+    const test = await fixture();
+    try {
+      await test.store.save(profile(join(test.root, "workspace")));
+      const filesystem: ServiceManifestFilesystem = { read: async () => undefined, write: async () => undefined, remove: async () => undefined };
+      const manager = {
+        platform: "linux" as const,
+        mode: "system" as const,
+        install: vi.fn(async () => undefined),
+        stop: async () => undefined,
+        restart: async () => undefined,
+        uninstall: vi.fn(async () => undefined),
+        status: vi.fn(async () => ({ installed: false, active: false, reliable: false, detail: "permission denied" })),
+      };
+      const provisioner = { platform: "linux" as const, provision: vi.fn(async () => ({ identity: "root", profileSecured: true })) };
+      await expect(runCli(["install", "--execution-mode", "privileged_host", "--confirm-privileged-host"], {
+        store: test.store,
+        servicePlatform: "linux",
+        serviceFilesystem: filesystem,
+        serviceManager: manager,
+        serviceProvisioner: provisioner,
+        isAdministrator: () => true,
+      })).rejects.toThrow(/status probe/);
+      expect(provisioner.provision).not.toHaveBeenCalled();
+      expect(manager.install).not.toHaveBeenCalled();
+      expect(manager.uninstall).not.toHaveBeenCalled();
+    } finally { await test.cleanup(); }
+  });
+  it("refuses stop and restart when no managed manifest is present", async () => {
+    const test = await fixture();
+    try {
+      await test.store.save(profile(join(test.root, "workspace")));
+      const filesystem: ServiceManifestFilesystem = { read: async () => undefined, write: async () => undefined, remove: async () => undefined };
+      const manager = {
+        platform: "linux" as const,
+        mode: "system" as const,
+        install: async () => undefined,
+        stop: vi.fn(async () => undefined),
+        restart: vi.fn(async () => undefined),
+        uninstall: async () => undefined,
+      };
+      for (const command of ["stop", "restart"] as const) {
+        await expect(runCli([command], { store: test.store, servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager })).rejects.toThrow("managed service manifest is not installed");
+      }
+      expect(manager.stop).not.toHaveBeenCalled();
+      expect(manager.restart).not.toHaveBeenCalled();
     } finally { await test.cleanup(); }
   });
   it("emits stable doctor JSON checks and only fails its exit seam for required failures", async () => {
@@ -667,7 +1024,7 @@ describe("runner product CLI and service safety", () => {
       const manager = {
         platform: doctorPlatform, mode: "system" as const,
         install: async () => undefined, stop: async () => undefined, restart: async () => undefined, uninstall: async () => undefined,
-        status: async () => ({ installed: true, active: true, identity: "runmesh" }),
+        status: async () => ({ installed: true, active: true, identity: doctorPlatform === "win32" ? "NT AUTHORITY\\LOCAL SERVICE" : "runmesh" }),
       };
       const lines: string[] = []; const exitCodes: number[] = [];
       await runCli(["doctor", "--json"], {
@@ -702,7 +1059,10 @@ describe("runner product CLI and service safety", () => {
       const contents = new Map<string, string>();
       const filesystem: ServiceManifestFilesystem = { read: async (path) => contents.get(path), write: async (path, content) => { contents.set(path, content); }, remove: async (path) => { contents.delete(path); } };
       const commands: string[] = [];
-      const manager = createServiceManager({ platform: "linux", mode: "system", executor: { execute: async (file, args) => { commands.push([file, ...args].join(" ")); return { exitCode: 0 }; } } });
+      const managerAdapter = createServiceManager({ platform: "linux", mode: "system", executor: { execute: async (file, args) => { commands.push([file, ...args].join(" ")); return { exitCode: 0 }; } } });
+      // The injected status seam represents a genuinely fresh host. The
+      // lifecycle adapter still records the same auto-start commands below.
+      const manager = { ...managerAdapter, status: async () => ({ installed: false, active: false }) };
       const deniedErrors: string[] = [];
       await expect(runCli(["install"], { store: test.store, stderr: (line) => deniedErrors.push(line), servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, isAdministrator: () => false })).rejects.toThrow("administrator/root");
       await test.store.save(profile(join(test.root, "workspace")));
@@ -717,7 +1077,8 @@ describe("runner product CLI and service safety", () => {
     try {
       const contents = new Map<string, string>();
       const filesystem: ServiceManifestFilesystem = { read: async (path) => contents.get(path), write: async (path, content) => { contents.set(path, content); }, remove: async (path) => { contents.delete(path); } };
-      const manager = createServiceManager({ platform: "linux", mode: "system", executor: { execute: async () => ({ exitCode: 0 }) } });
+      const managerAdapter = createServiceManager({ platform: "linux", mode: "system", executor: { execute: async () => ({ exitCode: 0 }) } });
+      const manager = { ...managerAdapter, status: async () => ({ installed: false, active: false }) };
       const provisioner = { platform: "linux" as const, provision: async () => ({ identity: "runmesh", profileSecured: false, detail: "profile is not present yet" }) };
       await test.store.save(profile(join(test.root, "workspace")));
       await expect(runCli(["install"], { store: test.store, servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, serviceProvisioner: provisioner, isAdministrator: () => true })).rejects.toThrow("profile is not present yet");

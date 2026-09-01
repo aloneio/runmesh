@@ -114,7 +114,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
       )`);
       sql.exec("INSERT INTO mcp_clients (client_id, label, secret_verifier, secret_prefix, scopes_json, created_at_ms, updated_at_ms) VALUES ('legacy-client', 'Legacy client', ?, 'legacy-prefix', '[\"coding:read\"]', ?, ?)", "b".repeat(64), now, now);
       (instance as unknown as { ensureSchema(): void }).ensureSchema();
-      expect(instance.getRunner("legacy-row")).toMatchObject({ display_name: "legacy-row", public_info: null, last_sync_sequence: null, credential_version: 1, current_runner_version: null, protocol_compatibility: "unknown", update_channel: "stable", desired_runner_version: null, latest_runner_version: null, update_status: "unknown" });
+      expect(instance.getRunner("legacy-row")).toMatchObject({ display_name: "legacy-row", public_info: null, configured_execution_mode: null, last_sync_sequence: null, credential_version: 1, current_runner_version: null, protocol_compatibility: "unknown", update_channel: "stable", desired_runner_version: null, latest_runner_version: null, update_status: "unknown" });
       expect(instance.listMcpClients()).toContainEqual(expect.objectContaining({ client_id: "legacy-client", active_runner_id: null, active_runner_updated_at_ms: null }));
       expect(instance.createRunnerEnrollment("legacy-row", randomBase64Url(), "c".repeat(64), now)).toBeDefined();
     });
@@ -128,6 +128,23 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
       expect(instance.setRunnerVersionPolicy("versioned-runner", { update_channel: "pinned", desired_runner_version: "1.2.0" }, now + 2)).toMatchObject({ update_channel: "pinned", desired_runner_version: "1.2.0", latest_runner_version: null, update_status: "update_available" });
       expect(instance.setRunnerVersionPolicy("versioned-runner", { update_channel: "pinned" }, now + 3)).toBeUndefined();
       expect(instance.setRunnerVersionPolicy("versioned-runner", { update_channel: "stable", latest_runner_version: "latest" }, now + 4)).toBeUndefined();
+    });
+  });
+  it("persists only the administrator-selected execution mode and rejects unsafe mode mutations", async () => {
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName(`runner-execution-mode-${crypto.randomUUID()}`)); const now = Date.now();
+    await runInDurableObject(registry, async (instance) => {
+      const mutationId = `runner-create-${crypto.randomUUID()}`;
+      expect(instance.addRunner("mode-runner", "Mode runner", now, mutationId, "privileged_host", true)).toMatchObject({ configured_execution_mode: "privileged_host" });
+      // Replaying the creation marker with a different mode is a conflict;
+      // otherwise a lost response could turn an existing privileged row into a
+      // different service identity without a fresh administrator choice.
+      expect(instance.addRunner("mode-runner", "Mode runner", now + 1, mutationId, "dedicated_user", false)).toBeUndefined();
+      expect(instance.createRunnerEnrollment("mode-runner", randomBase64Url(), "a".repeat(64), now + 2, "dedicated_user")).toMatchObject({ runner_id: "mode-runner" });
+      expect(instance.getRunner("mode-runner")).toMatchObject({ configured_execution_mode: "dedicated_user" });
+      expect(instance.createRunnerEnrollment("mode-runner", randomBase64Url(), "b".repeat(64), now + 3, "privileged_host")).toBeUndefined();
+      // Runner-authored enrollment metadata cannot change the trusted field.
+      await instance.redeemRunnerEnrollment("a".repeat(64), "c".repeat(64), { platform: "linux", architecture: "x64", hostname: "host", runner_version: "1.0.0", protocol_version: 2, execution_mode: "privileged_host" }, now + 4);
+      expect(instance.getRunner("mode-runner")).toMatchObject({ configured_execution_mode: "dedicated_user" });
     });
   });
   it("migrates display names, distinguishes revoke from delete, and cleans selected clients", async () => {
@@ -430,6 +447,47 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect((await SELF.fetch("https://worker.test/admin", { redirect: "manual", headers: { cookie: cookies(adminJar) } })).status).toBe(303);
   });
 
+  it("preserves trusted execution mode across legacy action forms", async () => {
+    const loginPage = await SELF.fetch("https://worker.test/");
+    const loginCsrf = formToken(await loginPage.text());
+    const loginCookie = cookieFrom(loginPage, "__Host-runmesh_login_csrf");
+    const loggedIn = await submit("https://worker.test/login", { csrf_token: loginCsrf, password }, jar([["__Host-runmesh_login_csrf", loginCookie]]));
+    expect(loggedIn.status).toBe(303);
+    const csrf = cookieFrom(loggedIn, "__Host-runmesh_admin_csrf");
+    const adminJar = jar([["__Host-runmesh_admin_session", cookieFrom(loggedIn, "__Host-runmesh_admin_session")], ["__Host-runmesh_admin_csrf", csrf]]);
+    const privilegedId = `mode-preserve-${crypto.randomUUID().replaceAll("-", "")}`;
+    const created = await submit(`https://worker.test/admin/runners`, {
+      csrf_token: csrf,
+      display_name: "Mode preservation",
+      runner_id: privilegedId,
+      execution_mode: "privileged_host",
+      confirm_privileged_host: "true",
+    }, adminJar);
+    expect(created.status).toBe(200);
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
+    await expect(runInDurableObject(registry, (instance) => instance.getRunner(privilegedId))).resolves.toMatchObject({ configured_execution_mode: "privileged_host" });
+
+    // A pre-mode browser form must not silently downgrade a trusted privileged
+    // Runner.  The persisted acknowledgement is sufficient for a same-mode
+    // rotation/regeneration, so these requests do not need a second checkbox.
+    const rotated = await submit(`https://worker.test/admin/runners/${privilegedId}/rotate`, { csrf_token: csrf }, adminJar);
+    expect(rotated.status).toBe(200);
+    await expect(runInDurableObject(registry, (instance) => instance.getRunner(privilegedId))).resolves.toMatchObject({ configured_execution_mode: "privileged_host" });
+    const regenerated = await submit(`https://worker.test/admin/runners/${privilegedId}/enrollment`, { csrf_token: csrf }, adminJar);
+    expect(regenerated.status).toBe(200);
+    await expect(runInDurableObject(registry, (instance) => instance.getRunner(privilegedId))).resolves.toMatchObject({ configured_execution_mode: "privileged_host" });
+    const explicitPrivileged = await submit(`https://worker.test/admin/runners/${privilegedId}/enrollment`, { csrf_token: csrf, execution_mode: "privileged_host" }, adminJar);
+    expect(explicitPrivileged.status).toBe(200);
+
+    // A legacy row has no trusted mode and therefore cannot be migrated by an
+    // old form that omitted the administrator's explicit selection.
+    const legacyId = `mode-legacy-${crypto.randomUUID().replaceAll("-", "")}`;
+    await runInDurableObject(registry, (instance) => { expect(instance.registerRunner(legacyId, "a".repeat(64), Date.now())).toBe(true); });
+    const legacyAction = await submit(`https://worker.test/admin/runners/${legacyId}/enrollment`, { csrf_token: csrf }, adminJar);
+    expect(legacyAction.status).toBe(400);
+    await expect(runInDurableObject(registry, (instance) => instance.getRunner(legacyId))).resolves.toMatchObject({ configured_execution_mode: null });
+  });
+
   it("applies login throttling through the Worker and recovers after a valid password", async () => {
     const login = await SELF.fetch("https://worker.test/");
     const csrf = formToken(await login.text());
@@ -545,6 +603,17 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(dashboardHtml).toContain('class="button secondary" href="/admin">Refresh</a>');
     expect(dashboardHtml).not.toContain("data-refresh");
     expect(dashboardHtml).not.toContain("token_verifier"); expect(dashboardHtml).not.toContain("workspace_root");
+    const runnersPage = await SELF.fetch("https://worker.test/admin/runners", { headers: { cookie: cookies(adminJar) } });
+    expect(runnersPage.status).toBe(200);
+    const runnersHtml = await runnersPage.text();
+    // Existing rotate/install actions must expose a fresh mode choice instead
+    // of replaying a hidden dedicated_user value.  The server still validates
+    // the acknowledgement, so a forged privileged selection is rejected.
+    expect(runnersHtml).toContain('name="execution_mode"');
+    expect(runnersHtml).toContain('name="confirm_privileged_host"');
+    expect(runnersHtml).toContain("data-execution-mode-form");
+    const rejectedPrivilegedAction = await submit("https://worker.test/admin/runners/dashboard-runner/rotate", { csrf_token: csrf, execution_mode: "privileged_host" }, adminJar);
+    expect(rejectedPrivilegedAction.status).toBe(400);
     const adminScriptText = inlineScriptContaining(dashboardHtml, "function applyLocale");
     const localeOffset = adminScriptText.indexOf("function applyLocale");
     const localeBodyEnd = adminScriptText.indexOf("function requestedLocale", localeOffset);

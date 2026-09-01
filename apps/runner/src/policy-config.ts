@@ -6,7 +6,7 @@ export type WorkspaceValidationStatus = "valid" | "missing" | "not_directory" | 
 export type CentralWorkspacePolicy = { readonly workspace_id: string; readonly root_path: string; readonly enabled: boolean; readonly permissions: PermissionSet };
 export type WorkspaceValidationStage = "realpath" | "lstat";
 export type WorkspaceValidationReason = "os_access_denied";
-export type WorkspaceValidationRemediation = "confirm_privileged_host" | "check_workspace_acl" | "run_as_admin";
+export type WorkspaceValidationRemediation = "migrate_privileged_host" | "grant_os_access" | "confirm_privileged_host" | "check_workspace_acl" | "run_as_admin";
 export type WorkspaceValidationDiagnostic = {
   readonly workspace_id: string;
   readonly status: WorkspaceValidationStatus;
@@ -30,7 +30,15 @@ export function effectiveCentralPermissions(runner: PermissionSet, workspace: Pe
   };
 }
 
-export async function validateCentralWorkspacePolicy(workspaces: readonly CentralWorkspacePolicy[], context: { readonly serviceIdentity?: string; readonly executionMode?: "dedicated_user" | "privileged_host" } = {}): Promise<{ workspaces: WorkspaceConfig[]; status: WorkspaceValidationDiagnostic[] }> {
+export interface WorkspaceValidationContext {
+  readonly serviceIdentity?: string;
+  readonly executionMode?: "dedicated_user" | "privileged_host";
+  /** Injectable filesystem seams keep OS-denial diagnostics testable. */
+  readonly realpath?: typeof realpath;
+  readonly lstat?: typeof lstat;
+}
+
+export async function validateCentralWorkspacePolicy(workspaces: readonly CentralWorkspacePolicy[], context: WorkspaceValidationContext = {}): Promise<{ workspaces: WorkspaceConfig[]; status: WorkspaceValidationDiagnostic[] }> {
   const accepted: WorkspaceConfig[] = [];
   const status: WorkspaceValidationDiagnostic[] = [];
   const seen = new Set<string>();
@@ -40,11 +48,19 @@ export async function validateCentralWorkspacePolicy(workspaces: readonly Centra
     seen.add(workspace.workspace_id);
     if (!workspace.enabled) { status.push(diagnostic(workspace.workspace_id, "valid", context)); continue; }
     let path: string;
-    try { path = await realpath(workspace.root_path); } catch (error) { status.push(accessDiagnostic(workspace.workspace_id, errno(error, "EACCES") || errno(error, "EPERM") ? "permission_denied" : "missing", "realpath", context)); continue; }
+    try { path = await (context.realpath ?? realpath)(workspace.root_path); } catch (error) {
+      const denied = errno(error, "EACCES") || errno(error, "EPERM");
+      status.push(denied ? accessDiagnostic(workspace.workspace_id, "permission_denied", "realpath", context) : diagnostic(workspace.workspace_id, "missing"));
+      continue;
+    }
     try {
-      const info = await lstat(path);
-      if (!info.isDirectory()) { status.push(diagnostic(workspace.workspace_id, "not_directory", context)); continue; }
-    } catch (error) { status.push(accessDiagnostic(workspace.workspace_id, errno(error, "EACCES") || errno(error, "EPERM") ? "permission_denied" : "missing", "lstat", context)); continue; }
+      const info = await (context.lstat ?? lstat)(path);
+      if (!info.isDirectory()) { status.push(diagnostic(workspace.workspace_id, "not_directory")); continue; }
+    } catch (error) {
+      const denied = errno(error, "EACCES") || errno(error, "EPERM");
+      status.push(denied ? accessDiagnostic(workspace.workspace_id, "permission_denied", "lstat", context) : diagnostic(workspace.workspace_id, "missing"));
+      continue;
+    }
     canonical.push({ workspace, path });
   }
   const overlapping = canonical.filter((entry, index) => canonical.some((other, otherIndex) => index !== otherIndex && (nestedRoot(entry.path, other.path) || nestedRoot(other.path, entry.path))));
@@ -61,9 +77,25 @@ function nestedRoot(left: string, right: string): boolean {
   return relation === "" || (relation !== ".." && !relation.startsWith(`..${sep}`) && !isAbsolute(relation));
 }
 function errno(error: unknown, code: string): boolean { return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === code; }
-function diagnostic(workspaceId: string, status: WorkspaceValidationStatus, context: { readonly serviceIdentity?: string; readonly executionMode?: "dedicated_user" | "privileged_host" } = {}): WorkspaceValidationDiagnostic {
-  return { workspace_id: workspaceId, status, ...(context.serviceIdentity === undefined ? {} : { service_identity: context.serviceIdentity }), ...(context.executionMode === undefined ? {} : { execution_mode: context.executionMode }) };
+function diagnostic(workspaceId: string, status: WorkspaceValidationStatus, _context?: WorkspaceValidationContext): WorkspaceValidationDiagnostic {
+  return { workspace_id: workspaceId, status };
 }
-function accessDiagnostic(workspaceId: string, status: Exclude<WorkspaceValidationStatus, "valid">, stage: WorkspaceValidationStage, context: { readonly serviceIdentity?: string; readonly executionMode?: "dedicated_user" | "privileged_host" } = {}): WorkspaceValidationDiagnostic {
-  return { ...diagnostic(workspaceId, status, context), validation_stage: stage, reason: "os_access_denied", remediation_code: context.executionMode === "privileged_host" ? "check_workspace_acl" : "confirm_privileged_host" };
+function accessDiagnostic(workspaceId: string, status: Exclude<WorkspaceValidationStatus, "valid">, stage: WorkspaceValidationStage, context: WorkspaceValidationContext = {}): WorkspaceValidationDiagnostic {
+  const identity = safeDiagnosticIdentity(context.serviceIdentity);
+  return {
+    workspace_id: workspaceId,
+    status,
+    validation_stage: stage,
+    reason: "os_access_denied",
+    ...(identity === undefined ? {} : { service_identity: identity }),
+    ...(context.executionMode === undefined ? {} : { execution_mode: context.executionMode }),
+    remediation_code: context.executionMode === "privileged_host" ? "grant_os_access" : "migrate_privileged_host",
+  };
+}
+
+/** Keep administrator diagnostics bounded and free of control characters. */
+function safeDiagnosticIdentity(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 && trimmed.length <= 256 && !/[\u0000-\u001f\u007f-\u009f]/u.test(trimmed) ? trimmed : undefined;
 }

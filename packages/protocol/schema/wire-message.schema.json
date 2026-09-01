@@ -694,6 +694,8 @@
               "remediation_code": {
                 "type": "string",
                 "enum": [
+                  "migrate_privileged_host",
+                  "grant_os_access",
                   "confirm_privileged_host",
                   "check_workspace_acl",
                   "run_as_admin"
