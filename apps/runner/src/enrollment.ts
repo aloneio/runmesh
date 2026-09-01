@@ -79,7 +79,14 @@ export async function enrollRunner(options: EnrollmentOptions): Promise<Enrollme
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         enrollment_code: options.code,
-        runner_public_info: { platform: process.platform, architecture: process.arch, hostname: hostname().slice(0, 256), runner_version: RUNNER_VERSION, protocol_version: PROTOCOL_CURRENT_VERSION },
+        runner_public_info: {
+          platform: process.platform,
+          architecture: process.arch,
+          hostname: hostname().slice(0, 256),
+          runner_version: RUNNER_VERSION,
+          protocol_version: PROTOCOL_CURRENT_VERSION,
+          ...(options.executionMode === undefined ? {} : { execution_mode: options.executionMode }),
+        },
       }),
     });
   } catch {
@@ -119,8 +126,15 @@ export async function enrollRunner(options: EnrollmentOptions): Promise<Enrollme
       workspaces: existing?.workspaces ?? [],
       ...(options.insecureLocal === true ? { insecure_local: true } : {}),
       ...(existing?.max_concurrent_jobs === undefined ? {} : { max_concurrent_jobs: existing.max_concurrent_jobs }),
+      // A brand-new profile uses the restricted default.  Re-enrollment of a
+      // legacy profile deliberately keeps the execution-mode field absent so
+      // the subsequent system install still requires an explicit operator
+      // migration choice; it must not silently guess (even a restricted)
+      // service contract during credential replacement.
       ...(options.executionMode === undefined
-        ? existing?.execution_mode === undefined ? { execution_mode: "dedicated_user" as const } : { execution_mode: existing.execution_mode }
+        ? existing === undefined
+          ? { execution_mode: "dedicated_user" as const }
+          : existing.execution_mode === undefined ? {} : { execution_mode: existing.execution_mode }
         : { execution_mode: options.executionMode }),
       ...(existing === undefined
         ? { management_mode: "central" as const }

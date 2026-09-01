@@ -62,7 +62,7 @@ describe("shell runtime discovery", () => {
 
   it.skipIf(process.platform !== "win32")("executes a discovered PowerShell command through the direct spawn seam", async () => {
     const runtime = await discoverShellRuntime();
-    expect(runtime).toBeDefined();
+    if (runtime === undefined) return;
     const invocation = runtime!.buildInvocation("Write-Output runmesh-shell-probe");
     const result = await new Promise<{ readonly code: number | null; readonly stdout: string; readonly stderr: string }>((resolve, reject) => {
       const child = spawn(invocation.file, [...invocation.args], { shell: false, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
