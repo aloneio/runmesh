@@ -8,7 +8,7 @@ import { enrollRunner, isEnrollmentOutcomeUnknown } from "./enrollment.js";
 import { ProfileStore, defaultWorkspaceId, profileExecutionMode, profileManagementMode, redactedProfile, workspaceOptions, type RunnerProfile, type StoredWorkspace } from "./profile.js";
 import { EnvironmentInfoService, discoverShellRuntime, type ShellRuntime } from "./runtime.js";
 import { RUNNER_VERSION } from "./version.js";
-import { assertManagedServiceManifest, createServiceManager, createServiceProvisioner, expectedServiceIdentity, hostServiceManifestFilesystem, installServiceManifest, isManagedService, removeServiceManifest, renderService, serviceLayout, servicePrivilegeState, serviceProfilePath, type ExecutionMode, type ServiceManagerAdapter, type ServiceManifest, type ServiceManifestFilesystem, type ServicePlatform, type ServicePrivilegeState, type ServiceProvisioner } from "./service.js";
+import { assertManagedServiceManifest, createServiceManager, createServiceProvisioner, currentServicePlatform, expectedServiceIdentity, hostServiceManifestFilesystem, installServiceManifest, isManagedService, managedServiceManifestFromContent, removeServiceManifest, renderService, rewriteManagedServiceExecutionMode, serviceLayout, servicePrivilegeState, serviceProfilePath, type ExecutionMode, type ServiceManagerAdapter, type ServiceManifest, type ServiceManifestFilesystem, type ServicePlatform, type ServicePrivilegeState, type ServiceProvisioner } from "./service.js";
 import { resolveTrustedWindowsTool, trustedWindowsEnvironment, trustedWindowsRoot } from "./windows-tools.js";
 
 export interface CliDependencies {
@@ -54,7 +54,7 @@ export interface EnrollCliDependencies {
   readonly afterEnroll?: () => Promise<void>;
 }
 interface ParsedCommand { readonly command: string; readonly json: boolean; readonly values: Record<string, string | boolean | string[]>; readonly passthrough: string[]; }
-const HELP = "usage: runmesh-runner <start|enroll|status|doctor|workspace|env|install|stop|restart|uninstall> [options]\nenroll: --server <https-url> (--code <one-time-code> | --code-stdin)\nworkspace: list | add --path <directory> [--allow-edit] [--allow-host-shell --i-understand-host-shell-is-not-sandboxed] | remove --id <workspace-id> | migrate --management-mode <central|legacy_manual>";
+const HELP = "usage: runmesh-runner <start|enroll|status|doctor|workspace|env|install|migrate|stop|restart|uninstall> [options]\nenroll: --server <https-url> (--code <one-time-code> | --code-stdin)\nservice migration: migrate --execution-mode <dedicated_user|privileged_host> [--confirm-privileged-host]\nworkspace: list | add --path <directory> [--allow-edit] [--allow-host-shell --i-understand-host-shell-is-not-sandboxed] | remove --id <workspace-id> | migrate --management-mode <central|legacy_manual>";
 
 /**
  * Read a one-time enrollment code without placing it in argv, a URL, or the
@@ -238,9 +238,61 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
     }
     if (parsed.command === "status") {
       const profile = await store.load();
-      const executionMode = parsed.values.user === true ? "dedicated_user" : profileExecutionMode(profile) ?? "migration_required";
-      const managementMode = profileManagementMode(profile) ?? "migration_required";
-      report(output, parsed.json, { configured: profile !== undefined, profile: redactedProfile(profile), runner_id: profile?.runner_id ?? null, display_name: null, version: null, service: { mode: parsed.values.user === true ? "user" : "system", execution_mode: executionMode, status: "unknown" }, management_mode: managementMode, connection: "unknown", desired_policy_revision: null, applied_policy_revision: null, workspace_count: profile?.workspaces.length ?? 0 });
+      const serviceMode = parsed.values.user === true ? "user" as const : "system" as const;
+      const configuredMode = profile === undefined ? "migration_required" as const : serviceMode === "user" ? "dedicated_user" as const : profileExecutionMode(profile) ?? "migration_required" as const;
+      let manifest: ServiceManifest | undefined;
+      let statusManifest: ServiceManifest | undefined;
+      let runtimeStatus: Awaited<ReturnType<NonNullable<ServiceManagerAdapter["status"]>>> | undefined;
+      if (profile !== undefined && configuredMode !== "migration_required") {
+        manifest = renderService({ ...(dependencies.servicePlatform === undefined ? {} : { platform: dependencies.servicePlatform }), mode: serviceMode, profilePath: store.filePath, ...(configuredMode === "dedicated_user" || configuredMode === "privileged_host" ? { executionMode: configuredMode } : {}) });
+        statusManifest = manifest;
+        if (manifest.mode === "system" && manifest.executionMode === "dedicated_user") {
+          try {
+            const existing = await (dependencies.serviceFilesystem ?? hostServiceManifestFilesystem).read(manifest.path);
+            if (existing !== undefined && isManagedService(existing)) statusManifest = managedServiceManifestFromContent(manifest, existing, "dedicated_user");
+          } catch { /* status still uses the profile's safe default identity */ }
+        }
+        const manager = dependencies.serviceManager ?? createServiceManager({ platform: manifest.platform, mode: manifest.mode });
+        if (manager.platform === manifest.platform && manager.mode === manifest.mode && manager.status !== undefined) {
+          try { runtimeStatus = await manager.status(statusManifest); } catch { runtimeStatus = undefined; }
+        }
+      }
+      const actualIdentity = runtimeStatus?.identity ?? null;
+      const privilegeState: ServicePrivilegeState | "unknown" = statusManifest === undefined
+        ? "unknown"
+        : servicePrivilegeState(statusManifest, runtimeStatus?.identity, runtimeStatus?.active ?? false);
+      const service = {
+        mode: serviceMode,
+        execution_mode: configuredMode,
+        configured_execution_mode: configuredMode,
+        manifest: manifest?.path ?? null,
+        registered: runtimeStatus?.registered ?? null,
+        installed: runtimeStatus?.installed ?? null,
+        active: runtimeStatus?.active ?? null,
+        status: runtimeStatus === undefined ? "unknown" : runtimeStatus.active ? "active" : runtimeStatus.installed ? "inactive" : "not_installed",
+        actual_service_identity: actualIdentity,
+        privilege_state: privilegeState,
+      };
+      report(output, parsed.json, {
+        configured: profile !== undefined,
+        profile: redactedProfile(profile),
+        runner_id: profile?.runner_id ?? null,
+        display_name: null,
+        version: null,
+        service,
+        configured_execution_mode: configuredMode,
+        actual_service_identity: actualIdentity,
+        privilege_state: privilegeState,
+        management_mode: profileManagementMode(profile) ?? "migration_required",
+        // A native service-manager state only says whether the process is
+        // scheduled/running.  It does not prove that the Runner has an
+        // authenticated control-plane socket, so never label an active task
+        // as "online" from this local probe alone.
+        connection: "unknown",
+        desired_policy_revision: null,
+        applied_policy_revision: null,
+        workspace_count: profile?.workspaces.length ?? 0,
+      });
       return;
     }
     if (parsed.command === "workspace") { await workspaceCommand(parsed, store, output); return; }
@@ -251,7 +303,7 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
       if (!result.ok) (dependencies.setExitCode ?? ((code) => { process.exitCode = code; }))(1);
       return;
     }
-    if (parsed.command === "install" || parsed.command === "stop" || parsed.command === "restart") { await serviceCommand(parsed, store, output, dependencies); return; }
+    if (parsed.command === "install" || parsed.command === "migrate" || parsed.command === "stop" || parsed.command === "restart") { await serviceCommand(parsed, store, output, dependencies); return; }
     if (parsed.command === "uninstall") { await uninstall(parsed, store, output, dependencies); return; }
     throw new Error(HELP);
   } catch (cause) {
@@ -270,9 +322,22 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
 async function start(parsed: ParsedCommand, store: ProfileStore, error: (line: string) => void, dependencies: CliDependencies): Promise<void> {
   const raw = parseRunnerArgs(parsed.passthrough);
   const profilePath = typeof parsed.values.profilePath === "string" ? parsed.values.profilePath : undefined;
-  const profile = profilePath === undefined
-    ? await store.load()
-    : await new ProfileStore({ filePath: profilePath, ...(dependencies.servicePlatform === undefined ? {} : { platform: dependencies.servicePlatform }) }).load();
+  const profileStore = profilePath === undefined
+    ? store
+    : new ProfileStore({ filePath: profilePath, ...(dependencies.servicePlatform === undefined ? {} : { platform: dependencies.servicePlatform }) });
+  const profile = await profileStore.load();
+  // A system Runner must not consume a canonical profile owned by an
+  // untrusted account/group.  This is checked after parsing execution_mode so
+  // dedicated_user and privileged_host receive their distinct root:group
+  // contracts; user-level foreground starts intentionally skip it.
+  if (parsed.values.user !== true && profile !== undefined
+    && (profile.execution_mode === "dedicated_user" || profile.execution_mode === "privileged_host")) {
+    // A managed system manifest may use a custom dedicated group.  Carry the
+    // identity from that manifest into the profile ownership check instead of
+    // assuming the built-in `runmesh` group.
+    const serviceGroup = await serviceGroupForManagedProfile(profileStore, dependencies.servicePlatform, dependencies.serviceFilesystem);
+    await profileStore.assertServiceOwnership(profile.execution_mode, serviceGroup);
+  }
   const hasLegacyExplicit = raw.server !== undefined || raw.runnerId !== undefined || raw.token !== undefined || (raw.workspaces?.length ?? 0) > 0;
   const productWorkspaces = profile === undefined || profileManagementMode(profile) === "central" ? [] : workspaceOptions(profile);
   const server = raw.server ?? profile?.server_url;
@@ -293,7 +358,17 @@ async function start(parsed: ParsedCommand, store: ProfileStore, error: (line: s
   };
   const config = await validateRunnerConfig(options);
   if (dependencies.startRunner !== undefined) return dependencies.startRunner(config);
-  const runner = new RunnerConnection({ config, onStateChange: (state) => error(`runner ${config.runnerId}: ${state}`) });
+  // A user-level foreground service is never allowed to inherit a
+  // privileged_host claim from a copied or manually edited system profile.
+  // The process is running under the interactive account, so report the
+  // effective user-service contract as dedicated_user and let OS validation
+  // fail closed for any host-wide workspace it cannot actually access.
+  const executionMode = parsed.values.user === true ? "dedicated_user" as const : profileExecutionMode(profile);
+  const runner = new RunnerConnection({
+    config,
+    onStateChange: (state) => error(`runner ${config.runnerId}: ${state}`),
+    ...(executionMode === "dedicated_user" || executionMode === "privileged_host" ? { executionMode } : {}),
+  });
   if (config.disconnectControlFile !== undefined) installDisconnectControl(runner, config.disconnectControlFile);
   const stop = (): void => runner.stop();
   process.once("SIGINT", stop); process.once("SIGTERM", stop);
@@ -348,30 +423,55 @@ export interface DoctorReport {
   readonly ok: boolean;
   readonly checks: readonly DoctorCheck[];
   readonly profile: Record<string, unknown> | undefined;
-  readonly service: { readonly manifest: string; readonly mode: "system" | "user"; readonly execution_mode: ExecutionMode | "migration_required" };
+  readonly service: {
+    readonly manifest: string;
+    readonly mode: "system" | "user";
+    readonly execution_mode: ExecutionMode | "migration_required";
+    readonly configured_execution_mode: ExecutionMode | "migration_required";
+    readonly actual_service_identity: string | null;
+    readonly privilege_state: ServicePrivilegeState;
+  };
 }
 
 export async function doctor(store: ProfileStore, mode: "system" | "user" = "system", platform: ServicePlatform | undefined = undefined, dependencies: Pick<CliDependencies, "serviceFilesystem" | "serviceManager" | "environment" | "discoverShellRuntime" | "policyRevision"> = {}): Promise<DoctorReport> {
-  const profile = await store.load();
+  let profile: RunnerProfile | undefined;
+  let profileLoadError: string | undefined;
+  try { profile = await store.load(); }
+  catch (error) { profileLoadError = errorMessage(error); }
   const permissions = await store.permissions();
   const checks: DoctorCheck[] = [];
   const add = (name: string, required: boolean, ok: boolean, detail?: string): void => {
     checks.push({ name, required, ok, status: ok ? "ok" : required ? "failure" : "warning", ...(detail === undefined ? {} : { detail }) });
   };
   const enrolled = profile !== undefined;
-  add("profile", true, enrolled, enrolled ? undefined : "not enrolled");
-  const targetPlatform = platform ?? (process.platform === "darwin" ? "darwin" : process.platform === "linux" ? "linux" : "win32");
-  const posix = targetPlatform !== "win32";
+  add("profile", true, enrolled, enrolled ? undefined : profileLoadError ?? "not enrolled");
+  const storedMode = profileExecutionMode(profile);
+  const executionMode: ExecutionMode | "migration_required" = mode === "user" ? "dedicated_user" : storedMode ?? "migration_required";
+  // ProfileStore permissions describe the host on which this CLI is running,
+  // whereas `platform` can be injected to inspect a rendered service for a
+  // different target platform.  Do not apply POSIX mode-bit rules to a
+  // Windows profile merely because the requested service target is Linux.
+  const posix = process.platform !== "win32";
   // A system service deliberately grants its dedicated `runmesh` group
   // traversal/read access to the profile (0750/0640).  User profiles remain
   // owner-only (0700/0600); both shapes are exact, bounded permission sets.
   // Do not accept arbitrary group/other bits here: `permissions()` reports
   // the final component without following symlinks, so this is the same
   // credential boundary enforced by ProfileStore.
-  const safeProfileDirectory = permissions.directory_mode === 0o700 || permissions.directory_mode === 0o750;
-  const safeProfileFile = permissions.file_mode === 0o600 || permissions.file_mode === 0o640;
-  add("profile_directory_permissions", true, enrolled && (!posix || safeProfileDirectory), !enrolled ? "not enrolled" : posix ? `mode ${formatMode(permissions.directory_mode)}` : "ACL permissions not inspected");
-  add("profile_file_permissions", true, enrolled && (!posix || safeProfileFile), !enrolled ? "not enrolled" : posix ? `mode ${formatMode(permissions.file_mode)}` : "ACL permissions not inspected");
+  const ownerOnlyProfile = mode === "user" || executionMode === "privileged_host";
+  const safeProfileDirectory = ownerOnlyProfile ? permissions.directory_mode === 0o700 : permissions.directory_mode === 0o700 || permissions.directory_mode === 0o750;
+  const safeProfileFile = ownerOnlyProfile ? permissions.file_mode === 0o600 : permissions.file_mode === 0o600 || permissions.file_mode === 0o640;
+  const expectedDirectoryModes = ownerOnlyProfile ? "0700" : "0700 or 0750";
+  const expectedFileModes = ownerOnlyProfile ? "0600" : "0600 or 0640";
+  add("profile_directory_permissions", true, enrolled && (!posix || safeProfileDirectory), !enrolled ? "not enrolled" : posix ? `mode ${formatMode(permissions.directory_mode)} (expected ${expectedDirectoryModes})` : "ACL permissions not inspected");
+  add("profile_file_permissions", true, enrolled && (!posix || safeProfileFile), !enrolled ? "not enrolled" : posix ? `mode ${formatMode(permissions.file_mode)} (expected ${expectedFileModes})` : "ACL permissions not inspected");
+  // Mode bits alone do not establish who controls a privileged profile: a
+  // hostile account can create an apparently private 0600 file and a root
+  // process would otherwise accept it.  Check the canonical POSIX owner/group
+  // contract independently and expose a bounded administrator diagnostic.
+  let ownershipCheck: Awaited<ReturnType<ProfileStore["checkServiceOwnership"]>> | undefined;
+  let ownershipError: string | undefined;
+  const ownershipRequired = enrolled && mode === "system" && posix && (executionMode === "dedicated_user" || executionMode === "privileged_host");
   if (profile !== undefined) {
     const url = urlCheck(profile.server_url, profile.insecure_local === true);
     add("server_url", true, url.ok, url.detail);
@@ -381,8 +481,6 @@ export async function doctor(store: ProfileStore, mode: "system" | "user" = "sys
     }
   } else add("server_url", false, false, "not enrolled");
 
-  const storedMode = profileExecutionMode(profile);
-  const executionMode: ExecutionMode | "migration_required" = mode === "user" ? "dedicated_user" : storedMode ?? "migration_required";
   const manifest = renderService({ ...(platform === undefined ? {} : { platform }), mode, profilePath: store.filePath, ...(executionMode === "migration_required" ? {} : { executionMode }) });
   add("execution_mode", enrolled, executionMode !== "migration_required", !enrolled ? "not enrolled" : executionMode === "migration_required" ? "legacy profile has no execution_mode; choose --execution-mode dedicated_user or privileged_host before installation" : executionMode);
   let serviceContent: string | undefined;
@@ -391,23 +489,65 @@ export async function doctor(store: ProfileStore, mode: "system" | "user" = "sys
     const managed = serviceContent !== undefined && isManagedService(serviceContent);
     add("service_manifest", true, managed, serviceContent === undefined ? "not installed" : managed ? undefined : "unmanaged manifest");
   }
+  let serviceProbeManifest = manifest;
+  if (executionMode === "dedicated_user" && serviceContent !== undefined && isManagedService(serviceContent)) {
+    try { serviceProbeManifest = managedServiceManifestFromContent(manifest, serviceContent, "dedicated_user"); }
+    catch { serviceProbeManifest = manifest; }
+  }
+  if (profile !== undefined && mode === "system" && (executionMode === "dedicated_user" || executionMode === "privileged_host")) {
+    // Resolve an operator-selected dedicated group from the managed unit
+    // before checking the profile inode.  A custom group is part of the local
+    // service contract; falling back to `runmesh` here would reject a healthy
+    // migration even though the native service can read the credential.
+    let serviceGroup: string | undefined;
+    if (executionMode === "dedicated_user" && serviceContent !== undefined && isManagedService(serviceContent)) {
+      try {
+        serviceGroup = serviceProbeManifest.serviceGroup;
+      } catch { serviceGroup = undefined; }
+    }
+    try { ownershipCheck = await store.checkServiceOwnership(executionMode, serviceGroup); }
+    catch (error) { ownershipError = errorMessage(error); }
+  }
+  add("profile_ownership", ownershipRequired, !ownershipRequired || ownershipCheck?.ok === true, !enrolled ? "not enrolled" : ownershipError ?? ownershipCheck?.detail ?? (ownershipRequired ? "canonical ownership could not be verified" : "non-system profile"));
   const manager = dependencies.serviceManager ?? createServiceManager({ platform: manifest.platform, mode: manifest.mode });
+  let actualServiceIdentity: string | null = null;
+  let privilegeState: ServicePrivilegeState = "unknown";
+  const expectedIdentity = executionMode === "migration_required" ? undefined : expectedServiceIdentity(serviceProbeManifest);
+  const serviceIdentityRequired = expectedIdentity !== undefined;
   if (manager.platform !== manifest.platform || manager.mode !== manifest.mode || manager.status === undefined) {
-    add("service_installed", false, false, "service status probe unavailable");
-    add("service_active", false, false, "service status probe unavailable");
+    const detail = "service status probe unavailable";
+    add("service_installed", serviceIdentityRequired, false, detail);
+    add("service_active", serviceIdentityRequired, false, detail);
+    add("service_identity", serviceIdentityRequired, false, detail);
+    add("service_privilege_state", serviceIdentityRequired, false, detail);
   } else {
     try {
-      const status = await manager.status(manifest);
-      add("service_installed", true, status.installed, status.detail);
-      add("service_active", true, status.active, status.detail);
-      const expectedIdentity = manifest.mode === "system" && manifest.executionMode === "dedicated_user" ? "runmesh" : undefined;
-      const identityMatches = expectedIdentity === undefined || status.identity === expectedIdentity || (manifest.platform === "win32" && status.identity === "NT AUTHORITY\\LOCAL SERVICE");
-      add("service_identity", expectedIdentity !== undefined, identityMatches, status.identity ?? "service identity unavailable");
+      const status = await manager.status(serviceProbeManifest);
+      actualServiceIdentity = status.identity ?? null;
+      privilegeState = servicePrivilegeState(serviceProbeManifest, status.identity, status.active);
+      if (status.reliable === false) {
+        const detail = status.detail ?? "native service status probe was unreliable";
+        add("service_installed", true, false, detail);
+        add("service_active", true, false, detail);
+        add("service_identity", serviceIdentityRequired, false, detail);
+        add("service_privilege_state", serviceIdentityRequired, false, detail);
+      } else {
+        add("service_installed", true, status.installed, status.detail);
+        add("service_active", true, status.active, status.detail);
+        const identityMatches = expectedIdentity === undefined ? true : privilegeState === "privileged" || privilegeState === "restricted";
+        add("service_identity", serviceIdentityRequired, identityMatches, status.identity ?? "service identity unavailable");
+        // A user-level service has no fixed account name, but a reported
+        // host-wide identity is still a mismatch and must be visible to
+        // doctor rather than being silently accepted as an optional probe.
+        const privilegeProbeRequired = serviceIdentityRequired || privilegeState === "mismatch";
+        add("service_privilege_state", privilegeProbeRequired, privilegeProbeRequired ? privilegeState !== "mismatch" && privilegeState !== "unknown" : true, privilegeState);
+      }
     } catch (error) {
       const detail = errorMessage(error);
       add("service_installed", true, false, detail);
       add("service_active", true, false, detail);
-      add("service_identity", manifest.mode === "system" && manifest.executionMode === "dedicated_user", false, detail);
+      add("service_identity", serviceIdentityRequired, false, detail);
+      add("service_privilege_state", serviceIdentityRequired, false, detail);
     }
   }
   const shell = await (dependencies.discoverShellRuntime ?? (() => discoverShellRuntime()))();
@@ -428,49 +568,372 @@ export async function doctor(store: ProfileStore, mode: "system" | "user" = "sys
       add("policy_revision", false, valid, valid ? `desired=${desired ?? "unknown"}, applied=${applied ?? "unknown"}` : "invalid revision");
     }
   } catch (error) { add("policy_revision", false, false, errorMessage(error)); }
-  return { ok: checks.filter((check) => check.required).every((check) => check.ok), checks, profile: redactedProfile(profile), service: { manifest: manifest.path, mode, execution_mode: executionMode } };
+  return {
+    ok: checks.filter((check) => check.required).every((check) => check.ok),
+    checks,
+    profile: redactedProfile(profile),
+    service: {
+      manifest: manifest.path,
+      mode,
+      execution_mode: executionMode,
+      configured_execution_mode: executionMode,
+      actual_service_identity: actualServiceIdentity,
+      privilege_state: privilegeState,
+    },
+  };
 }
 async function serviceCommand(parsed: ParsedCommand, store: ProfileStore, output: (line: string) => void, dependencies: CliDependencies): Promise<void> {
-  const manifest = await serviceManifestFor(parsed, store, dependencies.servicePlatform);
+  if (parsed.command === "migrate" && parsed.values.user === true) {
+    throw new Error("service migration is only available for system Runner services; remove --user");
+  }
+  const manifest = await serviceManifestFor(parsed, store, dependencies.servicePlatform, dependencies.serviceFilesystem);
   const manager = dependencies.serviceManager ?? createServiceManager({ platform: manifest.platform, mode: manifest.mode });
   if (manager.platform !== manifest.platform || manager.mode !== manifest.mode) throw new Error("service manager does not match the requested service mode");
-  if (parsed.command === "install") {
+  if (parsed.command === "install" || parsed.command === "migrate") {
+    if (parsed.command === "migrate" && typeof parsed.values.executionMode !== "string") throw new Error("service migration requires --execution-mode dedicated_user or --execution-mode privileged_host");
     assertSystemInstallationPrivilege(manifest, dependencies);
     // A service manifest always points at the persisted Runner profile. Do not
     // install/activate a service that is known to have no credentials; it
     // would otherwise enter a restart loop and report a misleading success.
-    if (await store.load() === undefined) throw new Error("runner is not enrolled; run enroll before installing the service");
-    const provisioner = dependencies.serviceProvisioner ?? createServiceProvisioner({ platform: manifest.platform });
-    const provisioned = await provisioner.provision(manifest, store.filePath);
-    // Dedicated system services must be able to read the profile as the
-    // service identity. The native provisioners return false when the profile
-    // is absent (or could not be secured); fail before writing/activating the
-    // manifest instead of creating a service that cannot start.
-    if (manifest.mode === "system" && manifest.executionMode === "dedicated_user" && !provisioned.profileSecured) {
-      throw new Error(provisioned.detail ?? "Runner profile could not be secured for the dedicated service identity; enroll before installing the service");
+    const profileBefore = await store.load();
+    if (profileBefore === undefined) throw new Error("runner is not enrolled; run enroll before installing the service");
+    const filesystem = dependencies.serviceFilesystem ?? hostServiceManifestFilesystem;
+    const existingManifest = await filesystem.read(manifest.path);
+    const existingManaged = existingManifest !== undefined && isManagedService(existingManifest);
+    // Reject an unmanaged file before creating accounts, changing ACLs, or
+    // touching the profile. `installServiceManifest` performs the same check
+    // at its write boundary, but doing it here keeps a failed attempt free of
+    // unrelated provisioning side effects.
+    if (existingManifest !== undefined && !existingManaged) throw new Error(`refusing to overwrite unmanaged service manifest: ${manifest.path}`);
+    // Probe the service under the mode that was actually persisted before
+    // changing it.  During dedicated_user -> privileged_host migration the
+    // new manifest intentionally describes SYSTEM/root, so using it for the
+    // preflight probe could misclassify an old runmesh process as privileged.
+    const previousExecutionMode = profileExecutionMode(profileBefore);
+    // The managed manifest is the native service's actual contract. Prefer it
+    // over a stale/mismatched profile field when reconstructing the previous
+    // lifecycle request, so rollback reloads the same identity that was
+    // running before this attempt.
+    const inferredPreviousMode = existingManaged && existingManifest !== undefined
+      ? inferExecutionModeFromManifest(manifest.platform, existingManifest)
+      : previousExecutionMode === "dedicated_user" || previousExecutionMode === "privileged_host" ? previousExecutionMode : "dedicated_user";
+    const previousManifestCandidate = renderService({
+      ...(dependencies.servicePlatform === undefined ? {} : { platform: dependencies.servicePlatform }),
+      mode: manifest.mode,
+      profilePath: store.filePath,
+      executionMode: inferredPreviousMode,
+      ...(typeof parsed.values.executablePath === "string" ? { executablePath: parsed.values.executablePath } : {}),
+    });
+    // Rollback and the preflight status probe must use the exact managed body
+    // that was installed before this transaction.  Re-rendering here would
+    // discard custom executable paths/accounts and could restart the old
+    // service with a different contract after a failed migration.
+    const previousManifest = existingManaged && existingManifest !== undefined
+      ? managedServiceManifestFromContent(previousManifestCandidate, existingManifest, inferredPreviousMode)
+      : previousManifestCandidate;
+    const privilegedConfirmation = parsed.values.confirmPrivilegedHost === true || dependencies.confirmPrivilegedHost === true;
+    if (manifest.mode === "system" && manifest.executionMode === "privileged_host" && !privilegedConfirmation) {
+      // Fail before provisioning, status probes, or profile mutation.  In
+      // particular, a custom provisioner must not get a chance to make host
+      // changes before the operator has acknowledged the one-time risk.
+      throw new Error("privileged_host service installation requires --confirm-privileged-host");
     }
-    await installServiceManifest(manifest, dependencies.serviceFilesystem, { confirmPrivilegedHost: parsed.values.confirmPrivilegedHost === true });
-    await manager.install(manifest);
-    report(output, parsed.json, { action: "install", manifest: manifest.path, mode: manifest.mode, identity: provisioned.identity, profile_secured: provisioned.profileSecured, commands: serviceCommandNames("install", manifest) });
-    return;
+    let previousStatus: Awaited<ReturnType<NonNullable<ServiceManagerAdapter["status"]>>> | undefined;
+    let statusProbeFailed = false;
+    if (manager.status !== undefined) {
+      try { previousStatus = await manager.status(previousManifest); } catch { statusProbeFailed = true; previousStatus = undefined; }
+    }
+    const statusProbeReliable = previousStatus !== undefined && previousStatus.reliable !== false;
+    // Compare the requested contract with the mode represented by the
+    // existing managed manifest as well as the profile. This catches stale
+    // legacy/mismatched states where the JSON omits (or disagrees with) the
+    // native service identity, and forces a real restart/identity check.
+    const modeChanged = inferredPreviousMode !== manifest.executionMode;
+    const requiresReliableLifecycleProbe = parsed.command === "migrate" || modeChanged || manifest.executionMode === "privileged_host" || (manifest.mode === "system" && existingManifest === undefined);
+    if (requiresReliableLifecycleProbe && (manager.status === undefined || statusProbeFailed || !statusProbeReliable)) {
+      throw new Error("service status probe is required and must succeed before privileged_host installation or execution-mode migration");
+    }
+    // Even when a normal dedicated-user reinstall does not need an identity
+    // check, an explicitly unreliable native result must never be treated as
+    // evidence that it is safe to replace an unknown service registration.
+    if (manager.status !== undefined && (statusProbeFailed || (previousStatus !== undefined && previousStatus.reliable === false))) {
+      throw new Error("service status probe is unavailable or unreliable; refusing to change the service");
+    }
+    if (manifest.mode === "system" && existingManifest === undefined && (manager.status === undefined || statusProbeFailed || !statusProbeReliable)) {
+      throw new Error("service status probe is required before installing a system Runner without a managed manifest");
+    }
+    // Never take over a native service whose managed manifest is absent.  A
+    // disabled unit/task can still be started by the next `install` call, and
+    // an active one may be running a different executable or credential. The
+    // operator must first restore/remove that registration explicitly.
+    if (!existingManaged && statusProbeReliable && previousStatus !== undefined
+      && (previousStatus.registered === true || previousStatus.installed || previousStatus.active)) {
+      throw new Error("refusing to manage an existing native Runner service without its managed manifest; restore or remove the service first");
+    }
+    const provisioner = dependencies.serviceProvisioner ?? createServiceProvisioner({ platform: manifest.platform });
+    let provisioned: Awaited<ReturnType<ServiceProvisioner["provision"]>> | undefined;
+    let profileUpdated = false;
+    let manifestChanged = false;
+    let manifestWriteAttempted = false;
+    let lifecycleAttempted = false;
+    let provisioningAttempted = false;
+    const profileTarget = { ...profileBefore, execution_mode: manifest.executionMode } as RunnerProfile;
+    try {
+      // Persist the selected mode before provisioning so the final profile
+      // inode is the one whose ownership/ACLs the provisioner secures.  This
+      // matters on Windows, where ProfileStore's atomic replacement cannot
+      // reproduce NTFS ACEs by itself.  The catch block restores the previous
+      // profile if provisioning or lifecycle setup fails.
+      if (manifest.mode === "system" && profileBefore.execution_mode !== manifest.executionMode) {
+        // Set the rollback marker before the atomic profile replacement.  A
+        // save can rename the new inode successfully and then fail while
+        // applying its final mode/ACL; the catch path must still restore the
+        // previous snapshot in that partial-success case.
+        profileUpdated = true;
+        await store.save(profileTarget);
+      }
+      // Provisioning can change ownership/ACLs in several steps before it
+      // returns a result. Mark the attempt first so a partial failure still
+      // gets a best-effort restore to the previously persisted mode.
+      provisioningAttempted = true;
+      provisioned = await provisioner.provision(manifest, store.filePath);
+      // Every machine service must be able to read its credential under the
+      // selected identity.  Native provisioners return false when the profile
+      // is absent or ACL/ownership setup could not be completed; fail before
+      // writing or activating a service that cannot start safely.
+      if (manifest.mode === "system" && !provisioned.profileSecured) {
+        throw new Error(provisioned.detail ?? `Runner profile could not be secured for ${manifest.executionMode}; enroll before installing the service`);
+      }
+      // The provisioner changes the profile inode's owner/group as part of
+      // machine-service setup. Verify the resulting canonical contract before
+      // writing or activating the native registration; mode bits alone would
+      // allow an attacker-owned 0600 profile to be consumed by root.
+      if (manifest.mode === "system" && (manifest.executionMode === "dedicated_user" || manifest.executionMode === "privileged_host")) {
+        await store.assertServiceOwnership(manifest.executionMode, manifest.serviceGroup);
+      }
+      // The host implementation is atomic, but injectable/filesystem adapters
+      // may report an error after replacing the target.  Record the attempt
+      // only after the unmanaged-file preflight above so rollback can restore
+      // a managed snapshot without ever deleting an unrelated file.
+      manifestWriteAttempted = existingManifest === undefined || existingManaged;
+      manifestChanged = await installServiceManifest(manifest, filesystem, { confirmPrivilegedHost: privilegedConfirmation });
+      // Mark before invoking the native adapter: an adapter can create/load a
+      // task and then throw while waiting for its final status.  Rollback must
+      // still reload the prior definition in that partial-success case.
+      lifecycleAttempted = true;
+      await manager.install(manifest);
+      // `enable --now`/the platform equivalent does not replace an already
+      // running process.  A changed managed manifest therefore gets an
+      // explicit restart; an inactive service is started by install above.
+      if ((manifestChanged || modeChanged) && previousStatus?.active === true) await manager.restart(manifest);
+
+      // Privileged installs and every manifest migration must verify the
+      // native manager's post-start identity.  Keep the first dedicated-user
+      // install's historical command seam lightweight; doctor remains the
+      // explicit identity probe for that path.
+      // A privileged install and an explicit migration must always prove the
+      // native identity.  For a normal dedicated-user reinstall retain the
+      // historical lightweight command seam (doctor can still be used for an
+      // identity probe); a mode transition to privileged_host is covered by
+      // the first branch above.
+      const mustVerify = manifest.executionMode === "privileged_host" || parsed.command === "migrate" || modeChanged;
+      let verified: Awaited<ReturnType<NonNullable<ServiceManagerAdapter["status"]>>> | undefined;
+      if (mustVerify) {
+        if (manager.status === undefined) throw new Error("service status probe is required to verify privileged_host installation or migration");
+        verified = await manager.status(manifest);
+        if (verified.reliable === false) throw new Error("Runner service status could not be verified after installation");
+        if (!verified.installed || !verified.active) throw new Error("Runner service did not become active after installation");
+        const state = servicePrivilegeState(manifest, verified.identity, verified.active);
+        if (state !== "privileged" && state !== "restricted") {
+          throw new Error(`Runner service identity does not match execution mode (expected ${expectedServiceIdentity(manifest) ?? "interactive"}, got ${verified.identity ?? "unknown"})`);
+        }
+      }
+      const identity = verified?.identity ?? provisioned.identity;
+      report(output, parsed.json, {
+        action: parsed.command,
+        manifest: manifest.path,
+        mode: manifest.mode,
+        execution_mode: manifest.executionMode,
+        configured_execution_mode: manifest.executionMode,
+        identity,
+        actual_service_identity: verified?.identity ?? null,
+        privilege_state: verified === undefined ? servicePrivilegeState(manifest, provisioned.identity, true) : servicePrivilegeState(manifest, verified.identity, verified.active),
+        profile_secured: provisioned.profileSecured,
+        manifest_changed: manifestChanged,
+        restarted: (manifestChanged || modeChanged) && previousStatus?.active === true,
+        commands: serviceCommandNames("install", manifest),
+      });
+      return;
+    } catch (cause) {
+      // A failed lifecycle operation must not leave the profile claiming a
+      // mode that was never activated. Restore the prior managed manifest and
+      // profile on a best-effort basis, while preserving the original error.
+      // A no-manifest install has no native service identity whose profile
+      // ACL can be restored by the provisioner.  Even when the requested
+      // execution mode is unchanged (`profileUpdated === false`), the
+      // provisioner may have widened a legacy profile before failing; keep
+      // that path in the private rollback below as well.
+      if (profileUpdated || (!existingManaged && provisioningAttempted)) {
+        // Do not clobber a profile written by another local operation while
+        // this transaction was in flight.  If the selected snapshot is still
+        // current, restore the exact pre-attempt bytes; otherwise leave the
+        // newer operator change intact and let doctor surface any mismatch.
+        let currentProfile: RunnerProfile | undefined;
+        let profileProbeFailed = false;
+        try { currentProfile = await store.load(); } catch { profileProbeFailed = true; }
+        const expectedProfileSnapshot = profileUpdated ? profileTarget : profileBefore;
+        const ownsProfileSnapshot = !profileProbeFailed && currentProfile !== undefined && sameEnrollmentProfile(currentProfile, expectedProfileSnapshot);
+        if (ownsProfileSnapshot) {
+          // A legacy profile has no managed service contract to restore.  A
+          // failed privileged attempt may nevertheless have run the
+          // dedicated provisioner's ACL steps before throwing, widening the
+          // inode to root:runmesh/0640.  Force the no-service rollback back to
+          // the canonical private root:root/0600 shape; managed dedicated
+          // services retain their root:runmesh access contract below.
+          await store.save(profileBefore, { privateOwnerOnly: !existingManaged }).catch(() => undefined);
+        }
+        // Restoring a profile on Windows also replaces its inode. Re-run the
+        // previous-mode provisioner so the rollback does not leave a
+        // credential file with inherited/default ACLs.
+        // Re-run only when a managed service proves that this profile was
+        // previously provisioned for a known native service identity.  A
+        // legacy profile with no managed manifest has no dedicated account
+        // contract to restore; invoking the dedicated provisioner there would
+        // widen an owner-only profile to root:runmesh/0640 (or grant Local
+        // Service read access on Windows) after a failed privileged attempt.
+        // The profile save above explicitly restores a safe private inode for
+        // that no-service case.
+        if (existingManaged && ownsProfileSnapshot) await provisioner.provision(previousManifest, store.filePath).catch(() => undefined);
+      }
+      if (manifestWriteAttempted || manifestChanged) await restoreManifestSnapshot(filesystem, manifest, existingManaged ? existingManifest : undefined, existingManaged);
+      // Restore the native process as well as the bytes/profile.  Otherwise a
+      // failed migration can leave an old process running with a new profile
+      // contract (or a newly-created privileged process alive after its
+      // manifest was removed).  All cleanup is best-effort so the original
+      // failure remains the actionable error.
+      if (provisioningAttempted && !profileUpdated && existingManaged) {
+        // Same-mode reinstalls do not replace the profile JSON, but their ACL
+        // or ownership changes can still be partial. Re-run the old-mode
+        // provisioner even when no profile migration was requested.
+        await provisioner.provision(previousManifest, store.filePath).catch(() => undefined);
+      }
+      if (lifecycleAttempted) {
+        if (existingManaged && existingManifest !== undefined) {
+          const hadNativeService = statusProbeReliable && previousStatus !== undefined
+            && (previousStatus.registered === true || previousStatus.installed === true || previousStatus.active === true);
+          const wasRegisteredButDisabled = statusProbeReliable && previousStatus !== undefined
+            && previousStatus.registered === true && previousStatus.installed !== true && previousStatus.active !== true;
+          if (wasRegisteredButDisabled) {
+            // Do not call manager.install() while restoring a disabled,
+            // masked, or linked native registration.  The production Linux
+            // adapter implements install as `enable --now`, which would
+            // silently turn the operator's disabled state into an enabled
+            // service during rollback (and a masked unit would fail with an
+            // unnecessary error).  The restored manifest is already on disk;
+            // stop is a harmless best-effort guard against an adapter that
+            // partially started the candidate before throwing.  A native
+            // disable hook then removes only an enablement introduced by this
+            // attempt while leaving masked/linked/static registrations alone.
+            // The next explicit install/start will reload the restored
+            // definition.
+            await manager.stop(previousManifest).catch(() => undefined);
+            if (manager.disable !== undefined) await manager.disable(previousManifest).catch(() => undefined);
+          } else if (statusProbeReliable && previousStatus !== undefined && !hadNativeService) {
+            // There was no service before this attempt; remove any newly
+            // created registration rather than starting the old definition.
+            await manager.uninstall(previousManifest).catch(() => undefined);
+          } else if (hadNativeService) {
+            // Re-load the restored bytes before changing lifecycle state. A
+            // restart alone can keep a cached/new unit or task definition.
+            await manager.install(previousManifest).catch(() => undefined);
+            if (previousStatus?.active === true) await manager.restart(previousManifest).catch(() => undefined);
+            else if (previousStatus?.installed === true) await manager.stop(previousManifest).catch(() => undefined);
+            else {
+              // The preflight probe was unavailable.  Leave the restored
+              // service stopped rather than risk a privileged process from
+              // the failed attempt continuing under an unknown definition.
+              await manager.stop(previousManifest).catch(() => undefined);
+            }
+          }
+        } else if (statusProbeReliable && previousStatus !== undefined
+          && previousStatus.registered !== true && !previousStatus.installed && !previousStatus.active) {
+          // The preflight explicitly proved that no native service existed;
+          // only in that case is it safe to remove a registration created by
+          // this failed attempt.  Unknown status is intentionally left alone
+          // so a custom/native service cannot be deleted as collateral.
+          await manager.uninstall(manifest).catch(() => undefined);
+        }
+      }
+      throw cause;
+    }
   }
-  await assertManagedServiceManifest(manifest, dependencies.serviceFilesystem);
+  const managed = await assertManagedServiceManifest(manifest, dependencies.serviceFilesystem);
+  if (!managed) throw new Error("managed service manifest is not installed; refusing to stop or restart an unknown service");
+  // Stopping/restarting a machine service is itself a privileged operation.
+  // POSIX service managers normally reject an unprivileged caller, but
+  // Windows Task Scheduler permissions can vary with the task ACL; enforce
+  // the same administrator/root boundary here instead of relying on the
+  // native command to fail (or, worse, allowing a local DoS of a SYSTEM
+  // Runner).
+  assertSystemInstallationPrivilege(manifest, dependencies);
+  const lifecycleStatus = await probeServiceStatus(manager, manifest, parsed.command);
+  if (lifecycleStatus !== undefined && lifecycleStatus.registered !== true && !lifecycleStatus.installed && !lifecycleStatus.active) {
+    throw new Error(`cannot ${parsed.command} Runner service because it is not installed`);
+  }
   if (parsed.command === "stop") await manager.stop(manifest);
   else await manager.restart(manifest);
   report(output, parsed.json, { action: parsed.command, manifest: manifest.path, mode: manifest.mode, commands: serviceCommandNames(parsed.command as "install" | "stop" | "restart", manifest) });
 }
 async function uninstall(parsed: ParsedCommand, store: ProfileStore, output: (line: string) => void, dependencies: CliDependencies): Promise<void> {
   if (parsed.values.purge === true && parsed.values.yes !== true) throw new Error("--purge requires --yes");
-  const manifest = await serviceManifestFor(parsed, store, dependencies.servicePlatform);
+  const manifest = await serviceManifestFor(parsed, store, dependencies.servicePlatform, dependencies.serviceFilesystem);
   const manager = dependencies.serviceManager ?? createServiceManager({ platform: manifest.platform, mode: manifest.mode });
   if (manager.platform !== manifest.platform || manager.mode !== manifest.mode) throw new Error("service manager does not match the requested service mode");
   assertSystemInstallationPrivilege(manifest, dependencies);
   const managed = await assertManagedServiceManifest(manifest, dependencies.serviceFilesystem);
-  if (managed) await manager.uninstall(manifest);
+  const lifecycleStatus = managed ? await probeServiceStatus(manager, manifest, "uninstall") : undefined;
+  // If the native probe proves that the registration is already absent, only
+  // remove our managed manifest. Calling disable/delete in that state can
+  // report a confusing error and, on some platforms, target a newly-created
+  // same-name task between the probe and the command. An adapter without a
+  // status hook retains the historical manifest-owned behavior.
+  if (managed && (lifecycleStatus === undefined || lifecycleStatus.registered === true || lifecycleStatus.installed || lifecycleStatus.active)) await manager.uninstall(manifest);
   const removed = await removeServiceManifest(manifest, dependencies.serviceFilesystem);
   if (parsed.values.purge === true) await store.remove();
   // Job state and workspace roots deliberately remain untouched, including with --purge.
   report(output, parsed.json, { action: "uninstall", service_removed: removed, profile_removed: parsed.values.purge === true, mode: manifest.mode, commands: serviceCommandNames("uninstall", manifest) });
+}
+
+type ProbedServiceStatus = Awaited<ReturnType<NonNullable<ServiceManagerAdapter["status"]>>>;
+/**
+ * Destructive/lifecycle commands must not act on an unknown native service.
+ * Production managers mark ambiguous native-query failures as unreliable;
+ * injected legacy managers that omit the optional flag remain compatible.
+ */
+async function probeServiceStatus(manager: ServiceManagerAdapter, manifest: ServiceManifest, action: string): Promise<ProbedServiceStatus | undefined> {
+  if (manager.status === undefined) return undefined;
+  let status: ProbedServiceStatus;
+  try {
+    status = await manager.status(manifest);
+  } catch {
+    throw new Error(`service status probe is unavailable; refusing to ${action} the Runner service`);
+  }
+  if (status.reliable === false) throw new Error(`service status probe is unavailable or unreliable; refusing to ${action} the Runner service`);
+  if (status.active && servicePrivilegeState(manifest, status.identity, status.active) === "mismatch") {
+    throw new Error(`active Runner service identity does not match the managed execution mode; refusing to ${action} the service`);
+  }
+  return status;
+}
+
+/** Restore only the exact manifest snapshot this transaction wrote. */
+async function restoreManifestSnapshot(filesystem: ServiceManifestFilesystem, manifest: ServiceManifest, previousContent: string | undefined, hadManagedManifest: boolean): Promise<void> {
+  let current: string | undefined;
+  try { current = await filesystem.read(manifest.path); } catch { return; }
+  // A concurrent operator or package update owns the path once its bytes no
+  // longer equal our candidate. Never overwrite or remove that newer state.
+  if (current !== manifest.content) return;
+  if (hadManagedManifest && previousContent !== undefined) await filesystem.write(manifest.path, previousContent).catch(() => undefined);
+  else await filesystem.remove(manifest.path).catch(() => undefined);
 }
 
 export function parseProductArgs(argv: readonly string[]): ParsedCommand {
@@ -519,16 +982,77 @@ function storeFor(parsed: ParsedCommand, platform?: ServicePlatform): ProfileSto
   const layout = serviceLayout({ ...(platform === undefined ? {} : { platform }), mode: "system" });
   return new ProfileStore({ filePath: serviceProfilePath(layout), ...(platform === undefined ? {} : { platform }) });
 }
-async function serviceManifestFor(parsed: ParsedCommand, store: ProfileStore, platform?: ServicePlatform): Promise<ServiceManifest> {
+async function serviceManifestFor(parsed: ParsedCommand, store: ProfileStore, platform?: ServicePlatform, filesystem: ServiceManifestFilesystem | undefined = undefined): Promise<ServiceManifest> {
   const profile = await store.load();
   const requestedMode = parsed.values.executionMode;
   if (requestedMode !== undefined && requestedMode !== "dedicated_user" && requestedMode !== "privileged_host") throw new Error("--execution-mode must be dedicated_user or privileged_host");
+  if (parsed.values.user === true && requestedMode === "privileged_host") throw new Error("user Runner services cannot use privileged_host; choose --execution-mode dedicated_user");
   const profileMode = profileExecutionMode(profile);
   const profileExecutionModeValue: ExecutionMode | undefined = profileMode === "migration_required" ? undefined : profileMode;
-  if (parsed.values.user !== true && profileMode === "migration_required" && requestedMode === undefined) throw new Error("legacy Runner profile requires --execution-mode dedicated_user or --execution-mode privileged_host before system installation");
-  const executionMode: ExecutionMode = parsed.values.user === true ? "dedicated_user" : requestedMode ?? profileExecutionModeValue ?? "dedicated_user";
+  // Installing or migrating a legacy profile requires an explicit choice, so
+  // an upgrade can never silently turn an existing service into root/SYSTEM.
+  // Lifecycle commands that merely stop/restart/uninstall may safely use the
+  // restricted manifest as a compatibility bridge for an already-installed
+  // legacy service; this does not grant any new privilege.
+  const needsExplicitMode = parsed.command === "install" || parsed.command === "migrate";
+  if (parsed.values.user !== true && needsExplicitMode && profileMode === "migration_required" && requestedMode === undefined) throw new Error("legacy Runner profile requires --execution-mode dedicated_user or --execution-mode privileged_host before system installation");
+  let executionMode: ExecutionMode = parsed.values.user === true ? "dedicated_user" : requestedMode ?? profileExecutionModeValue ?? "dedicated_user";
+  if (parsed.values.user !== true && requestedMode === undefined && profileMode === "migration_required" && !needsExplicitMode) {
+    // A legacy profile may have an already-installed managed privileged unit.
+    // Infer the existing mode only to target stop/restart/uninstall; this path
+    // never provisions, persists, or authorizes a new privileged service.
+    const layout = serviceLayout({ ...(platform === undefined ? {} : { platform }), mode: "system" });
+    const existing = await (filesystem ?? hostServiceManifestFilesystem).read(layout.manifestPath);
+    if (existing !== undefined && isManagedService(existing)) executionMode = inferExecutionModeFromManifest(platform ?? currentServicePlatform(), existing);
+  }
   const requestedServiceMode = parsed.values.user === true ? "user" : "system";
-  return renderService({ ...(platform === undefined ? {} : { platform }), mode: requestedServiceMode, profilePath: store.filePath, executionMode, ...(typeof parsed.values.executablePath === "string" ? { executablePath: parsed.values.executablePath } : {}) });
+  const renderOptions = {
+    ...(platform === undefined ? {} : { platform }),
+    mode: requestedServiceMode as "system" | "user",
+    profilePath: store.filePath,
+    executionMode,
+    ...(typeof parsed.values.executablePath === "string" ? { executablePath: parsed.values.executablePath } : {}),
+  };
+  let manifest = renderService(renderOptions);
+  const serviceFilesystem = filesystem ?? hostServiceManifestFilesystem;
+  // Read the existing managed definition before rendering a replacement.  A
+  // migration must retain operator-selected executable paths, arguments, and
+  // service-manager settings; only the OS identity is allowed to change when
+  // no explicit executable override was requested.
+  const existing = await serviceFilesystem.read(manifest.path);
+  if (existing === undefined || !isManagedService(existing)) return manifest;
+
+  const existingMode = requestedServiceMode === "system"
+    ? inferExecutionModeFromManifest(manifest.platform, existing)
+    : "dedicated_user";
+  if (requestedServiceMode === "system" && !needsExplicitMode && requestedMode === undefined
+    && (parsed.command === "stop" || parsed.command === "restart" || parsed.command === "uninstall")) {
+    // Lifecycle commands without an explicit mode should always address the
+    // identity represented by the installed definition, even if a legacy
+    // profile is stale or omits execution_mode.
+    executionMode = existingMode;
+    manifest = renderService({ ...renderOptions, executionMode });
+  }
+
+  if (parsed.values.executablePath === undefined) {
+    const desired = renderService({ ...renderOptions, executionMode });
+    if (desired.mode === "system" && desired.executionMode !== existingMode) {
+      // Rewrite only User/Group, UserName, or the Windows principal.  The
+      // existing command and all other service settings remain untouched.
+      return rewriteManagedServiceExecutionMode(desired, existing, desired.executionMode);
+    }
+    return managedServiceManifestFromContent(desired, existing, desired.executionMode);
+  }
+
+  // An explicit executable path is an intentional service-definition update,
+  // but a custom dedicated account remains an operator-owned setting.  Carry
+  // that account through the re-render so changing the binary cannot silently
+  // switch the service identity back to the default `runmesh` account.
+  if (desiredServiceNeedsDedicatedIdentity(manifest)) {
+    const identity = existingDedicatedIdentityOptions(manifest.platform, existing);
+    manifest = renderService({ ...renderOptions, executionMode, ...identity });
+  }
+  return manifest;
 }
 function assertSystemInstallationPrivilege(manifest: ServiceManifest, dependencies: CliDependencies): void {
   if (manifest.mode !== "system") return;
@@ -574,4 +1098,57 @@ function urlCheck(value: string, insecureLocal = false): { ok: boolean; detail?:
 }
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message.slice(0, 512) : String(error).slice(0, 512); }
 function formatMode(mode: number | undefined): string { return mode === undefined ? "missing" : `0${mode.toString(8)}`; }
+/** Infer only the previously-installed mode when a legacy profile omitted it.
+ * The manifest is accepted only after `isManagedService`, so this heuristic
+ * is used solely to reload the exact managed definition during rollback; it
+ * is never used to authorize a new installation or silently elevate one.
+ */
+function inferExecutionModeFromManifest(platform: ServicePlatform, content: string): ExecutionMode {
+  if (platform === "linux") {
+    // A managed unit may have been rendered with an operator-supplied service
+    // account.  Match the presence of a non-empty User= directive rather than
+    // one literal account name; an otherwise valid dedicated unit must never
+    // be mistaken for root during stop/restart/uninstall or migration
+    // rollback.
+    return /^\s*User\s*=\s*\S.*$/mu.test(content) ? "dedicated_user" : "privileged_host";
+  }
+  if (platform === "darwin") return content.includes("<key>UserName</key>") ? "dedicated_user" : "privileged_host";
+  return /<UserId>\s*(?:SYSTEM|NT AUTHORITY\\SYSTEM)\s*<\/UserId>/iu.test(content) ? "privileged_host" : "dedicated_user";
+}
+function desiredServiceNeedsDedicatedIdentity(manifest: Pick<ServiceManifest, "mode" | "executionMode">): boolean {
+  return manifest.mode === "system" && manifest.executionMode === "dedicated_user";
+}
+function existingDedicatedIdentityOptions(platform: ServicePlatform, content: string): { readonly serviceUser?: string; readonly serviceGroup?: string } {
+  const safe = (value: string | undefined): value is string => value !== undefined && /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/u.test(value);
+  if (platform === "linux") {
+    const user = /^\s*User\s*=\s*(\S+)\s*$/mu.exec(content)?.[1];
+    const group = /^\s*Group\s*=\s*(\S+)\s*$/mu.exec(content)?.[1];
+    return {
+      ...(safe(user) ? { serviceUser: user } : {}),
+      ...(safe(group) ? { serviceGroup: group } : {}),
+    };
+  }
+  if (platform === "darwin") {
+    const user = /<key>UserName<\/key><string>([^<]*)<\/string>/u.exec(content)?.[1];
+    return safe(user) ? { serviceUser: user } : {};
+  }
+  return {};
+}
+/** Read the managed system definition used by a service-launched `start` and
+ * return its dedicated group, if one was explicitly configured.  The profile
+ * format intentionally does not duplicate service-account metadata; the
+ * signed/hashed native manifest is the source of truth for this local check.
+ */
+async function serviceGroupForManagedProfile(store: ProfileStore, platform: ServicePlatform | undefined, filesystem: ServiceManifestFilesystem | undefined): Promise<string | undefined> {
+  const targetPlatform = platform ?? currentServicePlatform();
+  const layout = serviceLayout({ platform: targetPlatform, mode: "system" });
+  let content: string | undefined;
+  try { content = await (filesystem ?? hostServiceManifestFilesystem).read(layout.manifestPath); }
+  catch { return undefined; }
+  if (content === undefined || !isManagedService(content)) return undefined;
+  try {
+    const base = renderService({ platform: targetPlatform, mode: "system", executionMode: "dedicated_user", profilePath: store.filePath });
+    return managedServiceManifestFromContent(base, content, "dedicated_user").serviceGroup;
+  } catch { return undefined; }
+}
 function installDisconnectControl(runner: RunnerConnection, file: string): void { let busy = false; const interval = setInterval(async () => { if (busy) return; busy = true; try { await access(file); await rm(file, { force: true }); runner.disconnectForTest(); } catch { /* absent */ } finally { busy = false; } }, 50); interval.unref(); }

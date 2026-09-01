@@ -2,9 +2,16 @@ import {
   decodeWireFrame,
   encodeWireFrame,
   LOCAL_RUNNER_OPERATION_TIMEOUT_MS,
+  RUNNER_DIAGNOSTICS_EXTENSION,
+  RUNNER_POLICY_DIAGNOSTICS_EXTENSION,
+  policyDiagnosticsExtension,
   PROTOCOL_CURRENT_VERSION,
   PROTOCOL_MIN_VERSION,
   runnerPolicyChecksum,
+  runnerDiagnosticsExtension,
+  stripRunnerDiagnostics,
+  stripWorkspaceDiagnostics,
+  supportsDirectPolicyDiagnostics,
   type RunnerMetadata,
   type RunnerPolicyAck,
   type RunnerWelcome,
@@ -14,6 +21,7 @@ import {
 } from "@aloneio/runmesh-protocol";
 import type { CapabilityMetadata } from "./protocol-types.js";
 import WebSocket from "ws";
+import { userInfo } from "node:os";
 import { reconnectDelayMs } from "./backoff.js";
 import { PolicyStore } from "./policy-store.js";
 import { effectiveCentralPermissions, validateCentralWorkspacePolicy, type CentralWorkspacePolicy } from "./policy-config.js";
@@ -78,6 +86,8 @@ export class RunnerConnection {
    * transport block policy delivery on the replacement socket.
    */
   private readonly policyApplyQueues = new WeakMap<WebSocket, Promise<void>>();
+  /** Whether each peer explicitly opted into direct diagnostic fields. */
+  private readonly directPolicyDiagnostics = new WeakMap<WebSocket, boolean>();
   /**
    * A sync snapshot is asynchronous (job recovery/persistence may yield), so
    * timer, welcome, and policy-apply triggers must share one FIFO. Without a
@@ -97,14 +107,24 @@ export class RunnerConnection {
     this.onStateChange = options.onStateChange ?? (() => undefined);
     this.runtime = options.runtime ?? new RunnerRuntime({ config: this.config, ...(this.config.stateDir === undefined ? {} : { stateDir: this.config.stateDir }), onJobEvent: (event) => this.forwardJobEvent(event) });
     this.policyStore = options.policyStore ?? new PolicyStore(this.config.stateDir);
+    const executionMode = options.executionMode;
+    // Metadata is echoed through the authenticated control plane and later
+    // shown in administrator diagnostics.  Treat an injected identity as
+    // untrusted text just like the auto-discovered username; never carry
+    // control characters or an unbounded value into a wire frame.
+    // A profile without an execution mode is a legacy/migration state.  Do
+    // not add an automatically discovered identity to its hello: older Worker
+    // versions decode Runner metadata strictly and would reject the new field,
+    // while the mode itself is not yet authoritative until migration.
+    const serviceIdentity = executionMode === undefined ? undefined : sanitizeServiceIdentity(options.serviceIdentity ?? currentProcessServiceIdentity());
     this.metadata = {
       runner_id: this.config.runnerId,
       runner_version: options.version ?? RUNNER_VERSION,
       platform: process.platform,
       architecture: process.arch,
-      ...(options.executionMode === undefined ? {} : { execution_mode: options.executionMode }),
-      ...(options.serviceIdentity === undefined ? {} : { service_identity: options.serviceIdentity }),
-      privilege_state: options.executionMode === "privileged_host" ? "privileged" : "restricted",
+      ...(executionMode === undefined ? {} : { execution_mode: executionMode }),
+      ...(serviceIdentity === undefined ? {} : { service_identity: serviceIdentity }),
+      ...(executionMode === undefined ? {} : { privilege_state: processPrivilegeState(executionMode, serviceIdentity) }),
       capabilities: discoverCapabilities(this.config.maxConcurrentJobs ?? 1),
     };
   }
@@ -119,10 +139,19 @@ export class RunnerConnection {
     const persisted = await this.policyStore.load(this.config.runnerId);
     if (this.stopped || generation !== this.lifecycleGeneration) return;
     if (persisted !== undefined) {
-      const restored = await candidateWorkspaces(persisted);
-      this.runtime.applyPolicy(restored);
-      this.appliedPolicyRevision = persisted.revision;
-      this.appliedPolicyChecksum = persisted.checksum;
+      try {
+        const restored = await candidateWorkspaces(persisted, this.metadata.execution_mode, this.metadata.service_identity);
+        this.runtime.applyPolicy(restored);
+        this.appliedPolicyRevision = persisted.revision;
+        this.appliedPolicyChecksum = persisted.checksum;
+      } catch {
+        // Keep the live policy fail-closed but continue to the authenticated
+        // transport.  The Worker can then receive an explicit `invalid` ACK
+        // (including os_access_denied diagnostics) and deliver a corrected
+        // policy after an operator fixes the service identity/ACL; aborting
+        // here would leave the Runner permanently offline and hide the cause.
+        this.runtime.applyPolicy([]);
+      }
       this.desiredPolicyRevision = persisted.revision;
       this.desiredPolicyChecksum = persisted.checksum;
     }
@@ -212,13 +241,19 @@ export class RunnerConnection {
         fail(error);
       });
       socket.once("open", () => {
+        // Keep the initial hello in the legacy direct shape.  Optional
+        // diagnostics travel under the long-supported envelope extension so
+        // a pre-diagnostics Worker with a strict RunnerMetadata schema can
+        // still accept this frame.
+        const diagnostics = runnerDiagnosticsExtension(this.metadata);
         const hello: WireMessage = {
           type: "runner.hello",
           protocol_version: PROTOCOL_CURRENT_VERSION,
           request_id: `hello-${crypto.randomUUID()}`,
-          runner: this.metadata,
+          runner: stripRunnerDiagnostics(this.metadata),
           min_protocol_version: PROTOCOL_MIN_VERSION,
           max_protocol_version: PROTOCOL_CURRENT_VERSION,
+          ...(diagnostics === undefined ? {} : { extensions: { [RUNNER_DIAGNOSTICS_EXTENSION]: diagnostics } }),
         };
         try { socket.send(encodeWireFrame(hello)); }
         catch (error) { fail(error instanceof Error ? error : new Error("failed to send runner hello")); }
@@ -248,6 +283,7 @@ export class RunnerConnection {
             return;
           }
           welcomed = true;
+          this.directPolicyDiagnostics.set(socket, supportsDirectPolicyDiagnostics(message.extensions));
           this.onStateChange("online");
           if (message.desired_policy !== undefined) this.queueDesiredPolicy(socket, message.desired_policy);
           void this.sendSync(socket).catch(() => undefined);
@@ -354,7 +390,7 @@ export class RunnerConnection {
       // unnecessary disk churn; still validate and re-ack the immutable
       // snapshot, otherwise the Registry can remain pending forever.
       const generation = ++this.policyApplyGeneration;
-      const validation = await validateCentralWorkspacePolicy(policy.workspaces as CentralWorkspacePolicy[], this.metadata.execution_mode === undefined ? {} : { executionMode: this.metadata.execution_mode });
+      const validation = await validateCentralWorkspacePolicy(policy.workspaces as CentralWorkspacePolicy[], validationContext(this.metadata));
       if (generation !== this.policyApplyGeneration || this.stopped || socket !== this.socket || socket.readyState !== WebSocket.OPEN
         || policy.revision !== this.desiredPolicyRevision || policy.checksum !== this.desiredPolicyChecksum) return;
       const invalid = validation.status.some((item) => item.status !== "valid");
@@ -366,7 +402,7 @@ export class RunnerConnection {
     this.policyApplyGeneration = generation;
     this.desiredPolicyRevision = policy.revision;
     this.desiredPolicyChecksum = policy.checksum;
-    const validation = await validateCentralWorkspacePolicy(policy.workspaces as CentralWorkspacePolicy[], this.metadata.execution_mode === undefined ? {} : { executionMode: this.metadata.execution_mode });
+    const validation = await validateCentralWorkspacePolicy(policy.workspaces as CentralWorkspacePolicy[], validationContext(this.metadata));
     if (generation !== this.policyApplyGeneration || this.stopped || socket !== this.socket || socket.readyState !== WebSocket.OPEN || policy.revision !== this.desiredPolicyRevision) return;
     const invalid = validation.status.some((item) => item.status !== "valid");
     if (invalid) {
@@ -393,8 +429,24 @@ export class RunnerConnection {
     if (socket !== this.socket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
     const reportedRevision = this.appliedPolicyRevision;
     const reportedChecksum = this.appliedPolicyChecksum;
+    const directDiagnostics = this.directPolicyDiagnostics.get(socket) === true;
+    const extensionDiagnostics = policyDiagnosticsExtension(workspaceStatus);
+    const ack: RunnerPolicyAck = {
+      type: "runner.policy_ack",
+      protocol_version: PROTOCOL_CURRENT_VERSION,
+      runner_id: this.config.runnerId,
+      desired_revision: this.desiredPolicyRevision,
+      desired_checksum: this.desiredPolicyChecksum,
+      applied_revision: this.appliedPolicyRevision,
+      applied_checksum: this.appliedPolicyChecksum,
+      runner_reported_policy_revision: reportedRevision,
+      runner_reported_policy_checksum: reportedChecksum,
+      status,
+      workspace_status: directDiagnostics ? workspaceStatus : stripWorkspaceDiagnostics(workspaceStatus),
+      ...(!directDiagnostics && extensionDiagnostics !== undefined ? { extensions: { [RUNNER_POLICY_DIAGNOSTICS_EXTENSION]: extensionDiagnostics } } : {}),
+    };
     try {
-      socket.send(encodeWireFrame({ type: "runner.policy_ack", protocol_version: PROTOCOL_CURRENT_VERSION, runner_id: this.config.runnerId, desired_revision: this.desiredPolicyRevision, desired_checksum: this.desiredPolicyChecksum, applied_revision: this.appliedPolicyRevision, applied_checksum: this.appliedPolicyChecksum, runner_reported_policy_revision: reportedRevision, runner_reported_policy_checksum: reportedChecksum, status, workspace_status: workspaceStatus }));
+      socket.send(encodeWireFrame(ack));
     } catch { /* close handler drives reconnect */ }
   }
 
@@ -491,8 +543,11 @@ function effectivePolicyWorkspaces(policy: NonNullable<RunnerWelcome["desired_po
   });
 }
 
-async function candidateWorkspaces(policy: NonNullable<RunnerWelcome["desired_policy"]>): Promise<WorkspaceConfig[]> {
-  const validation = await validateCentralWorkspacePolicy(policy.workspaces as CentralWorkspacePolicy[]);
+async function candidateWorkspaces(policy: NonNullable<RunnerWelcome["desired_policy"]>, executionMode?: "dedicated_user" | "privileged_host", serviceIdentity?: string): Promise<WorkspaceConfig[]> {
+  const validation = await validateCentralWorkspacePolicy(policy.workspaces as CentralWorkspacePolicy[], {
+    ...(executionMode === undefined ? {} : { executionMode }),
+    ...(serviceIdentity === undefined ? {} : { serviceIdentity }),
+  });
   if (validation.status.some((item) => item.status !== "valid")) throw new Error("persisted active policy is not locally valid");
   return effectivePolicyWorkspaces(policy, validation.workspaces);
 }
@@ -507,4 +562,39 @@ export function discoverCapabilities(maxConcurrentJobs = 1): CapabilityMetadata 
     supported_rpc_methods: ["echo", "runner.info", "workspace.list", "env.info", "fs.read", "fs.stat", "fs.list", "fs.search", "fs.apply_patch", "fs.patch", "git.status", "git.diff", "exec.start", "exec.run", "job.list", "job.get", "job.logs", "job.cancel", "job.input"],
     labels: { runtime: "node" },
   };
+}
+
+/** Return the local process identity without invoking a shell or exposing a path. */
+export function currentProcessServiceIdentity(): string | undefined {
+  try {
+    if (process.platform !== "win32" && process.getuid?.() === 0) return "root";
+    const username = userInfo().username.trim();
+    return username.length > 0 && username.length <= 512 && !/[\u0000-\u001f\u007f]/u.test(username) ? username : undefined;
+  } catch {
+    const username = process.platform === "win32" ? process.env.USERNAME : undefined;
+    return typeof username === "string" && username.length > 0 && username.length <= 512 && !/[\u0000-\u001f\u007f]/u.test(username) ? username : undefined;
+  }
+}
+
+function sanitizeServiceIdentity(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 && trimmed.length <= 256 && !/[\u0000-\u001f\u007f-\u009f]/u.test(trimmed) ? trimmed : undefined;
+}
+
+function validationContext(metadata: RunnerMetadata): { readonly executionMode?: "dedicated_user" | "privileged_host"; readonly serviceIdentity?: string } {
+  return {
+    ...(metadata.execution_mode === undefined ? {} : { executionMode: metadata.execution_mode }),
+    ...(metadata.service_identity === undefined ? {} : { serviceIdentity: metadata.service_identity }),
+  };
+}
+
+function processPrivilegeState(mode: "dedicated_user" | "privileged_host", identity: string | undefined): "privileged" | "restricted" | "mismatch" | "unknown" {
+  if (identity === undefined) return "unknown";
+  const normalized = identity.trim().replaceAll("/", "\\").toLowerCase();
+  const privileged = process.platform === "win32"
+    ? normalized === "system" || normalized === "nt authority\\system" || normalized === "s-1-5-18"
+    : normalized === "root";
+  if (mode === "privileged_host") return privileged ? "privileged" : "mismatch";
+  return privileged ? "mismatch" : "restricted";
 }
