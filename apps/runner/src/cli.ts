@@ -8,7 +8,7 @@ import { enrollRunner, isEnrollmentOutcomeUnknown } from "./enrollment.js";
 import { ProfileStore, defaultWorkspaceId, profileExecutionMode, profileManagementMode, redactedProfile, workspaceOptions, type RunnerProfile, type StoredWorkspace } from "./profile.js";
 import { EnvironmentInfoService, discoverShellRuntime, type ShellRuntime } from "./runtime.js";
 import { RUNNER_VERSION } from "./version.js";
-import { assertManagedServiceManifest, createServiceManager, createServiceProvisioner, hostServiceManifestFilesystem, installServiceManifest, isManagedService, removeServiceManifest, renderService, serviceLayout, serviceProfilePath, type ExecutionMode, type ServiceManagerAdapter, type ServiceManifest, type ServiceManifestFilesystem, type ServicePlatform, type ServiceProvisioner } from "./service.js";
+import { assertManagedServiceManifest, createServiceManager, createServiceProvisioner, expectedServiceIdentity, hostServiceManifestFilesystem, installServiceManifest, isManagedService, removeServiceManifest, renderService, serviceLayout, servicePrivilegeState, serviceProfilePath, type ExecutionMode, type ServiceManagerAdapter, type ServiceManifest, type ServiceManifestFilesystem, type ServicePlatform, type ServicePrivilegeState, type ServiceProvisioner } from "./service.js";
 import { resolveTrustedWindowsTool, trustedWindowsEnvironment, trustedWindowsRoot } from "./windows-tools.js";
 
 export interface CliDependencies {
@@ -29,6 +29,8 @@ export interface CliDependencies {
   /** Injectable local discovery keeps doctor diagnostics deterministic in tests. */
   readonly environment?: EnvironmentInfoService;
   readonly discoverShellRuntime?: () => Promise<ShellRuntime | undefined>;
+  readonly executionMode?: ExecutionMode;
+  readonly confirmPrivilegedHost?: boolean;
   /** Optional local policy revision source; normal profiles do not persist central policy state. */
   readonly policyRevision?: () => Promise<{ readonly desired?: number; readonly applied?: number } | undefined>;
   /** Injectable exit-code seam for doctor failures; production sets process.exitCode. */
@@ -217,7 +219,17 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
     if (parsed.command === "enroll") {
       const server = requiredString(parsed, "server"); const code = await enrollmentCode(parsed, dependencies.readStdin);
       previousProfile = await store.load();
-      const result = await enrollRunner({ server, code, reEnroll: parsed.values.reEnroll === true, insecureLocal: parsed.values.insecureLocal === true, ...(typeof parsed.values.executionMode === "string" ? { executionMode: parsed.values.executionMode as ExecutionMode } : {}), ...(parsed.values.confirmPrivilegedHost === true ? { confirmPrivilegedHost: true } : {}), ...(typeof parsed.values.cwd === "string" ? { cwd: parsed.values.cwd } : {}), store, ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch }) });
+      const result = await enrollRunner({
+        server,
+        code,
+        reEnroll: parsed.values.reEnroll === true,
+        insecureLocal: parsed.values.insecureLocal === true,
+        ...(typeof parsed.values.executionMode === "string" ? { executionMode: parsed.values.executionMode as ExecutionMode } : dependencies.executionMode === undefined ? {} : { executionMode: dependencies.executionMode }),
+        ...(parsed.values.confirmPrivilegedHost === true || dependencies.confirmPrivilegedHost === true ? { confirmPrivilegedHost: true } : {}),
+        ...(typeof parsed.values.cwd === "string" ? { cwd: parsed.values.cwd } : {}),
+        store,
+        ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch }),
+      });
       enrolledDuringThisInvocation = true;
       enrolledProfile = result.profile;
       if (dependencies.afterEnroll !== undefined) await dependencies.afterEnroll();
