@@ -35,6 +35,8 @@ export function classifyConnectionFailure(input: { readonly statusCode?: number;
 export interface RunnerConnectionOptions {
   readonly config: RunnerConfig;
   readonly version?: string | undefined;
+  readonly executionMode?: "dedicated_user" | "privileged_host";
+  readonly serviceIdentity?: string;
   readonly heartbeatMs?: number;
   readonly rpcTimeoutMs?: number;
   readonly syncMs?: number;
@@ -100,6 +102,9 @@ export class RunnerConnection {
       runner_version: options.version ?? RUNNER_VERSION,
       platform: process.platform,
       architecture: process.arch,
+      ...(options.executionMode === undefined ? {} : { execution_mode: options.executionMode }),
+      ...(options.serviceIdentity === undefined ? {} : { service_identity: options.serviceIdentity }),
+      privilege_state: options.executionMode === "privileged_host" ? "privileged" : "restricted",
       capabilities: discoverCapabilities(this.config.maxConcurrentJobs ?? 1),
     };
   }
@@ -349,7 +354,7 @@ export class RunnerConnection {
       // unnecessary disk churn; still validate and re-ack the immutable
       // snapshot, otherwise the Registry can remain pending forever.
       const generation = ++this.policyApplyGeneration;
-      const validation = await validateCentralWorkspacePolicy(policy.workspaces as CentralWorkspacePolicy[]);
+      const validation = await validateCentralWorkspacePolicy(policy.workspaces as CentralWorkspacePolicy[], this.metadata.execution_mode === undefined ? {} : { executionMode: this.metadata.execution_mode });
       if (generation !== this.policyApplyGeneration || this.stopped || socket !== this.socket || socket.readyState !== WebSocket.OPEN
         || policy.revision !== this.desiredPolicyRevision || policy.checksum !== this.desiredPolicyChecksum) return;
       const invalid = validation.status.some((item) => item.status !== "valid");
@@ -361,7 +366,7 @@ export class RunnerConnection {
     this.policyApplyGeneration = generation;
     this.desiredPolicyRevision = policy.revision;
     this.desiredPolicyChecksum = policy.checksum;
-    const validation = await validateCentralWorkspacePolicy(policy.workspaces as CentralWorkspacePolicy[]);
+    const validation = await validateCentralWorkspacePolicy(policy.workspaces as CentralWorkspacePolicy[], this.metadata.execution_mode === undefined ? {} : { executionMode: this.metadata.execution_mode });
     if (generation !== this.policyApplyGeneration || this.stopped || socket !== this.socket || socket.readyState !== WebSocket.OPEN || policy.revision !== this.desiredPolicyRevision) return;
     const invalid = validation.status.some((item) => item.status !== "valid");
     if (invalid) {

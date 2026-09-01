@@ -90,4 +90,13 @@ describe("hosted installer origin and template safety", () => {
     expect(hostedHtml).not.toContain(`--code ${code}`);
     expect(hostedHtml).toContain("Copy installer command");
   });
+
+  it("states the privileged_host default and confirmation requirement on the enrollment page", async () => {
+    const code = "B".repeat(43);
+    const page = runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }, "https://worker.example", "runner-test", code, "csrf");
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    expect(html).toContain("The recommended execution mode is privileged_host");
+    expect(html).toContain("--confirm-privileged-host");
+  });
 });

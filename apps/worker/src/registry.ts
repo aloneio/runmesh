@@ -1962,12 +1962,24 @@ function validPolicyJson(value: { runner_permissions?: unknown; workspaces?: unk
     return typeof item.workspace_id === "string" && isSafeIdentifier(item.workspace_id) && typeof item.root_path === "string" && item.root_path.length > 0 && item.root_path.length <= 4_096 && absoluteWorkspaceRoot(item.root_path) && !/[\u0000-\u001f\u007f]/u.test(item.root_path) && typeof item.enabled === "boolean" && permissionSetField(item.permissions) !== undefined;
   });
 }
-function workspaceStatusesField(value: unknown): Array<{ workspace_id: string; status: WorkspaceValidationStatus }> | undefined {
+function workspaceStatusesField(value: unknown): Array<{ workspace_id: string; status: WorkspaceValidationStatus; validation_stage?: "realpath" | "lstat"; reason?: "os_access_denied"; service_identity?: string; execution_mode?: "dedicated_user" | "privileged_host"; remediation_code?: "confirm_privileged_host" | "check_workspace_acl" | "run_as_admin" }> | undefined {
   if (!Array.isArray(value) || value.length > 64) return undefined;
   const valid = new Set<WorkspaceValidationStatus>(["valid", "missing", "not_directory", "permission_denied", "invalid_path"]);
-  const output: Array<{ workspace_id: string; status: WorkspaceValidationStatus }> = [];
-  for (const item of value) { if (typeof item !== "object" || item === null || Array.isArray(item)) return undefined; const itemValue = item as Record<string, unknown>; if (typeof itemValue.workspace_id !== "string" || !isSafeIdentifier(itemValue.workspace_id) || typeof itemValue.status !== "string" || !valid.has(itemValue.status as WorkspaceValidationStatus)) return undefined; output.push({ workspace_id: itemValue.workspace_id, status: itemValue.status as WorkspaceValidationStatus }); }
-  return output;
+  const stages = new Set(["realpath", "lstat"]);
+  const outputs: Array<{ workspace_id: string; status: WorkspaceValidationStatus; validation_stage?: "realpath" | "lstat"; reason?: "os_access_denied"; service_identity?: string; execution_mode?: "dedicated_user" | "privileged_host"; remediation_code?: "confirm_privileged_host" | "check_workspace_acl" | "run_as_admin" }> = [];
+  for (const item of value) {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) return undefined;
+    const itemValue = item as Record<string, unknown>;
+    if (typeof itemValue.workspace_id !== "string" || !isSafeIdentifier(itemValue.workspace_id) || typeof itemValue.status !== "string" || !valid.has(itemValue.status as WorkspaceValidationStatus)) return undefined;
+    const next: { workspace_id: string; status: WorkspaceValidationStatus; validation_stage?: "realpath" | "lstat"; reason?: "os_access_denied"; service_identity?: string; execution_mode?: "dedicated_user" | "privileged_host"; remediation_code?: "confirm_privileged_host" | "check_workspace_acl" | "run_as_admin" } = { workspace_id: itemValue.workspace_id, status: itemValue.status as WorkspaceValidationStatus };
+    if (typeof itemValue.validation_stage === "string" && stages.has(itemValue.validation_stage)) next.validation_stage = itemValue.validation_stage as "realpath" | "lstat";
+    if (itemValue.reason === "os_access_denied") next.reason = itemValue.reason;
+    if (typeof itemValue.service_identity === "string" && safePublicText(itemValue.service_identity, 256)) next.service_identity = itemValue.service_identity;
+    if (itemValue.execution_mode === "dedicated_user" || itemValue.execution_mode === "privileged_host") next.execution_mode = itemValue.execution_mode;
+    if (itemValue.remediation_code === "confirm_privileged_host" || itemValue.remediation_code === "check_workspace_acl" || itemValue.remediation_code === "run_as_admin") next.remediation_code = itemValue.remediation_code;
+    outputs.push(next);
+  }
+  return outputs;
 }
 function validVerifier(value: string): boolean { return /^[0-9a-f]{64}$/.test(value); }
 function validMutationId(value: unknown): value is string { return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value); }

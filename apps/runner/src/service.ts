@@ -289,13 +289,21 @@ export const hostServiceManifestFilesystem: ServiceManifestFilesystem = {
   },
   remove: async (path) => { await rm(path); },
 };
-export async function installServiceManifest(manifest: ServiceManifest, filesystem: ServiceManifestFilesystem = hostServiceManifestFilesystem, options: InstallServiceManifestOptions = {}): Promise<void> {
+/**
+ * Install a managed manifest and report whether its bytes changed.  The
+ * change bit is deliberately calculated before the atomic write so callers
+ * can decide whether a running service needs a restart.  Returning a boolean
+ * is backwards compatible with callers that only await the operation.
+ */
+export async function installServiceManifest(manifest: ServiceManifest, filesystem: ServiceManifestFilesystem = hostServiceManifestFilesystem, options: InstallServiceManifestOptions = {}): Promise<boolean> {
   if (manifest.mode === "system" && manifest.executionMode === "privileged_host" && options.confirmPrivilegedHost !== true) {
     throw new Error("privileged_host service installation requires --confirm-privileged-host");
   }
   const existing = await filesystem.read(manifest.path);
   if (existing !== undefined && !isManagedService(existing)) throw new Error(`refusing to overwrite unmanaged service manifest: ${manifest.path}`);
+  const changed = existing !== manifest.content;
   await filesystem.write(manifest.path, manifest.content);
+  return changed;
 }
 export async function removeServiceManifest(manifest: ServiceManifest, filesystem: ServiceManifestFilesystem = hostServiceManifestFilesystem): Promise<boolean> {
   const existing = await filesystem.read(manifest.path);
@@ -485,7 +493,11 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
       status: async () => {
         const result = await executor.execute("launchctl", ["print", target]);
         const match = /(?:user|UserName)\s*=\s*([^\s]+)/u.exec(result.stdout ?? "");
-        return { installed: result.exitCode === 0, active: result.exitCode === 0, ...(match?.[1] === undefined ? {} : { identity: match[1] }), ...(result.stderr === undefined || result.stderr.trim() === "" ? {} : { detail: result.stderr.trim().slice(0, 512) }) };
+        // A system LaunchDaemon that omits UserName is launched as root by
+        // launchd. Report that native default explicitly so the status and
+        // doctor layers can distinguish it from an unavailable identity.
+        const identity = match?.[1] ?? (mode === "system" ? "root" : undefined);
+        return { installed: result.exitCode === 0, active: result.exitCode === 0, ...(identity === undefined ? {} : { identity }), ...(result.stderr === undefined || result.stderr.trim() === "" ? {} : { detail: result.stderr.trim().slice(0, 512) }) };
       },
     };
   }
@@ -544,6 +556,36 @@ export function serviceCommands(action: "install" | "start" | "stop" | "restart"
   }
   if (action === "install") return [`schtasks /Create /TN ${WINDOWS_TASK_NAME} /XML <manifest> /F`, `schtasks /Run /TN ${WINDOWS_TASK_NAME}`, `schtasks /Query /TN ${WINDOWS_TASK_NAME}`];
   return [`schtasks /${action === "start" ? "Run" : action === "stop" ? "End" : action === "uninstall" ? "Delete" : "Run"} /TN ${WINDOWS_TASK_NAME}`];
+}
+
+export type ServicePrivilegeState = "privileged" | "restricted" | "mismatch" | "unknown";
+
+/** The identity a manifest asks the native service manager to use. */
+export function expectedServiceIdentity(manifest: Pick<ServiceManifest, "platform" | "mode" | "executionMode">): string | undefined {
+  if (manifest.mode !== "system") return undefined;
+  if (manifest.executionMode === "privileged_host") return privilegedIdentity(manifest.platform);
+  return manifest.platform === "win32" ? "NT AUTHORITY\\LOCAL SERVICE" : "runmesh";
+}
+
+/**
+ * Compare a service-manager identity with the manifest contract.  Status
+ * probes are allowed to omit identity (for example an unloaded launchd
+ * job); that is unknown rather than an implicit success.  The comparison is
+ * intentionally conservative and never treats a privileged request as
+ * satisfied by an arbitrary account name.
+ */
+export function servicePrivilegeState(manifest: Pick<ServiceManifest, "platform" | "mode" | "executionMode">, actualIdentity: string | undefined, active = true): ServicePrivilegeState {
+  if (!active || actualIdentity === undefined || actualIdentity.trim() === "") return "unknown";
+  const expected = expectedServiceIdentity(manifest);
+  if (expected === undefined) return "restricted";
+  const normalize = (value: string): string => value.trim().replaceAll("/", "\\").toLowerCase();
+  const actual = normalize(actualIdentity);
+  const wanted = normalize(expected);
+  const matches = actual === wanted
+    || (manifest.platform === "win32" && manifest.executionMode === "privileged_host" && (actual === "system" || actual === "nt authority\\system"))
+    || (manifest.platform === "win32" && manifest.executionMode === "dedicated_user" && (actual === "local service" || actual === "nt authority\\local service"));
+  if (!matches) return "mismatch";
+  return manifest.executionMode === "privileged_host" ? "privileged" : "restricted";
 }
 
 function privilegedIdentity(platform: ServicePlatform): string { return platform === "win32" ? "SYSTEM" : "root"; }
