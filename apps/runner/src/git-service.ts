@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { lstat, mkdir, mkdtemp, rm, writeFile, realpath } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, rm, utimes, writeFile, realpath } from "node:fs/promises";
 import { constants, lstatSync, realpathSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { dirname, join, normalize, relative, sep } from "node:path";
@@ -288,7 +288,15 @@ async function createIsolatedGitContext(worktree: string): Promise<IsolatedGitCo
       if (!indexInfo.isFile() || indexInfo.isSymbolicLink() || indexInfo.size > MAX_GIT_METADATA_BYTES) throw new Error("Git index is not a safe regular file");
       // Read through an identity-checked descriptor; copyFile(index, ...)
       // would follow a replacement symlink after the lstat above.
-      await writeFile(join(directory, "index"), await readRegularBytes(index, MAX_GIT_METADATA_BYTES), { mode: 0o600 });
+      const isolatedIndex = join(directory, "index");
+      await writeFile(isolatedIndex, await readRegularBytes(index, MAX_GIT_METADATA_BYTES), { mode: 0o600 });
+      // The copied index is created after the worktree is inspected, so its
+      // fresh filesystem mtime can be newer than the files it describes. Git
+      // would then trust stale stat entries (especially on Windows' coarse
+      // timestamp filesystems) and miss a same-size edit. Preserve the source
+      // index mtime so Git's normal racy-clean check hashes entries when the
+      // timestamps are equal, without rewriting any user-owned index flags.
+      await utimes(isolatedIndex, indexInfo.atime, indexInfo.mtime);
     }
 
     const objectPath = join(commonDirectory, "objects");

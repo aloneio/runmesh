@@ -7,6 +7,8 @@ import {
   PROTOCOL_CURRENT_VERSION,
   ProtocolFrameError,
   JsonValueSchema,
+  RUNNER_DIAGNOSTICS_EXTENSION,
+  RUNNER_POLICY_DIAGNOSTICS_EXTENSION,
   RpcRequestSchema,
   runnerPolicyChecksum,
   decodeWireFrame,
@@ -296,6 +298,46 @@ describe("Runner-Worker protocol", () => {
   it("accepts compatible additions only beneath extensions", () => {
     expect(decodeWireFrame(JSON.stringify({ ...messages[0], extensions: { feature: true } }))).toMatchObject({ extensions: { feature: true } });
     expect(() => decodeWireFrame(JSON.stringify({ ...messages[0], feature: true }))).toThrow(/does not match/);
+  });
+  it("carries Runner diagnostics in extensions without changing the legacy direct shape", () => {
+    const hello = {
+      ...messages[0],
+      extensions: {
+        [RUNNER_DIAGNOSTICS_EXTENSION]: {
+          execution_mode: "privileged_host",
+          service_identity: "root",
+          privilege_state: "privileged",
+        },
+      },
+    };
+    const decodedHello = decodeWireFrame(encodeWireFrame(hello));
+    expect(decodedHello).toMatchObject({ extensions: hello.extensions });
+    if (decodedHello.type === "runner.hello") expect(decodedHello.runner).not.toHaveProperty("service_identity");
+
+    const ack = {
+      type: "runner.policy_ack" as const,
+      protocol_version: PROTOCOL_CURRENT_VERSION,
+      runner_id: "runner-1",
+      desired_revision: 1,
+      desired_checksum: "a".repeat(64),
+      applied_revision: null,
+      applied_checksum: null,
+      runner_reported_policy_revision: null,
+      runner_reported_policy_checksum: null,
+      status: "invalid" as const,
+      workspace_status: [{ workspace_id: "workspace-1", status: "permission_denied" as const }],
+      extensions: {
+        [RUNNER_POLICY_DIAGNOSTICS_EXTENSION]: [{
+          workspace_id: "workspace-1",
+          status: "permission_denied" as const,
+          validation_stage: "realpath" as const,
+          reason: "os_access_denied" as const,
+          execution_mode: "dedicated_user" as const,
+          remediation_code: "migrate_privileged_host" as const,
+        }],
+      },
+    };
+    expect(decodeWireFrame(encodeWireFrame(ack))).toMatchObject({ workspace_status: [{ workspace_id: "workspace-1", status: "permission_denied" }], extensions: ack.extensions });
   });
   it("requires a positive top-level revision for protected RPC methods", () => {
     const request = { type: "rpc.request", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "rpc-policy", method: "fs.read", params: {} };

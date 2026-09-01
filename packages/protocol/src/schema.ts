@@ -182,6 +182,9 @@ export const RunnerMetadataSchema = z
     runner_version: ShortTextSchema,
     platform: ShortTextSchema,
     architecture: ShortTextSchema,
+    execution_mode: z.enum(["dedicated_user", "privileged_host"]).optional(),
+    service_identity: ShortTextSchema.optional(),
+    privilege_state: z.enum(["privileged", "restricted", "mismatch", "unknown"]).optional(),
     capabilities: CapabilityMetadataSchema,
   })
   .strict();
@@ -341,6 +344,11 @@ export const RunnerPolicyAckSchema = EnvelopeSchema.extend({
   workspace_status: z.array(z.object({
     workspace_id: IdentifierSchema,
     status: z.enum(["valid", "missing", "not_directory", "permission_denied", "invalid_path"]),
+    validation_stage: z.enum(["realpath", "lstat"]).optional(),
+    reason: z.enum(["os_access_denied"]).optional(),
+    service_identity: ShortTextSchema.optional(),
+    execution_mode: z.enum(["dedicated_user", "privileged_host"]).optional(),
+    remediation_code: z.enum(["migrate_privileged_host", "grant_os_access", "confirm_privileged_host", "check_workspace_acl", "run_as_admin"]).optional(),
   }).strict()).max(64),
 }).strict().superRefine((value, context) => {
   const appliedPair = (value.applied_revision === null) === (value.applied_checksum === null);
