@@ -1,5 +1,6 @@
 import { constants } from "node:fs";
-import { chmod, chown, lstat, mkdir, open, rename, rm, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { chmod, chown, lstat, mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, parse, posix, relative, resolve, sep, win32 } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -39,14 +40,59 @@ export interface RunnerProfile {
   /** Machine service identity. Omitted pre-release profiles require explicit migration before service installation. */
   readonly execution_mode?: ProfileExecutionMode;
 }
-export interface ProfileStoreOptions { readonly baseDir?: string; readonly filePath?: string; readonly platform?: HostPlatform; readonly home?: string; }
+export interface ProfileStoreOptions {
+  readonly baseDir?: string;
+  readonly filePath?: string;
+  readonly platform?: HostPlatform;
+  readonly home?: string;
+  /** Service account group used by the dedicated system profile. */
+  readonly serviceGroup?: string;
+  /** Injectable group id for tests/hosts whose group database is external. */
+  readonly serviceGroupId?: number;
+  /** Force canonical ownership checks for an injected profile path. */
+  readonly enforceServiceOwnership?: boolean;
+}
+
+export interface ProfilePermissions {
+  readonly directory_mode?: number;
+  readonly file_mode?: number;
+  readonly directory_uid?: number;
+  readonly directory_gid?: number;
+  readonly file_uid?: number;
+  readonly file_gid?: number;
+}
+
+/**
+ * Save-time security overrides used only by transaction rollback.  A normal
+ * save preserves the access shape required by a dedicated service (root:
+ * runmesh/0640); rollback of a legacy, unmanaged profile must instead return
+ * to an owner-only root:root profile before any service can consume it.
+ */
+export interface ProfileSaveOptions {
+  readonly privateOwnerOnly?: boolean;
+}
+
+export interface ProfileOwnershipCheck {
+  readonly ok: boolean;
+  /** False when the profile is not a system profile on this host. */
+  readonly checked: boolean;
+  readonly expected_uid?: number;
+  readonly expected_gid?: number;
+  readonly actual_directory_uid?: number;
+  readonly actual_directory_gid?: number;
+  readonly actual_file_uid?: number;
+  readonly actual_file_gid?: number;
+  readonly detail?: string;
+}
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const SAFE_GROUP = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
 const MAX_WORKSPACES = 64;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
 // The validated profile is small (64 workspaces with bounded fields).  Keep a
 // hard byte ceiling before JSON parsing so a tampered profile cannot force an
 // unbounded allocation in the long-lived Runner process.
 const MAX_PROFILE_BYTES = 2 * 1024 * 1024;
+const DEFAULT_SERVICE_GROUP = "runmesh";
 
 export function profileDirectory(options: ProfileStoreOptions = {}): string {
   if (options.baseDir !== undefined) return options.baseDir;
@@ -72,34 +118,69 @@ export class ProfileStore {
   /** Resolve once so a caller changing cwd cannot redirect a later load/save. */
   private readonly absolutePath: string;
   private readonly platform: HostPlatform;
+  private readonly serviceGroup: string;
+  private readonly serviceGroupId: number | undefined;
+  private readonly enforceServiceOwnership: boolean;
   public constructor(options: ProfileStoreOptions = {}) {
     this.platform = options.platform ?? process.platform;
     this.path = profilePath(options);
     this.absolutePath = absoluteProfilePath(this.path, this.platform);
+    this.serviceGroup = options.serviceGroup ?? DEFAULT_SERVICE_GROUP;
+    if (!SAFE_GROUP.test(this.serviceGroup)) throw new Error("service group must be a safe account name");
+    if (options.serviceGroupId !== undefined && (!Number.isSafeInteger(options.serviceGroupId) || options.serviceGroupId < 0)) throw new Error("service group id must be a non-negative integer");
+    this.serviceGroupId = options.serviceGroupId;
+    this.enforceServiceOwnership = options.enforceServiceOwnership === true;
   }
   /** Service manifests must not depend on the service manager's working cwd. */
   public get filePath(): string { return this.absolutePath; }
   public async load(): Promise<RunnerProfile | undefined> {
-    const raw = await readPrivateProfile(this.absolutePath, this.platform).catch((error: unknown) => { if (isErrno(error, "ENOENT")) return undefined; throw error; });
+    // Pass the same ownership decision used by save()/doctor into the
+    // descriptor-based reader.  This is important for injected canonical
+    // paths in tests and for service wrappers that deliberately force the
+    // system-profile contract: checking only the literal default path would
+    // otherwise let a non-root-owned profile pass load() after save() had
+    // correctly rejected it.
+    const raw = await readPrivateProfile(this.absolutePath, this.platform, this.shouldCheckServiceOwnership()).catch((error: unknown) => { if (isErrno(error, "ENOENT")) return undefined; throw error; });
     if (raw === undefined) return undefined;
     let value: unknown;
     try { value = JSON.parse(raw) as unknown; } catch { throw new Error("runner profile is not valid JSON"); }
     return validateProfile(value);
   }
-  public async save(profile: RunnerProfile): Promise<void> {
+  public async save(profile: RunnerProfile, options: ProfileSaveOptions = {}): Promise<void> {
     const valid = validateProfile(profile);
     if (valid === undefined) throw new Error("runner profile is invalid");
+    const privateOwnerOnly = options.privateOwnerOnly === true;
+    // This option is intentionally constrained to the canonical POSIX
+    // service profile.  Arbitrary/user profiles must retain their normal
+    // caller ownership semantics; on those paths it still tightens the mode
+    // to 0600 but never attempts a privileged chown.
+    const forceCanonicalOwner = privateOwnerOnly && this.shouldCheckServiceOwnership() && this.platform !== "win32";
     const target = this.absolutePath;
     const directory = dirname(target);
     // Walk every existing component and reject symlink/junction directories.
     // A recursive mkdir() followed by chmod() would otherwise follow a
     // pre-created profile-directory symlink and write credentials elsewhere.
     const directoryInfo = await ensureProfileDirectory(directory);
-    const directoryMode = this.platform === "win32" ? 0o700 : profileDirectoryMode(directoryInfo.mode & 0o777);
+    // A system profile must not live in a directory controlled by an
+    // unprivileged local principal.  This check is intentionally limited to
+    // the canonical system path (or an explicitly forced test seam), so user
+    // profiles remain usable in ordinary home directories.
+    if (this.shouldCheckServiceOwnership()) {
+      assertRootOwnedDirectory(directoryInfo, "runner profile directory");
+    }
+    const directoryMode = this.platform === "win32" || privateOwnerOnly ? 0o700 : profileDirectoryMode(directoryInfo.mode & 0o777);
+    if (forceCanonicalOwner) {
+      // The directory may have been widened to root:runmesh/0750 by a
+      // partially completed dedicated-service provision.  Restore the
+      // privileged/legacy contract atomically with the profile bytes.
+      await chown(directory, 0, 0);
+    }
     await this.chmodPrivate(directory, directoryMode, "directory");
     const existing = await lstat(target).catch((error: unknown) => isErrno(error, "ENOENT") ? undefined : Promise.reject(error));
     if (existing !== undefined && (!existing.isFile() || existing.isSymbolicLink())) throw new Error("runner profile is not a regular file");
-    const fileMode = this.platform === "win32" ? 0o600 : profileFileMode(existing?.mode === undefined ? undefined : existing.mode & 0o777);
+    const fileMode = this.platform === "win32" || privateOwnerOnly
+      ? 0o600
+      : profileFileMode(existing?.mode === undefined ? undefined : existing.mode & 0o777);
     // Use an unpredictable, exclusive temporary name.  A predictable path
     // combined with a plain write would let another local principal place a
     // symlink before enrollment writes the credential-bearing profile.
@@ -108,11 +189,24 @@ export class ProfileStore {
       await writeFile(temporary, `${JSON.stringify(valid, null, 2)}\n`, { mode: 0o600, flag: "wx" });
       if (this.platform !== "win32") {
         await this.chmodPrivate(temporary, fileMode, "file");
+        if (forceCanonicalOwner) {
+          // Do not inherit a dedicated-service group from the old inode.
+          // Explicitly set both IDs on the temporary inode before rename so a
+          // failed migration cannot leave root consuming attacker/group-owned
+          // credentials, even if the old profile had been widened already.
+          await chown(temporary, 0, 0);
+          await this.chmodPrivate(temporary, fileMode, "file");
+        }
         // Dedicated system services intentionally use root:runmesh 0640 so
         // the service account can read the profile. Preserve that ownership
         // across an atomic re-enrollment replacement; otherwise save() would
         // silently create a root-only 0600 file and strand the service.
-        if (existing !== undefined && typeof existing.uid === "number" && typeof existing.gid === "number") {
+        if (!forceCanonicalOwner && existing !== undefined && typeof existing.uid === "number" && typeof existing.gid === "number"
+          // Never carry an attacker-owned canonical inode's uid/gid into the
+          // replacement.  A root process will create the temporary inode with
+          // root ownership; preserving a non-root owner would let that owner
+          // continue supplying credentials to a privileged Runner.
+          && (!this.shouldCheckServiceOwnership() || existing.uid === 0)) {
           // A freshly-created temporary file normally already has the caller's
           // ownership. Avoid an unnecessary chown (which requires privilege on
           // many POSIX systems), but preserve a service-managed root:group
@@ -125,6 +219,7 @@ export class ProfileStore {
         }
       } else await this.chmodPrivate(temporary, 0o600, "file");
       await rename(temporary, target);
+      if (forceCanonicalOwner) await chown(target, 0, 0);
       await this.chmodPrivate(target, fileMode, "file");
     } finally {
       // A failed write/chmod/rename must not leave a readable stale profile
@@ -133,16 +228,86 @@ export class ProfileStore {
     }
   }
   public async remove(): Promise<void> { await rm(this.absolutePath, { force: true }); }
-  public async permissions(): Promise<{ readonly directory_mode?: number; readonly file_mode?: number }> {
-    const result: { directory_mode?: number; file_mode?: number } = {};
+  public async permissions(): Promise<ProfilePermissions> {
+    const result: { directory_mode?: number; file_mode?: number; directory_uid?: number; directory_gid?: number; file_uid?: number; file_gid?: number } = {};
     // Do not follow a profile symlink while reporting security diagnostics;
     // otherwise doctor could report the target's mode for an attacker-selected
     // file and make an unsafe profile look healthy.
     const directory = await lstat(dirname(this.absolutePath)).catch(() => undefined);
     const file = await lstat(this.absolutePath).catch(() => undefined);
-    if (directory !== undefined) result.directory_mode = directory.mode & 0o777;
-    if (file !== undefined) result.file_mode = file.mode & 0o777;
+    if (directory !== undefined) {
+      result.directory_mode = directory.mode & 0o777;
+      if (typeof directory.uid === "number") result.directory_uid = directory.uid;
+      if (typeof directory.gid === "number") result.directory_gid = directory.gid;
+    }
+    if (file !== undefined) {
+      result.file_mode = file.mode & 0o777;
+      if (typeof file.uid === "number") result.file_uid = file.uid;
+      if (typeof file.gid === "number") result.file_gid = file.gid;
+    }
     return result;
+  }
+  /**
+   * Check the canonical POSIX ownership contract for a machine profile.
+   * Privileged profiles are root:root; dedicated system profiles are
+   * root:<serviceGroup>.  Unknown group databases fail closed instead of
+   * accepting an arbitrary gid merely because the mode is 0600.
+   */
+  public async checkServiceOwnership(executionMode: ExecutionMode, serviceGroup: string = this.serviceGroup): Promise<ProfileOwnershipCheck> {
+    if (!this.shouldCheckServiceOwnership()) return { ok: true, checked: false, detail: "non-system profile" };
+    // A managed manifest may intentionally use a dedicated account/group
+    // chosen by the operator. Validate that override with the same grammar as
+    // constructor options before resolving it through the local group DB; an
+    // arbitrary string must never reach `id`/filesystem ownership checks.
+    if (!SAFE_GROUP.test(serviceGroup)) {
+      return { ok: false, checked: true, expected_uid: 0, detail: "canonical profile service group is invalid" };
+    }
+    const permissions = await this.permissions();
+    const expectedUid = 0;
+    const groupIdOverride = serviceGroup === this.serviceGroup ? this.serviceGroupId : undefined;
+    const expectedGid = executionMode === "privileged_host" ? 0 : await resolveServiceGroupId(serviceGroup, groupIdOverride);
+    const actual = {
+      ...(permissions.directory_uid === undefined ? {} : { actual_directory_uid: permissions.directory_uid }),
+      ...(permissions.directory_gid === undefined ? {} : { actual_directory_gid: permissions.directory_gid }),
+      ...(permissions.file_uid === undefined ? {} : { actual_file_uid: permissions.file_uid }),
+      ...(permissions.file_gid === undefined ? {} : { actual_file_gid: permissions.file_gid }),
+    };
+    // A dedicated account must never be mapped to the root group (gid 0),
+    // even if a corrupted/local group database reports that name.  The
+    // privileged contract handles gid 0 explicitly above.
+    if (expectedGid === undefined || (executionMode === "dedicated_user" && expectedGid === 0)) {
+      return {
+        ok: false,
+        checked: true,
+        expected_uid: expectedUid,
+        detail: `canonical profile group ${serviceGroup} could not be resolved safely`,
+        ...actual,
+      };
+    }
+    const ownerMatches = permissions.directory_uid === expectedUid && permissions.file_uid === expectedUid;
+    const groupMatches = permissions.directory_gid === expectedGid && permissions.file_gid === expectedGid;
+    return {
+      ok: ownerMatches && groupMatches,
+      checked: true,
+      expected_uid: expectedUid,
+      expected_gid: expectedGid,
+      ...(ownerMatches && groupMatches ? {} : { detail: `canonical profile ownership mismatch (expected root:${executionMode === "privileged_host" ? "root" : serviceGroup})` }),
+      ...actual,
+    };
+  }
+  /** Throw a bounded error when a machine profile is not canonically owned. */
+  public async assertServiceOwnership(executionMode: ExecutionMode, serviceGroup?: string): Promise<void> {
+    const check = await this.checkServiceOwnership(executionMode, serviceGroup);
+    if (!check.ok) throw new Error(check.detail ?? "runner profile ownership is not canonical");
+  }
+  /** Expose whether this store points at the host-wide canonical profile. */
+  public get isCanonicalSystemProfile(): boolean { return this.shouldCheckServiceOwnership(); }
+  private shouldCheckServiceOwnership(): boolean {
+    // `platform` may be injected to render another target in tests. Ownership
+    // metadata is meaningful only on an actual POSIX host; never apply these
+    // checks to a Windows process just because its target platform is Linux.
+    if (process.platform === "win32" || this.platform === "win32") return false;
+    return this.enforceServiceOwnership || isCanonicalSystemProfilePath(this.absolutePath, this.platform);
   }
   private async chmodPrivate(path: string, mode: number, kind: "directory" | "file"): Promise<void> {
     try {
@@ -163,12 +328,19 @@ export class ProfileStore {
   }
 }
 
-async function readPrivateProfile(path: string, platform: HostPlatform): Promise<string> {
+async function readPrivateProfile(path: string, platform: HostPlatform, enforceOwnership = false): Promise<string> {
+  const ownershipRequired = enforceOwnership || (process.platform !== "win32" && isCanonicalSystemProfilePath(path, platform));
   const directory = await lstat(dirname(path));
   if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error("runner profile directory is not a regular directory");
+  // A root process must never consume an attacker-owned canonical system
+  // profile merely because its mode is 0600.  Check the directory and each
+  // opened inode; the latter closes the ownership-change race between lstat
+  // and open.
+  if (ownershipRequired) assertRootOwnedDirectory(directory, "runner profile directory");
   if (platform !== "win32" && (directory.mode & 0o022) !== 0) throw new Error("runner profile directory is writable by group or others");
   const before = await lstat(path);
   if (before.isSymbolicLink() || !before.isFile()) throw new Error("runner profile is not a regular file");
+  if (ownershipRequired) assertRootOwnedFile(before);
   if (before.size > MAX_PROFILE_BYTES) throw new Error(`runner profile exceeds ${MAX_PROFILE_BYTES} bytes`);
   if (platform !== "win32" && !canReadProfileMode(before.mode & 0o777, before.gid, before.uid)) throw new Error("runner profile is not private");
   // O_NOFOLLOW closes the final-component symlink race on POSIX. Windows has
@@ -178,6 +350,7 @@ async function readPrivateProfile(path: string, platform: HostPlatform): Promise
   try {
     const opened = await handle.stat();
     if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) throw new Error("runner profile changed while being opened");
+    if (ownershipRequired) assertRootOwnedFile(opened);
     if (opened.size > MAX_PROFILE_BYTES) throw new Error(`runner profile exceeds ${MAX_PROFILE_BYTES} bytes`);
     if (platform !== "win32" && !canReadProfileMode(opened.mode & 0o777, opened.gid, opened.uid)) throw new Error("runner profile is not private");
     // Allocate only the observed size plus one byte.  The sentinel detects a
@@ -196,6 +369,7 @@ async function readPrivateProfile(path: string, platform: HostPlatform): Promise
     if (!final.isFile() || final.dev !== opened.dev || final.ino !== opened.ino || final.size !== opened.size || offset !== opened.size) {
       throw new Error("runner profile changed while being read");
     }
+    if (ownershipRequired) assertRootOwnedFile(final);
     if (offset > MAX_PROFILE_BYTES) throw new Error(`runner profile exceeds ${MAX_PROFILE_BYTES} bytes`);
     return buffer.subarray(0, offset).toString("utf8");
   } finally {
@@ -320,6 +494,59 @@ function isErrno(error: unknown, code: string): boolean { return typeof error ==
 function absoluteProfilePath(value: string, platform: HostPlatform): string {
   const path = platform === "win32" ? win32 : posix;
   return path.normalize(path.isAbsolute(value) ? value : path.resolve(value));
+}
+
+/**
+ * Return true only for the host-wide profile locations managed by the native
+ * service installers.  User profiles and arbitrary test paths deliberately do
+ * not inherit the root:root/root:runmesh ownership contract.
+ */
+export function isCanonicalSystemProfilePath(path: string, platform: HostPlatform = process.platform): boolean {
+  if (platform !== "linux" && platform !== "darwin") return false;
+  const normalized = absoluteProfilePath(path, platform);
+  const expected = platform === "linux" ? "/etc/runmesh/profile.json" : "/Library/Application Support/Runmesh/profile.json";
+  return posix.normalize(normalized) === expected;
+}
+
+function assertRootOwnedDirectory(info: import("node:fs").Stats, label: string): void {
+  if (typeof info.uid !== "number" || info.uid !== 0) throw new Error(`${label} must be owned by root`);
+}
+function assertRootOwnedFile(info: import("node:fs").Stats): void {
+  if (typeof info.uid !== "number" || info.uid !== 0) throw new Error("runner profile must be owned by root");
+}
+
+/** Resolve a POSIX group using a fixed local database/utility only. */
+async function resolveServiceGroupId(name: string, override: number | undefined): Promise<number | undefined> {
+  if (override !== undefined) return override;
+  try {
+    const contents = await readFile("/etc/group", "utf8");
+    for (const line of contents.split(/\r?\n/u)) {
+      if (line.startsWith("#")) continue;
+      const fields = line.split(":");
+      if (fields[0] !== name) continue;
+      const gid = Number(fields[2]);
+      if (Number.isSafeInteger(gid) && gid >= 0) return gid;
+    }
+  } catch {
+    // Directory-service backed macOS groups may not be mirrored in
+    // /etc/group; use the fixed absolute `id` path below as a fallback.
+  }
+  if (process.platform === "win32") return undefined;
+  try {
+    const result = spawnSync("/usr/bin/id", ["-g", name], {
+      cwd: "/",
+      encoding: "utf8",
+      timeout: 2_000,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"],
+      env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LANG: "C", LC_ALL: "C" },
+    });
+    if (result.status !== 0 || result.error !== undefined) return undefined;
+    const gid = Number(typeof result.stdout === "string" ? result.stdout.trim() : "");
+    return Number.isSafeInteger(gid) && gid >= 0 ? gid : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function profileExecutionMode(profile: RunnerProfile | undefined): ProfileExecutionMode | undefined {

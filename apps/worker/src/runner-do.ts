@@ -3,8 +3,12 @@ import {
   decodeWireFrame,
   encodeWireFrame,
   negotiateProtocolVersion,
+  mergeRunnerDiagnostics,
+  mergeWorkspaceDiagnostics,
   PROTOCOL_CURRENT_VERSION,
   PROTOCOL_MIN_VERSION,
+  runnerDiagnosticsFeatureExtension,
+  RUNNER_DIAGNOSTICS_FEATURE_EXTENSION,
   RpcRequestSchema,
   RunnerPolicySchema,
   WORKER_BRIDGE_TIMEOUT_MS,
@@ -304,12 +308,18 @@ export class RunnerDO {
         ws.close(1002, negotiation.error.code);
         return;
       }
+      // The direct Runner metadata object is kept in the legacy shape on the
+      // wire.  New Runners put execution identity diagnostics in the envelope
+      // extension; merge only validated known fields before persisting them in
+      // Registry.  Older Workers simply ignore that extension and still
+      // complete the handshake.
+      const runnerMetadata = mergeRunnerDiagnostics(message.runner, message.extensions);
       const epochResponse = await this.registryRequest(attachment.runnerId, "/connect", {
         method: "POST",
         // The lifecycle nonce is allocated by Registry during /connect, so the
         // handshake carries an explicit null placeholder and all subsequent
         // transport requests carry the returned concrete value.
-        body: JSON.stringify({ metadata: message.runner, min_protocol_version: message.min_protocol_version, max_protocol_version: message.max_protocol_version, session_id: attachment.sessionId, lifecycle_id: null, credential_version: attachment.credentialVersion, now_ms: Date.now() }),
+        body: JSON.stringify({ metadata: runnerMetadata, min_protocol_version: message.min_protocol_version, max_protocol_version: message.max_protocol_version, session_id: attachment.sessionId, lifecycle_id: null, credential_version: attachment.credentialVersion, now_ms: Date.now() }),
       });
       if (!epochResponse.ok) {
         ws.close(1008, "stale credentials");
@@ -374,6 +384,10 @@ export class RunnerDO {
           worker_id: this.env.WORKER_ID ?? "runmesh", worker_version: PRODUCT_VERSION,
           capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: ["echo", "runner.info"], labels: { runtime: "cloudflare" } },
         },
+        // New Runner builds may use direct optional fields after this explicit
+        // capability signal.  Older Runners accept the envelope extension but
+        // ignore it; they continue sending the legacy ACK shape.
+        extensions: { [RUNNER_DIAGNOSTICS_FEATURE_EXTENSION]: runnerDiagnosticsFeatureExtension() },
         ...(isPolicy(body.desired_policy) ? { desired_policy: body.desired_policy } : {}),
       };
       try { ws.send(encodeWireFrame(welcome)); } catch {
@@ -420,7 +434,8 @@ export class RunnerDO {
     if (message.type === "runner.policy_ack") {
       if (message.runner_id !== attachment.runnerId) return ws.close(1008, "runner identity mismatch");
       const expectedAdmission = { ...(await this.admission()) };
-      const response = await this.registryRequest(attachment.runnerId, "/policy-ack", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, ...transportIdentityFields(attachment), desired_revision: message.desired_revision, desired_checksum: message.desired_checksum, applied_revision: message.applied_revision, applied_checksum: message.applied_checksum, runner_reported_policy_revision: message.runner_reported_policy_revision, runner_reported_policy_checksum: message.runner_reported_policy_checksum, status: message.status, workspace_status: message.workspace_status }) });
+      const workspaceStatus = mergeWorkspaceDiagnostics(message.workspace_status, message.extensions);
+      const response = await this.registryRequest(attachment.runnerId, "/policy-ack", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, ...transportIdentityFields(attachment), desired_revision: message.desired_revision, desired_checksum: message.desired_checksum, applied_revision: message.applied_revision, applied_checksum: message.applied_checksum, runner_reported_policy_revision: message.runner_reported_policy_revision, runner_reported_policy_checksum: message.runner_reported_policy_checksum, status: message.status, workspace_status: workspaceStatus }) });
       const responseBody = response.ok ? await response.json() as { ack_result?: unknown } : undefined;
       const ackResult = responseBody?.ack_result;
       if (!response.ok || (ackResult !== "applied" && ackResult !== "invalid" && ackResult !== "stale")) {

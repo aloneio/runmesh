@@ -393,14 +393,14 @@ ENROLLMENT_INPUT="$TMP/enrollment-code"
 printf '%s\n' "$ENROLLMENT_CODE" > "$ENROLLMENT_INPUT"
 unset ENROLLMENT_CODE
 ENROLLMENT_ATTEMPTED=1
-"$RUNNER" enroll --profile "$PROFILE" --server "$ENROLLMENT_URL" --code-stdin < "$ENROLLMENT_INPUT"
+"$RUNNER" enroll --profile "$PROFILE" --server "$ENROLLMENT_URL" --code-stdin --execution-mode privileged_host --confirm-privileged-host < "$ENROLLMENT_INPUT"
 rm -f "$ENROLLMENT_INPUT"
 mv "$STAGE" "$FINAL"
 FINAL_CREATED=1
 ln -s "$FINAL" "$INSTALL_ROOT/current.new"
 mv "$INSTALL_ROOT/current.new" "$INSTALL_ROOT/current"
 CURRENT_CREATED=1
-"$INSTALL_ROOT/current/bin/coding-runner" install --profile "$PROFILE" --executable-path "$INSTALL_ROOT/current/bin/coding-runner"
+"$INSTALL_ROOT/current/bin/coding-runner" install --profile "$PROFILE" --execution-mode privileged_host --confirm-privileged-host --executable-path "$INSTALL_ROOT/current/bin/coding-runner"
 printf '%s\n' "Runmesh Runner $VERSION installed and enrolled."
 `;
 
@@ -554,7 +554,7 @@ __VERIFIER__
   try { $EnrollmentCode = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($CodePointer) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($CodePointer) }
   if ([string]::IsNullOrWhiteSpace($EnrollmentCode)) { throw 'An enrollment code is required.' }
   $EnrollmentAttempted = $true
-  $EnrollmentCode | & $Runner.FullName enroll --profile $Profile --server $EnrollmentUrl --code-stdin
+  $EnrollmentCode | & $Runner.FullName enroll --profile $Profile --server $EnrollmentUrl --code-stdin --execution-mode privileged_host --confirm-privileged-host
   $EnrollmentCode = $null
   $SecureCode = $null
   if ($LASTEXITCODE -ne 0) { throw 'Enrollment failed.' }
@@ -563,7 +563,7 @@ __VERIFIER__
   Move-Item -LiteralPath $CurrentNew -Destination $CurrentRoot
   $CurrentRunner = Join-Path $CurrentRoot 'coding-runner.cmd'
   $ServiceAttempted = $true
-  & $CurrentRunner install --profile $Profile --executable-path $CurrentRunner
+  & $CurrentRunner install --profile $Profile --execution-mode privileged_host --confirm-privileged-host --executable-path $CurrentRunner
   if ($LASTEXITCODE -ne 0) { throw 'Service installation failed after enrollment.' }
   $Succeeded = $true
   Write-Output "Runmesh Runner $Version installed and enrolled."

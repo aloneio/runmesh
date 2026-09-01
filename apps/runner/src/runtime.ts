@@ -261,10 +261,10 @@ export class RunnerRuntime {
       case "exec.start": return this.startJob(params);
       case "exec.run": return this.run(params);
       case "job.list": this.assertJobsReadable(params.workspace_id); return this.jobs.listReconciled(params);
-      case "job.get": { const job = this.jobs.get(params.job_id); this.policy.assertPermission(job.workspace_id, "read"); return this.jobs.getReconciled(params.job_id); }
-      case "job.logs": { const job = this.jobs.get(params.job_id); this.policy.assertPermission(job.workspace_id, "read"); return this.jobs.logs(job.job_id, params); }
-      case "job.cancel": { const job = this.jobs.get(params.job_id); this.assertJobControl(job.workspace_id); return this.jobs.cancel(job.job_id); }
-      case "job.input": { const job = this.jobs.get(params.job_id); this.assertJobControl(job.workspace_id); return this.jobs.input(job.job_id, params.data, params.close_stdin === true); }
+      case "job.get": { const job = this.jobs.get(params.job_id); assertExpectedJobWorkspace(params, job.workspace_id); this.policy.assertPermission(job.workspace_id, "read"); return this.jobs.getReconciled(params.job_id); }
+      case "job.logs": { const job = this.jobs.get(params.job_id); assertExpectedJobWorkspace(params, job.workspace_id); this.policy.assertPermission(job.workspace_id, "read"); return this.jobs.logs(job.job_id, params); }
+      case "job.cancel": { const job = this.jobs.get(params.job_id); assertExpectedJobWorkspace(params, job.workspace_id); this.assertJobControl(job.workspace_id); return this.jobs.cancel(job.job_id); }
+      case "job.input": { const job = this.jobs.get(params.job_id); assertExpectedJobWorkspace(params, job.workspace_id); this.assertJobControl(job.workspace_id); return this.jobs.input(job.job_id, params.data, params.close_stdin === true); }
       default: throw new RpcRuntimeError("method_not_found", `Unsupported method: ${method}`);
     }
   }
@@ -309,5 +309,13 @@ export { RpcRuntimeError } from "./errors.js";
 export function rpcError(error: unknown): { code: string; message: string; details?: Record<string, unknown> | undefined } { if (error instanceof Error && error.message === "stale_policy") return { code: "stale_policy", message: "RPC policy revision is stale" }; if (error instanceof PathPolicyError || error instanceof RpcRuntimeError) return { code: error.code, message: error.message.slice(0, 4_096), ...(error instanceof RpcRuntimeError && error.details === undefined ? {} : { details: (error as RpcRuntimeError).details }) }; return { code: "invalid_request", message: (error instanceof Error ? error.message : "request failed").slice(0, 4_096) || "request failed" }; }
 function object(value: unknown): Record<string, unknown> { if (typeof value !== "object" || value === null || Array.isArray(value)) throw new RpcRuntimeError("invalid_params", "params must be an object"); return value as Record<string, unknown>; }
 function positiveInteger(value: unknown, field: string): number { if (!Number.isSafeInteger(value) || (value as number) < 1) throw new RpcRuntimeError("invalid_params", `${field} must be a positive integer`); return value as number; }
+/** Worker-side job authorization is bound to a Registry workspace snapshot.
+ * New Workers send this fence on job operations; accepting an omitted field
+ * keeps older protocol peers compatible, while a malformed or mismatched
+ * value fails before cancel/input can cause a cross-workspace side effect. */
+function assertExpectedJobWorkspace(params: Record<string, unknown>, actualWorkspaceId: string): void {
+  if (!Object.prototype.hasOwnProperty.call(params, "expected_workspace_id")) return;
+  if (typeof params.expected_workspace_id !== "string" || params.expected_workspace_id !== actualWorkspaceId) throw new RpcRuntimeError("permission_denied", "job workspace does not match request");
+}
 function isActive(job: JobRecord): boolean { return job.status === "queued" || job.status === "running" || job.status === "cancelling"; }
 function delay(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms))); }
