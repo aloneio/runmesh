@@ -147,6 +147,27 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
       expect(instance.getRunner("mode-runner")).toMatchObject({ configured_execution_mode: "dedicated_user" });
     });
   });
+  it("rejects stale enrollment mode writes across concurrent changes and recreated lifecycles", async () => {
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName(`runner-execution-mode-cas-${crypto.randomUUID()}`)); const now = Date.now();
+    await runInDurableObject(registry, (instance, state) => {
+      const runnerId = "mode-cas-runner";
+      expect(instance.addRunner(runnerId, "CAS runner", now, `runner-create-${crypto.randomUUID()}`, "dedicated_user")).toBeDefined();
+      const firstLifecycle = state.storage.sql.exec<{ lifecycle_id: string }>("SELECT lifecycle_id FROM runners WHERE runner_id = ?", runnerId).toArray()[0]?.lifecycle_id;
+      expect(firstLifecycle).toBeDefined();
+      // A guarded transition is allowed when the expected trusted mode still
+      // matches, but an old form cannot subsequently overwrite the new mode.
+      expect(instance.createRunnerEnrollment(runnerId, randomBase64Url(), "a".repeat(64), now + 1, "privileged_host", true, "dedicated_user", firstLifecycle)).toBeDefined();
+      expect(instance.createRunnerEnrollment(runnerId, randomBase64Url(), "b".repeat(64), now + 2, "dedicated_user", false, "dedicated_user", firstLifecycle)).toBeUndefined();
+      expect(instance.getRunner(runnerId)).toMatchObject({ configured_execution_mode: "privileged_host" });
+
+      // A runner-id can be recreated after deletion.  A pending enrollment
+      // from the old lifecycle must never write a code or mode to the new row.
+      expect(instance.deleteRunner(runnerId, runnerId, now + 3)).toBe(true);
+      expect(instance.addRunner(runnerId, "CAS runner recreated", now + 4, `runner-create-${crypto.randomUUID()}`, "dedicated_user")).toBeDefined();
+      expect(instance.createRunnerEnrollment(runnerId, randomBase64Url(), "c".repeat(64), now + 5, "privileged_host", true, "privileged_host", firstLifecycle)).toBeUndefined();
+      expect(instance.getRunner(runnerId)).toMatchObject({ configured_execution_mode: "dedicated_user" });
+    });
+  });
   it("migrates display names, distinguishes revoke from delete, and cleans selected clients", async () => {
     const registry = env.REGISTRY.get(env.REGISTRY.idFromName(`runner-registry-${crypto.randomUUID()}`)); const now = Date.now();
     await runInDurableObject(registry, (instance) => {
@@ -479,10 +500,26 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     const explicitPrivileged = await submit(`https://worker.test/admin/runners/${privilegedId}/enrollment`, { csrf_token: csrf, execution_mode: "privileged_host" }, adminJar);
     expect(explicitPrivileged.status).toBe(200);
 
+    // A deliberate dedicated_user -> privileged_host migration must still
+    // succeed: the CAS compares against the trusted mode observed before the
+    // action, not against the requested destination mode.
+    const dedicatedId = `mode-dedicated-${crypto.randomUUID().replaceAll("-", "")}`;
+    const dedicatedCreated = await submit(`https://worker.test/admin/runners`, {
+      csrf_token: csrf, display_name: "Dedicated migration", runner_id: dedicatedId, execution_mode: "dedicated_user",
+    }, adminJar);
+    expect(dedicatedCreated.status).toBe(200);
+    const migrated = await submit(`https://worker.test/admin/runners/${dedicatedId}/enrollment`, {
+      csrf_token: csrf, execution_mode: "privileged_host", confirm_privileged_host: "true",
+    }, adminJar);
+    expect(migrated.status).toBe(200);
+    await expect(runInDurableObject(registry, (instance) => instance.getRunner(dedicatedId))).resolves.toMatchObject({ configured_execution_mode: "privileged_host" });
+
     // A legacy row has no trusted mode and therefore cannot be migrated by an
     // old form that omitted the administrator's explicit selection.
     const legacyId = `mode-legacy-${crypto.randomUUID().replaceAll("-", "")}`;
     await runInDurableObject(registry, (instance) => { expect(instance.registerRunner(legacyId, "a".repeat(64), Date.now())).toBe(true); });
+    const legacyPage = await SELF.fetch("https://worker.test/admin/runners", { headers: { cookie: cookies(adminJar) } });
+    expect(await legacyPage.text()).toContain("Choose execution mode (required for legacy Runner)");
     const legacyAction = await submit(`https://worker.test/admin/runners/${legacyId}/enrollment`, { csrf_token: csrf }, adminJar);
     expect(legacyAction.status).toBe(400);
     await expect(runInDurableObject(registry, (instance) => instance.getRunner(legacyId))).resolves.toMatchObject({ configured_execution_mode: null });
