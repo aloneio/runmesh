@@ -1486,6 +1486,7 @@ function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly 
   const runnerId = typeof runner.runner_id === "string" ? runner.runner_id : "unknown";
   const displayName = typeof runner.display_name === "string" ? runner.display_name : runnerId;
   const state = typeof runner.state === "string" ? runner.state : "offline";
+  const metadata = record(runner.metadata);
   const publicInfo = record(runner.public_info);
   const tools = record(environment?.tools);
   const toolRows = tools === undefined ? `<p class="muted empty-desc">Environment details unavailable while offline.</p>` : `<div class="tool-grid">${Object.entries(tools).map(([name, value]) => { const item = record(value); const isAvail = item?.available === true; return `<div class="tool-item"><div class="tool-name-row"><strong class="tool-name">${escapeHtml(name)}</strong>${isAvail ? `<span class="badge online"><span class="status-dot online"></span>Available</span>` : `<span class="badge offline"><span class="status-dot offline"></span>Unavailable</span>`}</div>${isAvail && typeof item?.version === "string" ? `<span class="tool-version mono">${escapeHtml(item.version)}</span>` : ""}</div>`; }).join("")}</div>`;
@@ -1501,6 +1502,9 @@ function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly 
   const permissions = record(runner.runner_permissions);
   const desiredRevision = typeof runner.desired_policy_revision === "number" ? String(runner.desired_policy_revision) : "0";
   const appliedRevision = typeof runner.applied_policy_revision === "number" ? String(runner.applied_policy_revision) : "—";
+  const executionMode = typeof metadata?.execution_mode === "string" ? metadata.execution_mode : "migration_required";
+  const privilegeState = typeof metadata?.privilege_state === "string" ? metadata.privilege_state : "unknown";
+  const serviceIdentity = typeof metadata?.service_identity === "string" ? metadata.service_identity : "Unknown";
   return `<section class="detail-header">
     <div class="detail-title-group">
       <div class="detail-title-row">
@@ -1551,6 +1555,12 @@ function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly 
         <dd class="mono">${escapeHtml(typeof publicInfo?.hostname === "string" ? publicInfo.hostname : "Unknown")}</dd>
         <dt>Runner version</dt>
         <dd class="mono">${escapeHtml(currentVersion)}</dd>
+        <dt>Execution mode</dt>
+        <dd class="mono">${escapeHtml(executionMode)}</dd>
+        <dt>Service identity</dt>
+        <dd class="mono">${escapeHtml(serviceIdentity)}</dd>
+        <dt>Privilege state</dt>
+        <dd class="mono">${escapeHtml(privilegeState)}</dd>
         <dt>Stable/latest version</dt>
         <dd class="mono">${escapeHtml(latestVersion)}</dd>
         <dt>Protocol compatibility</dt>
@@ -3272,7 +3282,7 @@ read -r -s RUNMESH_ENROLLMENT_CODE
 printf '\\n' >&2
 printf '%s\\n' "$RUNMESH_ENROLLMENT_CODE" | sudo "$RUNNER" enroll --server ${shellServer} --code-stdin
 unset RUNMESH_ENROLLMENT_CODE
-sudo "$RUNNER" install --executable-path "$RUNNER"
+sudo "$RUNNER" install --execution-mode privileged_host --confirm-privileged-host --executable-path "$RUNNER"
 sudo "$RUNNER" doctor --json`,
     macos: `set -euo pipefail
 RUNNER=/opt/runmesh/current/bin/coding-runner # replace with the verified absolute path if different
@@ -3282,7 +3292,7 @@ read -r -s RUNMESH_ENROLLMENT_CODE
 printf '\\n' >&2
 printf '%s\\n' "$RUNMESH_ENROLLMENT_CODE" | sudo "$RUNNER" enroll --server ${shellServer} --code-stdin
 unset RUNMESH_ENROLLMENT_CODE
-sudo "$RUNNER" install --executable-path "$RUNNER"
+sudo "$RUNNER" install --execution-mode privileged_host --confirm-privileged-host --executable-path "$RUNNER"
 sudo "$RUNNER" doctor --json`,
     windows: `# Run this in an elevated PowerShell session
 $ErrorActionPreference = 'Stop'
@@ -3290,12 +3300,12 @@ $RunnerPath = 'C:\\Program Files\\Runmesh\\current\\coding-runner.cmd' # replace
 if (-not (Test-Path -LiteralPath $RunnerPath -PathType Leaf)) { throw 'Set RunnerPath to the verified coding-runner.cmd path.' }
 $EnrollmentCode = Read-Host 'One-time enrollment code'
 try {
-  $EnrollmentCode | & $RunnerPath enroll --server ${powershellServer} --code-stdin
+  $EnrollmentCode | & $RunnerPath enroll --server ${powershellServer} --code-stdin --execution-mode privileged_host --confirm-privileged-host
   if ($LASTEXITCODE -ne 0) { throw 'Runner enrollment failed.' }
 } finally {
   Remove-Variable EnrollmentCode -ErrorAction SilentlyContinue
 }
-& $RunnerPath install --executable-path $RunnerPath
+& $RunnerPath install --execution-mode privileged_host --confirm-privileged-host --executable-path $RunnerPath
 if ($LASTEXITCODE -ne 0) { throw 'Runner service installation failed.' }
 & $RunnerPath doctor --json
 if ($LASTEXITCODE -ne 0) { throw 'Runner doctor check failed.' }`,
@@ -3304,8 +3314,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Runner doctor check failed.' }`,
   const tabs = Object.entries(commands).map(([platform, value], index) => `<button role="tab" id="tab-${platform}" aria-controls="panel-${platform}" aria-selected="${index === 0 ? "true" : "false"}" tabindex="${index === 0 ? "0" : "-1"}" data-tab="${platform}">${platform === "macos" ? "macOS" : platform === "windows" ? "Windows" : "Linux"}</button><section role="tabpanel" id="panel-${platform}" aria-labelledby="tab-${platform}" ${index === 0 ? "" : "hidden"} data-panel="${platform}"><pre><code>${escapeHtml(value)}</code></pre><button type="button" class="button secondary" data-copy="${escapeHtml(value)}">Copy ${bootstrap ? "installer" : "enrollment and install"} command</button></section>`).join("");
   const title = bootstrap ? "Signed fixed-preview enrollment" : "Manual portable-artifact enrollment";
   const instruction = bootstrap
-    ? "The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments."
-    : "Manual Runner enrollment and install uses a verified portable artifact. The fixed signed hosted release is not enabled on this deployment. Install the artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. The install step runs only after enrollment succeeds.";
+    ? "The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. The recommended execution mode is privileged_host; dedicated_user stays available for explicit isolation cases and privileged_host still requires an explicit --confirm-privileged-host acknowledgement in the Runner CLI."
+    : "Manual Runner enrollment and install uses a verified portable artifact. The fixed signed hosted release is not enabled on this deployment. Install the artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. The install step runs only after enrollment succeeds. The recommended execution mode is privileged_host; dedicated_user stays available for explicit isolation cases and privileged_host still requires an explicit --confirm-privileged-host acknowledgement in the Runner CLI.";
   return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body enrollment-body"><header class="enrollment-header"><a class="enrollment-brand" href="/admin" aria-label="Runmesh · Agent Control Plane">${brandLogo("enrollment-brand-logo")}</a><div class="enrollment-header-actions">${languageSwitch()}</div></header><main class="shell enrollment-shell"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><div class="dialog-icon-row">${meshMarkSvg("dialog-mark")}</div><p class="eyebrow">${title}</p><h1 id="enrollment-title">Enroll Runner</h1><p class="lede">${instruction} This one-time code expires in 30 minutes and will not be shown again.</p></div></section><div class="enrollment-meta-box"><span class="form-stat-label">Target Runner ID</span><span class="mono">${escapeHtml(runnerId)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">One-time enrollment code</span><code class="mono" data-no-i18n>${escapeHtml(code)}</code><span class="muted font-12">Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.</span></div><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.</p><div class="top-actions dialog-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
 }
   function secretCreatedPage(title: string, url: string): string { return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${escapeHtml(title)}</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card secret-card"><div class="secret-brand-row">${meshMarkSvg("secret-mesh-mark")}<span class="brand-name">Runmesh</span></div><p class="brand-kicker">Runmesh</p><h1>${escapeHtml(title)}</h1><p class="lede">Copy this URL now. It will not be shown again.</p><code>${escapeHtml(url)}</code><div class="secret-actions"><button type="button" class="button" data-copy="${escapeHtml(url)}">Copy MCP URL</button><a class="button secondary" href="/admin">Back to admin</a></div></section></main>${adminScript()}</body></html>`; }

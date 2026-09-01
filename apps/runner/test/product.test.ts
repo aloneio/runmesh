@@ -215,6 +215,21 @@ describe("runner product profile and enrollment", () => {
       await expect(runEnrollCli(["--server", "https://example.test/runner/enroll", "--code", code, "--code-stdin"], { store: test.store, readStdin: async () => code })).rejects.toThrow("cannot be used together");
     } finally { await test.cleanup(); }
   });
+  it("passes injected enrollment execution mode and privileged-host confirmation through the main CLI", async () => {
+    const test = await fixture();
+    try {
+      const lines: string[] = [];
+      await runCli(["enroll", "--server", "https://example.test/runner/enroll", "--code", "b".repeat(43), "--json"], {
+        store: test.store,
+        stdout: (line) => lines.push(line),
+        executionMode: "privileged_host",
+        confirmPrivilegedHost: true,
+        fetch: async () => new Response(JSON.stringify({ runner_id: "runner-privileged", server_url: "https://example.test/runner/connect", token: "privileged-token-0123456789" }), { status: 200 }),
+      });
+      expect(lines.join("\n")).toContain("runner-privileged");
+      await expect(test.store.load()).resolves.toMatchObject({ execution_mode: "privileged_host", runner_id: "runner-privileged" });
+    } finally { await test.cleanup(); }
+  });
   it("removes the profile when post-enrollment activation fails after irreversible redemption", async () => {
     const test = await fixture();
     try {
