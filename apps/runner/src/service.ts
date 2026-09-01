@@ -17,6 +17,9 @@ export interface ServiceManifest {
   readonly path: string;
   readonly content: string;
   readonly hash: string;
+  /** Operator-selected dedicated identity, when present in a managed unit. */
+  readonly serviceUser?: string;
+  readonly serviceGroup?: string;
 }
 export interface ServiceLayout {
   readonly installRoot: string;
@@ -63,9 +66,22 @@ export interface ServiceCommandExecutor {
 export interface ServiceRuntimeStatus {
   readonly installed: boolean;
   readonly active: boolean;
+  /**
+   * Whether a native registration/unit exists, independent from its enabled
+   * or active state. `undefined` means the adapter could not prove either
+   * answer (or is a legacy injected adapter); callers must fail closed when
+   * replacing an unmanaged registration.
+   */
+  readonly registered?: boolean;
   /** Identity reported by the host service manager, when its native query exposes it. */
   readonly identity?: string;
   readonly detail?: string;
+  /**
+   * False means the native probe could not distinguish an absent service from
+   * a query/tool/permission failure.  Omitted is retained for injected legacy
+   * adapters and is treated as reliable by callers for compatibility.
+   */
+  readonly reliable?: boolean;
 }
 export interface ServiceProvisioningStatus {
   readonly identity: string;
@@ -86,6 +102,12 @@ export interface ServiceManagerAdapter {
   readonly mode: ServiceMode;
   readonly install: (manifest: ServiceManifest) => Promise<void>;
   readonly stop: (manifest: ServiceManifest) => Promise<void>;
+  /**
+   * Disable a native registration without deleting its managed definition.
+   * This is optional for injected/legacy adapters; rollback uses it when a
+   * pre-existing unit was registered but deliberately disabled.
+   */
+  readonly disable?: (manifest: ServiceManifest) => Promise<void>;
   readonly restart: (manifest: ServiceManifest) => Promise<void>;
   readonly uninstall: (manifest: ServiceManifest) => Promise<void>;
   /** Optional injectable status probe; custom managers may omit it. */
@@ -125,7 +147,16 @@ export function dedicatedServiceIdentity(options: Pick<ServiceAdapterOptions, "s
 export function serviceLayout(options: ServiceAdapterOptions = {}): ServiceLayout {
   const platform = options.platform ?? currentServicePlatform();
   const mode = serviceMode(options);
-  const home = options.home ?? homedir();
+  const configuredHome = options.home ?? homedir();
+  // Rendering a target platform is also used by cross-platform release and
+  // migration tests.  Do not splice a Windows host home (or a POSIX host home)
+  // into the other platform's path grammar and then emit a relative service
+  // executable.  An explicit `home` always wins; otherwise use a harmless,
+  // target-shaped placeholder when the host spelling is incompatible; a
+  // compatible explicit home is preserved verbatim.
+  const home = platform === "win32"
+    ? isWindowsAbsolute(configuredHome) ? configuredHome : "C:\\Users\\runmesh"
+    : configuredHome.startsWith("/") ? configuredHome : platform === "darwin" ? "/Users/runmesh" : "/home/runmesh";
   // Render a target platform's paths even when the CLI is being exercised on a
   // different host (for example, release tests render Linux manifests on
   // Windows). Using the host `join` here would produce backslashes in POSIX
@@ -218,7 +249,7 @@ export function renderService(options: ServiceAdapterOptions = {}): ServiceManif
   const hash = hashContent(body);
   const marker = `${MARKER}:${hash}`;
   const content = platform === "linux" ? `# ${marker}\n${body}` : `<!-- ${marker} -->\n${body}`;
-  return { platform, mode, executionMode, path: layout.manifestPath, content, hash };
+  return { platform, mode, executionMode, path: layout.manifestPath, content, hash, serviceUser: identity.user, serviceGroup: identity.group };
 }
 
 function serviceInvocation(options: ServiceAdapterOptions, layout: ServiceLayout, profile: string, stateDir: string, platform: ServicePlatform): readonly string[] {
@@ -265,9 +296,109 @@ function renderWindowsTask(mode: ServiceMode, executionMode: ExecutionMode, invo
 
 /** Only manifests with an intact marker and content hash are considered ours. */
 export function isManagedService(content: string): boolean {
-  const match = /(?:#|<!--)\s*runmesh-runner-managed:([0-9a-f]{8})\s*(?:-->)?\n/.exec(content);
+  // The marker is an ownership boundary, not merely an annotation.  Require
+  // it to be the first line so an arbitrary preamble cannot be smuggled in
+  // front of a valid hash and then be treated as a native definition we own.
+  const match = /^(?:#\s*|<!--\s*)runmesh-runner-managed:([0-9a-f]{8})\s*(?:-->)?\r?\n/u.exec(content);
   if (match === null || match[1] === undefined) return false;
   return hashContent(content.slice(match[0].length)) === match[1];
+}
+
+/**
+ * Attach the metadata of a rendered manifest to an already validated managed
+ * definition without re-rendering its body.  This is used for idempotent
+ * installs and rollback so operator-supplied executable paths and service
+ * options remain byte-for-byte intact.
+ */
+export function managedServiceManifestFromContent(manifest: ServiceManifest, content: string, executionMode: ExecutionMode = manifest.executionMode): ServiceManifest {
+  if (executionMode !== "dedicated_user" && executionMode !== "privileged_host") throw new Error("execution mode must be dedicated_user or privileged_host");
+  if (!isManagedService(content)) throw new Error("cannot use an unmanaged service manifest");
+  const marker = /^(?:#\s*|<!--\s*)runmesh-runner-managed:[0-9a-f]{8}\s*(?:-->)?\r?\n/u.exec(content);
+  if (marker === null) throw new Error("managed service manifest is malformed");
+  const body = content.slice(marker[0].length);
+  const identity = executionMode === "dedicated_user" ? dedicatedIdentityFromContent(manifest.platform, body) : {};
+  return { ...manifest, executionMode, content, hash: hashContent(body), ...identity };
+}
+
+/**
+ * Reuse an existing managed service definition while changing only its
+ * execution identity.  Installers from older releases may have an explicit
+ * executable path or a custom dedicated account; re-rendering from defaults
+ * during migration would silently discard those operator choices.  The
+ * manifest marker is checked before this transformation, and identity values
+ * are restricted to the same account grammar used by the renderer.
+ */
+export function rewriteManagedServiceExecutionMode(manifest: ServiceManifest, existingContent: string, executionMode: ExecutionMode): ServiceManifest {
+  if (manifest.mode !== "system") throw new Error("execution-mode rewrites require a system service manifest");
+  if (executionMode !== "dedicated_user" && executionMode !== "privileged_host") throw new Error("execution mode must be dedicated_user or privileged_host");
+  if (!isManagedService(existingContent)) throw new Error("cannot rewrite an unmanaged service manifest");
+  const marker = /^(?:#\s*|<!--\s*)runmesh-runner-managed:[0-9a-f]{8}\s*(?:-->)?\r?\n/u.exec(existingContent);
+  if (marker === null) throw new Error("managed service manifest is malformed");
+  const body = existingContent.slice(marker[0].length);
+  const newline = body.includes("\r\n") ? "\r\n" : "\n";
+  let rewritten = body;
+  if (manifest.platform === "linux") rewritten = rewriteSystemdIdentity(body, executionMode, newline);
+  else if (manifest.platform === "darwin") rewritten = rewriteLaunchdIdentity(body, executionMode);
+  else rewritten = rewriteWindowsIdentity(body, executionMode);
+  const hash = hashContent(rewritten);
+  const content = manifest.platform === "linux" ? `# ${MARKER}:${hash}${newline}${rewritten}` : `<!-- ${MARKER}:${hash} -->${newline}${rewritten}`;
+  const identity = executionMode === "dedicated_user" ? dedicatedIdentityFromContent(manifest.platform, rewritten) : {};
+  return { ...manifest, executionMode, content, hash, ...identity };
+}
+
+function dedicatedIdentityFromContent(platform: ServicePlatform, body: string): { readonly serviceUser?: string; readonly serviceGroup?: string } {
+  if (platform === "linux") {
+    const lines = body.split(/\r?\n/u);
+    const user = serviceIdentityFromLine(lines, "User");
+    const group = serviceIdentityFromLine(lines, "Group") ?? user;
+    if (user !== undefined && group !== undefined && safeServiceIdentity(user) && safeServiceIdentity(group)) return { serviceUser: user, serviceGroup: group };
+    return {};
+  }
+  if (platform === "darwin") {
+    const user = /<key>UserName<\/key><string>([^<]*)<\/string>/u.exec(body)?.[1];
+    return user !== undefined && safeServiceIdentity(user) ? { serviceUser: user, serviceGroup: user } : {};
+  }
+  return {};
+}
+
+function rewriteSystemdIdentity(body: string, executionMode: ExecutionMode, newline: string): string {
+  const lines = body.split(/\r?\n/u);
+  const user = serviceIdentityFromLine(lines, "User") ?? DEDICATED_SERVICE_USER;
+  const group = serviceIdentityFromLine(lines, "Group") ?? user;
+  if (!safeServiceIdentity(user) || !safeServiceIdentity(group)) throw new Error("managed service manifest has an invalid dedicated service identity");
+  const filtered = lines.filter((line) => !/^\s*(?:User|Group)\s*=/u.test(line));
+  if (executionMode === "dedicated_user") {
+    const typeIndex = filtered.findIndex((line) => /^\s*Type\s*=\s*simple\s*$/u.test(line));
+    if (typeIndex < 0) throw new Error("managed systemd manifest is missing its service section");
+    filtered.splice(typeIndex + 1, 0, `User=${user}`, `Group=${group}`);
+  }
+  return filtered.join(newline);
+}
+
+function serviceIdentityFromLine(lines: readonly string[], key: "User" | "Group"): string | undefined {
+  const line = lines.find((value) => new RegExp(`^\\s*${key}\\s*=`, "u").test(value));
+  if (line === undefined) return undefined;
+  const value = line.replace(new RegExp(`^\\s*${key}\\s*=\\s*`, "u"), "").trim();
+  return value.length === 0 ? undefined : value;
+}
+
+function rewriteLaunchdIdentity(body: string, executionMode: ExecutionMode): string {
+  const match = /<key>UserName<\/key><string>([^<]*)<\/string>/u.exec(body);
+  const existing = match?.[1];
+  const user = existing === undefined || existing.length === 0 ? DEDICATED_SERVICE_USER : existing;
+  if (!safeServiceIdentity(user)) throw new Error("managed launchd manifest has an invalid dedicated service identity");
+  const withoutIdentity = body.replace(/<key>UserName<\/key><string>[^<]*<\/string>/gu, "");
+  if (executionMode === "privileged_host") return withoutIdentity;
+  const label = /(<key>Label<\/key><string>[^<]*<\/string>)/u;
+  if (!label.test(withoutIdentity)) throw new Error("managed launchd manifest is missing its label");
+  return withoutIdentity.replace(label, `$1<key>UserName</key><string>${escapeXml(user)}</string>`);
+}
+
+function rewriteWindowsIdentity(body: string, executionMode: ExecutionMode): string {
+  const userId = executionMode === "privileged_host" ? "SYSTEM" : "NT AUTHORITY\\LOCAL SERVICE";
+  const runLevel = executionMode === "privileged_host" ? "HighestAvailable" : "LeastPrivilege";
+  if (!/<UserId>[^<]*<\/UserId>/u.test(body) || !/<RunLevel>[^<]*<\/RunLevel>/u.test(body)) throw new Error("managed Windows task manifest is missing its principal");
+  return body.replace(/<UserId>[^<]*<\/UserId>/u, `<UserId>${userId}</UserId>`).replace(/<RunLevel>[^<]*<\/RunLevel>/u, `<RunLevel>${runLevel}</RunLevel>`);
 }
 
 export const hostServiceManifestFilesystem: ServiceManifestFilesystem = {
@@ -302,7 +433,7 @@ export async function installServiceManifest(manifest: ServiceManifest, filesyst
   const existing = await filesystem.read(manifest.path);
   if (existing !== undefined && !isManagedService(existing)) throw new Error(`refusing to overwrite unmanaged service manifest: ${manifest.path}`);
   const changed = existing !== manifest.content;
-  await filesystem.write(manifest.path, manifest.content);
+  if (changed) await filesystem.write(manifest.path, manifest.content);
   return changed;
 }
 export async function removeServiceManifest(manifest: ServiceManifest, filesystem: ServiceManifestFilesystem = hostServiceManifestFilesystem): Promise<boolean> {
@@ -373,17 +504,55 @@ export function createServiceProvisioner(options: ServiceProvisionerOptions = {}
   return {
     platform,
     provision: async (manifest, profilePath) => {
-      if (manifest.mode !== "system" || manifest.executionMode !== "dedicated_user") return { identity: manifest.executionMode === "privileged_host" ? privilegedIdentity(platform) : "interactive", profileSecured: false };
+      if (manifest.mode !== "system") return { identity: "interactive", profileSecured: true };
       const layout = serviceLayout({ platform, mode: "system" });
-      if (!isDefaultSystemProfile(layout, profilePath)) throw new Error(`dedicated system Runner profiles must be stored at ${serviceProfilePath(layout)}`);
+      // A machine service must never be pointed at an operator-selected
+      // profile path.  In particular, a SYSTEM/root service loading a file
+      // from a user-controlled directory would turn that directory into a
+      // durable privilege-escalation boundary.  Keep the canonical profile
+      // location for both execution modes; user services can still use an
+      // explicit profile through the foreground CLI.
+      if (!isDefaultSystemProfile(layout, profilePath)) throw new Error(`system Runner profiles must be stored at ${serviceProfilePath(layout)}`);
       if (platform === "linux") {
-        const identity = dedicatedServiceIdentity();
+        if (manifest.executionMode === "privileged_host") {
+          // The privileged unit intentionally has no User=/Group= directive,
+          // so all Runmesh-owned service state must remain root-only.  Do not
+          // create or chown anything to the restricted `runmesh` account on
+          // this path; doing so would both misreport identity and strand a
+          // root service from its credential.
+          await required("mkdir", ["-p", layout.installRoot, layout.configRoot, layout.stateRoot, layout.logRoot]);
+          await required("chown", ["root:root", layout.installRoot, layout.configRoot, layout.stateRoot, layout.logRoot]);
+          // A root service must not execute a package tree writable by a
+          // non-root principal. Tighten every real package directory below
+          // the Runmesh install root without following symlinks or changing
+          // executable bits supplied by the verified package. The portable
+          // installer creates `current` as a root-owned link to a version
+          // directory inside this root; refusing to follow links here keeps a
+          // malformed link from redirecting chown/chmod outside Runmesh.
+          await securePosixInstallTree(required, layout.installRoot, "root:root", platform);
+          await required("chmod", ["0755", layout.installRoot]);
+          await required("chmod", ["0700", layout.configRoot, layout.stateRoot, layout.logRoot]);
+          await securePosixTree(required, layout.configRoot, "root:root", "0700", "0600", platform);
+          await securePosixTree(required, layout.stateRoot, "root:root", "0700", "0600", platform);
+          await securePosixTree(required, layout.logRoot, "root:root", "0700", "0600", platform);
+          if ((await execute("test", ["-f", profilePath])).exitCode === 0) {
+            await required("chown", ["root:root", profilePath]);
+            await required("chmod", ["0600", profilePath]);
+            return { identity: "root", profileSecured: true };
+          }
+          return { identity: "root", profileSecured: false, detail: "profile is not present yet; enroll before installing the service" };
+        }
+        const identity = dedicatedServiceIdentity(manifest);
         if ((await execute("getent", ["group", identity.group])).exitCode !== 0) await required("groupadd", ["--system", identity.group]);
         if ((await execute("id", ["-u", identity.user])).exitCode !== 0) await required("useradd", ["--system", "--gid", identity.group, "--no-create-home", "--shell", "/usr/sbin/nologin", identity.user]);
         await required("mkdir", ["-p", layout.installRoot, layout.configRoot, layout.stateRoot, layout.logRoot]);
         await required("chown", ["root:root", layout.installRoot]); await required("chmod", ["0755", layout.installRoot]);
+        await securePosixInstallTree(required, layout.installRoot, "root:root", platform);
         await required("chown", [`root:${identity.group}`, layout.configRoot]); await required("chmod", ["0750", layout.configRoot]);
         await required("chown", [`${identity.user}:${identity.group}`, layout.stateRoot, layout.logRoot]); await required("chmod", ["0750", layout.stateRoot, layout.logRoot]);
+        await securePosixTree(required, layout.configRoot, `root:${identity.group}`, "0750", "0640", platform);
+        await securePosixTree(required, layout.stateRoot, `${identity.user}:${identity.group}`, "0750", "0640", platform);
+        await securePosixTree(required, layout.logRoot, `${identity.user}:${identity.group}`, "0750", "0640", platform);
         if ((await execute("test", ["-f", profilePath])).exitCode === 0) {
           await required("chown", [`root:${identity.group}`, profilePath]); await required("chmod", ["0640", profilePath]);
           return { identity: identity.user, profileSecured: true };
@@ -391,23 +560,65 @@ export function createServiceProvisioner(options: ServiceProvisionerOptions = {}
         return { identity: identity.user, profileSecured: false, detail: "profile is not present yet; enroll before installing the service" };
       }
       if (platform === "darwin") {
-        const identity = dedicatedServiceIdentity();
+        if (manifest.executionMode === "privileged_host") {
+          await required("mkdir", ["-p", layout.installRoot, layout.configRoot, layout.stateRoot, layout.logRoot]);
+          await required("chown", ["root:wheel", layout.installRoot, layout.configRoot, layout.stateRoot, layout.logRoot]);
+          await securePosixInstallTree(required, layout.installRoot, "root:wheel", platform);
+          await required("chmod", ["0755", layout.installRoot]);
+          await required("chmod", ["0700", layout.configRoot, layout.stateRoot, layout.logRoot]);
+          await securePosixTree(required, layout.configRoot, "root:wheel", "0700", "0600", platform);
+          await securePosixTree(required, layout.stateRoot, "root:wheel", "0700", "0600", platform);
+          await securePosixTree(required, layout.logRoot, "root:wheel", "0700", "0600", platform);
+          if ((await execute("test", ["-f", profilePath])).exitCode === 0) {
+            await required("chown", ["root:wheel", profilePath]);
+            await required("chmod", ["0600", profilePath]);
+            return { identity: "root", profileSecured: true };
+          }
+          return { identity: "root", profileSecured: false, detail: "profile is not present yet; enroll before installing the service" };
+        }
+        const identity = dedicatedServiceIdentity(manifest);
         await provisionMacIdentity(execute, required, identity.user, identity.group);
         await required("mkdir", ["-p", layout.installRoot, layout.configRoot, layout.stateRoot, layout.logRoot]);
         await required("chown", ["root:wheel", layout.installRoot]); await required("chmod", ["0755", layout.installRoot]);
+        await securePosixInstallTree(required, layout.installRoot, "root:root", platform);
         await required("chown", [`root:${identity.group}`, layout.configRoot]); await required("chmod", ["0750", layout.configRoot]);
         await required("chown", [`${identity.user}:${identity.group}`, layout.stateRoot, layout.logRoot]); await required("chmod", ["0750", layout.stateRoot, layout.logRoot]);
+        await securePosixTree(required, layout.configRoot, `root:${identity.group}`, "0750", "0640", platform);
+        await securePosixTree(required, layout.stateRoot, `${identity.user}:${identity.group}`, "0750", "0640", platform);
+        await securePosixTree(required, layout.logRoot, `${identity.user}:${identity.group}`, "0750", "0640", platform);
         if ((await execute("test", ["-f", profilePath])).exitCode === 0) {
           await required("chown", [`root:${identity.group}`, profilePath]); await required("chmod", ["0640", profilePath]);
           return { identity: identity.user, profileSecured: true };
         }
         return { identity: identity.user, profileSecured: false, detail: "profile is not present yet; enroll before installing the service" };
       }
-      const script = windowsProvisionScript(layout, profilePath);
+      const script = windowsProvisionScript(layout, profilePath, manifest.executionMode);
       await required("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]);
-      return { identity: "NT AUTHORITY\\LOCAL SERVICE", profileSecured: true };
+      return { identity: manifest.executionMode === "privileged_host" ? "NT AUTHORITY\\SYSTEM" : "NT AUTHORITY\\LOCAL SERVICE", profileSecured: true };
     },
   };
+}
+
+/**
+ * Tighten existing Runmesh-owned trees without following symlinks or crossing
+ * filesystem mounts. Workspace roots are never passed to this helper.
+ */
+async function securePosixTree(required: (file: string, args: readonly string[]) => Promise<void>, root: string, owner: string, directoryMode: string, fileMode: string, platform: ServicePlatform = currentServicePlatform()): Promise<void> {
+  const noCrossDevice = platform === "darwin" ? "-x" : "-xdev";
+  await required("find", ["-P", root, noCrossDevice, "-type", "d", "-exec", "chown", owner, "{}", "+"]);
+  await required("find", ["-P", root, noCrossDevice, "-type", "f", "-exec", "chown", owner, "{}", "+"]);
+  await required("find", ["-P", root, noCrossDevice, "-type", "d", "-exec", "chmod", directoryMode, "{}", "+"]);
+  await required("find", ["-P", root, noCrossDevice, "-type", "f", "-exec", "chmod", fileMode, "{}", "+"]);
+}
+
+/** Remove group/other write access from the package tree while preserving
+ * the executable/read bits selected by the verified package itself. */
+async function securePosixInstallTree(required: (file: string, args: readonly string[]) => Promise<void>, root: string, owner: string, platform: ServicePlatform = currentServicePlatform()): Promise<void> {
+  const noCrossDevice = platform === "darwin" ? "-x" : "-xdev";
+  await required("find", ["-P", root, noCrossDevice, "-type", "d", "-exec", "chown", owner, "{}", "+"]);
+  await required("find", ["-P", root, noCrossDevice, "-type", "f", "-exec", "chown", owner, "{}", "+"]);
+  await required("find", ["-P", root, noCrossDevice, "-type", "d", "-exec", "chmod", "a-w", "{}", "+"]);
+  await required("find", ["-P", root, noCrossDevice, "-type", "f", "-exec", "chmod", "a-w", "{}", "+"]);
 }
 
 async function provisionMacIdentity(execute: (file: string, args: readonly string[]) => Promise<ServiceCommandResult>, required: (file: string, args: readonly string[]) => Promise<void>, user: string, group: string): Promise<void> {
@@ -434,24 +645,35 @@ function nextDarwinId(value: string | undefined): string {
   throw new Error("could not allocate a macOS service identity ID");
 }
 function parseDarwinId(value: string | undefined): string | undefined { const match = /\b(\d+)\b/u.exec(value ?? ""); return match?.[1]; }
-function windowsProvisionScript(layout: ServiceLayout, profilePath: string): string {
+function windowsProvisionScript(layout: ServiceLayout, profilePath: string, executionMode: ExecutionMode = "dedicated_user"): string {
   const quote = (value: string): string => `'${value.replaceAll("'", "''")}'`;
-  const acl = (path: string, grants: readonly string[]): string =>
+  const acl = (path: string, grants: readonly string[], recursive = true): string =>
     // Reset first so a pre-existing install cannot retain an explicit
     // Users/Everyone ACE that /grant:r alone would leave in place. Then turn
     // inheritance off and grant only the service identities we require.
-    `& icacls ${quote(path)} /reset | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'icacls reset failed' }; & icacls ${quote(path)} /inheritance:r /grant:r ${grants.map(quote).join(" ")} | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'icacls failed' }; `;
+    `& icacls ${quote(path)} /reset${recursive ? " /T" : ""} | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'icacls reset failed' }; & icacls ${quote(path)} /inheritance:r /grant:r ${grants.map(quote).join(" ")}${recursive ? " /T" : ""} | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'icacls failed' }; `;
   const roots = [layout.installRoot, layout.configRoot, layout.stateRoot, layout.logRoot].map(quote).join(", ");
-  const readGrants = ["BUILTIN\\Administrators:(OI)(CI)F", "NT AUTHORITY\\SYSTEM:(OI)(CI)F", "NT AUTHORITY\\LOCAL SERVICE:(OI)(CI)RX"];
-  const modifyGrants = ["BUILTIN\\Administrators:(OI)(CI)F", "NT AUTHORITY\\SYSTEM:(OI)(CI)F", "NT AUTHORITY\\LOCAL SERVICE:(OI)(CI)M"];
-  const profileGrants = ["BUILTIN\\Administrators:F", "NT AUTHORITY\\SYSTEM:F", "NT AUTHORITY\\LOCAL SERVICE:R"];
+  // SYSTEM is the only service principal needed by privileged_host.  Keep
+  // Local Service out of that ACL so a restricted account cannot read or
+  // tamper with the privileged Runner credential.  The dedicated path keeps
+  // its narrower read/modify grants for backwards compatibility.
+  const privileged = executionMode === "privileged_host";
+  const readGrants = privileged
+    ? ["BUILTIN\\Administrators:(OI)(CI)F", "NT AUTHORITY\\SYSTEM:(OI)(CI)F"]
+    : ["BUILTIN\\Administrators:(OI)(CI)F", "NT AUTHORITY\\SYSTEM:(OI)(CI)F", "NT AUTHORITY\\LOCAL SERVICE:(OI)(CI)RX"];
+  const modifyGrants = privileged
+    ? ["BUILTIN\\Administrators:(OI)(CI)F", "NT AUTHORITY\\SYSTEM:(OI)(CI)F"]
+    : ["BUILTIN\\Administrators:(OI)(CI)F", "NT AUTHORITY\\SYSTEM:(OI)(CI)F", "NT AUTHORITY\\LOCAL SERVICE:(OI)(CI)M"];
+  const profileGrants = privileged
+    ? ["BUILTIN\\Administrators:F", "NT AUTHORITY\\SYSTEM:F"]
+    : ["BUILTIN\\Administrators:F", "NT AUTHORITY\\SYSTEM:F", "NT AUTHORITY\\LOCAL SERVICE:R"];
   return `$ErrorActionPreference = 'Stop'; Set-StrictMode -Version Latest; $paths = @(${roots}); foreach ($path in $paths) { New-Item -ItemType Directory -Force -LiteralPath $path | Out-Null }; `
     + acl(layout.installRoot, readGrants)
     + acl(layout.configRoot, readGrants)
     + acl(layout.stateRoot, modifyGrants)
     + acl(layout.logRoot, modifyGrants)
     + `if (-not (Test-Path -LiteralPath ${quote(profilePath)} -PathType Leaf)) { throw 'runner profile is not present' }; `
-    + acl(profilePath, profileGrants);
+    + acl(profilePath, profileGrants, false);
 }
 
 /** Explicit, injectable machine service adapters. No adapter falls back to a user service. */
@@ -469,15 +691,48 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
       platform, mode,
       install: async () => { await execute("systemctl", [...prefix, "daemon-reload"]); await execute("systemctl", [...prefix, "enable", "--now", LINUX_SERVICE_NAME]); await execute("systemctl", [...prefix, "is-active", "--quiet", LINUX_SERVICE_NAME]); },
       stop: async () => execute("systemctl", [...prefix, "stop", LINUX_SERVICE_NAME]),
+      // Rollback of a previously disabled/masked/linked unit must not call
+      // install(), because install enables and starts the unit.  Probe the
+      // current enablement first and disable only an explicit enabled state;
+      // leaving masked/linked/static states untouched preserves the operator's
+      // registration rather than deleting or rewriting its symlink.
+      disable: async () => {
+        // The candidate manifest may already have been daemon-reloaded before
+        // its lifecycle command failed. Reload the restored bytes while the
+        // unit is still stopped, without changing its enablement state.
+        await execute("systemctl", [...prefix, "daemon-reload"]);
+        const current = await executor.execute("systemctl", [...prefix, "is-enabled", LINUX_SERVICE_NAME]);
+        const state = systemdEnablementState(current);
+        if (state === "enabled" || state === "enabled-runtime") {
+          await execute("systemctl", [...prefix, "disable", LINUX_SERVICE_NAME]);
+          return;
+        }
+        if (state === undefined) throw new Error("could not determine systemd unit enablement while restoring rollback state");
+      },
       restart: async () => execute("systemctl", [...prefix, "restart", LINUX_SERVICE_NAME]),
       uninstall: async () => execute("systemctl", [...prefix, "disable", "--now", LINUX_SERVICE_NAME]),
-      status: async () => {
+      status: async (manifest) => {
         const installed = await executor.execute("systemctl", [...prefix, "is-enabled", LINUX_SERVICE_NAME]);
         const active = await executor.execute("systemctl", [...prefix, "is-active", "--quiet", LINUX_SERVICE_NAME]);
         const user = await executor.execute("systemctl", [...prefix, "show", LINUX_SERVICE_NAME, "--property=User", "--value"]);
-        const reported = user.exitCode === 0 ? (user.stdout ?? "").trim() : "";
-        const identity = reported === "" ? "root" : reported;
-        return { installed: installed.exitCode === 0, active: active.exitCode === 0, identity, ...(active.stderr === undefined || active.stderr.trim() === "" ? {} : { detail: active.stderr.trim().slice(0, 512) }) };
+        const installedReliable = nativeProbeReliable(installed, "enabled");
+        const userReliable = nativeProbeReliable(user, "query");
+        // `systemctl is-active --quiet` returns exit 4 with no output for a
+        // missing unit on several systemd versions.  That code is otherwise
+        // ambiguous (for example when a D-Bus query fails), so accept it as
+        // a reliable inactive result only when the companion is-enabled/show
+        // probes independently report a known absent/disabled unit.
+        const activeReliable = nativeProbeReliable(active, "active", knownNonActiveUnit(installed) || knownNonActiveUnit(user));
+        const registered = systemdRegistrationState(installed);
+        const reliable = installedReliable && activeReliable && userReliable && registered !== undefined;
+        const userProbeSucceeded = user.exitCode === 0;
+        const reported = userProbeSucceeded ? safeServiceReportedIdentity((user.stdout ?? "").trim()) : undefined;
+        // An empty, successful `systemctl show User` means the native default
+        // (root) for a privileged system unit.  A failed identity probe is
+        // different from an empty value and must remain unknown so install /
+        // doctor cannot claim a privilege transition was verified.
+        const identity = userProbeSucceeded && reported === undefined && manifest.mode === "system" && manifest.executionMode === "privileged_host" ? "root" : reported;
+        return { installed: installed.exitCode === 0, active: active.exitCode === 0, ...(registered === undefined ? {} : { registered }), reliable, ...(identity === undefined ? {} : { identity }), ...(active.stderr === undefined || active.stderr.trim() === "" ? {} : { detail: active.stderr.trim().slice(0, 512) }) };
       },
     };
   }
@@ -486,18 +741,60 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
     const target = `${domain}/${MACOS_LABEL}`;
     return {
       platform, mode,
-      install: async (manifest) => { await execute("launchctl", ["bootstrap", domain, manifest.path]); await execute("launchctl", ["enable", target]); await execute("launchctl", ["print", target]); },
+      install: async (manifest) => {
+        // `bootstrap` rejects an already-loaded label.  Retry only this exact
+        // Runmesh label after confirming it is already loaded and booting it
+        // out.  A permission or malformed-plist failure must not be masked by
+        // an unconditional bootout attempt.
+        const bootstrapped = await executor.execute("launchctl", ["bootstrap", domain, manifest.path]);
+        if (bootstrapped.exitCode !== 0) {
+          const loaded = await executor.execute("launchctl", ["print", target]);
+          if (loaded.exitCode !== 0) {
+            const detail = bootstrapped.stderr === undefined || bootstrapped.stderr.trim() === "" ? "" : ` (${bootstrapped.stderr.trim().slice(0, 512)})`;
+            throw new Error(`service command failed: launchctl bootstrap ${domain} ${manifest.path}${detail}`);
+          }
+          await execute("launchctl", ["bootout", target]);
+          await execute("launchctl", ["bootstrap", domain, manifest.path]);
+        }
+        await execute("launchctl", ["enable", target]);
+        await execute("launchctl", ["print", target]);
+      },
       stop: async () => execute("launchctl", ["kill", "SIGTERM", target]),
       restart: async () => execute("launchctl", ["kickstart", "-k", target]),
       uninstall: async () => execute("launchctl", ["bootout", target]),
-      status: async () => {
+      status: async (manifest) => {
         const result = await executor.execute("launchctl", ["print", target]);
         const match = /(?:user|UserName)\s*=\s*([^\s]+)/u.exec(result.stdout ?? "");
         // A system LaunchDaemon that omits UserName is launched as root by
         // launchd. Report that native default explicitly so the status and
         // doctor layers can distinguish it from an unavailable identity.
-        const identity = match?.[1] ?? (mode === "system" ? "root" : undefined);
-        return { installed: result.exitCode === 0, active: result.exitCode === 0, ...(identity === undefined ? {} : { identity }), ...(result.stderr === undefined || result.stderr.trim() === "" ? {} : { detail: result.stderr.trim().slice(0, 512) }) };
+        const state = /^\s*state\s*=\s*([^\s]+)\s*$/imu.exec(result.stdout ?? "")?.[1]?.toLowerCase();
+        // launchctl can report a loaded job whose last process already
+        // exited. Treat explicit non-running states as inactive; when older
+        // launchctl output omits a state line, retain the successful print
+        // result as the best available probe and let the identity check carry
+        // the remaining safety signal.
+        const active = result.exitCode === 0 && (state === undefined || state === "running" || state === "active");
+        let identity = result.exitCode === 0
+          ? safeServiceReportedIdentity(match?.[1]) ?? (manifest.mode === "system" && manifest.executionMode === "privileged_host" ? "root" : undefined)
+          : undefined;
+        // Some launchctl versions expose the configured UserName as a UID
+        // (`user = 501`) rather than the account name. Resolve it when the
+        // native lookup is available; servicePrivilegeState also recognizes a
+        // non-zero UID as restricted for a dedicated macOS daemon.
+        if (identity !== undefined && /^\d+$/u.test(identity)) {
+          try {
+            const resolved = await executor.execute("id", ["-un", identity]);
+            const name = resolved.exitCode === 0 ? safeServiceReportedIdentity(resolved.stdout?.trim()) : undefined;
+            if (name !== undefined) identity = name;
+          } catch {
+            // Identity resolution is an enhancement only; retain the numeric
+            // UID so the privilege-state check can still classify the daemon.
+          }
+        }
+        const reliable = nativeProbeReliable(result, "query");
+        const registered = reliable ? result.exitCode === 0 : undefined;
+        return { installed: result.exitCode === 0, active, ...(registered === undefined ? {} : { registered }), reliable, ...(identity === undefined ? {} : { identity }), ...(result.stderr === undefined || result.stderr.trim() === "" ? {} : { detail: result.stderr.trim().slice(0, 512) }) };
       },
     };
   }
@@ -516,29 +813,42 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
       status: async () => {
         const installed = await executor.execute("schtasks", ["/Query", "/TN", WINDOWS_TASK_NAME]);
         // `schtasks /FO LIST /V` localizes both field names and state values.
-        // Query the Task Scheduler API through PowerShell first and serialize
-        // the numeric enum (Running = 4), which is locale-independent. Keep a
-        // conservative text fallback for hosts without the ScheduledTasks
-        // module and for injected legacy executors.
-        const invariant = await executor.execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "$task=Get-ScheduledTask -TaskName 'RunmeshRunner' -ErrorAction Stop; $info=Get-ScheduledTaskInfo -TaskName 'RunmeshRunner' -ErrorAction Stop; [pscustomobject]@{ state=[int]$task.State; identity=[string]$task.Principal.UserId } | ConvertTo-Json -Compress"]);
+        // Query the Task Scheduler COM API through PowerShell first and
+        // serialize the numeric enum (Running = 4), which is locale-
+        // independent and available even when the ScheduledTasks module is
+        // missing. Keep a conservative text fallback for injected/very old
+        // executors; a localized state that cannot be proven to be Running is
+        // reported inactive rather than guessed active.
+        let invariant: ServiceCommandResult | undefined;
+        try {
+          invariant = await executor.execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "$service=New-Object -ComObject 'Schedule.Service'; $service.Connect(); $task=$service.GetFolder('\\').GetTask('RunmeshRunner'); [pscustomobject]@{ state=[int]$task.State; identity=[string]$task.Definition.Principal.UserId } | ConvertTo-Json -Compress"]);
+        } catch {
+          // Injected/older executors may not expose PowerShell. Fall through
+          // to the conservative schtasks text probe below.
+          invariant = undefined;
+        }
         let invariantState: { readonly state?: unknown; readonly identity?: unknown } | undefined;
         try {
-          const parsed = JSON.parse((invariant.stdout ?? "").trim()) as unknown;
+          const parsed = JSON.parse((invariant?.stdout ?? "").trim()) as unknown;
           if (typeof parsed === "object" && parsed !== null) invariantState = parsed as { readonly state?: unknown; readonly identity?: unknown };
         } catch { /* use the text fallback below */ }
-        if (invariant.exitCode === 0 && invariantState !== undefined && (typeof invariantState.state === "number" || typeof invariantState.state === "string")) {
+        if (invariant?.exitCode === 0 && invariantState !== undefined && (typeof invariantState.state === "number" || typeof invariantState.state === "string")) {
           const state = typeof invariantState.state === "number" ? invariantState.state : Number(invariantState.state);
-          const identity = typeof invariantState.identity === "string" ? invariantState.identity.trim() : "";
-          return { installed: installed.exitCode === 0, active: state === 4, ...(identity === "" ? {} : { identity }), ...(invariant.stderr === undefined || invariant.stderr.trim() === "" ? {} : { detail: invariant.stderr.trim().slice(0, 512) }) };
+          const identity = typeof invariantState.identity === "string" ? safeServiceReportedIdentity(invariantState.identity) ?? "" : "";
+          const queryReliable = nativeProbeReliable(installed, "query") && nativeProbeReliable(invariant, "query");
+          const registered = queryReliable ? true : undefined;
+          return { installed: true, active: state === 4, ...(registered === undefined ? {} : { registered }), reliable: queryReliable, ...(identity === "" ? {} : { identity }), ...(invariant.stderr === undefined || invariant.stderr.trim() === "" ? {} : { detail: invariant.stderr.trim().slice(0, 512) }) };
         }
         const detail = await executor.execute("schtasks", ["/Query", "/TN", WINDOWS_TASK_NAME, "/FO", "LIST", "/V"]);
-      // Task Scheduler reports `Ready` for an installed task that is not
-      // currently executing. Treat only `Running` as active; conflating the
-      // two makes `doctor` report a stopped/crashed Runner as healthy.
-      const active = detail.exitCode === 0 && /Status:\s*Running/iu.test(detail.stdout ?? "");
-      const identity = /Run As User:\s*(.+)/iu.exec(detail.stdout ?? "")?.[1]?.trim();
-      return { installed: installed.exitCode === 0, active, ...(identity === undefined || identity === "" ? {} : { identity }), ...(detail.stderr === undefined || detail.stderr.trim() === "" ? {} : { detail: detail.stderr.trim().slice(0, 512) }) };
-    },
+        // Task Scheduler reports `Ready` for an installed task that is not
+        // currently executing. Treat only `Running` as active; conflating the
+        // two makes `doctor` report a stopped/crashed Runner as healthy.
+        const active = detail.exitCode === 0 && /Status:\s*Running/iu.test(detail.stdout ?? "");
+        const identity = safeServiceReportedIdentity(/Run As User:\s*(.+)/iu.exec(detail.stdout ?? "")?.[1]);
+        const queryReliable = nativeProbeReliable(installed, "query") && nativeProbeReliable(detail, "query");
+        const registered = queryReliable ? detail.exitCode === 0 || installed.exitCode === 0 : undefined;
+        return { installed: installed.exitCode === 0, active, ...(registered === undefined ? {} : { registered }), reliable: queryReliable, ...(identity === undefined || identity === "" ? {} : { identity }), ...(detail.stderr === undefined || detail.stderr.trim() === "" ? {} : { detail: detail.stderr.trim().slice(0, 512) }) };
+      },
   };
 }
 
@@ -561,10 +871,10 @@ export function serviceCommands(action: "install" | "start" | "stop" | "restart"
 export type ServicePrivilegeState = "privileged" | "restricted" | "mismatch" | "unknown";
 
 /** The identity a manifest asks the native service manager to use. */
-export function expectedServiceIdentity(manifest: Pick<ServiceManifest, "platform" | "mode" | "executionMode">): string | undefined {
+export function expectedServiceIdentity(manifest: Pick<ServiceManifest, "platform" | "mode" | "executionMode" | "serviceUser">): string | undefined {
   if (manifest.mode !== "system") return undefined;
   if (manifest.executionMode === "privileged_host") return privilegedIdentity(manifest.platform);
-  return manifest.platform === "win32" ? "NT AUTHORITY\\LOCAL SERVICE" : "runmesh";
+  return manifest.platform === "win32" ? "NT AUTHORITY\\LOCAL SERVICE" : manifest.serviceUser ?? "runmesh";
 }
 
 /**
@@ -574,28 +884,129 @@ export function expectedServiceIdentity(manifest: Pick<ServiceManifest, "platfor
  * intentionally conservative and never treats a privileged request as
  * satisfied by an arbitrary account name.
  */
-export function servicePrivilegeState(manifest: Pick<ServiceManifest, "platform" | "mode" | "executionMode">, actualIdentity: string | undefined, active = true): ServicePrivilegeState {
+export function servicePrivilegeState(manifest: Pick<ServiceManifest, "platform" | "mode" | "executionMode" | "serviceUser">, actualIdentity: string | undefined, active = true): ServicePrivilegeState {
   if (!active || actualIdentity === undefined || actualIdentity.trim() === "") return "unknown";
   const expected = expectedServiceIdentity(manifest);
-  if (expected === undefined) return "restricted";
   const normalize = (value: string): string => value.trim().replaceAll("/", "\\").toLowerCase();
   const actual = normalize(actualIdentity);
+  // A user-level service must never be considered healthy when its manager
+  // reports a host-wide identity.  We cannot require an exact username here
+  // (the interactive account is platform-specific), but we can fail closed
+  // for the identities that would constitute an unintended elevation.
+  if (expected === undefined) {
+    const hostPrivileged = manifest.platform === "win32"
+      ? actual === "system" || actual === "nt authority\\system" || actual === "s-1-5-18"
+      : actual === "root" || actual === "0" || actual === "uid=0";
+    return hostPrivileged ? "mismatch" : "restricted";
+  }
+  // launchctl can expose a numeric UID.  Only a successful `id -un` lookup
+  // proves which configured account owns that UID; accepting every non-zero
+  // number would turn an arbitrary restricted account into a healthy
+  // dedicated service. UID 0 is an explicit elevation mismatch, while an
+  // unresolved non-zero UID remains unknown and must be re-probed.
+  if (manifest.platform === "darwin" && manifest.executionMode === "dedicated_user" && /^\d+$/u.test(actual)) {
+    return actual === "0" ? "mismatch" : "unknown";
+  }
   const wanted = normalize(expected);
   const matches = actual === wanted
-    || (manifest.platform === "win32" && manifest.executionMode === "privileged_host" && (actual === "system" || actual === "nt authority\\system"))
-    || (manifest.platform === "win32" && manifest.executionMode === "dedicated_user" && (actual === "local service" || actual === "nt authority\\local service"));
+    || (manifest.platform === "win32" && manifest.executionMode === "privileged_host" && (actual === "system" || actual === "nt authority\\system" || actual === "s-1-5-18"))
+    || (manifest.platform !== "win32" && manifest.executionMode === "privileged_host" && (actual === "root" || actual === "0" || actual === "uid=0"))
+    || (manifest.platform !== "win32" && manifest.executionMode === "dedicated_user" && actual === (manifest.serviceUser ?? "runmesh").toLowerCase())
+    || (manifest.platform === "win32" && manifest.executionMode === "dedicated_user" && (actual === "local service" || actual === "nt authority\\local service" || actual === "s-1-5-19"));
   if (!matches) return "mismatch";
   return manifest.executionMode === "privileged_host" ? "privileged" : "restricted";
 }
 
 function privilegedIdentity(platform: ServicePlatform): string { return platform === "win32" ? "SYSTEM" : "root"; }
 function isAbsoluteForPlatform(value: string, platform: ServicePlatform): boolean { return platform === "win32" ? win32.isAbsolute(value) : value.startsWith("/"); }
+function isWindowsAbsolute(value: string): boolean { return win32.isAbsolute(value); }
 /** Service managers may choose an arbitrary cwd; never emit relative state paths. */
 function absoluteServicePath(value: string, platform: ServicePlatform): string {
   const path = platform === "win32" ? win32 : posix;
   return path.normalize(path.isAbsolute(value) ? value : path.resolve(value));
 }
 function safeServiceIdentity(value: string): boolean { return /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/.test(value); }
+function safeServiceReportedIdentity(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 && trimmed.length <= 256 && !/[\u0000-\u001f\u007f-\u009f]/u.test(trimmed) ? trimmed : undefined;
+}
+/**
+ * Native service commands use non-zero exit codes for ordinary states such as
+ * disabled, inactive, or not-found.  Classify those known states explicitly,
+ * while marking silent/unknown query failures unreliable so a caller cannot
+ * mistake an unavailable service probe for an absent one.
+ */
+type NativeProbeKind = "enabled" | "active" | "query";
+type SystemdEnablementState = "enabled" | "enabled-runtime" | "disabled" | "static" | "indirect" | "generated" | "transient" | "masked" | "masked-runtime" | "alias" | "linked" | "linked-runtime" | "bad" | "not-found";
+const SYSTEMD_ENABLEMENT_STATES: ReadonlySet<SystemdEnablementState> = new Set([
+  "enabled", "enabled-runtime", "disabled", "static", "indirect", "generated", "transient", "masked", "masked-runtime", "alias", "linked", "linked-runtime", "bad", "not-found",
+]);
+function systemdEnablementState(result: ServiceCommandResult): SystemdEnablementState | undefined {
+  // `systemctl is-enabled` writes one bounded state token to stdout.  Ignore
+  // arbitrary stderr text here: a warning/error mixed with a stale token must
+  // not authorize a destructive disable operation.
+  const token = (result.stdout ?? "").trim().split(/\s+/u)[0]?.toLowerCase();
+  return token !== undefined && SYSTEMD_ENABLEMENT_STATES.has(token as SystemdEnablementState)
+    ? token as SystemdEnablementState
+    : undefined;
+}
+function nativeProbeReliable(result: ServiceCommandResult, kind: NativeProbeKind, knownInactiveUnit = false): boolean {
+  if (result.exitCode === 0) return true;
+  if (result.exitCode === 126 || result.exitCode === 127 || result.exitCode === 255) return false;
+  const detail = `${result.stderr ?? ""}\n${result.stdout ?? ""}`.trim();
+  if (detail === "") return kind === "active" && (result.exitCode === 3 || (result.exitCode === 4 && knownInactiveUnit));
+  if (/(access is denied|permission denied|not authorized|authentication is required|operation not permitted|failed to connect|could not connect|connection to (?:the )?bus|command not found|not recognized as an internal|cannot open|unknown option|invalid option)/iu.test(detail)) return false;
+  // These are the normal absent-service messages emitted by systemctl,
+  // launchctl, and schtasks.  `systemctl is-enabled` commonly prints the
+  // hyphenated `not-found` state, so accept both spellings. Localized variants
+  // without these words remain conservative (unreliable) rather than being
+  // treated as a clean absence.
+  if (/(not[- ]found|not loaded|does not exist|no such (?:unit|service|task|process|file)|could not find|could not be found|cannot find|cannot be found|system cannot find)/iu.test(detail)) return true;
+  // `systemctl is-enabled` returns exit 1 for a known, non-enabled unit and
+  // emits one of these state names. They are reliable observations (and must
+  // not block a first install or re-enable), unlike a failed D-Bus/tool query.
+  if (kind === "enabled" && /^(?:disabled|static|indirect|generated|transient|masked|masked-runtime|alias|enabled-runtime|linked|linked-runtime|bad)\s*$/iu.test(detail)) return true;
+  // `systemctl is-active --quiet` uses exit 3 for a known inactive unit and
+  // intentionally emits no text. Other no-output failures remain unknown.
+  if (kind === "active" && result.exitCode === 3 && detail === "") return true;
+  return false;
+}
+/**
+ * Interpret `systemctl is-enabled` as a registration probe.  Enablement is
+ * not the same thing as presence: `disabled`, `masked`, `static`, `bad`, and
+ * linked states all describe a unit that occupies the native service name.
+ * Only the explicit `not-found` state is an absence.  Unknown/error output is
+ * kept separate so callers can fail closed instead of overwriting it.
+ */
+function systemdRegistrationState(result: ServiceCommandResult): boolean | undefined {
+  const output = (result.stdout ?? "").trim().toLowerCase();
+  const detail = `${result.stderr ?? ""}\n${result.stdout ?? ""}`.trim();
+  // A diagnostic that mixes an ordinary state token with a transport or
+  // permission failure is still an unknown probe.  Never let stale stdout
+  // such as `not-found` turn a failed D-Bus query into permission to take over
+  // a native registration.
+  if (/(access is denied|permission denied|not authorized|authentication is required|operation not permitted|failed to connect|could not connect|connection to (?:the )?bus|command not found|not recognized as an internal|cannot open|unknown option|invalid option)/iu.test(detail)) return undefined;
+  const state = systemdEnablementState(result);
+  if (state === "not-found" || /(?:^|\s)not[- ]found(?:\s|$)/iu.test(output) || /(?:^|\s)not[- ]found(?:\s|$)/iu.test(detail)) return false;
+  if (result.exitCode === 0) return true;
+  if (state !== undefined) return true;
+  if (/(?:^|\s)(?:disabled|static|indirect|generated|transient|masked|masked-runtime|alias|enabled-runtime|linked|linked-runtime|bad)(?:\s|$)/iu.test(output)) return true;
+  // A few systemd versions put the ordinary state in stderr. Keep the same
+  // bounded token check there, but never classify permission/tool diagnostics
+  // as a registration.
+  if (/(?:^|\s)(?:disabled|static|indirect|generated|transient|masked|masked-runtime|alias|enabled-runtime|linked|linked-runtime|bad)(?:\s|$)/iu.test(detail)) return true;
+  if (nativeProbeReliable(result, "enabled")) return false;
+  return undefined;
+}
+/** Whether a non-zero systemd probe gives an explicit ordinary state. */
+function knownNonActiveUnit(result: ServiceCommandResult): boolean {
+  if (result.exitCode === 0) return false;
+  const detail = `${result.stderr ?? ""}\n${result.stdout ?? ""}`.trim();
+  if (detail === "") return false;
+  if (/(access is denied|permission denied|not authorized|authentication is required|operation not permitted|failed to connect|could not connect|connection to (?:the )?bus|command not found|not recognized as an internal|cannot open|unknown option|invalid option)/iu.test(detail)) return false;
+  return /(not[- ]found|not loaded|does not exist|no such (?:unit|service|task|process|file)|could not find|could not be found|cannot find|cannot be found|system cannot find|^(?:disabled|static|indirect|generated|transient|masked|masked-runtime|alias|enabled-runtime|linked|linked-runtime|bad)\s*$)/iu.test(detail);
+}
 function escapeSystemdArgument(value: string): string { return escapeSystemdValue(value, true); }
 function escapeSystemdEnvironment(value: string): string { return escapeSystemdValue(value, false); }
 /** Escape systemd unit-file values without allowing specifier or line injection. */

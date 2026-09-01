@@ -88,11 +88,7 @@ export function createCodingMcpServer(env: WorkerEnv, auth: McpAuth): McpServer 
     const selection = await getActiveRunnerSelection(env, auth.clientId);
     if (selection.ok) {
       const current = selection.value as McpClientActiveRunner;
-      return success({
-        active_runner_id: current.active_runner_id,
-        active_runner_updated_at_ms: current.active_runner_updated_at_ms,
-        active_runner: current.runner,
-      });
+      return success(safeSelectionValue(current));
     }
     return asToolResult(selection);
   });
@@ -100,18 +96,18 @@ export function createCodingMcpServer(env: WorkerEnv, auth: McpAuth): McpServer 
     const selection = await selectActiveRunner(env, auth.clientId, runner_id, confirm_switch === true);
     if (selection.ok) {
       const result = selection.value as { selection: McpClientActiveRunner; changed: boolean };
-      return success({ ...result.selection, changed: result.changed });
+      return success({ ...safeSelectionValue(result.selection), changed: result.changed });
     }
     if (selection.error.code === "runner_switch_confirmation_required") {
       const current = selection.error.details;
-      return failureWithDetails(selection.error.code, selection.error.message, selection.error.hint, current === undefined ? {} : { current_active_runner: current });
+      return failureWithDetails(selection.error.code, selection.error.message, selection.error.hint, current === undefined ? {} : { current_active_runner: safeSelectionValue(current) });
     }
     return asToolResult(selection);
   });
   register(server, "workspace_list", z.object({}).strict(), async () => activeWorkspaceList(env, auth.clientId));
   register(server, "inspect", InspectInputSchema, async (params) => inspectTool(env, auth.clientId, params));
-  register(server, "read", ReadInputSchema, async (params) => activeRunnerTool(env, auth.clientId, "fs.read", boundedReadParams(params, 32 * 1024), "read"));
-  register(server, "edit", EditInputSchema, async (params) => activeRunnerTool(env, auth.clientId, "fs.apply_patch", params, "edit"));
+  register(server, "read", ReadInputSchema, async (params) => activeRunnerTool(env, auth.clientId, "fs.read", boundedReadParams(params, 32 * 1024), "read", "read"));
+  register(server, "edit", EditInputSchema, async (params) => activeRunnerTool(env, auth.clientId, "fs.apply_patch", params, "edit", "edit"));
   register(server, "shell", ShellInputSchema, async (params) => shellTool(env, auth.clientId, params));
   register(server, "job", JobInputSchema, async (params, scopes) => jobTool(env, auth.clientId, params, scopes));
 
@@ -149,23 +145,26 @@ async function inspectTool(env: WorkerEnv, clientId: string, params: z.output<ty
     ...(params.action === "git_diff" ? { max_bytes: 32 * 1024 } : {}),
     ...(params.action === "git_status" ? { max_bytes: 32 * 1024 } : {}),
   };
-  return activeRunnerTool(env, clientId, method, input, "read");
+  return activeRunnerTool(env, clientId, method, input, "read", inspectResultMode(params.action));
 }
 async function shellTool(env: WorkerEnv, clientId: string, params: z.output<typeof ShellInputSchema>): Promise<unknown> {
   const invocation = { workspace_id: params.workspace_id, command: params.command, shell: true, created_by_client_id: clientId };
-  if (params.background === true) return activeRunnerTool(env, clientId, "exec.start", invocation, "shell");
-  const result = await activeRunnerTool(env, clientId, "exec.run", { ...invocation, ...(params.wait_ms === undefined ? {} : { wait_ms: params.wait_ms }) }, "shell");
+  // Background starts return a Runner JobRecord.  Keep the MCP response on
+  // the stable job-metadata allow-list; command/cwd/PID/process identity are
+  // Runner-internal and must not cross this boundary.
+  if (params.background === true) return activeRunnerTool(env, clientId, "exec.start", invocation, "shell", "job");
+  const result = await activeRunnerTool(env, clientId, "exec.run", { ...invocation, ...(params.wait_ms === undefined ? {} : { wait_ms: params.wait_ms }) }, "shell", "shell");
   return normalizeShellResult(result);
 }
 
 function normalizeShellResult(result: unknown): unknown {
   if (!isToolSuccessResult(result)) return result;
   const value = result.structuredContent;
-  if (isRecord(value.job)) {
-    const { job, ...rest } = value;
-    return success({ ...rest, ...safeJobMetadata(job), status: typeof job.status === "string" ? job.status : "unknown" });
-  }
-  return result;
+  // `success()` may already have returned its bounded truncation envelope.
+  // Preserve that explicit signal rather than replacing it with an empty
+  // projection; the serialized data has already passed redaction.
+  if (isRedactionTruncationEnvelope(value)) return result;
+  return success(safeShellResult(value));
 }
 
 async function jobTool(env: WorkerEnv, clientId: string, params: z.output<typeof JobInputSchema>, scopes: readonly string[]): Promise<unknown> {
@@ -178,13 +177,13 @@ async function jobTool(env: WorkerEnv, clientId: string, params: z.output<typeof
       return activeJobGet(env, clientId, params.job_id);
     case "logs":
       if (!scopes.includes("coding:read")) return failure("insufficient_scope", "This job action requires coding:read.", "Authorize the MCP client again with coding:read.");
-      return activeJobRunnerTool(env, clientId, "job.logs", boundedReadParams(params, 16 * 1024), "read");
+      return activeJobRunnerTool(env, clientId, "job.logs", boundedReadParams(params, 16 * 1024), "read", "logs");
     case "cancel":
       if (!scopes.includes("coding:exec")) return failure("insufficient_scope", "This job action requires coding:exec.", "Authorize the MCP client again with coding:exec.");
-      return activeJobRunnerTool(env, clientId, "job.cancel", params, "job_control");
+      return activeJobRunnerTool(env, clientId, "job.cancel", params, "job_control", "job");
     case "input":
       if (!scopes.includes("coding:exec")) return failure("insufficient_scope", "This job action requires coding:exec.", "Authorize the MCP client again with coding:exec.");
-      return activeJobRunnerTool(env, clientId, "job.input", params, "job_control");
+      return activeJobRunnerTool(env, clientId, "job.input", params, "job_control", "input");
   }
 }
 
@@ -192,19 +191,353 @@ function isToolSuccessResult(value: unknown): value is { readonly structuredCont
   return isRecord(value) && value.isError !== true && isRecord(value.structuredContent);
 }
 
-function safeJobMetadata(value: unknown): Record<string, unknown> {
+/**
+ * Project only the stable, non-sensitive Job metadata contract exposed by
+ * MCP.  Runner JobRecord objects also carry command/cwd/PID/process identity
+ * fields that must never cross the MCP boundary.
+ */
+export function safeJobMetadata(value: unknown): Record<string, unknown> {
   if (!isRecord(value)) return {};
   const output: Record<string, unknown> = {};
-  for (const key of ["job_id", "workspace_id", "status", "created_at_ms", "started_at_ms", "updated_at_ms", "completed_at_ms", "exit_code", "signal", "recovery_note", "output_truncated", "cancellation_delivered_at_ms"]) {
-    if (value[key] !== undefined) output[key] = value[key];
+  // The allow-list is only the first boundary.  Runner records normally have
+  // already passed their local schema, but Registry snapshots and old peers
+  // are untrusted at this layer too.  Copy scalar values only; otherwise a
+  // hostile object such as `{ job_id: { cwd: ... } }` could survive the key
+  // filter and become an arbitrary nested MCP response.
+  const jobId = safeJobIdentifier(value.job_id);
+  if (jobId !== undefined) output.job_id = jobId;
+  const workspaceId = safeJobIdentifier(value.workspace_id);
+  if (workspaceId !== undefined) output.workspace_id = workspaceId;
+  if (typeof value.status === "string") output.status = safeJobStatus(value.status);
+  copyRequiredTimestamp(value, output, "created_at_ms");
+  copyNullableTimestamp(value, output, "started_at_ms");
+  copyRequiredTimestamp(value, output, "updated_at_ms");
+  copyNullableTimestamp(value, output, "completed_at_ms");
+  const exitCode = value.exit_code;
+  if (exitCode === null || isSafeExitCode(exitCode)) output.exit_code = exitCode;
+  const signal = safeSignal(value.signal);
+  if (signal !== undefined) output.signal = signal;
+  // Recovery notes are Runner-authored free text and can contain raw process
+  // errors, filesystem paths, or credential-adjacent details.  They are useful
+  // to the authenticated administrator surface, but are intentionally not a
+  // part of the public MCP Job contract; exposing a bounded string is still
+  // an information leak, so omit it rather than attempting ad-hoc filtering.
+  if (typeof value.output_truncated === "boolean") output.output_truncated = value.output_truncated;
+  copyNullableTimestamp(value, output, "cancellation_delivered_at_ms");
+  return output;
+}
+
+/**
+ * Project the bounded log envelope returned by `job.logs`. Log `data` is
+ * intentionally retained (it is the content the caller requested), while
+ * arbitrary future fields—including a nested JobRecord—are discarded.
+ */
+export function safeJobLogResult(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) return {};
+  const output: Record<string, unknown> = {};
+  const jobId = safeJobIdentifier(value.job_id);
+  if (jobId !== undefined) output.job_id = jobId;
+  if (value.stream === "stdout" || value.stream === "stderr") output.stream = value.stream;
+  if (typeof value.data === "string") output.data = value.data.slice(0, 65_536);
+  if (isSafeNonnegativeInteger(value.offset)) output.offset = value.offset;
+  if (value.next_cursor === null || isSafeCursor(value.next_cursor)) output.next_cursor = value.next_cursor;
+  if (typeof value.truncated === "boolean") output.truncated = value.truncated;
+  if (isSafeNonnegativeInteger(value.size)) output.size = value.size;
+  return output;
+}
+
+/** Project the acknowledgement returned by `job.input`; no JobRecord fields belong here. */
+export function safeJobInputResult(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) return {};
+  const output: Record<string, unknown> = {};
+  if (isSafeNonnegativeInteger(value.accepted)) output.accepted = value.accepted;
+  if (typeof value.eof === "boolean") output.eof = value.eof;
+  return output;
+}
+
+/** Project the `exec.run` response, including its nested job and log envelopes. */
+export function safeShellResult(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) return {};
+  const output: Record<string, unknown> = {};
+  const job = isRecord(value.job) ? value.job : value;
+  Object.assign(output, safeJobMetadata(job));
+  if (typeof value.completed === "boolean") output.completed = value.completed;
+  if (isSafeNonnegativeInteger(value.wait_cap_ms)) output.wait_cap_ms = value.wait_cap_ms;
+  if (value.stdout !== undefined) output.stdout = safeJobLogResult(value.stdout);
+  if (value.stderr !== undefined) output.stderr = safeJobLogResult(value.stderr);
+  if (value.runner_context !== undefined) output.runner_context = safeRunnerContext(value.runner_context);
+  // A status is required by the shell contract even when an old/malformed
+  // Runner omitted it. Normalize arbitrary strings to the stable enum so a
+  // hostile RPC result cannot smuggle an unbounded status value downstream.
+  if (Object.prototype.hasOwnProperty.call(output, "status")) output.status = safeJobStatus(output.status);
+  return output;
+}
+
+/**
+ * Project filesystem read results at the MCP boundary.  A current Runner
+ * emits workspace-relative paths, but a stale or compromised peer is still
+ * untrusted: absolute/UNC/drive-qualified paths are omitted instead of being
+ * allowed through the generic redactor.
+ */
+export function safeReadResult(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) return {};
+  const output: Record<string, unknown> = {};
+  copySafeWorkspaceId(value, output);
+  copySafeRelativePath(value, output, "path");
+  if (typeof value.data === "string") output.data = value.data.slice(0, 65_536);
+  if (value.encoding === "utf-8" || value.encoding === "utf8") output.encoding = "utf-8";
+  if (isSafeNonnegativeInteger(value.offset)) output.offset = value.offset;
+  if (value.next_cursor === null || isSafeCursor(value.next_cursor)) output.next_cursor = value.next_cursor;
+  if (typeof value.truncated === "boolean") output.truncated = value.truncated;
+  if (isSafeNonnegativeInteger(value.size)) output.size = value.size;
+  return output;
+}
+
+export type InspectResultKind = "list" | "search" | "stat" | "git_status" | "git_diff";
+
+/** Project each inspect operation without exposing host roots or raw errors. */
+export function safeInspectResult(value: unknown, kind: InspectResultKind): Record<string, unknown> {
+  if (!isRecord(value)) return {};
+  const output: Record<string, unknown> = {};
+  copySafeWorkspaceId(value, output);
+  if (kind === "stat") {
+    copySafeRelativePath(value, output, "path");
+    if (value.type === "file" || value.type === "directory" || value.type === "other") output.type = value.type;
+    if (isSafeNonnegativeInteger(value.size)) output.size = value.size;
+    if (isSafeNonnegativeInteger(value.modified_at_ms)) output.modified_at_ms = value.modified_at_ms;
+    if (value.encoding === "utf-8" || value.encoding === "binary") output.encoding = value.encoding;
+    if (typeof value.binary === "boolean") output.binary = value.binary;
+    return output;
+  }
+  if (kind === "list") {
+    copySafeRelativePath(value, output, "path");
+    if (Array.isArray(value.entries)) {
+      output.entries = value.entries.slice(0, 256).flatMap((entry) => {
+        if (!isRecord(entry) || typeof entry.name !== "string" || !safeDirectoryName(entry.name)) return [];
+        const type = entry.type === "file" || entry.type === "directory" || entry.type === "other" ? entry.type : undefined;
+        return type === undefined ? [] : [{ name: entry.name, type }];
+      });
+    }
+    copySafeCursorFields(value, output);
+    return output;
+  }
+  if (kind === "search") {
+    if (typeof value.query === "string" && value.query.length <= 512 && !hasControlCharacters(value.query)) output.query = value.query;
+    if (Array.isArray(value.results)) {
+      output.results = value.results.slice(0, 256).flatMap((entry) => {
+        if (!isRecord(entry)) return [];
+        const path = safeRelativePathValue(entry.path);
+        if (path === undefined || !isSafePositiveInteger(entry.line) || typeof entry.text !== "string") return [];
+        return [{ path, line: entry.line, text: entry.text.slice(0, 4_096) }];
+      });
+    }
+    copySafeCursorFields(value, output);
+    return output;
+  }
+  if (kind === "git_status") {
+    copySafeRelativePath(value, output, "path");
+    if (isRecord(value.branch)) {
+      const branch: Record<string, unknown> = {};
+      for (const key of ["oid", "head", "upstream"] as const) {
+        if (typeof value.branch[key] === "string" && value.branch[key].length <= 512 && !hasControlCharacters(value.branch[key] as string)) branch[key] = value.branch[key];
+      }
+      output.branch = branch;
+    }
+    if (Array.isArray(value.entries)) {
+      output.entries = value.entries.slice(0, 1_000).flatMap((entry) => {
+        if (!isRecord(entry)) return [];
+        const path = safeRelativePathValue(entry.path);
+        if (path === undefined) return [];
+        const item: Record<string, unknown> = { path };
+        for (const key of ["original_path"] as const) {
+          const original = safeRelativePathValue(entry[key]);
+          if (original !== undefined) item[key] = original;
+        }
+        for (const key of ["index_status", "worktree_status"] as const) {
+          if (typeof entry[key] === "string" && entry[key].length <= 8 && !hasControlCharacters(entry[key] as string)) item[key] = entry[key];
+        }
+        if (typeof entry.untracked === "boolean") item.untracked = entry.untracked;
+        if (typeof entry.ignored === "boolean") item.ignored = entry.ignored;
+        return [item];
+      });
+    }
+    copySafeInteger(value, output, "ahead");
+    copySafeInteger(value, output, "behind");
+    copySafeInteger(value, output, "output_bytes");
+    if (typeof value.truncated === "boolean") output.truncated = value.truncated;
+    return output;
+  }
+  // git_diff.  GitService returns `path`, `diff`, `encoding`, and `bytes`;
+  // keep those names stable at the MCP boundary (and accept the older
+  // aliases only for compatibility with pre-privileged Runners).
+  const path = safeRelativePathValue(value.path) ?? safeRelativePathValue(value.requested_path);
+  if (path !== undefined) output.path = path;
+  if (typeof value.staged === "boolean") output.staged = value.staged;
+  const diff = typeof value.diff === "string" ? value.diff : value.output;
+  if (typeof diff === "string") output.diff = diff.slice(0, 65_536);
+  if (value.encoding === "utf-8" || value.encoding === "utf8") output.encoding = "utf-8";
+  const bytes = value.bytes ?? value.output_bytes;
+  if (isSafeNonnegativeInteger(bytes)) output.bytes = bytes;
+  if (typeof value.truncated === "boolean") output.truncated = value.truncated;
+  return output;
+}
+
+/** Return only workspace-relative patch metadata; recovery paths/errors stay local to the Runner. */
+export function safeEditResult(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) return {};
+  const output: Record<string, unknown> = {};
+  copySafeWorkspaceId(value, output);
+  if (Array.isArray(value.changed_paths)) {
+    output.changed_paths = value.changed_paths.slice(0, 128).flatMap((item) => safePatchChange(item));
+  }
+  if (Array.isArray(value.operations)) {
+    output.operations = value.operations.slice(0, 128).flatMap((item) => safePatchOperation(item));
+  }
+  if (Array.isArray(value.warnings)) {
+    output.warnings = value.warnings.slice(0, 128).flatMap((item) => {
+      if (!isRecord(item)) return [];
+      const path = safeRelativePathValue(item.path);
+      return path === undefined ? [] : [{ path, code: "recovery_required" }];
+    });
   }
   return output;
+}
+
+function safePatchChange(value: unknown): Record<string, unknown>[] {
+  if (!isRecord(value)) return [];
+  const path = safeRelativePathValue(value.path);
+  if (path === undefined) return [];
+  const status = value.status === "created" || value.status === "updated" || value.status === "deleted" ? value.status : undefined;
+  if (status === undefined) return [];
+  const result: Record<string, unknown> = { path, status };
+  for (const key of ["before_hash", "after_hash"] as const) {
+    if (value[key] === null || isSha256(value[key])) result[key] = value[key];
+  }
+  if (isSafeMode(value.mode)) result.mode = value.mode;
+  return [result];
+}
+
+function safePatchOperation(value: unknown): Record<string, unknown>[] {
+  if (!isRecord(value)) return [];
+  const path = safeRelativePathValue(value.path);
+  if (path === undefined) return [];
+  const operation = value.operation === "add" || value.operation === "update" || value.operation === "delete" || value.operation === "move" ? value.operation : undefined;
+  if (operation === undefined || value.status !== "applied") return [];
+  const result: Record<string, unknown> = { operation, path, status: "applied" };
+  const destination = safeRelativePathValue(value.destination);
+  if (destination !== undefined) result.destination = destination;
+  if (Array.isArray(value.results)) result.results = value.results.slice(0, 128).flatMap((item) => safePatchChange(item));
+  return [result];
+}
+
+function copySafeWorkspaceId(value: Record<string, unknown>, output: Record<string, unknown>): void {
+  const id = safeJobIdentifier(value.workspace_id);
+  if (id !== undefined) output.workspace_id = id;
+}
+
+function copySafeRelativePath(value: Record<string, unknown>, output: Record<string, unknown>, key: string): void {
+  const path = safeRelativePathValue(value[key]);
+  if (path !== undefined) output[key] = path;
+}
+
+function copySafeCursorFields(value: Record<string, unknown>, output: Record<string, unknown>): void {
+  if (value.next_cursor === null || isSafeCursor(value.next_cursor)) output.next_cursor = value.next_cursor;
+  if (typeof value.truncated === "boolean") output.truncated = value.truncated;
+}
+
+function copySafeInteger(value: Record<string, unknown>, output: Record<string, unknown>, key: string): void {
+  if (isSafeNonnegativeInteger(value[key])) output[key] = value[key];
+}
+
+function safeRelativePathValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.length <= 4_096 && isSafeRelativePath(value) ? value : undefined;
+}
+
+function safeDirectoryName(value: string): boolean {
+  return value.length > 0 && value.length <= 4_096 && !hasControlCharacters(value) && value !== "." && value !== ".." && !value.includes("/") && !value.includes("\\");
+}
+
+function hasControlCharacters(value: string): boolean { return /[\u0000-\u001f\u007f-\u009f]/u.test(value); }
+function isSafePositiveInteger(value: unknown): value is number { return isSafeNonnegativeInteger(value) && value > 0; }
+function isSha256(value: unknown): value is string { return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value); }
+function isSafeMode(value: unknown): value is number { return isSafeNonnegativeInteger(value) && value <= 0o7777; }
+
+function safeJobStatus(value: unknown): string {
+  return value === "queued" || value === "running" || value === "cancelling" || value === "cancelled" || value === "succeeded" || value === "failed" || value === "unknown" || value === "interrupted" ? value : "unknown";
+}
+
+function safeJobIdentifier(value: unknown): string | undefined {
+  return typeof value === "string" && value.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(value) ? value : undefined;
+}
+
+function isSafeCursor(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 128 && /^\d+$/u.test(value);
+}
+
+function isSafeExitCode(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && Math.abs(value) <= 2 ** 31;
+}
+
+function copyRequiredTimestamp(value: Record<string, unknown>, output: Record<string, unknown>, key: string): void {
+  if (isSafeNonnegativeInteger(value[key])) output[key] = value[key];
+}
+
+function copyNullableTimestamp(value: Record<string, unknown>, output: Record<string, unknown>, key: string): void {
+  if (value[key] === null || isSafeNonnegativeInteger(value[key])) output[key] = value[key];
+}
+
+function safeRunnerContext(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) return {};
+  const output: Record<string, unknown> = {};
+  const runnerId = safeJobIdentifier(value.runner_id);
+  if (runnerId !== undefined) output.runner_id = runnerId;
+  if (value.state === "online" || value.state === "offline" || value.state === "stale" || value.state === "unavailable") output.state = value.state;
+  if (typeof value.available === "boolean") output.available = value.available;
+  if (value.updated_at_ms === null || isSafeNonnegativeInteger(value.updated_at_ms)) output.updated_at_ms = value.updated_at_ms;
+  if (typeof value.automatic_selection === "boolean") output.automatic_selection = value.automatic_selection;
+  return output;
+}
+
+/** Explicitly project sticky selection data; Registry responses are internal
+ * and must not be spread into the public MCP response. */
+function safeSelectionValue(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) return { active_runner_id: null, active_runner_updated_at_ms: null, active_runner: null };
+  return {
+    active_runner_id: value.active_runner_id === null ? null : safeJobIdentifier(value.active_runner_id) ?? null,
+    active_runner_updated_at_ms: value.active_runner_updated_at_ms === null || isSafeNonnegativeInteger(value.active_runner_updated_at_ms)
+      ? value.active_runner_updated_at_ms
+      : null,
+    active_runner: value.runner === null ? null : safeRunnerContext(value.runner),
+  };
+}
+
+function safeSignal(value: unknown): string | null | undefined {
+  if (value === null) return null;
+  // Signals are a finite, protocol-level enum in current Runners.  Do not
+  // let a stale/malformed peer use this short field as a filesystem/path
+  // side-channel.
+  return typeof value === "string" && value.length <= 32 && /^(?:SIG[A-Z0-9]+|[A-Z][A-Z0-9_]{0,31})$/u.test(value)
+    ? value
+    : undefined;
+}
+
+function isSafeNonnegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isRedactionTruncationEnvelope(value: Record<string, unknown>): boolean {
+  return value.truncated === true
+    && typeof value.data === "string"
+    && typeof value.recovery_hint === "string"
+    && Object.keys(value).every((key) => key === "truncated" || key === "data" || key === "recovery_hint");
 }
 
 type ActiveSelection = {
   readonly runnerId: string;
   readonly context: ActiveRunnerContext & { readonly automatic_selection: boolean };
 };
+type RunnerResultMode = "raw" | "job" | "logs" | "input" | "shell" | "read" | "edit" | "inspect:list" | "inspect:search" | "inspect:stat" | "inspect:git_status" | "inspect:git_diff";
+function inspectResultMode(action: InspectResultKind): RunnerResultMode { return `inspect:${action}` as RunnerResultMode; }
 type SelectionCall = ToolSuccess | ToolFailure;
 type ActiveSelectionCall = { readonly ok: true; readonly value: ActiveSelection } | ToolFailure;
 
@@ -256,14 +589,15 @@ async function resolveActiveRunner(env: WorkerEnv, clientId: string, allowOfflin
 }
 
 function runnerSuccess(value: unknown, selection: ActiveSelection): unknown {
-  if (isRecord(value)) return success({ ...value, runner_context: selection.context });
-  return success({ data: value, runner_context: selection.context });
+  const runnerContext = safeRunnerContext(selection.context);
+  if (isRecord(value)) return success({ ...value, runner_context: runnerContext });
+  return success({ data: value, runner_context: runnerContext });
 }
 function runnerFailure(error: ToolFailure["error"], selection: ActiveSelection): unknown {
-  return failureWithDetails(error.code, error.message, error.hint, { runner_context: selection.context });
+  return failureWithDetails(error.code, error.message, error.hint, { runner_context: safeRunnerContext(selection.context) });
 }
 
-async function activeRunnerTool(env: WorkerEnv, clientId: string, method: string, params: Record<string, unknown>, requiredPermission?: PermissionBit): Promise<unknown> {
+async function activeRunnerTool(env: WorkerEnv, clientId: string, method: string, params: Record<string, unknown>, requiredPermission?: PermissionBit, resultMode: RunnerResultMode = "raw"): Promise<unknown> {
   const selected = await resolveActiveRunner(env, clientId);
   if (!selected.ok) return asToolResult(selected);
   const permission = requiredPermission === undefined
@@ -275,21 +609,51 @@ async function activeRunnerTool(env: WorkerEnv, clientId: string, method: string
   const readiness = await policyReadiness(env, selected.value.runnerId);
   if (!readiness.ok) return asToolResult(readiness.error);
   const call = await callRunner(env, selected.value.runnerId, method, params, readiness.value.applied_revision, readiness.value.active_checksum);
-  return call.ok ? runnerSuccess(call.value, selected.value) : runnerFailure(call.error, selected.value);
+  return call.ok ? runnerSuccess(projectRunnerResult(call.value, resultMode), selected.value) : runnerFailure(call.error, selected.value);
 }
 
-async function activeJobRunnerTool(env: WorkerEnv, clientId: string, method: string, params: Record<string, unknown>, requiredPermission: PermissionBit): Promise<unknown> {
+async function activeJobRunnerTool(env: WorkerEnv, clientId: string, method: string, params: Record<string, unknown>, requiredPermission: PermissionBit, resultMode: RunnerResultMode = "raw"): Promise<unknown> {
   const selected = await resolveActiveRunner(env, clientId);
   if (!selected.ok) return asToolResult(selected);
   const job = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/jobs/${encodeURIComponent(String(params.job_id))}`);
   if (!job.ok) return runnerFailure(job.error, selected.value);
   const workspaceId = isRecord(job.value) && typeof job.value.workspace_id === "string" ? job.value.workspace_id : undefined;
+  const requestedJobId = typeof params.job_id === "string" ? params.job_id : undefined;
+  if (requestedJobId === undefined || workspaceId === undefined || !isSafeIdentifier(workspaceId)) {
+    return runnerFailure(fail("permission_denied", "The operation is not permitted for this job.", "Use a job identifier belonging to an authorized workspace.").error, selected.value);
+  }
   const permission = await checkPermission(env, clientId, selected.value.runnerId, workspaceId, requiredPermission);
   if (permission !== undefined) return asToolResult(permission);
   const readiness = await policyReadiness(env, selected.value.runnerId);
   if (!readiness.ok) return asToolResult(readiness.error);
-  const call = await callRunner(env, selected.value.runnerId, method, params, readiness.value.applied_revision, readiness.value.active_checksum);
-  return call.ok ? runnerSuccess(call.value, selected.value) : runnerFailure(call.error, selected.value);
+  // Bind the live request to the Registry-authorized workspace as an
+  // additional confused-deputy defense. Current Runners validate this field;
+  // older Runners may ignore the optional value, so response identity checks
+  // below remain in place for compatibility.
+  const boundParams = { ...params, expected_workspace_id: workspaceId };
+  const call = await callRunner(env, selected.value.runnerId, method, boundParams, readiness.value.applied_revision, readiness.value.active_checksum);
+  if (!call.ok) return runnerFailure(call.error, selected.value);
+  // A live Runner is expected to echo the addressed job identity in metadata
+  // and cancellation responses.  If it does, bind both IDs to the Registry
+  // snapshot that passed the permission check; never return a cross-workspace
+  // record from a stale/reused job ID.  Log/input acknowledgements may omit
+  // workspace_id by contract, so they are still bound by the exact job_id
+  // request and the Registry preflight above.
+  if (!runnerJobResultMatches(call.value, requestedJobId, workspaceId)) {
+    return runnerFailure(fail("permission_denied", "The Runner returned a job from a different workspace.", "Refresh the job list and retry with the authorized job identifier.").error, selected.value);
+  }
+  return runnerSuccess(projectRunnerResult(call.value, resultMode), selected.value);
+}
+
+function projectRunnerResult(value: unknown, mode: RunnerResultMode): unknown {
+  if (mode === "job") return safeJobMetadata(value);
+  if (mode === "logs") return safeJobLogResult(value);
+  if (mode === "input") return safeJobInputResult(value);
+  if (mode === "shell") return safeShellResult(value);
+  if (mode === "read") return safeReadResult(value);
+  if (mode === "edit") return safeEditResult(value);
+  if (mode.startsWith("inspect:")) return safeInspectResult(value, mode.slice("inspect:".length) as InspectResultKind);
+  return value;
 }
 
 async function activeJobList(env: WorkerEnv, clientId: string, filters: Record<string, unknown>): Promise<unknown> {
@@ -309,9 +673,26 @@ async function activeJobList(env: WorkerEnv, clientId: string, filters: Record<s
   const visible: unknown[] = [];
   for (const job of jobs) {
     const workspaceId = isRecord(job) ? job.workspace_id : undefined;
-    if (await checkPermission(env, clientId, selected.value.runnerId, workspaceId, "read") === undefined) visible.push(job);
+    if (await checkPermission(env, clientId, selected.value.runnerId, workspaceId, "read") === undefined) {
+      // Registry snapshots contain Runner-internal JobRecord fields (cwd,
+      // command, PID, and process identity).  Keep the MCP contract to the
+      // documented metadata allow-list even when a future Registry adds more
+      // fields or redaction rules change.
+      visible.push(safeJobMetadata(job));
+    }
   }
-  return runnerSuccess({ ...value, jobs: visible, ...(selected.value.context.state === "online" ? {} : { source: "registry_snapshot", runner_state: "offline" }) }, selected.value);
+  // Keep the outer envelope closed as well as each JobRecord.  Spreading a
+  // Registry response here would let a future/internal field (for example a
+  // root path or query diagnostic) cross the MCP boundary without going
+  // through an explicit projection.
+  const projected: Record<string, unknown> = { jobs: visible };
+  const runnerId = safeJobIdentifier(value.runner_id);
+  if (runnerId !== undefined) projected.runner_id = runnerId;
+  if (selected.value.context.state !== "online") {
+    projected.source = "registry_snapshot";
+    projected.runner_state = "offline";
+  }
+  return runnerSuccess(projected, selected.value);
 }
 
 async function activeWorkspaceList(env: WorkerEnv, clientId: string): Promise<unknown> {
@@ -324,9 +705,24 @@ async function activeWorkspaceList(env: WorkerEnv, clientId: string): Promise<un
   const visible: unknown[] = [];
   for (const workspace of workspaces) {
     const workspaceId = isRecord(workspace) ? workspace.workspace_id : undefined;
-    if (await checkPermission(env, clientId, selected.value.runnerId, workspaceId, "read") === undefined) visible.push(workspace);
+    if (await checkPermission(env, clientId, selected.value.runnerId, workspaceId, "read") === undefined) {
+      const projectedWorkspace = safeWorkspaceMetadata(workspace);
+      if (projectedWorkspace !== undefined) visible.push(projectedWorkspace);
+    }
   }
-  return runnerSuccess({ ...value, workspaces: visible, ...(selected.value.context.state === "online" ? {} : { source: "registry_snapshot", runner_state: "offline" }) }, selected.value);
+  // The Registry currently returns only IDs/permission bits here.  Preserve
+  // that documented envelope explicitly instead of spreading future fields
+  // (especially host roots) into a public MCP response.
+  const projected: Record<string, unknown> = { workspaces: visible };
+  const runnerId = safeJobIdentifier(value.runner_id);
+  if (runnerId !== undefined) projected.runner_id = runnerId;
+  if (isSafeNonnegativeInteger(value.revision)) projected.revision = value.revision;
+  if (typeof value.checksum === "string" && /^[a-f0-9]{64}$/u.test(value.checksum)) projected.checksum = value.checksum;
+  if (selected.value.context.state !== "online") {
+    projected.source = "registry_snapshot";
+    projected.runner_state = "offline";
+  }
+  return runnerSuccess(projected, selected.value);
 }
 type PermissionCheck = ToolFailure;
 async function checkPermission(env: WorkerEnv, clientId: string, runnerId: string, workspaceId: unknown, required: PermissionBit): Promise<PermissionCheck | undefined> {
@@ -393,14 +789,36 @@ async function activeJobGet(env: WorkerEnv, clientId: string, jobId: string): Pr
   const snapshot = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/jobs/${encodeURIComponent(jobId)}`);
   if (!snapshot.ok) return runnerFailure(snapshot.error, selected.value);
   const workspaceId = isRecord(snapshot.value) && typeof snapshot.value.workspace_id === "string" ? snapshot.value.workspace_id : undefined;
+  if (workspaceId === undefined || !isSafeIdentifier(workspaceId)) {
+    return runnerFailure(fail("permission_denied", "The operation is not permitted for this job.", "Use a job identifier belonging to an authorized workspace.").error, selected.value);
+  }
   const permission = await checkPermission(env, clientId, selected.value.runnerId, workspaceId, "read");
   if (permission !== undefined) return asToolResult(permission);
-  if (selected.value.context.state !== "online") return runnerSuccess({ ...(snapshot.value as Record<string, unknown>), source: "registry_snapshot", runner_state: "offline" }, selected.value);
+  if (selected.value.context.state !== "online") {
+    return runnerSuccess({ ...safeJobMetadata(snapshot.value), source: "registry_snapshot", runner_state: "offline" }, selected.value);
+  }
   const readiness = await policyReadiness(env, selected.value.runnerId);
   if (!readiness.ok) return asToolResult(readiness.error);
-  const live = await callRunner(env, selected.value.runnerId, "job.get", { job_id: jobId }, readiness.value.applied_revision, readiness.value.active_checksum);
-  if (live.ok || live.error.code !== "runner_offline") return live.ok ? runnerSuccess(live.value, selected.value) : runnerFailure(live.error, selected.value);
-  return runnerSuccess({ ...(snapshot.value as Record<string, unknown>), source: "registry_snapshot", runner_state: "offline" }, selected.value);
+  const live = await callRunner(env, selected.value.runnerId, "job.get", { job_id: jobId, expected_workspace_id: workspaceId }, readiness.value.applied_revision, readiness.value.active_checksum);
+  if (live.ok) {
+    if (!runnerJobResultMatches(live.value, jobId, workspaceId)) {
+      return runnerFailure(fail("permission_denied", "The Runner returned a job from a different workspace.", "Refresh the job list and retry with the authorized job identifier.").error, selected.value);
+    }
+    return runnerSuccess(safeJobMetadata(live.value), selected.value);
+  }
+  if (live.error.code !== "runner_offline") return runnerFailure(live.error, selected.value);
+  return runnerSuccess({ ...safeJobMetadata(snapshot.value), source: "registry_snapshot", runner_state: "offline" }, selected.value);
+}
+
+/** Check an RPC job envelope against the Registry-authorized job/workspace pair. */
+function runnerJobResultMatches(value: unknown, jobId: string, workspaceId: string): boolean {
+  if (!isRecord(value)) return false;
+  const nested = isRecord(value.job) ? value.job : value;
+  const returnedJobId = nested.job_id;
+  if (returnedJobId !== undefined && returnedJobId !== jobId) return false;
+  const returnedWorkspaceId = nested.workspace_id;
+  if (returnedWorkspaceId !== undefined && returnedWorkspaceId !== workspaceId) return false;
+  return true;
 }
 
 function isSafeRelativePath(value: string): boolean {
@@ -465,12 +883,22 @@ function registryJobsPath(runnerId: string, filters: Record<string, unknown>): s
 
 function runnerListToolValue(value: readonly unknown[]): unknown {
   const runners = value.filter(isRecord).map((runner) => {
-    const runnerId = typeof runner.runner_id === "string" ? runner.runner_id : "unknown";
-    const displayName = typeof runner.display_name === "string" && runner.display_name.length > 0 ? runner.display_name : runnerId;
+    const runnerId = safeJobIdentifier(runner.runner_id) ?? "unknown";
+    const displayName = typeof runner.display_name === "string" && runner.display_name.length > 0 && runner.display_name.length <= 256 && !/[\u0000-\u001f\u007f]/u.test(runner.display_name) ? runner.display_name : runnerId;
     const state = runner.state === "online" || runner.state === "offline" || runner.state === "stale" ? runner.state : "unavailable";
-    return { runner_id: runnerId, display_name: displayName, state, available: state === "online", updated_at_ms: typeof runner.updated_at_ms === "number" ? runner.updated_at_ms : null };
+    return { runner_id: runnerId, display_name: displayName, state, available: state === "online", updated_at_ms: isSafeNonnegativeInteger(runner.updated_at_ms) ? runner.updated_at_ms : null };
   });
   return success({ runners });
+}
+
+/** Public workspace metadata is intentionally smaller than the Registry row. */
+function safeWorkspaceMetadata(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  const workspaceId = safeJobIdentifier(value.workspace_id);
+  if (workspaceId === undefined || typeof value.enabled !== "boolean" || !isRecord(value.permissions)) return undefined;
+  const permissions = value.permissions;
+  if (typeof permissions.read !== "boolean" || typeof permissions.edit !== "boolean" || typeof permissions.shell !== "boolean" || typeof permissions.job_control !== "boolean") return undefined;
+  return { workspace_id: workspaceId, enabled: value.enabled, permissions: { read: permissions.read, edit: permissions.edit, shell: permissions.shell, job_control: permissions.job_control } };
 }
 
 async function registryCall(env: WorkerEnv, path: string): Promise<ToolCall> {

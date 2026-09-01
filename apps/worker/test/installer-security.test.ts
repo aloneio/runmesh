@@ -9,7 +9,7 @@ import {
   resolvePublicOrigin,
   shellQuote,
 } from "../src/installer.js";
-import { runnerEnrollmentPage } from "../src/index.js";
+import { runnerConfiguredExecutionMode, runnerEnrollmentPage } from "../src/index.js";
 
 describe("hosted installer origin and template safety", () => {
   it("canonicalizes only strict HTTPS authorities", () => {
@@ -72,7 +72,7 @@ describe("hosted installer origin and template safety", () => {
 
   it("keeps enrollment codes out of copied commands and rejects Host confusion", async () => {
     const code = "A".repeat(43);
-    const page = runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }, "https://worker.example", "runner-test", code, "csrf");
+    const page = runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }, "https://worker.example", "runner-test", code, "csrf", false, "privileged_host", true);
     expect(page.status).toBe(200);
     const html = await page.text();
     // The code is shown once for the operator, but it must never be present
@@ -84,7 +84,7 @@ describe("hosted installer origin and template safety", () => {
     const rejected = runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }, "https://evil.example", "runner-test", code, "csrf");
     expect(rejected.status).toBe(421);
 
-    const hosted = runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example", RUNMESH_SIGNED_RELEASE_AVAILABLE: FIXED_RELEASE_VERSION }, "https://worker.example", "runner-test", code, "csrf");
+    const hosted = runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example", RUNMESH_SIGNED_RELEASE_AVAILABLE: FIXED_RELEASE_VERSION }, "https://worker.example", "runner-test", code, "csrf", false, "privileged_host", true);
     expect(hosted.status).toBe(200);
     const hostedHtml = await hosted.text();
     expect(hostedHtml).not.toContain(`--code ${code}`);
@@ -93,10 +93,28 @@ describe("hosted installer origin and template safety", () => {
 
   it("states the privileged_host default and confirmation requirement on the enrollment page", async () => {
     const code = "B".repeat(43);
-    const page = runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }, "https://worker.example", "runner-test", code, "csrf");
+    const page = runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }, "https://worker.example", "runner-test", code, "csrf", false, "privileged_host", true);
     expect(page.status).toBe(200);
     const html = await page.text();
     expect(html).toContain("The recommended execution mode is privileged_host");
     expect(html).toContain("--confirm-privileged-host");
+    expect(runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }, "https://worker.example", "runner-test", code, "csrf", false, "privileged_host").status).toBe(400);
+  });
+
+  it("never treats Runner-reported execution mode as administrator authorization", () => {
+    expect(runnerConfiguredExecutionMode({
+      configured_execution_mode: "privileged_host",
+      metadata: { execution_mode: "privileged_host" },
+      public_info: { execution_mode: "privileged_host" },
+    })).toBe("privileged_host");
+    expect(runnerConfiguredExecutionMode({
+      metadata: { execution_mode: "dedicated_user" },
+      public_info: { execution_mode: "dedicated_user" },
+    })).toBe("migration_required");
+    expect(runnerConfiguredExecutionMode({
+      configured_execution_mode: "dedicated_user",
+      metadata: { execution_mode: "privileged_host" },
+      public_info: { execution_mode: "privileged_host" },
+    })).toBe("dedicated_user");
   });
 });

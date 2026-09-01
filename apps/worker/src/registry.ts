@@ -19,6 +19,9 @@ import { containsControlCharacter, constantTimeEqual, isConfiguredSecret, isSafe
 import { readCappedText } from "./body.js";
 
 export type RunnerConnectionState = "online" | "offline" | "stale";
+/** Administrator-selected service execution mode.  This is control-plane
+ * configuration; Runner-reported values are kept separately as diagnostics. */
+export type RunnerExecutionMode = "dedicated_user" | "privileged_host";
 
 export type PolicyReadiness =
   | {
@@ -83,6 +86,9 @@ export interface RunnerPublicInfo {
   readonly hostname: string;
   readonly runner_version: string;
   readonly protocol_version: number;
+  readonly execution_mode?: RunnerExecutionMode;
+  readonly service_identity?: string;
+  readonly privilege_state?: "privileged" | "restricted" | "mismatch" | "unknown";
 }
 export interface RunnerRecord {
   readonly runner_id: string;
@@ -91,6 +97,9 @@ export interface RunnerRecord {
   readonly connection_epoch: number;
   readonly credential_version: number;
   readonly management_mode: "central" | "legacy_local";
+  /** Trusted administrator selection.  Null means a legacy row needs an
+   * explicit mode choice before it can be (re)installed. */
+  readonly configured_execution_mode: RunnerExecutionMode | null;
   readonly session_id: string | null;
   readonly metadata: RunnerMetadata | null;
   /** Safe enrollment-time identity/version data, intentionally excluding paths and credentials. */
@@ -191,6 +200,7 @@ type RunnerRow = {
   /** Internal identity for one runner-id lifecycle; never exposed to callers. */
   lifecycle_id: string;
   management_mode: "central" | "legacy_local";
+  configured_execution_mode: RunnerExecutionMode | null;
   session_id: string | null;
   metadata_json: string | null;
   public_info_json: string | null;
@@ -271,6 +281,7 @@ export class RegistryDO {
           runner_id TEXT PRIMARY KEY, display_name TEXT NOT NULL, token_verifier TEXT NOT NULL, state TEXT NOT NULL,
           connection_epoch INTEGER NOT NULL DEFAULT 0, credential_version INTEGER NOT NULL DEFAULT 1,
           lifecycle_id TEXT NOT NULL DEFAULT '', management_mode TEXT NOT NULL DEFAULT 'legacy_local',
+          configured_execution_mode TEXT,
           session_id TEXT, metadata_json TEXT, public_info_json TEXT, last_heartbeat_ms INTEGER, last_sync_sequence INTEGER,
           desired_policy_revision INTEGER NOT NULL DEFAULT 0, desired_policy_checksum TEXT, applied_policy_revision INTEGER, active_policy_checksum TEXT,
           runner_reported_policy_revision INTEGER, runner_reported_policy_checksum TEXT, policy_status TEXT NOT NULL DEFAULT 'pending',
@@ -951,8 +962,8 @@ export class RegistryDO {
       return true;
     });
   }
-  public addRunner(runnerId: string, displayName: string, nowMs: number, mutationId?: string): RunnerRecord | undefined {
-    if (!isSafeIdentifier(runnerId) || !validLabel(displayName) || !validOptionalMutationId(mutationId)) return undefined;
+  public addRunner(runnerId: string, displayName: string, nowMs: number, mutationId?: string, configuredExecutionMode?: RunnerExecutionMode, confirmPrivilegedHost = false): RunnerRecord | undefined {
+    if (!isSafeIdentifier(runnerId) || !validLabel(displayName) || !validOptionalMutationId(mutationId) || !validOptionalExecutionMode(configuredExecutionMode) || (configuredExecutionMode === "privileged_host" && !confirmPrivilegedHost)) return undefined;
     try {
       this.ctx.storage.transactionSync(() => {
         const existing = this.runnerRow(runnerId);
@@ -962,14 +973,15 @@ export class RegistryDO {
           // never turn an arbitrary existing row into an idempotent success.
           if (mutationId === undefined) throw new Error("runner already exists");
           const marker = this.mutationRow(runnerId, mutationId);
-          if (marker === undefined || marker.kind !== "runner_create" || !validLifecycleId(existing.lifecycle_id) || marker.lifecycle_id !== existing.lifecycle_id || existing.display_name !== displayName || existing.credential_version !== marker.pre_credential_version) throw new Error("runner creation conflict");
+          if (marker === undefined || marker.kind !== "runner_create" || !validLifecycleId(existing.lifecycle_id) || marker.lifecycle_id !== existing.lifecycle_id || existing.display_name !== displayName || existing.credential_version !== marker.pre_credential_version
+            || (configuredExecutionMode !== undefined && existing.configured_execution_mode !== configuredExecutionMode)) throw new Error("runner creation conflict");
           return;
         }
         if (mutationId !== undefined && this.mutationRow(runnerId, mutationId) !== undefined) throw new Error("runner creation tombstone conflict");
         const lifecycleId = crypto.randomUUID();
         this.ctx.storage.sql.exec(
-          `INSERT INTO runners (runner_id, display_name, token_verifier, state, management_mode, credential_version, lifecycle_id, desired_policy_revision, desired_policy_checksum, policy_status, runner_permissions_json, updated_at_ms)
-           VALUES (?, ?, '', 'offline', 'central', 0, ?, 0, NULL, 'pending', ?, ?)`, runnerId, displayName, lifecycleId, JSON.stringify(READ_ONLY_PERMISSIONS), nowMs,
+          `INSERT INTO runners (runner_id, display_name, token_verifier, state, management_mode, configured_execution_mode, credential_version, lifecycle_id, desired_policy_revision, desired_policy_checksum, policy_status, runner_permissions_json, updated_at_ms)
+           VALUES (?, ?, '', 'offline', 'central', ?, 0, ?, 0, NULL, 'pending', ?, ?)`, runnerId, displayName, configuredExecutionMode ?? null, lifecycleId, JSON.stringify(READ_ONLY_PERMISSIONS), nowMs,
         );
         if (mutationId !== undefined) this.ctx.storage.sql.exec(
           "INSERT INTO runner_mutations (runner_id, mutation_id, kind, pre_credential_version, lifecycle_id, committed_at_ms) VALUES (?, ?, 'runner_create', 0, ?, ?)",
@@ -1007,13 +1019,19 @@ export class RegistryDO {
       return true;
     });
   }
-  public createRunnerEnrollment(runnerId: string, enrollmentId: string, verifier: string, nowMs: number): { enrollment_id: string; runner_id: string; expires_at_ms: number } | undefined {
-    if (!isSafeIdentifier(runnerId) || !/^[A-Za-z0-9_-]{43}$/.test(enrollmentId) || !validVerifier(verifier) || this.runnerRow(runnerId) === undefined) return undefined;
+  public createRunnerEnrollment(runnerId: string, enrollmentId: string, verifier: string, nowMs: number, configuredExecutionMode?: RunnerExecutionMode, confirmPrivilegedHost = false): { enrollment_id: string; runner_id: string; expires_at_ms: number } | undefined {
+    if (!isSafeIdentifier(runnerId) || !/^[A-Za-z0-9_-]{43}$/.test(enrollmentId) || !validVerifier(verifier) || !validOptionalExecutionMode(configuredExecutionMode) || (configuredExecutionMode === "privileged_host" && !confirmPrivilegedHost) || this.runnerRow(runnerId) === undefined) return undefined;
     const expiresAtMs = nowMs + RUNNER_ENROLLMENT_TTL_MS;
-    this.ctx.storage.transactionSync(() => {
-      this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE runner_id = ? AND used_at_ms IS NULL", runnerId);
-      this.ctx.storage.sql.exec("INSERT INTO runner_enrollments (enrollment_id, runner_id, verifier, created_at_ms, expires_at_ms) VALUES (?, ?, ?, ?, ?)", enrollmentId, runnerId, verifier, nowMs, expiresAtMs);
-    });
+    try {
+      this.ctx.storage.transactionSync(() => {
+        // Persist the administrator's selection in the same transaction as
+        // the one-time code.  A failed insert therefore cannot leave the
+        // Runner advertising a mode for a code that was never issued.
+        if (configuredExecutionMode !== undefined) this.ctx.storage.sql.exec("UPDATE runners SET configured_execution_mode = ?, updated_at_ms = ? WHERE runner_id = ?", configuredExecutionMode, nowMs, runnerId);
+        this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE runner_id = ? AND used_at_ms IS NULL", runnerId);
+        this.ctx.storage.sql.exec("INSERT INTO runner_enrollments (enrollment_id, runner_id, verifier, created_at_ms, expires_at_ms) VALUES (?, ?, ?, ?, ?)", enrollmentId, runnerId, verifier, nowMs, expiresAtMs);
+      });
+    } catch { return undefined; }
     return { enrollment_id: enrollmentId, runner_id: runnerId, expires_at_ms: expiresAtMs };
   }
   /**
@@ -1400,12 +1418,20 @@ export class RegistryDO {
     if (request.method === "POST" && action === "add") {
       const displayName = stringField(input, "display_name", 256); const mutationId = input.mutation_id === undefined ? undefined : mutationIdField(input);
       if (input.mutation_id !== undefined && mutationId === undefined) return Response.json({ error: "invalid mutation_id" }, { status: 400 });
-      const runner = displayName === undefined ? undefined : this.addRunner(runnerId, displayName, now, mutationId);
+      const configuredExecutionMode = requestedExecutionMode(input); const confirmation = requestedPrivilegedConfirmation(input);
+      if (configuredExecutionMode === null || confirmation === null || (configuredExecutionMode === "privileged_host" && confirmation !== true)) return Response.json({ error: "invalid execution mode or privileged-host confirmation" }, { status: 400 });
+      const runner = displayName === undefined ? undefined : this.addRunner(runnerId, displayName, now, mutationId, configuredExecutionMode, confirmation === true);
       return runner === undefined ? new Response("conflict", { status: 409 }) : Response.json(runner);
     }
     if (request.method === "DELETE" && action === undefined) { const confirmation = stringField(input, "confirmation", 128); const mutationId = mutationIdField(input); return confirmation !== undefined && mutationId !== undefined && this.deleteRunner(runnerId, confirmation, now, mutationId) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 }); }
     if (request.method === "POST" && action === "rename") { const displayName = stringField(input, "display_name", 256); const runner = displayName === undefined ? undefined : this.renameRunner(runnerId, displayName, now); return runner === undefined ? new Response("not found", { status: 404 }) : Response.json(runner); }
-    if (request.method === "POST" && action === "enrollments") { const enrollmentId = stringField(input, "enrollment_id", 43); const verifier = stringField(input, "verifier", 64); const enrollment = enrollmentId === undefined || verifier === undefined ? undefined : this.createRunnerEnrollment(runnerId, enrollmentId, verifier, now); return enrollment === undefined ? new Response("not found", { status: 404 }) : Response.json(enrollment); }
+    if (request.method === "POST" && action === "enrollments") {
+      const enrollmentId = stringField(input, "enrollment_id", 43); const verifier = stringField(input, "verifier", 64);
+      const configuredExecutionMode = requestedExecutionMode(input); const confirmation = requestedPrivilegedConfirmation(input);
+      if (configuredExecutionMode === null || confirmation === null || (configuredExecutionMode === "privileged_host" && confirmation !== true)) return Response.json({ error: "invalid execution mode or privileged-host confirmation" }, { status: 400 });
+      const enrollment = enrollmentId === undefined || verifier === undefined ? undefined : this.createRunnerEnrollment(runnerId, enrollmentId, verifier, now, configuredExecutionMode, confirmation === true);
+      return enrollment === undefined ? new Response("not found", { status: 404 }) : Response.json(enrollment);
+    }
     if (request.method === "POST" && action === "rotate") {
       const mutationId = mutationIdField(input);
       if (this.runnerRow(runnerId) === undefined) return new Response("not found", { status: 404 });
@@ -1680,6 +1706,7 @@ export class RegistryDO {
     if (!columns.has("public_info_json")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN public_info_json TEXT");
     if (!columns.has("last_sync_sequence")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN last_sync_sequence INTEGER");
     if (!columns.has("management_mode")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN management_mode TEXT NOT NULL DEFAULT 'legacy_local'");
+    if (!columns.has("configured_execution_mode")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN configured_execution_mode TEXT");
     if (!columns.has("desired_policy_revision")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN desired_policy_revision INTEGER NOT NULL DEFAULT 0");
     if (!columns.has("applied_policy_revision")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN applied_policy_revision INTEGER");
     if (!columns.has("runner_reported_policy_revision")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN runner_reported_policy_revision INTEGER");
@@ -1885,6 +1912,24 @@ function matchesTransportIdentity(row: Pick<RunnerRow, "lifecycle_id" | "session
 }
 function validUpdateChannel(value: unknown): value is RunnerUpdateChannel { return value === "stable" || value === "pinned"; }
 function validUpdateStatus(value: unknown): value is RunnerUpdateStatus { return value === "unknown" || value === "up_to_date" || value === "update_available" || value === "pinned" || value === "incompatible"; }
+function validExecutionMode(value: unknown): value is RunnerExecutionMode { return value === "dedicated_user" || value === "privileged_host"; }
+function validOptionalExecutionMode(value: unknown): value is RunnerExecutionMode | undefined { return value === undefined || validExecutionMode(value); }
+/** Parse an optional authenticated mode field.  `null` is an invalid sentinel
+ * so callers can distinguish a missing legacy field from malformed input. */
+function requestedExecutionMode(input: InternalInput): RunnerExecutionMode | undefined | null {
+  const hasPrimary = Object.prototype.hasOwnProperty.call(input, "execution_mode");
+  const hasAlias = Object.prototype.hasOwnProperty.call(input, "configured_execution_mode");
+  if (!hasPrimary && !hasAlias) return undefined;
+  const primary = input.execution_mode;
+  const alias = input.configured_execution_mode;
+  if (hasPrimary && !validExecutionMode(primary) || hasAlias && !validExecutionMode(alias)) return null;
+  if (hasPrimary && hasAlias && primary !== alias) return null;
+  return (hasPrimary ? primary : alias) as RunnerExecutionMode;
+}
+function requestedPrivilegedConfirmation(input: InternalInput): boolean | undefined | null {
+  if (!Object.prototype.hasOwnProperty.call(input, "confirm_privileged_host")) return undefined;
+  return typeof input.confirm_privileged_host === "boolean" ? input.confirm_privileged_host : null;
+}
 function protocolCompatibility(minVersion: number, maxVersion: number): RunnerProtocolCompatibility { return minVersion <= PROTOCOL_CURRENT_VERSION && maxVersion >= PROTOCOL_MIN_VERSION ? "compatible" : "incompatible"; }
 function updateStatus(channel: RunnerUpdateChannel, desired: string | undefined, latest: string | undefined, current: { current_runner_version?: string | null; protocol_compatibility?: RunnerProtocolCompatibility } | undefined): RunnerUpdateStatus {
   if (current?.protocol_compatibility === "incompatible") return "incompatible";
@@ -1900,6 +1945,7 @@ function emptyMutationState(): RunnerMutationState {
 function decodeRunner(row: RunnerRow): RunnerRecord {
   return {
     runner_id: row.runner_id, display_name: row.display_name || row.runner_id, state: row.state, management_mode: row.management_mode === "central" ? "central" : "legacy_local", connection_epoch: row.connection_epoch,
+    configured_execution_mode: validExecutionMode(row.configured_execution_mode) ? row.configured_execution_mode : null,
     credential_version: row.credential_version, session_id: row.session_id, metadata: row.metadata_json === null ? null : JSON.parse(row.metadata_json) as RunnerMetadata,
     public_info: row.public_info_json === null ? null : JSON.parse(row.public_info_json) as RunnerPublicInfo, last_heartbeat_ms: row.last_heartbeat_ms,
     last_sync_sequence: row.last_sync_sequence, desired_policy_revision: row.desired_policy_revision ?? 0, desired_policy_checksum: row.desired_policy_checksum, applied_policy_revision: row.applied_policy_revision, active_policy_checksum: row.active_policy_checksum,
@@ -1933,9 +1979,18 @@ function nullableChecksumField(input: InternalInput, field: string): string | nu
 function runnerPublicInfoField(value: unknown): RunnerPublicInfo | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const item = value as Record<string, unknown>;
-  return safePublicText(item.platform, 128) && safePublicText(item.architecture, 128) && safePublicText(item.hostname, 256) && safePublicText(item.runner_version, 256) && typeof item.protocol_version === "number"
-    ? { platform: item.platform, architecture: item.architecture, hostname: item.hostname, runner_version: item.runner_version, protocol_version: item.protocol_version }
-    : undefined;
+  if (!safePublicText(item.platform, 128) || !safePublicText(item.architecture, 128) || !safePublicText(item.hostname, 256) || !safePublicText(item.runner_version, 256) || typeof item.protocol_version !== "number") return undefined;
+  const info: RunnerPublicInfo = {
+    platform: item.platform,
+    architecture: item.architecture,
+    hostname: item.hostname,
+    runner_version: item.runner_version,
+    protocol_version: item.protocol_version,
+    ...(item.execution_mode === "dedicated_user" || item.execution_mode === "privileged_host" ? { execution_mode: item.execution_mode } : {}),
+    ...(typeof item.service_identity === "string" && safePublicText(item.service_identity, 512) ? { service_identity: item.service_identity } : {}),
+    ...(item.privilege_state === "privileged" || item.privilege_state === "restricted" || item.privilege_state === "mismatch" || item.privilege_state === "unknown" ? { privilege_state: item.privilege_state } : {}),
+  };
+  return Number.isSafeInteger(info.protocol_version) && info.protocol_version > 0 && info.protocol_version <= 1_000 ? info : undefined;
 }
 function safePublicText(value: unknown, max: number): value is string { return typeof value === "string" && value.length > 0 && value.length <= max && !/[\u0000-\u001f\u007f<>]/.test(value); }
 function permissionSetField(value: unknown): PermissionSet | undefined {
@@ -1962,21 +2017,21 @@ function validPolicyJson(value: { runner_permissions?: unknown; workspaces?: unk
     return typeof item.workspace_id === "string" && isSafeIdentifier(item.workspace_id) && typeof item.root_path === "string" && item.root_path.length > 0 && item.root_path.length <= 4_096 && absoluteWorkspaceRoot(item.root_path) && !/[\u0000-\u001f\u007f]/u.test(item.root_path) && typeof item.enabled === "boolean" && permissionSetField(item.permissions) !== undefined;
   });
 }
-function workspaceStatusesField(value: unknown): Array<{ workspace_id: string; status: WorkspaceValidationStatus; validation_stage?: "realpath" | "lstat"; reason?: "os_access_denied"; service_identity?: string; execution_mode?: "dedicated_user" | "privileged_host"; remediation_code?: "confirm_privileged_host" | "check_workspace_acl" | "run_as_admin" }> | undefined {
+function workspaceStatusesField(value: unknown): Array<{ workspace_id: string; status: WorkspaceValidationStatus; validation_stage?: "realpath" | "lstat"; reason?: "os_access_denied"; service_identity?: string; execution_mode?: "dedicated_user" | "privileged_host"; remediation_code?: "migrate_privileged_host" | "grant_os_access" | "confirm_privileged_host" | "check_workspace_acl" | "run_as_admin" }> | undefined {
   if (!Array.isArray(value) || value.length > 64) return undefined;
   const valid = new Set<WorkspaceValidationStatus>(["valid", "missing", "not_directory", "permission_denied", "invalid_path"]);
   const stages = new Set(["realpath", "lstat"]);
-  const outputs: Array<{ workspace_id: string; status: WorkspaceValidationStatus; validation_stage?: "realpath" | "lstat"; reason?: "os_access_denied"; service_identity?: string; execution_mode?: "dedicated_user" | "privileged_host"; remediation_code?: "confirm_privileged_host" | "check_workspace_acl" | "run_as_admin" }> = [];
+  const outputs: Array<{ workspace_id: string; status: WorkspaceValidationStatus; validation_stage?: "realpath" | "lstat"; reason?: "os_access_denied"; service_identity?: string; execution_mode?: "dedicated_user" | "privileged_host"; remediation_code?: "migrate_privileged_host" | "grant_os_access" | "confirm_privileged_host" | "check_workspace_acl" | "run_as_admin" }> = [];
   for (const item of value) {
     if (typeof item !== "object" || item === null || Array.isArray(item)) return undefined;
     const itemValue = item as Record<string, unknown>;
     if (typeof itemValue.workspace_id !== "string" || !isSafeIdentifier(itemValue.workspace_id) || typeof itemValue.status !== "string" || !valid.has(itemValue.status as WorkspaceValidationStatus)) return undefined;
-    const next: { workspace_id: string; status: WorkspaceValidationStatus; validation_stage?: "realpath" | "lstat"; reason?: "os_access_denied"; service_identity?: string; execution_mode?: "dedicated_user" | "privileged_host"; remediation_code?: "confirm_privileged_host" | "check_workspace_acl" | "run_as_admin" } = { workspace_id: itemValue.workspace_id, status: itemValue.status as WorkspaceValidationStatus };
+    const next: { workspace_id: string; status: WorkspaceValidationStatus; validation_stage?: "realpath" | "lstat"; reason?: "os_access_denied"; service_identity?: string; execution_mode?: "dedicated_user" | "privileged_host"; remediation_code?: "migrate_privileged_host" | "grant_os_access" | "confirm_privileged_host" | "check_workspace_acl" | "run_as_admin" } = { workspace_id: itemValue.workspace_id, status: itemValue.status as WorkspaceValidationStatus };
     if (typeof itemValue.validation_stage === "string" && stages.has(itemValue.validation_stage)) next.validation_stage = itemValue.validation_stage as "realpath" | "lstat";
     if (itemValue.reason === "os_access_denied") next.reason = itemValue.reason;
     if (typeof itemValue.service_identity === "string" && safePublicText(itemValue.service_identity, 256)) next.service_identity = itemValue.service_identity;
     if (itemValue.execution_mode === "dedicated_user" || itemValue.execution_mode === "privileged_host") next.execution_mode = itemValue.execution_mode;
-    if (itemValue.remediation_code === "confirm_privileged_host" || itemValue.remediation_code === "check_workspace_acl" || itemValue.remediation_code === "run_as_admin") next.remediation_code = itemValue.remediation_code;
+    if (itemValue.remediation_code === "migrate_privileged_host" || itemValue.remediation_code === "grant_os_access" || itemValue.remediation_code === "confirm_privileged_host" || itemValue.remediation_code === "check_workspace_acl" || itemValue.remediation_code === "run_as_admin") next.remediation_code = itemValue.remediation_code;
     outputs.push(next);
   }
   return outputs;
@@ -1998,7 +2053,16 @@ function policyMutationFingerprint(kind: PolicyMutationKind, value: Record<strin
   return JSON.stringify({ kind, permissions: { read: permissions.read, edit: permissions.edit, shell: permissions.shell, job_control: permissions.job_control } });
 }
 function validLabel(value: string): boolean { return value.trim().length >= 1 && value.length <= 256; }
-function validRunnerPublicInfo(value: RunnerPublicInfo): boolean { return value.platform.length > 0 && value.platform.length <= 128 && value.architecture.length > 0 && value.architecture.length <= 128 && value.hostname.length > 0 && value.hostname.length <= 256 && value.runner_version.length > 0 && value.runner_version.length <= 256 && Number.isSafeInteger(value.protocol_version) && value.protocol_version > 0 && value.protocol_version <= 1_000; }
+function validRunnerPublicInfo(value: RunnerPublicInfo): boolean {
+  return value.platform.length > 0 && value.platform.length <= 128
+    && value.architecture.length > 0 && value.architecture.length <= 128
+    && value.hostname.length > 0 && value.hostname.length <= 256
+    && value.runner_version.length > 0 && value.runner_version.length <= 256
+    && Number.isSafeInteger(value.protocol_version) && value.protocol_version > 0 && value.protocol_version <= 1_000
+    && (value.execution_mode === undefined || value.execution_mode === "dedicated_user" || value.execution_mode === "privileged_host")
+    && (value.service_identity === undefined || safePublicText(value.service_identity, 512))
+    && (value.privilege_state === undefined || value.privilege_state === "privileged" || value.privilege_state === "restricted" || value.privilege_state === "mismatch" || value.privilege_state === "unknown");
+}
 function validScopes(value: readonly CodingScope[]): boolean { return value.length > 0 && value.length <= 3 && new Set(value).size === value.length && value.every((scope) => VALID_SCOPES.has(scope)); }
 function scopesField(value: unknown): CodingScope[] | undefined { if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !VALID_SCOPES.has(item as CodingScope))) return undefined; const scopes = value as CodingScope[]; return validScopes(scopes) ? scopes : undefined; }
 function parseScopes(value: string): CodingScope[] | undefined { try { return scopesField(JSON.parse(value) as unknown); } catch { return undefined; } }
