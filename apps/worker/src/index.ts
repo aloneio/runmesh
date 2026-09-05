@@ -1073,10 +1073,10 @@ const ZH_UI_TEXT: Record<string, string> = {
   "View all": "查看全部",
   "Runner activity": "Runner 活动",
   "Infrastructure": "基础设施",
-  "Manage safe runner metadata and one-time enrollment.": "管理安全的 Runner 元数据和一次性注册。",
-  "Manage safe runner metadata and one-time registration.": "管理安全的 Runner 元数据和一次性注册。",
+  "Manage safe runner metadata and one-time enrollment.": "管理 Runner 信息并完成一次性注册。",
+  "Manage safe runner metadata and one-time registration.": "管理 Runner 信息并完成一次性注册。",
   "Add Runner": "添加 Runner",
-  "Enrollment codes expire after 30 minutes.": "注册码将在 30 分钟后过期。",
+  "Enrollment codes expire after 30 minutes.": "注册码 30 分钟后过期。",
   "Display name": "显示名称",
   "Safe runner ID": "安全 Runner ID",
   "optional": "可选",
@@ -1125,7 +1125,7 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Base scopes": "基础权限范围",
   "Save scopes": "保存权限范围",
   "Client access on each Runner": "每个 Runner 上的客户端访问",
-  "Use Global means no additional restriction. Effective access is still limited by Runner and Workspace policy.": "使用全局表示不增加额外限制；有效权限仍受 Runner 与工作区策略约束。",
+  "Use Global means no additional restriction. Effective access is still limited by Runner and Workspace policy.": "选择“全局”表示不额外限制；实际权限仍受 Runner 与工作区策略约束。",
   "Use global": "使用全局",
   "Additional restriction": "附加限制",
   "Save restriction": "保存限制",
@@ -1154,19 +1154,19 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Back to runners": "返回 Runner",
   "Runner ID": "Runner ID",
   "Policy status": "策略状态",
-  "Safe metadata": "安全元数据",
+  "Safe metadata": "基础信息",
   "Service and policy diagnostics": "服务与策略诊断",
-  "Runner-reported execution mode": "Runner 报告的执行模式",
+  "Runner-reported execution mode": "Runner 上报的执行模式",
   "Service identity": "服务身份",
-  "Runner-reported privilege state": "Runner 报告的权限状态",
+  "Runner-reported privilege state": "Runner 上报的权限状态",
   "Configured execution mode (administrator)": "管理员配置的执行模式",
-  "Reported service identity": "报告的服务身份",
+  "Reported service identity": "上报的服务身份",
   "Desired policy revision": "期望策略版本",
   "Active / applied policy revision": "活动 / 已应用策略版本",
-  "Runner reported revision": "Runner 报告的版本",
-  "Desired checksum": "期望 checksum",
-  "Active checksum": "活动 checksum",
-  "Runner reported checksum": "Runner 报告的 checksum",
+  "Runner reported revision": "Runner 上报的版本",
+  "Desired checksum": "期望校验和",
+  "Active checksum": "当前校验和",
+  "Runner reported checksum": "Runner 上报的校验和",
   "Workspace validation status": "工作区验证状态",
   "Platform": "平台",
   "Architecture": "架构",
@@ -1177,7 +1177,7 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Version policy": "版本策略",
   "Runmesh Runner one-click installation": "Runmesh Runner 一键安装",
   "Install Runmesh Runner": "安装 Runmesh Runner",
-  "This command downloads the pinned Runmesh Runner release, verifies its manifest, signature, and checksum, enrolls this host, and installs the service. The one-time code expires in 30 minutes and will not be shown again.": "此命令会下载固定版本的 Runmesh Runner，并校验其清单、签名和 checksum，然后注册当前主机并安装服务。一次性代码将在 30 分钟后过期，且不会再次显示。",
+  "This command downloads the pinned Runmesh Runner release, verifies its manifest, signature, and checksum, enrolls this host, and installs the service. The one-time code expires in 30 minutes and will not be shown again.": "此命令会下载指定版本的 Runmesh Runner，校验清单、签名和校验和，然后注册当前主机并安装服务。此代码将在 30 分钟后失效，且只显示一次。",
   "Run only on the intended host. The command contains a single-use enrollment code; never share or log it. Node.js 20+ and an elevated administrator/root shell are required.": "请只在目标主机上运行。命令包含单次使用的注册代码，请勿分享或记录。需要 Node.js 20+ 以及管理员/root 权限 Shell。",
   "Copy install command": "复制安装命令",
   "Channel": "频道",
@@ -1190,10 +1190,10 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Environment tools": "环境工具",
   "Environment details unavailable while offline.": "离线时无法获取环境详情。",
   "Runner permission profile": "Runner 权限配置",
-  "Changes remain pending until the connected Runner validates and applies the revision.": "变更会保持待处理，直到已连接的 Runner 校验并应用该版本。",
+  "Changes remain pending until the connected Runner validates and applies the revision.": "变更将在已连接的 Runner 校验并应用版本前保持待处理状态。",
   "Emergency control": "紧急控制",
   "Save profile": "保存配置",
-  "Emergency Lock does not automatically stop existing Jobs.": "紧急锁定不会自动停止已有任务。",
+  "Emergency Lock does not automatically stop existing Jobs.": "紧急锁定不会自动停止正在运行的任务。",
   "Emergency lock all permissions": "紧急锁定所有权限",
   "Managed workspaces": "托管工作区",
   "Each save increments the desired policy revision.": "每次保存都会递增期望策略版本。",
@@ -1214,20 +1214,20 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Save workspace": "保存工作区",
   "Create workspace": "创建工作区",
   "Delete workspace": "删除工作区",
-  "Manual portable-artifact enrollment": "手动便携制品注册",
+  "Manual portable-artifact enrollment": "手动注册便携版 Runner",
   "Manual Runner enrollment and install": "手动注册并安装 Runner",
   "Enroll Runner manually": "手动注册 Runner",
   "Enroll Runner": "注册 Runner",
   "Target Runner ID": "目标 Runner ID",
   "One-time enrollment code": "一次性注册代码",
-  "Hosted installers are disabled in this development preview. Download and verify the portable Runner artifact first. This one-time code expires in 30 minutes and will not be shown again.": "此开发预览版已禁用托管安装器。请先下载并校验便携 Runner 制品。此一次性代码将在 30 分钟后过期，且不会再次显示。",
-  "The fixed signed hosted release is not enabled on this deployment. Install the verified portable Runner artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. The install step runs only after enrollment succeeds. This one-time code expires in 30 minutes and will not be shown again.": "当前部署未启用固定签名托管版本。请先安装已校验的便携 Runner 制品，再运行下面的单行命令。命令会在本地请求此代码；粘贴后按 Enter，只有注册成功才会继续安装。此一次性代码将在 30 分钟后过期，且不会再次显示。",
-  "The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. This one-time code expires in 30 minutes and will not be shown again.": "安装器会先校验固定签名的 Runner 制品，再在本地请求此一次性代码。代码不会放入此命令、URL 或进程参数中。此一次性代码将在 30 分钟后过期，且不会再次显示。",
-  "Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.": "请仅在完成校验后将其粘贴到本地提示中；代码不会包含在复制的命令里。",
+  "Hosted installers are disabled in this development preview. Download and verify the portable Runner artifact first. This one-time code expires in 30 minutes and will not be shown again.": "当前开发预览版未启用托管安装器。请先下载并校验便携版 Runner。此代码将在 30 分钟后失效，且只显示一次。",
+  "The fixed signed hosted release is not enabled on this deployment. Install the verified portable Runner artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. The install step runs only after enrollment succeeds. This one-time code expires in 30 minutes and will not be shown again.": "当前部署未启用固定签名的托管版本。请先安装已校验的便携版 Runner，再运行下面的单行命令。命令会在本地提示输入代码，粘贴后按 Enter；只有注册成功后才会继续安装。此代码将在 30 分钟后失效，且只显示一次。",
+  "The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. This one-time code expires in 30 minutes and will not be shown again.": "安装器会先校验固定签名的 Runner，再在本地提示输入代码。代码不会写入命令、URL 或进程参数。此代码将在 30 分钟后失效，且只显示一次。",
+  "Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.": "完成校验后，请将代码粘贴到本地提示中；复制的命令不会包含代码。",
   "Operating system": "操作系统",
   "Copy enrollment command": "复制注册命令",
   "Copy enrollment and install command": "复制注册并安装命令",
-  "Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.": "不要分享此代码。它是一次性注册材料，不是管理员密码、MCP 密钥或长期凭据。",
+  "Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.": "请勿分享此代码。它仅用于一次性注册，不是管理员密码、MCP 密钥或长期凭据。",
   "Regenerate enrollment": "重新生成注册",
   "Done": "完成",
   "MCP client created": "MCP 客户端已创建",
@@ -1337,8 +1337,8 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Unique runtime": "唯一运行时",
   "Revision applied / desired": "已应用 / 期望版本",
   "Heartbeat": "心跳",
-  "Policy is recorded for operators; package download, update, and rollback remain deferred.": "策略会记录供操作员查看；软件包下载、更新和回滚暂缓处理。",
-  "Hosted distribution is not configured. Portable artifact/manual version management only.": "托管分发尚未配置；当前仅支持便携制品和手动版本管理。",
+  "Policy is recorded for operators; package download, update, and rollback remain deferred.": "策略仅供操作员查看；软件包下载、更新和回滚暂不执行。",
+  "Hosted distribution is not configured. Portable artifact/manual version management only.": "托管分发尚未配置；目前只能使用便携版制品并手动管理版本。",
   "Effective Global Scopes": "生效的全局权限范围",
   "Read": "读取",
   "Write": "写入",
@@ -1363,8 +1363,8 @@ const ZH_UI_TEXT: Record<string, string> = {
   // back to English on the secondary views and enrollment flow.
   "Language": "语言",
   "Skip to main content": "跳转到主要内容",
-  "Use a dedicated restricted service identity for narrower host access.": "使用专用受限服务身份，以缩小主机访问范围。",
-  "I understand and authorize this one-time high-privilege installation acknowledgement.": "我理解并授权此次一次性高权限安装。",
+  "Use a dedicated restricted service identity for narrower host access.": "使用专用的受限服务账户，进一步限制主机访问范围。",
+  "I understand and authorize this one-time high-privilege installation acknowledgement.": "我已了解风险，并授权本次高权限安装。",
   "e.g. Production Runner 01": "例如：生产 Runner 01",
   "generated-id": "自动生成的 ID",
   "e.g. Cursor / Claude Desktop": "例如：Cursor / Claude Desktop",
@@ -1372,24 +1372,24 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Status: ": "状态：",
   "Validation: ": "验证：",
   "Validation": "验证",
-  "Selected execution mode": "已选择的执行模式",
+  "Selected execution mode": "当前执行模式",
   "The hosted privileged installer is not used.": "不会使用托管高权限安装器。",
-  "Selected restricted service account mode: dedicated_user.": "已选择受限服务账户模式：dedicated_user。",
-  "This one-time code expires in 30 minutes and will not be shown again.": "此一次性代码将在 30 分钟后过期，且不会再次显示。",
-  "Do not share this code.": "不要分享此代码。",
-  "Use Global means no additional restriction.": "使用全局表示不增加额外限制。",
-  "Effective access is still limited by Runner and Workspace policy.": "有效权限仍受 Runner 与工作区策略约束。",
-  "Runner-reported privilege state is mismatch; verify the service identity before granting access.": "Runner 报告的权限状态不匹配；授予访问权限前请先核验服务身份。",
-  "No trusted administrator execution-mode selection is recorded; choose and confirm a mode before (re)installing.": "尚未记录受信任的管理员执行模式选择；重新安装前请选择并确认模式。",
-  "Runner reports privileged_host, but that self-report is not authorization; re-enroll only after an administrator explicitly confirms the desired mode.": "Runner 报告为 privileged_host，但该自报信息不构成授权；仅在管理员明确确认目标模式后重新注册。",
-  "dedicated_user is configured while a full-host workspace is enabled; migrate the service or narrow the workspace.": "当前配置为 dedicated_user，但启用了整机工作区；请迁移服务或收窄工作区范围。",
-  "Workspace validation reported os_access_denied; review the service identity and migrate to privileged_host or grant the required OS access.": "工作区校验报告 os_access_denied；请检查服务身份，并迁移到 privileged_host 或授予所需的操作系统权限。",
-  "The managed service manifest changed but the Runner process was not restarted.": "托管服务清单已变更，但 Runner 进程尚未重启。",
+  "Selected restricted service account mode: dedicated_user.": "当前使用受限服务账户模式（dedicated_user）。",
+  "This one-time code expires in 30 minutes and will not be shown again.": "此代码将在 30 分钟后失效，且只显示一次。",
+  "Do not share this code.": "请勿分享此代码。",
+  "Use Global means no additional restriction.": "选择“全局”表示不额外限制。",
+  "Effective access is still limited by Runner and Workspace policy.": "实际权限仍受 Runner 与工作区策略约束。",
+  "Runner-reported privilege state is mismatch; verify the service identity before granting access.": "Runner 上报的权限状态不匹配。授予访问权限前，请先核验服务身份。",
+  "No trusted administrator execution-mode selection is recorded; choose and confirm a mode before (re)installing.": "尚未记录管理员确认的执行模式。重新安装前，请选择并确认一种模式。",
+  "Runner reports privileged_host, but that self-report is not authorization; re-enroll only after an administrator explicitly confirms the desired mode.": "Runner 上报为 privileged_host，但这不等同于授权。只有管理员明确确认目标模式后，才能重新注册。",
+  "dedicated_user is configured while a full-host workspace is enabled; migrate the service or narrow the workspace.": "当前使用 dedicated_user，但启用了整机工作区。请迁移服务或缩小工作区范围。",
+  "Workspace validation reported os_access_denied; review the service identity and migrate to privileged_host or grant the required OS access.": "工作区校验返回 os_access_denied。请检查服务身份，迁移到 privileged_host，或补充必要的操作系统权限。",
+  "The managed service manifest changed but the Runner process was not restarted.": "托管服务配置已变更，但 Runner 进程尚未重启。",
   "Runner is online but has zero valid workspaces.": "Runner 已在线，但没有有效工作区。",
-  "No validation result has been reported yet.": "尚未报告校验结果。",
-  "Runner will run as root, SYSTEM, or the platform-equivalent highest-privilege identity. Shell commands can access files, processes, network, environment variables, credentials, and system services reachable by that service identity. Install only on a trusted dedicated machine, VM, or container.": "Runner 将以 root、SYSTEM 或平台等效最高权限运行。Shell 命令可以访问该服务身份可访问的文件、进程、网络、环境变量、凭据和系统服务。仅应安装在受信任的专用机器、虚拟机或容器中。",
-  "You must keep the one-time confirmation in the local install command.": "必须在本地安装命令中保留一次性确认信息。",
-  "Selected restricted service account mode: dedicated_user. The hosted privileged installer is not used.": "已选择受限服务账户模式：dedicated_user。不会使用托管高权限安装器。",
+  "No validation result has been reported yet.": "尚未收到校验结果。",
+  "Runner will run as root, SYSTEM, or the platform-equivalent highest-privilege identity. Shell commands can access files, processes, network, environment variables, credentials, and system services reachable by that service identity. Install only on a trusted dedicated machine, VM, or container.": "Runner 将以 root、SYSTEM 或平台对应的最高权限运行。Shell 命令可访问该服务身份能够访问的文件、进程、网络、环境变量、凭据和系统服务。请仅在受信任的专用机器、虚拟机或容器中安装。",
+  "You must keep the one-time confirmation in the local install command.": "本地安装命令必须保留一次性确认参数。",
+  "Selected restricted service account mode: dedicated_user. The hosted privileged installer is not used.": "当前使用受限服务账户模式（dedicated_user），不会启用托管高权限安装器。",
   "e.g. project-src": "例如：project-src",
   "e.g. Main Repository": "例如：主代码仓库",
   "/absolute/path/to/directory": "/绝对路径/目录",
@@ -1414,16 +1414,16 @@ const ZH_UI_TEXT: Record<string, string> = {
   "RUNNER 详情": "Runner 详情",
   "RUNNER ID": "Runner ID",
   "RUNNER 版本": "Runner 版本",
-  "RUNNER 报告的执行模式": "Runner 报告的执行模式",
-  "RUNNER 报告的权限状态": "Runner 报告的权限状态",
-  "RUNNER 报告的版本": "Runner 报告的版本",
+  "RUNNER 报告的执行模式": "Runner 上报的执行模式",
+  "RUNNER 报告的权限状态": "Runner 上报的权限状态",
+  "RUNNER 报告的版本": "Runner 上报的版本",
   "期望 CHECKSUM": "期望校验和",
   "活动 CHECKSUM": "活动校验和",
-  "RUNNER 报告的 CHECKSUM": "Runner 报告的校验和",
-  "Manual Runner enrollment and install uses a verified portable artifact. Install the artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. Selected execution mode: ": "手动注册并安装 Runner 需要使用已校验的便携制品。请先安装该制品，再运行下面的单行命令。命令会在本地请求此代码；粘贴后按 Enter。已选择的执行模式：",
-  "The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. Selected execution mode: ": "安装器会先校验固定签名的 Runner 制品，再在本地请求此一次性代码。代码不会放入此命令、URL 或进程参数。已选择的执行模式：",
-  "The recommended execution mode is privileged_host; dedicated_user remains available for explicit isolation cases. The install step runs only after enrollment succeeds.": "推荐的执行模式是 privileged_host；如需明确隔离，仍可使用 dedicated_user。只有注册成功后才会继续安装。",
-  "The recommended execution mode is privileged_host; dedicated_user remains available for explicit isolation cases.": "推荐的执行模式是 privileged_host；如需明确隔离，仍可使用 dedicated_user。",
+  "RUNNER 报告的 CHECKSUM": "Runner 上报的校验和",
+  "Manual Runner enrollment and install uses a verified portable artifact. Install the artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. Selected execution mode: ": "请先安装已验证的便携版 Runner，再运行下面的命令。命令会在本机提示输入代码，粘贴后按 Enter。当前执行模式：",
+  "The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. Selected execution mode: ": "安装器会先校验固定签名的 Runner，再在本机提示输入代码。代码不会写入命令、URL 或进程参数。当前执行模式：",
+  "The recommended execution mode is privileged_host; dedicated_user remains available for explicit isolation cases. The install step runs only after enrollment succeeds.": "推荐使用 privileged_host；如需进一步隔离，也可以选择 dedicated_user。注册成功后才会继续安装。",
+  "The recommended execution mode is privileged_host; dedicated_user remains available for explicit isolation cases.": "推荐使用 privileged_host；如需进一步隔离，也可以选择 dedicated_user。",
 };
 
 function brandLogo(className: string, alt = "Runmesh · Agent Control Plane"): string {
@@ -3400,7 +3400,13 @@ legend{
   background:var(--ink-heading);
   border-color:var(--ink-heading);
 }
-.tabs [role=tabpanel]{flex:1 1 100%;margin-top:8px}
+.enrollment-command-panels{display:grid;align-items:start;min-width:0}
+.enrollment-command-panels [role=tabpanel]{grid-area:1 / 1;margin-top:8px;visibility:hidden;pointer-events:none;min-width:0}
+/* Keep every command panel in the same grid track while switching tabs. The
+   hidden panels still reserve the tallest command block, so the enrollment
+   header and the rest of the page do not jump as an OS tab changes. */
+.enrollment-command-panels [role=tabpanel][hidden]{display:block!important}
+.enrollment-command-panels [role=tabpanel]:not([hidden]){visibility:visible;pointer-events:auto}
 pre{
   overflow:auto;
   max-width:100%;
@@ -3886,7 +3892,8 @@ function rememberLocale(locale){document.cookie='runmesh_lang='+locale+'; Max-Ag
 var locale=requestedLocale();if(new URLSearchParams(location.search).has('lang'))rememberLocale(locale);applyLocale(locale);
 function copyText(text){if(navigator.clipboard&&navigator.clipboard.writeText)return navigator.clipboard.writeText(text);var area=document.createElement('textarea');area.value=text;area.setAttribute('readonly','');area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.select();try{document.execCommand('copy')}catch(_){}area.remove();return Promise.resolve()}
 document.querySelectorAll('[data-copy]').forEach(function(button){button.addEventListener('click',function(){var result=copyText(button.getAttribute('data-copy')||'');var mark=function(){button.textContent=document.documentElement.lang==='zh-CN'?'已复制':'Copied';button.classList.add('copied')};if(result&&typeof result.then==='function')result.then(mark,function(){});else mark()})});
-document.querySelectorAll('[data-tab]').forEach(function(tab){tab.addEventListener('click',function(){var target=tab.getAttribute('data-tab');document.querySelectorAll('[data-tab]').forEach(function(item){item.setAttribute('aria-selected',String(item===tab));item.tabIndex=item===tab?0:-1});document.querySelectorAll('[data-panel]').forEach(function(panel){panel.hidden=panel.getAttribute('data-panel')!==target})});tab.addEventListener('keydown',function(event){if(event.key==='ArrowLeft'||event.key==='ArrowRight'){var tabs=Array.prototype.slice.call(document.querySelectorAll('[data-tab]'));var next=tabs[(tabs.indexOf(tab)+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length];next.focus();next.click()}})});
+function stabilizeTabPanels(){document.querySelectorAll('.enrollment-command-panels').forEach(function(container){var panels=Array.prototype.slice.call(container.querySelectorAll('[data-panel]'));if(!panels.length)return;var max=0;panels.forEach(function(panel){var wasHidden=panel.hidden;panel.hidden=false;max=Math.max(max,panel.offsetHeight);panel.hidden=wasHidden});if(max>0)panels.forEach(function(panel){panel.style.minHeight=max+'px'})})}
+document.querySelectorAll('[data-tab]').forEach(function(tab){tab.addEventListener('click',function(){var target=tab.getAttribute('data-tab');var top=tab.getBoundingClientRect().top;document.querySelectorAll('[data-tab]').forEach(function(item){item.setAttribute('aria-selected',String(item===tab));item.tabIndex=item===tab?0:-1});document.querySelectorAll('[data-panel]').forEach(function(panel){panel.hidden=panel.getAttribute('data-panel')!==target});var delta=tab.getBoundingClientRect().top-top;if(delta)window.scrollBy(0,delta)});tab.addEventListener('keydown',function(event){if(event.key==='ArrowLeft'||event.key==='ArrowRight'){var tabs=Array.prototype.slice.call(document.querySelectorAll('[data-tab]'));var next=tabs[(tabs.indexOf(tab)+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length];next.focus();next.click()}})});stabilizeTabPanels();window.addEventListener('resize',function(){stabilizeTabPanels()});
 document.querySelectorAll('.pwd-toggle-btn').forEach(function(btn){btn.addEventListener('click',function(){var wrap=btn.closest('.password-input-wrap');if(!wrap)return;var input=wrap.querySelector('input');if(!input)return;var isPwd=input.type==='password';input.type=isPwd?'text':'password';var isZh=document.documentElement.lang==='zh-CN';var buttonLabel=isPwd?(isZh?'隐藏密码':'Hide password'):(isZh?'显示密码':'Show password');btn.setAttribute('aria-label',buttonLabel);btn.setAttribute('title',buttonLabel);btn.innerHTML=isPwd?'<svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>':'<svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>'})});
  document.querySelectorAll('form.login-form').forEach(function(form){form.addEventListener('submit',function(){var btn=form.querySelector('.login-submit-btn');if(!btn||btn.disabled)return;var isZh=document.documentElement.lang==='zh-CN';var isSetup=form.getAttribute('action')==='/setup';var loadingText=isSetup?(isZh?'正在初始化...':'Initializing...'):(isZh?'正在登录...':'Signing in...');var origWidth=btn.offsetWidth;btn.style.width=origWidth>0?(origWidth+'px'):'100%';btn.disabled=true;btn.textContent=loadingText;try{form.submit()}catch(e){}})});
 function syncExecutionMode(form){var selected=form.querySelector('input[name="execution_mode"]:checked');if(!selected)selected=form.querySelector('select[name="execution_mode"]');var privileged=!!selected&&selected.value==='privileged_host';var confirmation=form.querySelector('[data-privileged-confirmation]');var warning=form.querySelector('.privileged-host-warning');var modeFieldset=form.querySelector('[data-execution-mode-form]');var reuse=!!modeFieldset&&modeFieldset.getAttribute('data-reuse-privileged-confirmation')==='true';if(confirmation)confirmation.required=privileged&&!reuse;if(warning)warning.hidden=!privileged||reuse}
@@ -3986,13 +3993,15 @@ if ($LASTEXITCODE -ne 0) { throw 'Runner doctor check failed.' }`,
   // dedicated_user selection must use the explicit manual path so it cannot
   // silently change the service identity.
   const commands = bootstrap && executionMode === "privileged_host" ? { linux: shellCommand, macos: shellCommand, windows: powerShellCommand } : manualCommands;
-  const tabs = Object.entries(commands).map(([platform, value], index) => `<button role="tab" id="tab-${platform}" aria-controls="panel-${platform}" aria-selected="${index === 0 ? "true" : "false"}" tabindex="${index === 0 ? "0" : "-1"}" data-tab="${platform}">${platform === "macos" ? "macOS" : platform === "windows" ? "Windows" : "Linux"}</button><section role="tabpanel" id="panel-${platform}" aria-labelledby="tab-${platform}" ${index === 0 ? "" : "hidden"} data-panel="${platform}"><pre><code>${escapeHtml(value)}</code></pre><button type="button" class="button secondary" data-copy="${escapeHtml(value)}">Copy ${commands === manualCommands ? "enrollment and install" : "installer"} command</button></section>`).join("");
+  const tabs = Object.entries(commands).map(([platform], index) => `<button role="tab" id="tab-${platform}" aria-controls="panel-${platform}" aria-selected="${index === 0 ? "true" : "false"}" tabindex="${index === 0 ? "0" : "-1"}" data-tab="${platform}">${platform === "macos" ? "macOS" : platform === "windows" ? "Windows" : "Linux"}</button>`).join("");
+  const panels = Object.entries(commands).map(([platform, value], index) => `<section role="tabpanel" id="panel-${platform}" aria-labelledby="tab-${platform}" ${index === 0 ? "" : "hidden"} class="${index === 0 ? "is-active" : ""}" data-panel="${platform}"><pre><code>${escapeHtml(value)}</code></pre><button type="button" class="button secondary" data-copy="${escapeHtml(value)}">Copy ${commands === manualCommands ? "enrollment and install" : "installer"} command</button></section>`).join("");
   const title = commands === manualCommands ? "Manual portable-artifact enrollment" : "Signed fixed-preview enrollment";
   const instruction = commands === manualCommands
     ? `Manual Runner enrollment and install uses a verified portable artifact. Install the artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. Selected execution mode: ${modeLabel}. The recommended execution mode is privileged_host; dedicated_user remains available for explicit isolation cases. The install step runs only after enrollment succeeds.`
     : `The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. Selected execution mode: ${modeLabel}. The recommended execution mode is privileged_host; dedicated_user remains available for explicit isolation cases.`;
   const warningBlock = executionMode === "privileged_host" ? `<p class="warning privileged-host-warning">${escapeHtml(privilegedWarning)} You must keep the one-time confirmation in the local install command.</p>` : `<p class="notice">Selected restricted service account mode: dedicated_user. The hosted privileged installer is not used.</p>`;
-  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body enrollment-body"><header class="enrollment-header"><a class="enrollment-brand" href="/admin" aria-label="Runmesh · Agent Control Plane">${brandLogo("enrollment-brand-logo")}</a><div class="enrollment-header-actions">${languageSwitch()}</div></header><main class="shell enrollment-shell"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><div class="dialog-icon-row">${meshMarkSvg("dialog-mark")}</div><p class="eyebrow">${title}</p><h1 id="enrollment-title">Enroll Runner</h1><p class="lede">${instruction} This one-time code expires in 30 minutes and will not be shown again.</p></div></section><div class="enrollment-meta-box"><span class="form-stat-label">Target Runner ID</span><span class="mono">${escapeHtml(runnerId)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">Selected execution mode</span><span class="mono">${escapeHtml(modeLabel)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">One-time enrollment code</span><code class="mono" data-no-i18n>${escapeHtml(code)}</code><span class="muted font-12">Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.</span></div><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div>${warningBlock}<p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.</p><div class="top-actions dialog-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment">${executionModeFormFields(executionMode, csrf)}<button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
+  const nav = `<nav class="control-nav" aria-label="Main navigation"><a href="/admin">Dashboard</a><a class="active" aria-current="page" href="/admin/runners">Runners</a><a href="/admin/clients">MCP Clients</a><a href="/admin/settings">Settings</a></nav>`;
+  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body enrollment-body"><a class="skip-link" href="#main-content">Skip to main content</a><header class="app-header"><div class="header-inner"><div class="header-left"><a class="brand" href="/admin" aria-label="Runmesh · Agent Control Plane">${meshMarkSvg("header-mesh-mark")}</a>${nav}</div><div class="header-actions">${languageSwitch()}</div></div></header><main class="shell enrollment-shell" id="main-content" tabindex="-1"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><p class="eyebrow">${title}</p><h1 id="enrollment-title">Enroll Runner</h1><p class="lede">${instruction} This one-time code expires in 30 minutes and will not be shown again.</p></div></section><div class="enrollment-meta-box"><span class="form-stat-label">Target Runner ID</span><span class="mono">${escapeHtml(runnerId)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">Selected execution mode</span><span class="mono">${escapeHtml(modeLabel)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">One-time enrollment code</span><code class="mono" data-no-i18n>${escapeHtml(code)}</code><span class="muted font-12">Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.</span></div><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><div class="enrollment-command-panels">${panels}</div>${warningBlock}<p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.</p><div class="top-actions dialog-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment">${executionModeFormFields(executionMode, csrf)}<button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
 }
   function secretCreatedPage(title: string, url: string): string { return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${escapeHtml(title)}</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card secret-card"><div class="secret-brand-row">${meshMarkSvg("secret-mesh-mark")}<span class="brand-name">Runmesh</span></div><p class="brand-kicker">Runmesh</p><h1>${escapeHtml(title)}</h1><p class="lede">Copy this URL now. It will not be shown again.</p><code>${escapeHtml(url)}</code><div class="secret-actions"><button type="button" class="button" data-copy="${escapeHtml(url)}">Copy MCP URL</button><a class="button secondary" href="/admin">Back to admin</a></div></section></main>${adminScript()}</body></html>`; }
 function secretUrl(base: string, secret: string): string { const url = new URL(base); url.pathname = `/${secret}/mcp`; url.search = ""; return url.toString(); }
