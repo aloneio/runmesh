@@ -1670,15 +1670,15 @@ function runnersPage(data: AdminData, csrf: string): string {
     // administrator acknowledgement; switching a restricted/legacy Runner
     // to privileged_host still requires a fresh checkbox.
     const modeFields = executionModeFormFields(mode, csrf, true, configuredMode !== "privileged_host");
-    return `<tr class="data-row"><td><div class="table-primary-cell"><a class="strong" href="/admin/runners/${encodeURIComponent(runner.runner_id)}">${escapeHtml(runner.display_name)}</a><span class="sub-id mono">${escapeHtml(runner.runner_id)}</span></div></td><td>${statusBadge(runner.state)}</td><td><span class="platform-tag">${escapeHtml(safePlatform(runner))}</span></td><td><span class="mono font-12">${escapeHtml(modeLabel)}</span>${configuredMode === "migration_required" ? "<span class=\"warning-text\"> · explicit migration required</span>" : ""}</td><td class="num-cell">${runnerWorkspaceCount(runner)}</td><td class="num-cell">${runnerActiveJobs(runner)}</td><td class="time-cell">${escapeHtml(time(runner.last_heartbeat_ms))}</td><td class="actions"><div class="action-btn-group"><a class="button small secondary" href="/admin/runners/${encodeURIComponent(runner.runner_id)}">View</a><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/rename" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input name="display_name" value="${escapeHtml(runner.display_name)}" aria-label="Rename ${escapeHtml(runner.display_name)}" maxlength="256"><button class="small secondary">Rename</button></form><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/rotate" class="inline-action-form">${modeFields}<button class="small secondary">Rotate Credential</button></form><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/revoke" class="inline-action-form danger-action"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Type Runner ID to confirm<input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required></label><button class="small danger">Revoke</button></form><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/delete" class="inline-action-form danger-action"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Type Runner ID to confirm<input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required></label><button class="small danger">Delete</button></form><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/enrollment" class="inline-action-form">${modeFields}<button class="small secondary">Install / Reinstall</button></form></div></td></tr>`;
+    return `<tr class="data-row"><td><div class="table-primary-cell"><a class="strong" href="/admin/runners/${encodeURIComponent(runner.runner_id)}">${escapeHtml(runner.display_name)}</a><span class="sub-id mono">${escapeHtml(runner.runner_id)}</span></div></td><td>${statusBadge(runner.state)}</td><td><span class="platform-tag">${escapeHtml(safePlatform(runner))}</span></td><td><span class="mono font-12">${escapeHtml(modeLabel)}</span>${configuredMode === "migration_required" ? "<span class=\"warning-text\"> · explicit migration required</span>" : ""}</td><td class="num-cell">${runnerWorkspaceCount(runner)}</td><td class="num-cell">${runnerActiveJobs(runner)}</td><td class="time-cell">${escapeHtml(time(runner.last_heartbeat_ms))}</td><td class="actions"><div class="action-btn-group runner-actions"><a class="button small secondary" href="/admin/runners/${encodeURIComponent(runner.runner_id)}">View</a><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/rename" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input name="display_name" value="${escapeHtml(runner.display_name)}" aria-label="Rename ${escapeHtml(runner.display_name)}" maxlength="256"><button class="small secondary">Rename</button></form><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/rotate" class="inline-action-form">${modeFields}<button class="small secondary">Rotate Credential</button></form><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/revoke" class="inline-action-form danger-action"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Type Runner ID to confirm<input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required></label><button class="small danger">Revoke</button></form><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/delete" class="inline-action-form danger-action"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Type Runner ID to confirm<input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required></label><button class="small danger">Delete</button></form><form method="post" action="/admin/runners/${encodeURIComponent(runner.runner_id)}/enrollment" class="inline-action-form">${modeFields}<button class="small secondary">Install / Reinstall</button></form></div></td></tr>`;
   }).join("") || `<tr><td colspan="8" class="empty"><div class="empty-state-box"><p>No runners yet.</p></div></td></tr>`;
   const warning = PRIVILEGED_HOST_WARNING;
-  return `<section class="page-heading"><div><p class="eyebrow">Infrastructure</p><h1>Runners</h1><p class="lede">Manage safe runner metadata and one-time enrollment.</p></div></section><section class="panel add-panel" id="add-runner"><div class="section-title"><h2>Add Runner</h2><span class="muted font-12">Enrollment codes expire after 30 minutes.</span></div><form method="post" action="/admin/runners" class="form-grid add-form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Display name<input name="display_name" maxlength="256" required autocomplete="off" placeholder="e.g. Production Runner 01"></label><label>Safe runner ID <span class="muted font-11">optional</span><input name="runner_id" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" placeholder="generated-id"></label><fieldset class="execution-mode-fieldset"><legend>System Runner execution mode</legend><label class="check"><input type="radio" name="execution_mode" value="privileged_host" checked data-execution-mode="privileged_host"><span><strong>整机控制 / 高权限模式（推荐用于受信任的自托管机器）</strong><small>Linux root · macOS root LaunchDaemon · Windows SYSTEM / HighestAvailable</small></span></label><label class="check"><input type="radio" name="execution_mode" value="dedicated_user" data-execution-mode="dedicated_user"><span><strong>受限服务账户模式（dedicated_user）</strong><small>Use a dedicated restricted service identity for narrower host access.</small></span></label><p class="warning privileged-host-warning">${escapeHtml(warning)}</p><label class="check"><input type="checkbox" name="confirm_privileged_host" value="true" data-privileged-confirmation><span>I understand and authorize this one-time high-privilege installation acknowledgement.</span></label></fieldset><div class="form-submit-wrap"><button class="button">Create enrollment</button></div></form></section><section class="panel"><div class="table-wrap"><table class="data-table"><caption class="sr-only">Registered runners</caption><thead><tr><th>Display name</th><th>Status</th><th>Platform / architecture</th><th>Execution mode</th><th>Workspaces</th><th>Active jobs</th><th>Last seen</th><th>Actions</th></tr></thead><tbody>${table}</tbody></table></div></section>`;
+  return `<section class="page-heading"><div><p class="eyebrow">Infrastructure</p><h1>Runners</h1><p class="lede">Manage safe runner metadata and one-time registration.</p></div></section><section class="panel add-panel" id="add-runner"><div class="section-title"><h2>Add Runner</h2><span class="muted font-12">Enrollment codes expire after 30 minutes.</span></div><form method="post" action="/admin/runners" class="form-grid add-form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Display name<input name="display_name" maxlength="256" required autocomplete="off" placeholder="e.g. Production Runner 01"></label><label>Safe runner ID <span class="muted font-11">optional</span><input name="runner_id" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" placeholder="generated-id"></label><fieldset class="execution-mode-fieldset"><legend>System Runner execution mode</legend><label class="check"><input type="radio" name="execution_mode" value="privileged_host" checked data-execution-mode="privileged_host"><span><strong>整机控制 / 高权限模式（推荐用于受信任的自托管机器）</strong><small>Linux root · macOS root LaunchDaemon · Windows SYSTEM / HighestAvailable</small></span></label><label class="check"><input type="radio" name="execution_mode" value="dedicated_user" data-execution-mode="dedicated_user"><span><strong>受限服务账户模式（dedicated_user）</strong><small>Use a dedicated restricted service identity for narrower host access.</small></span></label><p class="warning privileged-host-warning">${escapeHtml(warning)}</p><label class="check"><input type="checkbox" name="confirm_privileged_host" value="true" data-privileged-confirmation><span>I understand and authorize this one-time high-privilege installation acknowledgement.</span></label></fieldset><div class="form-submit-wrap"><button class="button">Create enrollment</button></div></form></section><section class="panel"><div class="table-wrap"><table class="data-table runner-table"><caption class="sr-only">Registered runners</caption><thead><tr><th>Display name</th><th>Status</th><th>Platform / architecture</th><th>Execution mode</th><th>Workspaces</th><th>Active jobs</th><th>Last seen</th><th>Actions</th></tr></thead><tbody>${table}</tbody></table></div></section>`;
 }
 function activeRunnerLabel(client: McpClientRecord, runners: readonly RunnerRecord[]): string { const runner = client.active_runner_id === null ? undefined : runners.find((item) => item.runner_id === client.active_runner_id); return runner === undefined ? "Not selected" : runner.display_name; }
 function clientsPage(data: AdminData, csrf: string): string {
   const rows = data.clients.map((client) => `<tr class="data-row"><td><div class="table-primary-cell"><a class="strong" href="/admin/clients/${encodeURIComponent(client.client_id)}">${escapeHtml(client.label)}</a><span class="sub-id mono">${escapeHtml(client.client_id)}</span></div></td><td><div class="scope-tags">${client.scopes.map((s) => `<span class="scope-pill">${escapeHtml(displayScopeLabel(s))}</span>`).join("")}</div></td><td><span class="routing-badge">${escapeHtml(activeRunnerLabel(client, data.runners))}</span></td><td class="time-cell">${escapeHtml(time(client.last_used_at_ms))}</td><td>${client.revoked_at_ms === null ? statusBadge("online") : statusBadge("offline")}</td><td class="actions"><div class="action-btn-group"><a class="button small secondary" href="/admin/clients/${encodeURIComponent(client.client_id)}">View</a><form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rename" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input name="label" value="${escapeHtml(client.label)}" aria-label="Rename ${escapeHtml(client.label)}" maxlength="256"><button class="small secondary">Rename</button></form>${client.revoked_at_ms === null ? `<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rotate" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Rotate</button></form>` : ""}<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/reset-runner" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Reset Runner Selection</button></form>${client.revoked_at_ms === null ? `<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/revoke" class="inline-action-form danger-action"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small danger">Revoke</button></form>` : ""}</div></td></tr>`).join("") || `<tr><td colspan="6" class="empty"><div class="empty-state-box"><p>No MCP clients yet.</p></div></td></tr>`;
-  return `<section class="page-heading"><div><p class="eyebrow">Integrations</p><h1>MCP Clients</h1><p class="lede">Manage labels, scopes, runner routing, and one-time client secrets.</p></div></section><section class="panel add-panel" id="add-client"><div class="section-title"><h2>Add MCP Client</h2></div><form method="post" action="/admin/clients" class="form-grid add-client-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Label<input name="label" maxlength="256" required placeholder="e.g. Cursor / Claude Desktop"></label><fieldset><legend>Scopes</legend><div class="scope-selector-row">${scopeCheckboxes()}</div></fieldset><div class="form-submit-wrap"><button class="button">Create one-time secret</button></div></form></section><section class="panel"><div class="table-wrap"><table class="data-table"><caption class="sr-only">MCP clients</caption><thead><tr><th>Label</th><th>Scopes</th><th>Active runner</th><th>Last used</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+  return `<section class="page-heading"><div><p class="eyebrow">Integrations</p><h1>MCP Clients</h1><p class="lede">Manage labels, scopes, runner routing, and one-time client secrets.</p></div></section><section class="panel add-panel" id="add-client"><div class="section-title"><h2>Add MCP Client</h2></div><form method="post" action="/admin/clients" class="form-grid add-client-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Label<input name="label" maxlength="256" required placeholder="e.g. Cursor / Claude Desktop"></label><fieldset><legend>Scopes</legend><div class="scope-selector-row">${scopeCheckboxes()}</div></fieldset><div class="form-submit-wrap"><button class="button">Create one-time secret</button></div></form></section><section class="panel"><div class="table-wrap"><table class="data-table client-table"><caption class="sr-only">MCP clients</caption><thead><tr><th>Label</th><th>Scopes</th><th>Active runner</th><th>Last used</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
 }
 function settingsPage(csrf: string): string { return `<section class="page-heading"><div><p class="eyebrow">Workspace administration</p><h1>Settings</h1><p class="lede">Keep operator notes here; credentials and secrets are never displayed.</p></div></section><div class="grid-two"><section class="panel"><div class="section-title"><h2>Change password</h2></div><form method="post" action="/admin/password" class="stack settings-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Current password<input type="password" name="current_password" required autocomplete="current-password"></label><label>New password<input type="password" name="password" minlength="12" required autocomplete="new-password"></label><label>Confirm new password<input type="password" name="confirm_password" minlength="12" required autocomplete="new-password"></label><button class="button">Change password</button></form></section><section class="panel danger-panel"><div class="section-title"><h2 class="danger-title">Operator notes</h2></div><p class="muted settings-note">Deployment notes belong in your deployment system. This dashboard intentionally stores no notes or secrets.</p><div class="logout-box"><form method="post" action="/admin/logout" class="stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Log out</button></form></div></section></div>`; }
 function runnerList(runners: readonly RunnerRecord[]): string { return runners.length === 0 ? `<p class="empty">No runners yet.</p>` : `<ul class="item-list">${runners.map((runner) => `<li><a href="/admin/runners/${encodeURIComponent(runner.runner_id)}" class="card-row"><div class="card-row-main"><span class="strong">${escapeHtml(runner.display_name)}</span><span class="card-row-sub">${statusBadge(runner.state)}<span class="meta-separator">·</span><span class="platform-meta">${escapeHtml(safePlatform(runner))}</span></span></div><div class="card-row-aside"><span class="row-arrow">→</span></div></a></li>`).join("")}</ul>`; }
@@ -2528,6 +2528,36 @@ a.strong:hover{color:var(--brand-hover);text-decoration:underline}
   gap:6px;
   flex-wrap:wrap;
 }
+.actions{
+  width:360px;
+  min-width:360px;
+  vertical-align:top;
+}
+.actions .action-btn-group{
+  display:flex;
+  align-items:stretch;
+  flex-direction:column;
+  gap:6px;
+  min-width:0;
+}
+.actions .action-btn-group > *{min-width:0}
+.actions .action-btn-group > a.button{align-self:flex-start}
+.actions .inline-action-form{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:center;
+  width:100%;
+  min-width:0;
+}
+.actions .inline-action-form > input:not([type=hidden]){min-width:0;max-width:none;width:100%}
+.actions .execution-mode-inline{
+  min-width:0;
+  width:100%;
+  flex-wrap:wrap;
+}
+.actions .execution-mode-inline .privileged-host-warning{display:none!important}
+.actions .execution-mode-inline .check{min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.actions .execution-mode-inline .check span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .inline-action-form{
   display:inline-flex;
   align-items:center;
@@ -3404,9 +3434,10 @@ pre{
   .card-row-main{min-width:0;max-width:100%}
   .card-row-sub{display:flex;flex-wrap:wrap;min-width:0;max-width:100%;row-gap:3px}
   .platform-meta,.client-runner-meta{min-width:0;max-width:100%;overflow-wrap:anywhere;word-break:break-word}
-  .action-btn-group{flex-wrap:nowrap}
-  .action-btn-group > *{flex:0 0 auto}
-  .action-btn-group .danger-action label{white-space:nowrap}
+  .action-btn-group{flex-wrap:wrap}
+  .action-btn-group > *{flex:0 1 auto}
+  .action-btn-group .danger-action label{white-space:normal}
+  .actions{width:300px;min-width:300px}
   .metrics{grid-template-columns:1fr}
   .form-grid{grid-template-columns:1fr}
   .perm-selects-row{grid-template-columns:1fr}
@@ -3614,7 +3645,76 @@ tbody tr:hover{background:#f8fafc}
   .metric{min-height:98px}
   .metric-value,.metric strong{font-size:20px}
   .panel{padding:14px;border-radius:10px}
-}</style>`; }
+}
+/* Dense action cells need their own layout.  Without this, each form's
+   intrinsic width expands the Runner table and makes the page unusable. */
+.runner-table{min-width:0;table-layout:fixed}
+.runner-table th:nth-child(1){width:18%}
+.runner-table th:nth-child(2){width:9%}
+.runner-table th:nth-child(3){width:13%}
+.runner-table th:nth-child(4){width:14%}
+.runner-table th:nth-child(5),.runner-table th:nth-child(6){width:7%}
+.runner-table th:nth-child(7){width:12%}
+.runner-table th:nth-child(8){width:20%}
+.runner-table td{overflow-wrap:anywhere}
+.runner-table .actions{vertical-align:top;min-width:0}
+.runner-actions{display:grid;width:100%;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;align-items:start}
+.runner-actions>a,.runner-actions>form{min-width:0}
+.runner-actions>a{width:100%}
+.runner-actions .inline-action-form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px;width:100%;align-items:center}
+.runner-actions .inline-action-form:first-of-type{grid-column:1 / -1}
+.runner-actions .execution-mode-inline{grid-column:1 / -1;min-width:0;width:100%;display:grid;grid-template-columns:auto minmax(0,1fr);padding:7px 8px;gap:5px;background:#f8fafc}
+.runner-actions .execution-mode-inline legend{grid-column:1 / -1}
+.runner-actions .execution-mode-inline label:not(.check){min-width:0}
+.runner-actions .execution-mode-inline select{max-width:100%;min-width:0;width:100%}
+.runner-actions .execution-mode-inline .check{min-width:0;overflow-wrap:anywhere}
+.runner-actions .execution-mode-inline .privileged-host-warning{display:none!important}
+.runner-actions .danger-action{grid-template-columns:minmax(0,1fr) auto}
+.runner-actions .danger-action label{min-width:0;display:flex;flex-direction:column;align-items:stretch;gap:3px}
+.runner-actions .danger-action label input{max-width:none;width:100%}
+.client-table{min-width:0;table-layout:fixed}
+.client-table th:nth-child(1){width:19%}.client-table th:nth-child(2){width:16%}.client-table th:nth-child(3){width:14%}.client-table th:nth-child(4){width:15%}.client-table th:nth-child(5){width:9%}.client-table th:nth-child(6){width:27%}
+.client-table .actions{vertical-align:top;min-width:0}
+.client-table .action-btn-group{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;width:100%}
+.client-table .inline-action-form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px;min-width:0}
+.client-table .inline-action-form:first-of-type{grid-column:1 / -1}
+.client-table .action-btn-group>a,.client-table .action-btn-group>form{min-width:0}
+.client-table .action-btn-group>a{width:100%}
+.client-table .inline-action-form input{max-width:none;width:100%}
+.enrollment-body .shell{max-width:1120px}
+.enrollment-dialog{width:min(960px,100%);margin:0 auto;padding:32px 34px}
+.enrollment-dialog .page-heading{display:block;margin-bottom:22px}
+.enrollment-dialog .page-heading .lede{max-width:72ch}
+.enrollment-dialog .dialog-actions{align-items:center;flex-wrap:wrap}
+.enrollment-dialog .dialog-actions form{display:flex;align-items:center;gap:10px;min-width:0;flex:1 1 520px}
+.enrollment-dialog .dialog-actions .execution-mode-inline{flex:1 1 auto;min-width:0}
+.enrollment-dialog .dialog-actions .execution-mode-inline .privileged-host-warning{max-width:100%;position:static;margin:8px 0 0;grid-column:1 / -1}
+.secret-card{width:min(620px,100%);margin:0 auto;padding:36px}
+.secret-card code{font-size:12px;line-height:1.55;overflow-wrap:anywhere;word-break:break-word}
+.secret-actions{flex-wrap:wrap}
+.secret-actions .button{flex:1 1 180px}
+@media(max-width:1050px){
+  .runner-table,.client-table{table-layout:auto;min-width:940px}
+  .runner-table .actions,.client-table .actions{min-width:300px}
+}
+@media(max-width:800px){
+  .runner-table,.client-table{display:block;min-width:0;border:0}
+  .runner-table thead,.client-table thead{display:none}
+  .runner-table tbody,.client-table tbody,.runner-table tr,.client-table tr,.runner-table td,.client-table td{display:block;width:100%}
+  .runner-table tr,.client-table tr{padding:14px 0;border-bottom:1px solid var(--line)}
+  .runner-table td,.client-table td{padding:5px 0;border:0}
+  .runner-table td::before,.client-table td::before{display:block;margin-bottom:3px;color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+  .runner-table td:nth-child(1)::before{content:"Runner"}.runner-table td:nth-child(2)::before{content:"Status"}.runner-table td:nth-child(3)::before{content:"Platform"}.runner-table td:nth-child(4)::before{content:"Execution mode"}.runner-table td:nth-child(5)::before{content:"Workspaces"}.runner-table td:nth-child(6)::before{content:"Active jobs"}.runner-table td:nth-child(7)::before{content:"Last seen"}.runner-table td:nth-child(8)::before{content:"Actions"}
+  .client-table td:nth-child(1)::before{content:"Client"}.client-table td:nth-child(2)::before{content:"Scopes"}.client-table td:nth-child(3)::before{content:"Active runner"}.client-table td:nth-child(4)::before{content:"Last used"}.client-table td:nth-child(5)::before{content:"Status"}.client-table td:nth-child(6)::before{content:"Actions"}
+  .runner-actions,.client-table .action-btn-group{grid-template-columns:1fr}
+  .runner-actions .inline-action-form:first-of-type,.client-table .inline-action-form:first-of-type{grid-column:auto}
+  .enrollment-dialog{padding:22px 18px}
+  .enrollment-dialog .dialog-actions{align-items:stretch;flex-direction:column}
+  .enrollment-dialog .dialog-actions form{width:100%;flex-direction:column;align-items:stretch}
+  .enrollment-dialog .dialog-actions form .button,.enrollment-dialog .dialog-actions>a{width:100%}
+  .secret-card{padding:24px 20px}
+}
+</style>`; }
  function adminScript(): string {
    const translationJson = JSON.stringify(ZH_UI_TEXT);
    return `<script>
@@ -3650,7 +3750,7 @@ document.querySelectorAll('[data-copy]').forEach(function(button){button.addEven
 document.querySelectorAll('[data-tab]').forEach(function(tab){tab.addEventListener('click',function(){var target=tab.getAttribute('data-tab');document.querySelectorAll('[data-tab]').forEach(function(item){item.setAttribute('aria-selected',String(item===tab));item.tabIndex=item===tab?0:-1});document.querySelectorAll('[data-panel]').forEach(function(panel){panel.hidden=panel.getAttribute('data-panel')!==target})});tab.addEventListener('keydown',function(event){if(event.key==='ArrowLeft'||event.key==='ArrowRight'){var tabs=Array.prototype.slice.call(document.querySelectorAll('[data-tab]'));var next=tabs[(tabs.indexOf(tab)+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length];next.focus();next.click()}})});
 document.querySelectorAll('.pwd-toggle-btn').forEach(function(btn){btn.addEventListener('click',function(){var wrap=btn.closest('.password-input-wrap');if(!wrap)return;var input=wrap.querySelector('input');if(!input)return;var isPwd=input.type==='password';input.type=isPwd?'text':'password';var isZh=document.documentElement.lang==='zh-CN';var buttonLabel=isPwd?(isZh?'隐藏密码':'Hide password'):(isZh?'显示密码':'Show password');btn.setAttribute('aria-label',buttonLabel);btn.setAttribute('title',buttonLabel);btn.innerHTML=isPwd?'<svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>':'<svg class="eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>'})});
  document.querySelectorAll('form.login-form').forEach(function(form){form.addEventListener('submit',function(){var btn=form.querySelector('.login-submit-btn');if(!btn||btn.disabled)return;var isZh=document.documentElement.lang==='zh-CN';var isSetup=form.getAttribute('action')==='/setup';var loadingText=isSetup?(isZh?'正在初始化...':'Initializing...'):(isZh?'正在登录...':'Signing in...');var origWidth=btn.offsetWidth;btn.style.width=origWidth>0?(origWidth+'px'):'100%';btn.disabled=true;btn.textContent=loadingText;try{form.submit()}catch(e){}})});
- function syncExecutionMode(form){var selected=form.querySelector('input[name="execution_mode"]:checked');if(!selected)selected=form.querySelector('select[name="execution_mode"]');var privileged=!!selected&&selected.value==='privileged_host';var confirmation=form.querySelector('[data-privileged-confirmation]');var warning=form.querySelector('.privileged-host-warning');var modeFieldset=form.querySelector('[data-execution-mode-form]');var reuse=!!modeFieldset&&modeFieldset.getAttribute('data-reuse-privileged-confirmation')==='true';if(confirmation)confirmation.required=privileged&&!reuse;if(warning)warning.hidden=!privileged}
+function syncExecutionMode(form){var selected=form.querySelector('input[name="execution_mode"]:checked');if(!selected)selected=form.querySelector('select[name="execution_mode"]');var privileged=!!selected&&selected.value==='privileged_host';var confirmation=form.querySelector('[data-privileged-confirmation]');var warning=form.querySelector('.privileged-host-warning');var modeFieldset=form.querySelector('[data-execution-mode-form]');var reuse=!!modeFieldset&&modeFieldset.getAttribute('data-reuse-privileged-confirmation')==='true';if(confirmation)confirmation.required=privileged&&!reuse;if(warning)warning.hidden=!privileged||reuse}
  document.querySelectorAll('form').forEach(function(form){var controls=form.querySelectorAll('input[name="execution_mode"],select[name="execution_mode"]');if(!controls.length)return;controls.forEach(function(input){input.addEventListener('change',function(){syncExecutionMode(form)})});syncExecutionMode(form)});
  })();
 </script>`;
