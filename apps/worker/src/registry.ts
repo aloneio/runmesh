@@ -149,6 +149,7 @@ export interface DashboardJobRecord {
   readonly job_id: string;
   readonly workspace_id: string;
   readonly status: string;
+  readonly created_by_client_id: string | null;
   readonly updated_at_ms: number;
 }
 export interface DashboardSnapshot {
@@ -1353,7 +1354,14 @@ export class RegistryDO {
       try {
         const job = JSON.parse(row.job_json) as Record<string, unknown>;
         return typeof job.job_id === "string" && typeof job.workspace_id === "string" && typeof job.status === "string"
-          ? [{ runner_id: row.runner_id, job_id: job.job_id, workspace_id: job.workspace_id, status: job.status, updated_at_ms: row.updated_at_ms }]
+          ? [{
+              runner_id: row.runner_id,
+              job_id: job.job_id,
+              workspace_id: job.workspace_id,
+              status: job.status,
+              created_by_client_id: typeof job.created_by_client_id === "string" && isSafeIdentifier(job.created_by_client_id) ? job.created_by_client_id : null,
+              updated_at_ms: row.updated_at_ms,
+            }]
           : [];
       } catch { return []; }
     });
