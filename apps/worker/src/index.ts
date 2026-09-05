@@ -662,7 +662,7 @@ function executionModeFormFields(mode: ConsoleExecutionMode | undefined, csrf: s
   const confirmationRequired = safeMode === "privileged_host" && requirePrivilegedConfirmation;
   const priorConfirmation = safeMode === "privileged_host" && !confirmationRequired;
   const placeholder = safeMode === undefined ? `<option value="" selected>Choose execution mode (required for legacy Runner)</option>` : "";
-  return `<input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input type="hidden" name="expected_execution_mode" value="${expected}"><fieldset class="execution-mode-inline" data-execution-mode-form data-reuse-privileged-confirmation="${priorConfirmation ? "true" : "false"}"><legend>Execution mode</legend><label>Mode<select name="execution_mode" aria-label="Execution mode"${safeMode === undefined ? " required" : ""}>${placeholder}<option value="dedicated_user"${safeMode === "dedicated_user" ? " selected" : ""}>dedicated_user · restricted service account</option><option value="privileged_host"${safeMode === "privileged_host" ? " selected" : ""}>privileged_host · highest host privilege</option></select></label><label class="check"><input type="checkbox" name="confirm_privileged_host" value="true" data-privileged-confirmation${confirmationRequired ? " required" : ""}><span>${priorConfirmation ? "High-privilege mode was already authorized for this Runner." : "I understand and authorize the high-privilege installation."}</span></label><p class="warning privileged-host-warning"${safeMode === "privileged_host" ? "" : " hidden"}>${escapeHtml(PRIVILEGED_HOST_WARNING)}</p></fieldset>`;
+  return `<input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input type="hidden" name="expected_execution_mode" value="${expected}"><fieldset class="execution-mode-inline" data-execution-mode-form data-reuse-privileged-confirmation="${priorConfirmation ? "true" : "false"}"><legend>Execution mode</legend><label>Mode<select name="execution_mode" aria-label="Execution mode"${safeMode === undefined ? " required" : ""}>${placeholder}<option value="dedicated_user"${safeMode === "dedicated_user" ? " selected" : ""}>dedicated_user · restricted service account</option><option value="privileged_host"${safeMode === "privileged_host" ? " selected" : ""}>privileged_host · highest host privilege</option></select></label><label class="check"><input type="checkbox" name="confirm_privileged_host" value="true" data-privileged-confirmation${confirmationRequired ? " required" : ""}><span>${priorConfirmation ? "Previously authorized for this Runner." : "I understand and authorize the high-privilege installation."}</span></label><p class="warning privileged-host-warning"${safeMode === "privileged_host" ? "" : " hidden"}>${escapeHtml(PRIVILEGED_HOST_WARNING)}</p></fieldset>`;
 }
 
 async function createBrowserRunner(env: WorkerEnv, form: FormData, baseUrl: string): Promise<Response> {
@@ -1074,6 +1074,7 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Runner activity": "Runner 活动",
   "Infrastructure": "基础设施",
   "Manage safe runner metadata and one-time enrollment.": "管理安全的 Runner 元数据和一次性注册。",
+  "Manage safe runner metadata and one-time registration.": "管理安全的 Runner 元数据和一次性注册。",
   "Add Runner": "添加 Runner",
   "Enrollment codes expire after 30 minutes.": "注册码将在 30 分钟后过期。",
   "Display name": "显示名称",
@@ -1095,6 +1096,15 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Revoke": "撤销",
   "Delete": "删除",
   "Install / Reinstall": "安装 / 重装",
+  "Execution mode": "执行模式",
+  "Mode": "模式",
+  "System Runner execution mode": "系统 Runner 执行模式",
+  "dedicated_user · restricted service account": "dedicated_user · 受限服务账户",
+  "privileged_host · highest host privilege": "privileged_host · 主机最高权限",
+  "Choose execution mode (required for legacy Runner)": "选择执行模式（旧 Runner 必选）",
+  "High-privilege mode was already authorized for this Runner.": "此 Runner 已获得高权限模式授权。",
+  "Previously authorized for this Runner.": "此 Runner 已获授权。",
+  "I understand and authorize the high-privilege installation.": "我理解并授权此次高权限安装。",
   "Integrations": "集成",
   "Manage labels, scopes, runner routing, and one-time client secrets.": "管理标签、权限范围、Runner 路由和一次性客户端密钥。",
   "Add MCP Client": "添加 MCP 客户端",
@@ -1144,6 +1154,19 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Runner ID": "Runner ID",
   "Policy status": "策略状态",
   "Safe metadata": "安全元数据",
+  "Service and policy diagnostics": "服务与策略诊断",
+  "Runner-reported execution mode": "Runner 报告的执行模式",
+  "Service identity": "服务身份",
+  "Runner-reported privilege state": "Runner 报告的权限状态",
+  "Configured execution mode (administrator)": "管理员配置的执行模式",
+  "Reported service identity": "报告的服务身份",
+  "Desired policy revision": "期望策略版本",
+  "Active / applied policy revision": "活动 / 已应用策略版本",
+  "Runner reported revision": "Runner 报告的版本",
+  "Desired checksum": "期望 checksum",
+  "Active checksum": "活动 checksum",
+  "Runner reported checksum": "Runner 报告的 checksum",
+  "Workspace validation status": "工作区验证状态",
   "Platform": "平台",
   "Architecture": "架构",
   "Hostname": "主机名",
@@ -3649,32 +3672,32 @@ tbody tr:hover{background:#f8fafc}
 /* Dense action cells need their own layout.  Without this, each form's
    intrinsic width expands the Runner table and makes the page unusable. */
 .runner-table{min-width:0;table-layout:fixed}
-.runner-table th:nth-child(1){width:18%}
+.runner-table th:nth-child(1){width:16%}
 .runner-table th:nth-child(2){width:9%}
 .runner-table th:nth-child(3){width:13%}
-.runner-table th:nth-child(4){width:14%}
+.runner-table th:nth-child(4){width:12%}
 .runner-table th:nth-child(5),.runner-table th:nth-child(6){width:7%}
-.runner-table th:nth-child(7){width:12%}
-.runner-table th:nth-child(8){width:20%}
+.runner-table th:nth-child(7){width:10%}
+.runner-table th:nth-child(8){width:28%}
 .runner-table td{overflow-wrap:anywhere}
-.runner-table .actions{vertical-align:top;min-width:0}
+.runner-table .actions{vertical-align:top;width:auto;min-width:0}
 .runner-actions{display:grid;width:100%;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;align-items:start}
 .runner-actions>a,.runner-actions>form{min-width:0}
 .runner-actions>a{width:100%}
 .runner-actions .inline-action-form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px;width:100%;align-items:center}
 .runner-actions .inline-action-form:first-of-type{grid-column:1 / -1}
-.runner-actions .execution-mode-inline{grid-column:1 / -1;min-width:0;width:100%;display:grid;grid-template-columns:auto minmax(0,1fr);padding:7px 8px;gap:5px;background:#f8fafc}
+.runner-actions .execution-mode-inline{grid-column:1 / -1;min-width:0;width:100%;display:grid;grid-template-columns:auto minmax(0,1fr);padding:4px 6px;gap:4px;background:#f8fafc}
 .runner-actions .execution-mode-inline legend{grid-column:1 / -1}
 .runner-actions .execution-mode-inline label:not(.check){min-width:0}
 .runner-actions .execution-mode-inline select{max-width:100%;min-width:0;width:100%}
-.runner-actions .execution-mode-inline .check{min-width:0;overflow-wrap:anywhere}
+.runner-actions .execution-mode-inline .check{min-width:0;overflow-wrap:anywhere;margin:0;font-size:10px}
 .runner-actions .execution-mode-inline .privileged-host-warning{display:none!important}
 .runner-actions .danger-action{grid-template-columns:minmax(0,1fr) auto}
 .runner-actions .danger-action label{min-width:0;display:flex;flex-direction:column;align-items:stretch;gap:3px}
 .runner-actions .danger-action label input{max-width:none;width:100%}
 .client-table{min-width:0;table-layout:fixed}
 .client-table th:nth-child(1){width:19%}.client-table th:nth-child(2){width:16%}.client-table th:nth-child(3){width:14%}.client-table th:nth-child(4){width:15%}.client-table th:nth-child(5){width:9%}.client-table th:nth-child(6){width:27%}
-.client-table .actions{vertical-align:top;min-width:0}
+.client-table .actions{vertical-align:top;width:auto;min-width:0}
 .client-table .action-btn-group{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;width:100%}
 .client-table .inline-action-form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px;min-width:0}
 .client-table .inline-action-form:first-of-type{grid-column:1 / -1}
