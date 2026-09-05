@@ -21,7 +21,7 @@ A compromised Worker/bootstrap endpoint can replace the installer and its embedd
 
 ## Enabled hosted-bootstrap commands
 
-Use these commands **only when the authenticated Admin enrollment page says the fixed signed preview is available** and the command URL uses the configured public origin. The hosted command carries the single-use enrollment code as its final argument. The script validates the artifact first, then sends it only to `coding-runner enroll --code-stdin` and clears its working variable. Treat the copied command as a secret and use it only once. If the request `Host` does not match `RUNMESH_PUBLIC_ORIGIN`, the Worker refuses to render the installer instead of embedding a different origin.
+Use these commands **only when the authenticated Admin enrollment page says the fixed signed preview is available** and the command URL uses the configured public origin. The hosted command carries the single-use enrollment code as its final argument. The script validates the artifact first, then sends it only to `runmesh enroll --code-stdin` and clears its working variable. Treat the copied command as a secret and use it only once. If the request `Host` does not match `RUNMESH_PUBLIC_ORIGIN`, the Worker refuses to render the installer instead of embedding a different origin.
 
 The `262144`-byte limit in the download snippets below applies only to the Worker-served installer script. After that script starts, its embedded downloader applies the separate 8 MiB limit to each fixed GitHub release asset; the repository's `pack:smoke` gate packs the actual Runner tarball and fails if it exceeds that bound.
 
@@ -54,7 +54,7 @@ try {
 }
 ```
 
-The installers require elevation and a clean Runmesh installation; they do not require a host-provided Node.js or npm. They select the host OS/CPU archive for the pinned Node.js `22.19.0` runtime, verify its embedded SHA-256 digest, and place only the Node executable inside the versioned Runmesh root. They refuse an existing `current`, same-version/staging root, canonical system profile, or service manifest. They stage the package under the versioned Runmesh root, validate both `coding-runner` and `runmesh-runner` entry points, and do not make an unverified `latest` update. The private runtime's npm CLI is used only inside the temporary staging directory, with empty user/global config and cache paths, `--offline`, and `--ignore-scripts`; no host npm configuration can change the install. The installed service wrapper invokes the private runtime directly, so the service continues to work even when Node.js/npm are absent from the host PATH. Local artifact installation happens before code redemption, so verification and staging failures do not consume the code. If a later local service step fails, the installer best-effort uninstalls only its newly created managed service, removes the newly created profile, current pointer, and version root, and exits nonzero. There is no automatic package update or rollback: retain the prior verified package and managed `current`/service state for a manual recovery. Enrollment redemption itself is remote and single-use and cannot be restored; generate a replacement code before retrying.
+The installers require elevation and a clean Runmesh installation; they do not require a host-provided Node.js or npm. They select the host OS/CPU archive for the pinned Node.js `22.19.0` runtime, verify its embedded SHA-256 digest, and place only the Node executable inside the versioned Runmesh root. They refuse an existing `current`, same-version/staging root, canonical system profile, or service manifest. They stage the package under the versioned Runmesh root, validate both `runmesh` and `runmesh-runner` entry points, and do not make an unverified `latest` update. The private runtime's npm CLI is used only inside the temporary staging directory, with empty user/global config and cache paths, `--offline`, and `--ignore-scripts`; no host npm configuration can change the install. The installed service wrapper invokes the private runtime directly, so the service continues to work even when Node.js/npm are absent from the host PATH. Local artifact installation happens before code redemption, so verification and staging failures do not consume the code. If a later local service step fails, the installer best-effort uninstalls only its newly created managed service, removes the newly created profile, current pointer, and version root, and exits nonzero. There is no automatic package update or rollback: retain the prior verified package and managed `current`/service state for a manual recovery. Enrollment redemption itself is remote and single-use and cannot be restored; generate a replacement code before retrying.
 
 ## High-assurance offline verification path
 
@@ -188,11 +188,11 @@ sudo mkdir -p "/opt/runmesh/versions/$VERSION"
 )
 sudo ln -s "/opt/runmesh/versions/$VERSION" /opt/runmesh/current.new
 sudo mv /opt/runmesh/current.new /opt/runmesh/current
-sudo "/opt/runmesh/current/bin/coding-runner" --version
-sudo "/opt/runmesh/current/bin/coding-runner" --help
+sudo "/opt/runmesh/current/bin/runmesh" --version
+sudo "/opt/runmesh/current/bin/runmesh" --help
 ```
 
-Use an equivalent verified local path on Windows and inspect the actual `coding-runner.cmd` npm shim before using it for a service. Do not delete an existing `current` link/junction to make room for an install.
+Use an equivalent verified local path on Windows and inspect the actual `runmesh.cmd` npm shim before using it for a service. Do not delete an existing `current` link/junction to make room for an install.
 
 After local verification, run the platform-specific enrollment and service activation steps below without putting the code in argv, shell history, configuration, or a URL.
 
@@ -222,7 +222,7 @@ sudo mkdir -p "/opt/runmesh/versions/$VERSION"
 )
 sudo ln -s "/opt/runmesh/versions/$VERSION" /opt/runmesh/current.new
 sudo mv /opt/runmesh/current.new /opt/runmesh/current
-sudo "/opt/runmesh/current/bin/coding-runner" --help
+sudo "/opt/runmesh/current/bin/runmesh" --help
 ```
 
 ### Windows PowerShell
@@ -255,14 +255,14 @@ try {
 } finally {
   Remove-Item -LiteralPath $NpmConfigRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
-$Runner = Get-ChildItem -LiteralPath $VersionRoot -Filter 'coding-runner.cmd' -File -Recurse | Select-Object -First 1
-if ($null -eq $Runner) { throw 'coding-runner.cmd was not found under the versioned install root.' }
+$Runner = Get-ChildItem -LiteralPath $VersionRoot -Filter 'runmesh.cmd' -File -Recurse | Select-Object -First 1
+if ($null -eq $Runner) { throw 'runmesh.cmd was not found under the versioned install root.' }
 & $Runner.FullName --version
 if ($LASTEXITCODE -ne 0) { throw 'Installed Runner version check failed.' }
 New-Item -ItemType Junction -Path $CurrentRoot -Target $VersionRoot | Out-Null
 ```
 
-The exact npm Windows shim location can vary by npm version. Confirm the installed `coding-runner.cmd` path under `$VersionRoot` before creating the junction; pass that exact absolute path to `--executable-path`.
+The exact npm Windows shim location can vary by npm version. Confirm the installed `runmesh.cmd` path under `$VersionRoot` before creating the junction; pass that exact absolute path to `--executable-path`.
 
 ## Confirm and activate the installed Runner
 
@@ -275,7 +275,7 @@ On Linux or macOS (in `bash` or `zsh`):
 
 ```bash
 set -euo pipefail
-RUNNER=/opt/runmesh/current/bin/coding-runner
+RUNNER=/opt/runmesh/current/bin/runmesh
 SERVER=https://your-runmesh.example/runner/enroll
 "$RUNNER" --version
 "$RUNNER" --help
@@ -295,8 +295,8 @@ On Windows PowerShell (use the exact shim path discovered during installation):
 ```powershell
 $ErrorActionPreference = 'Stop'
 $CurrentRoot = 'C:\Program Files\Runmesh\current'
-$RunnerPath = (Get-ChildItem -LiteralPath $CurrentRoot -Filter 'coding-runner.cmd' -File -Recurse | Select-Object -First 1).FullName
-if ([string]::IsNullOrWhiteSpace($RunnerPath)) { throw 'coding-runner.cmd was not found under the current install.' }
+$RunnerPath = (Get-ChildItem -LiteralPath $CurrentRoot -Filter 'runmesh.cmd' -File -Recurse | Select-Object -First 1).FullName
+if ([string]::IsNullOrWhiteSpace($RunnerPath)) { throw 'runmesh.cmd was not found under the current install.' }
 $Server = 'https://your-runmesh.example/runner/enroll'
 & $RunnerPath --version
 if ($LASTEXITCODE -ne 0) { throw 'Installed Runner version check failed.' }
@@ -317,7 +317,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Runner service installation failed.' }
 if ($LASTEXITCODE -ne 0) { throw 'Runner doctor check failed.' }
 ```
 
-`coding-runner --version` must equal the manifest version, and `doctor --json`
+`runmesh --version` must equal the manifest version, and `doctor --json`
 must return structured checks. The enrollment code is single-use and is not a
 long-term Runner credential; never place it in logs, shell history, issue
 reports, or configuration management. The resulting long-lived Runner token is private profile material.

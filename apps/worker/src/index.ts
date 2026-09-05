@@ -3991,7 +3991,7 @@ export function runnerEnrollmentPage(env: RunnerReleaseEnvironment, baseUrl: str
   const privilegedWarning = "Runner 将以 root、SYSTEM 或平台等效最高权限运行。Shell 命令可以访问该服务身份可访问的文件、进程、网络、环境变量、凭据和系统服务。仅应安装在受信任的专用机器、虚拟机或容器中。";
   const manualCommands = {
     linux: `set -euo pipefail
-RUNNER=/opt/runmesh/current/bin/coding-runner # replace with the verified absolute path if different
+RUNNER=/opt/runmesh/current/bin/runmesh # replace with the verified absolute path if different
 test -x "$RUNNER"
 printf '%s' 'One-time enrollment code: ' >&2
 read -r -s RUNMESH_ENROLLMENT_CODE
@@ -4001,7 +4001,7 @@ unset RUNMESH_ENROLLMENT_CODE
 sudo "$RUNNER" install ${modeFlags} --executable-path "$RUNNER"
 sudo "$RUNNER" doctor --json`,
     macos: `set -euo pipefail
-RUNNER=/opt/runmesh/current/bin/coding-runner # replace with the verified absolute path if different
+RUNNER=/opt/runmesh/current/bin/runmesh # replace with the verified absolute path if different
 test -x "$RUNNER"
 printf '%s' 'One-time enrollment code: ' >&2
 read -r -s RUNMESH_ENROLLMENT_CODE
@@ -4012,8 +4012,8 @@ sudo "$RUNNER" install ${modeFlags} --executable-path "$RUNNER"
 sudo "$RUNNER" doctor --json`,
     windows: `# Run this in an elevated PowerShell session
 $ErrorActionPreference = 'Stop'
-$RunnerPath = 'C:\\Program Files\\Runmesh\\current\\coding-runner.cmd' # replace with the verified absolute shim path if different
-if (-not (Test-Path -LiteralPath $RunnerPath -PathType Leaf)) { throw 'Set RunnerPath to the verified coding-runner.cmd path.' }
+$RunnerPath = 'C:\\Program Files\\Runmesh\\current\\runmesh.cmd' # replace with the verified absolute shim path if different
+if (-not (Test-Path -LiteralPath $RunnerPath -PathType Leaf)) { throw 'Set RunnerPath to the verified runmesh.cmd path.' }
 $EnrollmentCode = Read-Host 'One-time enrollment code'
 try {
   $EnrollmentCode | & $RunnerPath enroll --server ${powershellServer} --code-stdin ${modeFlags}
