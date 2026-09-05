@@ -676,6 +676,15 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(runnersHtml).toContain('name="execution_mode"');
     expect(runnersHtml).toContain('name="confirm_privileged_host"');
     expect(runnersHtml).toContain("data-execution-mode-form");
+    const runnerTableHeader = /<table class="data-table runner-table">[\s\S]*?<thead>([\s\S]*?)<\/thead>/i.exec(runnersHtml)?.[1] ?? "";
+    expect(runnerTableHeader).toContain("<th>Display name</th>");
+    expect(runnerTableHeader).toContain("<th>Last seen</th>");
+    expect(runnerTableHeader).toContain("<th>Actions</th>");
+    expect(runnerTableHeader).not.toContain("Workspaces");
+    expect(runnerTableHeader).not.toContain("Active jobs");
+    expect(runnersHtml).toContain('class="row-actions-more"');
+    expect(runnersHtml).toContain('class="row-actions-menu"');
+    expect(runnersHtml).toContain(".row-actions-menu>.inline-action-form");
     const rejectedPrivilegedAction = await submit("https://worker.test/admin/runners/dashboard-runner/rotate", { csrf_token: csrf, execution_mode: "privileged_host" }, adminJar);
     expect(rejectedPrivilegedAction.status).toBe(400);
     const adminScriptText = inlineScriptContaining(dashboardHtml, "function applyLocale");
