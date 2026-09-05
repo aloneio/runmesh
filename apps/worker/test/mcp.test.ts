@@ -436,6 +436,11 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
       body: chunkedMcpBody,
     });
     expect(chunked.status).toBe(200);
+    for (const name of ["cache-control", "referrer-policy", "x-content-type-options", "x-frame-options", "content-security-policy"]) {
+      expect(chunked.headers.get(name)).toBeTruthy();
+    }
+    expect(chunked.headers.get("cache-control")).toBe("no-store");
+    expect(chunked.headers.get("referrer-policy")).toBe("no-referrer");
 
     const list = await mcp(secretUrl, toolsList());
     expect(list.status).toBe(200);

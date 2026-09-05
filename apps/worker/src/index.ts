@@ -280,6 +280,12 @@ async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL): Prom
     token: verified.client_id,
     clientId: verified.client_id,
     scopes: [...verified.scopes],
+    // The MCP SDK's AuthInfo contract includes these fields even for
+    // stateless URL-secret authentication.  Runmesh credentials do not carry
+    // an independent expiry or OAuth resource indicator, so make that
+    // absence explicit instead of relying on an outdated structural type.
+    expiresAt: undefined,
+    resource: undefined,
     extra: { client_label: verified.label, secret_version: verified.secret_version },
   };
   const handler = createMcpHandler(
@@ -299,7 +305,19 @@ async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL): Prom
   } else {
     forwarded = new Request(rewritten, request);
   }
-  return handler.fetch(forwarded, { authInfo: auth });
+  const response = await handler.fetch(forwarded, { authInfo: auth });
+  // The MCP credential is carried in the request path.  Do not allow an SDK
+  // response (or an intermediary) to cache that path or disclose it through
+  // a referrer when a client follows a response link.  These headers also
+  // keep the JSON/SSE endpoint from becoming an embeddable cross-origin
+  // document if a future SDK response changes its content type.
+  const headers = new Headers(response.headers);
+  headers.set("cache-control", "no-store");
+  headers.set("referrer-policy", "no-referrer");
+  headers.set("x-content-type-options", "nosniff");
+  headers.set("x-frame-options", "DENY");
+  headers.set("content-security-policy", "default-src 'none'; frame-ancestors 'none'");
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
 function isMcpPath(pathname: string): boolean {
