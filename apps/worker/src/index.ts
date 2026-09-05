@@ -3989,7 +3989,7 @@ export function runnerEnrollmentPage(env: RunnerReleaseEnvironment, baseUrl: str
   // profile aliases/functions or execution-policy setting. The installer
   // itself remains the only downloaded payload and receives the one-time code
   // as its sole argument.
-  const powerShellCommand = `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 -TimeoutSec 60 -ErrorAction Stop -Uri ${powerShellInstallerUrl}).Content)) ${powerShellCode}"`;
+  const powerShellCommand = `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 -TimeoutSec 60 -ErrorAction Stop -Uri ${powerShellInstallerUrl}).Content)) ${powerShellCode}"`;
   const server = new URL("/runner/enroll", publicBase).toString();
   const shellServer = shellQuote(server);
   const powershellServer = powershellQuote(server);

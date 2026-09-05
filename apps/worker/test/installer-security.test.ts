@@ -89,7 +89,7 @@ describe("hosted installer origin and template safety", () => {
     const hostedHtml = await hosted.text();
     expect(hostedHtml).toContain(code);
     expect(hostedHtml).toContain(`sudo sh -s -- &#039;${code}&#039;`);
-    expect(hostedHtml).toContain(`powershell.exe -NoProfile -ExecutionPolicy Bypass -Command`);
+    expect(hostedHtml).toContain(`powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command`);
     expect(hostedHtml).toContain(`.Content)) &#039;${code}&#039;&quot;`);
     expect(hostedHtml).toContain("Copy installer command");
   });
