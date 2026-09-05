@@ -521,7 +521,15 @@ export class RunnerDO {
       this.bridgeWaiters.set(requestId, { resolve, timer, socket });
       try { socket.send(encodeWireFrame(parsed.data)); } catch (error) {
         clearTimeout(timer); this.bridgeWaiters.delete(requestId);
-        if (error instanceof ProtocolFrameError && error.code === "frame_too_large") {
+        // Keep the error-code check resilient when the protocol package is
+        // loaded through more than one module graph and `instanceof` does not
+        // recognize an otherwise valid ProtocolFrameError.
+        const protocolCode = error instanceof ProtocolFrameError
+          ? error.code
+          : typeof error === "object" && error !== null && "code" in error && (error as { readonly code?: unknown }).code === "frame_too_large"
+            ? "frame_too_large"
+            : undefined;
+        if (protocolCode === "frame_too_large") {
           resolve({ type: "rpc.error", protocol_version: attachment.protocolVersion, request_id: requestId, error: { code: "request_too_large", message: "runner RPC exceeds the wire-frame limit" } });
           return;
         }
