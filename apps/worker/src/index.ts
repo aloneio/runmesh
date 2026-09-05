@@ -287,7 +287,7 @@ async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL): Prom
     expiresAt: undefined,
     resource: undefined,
     extra: { client_label: verified.label, secret_version: verified.secret_version },
-  } as McpAuth;
+  } as unknown as McpAuth;
   const handler = createMcpHandler(
     () => createCodingMcpServer(env, auth),
     {
