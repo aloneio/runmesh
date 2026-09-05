@@ -1,4 +1,6 @@
-# Deployment
+# Deployment reference
+
+> This page is the advanced deployment reference. If you are setting up Runmesh for the first time, start with the [administrator guide](admin-guide.md). It explains the same process in product language and lists the decisions you need to make before opening access to users.
 
 This document describes the implemented deployment and operator paths. The dashboard-led route is the normal setup path; the `ADMIN_TOKEN` API and explicit Runner flags are advanced/manual alternatives.
 
