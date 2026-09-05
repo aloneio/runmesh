@@ -642,7 +642,7 @@ function runnerActionExecutionMode(runner: { readonly configured_execution_mode?
   return mode === "migration_required" ? undefined : mode;
 }
 
-const PRIVILEGED_HOST_WARNING = "Runner will run as root, SYSTEM, or the platform-equivalent highest-privilege identity. Shell commands can access files, processes, network, environment variables, credentials, and system services reachable by that service identity. Install only on a trusted dedicated machine, VM, or container. Runner 将以 root、SYSTEM 或平台等效最高权限运行。Shell 命令可以访问该服务身份可访问的文件、进程、网络、环境变量、凭据和系统服务。仅应安装在受信任的专用机器、虚拟机或容器中。";
+const PRIVILEGED_HOST_WARNING = "Runner will run as root, SYSTEM, or the platform-equivalent highest-privilege identity. Shell commands can access files, processes, network, environment variables, credentials, and system services reachable by that service identity. Install only on a trusted dedicated machine, VM, or container.";
 
 /**
  * Render mode fields for an authenticated action. Legacy rows intentionally
@@ -1359,6 +1359,59 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Apply approved edits.": "应用已批准的编辑。",
   "Use Host shell and control Jobs.": "使用主机 Shell 并控制任务。",
   "Runmesh · Agent Control Plane": "Runmesh · 智能体控制平面",
+  // Remaining template copy kept here so the Chinese locale does not fall
+  // back to English on the secondary views and enrollment flow.
+  "Language": "语言",
+  "Skip to main content": "跳转到主要内容",
+  "Use a dedicated restricted service identity for narrower host access.": "使用专用受限服务身份，以缩小主机访问范围。",
+  "I understand and authorize this one-time high-privilege installation acknowledgement.": "我理解并授权此次一次性高权限安装。",
+  "e.g. Production Runner 01": "例如：生产 Runner 01",
+  "generated-id": "自动生成的 ID",
+  "e.g. Cursor / Claude Desktop": "例如：Cursor / Claude Desktop",
+  "MCP clients yet.": "MCP 客户端。",
+  "Status: ": "状态：",
+  "Validation: ": "验证：",
+  "Validation": "验证",
+  "Selected execution mode": "已选择的执行模式",
+  "The hosted privileged installer is not used.": "不会使用托管高权限安装器。",
+  "Selected restricted service account mode: dedicated_user.": "已选择受限服务账户模式：dedicated_user。",
+  "This one-time code expires in 30 minutes and will not be shown again.": "此一次性代码将在 30 分钟后过期，且不会再次显示。",
+  "Do not share this code.": "不要分享此代码。",
+  "Use Global means no additional restriction.": "使用全局表示不增加额外限制。",
+  "Effective access is still limited by Runner and Workspace policy.": "有效权限仍受 Runner 与工作区策略约束。",
+  "Runner-reported privilege state is mismatch; verify the service identity before granting access.": "Runner 报告的权限状态不匹配；授予访问权限前请先核验服务身份。",
+  "No trusted administrator execution-mode selection is recorded; choose and confirm a mode before (re)installing.": "尚未记录受信任的管理员执行模式选择；重新安装前请选择并确认模式。",
+  "Runner reports privileged_host, but that self-report is not authorization; re-enroll only after an administrator explicitly confirms the desired mode.": "Runner 报告为 privileged_host，但该自报信息不构成授权；仅在管理员明确确认目标模式后重新注册。",
+  "dedicated_user is configured while a full-host workspace is enabled; migrate the service or narrow the workspace.": "当前配置为 dedicated_user，但启用了整机工作区；请迁移服务或收窄工作区范围。",
+  "Workspace validation reported os_access_denied; review the service identity and migrate to privileged_host or grant the required OS access.": "工作区校验报告 os_access_denied；请检查服务身份，并迁移到 privileged_host 或授予所需的操作系统权限。",
+  "The managed service manifest changed but the Runner process was not restarted.": "托管服务清单已变更，但 Runner 进程尚未重启。",
+  "Runner is online but has zero valid workspaces.": "Runner 已在线，但没有有效工作区。",
+  "No validation result has been reported yet.": "尚未报告校验结果。",
+  "Runner will run as root, SYSTEM, or the platform-equivalent highest-privilege identity. Shell commands can access files, processes, network, environment variables, credentials, and system services reachable by that service identity. Install only on a trusted dedicated machine, VM, or container.": "Runner 将以 root、SYSTEM 或平台等效最高权限运行。Shell 命令可以访问该服务身份可访问的文件、进程、网络、环境变量、凭据和系统服务。仅应安装在受信任的专用机器、虚拟机或容器中。",
+  "You must keep the one-time confirmation in the local install command.": "必须在本地安装命令中保留一次性确认信息。",
+  "Selected restricted service account mode: dedicated_user. The hosted privileged installer is not used.": "已选择受限服务账户模式：dedicated_user。不会使用托管高权限安装器。",
+  "e.g. project-src": "例如：project-src",
+  "e.g. Main Repository": "例如：主代码仓库",
+  "/absolute/path/to/directory": "/绝对路径/目录",
+  "compatible": "兼容",
+  "incompatible": "不兼容",
+  "update_available": "有更新",
+  "permission_denied": "无权限",
+  "os_access_denied": "操作系统拒绝访问",
+  "not_directory": "不是目录",
+  "invalid_path": "路径无效",
+  "missing": "缺失",
+  "valid": "有效",
+  "Read, Write, Exec": "读取、写入、执行",
+  "Each base scope has a distinct ceiling: ": "每个基础权限范围都有独立上限：",
+  "Desired policy revision is ahead of the applied or Runner-reported revision.": "期望策略版本高于已应用版本或 Runner 报告的版本。",
+  "e.g. ": "例如：",
+  "RUNNER": "Runner",
+  "CHECKSUM": "校验和",
+  "Manual Runner enrollment and install uses a verified portable artifact. Install the artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. Selected execution mode: ": "手动注册并安装 Runner 需要使用已校验的便携制品。请先安装该制品，再运行下面的单行命令。命令会在本地请求此代码；粘贴后按 Enter。已选择的执行模式：",
+  "The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. Selected execution mode: ": "安装器会先校验固定签名的 Runner 制品，再在本地请求此一次性代码。代码不会放入此命令、URL 或进程参数。已选择的执行模式：",
+  "The recommended execution mode is privileged_host; dedicated_user remains available for explicit isolation cases. The install step runs only after enrollment succeeds.": "推荐的执行模式是 privileged_host；如需明确隔离，仍可使用 dedicated_user。只有注册成功后才会继续安装。",
+  "The recommended execution mode is privileged_host; dedicated_user remains available for explicit isolation cases.": "推荐的执行模式是 privileged_host；如需明确隔离，仍可使用 dedicated_user。",
 };
 
 function brandLogo(className: string, alt = "Runmesh · Agent Control Plane"): string {
@@ -3778,7 +3831,12 @@ tbody tr:hover{background:#f8fafc}
   var separator=' · ';
   var separatorAt=trimmed.indexOf(separator);
   if(separatorAt>0){var status=trimmed.slice(0,separatorAt);if(ZH_UI_TEXT[status])return value.replace(trimmed,statusText(status)+' · '+trimmed.slice(separatorAt+separator.length))}
-  return value;
+  var statusKeys=['compatible','incompatible','update_available','permission_denied','os_access_denied','not_directory','invalid_path','missing','pending','valid','unknown','online','offline','stale','queued','running','cancelling','cancelled','succeeded','completed','failed','interrupted','invalid'];
+  var replaced=value;
+  statusKeys.forEach(function(key){var re=new RegExp('(^|[^A-Za-z_])'+key+'(?=$|[^A-Za-z_])','g');replaced=replaced.replace(re,function(_,prefix){return prefix+statusText(key)})});
+  var phraseKeys=['Client Routing & Status','Skip to main content','Use a dedicated restricted service identity for narrower host access.','I understand and authorize this one-time high-privilege installation acknowledgement.','Read, Write, Exec','Each base scope has a distinct ceiling: ',' permits inspection, ',' permits approved edits, and ',' permits Host shell and Job control. Runner and Workspace policy can only reduce these permissions.','Desired policy revision is ahead of the applied or Runner-reported revision.','Runner will run as root, SYSTEM, or the platform-equivalent highest-privilege identity. Shell commands can access files, processes, network, environment variables, credentials, and system services reachable by that service identity. Install only on a trusted dedicated machine, VM, or container.','Manual Runner enrollment and install uses a verified portable artifact. Install the artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. Selected execution mode: ','The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. Selected execution mode: ','The recommended execution mode is privileged_host; dedicated_user remains available for explicit isolation cases. The install step runs only after enrollment succeeds.','The recommended execution mode is privileged_host; dedicated_user remains available for explicit isolation cases.','You must keep the one-time confirmation in the local install command.','Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.','Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.'];
+  phraseKeys.sort(function(a,b){return b.length-a.length}).forEach(function(key){var translated=ZH_UI_TEXT[key];if(translated&&replaced.indexOf(key)>=0)replaced=replaced.split(key).join(translated)});
+  return replaced;
 }
 function translateTextNodes(root){var walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode:function(node){if(!node.nodeValue||!node.nodeValue.trim())return NodeFilter.FILTER_REJECT;for(var el=node.parentElement;el;el=el.parentElement){if(el.hasAttribute('data-no-i18n')||el.tagName==='CODE'||el.tagName==='PRE'||el.tagName==='SCRIPT'||el.tagName==='STYLE'||el.tagName==='INPUT'||el.tagName==='TEXTAREA')return NodeFilter.FILTER_REJECT}return NodeFilter.FILTER_ACCEPT}});var nodes=[];while(walker.nextNode())nodes.push(walker.currentNode);nodes.forEach(function(node){node.nodeValue=translateKnown(node.nodeValue||'')})}
 function translateAttributes(root){['aria-label','alt','placeholder','title'].forEach(function(name){root.querySelectorAll('['+name+']').forEach(function(element){if(element.closest('[data-no-i18n]'))return;var value=element.getAttribute(name)||'';var translated=translateKnown(value);if(translated===value&&value.indexOf('Rename ')===0)translated='重命名 '+value.slice(7);element.setAttribute(name,translated)})})}
