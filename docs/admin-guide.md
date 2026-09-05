@@ -23,7 +23,7 @@ Configure these Cloudflare secrets and variables before deployment:
 - `RUNNER_TOKEN_PEPPER` and `INTERNAL_CONTROL_SECRET` for server-side credential protection;
 - `RUNMESH_PUBLIC_ORIGIN` as the exact external HTTPS origin, without a path, query, or credentials.
 
-Never commit secrets or place them in CI logs. Protect a public, uninitialized deployment with Cloudflare Access until the intended administrator completes first setup.
+Generate every secret with a cryptographically secure generator and use at least 32 random bytes for `SETUP_TOKEN`, `ADMIN_TOKEN`, `RUNNER_TOKEN_PEPPER`, and `INTERNAL_CONTROL_SECRET`. Never commit secrets or place them in CI logs. Protect a public, uninitialized deployment with Cloudflare Access until the intended administrator completes first setup.
 
 ## Enroll a Runner
 
