@@ -55,6 +55,7 @@ describe("hosted installer origin and template safety", () => {
       expect(text).toContain("https://github.com");
       expect(text).toContain("https://objects.githubusercontent.com");
       expect(text).not.toContain("__RELEASE_");
+      expect(text).not.toContain("coding-runner");
     }
     expect(shell).toContain("--proto-redir '=https'");
     expect(shell).toContain("--max-redirs 0");
