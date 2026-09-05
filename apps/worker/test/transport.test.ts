@@ -34,12 +34,19 @@ describe("Worker runner transport", () => {
     const secret = "test-internal-control-secret-not-for-production";
     const now = Date.now();
     const nonce = "a".repeat(64);
-    const path = "/runners?status=online";
-    const headers = await internalHeaders(secret, "GET", path, "", { timestamp: now, nonce });
-    const valid = await registry.fetch(`https://registry.internal${path}`, { headers });
+    const path = "/auth/throttle/check";
+    const body = JSON.stringify({ kind: "login" });
+    const headers = await internalHeaders(secret, "POST", path, body, { timestamp: now, nonce });
+    const valid = await registry.fetch(`https://registry.internal${path}`, { method: "POST", headers, body });
     expect(valid.status).toBe(200);
-    const replay = await registry.fetch(`https://registry.internal${path}`, { headers });
+    const replay = await registry.fetch(`https://registry.internal${path}`, { method: "POST", headers, body });
     expect(replay.status).toBe(404);
+
+    const readHeaders = await internalHeaders(secret, "GET", "/runners?status=online", "", { timestamp: now, nonce: "a".repeat(64) });
+    const read = await registry.fetch("https://registry.internal/runners?status=online", { headers: readHeaders });
+    expect(read.status).toBe(200);
+    const readReplay = await registry.fetch("https://registry.internal/runners?status=online", { headers: readHeaders });
+    expect(readReplay.status).toBe(200);
 
     const missing = new Headers(await internalHeaders(secret, "GET", "/runners", "", { timestamp: now, nonce: "b".repeat(64) }));
     missing.delete("x-internal-control-version");
