@@ -365,7 +365,7 @@ rollback() {
   rc="$1"
   cleanup_tty
   if [ "$CURRENT_CREATED" -eq 1 ] && [ -L "$CURRENT_NEW" ]; then rm -f "$CURRENT_NEW"; fi
-  if [ "$CURRENT_CREATED" -eq 1 ] && [ -L "$INSTALL_ROOT/current" ] && [ "$(readlink "$INSTALL_ROOT/current")" = "$FINAL" ]; then "$INSTALL_ROOT/current/bin/coding-runner" uninstall --profile "$PROFILE" --purge --yes --json >/dev/null 2>&1 || true; rm -f "$INSTALL_ROOT/current"; fi
+  if [ "$CURRENT_CREATED" -eq 1 ] && [ -L "$INSTALL_ROOT/current" ] && [ "$(readlink "$INSTALL_ROOT/current")" = "$FINAL" ]; then "$INSTALL_ROOT/current/bin/runmesh" uninstall --profile "$PROFILE" --purge --yes --json >/dev/null 2>&1 || true; rm -f "$INSTALL_ROOT/current"; fi
   if [ "$ENROLLMENT_ATTEMPTED" -eq 1 ] && [ -f "$PROFILE" ]; then rm -f "$PROFILE"; fi
   if [ -L "$INSTALL_ROOT/current" ] && [ "$(readlink "$INSTALL_ROOT/current")" = "$FINAL" ]; then rm -f "$INSTALL_ROOT/current"; fi
   if [ -L "$CURRENT_NEW" ]; then rm -f "$CURRENT_NEW"; fi
@@ -453,28 +453,30 @@ if ! mkdir "$STAGE"; then printf '%s\n' 'error: installer staging path is alread
   "$NODE" "$NPM_CLI" --userconfig "$NPM_CONFIG_USERCONFIG" --globalconfig "$NPM_CONFIG_GLOBALCONFIG" install --global --ignore-scripts --offline --no-audit --no-fund --prefix "$STAGE" "$TMP/$ARTIFACT"
 )
 PACKAGE_ROOT="$STAGE/lib/node_modules/@aloneio/runmesh-runner"
-[ -f "$PACKAGE_ROOT/dist/coding-runner.cjs" ] || { printf '%s\n' 'error: verified package did not contain the Runner bundle' >&2; exit 1; }
+BUNDLE_FILENAME='runmesh.cjs'
+if [ ! -f "$PACKAGE_ROOT/dist/$BUNDLE_FILENAME" ]; then BUNDLE_FILENAME='coding-runner.cjs'; fi
+[ -f "$PACKAGE_ROOT/dist/$BUNDLE_FILENAME" ] || { printf '%s\n' 'error: verified package did not contain the Runner bundle' >&2; exit 1; }
 mkdir -p "$STAGE/runtime"
 cp "$NODE" "$STAGE/runtime/node"
 chmod 0755 "$STAGE/runtime/node"
-RUNNER="$STAGE/bin/coding-runner"
+RUNNER="$STAGE/bin/runmesh"
 RUNMESH_RUNNER="$STAGE/bin/runmesh-runner"
 # npm creates POSIX bin entries as symlinks into the package's dist directory.
 # Remove those links before writing our private-runtime wrappers; redirecting
-# cat through the links would overwrite dist/coding-runner.cjs with shell code.
+# cat through the links would overwrite the verified Runner bundle with shell code.
 rm -f "$RUNNER" "$RUNMESH_RUNNER"
-cat > "$RUNNER" <<'RUNMESH_RUNNER_SH'
+cat > "$RUNNER" <<RUNMESH_RUNNER_SH
 #!/bin/sh
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec "$ROOT/../runtime/node" "$ROOT/../lib/node_modules/@aloneio/runmesh-runner/dist/coding-runner.cjs" "$@"
+ROOT=\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)
+exec "\$ROOT/../runtime/node" "\$ROOT/../lib/node_modules/@aloneio/runmesh-runner/dist/$BUNDLE_FILENAME" "\$@"
 RUNMESH_RUNNER_SH
-cat > "$RUNMESH_RUNNER" <<'RUNMESH_RUNNER_SH'
+cat > "$RUNMESH_RUNNER" <<RUNMESH_RUNNER_SH
 #!/bin/sh
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec "$ROOT/../runtime/node" "$ROOT/../lib/node_modules/@aloneio/runmesh-runner/dist/coding-runner.cjs" "$@"
+ROOT=\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)
+exec "\$ROOT/../runtime/node" "\$ROOT/../lib/node_modules/@aloneio/runmesh-runner/dist/$BUNDLE_FILENAME" "\$@"
 RUNMESH_RUNNER_SH
 chmod 0755 "$RUNNER" "$RUNMESH_RUNNER"
-[ "$("$RUNNER" --version)" = "$VERSION" ] || { printf '%s\n' 'error: installed coding-runner version mismatch' >&2; exit 1; }
+[ "$("$RUNNER" --version)" = "$VERSION" ] || { printf '%s\n' 'error: installed runmesh version mismatch' >&2; exit 1; }
 [ "$("$RUNMESH_RUNNER" --version)" = "$VERSION" ] || { printf '%s\n' 'error: installed runmesh-runner version mismatch' >&2; exit 1; }
 "$RUNNER" --help | grep -F 'usage: runmesh-runner' >/dev/null
 "$RUNMESH_RUNNER" --help | grep -F 'usage: runmesh-runner' >/dev/null
@@ -500,8 +502,8 @@ FINAL_CREATED=1
 ln -s "$FINAL" "$INSTALL_ROOT/current.new"
 mv "$INSTALL_ROOT/current.new" "$INSTALL_ROOT/current"
 CURRENT_CREATED=1
-"$INSTALL_ROOT/current/bin/coding-runner" install --profile "$PROFILE" --execution-mode privileged_host --confirm-privileged-host --executable-path "$INSTALL_ROOT/current/bin/coding-runner"
-printf '%s\n' "Runmesh Runner $VERSION installed and enrolled." 'The background service is enabled and started automatically.' 'Linux logs: sudo journalctl -u runmesh-runner -f' 'macOS logs: sudo log stream --predicate process==coding-runner'
+"$INSTALL_ROOT/current/bin/runmesh" install --profile "$PROFILE" --execution-mode privileged_host --confirm-privileged-host --executable-path "$INSTALL_ROOT/current/bin/runmesh"
+printf '%s\n' "Runmesh Runner $VERSION installed and enrolled." 'The background service is enabled and started automatically.' 'Linux logs: sudo journalctl -u runmesh-runner -f' 'macOS logs: sudo log stream --predicate process==runmesh'
 `;
 
 const POWERSHELL_TEMPLATE = String.raw`$ErrorActionPreference = 'Stop'
@@ -665,19 +667,20 @@ __VERIFIER__
     Pop-Location
   }
   if ($LASTEXITCODE -ne 0) { throw 'Verified local tarball installation failed.' }
-  $PackageRoot = Get-ChildItem -LiteralPath $Stage -Filter 'coding-runner.cjs' -File -Recurse | Select-Object -First 1
+  $PackageRoot = Get-ChildItem -LiteralPath $Stage -Filter 'runmesh.cjs' -File -Recurse | Select-Object -First 1
+  if ($null -eq $PackageRoot) { $PackageRoot = Get-ChildItem -LiteralPath $Stage -Filter 'coding-runner.cjs' -File -Recurse | Select-Object -First 1 }
   if ($null -eq $PackageRoot) { throw 'Verified package did not contain the Runner bundle.' }
   New-Item -ItemType Directory -Path (Join-Path $Stage 'runtime') -Force | Out-Null
   Copy-Item -LiteralPath $NodePath -Destination (Join-Path $Stage 'runtime\node.exe') -Force
-  Copy-Item -LiteralPath $PackageRoot.FullName -Destination (Join-Path $Stage 'coding-runner.cjs') -Force
-  $Runner = Join-Path $Stage 'coding-runner.cmd'
+  Copy-Item -LiteralPath $PackageRoot.FullName -Destination (Join-Path $Stage 'runmesh.cjs') -Force
+  $Runner = Join-Path $Stage 'runmesh.cmd'
   $RunmeshRunner = Join-Path $Stage 'runmesh-runner.cmd'
-  Set-Content -LiteralPath $Runner -Encoding ASCII -Value ('@echo off' + $crlf + $dq + '%~dp0runtime\node.exe' + $dq + ' ' + $dq + '%~dp0coding-runner.cjs' + $dq + ' %*' + $crlf)
-  Set-Content -LiteralPath $RunmeshRunner -Encoding ASCII -Value ('@echo off' + $crlf + $dq + '%~dp0runtime\node.exe' + $dq + ' ' + $dq + '%~dp0coding-runner.cjs' + $dq + ' %*' + $crlf)
-  if ((& $Runner --version).Trim() -ne $Version) { throw 'Installed coding-runner version mismatch.' }
+  Set-Content -LiteralPath $Runner -Encoding ASCII -Value ('@echo off' + $crlf + $dq + '%~dp0runtime\node.exe' + $dq + ' ' + $dq + '%~dp0runmesh.cjs' + $dq + ' %*' + $crlf)
+  Set-Content -LiteralPath $RunmeshRunner -Encoding ASCII -Value ('@echo off' + $crlf + $dq + '%~dp0runtime\node.exe' + $dq + ' ' + $dq + '%~dp0runmesh.cjs' + $dq + ' %*' + $crlf)
+  if ((& $Runner --version).Trim() -ne $Version) { throw 'Installed runmesh version mismatch.' }
   if ((& $RunmeshRunner --version).Trim() -ne $Version) { throw 'Installed runmesh-runner version mismatch.' }
   & $Runner --help | Select-String -SimpleMatch 'usage: runmesh-runner' | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw 'Installed coding-runner help check failed.' }
+  if ($LASTEXITCODE -ne 0) { throw 'Installed runmesh help check failed.' }
   & $RunmeshRunner --help | Select-String -SimpleMatch 'usage: runmesh-runner' | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'Installed runmesh-runner help check failed.' }
   if ($null -ne $EnrollmentCodeArgument) {
@@ -697,7 +700,7 @@ __VERIFIER__
   Move-Item -LiteralPath $Stage -Destination $VersionRoot
   New-Item -ItemType Junction -Path $CurrentNew -Target $VersionRoot | Out-Null
   Move-Item -LiteralPath $CurrentNew -Destination $CurrentRoot
-  $CurrentRunner = Join-Path $CurrentRoot 'coding-runner.cmd'
+  $CurrentRunner = Join-Path $CurrentRoot 'runmesh.cmd'
   $ServiceAttempted = $true
   & $CurrentRunner install --profile $Profile --execution-mode privileged_host --confirm-privileged-host --executable-path $CurrentRunner
   if ($LASTEXITCODE -ne 0) { throw 'Service installation failed after enrollment.' }

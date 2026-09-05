@@ -76,8 +76,8 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     // Exercise the real source CLI against the Worker enrollment endpoint using
     // its isolated profile, then start from that saved profile (no service manager).
     enrolledProfile = join(root, "enrolled-profile.json");
-    const enrollmentCli = spawn(process.execPath, [tsxCli, "apps/runner/src/coding-runner-entry.ts", "enroll", "--server", `${workerUrl}/runner/enroll`, "--code-stdin", "--insecure-local", "--cwd", workspace, "--profile", enrolledProfile, "--json"], {
-      cwd: projectDirectory, env: { ...process.env, CODING_RUNNER_PROFILE: enrolledProfile }, stdio: ["pipe", "pipe", "pipe"], detached: true, ...childSpawnOptions,
+    const enrollmentCli = spawn(process.execPath, [tsxCli, "apps/runner/src/runmesh-entry.ts", "enroll", "--server", `${workerUrl}/runner/enroll`, "--code-stdin", "--insecure-local", "--cwd", workspace, "--profile", enrolledProfile, "--json"], {
+      cwd: projectDirectory, env: { ...process.env, RUNMESH_PROFILE: enrolledProfile }, stdio: ["pipe", "pipe", "pipe"], detached: true, ...childSpawnOptions,
     });
     enrollmentCli.stdin?.end(`${enrollmentCode}\n`);
     const enrollmentCliLog = collectOutput(enrollmentCli);
@@ -93,9 +93,9 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(savedProfile.workspaces).toEqual([]);
 
     runner = spawn(process.execPath, [
-      tsxCli, "apps/runner/src/coding-runner-entry.ts", "start", "--profile", enrolledProfile, "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
+      tsxCli, "apps/runner/src/runmesh-entry.ts", "start", "--profile", enrolledProfile, "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
     ], {
-      cwd: projectDirectory, env: { ...process.env, CODING_RUNNER_PROFILE: enrolledProfile }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
+      cwd: projectDirectory, env: { ...process.env, RUNMESH_PROFILE: enrolledProfile }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
     });
     const runnerLog = collectOutput(runner);
     runnerOutput = runnerLog;
@@ -226,9 +226,9 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     // detached persistent job and registry snapshot remain available.
     await stop(runner);
     runner = spawn(process.execPath, [
-      tsxCli, "apps/runner/src/coding-runner-entry.ts", "start", "--profile", enrolledProfile, "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
+      tsxCli, "apps/runner/src/runmesh-entry.ts", "start", "--profile", enrolledProfile, "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
     ], {
-      cwd: projectDirectory, env: { ...process.env, CODING_RUNNER_PROFILE: enrolledProfile }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
+      cwd: projectDirectory, env: { ...process.env, RUNMESH_PROFILE: enrolledProfile }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
     });
     runnerOutput = collectOutput(runner);
     await waitFor(async () => (await mcpTool("runner_list", {}, clientA)).structuredContent?.runners?.some((item: { runner_id?: string; state?: string }) => item.runner_id === runnerId && item.state === "online"), 15_000, runnerOutput);
@@ -318,8 +318,8 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const html = await response.text();
     expect(html).toContain("Manual portable-artifact enrollment");
     expect(html).toContain("Manual Runner enrollment and install");
-    expect(html).toContain("RUNNER=/opt/runmesh/current/bin/coding-runner");
-    expect(html).toContain("C:\\Program Files\\Runmesh\\current\\coding-runner.cmd");
+    expect(html).toContain("RUNNER=/opt/runmesh/current/bin/runmesh");
+    expect(html).toContain("C:\\Program Files\\Runmesh\\current\\runmesh.cmd");
     expect(html).toContain('sudo &quot;$RUNNER&quot; enroll');
     expect(html).toContain('&amp; $RunnerPath enroll');
     expect(html).toContain('sudo &quot;$RUNNER&quot; install');

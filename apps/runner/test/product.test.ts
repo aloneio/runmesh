@@ -476,13 +476,12 @@ describe("runner product CLI and service safety", () => {
     const linux = renderService({ platform: "linux", mode: "system" });
     expect(serviceLayout({ platform: "linux", mode: "system" })).toMatchObject({ installRoot: "/opt/runmesh", configRoot: "/etc/runmesh", stateRoot: "/var/lib/runmesh", logRoot: "/var/log/runmesh", manifestPath: "/etc/systemd/system/runmesh-runner.service" });
     expect(linux).toMatchObject({ executionMode: "dedicated_user" });
-    expect(serviceLayout({ platform: "linux", mode: "system" }).executablePath).toBe("/opt/runmesh/current/bin/coding-runner");
-    expect(serviceLayout({ platform: "darwin", mode: "system" }).executablePath).toBe("/opt/runmesh/current/bin/coding-runner");
+    expect(serviceLayout({ platform: "linux", mode: "system" }).executablePath).toBe("/opt/runmesh/current/bin/runmesh");
+    expect(serviceLayout({ platform: "darwin", mode: "system" }).executablePath).toBe("/opt/runmesh/current/bin/runmesh");
     expect(linux.content).toContain("User=runmesh");
     expect(linux.content).toContain("Group=runmesh");
-    expect(linux.content).toContain("ExecStart=/opt/runmesh/current/bin/coding-runner start");
+    expect(linux.content).toContain("ExecStart=/opt/runmesh/current/bin/runmesh start");
     expect(linux.content).toContain("RUNMESH_RUNNER_PROFILE=/etc/runmesh/profile.json");
-    expect(linux.content).not.toContain("coding-runner start\n");
     const macos = renderService({ platform: "darwin", mode: "system" });
     expect(macos.content).toContain("<key>UserName</key><string>runmesh</string>");
     expect(macos.content).toContain("io.alone.runmesh.runner");
@@ -530,12 +529,12 @@ describe("runner product CLI and service safety", () => {
   });
   it("rejects legacy service commands that try to override profile or state paths", () => {
     for (const command of [
-      "/opt/runmesh/current/bin/coding-runner start --profile /tmp/attacker-profile",
-      "/opt/runmesh/current/bin/coding-runner start --state-dir=/tmp/attacker-state",
+      "/opt/runmesh/current/bin/runmesh start --profile /tmp/attacker-profile",
+      "/opt/runmesh/current/bin/runmesh start --state-dir=/tmp/attacker-state",
     ]) {
       expect(() => renderService({ platform: "linux", mode: "system", command })).toThrow("cannot override --profile or --state-dir");
     }
-    const safe = renderService({ platform: "linux", mode: "system", command: "/opt/runmesh/current/bin/coding-runner start --json" });
+    const safe = renderService({ platform: "linux", mode: "system", command: "/opt/runmesh/current/bin/runmesh start --json" });
     expect(safe.content).toContain("--profile /etc/runmesh/profile.json");
     expect(safe.content).toContain("--state-dir /var/lib/runmesh");
   });
@@ -551,10 +550,10 @@ describe("runner product CLI and service safety", () => {
   });
   it("escapes systemd specifiers and control characters in generated values", () => {
     const manifest = renderService({
-      platform: "linux", mode: "user", executablePath: "/opt/run%mesh/coding runner",
+      platform: "linux", mode: "user", executablePath: "/opt/run%mesh/runmesh runner",
       profilePath: "/tmp/profile%name\nnext", stateDir: "/tmp/state\tname",
     });
-    expect(manifest.content).toContain("ExecStart=/opt/run%%mesh/coding\\x20runner start");
+    expect(manifest.content).toContain("ExecStart=/opt/run%%mesh/runmesh\\x20runner start");
     expect(manifest.content).toContain('RUNMESH_RUNNER_PROFILE=/tmp/profile%%name\\x0anext');
     expect(manifest.content).toContain("--state-dir /tmp/state\\x09name");
     expect(manifest.content).not.toContain("profile%name");
@@ -745,7 +744,7 @@ describe("runner product CLI and service safety", () => {
     expect(frames.some((frame) => frame.type === "runner.sync")).toBe(true);
   });
   it("quotes Windows task arguments with trailing backslashes safely", () => {
-    const executablePath = String.raw`C:\Program Files\Runmesh\current\coding-runner.cmd`;
+    const executablePath = String.raw`C:\Program Files\Runmesh\current\runmesh.cmd`;
     const profilePath = String.raw`C:\Program Files\Runmesh\config\profile` + "\\";
     const stateDir = String.raw`C:\Program Files\Runmesh\state` + "\\";
     const manifest = renderService({ platform: "win32", mode: "system", executablePath, profilePath, stateDir });
@@ -1069,7 +1068,7 @@ describe("runner product CLI and service safety", () => {
       const installOutput: string[] = [];
       await runCli(["install", "--json"], { store: test.store, stdout: (line) => installOutput.push(line), servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, serviceProvisioner: { platform: "linux", provision: async () => ({ identity: "runmesh", profileSecured: true }) }, isAdministrator: () => true });
       expect(commands).toEqual(["systemctl daemon-reload", "systemctl enable --now runmesh-runner.service", "systemctl is-active --quiet runmesh-runner.service"]);
-      expect([...contents.values()][0]).toContain("ExecStart=/opt/runmesh/current/bin/coding-runner start");
+      expect([...contents.values()][0]).toContain("ExecStart=/opt/runmesh/current/bin/runmesh start");
       } finally { await test.cleanup(); }
   });
   it("refuses to activate a service when its profile cannot be secured", async () => {

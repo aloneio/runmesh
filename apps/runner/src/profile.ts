@@ -108,7 +108,7 @@ export function profilePath(options: ProfileStoreOptions = {}): string {
   // A per-process explicit profile path keeps service and integration launches
   // isolated without making profiles relative to the current workspace.
   if (options.baseDir === undefined && process.env.RUNMESH_RUNNER_PROFILE !== undefined) return process.env.RUNMESH_RUNNER_PROFILE;
-  if (options.baseDir === undefined && process.env.CODING_RUNNER_PROFILE !== undefined) return process.env.CODING_RUNNER_PROFILE;
+  if (options.baseDir === undefined && process.env.RUNMESH_PROFILE !== undefined) return process.env.RUNMESH_PROFILE;
   const path = (options.platform ?? process.platform) === "win32" ? win32 : posix;
   return path.join(profileDirectory(options), "profile.json");
 }

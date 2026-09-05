@@ -260,7 +260,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     }
     const shellText = await shell.text(); const powershellText = await powershell.text();
     for (const text of [shellText, powershellText]) {
-      expect(text).not.toMatch(/ADMIN_TOKEN|MCP_SECRET|CODING_RUNNER_TOKEN|Bearer /i);
+      expect(text).not.toMatch(/ADMIN_TOKEN|MCP_SECRET|RUNMESH_TOKEN|Bearer /i);
       expect(text).toContain("not enabled on this deployment");
       expect(text).not.toMatch(/npm install|--code\s+[A-Za-z0-9_-]{20,}|trust-keyring\.json/i);
     }
@@ -279,10 +279,10 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
       expect(text).not.toMatch(/trust-keyring\.json|@latest|npmjs\.com|--code\s+[A-Za-z0-9_-]{20,}/i);
     }
     expect(shell).toContain("--code-stdin"); expect(shell).toContain("/dev/tty"); expect(shell).toContain("stty -echo"); expect(shell).toContain("FINAL=\"$INSTALL_ROOT/versions/$VERSION\""); expect(shell).toContain("ENROLLMENT_ATTEMPTED=0"); expect(shell).toContain("trap on_exit EXIT"); expect(shell).toContain("trap 'rollback 1' HUP INT TERM"); expect(shell).toContain("command_name in curl stty readlink grep tar mktemp"); expect(shell).toContain("node-v22.19.0"); expect(shell).toContain("NODE_SHA256"); expect(shell).toContain('> "$ENROLLMENT_INPUT"'); expect(shell).toContain(' < "$ENROLLMENT_INPUT"'); expect(shell).not.toMatch(/printf '[^']*' \"\$ENROLLMENT_CODE\" \|/); expect(shell).toContain('"$NODE" "$NPM_CLI"'); expect(shell).toContain("--ignore-scripts --offline");
-    expect(shell).toContain("runmesh-runner"); expect(shell).toContain("current/bin/coding-runner"); expect(shell).toContain('--profile "$PROFILE"');
+    expect(shell).toContain("runmesh-runner"); expect(shell).toContain("current/bin/runmesh"); expect(shell).toContain('--profile "$PROFILE"');
     // npm's POSIX global install creates bin symlinks into dist/. The hosted
     // installer must unlink them before writing private-runtime wrappers, or
-    // the shell wrapper would overwrite coding-runner.cjs itself.
+    // the shell wrapper would overwrite runmesh.cjs itself.
     expect(shell).toContain('rm -f "$RUNNER" "$RUNMESH_RUNNER"');
     expect(shell.indexOf('rm -f "$RUNNER" "$RUNMESH_RUNNER"')).toBeLessThan(shell.indexOf('cat > "$RUNNER"'));
     expect(powershell).toContain("Read-Host"); expect(powershell).toContain("-AsSecureString"); expect(powershell).toContain("Add-Type -AssemblyName System.Net.Http"); expect(powershell).toContain("AllowAutoRedirect = $false"); expect(powershell).toContain("$EnrollmentAttempted = $false"); expect(powershell).toContain("$EnrollmentAttempted = $true"); expect(powershell).toContain("& $NpmPath --userconfig $EmptyUserConfig --globalconfig $EmptyGlobalConfig install --global --ignore-scripts --offline");
@@ -603,7 +603,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(enrollment).toMatch(logoTag);
     expect(enrollment).toContain('class="enrollment-brand-logo"');
     expect(enrollment).toContain("Linux"); expect(enrollment).toContain("macOS"); expect(enrollment).toContain("Windows");
-    expect(enrollment).toContain("Manual portable-artifact enrollment"); expect(enrollment).toContain("Manual Runner enrollment and install"); expect(enrollment).toContain("RUNNER=/opt/runmesh/current/bin/coding-runner"); expect(enrollment).toContain("C:\\Program Files\\Runmesh\\current\\coding-runner.cmd"); expect(enrollment).toContain('sudo &quot;$RUNNER&quot; enroll'); expect(enrollment).toContain('sudo &quot;$RUNNER&quot; install'); expect(enrollment).toContain("&amp; $RunnerPath enroll"); expect(enrollment).toContain("&amp; $RunnerPath install"); expect(enrollment).toContain("--code-stdin"); expect(enrollment).toContain("single-line command"); expect(enrollment).toContain("One-time enrollment code"); expect(enrollment).not.toMatch(/--code [A-Za-z0-9_-]{20,}/u); expect(enrollment).toContain("--executable-path"); expect(enrollment).not.toContain("curl -fsSL"); expect(enrollment).not.toContain("curl --fail --location"); expect(enrollment).not.toContain("Invoke-RestMethod"); expect(enrollment).not.toContain("Invoke-WebRequest");
+    expect(enrollment).toContain("Manual portable-artifact enrollment"); expect(enrollment).toContain("Manual Runner enrollment and install"); expect(enrollment).toContain("RUNNER=/opt/runmesh/current/bin/runmesh"); expect(enrollment).toContain("C:\\Program Files\\Runmesh\\current\\runmesh.cmd"); expect(enrollment).toContain('sudo &quot;$RUNNER&quot; enroll'); expect(enrollment).toContain('sudo &quot;$RUNNER&quot; install'); expect(enrollment).toContain("&amp; $RunnerPath enroll"); expect(enrollment).toContain("&amp; $RunnerPath install"); expect(enrollment).toContain("--code-stdin"); expect(enrollment).toContain("single-line command"); expect(enrollment).toContain("One-time enrollment code"); expect(enrollment).not.toMatch(/--code [A-Za-z0-9_-]{20,}/u); expect(enrollment).toContain("--executable-path"); expect(enrollment).not.toContain("curl -fsSL"); expect(enrollment).not.toContain("curl --fail --location"); expect(enrollment).not.toContain("Invoke-RestMethod"); expect(enrollment).not.toContain("Invoke-WebRequest");
     // The generated server URL is shell/PowerShell quoted before it is placed
     // in the copyable command, preventing Host-header metacharacters from
     // becoming a second command when an operator pastes the snippet.
@@ -620,7 +620,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(enrollmentUiText["Paste it only into the local prompt after verification; it is deliberately excluded from copied commands."]).toContain("本地提示");
     for (const copied of enrollment.matchAll(/data-copy="([^"]*)"/g)) expect(copied[1]).not.toContain("--code ");
     expect(enrollment).not.toContain("--re-enroll"); expect(enrollment).not.toContain("-ReEnroll");
-    expect(enrollment).not.toContain("--runner-id"); expect(enrollment).not.toContain("ADMIN_TOKEN"); expect(enrollment).not.toMatch(/CODING_RUNNER_TOKEN|MCP_SECRET/i);
+    expect(enrollment).not.toContain("--runner-id"); expect(enrollment).not.toContain("ADMIN_TOKEN"); expect(enrollment).not.toMatch(/RUNMESH_TOKEN|MCP_SECRET/i);
     const rotatedEnrollment = await submit("https://worker.test/admin/runners/dashboard-runner/rotate", { csrf_token: csrf }, adminJar);
     expect(rotatedEnrollment.status).toBe(200);
     const rotatedText = await rotatedEnrollment.text();
