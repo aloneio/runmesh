@@ -21,7 +21,7 @@ A compromised Worker/bootstrap endpoint can replace the installer and its embedd
 
 ## Enabled hosted-bootstrap commands
 
-Use these commands **only when the authenticated Admin enrollment page says the fixed signed preview is available** and the command URL uses the configured public origin. They contain no enrollment code. The script validates the artifact first, then asks locally for the single-use code and sends it only to `coding-runner enroll --code-stdin`; it is not put in the URL, copied command, or process arguments. If the request `Host` does not match `RUNMESH_PUBLIC_ORIGIN`, the Worker refuses to render the installer instead of embedding a different origin.
+Use these commands **only when the authenticated Admin enrollment page says the fixed signed preview is available** and the command URL uses the configured public origin. The hosted command carries the single-use enrollment code as its final argument. The script validates the artifact first, then sends it only to `coding-runner enroll --code-stdin` and clears its working variable. Treat the copied command as a secret and use it only once. If the request `Host` does not match `RUNMESH_PUBLIC_ORIGIN`, the Worker refuses to render the installer instead of embedding a different origin.
 
 The `262144`-byte limit in the download snippets below applies only to the Worker-served installer script. After that script starts, its embedded downloader applies the separate 8 MiB limit to each fixed GitHub release asset; the repository's `pack:smoke` gate packs the actual Runner tarball and fails if it exceeds that bound.
 
