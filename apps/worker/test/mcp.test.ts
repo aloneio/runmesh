@@ -280,6 +280,11 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     }
     expect(shell).toContain("--code-stdin"); expect(shell).toContain("/dev/tty"); expect(shell).toContain("stty -echo"); expect(shell).toContain("FINAL=\"$INSTALL_ROOT/versions/$VERSION\""); expect(shell).toContain("ENROLLMENT_ATTEMPTED=0"); expect(shell).toContain("trap on_exit EXIT"); expect(shell).toContain("trap 'rollback 1' HUP INT TERM"); expect(shell).toContain("command_name in curl stty readlink grep tar mktemp"); expect(shell).toContain("node-v22.19.0"); expect(shell).toContain("NODE_SHA256"); expect(shell).toContain('> "$ENROLLMENT_INPUT"'); expect(shell).toContain(' < "$ENROLLMENT_INPUT"'); expect(shell).not.toMatch(/printf '[^']*' \"\$ENROLLMENT_CODE\" \|/); expect(shell).toContain('"$NODE" "$NPM_CLI"'); expect(shell).toContain("--ignore-scripts --offline");
     expect(shell).toContain("runmesh-runner"); expect(shell).toContain("current/bin/coding-runner"); expect(shell).toContain('--profile "$PROFILE"');
+    // npm's POSIX global install creates bin symlinks into dist/. The hosted
+    // installer must unlink them before writing private-runtime wrappers, or
+    // the shell wrapper would overwrite coding-runner.cjs itself.
+    expect(shell).toContain('rm -f "$RUNNER" "$RUNMESH_RUNNER"');
+    expect(shell.indexOf('rm -f "$RUNNER" "$RUNMESH_RUNNER"')).toBeLessThan(shell.indexOf('cat > "$RUNNER"'));
     expect(powershell).toContain("Read-Host"); expect(powershell).toContain("-AsSecureString"); expect(powershell).toContain("Add-Type -AssemblyName System.Net.Http"); expect(powershell).toContain("AllowAutoRedirect = $false"); expect(powershell).toContain("$EnrollmentAttempted = $false"); expect(powershell).toContain("$EnrollmentAttempted = $true"); expect(powershell).toContain("& $NpmPath --userconfig $EmptyUserConfig --globalconfig $EmptyGlobalConfig install --global --ignore-scripts --offline");
     expect(powershell).toContain("runmesh-runner"); expect(powershell).toContain("ProgramData");
   });
