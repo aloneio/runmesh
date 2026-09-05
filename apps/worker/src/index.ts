@@ -1751,14 +1751,17 @@ function overviewPage(data: AdminData, csrf: string): string {
 function runnerActionCell(runner: RunnerRecord, modeFields: string, csrf: string): string {
   const runnerId = encodeURIComponent(runner.runner_id);
   const displayName = escapeHtml(runner.display_name);
+  // Keep one visible mode selector per row.  Credential rotation can safely
+  // reuse the Registry-owned mode marker; enrollment is the action that needs
+  // an explicit choice when a legacy Runner is being migrated.
+  const rotateModeFields = executionModeFormFields(runnerActionExecutionMode(runner), csrf, false);
   return '<td class="actions"><div class="runner-actions">'
     + '<a class="button small secondary" href="/admin/runners/' + runnerId + '">View</a>'
     + '<form method="post" action="/admin/runners/' + runnerId + '/rename" class="inline-action-form runner-rename-form"><input type="hidden" name="csrf_token" value="' + escapeHtml(csrf) + '"><input name="display_name" value="' + displayName + '" aria-label="Rename ' + displayName + '" maxlength="256"><button class="small secondary">Rename</button></form>'
     + '<details class="row-actions-more"><summary>More actions</summary><div class="row-actions-menu">'
-    + '<form method="post" action="/admin/runners/' + runnerId + '/rotate" class="inline-action-form">' + modeFields + '<button class="small secondary">Rotate Credential</button></form>'
+    + '<form method="post" action="/admin/runners/' + runnerId + '/rotate" class="inline-action-form">' + rotateModeFields + '<button class="small secondary">Rotate Credential</button></form>'
     + '<form method="post" action="/admin/runners/' + runnerId + '/enrollment" class="inline-action-form">' + modeFields + '<button class="small secondary">Install / Reinstall</button></form>'
-    + '<form method="post" action="/admin/runners/' + runnerId + '/revoke" class="inline-action-form danger-action"><input type="hidden" name="csrf_token" value="' + escapeHtml(csrf) + '"><label>Type Runner ID to confirm<input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required></label><button class="small danger">Revoke</button></form>'
-    + '<form method="post" action="/admin/runners/' + runnerId + '/delete" class="inline-action-form danger-action"><input type="hidden" name="csrf_token" value="' + escapeHtml(csrf) + '"><label>Type Runner ID to confirm<input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required></label><button class="small danger">Delete</button></form>'
+    + '<form method="post" action="/admin/runners/' + runnerId + '/delete" class="inline-action-form danger-action"><input type="hidden" name="csrf_token" value="' + escapeHtml(csrf) + '"><label>Type Runner ID to confirm<input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required></label><div class="danger-action-buttons"><button class="small danger" type="submit" formaction="/admin/runners/' + runnerId + '/revoke">Revoke</button><button class="small danger" type="submit">Delete</button></div></form>'
     + '</div></details></div></td>';
 }
 function runnersPage(data: AdminData, csrf: string): string {
@@ -3364,6 +3367,24 @@ legend{
   margin-top:20px;
 }
 .tabs{display:flex;flex-wrap:wrap;gap:6px;margin:16px 0}
+.enrollment-dialog pre{
+  width:100%;
+  max-width:100%;
+  min-width:0;
+  margin:0 0 12px;
+  overflow:auto;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+  word-break:break-word;
+  box-sizing:border-box;
+}
+.enrollment-dialog pre code{
+  display:block;
+  min-width:0;
+  white-space:inherit;
+  overflow-wrap:inherit;
+  word-break:inherit;
+}
 .tabs [role=tab]{
   background:var(--panel-card);
   color:var(--muted-dark);
@@ -3780,6 +3801,8 @@ tbody tr:hover{background:#f8fafc}
 .runner-actions .danger-action{grid-template-columns:minmax(0,1fr) auto}
 .runner-actions .danger-action label{min-width:0;display:flex;flex-direction:column;align-items:stretch;gap:3px}
 .runner-actions .danger-action label input{max-width:none;width:100%}
+.runner-actions .danger-action-buttons{display:flex;align-items:flex-end;gap:5px;flex-wrap:wrap}
+.runner-actions .danger-action-buttons .small{flex:1 1 auto}
 .client-table{min-width:0;table-layout:fixed}
 .client-table th:nth-child(1){width:19%}.client-table th:nth-child(2){width:16%}.client-table th:nth-child(3){width:14%}.client-table th:nth-child(4){width:15%}.client-table th:nth-child(5){width:9%}.client-table th:nth-child(6){width:27%}
 .client-table .actions{vertical-align:top;width:auto;min-width:0}
@@ -3849,7 +3872,7 @@ html[lang="zh-CN"] legend,html[lang="zh-CN"] h3,html[lang="zh-CN"] .eyebrow,html
   var statusKeys=['compatible','incompatible','update_available','permission_denied','os_access_denied','not_directory','invalid_path','missing','pending','valid','unknown','online','offline','stale','queued','running','cancelling','cancelled','succeeded','completed','failed','interrupted','invalid'];
   var replaced=value;
   statusKeys.forEach(function(key){var re=new RegExp('(^|[^A-Za-z_])'+key+'(?=$|[^A-Za-z_])','g');replaced=replaced.replace(re,function(_,prefix){return prefix+statusText(key)})});
-  var phraseKeys=['Client Routing & Status','Skip to main content','Use a dedicated restricted service identity for narrower host access.','I understand and authorize this one-time high-privilege installation acknowledgement.','Read, Write, Exec','Each base scope has a distinct ceiling: ',' permits inspection, ',' permits approved edits, and ',' permits Host shell and Job control. Runner and Workspace policy can only reduce these permissions.','Desired policy revision is ahead of the applied or Runner-reported revision.','Runner will run as root, SYSTEM, or the platform-equivalent highest-privilege identity. Shell commands can access files, processes, network, environment variables, credentials, and system services reachable by that service identity. Install only on a trusted dedicated machine, VM, or container.','Manual Runner enrollment and install uses a verified portable artifact. Install the artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. Selected execution mode: ','The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. Selected execution mode: ','The recommended execution mode is privileged_host; dedicated_user remains available for explicit isolation cases. The install step runs only after enrollment succeeds.','The recommended execution mode is privileged_host; dedicated_user remains available for explicit isolation cases.','You must keep the one-time confirmation in the local install command.','Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.','Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.','RUNNER','CHECKSUM','HighestAvailable'];
+  var phraseKeys=['Client Routing & Status','Skip to main content','Use a dedicated restricted service identity for narrower host access.','I understand and authorize this one-time high-privilege installation acknowledgement.','Read, Write, Exec','Each base scope has a distinct ceiling: ',' permits inspection, ',' permits approved edits, and ',' permits Host shell and Job control. Runner and Workspace policy can only reduce these permissions.','Desired policy revision is ahead of the applied or Runner-reported revision.','Runner will run as root, SYSTEM, or the platform-equivalent highest-privilege identity. Shell commands can access files, processes, network, environment variables, credentials, and system services reachable by that service identity. Install only on a trusted dedicated machine, VM, or container.','Manual Runner enrollment and install uses a verified portable artifact. Install the artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. Selected execution mode: ','The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. Selected execution mode: ','The recommended execution mode is privileged_host; dedicated_user remains available for explicit isolation cases. The install step runs only after enrollment succeeds.','The recommended execution mode is privileged_host; dedicated_user remains available for explicit isolation cases.','You must keep the one-time confirmation in the local install command.','Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.','This one-time code expires in 30 minutes and will not be shown again.','Selected restricted service account mode: dedicated_user. The hosted privileged installer is not used.','Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.','RUNNER','CHECKSUM','HighestAvailable'];
   phraseKeys.sort(function(a,b){return b.length-a.length}).forEach(function(key){var translated=ZH_UI_TEXT[key];if(translated&&replaced.indexOf(key)>=0)replaced=replaced.split(key).join(translated)});
   return replaced;
 }
