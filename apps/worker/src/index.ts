@@ -1088,6 +1088,7 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Active jobs": "活跃任务",
   "Last seen": "最后在线",
   "Actions": "操作",
+  "More actions": "更多操作",
   "View": "查看",
   "Rename": "重命名",
   "Rotate Credential": "轮换凭据",
