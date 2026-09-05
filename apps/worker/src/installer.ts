@@ -5,6 +5,8 @@
  * never fetched or used by an installer.
  */
 export const FIXED_RELEASE_VERSION = "0.1.0-dev.2";
+export const FIXED_NODE_VERSION = "22.19.0";
+export const FIXED_NODE_BASE_URL = `https://nodejs.org/dist/v${FIXED_NODE_VERSION}`;
 export const FIXED_RELEASE_KEY_ID = "runmesh-preview-2026-01";
 export const FIXED_RELEASE_PUBLIC_KEY_PEM = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEASXdEYS7UorlzNJ8ij2gftFIX2rrTvhNlZm3MqE/BWXI=\n-----END PUBLIC KEY-----\n";
 export const FIXED_RELEASE_TAG = `v${FIXED_RELEASE_VERSION}`;
@@ -21,6 +23,18 @@ export const FIXED_CHECKSUMS_URL = `${FIXED_RELEASE_BASE_URL}/SHA256SUMS`;
 // preventing an over-sized allowed-origin response from filling a host's
 // temporary filesystem.
 export const MAX_RELEASE_ASSET_BYTES = 8 * 1024 * 1024;
+export const MAX_NODE_RUNTIME_BYTES = 64 * 1024 * 1024;
+// Node is shipped inside the Runmesh installation so the service does not
+// depend on a host-provided Node/npm installation.  These are the official
+// Node distribution archive digests for the supported desktop/server targets.
+export const FIXED_NODE_RUNTIME_ASSETS = {
+  "linux-x64": { archive: `node-v${FIXED_NODE_VERSION}-linux-x64.tar.xz`, sha256: "c0649af18e6a24f6fe5535a3e86b341dd49a8e71117c8b68bde973ef834f16f2" },
+  "linux-arm64": { archive: `node-v${FIXED_NODE_VERSION}-linux-arm64.tar.xz`, sha256: "0b2d9f564b6594222a62c82e1df2efe119dd4a4aff29644f4dd325bf360b6bcc" },
+  "darwin-x64": { archive: `node-v${FIXED_NODE_VERSION}-darwin-x64.tar.xz`, sha256: "41796082f45db51738d1902cae84fa4f699ff6d2550321361424e8bfe6ea1939" },
+  "darwin-arm64": { archive: `node-v${FIXED_NODE_VERSION}-darwin-arm64.tar.xz`, sha256: "1c3a9e78da501bbc1f0c99fbbb69bb7c722bc7a9bf30128b21ea502f3905892a" },
+  "win-x64": { archive: `node-v${FIXED_NODE_VERSION}-win-x64.zip`, sha256: "ea3fad0e67a991d8477d8c01344b56e69c676ccb733f065b22436994b1253f86" },
+  "win-arm64": { archive: `node-v${FIXED_NODE_VERSION}-win-arm64.zip`, sha256: "e4a7336010d58ff35b53d9dd5869095c56089c70913cf22508cf8183593e56b2" },
+} as const;
 
 export interface FixedReleaseDescriptor {
   readonly channel: "dev";
@@ -261,33 +275,53 @@ case "$(uname -s)" in
   Darwin) PROFILE='/Library/Application Support/Runmesh/profile.json'; SERVICE_MANIFEST='/Library/LaunchDaemons/io.alone.runmesh.runner.plist' ;;
   *) printf '%s\n' 'error: Linux or macOS is required' >&2; exit 1;;
 esac
-install_dependencies() {
-  if [ "$(uname -s)" = "Darwin" ]; then
-    printf '%s\n' 'error: Node.js 20+ is missing. Install Node.js 20+ before running the macOS installer; Homebrew cannot install packages from a root shell.' >&2
-    exit 1
-  fi
-  if command -v apt-get >/dev/null 2>&1; then apt-get update && apt-get install -y ca-certificates curl nodejs npm; return; fi
-  if command -v dnf >/dev/null 2>&1; then dnf install -y ca-certificates curl nodejs npm; return; fi
-  if command -v yum >/dev/null 2>&1; then yum install -y ca-certificates curl nodejs npm; return; fi
-  if command -v apk >/dev/null 2>&1; then apk add --no-cache ca-certificates curl nodejs npm; return; fi
-  printf '%s\n' 'error: could not find apt-get, dnf, yum, or apk to install Node.js automatically.' >&2
-  exit 1
-}
-if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || printf 0)" -lt 20 ]; then
-  [ "$AUTO_INSTALL_DEPS" -eq 1 ] || { printf '%s\n' 'error: Node.js 20+ and npm are required (automatic dependency installation disabled).' >&2; exit 1; }
-  printf '%s\n' 'Runmesh is installing the required Node.js runtime and package tools...'
-  install_dependencies
-fi
-for command_name in curl node npm stty readlink grep; do command -v "$command_name" >/dev/null 2>&1 || { printf '%s\n' "error: $command_name is required" >&2; exit 1; }; done
-NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
-case "$NODE_MAJOR" in ''|*[!0-9]*) printf '%s\n' 'error: unable to determine Node.js version' >&2; exit 1;; esac
-if [ "$NODE_MAJOR" -lt 20 ]; then printf '%s\n' 'error: Node.js 20 or newer is required' >&2; exit 1; fi
+for command_name in curl stty readlink grep tar mktemp sed wc tr; do command -v "$command_name" >/dev/null 2>&1 || { printf '%s\n' "error: $command_name is required" >&2; exit 1; }; done
+case "$(uname -s):$(uname -m)" in
+  Linux:x86_64|Linux:amd64) NODE_ASSET='__NODE_LINUX_X64__'; NODE_SHA256='__NODE_LINUX_X64_SHA256__' ;;
+  Linux:aarch64|Linux:arm64) NODE_ASSET='__NODE_LINUX_ARM64__'; NODE_SHA256='__NODE_LINUX_ARM64_SHA256__' ;;
+  Darwin:x86_64) NODE_ASSET='__NODE_DARWIN_X64__'; NODE_SHA256='__NODE_DARWIN_X64_SHA256__' ;;
+  Darwin:arm64) NODE_ASSET='__NODE_DARWIN_ARM64__'; NODE_SHA256='__NODE_DARWIN_ARM64_SHA256__' ;;
+  *) printf '%s\n' 'error: unsupported operating system or CPU architecture' >&2; exit 1;;
+esac
+NODE_BASE='__NODE_BASE_URL__'
+[ "$AUTO_INSTALL_DEPS" -eq 1 ] || { printf '%s\n' 'error: private runtime bootstrap is disabled (--no-auto-deps).' >&2; exit 1; }
 has_path() { [ -e "$1" ] || [ -L "$1" ]; }
 if has_path "$INSTALL_ROOT/current" || has_path "$INSTALL_ROOT/versions/$VERSION" || has_path "$INSTALL_ROOT/versions/$VERSION.staging.$$" || has_path "$PROFILE" || has_path "$SERVICE_MANIFEST"; then printf '%s\n' 'error: existing Runmesh installation or service state found; refusing to overwrite it' >&2; exit 1; fi
 TMP="$(mktemp -d /tmp/runmesh-installer.XXXXXX)"
 STAGE="$INSTALL_ROOT/versions/$VERSION.staging.$$"
 CURRENT_NEW="$INSTALL_ROOT/current.new"
 FINAL="$INSTALL_ROOT/versions/$VERSION"
+RUNTIME_ARCHIVE="$TMP/$NODE_ASSET"
+RUNTIME_ROOT="$TMP/node-runtime"
+mkdir "$RUNTIME_ROOT"
+RUNTIME_URL="$NODE_BASE/$NODE_ASSET"
+if command -v curl >/dev/null 2>&1; then
+  curl -q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 3 --max-time 120 --max-filesize __MAX_NODE_RUNTIME_BYTES__ --output "$RUNTIME_ARCHIVE" "$RUNTIME_URL"
+elif command -v wget >/dev/null 2>&1; then
+  wget --https-only --timeout=120 --tries=1 --output-document="$RUNTIME_ARCHIVE" "$RUNTIME_URL"
+else
+  printf '%s\n' 'error: curl or wget is required to download the private Node.js runtime' >&2
+  exit 1
+fi
+RUNTIME_SIZE="$(wc -c < "$RUNTIME_ARCHIVE" | tr -d '[:space:]')"
+case "$RUNTIME_SIZE" in ''|*[!0-9]*) printf '%s\n' 'error: private Node.js runtime archive size is invalid' >&2; exit 1;; esac
+[ "$RUNTIME_SIZE" -le __MAX_NODE_RUNTIME_BYTES__ ] || { printf '%s\n' 'error: private Node.js runtime archive exceeds the fixed size limit' >&2; exit 1; }
+if command -v sha256sum >/dev/null 2>&1; then
+  printf '%s  %s\n' "$NODE_SHA256" "$RUNTIME_ARCHIVE" | sha256sum -c -
+elif command -v shasum >/dev/null 2>&1; then
+  test "$(shasum -a 256 "$RUNTIME_ARCHIVE" | awk '{print $1}')" = "$NODE_SHA256"
+else
+  printf '%s\n' 'error: sha256sum or shasum is required to verify the private Node.js runtime' >&2
+  exit 1
+fi
+tar -xJf "$RUNTIME_ARCHIVE" -C "$RUNTIME_ROOT"
+NODE_DIRECTORY="$(printf '%s' "$NODE_ASSET" | sed 's/\.tar\.xz$//')"
+NODE_HOME="$RUNTIME_ROOT/$NODE_DIRECTORY"
+NODE="$NODE_HOME/bin/node"
+NPM_CLI="$NODE_HOME/lib/node_modules/npm/bin/npm-cli.js"
+[ -x "$NODE" ] || { printf '%s\n' 'error: private Node.js runtime extraction failed' >&2; exit 1; }
+NODE_MAJOR="$("$NODE" -p 'process.versions.node.split(".")[0]')"
+[ "$NODE_MAJOR" -ge 20 ] || { printf '%s\n' 'error: private Node.js runtime is too old' >&2; exit 1; }
 # Keep privileged npm completely inside the private temporary directory. npm
 # otherwise consults the invoking root user's, global, and current-directory
 # npmrc files, any of which could change where or how a package is installed.
@@ -348,7 +382,7 @@ download() {
     case "$status_code" in
       301|302|303|307|308)
         if [ "$attempt" -ge 6 ]; then printf '%s\n' 'error: release redirect limit exceeded' >&2; exit 1; fi
-        url="$(node --input-type=module - "$headers" "$url" <<'RUNMESH_REDIRECT_CHECK'
+        url="$("$NODE" --input-type=module - "$headers" "$url" <<'RUNMESH_REDIRECT_CHECK'
 import { readFile } from "node:fs/promises";
 const [headerPath, current] = process.argv.slice(2);
 const headers = await readFile(headerPath, "utf8");
@@ -366,7 +400,7 @@ RUNMESH_REDIRECT_CHECK
         ;;
       2??)
         if [ "$curl_rc" -ne 0 ]; then printf '%s\n' 'error: release download failed' >&2; exit 1; fi
-        if ! node -e '
+        if ! "$NODE" -e '
           const { statSync } = require("node:fs");
           const metadata = statSync(process.argv[1]);
           if (!metadata.isFile() || metadata.size <= 0 || metadata.size > __MAX_RELEASE_ASSET_BYTES__) process.exit(1);
@@ -389,19 +423,33 @@ download manifest.sig
 download manifest.signature.json
 download SHA256SUMS
 download "$ARTIFACT"
-node --input-type=module - "$TMP" <<'RUNMESH_VERIFY'
+"$NODE" --input-type=module - "$TMP" <<'RUNMESH_VERIFY'
 __VERIFIER__
 RUNMESH_VERIFY
 mkdir -p "$INSTALL_ROOT/versions"
 if ! mkdir "$STAGE"; then printf '%s\n' 'error: installer staging path is already in use' >&2; exit 1; fi
 (
   cd "$TMP"
-  npm --userconfig "$NPM_CONFIG_USERCONFIG" --globalconfig "$NPM_CONFIG_GLOBALCONFIG" install --global --ignore-scripts --offline --no-audit --no-fund --prefix "$STAGE" "$TMP/$ARTIFACT"
+  "$NODE" "$NPM_CLI" --userconfig "$NPM_CONFIG_USERCONFIG" --globalconfig "$NPM_CONFIG_GLOBALCONFIG" install --global --ignore-scripts --offline --no-audit --no-fund --prefix "$STAGE" "$TMP/$ARTIFACT"
 )
+PACKAGE_ROOT="$STAGE/lib/node_modules/@aloneio/runmesh-runner"
+[ -f "$PACKAGE_ROOT/dist/coding-runner.cjs" ] || { printf '%s\n' 'error: verified package did not contain the Runner bundle' >&2; exit 1; }
+mkdir -p "$STAGE/runtime"
+cp "$NODE" "$STAGE/runtime/node"
+chmod 0755 "$STAGE/runtime/node"
 RUNNER="$STAGE/bin/coding-runner"
 RUNMESH_RUNNER="$STAGE/bin/runmesh-runner"
-[ -x "$RUNNER" ] || { printf '%s\n' 'error: verified package did not install coding-runner' >&2; exit 1; }
-[ -x "$RUNMESH_RUNNER" ] || { printf '%s\n' 'error: verified package did not install runmesh-runner' >&2; exit 1; }
+cat > "$RUNNER" <<'RUNMESH_RUNNER_SH'
+#!/bin/sh
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec "$ROOT/../runtime/node" "$ROOT/../lib/node_modules/@aloneio/runmesh-runner/dist/coding-runner.cjs" "$@"
+RUNMESH_RUNNER_SH
+cat > "$RUNMESH_RUNNER" <<'RUNMESH_RUNNER_SH'
+#!/bin/sh
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec "$ROOT/../runtime/node" "$ROOT/../lib/node_modules/@aloneio/runmesh-runner/dist/coding-runner.cjs" "$@"
+RUNMESH_RUNNER_SH
+chmod 0755 "$RUNNER" "$RUNMESH_RUNNER"
 [ "$("$RUNNER" --version)" = "$VERSION" ] || { printf '%s\n' 'error: installed coding-runner version mismatch' >&2; exit 1; }
 [ "$("$RUNMESH_RUNNER" --version)" = "$VERSION" ] || { printf '%s\n' 'error: installed runmesh-runner version mismatch' >&2; exit 1; }
 "$RUNNER" --help | grep -F 'usage: runmesh-runner' >/dev/null
@@ -455,27 +503,15 @@ $EnrollmentUrl = '__ENROLLMENT_URL__'
 $AllowedReleaseOrigins = @(__RELEASE_REDIRECT_ORIGINS_PS__)
 $AutoInstallDeps = $true
 if ($args -contains '--no-auto-deps') { $AutoInstallDeps = $false }
+if (-not $AutoInstallDeps) { throw 'Private runtime bootstrap is disabled (--no-auto-deps).' }
 $InstallRoot = Join-Path $env:ProgramFiles 'Runmesh'
 $Principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run from an elevated Administrator PowerShell session.' }
-$NodeCommand = Get-Command node -CommandType Application -ErrorAction SilentlyContinue
-$NpmCommand = Get-Command npm.cmd -CommandType Application -ErrorAction SilentlyContinue
-if ($null -eq $NodeCommand -or $null -eq $NpmCommand) {
-  if (-not $AutoInstallDeps) { throw 'Node.js 20 or newer and npm are required (automatic dependency installation disabled).' }
-  $Winget = Get-Command winget.exe -CommandType Application -ErrorAction SilentlyContinue
-  if ($null -eq $Winget) { throw 'Node.js 20+ is missing and winget.exe is unavailable. Install Node.js LTS, then rerun this command.' }
-  Write-Host 'Runmesh is installing the required Node.js runtime and package tools...'
-  & $Winget.Source install --id OpenJS.NodeJS.LTS --exact --silent --accept-package-agreements --accept-source-agreements
-  if ($LASTEXITCODE -ne 0) { throw 'Automatic Node.js installation failed.' }
-  $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
-  $NodeCommand = Get-Command node -CommandType Application -ErrorAction SilentlyContinue
-  $NpmCommand = Get-Command npm.cmd -CommandType Application -ErrorAction SilentlyContinue
-}
-if ($null -eq $NodeCommand -or $null -eq $NpmCommand) { throw 'Node.js 20 or newer and npm are required.' }
-$NodePath = if ([string]::IsNullOrEmpty([string]$NodeCommand.Source)) { [string]$NodeCommand.Path } else { [string]$NodeCommand.Source }
-$NpmPath = if ([string]::IsNullOrEmpty([string]$NpmCommand.Source)) { [string]$NpmCommand.Path } else { [string]$NpmCommand.Source }
-$NodeMajor = [int]((& $NodePath --version).Trim().TrimStart('v').Split('.')[0])
-if ($NodeMajor -lt 20) { throw 'Node.js 20 or newer is required.' }
+$NodeAsset = if ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq [Runtime.InteropServices.Architecture]::Arm64) { '__NODE_WIN_ARM64__' } else { '__NODE_WIN_X64__' }
+$NodeSha256 = if ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq [Runtime.InteropServices.Architecture]::Arm64) { '__NODE_WIN_ARM64_SHA256__' } else { '__NODE_WIN_X64_SHA256__' }
+$NodeUrl = '__NODE_BASE_URL__/' + $NodeAsset
+$crlf = [Environment]::NewLine
+$dq = [char]34
 $VersionsRoot = Join-Path $InstallRoot 'versions'
 $VersionRoot = Join-Path $VersionsRoot $Version
 $Stage = Join-Path $VersionsRoot ($Version + '.staging.' + $PID)
@@ -514,6 +550,19 @@ try {
   # Invoke-WebRequest/-MaximumRedirection are intentionally not used for the
   # release fetch: their automatic redirect behavior cannot be pinned before
   # the next request. HttpClient follows one validated Location at a time.
+  $NodeArchivePath = Join-Path $TempRoot $NodeAsset
+  Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 -Uri $NodeUrl -OutFile $NodeArchivePath
+  if ((Get-Item -LiteralPath $NodeArchivePath).Length -le 0 -or (Get-Item -LiteralPath $NodeArchivePath).Length -gt __MAX_NODE_RUNTIME_BYTES__) { throw 'Private Node.js runtime archive size is invalid.' }
+  $NodeDigest = (Get-FileHash -LiteralPath $NodeArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($NodeDigest -ne $NodeSha256) { throw 'Private Node.js runtime checksum verification failed.' }
+  $NodeExtract = Join-Path $TempRoot 'node-runtime'
+  Expand-Archive -LiteralPath $NodeArchivePath -DestinationPath $NodeExtract -Force
+  $NodeHome = Join-Path $NodeExtract ([IO.Path]::GetFileNameWithoutExtension($NodeAsset))
+  $NodePath = Join-Path $NodeHome 'node.exe'
+  $NpmPath = Join-Path $NodeHome 'npm.cmd'
+  if (-not (Test-Path -LiteralPath $NodePath -PathType Leaf) -or -not (Test-Path -LiteralPath $NpmPath -PathType Leaf)) { throw 'Private Node.js runtime extraction failed.' }
+  $NodeMajor = [int]((& $NodePath --version).Trim().TrimStart('v').Split('.')[0])
+  if ($NodeMajor -lt 20) { throw 'Private Node.js runtime is too old.' }
   $HttpHandler = [Net.Http.HttpClientHandler]::new()
   $HttpHandler.AllowAutoRedirect = $false
   $HttpHandler.AutomaticDecompression = [Net.DecompressionMethods]::GZip -bor [Net.DecompressionMethods]::Deflate
@@ -576,14 +625,20 @@ __VERIFIER__
     Pop-Location
   }
   if ($LASTEXITCODE -ne 0) { throw 'Verified local tarball installation failed.' }
-  $Runner = Get-ChildItem -LiteralPath $Stage -Filter 'coding-runner.cmd' -File -Recurse | Select-Object -First 1
-  $RunmeshRunner = Get-ChildItem -LiteralPath $Stage -Filter 'runmesh-runner.cmd' -File -Recurse | Select-Object -First 1
-  if ($null -eq $Runner -or $null -eq $RunmeshRunner) { throw 'Verified package did not install both Runner entry points.' }
-  if ((& $Runner.FullName --version).Trim() -ne $Version) { throw 'Installed coding-runner version mismatch.' }
-  if ((& $RunmeshRunner.FullName --version).Trim() -ne $Version) { throw 'Installed runmesh-runner version mismatch.' }
-  & $Runner.FullName --help | Select-String -SimpleMatch 'usage: runmesh-runner' | Out-Null
+  $PackageRoot = Get-ChildItem -LiteralPath $Stage -Filter 'coding-runner.cjs' -File -Recurse | Select-Object -First 1
+  if ($null -eq $PackageRoot) { throw 'Verified package did not contain the Runner bundle.' }
+  New-Item -ItemType Directory -Path (Join-Path $Stage 'runtime') -Force | Out-Null
+  Copy-Item -LiteralPath $NodePath -Destination (Join-Path $Stage 'runtime\node.exe') -Force
+  Copy-Item -LiteralPath $PackageRoot.FullName -Destination (Join-Path $Stage 'coding-runner.cjs') -Force
+  $Runner = Join-Path $Stage 'coding-runner.cmd'
+  $RunmeshRunner = Join-Path $Stage 'runmesh-runner.cmd'
+  Set-Content -LiteralPath $Runner -Encoding ASCII -Value ('@echo off' + $crlf + $dq + '%~dp0runtime\node.exe' + $dq + ' ' + $dq + '%~dp0coding-runner.cjs' + $dq + ' %*' + $crlf)
+  Set-Content -LiteralPath $RunmeshRunner -Encoding ASCII -Value ('@echo off' + $crlf + $dq + '%~dp0runtime\node.exe' + $dq + ' ' + $dq + '%~dp0coding-runner.cjs' + $dq + ' %*' + $crlf)
+  if ((& $Runner --version).Trim() -ne $Version) { throw 'Installed coding-runner version mismatch.' }
+  if ((& $RunmeshRunner --version).Trim() -ne $Version) { throw 'Installed runmesh-runner version mismatch.' }
+  & $Runner --help | Select-String -SimpleMatch 'usage: runmesh-runner' | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'Installed coding-runner help check failed.' }
-  & $RunmeshRunner.FullName --help | Select-String -SimpleMatch 'usage: runmesh-runner' | Out-Null
+  & $RunmeshRunner --help | Select-String -SimpleMatch 'usage: runmesh-runner' | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'Installed runmesh-runner help check failed.' }
   $SecureCode = Read-Host 'Paste the one-time enrollment code (input is hidden)' -AsSecureString
   $CodePointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureCode)
@@ -618,8 +673,24 @@ __VERIFIER__
 `;
 
 function replaceInstallerTemplate(template: string, enrollmentUrl: string, literal: (value: string) => string): string {
+  const node = FIXED_NODE_RUNTIME_ASSETS;
   return template
     .replaceAll("__VERSION__", literal(FIXED_RELEASE_VERSION))
+    .replaceAll("__NODE_VERSION__", literal(FIXED_NODE_VERSION))
+    .replaceAll("__MAX_NODE_RUNTIME_BYTES__", String(MAX_NODE_RUNTIME_BYTES))
+    .replaceAll("__NODE_BASE_URL__", literal(FIXED_NODE_BASE_URL))
+    .replaceAll("__NODE_LINUX_X64__", literal(node["linux-x64"].archive))
+    .replaceAll("__NODE_LINUX_X64_SHA256__", node["linux-x64"].sha256)
+    .replaceAll("__NODE_LINUX_ARM64__", literal(node["linux-arm64"].archive))
+    .replaceAll("__NODE_LINUX_ARM64_SHA256__", node["linux-arm64"].sha256)
+    .replaceAll("__NODE_DARWIN_X64__", literal(node["darwin-x64"].archive))
+    .replaceAll("__NODE_DARWIN_X64_SHA256__", node["darwin-x64"].sha256)
+    .replaceAll("__NODE_DARWIN_ARM64__", literal(node["darwin-arm64"].archive))
+    .replaceAll("__NODE_DARWIN_ARM64_SHA256__", node["darwin-arm64"].sha256)
+    .replaceAll("__NODE_WIN_X64__", literal(node["win-x64"].archive))
+    .replaceAll("__NODE_WIN_X64_SHA256__", node["win-x64"].sha256)
+    .replaceAll("__NODE_WIN_ARM64__", literal(node["win-arm64"].archive))
+    .replaceAll("__NODE_WIN_ARM64_SHA256__", node["win-arm64"].sha256)
     .replaceAll("__RELEASE_BASE__", literal(FIXED_RELEASE_BASE_URL))
     .replaceAll("__ARTIFACT_NAME__", literal(FIXED_ARTIFACT_NAME))
     .replaceAll("__ENROLLMENT_URL__", literal(enrollmentUrl))

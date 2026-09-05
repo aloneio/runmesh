@@ -225,8 +225,10 @@ test("embeds the independently reviewed fixed release key and immutable installe
     assert.match(shell, /NPM_CONFIG_USERCONFIG="\$TMP\/npm-user\.npmrc"/u);
     assert.match(shell, /NPM_CONFIG_GLOBALCONFIG="\$TMP\/npm-global\.npmrc"/u);
     assert.match(shell, /export npm_config_userconfig="\$NPM_CONFIG_USERCONFIG" npm_config_globalconfig="\$NPM_CONFIG_GLOBALCONFIG"/u);
-    assert.match(shell, /npm --userconfig "\$NPM_CONFIG_USERCONFIG" --globalconfig "\$NPM_CONFIG_GLOBALCONFIG" install/u);
-    assert.match(shell, /\(\s+cd "\$TMP"\s+npm --userconfig[\s\S]*?install[\s\S]*?--ignore-scripts[\s\S]*?--offline/u);
+    assert.match(shell, /"\$NODE" "\$NPM_CLI" --userconfig "\$NPM_CONFIG_USERCONFIG" --globalconfig "\$NPM_CONFIG_GLOBALCONFIG" install/u);
+    assert.match(shell, /\(\s+cd "\$TMP"\s+"\$NODE" "\$NPM_CLI" --userconfig[\s\S]*?install[\s\S]*?--ignore-scripts[\s\S]*?--offline/u);
+    assert.match(shell, /node-v22\.19\.0/u);
+    assert.match(shell, /NODE_SHA256/u);
     assert.match(powershell, /ContentLength/u);
     assert.match(powershell, /fixed size limit/u);
     assert.match(powershell, /\$EmptyUserConfig = Join-Path \$TempRoot 'empty-user\.npmrc'/u);
