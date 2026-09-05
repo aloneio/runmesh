@@ -3,7 +3,9 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   plugins: [cloudflareTest({
-    wrangler: { configPath: "./wrangler.jsonc" },
+    // Use an isolated Wrangler environment so production's hosted bootstrap
+    // vars never leak into requests exercised by the local Worker harness.
+    wrangler: { configPath: "./wrangler.jsonc", environment: "test" },
     miniflare: { bindings: {
       ADMIN_TOKEN: "test-admin-token-0123456789abcdef",
       SETUP_TOKEN: "test-setup-token-0123456789abcdef",
