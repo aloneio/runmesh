@@ -1,5 +1,7 @@
 # Security model
 
+Runmesh is designed to keep execution on machines you control while limiting what each MCP client can do. For an operator-friendly explanation, read the [administrator guide](admin-guide.md) and [user guide](user-guide.md) first. This page records the detailed boundaries for security review and production acceptance.
+
 ## Trust boundaries
 
 1. **MCP client → Worker:** a unique 256-bit random URL path credential: `/<secret>/mcp`. RegistryDO stores only its SHA-256 verifier, prefix, scopes, metadata, and sticky active-runner selection. Wrong, malformed, rotated, and revoked credentials all return `404`.
