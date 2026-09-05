@@ -3986,7 +3986,14 @@ export function runnerEnrollmentPage(env: RunnerReleaseEnvironment, baseUrl: str
   const shellCommand = `set -eu
 installer="$(mktemp)"
 trap 'rm -f "$installer"' EXIT
-curl -q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 0 --max-time 60 --max-filesize 262144 --output "$installer" ${shellInstallerUrl}
+if command -v curl >/dev/null 2>&1; then
+  curl -q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 0 --max-time 60 --max-filesize 262144 --output "$installer" ${shellInstallerUrl}
+elif command -v wget >/dev/null 2>&1; then
+  wget --https-only --timeout=60 --tries=1 --output-document="$installer" ${shellInstallerUrl}
+else
+  printf '%s\\n' '需要 curl 或 wget 才能下载 Runmesh 安装器。' >&2
+  exit 1
+fi
 test -s "$installer"
 sudo sh "$installer" install --auto-deps`;
   const powerShellCommand = `$ErrorActionPreference = 'Stop'
