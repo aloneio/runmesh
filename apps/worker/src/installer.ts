@@ -645,7 +645,7 @@ __VERIFIER__
   try { $EnrollmentCode = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($CodePointer) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($CodePointer) }
   if ([string]::IsNullOrWhiteSpace($EnrollmentCode)) { throw 'An enrollment code is required.' }
   $EnrollmentAttempted = $true
-  $EnrollmentCode | & $Runner.FullName enroll --profile $Profile --server $EnrollmentUrl --code-stdin --execution-mode privileged_host --confirm-privileged-host
+  $EnrollmentCode | & $Runner enroll --profile $Profile --server $EnrollmentUrl --code-stdin --execution-mode privileged_host --confirm-privileged-host
   $EnrollmentCode = $null
   $SecureCode = $null
   if ($LASTEXITCODE -ne 0) { throw 'Enrollment failed.' }
