@@ -117,7 +117,8 @@ export interface RunnerReleaseEnvironment {
 export function runnerReleaseDescriptor(env: RunnerReleaseEnvironment): RunnerReleaseDescriptor {
   let originConfigured = false;
   try { originConfigured = env.RUNMESH_PUBLIC_ORIGIN !== undefined && canonicalPublicOrigin(env.RUNMESH_PUBLIC_ORIGIN).length > 0; } catch { originConfigured = false; }
-  return { ...fixedReleaseDescriptor(signedReleaseIsAvailable(env.RUNMESH_SIGNED_RELEASE_AVAILABLE) && originConfigured), protocol: { min_version: PROTOCOL_MIN_VERSION, max_version: PROTOCOL_CURRENT_VERSION } };
+  const distributable = env.RUNMESH_TEST_MODE !== "1" && signedReleaseIsAvailable(env.RUNMESH_SIGNED_RELEASE_AVAILABLE) && originConfigured;
+  return { ...fixedReleaseDescriptor(distributable), protocol: { min_version: PROTOCOL_MIN_VERSION, max_version: PROTOCOL_CURRENT_VERSION } };
 }
 function runnerRelease(request: Request, env: WorkerEnv): Response {
   if (request.method !== "GET" && request.method !== "HEAD") { void discardBody(request); return methodNotAllowed("GET, HEAD"); }
