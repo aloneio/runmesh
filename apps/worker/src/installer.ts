@@ -264,11 +264,31 @@ ARTIFACT='__ARTIFACT_NAME__'
 ENROLLMENT_URL='__ENROLLMENT_URL__'
 INSTALL_ROOT='/opt/runmesh'
 AUTO_INSTALL_DEPS=1
+ENROLLMENT_CODE_ARG=''
+EXPECT_CODE_ARG=0
 for arg in "$@"; do
   case "$arg" in
     --no-auto-deps) AUTO_INSTALL_DEPS=0 ;;
+    --code) EXPECT_CODE_ARG=1 ;;
+    --code=*) ENROLLMENT_CODE_ARG="$(printf '%s' "$arg" | sed 's/^--code=//')" ;;
+    install|--auto-deps) : ;;
+    *)
+      if [ "$EXPECT_CODE_ARG" -eq 1 ]; then
+        ENROLLMENT_CODE_ARG="$arg"
+        EXPECT_CODE_ARG=0
+      elif [ -z "$ENROLLMENT_CODE_ARG" ]; then
+        ENROLLMENT_CODE_ARG="$arg"
+      fi
+      ;;
   esac
 done
+if [ "$EXPECT_CODE_ARG" -eq 1 ]; then printf '%s\n' 'error: --code requires the one-time enrollment code' >&2; exit 1; fi
+if [ -n "$ENROLLMENT_CODE_ARG" ]; then
+  case "$ENROLLMENT_CODE_ARG" in
+    *[!A-Za-z0-9_-]*) printf '%s\n' 'error: invalid one-time enrollment code' >&2; exit 1 ;;
+  esac
+  [ "$(printf '%s' "$ENROLLMENT_CODE_ARG" | wc -c | tr -d '[:space:]')" -eq 43 ] || { printf '%s\n' 'error: invalid one-time enrollment code' >&2; exit 1; }
+fi
 if [ "$(id -u)" -ne 0 ]; then printf '%s\n' 'error: run from an elevated root shell' >&2; exit 1; fi
 case "$(uname -s)" in
   Linux) PROFILE='/etc/runmesh/profile.json'; SERVICE_MANIFEST='/etc/systemd/system/runmesh-runner.service' ;;
@@ -439,6 +459,10 @@ cp "$NODE" "$STAGE/runtime/node"
 chmod 0755 "$STAGE/runtime/node"
 RUNNER="$STAGE/bin/coding-runner"
 RUNMESH_RUNNER="$STAGE/bin/runmesh-runner"
+# npm creates POSIX bin entries as symlinks into the package's dist directory.
+# Remove those links before writing our private-runtime wrappers; redirecting
+# cat through the links would overwrite dist/coding-runner.cjs with shell code.
+rm -f "$RUNNER" "$RUNMESH_RUNNER"
 cat > "$RUNNER" <<'RUNMESH_RUNNER_SH'
 #!/bin/sh
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -454,12 +478,17 @@ chmod 0755 "$RUNNER" "$RUNMESH_RUNNER"
 [ "$("$RUNMESH_RUNNER" --version)" = "$VERSION" ] || { printf '%s\n' 'error: installed runmesh-runner version mismatch' >&2; exit 1; }
 "$RUNNER" --help | grep -F 'usage: runmesh-runner' >/dev/null
 "$RUNMESH_RUNNER" --help | grep -F 'usage: runmesh-runner' >/dev/null
-printf '%s' 'Paste the one-time enrollment code (input is hidden): ' >/dev/tty
-stty -echo < /dev/tty || { printf '%s\n' 'error: terminal input cannot be protected' >&2; exit 1; }
-TTY_ECHO_DISABLED=1
-if ! IFS= read -r ENROLLMENT_CODE < /dev/tty; then printf '\n%s\n' 'error: unable to read enrollment code from terminal' >&2; exit 1; fi
-cleanup_tty
-printf '\n' >/dev/tty
+if [ -n "$ENROLLMENT_CODE_ARG" ]; then
+  ENROLLMENT_CODE="$ENROLLMENT_CODE_ARG"
+  unset ENROLLMENT_CODE_ARG
+else
+  printf '%s' 'Paste the one-time enrollment code (input is hidden): ' >/dev/tty
+  stty -echo < /dev/tty || { printf '%s\n' 'error: terminal input cannot be protected' >&2; exit 1; }
+  TTY_ECHO_DISABLED=1
+  if ! IFS= read -r ENROLLMENT_CODE < /dev/tty; then printf '\n%s\n' 'error: unable to read enrollment code from terminal' >&2; exit 1; fi
+  cleanup_tty
+  printf '\n' >/dev/tty
+fi
 ENROLLMENT_INPUT="$TMP/enrollment-code"
 printf '%s\n' "$ENROLLMENT_CODE" > "$ENROLLMENT_INPUT"
 unset ENROLLMENT_CODE
@@ -504,6 +533,17 @@ $AllowedReleaseOrigins = @(__RELEASE_REDIRECT_ORIGINS_PS__)
 $AutoInstallDeps = $true
 if ($args -contains '--no-auto-deps') { $AutoInstallDeps = $false }
 if (-not $AutoInstallDeps) { throw 'Private runtime bootstrap is disabled (--no-auto-deps).' }
+$EnrollmentCodeArgument = $null
+$ExpectCodeArgument = $false
+foreach ($Argument in $args) {
+  if ($ExpectCodeArgument) { $EnrollmentCodeArgument = [string]$Argument; $ExpectCodeArgument = $false; continue }
+  if ($Argument -eq '--code') { $ExpectCodeArgument = $true; continue }
+  if ($Argument -like '--code=*') { $EnrollmentCodeArgument = [string]$Argument.Substring(7); continue }
+  if ($Argument -eq 'install' -or $Argument -eq '--auto-deps' -or $Argument -eq '--no-auto-deps') { continue }
+  if ($null -eq $EnrollmentCodeArgument) { $EnrollmentCodeArgument = [string]$Argument }
+}
+if ($ExpectCodeArgument) { throw '--code requires the one-time enrollment code.' }
+if ($null -ne $EnrollmentCodeArgument -and $EnrollmentCodeArgument -notmatch '^[A-Za-z0-9_-]{43}$') { throw 'Invalid one-time enrollment code.' }
 $InstallRoot = Join-Path $env:ProgramFiles 'Runmesh'
 $Principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run from an elevated Administrator PowerShell session.' }
@@ -640,10 +680,15 @@ __VERIFIER__
   if ($LASTEXITCODE -ne 0) { throw 'Installed coding-runner help check failed.' }
   & $RunmeshRunner --help | Select-String -SimpleMatch 'usage: runmesh-runner' | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'Installed runmesh-runner help check failed.' }
-  $SecureCode = Read-Host 'Paste the one-time enrollment code (input is hidden)' -AsSecureString
-  $CodePointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureCode)
-  try { $EnrollmentCode = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($CodePointer) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($CodePointer) }
-  if ([string]::IsNullOrWhiteSpace($EnrollmentCode)) { throw 'An enrollment code is required.' }
+  if ($null -ne $EnrollmentCodeArgument) {
+    $EnrollmentCode = $EnrollmentCodeArgument
+    $EnrollmentCodeArgument = $null
+  } else {
+    $SecureCode = Read-Host 'Paste the one-time enrollment code (input is hidden)' -AsSecureString
+    $CodePointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureCode)
+    try { $EnrollmentCode = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($CodePointer) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($CodePointer) }
+    if ([string]::IsNullOrWhiteSpace($EnrollmentCode)) { throw 'An enrollment code is required.' }
+  }
   $EnrollmentAttempted = $true
   $EnrollmentCode | & $Runner enroll --profile $Profile --server $EnrollmentUrl --code-stdin --execution-mode privileged_host --confirm-privileged-host
   $EnrollmentCode = $null
