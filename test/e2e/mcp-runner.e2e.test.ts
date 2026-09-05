@@ -409,7 +409,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const encodedBody = body.toString();
     return fetch(`${workerUrl}${path}`, {
       method: "POST", redirect: "manual",
-      headers: { "content-type": "application/x-www-form-urlencoded", "content-length": String(Buffer.byteLength(encodedBody)), origin: workerUrl, cookie: cookieHeader(cookies) },
+      headers: { "content-type": "application/x-www-form-urlencoded", connection: "close", origin: workerUrl, cookie: cookieHeader(cookies) },
       body: encodedBody,
     });
   }
