@@ -1372,7 +1372,15 @@ export class RegistryDO {
   public async fetch(request: Request): Promise<Response> {
     const rawBody = await readCappedBody(request);
     if (rawBody === undefined) return new Response("payload too large", { status: 413 });
-    if (!await verifyInternalRequest(request, this.env.INTERNAL_CONTROL_SECRET, rawBody, (nonce, expiresAtMs) => this.consumeInternalNonce(nonce, expiresAtMs))) return new Response("not found", { status: 404 });
+    // Read-only internal calls are authenticated by the short-lived HMAC
+    // timestamp and do not mutate state. Persisting a nonce row for every
+    // dashboard read exhausts the Durable Objects free-tier write budget.
+    // Keep durable one-time nonce consumption for mutating requests, where a
+    // replay could change control-plane state.
+    const consumeNonce = request.method === "GET"
+      ? () => true
+      : (nonce: string, expiresAtMs: number) => this.consumeInternalNonce(nonce, expiresAtMs);
+    if (!await verifyInternalRequest(request, this.env.INTERNAL_CONTROL_SECRET, rawBody, consumeNonce)) return new Response("not found", { status: 404 });
     const url = new URL(request.url);
     const segments = url.pathname.split("/").filter(Boolean);
     const input = rawBody.length === 0 ? {} : parseJsonObject(rawBody);
