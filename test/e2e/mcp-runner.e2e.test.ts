@@ -407,10 +407,11 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       else for (const item of value) body.append(key, item);
     }
     const encodedBody = body.toString();
+    const bodyBytes = new TextEncoder().encode(encodedBody);
     return fetch(`${workerUrl}${path}`, {
       method: "POST", redirect: "manual",
-      headers: { "content-type": "application/x-www-form-urlencoded", connection: "close", origin: workerUrl, cookie: cookieHeader(cookies) },
-      body: encodedBody,
+      headers: { "content-type": "application/x-www-form-urlencoded", "content-length": String(bodyBytes.byteLength), connection: "close", origin: workerUrl, cookie: cookieHeader(cookies) },
+      body: bodyBytes,
     });
   }
 });
