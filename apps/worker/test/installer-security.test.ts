@@ -70,7 +70,7 @@ describe("hosted installer origin and template safety", () => {
     expect(FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS.every((value) => value.startsWith("https://"))).toBe(true);
   });
 
-  it("keeps enrollment codes out of copied commands and rejects Host confusion", async () => {
+  it("embeds hosted enrollment codes in the copied bootstrap and rejects Host confusion", async () => {
     const code = "A".repeat(43);
     const page = runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }, "https://worker.example", "runner-test", code, "csrf", false, "privileged_host", true);
     expect(page.status).toBe(200);
@@ -87,7 +87,8 @@ describe("hosted installer origin and template safety", () => {
     const hosted = runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example", RUNMESH_SIGNED_RELEASE_AVAILABLE: FIXED_RELEASE_VERSION }, "https://worker.example", "runner-test", code, "csrf", false, "privileged_host", true);
     expect(hosted.status).toBe(200);
     const hostedHtml = await hosted.text();
-    expect(hostedHtml).not.toContain(`--code ${code}`);
+    expect(hostedHtml).toContain(code);
+    expect(hostedHtml).toContain(`sudo sh -s -- &#039;${code}&#039;`);
     expect(hostedHtml).toContain("Copy installer command");
   });
 
