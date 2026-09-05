@@ -604,9 +604,8 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     const created = await submit("https://worker.test/admin/runners", { csrf_token: csrf, display_name: "Safe runner", runner_id: "dashboard-runner" }, adminJar);
     expect(created.status).toBe(200);
     const enrollment = await created.text();
-    expect(enrollment).toContain('class="enrollment-header"');
-    expect(enrollment).toMatch(logoTag);
-    expect(enrollment).toContain('class="enrollment-brand-logo"');
+    expect(enrollment).toContain('class="app-header"');
+    expect(enrollment).toContain('class="header-mesh-mark"');
     expect(enrollment).toContain("Linux"); expect(enrollment).toContain("macOS"); expect(enrollment).toContain("Windows");
     expect(enrollment).toContain("Manual portable-artifact enrollment"); expect(enrollment).toContain("Manual Runner enrollment and install"); expect(enrollment).toContain("RUNNER=/opt/runmesh/current/bin/runmesh"); expect(enrollment).toContain("C:\\Program Files\\Runmesh\\current\\runmesh.cmd"); expect(enrollment).toContain('sudo &quot;$RUNNER&quot; enroll'); expect(enrollment).toContain('sudo &quot;$RUNNER&quot; install'); expect(enrollment).toContain("&amp; $RunnerPath enroll"); expect(enrollment).toContain("&amp; $RunnerPath install"); expect(enrollment).toContain("--code-stdin"); expect(enrollment).toContain("single-line command"); expect(enrollment).toContain("One-time enrollment code"); expect(enrollment).not.toMatch(/--code [A-Za-z0-9_-]{20,}/u); expect(enrollment).toContain("--executable-path"); expect(enrollment).not.toContain("curl -fsSL"); expect(enrollment).not.toContain("curl --fail --location"); expect(enrollment).not.toContain("Invoke-RestMethod"); expect(enrollment).not.toContain("Invoke-WebRequest");
     // The generated server URL is shell/PowerShell quoted before it is placed
