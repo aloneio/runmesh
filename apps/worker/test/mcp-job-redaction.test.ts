@@ -44,6 +44,25 @@ describe("MCP job metadata boundary", () => {
     expect(result).not.toHaveProperty("argv");
   });
 
+  it("preserves the originating MCP client identifier", () => {
+    expect(safeJobMetadata({
+      job_id: "job-1",
+      workspace_id: "workspace-1",
+      created_by_client_id: "client-1",
+      status: "succeeded",
+      created_at_ms: 1,
+      updated_at_ms: 2,
+    })).toEqual({
+      job_id: "job-1",
+      workspace_id: "workspace-1",
+      created_by_client_id: "client-1",
+      status: "succeeded",
+      created_at_ms: 1,
+      updated_at_ms: 2,
+    });
+    expect(safeJobMetadata({ job_id: "job-1", created_by_client_id: { secret: "hidden" } })).toEqual({ job_id: "job-1" });
+  });
+
   it("does not copy malformed allow-listed values as nested objects", () => {
     const result = safeJobMetadata({
       job_id: { cwd: "/private/root" },
