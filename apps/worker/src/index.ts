@@ -275,7 +275,7 @@ async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL): Prom
   const rewritten = new URL(request.url);
   rewritten.pathname = "/mcp";
   rewritten.search = "";
-  const auth: McpAuth = {
+  const auth = {
     // AuthInfo needs an opaque token but no component needs the raw URL secret.
     token: verified.client_id,
     clientId: verified.client_id,
@@ -287,7 +287,7 @@ async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL): Prom
     expiresAt: undefined,
     resource: undefined,
     extra: { client_label: verified.label, secret_version: verified.secret_version },
-  };
+  } as McpAuth;
   const handler = createMcpHandler(
     () => createCodingMcpServer(env, auth),
     {
