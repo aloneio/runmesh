@@ -74,7 +74,11 @@ const JobInputSchema = z.discriminatedUnion("action", [
 /** Structured output is always a bounded object; individual tool descriptions define its safe fields. */
 const SafeOutputSchema = z.object({}).passthrough();
 
-export type McpAuth = Pick<AuthInfo, "clientId" | "scopes" | "expiresAt" | "resource" | "extra"> & { token: string };
+// Keep the SDK's optional fields explicit for the local auth envelope. With
+// exactOptionalPropertyTypes enabled, an explicitly absent expiry/resource
+// must be represented as a required property whose value may be undefined.
+export type McpAuth = Omit<Pick<AuthInfo, "clientId" | "scopes" | "expiresAt" | "resource" | "extra">, "expiresAt" | "resource">
+  & { expiresAt: AuthInfo["expiresAt"] | undefined; resource: AuthInfo["resource"] | undefined; token: string };
 
 /**
  * Fresh server factory target for createMcpHandler. Every HTTP request receives
