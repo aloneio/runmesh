@@ -1734,9 +1734,20 @@ async function clientDetailPage(_env: WorkerEnv, client: Record<string, unknown>
     </div>
   </section>`;
 }
-function adminDocument(title: string, body: string, active: "dashboard" | "runners" | "clients" | "settings"): string {
-  const nav = `<nav class="control-nav" aria-label="Main navigation"><a class="${active === "dashboard" ? "active" : ""}"${active === "dashboard" ? ' aria-current="page"' : ""} href="/admin">Dashboard</a><a class="${active === "runners" ? "active" : ""}"${active === "runners" ? ' aria-current="page"' : ""} href="/admin/runners">Runners</a><a class="${active === "clients" ? "active" : ""}"${active === "clients" ? ' aria-current="page"' : ""} href="/admin/clients">MCP Clients</a><a class="${active === "settings" ? "active" : ""}"${active === "settings" ? ' aria-current="page"' : ""} href="/admin/settings">Settings</a></nav>`;
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${escapeHtml(title)} · Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="ops-body"><a class="skip-link" href="#main-content">Skip to main content</a><header class="app-header"><div class="header-inner"><div class="header-left"><a class="brand" href="/admin">${meshMarkSvg("header-mesh-mark")}<span class="brand-copy"><span>Runmesh</span><small>Agent Control Plane</small></span></a>${nav}</div><div class="header-actions">${languageSwitch()}</div></div></header><div class="shell"><main class="workspace" id="main-content" tabindex="-1">${body}</main></div>${adminScript()}</body></html>`;
+type ControlNavSection = "dashboard" | "runners" | "clients" | "settings";
+
+function controlHeader(active?: ControlNavSection): string {
+  const nav = ([
+    ["dashboard", "Dashboard", "/admin"],
+    ["runners", "Runners", "/admin/runners"],
+    ["clients", "MCP Clients", "/admin/clients"],
+    ["settings", "Settings", "/admin/settings"],
+  ] as const).map(([key, label, href]) => `<a class="${active === key ? "active" : ""}"${active === key ? ' aria-current="page"' : ""} href="${href}">${label}</a>`).join("");
+  return `<header class="app-header" data-app-header><div class="header-inner"><div class="header-left"><a class="brand" href="/admin" aria-label="Runmesh · Agent Control Plane">${meshMarkSvg("header-mesh-mark")}<span class="brand-copy"><span>Runmesh</span><small>Agent Control Plane</small></span></a><nav class="control-nav" aria-label="Main navigation">${nav}</nav></div><div class="header-actions">${languageSwitch()}</div></div></header>`;
+}
+
+function adminDocument(title: string, body: string, active: ControlNavSection): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${escapeHtml(title)} · Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="ops-body"><a class="skip-link" href="#main-content">Skip to main content</a>${controlHeader(active)}<div class="shell"><main class="workspace" id="main-content" tabindex="-1">${body}</main></div>${adminScript()}</body></html>`;
 }
 function adminPage(pathname: string, data: AdminData, csrf: string): string {
   const active = pathname === "/admin" ? "dashboard" : pathname.slice("/admin/".length) as "runners" | "clients" | "settings";
@@ -2151,6 +2162,8 @@ function workspaceProfile(permissions: Record<string, unknown> | undefined): "cu
   return "custom";
 }
 function adminStyles(): string { return `<style>
+@view-transition{navigation:auto}
+::view-transition-old(app-header),::view-transition-new(app-header){animation:none}
 :root{
   color-scheme:light;
   --canvas:#f4f6f8;
@@ -2255,9 +2268,16 @@ body::before{
   position:sticky;
   top:0;
   z-index:100;
-  background:var(--header-bg);
-  backdrop-filter:blur(12px);
-  -webkit-backdrop-filter:blur(12px);
+  height:57px;
+  min-height:64px;
+  view-transition-name:app-header;
+  background:var(--panel);
+  /* Keep the header on one composited layer while pages and command tabs
+     replace their content. This avoids a translucent backdrop repaint flash. */
+  isolation:isolate;
+  contain:layout paint;
+  transform:translateZ(0);
+  backface-visibility:hidden;
   border-bottom:1px solid var(--line);
   box-shadow:var(--shadow-sm);
 }
@@ -2266,6 +2286,7 @@ body::before{
   margin:auto;
   padding:0 32px;
   height:56px;
+  min-height:56px;
   display:flex;
   align-items:center;
   justify-content:space-between;
@@ -2302,6 +2323,8 @@ body::before{
   display:block;
   width:160px;
   height:40px;
+  min-width:160px;
+  min-height:40px;
   flex-shrink:0;
 }
 .control-nav{
@@ -3255,6 +3278,8 @@ legend{
   position:relative;
   z-index:2;
 }
+.secret-result-shell{max-width:760px;padding-top:48px;padding-bottom:48px}
+.secret-result-shell .secret-card{width:min(620px,100%);margin:0 auto}
 .auth-card{
   padding:32px 28px;
   box-shadow:var(--shadow-lg);
@@ -4000,10 +4025,10 @@ if ($LASTEXITCODE -ne 0) { throw 'Runner doctor check failed.' }`,
     ? `Manual Runner enrollment and install uses a verified portable artifact. Install the artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. Selected execution mode: ${modeLabel}. The recommended execution mode is privileged_host; dedicated_user remains available for explicit isolation cases. The install step runs only after enrollment succeeds.`
     : `The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. Selected execution mode: ${modeLabel}. The recommended execution mode is privileged_host; dedicated_user remains available for explicit isolation cases.`;
   const warningBlock = executionMode === "privileged_host" ? `<p class="warning privileged-host-warning">${escapeHtml(privilegedWarning)} You must keep the one-time confirmation in the local install command.</p>` : `<p class="notice">Selected restricted service account mode: dedicated_user. The hosted privileged installer is not used.</p>`;
-  const nav = `<nav class="control-nav" aria-label="Main navigation"><a href="/admin">Dashboard</a><a class="active" aria-current="page" href="/admin/runners">Runners</a><a href="/admin/clients">MCP Clients</a><a href="/admin/settings">Settings</a></nav>`;
-  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body enrollment-body"><a class="skip-link" href="#main-content">Skip to main content</a><header class="app-header"><div class="header-inner"><div class="header-left"><a class="brand" href="/admin" aria-label="Runmesh · Agent Control Plane">${meshMarkSvg("header-mesh-mark")}</a>${nav}</div><div class="header-actions">${languageSwitch()}</div></div></header><main class="shell enrollment-shell" id="main-content" tabindex="-1"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><p class="eyebrow">${title}</p><h1 id="enrollment-title">Enroll Runner</h1><p class="lede">${instruction} This one-time code expires in 30 minutes and will not be shown again.</p></div></section><div class="enrollment-meta-box"><span class="form-stat-label">Target Runner ID</span><span class="mono">${escapeHtml(runnerId)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">Selected execution mode</span><span class="mono">${escapeHtml(modeLabel)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">One-time enrollment code</span><code class="mono" data-no-i18n>${escapeHtml(code)}</code><span class="muted font-12">Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.</span></div><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><div class="enrollment-command-panels">${panels}</div>${warningBlock}<p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.</p><div class="top-actions dialog-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment">${executionModeFormFields(executionMode, csrf)}<button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
+
+  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body enrollment-body"><a class="skip-link" href="#main-content">Skip to main content</a>${controlHeader("runners")}<main class="shell enrollment-shell" id="main-content" tabindex="-1"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><p class="eyebrow">${title}</p><h1 id="enrollment-title">Enroll Runner</h1><p class="lede">${instruction} This one-time code expires in 30 minutes and will not be shown again.</p></div></section><div class="enrollment-meta-box"><span class="form-stat-label">Target Runner ID</span><span class="mono">${escapeHtml(runnerId)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">Selected execution mode</span><span class="mono">${escapeHtml(modeLabel)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">One-time enrollment code</span><code class="mono" data-no-i18n>${escapeHtml(code)}</code><span class="muted font-12">Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.</span></div><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><div class="enrollment-command-panels">${panels}</div>${warningBlock}<p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.</p><div class="top-actions dialog-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment">${executionModeFormFields(executionMode, csrf)}<button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
 }
-  function secretCreatedPage(title: string, url: string): string { return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${escapeHtml(title)}</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card secret-card"><div class="secret-brand-row">${meshMarkSvg("secret-mesh-mark")}<span class="brand-name">Runmesh</span></div><p class="brand-kicker">Runmesh</p><h1>${escapeHtml(title)}</h1><p class="lede">Copy this URL now. It will not be shown again.</p><code>${escapeHtml(url)}</code><div class="secret-actions"><button type="button" class="button" data-copy="${escapeHtml(url)}">Copy MCP URL</button><a class="button secondary" href="/admin">Back to admin</a></div></section></main>${adminScript()}</body></html>`; }
+  function secretCreatedPage(title: string, url: string): string { return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${escapeHtml(title)} · Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="ops-body secret-result-body"><a class="skip-link" href="#main-content">Skip to main content</a>${controlHeader("clients")}<main class="shell secret-result-shell" id="main-content" tabindex="-1"><section class="auth-card secret-card"><p class="brand-kicker">Runmesh</p><h1>${escapeHtml(title)}</h1><p class="lede">Copy this URL now. It will not be shown again.</p><code>${escapeHtml(url)}</code><div class="secret-actions"><button type="button" class="button" data-copy="${escapeHtml(url)}">Copy MCP URL</button><a class="button secondary" href="/admin">Back to admin</a></div></section></main>${adminScript()}</body></html>`; }
 function secretUrl(base: string, secret: string): string { const url = new URL(base); url.pathname = `/${secret}/mcp`; url.search = ""; return url.toString(); }
 function selectedScopes(form: FormData): CodingScope[] | undefined { const values = form.getAll("scopes"); const scopes = values.filter((value): value is CodingScope => value === "coding:read" || value === "coding:write" || value === "coding:exec"); return scopes.length === values.length && scopes.length > 0 && new Set(scopes).size === scopes.length ? scopes : undefined; }
 function validPassword(password: string): boolean { return password.length >= 12 && password.length <= 1_024; }
