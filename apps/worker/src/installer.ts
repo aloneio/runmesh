@@ -249,12 +249,35 @@ RELEASE_BASE='__RELEASE_BASE__'
 ARTIFACT='__ARTIFACT_NAME__'
 ENROLLMENT_URL='__ENROLLMENT_URL__'
 INSTALL_ROOT='/opt/runmesh'
+AUTO_INSTALL_DEPS=1
+for arg in "$@"; do
+  case "$arg" in
+    --no-auto-deps) AUTO_INSTALL_DEPS=0 ;;
+  esac
+done
 if [ "$(id -u)" -ne 0 ]; then printf '%s\n' 'error: run from an elevated root shell' >&2; exit 1; fi
 case "$(uname -s)" in
   Linux) PROFILE='/etc/runmesh/profile.json'; SERVICE_MANIFEST='/etc/systemd/system/runmesh-runner.service' ;;
   Darwin) PROFILE='/Library/Application Support/Runmesh/profile.json'; SERVICE_MANIFEST='/Library/LaunchDaemons/io.alone.runmesh.runner.plist' ;;
   *) printf '%s\n' 'error: Linux or macOS is required' >&2; exit 1;;
 esac
+install_dependencies() {
+  if [ "$(uname -s)" = "Darwin" ]; then
+    printf '%s\n' 'error: Node.js 20+ is missing. Install Node.js 20+ before running the macOS installer; Homebrew cannot install packages from a root shell.' >&2
+    exit 1
+  fi
+  if command -v apt-get >/dev/null 2>&1; then apt-get update && apt-get install -y ca-certificates curl nodejs npm; return; fi
+  if command -v dnf >/dev/null 2>&1; then dnf install -y ca-certificates curl nodejs npm; return; fi
+  if command -v yum >/dev/null 2>&1; then yum install -y ca-certificates curl nodejs npm; return; fi
+  if command -v apk >/dev/null 2>&1; then apk add --no-cache ca-certificates curl nodejs npm; return; fi
+  printf '%s\n' 'error: could not find apt-get, dnf, yum, or apk to install Node.js automatically.' >&2
+  exit 1
+}
+if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || printf 0)" -lt 20 ]; then
+  [ "$AUTO_INSTALL_DEPS" -eq 1 ] || { printf '%s\n' 'error: Node.js 20+ and npm are required (automatic dependency installation disabled).' >&2; exit 1; }
+  printf '%s\n' 'Runmesh is installing the required Node.js runtime and package tools...'
+  install_dependencies
+fi
 for command_name in curl node npm stty readlink grep; do command -v "$command_name" >/dev/null 2>&1 || { printf '%s\n' "error: $command_name is required" >&2; exit 1; }; done
 NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
 case "$NODE_MAJOR" in ''|*[!0-9]*) printf '%s\n' 'error: unable to determine Node.js version' >&2; exit 1;; esac
@@ -401,7 +424,7 @@ ln -s "$FINAL" "$INSTALL_ROOT/current.new"
 mv "$INSTALL_ROOT/current.new" "$INSTALL_ROOT/current"
 CURRENT_CREATED=1
 "$INSTALL_ROOT/current/bin/coding-runner" install --profile "$PROFILE" --execution-mode privileged_host --confirm-privileged-host --executable-path "$INSTALL_ROOT/current/bin/coding-runner"
-printf '%s\n' "Runmesh Runner $VERSION installed and enrolled."
+printf '%s\n' "Runmesh Runner $VERSION installed and enrolled." 'The background service is enabled and started automatically.' 'Linux logs: sudo journalctl -u runmesh-runner -f' 'macOS logs: sudo log stream --predicate process==coding-runner'
 `;
 
 const POWERSHELL_TEMPLATE = String.raw`$ErrorActionPreference = 'Stop'
@@ -430,11 +453,24 @@ $ReleaseBase = '__RELEASE_BASE__'
 $ArtifactName = '__ARTIFACT_NAME__'
 $EnrollmentUrl = '__ENROLLMENT_URL__'
 $AllowedReleaseOrigins = @(__RELEASE_REDIRECT_ORIGINS_PS__)
+$AutoInstallDeps = $true
+if ($args -contains '--no-auto-deps') { $AutoInstallDeps = $false }
 $InstallRoot = Join-Path $env:ProgramFiles 'Runmesh'
 $Principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run from an elevated Administrator PowerShell session.' }
 $NodeCommand = Get-Command node -CommandType Application -ErrorAction SilentlyContinue
 $NpmCommand = Get-Command npm.cmd -CommandType Application -ErrorAction SilentlyContinue
+if ($null -eq $NodeCommand -or $null -eq $NpmCommand) {
+  if (-not $AutoInstallDeps) { throw 'Node.js 20 or newer and npm are required (automatic dependency installation disabled).' }
+  $Winget = Get-Command winget.exe -CommandType Application -ErrorAction SilentlyContinue
+  if ($null -eq $Winget) { throw 'Node.js 20+ is missing and winget.exe is unavailable. Install Node.js LTS, then rerun this command.' }
+  Write-Host 'Runmesh is installing the required Node.js runtime and package tools...'
+  & $Winget.Source install --id OpenJS.NodeJS.LTS --exact --silent --accept-package-agreements --accept-source-agreements
+  if ($LASTEXITCODE -ne 0) { throw 'Automatic Node.js installation failed.' }
+  $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+  $NodeCommand = Get-Command node -CommandType Application -ErrorAction SilentlyContinue
+  $NpmCommand = Get-Command npm.cmd -CommandType Application -ErrorAction SilentlyContinue
+}
 if ($null -eq $NodeCommand -or $null -eq $NpmCommand) { throw 'Node.js 20 or newer and npm are required.' }
 $NodePath = if ([string]::IsNullOrEmpty([string]$NodeCommand.Source)) { [string]$NodeCommand.Path } else { [string]$NodeCommand.Source }
 $NpmPath = if ([string]::IsNullOrEmpty([string]$NpmCommand.Source)) { [string]$NpmCommand.Path } else { [string]$NpmCommand.Source }
@@ -567,6 +603,8 @@ __VERIFIER__
   if ($LASTEXITCODE -ne 0) { throw 'Service installation failed after enrollment.' }
   $Succeeded = $true
   Write-Output "Runmesh Runner $Version installed and enrolled."
+  Write-Output 'The background service is enabled and started automatically.'
+  Write-Output 'Windows status: Get-ScheduledTask -TaskName RunmeshRunner'
 } finally {
   if ($null -ne $HttpClient) { $HttpClient.Dispose() }
   if ($null -ne $HttpHandler) { $HttpHandler.Dispose() }
