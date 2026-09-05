@@ -3798,6 +3798,7 @@ tbody tr:hover{background:#f8fafc}
 .enrollment-dialog .dialog-actions .execution-mode-inline{flex:1 1 auto;min-width:0}
 .enrollment-dialog .dialog-actions .execution-mode-inline .privileged-host-warning{max-width:100%;position:static;margin:8px 0 0;grid-column:1 / -1}
 .secret-card{width:min(620px,100%);margin:0 auto;padding:36px}
+html[lang="zh-CN"] legend,html[lang="zh-CN"] h3,html[lang="zh-CN"] .eyebrow,html[lang="zh-CN"] .metric-label,html[lang="zh-CN"] th,html[lang="zh-CN"] .form-stat-label,html[lang="zh-CN"] .details dt{text-transform:none}
 .secret-card code{font-size:12px;line-height:1.55;overflow-wrap:anywhere;word-break:break-word}
 .secret-actions{flex-wrap:wrap}
 .secret-actions .button{flex:1 1 180px}
@@ -3814,6 +3815,8 @@ tbody tr:hover{background:#f8fafc}
   .runner-table td::before,.client-table td::before{display:block;margin-bottom:3px;color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
   .runner-table td:nth-child(1)::before{content:"Runner"}.runner-table td:nth-child(2)::before{content:"Status"}.runner-table td:nth-child(3)::before{content:"Platform"}.runner-table td:nth-child(4)::before{content:"Execution mode"}.runner-table td:nth-child(5)::before{content:"Workspaces"}.runner-table td:nth-child(6)::before{content:"Active jobs"}.runner-table td:nth-child(7)::before{content:"Last seen"}.runner-table td:nth-child(8)::before{content:"Actions"}
   .client-table td:nth-child(1)::before{content:"Client"}.client-table td:nth-child(2)::before{content:"Scopes"}.client-table td:nth-child(3)::before{content:"Active runner"}.client-table td:nth-child(4)::before{content:"Last used"}.client-table td:nth-child(5)::before{content:"Status"}.client-table td:nth-child(6)::before{content:"Actions"}
+  html[lang="zh-CN"] .runner-table td:nth-child(1)::before{content:"Runner"}html[lang="zh-CN"] .runner-table td:nth-child(2)::before{content:"状态"}html[lang="zh-CN"] .runner-table td:nth-child(3)::before{content:"平台"}html[lang="zh-CN"] .runner-table td:nth-child(4)::before{content:"执行模式"}html[lang="zh-CN"] .runner-table td:nth-child(5)::before{content:"工作区"}html[lang="zh-CN"] .runner-table td:nth-child(6)::before{content:"活跃任务"}html[lang="zh-CN"] .runner-table td:nth-child(7)::before{content:"最后在线"}html[lang="zh-CN"] .runner-table td:nth-child(8)::before{content:"操作"}
+  html[lang="zh-CN"] .client-table td:nth-child(1)::before{content:"客户端"}html[lang="zh-CN"] .client-table td:nth-child(2)::before{content:"权限范围"}html[lang="zh-CN"] .client-table td:nth-child(3)::before{content:"活跃 Runner"}html[lang="zh-CN"] .client-table td:nth-child(4)::before{content:"最后使用"}html[lang="zh-CN"] .client-table td:nth-child(5)::before{content:"状态"}html[lang="zh-CN"] .client-table td:nth-child(6)::before{content:"操作"}
   .runner-actions,.client-table .action-btn-group{grid-template-columns:1fr}
   .runner-actions .inline-action-form:first-of-type,.client-table .inline-action-form:first-of-type{grid-column:auto}
   .enrollment-dialog{padding:22px 18px}
