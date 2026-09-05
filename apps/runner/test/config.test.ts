@@ -53,14 +53,14 @@ describe("runner configuration", () => {
     await expect(validateRunnerConfig({ server: "wss://example.test", runnerId: "runner-1" })).resolves.toMatchObject({ token: "0123456789abcdef" });
     process.env.RUNMESH_RUNNER_TOKEN = oldToken;
   });
-  it("uses CODING_RUNNER_TOKEN when --token is omitted", async () => {
+  it("uses RUNMESH_TOKEN when --token is omitted", async () => {
     const oldToken = process.env.RUNMESH_RUNNER_TOKEN;
-    const oldLegacyToken = process.env.CODING_RUNNER_TOKEN;
+    const oldLegacyToken = process.env.RUNMESH_TOKEN;
     delete process.env.RUNMESH_RUNNER_TOKEN;
-    process.env.CODING_RUNNER_TOKEN = "0123456789abcdef";
+    process.env.RUNMESH_TOKEN = "0123456789abcdef";
     await expect(validateRunnerConfig({ server: "wss://example.test", runnerId: "runner-1" })).resolves.toMatchObject({ token: "0123456789abcdef" });
     process.env.RUNMESH_RUNNER_TOKEN = oldToken;
-    process.env.CODING_RUNNER_TOKEN = oldLegacyToken;
+    process.env.RUNMESH_TOKEN = oldLegacyToken;
   });
   it("parses explicit persistent state and transport-disconnect test controls", () => {
     expect(parseRunnerArgs(["--state-dir", "/tmp/state", "--disconnect-after-ms", "25", "--disconnect-control-file", "/tmp/disconnect"])).toMatchObject({ stateDir: "/tmp/state", disconnectAfterMs: 25, disconnectControlFile: "/tmp/disconnect" });

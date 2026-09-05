@@ -341,7 +341,7 @@ async function start(parsed: ParsedCommand, store: ProfileStore, error: (line: s
   const hasLegacyExplicit = raw.server !== undefined || raw.runnerId !== undefined || raw.token !== undefined || (raw.workspaces?.length ?? 0) > 0;
   const productWorkspaces = profile === undefined || profileManagementMode(profile) === "central" ? [] : workspaceOptions(profile);
   const server = raw.server ?? profile?.server_url;
-  const token = raw.token ?? process.env.RUNMESH_RUNNER_TOKEN ?? process.env.CODING_RUNNER_TOKEN ?? profile?.token;
+  const token = raw.token ?? process.env.RUNMESH_RUNNER_TOKEN ?? process.env.RUNMESH_TOKEN ?? profile?.token;
   const runnerId = raw.runnerId ?? profile?.runner_id;
   const maxConcurrentJobs = raw.maxConcurrentJobs ?? profile?.max_concurrent_jobs;
   const options: RawRunnerOptions = {
@@ -978,7 +978,7 @@ export function parseProductArgs(argv: readonly string[]): ParsedCommand {
 }
 function storeFor(parsed: ParsedCommand, platform?: ServicePlatform): ProfileStore {
   if (typeof parsed.values.profilePath === "string") return new ProfileStore({ filePath: parsed.values.profilePath, ...(platform === undefined ? {} : { platform }) });
-  if (parsed.values.user === true || process.env.RUNMESH_RUNNER_PROFILE !== undefined || process.env.CODING_RUNNER_PROFILE !== undefined) return new ProfileStore(platform === undefined ? {} : { platform });
+  if (parsed.values.user === true || process.env.RUNMESH_RUNNER_PROFILE !== undefined || process.env.RUNMESH_PROFILE !== undefined) return new ProfileStore(platform === undefined ? {} : { platform });
   const layout = serviceLayout({ ...(platform === undefined ? {} : { platform }), mode: "system" });
   return new ProfileStore({ filePath: serviceProfilePath(layout), ...(platform === undefined ? {} : { platform }) });
 }
