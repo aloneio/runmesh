@@ -406,10 +406,11 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       if (typeof value === "string") body.set(key, value);
       else for (const item of value) body.append(key, item);
     }
+    const encodedBody = body.toString();
     return fetch(`${workerUrl}${path}`, {
       method: "POST", redirect: "manual",
-      headers: { "content-type": "application/x-www-form-urlencoded", origin: workerUrl, cookie: cookieHeader(cookies) },
-      body,
+      headers: { "content-type": "application/x-www-form-urlencoded", "content-length": String(Buffer.byteLength(encodedBody)), origin: workerUrl, cookie: cookieHeader(cookies) },
+      body: encodedBody,
     });
   }
 });
