@@ -531,6 +531,11 @@ export class RunnerConnection {
         socket.send(encodeWireFrame({ type: "job.status", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: event.job.job_id, job }));
       }
     } catch { /* local persistence remains authoritative; transport is best effort */ }
+    // Event delivery is intentionally best effort, while the periodic sync is
+    // the durable reconciliation path.  Push a snapshot after lifecycle
+    // boundaries so an MCP job is visible to Registry immediately even when
+    // the event frame races the next job/list request.
+    if (event.type !== "output") void this.sendSync(socket).catch(() => undefined);
   }
 }
 

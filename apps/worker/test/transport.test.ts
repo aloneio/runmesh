@@ -569,10 +569,10 @@ describe("Worker runner transport", () => {
     const credentialVersion = record?.credential_version;
     const recorded = await runInDurableObject(registry, (instance) => instance.recordJobEvent(runnerId, epoch as number, credentialVersion as number, {
       type: "job.status", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "job-event-1",
-      job: { job_id: "job-event-1", workspace_id: "workspace-1", status: "running", created_at_ms: 1, updated_at_ms: 2, runner_id: runnerId },
+      job: { job_id: "job-event-1", workspace_id: "workspace-1", status: "running", created_at_ms: 1, updated_at_ms: 2, created_by_client_id: "client-1", runner_id: runnerId },
     }, Date.now(), false));
     expect(recorded).toBe(true);
-    await expect(runInDurableObject(registry, (instance) => instance.listJobs(runnerId))).resolves.toMatchObject([{ job_id: "job-event-1", status: "running" }]);
+    await expect(runInDurableObject(registry, (instance) => instance.listJobs(runnerId))).resolves.toMatchObject([{ job_id: "job-event-1", status: "running", created_by_client_id: "client-1" }]);
     socket?.close();
   });
 

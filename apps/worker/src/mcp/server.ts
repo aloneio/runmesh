@@ -208,6 +208,11 @@ export function safeJobMetadata(value: unknown): Record<string, unknown> {
   if (jobId !== undefined) output.job_id = jobId;
   const workspaceId = safeJobIdentifier(value.workspace_id);
   if (workspaceId !== undefined) output.workspace_id = workspaceId;
+  // Keep the originating MCP client attribution in the public job metadata.
+  // It is a bounded identifier, and lets callers correlate shared jobs after
+  // the original MCP request has completed.
+  const createdByClientId = safeJobIdentifier(value.created_by_client_id);
+  if (createdByClientId !== undefined) output.created_by_client_id = createdByClientId;
   if (typeof value.status === "string") output.status = safeJobStatus(value.status);
   copyRequiredTimestamp(value, output, "created_at_ms");
   copyNullableTimestamp(value, output, "started_at_ms");
