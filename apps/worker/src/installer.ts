@@ -454,7 +454,6 @@ if ! mkdir "$STAGE"; then printf '%s\n' 'error: installer staging path is alread
 )
 PACKAGE_ROOT="$STAGE/lib/node_modules/@aloneio/runmesh-runner"
 BUNDLE_FILENAME='runmesh.cjs'
-if [ ! -f "$PACKAGE_ROOT/dist/$BUNDLE_FILENAME" ]; then BUNDLE_FILENAME='coding-runner.cjs'; fi
 [ -f "$PACKAGE_ROOT/dist/$BUNDLE_FILENAME" ] || { printf '%s\n' 'error: verified package did not contain the Runner bundle' >&2; exit 1; }
 mkdir -p "$STAGE/runtime"
 cp "$NODE" "$STAGE/runtime/node"
@@ -668,7 +667,6 @@ __VERIFIER__
   }
   if ($LASTEXITCODE -ne 0) { throw 'Verified local tarball installation failed.' }
   $PackageRoot = Get-ChildItem -LiteralPath $Stage -Filter 'runmesh.cjs' -File -Recurse | Select-Object -First 1
-  if ($null -eq $PackageRoot) { $PackageRoot = Get-ChildItem -LiteralPath $Stage -Filter 'coding-runner.cjs' -File -Recurse | Select-Object -First 1 }
   if ($null -eq $PackageRoot) { throw 'Verified package did not contain the Runner bundle.' }
   New-Item -ItemType Directory -Path (Join-Path $Stage 'runtime') -Force | Out-Null
   Copy-Item -LiteralPath $NodePath -Destination (Join-Path $Stage 'runtime\node.exe') -Force
