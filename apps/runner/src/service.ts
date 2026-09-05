@@ -172,7 +172,7 @@ export function serviceLayout(options: ServiceAdapterOptions = {}): ServiceLayou
       // npm's POSIX global layout places package bin shims under `<prefix>/bin`.
       // Keep the generated system unit pointed at the executable that the
       // portable installation procedure actually stages.
-      return { installRoot, configRoot, stateRoot, logRoot, manifestPath, executablePath: options.executablePath ?? path.join(installRoot, "current", "bin", "coding-runner") };
+      return { installRoot, configRoot, stateRoot, logRoot, manifestPath, executablePath: options.executablePath ?? path.join(installRoot, "current", "bin", "runmesh") };
     }
     if (platform === "darwin") {
       const installRoot = options.installRoot ?? "/opt/runmesh";
@@ -183,35 +183,35 @@ export function serviceLayout(options: ServiceAdapterOptions = {}): ServiceLayou
       // npm's POSIX global layout places package bin shims under `<prefix>/bin`.
       // Keep the generated launchd daemon pointed at the executable staged by
       // the portable installation procedure.
-      return { installRoot, configRoot, stateRoot, logRoot, manifestPath, executablePath: options.executablePath ?? path.join(installRoot, "current", "bin", "coding-runner") };
+      return { installRoot, configRoot, stateRoot, logRoot, manifestPath, executablePath: options.executablePath ?? path.join(installRoot, "current", "bin", "runmesh") };
     }
     const installRoot = options.installRoot ?? "C:\\Program Files\\Runmesh";
     const configRoot = options.configRoot ?? "C:\\ProgramData\\Runmesh";
     const stateRoot = options.dataRoot ?? path.join(configRoot, "state");
     const logRoot = options.logRoot ?? path.join(configRoot, "logs");
     const manifestPath = path.join(options.manifestDir ?? configRoot, "RunmeshRunner.xml");
-    return { installRoot, configRoot, stateRoot, logRoot, manifestPath, executablePath: options.executablePath ?? path.join(installRoot, "current", "coding-runner.cmd") };
+    return { installRoot, configRoot, stateRoot, logRoot, manifestPath, executablePath: options.executablePath ?? path.join(installRoot, "current", "runmesh.cmd") };
   }
   if (platform === "linux") {
     const installRoot = options.installRoot ?? path.join(home, ".local", "share", "runmesh");
     const configRoot = options.configRoot ?? path.join(home, ".config", "runmesh");
     const stateRoot = options.dataRoot ?? path.join(home, ".local", "state", "runmesh");
     const logRoot = options.logRoot ?? path.join(stateRoot, "logs");
-      return { installRoot, configRoot, stateRoot, logRoot, manifestPath: path.join(options.manifestDir ?? path.join(home, ".config", "systemd", "user"), LINUX_SERVICE_NAME), executablePath: options.executablePath ?? path.join(installRoot, "current", "bin", "coding-runner") };
+      return { installRoot, configRoot, stateRoot, logRoot, manifestPath: path.join(options.manifestDir ?? path.join(home, ".config", "systemd", "user"), LINUX_SERVICE_NAME), executablePath: options.executablePath ?? path.join(installRoot, "current", "bin", "runmesh") };
   }
   if (platform === "darwin") {
     const installRoot = options.installRoot ?? path.join(home, ".local", "share", "runmesh");
     const configRoot = options.configRoot ?? path.join(home, "Library", "Application Support", "Runmesh");
     const stateRoot = options.dataRoot ?? path.join(configRoot, "state");
     const logRoot = options.logRoot ?? path.join(configRoot, "logs");
-      return { installRoot, configRoot, stateRoot, logRoot, manifestPath: path.join(options.manifestDir ?? path.join(home, "Library", "LaunchAgents"), `${MACOS_LABEL}.plist`), executablePath: options.executablePath ?? path.join(installRoot, "current", "bin", "coding-runner") };
+      return { installRoot, configRoot, stateRoot, logRoot, manifestPath: path.join(options.manifestDir ?? path.join(home, "Library", "LaunchAgents"), `${MACOS_LABEL}.plist`), executablePath: options.executablePath ?? path.join(installRoot, "current", "bin", "runmesh") };
   }
   const local = process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local");
   const installRoot = options.installRoot ?? path.join(local, "Runmesh");
   const configRoot = options.configRoot ?? path.join(local, "Runmesh");
   const stateRoot = options.dataRoot ?? path.join(configRoot, "state");
   const logRoot = options.logRoot ?? path.join(configRoot, "logs");
-  return { installRoot, configRoot, stateRoot, logRoot, manifestPath: path.join(options.manifestDir ?? configRoot, "RunmeshRunner.xml"), executablePath: options.executablePath ?? path.join(installRoot, "current", "coding-runner.cmd") };
+  return { installRoot, configRoot, stateRoot, logRoot, manifestPath: path.join(options.manifestDir ?? configRoot, "RunmeshRunner.xml"), executablePath: options.executablePath ?? path.join(installRoot, "current", "runmesh.cmd") };
 }
 
 export function servicePath(options: ServiceAdapterOptions = {}): string { return serviceLayout(options).manifestPath; }

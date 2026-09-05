@@ -71,7 +71,7 @@ export async function validateRunnerConfig(options: RawRunnerOptions): Promise<R
   if (typeof options !== "object" || options === null || Array.isArray(options)) throw new Error("runner options must be an object");
   const suppliedServer = typeof options.server === "string" ? options.server : undefined;
   const server = suppliedServer?.trim();
-  const suppliedToken = options.token ?? process.env.RUNMESH_RUNNER_TOKEN ?? process.env.CODING_RUNNER_TOKEN;
+  const suppliedToken = options.token ?? process.env.RUNMESH_RUNNER_TOKEN ?? process.env.RUNMESH_TOKEN;
   if ((suppliedServer !== undefined && CONTROL_CHARACTER_PATTERN.test(suppliedServer)) || (typeof suppliedToken === "string" && CONTROL_CHARACTER_PATTERN.test(suppliedToken))) {
     throw new Error("server and token must not contain control characters");
   }

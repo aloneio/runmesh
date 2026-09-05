@@ -25,7 +25,7 @@ try {
   await exec(npmExecutable, ["install", "--ignore-scripts", "--offline", join(root, runner)], { cwd: root, env: { ...process.env, npm_config_cache: cache }, ...npmExecOptions });
   const packageRoot = join(root, "node_modules", "@aloneio", "runmesh-runner");
   const manifest = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
-  if (manifest.private === true || manifest.bin?.["runmesh-runner"] !== "./dist/coding-runner.cjs" || Object.keys(manifest.dependencies ?? {}).length !== 0) throw new Error("Runner tarball is not self-contained");
+  if (manifest.private === true || manifest.bin?.["runmesh-runner"] !== "./dist/runmesh.cjs" || Object.keys(manifest.dependencies ?? {}).length !== 0) throw new Error("Runner tarball is not self-contained");
   for (const file of ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"]) await readFile(join(packageRoot, file));
   const bin = process.platform === "win32" ? join(root, "node_modules", ".bin", "runmesh-runner.cmd") : join(root, "node_modules", ".bin", "runmesh-runner");
   const binExecOptions = process.platform === "win32" ? { shell: true } : {};
