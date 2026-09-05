@@ -32,6 +32,8 @@ export interface WorkerEnv {
   RUNMESH_SIGNED_RELEASE_AVAILABLE?: string;
   /** Canonical external HTTPS origin used in hosted installer commands. */
   RUNMESH_PUBLIC_ORIGIN?: string;
+  /** Test-harness-only switch; never configured by a deployment. */
+  RUNMESH_TEST_MODE?: string;
   /** Static assets served by the Worker asset binding. */
   ASSETS?: Fetcher;
 }

@@ -110,6 +110,8 @@ export interface RunnerReleaseEnvironment {
   readonly RUNMESH_SIGNED_RELEASE_AVAILABLE?: string;
   /** Canonical external HTTPS origin; required before hosted bootstrap is exposed. */
   readonly RUNMESH_PUBLIC_ORIGIN?: string;
+  /** Test-harness-only switch; never configured by a deployment. */
+  readonly RUNMESH_TEST_MODE?: string;
 }
 
 export function runnerReleaseDescriptor(env: RunnerReleaseEnvironment): RunnerReleaseDescriptor {
@@ -127,7 +129,7 @@ function runnerInstallScript(request: Request, _url: URL, env: RunnerReleaseEnvi
   const descriptor = runnerReleaseDescriptor(env);
   let content: string;
   if (descriptor.distributable) {
-    try { content = renderPosixInstaller(resolvePublicOrigin(request, env.RUNMESH_PUBLIC_ORIGIN)); }
+    try { content = renderPosixInstaller(resolvePublicOrigin(request, configuredPublicOrigin(env))); }
     catch { return installerOriginUnavailable(); }
   } else {
     content =
@@ -144,7 +146,7 @@ function runnerInstallPowerShell(request: Request, _url: URL, env: RunnerRelease
   const descriptor = runnerReleaseDescriptor(env);
   let content: string;
   if (descriptor.distributable) {
-    try { content = renderPowerShellInstaller(resolvePublicOrigin(request, env.RUNMESH_PUBLIC_ORIGIN)); }
+    try { content = renderPowerShellInstaller(resolvePublicOrigin(request, configuredPublicOrigin(env))); }
     catch { return installerOriginUnavailable(); }
   } else {
     content = `$ErrorActionPreference = 'Stop'
@@ -172,7 +174,7 @@ async function handleRunnerEnrollment(request: Request, env: WorkerEnv): Promise
   // controlled or unusable reconnect URL when the request arrived through a
   // misconfigured proxy.
   let publicOrigin: string;
-  try { publicOrigin = resolveConnectionOrigin(request, env.RUNMESH_PUBLIC_ORIGIN); } catch { return installerOriginUnavailable(); }
+  try { publicOrigin = resolveConnectionOrigin(request, configuredPublicOrigin(env)); } catch { return installerOriginUnavailable(); }
   const verifier = await sha256Hex(code);
   // Resolve the target before redeeming so the RunnerDO can acquire its
   // mutation fence. A direct redeem fallback would let an old socket remain
@@ -464,7 +466,7 @@ async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: URL): P
   // may use HTTP; copied manual commands still quote this derived origin.
   let publicOrigin: string;
   try {
-    publicOrigin = resolveConnectionOrigin(request, env.RUNMESH_PUBLIC_ORIGIN);
+    publicOrigin = resolveConnectionOrigin(request, configuredPublicOrigin(env));
   } catch { return installerOriginUnavailable(); }
   if (url.pathname === "/admin/logout") {
     await registryPost(env, "/auth/sessions/logout", { session_hash: session.hash });
@@ -997,12 +999,12 @@ async function adminSession(request: Request, env: WorkerEnv): Promise<{ hash: s
   return typeof csrfHash === "string" && /^[0-9a-f]{64}$/.test(csrfHash) ? { hash, csrf_hash: csrfHash } : undefined;
 }
 async function verifyAdminPost(request: Request, form: FormData, session: { csrf_hash: string }, env: WorkerEnv): Promise<boolean> {
-  if (!sameOrigin(request, env.RUNMESH_PUBLIC_ORIGIN)) return false;
+  if (!sameOrigin(request, configuredPublicOrigin(env))) return false;
   const supplied = form.get("csrf_token"); const cookie = cookieValue(request, ADMIN_CSRF_COOKIE);
   return typeof supplied === "string" && typeof cookie === "string" && constantTimeEqual(supplied, cookie) && constantTimeEqual(await sha256Hex(supplied), session.csrf_hash);
 }
 async function verifyPreAuthCsrf(request: Request, form: FormData, name: string, env: WorkerEnv): Promise<boolean> {
-  if (!sameOrigin(request, env.RUNMESH_PUBLIC_ORIGIN)) return false;
+  if (!sameOrigin(request, configuredPublicOrigin(env))) return false;
   const supplied = form.get("csrf_token"); const cookie = cookieValue(request, name);
   return typeof supplied === "string" && typeof cookie === "string" && constantTimeEqual(supplied, cookie);
 }
@@ -1038,6 +1040,10 @@ function sameOrigin(request: Request, configuredOrigin?: string): boolean {
   const candidate = request.headers.get("origin") ?? request.headers.get("referer");
   if (candidate === null || candidate === "null") return true; // privacy browsers may submit Origin: null; the synchronizer token still remains mandatory.
   try { return new URL(candidate).origin === origin; } catch { return false; }
+}
+
+function configuredPublicOrigin(env: { RUNMESH_PUBLIC_ORIGIN?: string; RUNMESH_TEST_MODE?: string }): string | undefined {
+  return env.RUNMESH_TEST_MODE === "1" ? undefined : env.RUNMESH_PUBLIC_ORIGIN;
 }
 
 function registryStatusUnavailable(): Response {
@@ -3993,7 +3999,7 @@ export function runnerEnrollmentPage(env: RunnerReleaseEnvironment, baseUrl: str
   try {
     const parsed = new URL(baseUrl);
     const headers = new Headers({ host: parsed.host });
-    publicBase = resolveConnectionOrigin(new Request(parsed.toString(), { headers }), env.RUNMESH_PUBLIC_ORIGIN);
+    publicBase = resolveConnectionOrigin(new Request(parsed.toString(), { headers }), configuredPublicOrigin(env));
     if (bootstrap) publicBase = canonicalPublicOrigin(publicBase);
   } catch {
     return installerOriginUnavailable();
