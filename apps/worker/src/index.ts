@@ -1789,10 +1789,10 @@ function runnersPage(data: AdminData, csrf: string): string {
     // administrator acknowledgement; switching a restricted/legacy Runner
     // to privileged_host still requires a fresh checkbox.
     const modeFields = executionModeFormFields(mode, csrf, true, configuredMode !== "privileged_host");
-    return `<tr class="data-row"><td><div class="table-primary-cell"><a class="strong" href="/admin/runners/${encodeURIComponent(runner.runner_id)}">${escapeHtml(runner.display_name)}</a><span class="sub-id mono">${escapeHtml(runner.runner_id)}</span></div></td><td>${statusBadge(runner.state)}</td><td><span class="platform-tag">${escapeHtml(safePlatform(runner))}</span></td><td><span class="mono font-12">${escapeHtml(modeLabel)}</span>${configuredMode === "migration_required" ? "<span class=\"warning-text\"> · explicit migration required</span>" : ""}</td><td class="num-cell">${runnerWorkspaceCount(runner)}</td><td class="num-cell">${runnerActiveJobs(runner)}</td><td class="time-cell">${escapeHtml(time(runner.last_heartbeat_ms))}</td>${runnerActionCell(runner, modeFields, csrf)}</tr>`;
-  }).join("") || `<tr><td colspan="8" class="empty"><div class="empty-state-box"><p>No runners yet.</p></div></td></tr>`;
+    return `<tr class="data-row"><td><div class="table-primary-cell"><a class="strong" href="/admin/runners/${encodeURIComponent(runner.runner_id)}">${escapeHtml(runner.display_name)}</a><span class="sub-id mono">${escapeHtml(runner.runner_id)}</span></div></td><td>${statusBadge(runner.state)}</td><td><span class="platform-tag">${escapeHtml(safePlatform(runner))}</span></td><td><span class="mono font-12">${escapeHtml(modeLabel)}</span>${configuredMode === "migration_required" ? "<span class=\"warning-text\"> · explicit migration required</span>" : ""}</td><td class="time-cell">${escapeHtml(time(runner.last_heartbeat_ms))}</td>${runnerActionCell(runner, modeFields, csrf)}</tr>`;
+  }).join("") || `<tr><td colspan="6" class="empty"><div class="empty-state-box"><p>No runners yet.</p></div></td></tr>`;
   const warning = PRIVILEGED_HOST_WARNING;
-  return `<section class="page-heading"><div><p class="eyebrow">Infrastructure</p><h1>Runners</h1><p class="lede">Manage safe runner metadata and one-time registration.</p></div></section><section class="panel add-panel" id="add-runner"><div class="section-title"><h2>Add Runner</h2><span class="muted font-12">Enrollment codes expire after 30 minutes.</span></div><form method="post" action="/admin/runners" class="form-grid add-form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Display name<input name="display_name" maxlength="256" required autocomplete="off" placeholder="e.g. Production Runner 01"></label><label>Safe runner ID <span class="muted font-11">optional</span><input name="runner_id" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" placeholder="generated-id"></label><fieldset class="execution-mode-fieldset"><legend>System Runner execution mode</legend><label class="check"><input type="radio" name="execution_mode" value="privileged_host" checked data-execution-mode="privileged_host"><span><strong>整机控制 / 高权限模式（推荐用于受信任的自托管机器）</strong><small>Linux root · macOS root LaunchDaemon · Windows SYSTEM / HighestAvailable</small></span></label><label class="check"><input type="radio" name="execution_mode" value="dedicated_user" data-execution-mode="dedicated_user"><span><strong>受限服务账户模式（dedicated_user）</strong><small>Use a dedicated restricted service identity for narrower host access.</small></span></label><p class="warning privileged-host-warning">${escapeHtml(warning)}</p><label class="check"><input type="checkbox" name="confirm_privileged_host" value="true" data-privileged-confirmation><span>I understand and authorize this one-time high-privilege installation acknowledgement.</span></label></fieldset><div class="form-submit-wrap"><button class="button">Create enrollment</button></div></form></section><section class="panel"><div class="table-wrap"><table class="data-table runner-table"><caption class="sr-only">Registered runners</caption><thead><tr><th>Display name</th><th>Status</th><th>Platform / architecture</th><th>Execution mode</th><th>Workspaces</th><th>Active jobs</th><th>Last seen</th><th>Actions</th></tr></thead><tbody>${table}</tbody></table></div></section>`;
+  return `<section class="page-heading"><div><p class="eyebrow">Infrastructure</p><h1>Runners</h1><p class="lede">Manage safe runner metadata and one-time registration.</p></div></section><section class="panel add-panel" id="add-runner"><div class="section-title"><h2>Add Runner</h2><span class="muted font-12">Enrollment codes expire after 30 minutes.</span></div><form method="post" action="/admin/runners" class="form-grid add-form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Display name<input name="display_name" maxlength="256" required autocomplete="off" placeholder="e.g. Production Runner 01"></label><label>Safe runner ID <span class="muted font-11">optional</span><input name="runner_id" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" placeholder="generated-id"></label><fieldset class="execution-mode-fieldset"><legend>System Runner execution mode</legend><label class="check"><input type="radio" name="execution_mode" value="privileged_host" checked data-execution-mode="privileged_host"><span><strong>整机控制 / 高权限模式（推荐用于受信任的自托管机器）</strong><small>Linux root · macOS root LaunchDaemon · Windows SYSTEM / HighestAvailable</small></span></label><label class="check"><input type="radio" name="execution_mode" value="dedicated_user" data-execution-mode="dedicated_user"><span><strong>受限服务账户模式（dedicated_user）</strong><small>Use a dedicated restricted service identity for narrower host access.</small></span></label><p class="warning privileged-host-warning">${escapeHtml(warning)}</p><label class="check"><input type="checkbox" name="confirm_privileged_host" value="true" data-privileged-confirmation><span>I understand and authorize this one-time high-privilege installation acknowledgement.</span></label></fieldset><div class="form-submit-wrap"><button class="button">Create enrollment</button></div></form></section><section class="panel"><div class="table-wrap"><table class="data-table runner-table"><caption class="sr-only">Registered runners</caption><thead><tr><th>Display name</th><th>Status</th><th>Platform / architecture</th><th>Execution mode</th><th>Last seen</th><th>Actions</th></tr></thead><tbody>${table}</tbody></table></div></section>`;
 }
 function activeRunnerLabel(client: McpClientRecord, runners: readonly RunnerRecord[]): string { const runner = client.active_runner_id === null ? undefined : runners.find((item) => item.runner_id === client.active_runner_id); return runner === undefined ? "Not selected" : runner.display_name; }
 function clientsPage(data: AdminData, csrf: string): string {
@@ -1807,8 +1807,6 @@ function statusBadge(state: string): string { const safe = ["online", "offline",
 function statusClass(status: string): string { return ["queued", "running", "cancelling", "cancelled", "succeeded", "completed", "failed", "unknown", "interrupted", "pending", "invalid", "offline", "online", "valid", "permission_denied", "not_directory", "invalid_path", "missing"].includes(status) ? status : "unknown"; }
 function safePlatform(runner: RunnerRecord): string { return runner.public_info === null ? "Not enrolled" : `${runner.public_info.platform} / ${runner.public_info.architecture}`; }
 function shortChecksum(value: unknown): string { return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value) ? `${value.slice(0, 12)}…` : "—"; }
-function runnerWorkspaceCount(runner: RunnerRecord): string { const value = (runner as RunnerRecord & { workspace_count?: unknown }).workspace_count; return typeof value === "number" ? String(value) : "—"; }
-function runnerActiveJobs(runner: RunnerRecord): string { const value = (runner as RunnerRecord & { active_job_count?: unknown }).active_job_count; return typeof value === "number" ? String(value) : "—"; }
 function displayScopeLabel(scope: string): string {
   switch (scope) {
     case "coding:read":
@@ -3813,26 +3811,29 @@ tbody tr:hover{background:#f8fafc}
 /* Dense action cells need their own layout.  Without this, each form's
    intrinsic width expands the Runner table and makes the page unusable. */
 .runner-table{min-width:0;table-layout:fixed}
-.runner-table th:nth-child(1){width:16%}
-.runner-table th:nth-child(2){width:9%}
-.runner-table th:nth-child(3){width:13%}
-.runner-table th:nth-child(4){width:12%}
-.runner-table th:nth-child(5),.runner-table th:nth-child(6){width:7%}
-.runner-table th:nth-child(7){width:10%}
-.runner-table th:nth-child(8){width:28%}
+.runner-table th:nth-child(1){width:19%}
+.runner-table th:nth-child(2){width:10%}
+.runner-table th:nth-child(3){width:16%}
+.runner-table th:nth-child(4){width:18%}
+.runner-table th:nth-child(5){width:12%}
+.runner-table th:nth-child(6){width:25%}
 .runner-table td{overflow-wrap:anywhere}
-.runner-table .actions{vertical-align:top;width:auto;min-width:0}
+.runner-table .actions{vertical-align:top;width:auto;min-width:0;overflow:visible}
 .runner-actions{display:grid;width:100%;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;align-items:start}
 .runner-actions>a,.runner-actions>form{min-width:0}
 .runner-actions>a{width:100%}
 .runner-actions .inline-action-form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px;width:100%;align-items:center}
 .runner-actions .inline-action-form:first-of-type{grid-column:1 / -1}
-.row-actions-more{grid-column:1 / -1;border:1px solid var(--line);border-radius:var(--radius-sm);background:#fff;min-width:0}
+.row-actions-more{grid-column:1 / -1;border:1px solid var(--line);border-radius:var(--radius-sm);background:#fff;min-width:0;overflow:visible;position:relative;z-index:1}
 .row-actions-more summary{cursor:pointer;padding:6px 8px;color:var(--muted-dark);font-size:11px;font-weight:700;list-style:none;text-align:center}
 .row-actions-more summary::-webkit-details-marker{display:none}
 .row-actions-more summary::before{content:"+";display:inline-block;margin-right:5px;color:var(--brand);font-size:14px;line-height:0;vertical-align:-1px}
 .row-actions-more[open] summary::before{content:"−"}
-.row-actions-menu{display:grid;gap:7px;padding:7px;border-top:1px solid var(--line-light);background:#f8fafc}
+.row-actions-menu{display:grid;gap:7px;padding:7px;border-top:1px solid var(--line-light);background:#f8fafc;box-sizing:border-box;width:100%;min-width:0;overflow:visible}
+.row-actions-menu>.inline-action-form{grid-template-columns:minmax(0,1fr);min-width:0;width:100%}
+.row-actions-menu>.inline-action-form>.small{width:100%;min-width:0}
+.row-actions-menu>.danger-action{grid-template-columns:minmax(0,1fr)}
+.row-actions-menu .execution-mode-inline{min-width:0;width:100%;box-sizing:border-box}
 .runner-actions .execution-mode-inline{grid-column:1 / -1;min-width:0;width:100%;display:grid;grid-template-columns:auto minmax(0,1fr);padding:4px 6px;gap:4px;background:#f8fafc}
 .runner-actions .execution-mode-inline legend{grid-column:1 / -1}
 .runner-actions .execution-mode-inline label:not(.check){min-width:0}
@@ -3867,8 +3868,8 @@ html[lang="zh-CN"] legend,html[lang="zh-CN"] h3,html[lang="zh-CN"] .eyebrow,html
 .secret-actions{flex-wrap:wrap}
 .secret-actions .button{flex:1 1 180px}
 @media(max-width:1050px){
-  .runner-table,.client-table{table-layout:auto;min-width:940px}
-  .runner-table .actions,.client-table .actions{min-width:300px}
+  .runner-table,.client-table{table-layout:auto;min-width:760px}
+  .runner-table .actions,.client-table .actions{min-width:280px}
 }
 @media(max-width:800px){
   .runner-table,.client-table{display:block;min-width:0;border:0}
@@ -3877,9 +3878,9 @@ html[lang="zh-CN"] legend,html[lang="zh-CN"] h3,html[lang="zh-CN"] .eyebrow,html
   .runner-table tr,.client-table tr{padding:14px 0;border-bottom:1px solid var(--line)}
   .runner-table td,.client-table td{padding:5px 0;border:0}
   .runner-table td::before,.client-table td::before{display:block;margin-bottom:3px;color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
-  .runner-table td:nth-child(1)::before{content:"Runner"}.runner-table td:nth-child(2)::before{content:"Status"}.runner-table td:nth-child(3)::before{content:"Platform"}.runner-table td:nth-child(4)::before{content:"Execution mode"}.runner-table td:nth-child(5)::before{content:"Workspaces"}.runner-table td:nth-child(6)::before{content:"Active jobs"}.runner-table td:nth-child(7)::before{content:"Last seen"}.runner-table td:nth-child(8)::before{content:"Actions"}
+  .runner-table td:nth-child(1)::before{content:"Runner"}.runner-table td:nth-child(2)::before{content:"Status"}.runner-table td:nth-child(3)::before{content:"Platform"}.runner-table td:nth-child(4)::before{content:"Execution mode"}.runner-table td:nth-child(5)::before{content:"Last seen"}.runner-table td:nth-child(6)::before{content:"Actions"}
   .client-table td:nth-child(1)::before{content:"Client"}.client-table td:nth-child(2)::before{content:"Scopes"}.client-table td:nth-child(3)::before{content:"Active runner"}.client-table td:nth-child(4)::before{content:"Last used"}.client-table td:nth-child(5)::before{content:"Status"}.client-table td:nth-child(6)::before{content:"Actions"}
-  html[lang="zh-CN"] .runner-table td:nth-child(1)::before{content:"Runner"}html[lang="zh-CN"] .runner-table td:nth-child(2)::before{content:"状态"}html[lang="zh-CN"] .runner-table td:nth-child(3)::before{content:"平台"}html[lang="zh-CN"] .runner-table td:nth-child(4)::before{content:"执行模式"}html[lang="zh-CN"] .runner-table td:nth-child(5)::before{content:"工作区"}html[lang="zh-CN"] .runner-table td:nth-child(6)::before{content:"活跃任务"}html[lang="zh-CN"] .runner-table td:nth-child(7)::before{content:"最后在线"}html[lang="zh-CN"] .runner-table td:nth-child(8)::before{content:"操作"}
+  html[lang="zh-CN"] .runner-table td:nth-child(1)::before{content:"Runner"}html[lang="zh-CN"] .runner-table td:nth-child(2)::before{content:"状态"}html[lang="zh-CN"] .runner-table td:nth-child(3)::before{content:"平台"}html[lang="zh-CN"] .runner-table td:nth-child(4)::before{content:"执行模式"}html[lang="zh-CN"] .runner-table td:nth-child(5)::before{content:"最后在线"}html[lang="zh-CN"] .runner-table td:nth-child(6)::before{content:"操作"}
   html[lang="zh-CN"] .client-table td:nth-child(1)::before{content:"客户端"}html[lang="zh-CN"] .client-table td:nth-child(2)::before{content:"权限范围"}html[lang="zh-CN"] .client-table td:nth-child(3)::before{content:"活跃 Runner"}html[lang="zh-CN"] .client-table td:nth-child(4)::before{content:"最后使用"}html[lang="zh-CN"] .client-table td:nth-child(5)::before{content:"状态"}html[lang="zh-CN"] .client-table td:nth-child(6)::before{content:"操作"}
   .runner-actions,.client-table .action-btn-group{grid-template-columns:1fr}
   .runner-actions .inline-action-form:first-of-type,.client-table .inline-action-form:first-of-type{grid-column:auto}
