@@ -3984,7 +3984,12 @@ export function runnerEnrollmentPage(env: RunnerReleaseEnvironment, baseUrl: str
   const shellCode = shellQuote(code);
   const powerShellCode = powershellQuote(code);
   const shellCommand = `curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 0 --max-time 60 --max-filesize 262144 ${shellInstallerUrl} | sudo sh -s -- ${shellCode}`;
-  const powerShellCommand = `& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 -TimeoutSec 60 -ErrorAction Stop -Uri ${powerShellInstallerUrl}).Content)) ${powerShellCode}`;
+  // Invoke a clean PowerShell child so the copied command works from either
+  // an elevated PowerShell prompt or cmd.exe, regardless of the operator's
+  // profile aliases/functions or execution-policy setting. The installer
+  // itself remains the only downloaded payload and receives the one-time code
+  // as its sole argument.
+  const powerShellCommand = `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 -TimeoutSec 60 -ErrorAction Stop -Uri ${powerShellInstallerUrl}).Content)) ${powerShellCode}"`;
   const server = new URL("/runner/enroll", publicBase).toString();
   const shellServer = shellQuote(server);
   const powershellServer = powershellQuote(server);
