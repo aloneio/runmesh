@@ -34,6 +34,7 @@ const workerEnv = {
   SETUP_TOKEN: "e2e-setup-token-0123456789abcdef",
   RUNNER_TOKEN_PEPPER: "e2e-runner-token-pepper-not-for-production",
   INTERNAL_CONTROL_SECRET: "e2e-internal-control-secret-not-for-production",
+  RUNMESH_TEST_MODE: "1",
 };
 
 describe.sequential("real local MCP → Worker → Runner RPC", () => {
