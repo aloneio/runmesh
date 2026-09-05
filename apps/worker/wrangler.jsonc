@@ -31,9 +31,7 @@
     }
   ],
   "vars": {
-    "WORKER_ID": "worker-local",
-    "RUNMESH_PUBLIC_ORIGIN": "https://runmesh.aloneio.workers.dev",
-    "RUNMESH_SIGNED_RELEASE_AVAILABLE": "0.1.0-dev.2"
+    "WORKER_ID": "worker-local"
   },
   "env": {
     "production": {
