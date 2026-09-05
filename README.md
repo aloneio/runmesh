@@ -1,255 +1,90 @@
 <p align="center">
-  <img src="./assets/logo.png" alt="Runmesh · Agent Control Plane" width="560" />
+  <img src="./assets/logo.png" alt="Runmesh" width="460" />
 </p>
 
-<p align="center">
-  <strong>Agent Control Plane for remote coding runtimes</strong>
-</p>
+<p align="center"><strong>Give AI clients safe access to the computers you approve</strong></p>
+<p align="center">Runmesh is a self-hosted remote development and automation control plane for MCP clients.</p>
 
 <p align="center">
-  Model-neutral · client-neutral · outbound-only
-</p>
-
-<p align="center">
-  English · <a href="./README.zh-CN.md">简体中文</a>
-</p>
-
-<p align="center">
-  <a href="https://github.com/aloneio/runmesh/actions/workflows/ci.yml?query=branch%3Adev"><img alt="CI" src="https://github.com/aloneio/runmesh/actions/workflows/ci.yml/badge.svg?branch=dev" /></a>
-  <a href="https://developers.cloudflare.com/workers/"><img alt="Cloudflare Workers" src="https://img.shields.io/badge/Cloudflare-Workers%20%2B%20Durable%20Objects-f38020?logo=cloudflare&logoColor=white" /></a>
-  <a href="https://nodejs.org/"><img alt="Node.js" src="https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white" /></a>
-  <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-6f42c1" /></a>
-</p>
-
-<p align="center">
-  <a href="#using-an-existing-runmesh-deployment">Use Runmesh</a> ·
-  <a href="#self-hosting-for-administrators">Self-host</a> ·
-  <a href="#mcp-tools">MCP Tools</a> ·
-  <a href="./docs/security.md">Security</a> ·
-  <a href="./docs/deployment.md">Deployment</a>
+  <a href="./README.zh-CN.md">简体中文</a> ·
+  <a href="./docs/user-guide.md">User guide</a> ·
+  <a href="./docs/admin-guide.md">Administrator guide</a> ·
+  <a href="./docs/troubleshooting.md">Troubleshooting</a>
 </p>
 
 > [!IMPORTANT]
-> Runmesh is **source-available under the PolyForm Noncommercial License 1.0.0**, not an OSI-approved open-source license. Commercial use requires separate written authorization; see [COMMERCIAL_LICENSE.md](docs/legal/COMMERCIAL_LICENSE.md).
-
-> [!WARNING]
-> `shell` is a host-shell capability, not a sandbox. Commands can access files, network resources, environment variables, credentials, and processes available to the Runner service identity. Use a restricted VM or container for untrusted code, and do not give a Runner more authority than necessary.
+> Runmesh is provided under the PolyForm Noncommercial License 1.0.0. Commercial use requires separate written authorization. See [Commercial License](docs/legal/COMMERCIAL_LICENSE.md).
 
 ## What Runmesh does
 
-Runmesh lets an MCP client use approved workspaces on one or more machines while keeping the execution machines private:
+Runmesh connects ChatGPT, Claude, Cursor, and other MCP-compatible clients to computers you control. An AI client can inspect approved files, suggest or apply changes, run authorized commands, and follow long-running jobs.
 
-- **Cloudflare Worker** is the public control plane and MCP HTTP endpoint.
-- **RegistryDO** stores authentication, Runner and Workspace records, policy state, client selection, and bounded Job metadata.
-- **RunnerDO** maintains the authenticated outbound WebSocket bridge for a Runner. It coordinates messages but does not execute commands or access files.
-- **Runner** is the local service that performs approved filesystem, Git, shell, and persistent Job operations.
+Each execution machine runs a Runmesh Runner. The Runner opens an encrypted outbound connection to the control plane, so the machine does not need a public inbound port, SSH service, or VPN tunnel. Files and commands stay on the machine; the control plane handles identity, policy, and routing.
 
-Runmesh does not call an AI or model service API. Your MCP client remains responsible for reasoning. A disconnected browser, chat, MCP request, or Runner WebSocket does not stop a persistent Job that has already started.
+Runmesh is useful for maintaining servers, sharing a controlled development machine with a team, running builds and migrations, and giving each client a precise set of machines, workspaces, and capabilities.
 
-## Using an existing Runmesh deployment
+## Get started in three minutes
 
-If an administrator has given you an MCP connection URL, you do **not** need Node.js, npm, Wrangler, a Cloudflare account, or this repository. Configure the exact URL in an MCP-compatible client such as ChatGPT, Claude, Cursor, or another client that supports Streamable HTTP:
+If an administrator has given you an MCP URL:
 
-```text
-https://your-runmesh-host.example/<one-time-secret>/mcp
-```
+1. Paste the complete URL into an MCP Streamable HTTP client.
+2. Call `runner_list` to see available machines.
+3. If more than one machine is available, call `runner_select`, then confirm with `runner_current`.
+4. Call `workspace_list` to see the workspaces approved for you.
+5. Start with `read` or `inspect`; use `edit`, `shell`, or `job` only when needed.
 
-The URL is a credential. It is shown only when an administrator creates or rotates the MCP Client. Do not paste it into source control, screenshots, issue reports, analytics, or public chat. Do not add it to shell commands or configuration that will be shared with others. This self-hosted authentication flow does not require an OAuth callback or an additional Bearer token.
+The MCP URL is a credential and is shown only when a client is created or rotated. Never post it in chat, tickets, screenshots, logs, or source control. See the [user guide](docs/user-guide.md) for the complete workflow.
 
-### First use
+## Administrator quick setup
 
-1. Call `runner_list` to see the Runners that the administrator has made available to this MCP Client.
-2. If more than one Runner is available, call `runner_select({"runner_id":"..."})`. Switching an existing selection requires `confirm_switch: true`.
-3. Call `runner_current` to confirm the sticky selection, then call `workspace_list` to see readable Workspace IDs.
-4. Use `read` for files, `inspect` for bounded read-only inspection, `edit` when your Client and Workspace have write permission, and `shell` only when host execution is explicitly permitted.
-5. Use `job` to list Jobs, read paginated output, send input, or cancel a Job when your permissions allow it.
+1. Deploy the Cloudflare Worker and set the first administrator password.
+2. Add a machine on the **Runner** page and review the execution privilege warning.
+3. Copy the one-time enrollment command and run it on the target machine.
+4. Add approved workspaces and permissions in the Runner details page.
+5. Create an MCP client with the least privileges needed and copy its one-time URL.
+6. Share the URL with its intended user, and rotate or revoke it when necessary.
 
-A selection belongs to the MCP Client and remains sticky across requests. If exactly one Runner is available, the service may select it automatically. Runmesh does not silently fail over from a selected offline, stale, revoked, or unavailable Runner; select another Runner explicitly when appropriate.
+The standard installer downloads a fixed, verified release, supplies the runtime, enrolls the Runner, and configures its service. If hosted installation is unavailable, the dashboard shows the offline-verifiable portable procedure. See the [administrator guide](docs/admin-guide.md).
 
-Administrators—not MCP Clients—define Workspace roots and permissions. If the required Runner or Workspace is not listed, ask the administrator to review the deployment rather than trying to work around the restriction.
+## Capabilities and permissions
 
-## Why Runmesh
+| Capability | What it does | Default behavior |
+| --- | --- | --- |
+| Read | Browse files and directories in approved workspaces | Read-only, paginated, and bounded |
+| Edit | Apply changes with baseline checks | Requires write permission and protects the original on failure |
+| Inspect | View Git status, diffs, and bounded diagnostics | Read-only; never exposes the host root |
+| Shell | Run commands as the Runner service identity | Explicitly authorized; not a sandbox |
+| Job | List, read, provide input to, or cancel long-running work | Paginated logs with bounded retention |
 
-| Capability | What it means for users |
-| :-- | :-- |
-| **One control plane** | A single MCP endpoint can route to approved Runners and Workspaces. |
-| **Outbound-only Runner** | The execution machine initiates the connection; it does not need a public inbound port, SSH server, tunnel, or public IPv4 address. |
-| **Explicit Workspace policy** | Administrators approve roots and permissions centrally. A policy must be validated and acknowledged before it becomes active. |
-| **Persistent Jobs** | Long-running commands continue after the MCP request or WebSocket disconnects and expose bounded, UTF-8-safe output pages. |
-| **Defense in depth** | Worker, Durable Object, and local Runner boundaries independently check identity, policy revisions, paths, permissions, and message sizes. |
-| **No model lock-in** | Runmesh does not require a particular AI provider or call a model API. |
+Effective permission is the intersection of the client, Runner, and workspace policies. A denied layer stops the operation. Runmesh never silently switches to another machine when the selected Runner is unavailable.
 
-## Architecture
+## Security boundary
 
-```mermaid
-flowchart LR
-    Client["ChatGPT / Claude / Cursor<br/>MCP client"] -->|HTTPS · secret URL| Worker["Cloudflare Worker<br/>Admin UI · MCP · routing"]
-    Worker --> Registry[("RegistryDO<br/>SQLite metadata · policy · bounded Job snapshots")]
-    Worker --> RunnerDO["RunnerDO<br/>WebSocket bridge"]
-    RunnerDO -->|outbound WSS| Runner["Runmesh Runner<br/>local service"]
-    Runner --> Workspace["Approved Workspaces<br/>filesystem · Git"]
-    Runner --> Jobs["Persistent Jobs<br/>stdout/stderr · recovery"]
+- MCP URLs, enrollment codes, and Runner credentials are shown once and can be rotated or revoked.
+- Runners use encrypted outbound connections; execution machines need no public inbound service.
+- Workspace roots stay private to the Runner; path checks reject traversal, device paths, and symlink escapes.
+- The admin UI uses secure cookies, CSRF and origin checks, and login throttling.
+- `shell` has the operating-system permissions of the Runner service account. It is not a container or virtual machine; use an external sandbox for untrusted code.
+- Production operators should configure edge log redaction and maintain a credential rotation procedure.
 
-    classDef edge fill:#e8f3ff,stroke:#2563eb,color:#111827
-    classDef control fill:#fff7ed,stroke:#ea580c,color:#111827
-    classDef local fill:#ecfdf5,stroke:#059669,color:#111827
-    class Client edge
-    class Worker,Registry,RunnerDO control
-    class Runner,Workspace,Jobs local
-```
+## Current release boundary
 
-The Worker resolves the MCP Client's active Runner and checks effective permissions before forwarding a protected request. RunnerDO checks the current Registry policy revision and connection generation. The local Runner checks the policy again before touching the host.
+Runmesh is a development preview. Runner management, workspace policy, MCP clients, persistent jobs, reconnect handling, service provisioning, and gated signed installation are included. Automatic upgrades and rollback, multi-tenant organizations, billing, hosted IDEs, browser automation, model APIs, and operating-system sandboxing are outside the current compatibility promise.
 
-## MCP tools
-
-The default public catalog contains nine tools:
-
-| Tool | Required scope | Purpose |
-| :-- | :-- | :-- |
-| `runner_list` | `coding:read` | List safe Runner IDs, display names, connection state, and availability. |
-| `runner_current` | `coding:read` | Show this MCP Client's sticky Runner selection. |
-| `runner_select` | `coding:read` | Select a Runner; switching requires `confirm_switch: true`. |
-| `workspace_list` | `coding:read` | List readable Workspace IDs without exposing roots. |
-| `inspect` | `coding:read` | Perform bounded `list`, `search`, `stat`, `git_status`, or `git_diff` inspection. |
-| `read` | `coding:read` | Read a Workspace-relative file with UTF-8-safe pagination. |
-| `edit` | `coding:write` | Apply a baseline-checked transactional multi-file patch. |
-| `shell` | `coding:exec` | Start a persistent host-shell Job through the Runner's Bash or PowerShell runtime. |
-| `job` | Depends on operation | List Jobs, inspect metadata, read logs, send input, or cancel Jobs. |
-
-Runner RPC names such as `fs.*`, `exec.*`, `job.*`, `git.*`, and `env.*` are private transport capabilities. They are not additional public MCP tools and are not advertised by `tools/list`.
-
-### Permissions
-
-Effective access is the intersection of:
-
-```text
-MCP Client scopes
-  ∩ Client × Runner restriction
-  ∩ Runner policy
-  ∩ Workspace policy
-```
-
-A Client×Runner restriction can only reduce access. It cannot grant a scope that the MCP Client does not already have. Permission dependencies are normalized consistently: `edit` requires `read`; `shell` requires `read`, `edit`, and `job_control`; `job_control` allows control of existing Jobs without granting shell access.
-
-While a central policy is pending, rejected, invalid, offline-pending, or revision-mismatched, ordinary operations fail closed with a structured `policy_pending` or `permission_denied` result. Existing Jobs continue by default when permissions are tightened; an administrator must explicitly request termination if running Jobs should be stopped.
-
-### Files and inspection
-
-- Paths are Workspace-relative. Absolute paths, drive paths, UNC/device paths, NUL bytes, traversal, symlink escapes, and writes through symlinks are rejected.
-- `read` and Job logs use bounded UTF-8-safe cursors so multibyte text can be reconstructed page by page without replacement characters.
-- `edit` supports Add, Update, Delete, and Move patches with expected-hash/baseline checks, staging, atomic replacement where available, rollback, and bounded structured results.
-- `inspect` is read-only and bounded by result count, bytes, depth, and operation timeout. It does not return local root paths.
-
-### Shell and Jobs
-
-`shell` always creates a persistent Job. A background request returns promptly; a foreground request waits only within a bounded budget and returns a `job_id` when more work remains. The current local foreground budget is 8 seconds and the Worker-to-Runner bridge budget is 12 seconds.
-
-A Workspace identifies the initial working directory, policy, and audit context. It is **not** a shell root: a command may change directory and access anything permitted to the Runner service identity. Use an external sandbox or VM for untrusted execution.
-
-Public Job metadata is redacted. RegistryDO retains bounded history so a Client can discover retained Jobs while the selected Runner is offline; complete stdout/stderr remains on the Runner and is read through pagination. When retention limits discard output, the Job reports `output_truncated: true` rather than consuming unlimited local disk.
-
-## Self-hosting for administrators
-
-This section is for the person deploying and operating a Runmesh instance. It is not required when you are only configuring an MCP Client URL.
-
-### Deploy the control plane
-
-The current implementation uses one Worker with SQLite-backed Durable Objects. It does not require D1, R2, Queues, Sandbox, Containers, a public Runner HTTP server, a tunnel, an inbound SSH service, OAuth, or a model provider. Account quotas and production behavior still depend on the Cloudflare account and plan; local validation is not proof of production capacity.
-
-From a source checkout, the maintainer can run the local checks:
-
-```sh
-npm ci
-npm run check:versions
-npm run typecheck
-npm run test:unit
-npm run test:e2e
-npm run build
-npm run validate:worker
-npm run pack:smoke
-npm run check:licenses
-```
-
-`npm run validate:worker` is a Wrangler dry-run. It does not deploy, test production Durable Object migrations, prove edge-log redaction, or verify external Internet clients.
-
-Before making the instance publicly reachable, configure these four Worker secrets and set the non-secret `RUNMESH_PUBLIC_ORIGIN` in the target Wrangler `vars` configuration **before** running the deploy command. It must be a canonical external HTTPS origin such as `https://mcp.example.com`; do not commit or enable `RUNMESH_SIGNED_RELEASE_AVAILABLE` unless the exact signed release has first been published and independently verified (the release gate is described below).
-
-```sh
-cd apps/worker
-npm exec --offline -- wrangler secret put ADMIN_TOKEN --env production
-npm exec --offline -- wrangler secret put SETUP_TOKEN --env production          # or configure SETUP_TOKEN_HASH instead
-npm exec --offline -- wrangler secret put RUNNER_TOKEN_PEPPER --env production
-npm exec --offline -- wrangler secret put INTERNAL_CONTROL_SECRET --env production
-npm exec --offline -- wrangler deploy --config wrangler.jsonc --env production
-```
-
-`RUNMESH_PUBLIC_ORIGIN` must have no path, query, fragment, credentials, whitespace, wildcard, or `http://` scheme. A missing/invalid value keeps hosted bootstrap disabled; with it configured, installer rendering and browser/Admin POSTs reject a mismatched `Host` rather than embedding an attacker-controlled origin. The checked-in `production` environment is configured for `https://runmesh.aloneio.workers.dev` and the independently verified fixed `v0.1.0-dev.2` release; the gates take effect after that environment is deployed. Forks or alternate hostnames must replace that origin and repeat the release verification before deploying. Local development uses the default environment and remains fail-closed.
-
-The first administrator setup requires the configured `SETUP_TOKEN` or the SHA-256 verifier in `SETUP_TOKEN_HASH`; the setup token is never stored in RegistryDO or displayed by the dashboard. First setup is atomic and first-success-wins, so an uninitialized public instance must be protected by deployment access controls until the intended administrator completes setup. `ADMIN_TOKEN` is only for the manual/programmatic Runner administration API. It is not an administrator-password replacement, browser cookie, MCP credential, or Runner enrollment code.
-
-Open the deployed root URL, set the administrator password with the setup token, and sign in. The dashboard then provides the normal flows to create and manage Runners, generate one-time enrollment codes, define managed Workspaces, review policy status, create MCP Clients, and rotate or revoke credentials.
-
-#### Cloudflare Workers Builds (GitHub and GitLab)
-
-The GitHub and GitLab repositories are connected directly to the `runmesh` Worker through Cloudflare Workers Builds. Cloudflare performs the build and deployment with its managed connection; GitHub Actions and GitLab CI in this repository run the same verification suite and do not need `CLOUDFLARE_API_TOKEN` or `CLOUDFLARE_ACCOUNT_ID` variables.
-
-For each Cloudflare repository connection, select the `dev` production branch, keep the repository root as the build root, and set the deploy command to:
-
-```sh
-npm exec --offline -- wrangler deploy --config apps/worker/wrangler.jsonc --env production --strict
-```
-
-The `--env production` flag is required so the canonical origin and signed-release gate in the checked-in production environment are deployed. Keep the four Worker runtime secrets in Cloudflare Variables & Secrets; never put them in GitLab/GitHub CI variables or source control. Review the exact commit, Worker name, Durable Object migration changes, and recovery plan before changing either Cloudflare connection.
-
-### Runner onboarding
-
-The dashboard-generated enrollment code is short-lived, single-use, and invalidated when regenerated or redeemed. The Runner connects outward to the Worker over authenticated WebSocket; it does not expose an HTTP server.
-
-Hosted bootstrap is implemented as a fixed signed-preview mechanism. The checked-in Worker config carries the canonical origin and exact immutable release acknowledgement; deployments that omit or override either value remain disabled. `/runner/releases/latest` and `/runner/releases/stable` return `distributable: false` until both `RUNMESH_PUBLIC_ORIGIN` and the exact `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.0-dev.2` acknowledgement are valid. The release flag is an equality acknowledgement, not a URL/package/version source, and setting it alone never enables distribution. The enabled installer pins the version, GitHub release URLs, key ID, and Ed25519 public key; it verifies manifest/signature/descriptor/artifact size/SHA-256 before a scripts-disabled local-tarball install. It also downloads the pinned Node.js `22.19.0` runtime for the host architecture, verifies its SHA-256 digest, and installs a private service wrapper, so Runner does not depend on Node.js/npm being present in the host PATH. It never trusts a downloaded keyring, an npm spec, `latest`, or arbitrary URL. The Admin page's hosted command includes the single-use enrollment code as its final script argument, then passes it to `runmesh enroll --code-stdin` and clears the working variable. The HTTPS Worker script is the one-command bootstrap trust root and cannot detect a compromised Worker response itself; use the independent [portable Runner verification and installation procedure](docs/portable-runner-installation.md) for high-assurance installation.
-
-Fresh enrollment starts with zero Workspaces. Workspace roots are added explicitly by an administrator through the dashboard and delivered privately to the selected Runner as policy data. Re-enrollment changes connection credentials without inventing a Workspace from the current directory. Browser Emergency Lock requires typing the Runner ID and locks future policy permissions without automatically stopping existing Jobs.
-
-### Credentials and security
-
-- MCP Client URLs contain high-entropy path credentials and are displayed only at creation or rotation. Rotate or revoke them immediately if exposed.
-- Runner enrollment codes are verifier-only, time-limited, and single-use. Runner credential rotation/revocation invalidates old credentials and closes the current connection.
-- The administrator password is stored as a salted PBKDF2-HMAC-SHA-256 verifier. Browser sessions are opaque, HttpOnly, Secure, and SameSite cookies.
-- Internal Worker-to-Durable-Object requests use versioned HMAC bound to the method, full path/query, timestamp, nonce, and body digest. Replayed or expired requests are rejected.
-- Absolute Workspace roots are private control-plane policy data. They are not returned to MCP Clients, public endpoints, ordinary logs, or errors.
-- A Runner running as root, Administrator, or another powerful service identity still has that host authority. Runmesh policy is not an operating-system sandbox.
-
-## Not included in v0.1.0-dev.2
-
-This development preview includes policy-gated workspace access, sticky Runner selection, persistent local Jobs, offline Registry snapshots, authenticated Runner transport, MCP Client base-scope editing, and a fixed signed hosted-bootstrap implementation. Automatic Runner update/rollback, SBOM publication, Reset runtime, enterprise multi-tenancy, and real-host macOS/Windows service E2E remain roadmap candidates rather than compatibility commitments.
-
-Before operational use, administrators should validate the target deployment and host:
-
-- Cloudflare account quotas, CPU limits, Durable Object migrations, hibernation/restart behavior, and edge-log redaction;
-- external MCP client behavior and infrastructure handling of secret-bearing URL paths;
-- manual verified-portable-artifact installation and service provisioning on the target OS;
-- native service lifecycle and least-privilege behavior on macOS and Windows;
-- fixed-release signature/artifact verification, the Worker bootstrap trust boundary, and their own recovery procedures.
-
-Hosted bootstrap is available only after the exact fixed signed release has been published, independently verified, a canonical `RUNMESH_PUBLIC_ORIGIN` has been configured, and the exact release acknowledgement is present in the Worker deployment. If any gate is missing, use a manually verified portable artifact; automatic Runner update/download/data downgrade/rollback remains outside this preview.
-
-Runmesh is not an operating-system sandbox, and this preview does not include tenant isolation, automatic failover, inbound SSH, a public Runner HTTP server, a hosted IDE, billing, Teams/organizations, MCP Tasks, PTY/Web Terminal, browser automation, an AI agent, RAG, or a model gateway. Those exclusions describe the current preview scope, not a permanent compatibility commitment.
+Validate Cloudflare quotas, Durable Object migrations, native service lifecycle behavior, edge-log redaction, and the MCP clients you plan to use before production rollout.
 
 ## Documentation
 
-- [Portable Runner installation](docs/portable-runner-installation.md) — trusted-key verification, SHA-256 checks, local `.tgz` installation, and version confirmation.
-- [Deployment](docs/deployment.md) — administrator setup, Worker secrets, Runner enrollment, and migration cautions.
-- [Security](docs/security.md) — credentials, host-shell risk, policy enforcement, and threat boundaries.
-- [Architecture](docs/architecture.md) — components, trust boundaries, and data flow.
-- [Runner transport](docs/runner-transport.md) — outbound WebSocket, protocol versions, heartbeat, sync, and Jobs.
-- [Protocol](docs/protocol.md) — typed wire messages, policy revisions, checksums, and limits.
-- [Migration](docs/migration.md) — additive schema changes, legacy profiles, and rollback precautions.
-- [.github/SECURITY.md](.github/SECURITY.md) — vulnerability reporting.
-- [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md) — complete contribution terms and process.
+- [User guide](docs/user-guide.md): connect an MCP client, select a Runner, use workspaces, and manage jobs.
+- [Administrator guide](docs/admin-guide.md): deploy, enroll Runners, configure workspaces, and create clients.
+- [Troubleshooting](docs/troubleshooting.md): login, connectivity, installation, permissions, and job issues.
+- [Security model](docs/security.md): credential handling and trust boundaries.
+- [Portable installation](docs/portable-runner-installation.md): offline verification and manual setup.
+- [Deployment reference](docs/deployment.md): Cloudflare and advanced operations.
+- [Release notes](docs/release-notes.md): changes and known limits for each release.
 
-## License and community
+Architecture, transport, and migration files are advanced references for maintainers. Legal notices, third-party credits, and community rules are in [docs](docs/).
 
-Runmesh is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE). It is **not** OSI-approved open-source software. Commercial use or additional rights require a separate written agreement; see [COMMERCIAL_LICENSE.md](docs/legal/COMMERCIAL_LICENSE.md).
+## License and support
 
-Community contributions are welcome. See [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md) for the complete contribution terms and process. See [NOTICE](NOTICE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for notices, [docs/legal/TRADEMARKS.md](docs/legal/TRADEMARKS.md) for name/logo guidance, and [.github/SECURITY.md](.github/SECURITY.md) for security reports.
-
-Runmesh is an independent implementation. Design research considered [coding-tools-mcp](https://github.com/xyTom/coding-tools-mcp), [volter-tunnel](https://github.com/volter-ai/volter-tunnel), [agent-mcp-gateway](https://github.com/Hiroshimeow/agent-mcp-gateway), and official Cloudflare/MCP documentation. These are research acknowledgements only; no referenced source or asset is claimed as included.
+Runmesh is maintained by aloneio. Report security vulnerabilities through the private process in [.github/SECURITY.md](.github/SECURITY.md); use Issues for ordinary bugs and product feedback. See [trademarks](docs/legal/TRADEMARKS.md) for name and logo usage.
