@@ -29,7 +29,7 @@ npm exec --offline -- wrangler deploy --config apps/worker/wrangler.jsonc --env 
 - `INTERNAL_CONTROL_SECRET`：保护控制平面内部请求；
 - `RUNMESH_PUBLIC_ORIGIN`：完整的外部 HTTPS 根地址，不带路径、查询参数或凭据。
 
-四个 Secret 不能提交到 Git 仓库、CI 变量、截图或日志。部署完成后立即打开根地址，使用 setup token 设置管理员密码。初始化采用先到先得；公开实例完成初始化前，请使用 Cloudflare Access 或等效访问控制保护它。
+请使用密码学安全随机数生成器创建 Secret；`SETUP_TOKEN`、`ADMIN_TOKEN`、`RUNNER_TOKEN_PEPPER` 和 `INTERNAL_CONTROL_SECRET` 至少使用 32 字节随机值。四个 Secret 不能提交到 Git 仓库、CI 变量、截图或日志。部署完成后立即打开根地址，使用 setup token 设置管理员密码。初始化采用先到先得；公开实例完成初始化前，请使用 Cloudflare Access 或等效访问控制保护它。
 
 ## 添加 Runner
 
