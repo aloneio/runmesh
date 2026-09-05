@@ -408,11 +408,13 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     }
     const encodedBody = body.toString();
     const bodyBytes = new TextEncoder().encode(encodedBody);
+    const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bodyBytes); controller.close(); } });
     return fetch(`${workerUrl}${path}`, {
       method: "POST", redirect: "manual",
-      headers: { "content-type": "application/x-www-form-urlencoded", "content-length": String(bodyBytes.byteLength), connection: "close", origin: workerUrl, cookie: cookieHeader(cookies) },
-      body: bodyBytes,
-    });
+      headers: { "content-type": "application/x-www-form-urlencoded", origin: workerUrl, cookie: cookieHeader(cookies) },
+      body: stream,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
   }
 });
 
