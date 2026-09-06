@@ -17,6 +17,7 @@ import {
 } from "@aloneio/runmesh-protocol";
 import { containsControlCharacter, constantTimeEqual, isConfiguredSecret, isSafeIdentifier, runnerTokenVerifier, verifyInternalRequest } from "./security.js";
 import { readCappedText } from "./body.js";
+import { validTimestamp, validWindow, validityStatus, type ValidityWindow, type ValidityStatus } from "./validity.js";
 
 export type RunnerConnectionState = "online" | "offline" | "stale";
 /** Administrator-selected service execution mode.  This is control-plane
@@ -90,7 +91,8 @@ export interface RunnerPublicInfo {
   readonly service_identity?: string;
   readonly privilege_state?: "privileged" | "restricted" | "mismatch" | "unknown";
 }
-export interface RunnerRecord {
+export interface RunnerRecord extends ValidityWindow {
+  readonly validity_status: ValidityStatus;
   readonly runner_id: string;
   readonly display_name: string;
   readonly state: RunnerConnectionState;
@@ -191,7 +193,8 @@ export interface VerifiedMcpClient {
   readonly secret_version: number;
 }
 
-type RunnerRow = {
+type RunnerRow = ValidityWindow & {
+  [key: string]: string | number | null;
   runner_id: string;
   display_name: string;
   token_verifier: string;
@@ -225,7 +228,7 @@ type RunnerRow = {
   update_status: RunnerUpdateStatus;
   updated_at_ms: number;
 };
-type EnrollmentRow = { enrollment_id: string; runner_id: string; verifier: string; created_at_ms: number; expires_at_ms: number; used_at_ms: number | null };
+type EnrollmentRow = { enrollment_id: string; runner_id: string; verifier: string; created_at_ms: number; not_before_ms: number; expires_at_ms: number; used_at_ms: number | null };
 type PolicyVersionRow = {
   runner_id: string; revision: number; checksum: string; policy_json: string; status: string;
   created_at_ms: number; acknowledged_at_ms: number | null; validation_summary_json: string | null;
@@ -261,7 +264,8 @@ const MAX_SYNC_ITEMS = 1_000;
 const MAX_TERMINAL_JOBS_PER_RUNNER = 1_000;
 const TERMINAL_JOB_STATUSES = new Set(["cancelled", "succeeded", "failed", "interrupted"]);
 const CLIENT_LAST_USED_WRITE_INTERVAL_MS = 60_000;
-const RUNNER_ENROLLMENT_TTL_MS = 30 * 60 * 1_000;
+export const DEFAULT_RUNNER_ENROLLMENT_TTL_MS = 30 * 60 * 1_000;
+export const RUNNER_ENROLLMENT_TTL_OPTIONS_MS = [5 * 60 * 1_000, 30 * 60 * 1_000, 2 * 60 * 60 * 1_000, 24 * 60 * 60 * 1_000, 7 * 24 * 60 * 60 * 1_000, 30 * 24 * 60 * 60 * 1_000] as const;
 const AUTH_THROTTLE_FAILURE_THRESHOLD = 5;
 const AUTH_THROTTLE_INITIAL_BLOCK_MS = 30_000;
 const AUTH_THROTTLE_MAX_BLOCK_MS = 15 * 60_000;
@@ -280,12 +284,12 @@ export class RegistryDO {
       // Production objects already carry the complete schema. Avoid touching
       // SQL or alarms during reconstruction so an exhausted free-tier write
       // budget cannot take the control plane offline.
-      if (this.env.RUNMESH_SCHEMA_READY === "1") return;
+      if (this.env.RUNMESH_SCHEMA_READY === "1") { this.ensureValiditySchema(); return; }
       // Durable Objects may be evicted and reconstructed for every request.
       // Replaying CREATE TABLE/INDEX IF NOT EXISTS on every reconstruction is
       // still counted as a SQL write on the free tier, so fast-path fully
       // initialized objects with a read-only schema check.
-      if (this.schemaIsCurrent()) return;
+      if (this.schemaIsCurrent()) { this.ensureValiditySchema(); return; }
       this.ctx.storage.sql.exec(`
         CREATE TABLE IF NOT EXISTS runners (
           runner_id TEXT PRIMARY KEY, display_name TEXT NOT NULL, token_verifier TEXT NOT NULL, state TEXT NOT NULL,
@@ -373,6 +377,7 @@ export class RegistryDO {
         CREATE INDEX IF NOT EXISTS idx_admin_sessions_expiry ON admin_sessions(expires_at_ms);
       `);
       this.ensureSchema();
+      this.ensureValiditySchema();
       await this.ctx.storage.setAlarm(Date.now() + 30_000);
     });
   }
@@ -385,8 +390,8 @@ export class RegistryDO {
     );
     this.ctx.storage.sql.exec("DELETE FROM admin_sessions WHERE expires_at_ms <= ?", nowMs);
     this.ctx.storage.sql.exec("DELETE FROM internal_request_nonces WHERE expires_at_ms <= ?", nowMs);
-    // Used enrollment records have no continuing value; retain unexpired rows only.
-    this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE expires_at_ms <= ? OR used_at_ms IS NOT NULL", nowMs);
+    // Keep recent expired/used metadata visible in the console; never retain raw codes.
+    this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE expires_at_ms <= ?", nowMs - 30 * 24 * 60 * 60 * 1_000);
     await this.ctx.storage.setAlarm(nowMs + 30_000);
   }
 
@@ -593,6 +598,7 @@ export class RegistryDO {
     return this.ctx.storage.sql.exec("DELETE FROM client_runner_overrides WHERE client_id = ? AND runner_id = ?", clientId, runnerId).rowsWritten === 1;
   }
   public effectivePermissions(clientId: string, runnerId: string, workspaceId: string): PermissionSet | undefined {
+    if (!this.runnerAccess(runnerId).allowed) return undefined;
     const client = this.getMcpClient(clientId);
     const policy = this.getActivePolicySnapshot(runnerId);
     if (client === undefined || policy === undefined) return undefined;
@@ -606,6 +612,7 @@ export class RegistryDO {
   public getSnapshotAuthorization(runnerId: string): { readonly ok: true; readonly revision: number; readonly checksum: string } | { readonly ok: false; readonly code: "policy_pending" | "stale_policy"; readonly reason: string } {
     const runner = this.runnerRow(runnerId);
     if (runner === undefined) return { ok: false, code: "stale_policy", reason: "runner is missing" };
+    if (validityStatus(runner) !== "active") return { ok: false, code: "stale_policy", reason: "runner authorization is outside its validity window" };
     if (runner.policy_status !== "applied" || runner.desired_policy_revision !== runner.applied_policy_revision || runner.applied_policy_revision !== runner.runner_reported_policy_revision
       || runner.desired_policy_checksum !== runner.active_policy_checksum || runner.active_policy_checksum !== runner.runner_reported_policy_checksum) return { ok: false, code: "policy_pending", reason: "policy identity is not fully applied" };
     const revision = runner.applied_policy_revision;
@@ -995,8 +1002,8 @@ export class RegistryDO {
       return true;
     });
   }
-  public addRunner(runnerId: string, displayName: string, nowMs: number, mutationId?: string, configuredExecutionMode?: RunnerExecutionMode, confirmPrivilegedHost = false): RunnerRecord | undefined {
-    if (!isSafeIdentifier(runnerId) || !validLabel(displayName) || !validOptionalMutationId(mutationId) || !validOptionalExecutionMode(configuredExecutionMode) || (configuredExecutionMode === "privileged_host" && !confirmPrivilegedHost)) return undefined;
+  public addRunner(runnerId: string, displayName: string, nowMs: number, mutationId?: string, configuredExecutionMode?: RunnerExecutionMode, confirmPrivilegedHost = false, validity: ValidityWindow = { valid_from_ms: null, valid_until_ms: null }): RunnerRecord | undefined {
+    if (!isSafeIdentifier(runnerId) || !validLabel(displayName) || !validOptionalMutationId(mutationId) || !validOptionalExecutionMode(configuredExecutionMode) || (configuredExecutionMode === "privileged_host" && !confirmPrivilegedHost) || !validWindow(validity)) return undefined;
     try {
       this.ctx.storage.transactionSync(() => {
         const existing = this.runnerRow(runnerId);
@@ -1013,8 +1020,8 @@ export class RegistryDO {
         if (mutationId !== undefined && this.mutationRow(runnerId, mutationId) !== undefined) throw new Error("runner creation tombstone conflict");
         const lifecycleId = crypto.randomUUID();
         this.ctx.storage.sql.exec(
-          `INSERT INTO runners (runner_id, display_name, token_verifier, state, management_mode, configured_execution_mode, credential_version, lifecycle_id, desired_policy_revision, desired_policy_checksum, policy_status, runner_permissions_json, updated_at_ms)
-           VALUES (?, ?, '', 'offline', 'central', ?, 0, ?, 0, NULL, 'pending', ?, ?)`, runnerId, displayName, configuredExecutionMode ?? null, lifecycleId, JSON.stringify(READ_ONLY_PERMISSIONS), nowMs,
+          `INSERT INTO runners (runner_id, display_name, token_verifier, state, management_mode, configured_execution_mode, valid_from_ms, valid_until_ms, credential_version, lifecycle_id, desired_policy_revision, desired_policy_checksum, policy_status, runner_permissions_json, updated_at_ms)
+           VALUES (?, ?, '', 'offline', 'central', ?, ?, ?, 0, ?, 0, NULL, 'pending', ?, ?)`, runnerId, displayName, configuredExecutionMode ?? null, validity.valid_from_ms, validity.valid_until_ms, lifecycleId, JSON.stringify(READ_ONLY_PERMISSIONS), nowMs,
         );
         if (mutationId !== undefined) this.ctx.storage.sql.exec(
           "INSERT INTO runner_mutations (runner_id, mutation_id, kind, pre_credential_version, lifecycle_id, committed_at_ms) VALUES (?, ?, 'runner_create', 0, ?, ?)",
@@ -1052,12 +1059,14 @@ export class RegistryDO {
       return true;
     });
   }
-  public createRunnerEnrollment(runnerId: string, enrollmentId: string, verifier: string, nowMs: number, configuredExecutionMode?: RunnerExecutionMode, confirmPrivilegedHost = false, expectedConfiguredExecutionMode?: RunnerExecutionMode | null, expectedLifecycleId?: string): { enrollment_id: string; runner_id: string; expires_at_ms: number } | undefined {
+  public createRunnerEnrollment(runnerId: string, enrollmentId: string, verifier: string, nowMs: number, configuredExecutionMode?: RunnerExecutionMode, confirmPrivilegedHost = false, expectedConfiguredExecutionMode?: RunnerExecutionMode | null, expectedLifecycleId?: string, enrollmentTtlMs = DEFAULT_RUNNER_ENROLLMENT_TTL_MS, window: { not_before_ms?: number; expires_at_ms?: number } = {}): { enrollment_id: string; runner_id: string; created_at_ms: number; not_before_ms: number; expires_at_ms: number } | undefined {
     // The expected values are an optional compare-and-swap guard used by the
     // browser action path.  Keep them trailing/optional so older direct
     // callers and already-issued enrollment code remain compatible.
-    if (!isSafeIdentifier(runnerId) || !/^[A-Za-z0-9_-]{43}$/.test(enrollmentId) || !validVerifier(verifier) || !validOptionalExecutionMode(configuredExecutionMode) || (configuredExecutionMode === "privileged_host" && !confirmPrivilegedHost) || !validExpectedExecutionMode(expectedConfiguredExecutionMode) || (expectedLifecycleId !== undefined && !validLifecycleId(expectedLifecycleId))) return undefined;
-    const expiresAtMs = nowMs + RUNNER_ENROLLMENT_TTL_MS;
+    if (!isSafeIdentifier(runnerId) || !/^[A-Za-z0-9_-]{43}$/.test(enrollmentId) || !validVerifier(verifier) || !validOptionalExecutionMode(configuredExecutionMode) || (configuredExecutionMode === "privileged_host" && !confirmPrivilegedHost) || !validExpectedExecutionMode(expectedConfiguredExecutionMode) || (expectedLifecycleId !== undefined && !validLifecycleId(expectedLifecycleId)) || !validRunnerEnrollmentTtl(enrollmentTtlMs)) return undefined;
+    const notBeforeMs = window.not_before_ms ?? nowMs;
+    const expiresAtMs = window.expires_at_ms ?? (Math.max(nowMs, notBeforeMs) + enrollmentTtlMs);
+    if (!validTimestamp(notBeforeMs) || !validTimestamp(expiresAtMs) || expiresAtMs <= Math.max(nowMs, notBeforeMs) || expiresAtMs - nowMs > 365 * 24 * 60 * 60 * 1_000) return undefined;
     try {
       this.ctx.storage.transactionSync(() => {
         const current = this.runnerRow(runnerId);
@@ -1080,10 +1089,10 @@ export class RegistryDO {
           if (update.rowsWritten !== 1) throw new Error("runner execution mode compare-and-swap failed");
         }
         this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE runner_id = ? AND used_at_ms IS NULL", runnerId);
-        this.ctx.storage.sql.exec("INSERT INTO runner_enrollments (enrollment_id, runner_id, verifier, created_at_ms, expires_at_ms) VALUES (?, ?, ?, ?, ?)", enrollmentId, runnerId, verifier, nowMs, expiresAtMs);
+        this.ctx.storage.sql.exec("INSERT INTO runner_enrollments (enrollment_id, runner_id, verifier, created_at_ms, not_before_ms, expires_at_ms) VALUES (?, ?, ?, ?, ?, ?)", enrollmentId, runnerId, verifier, nowMs, notBeforeMs, expiresAtMs);
       });
     } catch { return undefined; }
-    return { enrollment_id: enrollmentId, runner_id: runnerId, expires_at_ms: expiresAtMs };
+    return { enrollment_id: enrollmentId, runner_id: runnerId, created_at_ms: nowMs, not_before_ms: notBeforeMs, expires_at_ms: expiresAtMs };
   }
   /**
    * Resolve a pending enrollment code to its Runner before consuming it.
@@ -1096,7 +1105,7 @@ export class RegistryDO {
   public lookupRunnerEnrollment(verifier: string, nowMs: number): { runner_id: string } | undefined {
     if (!validVerifier(verifier)) return undefined;
     const row = this.ctx.storage.sql.exec<Pick<EnrollmentRow, "runner_id">>(
-      "SELECT runner_id FROM runner_enrollments WHERE verifier = ? AND used_at_ms IS NULL AND expires_at_ms > ?", verifier, nowMs,
+      "SELECT runner_id FROM runner_enrollments WHERE verifier = ? AND used_at_ms IS NULL AND not_before_ms <= ? AND expires_at_ms > ?", verifier, nowMs, nowMs,
     ).toArray()[0];
     return row !== undefined && this.runnerRow(row.runner_id) !== undefined ? { runner_id: row.runner_id } : undefined;
   }
@@ -1104,7 +1113,7 @@ export class RegistryDO {
     if (!validVerifier(verifier) || !validVerifier(tokenVerifier) || !validRunnerPublicInfo(publicInfo) || !validOptionalMutationId(mutationId)) return undefined;
     return this.ctx.storage.transactionSync(() => {
       const row = this.ctx.storage.sql.exec<EnrollmentRow>(
-        "SELECT * FROM runner_enrollments WHERE verifier = ? AND used_at_ms IS NULL AND expires_at_ms > ?", verifier, nowMs,
+        "SELECT * FROM runner_enrollments WHERE verifier = ? AND used_at_ms IS NULL AND not_before_ms <= ? AND expires_at_ms > ?", verifier, nowMs, nowMs,
       ).toArray()[0];
       if (row === undefined) {
         // A successful enrollment consumes the one-time row.  On a lost
@@ -1153,7 +1162,7 @@ export class RegistryDO {
           return { runner_id: row.runner_id };
         }
       }
-      const changed = this.ctx.storage.sql.exec("UPDATE runner_enrollments SET used_at_ms = ? WHERE enrollment_id = ? AND used_at_ms IS NULL AND expires_at_ms > ?", nowMs, row.enrollment_id, nowMs);
+      const changed = this.ctx.storage.sql.exec("UPDATE runner_enrollments SET used_at_ms = ? WHERE enrollment_id = ? AND used_at_ms IS NULL AND not_before_ms <= ? AND expires_at_ms > ?", nowMs, row.enrollment_id, nowMs, nowMs);
       if (changed.rowsWritten !== 1) return undefined;
       this.ctx.storage.sql.exec(
         `UPDATE runners SET token_verifier = ?, credential_version = credential_version + 1, connection_epoch = connection_epoch + 1,
@@ -1332,6 +1341,18 @@ export class RegistryDO {
       return true;
     });
   }
+  public runnerAccess(runnerId: string, nowMs = Date.now()): { allowed: boolean; status: ValidityStatus | "missing" } {
+    const runner = this.runnerRow(runnerId);
+    const status = runner === undefined ? "missing" : validityStatus(runner, nowMs);
+    return { allowed: status === "active", status };
+  }
+  public setRunnerValidity(runnerId: string, window: ValidityWindow, lifecycleId: string, nowMs = Date.now()): boolean {
+    if (!validWindow(window) || !validLifecycleId(lifecycleId)) return false;
+    return this.ctx.storage.sql.exec("UPDATE runners SET valid_from_ms = ?, valid_until_ms = ?, updated_at_ms = ? WHERE runner_id = ? AND lifecycle_id = ?", window.valid_from_ms, window.valid_until_ms, nowMs, runnerId, lifecycleId).rowsWritten === 1;
+  }
+  public latestRunnerEnrollment(runnerId: string): Omit<EnrollmentRow, "verifier"> | undefined {
+    return this.ctx.storage.sql.exec<Omit<EnrollmentRow, "verifier">>("SELECT enrollment_id, runner_id, created_at_ms, not_before_ms, expires_at_ms, used_at_ms FROM runner_enrollments WHERE runner_id = ? ORDER BY created_at_ms DESC LIMIT 1", runnerId).toArray()[0];
+  }
   public getRunner(runnerId: string): RunnerRecord | undefined {
     const staleBefore = Date.now() - 45_000;
     this.ctx.storage.sql.exec(`UPDATE runners SET state = 'stale', updated_at_ms = ? WHERE runner_id = ? AND state = 'online' AND last_heartbeat_ms < ?`, Date.now(), runnerId, staleBefore);
@@ -1496,15 +1517,18 @@ export class RegistryDO {
       if (input.mutation_id !== undefined && mutationId === undefined) return Response.json({ error: "invalid mutation_id" }, { status: 400 });
       const configuredExecutionMode = requestedExecutionMode(input); const confirmation = requestedPrivilegedConfirmation(input);
       if (configuredExecutionMode === null || confirmation === null || (configuredExecutionMode === "privileged_host" && confirmation !== true)) return Response.json({ error: "invalid execution mode or privileged-host confirmation" }, { status: 400 });
-      const runner = displayName === undefined ? undefined : this.addRunner(runnerId, displayName, now, mutationId, configuredExecutionMode, confirmation === true);
+      const validFrom = input.valid_from_ms === undefined || input.valid_from_ms === null ? null : validTimestamp(input.valid_from_ms) ? input.valid_from_ms : undefined;
+      const validUntil = input.valid_until_ms === undefined || input.valid_until_ms === null ? null : validTimestamp(input.valid_until_ms) ? input.valid_until_ms : undefined;
+      const runner = displayName === undefined || validFrom === undefined || validUntil === undefined ? undefined : this.addRunner(runnerId, displayName, now, mutationId, configuredExecutionMode, confirmation === true, { valid_from_ms: validFrom, valid_until_ms: validUntil });
       return runner === undefined ? new Response("conflict", { status: 409 }) : Response.json(runner);
     }
     if (request.method === "DELETE" && action === undefined) { const confirmation = stringField(input, "confirmation", 128); const mutationId = mutationIdField(input); return confirmation !== undefined && mutationId !== undefined && this.deleteRunner(runnerId, confirmation, now, mutationId) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 }); }
     if (request.method === "POST" && action === "rename") { const displayName = stringField(input, "display_name", 256); const runner = displayName === undefined ? undefined : this.renameRunner(runnerId, displayName, now); return runner === undefined ? new Response("not found", { status: 404 }) : Response.json(runner); }
     if (request.method === "POST" && action === "enrollments") {
       const enrollmentId = stringField(input, "enrollment_id", 43); const verifier = stringField(input, "verifier", 64);
-      const configuredExecutionMode = requestedExecutionMode(input); const confirmation = requestedPrivilegedConfirmation(input);
+      const configuredExecutionMode = requestedExecutionMode(input); const confirmation = requestedPrivilegedConfirmation(input); const enrollmentTtlMs = requestedRunnerEnrollmentTtl(input);
       const expectedMode = requestedExpectedExecutionMode(input); const expectedLifecycleId = requestedExpectedLifecycleId(input);
+      if ((input.not_before_ms !== undefined && !validTimestamp(input.not_before_ms)) || (input.expires_at_ms !== undefined && !validTimestamp(input.expires_at_ms))) return new Response("invalid enrollment dates", { status: 400 });
       const hasExpectedMode = Object.prototype.hasOwnProperty.call(input, "expected_configured_execution_mode");
       const hasExpectedLifecycle = Object.prototype.hasOwnProperty.call(input, "expected_lifecycle_id");
       // Any internal caller that supplies a mode for an existing Runner must
@@ -1513,9 +1537,17 @@ export class RegistryDO {
       // not be allowed to replay a legacy default and overwrite a newer
       // administrator choice.
       if (configuredExecutionMode !== undefined && (!hasExpectedMode || !hasExpectedLifecycle)) return Response.json({ error: "expected runner state is required for execution-mode changes" }, { status: 409 });
-      if (hasExpectedMode !== hasExpectedLifecycle || configuredExecutionMode === null || confirmation === null || (configuredExecutionMode === "privileged_host" && confirmation !== true) || expectedMode === "invalid" || expectedLifecycleId === null) return Response.json({ error: "invalid execution mode, confirmation, or expected runner state" }, { status: 400 });
-      const enrollment = enrollmentId === undefined || verifier === undefined ? undefined : this.createRunnerEnrollment(runnerId, enrollmentId, verifier, now, configuredExecutionMode, confirmation === true, expectedMode, expectedLifecycleId);
+      if (hasExpectedMode !== hasExpectedLifecycle || configuredExecutionMode === null || confirmation === null || (configuredExecutionMode === "privileged_host" && confirmation !== true) || expectedMode === "invalid" || expectedLifecycleId === null || enrollmentTtlMs === null) return Response.json({ error: "invalid execution mode, confirmation, expiration, or expected runner state" }, { status: 400 });
+      const enrollment = enrollmentId === undefined || verifier === undefined ? undefined : this.createRunnerEnrollment(runnerId, enrollmentId, verifier, now, configuredExecutionMode, confirmation === true, expectedMode, expectedLifecycleId, enrollmentTtlMs, { ...(input.not_before_ms === undefined ? {} : { not_before_ms: input.not_before_ms as number }), ...(input.expires_at_ms === undefined ? {} : { expires_at_ms: input.expires_at_ms as number }) });
       return enrollment === undefined ? new Response("not found", { status: 404 }) : Response.json(enrollment);
+    }
+    if (request.method === "GET" && action === "access") return Response.json(this.runnerAccess(runnerId));
+    if (request.method === "GET" && action === "enrollments") return Response.json({ enrollment: this.latestRunnerEnrollment(runnerId) ?? null });
+    if (request.method === "POST" && action === "validity") {
+      const window = { valid_from_ms: input.valid_from_ms, valid_until_ms: input.valid_until_ms } as ValidityWindow;
+      const lifecycleId = requestedExpectedLifecycleId(input);
+      if (!validWindow(window) || typeof lifecycleId !== "string") return new Response("invalid validity window", { status: 400 });
+      return this.setRunnerValidity(runnerId, window, lifecycleId, now) ? new Response(null, { status: 204 }) : new Response("runner state changed", { status: 409 });
     }
     if (request.method === "POST" && action === "rotate") {
       const mutationId = mutationIdField(input);
@@ -1656,6 +1688,19 @@ export class RegistryDO {
         ? new Response("not found", { status: 404 })
         : Response.json({ runner_id: clientId, workspaces: this.listManagedWorkspaces(clientId) });
     }
+    if (method === "GET" && action === "runners" && clientId !== undefined && segments[2] === "enrollments" && segments[3] === undefined) {
+      return !isSafeIdentifier(clientId) || this.runnerRow(clientId) === undefined ? new Response("not found", { status: 404 }) : Response.json({ enrollment: this.latestRunnerEnrollment(clientId) ?? null });
+    }
+    if (method === "GET" && action === "runners" && clientId !== undefined && segments[2] === "access" && segments[3] === undefined) {
+      return !isSafeIdentifier(clientId) ? new Response("not found", { status: 404 }) : Response.json(this.runnerAccess(clientId));
+    }
+    if (method === "POST" && action === "runners" && clientId !== undefined && segments[2] === "validity" && segments[3] === undefined) {
+      if (!isSafeIdentifier(clientId)) return new Response("not found", { status: 404 });
+      const window = { valid_from_ms: input.valid_from_ms, valid_until_ms: input.valid_until_ms } as ValidityWindow;
+      const lifecycleId = requestedExpectedLifecycleId(input);
+      if (!validWindow(window) || typeof lifecycleId !== "string") return new Response("invalid validity window", { status: 400 });
+      return this.setRunnerValidity(clientId, window, lifecycleId, nowMs) ? new Response(null, { status: 204 }) : new Response("runner state changed", { status: 409 });
+    }
     if (method === "POST" && action === "runners" && clientId !== undefined && segments[2] === "managed-workspaces" && segments[3] === undefined) {
       if (!isSafeIdentifier(clientId)) return new Response("not found", { status: 404 });
       const workspaceId = stringField(input, "workspace_id", 128); const displayName = stringField(input, "display_name", 256); const rootPath = stringField(input, "root_path", 4_096); const permissions = permissionSetField(input.permissions); const mutationId = mutationIdField(input);
@@ -1782,6 +1827,13 @@ export class RegistryDO {
     if (row === undefined || row.token_verifier.length === 0) return { runner_id: runnerId, state: "unavailable", available: false, updated_at_ms: updatedAtMs };
     return safeRunnerContext(decodeRunner(row), updatedAtMs);
   }
+  private ensureValiditySchema(): void {
+    const columns = new Set(this.ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(runners)").toArray().map((column) => column.name));
+    if (!columns.has("valid_from_ms")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN valid_from_ms INTEGER");
+    if (!columns.has("valid_until_ms")) this.ctx.storage.sql.exec("ALTER TABLE runners ADD COLUMN valid_until_ms INTEGER");
+    const enrollmentColumns = new Set(this.ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(runner_enrollments)").toArray().map((column) => column.name));
+    if (!enrollmentColumns.has("not_before_ms")) this.ctx.storage.sql.exec("ALTER TABLE runner_enrollments ADD COLUMN not_before_ms INTEGER NOT NULL DEFAULT 0");
+  }
   private ensureSchema(): void {
     const columns = new Set(this.ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(runners)").toArray().map((column) => column.name));
     if (!columns.has("token_verifier")) {
@@ -1877,6 +1929,7 @@ export class RegistryDO {
     `);
     this.ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS idx_runner_enrollments_expiry ON runner_enrollments(expires_at_ms)");
     this.ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS idx_runner_enrollments_runner ON runner_enrollments(runner_id)");
+    this.ensureValiditySchema();
     this.recoverLegacyPolicies();
   }
   /**
@@ -2035,6 +2088,13 @@ function requestedPrivilegedConfirmation(input: InternalInput): boolean | undefi
   if (!Object.prototype.hasOwnProperty.call(input, "confirm_privileged_host")) return undefined;
   return typeof input.confirm_privileged_host === "boolean" ? input.confirm_privileged_host : null;
 }
+function validRunnerEnrollmentTtl(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && (RUNNER_ENROLLMENT_TTL_OPTIONS_MS as readonly number[]).includes(value);
+}
+function requestedRunnerEnrollmentTtl(input: InternalInput): number | null {
+  if (!Object.prototype.hasOwnProperty.call(input, "enrollment_ttl_ms")) return DEFAULT_RUNNER_ENROLLMENT_TTL_MS;
+  return validRunnerEnrollmentTtl(input.enrollment_ttl_ms) ? input.enrollment_ttl_ms : null;
+}
 function protocolCompatibility(minVersion: number, maxVersion: number): RunnerProtocolCompatibility { return minVersion <= PROTOCOL_CURRENT_VERSION && maxVersion >= PROTOCOL_MIN_VERSION ? "compatible" : "incompatible"; }
 function updateStatus(channel: RunnerUpdateChannel, desired: string | undefined, latest: string | undefined, current: { current_runner_version?: string | null; protocol_compatibility?: RunnerProtocolCompatibility } | undefined): RunnerUpdateStatus {
   if (current?.protocol_compatibility === "incompatible") return "incompatible";
@@ -2049,6 +2109,7 @@ function emptyMutationState(): RunnerMutationState {
 
 function decodeRunner(row: RunnerRow): RunnerRecord {
   return {
+    valid_from_ms: row.valid_from_ms, valid_until_ms: row.valid_until_ms, validity_status: validityStatus(row),
     runner_id: row.runner_id, display_name: row.display_name || row.runner_id, state: row.state, management_mode: row.management_mode === "central" ? "central" : "legacy_local", connection_epoch: row.connection_epoch,
     configured_execution_mode: validExecutionMode(row.configured_execution_mode) ? row.configured_execution_mode : null,
     credential_version: row.credential_version, session_id: row.session_id, metadata: row.metadata_json === null ? null : JSON.parse(row.metadata_json) as RunnerMetadata,
