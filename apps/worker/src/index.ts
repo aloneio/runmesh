@@ -1925,9 +1925,10 @@ function overviewPage(data: AdminData, csrf: string): string {
 function runnerActionCell(runner: RunnerRecord, modeFields: string, csrf: string): string {
   const runnerId = encodeURIComponent(runner.runner_id);
   const displayName = escapeHtml(runner.display_name);
-  // Keep one visible mode selector per row.  Credential rotation can safely
-  // reuse the Registry-owned mode marker; enrollment is the action that needs
-  // an explicit choice when no trusted mode has been recorded.
+  // Keep the administrator's mode choice in one place. Once a Runner has a
+  // trusted configured mode, install/reinstall carries that server-owned
+  // value as a hidden expectation instead of asking the operator to confirm
+  // the same choice again from the list row.
   const rotateModeFields = executionModeFormFields(runnerActionExecutionMode(runner), csrf, false);
   return '<td class="actions"><div class="runner-actions">'
     + '<a class="button small secondary" href="/admin/runners/' + runnerId + '">View</a>'
@@ -1943,12 +1944,12 @@ function runnersPage(data: AdminData, csrf: string): string {
     const configuredMode = runnerConfiguredExecutionMode(runner);
     const mode = runnerActionExecutionMode(runner);
     const modeLabel = configuredMode ?? "not configured";
-    // Keep the mode choice in each mutating form.  A stale page or an older
-    // browser cannot silently replay a privileged self-report.  For a Runner
-    // whose trusted mode is already privileged, reuse the one-time
-    // administrator acknowledgement; switching a restricted Runner
-    // to privileged_host still requires a fresh checkbox.
-    const modeFields = executionModeFormFields(mode, csrf, true, configuredMode !== "privileged_host");
+    // Existing Runners already carry the administrator-confirmed mode. Keep
+    // that value read-only in action forms; only records without a trusted
+    // mode need an explicit choice before reinstalling.
+    const modeFields = configuredMode === null
+      ? executionModeFormFields(undefined, csrf, true)
+      : executionModeFormFields(mode, csrf, false);
     return `<tr class="data-row"><td><div class="table-primary-cell"><a class="strong" href="/admin/runners/${encodeURIComponent(runner.runner_id)}">${escapeHtml(runner.display_name)}</a><span class="sub-id mono">${escapeHtml(runner.runner_id)}</span></div></td><td>${statusBadge(runner.state)}</td><td><span class="platform-tag">${escapeHtml(safePlatform(runner))}</span></td><td><span class="mono font-12">${escapeHtml(modeLabel)}</span>${configuredMode === null ? "<span class=\"warning-text\"> · selection required</span>" : ""}</td><td class="time-cell">${escapeHtml(time(runner.last_heartbeat_ms))}</td>${runnerActionCell(runner, modeFields, csrf)}</tr>`;
   }).join("") || `<tr><td colspan="6" class="empty"><div class="empty-state-box"><p>No runners yet.</p></div></td></tr>`;
   const warning = PRIVILEGED_HOST_WARNING;
@@ -2152,10 +2153,6 @@ function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly 
       <dl class="details">
         <dt>Configured execution mode (administrator)</dt>
         <dd class="mono">${escapeHtml(executionMode ?? "not configured")}</dd>
-        <dt>Reported service identity</dt>
-        <dd class="mono">${escapeHtml(serviceIdentity)}</dd>
-        <dt>Runner-reported privilege state</dt>
-        <dd class="mono">${escapeHtml(privilegeState)}</dd>
         <dt>Desired policy revision</dt>
         <dd class="mono">${escapeHtml(desiredRevision)}</dd>
         <dt>Active / applied policy revision</dt>
