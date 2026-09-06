@@ -502,9 +502,6 @@ if ! mkdir "$STAGE"; then printf '%s\n' 'error: installer staging path is alread
 )
 PACKAGE_ROOT="$STAGE/lib/node_modules/@aloneio/runmesh-runner"
 BUNDLE_FILENAME='runmesh.cjs'
-if [ ! -f "$PACKAGE_ROOT/dist/$BUNDLE_FILENAME" ] && [ -f "$PACKAGE_ROOT/dist/coding-runner.cjs" ]; then
-  BUNDLE_FILENAME='coding-runner.cjs'
-fi
 [ -f "$PACKAGE_ROOT/dist/$BUNDLE_FILENAME" ] || { fail 'The verified Runmesh package is missing its Runner bundle.'; exit 1; }
 mkdir -p "$STAGE/runtime"
 cp "$NODE" "$STAGE/runtime/node"
