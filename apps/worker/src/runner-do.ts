@@ -390,7 +390,18 @@ export class RunnerDO {
       }
       return;
     }
-    if (attachment.epoch === 0 || attachment.protocolVersion !== message.protocol_version || !(await this.isCurrent(attachment))) {
+    // These frames are either fully fenced by their Registry mutation or are
+    // deliberately dropped. Avoid a second `/session` round trip for them; the
+    // extra probe used to multiply idle traffic and could even turn unbounded
+    // job output into unbounded Durable Object reads/writes.
+    const requiresSessionProbe = message.type !== "runner.heartbeat"
+      && message.type !== "runner.sync"
+      && message.type !== "runner.policy_ack"
+      && message.type !== "job.output"
+      && message.type !== "job.started"
+      && message.type !== "job.status"
+      && message.type !== "job.completed";
+    if (attachment.epoch === 0 || attachment.protocolVersion !== message.protocol_version || (requiresSessionProbe && !(await this.isCurrent(attachment)))) {
       this.rejectBridgeWaiters(ws, "credentials revoked");
       ws.close(4001, "credentials revoked");
       return;
@@ -984,7 +995,14 @@ export class RunnerDO {
       const attachment = socket.deserializeAttachment() as ConnectionAttachment | null;
       if (attachment?.epoch === 0 && (earliest === undefined || attachment.helloDeadlineMs < earliest)) earliest = attachment.helloDeadlineMs;
     }
-    if (earliest !== undefined) await this.ctx.storage.setAlarm(earliest);
+    if (earliest === undefined) {
+      // A hello timeout alarm may have been installed before the socket sent
+      // its hello (or before it disconnected). Leaving that alarm behind
+      // wakes an otherwise idle RunnerDO and runs a no-op alarm turn.
+      await this.ctx.storage.deleteAlarm();
+      return;
+    }
+    await this.ctx.storage.setAlarm(earliest);
   }
 
   private async isCurrent(attachment: ConnectionAttachment, requireOnline = false): Promise<boolean> {

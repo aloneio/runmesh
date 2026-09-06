@@ -91,7 +91,10 @@ export class RunnerConnection {
 
   public constructor(options: RunnerConnectionOptions) {
     this.config = options.config;
-    this.heartbeatMs = options.heartbeatMs ?? 15_000;
+    // Heartbeats keep an online Runner lease alive in RegistryDO. A 30s
+    // cadence stays below the 45s stale threshold while cutting steady
+    // Durable Object traffic for idle runners in half.
+    this.heartbeatMs = options.heartbeatMs ?? 30_000;
     this.rpcTimeoutMs = options.rpcTimeoutMs ?? LOCAL_RUNNER_OPERATION_TIMEOUT_MS;
     this.syncMs = options.syncMs ?? 30_000;
     this.random = options.random ?? Math.random;

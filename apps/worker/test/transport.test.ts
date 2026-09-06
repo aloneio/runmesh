@@ -36,6 +36,24 @@ describe("Worker runner transport", () => {
     expect(WORKER_BRIDGE_TIMEOUT_MS).toBeGreaterThan(8_000);
   });
 
+  it("updates heartbeat liveness with one fenced write", async () => {
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
+    const heartbeatRunnerId = `heartbeat-${crypto.randomUUID()}`;
+    await runInDurableObject(registry, (instance) => {
+      expect(instance.registerRunner(heartbeatRunnerId, "heartbeat-runner", Date.now(), undefined, "dedicated_user")).toBe(true);
+      const state = instance.getRunnerExecutionState(heartbeatRunnerId);
+      expect(state).toBeDefined();
+      const sessionId = `session-${crypto.randomUUID()}`;
+      const now = Date.now();
+      (instance as any).ctx.storage.sql.exec("UPDATE runners SET state = 'online', session_id = ? WHERE runner_id = ?", sessionId, heartbeatRunnerId);
+      const sessionCheck = vi.spyOn(instance, "sessionIsCurrent");
+      expect(instance.recordHeartbeat(heartbeatRunnerId, state!.runner.connection_epoch, state!.runner.credential_version, now, state!.lifecycle_id, sessionId)).toBe(true);
+      expect(sessionCheck).not.toHaveBeenCalled();
+      expect(instance.recordHeartbeat(heartbeatRunnerId, Number.NaN, state!.runner.credential_version, now, state!.lifecycle_id, sessionId)).toBe(false);
+      sessionCheck.mockRestore();
+    });
+  });
+
   it("binds internal proofs to versioned request details and consumes nonces once", async () => {
     const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
     const secret = "test-internal-control-secret-not-for-production";
