@@ -277,6 +277,11 @@ export class RegistryDO {
     private readonly env: { INTERNAL_CONTROL_SECRET?: string; RUNNER_TOKEN_PEPPER?: string },
   ) {
     this.ctx.blockConcurrencyWhile(async () => {
+      // Durable Objects may be evicted and reconstructed for every request.
+      // Replaying CREATE TABLE/INDEX IF NOT EXISTS on every reconstruction is
+      // still counted as a SQL write on the free tier, so fast-path fully
+      // initialized objects with a read-only schema check.
+      if (this.schemaIsCurrent()) return;
       this.ctx.storage.sql.exec(`
         CREATE TABLE IF NOT EXISTS runners (
           runner_id TEXT PRIMARY KEY, display_name TEXT NOT NULL, token_verifier TEXT NOT NULL, state TEXT NOT NULL,
@@ -393,6 +398,29 @@ export class RegistryDO {
         return false;
       }
     });
+  }
+
+  private schemaIsCurrent(): boolean {
+    const requiredTables = [
+      "runners", "runner_policy_versions", "runner_policy_migrations", "runner_mutations",
+      "runner_policy_mutations", "workspaces", "managed_workspaces", "jobs", "admin_settings",
+      "auth_throttle", "admin_sessions", "mcp_clients", "internal_request_nonces",
+      "client_runner_overrides", "runner_enrollments",
+    ];
+    const tables = new Set(this.ctx.storage.sql.exec<{ name: string }>(
+      "SELECT name FROM sqlite_master WHERE type = 'table'",
+    ).toArray().map((row) => row.name));
+    if (requiredTables.some((table) => !tables.has(table))) return false;
+    const columns = new Set(this.ctx.storage.sql.exec<{ name: string }>(
+      "PRAGMA table_info(runners)",
+    ).toArray().map((row) => row.name));
+    return [
+      "token_verifier", "credential_version", "lifecycle_id", "management_mode",
+      "configured_execution_mode", "desired_policy_revision", "policy_status",
+      "runner_permissions_json", "current_runner_version", "protocol_min_version",
+      "protocol_max_version", "protocol_compatibility", "update_channel",
+      "desired_runner_version", "latest_runner_version", "update_status",
+    ].every((column) => columns.has(column));
   }
 
   public adminStatus(): { initialized: boolean } { return { initialized: this.settings() !== undefined }; }
