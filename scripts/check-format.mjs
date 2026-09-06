@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 
 const patterns = ["*.ts", "*.mjs", "*.json", "*.jsonc", "*.md", "*.yml", "*.yaml", ".gitattributes", "LICENSE", "NOTICE"];
@@ -8,6 +8,10 @@ const files = requestedFiles.length > 0
   : execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "--", ...patterns], { encoding: "utf8" }).split(/\r?\n/).filter(Boolean);
 const errors = [];
 for (const file of files) {
+  // `git ls-files --cached --others` includes tracked files deleted in the
+  // working tree. A deliberate deletion is a valid release change; do not
+  // turn it into an unreadable-file formatting failure.
+  try { await access(file); } catch { continue; }
   const bytes = await readFile(file);
   const rawText = bytes.toString("utf8");
   if (!bytes.equals(Buffer.from(rawText, "utf8"))) errors.push(`${file}: invalid UTF-8`);

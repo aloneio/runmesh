@@ -874,7 +874,7 @@ async function writeTemporary(target: string, bytes: Buffer, mode: number, polic
   // check and open(), this path either remains the original directory or fails
   // closed; it cannot silently create the staging file in the junction target.
   const anchoredTarget = anchoredPath(target, parentBoundary);
-  const temporary = `${anchoredTarget}.remote-coding-runtime-${randomUUID()}.tmp`;
+  const temporary = `${anchoredTarget}.runmesh-${randomUUID()}.tmp`;
   const handle = await open(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0), mode);
   try {
     if (policy !== undefined) await verifyParentBoundary(policy, parentBoundary);
@@ -1061,7 +1061,7 @@ function object(value: unknown): Record<string, unknown> {
 }
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function message(error: unknown): string { return error instanceof Error ? error.message.slice(0, 1_024) : "filesystem operation failed"; }
-function backupName(path: string): string { return `${path}.remote-coding-runtime-${randomUUID()}.bak`; }
+function backupName(path: string): string { return `${path}.runmesh-${randomUUID()}.bak`; }
 /**
  * Windows path lookup is case-insensitive and trims trailing dots/spaces on
  * ordinary NTFS components. Keep internal transaction keys aligned with that

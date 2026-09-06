@@ -7,7 +7,7 @@ import { runCli, runEnrollCli, parseProductArgs } from "../src/cli.js";
 import { RunnerConnection, classifyConnectionFailure } from "../src/connection.js";
 import { RUNNER_VERSION } from "../src/version.js";
 import { enrollRunner } from "../src/enrollment.js";
-import { ProfileStore, defaultWorkspaceId, validateProfile } from "../src/profile.js";
+import { ProfileStore, validateProfile } from "../src/profile.js";
 import { PolicyStore } from "../src/policy-store.js";
 import { createServiceManager, createServiceProvisioner, hashContent, installServiceManifest, isManagedService, managedServiceManifestFromContent, removeServiceManifest, renderService, rewriteManagedServiceExecutionMode, serviceLayout, serviceProfilePath, type ServiceManifest, type ServiceManifestFilesystem } from "../src/service.js";
 
@@ -16,7 +16,7 @@ async function fixture(): Promise<{ root: string; store: ProfileStore; cleanup: 
   await mkdir(join(root, "workspace"));
   return { root, store: new ProfileStore({ baseDir: join(root, "profile") }), cleanup: () => rm(root, { recursive: true, force: true }) };
 }
-const profile = (path: string) => ({ version: 1 as const, server_url: "wss://runner.example.test/runner/connect", runner_id: "runner-1", token: "0123456789abcdef", execution_mode: "dedicated_user" as const, workspaces: [{ id: "workspace", path, writable: true, shell: true }] });
+const profile = (_path?: string) => ({ version: 1 as const, server_url: "wss://runner.example.test/runner/connect", runner_id: "runner-1", token: "0123456789abcdef", management_mode: "central" as const, execution_mode: "dedicated_user" as const, workspaces: [] as const });
 const runnerPolicy = (runnerId: string, revision: number) => {
   const unsigned = { schema_version: 1 as const, runner_id: runnerId, revision, runner_permissions: { read: true, edit: true, shell: true, job_control: true }, workspaces: [] as [] };
   return { ...unsigned, checksum: runnerPolicyChecksum(unsigned) };
@@ -81,7 +81,7 @@ describe("runner product profile and enrollment", () => {
       await test.cleanup();
     }
   });
-  it("writes atomic private redacted profile data and suffixes workspace ids", async () => {
+  it("writes atomic private redacted central profile data", async () => {
     const test = await fixture();
     try {
       await test.store.save(profile(join(test.root, "workspace")));
@@ -90,7 +90,6 @@ describe("runner product profile and enrollment", () => {
       // Windows ACLs are not represented by the POSIX mode bits exposed by
       // Node's stat(); the service provisioner covers the native ACL path.
       if (process.platform !== "win32") expect((await stat(test.store.filePath)).mode & 0o777).toBe(0o600);
-      expect(defaultWorkspaceId("/tmp/workspace", [{ id: "workspace", path: "/tmp/a", writable: true, shell: true }])).toBe("workspace-2");
       const lines: string[] = [];
       await runCli(["status", "--json"], { store: test.store, stdout: (line) => lines.push(line) });
       expect(lines.join("\n")).toContain("[redacted]");
@@ -176,8 +175,8 @@ describe("runner product profile and enrollment", () => {
       const original = profile(join(test.root, "workspace"));
       await test.store.save(original);
       const result = await enrollRunner({ server: "https://example.test/runner/enroll", code: "a".repeat(43), reEnroll: true, cwd: join(test.root, "workspace"), store: test.store, fetch: async () => new Response(JSON.stringify({ runner_id: "runner-replaced", server_url: "https://example.test/runner/connect", token: "abcdef0123456789" }), { status: 200 }) });
-      expect(result.profile).toMatchObject({ runner_id: "runner-replaced", token: "abcdef0123456789", workspaces: original.workspaces });
-      await expect(test.store.load()).resolves.toMatchObject({ runner_id: "runner-replaced", workspaces: original.workspaces });
+      expect(result.profile).toMatchObject({ runner_id: "runner-replaced", token: "abcdef0123456789", workspaces: [] });
+      await expect(test.store.load()).resolves.toMatchObject({ runner_id: "runner-replaced", workspaces: [] });
     } finally { await test.cleanup(); }
   });
   it("runs the real enrollment CLI with an isolated profile without outputting the token", async () => {
@@ -453,23 +452,20 @@ describe("runner product CLI and service safety", () => {
     expect((connection as unknown as { metadata: { runner_version: string } }).metadata.runner_version).toBe(RUNNER_VERSION);
   });
 
-  it("parses product CLI options and uses profile defaults for start", async () => {
+  it("rejects local workspace configuration and starts from the central profile", async () => {
     const test = await fixture();
     try {
       await test.store.save(profile(join(test.root, "workspace")));
-      expect(parseProductArgs(["workspace", "add", "--path", ".", "--readonly", "--json"])).toMatchObject({ command: "workspace", json: true, values: { action: "add", path: ".", readonly: true } });
-      let started: unknown;
-      await runCli(["start"], { store: test.store, startRunner: async (config) => { started = config; } });
-      expect(started).toMatchObject({ runnerId: "runner-1", workspaces: [{ workspaceId: "workspace", readonly: false, shell: true }] });
-    } finally { await test.cleanup(); }
-  });
-  it("uses profile workspaces exactly, including a zero-workspace machine Runner", async () => {
-    const test = await fixture();
-    try {
-      await test.store.save({ ...profile(join(test.root, "workspace")), workspaces: [] });
+      expect(() => parseProductArgs(["workspace", "add", "--path", ".", "--json"])).toThrow("unknown or incomplete option");
       let started: unknown;
       await runCli(["start"], { store: test.store, startRunner: async (config) => { started = config; } });
       expect(started).toMatchObject({ runnerId: "runner-1", workspaces: [] });
+    } finally { await test.cleanup(); }
+  });
+  it("rejects persisted local workspaces in a central profile", async () => {
+    const test = await fixture();
+    try {
+      expect(validateProfile({ ...profile(join(test.root, "workspace")), workspaces: [{ id: "workspace", path: join(test.root, "workspace"), writable: true, shell: true }] })).toBeUndefined();
     } finally { await test.cleanup(); }
   });
   it("renders dedicated-user manifests and uses privileged host only by explicit mode", () => {
@@ -756,7 +752,7 @@ describe("runner product CLI and service safety", () => {
     expect(argumentsText).toContain(`--state-dir "${stateDir}${"\\"}"`);
     expect(argumentsText).not.toContain(`--profile "${profilePath}"`);
   });
-  it("requires explicit confirmation for privileged host services without breaking legacy profiles", async () => {
+  it("requires explicit confirmation for privileged host services", async () => {
     const test = await fixture();
     try {
       const contents = new Map<string, string>();
@@ -864,28 +860,12 @@ describe("runner product CLI and service safety", () => {
       expect(manager.restart).toHaveBeenCalledTimes(2); // one migration + one rollback
     } finally { await test.cleanup(); }
   });
-  it("targets the existing managed mode for legacy lifecycle commands without silently migrating it", async () => {
+  it("rejects incomplete profiles instead of inferring a service mode", async () => {
     const test = await fixture();
     try {
       const { execution_mode: _omitted, ...legacyProfile } = profile(join(test.root, "workspace"));
-      await test.store.save(legacyProfile);
-      const contents = new Map<string, string>();
-      const oldManifest = renderService({ platform: "linux", mode: "system", profilePath: test.store.filePath, executionMode: "privileged_host" });
-      contents.set(oldManifest.path, oldManifest.content);
-      const stopped: ServiceManifest[] = [];
-      const manager = {
-        platform: "linux" as const,
-        mode: "system" as const,
-        install: async () => undefined,
-        stop: async (manifest: ServiceManifest) => { stopped.push(manifest); },
-        restart: async () => undefined,
-        uninstall: async () => undefined,
-      };
-      const filesystem: ServiceManifestFilesystem = { read: async (path) => contents.get(path), write: async (path, content) => { contents.set(path, content); }, remove: async (path) => { contents.delete(path); } };
-      await runCli(["stop"], { store: test.store, servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, isAdministrator: () => true });
-      expect(stopped).toHaveLength(1);
-      expect(stopped[0]?.executionMode).toBe("privileged_host");
-      expect(await test.store.load()).not.toHaveProperty("execution_mode");
+      expect(validateProfile(legacyProfile)).toBeUndefined();
+      await expect(test.store.save(legacyProfile)).rejects.toThrow("runner profile is invalid");
     } finally { await test.cleanup(); }
   });
   it("does not take over or remove a native service when its managed manifest is missing", async () => {
@@ -943,7 +923,7 @@ describe("runner product CLI and service safety", () => {
       await expect(store.checkServiceOwnership("privileged_host")).resolves.toMatchObject({ ok: false, checked: true, expected_uid: 0 });
     } finally { await test.cleanup(); }
   });
-  it.skipIf(process.platform === "win32" || process.getuid?.() !== 0)("forces root-owned 0600 profile bytes for a legacy rollback", async () => {
+  it.skipIf(process.platform === "win32" || process.getuid?.() !== 0)("forces root-owned 0600 profile bytes for a privileged rollback", async () => {
     const test = await fixture();
     try {
       // Use a non-canonical path with the ownership contract explicitly
