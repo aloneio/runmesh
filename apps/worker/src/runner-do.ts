@@ -502,6 +502,14 @@ export class RunnerDO {
     const expectedPolicyRevision = typeof input.expected_policy_revision === "number" && Number.isSafeInteger(input.expected_policy_revision) && input.expected_policy_revision > 0 ? input.expected_policy_revision : undefined;
     const expectedPolicyChecksum = typeof input.expected_policy_checksum === "string" && /^[a-f0-9]{64}$/.test(input.expected_policy_checksum) ? input.expected_policy_checksum : undefined;
     const method = typeof input.method === "string" ? input.method : "";
+    if (method !== "echo" && method !== "runner.info") {
+      let access: Record<string, unknown>;
+      try { access = await (await this.registryRequest(attachment.runnerId, "/access", { method: "GET" })).json() as Record<string, unknown>; } catch { return Response.json({ error: { code: "runner_access_unavailable", message: "Runner authorization status could not be verified" } }, { status: 503 }); }
+      if (access.allowed !== true) {
+        const status = access.status === "scheduled" ? "runner_not_active" : access.status === "expired" ? "runner_expired" : "runner_not_authorized";
+        return Response.json({ error: { code: status, message: status === "runner_expired" ? "Runner authorization has expired; renew it in the administrator console" : status === "runner_not_active" ? "Runner authorization has not started; update it in the administrator console" : "Runner authorization is unavailable" } }, { status: 403 });
+      }
+    }
     if (requestPolicyRevision === undefined && method !== "echo" && method !== "runner.info") {
       return Response.json({ error: { code: "stale_policy", message: "Protected RPC requires a policy revision" } }, { status: 409 });
     }

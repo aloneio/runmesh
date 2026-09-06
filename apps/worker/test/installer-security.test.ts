@@ -35,6 +35,7 @@ describe("hosted installer origin and template safety", () => {
     expect(resolvePublicOrigin(request, "https://PUBLIC.example/")).toBe("https://public.example");
     expect(resolvePublicOrigin(new Request("https://internal.worker/runner/install.sh", { headers: { host: "public.example" } }), "https://public.example")).toBe("https://public.example");
     expect(resolvePublicOrigin(new Request("http://internal.worker/runner/install.sh", { headers: { host: "public.example" } }), "https://public.example")).toBe("https://public.example");
+    expect(resolvePublicOrigin(new Request("https://custom.example/runner/install.sh", { headers: { host: "custom.example" } }), "https://public.example")).toBe("https://custom.example");
     expect(() => resolvePublicOrigin(new Request("https://public.example/runner/install.sh", { headers: { host: "evil.example" } }), "https://public.example")).toThrow();
     expect(() => resolvePublicOrigin(new Request("https://public.example/runner/install.sh", { headers: { host: "x.test';id;#" } }), "https://public.example")).toThrow();
     expect(() => resolvePublicOrigin(new Request("https://public.example/runner/install.sh", { headers: { host: "evil.example" } }))).toThrow();
@@ -82,7 +83,7 @@ describe("hosted installer origin and template safety", () => {
     expect(html).not.toContain(`--code ${code}`);
     expect(html).toContain("--code-stdin");
 
-    const rejected = runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }, "https://evil.example", "runner-test", code, "csrf");
+    const rejected = runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }, "https://evil.example/path", "runner-test", code, "csrf");
     expect(rejected.status).toBe(421);
 
     const hosted = runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example", RUNMESH_SIGNED_RELEASE_AVAILABLE: FIXED_RELEASE_VERSION }, "https://worker.example", "runner-test", code, "csrf", false, "privileged_host", true);

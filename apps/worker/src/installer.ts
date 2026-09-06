@@ -126,12 +126,13 @@ export function canonicalPublicOrigin(value: string): string {
 }
 
 /**
- * Resolve the origin that may be embedded in a hosted installer.  A configured
- * RUNMESH_PUBLIC_ORIGIN is authoritative; when present, the request URL and
- * Host header must agree with it.  Without configuration, both request URL and
- * Host (when supplied by the runtime) must agree with one another.  Throwing is
- * intentional so callers can return a generic 400/421 response rather than
- * rendering a script from attacker-controlled authority data.
+ * Resolve the origin that may be embedded in a hosted installer. A configured
+ * RUNMESH_PUBLIC_ORIGIN remains the canonical fallback, while a valid HTTPS
+ * request whose URL and Host agree is also accepted as the active custom
+ * Worker domain. This lets Cloudflare custom domains work without adding each
+ * hostname to a deployment variable. Throwing is intentional so callers can
+ * return a generic 400/421 response rather than rendering a script from
+ * attacker-controlled authority data.
  */
 export function resolvePublicOrigin(request: Request, configuredOrigin?: string): string {
   let requestUrl: URL;
@@ -143,17 +144,18 @@ export function resolvePublicOrigin(request: Request, configuredOrigin?: string)
   const configured = configuredOrigin === undefined ? undefined : canonicalPublicOrigin(configuredOrigin);
   const hostHeader = request.headers.get("host");
   const hostOrigin = hostHeader === null ? undefined : canonicalPublicOrigin(`https://${hostHeader}`);
-  // A configured public origin is authoritative and may differ from an
-  // internal URL used by a reverse proxy.  The proxy's Host header, when
-  // available, still has to agree with the configured value.  With no
-  // configuration, bind the generated URL to the request URL and reject Host
-  // confusion.
+  let requestOrigin: string | undefined;
+  try { requestOrigin = requestUrl.protocol === "https:" ? canonicalPublicOrigin(requestUrl.origin) : undefined; } catch { requestOrigin = undefined; }
   if (configured !== undefined) {
-    if (hostOrigin !== undefined && hostOrigin !== configured) throw new Error("request Host does not match the configured public origin");
-    return configured;
+    // A reverse proxy may expose an internal request URL while preserving the
+    // configured public Host. Keep that supported.
+    if (hostOrigin === configured) return configured;
+    // Cloudflare supplies the routed hostname in both the request URL and
+    // Host. Treat that matching HTTPS authority as the active custom domain.
+    if (requestOrigin !== undefined && hostOrigin === requestOrigin) return requestOrigin;
+    throw new Error("request Host does not match a configured or routed public origin");
   }
-  let requestOrigin: string;
-  try { requestOrigin = canonicalPublicOrigin(requestUrl.origin); } catch { throw new Error("request origin is not a valid public HTTPS origin"); }
+  if (requestOrigin === undefined) throw new Error("request origin is not a valid public HTTPS origin");
   if (hostOrigin !== undefined && hostOrigin !== requestOrigin) throw new Error("request Host does not match the request origin");
   return requestOrigin;
 }
@@ -255,6 +257,11 @@ const POSIX_TEMPLATE = String.raw`#!/usr/bin/env sh
 # embedded Ed25519 public key and never trusts a downloaded keyring.
 set -eu
 umask 077
+if [ -t 2 ] && [ -z "\${NO_COLOR:-}" ]; then C_RESET='\033[0m'; C_CYAN='\033[36m'; C_GREEN='\033[32m'; C_RED='\033[31m'; else C_RESET=''; C_CYAN=''; C_GREEN=''; C_RED=''; fi
+step() { printf '%b→%b %s\n' "\$C_CYAN" "\$C_RESET" "\$1" >&2; }
+ok() { printf '%b✓%b %s\n' "\$C_GREEN" "\$C_RESET" "\$1" >&2; }
+fail() { printf '%b✗%b %s\n' "\$C_RED" "\$C_RESET" "\$1" >&2; }
+printf '\n%bRunmesh%b  Runner installer\n\n' "\$C_CYAN" "\$C_RESET" >&2
 # Do not let inherited runtime/package-manager configuration alter a privileged
 # install. The operator's PATH is still required to point at trusted binaries.
 unset NODE_OPTIONS NODE_PATH CURL_HOME CURLRC NPM_CONFIG_USERCONFIG NPM_CONFIG_GLOBALCONFIG npm_config_userconfig npm_config_globalconfig 2>/dev/null || true
@@ -271,7 +278,7 @@ for arg in "$@"; do
     --no-auto-deps) AUTO_INSTALL_DEPS=0 ;;
     --code) EXPECT_CODE_ARG=1 ;;
     --code=*) ENROLLMENT_CODE_ARG="$(printf '%s' "$arg" | sed 's/^--code=//')" ;;
-    install|--auto-deps) : ;;
+    install|--auto-deps|--re-enroll) : ;;
     *)
       if [ "$EXPECT_CODE_ARG" -eq 1 ]; then
         ENROLLMENT_CODE_ARG="$arg"
@@ -306,6 +313,46 @@ esac
 NODE_BASE='__NODE_BASE_URL__'
 [ "$AUTO_INSTALL_DEPS" -eq 1 ] || { printf '%s\n' 'error: private runtime bootstrap is disabled (--no-auto-deps).' >&2; exit 1; }
 has_path() { [ -e "$1" ] || [ -L "$1" ]; }
+refresh_existing() {
+  if ! has_path "$INSTALL_ROOT/current"; then return 1; fi
+  [ -L "$INSTALL_ROOT/current" ] || { printf '%s\n' 'error: existing Runmesh path is not a managed current link' >&2; exit 1; }
+  CURRENT_TARGET="$(readlink "$INSTALL_ROOT/current")"
+  case "$CURRENT_TARGET" in
+    "$INSTALL_ROOT"/versions/*) : ;;
+    *) printf '%s\n' 'error: existing Runmesh current link is outside the managed Runmesh versions directory' >&2; exit 1 ;;
+  esac
+  EXISTING_RUNNER="$INSTALL_ROOT/current/bin/runmesh"
+  [ -x "$EXISTING_RUNNER" ] || { printf '%s\n' 'error: existing Runmesh installation is incomplete; restore it or remove it with runmesh uninstall before retrying' >&2; exit 1; }
+  [ -f "$PROFILE" ] && [ -f "$SERVICE_MANIFEST" ] || { printf '%s\n' 'error: existing Runmesh installation is incomplete; restore it or remove it with runmesh uninstall before retrying' >&2; exit 1; }
+  grep -F 'runmesh-runner-managed:' "$SERVICE_MANIFEST" >/dev/null 2>&1 || { printf '%s\n' 'error: existing service is not managed by Runmesh; refusing to modify it' >&2; exit 1; }
+  REFRESH_LOCK="$INSTALL_ROOT/.refresh.lock"
+  if ! mkdir "$REFRESH_LOCK" 2>/dev/null; then printf '%s\n' 'error: another Runmesh enrollment refresh is already running' >&2; exit 1; fi
+  REFRESH_INPUT="$INSTALL_ROOT/.refresh-code.$$"
+  trap 'rm -f "$REFRESH_INPUT" 2>/dev/null || true; rmdir "$REFRESH_LOCK" 2>/dev/null || true' EXIT HUP INT TERM
+  printf '%s\n' 'Existing managed Runmesh installation found; refreshing credentials in place.' >&2
+  if [ -n "$ENROLLMENT_CODE_ARG" ]; then ENROLLMENT_CODE="$ENROLLMENT_CODE_ARG"; unset ENROLLMENT_CODE_ARG
+  else
+    printf '%s' 'Paste the one-time enrollment code (input is hidden): ' >/dev/tty
+    stty -echo < /dev/tty || { printf '%s\n' 'error: terminal input cannot be protected' >&2; exit 1; }
+    TTY_ECHO_DISABLED=1
+    IFS= read -r ENROLLMENT_CODE < /dev/tty || { stty echo < /dev/tty 2>/dev/null || true; printf '\n%s\n' 'error: unable to read enrollment code from terminal' >&2; exit 1; }
+    stty echo < /dev/tty 2>/dev/null || true; TTY_ECHO_DISABLED=0; printf '\n' >/dev/tty
+  fi
+  case "$ENROLLMENT_CODE" in *[!A-Za-z0-9_-]*) printf '%s\n' 'error: invalid one-time enrollment code' >&2; exit 1;; esac
+  printf '%s\n' "$ENROLLMENT_CODE" > "$REFRESH_INPUT"
+  REFRESH_CODE_LENGTH="$(wc -c < "$REFRESH_INPUT" | tr -d '[:space:]')"
+  [ "$REFRESH_CODE_LENGTH" -eq 44 ] || { printf '%s\n' 'error: invalid one-time enrollment code' >&2; exit 1; }
+  unset ENROLLMENT_CODE
+  "$EXISTING_RUNNER" enroll --profile "$PROFILE" --server "$ENROLLMENT_URL" --code-stdin --re-enroll < "$REFRESH_INPUT"
+  rm -f "$REFRESH_INPUT"; REFRESH_INPUT=''
+  "$EXISTING_RUNNER" install --profile "$PROFILE" --executable-path "$EXISTING_RUNNER"
+  "$EXISTING_RUNNER" restart --profile "$PROFILE"
+  printf '%s\n' 'Runmesh Runner credentials refreshed and service restarted in place.'
+  trap - EXIT HUP INT TERM
+  rmdir "$REFRESH_LOCK" 2>/dev/null || true
+  return 0
+}
+if has_path "$INSTALL_ROOT/current" && has_path "$PROFILE" && has_path "$SERVICE_MANIFEST"; then refresh_existing; exit $?; fi
 if has_path "$INSTALL_ROOT/current" || has_path "$INSTALL_ROOT/versions/$VERSION" || has_path "$INSTALL_ROOT/versions/$VERSION.staging.$$" || has_path "$PROFILE" || has_path "$SERVICE_MANIFEST"; then printf '%s\n' 'error: existing Runmesh installation or service state found; refusing to overwrite it' >&2; exit 1; fi
 TMP="$(mktemp -d /tmp/runmesh-installer.XXXXXX)"
 STAGE="$INSTALL_ROOT/versions/$VERSION.staging.$$"
@@ -450,11 +497,12 @@ mkdir -p "$INSTALL_ROOT/versions"
 if ! mkdir "$STAGE"; then printf '%s\n' 'error: installer staging path is already in use' >&2; exit 1; fi
 (
   cd "$TMP"
-  "$NODE" "$NPM_CLI" --userconfig "$NPM_CONFIG_USERCONFIG" --globalconfig "$NPM_CONFIG_GLOBALCONFIG" install --global --ignore-scripts --offline --no-audit --no-fund --prefix "$STAGE" "$TMP/$ARTIFACT"
+  step 'Installing the verified Runner package.'
+  "$NODE" "$NPM_CLI" --userconfig "$NPM_CONFIG_USERCONFIG" --globalconfig "$NPM_CONFIG_GLOBALCONFIG" install --global --ignore-scripts --offline --no-audit --no-fund --prefix "$STAGE" "$TMP/$ARTIFACT" >/dev/null
 )
 PACKAGE_ROOT="$STAGE/lib/node_modules/@aloneio/runmesh-runner"
-BUNDLE_FILENAME='runmesh.cjs'
-[ -f "$PACKAGE_ROOT/dist/$BUNDLE_FILENAME" ] || { printf '%s\n' 'error: verified package did not contain the Runner bundle' >&2; exit 1; }
+BUNDLE_FILENAME='coding-runner.cjs'
+[ -f "$PACKAGE_ROOT/dist/$BUNDLE_FILENAME" ] || { fail 'The verified Runmesh package is missing its Runner bundle.'; exit 1; }
 mkdir -p "$STAGE/runtime"
 cp "$NODE" "$STAGE/runtime/node"
 chmod 0755 "$STAGE/runtime/node"
@@ -502,7 +550,8 @@ ln -s "$FINAL" "$INSTALL_ROOT/current.new"
 mv "$INSTALL_ROOT/current.new" "$INSTALL_ROOT/current"
 CURRENT_CREATED=1
 "$INSTALL_ROOT/current/bin/runmesh" install --profile "$PROFILE" --execution-mode privileged_host --confirm-privileged-host --executable-path "$INSTALL_ROOT/current/bin/runmesh"
-printf '%s\n' "Runmesh Runner $VERSION installed and enrolled." 'The background service is enabled and started automatically.' 'Linux logs: sudo journalctl -u runmesh-runner -f' 'macOS logs: sudo log stream --predicate process==runmesh'
+ok "Runmesh Runner $VERSION installed and enrolled."
+printf '%s\n' '  Service started automatically.' '  Logs: sudo journalctl -u runmesh-runner -f' >&2
 `;
 
 const POWERSHELL_TEMPLATE = String.raw`$ErrorActionPreference = 'Stop'
@@ -540,7 +589,7 @@ foreach ($Argument in $args) {
   if ($ExpectCodeArgument) { $EnrollmentCodeArgument = [string]$Argument; $ExpectCodeArgument = $false; continue }
   if ($Argument -eq '--code') { $ExpectCodeArgument = $true; continue }
   if ($Argument -like '--code=*') { $EnrollmentCodeArgument = [string]$Argument.Substring(7); continue }
-  if ($Argument -eq 'install' -or $Argument -eq '--auto-deps' -or $Argument -eq '--no-auto-deps') { continue }
+  if ($Argument -eq 'install' -or $Argument -eq '--auto-deps' -or $Argument -eq '--no-auto-deps' -or $Argument -eq '--re-enroll') { continue }
   if ($null -eq $EnrollmentCodeArgument) { $EnrollmentCodeArgument = [string]$Argument }
 }
 if ($ExpectCodeArgument) { throw '--code requires the one-time enrollment code.' }
@@ -560,6 +609,32 @@ $CurrentRoot = Join-Path $InstallRoot 'current'
 $CurrentNew = Join-Path $InstallRoot 'current.new'
 $Profile = Join-Path $env:ProgramData 'Runmesh\profile.json'
 $ServiceManifest = Join-Path $env:ProgramData 'Runmesh\RunmeshRunner.xml'
+function Refresh-Existing {
+  if (-not (Test-Path -LiteralPath $CurrentRoot)) { return $false }
+  if (-not (Test-Path -LiteralPath $CurrentRoot -PathType Container)) { throw 'Existing Runmesh current path is not a managed directory.' }
+  $ExistingRunner = Join-Path $CurrentRoot 'runmesh.cmd'
+  if (-not (Test-Path -LiteralPath $ExistingRunner -PathType Leaf) -or -not (Test-Path -LiteralPath $Profile -PathType Leaf) -or -not (Test-Path -LiteralPath $ServiceManifest -PathType Leaf)) { throw 'Existing Runmesh installation is incomplete; restore it or remove it with runmesh uninstall before retrying.' }
+  if ($null -eq (Select-String -LiteralPath $ServiceManifest -SimpleMatch 'runmesh-runner-managed:' -Quiet)) { throw 'Existing service is not managed by Runmesh; refusing to modify it.' }
+  $RefreshLock = Join-Path $InstallRoot '.refresh.lock'
+  try { New-Item -ItemType Directory -Path $RefreshLock -ErrorAction Stop | Out-Null } catch { throw 'Another Runmesh enrollment refresh is already running.' }
+  try {
+    if ($null -eq $EnrollmentCodeArgument) {
+      $SecureCode = Read-Host 'Paste the one-time enrollment code (input is hidden)' -AsSecureString
+      $CodePointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureCode)
+      try { $EnrollmentCode = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($CodePointer) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($CodePointer) }
+    } else { $EnrollmentCode = $EnrollmentCodeArgument; $EnrollmentCodeArgument = $null }
+    if ([string]::IsNullOrWhiteSpace($EnrollmentCode) -or $EnrollmentCode -notmatch '^[A-Za-z0-9_-]{43}$') { throw 'Invalid one-time enrollment code.' }
+    $EnrollmentCode | & $ExistingRunner enroll --profile $Profile --server $EnrollmentUrl --code-stdin --re-enroll
+    if ($LASTEXITCODE -ne 0) { throw 'Enrollment refresh failed.' }
+    & $ExistingRunner install --profile $Profile --executable-path $ExistingRunner
+    if ($LASTEXITCODE -ne 0) { throw 'Service installation refresh failed.' }
+    & $ExistingRunner restart --profile $Profile
+    if ($LASTEXITCODE -ne 0) { throw 'Runner service restart failed.' }
+    Write-Output 'Runmesh Runner credentials refreshed and service restarted in place.'
+    return $true
+  } finally { Remove-Variable EnrollmentCode -ErrorAction SilentlyContinue; try { Remove-Item -LiteralPath $RefreshLock -Force -ErrorAction SilentlyContinue } catch {} }
+}
+if ((Test-Path -LiteralPath $CurrentRoot) -and (Test-Path -LiteralPath $Profile) -and (Test-Path -LiteralPath $ServiceManifest)) { if (Refresh-Existing) { exit 0 } }
 if ((Test-Path -LiteralPath $CurrentRoot) -or (Test-Path -LiteralPath $VersionRoot) -or (Test-Path -LiteralPath $CurrentNew) -or (Test-Path -LiteralPath $Stage) -or (Test-Path -LiteralPath $Profile) -or (Test-Path -LiteralPath $ServiceManifest)) { throw 'Existing Runmesh installation or service state found; refusing to overwrite it.' }
 $TempRoot = Join-Path ([IO.Path]::GetTempPath()) ('runmesh-installer-' + [guid]::NewGuid().ToString('N'))
 $ServiceAttempted = $false
