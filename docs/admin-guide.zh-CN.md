@@ -29,6 +29,8 @@ npm exec --offline -- wrangler deploy --config apps/worker/wrangler.jsonc --env 
 - `INTERNAL_CONTROL_SECRET`：保护控制平面内部请求；
 - `RUNMESH_PUBLIC_ORIGIN`：完整的外部 HTTPS 根地址，不带路径、查询参数或凭据。
 
+`RUNMESH_PUBLIC_ORIGIN` 用作默认外部地址，也适用于反向代理部署。Cloudflare 新增自定义 HTTPS 域名后，只要请求 URL 与 `Host` 头一致，Runmesh 会自动识别并接受该域名，不需要再单独修改白名单。
+
 请使用密码学安全随机数生成器创建 Secret；`SETUP_TOKEN`、`ADMIN_TOKEN`、`RUNNER_TOKEN_PEPPER` 和 `INTERNAL_CONTROL_SECRET` 至少使用 32 字节随机值。四个 Secret 不能提交到 Git 仓库、CI 变量、截图或日志。部署完成后立即打开根地址，使用 setup token 设置管理员密码。初始化采用先到先得；公开实例完成初始化前，请使用 Cloudflare Access 或等效访问控制保护它。
 
 ## 添加 Runner
@@ -41,7 +43,7 @@ npm exec --offline -- wrangler deploy --config apps/worker/wrangler.jsonc --env 
 6. 复制页面显示的操作系统命令，在目标机器上以管理员权限运行；
 7. 返回页面确认 Runner 在线。
 
-注册码 30 分钟内有效且只能使用一次。重新生成会使旧注册码立即失效。不要把注册码写入脚本、工单或聊天记录。
+添加或重新安装 Runner 时，可以分别填写 Runner 授权和一次性注册码的有效天数。Runner 授权从保存时开始生效，填 `0` 表示永久有效；注册码立即生效且只能使用一次，重新生成会使旧注册码立即失效。不要把注册码写入脚本、工单或聊天记录。Runner 授权过期后，连接和心跳仍可用于恢复，但新的受保护操作会被拒绝；在控制台延长期限后会恢复。
 
 ### 安装方式
 
@@ -84,6 +86,7 @@ npm exec --offline -- wrangler deploy --config apps/worker/wrangler.jsonc --env 
 - **轮换凭据**：Runner 轮换会使旧凭据失效并断开旧连接；MCP 客户端轮换会生成新地址。
 - **撤销 Runner**：阻止重新连接，但不会自动终止主机上已经启动的进程；需要在主机上单独停止进程。
 - **删除 Runner**：永久清理该 Runner 的策略、工作区、任务元数据和客户端选择。
+- **主机删除命令**：在已安装主机运行 `sudo /opt/runmesh/current/bin/runmesh uninstall --purge --yes`（Windows 使用 `C:\Program Files\Runmesh\current\runmesh.cmd uninstall --purge --yes`），移除本机服务和凭据；控制台中的 Runner 记录需另行删除。
 - **紧急锁定**：输入 Runner ID 后立即阻止新的受保护操作；随后按需要撤销凭据并检查主机进程。
 - **修改管理员密码**：修改后所有已登录的管理会话失效。
 

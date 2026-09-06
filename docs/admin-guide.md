@@ -23,6 +23,8 @@ Configure these Cloudflare secrets and variables before deployment:
 - `RUNNER_TOKEN_PEPPER` and `INTERNAL_CONTROL_SECRET` for server-side credential protection;
 - `RUNMESH_PUBLIC_ORIGIN` as the exact external HTTPS origin, without a path, query, or credentials.
 
+`RUNMESH_PUBLIC_ORIGIN` is used as the default public origin and for reverse-proxy deployments. When Cloudflare routes a request through an additional custom HTTPS domain, Runmesh automatically accepts that domain when the request URL and `Host` header agree, so each new custom domain does not need a separate allowlist update.
+
 Generate every secret with a cryptographically secure generator and use at least 32 random bytes for `SETUP_TOKEN`, `ADMIN_TOKEN`, `RUNNER_TOKEN_PEPPER`, and `INTERNAL_CONTROL_SECRET`. Never commit secrets or place them in CI logs. Protect a public, uninitialized deployment with Cloudflare Access until the intended administrator completes first setup.
 
 ## Enroll a Runner
@@ -35,7 +37,7 @@ Generate every secret with a cryptographically secure generator and use at least
 6. Run it on the target machine with administrator privileges.
 7. Return to the dashboard and confirm that the Runner is online.
 
-An enrollment code expires after 30 minutes and can be used once. Generating a new code invalidates the previous unused code.
+The console lets you set the valid days for Runner authorization and for each one-time enrollment code. Runner authorization starts when it is saved; `0` means no expiry. A code starts immediately and can be used once; generating a new code invalidates the previous unused code. When Runner authorization expires, its connection and heartbeat remain available for recovery, while new protected operations are denied until the window is extended.
 
 When the hosted installer is enabled, the dashboard command pins the release, verifies its signature, supplies the runtime, enrolls the Runner, and installs its service. Otherwise follow the [portable installation procedure](portable-runner-installation.md) and use `runmesh enroll --code-stdin` after independently verifying the artifact.
 
@@ -55,6 +57,7 @@ Open **MCP Clients**, enter a clear label, select the minimum scopes, create the
 - Rotate Runner credentials or MCP client URLs when access changes.
 - Revoking a Runner blocks reconnection but does not kill processes already running on the host.
 - Deleting a Runner permanently removes its policies, workspaces, jobs, and client selections.
+- To remove the local host installation, run `sudo /opt/runmesh/current/bin/runmesh uninstall --purge --yes` (Windows: `C:\Program Files\Runmesh\current\runmesh.cmd uninstall --purge --yes`). Delete the control-plane Runner record separately when its history is no longer needed.
 - Emergency lock blocks new protected operations; inspect host processes separately.
 - Changing the administrator password invalidates existing admin sessions.
 
