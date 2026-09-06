@@ -258,10 +258,10 @@ const POSIX_TEMPLATE = String.raw`#!/usr/bin/env sh
 set -eu
 umask 077
 if [ -t 2 ] && [ -z "\${NO_COLOR:-}" ]; then C_RESET='\033[0m'; C_CYAN='\033[36m'; C_GREEN='\033[32m'; C_RED='\033[31m'; else C_RESET=''; C_CYAN=''; C_GREEN=''; C_RED=''; fi
-step() { printf '%b→%b %s\n' "\$C_CYAN" "\$C_RESET" "\$1" >&2; }
-ok() { printf '%b✓%b %s\n' "\$C_GREEN" "\$C_RESET" "\$1" >&2; }
-fail() { printf '%b✗%b %s\n' "\$C_RED" "\$C_RESET" "\$1" >&2; }
-printf '\n%bRunmesh%b  Runner installer\n\n' "\$C_CYAN" "\$C_RESET" >&2
+step() { printf '%b→%b %s\n' "$C_CYAN" "$C_RESET" "$1" >&2; }
+ok() { printf '%b✓%b %s\n' "$C_GREEN" "$C_RESET" "$1" >&2; }
+fail() { printf '%b✗%b %s\n' "$C_RED" "$C_RESET" "$1" >&2; }
+printf '\n%bRunmesh%b  Runner installer\n\n' "$C_CYAN" "$C_RESET" >&2
 # Do not let inherited runtime/package-manager configuration alter a privileged
 # install. The operator's PATH is still required to point at trusted binaries.
 unset NODE_OPTIONS NODE_PATH CURL_HOME CURLRC NPM_CONFIG_USERCONFIG NPM_CONFIG_GLOBALCONFIG npm_config_userconfig npm_config_globalconfig 2>/dev/null || true
@@ -329,7 +329,7 @@ refresh_existing() {
   if ! mkdir "$REFRESH_LOCK" 2>/dev/null; then printf '%s\n' 'error: another Runmesh enrollment refresh is already running' >&2; exit 1; fi
   REFRESH_INPUT="$INSTALL_ROOT/.refresh-code.$$"
   trap 'rm -f "$REFRESH_INPUT" 2>/dev/null || true; rmdir "$REFRESH_LOCK" 2>/dev/null || true' EXIT HUP INT TERM
-  printf '%s\n' 'Existing managed Runmesh installation found; refreshing credentials in place.' >&2
+  step 'Refreshing credentials for the existing Runmesh Runner.'
   if [ -n "$ENROLLMENT_CODE_ARG" ]; then ENROLLMENT_CODE="$ENROLLMENT_CODE_ARG"; unset ENROLLMENT_CODE_ARG
   else
     printf '%s' 'Paste the one-time enrollment code (input is hidden): ' >/dev/tty
@@ -345,7 +345,7 @@ refresh_existing() {
   unset ENROLLMENT_CODE
   "$EXISTING_RUNNER" enroll --profile "$PROFILE" --server "$ENROLLMENT_URL" --code-stdin --re-enroll < "$REFRESH_INPUT"
   rm -f "$REFRESH_INPUT"; REFRESH_INPUT=''
-  "$EXISTING_RUNNER" install --profile "$PROFILE" --executable-path "$EXISTING_RUNNER"
+  "$EXISTING_RUNNER" install --profile "$PROFILE" --execution-mode privileged_host --confirm-privileged-host --executable-path "$EXISTING_RUNNER"
   "$EXISTING_RUNNER" restart --profile "$PROFILE"
   printf '%s\n' 'Runmesh Runner credentials refreshed and service restarted in place.'
   trap - EXIT HUP INT TERM
