@@ -408,21 +408,26 @@ export class RegistryDO {
       `);
       }
       this.loadFeatureHealth();
-      await this.scheduleMaintenanceAlarm(Date.now());
     });
   }
 
   public async alarm(): Promise<void> {
     const nowMs = Date.now();
-    this.ctx.storage.sql.exec(
-      `UPDATE runners SET state = 'stale', updated_at_ms = ?
-       WHERE state = 'online' AND (last_heartbeat_ms IS NULL OR last_heartbeat_ms < ?)`, nowMs, nowMs - 45_000,
-    );
-    this.ctx.storage.sql.exec("DELETE FROM feature_health WHERE disabled_until_ms <= ?", nowMs);
-    this.ctx.storage.sql.exec("DELETE FROM admin_sessions WHERE expires_at_ms <= ?", nowMs);
-    this.ctx.storage.sql.exec("DELETE FROM internal_request_nonces WHERE expires_at_ms <= ?", nowMs);
+    // Reads are cheap compared with a Durable Object storage write. Avoid
+    // issuing no-op UPDATE/DELETE statements on every maintenance alarm when
+    // there is nothing to transition or expire.
+    if (this.ctx.storage.sql.exec("SELECT 1 FROM runners WHERE state = 'online' AND (last_heartbeat_ms IS NULL OR last_heartbeat_ms < ?) LIMIT 1", nowMs - 45_000).toArray().length > 0) {
+      this.ctx.storage.sql.exec(
+        `UPDATE runners SET state = 'stale', updated_at_ms = ?
+         WHERE state = 'online' AND (last_heartbeat_ms IS NULL OR last_heartbeat_ms < ?)`, nowMs, nowMs - 45_000,
+      );
+    }
+    if (this.ctx.storage.sql.exec("SELECT 1 FROM feature_health WHERE disabled_until_ms <= ? LIMIT 1", nowMs).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM feature_health WHERE disabled_until_ms <= ?", nowMs);
+    if (this.ctx.storage.sql.exec("SELECT 1 FROM admin_sessions WHERE expires_at_ms <= ? LIMIT 1", nowMs).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM admin_sessions WHERE expires_at_ms <= ?", nowMs);
+    if (this.ctx.storage.sql.exec("SELECT 1 FROM internal_request_nonces WHERE expires_at_ms <= ? LIMIT 1", nowMs).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM internal_request_nonces WHERE expires_at_ms <= ?", nowMs);
     // Keep recent expired/used metadata visible in the console; never retain raw codes.
-    this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE expires_at_ms <= ?", nowMs - 30 * 24 * 60 * 60 * 1_000);
+    const enrollmentRetentionCutoff = nowMs - 30 * 24 * 60 * 60 * 1_000;
+    if (this.ctx.storage.sql.exec("SELECT 1 FROM runner_enrollments WHERE expires_at_ms <= ? LIMIT 1", enrollmentRetentionCutoff).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE expires_at_ms <= ?", enrollmentRetentionCutoff);
     await this.scheduleMaintenanceAlarm(nowMs);
   }
 
@@ -432,7 +437,14 @@ export class RegistryDO {
       const nextStale = this.ctx.storage.sql.exec<{ next_ms: number | null }>(
         "SELECT MIN(COALESCE(last_heartbeat_ms, 0) + 45000) AS next_ms FROM runners WHERE state = 'online'",
       ).toArray()[0]?.next_ms;
-      if (!safeNonnegativeInteger(nextStale)) return;
+      // A prior alarm can outlive the last online runner (for example when a
+      // socket disconnects before its heartbeat deadline). Explicitly clear it
+      // so an otherwise idle RegistryDO is not woken for a no-op maintenance
+      // pass later.
+      if (!safeNonnegativeInteger(nextStale)) {
+        await this.ctx.storage.deleteAlarm();
+        return;
+      }
       await this.ctx.storage.setAlarm(Math.max(nowMs + 1_000, nextStale));
       this.clearFeatureHealth("maintenance_alarm");
     } catch (error) {
@@ -442,15 +454,10 @@ export class RegistryDO {
 
   private loadFeatureHealth(): void {
     const nowMs = Date.now();
-    let nextAlarmMs: number | undefined;
     for (const row of this.ctx.storage.sql.exec<FeatureHealthRow>("SELECT feature, disabled_until_ms, failure_count, last_failure_at_ms, last_error FROM feature_health").toArray()) {
       if (row.disabled_until_ms === null) continue;
       if (row.disabled_until_ms <= nowMs) continue;
       this.featureHealth.set(row.feature, row);
-      if (row.feature === "maintenance_alarm") nextAlarmMs = nextAlarmMs === undefined ? row.disabled_until_ms : Math.min(nextAlarmMs, row.disabled_until_ms);
-    }
-    if (nextAlarmMs !== undefined) {
-      void this.ctx.storage.setAlarm(Math.max(nowMs + 1_000, nextAlarmMs)).catch(() => undefined);
     }
   }
 
@@ -1346,9 +1353,21 @@ export class RegistryDO {
     return row?.connection_epoch === epoch && row.credential_version === credentialVersion && (!requireOnline || row.state === "online") && matchesTransportIdentity(row, lifecycleId, sessionId);
   }
   public recordHeartbeat(runnerId: string, epoch: number, credentialVersion: number, nowMs: number, lifecycleId: string, sessionId: string): boolean {
-    if (!validTransportIdentity(lifecycleId, sessionId)) return false;
-    this.ctx.storage.sql.exec("UPDATE runners SET state = 'online', last_heartbeat_ms = ?, updated_at_ms = ? WHERE runner_id = ? AND connection_epoch = ? AND credential_version = ? AND lifecycle_id = ? AND session_id = ?", nowMs, nowMs, runnerId, epoch, credentialVersion, lifecycleId, sessionId);
-    return this.sessionIsCurrent(runnerId, epoch, credentialVersion, true, lifecycleId, sessionId);
+    if (!validTransportIdentity(lifecycleId, sessionId) || !safeNonnegativeInteger(epoch) || !safeNonnegativeInteger(credentialVersion) || !safeNonnegativeInteger(nowMs)) return false;
+    // Heartbeats may be retried or replayed inside the signature skew window.
+    // Keep the write monotonic so an older replay cannot move the liveness
+    // timestamp backwards. The normal path is one conditional write; only a
+    // duplicate/clock-rollback frame needs a read to distinguish an unchanged
+    // current session from a stale transport identity.
+    try {
+      const updated = this.ctx.storage.sql.exec("UPDATE runners SET state = 'online', last_heartbeat_ms = ?, updated_at_ms = ? WHERE runner_id = ? AND connection_epoch = ? AND credential_version = ? AND lifecycle_id = ? AND session_id = ? AND (last_heartbeat_ms IS NULL OR last_heartbeat_ms < ?)", nowMs, nowMs, runnerId, epoch, credentialVersion, lifecycleId, sessionId, nowMs);
+      if (updated.rowsWritten === 1) return true;
+      const current = this.ctx.storage.sql.exec<Pick<RunnerRow, "connection_epoch" | "credential_version" | "state" | "lifecycle_id" | "session_id" | "last_heartbeat_ms">>("SELECT connection_epoch, credential_version, state, lifecycle_id, session_id, last_heartbeat_ms FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
+      return current?.connection_epoch === epoch && current.credential_version === credentialVersion && current.state === "online"
+        && current.lifecycle_id === lifecycleId && current.session_id === sessionId && current.last_heartbeat_ms !== null && current.last_heartbeat_ms >= nowMs;
+    } catch {
+      return false;
+    }
   }
   public markDisconnected(runnerId: string, epoch: number, credentialVersion: number, state: Exclude<RunnerConnectionState, "online">, nowMs: number, lifecycleId: string, sessionId: string): void {
     if (!validTransportIdentity(lifecycleId, sessionId)) return;
@@ -1467,9 +1486,16 @@ export class RegistryDO {
     return this.ctx.storage.sql.exec<Omit<EnrollmentRow, "verifier">>("SELECT enrollment_id, runner_id, created_at_ms, not_before_ms, expires_at_ms, used_at_ms FROM runner_enrollments WHERE runner_id = ? ORDER BY created_at_ms DESC LIMIT 1", runnerId).toArray()[0];
   }
   public getRunner(runnerId: string): RunnerRecord | undefined {
-    const staleBefore = Date.now() - 45_000;
-    this.ctx.storage.sql.exec(`UPDATE runners SET state = 'stale', updated_at_ms = ? WHERE runner_id = ? AND state = 'online' AND last_heartbeat_ms < ?`, Date.now(), runnerId, staleBefore);
-    const row = this.ctx.storage.sql.exec<RunnerRow>("SELECT * FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
+    const nowMs = Date.now();
+    const staleBefore = nowMs - 45_000;
+    let row = this.ctx.storage.sql.exec<RunnerRow>("SELECT * FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
+    // Read first so healthy control-plane lookups do not execute a write
+    // statement that matches zero rows on every request. Only persist the
+    // transition when the snapshot is actually stale.
+    if (row?.state === "online" && row.last_heartbeat_ms !== null && row.last_heartbeat_ms < staleBefore) {
+      this.ctx.storage.sql.exec("UPDATE runners SET state = 'stale', updated_at_ms = ? WHERE runner_id = ? AND state = 'online' AND last_heartbeat_ms < ?", nowMs, runnerId, staleBefore);
+      row = this.ctx.storage.sql.exec<RunnerRow>("SELECT * FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
+    }
     return row === undefined ? undefined : decodeRunner(row);
   }
   /** Return the ordinary Runner projection and its internal lifecycle identity
@@ -1477,9 +1503,13 @@ export class RegistryDO {
    * for their execution-mode CAS; the lifecycle value is never included in
    * the normal Runner/MCP projections. */
   public getRunnerExecutionState(runnerId: string): { readonly runner: RunnerRecord; readonly lifecycle_id: string; readonly session_id: string | null } | undefined {
-    const staleBefore = Date.now() - 45_000;
-    this.ctx.storage.sql.exec(`UPDATE runners SET state = 'stale', updated_at_ms = ? WHERE runner_id = ? AND state = 'online' AND last_heartbeat_ms < ?`, Date.now(), runnerId, staleBefore);
-    const row = this.ctx.storage.sql.exec<RunnerRow>("SELECT * FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
+    const nowMs = Date.now();
+    const staleBefore = nowMs - 45_000;
+    let row = this.ctx.storage.sql.exec<RunnerRow>("SELECT * FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
+    if (row?.state === "online" && row.last_heartbeat_ms !== null && row.last_heartbeat_ms < staleBefore) {
+      this.ctx.storage.sql.exec("UPDATE runners SET state = 'stale', updated_at_ms = ? WHERE runner_id = ? AND state = 'online' AND last_heartbeat_ms < ?", nowMs, runnerId, staleBefore);
+      row = this.ctx.storage.sql.exec<RunnerRow>("SELECT * FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
+    }
     return row === undefined || !validLifecycleId(row.lifecycle_id) ? undefined : { runner: decodeRunner(row), lifecycle_id: row.lifecycle_id, session_id: row.session_id };
   }
   public listJobs(runnerId: string, filters: { readonly workspace_id?: string; readonly status?: string; readonly limit?: number } = {}): unknown[] {
@@ -1613,17 +1643,24 @@ export class RegistryDO {
   public async fetch(request: Request): Promise<Response> {
     const rawBody = await readCappedBody(request);
     if (rawBody === undefined) return new Response("payload too large", { status: 413 });
+    const url = new URL(request.url);
+    const segments = url.pathname.split("/").filter(Boolean);
     // Read-only internal calls are authenticated by the short-lived HMAC
     // timestamp and do not mutate state. Persisting a nonce row for every
     // dashboard read exhausts the Durable Objects free-tier write budget.
-    // Keep durable one-time nonce consumption for mutating requests, where a
-    // replay could change control-plane state.
-    const consumeNonce = request.method === "GET"
+    // Heartbeats and session probes are replay-safe as well: they are fenced by
+    // the current transport identity, and heartbeats only accept monotonic
+    // timestamps. They arrive for every transport frame, so writing a nonce row
+    // for each one would consume the Durable Objects write budget while adding
+    // no protection.
+    const replaySafeHeartbeat = request.method === "POST"
+      && segments.length === 3 && segments[0] === "runners" && segments[2] === "heartbeat";
+    const replaySafeSession = request.method === "POST"
+      && segments.length === 3 && segments[0] === "runners" && segments[2] === "session";
+    const consumeNonce = request.method === "GET" || replaySafeHeartbeat || replaySafeSession
       ? () => true
       : (nonce: string, expiresAtMs: number) => this.consumeInternalNonce(nonce, expiresAtMs);
     if (!await verifyInternalRequest(request, this.env.INTERNAL_CONTROL_SECRET, rawBody, consumeNonce)) return new Response("not found", { status: 404 });
-    const url = new URL(request.url);
-    const segments = url.pathname.split("/").filter(Boolean);
     const input = rawBody.length === 0 ? {} : parseJsonObject(rawBody);
     if (input === undefined) return Response.json({ error: "invalid JSON object" }, { status: 400 });
     const now = Date.now();
@@ -1694,7 +1731,11 @@ export class RegistryDO {
     if (request.method === "POST" && action === "disconnect") {
       const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const nowMs = integerField(input, "now_ms"); const identity = parseTransportIdentity(input);
       if (epoch === undefined || credentialVersion === undefined || nowMs === undefined || (input.state !== "offline" && input.state !== "stale") || !identity.valid) return Response.json({ error: "invalid disconnect" }, { status: 400 });
-      this.markDisconnected(runnerId, epoch, credentialVersion, input.state, nowMs, identity.lifecycleId, identity.sessionId); return new Response(null, { status: 204 });
+      this.markDisconnected(runnerId, epoch, credentialVersion, input.state, nowMs, identity.lifecycleId, identity.sessionId);
+      // Drop a stale maintenance alarm as soon as the last online runner
+      // disconnects instead of waiting for the old deadline to wake this DO.
+      await this.scheduleMaintenanceAlarm(nowMs);
+      return new Response(null, { status: 204 });
     }
     if (request.method === "POST" && action === "sync") {
       const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const nowMs = integerField(input, "now_ms"); const message = RunnerSyncSchema.safeParse(input.message); const identity = parseTransportIdentity(input);
