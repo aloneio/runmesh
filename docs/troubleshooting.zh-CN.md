@@ -7,6 +7,7 @@
 - 检查 Worker 域名和 HTTPS 是否正确；
 - 确认 Cloudflare 部署成功，且 `RUNMESH_PUBLIC_ORIGIN` 与访问域名一致；
 - 如果页面显示“未初始化”，使用部署时配置的 setup token 完成首次设置；
+- 如果 Registry 报告数据结构不兼容，请创建全新的 Durable Object 命名空间；本版本不会修复或导入旧表；
 - 如果登录失败多次，请等待节流时间结束后再试；
 - 清除旧站点 Cookie 后重新登录。修改管理员密码会使旧会话失效。
 
@@ -18,6 +19,8 @@
 4. 检查系统时间是否准确；
 5. 使用 Runner 本机的 `runmesh doctor --json` 查看配置、服务和运行环境；
 6. 如果刚刚轮换或撤销过凭据，重新注册并不要复用旧注册码。
+
+如果 `doctor --json` 报告 profile 不完整或不兼容，请通过当前注册流程重新生成 profile；Runner 不会转换其他版本的配置。
 
 Runmesh 不需要公网入站端口。不要为了“修复”连接而开放 SSH 或把 Runner 暴露到公网。
 

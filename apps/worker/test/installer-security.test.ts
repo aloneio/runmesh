@@ -115,7 +115,7 @@ describe("hosted installer origin and template safety", () => {
     expect(runnerConfiguredExecutionMode({
       metadata: { execution_mode: "dedicated_user" },
       public_info: { execution_mode: "dedicated_user" },
-    })).toBe("migration_required");
+    })).toBeNull();
     expect(runnerConfiguredExecutionMode({
       configured_execution_mode: "dedicated_user",
       metadata: { execution_mode: "privileged_host" },

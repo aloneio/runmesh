@@ -275,7 +275,7 @@ const CorrelatedEnvelopeSchema = EnvelopeSchema.extend({
 }).strict();
 
 export const ProtectedRpcMethodSchema = z.enum([
-  "env.info", "workspace.list", "fs.stat", "fs.read", "fs.list", "fs.search", "fs.apply_patch", "fs.patch",
+  "env.info", "workspace.list", "fs.stat", "fs.read", "fs.list", "fs.search", "fs.apply_patch",
   "git.status", "git.diff", "exec.start", "exec.run", "job.list", "job.get", "job.logs", "job.cancel", "job.input",
 ]);
 export type ProtectedRpcMethod = z.infer<typeof ProtectedRpcMethodSchema>;
