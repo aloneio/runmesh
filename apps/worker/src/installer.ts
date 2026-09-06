@@ -498,7 +498,7 @@ if ! mkdir "$STAGE"; then printf '%s\n' 'error: installer staging path is alread
 (
   cd "$TMP"
   step 'Installing the verified Runner package.'
-  "$NODE" "$NPM_CLI" --userconfig "$NPM_CONFIG_USERCONFIG" --globalconfig "$NPM_CONFIG_GLOBALCONFIG" install --global --ignore-scripts --offline --no-audit --no-fund --prefix "$STAGE" "$TMP/$ARTIFACT" >/dev/null
+  NPM_CONFIG_UPDATE_NOTIFIER=false "$NODE" "$NPM_CLI" --userconfig "$NPM_CONFIG_USERCONFIG" --globalconfig "$NPM_CONFIG_GLOBALCONFIG" install --global --ignore-scripts --offline --no-audit --no-fund --prefix "$STAGE" "$TMP/$ARTIFACT" >/dev/null 2>&1
 )
 PACKAGE_ROOT="$STAGE/lib/node_modules/@aloneio/runmesh-runner"
 BUNDLE_FILENAME='coding-runner.cjs'
