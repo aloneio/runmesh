@@ -130,6 +130,23 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
       expect(instance.setRunnerVersionPolicy("versioned-runner", { update_channel: "stable", latest_runner_version: "latest" }, now + 4)).toBeUndefined();
     });
   });
+  it("enforces Runner and enrollment validity windows at their boundaries", async () => {
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName(`validity-${crypto.randomUUID()}`));
+    const now = Date.now(); const runnerId = "validity-runner"; const codeVerifier = "c".repeat(64);
+    await runInDurableObject(registry, (instance) => {
+      expect(instance.addRunner(runnerId, "Validity runner", now, undefined, "dedicated_user", false, { valid_from_ms: now + 1_000, valid_until_ms: now + 3_000 })).toBeDefined();
+      expect(instance.runnerAccess(runnerId, now)).toEqual({ allowed: false, status: "scheduled" });
+      expect(instance.runnerAccess(runnerId, now + 1_000)).toEqual({ allowed: true, status: "active" });
+      expect(instance.runnerAccess(runnerId, now + 3_000)).toEqual({ allowed: false, status: "expired" });
+      expect(instance.setRunnerValidity(runnerId, { valid_from_ms: null, valid_until_ms: now + 20_000 }, "bad-lifecycle")).toBe(false);
+      const lifecycle = instance.getRunnerExecutionState(runnerId)?.lifecycle_id;
+      expect(lifecycle).toBeDefined();
+      expect(instance.createRunnerEnrollment(runnerId, randomBase64Url(), codeVerifier, now, undefined, false, undefined, lifecycle, 5 * 60 * 1_000, { not_before_ms: now + 2_000, expires_at_ms: now + 4_000 })).toBeDefined();
+      expect(instance.lookupRunnerEnrollment(codeVerifier, now + 1_999)).toBeUndefined();
+      expect(instance.lookupRunnerEnrollment(codeVerifier, now + 2_000)).toEqual({ runner_id: runnerId });
+      expect(instance.lookupRunnerEnrollment(codeVerifier, now + 4_000)).toBeUndefined();
+    });
+  });
   it("persists only the administrator-selected execution mode and rejects unsafe mode mutations", async () => {
     const registry = env.REGISTRY.get(env.REGISTRY.idFromName(`runner-execution-mode-${crypto.randomUUID()}`)); const now = Date.now();
     await runInDurableObject(registry, async (instance) => {
@@ -601,7 +618,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     const loggedIn = await submit("https://worker.test/login", { csrf_token: loginCsrf, password }, jar([["__Host-runmesh_login_csrf", loginCookie]]));
     const csrf = cookieFrom(loggedIn, "__Host-runmesh_admin_csrf");
     const adminJar = jar([["__Host-runmesh_admin_session", cookieFrom(loggedIn, "__Host-runmesh_admin_session")], ["__Host-runmesh_admin_csrf", csrf]]);
-    const created = await submit("https://worker.test/admin/runners", { csrf_token: csrf, display_name: "Safe runner", runner_id: "dashboard-runner" }, adminJar);
+    const created = await submit("https://worker.test/admin/runners", { csrf_token: csrf, display_name: "Safe runner", runner_id: "dashboard-runner", runner_valid_days: "7", code_valid_days: "2" }, adminJar);
     expect(created.status).toBe(200);
     const enrollment = await created.text();
     expect(enrollment).toContain('class="app-header"');
@@ -614,6 +631,12 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(enrollment).toContain("--server &#039;https://worker.test/runner/enroll&#039; --code-stdin");
     expect(enrollment).toContain("data-copy"); expect(enrollment).toContain("expires in 30 minutes");
     expect(enrollment).toContain("One-time enrollment code");
+    expect(enrollment).toContain('name="code_valid_days"');
+    expect(enrollment).not.toContain('type="datetime-local"');
+    const createdRunner = await runInDurableObject(env.REGISTRY.get(env.REGISTRY.idFromName("registry")), (instance) => instance.getRunner("dashboard-runner"));
+    expect(createdRunner?.valid_until_ms).toBeGreaterThan(Date.now() + 6 * 24 * 60 * 60 * 1_000);
+    const createdEnrollment = await runInDurableObject(env.REGISTRY.get(env.REGISTRY.idFromName("registry")), (instance) => instance.latestRunnerEnrollment("dashboard-runner"));
+    expect(createdEnrollment?.expires_at_ms).toBeGreaterThan(Date.now() + 1 * 24 * 60 * 60 * 1_000);
     const enrollmentUiText = parseUiTextMap(enrollment);
     expect(enrollmentUiText["Enroll Runner"]).toBe("注册 Runner");
     expect(enrollmentUiText["Target Runner ID"]).toBe("目标 Runner ID");
