@@ -501,7 +501,10 @@ if ! mkdir "$STAGE"; then printf '%s\n' 'error: installer staging path is alread
   NPM_CONFIG_UPDATE_NOTIFIER=false "$NODE" "$NPM_CLI" --userconfig "$NPM_CONFIG_USERCONFIG" --globalconfig "$NPM_CONFIG_GLOBALCONFIG" install --global --ignore-scripts --offline --no-audit --no-fund --prefix "$STAGE" "$TMP/$ARTIFACT" >/dev/null 2>&1
 )
 PACKAGE_ROOT="$STAGE/lib/node_modules/@aloneio/runmesh-runner"
-BUNDLE_FILENAME='coding-runner.cjs'
+BUNDLE_FILENAME='runmesh.cjs'
+if [ ! -f "$PACKAGE_ROOT/dist/$BUNDLE_FILENAME" ] && [ -f "$PACKAGE_ROOT/dist/coding-runner.cjs" ]; then
+  BUNDLE_FILENAME='coding-runner.cjs'
+fi
 [ -f "$PACKAGE_ROOT/dist/$BUNDLE_FILENAME" ] || { fail 'The verified Runmesh package is missing its Runner bundle.'; exit 1; }
 mkdir -p "$STAGE/runtime"
 cp "$NODE" "$STAGE/runtime/node"
