@@ -274,9 +274,13 @@ const AUTH_THROTTLE_MAX_BLOCK_MS = 15 * 60_000;
 export class RegistryDO {
   public constructor(
     private readonly ctx: DurableObjectState,
-    private readonly env: { INTERNAL_CONTROL_SECRET?: string; RUNNER_TOKEN_PEPPER?: string },
+    private readonly env: { INTERNAL_CONTROL_SECRET?: string; RUNNER_TOKEN_PEPPER?: string; RUNMESH_SCHEMA_READY?: string },
   ) {
     this.ctx.blockConcurrencyWhile(async () => {
+      // Production objects already carry the complete schema. Avoid touching
+      // SQL or alarms during reconstruction so an exhausted free-tier write
+      // budget cannot take the control plane offline.
+      if (this.env.RUNMESH_SCHEMA_READY === "1") return;
       // Durable Objects may be evicted and reconstructed for every request.
       // Replaying CREATE TABLE/INDEX IF NOT EXISTS on every reconstruction is
       // still counted as a SQL write on the free tier, so fast-path fully
