@@ -8,14 +8,10 @@ import type { ExecutionMode } from "./service.js";
 import type { WorkspaceOption } from "./config.js";
 import type { HostPlatform } from "./platform-types.js";
 
-export type ProfileExecutionMode = ExecutionMode | "migration_required";
-/**
- * `central` profiles receive Workspace authority from the authenticated
- * control plane. `legacy_manual` retains only the deliberately opted-in
- * local CLI compatibility path. Profiles written before this field existed
- * are never guessed into either mode.
- */
-export type ProfileManagementMode = "central" | "legacy_manual" | "migration_required";
+/** The only supported persisted profile execution contract. */
+export type ProfileExecutionMode = ExecutionMode;
+/** Workspace authority always comes from the authenticated control plane. */
+export type ProfileManagementMode = "central";
 
 export interface StoredWorkspace {
   readonly id: string;
@@ -32,12 +28,9 @@ export interface RunnerProfile {
   readonly max_concurrent_jobs?: number;
   /** Development-only persisted allowance for loopback ws:// profiles. */
   readonly insecure_local?: boolean;
-  /**
-   * Explicit Workspace authority model. Omitted legacy profiles are reported
-   * as migration_required and cannot mutate local Workspace configuration.
-   */
-  readonly management_mode?: Exclude<ProfileManagementMode, "migration_required">;
-  /** Machine service identity. Omitted pre-release profiles require explicit migration before service installation. */
+  /** Explicit Workspace authority model. Required when persisted. */
+  readonly management_mode?: ProfileManagementMode;
+  /** Machine service identity. Required when persisted. */
   readonly execution_mode?: ProfileExecutionMode;
 }
 export interface ProfileStoreOptions {
@@ -65,8 +58,8 @@ export interface ProfilePermissions {
 /**
  * Save-time security overrides used only by transaction rollback.  A normal
  * save preserves the access shape required by a dedicated service (root:
- * runmesh/0640); rollback of a legacy, unmanaged profile must instead return
- * to an owner-only root:root profile before any service can consume it.
+ * runmesh/0640); a security rollback can instead return to an owner-only
+ * root:root profile before any service can consume it.
  */
 export interface ProfileSaveOptions {
   readonly privateOwnerOnly?: boolean;
@@ -108,7 +101,6 @@ export function profilePath(options: ProfileStoreOptions = {}): string {
   // A per-process explicit profile path keeps service and integration launches
   // isolated without making profiles relative to the current workspace.
   if (options.baseDir === undefined && process.env.RUNMESH_RUNNER_PROFILE !== undefined) return process.env.RUNMESH_RUNNER_PROFILE;
-  if (options.baseDir === undefined && process.env.RUNMESH_PROFILE !== undefined) return process.env.RUNMESH_PROFILE;
   const path = (options.platform ?? process.platform) === "win32" ? win32 : posix;
   return path.join(profileDirectory(options), "profile.json");
 }
@@ -457,20 +449,23 @@ export function validateProfile(value: unknown): RunnerProfile | undefined {
     seen.add(workspace.id as string);
     workspaces.push({ id: workspace.id as string, path: workspace.path as string, writable: workspace.writable, shell: workspace.shell });
   }
-  const executionMode: ProfileExecutionMode | undefined = item.execution_mode === undefined ? "migration_required" : validExecutionMode(item.execution_mode) ? item.execution_mode : undefined;
-  if (executionMode === undefined) return undefined;
-  const managementMode: ProfileManagementMode | undefined = item.management_mode === undefined ? "migration_required" : validManagementMode(item.management_mode) ? item.management_mode : undefined;
-  if (managementMode === undefined) return undefined;
-  const resultBase = { version: 1 as const, server_url: item.server_url as string, runner_id: item.runner_id as string, token: item.token as string, workspaces, ...(managementMode === "migration_required" ? {} : { management_mode: managementMode }) };
-  if (executionMode === "migration_required") {
-    const result: RunnerProfile = { ...resultBase, ...(item.insecure_local === true ? { insecure_local: true } : {}) };
-    return withMaxConcurrentJobs(result, item.max_concurrent_jobs);
-  }
-  const result: RunnerProfile = { ...resultBase, ...(item.insecure_local === true ? { insecure_local: true } : {}), execution_mode: executionMode };
+  // A persisted profile must use the complete current contract.  Missing
+  // authority fields are invalid data, not a migration state, and no legacy
+  // management mode is recognized.
+  if (!validExecutionMode(item.execution_mode) || item.management_mode !== "central" || workspaces.length !== 0) return undefined;
+  const result: RunnerProfile = {
+    version: 1 as const,
+    server_url: item.server_url as string,
+    runner_id: item.runner_id as string,
+    token: item.token as string,
+    workspaces,
+    management_mode: "central",
+    execution_mode: item.execution_mode,
+    ...(item.insecure_local === true ? { insecure_local: true } : {}),
+  };
   return withMaxConcurrentJobs(result, item.max_concurrent_jobs);
 }
 function validExecutionMode(value: unknown): value is ExecutionMode { return value === "dedicated_user" || value === "privileged_host"; }
-function validManagementMode(value: unknown): value is Exclude<ProfileManagementMode, "migration_required"> { return value === "central" || value === "legacy_manual"; }
 function withMaxConcurrentJobs(profile: RunnerProfile, value: unknown): RunnerProfile | undefined {
   if (value === undefined) return profile;
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > 64) return undefined;
@@ -550,12 +545,10 @@ async function resolveServiceGroupId(name: string, override: number | undefined)
 }
 
 export function profileExecutionMode(profile: RunnerProfile | undefined): ProfileExecutionMode | undefined {
-  if (profile === undefined) return undefined;
-  return profile.execution_mode ?? "migration_required";
+  return profile?.execution_mode;
 }
 export function profileManagementMode(profile: RunnerProfile | undefined): ProfileManagementMode | undefined {
-  if (profile === undefined) return undefined;
-  return profile.management_mode ?? "migration_required";
+  return profile?.management_mode;
 }
 export function workspaceOptions(profile: RunnerProfile): Array<WorkspaceOption & { readonly: boolean; shell: boolean }> {
   return profile.workspaces.map((workspace) => ({ workspaceId: workspace.id, rootPath: workspace.path, readonly: !workspace.writable, shell: workspace.shell }));
@@ -564,12 +557,4 @@ export function redactedProfile(profile: RunnerProfile | undefined): Record<stri
   if (profile === undefined) return undefined;
   return { ...profile, token: "[redacted]", workspaces: profile.workspaces.map((workspace) => ({ ...workspace })) };
 }
-export function defaultWorkspaceId(path: string, existing: readonly StoredWorkspace[] = []): string {
-  const base = path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "workspace";
-  const clean = base.replace(/[^A-Za-z0-9._:-]/g, "-").replace(/^[^A-Za-z0-9]+/, "").slice(0, 120) || "workspace";
-  if (!existing.some((item) => item.id === clean)) return clean;
-  for (let index = 2; index < 10_000; index += 1) { const candidate = `${clean}-${index}`; if (!existing.some((item) => item.id === candidate)) return candidate; }
-  throw new Error("could not allocate workspace id");
-}
-
 // No profile is ever created relative to a workspace.

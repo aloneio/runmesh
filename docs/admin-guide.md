@@ -8,6 +8,8 @@ Have a Cloudflare account, a public HTTPS Worker origin, a strong administrator 
 
 Runmesh does not choose operating-system permissions or workspace ownership for you.
 
+This release is a clean break from earlier Runner and Registry layouts. It does not import old tables, profiles, service manifests, or credentials. Use a fresh Durable Object namespace and enroll each current Runner again; retain any earlier deployment only as a separately backed-up archive.
+
 ## Deploy the control plane
 
 Connect the repository to Cloudflare Workers Builds. Use `dev` as the production branch and:

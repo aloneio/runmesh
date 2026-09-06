@@ -2,7 +2,7 @@
   "name": "@aloneio/runmesh-monorepo",
   "version": "0.1.0-dev.2",
   "private": true,
-  "description": "A language-neutral protocol foundation for remote coding runtimes.",
+  "description": "A language-neutral protocol foundation for remotely managed agent runtimes.",
   "repository": {
     "type": "git",
     "url": "https://github.com/aloneio/runmesh.git"
@@ -29,6 +29,7 @@
     "check:versions": "node ./scripts/check-versions.mjs",
     "generate:version": "node ./scripts/generate-version-modules.mjs",
     "check:format": "node ./scripts/check-format.mjs",
+    "check:architecture": "node ./scripts/check-architecture.mjs",
     "test:release-tools": "node --test ./test/release-tools.test.mjs"
   },
   "devDependencies": {

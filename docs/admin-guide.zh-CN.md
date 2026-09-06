@@ -13,6 +13,8 @@
 
 Runmesh 不会替你创建操作系统账号，也不会自动决定工作区权限。请先规划最小权限。
 
+本版本与之前的 Runner、Registry 数据布局是 clean break，不会导入旧表、旧配置、旧服务清单或旧凭据。请为 Durable Object 使用全新命名空间，并为每台机器重新注册当前 Runner；旧部署只能作为单独备份保留。
+
 ## 部署控制平面
 
 在 Cloudflare Workers Builds 中连接 GitHub 或 GitLab 仓库，生产分支使用 `dev`，部署命令为：

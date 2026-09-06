@@ -1,8 +1,7 @@
-import { createMcpHandler } from "agents/mcp/server";
 import { PROTOCOL_CURRENT_VERSION, PROTOCOL_MIN_VERSION } from "@aloneio/runmesh-protocol";
-import { createCodingMcpServer, type McpAuth } from "./mcp/server.js";
-import { RegistryDO, DEFAULT_RUNNER_ENROLLMENT_TTL_MS, RUNNER_ENROLLMENT_TTL_OPTIONS_MS, type McpClientRecord, type RunnerExecutionMode, type RunnerPublicInfo, type RunnerRecord, type VerifiedMcpClient } from "./registry.js";
+import { RegistryDO, DEFAULT_RUNNER_ENROLLMENT_TTL_MS, RUNNER_ENROLLMENT_TTL_OPTIONS_MS, type McpClientRecord, type RegistryFeatureHealth, type RunnerExecutionMode, type RunnerPublicInfo, type RunnerRecord, type VerifiedMcpClient } from "./registry.js";
 import { RunnerDO, type WorkerEnv } from "./runner-do.js";
+import type { McpAuth } from "./mcp/server.js";
 import type { CodingScope } from "./registry.js";
 import {
   ADMIN_SESSION_TTL_MS,
@@ -208,13 +207,13 @@ async function handleRunnerEnrollment(request: Request, env: WorkerEnv): Promise
     // durable mutation ledger; otherwise keep the Runner fenced and report
     // uncertainty rather than issuing an unverifiable credential.
     const state = await runnerMutationState(env, runnerId, mutationId).catch(() => undefined);
-    if (state?.mutation_committed === true) { try { await revokeRunnerTransport(env, runnerId, mutationId); } catch { /* fail closed */ } }
+    if (state?.mutation_committed === true) { try { await revokeRunnerTransport(env, runnerId, mutationId, true); } catch { /* fail closed */ } }
     return enrollmentUnavailable();
   }
   if (!response.ok) {
     const state = await runnerMutationState(env, runnerId, mutationId).catch(() => undefined);
     if (state?.mutation_committed === true) {
-      try { await revokeRunnerTransport(env, runnerId, mutationId); } catch { /* Registry credential is authoritative */ }
+      try { await revokeRunnerTransport(env, runnerId, mutationId, true); } catch { /* Registry credential is authoritative */ }
       return enrollmentUnavailable();
     }
     try {
@@ -233,7 +232,7 @@ async function handleRunnerEnrollment(request: Request, env: WorkerEnv): Promise
   // before revoke succeeds would hand out a credential while transport
   // admission is not known to be clean.  The mutation remains durably fenced
   // so a later retry/reconciliation can finish the cleanup.
-  try { await revokeRunnerTransport(env, runnerId, mutationId); }
+  try { await revokeRunnerTransport(env, runnerId, mutationId, true); }
   catch { return enrollmentUnavailable(); }
   const connectUrl = new URL("/runner/connect", publicOrigin).toString();
   return Response.json({ runner_id: runnerId, server_url: connectUrl, token }, { headers: credentialHeaders("application/json; charset=utf-8") });
@@ -281,19 +280,25 @@ async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL): Prom
   const rewritten = new URL(request.url);
   rewritten.pathname = "/mcp";
   rewritten.search = "";
-  const auth = {
+  let forwarded: Request;
+  if (request.method === "POST") {
+    const body = await readCappedBytes(request, MAX_MCP_BODY_BYTES);
+    if (body === undefined) return new Response("request body too large", { status: 413, headers: publicInstallerHeaders("text/plain; charset=utf-8") });
+    forwarded = new Request(rewritten, { method: request.method, headers: request.headers, body: body.buffer as ArrayBuffer });
+  } else {
+    forwarded = new Request(rewritten, request);
+  }
+  const auth: McpAuth = {
     // AuthInfo needs an opaque token but no component needs the raw URL secret.
     token: verified.client_id,
     clientId: verified.client_id,
     scopes: [...verified.scopes],
-    // The MCP SDK's AuthInfo contract includes these fields even for
-    // stateless URL-secret authentication.  Runmesh credentials do not carry
-    // an independent expiry or OAuth resource indicator, so make that
-    // absence explicit instead of relying on an outdated structural type.
-    expiresAt: undefined,
-    resource: undefined,
     extra: { client_label: verified.label, secret_version: verified.secret_version },
-  } as unknown as McpAuth;
+  };
+  const [{ createMcpHandler }, { createCodingMcpServer }] = await Promise.all([
+    import("agents/mcp/server"),
+    import("./mcp/server.js"),
+  ]);
   const handler = createMcpHandler(
     () => createCodingMcpServer(env, auth),
     {
@@ -303,14 +308,6 @@ async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL): Prom
       legacy: "stateless",
     },
   );
-  let forwarded: Request;
-  if (request.method === "POST") {
-    const body = await readCappedBytes(request, MAX_MCP_BODY_BYTES);
-    if (body === undefined) return new Response("request body too large", { status: 413, headers: publicInstallerHeaders("text/plain; charset=utf-8") });
-    forwarded = new Request(rewritten, { method: request.method, headers: request.headers, body: body.buffer as ArrayBuffer });
-  } else {
-    forwarded = new Request(rewritten, request);
-  }
   const response = await handler.fetch(forwarded, { authInfo: auth });
   // The MCP credential is carried in the request path.  Do not allow an SDK
   // response (or an intermediary) to cache that path or disclose it through
@@ -434,35 +431,50 @@ async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: URL): P
   if (request.method === "GET" && clientDetail !== null) {
     const csrf = cookieValue(request, ADMIN_CSRF_COOKIE);
     if (csrf === undefined || !constantTimeEqual(await sha256Hex(csrf), session.csrf_hash)) return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
-    const clientResponse = await registryGet(env, `/auth/clients`);
-    const clients = clientResponse.ok ? arrayField(record(await json(clientResponse))?.clients) : [];
+    const [clientResponse, runnersResponse, overridesResponse, notices] = await Promise.all([
+      registryGet(env, `/auth/clients`),
+      registryGet(env, "/runners"),
+      registryGet(env, `/auth/clients/${encodeURIComponent(clientDetail[1] as string)}/runner-overrides`),
+      loadFeatureNotices(env),
+    ]);
+    let clients: unknown[] = [];
+    try { clients = clientResponse.ok ? arrayField(record(await json(clientResponse))?.clients) : []; } catch { clients = []; }
     const client = clients.map(record).find((item) => item?.client_id === clientDetail[1]);
-    const runnersResponse = await registryGet(env, "/runners");
-    const runners = runnersResponse.ok ? arrayField(record(await json(runnersResponse))?.runners).filter(record) as RunnerRecord[] : [];
-    const overridesResponse = await registryGet(env, `/auth/clients/${encodeURIComponent(clientDetail[1] as string)}/runner-overrides`);
-    const overrides = overridesResponse.ok ? arrayField(record(await json(overridesResponse))?.overrides).filter(record) : [];
-    return client === undefined ? adminError(404, "MCP client was not found.") : html(adminDocument(`${typeof client.label === "string" ? client.label : clientDetail[1]} · MCP Client`, await clientDetailPage(env, client, runners, overrides as Record<string, unknown>[], csrf), "clients"));
+    let runners: RunnerRecord[] = [];
+    let overrides: Record<string, unknown>[] = [];
+    try { runners = runnersResponse.ok ? arrayField(record(await json(runnersResponse))?.runners).filter(record) as RunnerRecord[] : []; } catch { runners = []; }
+    try { overrides = overridesResponse.ok ? arrayField(record(await json(overridesResponse))?.overrides).flatMap((item) => { const value = record(item); return value === undefined ? [] : [value]; }) : []; } catch { overrides = []; }
+    return client === undefined ? adminError(404, "MCP client was not found.") : html(adminDocument(`${typeof client.label === "string" ? client.label : clientDetail[1]} · MCP Client`, await clientDetailPage(env, client, runners, overrides as Record<string, unknown>[], csrf), "clients", notices));
   }
 
   if (request.method === "GET" && runnerDetail !== null) {
     const csrf = cookieValue(request, ADMIN_CSRF_COOKIE);
     if (csrf === undefined || !constantTimeEqual(await sha256Hex(csrf), session.csrf_hash)) return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
     const runnerId = runnerDetail[1] as string;
-    const [runnerResponse, workspaceResponse, jobsResponse, policyVersionsResponse, enrollmentResponse, environment, releaseResponse] = await Promise.all([
+    const [runnerResponse, workspaceResponse, jobsResponse, mcpCallsResponse, policyVersionsResponse, enrollmentResponse, environment, releaseResponse, notices] = await Promise.all([
       registryGet(env, `/runners/${encodeURIComponent(runnerId)}`),
       registryGet(env, `/auth/runners/${encodeURIComponent(runnerId)}/managed-workspaces`),
       registryGet(env, `/runners/${encodeURIComponent(runnerId)}/jobs?status=running&limit=20`),
+      registryGet(env, `/runners/${encodeURIComponent(runnerId)}/mcp-calls?limit=20`),
       registryGet(env, `/runners/${encodeURIComponent(runnerId)}/policy-versions`),
       registryGet(env, `/auth/runners/${encodeURIComponent(runnerId)}/enrollments`),
       runnerEnvironment(env, runnerId),
       Promise.resolve(runnerReleaseDescriptor(env)),
+      loadFeatureNotices(env),
     ]);
-    const runner = runnerResponse.ok ? record(await json(runnerResponse)) : undefined;
-    const workspaces = workspaceResponse.ok ? arrayField(record(await json(workspaceResponse))?.workspaces) : [];
-    const jobs = jobsResponse.ok ? arrayField(record(await json(jobsResponse))?.jobs) : [];
-    const policyVersions = policyVersionsResponse.ok ? arrayField(record(await json(policyVersionsResponse))?.versions) : [];
-    const enrollment = enrollmentResponse.ok ? record(record(await json(enrollmentResponse))?.enrollment) : undefined;
-    return runner === undefined ? adminError(404, "Runner was not found.") : html(adminDocument(`${typeof runner.display_name === "string" ? runner.display_name : runnerId} · Runner`, runnerDetailPage(runner, workspaces, jobs, environment, csrf, releaseResponse, policyVersions, enrollment), "runners"));
+    let runner: Record<string, unknown> | undefined;
+    let workspaces: unknown[] = [];
+    let jobs: unknown[] = [];
+    let mcpCalls: unknown[] = [];
+    let policyVersions: unknown[] = [];
+    let enrollment: Record<string, unknown> | undefined;
+    try { runner = runnerResponse.ok ? record(await json(runnerResponse)) : undefined; } catch { runner = undefined; }
+    try { workspaces = workspaceResponse.ok ? arrayField(record(await json(workspaceResponse))?.workspaces) : []; } catch { workspaces = []; }
+    try { jobs = jobsResponse.ok ? arrayField(record(await json(jobsResponse))?.jobs) : []; } catch { jobs = []; }
+    try { mcpCalls = mcpCallsResponse.ok ? arrayField(record(await json(mcpCallsResponse))?.calls) : []; } catch { mcpCalls = []; }
+    try { policyVersions = policyVersionsResponse.ok ? arrayField(record(await json(policyVersionsResponse))?.versions) : []; } catch { policyVersions = []; }
+    try { enrollment = enrollmentResponse.ok ? record(record(await json(enrollmentResponse))?.enrollment) : undefined; } catch { enrollment = undefined; }
+    return runner === undefined ? adminError(404, "Runner was not found.") : html(adminDocument(`${typeof runner.display_name === "string" ? runner.display_name : runnerId} · Runner`, runnerDetailPage(runner, workspaces, jobs, environment, csrf, releaseResponse, policyVersions, enrollment, mcpCalls), "runners", notices));
   }
   if (request.method !== "POST") { await discardBody(request); return methodNotAllowed("GET, POST"); }
   const form = await formData(request);
@@ -539,7 +551,7 @@ type ConsoleExecutionMode = RunnerExecutionMode;
 type ExecutionModeSelection = { readonly mode: ConsoleExecutionMode; readonly confirmed: boolean };
 type RunnerExecutionSnapshot = {
   readonly runner: Record<string, unknown>;
-  readonly configuredMode: ConsoleExecutionMode | "migration_required";
+  readonly configuredMode: ConsoleExecutionMode | null;
   readonly lifecycleId: string;
 };
 type RunnerExecutionSnapshotResult = { readonly status: number; readonly snapshot?: RunnerExecutionSnapshot };
@@ -550,7 +562,7 @@ type EnrollmentCodeResult =
   | { readonly ok: false; readonly status: number; readonly deterministic: boolean };
 
 function expectedConfiguredMode(snapshot: RunnerExecutionSnapshot): ConsoleExecutionMode | null {
-  return snapshot.configuredMode === "migration_required" ? null : snapshot.configuredMode;
+  return snapshot.configuredMode;
 }
 
 function formDays(form: FormData, name: string): number | null | undefined {
@@ -590,16 +602,12 @@ function windowFields(prefix: "runner" | "code"): string {
 
 /**
  * Parse a fresh administrator service-mode choice at the authenticated form
- * boundary.  A missing field is treated as the restricted choice only for a
- * new Runner (where this preserves old API clients).  Existing Runner actions
- * use executionModeForExistingRunner below so an old form cannot silently
- * rewrite a trusted mode.
+ * boundary. New Runner records must always carry an explicit mode.
  */
-function executionModeFromForm(form: FormData, missingMode: ConsoleExecutionMode): ExecutionModeSelection | undefined {
+function executionModeFromForm(form: FormData): ExecutionModeSelection | undefined {
   const raw = form.get("execution_mode");
   let mode: ConsoleExecutionMode;
-  if (raw === null) mode = missingMode;
-  else if (raw === "dedicated_user" || raw === "privileged_host") mode = raw;
+  if (raw === "dedicated_user" || raw === "privileged_host") mode = raw;
   else return undefined;
   const confirmed = form.getAll("confirm_privileged_host").some((value) => value === "true");
   if (mode === "privileged_host" && !confirmed) return undefined;
@@ -607,10 +615,8 @@ function executionModeFromForm(form: FormData, missingMode: ConsoleExecutionMode
 }
 
 /**
- * Resolve an action form against the server-owned Registry choice.  The
- * execution mode is configuration, not Runner-authored telemetry: a missing
- * field preserves an already configured mode, while an unconfigured legacy
- * row must make an explicit choice.  Reusing an existing privileged choice is
+ * Resolve an action form against the server-owned Registry choice. The
+ * execution mode is configuration, not Runner-authored telemetry. Reusing an existing privileged choice is
  * intentional—the administrator already acknowledged that high-risk mode at
  * installation/migration—so credential rotation and code regeneration do not
  * become a second privilege prompt.  A fresh transition to privileged_host
@@ -621,20 +627,12 @@ function executionModeForExistingRunner(form: FormData, runner: { readonly confi
   const raw = form.get("execution_mode");
   const confirmed = form.getAll("confirm_privileged_host").some((value) => value === "true");
   const expectedRaw = form.get("expected_execution_mode");
-  const expected = expectedRaw === null
-    ? undefined
-    : expectedRaw === "dedicated_user" || expectedRaw === "privileged_host" || expectedRaw === "migration_required" ? expectedRaw : "invalid";
-  const actualMarker = configured === "migration_required" ? "migration_required" : configured;
-  if (expected === "invalid" || (expected !== undefined && expected !== actualMarker)) return undefined;
-  // Forms from before the mode binding was introduced have no expected marker.
-  // Preserve their same-mode compatibility, but never let an old explicit
-  // destination overwrite a mode that changed after the page was rendered.
-  // A legacy row has no trusted mode at all, so an explicit destination must
-  // carry the new migration marker before it can be accepted.
-  if (expected === undefined && raw !== null && (configured === "migration_required" || raw !== configured)) return undefined;
+  const expected = expectedRaw === "" ? null
+    : expectedRaw === "dedicated_user" || expectedRaw === "privileged_host" ? expectedRaw
+      : expectedRaw === null ? "missing" : "invalid";
+  if (expected === "invalid" || expected === "missing" || expected !== configured) return undefined;
   if (raw === null) {
-    if (configured === "migration_required") return undefined;
-    return { mode: configured, confirmed: configured === "privileged_host" };
+    return configured === null ? undefined : { mode: configured, confirmed: configured === "privileged_host" };
   }
   if (raw !== "dedicated_user" && raw !== "privileged_host") return undefined;
   if (raw === "privileged_host" && !confirmed && configured !== "privileged_host") return undefined;
@@ -644,12 +642,12 @@ function executionModeForExistingRunner(form: FormData, runner: { readonly confi
 /**
  * Read the server-owned administrator choice. `metadata` and `public_info`
  * are Runner-authored values, so they remain diagnostics only and can never
- * authorize a privileged installation. A legacy null value requires an
- * explicit migration choice.
+ * authorize a privileged installation. A null value means the record is not
+ * ready for an administrative action until a mode is selected.
  */
-export function runnerConfiguredExecutionMode(_runner: { readonly configured_execution_mode?: unknown; readonly metadata?: unknown; readonly public_info?: unknown }): ConsoleExecutionMode | "migration_required" {
+export function runnerConfiguredExecutionMode(_runner: { readonly configured_execution_mode?: unknown; readonly metadata?: unknown; readonly public_info?: unknown }): ConsoleExecutionMode | null {
   return _runner.configured_execution_mode === "dedicated_user" || _runner.configured_execution_mode === "privileged_host"
-    ? _runner.configured_execution_mode : "migration_required";
+    ? _runner.configured_execution_mode : null;
 }
 
 /** Runner-authored evidence is useful for diagnostics, but is not config. */
@@ -692,47 +690,37 @@ async function releaseUncommittedRunnerFence(env: WorkerEnv, runnerId: string, m
   } catch { return false; }
 }
 
-/** Action forms remain fail-closed for a legacy row while the table can show
- * the required explicit migration state instead of mislabeling it dedicated. */
+/** Action forms remain fail-closed until the Registry has a trusted mode. */
 function runnerActionExecutionMode(runner: { readonly configured_execution_mode?: unknown; readonly metadata?: unknown; readonly public_info?: unknown }): ConsoleExecutionMode | undefined {
   const mode = runnerConfiguredExecutionMode(runner);
-  // A legacy row must not render a pre-selected restricted mode.  Although
-  // dedicated_user is the safe fallback for new API callers, selecting it for
-  // an old row is itself a migration decision and must be made deliberately;
-  // otherwise a stale/self-reported privileged row could be silently
-  // downgraded simply by submitting the default action form.
-  return mode === "migration_required" ? undefined : mode;
+  return mode ?? undefined;
 }
 
 const PRIVILEGED_HOST_WARNING = "Runner will run as root, SYSTEM, or the platform-equivalent highest-privilege identity. Shell commands can access files, processes, network, environment variables, credentials, and system services reachable by that service identity. Install only on a trusted dedicated machine, VM, or container.";
 
 /**
- * Render mode fields for an authenticated action. Legacy rows intentionally
- * render an unselected mode so the administrator must make an explicit
- * migration choice; configured rows carry the server-owned choice through the
+ * Render mode fields for an authenticated action. Unconfigured rows render an
+ * unselected mode so the administrator must make an explicit choice; configured rows carry the server-owned choice through the
  * form. The enrollment result uses the non-interactive variant only to bind
  * the form to the mode observed when that one-time code was rendered; the
  * destination mode is never replayed from a hidden field.
  */
 function executionModeFormFields(mode: ConsoleExecutionMode | undefined, csrf: string, interactive = false, requirePrivilegedConfirmation = mode === "privileged_host"): string {
   if (!interactive) {
-    const expected = mode ?? "migration_required";
+    const expected = mode ?? "";
     return `<input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input type="hidden" name="expected_execution_mode" value="${expected}">`;
   }
   const safeMode = mode === "privileged_host" ? "privileged_host" : mode === "dedicated_user" ? "dedicated_user" : undefined;
-  const expected = safeMode ?? "migration_required";
+  const expected = safeMode ?? "";
   const confirmationRequired = safeMode === "privileged_host" && requirePrivilegedConfirmation;
   const priorConfirmation = safeMode === "privileged_host" && !confirmationRequired;
-  const placeholder = safeMode === undefined ? `<option value="" selected>Choose execution mode (required for legacy Runner)</option>` : "";
+  const placeholder = safeMode === undefined ? `<option value="" selected>Choose execution mode (required)</option>` : "";
   return `<input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input type="hidden" name="expected_execution_mode" value="${expected}"><fieldset class="execution-mode-inline" data-execution-mode-form data-reuse-privileged-confirmation="${priorConfirmation ? "true" : "false"}"><legend>Execution mode</legend><label>Mode<select name="execution_mode" aria-label="Execution mode"${safeMode === undefined ? " required" : ""}>${placeholder}<option value="dedicated_user"${safeMode === "dedicated_user" ? " selected" : ""}>dedicated_user · restricted service account</option><option value="privileged_host"${safeMode === "privileged_host" ? " selected" : ""}>privileged_host · highest host privilege</option></select></label><label class="check"><input type="checkbox" name="confirm_privileged_host" value="true" data-privileged-confirmation${confirmationRequired ? " required" : ""}><span>${priorConfirmation ? "Previously authorized for this Runner." : "I understand and authorize the high-privilege installation."}</span></label><p class="warning privileged-host-warning"${safeMode === "privileged_host" ? "" : " hidden"}>${escapeHtml(PRIVILEGED_HOST_WARNING)}</p></fieldset>`;
 }
 
 async function createBrowserRunner(env: WorkerEnv, form: FormData, baseUrl: string): Promise<Response> {
   const submittedId = form.get("runner_id"); const displayName = form.get("display_name");
-  // Older API clients did not send an execution mode. Keep those requests
-  // on the explicitly restricted path, while the dashboard form always sends
-  // the recommended privileged_host value and its separate acknowledgement.
-  const selection = executionModeFromForm(form, "dedicated_user");
+  const selection = executionModeFromForm(form);
   if (selection === undefined) return adminError(400, "Runner execution mode or privileged-host confirmation is invalid.");
   const runnerValidity = runnerWindowFromForm(form);
   const enrollmentWindow = enrollmentWindowFromForm(form); const enrollmentTtlMs = formEnrollmentTtl(form);
@@ -877,7 +865,7 @@ async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, baseUrl
     if (selection === undefined) return adminError(400, "Runner execution mode must be selected explicitly; privileged-host mode also requires confirmation.");
     // Registry state can lag a live RunnerDO/socket (for example after a
     // heartbeat timeout). Acquire the fence after resolving the trusted mode
-    // so a stale/legacy browser form cannot mutate configuration first.
+    // so a stale browser form cannot mutate configuration first.
     const fenced = await fenceRunnerTransport(env, runnerId, mutationId);
     if (!fenced.ok) return adminError(503, "Runner credential rotation could not fence the Runner.");
     const fencedState = await runnerExecutionSnapshot(env, runnerId);
@@ -1030,7 +1018,7 @@ async function createEnrollmentCode(env: WorkerEnv, runnerId: string, selection?
     enrollment_id: randomBase64Url(), verifier: await sha256Hex(code),
     enrollment_ttl_ms: enrollmentTtlMs, ...window,
     ...(selection === undefined ? {} : { execution_mode: selection.mode, confirm_privileged_host: selection.confirmed }),
-    ...(expected === undefined ? {} : { expected_configured_execution_mode: expected.configuredMode, expected_lifecycle_id: expected.lifecycleId }),
+    ...(expected === undefined ? {} : { expected_execution_mode: expected.configuredMode, expected_lifecycle_id: expected.lifecycleId }),
   }));
   if (!response.ok) return { ok: false, status: response.status, deterministic: [400, 404, 409].includes(response.status) };
   try {
@@ -1190,7 +1178,7 @@ const ZH_UI_TEXT: Record<string, string> = {
   "System Runner execution mode": "系统 Runner 执行模式",
   "dedicated_user · restricted service account": "dedicated_user · 受限服务账户",
   "privileged_host · highest host privilege": "privileged_host · 主机最高权限",
-  "Choose execution mode (required for legacy Runner)": "选择执行模式（旧 Runner 必选）",
+  "Choose execution mode (required)": "选择执行模式（必选）",
   "High-privilege mode was already authorized for this Runner.": "此 Runner 已获得高权限模式授权。",
   "Previously authorized for this Runner.": "此 Runner 已获授权。",
   "I understand and authorize the high-privilege installation.": "我理解并授权此次高权限安装。",
@@ -1427,6 +1415,15 @@ const ZH_UI_TEXT: Record<string, string> = {
   "In progress": "进行中",
   "Idle": "空闲",
   "Recorded": "已记录",
+  "Some control-plane features are temporarily paused.": "部分控制平面功能已临时暂停。",
+  "The console remains available, but dependent paths will stop retrying until the quota recovers or the anomaly clears.": "控制台仍可使用；依赖这些额度的路径会停止重试，直到额度恢复或异常解除。",
+  "Job recording paused": "任务记录已暂停",
+  "Job history and MCP call recording are temporarily disabled.": "任务历史和 MCP 调用记录已临时禁用。",
+  "MCP call audit paused": "MCP 调用审计已暂停",
+  "MCP call recording is temporarily disabled.": "MCP 调用记录已临时禁用。",
+  "Maintenance alarm paused": "维护定时器已暂停",
+  "Background cleanup and stale-runner checks are temporarily disabled.": "后台清理和 Runner 过期检查已临时禁用。",
+  "Dismiss": "知道了",
   "Socket connected": "Socket 已连接",
   "Disconnected": "已断开",
   "Unique runtime": "唯一运行时",
@@ -1703,14 +1700,56 @@ function loginPage(): Response {
   const csrf = randomBase64Url();
   return html(authEntryDocument("login", csrf), [`${LOGIN_CSRF_COOKIE}=${csrf}; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=${Math.floor(SETUP_CSRF_TTL_MS / 1_000)}`]);
 }
-type AdminData = { readonly clients: readonly McpClientRecord[]; readonly runners: readonly RunnerRecord[]; readonly jobs: readonly Record<string, unknown>[]; readonly snapshot: Record<string, unknown> };
+type AdminNotice = { readonly title: string; readonly message: string; readonly code?: string };
+type AdminData = { readonly clients: readonly McpClientRecord[]; readonly runners: readonly RunnerRecord[]; readonly jobs: readonly Record<string, unknown>[]; readonly snapshot: Record<string, unknown>; readonly notices: readonly AdminNotice[] };
+const FEATURE_LABELS: Record<RegistryFeatureHealth["feature"], string> = {
+  job_recording: "Job recording",
+  mcp_audit: "MCP call audit",
+  maintenance_alarm: "Maintenance alarm",
+};
+const FEATURE_NOTICE_TEXT: Record<RegistryFeatureHealth["feature"], AdminNotice> = {
+  job_recording: {
+    title: "Job recording paused",
+    message: "Job history and MCP call recording are temporarily disabled.",
+  },
+  mcp_audit: {
+    title: "MCP call audit paused",
+    message: "MCP call recording is temporarily disabled.",
+  },
+  maintenance_alarm: {
+    title: "Maintenance alarm paused",
+    message: "Background cleanup and stale-runner checks are temporarily disabled.",
+  },
+};
 async function loadDashboardData(env: WorkerEnv): Promise<AdminData> {
-  const [clientsResponse, runnersResponse, snapshotResponse] = await Promise.all([registryGet(env, "/auth/clients"), registryGet(env, "/dashboard"), registryGet(env, "/runners")]);
-  const clients = clientsResponse.ok ? ((record(await json(clientsResponse))?.clients ?? []) as McpClientRecord[]) : [];
-  const snapshotBody = snapshotResponse.ok ? record(await json(snapshotResponse)) : undefined;
-  const runners = snapshotBody !== undefined && Array.isArray(snapshotBody.runners) ? snapshotBody.runners as RunnerRecord[] : runnersResponse.ok ? ((record(await json(runnersResponse))?.runners ?? []) as RunnerRecord[]) : [];
+  const [clientsResponse, runnersResponse, snapshotResponse, notices] = await Promise.all([registryGet(env, "/auth/clients"), registryGet(env, "/dashboard"), registryGet(env, "/runners"), loadFeatureNotices(env)]);
+  let clients: McpClientRecord[] = [];
+  try { clients = clientsResponse.ok ? ((record(await json(clientsResponse))?.clients ?? []) as McpClientRecord[]) : []; } catch { clients = []; }
+  let snapshotBody: Record<string, unknown> | undefined;
+  try { snapshotBody = snapshotResponse.ok ? record(await json(snapshotResponse)) : undefined; } catch { snapshotBody = undefined; }
+  let runners: RunnerRecord[] = [];
+  try { runners = snapshotBody !== undefined && Array.isArray(snapshotBody.runners) ? snapshotBody.runners as RunnerRecord[] : runnersResponse.ok ? ((record(await json(runnersResponse))?.runners ?? []) as RunnerRecord[]) : []; } catch { runners = []; }
   const jobs = snapshotBody !== undefined && Array.isArray(snapshotBody.jobs) ? snapshotBody.jobs.filter(record) as Record<string, unknown>[] : [];
-  return { clients, runners, jobs, snapshot: snapshotBody ?? {} };
+  return { clients, runners, jobs, snapshot: snapshotBody ?? {}, notices };
+}
+async function loadFeatureNotices(env: WorkerEnv): Promise<readonly AdminNotice[]> {
+  const response = await registryGet(env, "/status/features");
+  try { return response.ok ? registryFeatureNotices(record(await json(response))) : []; } catch { return []; }
+}
+function registryFeatureNotices(value: Record<string, unknown> | undefined): readonly AdminNotice[] {
+  const features = arrayField(value?.features).map(record).filter((feature): feature is Record<string, unknown> => feature !== undefined);
+  const now = Date.now();
+  return features.flatMap((feature) => {
+    const key = typeof feature.feature === "string" && keyIsFeature(feature.feature) ? feature.feature : undefined;
+    const disabledUntilMs = typeof feature.disabled_until_ms === "number" && Number.isSafeInteger(feature.disabled_until_ms) ? feature.disabled_until_ms : null;
+    if (key === undefined || disabledUntilMs === null || disabledUntilMs <= now) return [];
+    const label = FEATURE_LABELS[key];
+    const lastError = typeof feature.last_error === "string" && feature.last_error.length > 0 ? feature.last_error : undefined;
+    return [lastError === undefined ? FEATURE_NOTICE_TEXT[key] : { ...FEATURE_NOTICE_TEXT[key], code: `${label}: ${lastError}` }];
+  });
+}
+function keyIsFeature(value: string): value is RegistryFeatureHealth["feature"] {
+  return value === "job_recording" || value === "mcp_audit" || value === "maintenance_alarm";
 }
 async function policyReadiness(env: WorkerEnv, runnerId: string): Promise<{ ok: true; value: { applied_revision: number; active_checksum: string } } | { ok: false }> {
   let response: Response;
@@ -1865,13 +1904,18 @@ function controlHeader(active?: ControlNavSection): string {
   return `<header class="app-header" data-app-header><div class="header-inner"><div class="header-left"><a class="brand" href="/admin" aria-label="Runmesh · Agent Control Plane">${meshMarkSvg("header-mesh-mark")}<span class="brand-copy"><span>Runmesh</span><small>Agent Control Plane</small></span></a><nav class="control-nav" aria-label="Main navigation">${nav}</nav></div><div class="header-actions">${languageSwitch()}</div></div></header>`;
 }
 
-function adminDocument(title: string, body: string, active: ControlNavSection): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${escapeHtml(title)} · Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="ops-body"><a class="skip-link" href="#main-content">Skip to main content</a>${controlHeader(active)}<div class="shell"><main class="workspace" id="main-content" tabindex="-1">${body}</main></div>${adminScript()}</body></html>`;
+function adminDocument(title: string, body: string, active: ControlNavSection, notices: readonly AdminNotice[] = []): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${escapeHtml(title)} · Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="ops-body"><a class="skip-link" href="#main-content">Skip to main content</a>${controlHeader(active)}<div class="shell"><main class="workspace" id="main-content" tabindex="-1">${renderAdminNotices(notices)}${body}</main></div>${adminScript()}</body></html>`;
 }
 function adminPage(pathname: string, data: AdminData, csrf: string): string {
   const active = pathname === "/admin" ? "dashboard" : pathname.slice("/admin/".length) as "runners" | "clients" | "settings";
   const body = active === "runners" ? runnersPage(data, csrf) : active === "clients" ? clientsPage(data, csrf) : active === "settings" ? settingsPage(csrf) : overviewPage(data, csrf);
-  return adminDocument(active[0]?.toUpperCase() + active.slice(1), body, active);
+  return adminDocument(active[0]?.toUpperCase() + active.slice(1), body, active, data.notices);
+}
+function renderAdminNotices(notices: readonly AdminNotice[]): string {
+  if (notices.length === 0) return "";
+  const list = notices.map((notice) => `<li><strong>${escapeHtml(notice.title)}</strong><span class="notice-message">${escapeHtml(notice.message)}</span>${notice.code === undefined ? "" : ` <span class="mono notice-code" data-no-i18n>${escapeHtml(notice.code)}</span>`}</li>`).join("");
+  return `<dialog open class="feature-alert-dialog" aria-labelledby="feature-alert-title"><form method="dialog" class="feature-alert-card"><section class="page-heading feature-alert-heading"><div><p class="eyebrow">Control plane</p><h2 id="feature-alert-title">Some control-plane features are temporarily paused.</h2><p class="lede">The console remains available, but dependent paths will stop retrying until the quota recovers or the anomaly clears.</p></div></section><ul class="warning diagnostic-warning-list feature-alert-list">${list}</ul><div class="top-actions dialog-actions"><button class="button secondary">Dismiss</button></div></form></dialog>`;
 }
 function overviewPage(data: AdminData, csrf: string): string {
   const online = data.runners.filter((runner) => runner.state === "online").length;
@@ -1883,7 +1927,7 @@ function runnerActionCell(runner: RunnerRecord, modeFields: string, csrf: string
   const displayName = escapeHtml(runner.display_name);
   // Keep one visible mode selector per row.  Credential rotation can safely
   // reuse the Registry-owned mode marker; enrollment is the action that needs
-  // an explicit choice when a legacy Runner is being migrated.
+  // an explicit choice when no trusted mode has been recorded.
   const rotateModeFields = executionModeFormFields(runnerActionExecutionMode(runner), csrf, false);
   return '<td class="actions"><div class="runner-actions">'
     + '<a class="button small secondary" href="/admin/runners/' + runnerId + '">View</a>'
@@ -1898,14 +1942,14 @@ function runnersPage(data: AdminData, csrf: string): string {
   const table = data.runners.map((runner) => {
     const configuredMode = runnerConfiguredExecutionMode(runner);
     const mode = runnerActionExecutionMode(runner);
-    const modeLabel = configuredMode === "migration_required" ? "migration_required" : configuredMode;
+    const modeLabel = configuredMode ?? "not configured";
     // Keep the mode choice in each mutating form.  A stale page or an older
     // browser cannot silently replay a privileged self-report.  For a Runner
     // whose trusted mode is already privileged, reuse the one-time
-    // administrator acknowledgement; switching a restricted/legacy Runner
+    // administrator acknowledgement; switching a restricted Runner
     // to privileged_host still requires a fresh checkbox.
     const modeFields = executionModeFormFields(mode, csrf, true, configuredMode !== "privileged_host");
-    return `<tr class="data-row"><td><div class="table-primary-cell"><a class="strong" href="/admin/runners/${encodeURIComponent(runner.runner_id)}">${escapeHtml(runner.display_name)}</a><span class="sub-id mono">${escapeHtml(runner.runner_id)}</span></div></td><td>${statusBadge(runner.state)}</td><td><span class="platform-tag">${escapeHtml(safePlatform(runner))}</span></td><td><span class="mono font-12">${escapeHtml(modeLabel)}</span>${configuredMode === "migration_required" ? "<span class=\"warning-text\"> · explicit migration required</span>" : ""}</td><td class="time-cell">${escapeHtml(time(runner.last_heartbeat_ms))}</td>${runnerActionCell(runner, modeFields, csrf)}</tr>`;
+    return `<tr class="data-row"><td><div class="table-primary-cell"><a class="strong" href="/admin/runners/${encodeURIComponent(runner.runner_id)}">${escapeHtml(runner.display_name)}</a><span class="sub-id mono">${escapeHtml(runner.runner_id)}</span></div></td><td>${statusBadge(runner.state)}</td><td><span class="platform-tag">${escapeHtml(safePlatform(runner))}</span></td><td><span class="mono font-12">${escapeHtml(modeLabel)}</span>${configuredMode === null ? "<span class=\"warning-text\"> · selection required</span>" : ""}</td><td class="time-cell">${escapeHtml(time(runner.last_heartbeat_ms))}</td>${runnerActionCell(runner, modeFields, csrf)}</tr>`;
   }).join("") || `<tr><td colspan="6" class="empty"><div class="empty-state-box"><p>No runners yet.</p></div></td></tr>`;
   const warning = PRIVILEGED_HOST_WARNING;
   return `<section class="page-heading"><div><p class="eyebrow">Infrastructure</p><h1>Runners</h1><p class="lede">Manage safe runner metadata, authorization windows, and one-time registration.</p></div></section><section class="panel add-panel" id="add-runner"><div class="section-title"><h2>Add Runner</h2><span class="muted font-12">You can set both Runner authorization and enrollment-code timing.</span></div><form method="post" action="/admin/runners" class="form-grid add-form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Display name<input name="display_name" maxlength="256" required autocomplete="off" placeholder="e.g. Production Runner 01"></label><label>Safe runner ID <span class="muted font-11">optional</span><input name="runner_id" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" placeholder="generated-id"></label>${windowFields("runner")}${windowFields("code")}<fieldset class="execution-mode-fieldset"><legend>System Runner execution mode</legend><label class="check"><input type="radio" name="execution_mode" value="privileged_host" checked data-execution-mode="privileged_host"><span><strong>整机控制 / 高权限模式（推荐用于受信任的自托管机器）</strong><small>Linux root · macOS root LaunchDaemon · Windows SYSTEM / HighestAvailable</small></span></label><label class="check"><input type="radio" name="execution_mode" value="dedicated_user" data-execution-mode="dedicated_user"><span><strong>受限服务账户模式（dedicated_user）</strong><small>Use a dedicated restricted service identity for narrower host access.</small></span></label><p class="warning privileged-host-warning">${escapeHtml(warning)}</p><label class="check"><input type="checkbox" name="confirm_privileged_host" value="true" data-privileged-confirmation><span>I understand and authorize this one-time high-privilege installation acknowledgement.</span></label></fieldset><div class="form-submit-wrap"><button class="button">Create enrollment</button></div></form></section><section class="panel"><div class="table-wrap"><table class="data-table runner-table"><caption class="sr-only">Registered runners</caption><thead><tr><th>Display name</th><th>Status</th><th>Platform / architecture</th><th>Execution mode</th><th>Last seen</th><th>Actions</th></tr></thead><tbody>${table}</tbody></table></div></section>`;
@@ -1919,6 +1963,7 @@ function settingsPage(csrf: string): string { return `<section class="page-headi
 function runnerList(runners: readonly RunnerRecord[]): string { return runners.length === 0 ? `<p class="empty">No runners yet.</p>` : `<ul class="item-list">${runners.map((runner) => `<li><a href="/admin/runners/${encodeURIComponent(runner.runner_id)}" class="card-row"><div class="card-row-main"><span class="strong">${escapeHtml(runner.display_name)}</span><span class="card-row-sub">${statusBadge(runner.state)}<span class="meta-separator">·</span><span class="platform-meta">${escapeHtml(safePlatform(runner))}</span></span></div><div class="card-row-aside"><span class="row-arrow">→</span></div></a></li>`).join("")}</ul>`; }
 function clientList(clients: readonly McpClientRecord[]): string { return clients.length === 0 ? `<p class="empty">No MCP clients yet.</p>` : `<ul class="item-list">${clients.map((client) => `<li><a href="/admin/clients/${encodeURIComponent(client.client_id)}" class="card-row"><div class="card-row-main"><span class="strong">${escapeHtml(client.label)}</span><span class="card-row-sub"><span class="client-runner-meta">${client.active_runner_id === null ? "Not selected" : escapeHtml(client.active_runner_id)}</span><span class="meta-separator">·</span>${client.revoked_at_ms === null ? statusBadge("online") : statusBadge("offline")}</span></div><div class="card-row-aside"><span class="row-arrow">→</span></div></a><form class="hidden" method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rename"><input name="label" value="${escapeHtml(client.label)}"></form></li>`).join("")}</ul>`; }
 function jobTable(jobs: readonly Record<string, unknown>[]): string { return jobs.length === 0 ? `<p class="empty">No recent jobs.</p>` : `<div class="table-wrap"><table class="data-table"><thead><tr><th>Job</th><th>Workspace</th><th>MCP client</th><th>Status</th><th>Updated</th></tr></thead><tbody>${jobs.map((job) => { const status = String(job.status ?? "unknown"); const safeStatus = statusClass(status); const clientId = typeof job.created_by_client_id === "string" && job.created_by_client_id.length > 0 ? job.created_by_client_id : "—"; return `<tr class="data-row"><td class="mono job-id-cell">${escapeHtml(String(job.job_id ?? "unknown"))}</td><td><span class="workspace-pill">${escapeHtml(String(job.workspace_id ?? "unknown"))}</span></td><td class="mono font-12">${escapeHtml(clientId)}</td><td><span class="badge job-status ${safeStatus}"><span class="status-dot ${safeStatus}"></span> ${escapeHtml(status)}</span></td><td class="time-cell">${escapeHtml(time(typeof job.updated_at_ms === "number" ? job.updated_at_ms : null))}</td></tr>`; }).join("")}</tbody></table></div>`; }
+function mcpCallTable(calls: readonly Record<string, unknown>[]): string { return calls.length === 0 ? `<p class="empty">No MCP calls recorded yet.</p>` : `<div class="table-wrap"><table class="data-table"><thead><tr><th>Method</th><th>MCP client</th><th>Workspace / Job</th><th>Status</th><th>Duration</th><th>Completed</th></tr></thead><tbody>${calls.map((call) => { const status = call.status === "ok" ? "ok" : call.status === "error" ? "error" : "unknown"; const safeStatus = status === "ok" ? "online" : status === "error" ? "offline" : "pending"; const workspaceId = typeof call.workspace_id === "string" && call.workspace_id.length > 0 ? call.workspace_id : "—"; const jobId = typeof call.job_id === "string" && call.job_id.length > 0 ? call.job_id : "—"; const errorCode = typeof call.error_code === "string" && call.error_code.length > 0 ? ` · ${call.error_code}` : ""; const duration = typeof call.duration_ms === "number" && Number.isSafeInteger(call.duration_ms) && call.duration_ms >= 0 ? `${call.duration_ms} ms` : "—"; return `<tr class="data-row"><td class="mono">${escapeHtml(String(call.method ?? "unknown"))}</td><td class="mono font-12">${escapeHtml(String(call.client_id ?? "unknown"))}</td><td><span class="workspace-pill">${escapeHtml(workspaceId)}</span> <span class="mono font-12">${escapeHtml(jobId)}</span></td><td><span class="badge job-status ${safeStatus}"><span class="status-dot ${safeStatus}"></span> ${escapeHtml(status)}${escapeHtml(errorCode)}</span></td><td class="mono font-12">${escapeHtml(duration)}</td><td class="time-cell">${escapeHtml(time(typeof call.completed_at_ms === "number" ? call.completed_at_ms : null))}</td></tr>`; }).join("")}</tbody></table></div>`; }
 function statusBadge(state: string): string { const safe = ["online", "offline", "stale", "pending", "invalid"].includes(state) ? state : "offline"; return `<span class="badge ${safe}"><span class="status-dot ${safe}"></span>${safe}</span>`; }
 function statusClass(status: string): string { return ["queued", "running", "cancelling", "cancelled", "succeeded", "completed", "failed", "unknown", "interrupted", "pending", "invalid", "offline", "online", "valid", "permission_denied", "not_directory", "invalid_path", "missing"].includes(status) ? status : "unknown"; }
 function safePlatform(runner: RunnerRecord): string { return runner.public_info === null ? "Not enrolled" : `${runner.public_info.platform} / ${runner.public_info.architecture}`; }
@@ -1948,7 +1993,7 @@ function scopeCheckboxes(selected: readonly string[] = ["coding:read", "coding:w
   };
   return (["coding:read", "coding:write", "coding:exec"] as const).map((scope) => `<label class="check"><input type="checkbox" name="scopes" value="${scope}"${selected.includes(scope) ? " checked" : ""}> <span><strong>${titles[scope]}</strong><small>${descriptions[scope]}</small></span></label>`).join("");
 }
-function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly unknown[], jobs: readonly unknown[], environment: Record<string, unknown> | undefined, csrf: string, release: RunnerReleaseDescriptor & { readonly distributable: boolean }, policyVersions: readonly unknown[] = [], enrollment?: Record<string, unknown>): string {
+function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly unknown[], jobs: readonly unknown[], environment: Record<string, unknown> | undefined, csrf: string, release: RunnerReleaseDescriptor & { readonly distributable: boolean }, policyVersions: readonly unknown[] = [], enrollment?: Record<string, unknown>, mcpCalls: readonly unknown[] = []): string {
   const runnerId = typeof runner.runner_id === "string" ? runner.runner_id : "unknown";
   const displayName = typeof runner.display_name === "string" ? runner.display_name : runnerId;
   const state = typeof runner.state === "string" ? runner.state : "offline";
@@ -2007,7 +2052,7 @@ function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly 
   const configuredButNotRestarted = runner.service_manifest_changed === true && runner.service_restarted !== true;
   const warnings = [
     identityMismatch ? "Runner-reported privilege state is mismatch; verify the service identity before granting access." : "",
-    executionMode === "migration_required" ? "No trusted administrator execution-mode selection is recorded; choose and confirm a mode before (re)installing." : "",
+    executionMode === null ? "No trusted administrator execution-mode selection is recorded; choose and confirm a mode before (re)installing." : "",
     unverifiedPrivilegedReport ? "Runner reports privileged_host, but that self-report is not authorization; re-enroll only after an administrator explicitly confirms the desired mode." : "",
     executionMode === "dedicated_user" && hasFullHostWorkspace ? "dedicated_user is configured while a full-host workspace is enabled; migrate the service or narrow the workspace." : "",
     revisionLag ? "Desired policy revision is ahead of the applied or Runner-reported revision." : "",
@@ -2071,7 +2116,7 @@ function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly 
       <div class="section-title"><h2>Latest enrollment code</h2><span class="badge ${enrollmentStatus === "active" ? "online" : enrollmentStatus === "scheduled" ? "pending" : enrollmentStatus === "expired" ? "offline" : "invalid"}">${escapeHtml(enrollmentStatus)}</span></div>
       <p class="muted font-12">Codes are single-use. Only timing metadata is retained; the code itself is never stored or shown here after this page.</p>
       <dl class="details"><dt>Active from</dt><dd class="mono">${escapeHtml(time(enrollmentFrom))}</dd><dt>Expires at</dt><dd class="mono">${escapeHtml(time(enrollmentUntil))}</dd><dt>Consumed</dt><dd class="mono">${escapeHtml(time(typeof enrollment?.used_at_ms === "number" ? enrollment.used_at_ms : null))}</dd></dl>
-      <form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment" class="form-grid validity-form">${executionModeFormFields(executionMode === "migration_required" ? undefined : executionMode, csrf, false)}${windowFields("code")}<div class="form-submit-wrap full-width-submit"><button class="button secondary">Generate new enrollment code</button></div></form>
+      <form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment" class="form-grid validity-form">${executionModeFormFields(executionMode ?? undefined, csrf, false)}${windowFields("code")}<div class="form-submit-wrap full-width-submit"><button class="button secondary">Generate new enrollment code</button></div></form>
     </section>
   </div>
   <div class="grid-two">
@@ -2106,7 +2151,7 @@ function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly 
       </div>
       <dl class="details">
         <dt>Configured execution mode (administrator)</dt>
-        <dd class="mono">${escapeHtml(executionMode)}</dd>
+        <dd class="mono">${escapeHtml(executionMode ?? "not configured")}</dd>
         <dt>Reported service identity</dt>
         <dd class="mono">${escapeHtml(serviceIdentity)}</dd>
         <dt>Runner-reported privilege state</dt>
@@ -2170,6 +2215,12 @@ function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly 
         <h2>Active jobs</h2>
       </div>
       ${jobTable(jobs.filter(record) as Record<string, unknown>[])}
+    </section>
+    <section class="panel">
+      <div class="section-title">
+        <h2>Recent MCP calls</h2>
+      </div>
+      ${mcpCallTable(mcpCalls.filter(record) as Record<string, unknown>[])}
     </section>
   </div>
   <div class="grid-two">
@@ -3609,8 +3660,33 @@ pre{
    border-radius:var(--radius-md);
    padding:10px 14px;
    font-size:13px;
+  }
+ .feature-alert-dialog{
+   width:min(720px,calc(100vw - 28px));
+   max-height:calc(100vh - 28px);
+   border:0;
+   border-radius:24px;
+   padding:0;
+   color:var(--ink);
+   background:transparent;
+   box-shadow:0 28px 80px rgba(15,23,42,.30);
  }
- .diagnostic-warning-list{margin:14px 0 0;padding:10px 14px 10px 30px}
+ .feature-alert-dialog::backdrop{background:rgba(15,23,42,.34);backdrop-filter:blur(4px)}
+ .feature-alert-card{
+   display:block;
+   margin:0;
+   padding:24px;
+   border:1px solid rgba(245,158,11,.34);
+   border-radius:24px;
+   background:linear-gradient(135deg,#fff7ed 0%,#ffffff 46%,#f8fafc 100%);
+ }
+ .feature-alert-heading{margin-bottom:14px}
+ .feature-alert-heading h2{margin:0;font-size:22px;letter-spacing:-.03em}
+ .feature-alert-list{display:grid;gap:8px;margin:0;padding:12px 14px 12px 30px}
+ .feature-alert-list li{padding:2px 0}
+ .feature-alert-list .notice-message{display:block;margin-top:2px;color:var(--warn);font-size:12px;line-height:1.45}
+ .feature-alert-list .notice-code{display:inline-block;margin-top:3px;color:var(--muted-dark)}
+  .diagnostic-warning-list{margin:14px 0 0;padding:10px 14px 10px 30px}
  .diagnostic-subheading{margin:18px 0 8px;font-size:13px;color:var(--ink-heading)}
  .diagnostic-list{display:flex;flex-direction:column;gap:7px}
  .diagnostic-list li{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:5px 0;border-bottom:1px solid var(--line-light)}
@@ -4031,11 +4107,11 @@ html[lang="zh-CN"] legend,html[lang="zh-CN"] h3,html[lang="zh-CN"] .eyebrow,html
   .secret-card{padding:24px 20px}
 }
 </style>`; }
- function adminScript(): string {
-   const translationJson = JSON.stringify(ZH_UI_TEXT);
-   return `<script>
- (function(){
- var ZH_UI_TEXT=${translationJson};function translateKnown(value){
+function adminScript(): string {
+  const translationJson = JSON.stringify(ZH_UI_TEXT);
+  return `<script>
+  (function(){
+  var ZH_UI_TEXT=${translationJson};function translateKnown(value){
   var trimmed=value.trim();
   if(!trimmed)return value;
   var rawMapped=ZH_UI_TEXT[value];
@@ -4089,17 +4165,19 @@ function bindDynamicContent(root){
   root.querySelectorAll('[data-tab]').forEach(function(tab){if(tab.__runmeshBound)return;tab.__runmeshBound=true;tab.addEventListener('click',function(){var target=tab.getAttribute('data-tab');var top=tab.getBoundingClientRect().top;root.querySelectorAll('[data-tab]').forEach(function(item){item.setAttribute('aria-selected',String(item===tab));item.tabIndex=item===tab?0:-1});root.querySelectorAll('[data-panel]').forEach(function(panel){panel.hidden=panel.getAttribute('data-panel')!==target});var delta=tab.getBoundingClientRect().top-top;if(delta)window.scrollBy(0,delta)});tab.addEventListener('keydown',function(event){if(event.key==='ArrowLeft'||event.key==='ArrowRight'){var tabs=Array.prototype.slice.call(root.querySelectorAll('[data-tab]'));var next=tabs[(tabs.indexOf(tab)+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length];next.focus();next.click()}})});
   root.querySelectorAll('.pwd-toggle-btn').forEach(function(btn){if(btn.__runmeshBound)return;btn.__runmeshBound=true;btn.addEventListener('click',function(){var wrap=btn.closest('.password-input-wrap');if(!wrap)return;var input=wrap.querySelector('input');if(!input)return;var isPwd=input.type==='password';input.type=isPwd?'text':'password';var label=isPwd?(document.documentElement.lang==='zh-CN'?'隐藏密码':'Hide password'):(document.documentElement.lang==='zh-CN'?'显示密码':'Show password');btn.setAttribute('aria-label',label);btn.setAttribute('title',label)})});
   root.querySelectorAll('form').forEach(function(form){var controls=form.querySelectorAll('input[name="execution_mode"],select[name="execution_mode"]');if(!controls.length)return;controls.forEach(function(input){if(input.__runmeshBound)return;input.__runmeshBound=true;input.addEventListener('change',function(){syncExecutionMode(form)})});syncExecutionMode(form)});
+  bindFeatureAlert(root);
   translateTextNodes(root);translateAttributes(root);stabilizeTabPanels();
 }
 function setupDynamicNavigation(){document.querySelectorAll('a[href^="/admin"]').forEach(function(link){if(link.__runmeshNavBound)return;link.__runmeshNavBound=true;link.addEventListener('click',function(event){if(event.defaultPrevented||event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey||link.hasAttribute('download')||link.target==='_blank')return;var target=new URL(link.href,location.href);if(target.origin!==location.origin)return;event.preventDefault();loadAdminPage(target,true)})})}
-function mountAdminPage(nextRoot,title,key,viewport,shouldPush,url){nextRoot.removeAttribute('id');var container=pageContainer(nextRoot,key);container.setAttribute('data-page-title',title||'');viewport=ensurePageViewport();viewport.appendChild(container);document.title=title||document.title;bindDynamicContent(container);setupDynamicNavigation();if(shouldPush)history.pushState({runmeshAdmin:true},'',url.pathname+url.search+url.hash);setActivePage(container,true);updateActiveNavigation(url.pathname);applyLocale(requestedLocale())}
+function mountAdminPage(nextRoot,title,key,viewport,shouldPush,url){nextRoot.removeAttribute('id');var container=pageContainer(nextRoot,key);container.setAttribute('data-page-title',title||'');viewport=ensurePageViewport();viewport.appendChild(container);document.title=title||document.title;bindDynamicContent(container);bindFeatureAlert(container);setupDynamicNavigation();if(shouldPush)history.pushState({runmeshAdmin:true},'',url.pathname+url.search+url.hash);setActivePage(container,true);updateActiveNavigation(url.pathname);applyLocale(requestedLocale())}
 function loadAdminPageFrame(url){return new Promise(function(resolve,reject){var frame=document.createElement('iframe');frame.setAttribute('aria-hidden','true');frame.className='admin-preload-frame';frame.onload=function(){try{var doc=frame.contentDocument;var next=doc&&doc.querySelector('#main-content');if(!next)throw new Error('preloaded main content missing');var root=pageRoot(next);if(!root)throw new Error('preloaded page root missing');var cloned=root.cloneNode(true);var title=doc.title||'';frame.remove();resolve({root:cloned,title:title})}catch(error){frame.remove();reject(error)}};frame.onerror=function(){frame.remove();reject(new Error('preloaded page failed'))};frame.src=url.href;document.body.appendChild(frame)})}
 function loadAdminPageXhr(url){return new Promise(function(resolve,reject){var xhr=new XMLHttpRequest();xhr.open('GET',url.href,true);xhr.withCredentials=true;xhr.setRequestHeader('Accept','text/html');xhr.onload=function(){if(xhr.status>=200&&xhr.status<300)resolve(xhr.responseText);else reject(new Error('HTTP '+xhr.status))};xhr.onerror=function(){reject(new Error('XHR failed'))};xhr.send()})}
 function loadAdminPage(url,shouldPush){var key=pageKey(url),viewport=ensurePageViewport(),existing=cachedPage(key);if(existing){if(shouldPush)history.pushState({runmeshAdmin:true},'',url.pathname+url.search+url.hash);document.title=existing.getAttribute('data-page-title')||document.title;setActivePage(existing,true);updateActiveNavigation(url.pathname);applyLocale(requestedLocale());return}if(window.__runmeshLoading){window.__runmeshQueuedUrl=url;window.__runmeshQueuedPush=shouldPush;return}window.__runmeshLoading=true;var current=document.querySelector('#main-content');if(current)current.setAttribute('aria-busy','true');fetch(url.href,{credentials:'same-origin',cache:'no-store'}).then(function(response){if(!response.ok)throw new Error('HTTP '+response.status);return response.text()}).then(function(markup){var parsed=new DOMParser().parseFromString(markup,'text/html');var next=parsed.querySelector('#main-content');if(!next)throw new Error('main content missing');var nextRoot=pageRoot(next);if(!nextRoot)throw new Error('page root missing');mountAdminPage(nextRoot,parsed.title||'',key,viewport,shouldPush,url)}).catch(function(error){console.error('Runmesh navigation failed',error);return loadAdminPageXhr(url).then(function(markup){var parsed=new DOMParser().parseFromString(markup,'text/html');var next=parsed.querySelector('#main-content');if(!next)throw new Error('XHR main content missing');var nextRoot=pageRoot(next);if(!nextRoot)throw new Error('XHR page root missing');mountAdminPage(nextRoot,parsed.title||'',key,viewport,shouldPush,url)}).catch(function(){return loadAdminPageFrame(url).then(function(result){mountAdminPage(result.root,result.title,key,viewport,shouldPush,url)}).catch(function(){location.href=url.href})})}).finally(function(){window.__runmeshLoading=false;var active=document.querySelector('#main-content');if(active)active.removeAttribute('aria-busy');if(window.__runmeshQueuedUrl){var queued=window.__runmeshQueuedUrl,queuedPush=window.__runmeshQueuedPush;window.__runmeshQueuedUrl=null;loadAdminPage(queued,queuedPush)}})}
-ensurePageViewport();var initialContainer=document.querySelector('[data-page-container].is-active');if(initialContainer){translateTextNodes(initialContainer);translateAttributes(initialContainer);stabilizeTabPanels();setActivePage(initialContainer,false)}
-window.addEventListener('popstate',function(){loadAdminPage(new URL(location.href),false)});setupDynamicNavigation();window.__runmeshDynamicNavigation=true;
- })();
-</script>`;
+function bindFeatureAlert(root){var dialog=root.querySelector('.feature-alert-dialog');if(!dialog||dialog.__runmeshBound)return;dialog.__runmeshBound=true;dialog.addEventListener('click',function(event){if(event.target===dialog)dialog.close()})}
+ ensurePageViewport();var initialContainer=document.querySelector('[data-page-container].is-active');if(initialContainer){translateTextNodes(initialContainer);translateAttributes(initialContainer);stabilizeTabPanels();setActivePage(initialContainer,false)}
+ window.addEventListener('popstate',function(){loadAdminPage(new URL(location.href),false)});setupDynamicNavigation();window.__runmeshDynamicNavigation=true;bindFeatureAlert(document);
+  })();
+  </script>`;
 }
 export function runnerEnrollmentPage(env: RunnerReleaseEnvironment, baseUrl: string, runnerId: string, code: string | undefined, csrf: string, reEnroll = false, executionMode: ConsoleExecutionMode = "dedicated_user", confirmPrivilegedHost = false, enrollment?: Pick<Extract<EnrollmentCodeResult, { readonly ok: true }>, "created_at_ms" | "not_before_ms" | "expires_at_ms">): Response {
   if (code === undefined) return adminError(503, "Enrollment code could not be generated.");
@@ -4343,12 +4421,16 @@ async function deleteRunnerWithAdminToken(env: WorkerEnv, runnerId: string, inpu
 async function registerRunner(env: WorkerEnv, runnerId: string, input: Record<string, unknown> | undefined): Promise<Response> {
   const supplied = input?.token;
   if (supplied !== undefined && (typeof supplied !== "string" || supplied.length < 32 || supplied.length > 512 || /\s/.test(supplied) || containsControlCharacter(supplied))) return Response.json({ error: "token must be 32-512 non-whitespace characters" }, { status: 400 });
+  const requestedMode = input?.execution_mode;
+  if (requestedMode !== undefined && requestedMode !== "dedicated_user" && requestedMode !== "privileged_host") return Response.json({ error: "execution_mode must be dedicated_user or privileged_host" }, { status: 400 });
+  if (requestedMode === "privileged_host" && input?.confirm_privileged_host !== true) return Response.json({ error: "privileged_host requires confirmation" }, { status: 400 });
   const token = typeof supplied === "string" ? supplied : generateRunnerToken(); const pepper = env.RUNNER_TOKEN_PEPPER;
   if (!isConfiguredSecret(pepper) || !isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) return new Response("admin control plane is not configured", { status: 503 });
   const mutationId = `credential-rotated-${crypto.randomUUID()}`;
   let existingResponse: Response;
   try { existingResponse = await runnerRegistryRequest(env, runnerId, "", "GET", ""); } catch { return new Response("registry unavailable", { status: 503 }); }
   if (!existingResponse.ok && existingResponse.status !== 404) return new Response("registry unavailable", { status: 503 });
+  if (existingResponse.status === 404 && requestedMode === undefined) return Response.json({ error: "execution_mode is required when creating a Runner" }, { status: 400 });
   // A missing Registry row does not prove that the corresponding RunnerDO is
   // empty: a prior delete may have committed in Registry while transport
   // cleanup failed, leaving an authenticated pre-hello socket behind. Always
@@ -4360,7 +4442,7 @@ async function registerRunner(env: WorkerEnv, runnerId: string, input: Record<st
     // Creation mutations are recorded with a synthetic pre-version in
     // Registry, making the same fenced cleanup/retry protocol work for both a
     // fresh row and an existing credential replacement.
-    response = await runnerRegistryRequest(env, runnerId, "", "PUT", JSON.stringify({ token_verifier: await runnerTokenVerifier(token, pepper), mutation_id: mutationId }));
+    response = await runnerRegistryRequest(env, runnerId, "", "PUT", JSON.stringify({ token_verifier: await runnerTokenVerifier(token, pepper), mutation_id: mutationId, ...(requestedMode === undefined ? {} : { execution_mode: requestedMode }) }));
   } catch {
     const state = await runnerMutationState(env, runnerId, mutationId).catch(() => undefined);
     if (state?.mutation_committed === true) {

@@ -53,7 +53,7 @@ function windowsGitExecutable(): string | undefined {
   return undefined;
 }
 async function patchArtifacts(root: string): Promise<readonly string[]> {
-  return (await readdir(root)).filter((entry) => entry.includes(".remote-coding-runtime-") && (entry.endsWith(".tmp") || entry.endsWith(".bak")));
+  return (await readdir(root)).filter((entry) => entry.includes(".runmesh-") && (entry.endsWith(".tmp") || entry.endsWith(".bak")));
 }
 
 describe("fs.apply_patch", () => {
@@ -182,14 +182,6 @@ describe("fs.apply_patch", () => {
     } finally { await test.cleanup(); }
   });
 
-  it("keeps fs.patch only as a compatible apply_patch alias", async () => {
-    const test = await fixture();
-    try {
-      const runtime = new RunnerRuntime({ config: { server: "ws://127.0.0.1", token: "0123456789abcdef", runnerId: "runner-1", workspaces: [test.workspace] } });
-      await runtime.dispatch("fs.patch", { workspace_id: test.workspace.workspaceId, patch: envelope("*** Add File: alias.txt\n+safe") });
-      await expect(readFile(join(test.root, "alias.txt"), "utf8")).resolves.toBe("safe\n");
-    } finally { await test.cleanup(); }
-  });
 });
 
 describe("git inspection", () => {

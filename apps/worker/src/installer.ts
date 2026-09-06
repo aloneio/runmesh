@@ -261,6 +261,18 @@ if [ -t 2 ] && [ -z "\${NO_COLOR:-}" ]; then C_RESET='\033[0m'; C_CYAN='\033[36m
 step() { printf '%b→%b %s\n' "$C_CYAN" "$C_RESET" "$1" >&2; }
 ok() { printf '%b✓%b %s\n' "$C_GREEN" "$C_RESET" "$1" >&2; }
 fail() { printf '%b✗%b %s\n' "$C_RED" "$C_RESET" "$1" >&2; }
+report_failure() {
+  label="$1"
+  log_file="$2"
+  rc="$3"
+  fail "$label"
+  printf '%s\n' "  exit code: $rc" >&2
+  if [ -s "$log_file" ]; then
+    printf '%s\n' '  output:' >&2
+    sed 's/^/  │ /' "$log_file" >&2
+  fi
+  rm -f "$log_file"
+}
 printf '\n%bRunmesh%b  Runner installer\n\n' "$C_CYAN" "$C_RESET" >&2
 # Do not let inherited runtime/package-manager configuration alter a privileged
 # install. The operator's PATH is still required to point at trusted binaries.
@@ -343,11 +355,14 @@ refresh_existing() {
   REFRESH_CODE_LENGTH="$(wc -c < "$REFRESH_INPUT" | tr -d '[:space:]')"
   [ "$REFRESH_CODE_LENGTH" -eq 44 ] || { printf '%s\n' 'error: invalid one-time enrollment code' >&2; exit 1; }
   unset ENROLLMENT_CODE
-  "$EXISTING_RUNNER" enroll --profile "$PROFILE" --server "$ENROLLMENT_URL" --code-stdin --re-enroll < "$REFRESH_INPUT"
+  REFRESH_ENROLL_LOG="$INSTALL_ROOT/.refresh-enroll.$$.log"
+  if "$EXISTING_RUNNER" enroll --profile "$PROFILE" --server "$ENROLLMENT_URL" --code-stdin --re-enroll < "$REFRESH_INPUT" >"$REFRESH_ENROLL_LOG" 2>&1; then :; else rc=$?; report_failure 'Refreshing credentials for the existing Runmesh Runner.' "$REFRESH_ENROLL_LOG" "$rc"; exit "$rc"; fi
   rm -f "$REFRESH_INPUT"; REFRESH_INPUT=''
-  "$EXISTING_RUNNER" install --profile "$PROFILE" --execution-mode privileged_host --confirm-privileged-host --executable-path "$EXISTING_RUNNER"
-  "$EXISTING_RUNNER" restart --profile "$PROFILE"
-  printf '%s\n' 'Runmesh Runner credentials refreshed and service restarted in place.'
+  REFRESH_INSTALL_LOG="$INSTALL_ROOT/.refresh-install.$$.log"
+  if "$EXISTING_RUNNER" install --profile "$PROFILE" --execution-mode privileged_host --confirm-privileged-host --executable-path "$EXISTING_RUNNER" >"$REFRESH_INSTALL_LOG" 2>&1; then :; else rc=$?; report_failure 'Refreshing the installed service for the existing Runmesh Runner.' "$REFRESH_INSTALL_LOG" "$rc"; exit "$rc"; fi
+  REFRESH_RESTART_LOG="$INSTALL_ROOT/.refresh-restart.$$.log"
+  if "$EXISTING_RUNNER" restart --profile "$PROFILE" >"$REFRESH_RESTART_LOG" 2>&1; then :; else rc=$?; report_failure 'Restarting the existing Runmesh Runner service.' "$REFRESH_RESTART_LOG" "$rc"; exit "$rc"; fi
+  ok 'Runmesh Runner credentials refreshed and service restarted in place.'
   trap - EXIT HUP INT TERM
   rmdir "$REFRESH_LOCK" 2>/dev/null || true
   return 0
@@ -485,22 +500,29 @@ RUNMESH_REDIRECT_CHECK
     esac
   done
 }
+step 'Downloading the fixed release assets.'
 download manifest.json
 download manifest.sig
 download manifest.signature.json
 download SHA256SUMS
 download "$ARTIFACT"
-"$NODE" --input-type=module - "$TMP" <<'RUNMESH_VERIFY'
+step 'Verifying the signed release assets.'
+VERIFY_LOG="$TMP/release-verify.log"
+if "$NODE" --input-type=module - "$TMP" >"$VERIFY_LOG" 2>&1 <<'RUNMESH_VERIFY'
 __VERIFIER__
 RUNMESH_VERIFY
+then :; else rc=$?; report_failure 'Verifying the signed release assets.' "$VERIFY_LOG" "$rc"; exit "$rc"; fi
+ok 'Signed release assets verified.'
 mkdir -p "$INSTALL_ROOT/versions"
 if ! mkdir "$STAGE"; then printf '%s\n' 'error: installer staging path is already in use' >&2; exit 1; fi
 step 'Installing the verified Runner package.'
 export NPM_CONFIG_UPDATE_NOTIFIER=false
-(
+INSTALL_LOG="$TMP/npm-install.log"
+if (
   cd "$TMP"
-  "$NODE" "$NPM_CLI" --userconfig "$NPM_CONFIG_USERCONFIG" --globalconfig "$NPM_CONFIG_GLOBALCONFIG" install --global --ignore-scripts --offline --no-audit --no-fund --prefix "$STAGE" "$TMP/$ARTIFACT" >/dev/null 2>&1
-)
+  "$NODE" "$NPM_CLI" --userconfig "$NPM_CONFIG_USERCONFIG" --globalconfig "$NPM_CONFIG_GLOBALCONFIG" install --global --ignore-scripts --offline --no-audit --no-fund --prefix "$STAGE" "$TMP/$ARTIFACT"
+)> "$INSTALL_LOG" 2>&1; then :; else rc=$?; report_failure 'Installing the verified Runner package.' "$INSTALL_LOG" "$rc"; exit "$rc"; fi
+ok 'Verified Runner package installed.'
 PACKAGE_ROOT="$STAGE/lib/node_modules/@aloneio/runmesh-runner"
 BUNDLE_FILENAME='runmesh.cjs'
 [ -f "$PACKAGE_ROOT/dist/$BUNDLE_FILENAME" ] || { fail 'The verified Runmesh package is missing its Runner bundle.'; exit 1; }
@@ -543,14 +565,17 @@ ENROLLMENT_INPUT="$TMP/enrollment-code"
 printf '%s\n' "$ENROLLMENT_CODE" > "$ENROLLMENT_INPUT"
 unset ENROLLMENT_CODE
 ENROLLMENT_ATTEMPTED=1
-"$RUNNER" enroll --profile "$PROFILE" --server "$ENROLLMENT_URL" --code-stdin --execution-mode privileged_host --confirm-privileged-host < "$ENROLLMENT_INPUT"
+step 'Enrolling the Runner and starting the service.'
+ENROLL_LOG="$TMP/enroll.log"
+if "$RUNNER" enroll --profile "$PROFILE" --server "$ENROLLMENT_URL" --code-stdin --execution-mode privileged_host --confirm-privileged-host < "$ENROLLMENT_INPUT" >"$ENROLL_LOG" 2>&1; then :; else rc=$?; report_failure 'Enrolling the Runner.' "$ENROLL_LOG" "$rc"; exit "$rc"; fi
 rm -f "$ENROLLMENT_INPUT"
 mv "$STAGE" "$FINAL"
 FINAL_CREATED=1
 ln -s "$FINAL" "$INSTALL_ROOT/current.new"
 mv "$INSTALL_ROOT/current.new" "$INSTALL_ROOT/current"
 CURRENT_CREATED=1
-"$INSTALL_ROOT/current/bin/runmesh" install --profile "$PROFILE" --execution-mode privileged_host --confirm-privileged-host --executable-path "$INSTALL_ROOT/current/bin/runmesh"
+SERVICE_LOG="$TMP/service-install.log"
+if "$INSTALL_ROOT/current/bin/runmesh" install --profile "$PROFILE" --execution-mode privileged_host --confirm-privileged-host --executable-path "$INSTALL_ROOT/current/bin/runmesh" >"$SERVICE_LOG" 2>&1; then :; else rc=$?; report_failure 'Installing the Runmesh service.' "$SERVICE_LOG" "$rc"; exit "$rc"; fi
 ok "Runmesh Runner $VERSION installed and enrolled."
 printf '%s\n' '  Service started automatically.' '  Logs: sudo journalctl -u runmesh-runner -f' >&2
 `;
@@ -610,6 +635,49 @@ $CurrentRoot = Join-Path $InstallRoot 'current'
 $CurrentNew = Join-Path $InstallRoot 'current.new'
 $Profile = Join-Path $env:ProgramData 'Runmesh\profile.json'
 $ServiceManifest = Join-Path $env:ProgramData 'Runmesh\RunmeshRunner.xml'
+function Write-Step([string]$Message) { Write-Host ("→ {0}" -f $Message) -ForegroundColor Cyan }
+function Write-Ok([string]$Message) { Write-Host ("✓ {0}" -f $Message) -ForegroundColor Green }
+function Write-Fail([string]$Message) { Write-Host ("✗ {0}" -f $Message) -ForegroundColor Red }
+function Write-LogFailure([string]$Message, [string]$LogPath, [int]$ExitCode, $ErrorRecord = $null) {
+  Write-Fail $Message
+  Write-Host ("  exit code: {0}" -f $ExitCode) -ForegroundColor DarkGray
+  if ($null -ne $ErrorRecord) {
+    Write-Host ("  exception: {0}" -f $ErrorRecord.Exception.GetType().FullName) -ForegroundColor DarkGray
+    Write-Host ("  message: {0}" -f $ErrorRecord.Exception.Message) -ForegroundColor DarkGray
+    if ($ErrorRecord.InvocationInfo -and $ErrorRecord.InvocationInfo.PositionMessage) {
+      Write-Host '  location:' -ForegroundColor DarkGray
+      $ErrorRecord.InvocationInfo.PositionMessage.TrimEnd().Split([Environment]::NewLine) | ForEach-Object { Write-Host ("  │ {0}" -f $_) -ForegroundColor DarkGray }
+    }
+    if ($ErrorRecord.ScriptStackTrace) {
+      Write-Host '  stack trace:' -ForegroundColor DarkGray
+      $ErrorRecord.ScriptStackTrace.TrimEnd().Split([Environment]::NewLine) | ForEach-Object { Write-Host ("  │ {0}" -f $_) -ForegroundColor DarkGray }
+    }
+  }
+  if (Test-Path -LiteralPath $LogPath -PathType Leaf) {
+    $contents = Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue
+    if ($null -ne $contents -and $contents.Count -gt 0) {
+      Write-Host '  output:' -ForegroundColor DarkGray
+      $contents | ForEach-Object { Write-Host ("  │ {0}" -f $_) -ForegroundColor DarkGray }
+    }
+  }
+}
+function Invoke-LoggedStep([string]$Message, [string]$LogPath, [scriptblock]$Action) {
+  Write-Step $Message
+  try {
+    & $Action *> $LogPath
+  } catch {
+    $code = if ($LASTEXITCODE -ne 0) { [int]$LASTEXITCODE } else { 1 }
+    Add-Content -LiteralPath $LogPath -Value (($_ | Out-String).TrimEnd()) -ErrorAction SilentlyContinue
+    Write-LogFailure $Message $LogPath $code $_
+    throw
+  }
+  $code = if ($LASTEXITCODE -ne 0) { [int]$LASTEXITCODE } else { 0 }
+  if ($code -ne 0) {
+    Write-LogFailure $Message $LogPath $code
+    throw $Message
+  }
+  Write-Ok $Message
+}
 function Refresh-Existing {
   if (-not (Test-Path -LiteralPath $CurrentRoot)) { return $false }
   if (-not (Test-Path -LiteralPath $CurrentRoot -PathType Container)) { throw 'Existing Runmesh current path is not a managed directory.' }
@@ -619,19 +687,23 @@ function Refresh-Existing {
   $RefreshLock = Join-Path $InstallRoot '.refresh.lock'
   try { New-Item -ItemType Directory -Path $RefreshLock -ErrorAction Stop | Out-Null } catch { throw 'Another Runmesh enrollment refresh is already running.' }
   try {
+    Write-Step 'Refreshing credentials for the existing Runmesh Runner.'
     if ($null -eq $EnrollmentCodeArgument) {
       $SecureCode = Read-Host 'Paste the one-time enrollment code (input is hidden)' -AsSecureString
       $CodePointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureCode)
       try { $EnrollmentCode = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($CodePointer) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($CodePointer) }
     } else { $EnrollmentCode = $EnrollmentCodeArgument; $EnrollmentCodeArgument = $null }
     if ([string]::IsNullOrWhiteSpace($EnrollmentCode) -or $EnrollmentCode -notmatch '^[A-Za-z0-9_-]{43}$') { throw 'Invalid one-time enrollment code.' }
-    $EnrollmentCode | & $ExistingRunner enroll --profile $Profile --server $EnrollmentUrl --code-stdin --re-enroll
-    if ($LASTEXITCODE -ne 0) { throw 'Enrollment refresh failed.' }
-    & $ExistingRunner install --profile $Profile --executable-path $ExistingRunner
-    if ($LASTEXITCODE -ne 0) { throw 'Service installation refresh failed.' }
-    & $ExistingRunner restart --profile $Profile
-    if ($LASTEXITCODE -ne 0) { throw 'Runner service restart failed.' }
-    Write-Output 'Runmesh Runner credentials refreshed and service restarted in place.'
+    $RefreshEnrollLog = Join-Path $InstallRoot ('.refresh-enroll.{0}.log' -f $PID)
+    $EnrollmentCode | & $ExistingRunner enroll --profile $Profile --server $EnrollmentUrl --code-stdin --re-enroll *> $RefreshEnrollLog
+    if ($LASTEXITCODE -ne 0) { Write-LogFailure 'Refreshing credentials for the existing Runmesh Runner.' $RefreshEnrollLog $LASTEXITCODE; throw 'Enrollment refresh failed.' }
+    $RefreshInstallLog = Join-Path $InstallRoot ('.refresh-install.{0}.log' -f $PID)
+    & $ExistingRunner install --profile $Profile --executable-path $ExistingRunner *> $RefreshInstallLog
+    if ($LASTEXITCODE -ne 0) { Write-LogFailure 'Refreshing the installed service for the existing Runmesh Runner.' $RefreshInstallLog $LASTEXITCODE; throw 'Service installation refresh failed.' }
+    $RefreshRestartLog = Join-Path $InstallRoot ('.refresh-restart.{0}.log' -f $PID)
+    & $ExistingRunner restart --profile $Profile *> $RefreshRestartLog
+    if ($LASTEXITCODE -ne 0) { Write-LogFailure 'Restarting the existing Runmesh Runner service.' $RefreshRestartLog $LASTEXITCODE; throw 'Runner service restart failed.' }
+    Write-Ok 'Runmesh Runner credentials refreshed and service restarted in place.'
     return $true
   } finally { Remove-Variable EnrollmentCode -ErrorAction SilentlyContinue; try { Remove-Item -LiteralPath $RefreshLock -Force -ErrorAction SilentlyContinue } catch {} }
 }
@@ -730,18 +802,22 @@ try {
     }
     if (-not $downloaded) { throw 'Release download did not complete.' }
   }
-  @'
+  $VerifyLog = Join-Path $TempRoot 'release-verify.log'
+  Invoke-LoggedStep 'Verifying the signed release assets.' $VerifyLog {
+    @'
 __VERIFIER__
 '@ | & $NodePath --input-type=module - $TempRoot
-  if ($LASTEXITCODE -ne 0) { throw 'Release verification failed.' }
+  }
   New-Item -ItemType Directory -Path $VersionsRoot -Force | Out-Null
   Push-Location -LiteralPath $TempRoot
   try {
-    & $NpmPath --userconfig $EmptyUserConfig --globalconfig $EmptyGlobalConfig install --global --ignore-scripts --offline --no-audit --no-fund --prefix $Stage (Join-Path $TempRoot $ArtifactName)
+    $InstallLog = Join-Path $TempRoot 'npm-install.log'
+    Invoke-LoggedStep 'Installing the verified Runner package.' $InstallLog {
+      & $NpmPath --userconfig $EmptyUserConfig --globalconfig $EmptyGlobalConfig install --global --ignore-scripts --offline --no-audit --no-fund --prefix $Stage (Join-Path $TempRoot $ArtifactName)
+    }
   } finally {
     Pop-Location
   }
-  if ($LASTEXITCODE -ne 0) { throw 'Verified local tarball installation failed.' }
   $PackageRoot = Get-ChildItem -LiteralPath $Stage -Filter 'runmesh.cjs' -File -Recurse | Select-Object -First 1
   if ($null -eq $PackageRoot) { throw 'Verified package did not contain the Runner bundle.' }
   New-Item -ItemType Directory -Path (Join-Path $Stage 'runtime') -Force | Out-Null
@@ -767,21 +843,39 @@ __VERIFIER__
     if ([string]::IsNullOrWhiteSpace($EnrollmentCode)) { throw 'An enrollment code is required.' }
   }
   $EnrollmentAttempted = $true
-  $EnrollmentCode | & $Runner enroll --profile $Profile --server $EnrollmentUrl --code-stdin --execution-mode privileged_host --confirm-privileged-host
+  $EnrollLog = Join-Path $TempRoot 'enroll.log'
+  Invoke-LoggedStep 'Enrolling the Runner.' $EnrollLog {
+    $EnrollmentCode | & $Runner enroll --profile $Profile --server $EnrollmentUrl --code-stdin --execution-mode privileged_host --confirm-privileged-host
+  }
   $EnrollmentCode = $null
   $SecureCode = $null
-  if ($LASTEXITCODE -ne 0) { throw 'Enrollment failed.' }
   Move-Item -LiteralPath $Stage -Destination $VersionRoot
   New-Item -ItemType Junction -Path $CurrentNew -Target $VersionRoot | Out-Null
   Move-Item -LiteralPath $CurrentNew -Destination $CurrentRoot
   $CurrentRunner = Join-Path $CurrentRoot 'runmesh.cmd'
   $ServiceAttempted = $true
-  & $CurrentRunner install --profile $Profile --execution-mode privileged_host --confirm-privileged-host --executable-path $CurrentRunner
-  if ($LASTEXITCODE -ne 0) { throw 'Service installation failed after enrollment.' }
+  $ServiceLog = Join-Path $TempRoot 'service-install.log'
+  Invoke-LoggedStep 'Installing and starting the Runmesh service.' $ServiceLog {
+    & $CurrentRunner install --profile $Profile --execution-mode privileged_host --confirm-privileged-host --executable-path $CurrentRunner
+  }
   $Succeeded = $true
-  Write-Output "Runmesh Runner $Version installed and enrolled."
-  Write-Output 'The background service is enabled and started automatically.'
-  Write-Output 'Windows status: Get-ScheduledTask -TaskName RunmeshRunner'
+  Write-Ok "Runmesh Runner $Version installed and enrolled."
+  Write-Host '  Service started automatically.'
+  Write-Host '  Windows status: Get-ScheduledTask -TaskName RunmeshRunner'
+} catch {
+  Write-Fail 'Runmesh Runner installation failed.'
+  Write-Host ("  exception: {0}" -f $_.Exception.GetType().FullName) -ForegroundColor DarkGray
+  Write-Host ("  message: {0}" -f $_.Exception.Message) -ForegroundColor DarkGray
+  if ($_.InvocationInfo -and $_.InvocationInfo.PositionMessage) {
+    Write-Host '  location:' -ForegroundColor DarkGray
+    $_.InvocationInfo.PositionMessage.TrimEnd().Split([Environment]::NewLine) | ForEach-Object { Write-Host ("  │ {0}" -f $_) -ForegroundColor DarkGray }
+  }
+  if ($_.ScriptStackTrace) {
+    Write-Host '  stack trace:' -ForegroundColor DarkGray
+    $_.ScriptStackTrace.TrimEnd().Split([Environment]::NewLine) | ForEach-Object { Write-Host ("  │ {0}" -f $_) -ForegroundColor DarkGray }
+  }
+  Write-Host '  Any local files created by this attempt will be rolled back where safe.' -ForegroundColor DarkGray
+  throw
 } finally {
   if ($null -ne $HttpClient) { $HttpClient.Dispose() }
   if ($null -ne $HttpHandler) { $HttpHandler.Dispose() }

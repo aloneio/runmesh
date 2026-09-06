@@ -152,7 +152,7 @@ describe("RunnerDO concurrency finalization", () => {
   it("recovers a Registry-committed policy precommit before a later mutation", async () => {
     await withRunner("commit-recovery", async (target) => {
       target.admissionState = state("committed-before-mark", "precommit");
-      target.registryRequest = async (_id, action) => action.startsWith("/mutation-state") ? Response.json({ runner_exists: true, runner_state: "offline", mutation_committed: true, desired_revision: 8, desired_checksum: checksum }) : new Response(null, { status: 500 });
+      target.registryRequest = async (_id, action) => action.startsWith("/mutation-state") ? Response.json({ runner_exists: true, runner_state: "offline", mutation_committed: true, lifecycle_id: "lifecycle-race-7", desired_revision: 8, desired_checksum: checksum }) : new Response(null, { status: 500 });
       expect(await target.beginPolicyMutation("next", runnerId)).toBe("started");
       await expect(target.admission()).resolves.toMatchObject({ mutationId: "next", mutationPhase: "precommit" });
     });
@@ -162,7 +162,7 @@ describe("RunnerDO concurrency finalization", () => {
     it(`finalizes a committed ${mutationId} fence`, async () => {
       await withRunner(mutationId, async (target) => {
         target.admissionState = state(mutationId, "precommit"); target.verifyInternalRequest = async () => true;
-        target.registryRequest = async (_id, action) => action.startsWith("/mutation-state") ? Response.json({ runner_exists: true, mutation_committed: true, credential_mutation_committed: true }) : new Response(null, { status: 500 });
+        target.registryRequest = async (_id, action) => action.startsWith("/mutation-state") ? Response.json({ runner_exists: true, mutation_committed: true, credential_mutation_committed: true, lifecycle_id: "lifecycle-race-7" }) : new Response(null, { status: 500 });
         const response = await target.fetch(new Request("https://runner.internal/revoke", { method: "POST", body: JSON.stringify({ mutation_id: mutationId }) }));
         expect(response.status).toBe(204);
         await expect(target.admission()).resolves.toMatchObject({ mutationId: null, mutationPhase: "restart_reconcile" });

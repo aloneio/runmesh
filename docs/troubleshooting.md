@@ -6,6 +6,7 @@ First identify whether the issue is the admin UI, a Runner connection, or an MCP
 
 - Verify the Worker HTTPS origin and that `RUNMESH_PUBLIC_ORIGIN` matches it.
 - Complete first setup when the page reports an uninitialized deployment.
+- If the Registry reports an incompatible schema, provision a fresh Durable Object namespace; this release does not repair or import earlier tables.
 - After repeated failed logins, wait for the throttle window to end.
 - Clear the site's old cookies and sign in again; changing the administrator password invalidates old sessions.
 
@@ -16,6 +17,8 @@ First identify whether the issue is the admin UI, a Runner connection, or an MCP
 3. Confirm outbound `wss://` access to the Worker and accurate system time.
 4. Run `runmesh doctor --json` on the Runner host.
 5. After rotation or revocation, enroll again; old credentials cannot be reused.
+
+If `doctor --json` reports an incomplete or incompatible profile, replace it through the current enrollment flow. The Runner does not convert profiles from another release.
 
 Runmesh does not require a public inbound port. Do not expose the Runner or add SSH solely to troubleshoot it.
 

@@ -1,6 +1,6 @@
 # Runmesh 0.1.0-dev.2 版本说明
 
-这是一个开发预览版，适合在受控环境试用。升级前请先备份 Worker 配置和 Runner 本地目录，并在一台测试机器上验证。
+这是一个开发预览版，适合在受控环境试用。该版本采用 clean-break 数据边界：不会导入旧表、旧 profile、旧服务清单或旧凭据；请按[版本切换指南](migration.md)使用全新 Durable Object 命名空间并重新注册 Runner。发布前请先备份 Worker 配置和 Runner 本地目录，并在一台测试机器上验证。
 
 ## 对用户可见的改进
 
@@ -18,7 +18,7 @@
 - `shell` 使用 Runner 服务账号的操作系统权限，不是容器或虚拟机沙箱；
 - 自动升级、自动回滚、多租户组织、计费、托管 IDE、浏览器自动化和模型 API 不属于当前版本；
 - hosted bootstrap 只有在固定签名版本、外部 HTTPS 地址和部署门控同时满足时才会显示；
-- Cloudflare 配额、Durable Object 迁移、Windows/macOS 原生服务和外部 MCP 客户端仍需在目标环境验收。
+- Cloudflare 配额、全新 Durable Object 命名空间、Windows/macOS 原生服务和外部 MCP 客户端仍需在目标环境验收。
 
 ## 安装和升级
 
@@ -26,8 +26,8 @@
 
 ## English
 
-This is a development preview for controlled evaluation. It adds a unified dashboard, explicit Runner selection, per-workspace permissions, persistent jobs with bounded logs, cross-platform service provisioning, signed fixed-release installation, credential rotation, and path-safety checks.
+This is a development preview for controlled evaluation. It adds a unified dashboard, explicit Runner selection, per-workspace permissions, persistent jobs with bounded logs, cross-platform service provisioning, signed fixed-release installation, credential rotation, and path-safety checks. This release uses a clean-break data boundary: earlier tables, profiles, service manifests, and credentials are not imported; deploy a fresh Durable Object namespace and enroll Runners again.
 
-`shell` runs with the Runner service account's host permissions and is not a sandbox. Automatic upgrades and rollback, multi-tenant organizations, billing, hosted IDEs, browser automation, and model APIs are outside this release. Validate Cloudflare quotas, Durable Object migrations, native service lifecycle behavior, and your MCP clients before production use.
+`shell` runs with the Runner service account's host permissions and is not a sandbox. Automatic upgrades and rollback, multi-tenant organizations, billing, hosted IDEs, browser automation, and model APIs are outside this release. Validate Cloudflare quotas, fresh-namespace behavior, native service lifecycle behavior, and your MCP clients before production use.
 
 See the [administrator guide](admin-guide.md) and [portable installation procedure](portable-runner-installation.md).
