@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -24,7 +25,13 @@ const runnerId = "e2e-runner";
 // alive after the actual child exits, making the fixture hang during cleanup.
 const projectDirectory = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const wranglerCli = resolve(projectDirectory, "node_modules", "wrangler", "bin", "wrangler.js");
-const tsxCli = resolve(projectDirectory, "node_modules", "tsx", "dist", "cli.mjs");
+// npm hoists workspace dependencies to the repository root on the hosted CI
+// runner, while pnpm keeps them under the owning workspace. Resolve both
+// layouts so the fixture exercises the same source CLI locally and in CI.
+const tsxCli = resolveWorkspaceCli(
+  ["node_modules", "tsx", "dist", "cli.mjs"],
+  ["apps", "runner", "node_modules", "tsx", "dist", "cli.mjs"],
+);
 const childSpawnOptions = process.platform === "win32" ? { windowsHide: true } : {};
 const trustedTaskkill = process.platform === "win32" ? resolveTrustedWindowsTool("taskkill", trustedWindowsRoot()) : undefined;
 const adminToken = "e2e-admin-token-0123456789abcdef";
@@ -36,6 +43,12 @@ const workerEnv = {
   INTERNAL_CONTROL_SECRET: "e2e-internal-control-secret-not-for-production",
   RUNMESH_TEST_MODE: "1",
 };
+
+function resolveWorkspaceCli(...candidates: string[][]): string {
+  const resolved = candidates.map((parts) => resolve(projectDirectory, ...parts)).find((path) => existsSync(path));
+  if (resolved === undefined) throw new Error(`workspace CLI is not installed; checked: ${candidates.map((parts) => parts.join("/")).join(", ")}`);
+  return resolved;
+}
 
 describe.sequential("real local MCP → Worker → Runner RPC", () => {
   let requestId = 10;
