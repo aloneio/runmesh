@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { access, lstat, realpath, rm } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
+import { access, rm } from "node:fs/promises";
 import { parseRunnerArgs, validateRunnerConfig, type RawRunnerOptions } from "./config.js";
 import { RunnerConnection } from "./connection.js";
 import { enrollRunner, isEnrollmentOutcomeUnknown } from "./enrollment.js";
-import { ProfileStore, defaultWorkspaceId, profileExecutionMode, profileManagementMode, redactedProfile, workspaceOptions, type RunnerProfile, type StoredWorkspace } from "./profile.js";
+import { ProfileStore, profileExecutionMode, profileManagementMode, redactedProfile, workspaceOptions, type RunnerProfile } from "./profile.js";
 import { EnvironmentInfoService, discoverShellRuntime, type ShellRuntime } from "./runtime.js";
 import { RUNNER_VERSION } from "./version.js";
 import { assertManagedServiceManifest, createServiceManager, createServiceProvisioner, currentServicePlatform, expectedServiceIdentity, hostServiceManifestFilesystem, installServiceManifest, isManagedService, managedServiceManifestFromContent, removeServiceManifest, renderService, rewriteManagedServiceExecutionMode, serviceLayout, servicePrivilegeState, serviceProfilePath, type ExecutionMode, type ServiceManagerAdapter, type ServiceManifest, type ServiceManifestFilesystem, type ServicePlatform, type ServicePrivilegeState, type ServiceProvisioner } from "./service.js";
@@ -54,7 +53,7 @@ export interface EnrollCliDependencies {
   readonly afterEnroll?: () => Promise<void>;
 }
 interface ParsedCommand { readonly command: string; readonly json: boolean; readonly values: Record<string, string | boolean | string[]>; readonly passthrough: string[]; }
-const HELP = "usage: runmesh-runner <start|enroll|status|doctor|workspace|env|install|migrate|stop|restart|uninstall> [options]\nenroll: --server <https-url> (--code <one-time-code> | --code-stdin)\nservice migration: migrate --execution-mode <dedicated_user|privileged_host> [--confirm-privileged-host]\nworkspace: list | add --path <directory> [--allow-edit] [--allow-host-shell --i-understand-host-shell-is-not-sandboxed] | remove --id <workspace-id> | migrate --management-mode <central|legacy_manual>";
+const HELP = "usage: runmesh-runner <start|enroll|status|doctor|workspace|env|install|migrate|stop|restart|uninstall> [options]\nenroll: --server <https-url> (--code <one-time-code> | --code-stdin)\nservice migration: migrate --execution-mode <dedicated_user|privileged_host> [--confirm-privileged-host]\nworkspace: list";
 
 /**
  * Read a one-time enrollment code without placing it in argv, a URL, or the
@@ -239,11 +238,11 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
     if (parsed.command === "status") {
       const profile = await store.load();
       const serviceMode = parsed.values.user === true ? "user" as const : "system" as const;
-      const configuredMode = profile === undefined ? "migration_required" as const : serviceMode === "user" ? "dedicated_user" as const : profileExecutionMode(profile) ?? "migration_required" as const;
+      const configuredMode = profile === undefined ? undefined : serviceMode === "user" ? "dedicated_user" as const : profileExecutionMode(profile);
       let manifest: ServiceManifest | undefined;
       let statusManifest: ServiceManifest | undefined;
       let runtimeStatus: Awaited<ReturnType<NonNullable<ServiceManagerAdapter["status"]>>> | undefined;
-      if (profile !== undefined && configuredMode !== "migration_required") {
+      if (profile !== undefined && configuredMode !== undefined) {
         manifest = renderService({ ...(dependencies.servicePlatform === undefined ? {} : { platform: dependencies.servicePlatform }), mode: serviceMode, profilePath: store.filePath, ...(configuredMode === "dedicated_user" || configuredMode === "privileged_host" ? { executionMode: configuredMode } : {}) });
         statusManifest = manifest;
         if (manifest.mode === "system" && manifest.executionMode === "dedicated_user") {
@@ -283,7 +282,7 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
         configured_execution_mode: configuredMode,
         actual_service_identity: actualIdentity,
         privilege_state: privilegeState,
-        management_mode: profileManagementMode(profile) ?? "migration_required",
+        management_mode: profileManagementMode(profile) ?? null,
         // A native service-manager state only says whether the process is
         // scheduled/running.  It does not prove that the Runner has an
         // authenticated control-plane socket, so never label an active task
@@ -338,10 +337,9 @@ async function start(parsed: ParsedCommand, store: ProfileStore, error: (line: s
     const serviceGroup = await serviceGroupForManagedProfile(profileStore, dependencies.servicePlatform, dependencies.serviceFilesystem);
     await profileStore.assertServiceOwnership(profile.execution_mode, serviceGroup);
   }
-  const hasLegacyExplicit = raw.server !== undefined || raw.runnerId !== undefined || raw.token !== undefined || (raw.workspaces?.length ?? 0) > 0;
-  const productWorkspaces = profile === undefined || profileManagementMode(profile) === "central" ? [] : workspaceOptions(profile);
+  if ((raw.workspaces?.length ?? 0) > 0) throw new Error("Workspace configuration is centrally managed through the Runmesh Admin Panel; --workspace is not supported.");
   const server = raw.server ?? profile?.server_url;
-  const token = raw.token ?? process.env.RUNMESH_RUNNER_TOKEN ?? process.env.RUNMESH_TOKEN ?? profile?.token;
+  const token = raw.token ?? process.env.RUNMESH_RUNNER_TOKEN ?? profile?.token;
   const runnerId = raw.runnerId ?? profile?.runner_id;
   const maxConcurrentJobs = raw.maxConcurrentJobs ?? profile?.max_concurrent_jobs;
   const options: RawRunnerOptions = {
@@ -354,7 +352,7 @@ async function start(parsed: ParsedCommand, store: ProfileStore, error: (line: s
     // Test controls are retained only in the foreground compatible start path, never stored.
     ...(raw.disconnectAfterMs === undefined ? {} : { disconnectAfterMs: raw.disconnectAfterMs }),
     ...(raw.disconnectControlFile === undefined ? {} : { disconnectControlFile: raw.disconnectControlFile }),
-    workspaces: raw.workspaces?.length ? raw.workspaces : (hasLegacyExplicit ? [] : productWorkspaces),
+    workspaces: [],
   };
   const config = await validateRunnerConfig(options);
   if (dependencies.startRunner !== undefined) return dependencies.startRunner(config);
@@ -379,38 +377,8 @@ async function start(parsed: ParsedCommand, store: ProfileStore, error: (line: s
 async function workspaceCommand(parsed: ParsedCommand, store: ProfileStore, output: (line: string) => void): Promise<void> {
   const action = typeof parsed.values.action === "string" ? parsed.values.action : "list";
   const profile = await requireProfile(store);
-  const managementMode = profileManagementMode(profile);
-  if (action === "list") { report(output, parsed.json, { management_mode: managementMode, workspaces: profile.workspaces.map((workspace) => ({ ...workspace })) }); return; }
-  if (action === "migrate") {
-    const mode = parsed.values.managementMode;
-    if (managementMode !== "migration_required") throw new Error("workspace management mode is already configured");
-    if (mode !== "central" && mode !== "legacy_manual") throw new Error("--management-mode must be central or legacy_manual");
-    await store.save({ ...profile, management_mode: mode });
-    report(output, parsed.json, { management_mode: mode, migrated: true });
-    return;
-  }
-  if (managementMode === "central") throw new Error("Configure managed Workspaces through the Runmesh Admin Panel.");
-  if (managementMode !== "legacy_manual") throw new Error("Runner profile management_mode is migration_required; run runmesh-runner workspace migrate --management-mode central or legacy_manual first.");
-  if (action === "add") {
-    const path = await canonicalDirectory(requiredString(parsed, "path"));
-    const id = typeof parsed.values.id === "string" ? validateWorkspaceId(parsed.values.id) : defaultWorkspaceId(path, profile.workspaces);
-    if (profile.workspaces.some((workspace) => workspace.id === id || workspace.path === path)) throw new Error("workspace already exists");
-    const allowEdit = parsed.values.allowEdit === true;
-    const allowHostShell = parsed.values.allowHostShell === true;
-    const understoodHostShell = parsed.values.understoodHostShell === true;
-    if (allowHostShell !== understoodHostShell) throw new Error("--allow-host-shell requires --i-understand-host-shell-is-not-sandboxed");
-    if (allowHostShell && !allowEdit) throw new Error("--allow-host-shell also requires --allow-edit");
-    if (allowEdit && parsed.values.readonly === true) throw new Error("--allow-edit conflicts with --readonly");
-    if (allowHostShell && parsed.values.noShell === true) throw new Error("--allow-host-shell conflicts with --no-shell");
-    const workspace: StoredWorkspace = { id, path, writable: allowEdit, shell: allowHostShell };
-    await store.save({ ...profile, workspaces: [...profile.workspaces, workspace] }); report(output, parsed.json, { added: id, writable: workspace.writable, shell: workspace.shell }); return;
-  }
-  if (action === "remove") {
-    const id = requiredString(parsed, "id"); const workspaces = profile.workspaces.filter((workspace) => workspace.id !== id);
-    if (workspaces.length === profile.workspaces.length) throw new Error("workspace not found");
-    await store.save({ ...profile, workspaces }); report(output, parsed.json, { removed: id }); return;
-  }
-  throw new Error("usage: runmesh-runner workspace <list|add|remove|migrate>");
+  if (action === "list") { report(output, parsed.json, { management_mode: profileManagementMode(profile), workspaces: profile.workspaces.map((workspace) => ({ ...workspace })) }); return; }
+  throw new Error("Workspace configuration is centrally managed through the Runmesh Admin Panel; only `workspace list` is available locally.");
 }
 export interface DoctorCheck {
   readonly name: string;
@@ -426,8 +394,8 @@ export interface DoctorReport {
   readonly service: {
     readonly manifest: string;
     readonly mode: "system" | "user";
-    readonly execution_mode: ExecutionMode | "migration_required";
-    readonly configured_execution_mode: ExecutionMode | "migration_required";
+    readonly execution_mode: ExecutionMode | null;
+    readonly configured_execution_mode: ExecutionMode | null;
     readonly actual_service_identity: string | null;
     readonly privilege_state: ServicePrivilegeState;
   };
@@ -446,7 +414,7 @@ export async function doctor(store: ProfileStore, mode: "system" | "user" = "sys
   const enrolled = profile !== undefined;
   add("profile", true, enrolled, enrolled ? undefined : profileLoadError ?? "not enrolled");
   const storedMode = profileExecutionMode(profile);
-  const executionMode: ExecutionMode | "migration_required" = mode === "user" ? "dedicated_user" : storedMode ?? "migration_required";
+  const executionMode: ExecutionMode | undefined = mode === "user" ? "dedicated_user" : storedMode;
   // ProfileStore permissions describe the host on which this CLI is running,
   // whereas `platform` can be injected to inspect a rendered service for a
   // different target platform.  Do not apply POSIX mode-bit rules to a
@@ -481,8 +449,8 @@ export async function doctor(store: ProfileStore, mode: "system" | "user" = "sys
     }
   } else add("server_url", false, false, "not enrolled");
 
-  const manifest = renderService({ ...(platform === undefined ? {} : { platform }), mode, profilePath: store.filePath, ...(executionMode === "migration_required" ? {} : { executionMode }) });
-  add("execution_mode", enrolled, executionMode !== "migration_required", !enrolled ? "not enrolled" : executionMode === "migration_required" ? "legacy profile has no execution_mode; choose --execution-mode dedicated_user or privileged_host before installation" : executionMode);
+  const manifest = renderService({ ...(platform === undefined ? {} : { platform }), mode, profilePath: store.filePath, ...(executionMode === undefined ? {} : { executionMode }) });
+  add("execution_mode", enrolled, executionMode !== undefined, !enrolled ? "not enrolled" : executionMode === undefined ? "profile is incomplete; enroll again with the current Runner" : executionMode);
   let serviceContent: string | undefined;
   try { serviceContent = await (dependencies.serviceFilesystem ?? hostServiceManifestFilesystem).read(manifest.path); } catch (error) { add("service_manifest", true, false, errorMessage(error)); }
   if (!checks.some((check) => check.name === "service_manifest")) {
@@ -512,7 +480,7 @@ export async function doctor(store: ProfileStore, mode: "system" | "user" = "sys
   const manager = dependencies.serviceManager ?? createServiceManager({ platform: manifest.platform, mode: manifest.mode });
   let actualServiceIdentity: string | null = null;
   let privilegeState: ServicePrivilegeState = "unknown";
-  const expectedIdentity = executionMode === "migration_required" ? undefined : expectedServiceIdentity(serviceProbeManifest);
+  const expectedIdentity = executionMode === undefined ? undefined : expectedServiceIdentity(serviceProbeManifest);
   const serviceIdentityRequired = expectedIdentity !== undefined;
   if (manager.platform !== manifest.platform || manager.mode !== manifest.mode || manager.status === undefined) {
     const detail = "service status probe unavailable";
@@ -575,8 +543,8 @@ export async function doctor(store: ProfileStore, mode: "system" | "user" = "sys
     service: {
       manifest: manifest.path,
       mode,
-      execution_mode: executionMode,
-      configured_execution_mode: executionMode,
+      execution_mode: executionMode ?? null,
+      configured_execution_mode: executionMode ?? null,
       actual_service_identity: actualServiceIdentity,
       privilege_state: privilegeState,
     },
@@ -954,15 +922,10 @@ export function parseProductArgs(argv: readonly string[]): ParsedCommand {
     return { command, json: values.json === true, values, passthrough };
   }
   const rest = [...argv.slice(1)];
-  if (command === "workspace" && ["list", "add", "remove", "migrate"].includes(rest[0] ?? "")) values.action = rest.shift() as string;
+  if (command === "workspace" && rest[0] === "list") values.action = rest.shift() as string;
   for (let index = 0; index < rest.length; index += 1) {
     const arg = rest[index];
     if (arg === "--json") { values.json = true; continue; }
-    if (arg === "--readonly") { values.readonly = true; continue; }
-    if (arg === "--no-shell") { values.noShell = true; continue; }
-    if (arg === "--allow-edit") { values.allowEdit = true; continue; }
-    if (arg === "--allow-host-shell") { values.allowHostShell = true; continue; }
-    if (arg === "--i-understand-host-shell-is-not-sandboxed") { values.understoodHostShell = true; continue; }
     if (arg === "--purge") { values.purge = true; continue; }
     if (arg === "--yes") { values.yes = true; continue; }
     if (arg === "--insecure-local") { values.insecureLocal = true; continue; }
@@ -970,7 +933,7 @@ export function parseProductArgs(argv: readonly string[]): ParsedCommand {
     if (arg === "--user") { values.user = true; continue; }
     if (arg === "--confirm-privileged-host") { values.confirmPrivilegedHost = true; continue; }
     if (arg === "--code-stdin") { values.codeStdin = true; continue; }
-    const key = arg === "--execution-mode" ? "executionMode" : arg === "--management-mode" ? "managementMode" : arg === "--server" ? "server" : arg === "--code" ? "code" : arg === "--cwd" ? "cwd" : arg === "--id" ? "id" : arg === "--path" ? "path" : arg === "--executable-path" ? "executablePath" : arg === "--profile" ? "profilePath" : undefined;
+    const key = arg === "--execution-mode" ? "executionMode" : arg === "--server" ? "server" : arg === "--code" ? "code" : arg === "--cwd" ? "cwd" : arg === "--executable-path" ? "executablePath" : arg === "--profile" ? "profilePath" : undefined;
     const value = rest[index + 1]; if (key === undefined || value === undefined || value.startsWith("--")) throw new Error(`unknown or incomplete option: ${arg}`);
     values[key] = value; index += 1;
   }
@@ -978,7 +941,7 @@ export function parseProductArgs(argv: readonly string[]): ParsedCommand {
 }
 function storeFor(parsed: ParsedCommand, platform?: ServicePlatform): ProfileStore {
   if (typeof parsed.values.profilePath === "string") return new ProfileStore({ filePath: parsed.values.profilePath, ...(platform === undefined ? {} : { platform }) });
-  if (parsed.values.user === true || process.env.RUNMESH_RUNNER_PROFILE !== undefined || process.env.RUNMESH_PROFILE !== undefined) return new ProfileStore(platform === undefined ? {} : { platform });
+  if (parsed.values.user === true || process.env.RUNMESH_RUNNER_PROFILE !== undefined) return new ProfileStore(platform === undefined ? {} : { platform });
   const layout = serviceLayout({ ...(platform === undefined ? {} : { platform }), mode: "system" });
   return new ProfileStore({ filePath: serviceProfilePath(layout), ...(platform === undefined ? {} : { platform }) });
 }
@@ -988,23 +951,10 @@ async function serviceManifestFor(parsed: ParsedCommand, store: ProfileStore, pl
   if (requestedMode !== undefined && requestedMode !== "dedicated_user" && requestedMode !== "privileged_host") throw new Error("--execution-mode must be dedicated_user or privileged_host");
   if (parsed.values.user === true && requestedMode === "privileged_host") throw new Error("user Runner services cannot use privileged_host; choose --execution-mode dedicated_user");
   const profileMode = profileExecutionMode(profile);
-  const profileExecutionModeValue: ExecutionMode | undefined = profileMode === "migration_required" ? undefined : profileMode;
-  // Installing or migrating a legacy profile requires an explicit choice, so
-  // an upgrade can never silently turn an existing service into root/SYSTEM.
-  // Lifecycle commands that merely stop/restart/uninstall may safely use the
-  // restricted manifest as a compatibility bridge for an already-installed
-  // legacy service; this does not grant any new privilege.
+  const profileExecutionModeValue = profileMode;
   const needsExplicitMode = parsed.command === "install" || parsed.command === "migrate";
-  if (parsed.values.user !== true && needsExplicitMode && profileMode === "migration_required" && requestedMode === undefined) throw new Error("legacy Runner profile requires --execution-mode dedicated_user or --execution-mode privileged_host before system installation");
+  if (parsed.values.user !== true && needsExplicitMode && profile !== undefined && profileMode === undefined && requestedMode === undefined) throw new Error("Runner profile is incomplete; enroll again or provide --execution-mode dedicated_user or --execution-mode privileged_host before system installation");
   let executionMode: ExecutionMode = parsed.values.user === true ? "dedicated_user" : requestedMode ?? profileExecutionModeValue ?? "dedicated_user";
-  if (parsed.values.user !== true && requestedMode === undefined && profileMode === "migration_required" && !needsExplicitMode) {
-    // A legacy profile may have an already-installed managed privileged unit.
-    // Infer the existing mode only to target stop/restart/uninstall; this path
-    // never provisions, persists, or authorizes a new privileged service.
-    const layout = serviceLayout({ ...(platform === undefined ? {} : { platform }), mode: "system" });
-    const existing = await (filesystem ?? hostServiceManifestFilesystem).read(layout.manifestPath);
-    if (existing !== undefined && isManagedService(existing)) executionMode = inferExecutionModeFromManifest(platform ?? currentServicePlatform(), existing);
-  }
   const requestedServiceMode = parsed.values.user === true ? "user" : "system";
   const renderOptions = {
     ...(platform === undefined ? {} : { platform }),
@@ -1084,10 +1034,8 @@ function serviceCommandNames(action: "install" | "stop" | "restart" | "uninstall
 function report(output: (line: string) => void, json: boolean, value: unknown): void { output(json ? JSON.stringify(value) : human(value)); }
 function human(value: unknown): string { return typeof value === "string" ? value : JSON.stringify(value, null, 2); }
 function requiredString(parsed: ParsedCommand, name: string): string { const value = parsed.values[name]; if (typeof value !== "string" || value.length === 0) throw new Error(`--${name} is required`); return value; }
-function validateWorkspaceId(value: string): string { if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) throw new Error("--id must be a safe identifier"); return value; }
-async function canonicalDirectory(path: string): Promise<string> { const absolute = isAbsolute(path) ? path : resolve(path); const actual = await realpath(absolute).catch(() => { throw new Error(`workspace path does not exist: ${path}`); }); if (!(await lstat(actual)).isDirectory()) throw new Error(`workspace path is not a directory: ${path}`); return actual; }
 async function requireProfile(store: ProfileStore): Promise<RunnerProfile> { const profile = await store.load(); if (profile === undefined) throw new Error("runner is not enrolled"); return profile; }
-async function isDirectory(path: string): Promise<boolean> { return lstat(path).then((value) => value.isDirectory()).catch(() => false); }
+async function isDirectory(path: string): Promise<boolean> { return (await import("node:fs/promises")).lstat(path).then((value) => value.isDirectory()).catch(() => false); }
 function urlCheck(value: string, insecureLocal = false): { ok: boolean; detail?: string } {
   try {
     const url = new URL(value);

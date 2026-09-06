@@ -53,12 +53,12 @@ describe("runner configuration", () => {
     await expect(validateRunnerConfig({ server: "wss://example.test", runnerId: "runner-1" })).resolves.toMatchObject({ token: "0123456789abcdef" });
     process.env.RUNMESH_RUNNER_TOKEN = oldToken;
   });
-  it("uses RUNMESH_TOKEN when --token is omitted", async () => {
+  it("does not read the removed RUNMESH_TOKEN alias", async () => {
     const oldToken = process.env.RUNMESH_RUNNER_TOKEN;
     const oldLegacyToken = process.env.RUNMESH_TOKEN;
     delete process.env.RUNMESH_RUNNER_TOKEN;
     process.env.RUNMESH_TOKEN = "0123456789abcdef";
-    await expect(validateRunnerConfig({ server: "wss://example.test", runnerId: "runner-1" })).resolves.toMatchObject({ token: "0123456789abcdef" });
+    await expect(validateRunnerConfig({ server: "wss://example.test", runnerId: "runner-1" })).rejects.toThrow("token");
     process.env.RUNMESH_RUNNER_TOKEN = oldToken;
     process.env.RUNMESH_TOKEN = oldLegacyToken;
   });

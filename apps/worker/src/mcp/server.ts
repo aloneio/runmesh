@@ -4,7 +4,7 @@ import {
 } from "@aloneio/runmesh-protocol";
 import { z } from "zod";
 import { internalHeaders, isSafeIdentifier } from "../security.js";
-import type { ActiveRunnerContext, McpClientActiveRunner, McpRunnerSelectionResult } from "../registry.js";
+import type { ActiveRunnerContext, McpClientActiveRunner, McpRunnerSelectionResult, PolicyReadiness as RegistryPolicyReadiness } from "../registry.js";
 import type { WorkerEnv } from "../runner-do.js";
 import { PRODUCT_VERSION } from "../generated-version.js";
 
@@ -542,6 +542,10 @@ type ActiveSelection = {
   readonly context: ActiveRunnerContext & { readonly automatic_selection: boolean };
 };
 type RunnerResultMode = "raw" | "job" | "logs" | "input" | "shell" | "read" | "edit" | "inspect:list" | "inspect:search" | "inspect:stat" | "inspect:git_status" | "inspect:git_diff";
+type ActivePolicyReadiness = Omit<Extract<RegistryPolicyReadiness, { readonly ok: true }>, "lifecycle_id" | "session_id"> & {
+  readonly lifecycle_id: string;
+  readonly session_id: string;
+};
 function inspectResultMode(action: InspectResultKind): RunnerResultMode { return `inspect:${action}` as RunnerResultMode; }
 type SelectionCall = ToolSuccess | ToolFailure;
 type ActiveSelectionCall = { readonly ok: true; readonly value: ActiveSelection } | ToolFailure;
@@ -613,8 +617,19 @@ async function activeRunnerTool(env: WorkerEnv, clientId: string, method: string
   if (permission !== undefined) return asToolResult(permission);
   const readiness = await policyReadiness(env, selected.value.runnerId);
   if (!readiness.ok) return asToolResult(readiness.error);
+  const startedAtMs = Date.now();
   const call = await callRunner(env, selected.value.runnerId, method, params, readiness.value.applied_revision, readiness.value.active_checksum);
-  return call.ok ? runnerSuccess(projectRunnerResult(call.value, resultMode), selected.value) : runnerFailure(call.error, selected.value);
+  const result = call.ok ? runnerSuccess(projectRunnerResult(call.value, resultMode), selected.value) : runnerFailure(call.error, selected.value);
+  await recordRunnerToolCall(env, {
+    runnerId: selected.value.runnerId,
+    clientId,
+    method,
+    params,
+    result,
+    startedAtMs,
+    readiness: readiness.value,
+  }).catch(() => undefined);
+  return result;
 }
 
 async function activeJobRunnerTool(env: WorkerEnv, clientId: string, method: string, params: Record<string, unknown>, requiredPermission: PermissionBit, resultMode: RunnerResultMode = "raw"): Promise<unknown> {
@@ -631,13 +646,28 @@ async function activeJobRunnerTool(env: WorkerEnv, clientId: string, method: str
   if (permission !== undefined) return asToolResult(permission);
   const readiness = await policyReadiness(env, selected.value.runnerId);
   if (!readiness.ok) return asToolResult(readiness.error);
+  const startedAtMs = Date.now();
   // Bind the live request to the Registry-authorized workspace as an
   // additional confused-deputy defense. Current Runners validate this field;
   // older Runners may ignore the optional value, so response identity checks
   // below remain in place for compatibility.
   const boundParams = { ...params, expected_workspace_id: workspaceId };
   const call = await callRunner(env, selected.value.runnerId, method, boundParams, readiness.value.applied_revision, readiness.value.active_checksum);
-  if (!call.ok) return runnerFailure(call.error, selected.value);
+  if (!call.ok) {
+    const failure = runnerFailure(call.error, selected.value);
+    await recordRunnerToolCall(env, {
+      runnerId: selected.value.runnerId,
+      clientId,
+      method,
+      params: boundParams,
+      result: failure,
+      startedAtMs,
+      workspaceId,
+      jobId: requestedJobId,
+      readiness: readiness.value,
+    }).catch(() => undefined);
+    return failure;
+  }
   // A live Runner is expected to echo the addressed job identity in metadata
   // and cancellation responses.  If it does, bind both IDs to the Registry
   // snapshot that passed the permission check; never return a cross-workspace
@@ -645,9 +675,33 @@ async function activeJobRunnerTool(env: WorkerEnv, clientId: string, method: str
   // workspace_id by contract, so they are still bound by the exact job_id
   // request and the Registry preflight above.
   if (!runnerJobResultMatches(call.value, requestedJobId, workspaceId)) {
-    return runnerFailure(fail("permission_denied", "The Runner returned a job from a different workspace.", "Refresh the job list and retry with the authorized job identifier.").error, selected.value);
+    const failure = runnerFailure(fail("permission_denied", "The Runner returned a job from a different workspace.", "Refresh the job list and retry with the authorized job identifier.").error, selected.value);
+    await recordRunnerToolCall(env, {
+      runnerId: selected.value.runnerId,
+      clientId,
+      method,
+      params: boundParams,
+      result: failure,
+      startedAtMs,
+      workspaceId,
+      jobId: requestedJobId,
+      readiness: readiness.value,
+    }).catch(() => undefined);
+    return failure;
   }
-  return runnerSuccess(projectRunnerResult(call.value, resultMode), selected.value);
+  const result = runnerSuccess(projectRunnerResult(call.value, resultMode), selected.value);
+  await recordRunnerToolCall(env, {
+    runnerId: selected.value.runnerId,
+    clientId,
+    method,
+    params: boundParams,
+    result,
+    startedAtMs,
+    workspaceId,
+    jobId: requestedJobId,
+    readiness: readiness.value,
+  }).catch(() => undefined);
+  return result;
 }
 
 function projectRunnerResult(value: unknown, mode: RunnerResultMode): unknown {
@@ -738,30 +792,52 @@ async function checkPermission(env: WorkerEnv, clientId: string, runnerId: strin
   if (permissions?.[required] !== true) return fail(required === "edit" ? "readonly_workspace" : "permission_denied", "The operation is not permitted for this workspace.", "Ask the administrator to grant the required workspace permission.");
   return undefined;
 }
-type PolicyReadiness = {
-  readonly applied_revision: number;
-  readonly active_checksum: string;
-};
-async function policyReadiness(env: WorkerEnv, runnerId: string): Promise<{ readonly ok: true; readonly value: PolicyReadiness } | { readonly ok: false; readonly error: PermissionCheck }> {
+async function policyReadiness(env: WorkerEnv, runnerId: string): Promise<{ readonly ok: true; readonly value: ActivePolicyReadiness } | { readonly ok: false; readonly error: PermissionCheck }> {
   const readiness = await registryCall(env, `/runners/${encodeURIComponent(runnerId)}/policy-readiness`);
   if (!readiness.ok || !isRecord(readiness.value)) return { ok: false, error: fail("stale_policy", "The selected runner policy could not be verified.", "Wait for the runner to reconnect and apply the latest control-plane policy.") };
   const value = readiness.value;
-  const revision = value.applied_revision;
-  const checksum = value.active_checksum;
-  const validRevision = typeof revision === "number" && Number.isSafeInteger(revision) && revision > 0;
-  const triad = value.desired_revision === revision && value.runner_reported_policy_revision === revision
-    && value.desired_checksum === checksum && value.runner_reported_policy_checksum === checksum;
-  if (value.ok !== true || !validRevision || typeof checksum !== "string" || !/^[a-f0-9]{64}$/.test(checksum) || !triad) {
+  const desiredRevision = typeof value.desired_revision === "number" && Number.isSafeInteger(value.desired_revision) && value.desired_revision > 0 ? value.desired_revision : undefined;
+  const desiredChecksum = typeof value.desired_checksum === "string" && /^[a-f0-9]{64}$/u.test(value.desired_checksum) ? value.desired_checksum : undefined;
+  const appliedRevision = typeof value.applied_revision === "number" && Number.isSafeInteger(value.applied_revision) && value.applied_revision > 0 ? value.applied_revision : undefined;
+  const activeChecksum = typeof value.active_checksum === "string" && /^[a-f0-9]{64}$/u.test(value.active_checksum) ? value.active_checksum : undefined;
+  const reportedRevision = typeof value.runner_reported_policy_revision === "number" && Number.isSafeInteger(value.runner_reported_policy_revision) && value.runner_reported_policy_revision > 0 ? value.runner_reported_policy_revision : undefined;
+  const reportedChecksum = typeof value.runner_reported_policy_checksum === "string" && /^[a-f0-9]{64}$/u.test(value.runner_reported_policy_checksum) ? value.runner_reported_policy_checksum : undefined;
+  const connectionEpoch = typeof value.connection_epoch === "number" && Number.isSafeInteger(value.connection_epoch) && value.connection_epoch >= 0 ? value.connection_epoch : undefined;
+  const credentialVersion = typeof value.credential_version === "number" && Number.isSafeInteger(value.credential_version) && value.credential_version >= 0 ? value.credential_version : undefined;
+  const lifecycleId = typeof value.lifecycle_id === "string" && safeLifecycleId(value.lifecycle_id) ? value.lifecycle_id : undefined;
+  const sessionId = typeof value.session_id === "string" && safeJobIdentifier(value.session_id) !== undefined ? value.session_id : undefined;
+  const triad = desiredRevision !== undefined && appliedRevision !== undefined && reportedRevision !== undefined && desiredChecksum !== undefined && activeChecksum !== undefined && reportedChecksum !== undefined
+    && desiredRevision === appliedRevision && reportedRevision === appliedRevision && desiredChecksum === activeChecksum && reportedChecksum === activeChecksum;
+  if (value.ok !== true || desiredRevision === undefined || desiredChecksum === undefined || appliedRevision === undefined || activeChecksum === undefined || reportedRevision === undefined || reportedChecksum === undefined || connectionEpoch === undefined || credentialVersion === undefined || lifecycleId === undefined || sessionId === undefined || !triad) {
     const code = value.code === "stale_policy" ? "stale_policy" : "policy_pending";
     return { ok: false, error: fail(code, "The selected runner has no trusted active policy.", "Wait for the runner to reconnect and apply the latest control-plane policy.") };
   }
-  return { ok: true, value: { applied_revision: revision as number, active_checksum: checksum } };
+  return {
+    ok: true,
+    value: {
+      ok: true,
+      policy_status: "applied",
+      desired_revision: desiredRevision,
+      desired_checksum: desiredChecksum,
+      applied_revision: appliedRevision,
+      active_checksum: activeChecksum,
+      runner_reported_policy_revision: reportedRevision,
+      runner_reported_policy_checksum: reportedChecksum,
+      connection_epoch: connectionEpoch,
+      credential_version: credentialVersion,
+      lifecycle_id: lifecycleId,
+      session_id: sessionId,
+    },
+  };
 }
 
 async function snapshotAuthorization(env: WorkerEnv, runnerId: string): Promise<ToolFailure | undefined> {
   const snapshot = await registryCall(env, `/runners/${encodeURIComponent(runnerId)}/snapshot-authorization`);
   if (!snapshot.ok || !isRecord(snapshot.value) || snapshot.value.ok !== true) return fail("policy_pending", "The selected runner has no trusted active policy snapshot.", "Wait for an active policy to be acknowledged, then retry.");
   return undefined;
+}
+function safeLifecycleId(value: string): boolean {
+  return value.length >= 16 && value.length <= 128 && /^[A-Za-z0-9._:-]+$/u.test(value);
 }
 async function checkAnyReadPermission(env: WorkerEnv, clientId: string, runnerId: string): Promise<PermissionCheck | undefined> {
   const snapshotPermission = await snapshotAuthorization(env, runnerId);
@@ -886,6 +962,36 @@ function registryJobsPath(runnerId: string, filters: Record<string, unknown>): s
   return `/runners/${encodeURIComponent(runnerId)}/jobs${suffix}`;
 }
 
+function safeJobIdentifierFromResult(value: unknown): string | undefined {
+  if (!isRecord(value) || !isRecord(value.structuredContent)) return undefined;
+  const direct = safeJobIdentifier(value.structuredContent.job_id);
+  if (direct !== undefined) return direct;
+  const job = isRecord(value.structuredContent.job) ? value.structuredContent.job : undefined;
+  return job === undefined ? undefined : safeJobIdentifier(job.job_id);
+}
+
+function safeWorkspaceIdFromResult(value: unknown): string | null {
+  if (!isRecord(value) || !isRecord(value.structuredContent)) return null;
+  const direct = safeJobIdentifier(value.structuredContent.workspace_id);
+  if (direct !== undefined) return direct;
+  const job = isRecord(value.structuredContent.job) ? value.structuredContent.job : undefined;
+  return job === undefined ? null : safeJobIdentifier(job.workspace_id) ?? null;
+}
+
+function safeRunnerContextFromResult(value: unknown): { readonly runner_id?: string } | undefined {
+  if (!isRecord(value) || !isRecord(value.structuredContent)) return undefined;
+  const direct = isRecord(value.structuredContent.runner_context) ? value.structuredContent.runner_context : undefined;
+  if (direct !== undefined) {
+    const runnerId = safeJobIdentifier(direct.runner_id);
+    return runnerId === undefined ? undefined : { runner_id: runnerId };
+  }
+  const error = isRecord(value.structuredContent.error) ? value.structuredContent.error : undefined;
+  const details = error !== undefined && isRecord(error.details) ? error.details : undefined;
+  if (details === undefined || !isRecord(details.runner_context)) return undefined;
+  const runnerId = safeJobIdentifier(details.runner_context.runner_id);
+  return runnerId === undefined ? undefined : { runner_id: runnerId };
+}
+
 function runnerListToolValue(value: readonly unknown[]): unknown {
   const runners = value.filter(isRecord).map((runner) => {
     const runnerId = safeJobIdentifier(runner.runner_id) ?? "unknown";
@@ -930,6 +1036,49 @@ async function registryPostCall(env: WorkerEnv, path: string, input: Record<stri
     if (response.ok || response.status === 409) return { ok: true, value };
     return fail(response.status === 404 ? "not_found" : "registry_unavailable", "The registry is unavailable.", "Retry shortly.");
   } catch { return fail("registry_unavailable", "The registry is unavailable.", "Retry shortly."); }
+}
+async function recordRunnerToolCall(env: WorkerEnv, input: {
+  readonly runnerId: string;
+  readonly clientId: string;
+  readonly method: string;
+  readonly params: Record<string, unknown>;
+  readonly result: unknown;
+  readonly startedAtMs: number;
+  readonly workspaceId?: string;
+  readonly jobId?: string;
+  readonly readiness: ActivePolicyReadiness;
+}): Promise<void> {
+  const structuredContent = isRecord(input.result) && isRecord(input.result.structuredContent) ? input.result.structuredContent : undefined;
+  const errorValue = structuredContent === undefined ? undefined : structuredContent.error;
+  const errorCode = errorValue !== undefined && isRecord(errorValue) && typeof errorValue.code === "string"
+    ? errorValue.code
+    : "internal_error";
+  const result = isRecord(input.result) && input.result.isError === true
+    ? { status: "error" as const, error_code: errorCode }
+    : { status: "ok" as const, error_code: null };
+  const completedAtMs = Date.now();
+  const jobId = input.jobId ?? safeJobIdentifierFromResult(input.result) ?? null;
+  const runnerContext = safeRunnerContextFromResult(input.result);
+  await registryPostCall(env, `/runners/${encodeURIComponent(input.runnerId)}/mcp-calls`, {
+    call_id: `call-${crypto.randomUUID()}`,
+    client_id: input.clientId,
+    method: input.method,
+    workspace_id: input.workspaceId ?? safeWorkspaceIdFromResult(input.result),
+    job_id: jobId,
+    status: result.status,
+    error_code: result.error_code,
+    params: redactAndBound(input.params, 8_192),
+    result: redactAndBound(input.result, 8_192),
+    result_runner_id: runnerContext?.runner_id ?? null,
+    started_at_ms: input.startedAtMs,
+    completed_at_ms: completedAtMs,
+    duration_ms: completedAtMs - input.startedAtMs,
+    epoch: input.readiness.connection_epoch,
+    credential_version: input.readiness.credential_version,
+    lifecycle_id: input.readiness.lifecycle_id,
+    session_id: input.readiness.session_id,
+    now_ms: completedAtMs,
+  });
 }
 function asToolResult(call: ToolCall): unknown {
   return call.ok ? success(call.value) : call.error.details === undefined

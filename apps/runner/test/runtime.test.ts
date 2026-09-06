@@ -186,7 +186,6 @@ describe("workspace path policy", () => {
       const config: RunnerConfig = { server: "ws://127.0.0.1", token: "0123456789abcdef", runnerId: "runner-1", workspaces: [readonly] };
       const runtime = new RunnerRuntime({ config, stateDir: test.state });
       await runtime.initialize();
-      await expect(runtime.dispatch("fs.patch", { workspace_id: readonly.workspaceId, path: "new.txt", content: "x" })).rejects.toMatchObject({ code: "readonly_workspace" });
       await expect(runtime.dispatch("exec.start", { workspace_id: readonly.workspaceId, command: "echo", args: ["x"], shell: true })).rejects.toThrow(/shell execution/);
     } finally { await test.cleanup(); }
   });

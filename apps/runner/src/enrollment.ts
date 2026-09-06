@@ -6,7 +6,7 @@ import { RUNNER_VERSION } from "./version.js";
 export interface EnrollmentOptions {
   readonly server: string;
   readonly code: string;
-  /** Retained for explicit CLI compatibility; enrollment never derives a workspace from it. */
+  /** Enrollment never derives a workspace from this optional working directory. */
   readonly cwd?: string;
   readonly store?: ProfileStore;
   readonly fetch?: typeof globalThis.fetch;
@@ -113,9 +113,8 @@ export async function enrollRunner(options: EnrollmentOptions): Promise<Enrollme
   const enrolled = enrollmentResponse(body);
   if (enrolled === undefined) throw new EnrollmentOutcomeUnknownError(`${ENROLLMENT_OUTCOME_UNKNOWN_MESSAGE}; the server returned an invalid response`);
   // Enrollment represents a machine Runner. It intentionally never infers a local
-  // workspace from process.cwd() (or from the legacy cwd option). Initial
-  // enrollment therefore has zero workspaces; re-enrollment keeps explicitly
-  // configured roots while replacing only connection credentials.
+  // workspace from process.cwd(). Workspace authority remains central, and
+  // enrollment always writes the complete current profile contract.
   let profile: RunnerProfile;
   try {
     profile = {
@@ -123,22 +122,11 @@ export async function enrollRunner(options: EnrollmentOptions): Promise<Enrollme
       server_url: connectionUrl(enrolled.serverUrl, new URL(endpoint), options.insecureLocal === true),
       runner_id: enrolled.runnerId,
       token: enrolled.token,
-      workspaces: existing?.workspaces ?? [],
+      workspaces: [],
       ...(options.insecureLocal === true ? { insecure_local: true } : {}),
       ...(existing?.max_concurrent_jobs === undefined ? {} : { max_concurrent_jobs: existing.max_concurrent_jobs }),
-      // A brand-new profile uses the restricted default.  Re-enrollment of a
-      // legacy profile deliberately keeps the execution-mode field absent so
-      // the subsequent system install still requires an explicit operator
-      // migration choice; it must not silently guess (even a restricted)
-      // service contract during credential replacement.
-      ...(options.executionMode === undefined
-        ? existing === undefined
-          ? { execution_mode: "dedicated_user" as const }
-          : existing.execution_mode === undefined ? {} : { execution_mode: existing.execution_mode }
-        : { execution_mode: options.executionMode }),
-      ...(existing === undefined
-        ? { management_mode: "central" as const }
-        : existing.management_mode === undefined ? {} : { management_mode: existing.management_mode }),
+      execution_mode: options.executionMode ?? existing?.execution_mode ?? "dedicated_user",
+      management_mode: "central",
     };
     await store.save(profile);
   } catch {

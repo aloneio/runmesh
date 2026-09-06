@@ -76,20 +76,6 @@ export type {
 } from "./schema.js";
 
 export { generateWireMessageJsonSchema } from "./schema-artifact.js";
-export {
-  RUNNER_DIAGNOSTICS_EXTENSION,
-  RUNNER_POLICY_DIAGNOSTICS_EXTENSION,
-  RUNNER_DIAGNOSTICS_FEATURE_EXTENSION,
-  mergeRunnerDiagnostics,
-  mergeWorkspaceDiagnostics,
-  parseRunnerDiagnosticsExtension,
-  policyDiagnosticsExtension,
-  runnerDiagnosticsExtension,
-  runnerDiagnosticsFeatureExtension,
-  stripRunnerDiagnostics,
-  stripWorkspaceDiagnostics,
-  supportsDirectPolicyDiagnostics,
-} from "./diagnostics.js";
 export { canonicalJson, policyWithoutChecksum, runnerPolicyChecksum, sha256Hex } from "./crypto.js";
 export {
   FULL_PERMISSION_SET,
@@ -104,8 +90,6 @@ export {
 } from "./permissions.js";
 export type { PermissionBit as CanonicalPermissionBit } from "./permissions.js";
 export type { RunnerPolicyChecksumInput } from "./crypto.js";
-export type { RunnerDiagnostics, WorkspaceDiagnostic } from "./diagnostics.js";
-
 export {
   MAX_FRAME_BYTES,
   LOCAL_RUNNER_OPERATION_TIMEOUT_MS,

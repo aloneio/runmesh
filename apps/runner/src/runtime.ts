@@ -255,7 +255,6 @@ export class RunnerRuntime {
       case "fs.list": this.policy.assertPermission(params.workspace_id, "read"); return this.filesystem.list(params);
       case "fs.search": this.policy.assertPermission(params.workspace_id, "read"); return this.filesystem.search(params);
       case "fs.apply_patch": this.policy.assertPermission(params.workspace_id, "edit"); return this.patcher.apply(params);
-      case "fs.patch": this.policy.assertWritable(params.workspace_id); return this.patcher.apply(params);
       case "git.status": this.policy.assertPermission(params.workspace_id, "read"); return this.git.status(params);
       case "git.diff": this.policy.assertPermission(params.workspace_id, "read"); return this.git.diff(params);
       case "exec.start": return this.startJob(params);
@@ -310,11 +309,9 @@ export function rpcError(error: unknown): { code: string; message: string; detai
 function object(value: unknown): Record<string, unknown> { if (typeof value !== "object" || value === null || Array.isArray(value)) throw new RpcRuntimeError("invalid_params", "params must be an object"); return value as Record<string, unknown>; }
 function positiveInteger(value: unknown, field: string): number { if (!Number.isSafeInteger(value) || (value as number) < 1) throw new RpcRuntimeError("invalid_params", `${field} must be a positive integer`); return value as number; }
 /** Worker-side job authorization is bound to a Registry workspace snapshot.
- * New Workers send this fence on job operations; accepting an omitted field
- * keeps older protocol peers compatible, while a malformed or mismatched
- * value fails before cancel/input can cause a cross-workspace side effect. */
+ * The current transport always supplies this fence before a job lookup can
+ * expose logs, accept input, or trigger cancellation. */
 function assertExpectedJobWorkspace(params: Record<string, unknown>, actualWorkspaceId: string): void {
-  if (!Object.prototype.hasOwnProperty.call(params, "expected_workspace_id")) return;
   if (typeof params.expected_workspace_id !== "string" || params.expected_workspace_id !== actualWorkspaceId) throw new RpcRuntimeError("permission_denied", "job workspace does not match request");
 }
 function isActive(job: JobRecord): boolean { return job.status === "queued" || job.status === "running" || job.status === "cancelling"; }

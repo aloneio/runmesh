@@ -21,7 +21,7 @@ Runmesh connects ChatGPT, Claude, Cursor, and other MCP-compatible clients to co
 
 Each execution machine runs a Runmesh Runner. The Runner opens an encrypted outbound connection to the control plane, so the machine does not need a public inbound port, SSH service, or VPN tunnel. Files and commands stay on the machine; the control plane handles identity, policy, and routing.
 
-Runmesh is useful for maintaining servers, sharing a controlled development machine with a team, running builds and migrations, and giving each client a precise set of machines, workspaces, and capabilities.
+Runmesh is useful for maintaining servers, sharing a controlled development machine with a team, running builds and operational tasks, and giving each client a precise set of machines, workspaces, and capabilities.
 
 ## Get started in three minutes
 
@@ -71,7 +71,7 @@ Effective permission is the intersection of the client, Runner, and workspace po
 
 Runmesh is a development preview. Runner management, workspace policy, MCP clients, persistent jobs, reconnect handling, service provisioning, and gated signed installation are included. Automatic upgrades and rollback, multi-tenant organizations, billing, hosted IDEs, browser automation, model APIs, and operating-system sandboxing are outside the current compatibility promise.
 
-Validate Cloudflare quotas, Durable Object migrations, native service lifecycle behavior, edge-log redaction, and the MCP clients you plan to use before production rollout.
+This release uses a clean data boundary: provision a fresh Durable Object namespace and re-enroll Runners; it does not import earlier tables, profiles, service manifests, or credentials. Validate Cloudflare quotas, fresh-namespace behavior, native service lifecycle behavior, edge-log redaction, and the MCP clients you plan to use before production rollout.
 
 ## Documentation
 
@@ -83,7 +83,7 @@ Validate Cloudflare quotas, Durable Object migrations, native service lifecycle 
 - [Deployment reference](docs/deployment.md): Cloudflare and advanced operations.
 - [Release notes](docs/release-notes.md): changes and known limits for each release.
 
-Architecture, transport, and migration files are advanced references for maintainers. Legal notices, third-party credits, and community rules are in [docs](docs/).
+Architecture, transport, and release-transition files are advanced references for maintainers. Legal notices, third-party credits, and community rules are in [docs](docs/).
 
 ## License and support
 

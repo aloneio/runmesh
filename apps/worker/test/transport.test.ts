@@ -15,8 +15,15 @@ describe("Worker runner transport", () => {
     return SELF.fetch("https://worker.test/admin/runners", {
       method: "POST",
       headers: { Authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
-      body: JSON.stringify({ runner_id: id, token: runnerToken }),
+      body: JSON.stringify({ runner_id: id, token: runnerToken, execution_mode: "dedicated_user" }),
     });
+  }
+
+  function runnerTransportIdentity(instance: RegistryDO, id: string): { lifecycleId: string; sessionId: string } {
+    const state = instance.getRunnerExecutionState(id);
+    expect(state).toBeDefined();
+    expect(state?.session_id).toMatch(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u);
+    return { lifecycleId: state!.lifecycle_id, sessionId: state!.session_id as string };
   }
 
   beforeEach(async () => {
@@ -66,11 +73,136 @@ describe("Worker runner transport", () => {
     expect(headers[INTERNAL_CONTROL_HEADER]).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it("records MCP calls in the registry audit trail", async () => {
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
+    const auditRunnerId = `audit-${crypto.randomUUID()}`;
+    const secret = "test-internal-control-secret-not-for-production";
+    await runInDurableObject(registry, (instance) => {
+      expect(instance.registerRunner(auditRunnerId, "audit-runner", Date.now(), undefined, "dedicated_user")).toBe(true);
+    });
+
+    const readiness = await runInDurableObject(registry, (instance) => {
+      const current = instance.getRunnerExecutionState(auditRunnerId);
+      expect(current).toBeDefined();
+      const now = Date.now();
+      const sessionId = `session-${crypto.randomUUID()}`;
+      (instance as any).ctx.storage.sql.exec("UPDATE runners SET state = 'online', session_id = ?, last_heartbeat_ms = ?, updated_at_ms = ? WHERE runner_id = ?", sessionId, now, now, auditRunnerId);
+      expect(instance.recordHeartbeat(auditRunnerId, current!.runner.connection_epoch, current!.runner.credential_version, now, current!.lifecycle_id, sessionId)).toBe(true);
+      return { lifecycleId: current!.lifecycle_id, sessionId, epoch: current!.runner.connection_epoch, credentialVersion: current!.runner.credential_version };
+    }) as { lifecycleId: string; sessionId: string; epoch: number; credentialVersion: number };
+
+    const startedAtMs = Date.now() - 12;
+    const completedAtMs = startedAtMs + 12;
+    const body = JSON.stringify({
+      call_id: `call-${crypto.randomUUID()}`,
+      client_id: "client-audit",
+      method: "job.logs",
+      workspace_id: "workspace-1",
+      job_id: "job-1",
+      status: "ok",
+      error_code: null,
+      params: { job_id: "job-1", limit: 16 },
+      result: { content: [{ type: "text", text: "ok" }], structuredContent: { job_id: "job-1" } },
+      started_at_ms: startedAtMs,
+      completed_at_ms: completedAtMs,
+      duration_ms: 12,
+      epoch: readiness.epoch,
+      credential_version: readiness.credentialVersion,
+      lifecycle_id: readiness.lifecycleId,
+      session_id: readiness.sessionId,
+      now_ms: completedAtMs,
+    });
+    const path = `/runners/${encodeURIComponent(auditRunnerId)}/mcp-calls`;
+    const headers = await internalHeaders(secret, "POST", path, body, { timestamp: Date.now(), nonce: "d".repeat(64) });
+    const post = await registry.fetch(`https://registry.internal${path}`, { method: "POST", headers, body });
+    expect(post.status).toBe(204);
+
+    const readHeaders = await internalHeaders(secret, "GET", `${path}?limit=1`, "", { timestamp: Date.now(), nonce: "e".repeat(64) });
+    const read = await registry.fetch(`https://registry.internal${path}?limit=1`, { headers: readHeaders });
+    expect(read.status).toBe(200);
+    const payload = await read.json() as { calls: Array<Record<string, unknown>> };
+    expect(payload.calls).toHaveLength(1);
+    expect(payload.calls[0]).toMatchObject({
+      runner_id: auditRunnerId,
+      client_id: "client-audit",
+      method: "job.logs",
+      workspace_id: "workspace-1",
+      job_id: "job-1",
+      status: "ok",
+      error_code: null,
+      duration_ms: 12,
+      lifecycle_id: readiness.lifecycleId,
+      session_id: readiness.sessionId,
+    });
+  });
+
+  it("stops retrying optional registry writes after a feature breaker trips", async () => {
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
+    const auditRunnerId = `breaker-${crypto.randomUUID()}`;
+    await runInDurableObject(registry, (instance) => {
+      expect(instance.registerRunner(auditRunnerId, "breaker-runner", Date.now(), undefined, "dedicated_user")).toBe(true);
+      const current = instance.getRunnerExecutionState(auditRunnerId);
+      expect(current).toBeDefined();
+      const now = Date.now();
+      const sessionId = `session-${crypto.randomUUID()}`;
+      (instance as any).ctx.storage.sql.exec("UPDATE runners SET state = 'online', session_id = ?, last_heartbeat_ms = ?, updated_at_ms = ? WHERE runner_id = ?", sessionId, now, now, auditRunnerId);
+      expect(instance.recordHeartbeat(auditRunnerId, current!.runner.connection_epoch, current!.runner.credential_version, now, current!.lifecycle_id, sessionId)).toBe(true);
+      const readiness = {
+        lifecycleId: current!.lifecycle_id,
+        sessionId,
+        epoch: current!.runner.connection_epoch,
+        credentialVersion: current!.runner.credential_version,
+      };
+      const startedAtMs = Date.now() - 6;
+      const completedAtMs = startedAtMs + 6;
+      const call = {
+        call_id: `call-${crypto.randomUUID()}`,
+        client_id: "client-breaker",
+        method: "job.logs",
+        workspace_id: "workspace-1",
+        job_id: "job-1",
+        status: "ok" as const,
+        error_code: null,
+        params: { job_id: "job-1", limit: 16 },
+        result: { content: [{ type: "text", text: "ok" }], structuredContent: { job_id: "job-1" } },
+        started_at_ms: startedAtMs,
+        completed_at_ms: completedAtMs,
+        duration_ms: 6,
+        epoch: readiness.epoch,
+        credential_version: readiness.credentialVersion,
+        lifecycle_id: readiness.lifecycleId,
+        session_id: readiness.sessionId,
+        now_ms: completedAtMs,
+      };
+      const storage = (instance as any).ctx.storage;
+      const originalExec = storage.sql.exec.bind(storage.sql);
+      let insertAttempts = 0;
+      const execSpy = vi.spyOn(storage.sql, "exec").mockImplementation((statement: string, ...params: unknown[]) => {
+        if (typeof statement === "string" && statement.includes("INSERT INTO mcp_calls")) {
+          insertAttempts += 1;
+          throw new Error("simulated quota exhaustion");
+        }
+        return originalExec(statement, ...params);
+      });
+      try {
+        const first = instance.recordMcpCall(auditRunnerId, readiness.epoch, readiness.credentialVersion, call, Date.now(), false, readiness.lifecycleId, readiness.sessionId);
+        expect(first).toBe(true);
+        expect(instance.featureHealthSnapshot(Date.now()).map((item) => item.feature)).toContain("mcp_audit");
+        const second = instance.recordMcpCall(auditRunnerId, readiness.epoch, readiness.credentialVersion, { ...call, call_id: `call-${crypto.randomUUID()}` }, Date.now(), false, readiness.lifecycleId, readiness.sessionId);
+        expect(second).toBe(true);
+        expect(insertAttempts).toBe(1);
+        expect(instance.listMcpCalls(auditRunnerId)).toHaveLength(0);
+      } finally {
+        execSpy.mockRestore();
+      }
+    });
+  });
+
   it("requires a RunnerDO mutation fence before replacing an existing credential", async () => {
     const runnerId = `route-fence-${crypto.randomUUID()}`;
     const registry = env.REGISTRY.get(env.REGISTRY.idFromName(`route-fence-${crypto.randomUUID()}`));
     await runInDurableObject(registry, (instance) => {
-      expect(instance.registerRunner(runnerId, "a".repeat(64), Date.now())).toBe(true);
+      expect(instance.registerRunner(runnerId, "a".repeat(64), Date.now(), undefined, "dedicated_user")).toBe(true);
     });
     const body = JSON.stringify({ token_verifier: "b".repeat(64) });
     const path = `/runners/${encodeURIComponent(runnerId)}`;
@@ -250,7 +382,7 @@ describe("Worker runner transport", () => {
     const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
     const now = Date.now();
     await runInDurableObject(registry, async (instance) => {
-      expect(instance.addRunner(id, "Enrollment revoke cleanup", now)).toBeDefined();
+      expect(instance.addRunner(id, "Enrollment revoke cleanup", now, undefined, "dedicated_user")).toBeDefined();
       expect(instance.createRunnerEnrollment(id, randomBase64Url(), await sha256Hex(code), now)).toBeDefined();
     });
     const original = RunnerDO.prototype.fetch;
@@ -274,7 +406,7 @@ describe("Worker runner transport", () => {
     const mutationId = `credential-replay-${crypto.randomUUID()}`;
     const now = Date.now();
     await runInDurableObject(registry, (instance, state) => {
-      expect(instance.addRunner(runnerId, "Credential replay", now)).toBeDefined();
+      expect(instance.addRunner(runnerId, "Credential replay", now, undefined, "dedicated_user")).toBeDefined();
       expect(instance.registerRunner(runnerId, "a".repeat(64), now + 1, mutationId)).toBe(true);
       expect(instance.registerRunner(runnerId, "b".repeat(64), now + 2, mutationId)).toBe(false);
       expect(state.storage.sql.exec<{ token_verifier: string }>("SELECT token_verifier FROM runners WHERE runner_id = ?", runnerId).toArray()[0]?.token_verifier).toBe("a".repeat(64));
@@ -291,7 +423,7 @@ describe("Worker runner transport", () => {
     const info = { platform: "linux", architecture: "x64", hostname: "host", runner_version: "1.0.0", protocol_version: 2 };
     const now = Date.now();
     await runInDurableObject(registry, async (instance) => {
-      expect(instance.addRunner(runnerId, "Enrollment replay", now)).toBeDefined();
+      expect(instance.addRunner(runnerId, "Enrollment replay", now, undefined, "dedicated_user")).toBeDefined();
       expect(instance.createRunnerEnrollment(runnerId, randomBase64Url(), verifier, now)).toBeDefined();
       await expect(instance.redeemRunnerEnrollment(verifier, "a".repeat(64), info, now + 1, mutationId)).resolves.toEqual({ runner_id: runnerId });
     });
@@ -307,11 +439,11 @@ describe("Worker runner transport", () => {
     const now = Date.now();
     const info = { platform: "linux", architecture: "x64", hostname: "host", runner_version: "1.0.0", protocol_version: 2 };
     await runInDurableObject(registry, async (instance) => {
-      expect(instance.addRunner(runnerId, "Create marker", now, createMutation)).toBeDefined();
+      expect(instance.addRunner(runnerId, "Create marker", now, createMutation, "dedicated_user")).toBeDefined();
       expect(instance.getRunnerMutationState(runnerId, createMutation)).toMatchObject({ mutation_committed: true, credential_version: 0 });
       expect(instance.createRunnerEnrollment(runnerId, randomBase64Url(), verifier, now)).toBeDefined();
       await expect(instance.redeemRunnerEnrollment(verifier, "a".repeat(64), info, now + 1, `enrollment-${crypto.randomUUID()}`)).resolves.toEqual({ runner_id: runnerId });
-      expect(instance.addRunner(runnerId, "Create marker", now + 2, createMutation)).toBeUndefined();
+      expect(instance.addRunner(runnerId, "Create marker", now + 2, createMutation, "dedicated_user")).toBeUndefined();
     });
     await expect(runInDurableObject(registry, (instance) => instance.getRunnerMutationState(runnerId, createMutation))).resolves.toMatchObject({ mutation_committed: false, credential_version: 1 });
   });
@@ -323,7 +455,7 @@ describe("Worker runner transport", () => {
     const rotateMutation = `credential-rotate-${crypto.randomUUID()}`;
     const now = Date.now();
     await runInDurableObject(registry, (instance, state) => {
-      expect(instance.registerRunner(runnerId, "a".repeat(64), now)).toBe(true);
+      expect(instance.registerRunner(runnerId, "a".repeat(64), now, undefined, "dedicated_user")).toBe(true);
       const row = state.storage.sql.exec<{ lifecycle_id: string; credential_version: number }>("SELECT lifecycle_id, credential_version FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
       expect(row).toBeDefined();
       // Simulate the pre-transaction marker written by older Registry code.
@@ -462,13 +594,14 @@ describe("Worker runner transport", () => {
     const registry = env.REGISTRY.get(env.REGISTRY.idFromName(`policy-supersede-${crypto.randomUUID()}`));
     const now = Date.now();
     await runInDurableObject(registry, (instance) => {
-      expect(instance.addRunner("policy-supersede", "Policy supersede", now)).toBeDefined();
+      expect(instance.addRunner("policy-supersede", "Policy supersede", now, undefined, "dedicated_user")).toBeDefined();
       const runner = instance.getRunner("policy-supersede");
       const credentialVersion = runner?.credential_version ?? 0;
       const epoch = instance.beginConnection("policy-supersede", {
         runner_id: "policy-supersede", runner_version: "test", platform: "test", architecture: "test",
         capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: [], labels: {} },
       }, { min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION }, "policy-session", credentialVersion, now + 1);
+      const identity = runnerTransportIdentity(instance, "policy-supersede");
       expect(epoch).toEqual(expect.any(Number));
       const initial = instance.getDesiredPolicySnapshot("policy-supersede");
       expect(initial).toBeDefined();
@@ -477,7 +610,7 @@ describe("Worker runner transport", () => {
         applied_revision: initial?.revision as number, applied_checksum: initial?.checksum as string,
         runner_reported_policy_revision: initial?.revision as number, runner_reported_policy_checksum: initial?.checksum as string,
         status: "applied", workspace_status: [],
-      }, now + 2)).toBe("applied");
+      }, now + 2, identity.lifecycleId, identity.sessionId)).toBe("applied");
 
       expect(instance.createManagedWorkspace("policy-supersede", {
         workspace_id: "invalid-root", display_name: "Invalid root", root_path: "/missing", enabled: true,
@@ -489,7 +622,7 @@ describe("Worker runner transport", () => {
         applied_revision: initial?.revision as number, applied_checksum: initial?.checksum as string,
         runner_reported_policy_revision: initial?.revision as number, runner_reported_policy_checksum: initial?.checksum as string,
         status: "invalid", workspace_status: [{ workspace_id: "invalid-root", status: "missing" }],
-      }, now + 4)).toBe("invalid");
+      }, now + 4, identity.lifecycleId, identity.sessionId)).toBe("invalid");
       expect(instance.getRunner("policy-supersede")).toMatchObject({ policy_status: "invalid", applied_policy_revision: initial?.revision });
 
       expect(instance.setRunnerPermissions("policy-supersede", { read: false, edit: false, shell: false, job_control: false }, now + 5, "invalid-second")).toBeDefined();
@@ -502,7 +635,7 @@ describe("Worker runner transport", () => {
         applied_revision: initial?.revision as number, applied_checksum: initial?.checksum as string,
         runner_reported_policy_revision: initial?.revision as number, runner_reported_policy_checksum: initial?.checksum as string,
         status: "invalid", workspace_status: [{ workspace_id: "invalid-root", status: "missing" }],
-      }, now + 6)).toBe("stale");
+      }, now + 6, identity.lifecycleId, identity.sessionId)).toBe("stale");
       expect(instance.getRunner("policy-supersede")).toMatchObject({ policy_status: "pending" });
       expect(instance.getSnapshotAuthorization("policy-supersede")).toMatchObject({ ok: false });
     });
@@ -551,12 +684,13 @@ describe("Worker runner transport", () => {
     const record = await runInDurableObject(registry, (instance) => instance.getRunner(runnerId));
     const epoch = record?.connection_epoch;
     const credentialVersion = record?.credential_version;
+    const identity = await runInDurableObject(registry, (instance) => runnerTransportIdentity(instance, runnerId));
     expect(epoch).toEqual(expect.any(Number));
     expect(credentialVersion).toEqual(expect.any(Number));
     const result = await runInDurableObject(registry, (instance) => ({
-      first: instance.syncRunner(runnerId, epoch as number, credentialVersion as number, [], [], 2, Date.now(), false),
-      duplicate: instance.syncRunner(runnerId, epoch as number, credentialVersion as number, [], [], 2, Date.now(), false),
-      stale: instance.syncRunner(runnerId, epoch as number, credentialVersion as number, [], [], 1, Date.now(), false),
+      first: instance.syncRunner(runnerId, epoch as number, credentialVersion as number, [], [], 2, Date.now(), false, identity.lifecycleId, identity.sessionId),
+      duplicate: instance.syncRunner(runnerId, epoch as number, credentialVersion as number, [], [], 2, Date.now(), false, identity.lifecycleId, identity.sessionId),
+      stale: instance.syncRunner(runnerId, epoch as number, credentialVersion as number, [], [], 1, Date.now(), false, identity.lifecycleId, identity.sessionId),
     }));
     expect(result).toEqual({ first: true, duplicate: false, stale: false });
     socket?.close();
@@ -574,10 +708,11 @@ describe("Worker runner transport", () => {
     const record = await runInDurableObject(registry, (instance) => instance.getRunner(runnerId));
     const epoch = record?.connection_epoch;
     const credentialVersion = record?.credential_version;
+    const identity = await runInDurableObject(registry, (instance) => runnerTransportIdentity(instance, runnerId));
     const recorded = await runInDurableObject(registry, (instance) => instance.recordJobEvent(runnerId, epoch as number, credentialVersion as number, {
       type: "job.status", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "job-event-1",
       job: { job_id: "job-event-1", workspace_id: "workspace-1", status: "running", created_at_ms: 1, updated_at_ms: 2, created_by_client_id: "client-1", runner_id: runnerId },
-    }, Date.now(), false));
+    }, Date.now(), false, identity.lifecycleId, identity.sessionId));
     expect(recorded).toBe(true);
     await expect(runInDurableObject(registry, (instance) => instance.listJobs(runnerId))).resolves.toMatchObject([{ job_id: "job-event-1", status: "running", created_by_client_id: "client-1" }]);
     socket?.close();
@@ -585,9 +720,19 @@ describe("Worker runner transport", () => {
 
   it("retains historical jobs across bounded sync snapshots, filters before limit, and preserves active jobs during terminal retention", async () => {
     const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
-    const initial = await runInDurableObject(registry, (instance) => instance.getRunner(runnerId));
-    const epoch = initial?.connection_epoch as number;
-    const credentialVersion = initial?.credential_version as number;
+    const initial = await runInDurableObject(registry, (instance) => {
+      const runner = instance.getRunner(runnerId);
+      const credentialVersion = runner?.credential_version as number;
+      const epoch = instance.beginConnection(runnerId, {
+        runner_id: runnerId, runner_version: "test", platform: "test", architecture: "test",
+        capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: [], labels: {} },
+      }, { min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION }, "terminal-retention-session", credentialVersion, Date.now());
+      expect(epoch).toEqual(expect.any(Number));
+      return { epoch: epoch as number, credentialVersion, ...runnerTransportIdentity(instance, runnerId) };
+    });
+    const epoch = initial.epoch;
+    const credentialVersion = initial.credentialVersion;
+    const identity = { lifecycleId: initial.lifecycleId, sessionId: initial.sessionId };
     const now = Date.now();
     const terminal = Array.from({ length: 1_005 }, (_, index) => ({
       job_id: `terminal-${String(index).padStart(4, "0")}`,
@@ -599,8 +744,8 @@ describe("Worker runner transport", () => {
     }));
     const active = { job_id: "active-old", workspace_id: "workspace-a", status: "running" as const, created_at_ms: 1, updated_at_ms: 1, runner_id: runnerId };
     await runInDurableObject(registry, (instance) => {
-      expect(instance.syncRunner(runnerId, epoch, credentialVersion, [], [...terminal, active], 1, now, false)).toBe(true);
-      expect(instance.syncRunner(runnerId, epoch, credentialVersion, [], [], 2, now + 1, false)).toBe(true);
+      expect(instance.syncRunner(runnerId, epoch, credentialVersion, [], [...terminal, active], 1, now, false, identity.lifecycleId, identity.sessionId)).toBe(true);
+      expect(instance.syncRunner(runnerId, epoch, credentialVersion, [], [], 2, now + 1, false, identity.lifecycleId, identity.sessionId)).toBe(true);
     });
     const preserved = await runInDurableObject(registry, (instance) => ({
       active: instance.getJob(runnerId, "active-old"),

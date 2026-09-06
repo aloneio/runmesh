@@ -91,7 +91,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     // its isolated profile, then start from that saved profile (no service manager).
     enrolledProfile = join(root, "enrolled-profile.json");
     const enrollmentCli = spawn(process.execPath, [tsxCli, "apps/runner/src/runmesh-entry.ts", "enroll", "--server", `${workerUrl}/runner/enroll`, "--code-stdin", "--insecure-local", "--cwd", workspace, "--profile", enrolledProfile, "--json"], {
-      cwd: projectDirectory, env: { ...process.env, RUNMESH_PROFILE: enrolledProfile }, stdio: ["pipe", "pipe", "pipe"], detached: true, ...childSpawnOptions,
+      cwd: projectDirectory, env: { ...process.env, RUNMESH_RUNNER_PROFILE: enrolledProfile }, stdio: ["pipe", "pipe", "pipe"], detached: true, ...childSpawnOptions,
     });
     enrollmentCli.stdin?.end(`${enrollmentCode}\n`);
     const enrollmentCliLog = collectOutput(enrollmentCli);
@@ -109,7 +109,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     runner = spawn(process.execPath, [
       tsxCli, "apps/runner/src/runmesh-entry.ts", "start", "--profile", enrolledProfile, "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
     ], {
-      cwd: projectDirectory, env: { ...process.env, RUNMESH_PROFILE: enrolledProfile }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
+      cwd: projectDirectory, env: { ...process.env, RUNMESH_RUNNER_PROFILE: enrolledProfile }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
     });
     const runnerLog = collectOutput(runner);
     runnerOutput = runnerLog;
@@ -154,7 +154,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const otherRunnerId = "e2e-runner-secondary";
     const enrollment = await fetch(`${workerUrl}/admin/runners`, {
       method: "POST", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
-      body: JSON.stringify({ runner_id: otherRunnerId, token: "e2e-runner-secondary-token-0123456789" }),
+      body: JSON.stringify({ runner_id: otherRunnerId, token: "e2e-runner-secondary-token-0123456789", execution_mode: "dedicated_user" }),
     });
     expect(enrollment.status).toBe(200);
 
@@ -242,7 +242,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     runner = spawn(process.execPath, [
       tsxCli, "apps/runner/src/runmesh-entry.ts", "start", "--profile", enrolledProfile, "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
     ], {
-      cwd: projectDirectory, env: { ...process.env, RUNMESH_PROFILE: enrolledProfile }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
+      cwd: projectDirectory, env: { ...process.env, RUNMESH_RUNNER_PROFILE: enrolledProfile }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
     });
     runnerOutput = collectOutput(runner);
     await waitFor(async () => (await mcpTool("runner_list", {}, clientA)).structuredContent?.runners?.some((item: { runner_id?: string; state?: string }) => item.runner_id === runnerId && item.state === "online"), 15_000, runnerOutput);
@@ -327,7 +327,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
 
   async function createBrowserRunnerEnrollment(): Promise<string> {
     const { adminJar, csrf } = await adminCredentials();
-    const response = await submitForm("/admin/runners", { csrf_token: csrf, display_name: "Enrollment E2E Runner", runner_id: runnerId }, adminJar);
+    const response = await submitForm("/admin/runners", { csrf_token: csrf, display_name: "Enrollment E2E Runner", runner_id: runnerId, execution_mode: "dedicated_user" }, adminJar);
     expect(response.status).toBe(200);
     const html = await response.text();
     expect(html).toContain("Manual portable-artifact enrollment");

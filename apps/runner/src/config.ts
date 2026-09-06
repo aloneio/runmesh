@@ -11,11 +11,11 @@ export interface PermissionSet {
 export interface WorkspaceConfig {
   readonly workspaceId: string;
   readonly rootPath: string;
-  /** Compatibility presentation flag derived from permissions.edit. */
+  /** Presentation flag derived from permissions.edit. */
   readonly readonly: boolean;
-  /** Compatibility presentation flag derived from permissions.shell. */
+  /** Presentation flag derived from permissions.shell. */
   readonly shell: boolean;
-  /** Present for centrally managed policy; omitted by legacy CLI configurations. */
+  /** Present for centrally managed policy. */
   readonly permissions?: PermissionSet;
 }
 
@@ -71,7 +71,7 @@ export async function validateRunnerConfig(options: RawRunnerOptions): Promise<R
   if (typeof options !== "object" || options === null || Array.isArray(options)) throw new Error("runner options must be an object");
   const suppliedServer = typeof options.server === "string" ? options.server : undefined;
   const server = suppliedServer?.trim();
-  const suppliedToken = options.token ?? process.env.RUNMESH_RUNNER_TOKEN ?? process.env.RUNMESH_TOKEN;
+  const suppliedToken = options.token ?? process.env.RUNMESH_RUNNER_TOKEN;
   if ((suppliedServer !== undefined && CONTROL_CHARACTER_PATTERN.test(suppliedServer)) || (typeof suppliedToken === "string" && CONTROL_CHARACTER_PATTERN.test(suppliedToken))) {
     throw new Error("server and token must not contain control characters");
   }

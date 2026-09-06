@@ -2,7 +2,7 @@ export { reconnectDelayMs, RECONNECT_DELAYS_MS } from "./backoff.js";
 export { parseRunnerArgs, validateRunnerConfig } from "./config.js";
 export { runCli, runEnrollCli, parseProductArgs } from "./cli.js";
 export { enrollRunner, EnrollmentConflictError, EnrollmentOutcomeUnknownError, ENROLLMENT_OUTCOME_UNKNOWN_MESSAGE, isEnrollmentOutcomeUnknown } from "./enrollment.js";
-export { ProfileStore, defaultWorkspaceId, isCanonicalSystemProfilePath, profileDirectory, profileExecutionMode, profilePath, redactedProfile, validateProfile, workspaceOptions } from "./profile.js";
+export { ProfileStore, isCanonicalSystemProfilePath, profileDirectory, profileExecutionMode, profileManagementMode, profilePath, redactedProfile, validateProfile, workspaceOptions } from "./profile.js";
 export { classifyConnectionFailure, currentProcessServiceIdentity, discoverCapabilities, RunnerAuthenticationError, RunnerConnection } from "./connection.js";
 export { currentServicePlatform, createServiceManager, createServiceProvisioner, dedicatedServiceIdentity, hashContent, hostServiceCommandExecutor, installServiceManifest, isManagedService, managedServiceManifestFromContent, removeServiceManifest, renderService, rewriteManagedServiceExecutionMode, serviceCommands, serviceLayout, servicePath, serviceProfilePath, serviceMode, serviceExecutionMode, assertManagedServiceManifest } from "./service.js";
 export { FilesystemService } from "./filesystem.js";

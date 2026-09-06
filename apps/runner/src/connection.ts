@@ -2,16 +2,9 @@ import {
   decodeWireFrame,
   encodeWireFrame,
   LOCAL_RUNNER_OPERATION_TIMEOUT_MS,
-  RUNNER_DIAGNOSTICS_EXTENSION,
-  RUNNER_POLICY_DIAGNOSTICS_EXTENSION,
-  policyDiagnosticsExtension,
   PROTOCOL_CURRENT_VERSION,
   PROTOCOL_MIN_VERSION,
   runnerPolicyChecksum,
-  runnerDiagnosticsExtension,
-  stripRunnerDiagnostics,
-  stripWorkspaceDiagnostics,
-  supportsDirectPolicyDiagnostics,
   type RunnerMetadata,
   type RunnerPolicyAck,
   type RunnerWelcome,
@@ -71,6 +64,7 @@ export class RunnerConnection {
   private lifecycleGeneration = 0;
   private reconnectAttempt = 0;
   private syncSequence = 0;
+  private lastSyncSnapshot: string | undefined;
   private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   private syncTimer: ReturnType<typeof setInterval> | undefined;
   private appliedPolicyRevision: number | null = null;
@@ -86,8 +80,6 @@ export class RunnerConnection {
    * transport block policy delivery on the replacement socket.
    */
   private readonly policyApplyQueues = new WeakMap<WebSocket, Promise<void>>();
-  /** Whether each peer explicitly opted into direct diagnostic fields. */
-  private readonly directPolicyDiagnostics = new WeakMap<WebSocket, boolean>();
   /**
    * A sync snapshot is asynchronous (job recovery/persistence may yield), so
    * timer, welcome, and policy-apply triggers must share one FIFO. Without a
@@ -112,10 +104,10 @@ export class RunnerConnection {
     // shown in administrator diagnostics.  Treat an injected identity as
     // untrusted text just like the auto-discovered username; never carry
     // control characters or an unbounded value into a wire frame.
-    // A profile without an execution mode is a legacy/migration state.  Do
-    // not add an automatically discovered identity to its hello: older Worker
-    // versions decode Runner metadata strictly and would reject the new field,
-    // while the mode itself is not yet authoritative until migration.
+    // A missing execution mode is an invalid profile state and is rejected by
+    // profile validation before a production connection is constructed. Keep
+    // the optional shape here for injected test/runtime callers, but never
+    // synthesize or transport a second compatibility representation.
     const serviceIdentity = executionMode === undefined ? undefined : sanitizeServiceIdentity(options.serviceIdentity ?? currentProcessServiceIdentity());
     this.metadata = {
       runner_id: this.config.runnerId,
@@ -243,19 +235,13 @@ export class RunnerConnection {
         fail(error);
       });
       socket.once("open", () => {
-        // Keep the initial hello in the legacy direct shape.  Optional
-        // diagnostics travel under the long-supported envelope extension so
-        // a pre-diagnostics Worker with a strict RunnerMetadata schema can
-        // still accept this frame.
-        const diagnostics = runnerDiagnosticsExtension(this.metadata);
         const hello: WireMessage = {
           type: "runner.hello",
           protocol_version: PROTOCOL_CURRENT_VERSION,
           request_id: `hello-${crypto.randomUUID()}`,
-          runner: stripRunnerDiagnostics(this.metadata),
+          runner: this.metadata,
           min_protocol_version: PROTOCOL_MIN_VERSION,
           max_protocol_version: PROTOCOL_CURRENT_VERSION,
-          ...(diagnostics === undefined ? {} : { extensions: { [RUNNER_DIAGNOSTICS_EXTENSION]: diagnostics } }),
         };
         try { socket.send(encodeWireFrame(hello)); }
         catch (error) { fail(error instanceof Error ? error : new Error("failed to send runner hello")); }
@@ -285,8 +271,8 @@ export class RunnerConnection {
             return;
           }
           welcomed = true;
-          this.directPolicyDiagnostics.set(socket, supportsDirectPolicyDiagnostics(message.extensions));
           this.onStateChange("online");
+          this.lastSyncSnapshot = undefined;
           if (message.desired_policy !== undefined) this.queueDesiredPolicy(socket, message.desired_policy);
           void this.sendSync(socket).catch(() => undefined);
           this.heartbeatTimer = setInterval(() => {
@@ -431,8 +417,6 @@ export class RunnerConnection {
     if (socket !== this.socket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
     const reportedRevision = this.appliedPolicyRevision;
     const reportedChecksum = this.appliedPolicyChecksum;
-    const directDiagnostics = this.directPolicyDiagnostics.get(socket) === true;
-    const extensionDiagnostics = policyDiagnosticsExtension(workspaceStatus);
     const ack: RunnerPolicyAck = {
       type: "runner.policy_ack",
       protocol_version: PROTOCOL_CURRENT_VERSION,
@@ -444,8 +428,7 @@ export class RunnerConnection {
       runner_reported_policy_revision: reportedRevision,
       runner_reported_policy_checksum: reportedChecksum,
       status,
-      workspace_status: directDiagnostics ? workspaceStatus : stripWorkspaceDiagnostics(workspaceStatus),
-      ...(!directDiagnostics && extensionDiagnostics !== undefined ? { extensions: { [RUNNER_POLICY_DIAGNOSTICS_EXTENSION]: extensionDiagnostics } } : {}),
+      workspace_status: workspaceStatus,
     };
     try {
       socket.send(encodeWireFrame(ack));
@@ -484,16 +467,22 @@ export class RunnerConnection {
     if (socket !== this.socket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
     const jobs = await this.runtime.syncJobs();
     if (socket !== this.socket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
+    const workspaces = this.runtime.syncWorkspaceMetadata();
+    const snapshot = JSON.stringify({ workspaces, jobs });
+    if (snapshot === this.lastSyncSnapshot) return;
     const sync: RunnerSync = {
       type: "runner.sync",
       protocol_version: PROTOCOL_CURRENT_VERSION,
       runner_id: this.config.runnerId,
       sync_sequence: this.syncSequence++,
       sent_at_ms: Date.now(),
-      workspaces: this.runtime.syncWorkspaceMetadata(),
+      workspaces,
       jobs,
     };
-    try { socket.send(encodeWireFrame(sync)); } catch { /* close handler drives reconnect */ }
+    try {
+      socket.send(encodeWireFrame(sync));
+      this.lastSyncSnapshot = snapshot;
+    } catch { /* close handler drives reconnect */ }
   }
 
   private async respondToRpc(socket: WebSocket, request: RpcRequest, sessionCurrent: () => boolean): Promise<void> {
@@ -566,7 +555,7 @@ export function discoverCapabilities(maxConcurrentJobs = 1): CapabilityMetadata 
     pty: false,
     network_access: true,
     max_concurrent_jobs: maxConcurrentJobs,
-    supported_rpc_methods: ["echo", "runner.info", "workspace.list", "env.info", "fs.read", "fs.stat", "fs.list", "fs.search", "fs.apply_patch", "fs.patch", "git.status", "git.diff", "exec.start", "exec.run", "job.list", "job.get", "job.logs", "job.cancel", "job.input"],
+    supported_rpc_methods: ["echo", "runner.info", "workspace.list", "env.info", "fs.read", "fs.stat", "fs.list", "fs.search", "fs.apply_patch", "git.status", "git.diff", "exec.start", "exec.run", "job.list", "job.get", "job.logs", "job.cancel", "job.input"],
     labels: { runtime: "node" },
   };
 }
