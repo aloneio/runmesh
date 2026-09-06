@@ -161,6 +161,8 @@ export class RunnerConnection {
         await this.connectOnce();
         this.reconnectAttempt = 0;
       } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        if (detail.length > 0) console.error(`runner connection error: ${detail}`);
         this.onStateChange("offline");
         if (this.stopped) break;
         if (error instanceof RunnerAuthenticationError || classifyConnectionFailure({ error }) === "authentication") {
