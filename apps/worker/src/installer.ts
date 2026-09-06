@@ -495,10 +495,11 @@ __VERIFIER__
 RUNMESH_VERIFY
 mkdir -p "$INSTALL_ROOT/versions"
 if ! mkdir "$STAGE"; then printf '%s\n' 'error: installer staging path is already in use' >&2; exit 1; fi
+step 'Installing the verified Runner package.'
+export NPM_CONFIG_UPDATE_NOTIFIER=false
 (
   cd "$TMP"
-  step 'Installing the verified Runner package.'
-  NPM_CONFIG_UPDATE_NOTIFIER=false "$NODE" "$NPM_CLI" --userconfig "$NPM_CONFIG_USERCONFIG" --globalconfig "$NPM_CONFIG_GLOBALCONFIG" install --global --ignore-scripts --offline --no-audit --no-fund --prefix "$STAGE" "$TMP/$ARTIFACT" >/dev/null 2>&1
+  "$NODE" "$NPM_CLI" --userconfig "$NPM_CONFIG_USERCONFIG" --globalconfig "$NPM_CONFIG_GLOBALCONFIG" install --global --ignore-scripts --offline --no-audit --no-fund --prefix "$STAGE" "$TMP/$ARTIFACT" >/dev/null 2>&1
 )
 PACKAGE_ROOT="$STAGE/lib/node_modules/@aloneio/runmesh-runner"
 BUNDLE_FILENAME='runmesh.cjs'
