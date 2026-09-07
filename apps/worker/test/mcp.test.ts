@@ -663,12 +663,15 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     const runnersPage = await SELF.fetch("https://worker.test/admin/runners", { headers: { cookie: cookies(adminJar) } });
     expect(runnersPage.status).toBe(200);
     const runnersHtml = await runnersPage.text();
-    // Existing rotate/install actions must expose a fresh mode choice instead
-    // of replaying a hidden dedicated_user value.  The server still validates
-    // the acknowledgement, so a forged privileged selection is rejected.
+    // The add form is the one place where an administrator chooses and
+    // confirms execution mode. Existing Runner actions reuse the trusted
+    // Registry-owned choice and must not prompt for the same confirmation
+    // again from the list row.
     expect(runnersHtml).toContain('name="execution_mode"');
     expect(runnersHtml).toContain('name="confirm_privileged_host"');
-    expect(runnersHtml).toContain("data-execution-mode-form");
+    const runnerTableMarkup = /<table class="data-table runner-table">[\s\S]*?<\/table>/i.exec(runnersHtml)?.[0] ?? "";
+    expect(runnerTableMarkup).not.toContain("data-execution-mode-form");
+    expect(runnerTableMarkup).toContain('name="expected_execution_mode" value="dedicated_user"');
     const runnerTableHeader = /<table class="data-table runner-table">[\s\S]*?<thead>([\s\S]*?)<\/thead>/i.exec(runnersHtml)?.[1] ?? "";
     expect(runnerTableHeader).toContain("<th>Display name</th>");
     expect(runnerTableHeader).toContain("<th>Last seen</th>");
