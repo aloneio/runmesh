@@ -1174,6 +1174,7 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Delete": "删除",
   "Install / Reinstall": "安装 / 重装",
   "Execution mode": "执行模式",
+  "Administrator configuration": "管理员配置",
   "Mode": "模式",
   "System Runner execution mode": "系统 Runner 执行模式",
   "dedicated_user · restricted service account": "dedicated_user · 受限服务账户",
@@ -2086,14 +2087,14 @@ function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly 
   </section>
   <div class="metrics" aria-label="Runner summary">
     <div class="metric">
-      <span class="metric-label">Status</span>
-      <strong class="metric-value">${statusBadge(state)}</strong>
-      <span class="metric-meta">${state === "online" ? "Socket connected" : "Disconnected"}</span>
+      <span class="metric-label">Execution mode</span>
+      <strong class="metric-value mono font-16">${escapeHtml(executionMode ?? "not configured")}</strong>
+      <span class="metric-meta">Administrator configuration</span>
     </div>
     <div class="metric">
-      <span class="metric-label">Runner ID</span>
-      <strong class="metric-value mono mono-truncate" title="${escapeHtml(runnerId)}">${escapeHtml(runnerId)}</strong>
-      <span class="metric-meta">Unique runtime</span>
+      <span class="metric-label">Platform</span>
+      <strong class="metric-value mono font-16">${escapeHtml(typeof publicInfo?.platform === "string" ? publicInfo.platform : "Unknown")}</strong>
+      <span class="metric-meta">${escapeHtml(typeof publicInfo?.architecture === "string" ? publicInfo.architecture : "Unknown")}</span>
     </div>
     <div class="metric">
       <span class="metric-label">Policy status</span>
