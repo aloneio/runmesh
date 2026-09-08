@@ -1,5 +1,5 @@
 import { env, SELF, runInDurableObject } from "cloudflare:test";
-import { passwordVerifier, randomBase64Url, sha256Hex } from "../src/security.js";
+import { hmacHex, passwordVerifier, randomBase64Url, sha256Hex } from "../src/security.js";
 import { RegistryDO, RunnerDO, runnerReleaseDescriptor } from "../src/index.js";
 import { FIXED_ARTIFACT_URL, FIXED_RELEASE_KEY_ID, FIXED_RELEASE_PUBLIC_KEY_PEM, FIXED_RELEASE_VERSION, renderPosixInstaller, renderPowerShellInstaller } from "../src/installer.js";
 import { describe, expect, it, vi } from "vitest";
@@ -258,7 +258,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
       expect(text).toContain("--purge --yes"); expect(text).toContain("runmesh-runner");
       expect(text).not.toMatch(/trust-keyring\.json|@latest|npmjs\.com|--code\s+[A-Za-z0-9_-]{20,}/i);
     }
-    expect(shell).toContain("--code-stdin"); expect(shell).toContain("/dev/tty"); expect(shell).toContain("stty -echo"); expect(shell).toContain("FINAL=\"$INSTALL_ROOT/versions/$VERSION\""); expect(shell).toContain("ENROLLMENT_ATTEMPTED=0"); expect(shell).toContain("trap on_exit EXIT"); expect(shell).toContain("trap 'rollback 1' HUP INT TERM"); expect(shell).toContain("command_name in curl stty readlink grep tar mktemp"); expect(shell).toContain("node-v22.19.0"); expect(shell).toContain("NODE_SHA256"); expect(shell).toContain('> "$ENROLLMENT_INPUT"'); expect(shell).toContain(' < "$ENROLLMENT_INPUT"'); expect(shell).not.toMatch(/printf '[^']*' \"\$ENROLLMENT_CODE\" \|/); expect(shell).toContain('"$NODE" "$NPM_CLI"'); expect(shell).toContain("--ignore-scripts --offline");
+    expect(shell).toContain("--code-stdin"); expect(shell).toContain("/dev/tty"); expect(shell).toContain("stty -echo"); expect(shell).toContain("FINAL=\"$INSTALL_ROOT/versions/$VERSION\""); expect(shell).toContain("ENROLLMENT_ATTEMPTED=0"); expect(shell).toContain("trap on_exit EXIT"); expect(shell).toContain("trap 'rollback 1' HUP INT TERM"); expect(shell).toContain("command_name in curl stty readlink grep tar mktemp"); expect(shell).toContain("node-v22.19.0"); expect(shell).toContain("NODE_SHA256"); expect(shell).not.toContain("ENROLLMENT_INPUT"); expect(shell).not.toContain("REFRESH_INPUT"); expect(shell).toMatch(/printf '[^']*' \"\$ENROLLMENT_CODE\" \|/); expect(shell).toContain('"$NODE" "$NPM_CLI"'); expect(shell).toContain("--ignore-scripts --offline");
     expect(shell).toContain("runmesh-runner"); expect(shell).toContain("current/bin/runmesh"); expect(shell).toContain('--profile "$PROFILE"');
     // npm's POSIX global install creates bin symlinks into dist/. The hosted
     // installer must unlink them before writing private-runtime wrappers, or
@@ -296,7 +296,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(outcomes.filter(Boolean)).toHaveLength(1);
     const sessionHash = await sha256Hex(randomBase64Url());
     const csrfHash = await sha256Hex(randomBase64Url());
-    await expect(runInDurableObject(registry, (instance) => instance.createAdminSession(sessionHash, csrfHash, Date.now() - 1, Date.now() - 2))).resolves.toBe(true);
+    await expect(runInDurableObject(registry, (instance) => instance.createAdminSession(sessionHash, csrfHash, Date.now() - 1, Date.now() - 2, 1))).resolves.toBe(true);
     await expect(runInDurableObject(registry, (instance) => instance.verifyAdminSession(sessionHash, Date.now()))).resolves.toBeUndefined();
   });
 
@@ -540,7 +540,8 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(blocked.status).toBe(403);
     expect(Number(blocked.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
     const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
-    await runInDurableObject(registry, (instance) => instance.recordAuthAttempt("login", true, Date.now()));
+    const sourceHash = await hmacHex("test-internal-control-secret-not-for-production", "runmesh-auth-source:v1:unattributed");
+    await runInDurableObject(registry, (instance) => instance.recordSourceAuthAttempt("login", sourceHash, true, Date.now()));
     const recovered = await submit("https://worker.test/login", { csrf_token: csrf, password }, jarForLogin);
     expect(recovered.status).toBe(303);
   });
@@ -571,6 +572,13 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     const loggedIn = await submit("https://worker.test/login", { csrf_token: loginCsrf, password }, jar([["__Host-runmesh_login_csrf", loginCookie]]));
     const csrf = cookieFrom(loggedIn, "__Host-runmesh_admin_csrf");
     const adminJar = jar([["__Host-runmesh_admin_session", cookieFrom(loggedIn, "__Host-runmesh_admin_session")], ["__Host-runmesh_admin_csrf", csrf]]);
+    const runnerForm = await (await SELF.fetch("https://worker.test/admin/runners", { headers: { cookie: cookies(adminJar) } })).text();
+    expect(runnerForm).toContain('value="dedicated_user" checked data-execution-mode="dedicated_user"');
+    expect(runnerForm).not.toContain('value="privileged_host" checked');
+    const clientForm = await (await SELF.fetch("https://worker.test/admin/clients", { headers: { cookie: cookies(adminJar) } })).text();
+    expect(clientForm).toContain('name="scopes" value="coding:read" checked');
+    expect(clientForm).not.toContain('name="scopes" value="coding:write" checked');
+    expect(clientForm).not.toContain('name="scopes" value="coding:exec" checked');
     const created = await submit("https://worker.test/admin/runners", { csrf_token: csrf, display_name: "Safe runner", runner_id: "dashboard-runner", runner_valid_days: "7", code_valid_days: "2", execution_mode: "dedicated_user" }, adminJar);
     expect(created.status).toBe(200);
     const enrollment = await created.text();
@@ -639,7 +647,8 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(runnerDetailHtml).not.toMatch(/<header\b[^>]*\bapp-header\b[^>]*>[\s\S]*?<img\b/i);
     const dashboard = await SELF.fetch("https://worker.test/admin", { headers: { cookie: cookies(adminJar) } });
     expect(dashboard.headers.get("cache-control")).toBe("no-store");
-    expect(dashboard.headers.get("content-security-policy")).toContain("script-src 'unsafe-inline'");
+    expect(dashboard.headers.get("content-security-policy")).toContain("script-src 'nonce-");
+    expect(dashboard.headers.get("content-security-policy")).not.toContain("script-src 'unsafe-inline'");
     const dashboardHtml = await dashboard.text();
     for (const section of ["Dashboard", "MCP Clients", "Runners", "Settings", "Active MCP clients", "Online / total runners", "Running jobs", "Recent jobs", "Add Runner", "Add MCP Client"]) expect(dashboardHtml).toContain(section);
     expect(dashboardHtml).toContain('"Clients":"MCP 客户端"');
@@ -875,4 +884,4 @@ function parseUiTextMap(html: string): Record<string, string> {
 function cookieFrom(response: Response, name: string): string { const setCookie = response.headers.get("set-cookie") ?? ""; const value = new RegExp(`${name}=([^;]+)`).exec(setCookie)?.[1]; if (value === undefined) throw new Error(`cookie ${name} absent`); return value; }
 function jar(entries: readonly (readonly [string, string])[]): CookieJar { return new Map(entries); }
 function cookies(values: CookieJar): string { return [...values].map(([name, value]) => `${name}=${value}`).join("; "); }
-async function submit(url: string, values: Record<string, string>, valuesJar: CookieJar, origin = true): Promise<Response> { return SELF.fetch(url, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", cookie: cookies(valuesJar), ...(origin ? { origin: "https://worker.test" } : {}) }, body: new URLSearchParams(values) }); }
+async function submit(url: string, values: Record<string, string>, valuesJar: CookieJar, origin = true): Promise<Response> { return SELF.fetch(url, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", cookie: cookies(valuesJar), ...(origin ? { origin: "https://worker.test" } : {}) }, body: new URLSearchParams({ ...(new URL(url).pathname === "/setup" ? { } : {}), ...values }) }); }

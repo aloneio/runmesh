@@ -1,4 +1,18 @@
-# Clean-break release transition
+# Release transitions
+
+## Compatible dev.3 to dev.4 v2 upgrade
+
+The dev.4 candidate preserves the existing v2 namespace, administrator settings,
+sessions, Runner records, policies and Jobs. It adds the source-throttle table
+when missing and runs a one-time metadata-only audit migration which deletes
+old MCP audit history. It does not import retired namespaces or rewrite core
+schemas. Confirm migration completion and review provider backup/PITR copies
+after deployment; do not restore content-bearing history without cleanup.
+First setup has no additional bootstrap token and is not reopened for existing
+instances. Publish a new immutable signed dev.4 Runner before activating its
+empty production distribution gate. Host upgrades remain separately authorized.
+
+## Earlier clean-break transition into v2
 
 This release starts a new data, profile, and Runner/Worker protocol boundary. It does not inspect, import, repair, or translate data from an earlier layout. The `v2` Durable Object migration binds the Worker to fresh `RegistryDOv2` and `RunnerDOv2` classes; any retired namespace remains isolated and is never upgraded in place.
 

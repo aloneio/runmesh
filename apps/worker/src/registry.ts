@@ -17,6 +17,8 @@ import {
 } from "@aloneio/runmesh-protocol";
 import { containsControlCharacter, constantTimeEqual, isConfiguredSecret, isSafeIdentifier, runnerTokenVerifier, verifyInternalRequest } from "./security.js";
 import { readCappedText } from "./body.js";
+import { ensureMetadataOnlyAudit, MCP_AUDIT_RETENTION_MS, projectMcpAuditMetadata } from "./audit-metadata.js";
+import { AUTH_SOURCE_RETENTION_MS, MAX_AUTH_THROTTLE_KEYS, ensureAuthSourceThrottleSchema, reserveSourceAuthAttempt, type AuthThrottleState } from "./auth-throttle.js";
 import { validTimestamp, validWindow, validityStatus, type ValidityWindow, type ValidityStatus } from "./validity.js";
 
 export type RunnerConnectionState = "online" | "offline" | "stale";
@@ -305,6 +307,7 @@ const AUTH_THROTTLE_MAX_BLOCK_MS = 15 * 60_000;
 export class RegistryDO {
   private readonly featureHealth = new Map<RegistryFeatureKey, { readonly disabled_until_ms: number | null; readonly failure_count: number; readonly last_failure_at_ms: number | null; readonly last_error: string | null }>();
   private readonly fallbackThrottle = new Map<AuthThrottleKind, { failed_attempts: number; blocked_until_ms: number }>();
+  private readonly sourceThrottleFallback = new Map<string, AuthThrottleState>();
   public constructor(
     private readonly ctx: DurableObjectState,
     private readonly env: { INTERNAL_CONTROL_SECRET?: string; RUNNER_TOKEN_PEPPER?: string },
@@ -380,6 +383,11 @@ export class RegistryDO {
           id TEXT PRIMARY KEY CHECK (id IN ('login', 'setup')), failed_attempts INTEGER NOT NULL DEFAULT 0,
           blocked_until_ms INTEGER NOT NULL DEFAULT 0, updated_at_ms INTEGER NOT NULL DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS auth_source_throttle (
+          id TEXT PRIMARY KEY, failed_attempts INTEGER NOT NULL DEFAULT 0,
+          blocked_until_ms INTEGER NOT NULL DEFAULT 0, updated_at_ms INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_auth_source_throttle_updated ON auth_source_throttle(updated_at_ms);
         CREATE TABLE IF NOT EXISTS admin_sessions (
           session_hash TEXT PRIMARY KEY, csrf_hash TEXT NOT NULL, created_at_ms INTEGER NOT NULL,
           expires_at_ms INTEGER NOT NULL, session_version INTEGER NOT NULL
@@ -409,11 +417,23 @@ export class RegistryDO {
       `);
       }
       this.loadFeatureHealth();
+      // No legacy audit body is exposed, even if optional cleanup hits a quota.
+      try { this.ctx.storage.transactionSync(() => ensureMetadataOnlyAudit(this.ctx.storage.sql)); }
+      catch (error) { this.disableFeatureHealth("mcp_audit", error, Date.now()); }
+
+      // Existing v2 stores pass schemaIsCurrent and skip initial DDL. Add the
+      // optional source buckets once without breaking their administrator,
+      // Runner, or session data, and retain bounded fallback on quota failure.
+      try { this.ctx.storage.transactionSync(() => ensureAuthSourceThrottleSchema(this.ctx.storage.sql)); }
+      catch (error) { this.disableFeatureHealth("auth_throttle", error, Date.now()); }
     });
   }
 
   public async alarm(): Promise<void> {
     const nowMs = Date.now();
+    if (this.ctx.storage.sql.exec("SELECT 1 FROM mcp_calls WHERE completed_at_ms <= ? LIMIT 1", nowMs - MCP_AUDIT_RETENTION_MS).toArray().length > 0) {
+      this.ctx.storage.sql.exec("DELETE FROM mcp_calls WHERE completed_at_ms <= ?", nowMs - MCP_AUDIT_RETENTION_MS);
+    }
     // Reads are cheap compared with a Durable Object storage write. Avoid
     // issuing no-op UPDATE/DELETE statements on every maintenance alarm when
     // there is nothing to transition or expire.
@@ -583,6 +603,61 @@ export class RegistryDO {
    * concurrent Worker requests from racing past the per-instance limit. A
    * successful record clears it; a failed record preserves the reservation.
    */
+  private sourceThrottleMaintenanceAtMs = 0;
+
+  public checkSourceAuthThrottle(kind: AuthThrottleKind, sourceHash: string, nowMs: number): { allowed: boolean; retry_after_ms: number } {
+    if (!validVerifier(sourceHash)) return { allowed: false, retry_after_ms: 60_000 };
+    const key = `${kind}:${sourceHash}`;
+    if (!this.featureHealthDisabled("auth_throttle", nowMs)) {
+      try {
+        return this.ctx.storage.transactionSync(() => {
+          const read = (id: string) => this.ctx.storage.sql.exec<AuthThrottleState>("SELECT failed_attempts, blocked_until_ms, updated_at_ms FROM auth_source_throttle WHERE id = ?", id).toArray()[0];
+          const prior = read(key);
+          if (prior !== undefined && prior.blocked_until_ms > nowMs) return { allowed: false, retry_after_ms: prior.blocked_until_ms - nowMs };
+          if (nowMs >= this.sourceThrottleMaintenanceAtMs) {
+            const cutoff = nowMs - AUTH_SOURCE_RETENTION_MS;
+            if (this.ctx.storage.sql.exec("SELECT 1 FROM auth_source_throttle WHERE updated_at_ms < ? LIMIT 1", cutoff).toArray().length > 0) {
+              this.ctx.storage.sql.exec("DELETE FROM auth_source_throttle WHERE updated_at_ms < ?", cutoff);
+            }
+            this.sourceThrottleMaintenanceAtMs = nowMs + 60_000;
+          }
+          const count = this.ctx.storage.sql.exec<{ total: number }>("SELECT COUNT(*) AS total FROM auth_source_throttle").toArray()[0]?.total ?? 0;
+          if (read(key) === undefined && count >= MAX_AUTH_THROTTLE_KEYS - 2) {
+            const needed = count - (MAX_AUTH_THROTTLE_KEYS - 2) + 1;
+            const candidates = this.ctx.storage.sql.exec<{ id: string }>("SELECT id FROM auth_source_throttle WHERE length(id) > 64 AND blocked_until_ms <= ? ORDER BY updated_at_ms, id LIMIT ?", nowMs, needed).toArray();
+            if (candidates.length < needed) return { allowed: false, retry_after_ms: 60_000 };
+            for (const candidate of candidates) this.ctx.storage.sql.exec("DELETE FROM auth_source_throttle WHERE id = ?", candidate.id);
+          }
+          return reserveSourceAuthAttempt({ read, write: (id, state) => {
+            this.ctx.storage.sql.exec(
+              `INSERT INTO auth_source_throttle (id, failed_attempts, blocked_until_ms, updated_at_ms) VALUES (?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET failed_attempts = excluded.failed_attempts, blocked_until_ms = excluded.blocked_until_ms, updated_at_ms = excluded.updated_at_ms`,
+              id, state.failed_attempts, state.blocked_until_ms, state.updated_at_ms,
+            );
+          } }, kind, sourceHash, nowMs);
+        });
+      } catch (error) { this.disableFeatureHealth("auth_throttle", error, nowMs); }
+    }
+    for (const [id, state] of this.sourceThrottleFallback) if (state.updated_at_ms < nowMs - AUTH_SOURCE_RETENTION_MS) this.sourceThrottleFallback.delete(id);
+    while (!this.sourceThrottleFallback.has(key) && this.sourceThrottleFallback.size >= MAX_AUTH_THROTTLE_KEYS - 2) {
+      const evict = [...this.sourceThrottleFallback].filter(([id, state]) => id.length > 64 && state.blocked_until_ms <= nowMs)
+        .sort((a, b) => a[1].updated_at_ms - b[1].updated_at_ms)[0];
+      if (evict === undefined) return { allowed: false, retry_after_ms: 60_000 };
+      this.sourceThrottleFallback.delete(evict[0]);
+    }
+    return reserveSourceAuthAttempt({ read: (id) => this.sourceThrottleFallback.get(id), write: (id, state) => { this.sourceThrottleFallback.set(id, state); } }, kind, sourceHash, nowMs);
+  }
+
+  public recordSourceAuthAttempt(kind: AuthThrottleKind, sourceHash: string, success: boolean, nowMs: number): void {
+    if (!validVerifier(sourceHash) || !success) return;
+    const key = `${kind}:${sourceHash}`;
+    this.sourceThrottleFallback.delete(key);
+    if (this.featureHealthDisabled("auth_throttle", nowMs)) return;
+    try { this.ctx.storage.sql.exec("DELETE FROM auth_source_throttle WHERE id = ?", key); }
+    catch (error) { this.disableFeatureHealth("auth_throttle", error, nowMs); }
+    // A successful login clears only its own source, never the global CPU budget.
+  }
+
   public checkAuthThrottle(kind: AuthThrottleKind, nowMs: number): { allowed: boolean; retry_after_ms: number } {
     if (this.featureHealthDisabled("auth_throttle", nowMs)) return this.checkFallbackThrottle(kind, nowMs);
     try {
@@ -657,14 +732,18 @@ export class RegistryDO {
     });
   }
 
-  public createAdminSession(sessionHash: string, csrfHash: string, expiresAtMs: number, nowMs: number): boolean {
-    const settings = this.settings();
-    if (settings === undefined) return false;
-    this.ctx.storage.sql.exec(
-      "INSERT INTO admin_sessions (session_hash, csrf_hash, created_at_ms, expires_at_ms, session_version) VALUES (?, ?, ?, ?, ?)",
-      sessionHash, csrfHash, nowMs, expiresAtMs, settings.session_version,
-    );
-    return true;
+  /** Bind issuance atomically to the password generation actually verified. */
+  public createAdminSession(sessionHash: string, csrfHash: string, expiresAtMs: number, nowMs: number, expectedSessionVersion: number): boolean {
+    if (!Number.isSafeInteger(expectedSessionVersion) || expectedSessionVersion < 1) return false;
+    return this.ctx.storage.transactionSync(() => {
+      const settings = this.settings();
+      if (settings === undefined || settings.session_version !== expectedSessionVersion) return false;
+      this.ctx.storage.sql.exec(
+        "INSERT INTO admin_sessions (session_hash, csrf_hash, created_at_ms, expires_at_ms, session_version) VALUES (?, ?, ?, ?, ?)",
+        sessionHash, csrfHash, nowMs, expiresAtMs, expectedSessionVersion,
+      );
+      return true;
+    });
   }
 
   public verifyAdminSession(sessionHash: string, nowMs: number): { csrf_hash: string } | undefined {
@@ -1571,10 +1650,12 @@ export class RegistryDO {
   public listMcpCalls(runnerId: string, limit = 100): unknown[] {
     const boundedLimit = Math.min(Math.max(limit, 1), MAX_MCP_CALLS_PER_RUNNER);
     const rows = this.ctx.storage.sql.exec<McpCallRow>(
-      "SELECT call_json FROM mcp_calls WHERE runner_id = ? ORDER BY completed_at_ms DESC, call_id DESC LIMIT ?",
-      runnerId, boundedLimit,
+      "SELECT call_json FROM mcp_calls WHERE runner_id = ? AND completed_at_ms > ? ORDER BY completed_at_ms DESC, call_id DESC LIMIT ?",
+      runnerId, Date.now() - MCP_AUDIT_RETENTION_MS, boundedLimit,
     ).toArray();
-    return rows.map((row) => JSON.parse(row.call_json) as unknown);
+    return rows.flatMap((row) => {
+      try { return [projectMcpAuditMetadata(JSON.parse(row.call_json))]; } catch { return []; }
+    });
   }
   public listRunners(): RunnerRecord[] { return this.ctx.storage.sql.exec<RunnerRow>("SELECT * FROM runners ORDER BY display_name, runner_id").toArray().map(decodeRunner); }
   public dashboardSnapshot(): DashboardSnapshot {
@@ -1634,8 +1715,6 @@ export class RegistryDO {
             job_id: jobId,
             status,
             error_code: errorCode,
-            params: call.params,
-            result: call.result,
             result_runner_id: resultRunnerId,
             started_at_ms: startedAtMs,
             completed_at_ms: completedAtMs,
@@ -1658,6 +1737,10 @@ export class RegistryDO {
     }
   }
   private pruneMcpCalls(runnerId: string): void {
+    const cutoff = Date.now() - MCP_AUDIT_RETENTION_MS;
+    if (this.ctx.storage.sql.exec("SELECT 1 FROM mcp_calls WHERE runner_id = ? AND completed_at_ms <= ? LIMIT 1", runnerId, cutoff).toArray().length > 0) {
+      this.ctx.storage.sql.exec("DELETE FROM mcp_calls WHERE runner_id = ? AND completed_at_ms <= ?", runnerId, cutoff);
+    }
     this.ctx.storage.sql.exec(
       `DELETE FROM mcp_calls
        WHERE runner_id = ? AND call_id IN (
@@ -1895,8 +1978,6 @@ export class RegistryDO {
         result_runner_id: input.result_runner_id ?? null,
         status,
         error_code: errorCode,
-        params: input.params,
-        result: input.result,
         started_at_ms: startedAtMs,
         completed_at_ms: completedAtMs,
         duration_ms: durationMs,
@@ -1922,19 +2003,27 @@ export class RegistryDO {
         : new Response(null, { status: 204 });
     }
     if (method === "GET" && action === "status" && clientId === undefined) return Response.json(this.adminStatus());
-    if (method === "GET" && action === "settings" && clientId === undefined) { const verifier = this.adminPasswordVerifier(); return verifier === undefined ? new Response("not found", { status: 404 }) : Response.json({ password_verifier: verifier }); }
+    if (method === "GET" && action === "settings" && clientId === undefined) { const settings = this.settings(); return settings === undefined ? new Response("not found", { status: 404 }) : Response.json({ password_verifier: settings.password_verifier, session_version: settings.session_version }); }
     if (method === "POST" && action === "setup" && clientId === undefined) { const verifier = stringField(input, "password_verifier", 4_096); return verifier === undefined ? Response.json({ error: "invalid verifier" }, { status: 400 }) : this.setupAdmin(verifier, nowMs) ? new Response(null, { status: 204 }) : new Response("already initialized", { status: 409 }); }
     if (method === "POST" && action === "throttle" && clientId === "check") {
       const kind = authThrottleKind(input.kind);
-      return kind === undefined ? Response.json({ error: "invalid throttle kind" }, { status: 400 }) : Response.json(this.checkAuthThrottle(kind, nowMs));
+      const sourceHash = stringField(input, "source_hash", 64);
+      return kind === undefined || sourceHash === undefined || !validVerifier(sourceHash) ? Response.json({ error: "invalid throttle source" }, { status: 400 }) : Response.json(this.checkSourceAuthThrottle(kind, sourceHash, nowMs));
     }
     if (method === "POST" && action === "throttle" && clientId === "record") {
       const kind = authThrottleKind(input.kind);
-      if (kind === undefined || typeof input.success !== "boolean") return Response.json({ error: "invalid throttle record" }, { status: 400 });
-      this.recordAuthAttempt(kind, input.success, nowMs);
+      const sourceHash = stringField(input, "source_hash", 64);
+      if (kind === undefined || sourceHash === undefined || !validVerifier(sourceHash) || typeof input.success !== "boolean") return Response.json({ error: "invalid throttle record" }, { status: 400 });
+      this.recordSourceAuthAttempt(kind, sourceHash, input.success, nowMs);
       return new Response(null, { status: 204 });
     }
-    if (method === "POST" && action === "sessions" && clientId === undefined) { const sessionHash = stringField(input, "session_hash", 64); const csrfHash = stringField(input, "csrf_hash", 64); const expires = integerField(input, "expires_at_ms"); if (sessionHash === undefined || csrfHash === undefined || expires === undefined || !validVerifier(sessionHash) || !validVerifier(csrfHash) || expires <= nowMs) return Response.json({ error: "invalid session" }, { status: 400 }); return this.createAdminSession(sessionHash, csrfHash, expires, nowMs) ? new Response(null, { status: 204 }) : new Response("not initialized", { status: 409 }); }
+    if (method === "POST" && action === "sessions" && clientId === undefined) {
+      const sessionHash = stringField(input, "session_hash", 64); const csrfHash = stringField(input, "csrf_hash", 64);
+      const expires = integerField(input, "expires_at_ms"); const expectedVersion = integerField(input, "expected_session_version");
+      if (sessionHash === undefined || csrfHash === undefined || expires === undefined || expectedVersion === undefined || expectedVersion < 1 || !validVerifier(sessionHash) || !validVerifier(csrfHash) || expires <= nowMs) return Response.json({ error: "invalid session" }, { status: 400 });
+      return this.createAdminSession(sessionHash, csrfHash, expires, nowMs, expectedVersion)
+        ? new Response(null, { status: 204 }) : new Response("authentication generation changed", { status: 409 });
+    }
     if (method === "POST" && action === "sessions" && clientId === "verify") { const sessionHash = stringField(input, "session_hash", 64); if (sessionHash === undefined || !validVerifier(sessionHash)) return new Response("not found", { status: 404 }); const session = this.verifyAdminSession(sessionHash, nowMs); return session === undefined ? new Response("not found", { status: 404 }) : Response.json(session); }
     if (method === "POST" && action === "sessions" && clientId === "logout") { const sessionHash = stringField(input, "session_hash", 64); if (sessionHash !== undefined && validVerifier(sessionHash)) this.logoutAdminSession(sessionHash); return new Response(null, { status: 204 }); }
     if (method === "POST" && action === "password" && clientId === undefined) { const verifier = stringField(input, "password_verifier", 4_096); return verifier === undefined ? Response.json({ error: "invalid verifier" }, { status: 400 }) : this.changeAdminPassword(verifier, nowMs) ? new Response(null, { status: 204 }) : new Response("not initialized", { status: 409 }); }

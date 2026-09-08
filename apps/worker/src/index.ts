@@ -10,6 +10,7 @@ import {
   containsControlCharacter,
   constantTimeEqual,
   generateRunnerToken,
+  hmacHex,
   internalHeaders,
   isConfiguredSecret,
   isSafeIdentifier,
@@ -23,6 +24,7 @@ import {
 import { readCappedBytes, readCappedFormData, readCappedText as readBodyText } from "./body.js";
 import { canonicalPublicOrigin, fixedReleaseDescriptor, powershellQuote, renderPosixInstaller, renderPowerShellInstaller, resolvePublicOrigin, shellQuote, signedReleaseIsAvailable, type FixedReleaseDescriptor } from "./installer.js";
 import { validTimestamp, validityStatus, type ValidityWindow } from "./validity.js";
+import { loadLoginSettings } from "./auth-settings.js";
 
 // v2 Durable Object classes intentionally use fresh namespaces. The current
 // release is a clean schema break: persisted data from the retired namespace
@@ -141,7 +143,7 @@ function runnerInstallScript(request: Request, _url: URL, env: RunnerReleaseEnvi
     content =
 `#!/usr/bin/env sh
 set -eu
-printf '%s\\n' 'error: The fixed signed Runmesh v0.1.0-dev.3 release is not enabled on this deployment.' 'Use the manual verified portable-artifact route until the exact immutable release is available.' >&2
+printf '%s\\n' 'error: The fixed signed Runmesh v0.1.0-dev.4 release is not enabled on this deployment.' 'Use the manual verified portable-artifact route until the exact immutable release is available.' >&2
 exit 1
 `;
   }
@@ -157,7 +159,7 @@ function runnerInstallPowerShell(request: Request, _url: URL, env: RunnerRelease
   } else {
     content = `$ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-Write-Error 'The fixed signed Runmesh v0.1.0-dev.3 release is not enabled on this deployment. Use the manual verified portable-artifact route until the exact immutable release is available.'
+Write-Error 'The fixed signed Runmesh v0.1.0-dev.4 release is not enabled on this deployment. Use the manual verified portable-artifact route until the exact immutable release is available.'
 exit 1
 `;
   }
@@ -376,7 +378,7 @@ async function submitSetup(request: Request, env: WorkerEnv): Promise<Response> 
   const form = await formData(request);
   if (form === undefined) return adminError(400, "Invalid setup request.");
   if (!await verifyPreAuthCsrf(request, form, SETUP_CSRF_COOKIE, env)) return adminError(403, "Setup request was rejected.");
-  const throttle = await authThrottleCheck(env, "setup");
+  const throttle = await authThrottleCheck(env, "setup", request);
   if (throttle === undefined) return adminError(503, "Setup could not be completed. Try again.");
   if (!throttle.allowed) return throttleError(throttle.retry_after_ms);
   const password = form.get("password"); const confirmation = form.get("confirm_password");
@@ -384,10 +386,10 @@ async function submitSetup(request: Request, env: WorkerEnv): Promise<Response> 
   const verifier = await passwordVerifier(password);
   const response = await registryPost(env, "/auth/setup", { password_verifier: verifier });
   if (response.status === 204) {
-    await authThrottleRecord(env, "setup", true);
+    await authThrottleRecord(env, "setup", true, request);
     return redirect("/", [clearCookie(SETUP_CSRF_COOKIE)]);
   }
-  await authThrottleRecord(env, "setup", false);
+  await authThrottleRecord(env, "setup", false, request);
   if (response.status === 409) return adminError(409, "This instance is already initialized.", [clearCookie(SETUP_CSRF_COOKIE)]);
   return adminError(503, "Setup could not be completed. Try again.");
 }
@@ -396,21 +398,24 @@ async function submitLogin(request: Request, env: WorkerEnv): Promise<Response> 
   const form = await formData(request);
   if (form === undefined) return adminError(400, "Invalid login request.");
   if (!await verifyPreAuthCsrf(request, form, LOGIN_CSRF_COOKIE, env)) return adminError(403, "Login request was rejected.");
-  const throttle = await authThrottleCheck(env, "login");
-  if (throttle === undefined) return adminError(503, "Login could not be completed. Try again.");
-  if (!throttle.allowed) return throttleError(throttle.retry_after_ms);
   const password = form.get("password");
   if (typeof password !== "string") return adminError(403, "Invalid administrator password.", [clearCookie(LOGIN_CSRF_COOKIE)]);
-  const settings = await registryGet(env, "/auth/settings");
-  const body = settings.ok ? await json(settings) : undefined;
-  const verifier = record(body)?.password_verifier;
-  const valid = typeof verifier === "string" && await verifyPassword(password, verifier);
-  await authThrottleRecord(env, "login", valid);
+  // Fetch a valid verifier before reserving any password attempt. No KDF has
+  // run when Registry fails, so infrastructure failures must not source-lock.
+  const settings = await loadLoginSettings((signal) => registryRequest(env, "/auth/settings", "GET", "", signal));
+  if (settings === undefined) return adminError(503, "Authentication service unavailable. Try again.");
+  const throttle = await authThrottleCheck(env, "login", request);
+  if (throttle === undefined) return adminError(503, "Login could not be completed. Try again.");
+  if (!throttle.allowed) return throttleError(throttle.retry_after_ms);
+  const sessionVersion = settings.session_version;
+  const valid = await verifyPassword(password, settings.password_verifier);
+  await authThrottleRecord(env, "login", valid, request);
   if (!valid) return adminError(403, "Invalid administrator password.", [clearCookie(LOGIN_CSRF_COOKIE)]);
   const rawSession = randomBase64Url(); const rawCsrf = randomBase64Url();
   const sessionResponse = await registryPost(env, "/auth/sessions", {
-    session_hash: await sha256Hex(rawSession), csrf_hash: await sha256Hex(rawCsrf), expires_at_ms: Date.now() + ADMIN_SESSION_TTL_MS,
+    session_hash: await sha256Hex(rawSession), csrf_hash: await sha256Hex(rawCsrf), expires_at_ms: Date.now() + ADMIN_SESSION_TTL_MS, expected_session_version: sessionVersion,
   });
+  if (sessionResponse.status === 409) return adminError(403, "Authentication changed. Sign in again.", [clearCookie(LOGIN_CSRF_COOKIE)]);
   if (!sessionResponse.ok) return adminError(503, "Login could not be completed. Try again.");
   return redirect("/admin", [sessionCookie(rawSession), csrfCookie(rawCsrf), clearCookie(LOGIN_CSRF_COOKIE)]);
 }
@@ -979,11 +984,11 @@ function controlPlaneUnavailable(): Response {
   return new Response("control plane is not configured", { status: 503, headers: { "cache-control": "no-store" } });
 }
 
-async function registryRequest(env: WorkerEnv, path: string, method: string, body: string): Promise<Response> {
+async function registryRequest(env: WorkerEnv, path: string, method: string, body: string, signal?: AbortSignal): Promise<Response> {
   const headers = await signedInternalHeaders(env, method, path, body);
   if (headers === undefined) return controlPlaneUnavailable();
   try {
-    const init: RequestInit = { method, headers, ...(body.length === 0 || method === "GET" || method === "HEAD" ? {} : { body }) };
+    const init: RequestInit = { method, headers, ...(signal === undefined ? {} : { signal }), ...(body.length === 0 || method === "GET" || method === "HEAD" ? {} : { body }) };
     return await env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, init));
   } catch { return new Response("registry unavailable", { status: 503 }); }
 }
@@ -1321,7 +1326,7 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Hosted installers are disabled in this development preview. Download and verify the portable Runner artifact first. This one-time code expires in 30 minutes and will not be shown again.": "当前开发预览版未启用托管安装器。请先下载并校验便携版 Runner。此代码将在 30 分钟后失效，且只显示一次。",
   "The fixed signed hosted release is not enabled on this deployment. Install the verified portable Runner artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. The install step runs only after enrollment succeeds. This one-time code expires in 30 minutes and will not be shown again.": "当前部署未启用固定签名的托管版本。请先安装已校验的便携版 Runner，再运行下面的单行命令。命令会在本地提示输入代码，粘贴后按 Enter；只有注册成功后才会继续安装。此代码将在 30 分钟后失效，且只显示一次。",
   "The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. This one-time code expires in 30 minutes and will not be shown again.": "安装器会先校验固定签名的 Runner，再在本地提示输入代码。代码不会写入命令、URL 或进程参数。此代码将在 30 分钟后失效，且只显示一次。",
-  "The installer verifies the fixed signed Runner artifact, downloads and verifies a private Node.js runtime for the host architecture, registers the Runner as a background service, and starts it after enrollment. The copied command passes this one-time code as its final argument, then removes it from its working variables.": "安装器会校验固定签名的 Runner，按主机架构下载并校验私有 Node.js 运行时，注册后台服务，并在注册成功后自动启动。复制的命令会把一次性代码作为最后一个参数传入，安装器随后会清理工作变量。",
+  "The installer verifies the fixed signed Runner artifact, downloads and verifies a private Node.js runtime for the host architecture, registers the Runner as a background service, and starts it after enrollment. The copied command includes the one-time enrollment code; no second code entry is needed. Treat the command as a secret.": "安装器会校验固定签名的 Runner，按主机架构下载并校验私有 Node.js 运行时，注册后台服务，并在注册成功后自动启动。复制的命令已包含一次性注册码，无需再次输入。请将整条命令视为凭据妥善保管。",
   "Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.": "完成校验后，请将代码粘贴到本地提示中；复制的命令不会包含代码。",
   "The copied command includes this one-time code. Treat it as a secret and use it only once.": "复制的命令已经包含这次安装所需的一次性代码，请勿修改或分享。",
   "Operating system": "操作系统",
@@ -1534,8 +1539,8 @@ const ZH_UI_TEXT: Record<string, string> = {
   "RUNNER 报告的 CHECKSUM": "Runner 上报的校验和",
   "Manual Runner enrollment and install uses a verified portable artifact. Install the artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. Selected execution mode: ": "请先安装已验证的便携版 Runner，再运行下面的命令。命令会在本机提示输入代码，粘贴后按 Enter。当前执行模式：",
   "The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. Selected execution mode: ": "安装器会先校验固定签名的 Runner，再在本机提示输入代码。代码不会写入命令、URL 或进程参数。当前执行模式：",
-  "The recommended execution mode is privileged_host; dedicated_user remains available for explicit isolation cases. The install step runs only after enrollment succeeds.": "推荐使用 privileged_host；如需进一步隔离，也可以选择 dedicated_user。注册成功后才会继续安装。",
-  "The recommended execution mode is privileged_host; dedicated_user remains available for explicit isolation cases.": "推荐使用 privileged_host；如需进一步隔离，也可以选择 dedicated_user。",
+  "The default is dedicated_user; privileged_host is an advanced, explicitly confirmed option. The install step runs only after enrollment succeeds.": "推荐使用 privileged_host；如需进一步隔离，也可以选择 dedicated_user。注册成功后才会继续安装。",
+  "The default is dedicated_user; privileged_host is an advanced, explicitly confirmed option.": "推荐使用 privileged_host；如需进一步隔离，也可以选择 dedicated_user。",
   "Runner authorization": "Runner 授权",
   "One-time code": "一次性注册码",
   "Valid days": "有效天数",
@@ -1987,7 +1992,7 @@ function runnersPage(data: AdminData, csrf: string): string {
     return `<tr class="data-row"><td><div class="table-primary-cell"><a class="strong" href="/admin/runners/${encodeURIComponent(runner.runner_id)}">${escapeHtml(runner.display_name)}</a><span class="sub-id mono">${escapeHtml(runner.runner_id)}</span></div></td><td>${statusBadge(runner.state)}</td><td><span class="platform-tag">${escapeHtml(safePlatform(runner))}</span></td><td><span class="mono font-12">${escapeHtml(modeLabel)}</span>${configuredMode === null ? "<span class=\"warning-text\"> · selection required</span>" : ""}</td><td class="time-cell">${escapeHtml(time(runner.last_heartbeat_ms))}</td>${runnerActionCell(runner, modeFields, csrf)}</tr>`;
   }).join("") || `<tr><td colspan="6" class="empty"><div class="empty-state-box"><p>No runners yet.</p></div></td></tr>`;
   const warning = PRIVILEGED_HOST_WARNING;
-  return `<section class="page-heading"><div><p class="eyebrow">Infrastructure</p><h1>Runners</h1><p class="lede">Manage safe runner metadata, authorization windows, and one-time registration.</p></div></section><section class="panel add-panel" id="add-runner"><div class="section-title"><h2>Add Runner</h2><span class="muted font-12">You can set both Runner authorization and enrollment-code timing.</span></div><form method="post" action="/admin/runners" class="form-grid add-form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Display name<input name="display_name" maxlength="256" required autocomplete="off" placeholder="e.g. Production Runner 01"></label><label>Safe runner ID <span class="muted font-11">optional</span><input name="runner_id" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" placeholder="generated-id"></label>${windowFields("runner")}${windowFields("code")}<fieldset class="execution-mode-fieldset"><legend>System Runner execution mode</legend><label class="check"><input type="radio" name="execution_mode" value="privileged_host" checked data-execution-mode="privileged_host"><span><strong>整机控制 / 高权限模式（推荐用于受信任的自托管机器）</strong><small>Linux root · macOS root LaunchDaemon · Windows SYSTEM / HighestAvailable</small></span></label><label class="check"><input type="radio" name="execution_mode" value="dedicated_user" data-execution-mode="dedicated_user"><span><strong>受限服务账户模式（dedicated_user）</strong><small>Use a dedicated restricted service identity for narrower host access.</small></span></label><p class="warning privileged-host-warning">${escapeHtml(warning)}</p><label class="check"><input type="checkbox" name="confirm_privileged_host" value="true" data-privileged-confirmation><span>I understand and authorize this one-time high-privilege installation acknowledgement.</span></label></fieldset><div class="form-submit-wrap"><button class="button">Create enrollment</button></div></form></section><section class="panel"><div class="table-wrap"><table class="data-table runner-table"><caption class="sr-only">Registered runners</caption><thead><tr><th>Display name</th><th>Status</th><th>Platform / architecture</th><th>Execution mode</th><th>Last seen</th><th>Actions</th></tr></thead><tbody>${table}</tbody></table></div></section>`;
+  return `<section class="page-heading"><div><p class="eyebrow">Infrastructure</p><h1>Runners</h1><p class="lede">Manage safe runner metadata, authorization windows, and one-time registration.</p></div></section><section class="panel add-panel" id="add-runner"><div class="section-title"><h2>Add Runner</h2><span class="muted font-12">You can set both Runner authorization and enrollment-code timing.</span></div><form method="post" action="/admin/runners" class="form-grid add-form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Display name<input name="display_name" maxlength="256" required autocomplete="off" placeholder="e.g. Production Runner 01"></label><label>Safe runner ID <span class="muted font-11">optional</span><input name="runner_id" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" placeholder="generated-id"></label>${windowFields("runner")}${windowFields("code")}<fieldset class="execution-mode-fieldset"><legend>System Runner execution mode</legend><label class="check"><input type="radio" name="execution_mode" value="dedicated_user" checked data-execution-mode="dedicated_user"><span><strong>受限服务账户模式（dedicated_user，默认推荐）</strong><small>Use a dedicated restricted service identity for narrower host access.</small></span></label><label class="check"><input type="radio" name="execution_mode" value="privileged_host" data-execution-mode="privileged_host"><span><strong>整机控制 / 高权限模式（高级选项，需明确授权）</strong><small>Linux root · macOS root LaunchDaemon · Windows SYSTEM / HighestAvailable</small></span></label><p class="warning privileged-host-warning" hidden>${escapeHtml(warning)}</p><label class="check"><input type="checkbox" name="confirm_privileged_host" value="true" data-privileged-confirmation><span>I understand and authorize this one-time high-privilege installation acknowledgement.</span></label></fieldset><div class="form-submit-wrap"><button class="button">Create enrollment</button></div></form></section><section class="panel"><div class="table-wrap"><table class="data-table runner-table"><caption class="sr-only">Registered runners</caption><thead><tr><th>Display name</th><th>Status</th><th>Platform / architecture</th><th>Execution mode</th><th>Last seen</th><th>Actions</th></tr></thead><tbody>${table}</tbody></table></div></section>`;
 }
 function activeRunnerLabel(client: McpClientRecord, runners: readonly RunnerRecord[]): string { const runner = client.active_runner_id === null ? undefined : runners.find((item) => item.runner_id === client.active_runner_id); return runner === undefined ? "Not selected" : runner.display_name; }
 function activeRunnerSelector(client: McpClientRecord, runners: readonly RunnerRecord[], csrf: string): string {
@@ -2022,7 +2027,7 @@ function displayScopeLabel(scope: string): string {
       return scope.startsWith("coding:") ? scope.slice("coding:".length) : scope;
   }
 }
-function scopeCheckboxes(selected: readonly string[] = ["coding:read", "coding:write", "coding:exec"]): string {
+function scopeCheckboxes(selected: readonly string[] = ["coding:read"]): string {
   const descriptions: Record<CodingScope, string> = {
     "coding:read": "Inspect workspaces and read files.",
     "coding:write": "Apply approved edits.",
@@ -4156,9 +4161,9 @@ html[lang="zh-CN"] legend,html[lang="zh-CN"] h3,html[lang="zh-CN"] .eyebrow,html
   .secret-card{padding:24px 20px}
 }
 </style>`; }
-function adminScript(): string {
+function adminScript(nonce?: string): string {
   const translationJson = JSON.stringify(ZH_UI_TEXT);
-  return `<script>
+  return `<script${nonce === undefined ? "" : ` nonce="${nonce}"`}>
   (function(){
   var ZH_UI_TEXT=${translationJson};function translateKnown(value){
   var trimmed=value.trim();
@@ -4179,7 +4184,7 @@ function adminScript(): string {
   var statusKeys=['compatible','incompatible','update_available','permission_denied','os_access_denied','not_directory','invalid_path','missing','pending','valid','unknown','online','offline','stale','queued','running','cancelling','cancelled','succeeded','completed','failed','interrupted','invalid'];
   var replaced=value;
   statusKeys.forEach(function(key){var re=new RegExp('(^|[^A-Za-z_])'+key+'(?=$|[^A-Za-z_])','g');replaced=replaced.replace(re,function(_,prefix){return prefix+statusText(key)})});
-  var phraseKeys=['Client Routing & Status','Skip to main content','Use a dedicated restricted service identity for narrower host access.','I understand and authorize this one-time high-privilege installation acknowledgement.','Read, Write, Exec','Each base scope has a distinct ceiling: ',' permits inspection, ',' permits approved edits, and ',' permits Host shell and Job control. Runner and Workspace policy can only reduce these permissions.','Desired policy revision is ahead of the applied or Runner-reported revision.','Runner will run as root, SYSTEM, or the platform-equivalent highest-privilege identity. Shell commands can access files, processes, network, environment variables, credentials, and system services reachable by that service identity. Install only on a trusted dedicated machine, VM, or container.','Manual Runner enrollment and install uses a verified portable artifact. Install the artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. Selected execution mode: ','The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. Selected execution mode: ','The installer verifies the fixed signed Runner artifact, downloads and verifies a private Node.js runtime for the host architecture, registers the Runner as a background service, and starts it after enrollment. The copied command passes this one-time code as its final argument, then removes it from its working variables.','The recommended execution mode is privileged_host; dedicated_user remains available for explicit isolation cases. The install step runs only after enrollment succeeds.','The recommended execution mode is privileged_host; dedicated_user remains available for explicit isolation cases.','You must keep the one-time confirmation in the local install command.','Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.','The copied command includes this one-time code. Treat it as a secret and use it only once.','This one-time code expires in 30 minutes and will not be shown again.','Selected restricted service account mode: dedicated_user. The hosted privileged installer is not used.','Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.','This code is valid until ',' and can be used once.','RUNNER','CHECKSUM','HighestAvailable'];
+  var phraseKeys=['Client Routing & Status','Skip to main content','Use a dedicated restricted service identity for narrower host access.','I understand and authorize this one-time high-privilege installation acknowledgement.','Read, Write, Exec','Each base scope has a distinct ceiling: ',' permits inspection, ',' permits approved edits, and ',' permits Host shell and Job control. Runner and Workspace policy can only reduce these permissions.','Desired policy revision is ahead of the applied or Runner-reported revision.','Runner will run as root, SYSTEM, or the platform-equivalent highest-privilege identity. Shell commands can access files, processes, network, environment variables, credentials, and system services reachable by that service identity. Install only on a trusted dedicated machine, VM, or container.','Manual Runner enrollment and install uses a verified portable artifact. Install the artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. Selected execution mode: ','The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. Selected execution mode: ','The installer verifies the fixed signed Runner artifact, downloads and verifies a private Node.js runtime for the host architecture, registers the Runner as a background service, and starts it after enrollment. The copied command includes the one-time enrollment code; no second code entry is needed. Treat the command as a secret.','The default is dedicated_user; privileged_host is an advanced, explicitly confirmed option. The install step runs only after enrollment succeeds.','The default is dedicated_user; privileged_host is an advanced, explicitly confirmed option.','You must keep the one-time confirmation in the local install command.','Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.','The copied command includes this one-time code. Treat it as a secret and use it only once.','This one-time code expires in 30 minutes and will not be shown again.','Selected restricted service account mode: dedicated_user. The hosted privileged installer is not used.','Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.','This code is valid until ',' and can be used once.','RUNNER','CHECKSUM','HighestAvailable'];
   phraseKeys.sort(function(a,b){return b.length-a.length}).forEach(function(key){var translated=ZH_UI_TEXT[key];if(translated&&replaced.indexOf(key)>=0)replaced=replaced.split(key).join(translated)});
   return replaced;
 }
@@ -4256,8 +4261,8 @@ export function runnerEnrollmentPage(env: RunnerReleaseEnvironment, baseUrl: str
   // Invoke a clean PowerShell child so the copied command works from either
   // an elevated PowerShell prompt or cmd.exe, regardless of the operator's
   // profile aliases/functions or execution-policy setting. The installer
-  // itself remains the only downloaded payload and receives the one-time code
-  // as its sole argument.
+  // receives the single-use code as its sole argument for one-copy setup.
+  // Treat the complete command as credential material; manual input is optional.
   const powerShellCommand = `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 -TimeoutSec 60 -ErrorAction Stop -Uri ${powerShellInstallerUrl}).Content)) ${powerShellCode}"`;
   const server = new URL("/runner/enroll", publicBase).toString();
   const shellServer = shellQuote(server);
@@ -4291,7 +4296,10 @@ sudo "$RUNNER" doctor --json`,
 $ErrorActionPreference = 'Stop'
 $RunnerPath = 'C:\\Program Files\\Runmesh\\current\\runmesh.cmd' # replace with the verified absolute shim path if different
 if (-not (Test-Path -LiteralPath $RunnerPath -PathType Leaf)) { throw 'Set RunnerPath to the verified runmesh.cmd path.' }
-$EnrollmentCode = Read-Host 'One-time enrollment code'
+$SecureCode = Read-Host 'One-time enrollment code' -AsSecureString
+$CodePointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureCode)
+try { $EnrollmentCode = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($CodePointer) }
+finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($CodePointer); $SecureCode.Dispose() }
 try {
   $EnrollmentCode | & $RunnerPath enroll --server ${powershellServer} --code-stdin${reEnrollFlag} ${modeFlags}
   if ($LASTEXITCODE -ne 0) { throw 'Runner enrollment failed.' }
@@ -4311,14 +4319,14 @@ if ($LASTEXITCODE -ne 0) { throw 'Runner doctor check failed.' }`,
   const panels = Object.entries(commands).map(([platform, value], index) => `<section role="tabpanel" id="panel-${platform}" aria-labelledby="tab-${platform}" ${index === 0 ? "" : "hidden"} class="${index === 0 ? "is-active" : ""}" data-panel="${platform}"><pre><code>${escapeHtml(value)}</code></pre><button type="button" class="button secondary" data-copy="" data-copy-source="command">Copy ${commands === manualCommands ? "enrollment and install" : "installer"} command</button></section>`).join("");
   const title = commands === manualCommands ? "Manual portable-artifact enrollment" : "One-command Runner setup";
   const instruction = commands === manualCommands
-    ? `Manual Runner enrollment and install uses a verified portable artifact. Install the artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. Selected execution mode: ${modeLabel}. The recommended execution mode is privileged_host; dedicated_user remains available for explicit isolation cases. The install step runs only after enrollment succeeds.`
-    : `The installer verifies the fixed signed Runner artifact, downloads and verifies a private Node.js runtime for the host architecture, registers the Runner as a background service, and starts it after enrollment. The copied command passes this one-time code as its final argument, then removes it from its working variables. Selected execution mode: ${modeLabel}. The recommended execution mode is privileged_host; dedicated_user remains available for explicit isolation cases.`;
+    ? `Manual Runner enrollment and install uses a verified portable artifact. Install the artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. Selected execution mode: ${modeLabel}. The default is dedicated_user; privileged_host is an advanced, explicitly confirmed option. The install step runs only after enrollment succeeds.`
+    : `The installer verifies the fixed signed Runner artifact, downloads and verifies a private Node.js runtime for the host architecture, registers the Runner as a background service, and starts it after enrollment. The copied command includes the one-time enrollment code; no second code entry is needed. Treat the command as a secret. Selected execution mode: ${modeLabel}. The default is dedicated_user; privileged_host is an advanced, explicitly confirmed option.`;
   const warningBlock = executionMode === "privileged_host" ? `<p class="warning privileged-host-warning">${escapeHtml(privilegedWarning)} You must keep the one-time confirmation in the local install command.</p>` : `<p class="notice">Selected restricted service account mode: dedicated_user. The hosted privileged installer is not used.</p>`;
   const enrollmentSummary = enrollment === undefined ? "The one-time enrollment code expires after 30 minutes." : `This code is valid until ${new Date(enrollment.expires_at_ms).toISOString()} and can be used once.`;
   const removalCommands = { linux: "sudo /opt/runmesh/current/bin/runmesh uninstall --purge --yes", macos: "sudo /opt/runmesh/current/bin/runmesh uninstall --purge --yes", windows: "& 'C:\\Program Files\\Runmesh\\current\\runmesh.cmd' uninstall --purge --yes" };
   const removalBlock = `<details class="panel"><summary><strong>Remove this Runner from the host</strong></summary><p class="muted font-12">Run the command for the local OS to stop and remove the managed service and local credential profile. Delete the Runner record separately from the administrator console when you no longer need its history.</p><p><strong>Linux / macOS</strong></p><pre><code>${escapeHtml(removalCommands.linux)}</code></pre><p><strong>Windows PowerShell (Administrator)</strong></p><pre><code>${escapeHtml(removalCommands.windows)}</code></pre></details>`;
 
-  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body enrollment-body"><a class="skip-link" href="#main-content">Skip to main content</a>${controlHeader("runners")}<main class="shell enrollment-shell" id="main-content" tabindex="-1"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><p class="eyebrow">${title}</p><h1 id="enrollment-title">Enroll Runner</h1><p class="lede">${instruction} ${enrollmentSummary}</p></div></section><div class="enrollment-meta-box"><span class="form-stat-label">Target Runner ID</span><span class="mono">${escapeHtml(runnerId)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">Selected execution mode</span><span class="mono">${escapeHtml(modeLabel)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">One-time enrollment code</span><code class="mono" data-no-i18n>${escapeHtml(code)}</code><span class="muted font-12">${bootstrap && executionMode === "privileged_host" ? "The copied command includes this one-time code. Treat it as a secret and use it only once." : "Paste it only into the local prompt after verification; it is deliberately excluded from copied commands."}</span></div><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><div class="enrollment-command-panels">${panels}</div>${warningBlock}<p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.</p>${removalBlock}<div class="top-actions dialog-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment">${executionModeFormFields(executionMode, csrf)}${windowFields("code")}<button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
+  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body enrollment-body"><a class="skip-link" href="#main-content">Skip to main content</a>${controlHeader("runners")}<main class="shell enrollment-shell" id="main-content" tabindex="-1"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><p class="eyebrow">${title}</p><h1 id="enrollment-title">Enroll Runner</h1><p class="lede">${instruction} ${enrollmentSummary}</p></div></section><div class="enrollment-meta-box"><span class="form-stat-label">Target Runner ID</span><span class="mono">${escapeHtml(runnerId)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">Selected execution mode</span><span class="mono">${escapeHtml(modeLabel)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">One-time enrollment code</span><code class="mono" data-no-i18n>${escapeHtml(code)}</code><span class="muted font-12">${commands === manualCommands ? "Paste it only into the local prompt after verification; it is deliberately excluded from copied commands." : "The copied command includes this one-time code. Treat it as a secret and use it only once."}</span></div><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><div class="enrollment-command-panels">${panels}</div>${warningBlock}<p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.</p>${removalBlock}<div class="top-actions dialog-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment">${executionModeFormFields(executionMode, csrf)}${windowFields("code")}<button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
 }
   function secretCreatedPage(title: string, url: string): string { return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${escapeHtml(title)} · Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="ops-body secret-result-body"><a class="skip-link" href="#main-content">Skip to main content</a>${controlHeader("clients")}<main class="shell secret-result-shell" id="main-content" tabindex="-1"><section class="auth-card secret-card"><p class="brand-kicker">Runmesh</p><h1>${escapeHtml(title)}</h1><p class="lede">Copy this URL now. It will not be shown again.</p><code>${escapeHtml(url)}</code><div class="secret-actions"><button type="button" class="button" data-copy="${escapeHtml(url)}">Copy MCP URL</button><a class="button secondary" href="/admin">Back to admin</a></div></section></main>${adminScript()}</body></html>`; }
 function secretUrl(base: string, secret: string): string { const url = new URL(base); url.pathname = `/${secret}/mcp`; url.search = ""; return url.toString(); }
@@ -4588,21 +4596,30 @@ async function verifyMcpClient(env: WorkerEnv, secretVerifier: string): Promise<
 async function registryGet(env: WorkerEnv, path: string): Promise<Response> { return registryRequest(env, path, "GET", ""); }
 async function registryPost(env: WorkerEnv, path: string, payload: Record<string, unknown>): Promise<Response> { return registryRequest(env, path, "POST", JSON.stringify(payload)); }
 type PreAuthThrottle = { readonly allowed: boolean; readonly retry_after_ms: number };
-async function authThrottleCheck(env: WorkerEnv, kind: "login" | "setup"): Promise<PreAuthThrottle | undefined> {
-  const response = await registryPost(env, "/auth/throttle/check", { kind });
+async function authSourceHash(env: WorkerEnv, request: Request): Promise<string> {
+  // Trust only Cloudflare's edge-populated address, never X-Forwarded-For.
+  // Non-edge/local requests share a conservative unattributed source bucket.
+  const address = request.headers.get("cf-connecting-ip");
+  const source = address !== null && /^[0-9a-f:.]{3,64}$/iu.test(address) ? address.toLowerCase() : "unattributed";
+  if (!isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) throw new Error("internal control is not configured");
+  return hmacHex(env.INTERNAL_CONTROL_SECRET, `runmesh-auth-source:v1:${source}`);
+}
+async function authThrottleCheck(env: WorkerEnv, kind: "login" | "setup", request: Request): Promise<PreAuthThrottle | undefined> {
+  const response = await registryPost(env, "/auth/throttle/check", { kind, source_hash: await authSourceHash(env, request) });
   const body = response.ok ? record(await json(response)) : undefined;
   return body !== undefined && typeof body.allowed === "boolean" && typeof body.retry_after_ms === "number" && Number.isSafeInteger(body.retry_after_ms) && body.retry_after_ms >= 0
     ? { allowed: body.allowed, retry_after_ms: body.retry_after_ms }
     : undefined;
 }
-async function authThrottleRecord(env: WorkerEnv, kind: "login" | "setup", success: boolean): Promise<void> {
+async function authThrottleRecord(env: WorkerEnv, kind: "login" | "setup", success: boolean, request: Request): Promise<void> {
   // The request includes only outcome metadata; passwords/verifiers never enter logs.
-  try { await registryPost(env, "/auth/throttle/record", { kind, success }); } catch { /* authentication result remains authoritative */ }
+  try { await registryPost(env, "/auth/throttle/record", { kind, source_hash: await authSourceHash(env, request), success }); } catch { /* authentication result remains authoritative */ }
 }
 function throttleError(retryAfterMs: number): Response {
-  const headers = htmlHeaders();
+  const response = html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card error-card"><div class="secret-brand-row">${meshMarkSvg("error-mesh-mark")}<span class="brand-name">Runmesh</span></div><p class="brand-kicker">Runmesh</p><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="lede">Invalid administrator password.</p><p class="muted">Please try again shortly.</p><p><a class="button secondary" href="/">Return</a></p></section></main>${adminScript()}</body></html>`);
+  const headers = new Headers(response.headers);
   headers.set("retry-after", String(Math.max(1, Math.ceil(retryAfterMs / 1_000))));
-  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card error-card"><div class="secret-brand-row">${meshMarkSvg("error-mesh-mark")}<span class="brand-name">Runmesh</span></div><p class="brand-kicker">Runmesh</p><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="lede">Invalid administrator password.</p><p class="muted">Please try again shortly.</p><p><a class="button secondary" href="/">Return</a></p></section></main>${adminScript()}</body></html>`, { status: 403, headers });
+  return new Response(response.body, { status: 403, headers });
 }
 async function formData(request: Request): Promise<FormData | undefined> { return readCappedFormData(request, MAX_ADMIN_BODY_BYTES); }
 async function readAdminBody(request: Request): Promise<Record<string, unknown> | undefined> {
@@ -4620,8 +4637,16 @@ function sessionCookie(value: string): string { return `${ADMIN_SESSION_COOKIE}=
 function csrfCookie(value: string): string { return `${ADMIN_CSRF_COOKIE}=${value}; Secure; Path=/; SameSite=Strict; Max-Age=${Math.floor(ADMIN_SESSION_TTL_MS / 1_000)}`; }
 function clearCookie(name: string): string { return `${name}=; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=0`; }
 function credentialHeaders(contentType: string): Headers { const headers = htmlHeaders(); headers.set("content-type", contentType); return headers; }
-function html(value: string, cookies: readonly string[] = []): Response { const headers = htmlHeaders(); for (const cookie of cookies) headers.append("set-cookie", cookie); return new Response(value, { headers }); }
-function htmlHeaders(): Headers { return new Headers({ "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer", "content-security-policy": "default-src 'none'; connect-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'", "x-content-type-options": "nosniff", "x-frame-options": "DENY" }); }
+function html(value: string, cookies: readonly string[] = []): Response {
+  const headers = htmlHeaders(); const nonce = randomBase64Url(16);
+  // Authorize only the exact application-owned script, never every script
+  // found in rendered HTML. Arbitrary injected tags must not receive a nonce.
+  const document = value.replaceAll(adminScript(), () => adminScript(nonce));
+  headers.set("content-security-policy", (headers.get("content-security-policy") as string).replace("script-src 'none'", `script-src 'nonce-${nonce}'`));
+  for (const cookie of cookies) headers.append("set-cookie", cookie);
+  return new Response(document, { headers });
+}
+function htmlHeaders(): Headers { return new Headers({ "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer", "content-security-policy": "default-src 'none'; connect-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'", "x-content-type-options": "nosniff", "x-frame-options": "DENY" }); }
 function redirect(location: string, cookies: readonly string[] = []): Response { const headers = htmlHeaders(); headers.set("location", location); for (const cookie of cookies) headers.append("set-cookie", cookie); return new Response(null, { status: 303, headers }); }
 function adminError(status: number, message: string, cookies: readonly string[] = []): Response { const response = html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card error-card"><div class="secret-brand-row">${meshMarkSvg("error-mesh-mark")}<span class="brand-name">Runmesh</span></div><p class="brand-kicker">Runmesh</p><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="lede">${escapeHtml(message)}</p><p><a class="button secondary" href="/">Return</a></p></section></main>${adminScript()}</body></html>`, cookies.length === 0 ? [] : cookies); return new Response(response.body, { status, headers: response.headers }); }
 function methodNotAllowed(allow: string): Response { return new Response("Method not allowed", { status: 405, headers: { allow } }); }

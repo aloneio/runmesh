@@ -60,7 +60,7 @@ describe("Worker runner transport", () => {
     const now = Date.now();
     const nonce = "a".repeat(64);
     const path = "/auth/throttle/check";
-    const body = JSON.stringify({ kind: "login" });
+    const body = JSON.stringify({ kind: "login", source_hash: "a".repeat(64) });
     const headers = await internalHeaders(secret, "POST", path, body, { timestamp: now, nonce });
     const valid = await registry.fetch(`https://registry.internal${path}`, { method: "POST", headers, body });
     expect(valid.status).toBe(200);

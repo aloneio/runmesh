@@ -21,8 +21,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version-file: .node-version
           cache: npm
+      - run: npm install --global npm@10.9.3
+      - run: node scripts/check-toolchain.mjs
       - run: npm ci
       - run: npm audit --audit-level=high
       - run: npm audit --omit=dev --audit-level=high
@@ -36,5 +38,55 @@ jobs:
       - run: npm run build
       - run: npm run validate:worker -- --dry-run
       - run: npm run validate:worker -- --dry-run --env production
+      - run: node scripts/check-release-contract.mjs
       - run: npm run pack:smoke
       - run: npm run test:e2e
+
+  native-runner:
+    name: Runner native checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm install --global npm@10.9.3
+      - run: node scripts/check-toolchain.mjs
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run test --workspace=@aloneio/runmesh-runner
+      - run: npm run pack:smoke
+      - run: node scripts/check-installer-syntax.mjs
+      - run: node --test test/installer-arguments.test.mjs
+
+  runner-node20:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm install --global npm@10.9.3
+      - run: node scripts/check-toolchain.mjs
+      - run: npm ci
+      - run: npm run build
+      - run: npm run pack:smoke
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 20.19.2
+      - run: npm install --global npm@10.9.3
+      - run: npm run test --workspace=@aloneio/runmesh-runner
+      - run: node apps/runner/dist/runmesh.cjs --version
