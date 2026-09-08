@@ -120,20 +120,6 @@ function internalSignatureValue(
   return `${version}\n${method.toUpperCase()}\n${pathnameAndQuery}\n${timestamp}\n${nonce}\n${bodyHash}`;
 }
 
-export async function verifySetupToken(
-  supplied: FormDataEntryValue | null,
-  setupToken: string | undefined,
-  setupTokenHash: string | undefined,
-): Promise<boolean> {
-  if (typeof supplied !== "string" || supplied.length === 0 || supplied.length > 1_024 || containsControlCharacter(supplied)) return false;
-  if (setupTokenHash !== undefined) {
-    if (!/^[0-9a-fA-F]{64}$/.test(setupTokenHash)) return false;
-    return constantTimeEqual(await sha256Hex(supplied), setupTokenHash.toLowerCase());
-  }
-  return setupToken !== undefined && setupToken.length > 0
-    && constantTimeEqual(await sha256Hex(supplied), await sha256Hex(setupToken));
-}
-
 export async function hmacHex(secret: string, value: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     "raw",

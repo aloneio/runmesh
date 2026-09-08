@@ -1,24 +1,14 @@
 import { env, SELF, runInDurableObject } from "cloudflare:test";
-import { passwordVerifier, randomBase64Url, sha256Hex, verifySetupToken } from "../src/security.js";
+import { passwordVerifier, randomBase64Url, sha256Hex } from "../src/security.js";
 import { RegistryDO, RunnerDO, runnerReleaseDescriptor } from "../src/index.js";
 import { FIXED_ARTIFACT_URL, FIXED_RELEASE_KEY_ID, FIXED_RELEASE_PUBLIC_KEY_PEM, FIXED_RELEASE_VERSION, renderPosixInstaller, renderPowerShellInstaller } from "../src/installer.js";
 import { describe, expect, it, vi } from "vitest";
 
 const password = "administrator-password-for-tests";
-const setupToken = "test-setup-token-0123456789abcdef";
 
 type CookieJar = Map<string, string>;
 
 describe.sequential("self-hosted admin and MCP client authentication", () => {
-  it("accepts only a configured plaintext or SHA-256 setup-token verifier", async () => {
-    const token = "setup-token-for-hash-verifier";
-    const hash = await sha256Hex(token);
-    expect(await verifySetupToken(token, undefined, hash)).toBe(true);
-    expect(await verifySetupToken(token, undefined, hash.toUpperCase())).toBe(true);
-    expect(await verifySetupToken("wrong-setup-token", undefined, hash)).toBe(false);
-    expect(await verifySetupToken(token, undefined, undefined)).toBe(false);
-  });
-
   it("throttles login after five failed KDF attempts and clears it after a success", async () => {
     const registry = env.REGISTRY.get(env.REGISTRY.idFromName(`login-throttle-${crypto.randomUUID()}`));
     const now = Date.now();
@@ -342,27 +332,24 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(initial.headers.get("content-security-policy")).toContain("img-src 'self' data:");
     expect(initial.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
 
-    const rejectedCsrf = await submit("https://worker.test/setup", { setup_token: setupToken, password, confirm_password: password }, new Map(), false);
+    const rejectedCsrf = await submit("https://worker.test/setup", { password, confirm_password: password }, new Map(), false);
     expect(rejectedCsrf.status).toBe(403);
 
-    const rejectedSetup = await submit("https://worker.test/setup", { csrf_token: setupCsrf, password, confirm_password: password }, jar([["__Host-runmesh_setup_csrf", setupCookie]]));
-    expect(rejectedSetup.status).toBe(403);
-
-    const wrongSetup = await submit("https://worker.test/setup", { csrf_token: setupCsrf, setup_token: "wrong-setup-token", password, confirm_password: password }, jar([["__Host-runmesh_setup_csrf", setupCookie]]));
-    expect(wrongSetup.status).toBe(403);
+    const rejectedSetup = await submit("https://worker.test/setup", { csrf_token: setupCsrf }, jar([["__Host-runmesh_setup_csrf", setupCookie]]));
+    expect(rejectedSetup.status).toBe(400);
 
     const setupRequests = await Promise.all(Array.from({ length: 2 }, () => submit(
       "https://worker.test/setup",
-      { csrf_token: setupCsrf, setup_token: setupToken, password, confirm_password: password },
+      { csrf_token: setupCsrf, password, confirm_password: password },
       jar([["__Host-runmesh_setup_csrf", setupCookie]]),
     )));
     expect(setupRequests.filter((response) => response.status === 303)).toHaveLength(1);
     expect(setupRequests.filter((response) => response.status === 409)).toHaveLength(1);
     const setup = setupRequests.find((response) => response.status === 303);
     expect(setup).toBeDefined();
-    expect(setup?.headers.get("set-cookie")).not.toContain(setupToken);
-    const repeated = await SELF.fetch("https://worker.test/setup", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ csrf_token: setupCsrf, setup_token: setupToken, password, confirm_password: password }) });
-    expect([403, 409]).toContain(repeated.status);
+    expect(setup?.headers.get("set-cookie")).toContain("__Host-runmesh_setup_csrf=");
+    const repeated = await SELF.fetch("https://worker.test/setup", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ csrf_token: setupCsrf, password, confirm_password: password }) });
+    expect(repeated.status).toBe(409);
 
     const login = await SELF.fetch("https://worker.test/");
     const loginCsrf = formToken(await login.text());

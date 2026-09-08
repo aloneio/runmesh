@@ -21,8 +21,6 @@ export interface WorkerEnv {
   RUNNER: DurableObjectNamespace;
   WORKER_ID?: string;
   ADMIN_TOKEN?: string;
-  SETUP_TOKEN?: string;
-  SETUP_TOKEN_HASH?: string;
   RUNNER_TOKEN_PEPPER?: string;
   INTERNAL_CONTROL_SECRET?: string;
   RUNMESH_SIGNED_RELEASE_AVAILABLE?: string;

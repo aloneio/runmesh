@@ -38,7 +38,6 @@ const adminToken = "e2e-admin-token-0123456789abcdef";
 const adminPassword = "e2e-administrator-password";
 const workerEnv = {
   ADMIN_TOKEN: adminToken,
-  SETUP_TOKEN: "e2e-setup-token-0123456789abcdef",
   RUNNER_TOKEN_PEPPER: "e2e-runner-token-pepper-not-for-production",
   INTERNAL_CONTROL_SECRET: "e2e-internal-control-secret-not-for-production",
   RUNMESH_TEST_MODE: "1",
@@ -357,7 +356,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const setupCsrf = formToken(setupHtml);
     const setupCookie = cookieFrom(setupPage, "__Host-runmesh_setup_csrf");
     const setup = await submitForm("/setup", {
-      csrf_token: setupCsrf, setup_token: workerEnv.SETUP_TOKEN, password: adminPassword, confirm_password: adminPassword,
+      csrf_token: setupCsrf, password: adminPassword, confirm_password: adminPassword,
     }, cookieJar([["__Host-runmesh_setup_csrf", setupCookie]]));
     expect(setup.status).toBe(303);
 

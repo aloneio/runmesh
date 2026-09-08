@@ -25,12 +25,11 @@ The deployed core uses only:
 - SQLite-backed `RegistryDO` and `RunnerDO` classes;
 - no KV, D1, R2, Queues, Sandbox, Containers, Dynamic Workers, tunnels, inbound service, OAuth, AI/model API, or GitHub Actions runtime.
 
-Configure the four server-side secrets before deployment:
+Configure the three server-side secrets before deployment:
 
 ```sh
 cd apps/worker
 npm exec --offline -- wrangler secret put ADMIN_TOKEN --env production
-npm exec --offline -- wrangler secret put SETUP_TOKEN --env production          # or configure SETUP_TOKEN_HASH instead
 npm exec --offline -- wrangler secret put RUNNER_TOKEN_PEPPER --env production
 npm exec --offline -- wrangler secret put INTERNAL_CONTROL_SECRET --env production
 ```
@@ -39,7 +38,7 @@ Set the non-secret Worker variable `RUNMESH_PUBLIC_ORIGIN` in the `vars` section
 
 Leave `RUNMESH_SIGNED_RELEASE_AVAILABLE` unset in the default/development vars. The checked-in `production` environment contains the literal acknowledgement for the independently verified immutable `v0.1.0-dev.2` release alongside `RUNMESH_PUBLIC_ORIGIN`; this is an explicit release gate, not a URL or version selector. Before changing that acknowledgement or enabling it for another deployment, an authorized maintainer must check the repository's [immutable-release setting](https://docs.github.com/en/rest/repos/repos?apiVersion=latest#check-if-immutable-releases-are-enabled-for-a-repository) with an administration-read credential and require a successful response showing `enabled: true`; `401`, `403`, or `404` is a release blocker. The GitHub preview workflow intentionally does not request that elevated permission, so its successful run alone is not proof of immutability. The workflow is pinned to this same version because the hosted installer embeds its version, URLs, and signing key; update and independently review that installer contract before introducing a later release version. The GitHub and GitLab repositories are connected to Cloudflare Workers Builds; configure each connection to deploy the `dev` branch with `npm exec --offline -- wrangler deploy --config apps/worker/wrangler.jsonc --env production --strict`. Cloudflare manages the build connection's authentication, while GitHub Actions and GitLab CI only run verification.
 
-The first administrator setup requires the configured `SETUP_TOKEN` or the SHA-256 verifier in `SETUP_TOKEN_HASH`; the setup token is never stored in RegistryDO or displayed by the dashboard. First setup is atomic and first-success-wins, so an uninitialized public instance must be protected by deployment access controls until the intended administrator completes setup. `ADMIN_TOKEN` is only for the manual/programmatic Runner administration API. It is not an administrator-password replacement, browser cookie, MCP credential, or Runner enrollment code.
+The first user to complete setup becomes the administrator. First setup is atomic and first-success-wins, so an uninitialized public instance must be protected by deployment access controls until the intended administrator completes setup. `ADMIN_TOKEN` is only for the manual/programmatic Runner administration API. It is not an administrator-password replacement, browser cookie, MCP credential, or Runner enrollment code.
 
 Deploy when the account and hostname are ready. The Worker name is `runmesh`. For a direct Cloudflare Workers Builds connection, use the following as its deploy command; Cloudflare manages the connection authentication:
 
