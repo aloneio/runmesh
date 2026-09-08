@@ -7,7 +7,7 @@ Local profiles, state directories, and service manifests are likewise release-sp
 ## Required transition
 
 1. Record and protect the previous deployment and host data separately. A backup is for audit or archival purposes; it is not an input to an automatic migration.
-2. Apply the checked-in `v2` Durable Object migration during deployment (it provisions fresh Registry/Runner storage) and configure `ADMIN_TOKEN`, `SETUP_TOKEN` (or `SETUP_TOKEN_HASH`), `RUNNER_TOKEN_PEPPER`, and `INTERNAL_CONTROL_SECRET`.
+2. Apply the checked-in `v2` Durable Object migration during deployment (it provisions fresh Registry/Runner storage) and configure `ADMIN_TOKEN`, `RUNNER_TOKEN_PEPPER`, and `INTERNAL_CONTROL_SECRET`.
 3. Complete first-time administrator setup.
 4. Create each Runner in the Admin Panel with an explicit `execution_mode`, generate a one-time enrollment code, and enroll the current Runner package.
 5. Configure approved workspace roots and permissions in the Admin Panel. Central management starts with zero local workspaces; the local CLI exposes `workspace list` for inspection only.
