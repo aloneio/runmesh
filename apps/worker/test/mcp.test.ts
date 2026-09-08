@@ -578,6 +578,9 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(enrollment).toContain('class="header-mesh-mark"');
     expect(enrollment).toContain("Linux"); expect(enrollment).toContain("macOS"); expect(enrollment).toContain("Windows");
     expect(enrollment).toContain("Manual portable-artifact enrollment"); expect(enrollment).toContain("Manual Runner enrollment and install"); expect(enrollment).toContain("RUNNER=/opt/runmesh/current/bin/runmesh"); expect(enrollment).toContain("C:\\Program Files\\Runmesh\\current\\runmesh.cmd"); expect(enrollment).toContain('sudo &quot;$RUNNER&quot; enroll'); expect(enrollment).toContain('sudo &quot;$RUNNER&quot; install'); expect(enrollment).toContain("&amp; $RunnerPath enroll"); expect(enrollment).toContain("&amp; $RunnerPath install"); expect(enrollment).toContain("--code-stdin"); expect(enrollment).toContain("single-line command"); expect(enrollment).toContain("One-time enrollment code"); expect(enrollment).not.toMatch(/--code [A-Za-z0-9_-]{20,}/u); expect(enrollment).toContain("--executable-path"); expect(enrollment).not.toContain("curl -fsSL"); expect(enrollment).not.toContain("curl --fail --location"); expect(enrollment).not.toContain("Invoke-RestMethod"); expect(enrollment).not.toContain("Invoke-WebRequest");
+    const enrollmentCodeValue = enrollmentCode(enrollment);
+    const redeemed = await SELF.fetch("https://worker.test/runner/enroll", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ enrollment_code: enrollmentCodeValue, runner_public_info: { platform: "linux", architecture: "x64", hostname: "dashboard-host", runner_version: "1.0.0", protocol_version: 2 } }) });
+    expect(redeemed.status).toBe(200);
     // The generated server URL is shell/PowerShell quoted before it is placed
     // in the copyable command, preventing Host-header metacharacters from
     // becoming a second command when an operator pastes the snippet.
@@ -692,6 +695,26 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     for (const mixed of ["Inspect workspaces and 读取 files.", "Apply approved 编辑s.", "Use Host shell and control 任务s.", "Use Host shell and 控制 Jobs."]) expect(dashboardHtml).not.toContain(mixed);
     const clientId = /\/admin\/clients\/(client-[a-f0-9]+)\/rename/.exec(dashboardHtml)?.[1];
     expect(clientId).toBeDefined();
+    const clientsPage = await SELF.fetch("https://worker.test/admin/clients", { headers: { cookie: cookies(adminJar) } });
+    const routingClientsHtml = await clientsPage.text();
+    expect(routingClientsHtml).toContain(`/admin/clients/${clientId as string}/active-runner`);
+    expect(routingClientsHtml).toContain('name="runner_id"');
+    // Complete central registration so this browser action exercises a
+    // selectable enrolled Runner rather than the pre-enrollment state.
+    await runInDurableObject(env.REGISTRY.get(env.REGISTRY.idFromName("registry")), (instance) => {
+      expect(instance.registerRunner("dashboard-runner", "a".repeat(64), Date.now(), undefined, "dedicated_user")).toBe(true);
+    });
+    const selectedRunner = await SELF.fetch(`https://worker.test/admin/clients/${clientId as string}/active-runner`, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", cookie: cookies(adminJar), origin: "https://worker.test" }, body: new URLSearchParams([['csrf_token', csrf], ['runner_id', 'dashboard-runner'], ['confirm_switch', 'true']]) });
+    expect(selectedRunner.status).toBe(303);
+    const selectedDashboard = await SELF.fetch("https://worker.test/admin/clients", { headers: { cookie: cookies(adminJar) } });
+    expect(await selectedDashboard.text()).toContain("Safe runner");
+    await runInDurableObject(env.REGISTRY.get(env.REGISTRY.idFromName("registry")), (instance) => {
+      expect(instance.registerRunner("dashboard-runner-b", "b".repeat(64), Date.now(), undefined, "dedicated_user")).toBe(true);
+    });
+    const switchedWithoutConfirmation = await SELF.fetch(`https://worker.test/admin/clients/${clientId as string}/active-runner`, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", cookie: cookies(adminJar), origin: "https://worker.test" }, body: new URLSearchParams([['csrf_token', csrf], ['runner_id', 'dashboard-runner-b']]) });
+    expect(switchedWithoutConfirmation.status).toBe(409);
+    const switched = await SELF.fetch(`https://worker.test/admin/clients/${clientId as string}/select-runner`, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", cookie: cookies(adminJar), origin: "https://worker.test" }, body: new URLSearchParams([['csrf_token', csrf], ['runner_id', 'dashboard-runner-b'], ['confirm_switch', 'on']]) });
+    expect(switched.status).toBe(303);
     const scopesDetail = await SELF.fetch(`https://worker.test/admin/clients/${clientId as string}/scopes/detail`, { headers: { cookie: cookies(adminJar) } });
     expect(scopesDetail.status).toBe(200);
     const scopesDetailHtml = await scopesDetail.text();
