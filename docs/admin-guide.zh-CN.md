@@ -26,14 +26,13 @@ npm exec --offline -- wrangler deploy --config apps/worker/wrangler.jsonc --env 
 在 Cloudflare Variables & Secrets 中配置：
 
 - `ADMIN_TOKEN`：仅供自动化管理 Runner 的高级接口使用；
-- `SETUP_TOKEN` 或 `SETUP_TOKEN_HASH`：首次初始化使用；
 - `RUNNER_TOKEN_PEPPER`：保护 Runner 凭据校验值；
 - `INTERNAL_CONTROL_SECRET`：保护控制平面内部请求；
 - `RUNMESH_PUBLIC_ORIGIN`：完整的外部 HTTPS 根地址，不带路径、查询参数或凭据。
 
 `RUNMESH_PUBLIC_ORIGIN` 用作默认外部地址，也适用于反向代理部署。Cloudflare 新增自定义 HTTPS 域名后，只要请求 URL 与 `Host` 头一致，Runmesh 会自动识别并接受该域名，不需要再单独修改白名单。
 
-请使用密码学安全随机数生成器创建 Secret；`SETUP_TOKEN`、`ADMIN_TOKEN`、`RUNNER_TOKEN_PEPPER` 和 `INTERNAL_CONTROL_SECRET` 至少使用 32 字节随机值。四个 Secret 不能提交到 Git 仓库、CI 变量、截图或日志。部署完成后立即打开根地址，使用 setup token 设置管理员密码。初始化采用先到先得；公开实例完成初始化前，请使用 Cloudflare Access 或等效访问控制保护它。
+请使用密码学安全随机数生成器创建 Secret；`ADMIN_TOKEN`、`RUNNER_TOKEN_PEPPER` 和 `INTERNAL_CONTROL_SECRET` 至少使用 32 字节随机值。三个 Secret 不能提交到 Git 仓库、CI 变量、截图或日志。部署完成后立即打开根地址设置管理员密码，首个完成设置的用户自动成为管理员。初始化采用先到先得；公开实例完成初始化前，请使用 Cloudflare Access 或等效访问控制保护它。
 
 ## 添加 Runner
 

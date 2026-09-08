@@ -21,13 +21,12 @@ npm exec --offline -- wrangler deploy --config apps/worker/wrangler.jsonc --env 
 Configure these Cloudflare secrets and variables before deployment:
 
 - `ADMIN_TOKEN` for advanced automated Runner administration;
-- `SETUP_TOKEN` or `SETUP_TOKEN_HASH` for first-time setup;
 - `RUNNER_TOKEN_PEPPER` and `INTERNAL_CONTROL_SECRET` for server-side credential protection;
 - `RUNMESH_PUBLIC_ORIGIN` as the exact external HTTPS origin, without a path, query, or credentials.
 
 `RUNMESH_PUBLIC_ORIGIN` is used as the default public origin and for reverse-proxy deployments. When Cloudflare routes a request through an additional custom HTTPS domain, Runmesh automatically accepts that domain when the request URL and `Host` header agree, so each new custom domain does not need a separate allowlist update.
 
-Generate every secret with a cryptographically secure generator and use at least 32 random bytes for `SETUP_TOKEN`, `ADMIN_TOKEN`, `RUNNER_TOKEN_PEPPER`, and `INTERNAL_CONTROL_SECRET`. Never commit secrets or place them in CI logs. Protect a public, uninitialized deployment with Cloudflare Access until the intended administrator completes first setup.
+Generate every secret with a cryptographically secure generator and use at least 32 random bytes for `ADMIN_TOKEN`, `RUNNER_TOKEN_PEPPER`, and `INTERNAL_CONTROL_SECRET`. Never commit secrets or place them in CI logs. The first user to complete setup becomes the administrator; protect a public, uninitialized deployment with Cloudflare Access until that user completes setup.
 
 ## Enroll a Runner
 
