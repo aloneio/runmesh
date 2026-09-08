@@ -2,9 +2,9 @@
 
 Use this page when the Dashboard does not show a hosted installation command, when the target machine is offline, or when your organization's policy requires independent artifact verification. The normal product workflow is described in the [administrator guide](admin-guide.md).
 
-Runmesh supports a **fixed signed bootstrap design**, but it remains deliberately disabled in the default/local environment of `v0.1.0-dev.3`. The checked-in `production` environment contains the gates for the independently verified immutable `v0.1.0-dev.3` GitHub release. A deployment exposes hosted commands only when that environment has a canonical external HTTPS `RUNMESH_PUBLIC_ORIGIN` and the exact `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.0-dev.3` acknowledgement; both conditions are required, and setting the release acknowledgement alone never exposes the installer.
+Runmesh supports a **fixed signed bootstrap design**, but it remains deliberately disabled in the default/local environment of `v0.1.0-dev.4`. The production acknowledgement is empty while dev.4 is an unpublished source candidate. Publish and independently verify the new signed assets before enabling distribution. A deployment exposes hosted commands only when that environment has a canonical external HTTPS `RUNMESH_PUBLIC_ORIGIN` and the exact `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.0-dev.4` acknowledgement; both conditions are required, and setting the release acknowledgement alone never exposes the installer.
 
-`RUNMESH_PUBLIC_ORIGIN` is a non-secret Worker variable. Set it in the Wrangler `vars` configuration to an externally reachable origin such as `https://mcp.example.com`, with no path, query, fragment, credentials, whitespace, wildcard, or `http://` scheme. A trailing slash is normalized. Installer rendering and browser/Admin POSTs reject a configured `Host` that does not match this origin; an invalid or missing origin keeps the release descriptor non-distributable. Local development can omit the variable, but it cannot enable hosted signed bootstrap.
+`RUNMESH_PUBLIC_ORIGIN` is a non-secret Worker variable. Set it in the Wrangler `vars` configuration to an externally reachable origin such as `https://mcp.example.com`, with no path, query, fragment, credentials, whitespace, wildcard, or `http://` scheme. A trailing slash is normalized. The configured public Host is accepted behind a proxy. Routed domains are also accepted when the HTTPS request URL and Host agree; mismatched authorities are rejected; an invalid or missing origin keeps the release descriptor non-distributable. Local development can omit the variable, but it cannot enable hosted signed bootstrap.
 
 Until both prerequisites are satisfied, `/runner/releases/latest` and `/runner/releases/stable` return `distributable: false`, and `/runner/install.sh` and `/runner/install.ps1` fail closed. Do not treat a source change, an npm package, a branch artifact, or an arbitrary URL as release availability.
 
@@ -12,8 +12,8 @@ Until both prerequisites are satisfied, `/runner/releases/latest` and `/runner/r
 
 The one-command path (trust model A) treats the HTTPS Worker response that serves the installer as its bootstrap trust root. The installer pins all of the following in source:
 
-- version `0.1.0-dev.3` and tag `v0.1.0-dev.3`;
-- the exact GitHub release-asset URLs and `runmesh-runner-0.1.0-dev.3.tgz` name;
+- version `0.1.0-dev.4` and tag `v0.1.0-dev.4`;
+- the exact GitHub release-asset URLs and `runmesh-runner-0.1.0-dev.4.tgz` name;
 - signing key ID `runmesh-preview-2026-01`;
 - the reviewed Ed25519 public key from `release/trust-keyring.json`.
 
@@ -23,7 +23,7 @@ A compromised Worker/bootstrap endpoint can replace the installer and its embedd
 
 ## Enabled hosted-bootstrap commands
 
-Use these commands **only when the authenticated Admin enrollment page says the fixed signed preview is available** and the command URL uses the configured public origin. The hosted command carries the single-use enrollment code as its final argument. The script validates the artifact first, then sends it only to `runmesh enroll --code-stdin` and clears its working variable. Treat the copied command as a secret and use it only once. If the request `Host` does not match `RUNMESH_PUBLIC_ORIGIN`, the Worker refuses to render the installer instead of embedding a different origin.
+Use these commands **only when the authenticated Admin enrollment page says the fixed signed preview is available** and the command URL uses the configured public origin. The dashboard-generated convenience command includes a quoted one-time enrollment code for automatic registration. Scripts also accept `--code CODE` and `--code=CODE`. The optional manual snippets below omit the code and retain the hidden terminal prompt. In either case, the downstream Runner receives standard input, never a temporary credential file. Keep the entire convenience command private: it may remain in command history or process arguments. The Worker rejects mismatched authorities. A matching HTTPS URL and Host may identify a routed custom domain.
 
 The `262144`-byte limit in the download snippets below applies only to the Worker-served installer script. After that script starts, its embedded downloader applies the separate 8 MiB limit to each fixed GitHub release asset; the repository's `pack:smoke` gate packs the actual Runner tarball and fails if it exceeds that bound.
 
@@ -44,9 +44,8 @@ Windows, from an elevated PowerShell session:
 $ErrorActionPreference = 'Stop'
 $installer = Join-Path ([IO.Path]::GetTempPath()) ('runmesh-installer-' + [guid]::NewGuid().ToString('N') + '.ps1')
 try {
-  $response = Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 -TimeoutSec 60 -ErrorAction Stop -OutFile $installer -Uri 'https://your-runmesh.example/runner/install.ps1'
-  $status = [int]$response.StatusCode
-  if ($status -lt 200 -or $status -ge 300) { throw "Installer download returned HTTP $status." }
+  Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 -TimeoutSec 60 -ErrorAction Stop -OutFile $installer -Uri 'https://your-runmesh.example/runner/install.ps1'
+  # HTTP errors terminate with ErrorAction Stop; OutFile does not return a response object.
   if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw 'Installer download did not produce a file.' }
   $length = (Get-Item -LiteralPath $installer).Length
   if ($length -le 0 -or $length -gt 262144) { throw 'Installer download size is invalid.' }
@@ -56,7 +55,7 @@ try {
 }
 ```
 
-The installers require elevation and a clean Runmesh installation; they do not require a host-provided Node.js or npm. They select the host OS/CPU archive for the pinned Node.js `22.19.0` runtime, verify its embedded SHA-256 digest, and place only the Node executable inside the versioned Runmesh root. They refuse an existing `current`, same-version/staging root, canonical system profile, or service manifest. They stage the package under the versioned Runmesh root, validate both `runmesh` and `runmesh-runner` entry points, and do not make an unverified `latest` update. The private runtime's npm CLI is used only inside the temporary staging directory, with empty user/global config and cache paths, `--offline`, and `--ignore-scripts`; no host npm configuration can change the install. The installed service wrapper invokes the private runtime directly, so the service continues to work even when Node.js/npm are absent from the host PATH. Local artifact installation happens before code redemption, so verification and staging failures do not consume the code. If a later local service step fails, the installer best-effort uninstalls only its newly created managed service, removes the newly created profile, current pointer, and version root, and exits nonzero. There is no automatic package update, rollback, or import of an earlier profile/service layout: retain the prior verified package and managed `current`/service state separately for manual recovery. Enrollment redemption itself is remote and single-use and cannot be restored; generate a replacement code before retrying.
+The installers require elevation and a clean Runmesh installation; they do not require a host-provided Node.js or npm. They select the host OS/CPU archive for the pinned Node.js `22.19.0` runtime, verify its embedded SHA-256 digest, and place only the Node executable inside the versioned Runmesh root. Fresh installation refuses conflicting paths, profiles and service manifests. A managed same-version installation may refresh enrollment; an older/different version is rejected before code input and requires a separately verified manual upgrade. They stage the package under the versioned Runmesh root, validate both `runmesh` and `runmesh-runner` entry points, and do not make an unverified `latest` update. The private runtime's npm CLI is used only inside the temporary staging directory, with empty user/global config and cache paths, `--offline`, and `--ignore-scripts`; no host npm configuration can change the install. The installed service wrapper invokes the private runtime directly, so the service continues to work even when Node.js/npm are absent from the host PATH. Local artifact installation happens before code redemption, so verification and staging failures do not consume the code. If a later local service step fails, the installer best-effort uninstalls only its newly created managed service, removes the newly created profile, current pointer, and version root, and exits nonzero. There is no automatic package update, rollback, or import of an earlier profile/service layout: retain the prior verified package and managed `current`/service state separately for manual recovery. Enrollment redemption itself is remote and single-use and cannot be restored; generate a replacement code before retrying.
 
 ## High-assurance offline verification path
 

@@ -2,6 +2,8 @@
 
 本指南用于首次部署和日常管理 Runmesh。默认部署在 Cloudflare Workers 上，Runner 安装在需要执行任务的 Linux、macOS 或 Windows 机器上。
 
+首次初始化不需要额外令牌：直接设置管理员密码，仍校验 CSRF、同源请求、密码确认，并保证只有首个有效提交能成功。未初始化实例对公网开放时存在被先行设置的风险，请先完成初始化。新 Runner 默认 `dedicated_user`，新 MCP 客户端默认 `coding:read`，已有权限不自动修改。当前为 `0.1.0-dev.4` 候选版本，生产安装分发保持关闭，须发布并独立验证新签名资产后再启用。参见[修复与上线说明](security-remediation.md)。
+
 ## 部署前准备
 
 准备以下内容：
@@ -30,7 +32,7 @@ npm exec --offline -- wrangler deploy --config apps/worker/wrangler.jsonc --env 
 - `INTERNAL_CONTROL_SECRET`：保护控制平面内部请求；
 - `RUNMESH_PUBLIC_ORIGIN`：完整的外部 HTTPS 根地址，不带路径、查询参数或凭据。
 
-`RUNMESH_PUBLIC_ORIGIN` 用作默认外部地址，也适用于反向代理部署。Cloudflare 新增自定义 HTTPS 域名后，只要请求 URL 与 `Host` 头一致，Runmesh 会自动识别并接受该域名，不需要再单独修改白名单。
+`RUNMESH_PUBLIC_ORIGIN` 是配置的规范外部 HTTPS 地址，也适用于反向代理部署。配置该变量后，请求的外部 `Host` 必须与之匹配；新增自定义域名时应同步修改生产环境配置，不会自动授权任意新域名。
 
 请使用密码学安全随机数生成器创建 Secret；`ADMIN_TOKEN`、`RUNNER_TOKEN_PEPPER` 和 `INTERNAL_CONTROL_SECRET` 至少使用 32 字节随机值。三个 Secret 不能提交到 Git 仓库、CI 变量、截图或日志。部署完成后立即打开根地址设置管理员密码，首个完成设置的用户自动成为管理员。初始化采用先到先得；公开实例完成初始化前，请使用 Cloudflare Access 或等效访问控制保护它。
 

@@ -1,3 +1,29 @@
+# 0.1.0-dev.4 — unreleased security candidate
+
+This source identity is distinct from immutable dev.3; no publication or
+production rollout is implied by these notes. Hosted distribution is disabled
+until new signed assets are published and independently verified.
+
+MCP audit is metadata-only with a one-time legacy audit purge and seven-day
+retention. Hosted copied commands include one-time enrollment codes for convenience;
+positional, `--code`, and `--code=` inputs are supported. Hidden prompting remains
+optional when no code is supplied. Downstream stdin avoids temporary input files. Registry settings outages return 503 without false
+password lockouts. First administrator setup no longer requires a separate
+bootstrap token (explicit product decision); CSRF, same-origin and atomic
+first-success-wins protections remain. New Runner/client defaults remain
+`dedicated_user` / `coding:read`.
+
+This candidate also includes password-generation session CAS, Linux directory
+handle and search budget fixes, Git ownership/confinement checks, nonce-aware
+throttle pages, bounded source eviction, precise CI tooling, independent
+production validation and native-platform/Node 20 CI definitions.
+See [rollout notes](security-remediation.md) for remaining platform and cloud
+acceptance, legacy backup retention and new signed release requirements.
+
+---
+
+## Previous release notes (historical)
+
 # Runmesh 0.1.0-dev.3 版本说明
 
 这是一个开发预览版，适合在受控环境试用。该版本采用 clean-break 数据边界：不会导入旧表、旧 profile、旧服务清单或旧凭据；请按[版本切换指南](migration.md)使用全新 Durable Object 命名空间并重新注册 Runner。发布前请先备份 Worker 配置和 Runner 本地目录，并在一台测试机器上验证。

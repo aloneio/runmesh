@@ -36,8 +36,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version-file: .node-version
           cache: npm
+      - run: npm install --global npm@10.9.3
+      - run: node scripts/check-toolchain.mjs
       - name: Validate triggering commit, release identity, and secrets
         run: |
           set -euo pipefail
@@ -60,12 +62,12 @@ jobs:
           ROOT_VERSION="$(node -p 'require("./package.json").version')"
           test "$RELEASE_VERSION" = "$ROOT_VERSION"
           # This workflow and the hosted installer are the fixed
-          # v0.1.0-dev.3 preview contract. Refuse a future version until its
+          # v0.1.0-dev.4 preview contract. Refuse a future version until its
           # installer constants, key, and independent review are rotated.
-          test "$RELEASE_VERSION" = "0.1.0-dev.3"
+          test "$RELEASE_VERSION" = "0.1.0-dev.4"
           test -n "$RELEASE_SIGNING_KEY_ID"
           # The hosted installer embeds this reviewed key ID for the fixed
-          # v0.1.0-dev.3 contract; a different valid key would make the
+          # v0.1.0-dev.4 contract; a different valid key would make the
           # published asset unverifiable by the installer.
           test "$RELEASE_SIGNING_KEY_ID" = "runmesh-preview-2026-01"
           test "$(node -p 'require("./apps/runner/package.json").version')" = "$RELEASE_VERSION"
@@ -92,6 +94,8 @@ jobs:
           # reproducible from GITHUB_SHA.
           git diff --exit-code
       - run: npm run validate:worker -- --dry-run
+      - run: npm run validate:worker -- --dry-run --env production
+      - run: node scripts/check-release-contract.mjs
       - run: npm run check:licenses
       - run: npm run pack:smoke
       - name: Build immutable portable Runner artifact

@@ -19,7 +19,7 @@
 
 Runmesh connects ChatGPT, Claude, Cursor, and other MCP-compatible clients to computers you control. An AI client can inspect approved files, suggest or apply changes, run authorized commands, and follow long-running jobs.
 
-Each execution machine runs a Runmesh Runner. The Runner opens an encrypted outbound connection to the control plane, so the machine does not need a public inbound port, SSH service, or VPN tunnel. Files and commands stay on the machine; the control plane handles identity, policy, and routing.
+Each execution machine runs a Runmesh Runner. The Runner opens an encrypted outbound connection to the control plane, so the machine does not need a public inbound port, SSH service, or VPN tunnel. Authoritative files and command execution stay on the machine. Requested output is relayed through the control plane to the authenticated client; durable MCP audit stores metadata only, not tool bodies.
 
 Runmesh is useful for maintaining servers, sharing a controlled development machine with a team, running builds and operational tasks, and giving each client a precise set of machines, workspaces, and capabilities.
 
@@ -88,3 +88,16 @@ Architecture, transport, and release-transition files are advanced references fo
 ## License and support
 
 Runmesh is maintained by aloneio. Report security vulnerabilities through the private process in [.github/SECURITY.md](.github/SECURITY.md); use Issues for ordinary bugs and product feedback. See [trademarks](docs/legal/TRADEMARKS.md) for name and logo usage.
+
+## Current security and rollout defaults
+
+The source candidate is **0.1.0-dev.4**. Production hosted distribution remains
+disabled until its new immutable signed artifacts are published and independently
+verified; the existing dev.3 release does not contain these working-tree fixes.
+First administrator setup needs no additional bootstrap token: use password
+confirmation, CSRF and same-origin protected atomic first-success-wins setup.
+Finish initialization before exposing a new instance to untrusted visitors.
+New Runners default to `dedicated_user` and new MCP clients to `coding:read`.
+Hosted installer commands include the single-use enrollment code, so no second
+code entry is needed. Omit the code argument to use the hidden manual prompt.
+Keep the complete copied command private. See [security rollout notes](docs/security-remediation.md).
