@@ -178,7 +178,7 @@ export interface DashboardSnapshot {
   readonly runners: readonly DashboardRunnerRecord[];
   readonly jobs: readonly DashboardJobRecord[];
 }
-export type RegistryFeatureKey = "job_recording" | "mcp_audit" | "maintenance_alarm";
+export type RegistryFeatureKey = "job_recording" | "mcp_audit" | "mcp_usage_tracking" | "auth_throttle" | "maintenance_alarm";
 export interface RegistryFeatureHealth {
   readonly feature: RegistryFeatureKey;
   readonly disabled_until_ms: number | null;
@@ -304,6 +304,7 @@ const AUTH_THROTTLE_MAX_BLOCK_MS = 15 * 60_000;
  */
 export class RegistryDO {
   private readonly featureHealth = new Map<RegistryFeatureKey, { readonly disabled_until_ms: number | null; readonly failure_count: number; readonly last_failure_at_ms: number | null; readonly last_error: string | null }>();
+  private readonly fallbackThrottle = new Map<AuthThrottleKind, { failed_attempts: number; blocked_until_ms: number }>();
   public constructor(
     private readonly ctx: DurableObjectState,
     private readonly env: { INTERNAL_CONTROL_SECRET?: string; RUNNER_TOKEN_PEPPER?: string },
@@ -454,11 +455,13 @@ export class RegistryDO {
 
   private loadFeatureHealth(): void {
     const nowMs = Date.now();
-    for (const row of this.ctx.storage.sql.exec<FeatureHealthRow>("SELECT feature, disabled_until_ms, failure_count, last_failure_at_ms, last_error FROM feature_health").toArray()) {
-      if (row.disabled_until_ms === null) continue;
-      if (row.disabled_until_ms <= nowMs) continue;
-      this.featureHealth.set(row.feature, row);
-    }
+    try {
+      for (const row of this.ctx.storage.sql.exec<FeatureHealthRow>("SELECT feature, disabled_until_ms, failure_count, last_failure_at_ms, last_error FROM feature_health").toArray()) {
+        if (row.disabled_until_ms === null) continue;
+        if (row.disabled_until_ms <= nowMs) continue;
+        this.featureHealth.set(row.feature, row);
+      }
+    } catch { /* optional feature state must never make the Registry unavailable */ }
   }
 
   public featureHealthSnapshot(nowMs = Date.now()): RegistryFeatureHealth[] {
@@ -583,7 +586,9 @@ export class RegistryDO {
    * successful record clears it; a failed record preserves the reservation.
    */
   public checkAuthThrottle(kind: AuthThrottleKind, nowMs: number): { allowed: boolean; retry_after_ms: number } {
-    return this.ctx.storage.transactionSync(() => {
+    if (this.featureHealthDisabled("auth_throttle", nowMs)) return this.checkFallbackThrottle(kind, nowMs);
+    try {
+      return this.ctx.storage.transactionSync(() => {
       const row = this.authThrottleRow(kind);
       const retryAfter = row === undefined ? 0 : Math.max(0, row.blocked_until_ms - nowMs);
       if (retryAfter > 0) return { allowed: false, retry_after_ms: retryAfter };
@@ -600,22 +605,46 @@ export class RegistryDO {
       // The attempt that reaches the threshold is admitted; only subsequent
       // attempts are blocked, so this means five failed KDFs then a delay.
       return { allowed: true, retry_after_ms: 0 };
-    });
+      });
+    } catch (error) {
+      this.disableFeatureHealth("auth_throttle", error, nowMs);
+      return this.checkFallbackThrottle(kind, nowMs);
+    }
+  }
+
+  private checkFallbackThrottle(kind: AuthThrottleKind, nowMs: number): { allowed: boolean; retry_after_ms: number } {
+    const prior = this.fallbackThrottle.get(kind);
+    const retryAfter = prior === undefined ? 0 : Math.max(0, prior.blocked_until_ms - nowMs);
+    if (retryAfter > 0) return { allowed: false, retry_after_ms: retryAfter };
+    const failedAttempts = (prior?.failed_attempts ?? 0) + 1;
+    const exponent = Math.min(Math.max(0, failedAttempts - AUTH_THROTTLE_FAILURE_THRESHOLD), 30);
+    const blockMs = failedAttempts < AUTH_THROTTLE_FAILURE_THRESHOLD ? 0 : Math.min(AUTH_THROTTLE_MAX_BLOCK_MS, AUTH_THROTTLE_INITIAL_BLOCK_MS * (2 ** exponent));
+    this.fallbackThrottle.set(kind, { failed_attempts: failedAttempts, blocked_until_ms: blockMs === 0 ? 0 : nowMs + blockMs });
+    return { allowed: true, retry_after_ms: 0 };
   }
 
   /** Record only the outcome of a credential operation; no password is stored. */
   public recordAuthAttempt(kind: AuthThrottleKind, success: boolean, nowMs: number): void {
-    if (!success) {
+    if (this.featureHealthDisabled("auth_throttle", nowMs)) {
+      if (success) this.fallbackThrottle.delete(kind);
+      return;
+    }
+    try {
+      if (!success) {
       // checkAuthThrottle already reserved and persisted the failure before the
       // expensive KDF. Keep an outcome timestamp without exposing any secret.
       this.ctx.storage.sql.exec("UPDATE auth_throttle SET updated_at_ms = ? WHERE id = ?", nowMs, kind);
-      return;
-    }
-    this.ctx.storage.sql.exec(
+        return;
+      }
+      this.ctx.storage.sql.exec(
       `INSERT INTO auth_throttle (id, failed_attempts, blocked_until_ms, updated_at_ms) VALUES (?, 0, 0, ?)
        ON CONFLICT(id) DO UPDATE SET failed_attempts = 0, blocked_until_ms = 0, updated_at_ms = excluded.updated_at_ms`,
       kind, nowMs,
-    );
+      );
+    } catch (error) {
+      this.disableFeatureHealth("auth_throttle", error, nowMs);
+      if (success) this.fallbackThrottle.delete(kind);
+    }
   }
 
   /** Compare-and-set setup. transactionSync makes two concurrent first setup requests deterministic. */
@@ -647,7 +676,9 @@ export class RegistryDO {
     ).toArray()[0];
     const settings = this.settings();
     if (row === undefined || settings === undefined || row.expires_at_ms <= nowMs || row.session_version !== settings.session_version) {
-      if (row !== undefined) this.ctx.storage.sql.exec("DELETE FROM admin_sessions WHERE session_hash = ?", sessionHash);
+      if (row !== undefined) {
+        try { this.ctx.storage.sql.exec("DELETE FROM admin_sessions WHERE session_hash = ?", sessionHash); } catch { /* session cleanup is optional */ }
+      }
       return undefined;
     }
     return { csrf_hash: row.csrf_hash };
@@ -713,8 +744,9 @@ export class RegistryDO {
     if (row === undefined || row.revoked_at_ms !== null) return undefined;
     const scopes = parseScopes(row.scopes_json);
     if (scopes === undefined) return undefined;
-    if (row.last_used_at_ms === null || row.last_used_at_ms <= nowMs - CLIENT_LAST_USED_WRITE_INTERVAL_MS) {
-      this.ctx.storage.sql.exec("UPDATE mcp_clients SET last_used_at_ms = ? WHERE client_id = ?", nowMs, row.client_id);
+    if (!this.featureHealthDisabled("mcp_usage_tracking", nowMs) && (row.last_used_at_ms === null || row.last_used_at_ms <= nowMs - CLIENT_LAST_USED_WRITE_INTERVAL_MS)) {
+      try { this.ctx.storage.sql.exec("UPDATE mcp_clients SET last_used_at_ms = ? WHERE client_id = ?", nowMs, row.client_id); }
+      catch (error) { this.disableFeatureHealth("mcp_usage_tracking", error, nowMs); }
     }
     return { client_id: row.client_id, label: row.label, scopes, secret_version: row.secret_version };
   }
