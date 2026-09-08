@@ -1,14 +1,14 @@
 # Clean-break release transition
 
-This release starts a new data, profile, and Runner/Worker protocol boundary. It does not inspect, import, repair, or translate data from an earlier layout. A Registry Durable Object that contains an incompatible schema refuses to start; provision a fresh namespace for this release instead of attempting an in-place upgrade.
+This release starts a new data, profile, and Runner/Worker protocol boundary. It does not inspect, import, repair, or translate data from an earlier layout. The `v2` Durable Object migration binds the Worker to fresh `RegistryDOv2` and `RunnerDOv2` classes; any retired namespace remains isolated and is never upgraded in place.
 
 Local profiles, state directories, and service manifests are likewise release-specific. The Runner does not discover or import files from another installation. Keep any earlier installation stopped and separately backed up, then enroll a new Runner and review its policy in the Admin Panel.
 
 ## Required transition
 
 1. Record and protect the previous deployment and host data separately. A backup is for audit or archival purposes; it is not an input to an automatic migration.
-2. Provision a fresh Worker/Registry namespace and configure `ADMIN_TOKEN`, `SETUP_TOKEN` (or `SETUP_TOKEN_HASH`), `RUNNER_TOKEN_PEPPER`, and `INTERNAL_CONTROL_SECRET`.
-3. Deploy this release and complete first-time administrator setup.
+2. Apply the checked-in `v2` Durable Object migration during deployment (it provisions fresh Registry/Runner storage) and configure `ADMIN_TOKEN`, `SETUP_TOKEN` (or `SETUP_TOKEN_HASH`), `RUNNER_TOKEN_PEPPER`, and `INTERNAL_CONTROL_SECRET`.
+3. Complete first-time administrator setup.
 4. Create each Runner in the Admin Panel with an explicit `execution_mode`, generate a one-time enrollment code, and enroll the current Runner package.
 5. Configure approved workspace roots and permissions in the Admin Panel. Central management starts with zero local workspaces; the local CLI exposes `workspace list` for inspection only.
 6. Create MCP clients with least-privilege scopes and distribute each one-time URL through a protected channel.

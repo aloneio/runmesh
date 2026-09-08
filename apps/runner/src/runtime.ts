@@ -58,13 +58,17 @@ export interface EnvironmentInfoOptions { readonly probe?: (command: string, arg
 
 /** Cached, bounded local executable discovery. */
 export class EnvironmentInfoService {
-  private cached: Promise<Record<string, unknown>> | undefined;
+  // Executable discovery is expensive and stable for the process lifetime,
+  // but workspace metadata follows the active policy and may change after a
+  // central policy update. Cache only the host/tool probe so env.info never
+  // reports a stale workspace list.
+  private cachedTools: Promise<{ readonly platform: string; readonly architecture: string; readonly hostname: string; readonly tools: Record<string, EnvironmentToolInfo> }> | undefined;
   public constructor(private readonly options: EnvironmentInfoOptions = {}) {}
   public get(workspaces: readonly { readonly workspaceId: string; readonly readonly: boolean; readonly shell: boolean }[]): Promise<Record<string, unknown>> {
-    this.cached ??= this.discover(workspaces);
-    return this.cached;
+    this.cachedTools ??= this.discoverTools();
+    return this.cachedTools.then((info) => ({ ...info, workspaces: workspaces.map((workspace) => ({ workspace_id: workspace.workspaceId, readonly: workspace.readonly, shell: workspace.shell })) }));
   }
-  private async discover(workspaces: readonly { readonly workspaceId: string; readonly readonly: boolean; readonly shell: boolean }[]): Promise<Record<string, unknown>> {
+  private async discoverTools(): Promise<{ readonly platform: string; readonly architecture: string; readonly hostname: string; readonly tools: Record<string, EnvironmentToolInfo> }> {
     const probe = this.options.probe ?? probeVersion;
     const entries = await Promise.all([
       discoveredTool(probe, "npm", ["--version"]),
@@ -80,7 +84,7 @@ export class EnvironmentInfoService {
     const tools: Record<string, EnvironmentToolInfo> = {
       node: { available: true, version: process.version }, npm, pnpm, python, git, go, rustc, cargo, docker,
     };
-    return { platform: process.platform, architecture: process.arch, hostname: hostname(), shell: process.platform === "win32" ? process.env.ComSpec ?? null : process.env.SHELL ?? null, tools, workspaces: workspaces.map((workspace) => ({ workspace_id: workspace.workspaceId, readonly: workspace.readonly, shell: workspace.shell })) };
+    return { platform: process.platform, architecture: process.arch, hostname: hostname(), tools };
   }
 }
 async function discoveredTool(probe: (command: string, args: readonly string[]) => Promise<string | undefined>, command: string, args: readonly string[]): Promise<EnvironmentToolInfo> { const version = await probe(command, args); return version === undefined ? { available: false } : { available: true, version }; }
