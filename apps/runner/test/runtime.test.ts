@@ -957,6 +957,7 @@ describe("persistent local jobs", () => {
   it("does not retire a newer active process handle after a stale finish", async () => {
     const test = await fixture();
     let child: ChildProcess | undefined;
+    let finishClosedJob: (() => Promise<void>) | undefined;
     try {
       const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state });
       await manager.initialize();
@@ -968,6 +969,7 @@ describe("persistent local jobs", () => {
         persist: (record: JobRecord) => Promise<void>;
       };
       child = internals.processes.get(job.job_id);
+      finishClosedJob = () => internals.finish(job.job_id, child?.exitCode ?? null, child?.signalCode ?? null, false);
       expect(child).toBeDefined();
       const originalPersist = internals.persist.bind(manager);
       let injected = false;
@@ -1002,6 +1004,9 @@ describe("persistent local jobs", () => {
         child.kill();
         await closed;
       }
+      // Child close precedes asynchronous metadata persistence. Join that
+      // finish before removing the fixture so a write cannot recreate a file.
+      await finishClosedJob?.();
       await test.cleanup();
     }
   });
@@ -1244,7 +1249,7 @@ describe("persistent local jobs", () => {
     }
   });
 
-  it.skipIf(process.platform === "win32")("preserves recovered cancellation delivery evidence after a stale liveness probe", async () => {
+  it("preserves recovered cancellation evidence or refuses an unverified process identity", async () => {
     const test = await fixture();
     let first: JobManager | undefined;
     let job: JobRecord | undefined;
@@ -1261,6 +1266,17 @@ describe("persistent local jobs", () => {
       };
       const stale = internals.jobs.get(job.job_id)!;
       expect(stale.status).toBe("unknown");
+      if (process.platform !== "linux") {
+        // No Linux /proc start fingerprint exists on these hosts. A recovered
+        // PID without a live ChildProcess handle must not be signalled.
+        const kill = vi.spyOn(process, "kill");
+        restoreKill = () => kill.mockRestore();
+        await expect(internals.cancelRecoveredUnknown(stale)).resolves.toMatchObject({
+          status: "unknown", cancellation_delivered_at_ms: null,
+        });
+        expect(kill.mock.calls.every(([, signal]) => signal === 0)).toBe(true);
+        return;
+      }
       const originalKill = process.kill.bind(process);
       const kill = vi.spyOn(process, "kill");
       restoreKill = () => kill.mockRestore();
