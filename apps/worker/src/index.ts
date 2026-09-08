@@ -493,9 +493,9 @@ async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: URL): P
   if (url.pathname === "/admin/runners") return createBrowserRunner(env, form, publicOrigin);
   const runnerMatch = /^\/admin\/runners\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\/(rename|rotate|revoke|delete|enrollment|validity|permissions|version-policy|emergency-lock|workspace-create|workspace-update|workspace-delete)$/.exec(url.pathname);
   if (runnerMatch !== null) return handleBrowserRunnerAction(env, form, publicOrigin, runnerMatch[1] as string, runnerMatch[2] as "rename" | "rotate" | "revoke" | "delete" | "enrollment" | "validity" | "permissions" | "version-policy" | "emergency-lock" | "workspace-create" | "workspace-update" | "workspace-delete");
-  const clientMatch = /^\/admin\/clients\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\/(rename|rotate|revoke|reset-runner|override|reset-override|scopes)$/.exec(url.pathname);
+  const clientMatch = /^\/admin\/clients\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\/(rename|rotate|revoke|reset-runner|select-runner|active-runner|override|reset-override|scopes)$/.exec(url.pathname);
   if (clientMatch === null) return notFound();
-  const clientId = clientMatch[1] as string; const action = clientMatch[2] as "rename" | "rotate" | "revoke" | "reset-runner" | "override" | "reset-override" | "scopes";
+  const clientId = clientMatch[1] as string; const action = clientMatch[2] as "rename" | "rotate" | "revoke" | "reset-runner" | "select-runner" | "active-runner" | "override" | "reset-override" | "scopes";
   if (action === "scopes") {
     const scopes = selectedScopes(form);
     if (scopes === undefined) return adminError(400, "Client scopes are invalid.");
@@ -505,6 +505,20 @@ async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: URL): P
   if (action === "reset-runner") {
     const response = await registryPost(env, `/auth/clients/${encodeURIComponent(clientId)}/active-runner/reset`, {});
     return response.ok ? redirect("/admin/clients") : adminError(response.status === 404 ? 404 : 400, "Runner selection could not be reset.");
+  }
+  if (action === "select-runner" || action === "active-runner") {
+    const runnerId = form.get("runner_id");
+    if (typeof runnerId !== "string" || !isSafeIdentifier(runnerId)) return adminError(400, "Runner identifier is invalid.");
+    const confirmValue = form.get("confirm_switch");
+    const confirmSwitch = confirmValue === "true" || confirmValue === "on" || confirmValue === "1";
+    const response = await registryPost(env, `/auth/clients/${encodeURIComponent(clientId)}/active-runner`, { runner_id: runnerId, confirm_switch: confirmSwitch });
+    if (response.ok) return redirect(`/admin/clients/${encodeURIComponent(clientId)}`);
+    if (response.status === 409) {
+      let code: unknown;
+      try { code = record(await response.json())?.code; } catch { code = undefined; }
+      return adminError(409, code === "runner_unavailable" ? "The selected Runner is unavailable or has not completed enrollment." : "A different Runner is already selected. Check Confirm switch and try again.");
+    }
+    return adminError(response.status === 404 ? 404 : 400, "Runner selection could not be updated.");
   }
   if (action === "override" || action === "reset-override") {
     const runnerId = form.get("runner_id");
@@ -1188,6 +1202,12 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Create one-time secret": "创建一次性密钥",
   "MCP clients": "MCP 客户端",
   "Active runner": "活跃 Runner",
+  "Choose a Runner": "选择 Runner",
+  "Confirm switch": "确认切换",
+  "Save": "保存",
+  "No runners available": "没有可用 Runner",
+  "The selected Runner is unavailable or has not completed enrollment.": "所选 Runner 不可用或尚未完成注册。",
+  "A different Runner is already selected. Check Confirm switch and try again.": "已选择其他 Runner。请勾选“确认切换”后重试。",
   "Last used": "最后使用",
   "Reset Runner Selection": "重置 Runner 选择",
   "Rotate": "轮换",
@@ -1441,7 +1461,6 @@ const ZH_UI_TEXT: Record<string, string> = {
   " permits Host shell and Job control. Runner and Workspace policy can only reduce these permissions.": " 允许使用主机 Shell 和任务控制。Runner 与工作区策略只能收紧这些权限。",
   "Client Routing & Status": "客户端路由与状态",
   "Client ID": "客户端 ID",
-  "Active Runner": "活跃 Runner",
   "Last Used": "最后使用",
   "Workspace Permissions": "工作区权限",
   "Unknown–Unknown · unknown": "未知–未知 · 未知",
@@ -1880,7 +1899,7 @@ async function clientDetailPage(_env: WorkerEnv, client: Record<string, unknown>
         <dt>Client ID</dt>
         <dd class="mono">${escapeHtml(clientId)}</dd>
         <dt>Active Runner</dt>
-        <dd><span class="routing-badge">${escapeHtml(activeRunnerLabel(client as unknown as McpClientRecord, runners))}</span></dd>
+        <dd>${activeRunnerSelector(client as unknown as McpClientRecord, runners, csrf)}</dd>
         <dt>Last Used</dt>
         <dd class="time-cell">${escapeHtml(time(typeof client.last_used_at_ms === "number" ? client.last_used_at_ms : null))}</dd>
         <dt>Status</dt>
@@ -1971,8 +1990,15 @@ function runnersPage(data: AdminData, csrf: string): string {
   return `<section class="page-heading"><div><p class="eyebrow">Infrastructure</p><h1>Runners</h1><p class="lede">Manage safe runner metadata, authorization windows, and one-time registration.</p></div></section><section class="panel add-panel" id="add-runner"><div class="section-title"><h2>Add Runner</h2><span class="muted font-12">You can set both Runner authorization and enrollment-code timing.</span></div><form method="post" action="/admin/runners" class="form-grid add-form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Display name<input name="display_name" maxlength="256" required autocomplete="off" placeholder="e.g. Production Runner 01"></label><label>Safe runner ID <span class="muted font-11">optional</span><input name="runner_id" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" placeholder="generated-id"></label>${windowFields("runner")}${windowFields("code")}<fieldset class="execution-mode-fieldset"><legend>System Runner execution mode</legend><label class="check"><input type="radio" name="execution_mode" value="privileged_host" checked data-execution-mode="privileged_host"><span><strong>整机控制 / 高权限模式（推荐用于受信任的自托管机器）</strong><small>Linux root · macOS root LaunchDaemon · Windows SYSTEM / HighestAvailable</small></span></label><label class="check"><input type="radio" name="execution_mode" value="dedicated_user" data-execution-mode="dedicated_user"><span><strong>受限服务账户模式（dedicated_user）</strong><small>Use a dedicated restricted service identity for narrower host access.</small></span></label><p class="warning privileged-host-warning">${escapeHtml(warning)}</p><label class="check"><input type="checkbox" name="confirm_privileged_host" value="true" data-privileged-confirmation><span>I understand and authorize this one-time high-privilege installation acknowledgement.</span></label></fieldset><div class="form-submit-wrap"><button class="button">Create enrollment</button></div></form></section><section class="panel"><div class="table-wrap"><table class="data-table runner-table"><caption class="sr-only">Registered runners</caption><thead><tr><th>Display name</th><th>Status</th><th>Platform / architecture</th><th>Execution mode</th><th>Last seen</th><th>Actions</th></tr></thead><tbody>${table}</tbody></table></div></section>`;
 }
 function activeRunnerLabel(client: McpClientRecord, runners: readonly RunnerRecord[]): string { const runner = client.active_runner_id === null ? undefined : runners.find((item) => item.runner_id === client.active_runner_id); return runner === undefined ? "Not selected" : runner.display_name; }
+function activeRunnerSelector(client: McpClientRecord, runners: readonly RunnerRecord[], csrf: string): string {
+  const current = activeRunnerLabel(client, runners);
+  if (runners.length === 0) return `<span class="routing-badge">${escapeHtml(current)}</span><span class="muted"> · No runners available</span>`;
+  const options = runners.map((runner) => `<option value="${escapeHtml(runner.runner_id)}"${client.active_runner_id === runner.runner_id ? " selected" : ""}>${escapeHtml(runner.display_name)} (${escapeHtml(runner.runner_id)})</option>`).join("");
+  const reset = client.active_runner_id === null ? "" : `<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/reset-runner" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small danger" type="submit">Reset</button></form>`;
+  return `<div class="runner-selection-controls"><form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/active-runner" class="runner-selection-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><select name="runner_id" aria-label="Active Runner"><option value="" disabled${client.active_runner_id === null ? " selected" : ""}>Choose a Runner</option>${options}</select><label class="check"><input type="checkbox" name="confirm_switch" value="true"><span>Confirm switch</span></label><button class="small secondary">Save</button></form>${reset}</div>`;
+}
 function clientsPage(data: AdminData, csrf: string): string {
-  const rows = data.clients.map((client) => `<tr class="data-row"><td><div class="table-primary-cell"><a class="strong" href="/admin/clients/${encodeURIComponent(client.client_id)}">${escapeHtml(client.label)}</a><span class="sub-id mono">${escapeHtml(client.client_id)}</span></div></td><td><div class="scope-tags">${client.scopes.map((s) => `<span class="scope-pill">${escapeHtml(displayScopeLabel(s))}</span>`).join("")}</div></td><td><span class="routing-badge">${escapeHtml(activeRunnerLabel(client, data.runners))}</span></td><td class="time-cell">${escapeHtml(time(client.last_used_at_ms))}</td><td>${client.revoked_at_ms === null ? statusBadge("online") : statusBadge("offline")}</td><td class="actions"><div class="action-btn-group"><a class="button small secondary" href="/admin/clients/${encodeURIComponent(client.client_id)}">View</a><form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rename" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input name="label" value="${escapeHtml(client.label)}" aria-label="Rename ${escapeHtml(client.label)}" maxlength="256"><button class="small secondary">Rename</button></form>${client.revoked_at_ms === null ? `<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rotate" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Rotate</button></form>` : ""}<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/reset-runner" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Reset Runner Selection</button></form>${client.revoked_at_ms === null ? `<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/revoke" class="inline-action-form danger-action"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small danger">Revoke</button></form>` : ""}</div></td></tr>`).join("") || `<tr><td colspan="6" class="empty"><div class="empty-state-box"><p>No MCP clients yet.</p></div></td></tr>`;
+  const rows = data.clients.map((client) => `<tr class="data-row"><td><div class="table-primary-cell"><a class="strong" href="/admin/clients/${encodeURIComponent(client.client_id)}">${escapeHtml(client.label)}</a><span class="sub-id mono">${escapeHtml(client.client_id)}</span></div></td><td><div class="scope-tags">${client.scopes.map((s) => `<span class="scope-pill">${escapeHtml(displayScopeLabel(s))}</span>`).join("")}</div></td><td>${activeRunnerSelector(client, data.runners, csrf)}</td><td class="time-cell">${escapeHtml(time(client.last_used_at_ms))}</td><td>${client.revoked_at_ms === null ? statusBadge("online") : statusBadge("offline")}</td><td class="actions"><div class="action-btn-group"><a class="button small secondary" href="/admin/clients/${encodeURIComponent(client.client_id)}">View</a><form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rename" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input name="label" value="${escapeHtml(client.label)}" aria-label="Rename ${escapeHtml(client.label)}" maxlength="256"><button class="small secondary">Rename</button></form>${client.revoked_at_ms === null ? `<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rotate" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Rotate</button></form>` : ""}<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/reset-runner" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Reset Runner Selection</button></form>${client.revoked_at_ms === null ? `<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/revoke" class="inline-action-form danger-action"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small danger">Revoke</button></form>` : ""}</div></td></tr>`).join("") || `<tr><td colspan="6" class="empty"><div class="empty-state-box"><p>No MCP clients yet.</p></div></td></tr>`;
   return `<section class="page-heading"><div><p class="eyebrow">Integrations</p><h1>MCP Clients</h1><p class="lede">Manage labels, scopes, runner routing, and one-time client secrets.</p></div></section><section class="panel add-panel" id="add-client"><div class="section-title"><h2>Add MCP Client</h2></div><form method="post" action="/admin/clients" class="form-grid add-client-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Label<input name="label" maxlength="256" required placeholder="e.g. Cursor / Claude Desktop"></label><fieldset><legend>Scopes</legend><div class="scope-selector-row">${scopeCheckboxes()}</div></fieldset><div class="form-submit-wrap"><button class="button">Create one-time secret</button></div></form></section><section class="panel"><div class="table-wrap"><table class="data-table client-table"><caption class="sr-only">MCP clients</caption><thead><tr><th>Label</th><th>Scopes</th><th>Active runner</th><th>Last used</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
 }
 function settingsPage(csrf: string): string { return `<section class="page-heading"><div><p class="eyebrow">Workspace administration</p><h1>Settings</h1><p class="lede">Keep operator notes here; credentials and secrets are never displayed.</p></div></section><div class="grid-two"><section class="panel"><div class="section-title"><h2>Change password</h2></div><form method="post" action="/admin/password" class="stack settings-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Current password<input type="password" name="current_password" required autocomplete="current-password"></label><label>New password<input type="password" name="password" minlength="12" required autocomplete="new-password"></label><label>Confirm new password<input type="password" name="confirm_password" minlength="12" required autocomplete="new-password"></label><button class="button">Change password</button></form></section><section class="panel danger-panel"><div class="section-title"><h2 class="danger-title">Operator notes</h2></div><p class="muted settings-note">Deployment notes belong in your deployment system. This dashboard intentionally stores no notes or secrets.</p><div class="logout-box"><form method="post" action="/admin/logout" class="stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Log out</button></form></div></section></div>`; }
@@ -2858,6 +2884,17 @@ a.strong:hover{color:var(--brand-hover);text-decoration:underline}
   font-weight:600;
   color:var(--ink-heading);
 }
+.runner-selection-controls{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.runner-selection-form{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  flex-wrap:wrap;
+  margin:0;
+}
+.runner-selection-form select{min-width:150px;max-width:100%;height:30px;padding:3px 8px;font-size:12px}
+.runner-selection-form .check{font-size:11px;white-space:nowrap}
+.runner-selection-form button{height:30px}
 
 /* Action Groups & Forms */
 .action-btn-group{
