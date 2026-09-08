@@ -291,7 +291,9 @@ export class RunnerRuntime {
     const params = object(input); const workspace = this.policy.getWorkspace(params.workspace_id);
     this.policy.assertPermission(workspace.workspaceId, "read");
     if (workspace.permissions !== undefined && (!workspace.permissions.edit || workspace.permissions.shell === false || workspace.permissions.job_control === false)) throw new RpcRuntimeError("permission_denied", "Host shell requires read, edit, and job_control permissions");
-     if (params.shell === true && this.shellRuntime === undefined) throw new RpcRuntimeError("shell_unavailable", "the configured Host shell runtime is unavailable");
+    // Policy denial must not depend on whether a native shell was discovered.
+    if (params.shell === true && !workspace.shell) throw new RpcRuntimeError("permission_denied", "shell execution is disabled for this workspace");
+    if (params.shell === true && this.shellRuntime === undefined) throw new RpcRuntimeError("shell_unavailable", "the configured Host shell runtime is unavailable");
     const shellParams = params.shell === true && typeof params.command === "string" && this.shellRuntime !== undefined ? { ...params, shell_runtime: this.shellRuntime.buildInvocation(params.command) } : params;
     return this.jobs.start(shellParams);
   }
