@@ -1418,6 +1418,8 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Recorded": "已记录",
   "Some control-plane features are temporarily paused.": "部分控制平面功能已临时暂停。",
   "The console remains available, but dependent paths will stop retrying until the quota recovers or the anomaly clears.": "控制台仍可使用；依赖这些额度的路径会停止重试，直到额度恢复或异常解除。",
+  "Feature health status unavailable": "功能健康状态暂不可用",
+  "Core Runner and MCP paths remain available; retry the console shortly.": "核心 Runner 和 MCP 路径仍可用；请稍后重试控制台。",
   "Job recording paused": "任务记录已暂停",
   "Job history and MCP call recording are temporarily disabled.": "任务历史和 MCP 调用记录已临时禁用。",
   "MCP call audit paused": "MCP 调用审计已暂停",
@@ -1732,6 +1734,10 @@ const FEATURE_NOTICE_TEXT: Record<RegistryFeatureHealth["feature"], AdminNotice>
     message: "Background cleanup and stale-runner checks are temporarily disabled.",
   },
 };
+const FEATURE_STATUS_UNAVAILABLE_NOTICE: AdminNotice = {
+  title: "Feature health status unavailable",
+  message: "Core Runner and MCP paths remain available; retry the console shortly.",
+};
 async function loadDashboardData(env: WorkerEnv): Promise<AdminData> {
   const [clientsResponse, runnersResponse, snapshotResponse, notices] = await Promise.all([registryGet(env, "/auth/clients"), registryGet(env, "/dashboard"), registryGet(env, "/runners"), loadFeatureNotices(env)]);
   let clients: McpClientRecord[] = [];
@@ -1745,7 +1751,8 @@ async function loadDashboardData(env: WorkerEnv): Promise<AdminData> {
 }
 async function loadFeatureNotices(env: WorkerEnv): Promise<readonly AdminNotice[]> {
   const response = await registryGet(env, "/status/features");
-  try { return response.ok ? registryFeatureNotices(record(await json(response))) : []; } catch { return []; }
+  if (!response.ok) return [FEATURE_STATUS_UNAVAILABLE_NOTICE];
+  try { return registryFeatureNotices(record(await json(response))); } catch { return [FEATURE_STATUS_UNAVAILABLE_NOTICE]; }
 }
 function registryFeatureNotices(value: Record<string, unknown> | undefined): readonly AdminNotice[] {
   const features = arrayField(value?.features).map(record).filter((feature): feature is Record<string, unknown> => feature !== undefined);
