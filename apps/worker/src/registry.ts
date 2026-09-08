@@ -555,7 +555,6 @@ export class RegistryDO {
       "SELECT name FROM sqlite_master WHERE type = 'table'",
     ).toArray().map((row) => row.name));
     if (requiredTables.some((table) => !tables.has(table))) return false;
-    if (tables.has("workspaces") || tables.has("runner_policy_migrations")) return false;
     const requiredColumns: Readonly<Record<string, readonly string[]>> = {
       runners: ["token_verifier", "credential_version", "lifecycle_id", "configured_execution_mode", "desired_policy_revision", "policy_status", "runner_permissions_json", "current_runner_version", "protocol_min_version", "protocol_max_version", "protocol_compatibility", "update_channel", "desired_runner_version", "latest_runner_version", "update_status", "valid_from_ms", "valid_until_ms"],
       runner_policy_versions: ["source_revision", "mutation_id"],
@@ -566,7 +565,6 @@ export class RegistryDO {
     };
     return Object.entries(requiredColumns).every(([table, required]) => {
       const columns = new Set(this.ctx.storage.sql.exec<{ name: string }>(`PRAGMA table_info(${table})`).toArray().map((row) => row.name));
-      if (table === "runners" && columns.has("management_mode")) return false;
       return required.every((column) => columns.has(column));
     });
   }
@@ -2160,6 +2158,16 @@ export class RegistryDO {
   }
 
 }
+
+/**
+ * Clean-break Registry namespace for the current schema.
+ *
+ * The class intentionally inherits the implementation instead of attempting
+ * to migrate data from the retired RegistryDO namespace.  Wrangler provisions
+ * this as a new SQLite Durable Object class, so deployments that previously
+ * used RegistryDO cannot make an old table layout block the current release.
+ */
+export class RegistryDOv2 extends RegistryDO {}
 
 function authThrottleKind(value: unknown): AuthThrottleKind | undefined { return value === "login" || value === "setup" ? value : undefined; }
 function validRunnerVersion(value: string): boolean { return value.length > 0 && value.length <= 256 && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(value); }
