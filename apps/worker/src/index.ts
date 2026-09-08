@@ -18,7 +18,6 @@ import {
   runnerTokenVerifier,
   sha256Hex,
   verifyInternalRequest,
-  verifySetupToken,
   verifyPassword,
 } from "./security.js";
 import { readCappedBytes, readCappedFormData, readCappedText as readBodyText } from "./body.js";
@@ -377,18 +376,9 @@ async function submitSetup(request: Request, env: WorkerEnv): Promise<Response> 
   const form = await formData(request);
   if (form === undefined) return adminError(400, "Invalid setup request.");
   if (!await verifyPreAuthCsrf(request, form, SETUP_CSRF_COOKIE, env)) return adminError(403, "Setup request was rejected.");
-  // A fresh deployment must have one of the two supported setup credentials.
-  // Report configuration failure separately from an incorrect user token so
-  // operators can fix a missing/misspelled Cloudflare secret immediately.
-  if (!setupTokenConfigured(env)) return adminError(503, "Setup token is not configured. Ask the operator to configure SETUP_TOKEN or SETUP_TOKEN_HASH.");
   const throttle = await authThrottleCheck(env, "setup");
   if (throttle === undefined) return adminError(503, "Setup could not be completed. Try again.");
   if (!throttle.allowed) return throttleError(throttle.retry_after_ms);
-  const setupToken = form.get("setup_token");
-  if (!await verifySetupToken(setupToken, env.SETUP_TOKEN, env.SETUP_TOKEN_HASH)) {
-    await authThrottleRecord(env, "setup", false);
-    return adminError(403, "Setup request was rejected.");
-  }
   const password = form.get("password"); const confirmation = form.get("confirm_password");
   if (typeof password !== "string" || typeof confirmation !== "string" || !validPassword(password) || password !== confirmation) return adminError(400, "Passwords must match and be at least 12 characters.");
   const verifier = await passwordVerifier(password);
@@ -400,11 +390,6 @@ async function submitSetup(request: Request, env: WorkerEnv): Promise<Response> 
   await authThrottleRecord(env, "setup", false);
   if (response.status === 409) return adminError(409, "This instance is already initialized.", [clearCookie(SETUP_CSRF_COOKIE)]);
   return adminError(503, "Setup could not be completed. Try again.");
-}
-
-function setupTokenConfigured(env: Pick<WorkerEnv, "SETUP_TOKEN" | "SETUP_TOKEN_HASH">): boolean {
-  if (typeof env.SETUP_TOKEN_HASH === "string") return /^[0-9a-fA-F]{64}$/.test(env.SETUP_TOKEN_HASH);
-  return typeof env.SETUP_TOKEN === "string" && env.SETUP_TOKEN.length > 0 && env.SETUP_TOKEN.length <= 1_024 && !containsControlCharacter(env.SETUP_TOKEN);
 }
 
 async function submitLogin(request: Request, env: WorkerEnv): Promise<Response> {
@@ -1134,7 +1119,6 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Unified orchestration for distributed secure tool sandboxes, persistent agent runtimes, and MCP client bridges.": "统一编排分布式安全工具沙箱、持久化智能体运行时和 MCP 客户端桥接。",
   "RUNMESH / CONTROL PLANE": "RUNMESH / 控制平面",
   "Runmesh network visualization": "Runmesh 网络可视化",
-  "Setup token": "初始化令牌",
   "Password": "密码",
   "Confirm password": "确认密码",
   "Initialize": "初始化",
@@ -1339,7 +1323,6 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Please try again shortly.": "请稍后重试。",
   "Invalid setup request.": "初始化请求无效。",
   "Setup request was rejected.": "初始化请求已被拒绝。",
-  "Setup token is not configured. Ask the operator to configure SETUP_TOKEN or SETUP_TOKEN_HASH.": "未配置初始化令牌，请让运维人员配置 SETUP_TOKEN 或 SETUP_TOKEN_HASH。",
   "Setup could not be completed. Try again.": "初始化无法完成，请重试。",
   "Passwords must match and be at least 12 characters.": "两次密码必须一致且至少 12 个字符。",
   "This instance is already initialized.": "此实例已初始化。",
@@ -1703,7 +1686,7 @@ function authEntryDocument(kind: "login" | "setup", csrf: string): string {
     : "Unified orchestration for distributed secure tool sandboxes, persistent agent runtimes, and MCP client bridges.";
   const title = setup ? "Runmesh · Agent Control Plane setup" : "Runmesh · Agent Control Plane login";
   const form = setup
-    ? `<div class="input-group"><label for="setup_token">Setup token</label><div class="password-input-wrap"><input id="setup_token" type="password" name="setup_token" autocomplete="one-time-code" required>${passwordToggle()}</div></div><div class="input-group"><label for="password">Password</label><div class="password-input-wrap"><input id="password" type="password" name="password" autocomplete="new-password" required minlength="12">${passwordToggle()}</div></div><div class="input-group"><label for="confirm_password">Confirm password</label><div class="password-input-wrap"><input id="confirm_password" type="password" name="confirm_password" autocomplete="new-password" required minlength="12">${passwordToggle()}</div></div>`
+    ? `<div class="input-group"><label for="password">Password</label><div class="password-input-wrap"><input id="password" type="password" name="password" autocomplete="new-password" required minlength="12">${passwordToggle()}</div></div><div class="input-group"><label for="confirm_password">Confirm password</label><div class="password-input-wrap"><input id="confirm_password" type="password" name="confirm_password" autocomplete="new-password" required minlength="12">${passwordToggle()}</div></div>`
     : `<div class="input-group"><label for="admin_password">Admin password</label><div class="password-input-wrap"><input id="admin_password" type="password" name="password" autocomplete="current-password" required>${passwordToggle()}</div></div>`;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${title}</title>${adminStyles()}</head><body class="auth-body login-entry-body">${languageSwitch()}<div class="login-layout"><aside class="login-brand-pane"><div class="login-brand-header"><a class="login-brand-title-wrap" href="/" aria-label="Runmesh · Agent Control Plane">${brandLogo("login-brand-logo")}</a><p class="brand-kicker">RUNMESH / CONTROL PLANE</p><h2 class="login-brand-headline">${brandHeadline}</h2><p class="login-brand-desc">${brandDescription}</p></div>${meshVisualGraphic()}</aside><main class="login-form-pane"><div class="login-form-container"><div class="auth-header-mobile"><a class="login-brand-title-wrap" href="/" aria-label="Runmesh · Agent Control Plane">${brandLogo("login-brand-logo")}</a></div><div class="login-title-group"><p class="brand-kicker">Runmesh</p><h1>${setup ? "Welcome to Runmesh" : "Runmesh"}</h1><p class="subtitle">Agent Control Plane</p><p class="login-invite">${setup ? "Create administrator password" : "Enter the Runmesh control plane"}</p></div><form method="post" action="/${setup ? "setup" : "login"}" class="login-form stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">${form}<button class="login-submit-btn">${setup ? "Initialize" : "Login"}</button></form></div></main></div>${adminScript()}</body></html>`;
 }
