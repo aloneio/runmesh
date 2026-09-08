@@ -718,11 +718,7 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
       restart: async () => {
         await execute("systemctl", [...prefix, "restart", LINUX_SERVICE_NAME]);
         await new Promise((resolve) => setTimeout(resolve, SERVICE_STARTUP_STABILITY_DELAY_MS));
-        const active = await executor.execute("systemctl", [...prefix, "is-active", "--quiet", LINUX_SERVICE_NAME]);
-        if (active.exitCode !== 0) {
-          const detail = active.stderr === undefined || active.stderr.trim() === "" ? "" : ` (${active.stderr.trim().slice(0, 512)})`;
-          throw new Error(`service command failed: systemctl ${[...prefix, "is-active", "--quiet", LINUX_SERVICE_NAME].join(" ")}${detail}`);
-        }
+        await execute("systemctl", [...prefix, "is-active", "--quiet", LINUX_SERVICE_NAME]);
       },
       uninstall: async () => execute("systemctl", [...prefix, "disable", "--now", LINUX_SERVICE_NAME]),
       status: async (manifest) => {
