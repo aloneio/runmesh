@@ -1,4 +1,4 @@
-# Runmesh 0.1.0-dev.2 版本说明
+# Runmesh 0.1.0-dev.3 版本说明
 
 这是一个开发预览版，适合在受控环境试用。该版本采用 clean-break 数据边界：不会导入旧表、旧 profile、旧服务清单或旧凭据；请按[版本切换指南](migration.md)使用全新 Durable Object 命名空间并重新注册 Runner。发布前请先备份 Worker 配置和 Runner 本地目录，并在一台测试机器上验证。
 
