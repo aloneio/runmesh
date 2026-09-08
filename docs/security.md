@@ -23,7 +23,7 @@ Credential rotation/revocation increments credential/connection generations and 
 
 ## Browser protections and throttle
 
-Admin/MCP HTML uses `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `nosniff`, and frame blocking. Admin state changes require CSRF and same-origin checks. Setup and login each use a RegistryDO-backed global pre-authentication throttle: the first five failed KDF attempts are allowed, then a 30-second block begins; subsequent failures back off exponentially up to 15 minutes. A successful operation resets that kind's throttle state.
+Admin/MCP HTML uses `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `nosniff`, and frame blocking. Admin state changes require CSRF and same-origin checks. Setup and login each use a RegistryDO-backed global pre-authentication throttle: the first five failed KDF attempts are allowed, then a 30-second block begins; subsequent failures back off exponentially up to 15 minutes. A successful operation resets that kind's throttle state. When the provider refuses this optional state write, authentication continues with an in-memory fallback and the authenticated console shows a warning that persistent login protection is paused.
 
 This throttle is deployment-wide by setup/login kind. It is neither per-IP nor per-user and is not a complete distributed abuse-control system. It exists to serialize/limit repeated expensive KDF attempts. It should be supplemented by edge controls appropriate to the deployment.
 
