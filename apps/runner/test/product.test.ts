@@ -468,6 +468,19 @@ describe("runner product CLI and service safety", () => {
       expect(validateProfile({ ...profile(join(test.root, "workspace")), workspaces: [{ id: "workspace", path: join(test.root, "workspace"), writable: true, shell: true }] })).toBeUndefined();
     } finally { await test.cleanup(); }
   });
+  it("forwards asynchronous startup failures through the CLI stderr handler", async () => {
+    const test = await fixture();
+    try {
+      await test.store.save(profile(join(test.root, "workspace")));
+      const errors: string[] = [];
+      await expect(runCli(["start"], {
+        store: test.store,
+        stderr: (line) => errors.push(line),
+        startRunner: async () => { throw new Error("local state initialization failed"); },
+      })).rejects.toThrow("local state initialization failed");
+      expect(errors).toEqual(["local state initialization failed"]);
+    } finally { await test.cleanup(); }
+  });
   it("renders dedicated-user manifests and uses privileged host only by explicit mode", () => {
     const linux = renderService({ platform: "linux", mode: "system" });
     expect(serviceLayout({ platform: "linux", mode: "system" })).toMatchObject({ installRoot: "/opt/runmesh", configRoot: "/etc/runmesh", stateRoot: "/var/lib/runmesh", logRoot: "/var/log/runmesh", manifestPath: "/etc/systemd/system/runmesh-runner.service" });
@@ -991,6 +1004,27 @@ describe("runner product CLI and service safety", () => {
       }
       expect(manager.stop).not.toHaveBeenCalled();
       expect(manager.restart).not.toHaveBeenCalled();
+    } finally { await test.cleanup(); }
+  });
+  it("fails restart when the native service exits immediately", async () => {
+    const test = await fixture();
+    try {
+      const saved = { ...profile(join(test.root, "workspace")), execution_mode: "privileged_host" as const };
+      await test.store.save(saved);
+      const manifest = renderService({ platform: "linux", mode: "system", profilePath: test.store.filePath, executionMode: "privileged_host" });
+      const filesystem: ServiceManifestFilesystem = { read: async () => manifest.content, write: async () => undefined, remove: async () => undefined };
+      const manager = {
+        platform: "linux" as const,
+        mode: "system" as const,
+        install: async () => undefined,
+        stop: async () => undefined,
+        restart: vi.fn(async () => undefined),
+        uninstall: async () => undefined,
+        status: vi.fn(async () => ({ installed: true, active: false, identity: "root", detail: "status=1/FAILURE" })),
+      };
+      await expect(runCli(["restart"], { store: test.store, servicePlatform: "linux", serviceFilesystem: filesystem, serviceManager: manager, isAdministrator: () => true })).rejects.toThrow("not active");
+      expect(manager.restart).toHaveBeenCalledTimes(1);
+      expect(manager.status).toHaveBeenCalledTimes(2);
     } finally { await test.cleanup(); }
   });
   it("emits stable doctor JSON checks and only fails its exit seam for required failures", async () => {
