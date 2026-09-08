@@ -377,6 +377,10 @@ async function submitSetup(request: Request, env: WorkerEnv): Promise<Response> 
   const form = await formData(request);
   if (form === undefined) return adminError(400, "Invalid setup request.");
   if (!await verifyPreAuthCsrf(request, form, SETUP_CSRF_COOKIE, env)) return adminError(403, "Setup request was rejected.");
+  // A fresh deployment must have one of the two supported setup credentials.
+  // Report configuration failure separately from an incorrect user token so
+  // operators can fix a missing/misspelled Cloudflare secret immediately.
+  if (!setupTokenConfigured(env)) return adminError(503, "Setup token is not configured. Ask the operator to configure SETUP_TOKEN or SETUP_TOKEN_HASH.");
   const throttle = await authThrottleCheck(env, "setup");
   if (throttle === undefined) return adminError(503, "Setup could not be completed. Try again.");
   if (!throttle.allowed) return throttleError(throttle.retry_after_ms);
@@ -396,6 +400,11 @@ async function submitSetup(request: Request, env: WorkerEnv): Promise<Response> 
   await authThrottleRecord(env, "setup", false);
   if (response.status === 409) return adminError(409, "This instance is already initialized.", [clearCookie(SETUP_CSRF_COOKIE)]);
   return adminError(503, "Setup could not be completed. Try again.");
+}
+
+function setupTokenConfigured(env: Pick<WorkerEnv, "SETUP_TOKEN" | "SETUP_TOKEN_HASH">): boolean {
+  if (typeof env.SETUP_TOKEN_HASH === "string") return /^[0-9a-fA-F]{64}$/.test(env.SETUP_TOKEN_HASH);
+  return typeof env.SETUP_TOKEN === "string" && env.SETUP_TOKEN.length > 0 && env.SETUP_TOKEN.length <= 1_024 && !containsControlCharacter(env.SETUP_TOKEN);
 }
 
 async function submitLogin(request: Request, env: WorkerEnv): Promise<Response> {
@@ -1330,6 +1339,7 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Please try again shortly.": "请稍后重试。",
   "Invalid setup request.": "初始化请求无效。",
   "Setup request was rejected.": "初始化请求已被拒绝。",
+  "Setup token is not configured. Ask the operator to configure SETUP_TOKEN or SETUP_TOKEN_HASH.": "未配置初始化令牌，请让运维人员配置 SETUP_TOKEN 或 SETUP_TOKEN_HASH。",
   "Setup could not be completed. Try again.": "初始化无法完成，请重试。",
   "Passwords must match and be at least 12 characters.": "两次密码必须一致且至少 12 个字符。",
   "This instance is already initialized.": "此实例已初始化。",
