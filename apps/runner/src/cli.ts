@@ -214,7 +214,11 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
   let enrolledDuringThisInvocation = false;
   let enrolledProfile: RunnerProfile | undefined;
   try {
-    if (parsed.command === "start") return start(parsed, store, error, dependencies);
+    // Await startup inside the command boundary so initialization failures
+    // flow through the same stderr handler as every other CLI command. A
+    // bare `return start(...)` escapes this try/catch and makes embedded
+    // callers (including service wrappers) lose the actionable error detail.
+    if (parsed.command === "start") { await start(parsed, store, error, dependencies); return; }
     if (parsed.command === "enroll") {
       const server = requiredString(parsed, "server"); const code = await enrollmentCode(parsed, dependencies.readStdin);
       previousProfile = await store.load();
@@ -849,7 +853,20 @@ async function serviceCommand(parsed: ParsedCommand, store: ProfileStore, output
     throw new Error(`cannot ${parsed.command} Runner service because it is not installed`);
   }
   if (parsed.command === "stop") await manager.stop(manifest);
-  else await manager.restart(manifest);
+  else {
+    await manager.restart(manifest);
+    // `systemctl restart` (and its platform equivalents) can return success
+    // after scheduling a service that immediately crashes. Verify the
+    // post-restart state so installers and operators do not receive a false
+    // success while the Runner is already offline.
+    if (manager.status !== undefined) {
+      const restarted = await probeServiceStatus(manager, manifest, "restart");
+      if (restarted === undefined) throw new Error("service status probe is unavailable after restart");
+      if (restarted.active !== true) {
+        throw new Error(`Runner service restart completed but the service is not active${restarted.detail === undefined ? "" : `: ${restarted.detail}`}`);
+      }
+    }
+  }
   report(output, parsed.json, { action: parsed.command, manifest: manifest.path, mode: manifest.mode, commands: serviceCommandNames(parsed.command as "install" | "stop" | "restart", manifest) });
 }
 async function uninstall(parsed: ParsedCommand, store: ProfileStore, output: (line: string) => void, dependencies: CliDependencies): Promise<void> {
