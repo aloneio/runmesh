@@ -128,6 +128,12 @@ const LINUX_SERVICE_NAME = "runmesh-runner.service";
 const MACOS_LABEL = "io.alone.runmesh.runner";
 const WINDOWS_TASK_NAME = "RunmeshRunner";
 const DEDICATED_SERVICE_USER = "runmesh";
+// systemctl restart may report success as soon as the unit has been queued;
+// a process that fails during its first few hundred milliseconds can therefore
+// appear healthy to callers that probe immediately. Keep a short stability
+// window in the native adapter so installers and credential refreshes do not
+// claim success for a Runner that has already exited.
+const SERVICE_STARTUP_STABILITY_DELAY_MS = 300;
 
 export function currentServicePlatform(platform: HostPlatform = process.platform): ServicePlatform { return platform === "darwin" ? "darwin" : platform === "linux" ? "linux" : "win32"; }
 export function serviceMode(options: ServiceAdapterOptions = {}): ServiceMode { return options.mode ?? (options.system === false ? "user" : "system"); }
@@ -709,7 +715,15 @@ export function createServiceManager(options: ServiceManagerOptions = {}): Servi
         }
         if (state === undefined) throw new Error("could not determine systemd unit enablement while restoring rollback state");
       },
-      restart: async () => execute("systemctl", [...prefix, "restart", LINUX_SERVICE_NAME]),
+      restart: async () => {
+        await execute("systemctl", [...prefix, "restart", LINUX_SERVICE_NAME]);
+        await new Promise((resolve) => setTimeout(resolve, SERVICE_STARTUP_STABILITY_DELAY_MS));
+        const active = await executor.execute("systemctl", [...prefix, "is-active", "--quiet", LINUX_SERVICE_NAME]);
+        if (active.exitCode !== 0) {
+          const detail = active.stderr === undefined || active.stderr.trim() === "" ? "" : ` (${active.stderr.trim().slice(0, 512)})`;
+          throw new Error(`service command failed: systemctl ${[...prefix, "is-active", "--quiet", LINUX_SERVICE_NAME].join(" ")}${detail}`);
+        }
+      },
       uninstall: async () => execute("systemctl", [...prefix, "disable", "--now", LINUX_SERVICE_NAME]),
       status: async (manifest) => {
         const installed = await executor.execute("systemctl", [...prefix, "is-enabled", LINUX_SERVICE_NAME]);
