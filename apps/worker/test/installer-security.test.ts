@@ -160,3 +160,9 @@ it("rejects old installed versions before code input and checks the Windows mark
   expect(refresh).toContain('if (-not (Select-String -LiteralPath $ServiceManifest');
   expect(refresh).not.toContain('$null -eq (Select-String');
 });
+
+it("keeps the downloaded PowerShell script safe for Windows PowerShell 5.1 file decoding", () => {
+  // Windows PowerShell treats a BOM-less script as the current ANSI codepage.
+  // ASCII-only templates parse identically both from a saved file and via IWR.
+  expect(renderPowerShellInstaller("https://worker.example")).toMatch(/^[\x00-\x7f]*$/u);
+});
