@@ -11,6 +11,7 @@ const protocolPackage = JSON.parse(
 
 export default defineConfig({
   test: {
+    setupFiles: [fileURLToPath(new URL("./test/setup.ts", import.meta.url))],
     // Filesystem/process tests are materially slower on Windows (and on
     // freshly provisioned CI hosts) than Vitest's five-second default. Keep
     // the suite deterministic without changing production timeouts.
