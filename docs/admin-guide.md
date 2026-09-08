@@ -26,7 +26,7 @@ Configure these Cloudflare secrets and variables before deployment:
 
 `RUNMESH_PUBLIC_ORIGIN` is used as the default public origin and for reverse-proxy deployments. When Cloudflare routes a request through an additional custom HTTPS domain, Runmesh automatically accepts that domain when the request URL and `Host` header agree, so each new custom domain does not need a separate allowlist update.
 
-Generate every secret with a cryptographically secure generator and use at least 32 random bytes for `ADMIN_TOKEN`, `RUNNER_TOKEN_PEPPER`, and `INTERNAL_CONTROL_SECRET`. Never commit secrets or place them in CI logs. The first user to complete setup becomes the administrator; protect a public, uninitialized deployment with Cloudflare Access until that user completes setup.
+Generate `ADMIN_TOKEN`, `RUNNER_TOKEN_PEPPER` and `INTERNAL_CONTROL_SECRET` from at least 32 cryptographically random bytes. Never commit them or print them in CI logs. First administrator setup requires no additional bootstrap token; CSRF, same-origin and atomic first-success-wins remain. Complete setup before exposing an uninitialized instance to untrusted traffic. New Runners default to `dedicated_user` and new MCP clients to `coding:read`; existing permissions remain unchanged.
 
 ## Enroll a Runner
 

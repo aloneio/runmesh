@@ -72,13 +72,13 @@ describe("hosted installer origin and template safety", () => {
     expect(FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS.every((value) => value.startsWith("https://"))).toBe(true);
   });
 
-  it("embeds hosted enrollment codes in the copied bootstrap and rejects Host confusion", async () => {
+  it("embeds enrollment codes in hosted commands while keeping manual enrollment available", async () => {
     const code = "A".repeat(43);
     const page = runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }, "https://worker.example", "runner-test", code, "csrf", false, "privileged_host", true);
     expect(page.status).toBe(200);
     const html = await page.text();
-    // The code is shown once for the operator, but it must never be present
-    // in a command/clipboard payload or passed as an argv value.
+    // Without a verified release gate, the manual path still prompts locally.
+    // With the gate enabled, hosted commands include the code for convenience.
     expect(html).toContain(code);
     expect(html).not.toContain(`--code ${code}`);
     expect(html).toContain("--code-stdin");
@@ -90,18 +90,24 @@ describe("hosted installer origin and template safety", () => {
     expect(hosted.status).toBe(200);
     const hostedHtml = await hosted.text();
     expect(hostedHtml).toContain(code);
-    expect(hostedHtml).toContain(`sudo sh -s -- &#039;${code}&#039;`);
-    expect(hostedHtml).toContain(`powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command`);
-    expect(hostedHtml).toContain(`.Content)) &#039;${code}&#039;&quot;`);
+    const commands = [...hostedHtml.matchAll(/<pre><code>([\s\S]*?)<\/code><\/pre>/g)].map((match) => match[1]);
+    expect(commands.length).toBeGreaterThanOrEqual(3);
+    for (const command of commands.slice(0, 3)) expect(command).toContain(code);
+    expect(commands[0]).toContain(`sudo sh -s -- &#039;${code}&#039;`);
+    expect(commands[1]).toContain(`sudo sh -s -- &#039;${code}&#039;`);
+    expect(commands[2]).toContain(`.Content)) &#039;${code}&#039;&quot;`);
+    expect(hostedHtml).toContain("-NonInteractive");
+    expect(hostedHtml).toContain("no second code entry is needed");
+    expect(hostedHtml).toContain("Treat the command as a secret");
     expect(hostedHtml).toContain("Copy installer command");
   });
 
-  it("states the privileged_host default and confirmation requirement on the enrollment page", async () => {
+  it("states the dedicated_user default and privileged confirmation requirement on the enrollment page", async () => {
     const code = "B".repeat(43);
     const page = runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }, "https://worker.example", "runner-test", code, "csrf", false, "privileged_host", true);
     expect(page.status).toBe(200);
     const html = await page.text();
-    expect(html).toContain("The recommended execution mode is privileged_host");
+    expect(html).toContain("The default is dedicated_user");
     expect(html).toContain("--confirm-privileged-host");
     expect(runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }, "https://worker.example", "runner-test", code, "csrf", false, "privileged_host").status).toBe(400);
   });
@@ -122,4 +128,35 @@ describe("hosted installer origin and template safety", () => {
       public_info: { execution_mode: "privileged_host" },
     })).toBe("dedicated_user");
   });
+});
+
+it("accepts enrollment arguments with an optional prompt and keeps stdin forwarding", () => {
+  const shell = renderPosixInstaller("https://worker.example");
+  const powershell = renderPowerShellInstaller("https://worker.example");
+  expect(shell).toContain("ENROLLMENT_CODE_ARG");
+  expect(shell).toContain("--code)");
+  expect(shell).toContain("--code=*)");
+  expect(shell.match(/ENROLLMENT_CODE="\$ENROLLMENT_CODE_ARG"/g)).toHaveLength(2);
+  expect(shell).not.toContain("ENROLLMENT_INPUT");
+  expect(shell).not.toContain("REFRESH_INPUT");
+  expect(shell).toContain("hidden terminal prompt");
+  expect(powershell).toContain("EnrollmentCodeArgument");
+  expect(powershell.match(/Read-EnrollmentCode \$EnrollmentCodeArgument/g)).toHaveLength(2);
+  expect(powershell).toContain("-AsSecureString");
+  expect(powershell).toContain("Enrollment code supplied more than once.");
+  expect(powershell).toContain("return $CodeArgument");
+  expect(shell.indexOf("ok 'Signed release assets verified.'")).toBeLessThan(shell.lastIndexOf("IFS= read -r ENROLLMENT_CODE"));
+});
+
+it("rejects old installed versions before code input and checks the Windows marker Boolean", () => {
+  const shell = renderPosixInstaller("https://worker.example");
+  const powershell = renderPowerShellInstaller("https://worker.example");
+  const shellCheck = shell.indexOf('installed Runner version differs from the fixed release');
+  expect(shellCheck).toBeGreaterThan(0);
+  expect(shellCheck).toBeLessThan(shell.indexOf('IFS= read -r ENROLLMENT_CODE'));
+  const refresh = powershell.slice(powershell.indexOf('function Refresh-Existing'));
+  expect(refresh.indexOf('Installed Runner version differs from the fixed release')).toBeGreaterThan(0);
+  expect(refresh.indexOf('Installed Runner version differs from the fixed release')).toBeLessThan(refresh.indexOf('$EnrollmentCode = Read-EnrollmentCode'));
+  expect(refresh).toContain('if (-not (Select-String -LiteralPath $ServiceManifest');
+  expect(refresh).not.toContain('$null -eq (Select-String');
 });

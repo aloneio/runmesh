@@ -11,6 +11,9 @@ const MAX_SEARCH_FILE_BYTES = 256 * 1024;
 const MAX_SEARCH_TOTAL_BYTES = 4 * 1024 * 1024;
 const MAX_SEARCH_DIRECTORIES = 1_000;
 const MAX_SEARCH_DEPTH = 16;
+const MAX_SEARCH_ENTRIES = 10_000;
+const MAX_SEARCH_FILES = 1_000;
+const MAX_SEARCH_DURATION_MS = 5_000;
 // Directory cursors are entry indexes, so serving an arbitrarily large cursor
 // would require scanning every preceding entry even though each response is
 // capped at 256 items. Keep the worst-case scan bounded and fail closed for
@@ -20,7 +23,7 @@ const MAX_SEARCH_CURSOR = 100_000;
 const COMMON_HUGE_DIRECTORIES = new Set([".git", ".hg", ".svn", "node_modules", "vendor", "dist", "build", "coverage", ".cache"]);
 
 type SearchResult = { path: string; line: number; text: string };
-type SearchBudget = { bytes: number; directories: number; truncated: boolean };
+type SearchBudget = { bytes: number; directories: number; entries: number; files: number; deadline: number; truncated: boolean };
 type DirectoryEntryVisitor = (entry: Dirent<string>, index: number) => boolean | Promise<boolean>;
 
 export class FilesystemService {
@@ -132,7 +135,7 @@ export class FilesystemService {
     const limit = boundedInteger(params.max_results ?? params.limit, 1, 256, 100);
     const offset = boundedInteger(params.cursor, 0, MAX_SEARCH_CURSOR, 0);
     const results: SearchResult[] = [];
-    const budget: SearchBudget = { bytes: 0, directories: 0, truncated: false };
+    const budget: SearchBudget = { bytes: 0, directories: 0, entries: 0, files: 0, deadline: performance.now() + MAX_SEARCH_DURATION_MS, truncated: false };
     const snapshot = await this.policy.snapshot(resolved);
     if (snapshot.type !== "directory") throw new Error("path is not a directory");
     await this.searchDirectory(resolved, snapshot, params.query, results, budget, 0, Math.min(MAX_SEARCH_RESULTS, offset + limit + 1));
@@ -158,6 +161,11 @@ export class FilesystemService {
     try {
       await readDirectoryThroughHandle(this.policy, resolvedDirectory, directorySnapshot, async (entry) => {
         if (budget.truncated || results.length >= resultLimit) return false;
+        if (budget.entries >= MAX_SEARCH_ENTRIES || performance.now() >= budget.deadline || budget.bytes >= MAX_SEARCH_TOTAL_BYTES) {
+          budget.truncated = true;
+          return false;
+        }
+        budget.entries += 1;
         if (entry.isSymbolicLink()) return true;
         if (entry.isDirectory() && COMMON_HUGE_DIRECTORIES.has(entry.name)) return true;
         const childRelative = relative(workspace.rootPath, `${directory}${sep}${entry.name}`).split(sep).join("/");
@@ -169,14 +177,12 @@ export class FilesystemService {
           await this.searchDirectory(resolved, snapshot, query, results, budget, depth + 1, resultLimit);
           return !budget.truncated && results.length < resultLimit;
         }
-        if (snapshot.type !== "file" || snapshot.size > MAX_SEARCH_FILE_BYTES) return true;
-        const loaded = await readUtf8FileSecure(this.policy, resolved, snapshot).catch(() => undefined);
-        if (loaded === undefined) return true;
-        if (budget.bytes + loaded.size > MAX_SEARCH_TOTAL_BYTES) {
-          budget.truncated = true;
-          return false;
-        }
-        budget.bytes += loaded.size;
+        if (snapshot.type !== "file") return true;
+        if (budget.files >= MAX_SEARCH_FILES) { budget.truncated = true; return false; }
+        budget.files += 1;
+        if (snapshot.size > MAX_SEARCH_FILE_BYTES) return true;
+        const loaded = await readUtf8FileSecure(this.policy, resolved, snapshot, budget).catch(() => undefined);
+        if (loaded === undefined) return !budget.truncated;
         const content = loaded.content;
         for (const [index, line] of content.split(/\r?\n/).entries()) {
           if (line.includes(query)) results.push({ path: childRelative, line: index + 1, text: line.slice(0, 4_096) });
@@ -210,12 +216,22 @@ async function readDirectoryThroughHandle(
   snapshot: PathSnapshot,
   visit: DirectoryEntryVisitor,
 ): Promise<void> {
-  const directory = await opendir(resolved.path);
+  // On Linux bind traversal to a verified descriptor, not a pathname which
+  // could be swapped away and restored between opendir and revalidation.
+  // Keep the descriptor alive until Dir closes; never fall back to the path
+  // if procfs is unavailable. Other platforms retain the documented local
+  // mutator/ABA limitation until a native directory-handle adapter is added.
+  const anchor = process.platform === "linux"
+    ? await open(resolved.path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+    : undefined;
+  let directory: Awaited<ReturnType<typeof opendir>> | undefined;
   try {
-    // opendir() binds an OS directory handle. Re-check the pathname only after
-    // that handle exists; once this succeeds, later ancestor replacement does
-    // not redirect Dir.read(). (On Windows Node does not expose dirfd/reparse
-    // flags, so an extremely narrow ABA replacement window remains.)
+    if (anchor !== undefined) {
+      const info = await anchor.stat();
+      if (!info.isDirectory() || !sameIdentity(info, snapshot)) throw symlinkEscape();
+      await policy.verifySnapshot(resolved, snapshot);
+    }
+    directory = await opendir(anchor === undefined ? resolved.path : `/proc/self/fd/${anchor.fd}`);
     await policy.verifySnapshot(resolved, snapshot);
     let index = 0;
     while (true) {
@@ -225,7 +241,8 @@ async function readDirectoryThroughHandle(
       index += 1;
     }
   } finally {
-    await directory.close().catch(() => undefined);
+    await directory?.close().catch(() => undefined);
+    await anchor?.close().catch(() => undefined);
   }
 }
 
@@ -233,16 +250,26 @@ async function readUtf8FileSecure(
   policy: PathPolicy,
   resolved: { readonly workspace: WorkspaceConfig; readonly path: string },
   snapshot: PathSnapshot,
+  budget: SearchBudget,
 ): Promise<{ readonly content: string; readonly size: number }> {
   const handle = await openNoFollow(resolved.path, true);
   try {
     const info = await handle.stat();
     await policy.verifySnapshot(resolved, snapshot);
     if (!info.isFile() || !sameIdentity(info, snapshot) || info.size > MAX_SEARCH_FILE_BYTES) throw new Error("file is not a bounded regular file");
+    if (info.size > MAX_SEARCH_TOTAL_BYTES - budget.bytes) {
+      budget.truncated = true;
+      throw new Error("search byte budget exhausted");
+    }
     const data = Buffer.alloc(info.size);
     let offset = 0;
     while (offset < data.byteLength) {
-      const { bytesRead } = await handle.read(data, offset, data.byteLength - offset, offset);
+      if (performance.now() >= budget.deadline) { budget.truncated = true; throw new Error("search time budget exhausted"); }
+      const length = Math.min(data.byteLength - offset, MAX_SEARCH_TOTAL_BYTES - budget.bytes);
+      if (length <= 0) { budget.truncated = true; throw new Error("search byte budget exhausted"); }
+      const { bytesRead } = await handle.read(data, offset, length, offset);
+      // Account for I/O before binary detection, decoding, or any later error.
+      budget.bytes += bytesRead;
       if (bytesRead === 0) break;
       offset += bytesRead;
     }
