@@ -44,6 +44,10 @@
     "vitest": "^4.1.11",
     "wrangler": "^4.125.0"
   },
+  "overrides": {
+    "sharp": "0.35.4",
+    "hono": "4.13.5"
+  },
   "dependencies": {
     "ws": "^8.21.3"
   }
