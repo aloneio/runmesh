@@ -91,7 +91,16 @@ describe("runner product profile and enrollment", () => {
       // Node's stat(); the service provisioner covers the native ACL path.
       if (process.platform !== "win32") expect((await stat(test.store.filePath)).mode & 0o777).toBe(0o600);
       const lines: string[] = [];
-      await runCli(["status", "--json"], { store: test.store, stdout: (line) => lines.push(line) });
+      // This verifies profile redaction, not the host's Task Scheduler/launchd.
+      // Use the real adapter with an injected command executor so a missing
+      // native service cannot turn this unit test into a 30-second OS probe.
+      const serviceManager = createServiceManager({ mode: "system", executor: {
+        execute: async () => ({ exitCode: 1, stdout: "", stderr: "not installed" }),
+      } });
+      await runCli(["status", "--json"], {
+        store: test.store, stdout: (line) => lines.push(line), serviceManager,
+        serviceFilesystem: { read: async () => undefined, write: async () => undefined, remove: async () => undefined },
+      });
       expect(lines.join("\n")).toContain("[redacted]");
       expect(lines.join("\n")).not.toContain("0123456789abcdef");
     } finally { await test.cleanup(); }
