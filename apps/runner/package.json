@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@aloneio/runmesh-runner",
-  "version": "0.1.0-dev.2",
+  "version": "0.1.0-dev.3",
   "private": false,
   "type": "module",
   "description": "System Runner for Runmesh Agent Control Plane.",
@@ -51,7 +51,7 @@
   "engines": { "node": ">=20" },
   "dependencies": {},
   "devDependencies": {
-    "@aloneio/runmesh-protocol": "0.1.0-dev.2",
+    "@aloneio/runmesh-protocol": "0.1.0-dev.3",
     "@types/ws": "^8.18.1",
     "tsx": "^4.21.0",
     "vitest": "^4.1.11",
