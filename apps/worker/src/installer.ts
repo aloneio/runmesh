@@ -4,7 +4,7 @@
  * assets are authenticated with this embedded key; a downloaded keyring is
  * never fetched or used by an installer.
  */
-export const FIXED_RELEASE_VERSION = "0.1.0-dev.2";
+export const FIXED_RELEASE_VERSION = "0.1.0-dev.3";
 export const FIXED_NODE_VERSION = "22.19.0";
 export const FIXED_NODE_BASE_URL = `https://nodejs.org/dist/v${FIXED_NODE_VERSION}`;
 export const FIXED_RELEASE_KEY_ID = "runmesh-preview-2026-01";

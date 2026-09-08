@@ -60,12 +60,12 @@ jobs:
           ROOT_VERSION="$(node -p 'require("./package.json").version')"
           test "$RELEASE_VERSION" = "$ROOT_VERSION"
           # This workflow and the hosted installer are the fixed
-          # v0.1.0-dev.2 preview contract. Refuse a future version until its
+          # v0.1.0-dev.3 preview contract. Refuse a future version until its
           # installer constants, key, and independent review are rotated.
-          test "$RELEASE_VERSION" = "0.1.0-dev.2"
+          test "$RELEASE_VERSION" = "0.1.0-dev.3"
           test -n "$RELEASE_SIGNING_KEY_ID"
           # The hosted installer embeds this reviewed key ID for the fixed
-          # v0.1.0-dev.2 contract; a different valid key would make the
+          # v0.1.0-dev.3 contract; a different valid key would make the
           # published asset unverifiable by the installer.
           test "$RELEASE_SIGNING_KEY_ID" = "runmesh-preview-2026-01"
           test "$(node -p 'require("./apps/runner/package.json").version')" = "$RELEASE_VERSION"
