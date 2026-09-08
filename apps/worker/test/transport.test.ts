@@ -229,6 +229,28 @@ describe("Worker runner transport", () => {
     expect(response.status).toBe(400);
   });
 
+  it("keeps authentication available when optional quota writes fail", async () => {
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
+    await runInDurableObject(registry, (instance) => {
+      const storage = (instance as any).ctx.storage;
+      const originalExec = storage.sql.exec.bind(storage.sql);
+      let quotaAttempts = 0;
+      const execSpy = vi.spyOn(storage.sql, "exec").mockImplementation((statement: string, ...params: unknown[]) => {
+        if (typeof statement === "string" && (statement.includes("auth_throttle") || statement.includes("last_used_at_ms"))) { quotaAttempts += 1; throw new Error("simulated quota exhaustion"); }
+        return originalExec(statement, ...params);
+      });
+      try {
+        expect(instance.checkAuthThrottle("login", Date.now()).allowed).toBe(true);
+        expect(instance.checkAuthThrottle("login", Date.now()).allowed).toBe(true);
+        instance.recordAuthAttempt("login", true, Date.now());
+        expect(instance.featureHealthSnapshot(Date.now()).map((item) => item.feature)).toContain("auth_throttle");
+        expect(quotaAttempts).toBe(1);
+      } finally {
+        execSpy.mockRestore();
+      }
+    });
+  });
+
   it("fails closed when the Registry status is unavailable or malformed", async () => {
     const original = RegistryDO.prototype.fetch;
     let mode: "malformed" | "unavailable" | "initialized" = "malformed";

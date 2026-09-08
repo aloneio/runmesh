@@ -1706,6 +1706,8 @@ type AdminData = { readonly clients: readonly McpClientRecord[]; readonly runner
 const FEATURE_LABELS: Record<RegistryFeatureHealth["feature"], string> = {
   job_recording: "Job recording",
   mcp_audit: "MCP call audit",
+  mcp_usage_tracking: "MCP usage tracking",
+  auth_throttle: "Login protection",
   maintenance_alarm: "Maintenance alarm",
 };
 const FEATURE_NOTICE_TEXT: Record<RegistryFeatureHealth["feature"], AdminNotice> = {
@@ -1716,6 +1718,14 @@ const FEATURE_NOTICE_TEXT: Record<RegistryFeatureHealth["feature"], AdminNotice>
   mcp_audit: {
     title: "MCP call audit paused",
     message: "MCP call recording is temporarily disabled.",
+  },
+  mcp_usage_tracking: {
+    title: "MCP usage tracking paused",
+    message: "MCP authentication remains available; last-used telemetry is temporarily disabled.",
+  },
+  auth_throttle: {
+    title: "Login protection paused",
+    message: "Administrator login remains available; persistent login throttling is temporarily disabled.",
   },
   maintenance_alarm: {
     title: "Maintenance alarm paused",
@@ -1750,7 +1760,7 @@ function registryFeatureNotices(value: Record<string, unknown> | undefined): rea
   });
 }
 function keyIsFeature(value: string): value is RegistryFeatureHealth["feature"] {
-  return value === "job_recording" || value === "mcp_audit" || value === "maintenance_alarm";
+  return value === "job_recording" || value === "mcp_audit" || value === "mcp_usage_tracking" || value === "auth_throttle" || value === "maintenance_alarm";
 }
 async function policyReadiness(env: WorkerEnv, runnerId: string): Promise<{ ok: true; value: { applied_revision: number; active_checksum: string } } | { ok: false }> {
   let response: Response;
