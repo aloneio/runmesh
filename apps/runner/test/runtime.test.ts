@@ -185,6 +185,8 @@ describe("workspace path policy", () => {
       const readonly = { ...test.workspace, readonly: true };
       const config: RunnerConfig = { server: "ws://127.0.0.1", token: "0123456789abcdef", runnerId: "runner-1", workspaces: [readonly] };
       const runtime = new RunnerRuntime({ config, stateDir: test.state });
+      // Even before native shell discovery, the same policy must deny this.
+      await expect(runtime.dispatch("exec.start", { workspace_id: readonly.workspaceId, command: "echo", args: ["x"], shell: true })).rejects.toMatchObject({ code: "permission_denied" });
       await runtime.initialize();
       await expect(runtime.dispatch("exec.start", { workspace_id: readonly.workspaceId, command: "echo", args: ["x"], shell: true })).rejects.toThrow(/shell execution/);
     } finally { await test.cleanup(); }
