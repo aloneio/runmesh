@@ -654,9 +654,9 @@ $CurrentRoot = Join-Path $InstallRoot 'current'
 $CurrentNew = Join-Path $InstallRoot 'current.new'
 $Profile = Join-Path $env:ProgramData 'Runmesh\profile.json'
 $ServiceManifest = Join-Path $env:ProgramData 'Runmesh\RunmeshRunner.xml'
-function Write-Step([string]$Message) { Write-Host ("→ {0}" -f $Message) -ForegroundColor Cyan }
-function Write-Ok([string]$Message) { Write-Host ("✓ {0}" -f $Message) -ForegroundColor Green }
-function Write-Fail([string]$Message) { Write-Host ("✗ {0}" -f $Message) -ForegroundColor Red }
+function Write-Step([string]$Message) { Write-Host ("-> {0}" -f $Message) -ForegroundColor Cyan }
+function Write-Ok([string]$Message) { Write-Host ("[OK] {0}" -f $Message) -ForegroundColor Green }
+function Write-Fail([string]$Message) { Write-Host ("[FAIL] {0}" -f $Message) -ForegroundColor Red }
 function Write-LogFailure([string]$Message, [string]$LogPath, [int]$ExitCode, $ErrorRecord = $null) {
   Write-Fail $Message
   Write-Host ("  exit code: {0}" -f $ExitCode) -ForegroundColor DarkGray
@@ -665,18 +665,18 @@ function Write-LogFailure([string]$Message, [string]$LogPath, [int]$ExitCode, $E
     Write-Host ("  message: {0}" -f $ErrorRecord.Exception.Message) -ForegroundColor DarkGray
     if ($ErrorRecord.InvocationInfo -and $ErrorRecord.InvocationInfo.PositionMessage) {
       Write-Host '  location:' -ForegroundColor DarkGray
-      $ErrorRecord.InvocationInfo.PositionMessage.TrimEnd().Split([Environment]::NewLine) | ForEach-Object { Write-Host ("  │ {0}" -f $_) -ForegroundColor DarkGray }
+      $ErrorRecord.InvocationInfo.PositionMessage.TrimEnd().Split([Environment]::NewLine) | ForEach-Object { Write-Host ("  | {0}" -f $_) -ForegroundColor DarkGray }
     }
     if ($ErrorRecord.ScriptStackTrace) {
       Write-Host '  stack trace:' -ForegroundColor DarkGray
-      $ErrorRecord.ScriptStackTrace.TrimEnd().Split([Environment]::NewLine) | ForEach-Object { Write-Host ("  │ {0}" -f $_) -ForegroundColor DarkGray }
+      $ErrorRecord.ScriptStackTrace.TrimEnd().Split([Environment]::NewLine) | ForEach-Object { Write-Host ("  | {0}" -f $_) -ForegroundColor DarkGray }
     }
   }
   if (Test-Path -LiteralPath $LogPath -PathType Leaf) {
     $contents = Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue
     if ($null -ne $contents -and $contents.Count -gt 0) {
       Write-Host '  output:' -ForegroundColor DarkGray
-      $contents | ForEach-Object { Write-Host ("  │ {0}" -f $_) -ForegroundColor DarkGray }
+      $contents | ForEach-Object { Write-Host ("  | {0}" -f $_) -ForegroundColor DarkGray }
     }
   }
 }
@@ -878,11 +878,11 @@ __VERIFIER__
   Write-Host ("  message: {0}" -f $_.Exception.Message) -ForegroundColor DarkGray
   if ($_.InvocationInfo -and $_.InvocationInfo.PositionMessage) {
     Write-Host '  location:' -ForegroundColor DarkGray
-    $_.InvocationInfo.PositionMessage.TrimEnd().Split([Environment]::NewLine) | ForEach-Object { Write-Host ("  │ {0}" -f $_) -ForegroundColor DarkGray }
+    $_.InvocationInfo.PositionMessage.TrimEnd().Split([Environment]::NewLine) | ForEach-Object { Write-Host ("  | {0}" -f $_) -ForegroundColor DarkGray }
   }
   if ($_.ScriptStackTrace) {
     Write-Host '  stack trace:' -ForegroundColor DarkGray
-    $_.ScriptStackTrace.TrimEnd().Split([Environment]::NewLine) | ForEach-Object { Write-Host ("  │ {0}" -f $_) -ForegroundColor DarkGray }
+    $_.ScriptStackTrace.TrimEnd().Split([Environment]::NewLine) | ForEach-Object { Write-Host ("  | {0}" -f $_) -ForegroundColor DarkGray }
   }
   Write-Host '  Any local files created by this attempt will be rolled back where safe.' -ForegroundColor DarkGray
   throw
