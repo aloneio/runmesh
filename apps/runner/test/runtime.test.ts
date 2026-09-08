@@ -1609,4 +1609,20 @@ describe("persistent local jobs", () => {
       expect(calls).toBe(8);
     } finally { await test.cleanup(); }
   });
+
+  it("refreshes workspace metadata after a policy update while reusing probes", async () => {
+    const test = await fixture();
+    try {
+      let calls = 0;
+      const config: RunnerConfig = { server: "ws://127.0.0.1", token: "0123456789abcdef", runnerId: "runner-1", workspaces: [test.workspace] };
+      const runtimeModule = await import("../src/runtime.js");
+      const runtime = new RunnerRuntime({ config, stateDir: test.state, environment: new runtimeModule.EnvironmentInfoService({ probe: async (command) => { calls += 1; return `${command} version`; } }) });
+      await runtime.envInfo();
+      const replacement = { ...test.workspace, workspaceId: "workspace-2", readonly: true };
+      runtime.applyPolicy([replacement]);
+      const refreshed = await runtime.envInfo();
+      expect(refreshed.workspaces).toEqual([{ workspace_id: "workspace-2", readonly: true, shell: false }]);
+      expect(calls).toBe(8);
+    } finally { await test.cleanup(); }
+  });
 });
