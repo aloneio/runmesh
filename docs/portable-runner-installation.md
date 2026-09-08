@@ -2,7 +2,7 @@
 
 Use this page when the Dashboard does not show a hosted installation command, when the target machine is offline, or when your organization's policy requires independent artifact verification. The normal product workflow is described in the [administrator guide](admin-guide.md).
 
-Runmesh supports a **fixed signed bootstrap design**, but it remains deliberately disabled in the default/local environment of `v0.1.0-dev.2`. The checked-in `production` environment contains the gates for the independently verified immutable `v0.1.0-dev.2` GitHub release. A deployment exposes hosted commands only when that environment has a canonical external HTTPS `RUNMESH_PUBLIC_ORIGIN` and the exact `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.0-dev.2` acknowledgement; both conditions are required, and setting the release acknowledgement alone never exposes the installer.
+Runmesh supports a **fixed signed bootstrap design**, but it remains deliberately disabled in the default/local environment of `v0.1.0-dev.3`. The checked-in `production` environment contains the gates for the independently verified immutable `v0.1.0-dev.3` GitHub release. A deployment exposes hosted commands only when that environment has a canonical external HTTPS `RUNMESH_PUBLIC_ORIGIN` and the exact `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.0-dev.3` acknowledgement; both conditions are required, and setting the release acknowledgement alone never exposes the installer.
 
 `RUNMESH_PUBLIC_ORIGIN` is a non-secret Worker variable. Set it in the Wrangler `vars` configuration to an externally reachable origin such as `https://mcp.example.com`, with no path, query, fragment, credentials, whitespace, wildcard, or `http://` scheme. A trailing slash is normalized. Installer rendering and browser/Admin POSTs reject a configured `Host` that does not match this origin; an invalid or missing origin keeps the release descriptor non-distributable. Local development can omit the variable, but it cannot enable hosted signed bootstrap.
 
@@ -12,8 +12,8 @@ Until both prerequisites are satisfied, `/runner/releases/latest` and `/runner/r
 
 The one-command path (trust model A) treats the HTTPS Worker response that serves the installer as its bootstrap trust root. The installer pins all of the following in source:
 
-- version `0.1.0-dev.2` and tag `v0.1.0-dev.2`;
-- the exact GitHub release-asset URLs and `runmesh-runner-0.1.0-dev.2.tgz` name;
+- version `0.1.0-dev.3` and tag `v0.1.0-dev.3`;
+- the exact GitHub release-asset URLs and `runmesh-runner-0.1.0-dev.3.tgz` name;
 - signing key ID `runmesh-preview-2026-01`;
 - the reviewed Ed25519 public key from `release/trust-keyring.json`.
 

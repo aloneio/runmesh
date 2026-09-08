@@ -141,7 +141,7 @@ function runnerInstallScript(request: Request, _url: URL, env: RunnerReleaseEnvi
     content =
 `#!/usr/bin/env sh
 set -eu
-printf '%s\\n' 'error: The fixed signed Runmesh v0.1.0-dev.2 release is not enabled on this deployment.' 'Use the manual verified portable-artifact route until the exact immutable release is available.' >&2
+printf '%s\\n' 'error: The fixed signed Runmesh v0.1.0-dev.3 release is not enabled on this deployment.' 'Use the manual verified portable-artifact route until the exact immutable release is available.' >&2
 exit 1
 `;
   }
@@ -157,7 +157,7 @@ function runnerInstallPowerShell(request: Request, _url: URL, env: RunnerRelease
   } else {
     content = `$ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-Write-Error 'The fixed signed Runmesh v0.1.0-dev.2 release is not enabled on this deployment. Use the manual verified portable-artifact route until the exact immutable release is available.'
+Write-Error 'The fixed signed Runmesh v0.1.0-dev.3 release is not enabled on this deployment. Use the manual verified portable-artifact route until the exact immutable release is available.'
 exit 1
 `;
   }
