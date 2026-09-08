@@ -75,7 +75,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     await writeFile(join(workspace, "note.txt"), "hello from a real local runner\n");
     await writeFile(join(workspace, "utf8.txt"), "Hello你好😀éWorld", "utf8");
 
-    worker = spawn(process.execPath, [wranglerCli, "dev", "--local", "--config", "apps/worker/wrangler.jsonc", "--port", String(workerPort), "--persist-to", workerPersist, "--show-interactive-dev-session=false", ...workerVars()], {
+    worker = spawn(process.execPath, [wranglerCli, "dev", "--local", "--ip", "127.0.0.1", "--config", "apps/worker/wrangler.jsonc", "--port", String(workerPort), "--persist-to", workerPersist, "--show-interactive-dev-session=false", ...workerVars()], {
       cwd: projectDirectory, env: { ...process.env, ...workerEnv }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
     });
     const workerLog = collectOutput(worker);

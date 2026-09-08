@@ -1,6 +1,6 @@
 {
   "name": "@aloneio/runmesh-protocol",
-  "version": "0.1.0-dev.3",
+  "version": "0.1.0-dev.4",
   "description": "Versioned JSON wire contract for Runmesh Runner and Worker.",
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",

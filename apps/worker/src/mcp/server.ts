@@ -1067,8 +1067,7 @@ async function recordRunnerToolCall(env: WorkerEnv, input: {
     job_id: jobId,
     status: result.status,
     error_code: result.error_code,
-    params: redactAndBound(input.params, 8_192),
-    result: redactAndBound(input.result, 8_192),
+    // Audit transports metadata only: never send tool arguments or output.
     result_runner_id: runnerContext?.runner_id ?? null,
     started_at_ms: input.startedAtMs,
     completed_at_ms: completedAtMs,

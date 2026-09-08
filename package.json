@@ -1,7 +1,9 @@
 {
   "name": "@aloneio/runmesh-monorepo",
-  "version": "0.1.0-dev.3",
+  "version": "0.1.0-dev.4",
   "private": true,
+  "engines": { "node": ">=22" },
+  "packageManager": "npm@10.9.3",
   "description": "A language-neutral protocol foundation for remotely managed agent runtimes.",
   "repository": {
     "type": "git",
@@ -30,7 +32,7 @@
     "generate:version": "node ./scripts/generate-version-modules.mjs",
     "check:format": "node ./scripts/check-format.mjs",
     "check:architecture": "node ./scripts/check-architecture.mjs",
-    "test:release-tools": "node --test ./test/release-tools.test.mjs"
+    "test:release-tools": "node --test ./test/release-tools.test.mjs ./test/security-config.test.mjs ./test/installer-arguments.test.mjs"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.22.0",

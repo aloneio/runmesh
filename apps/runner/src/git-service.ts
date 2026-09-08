@@ -328,7 +328,18 @@ async function createIsolatedGitContext(worktree: string): Promise<IsolatedGitCo
 async function locateGitDirectory(worktree: string): Promise<string> {
   const dotGit = join(worktree, ".git");
   const info = await lstat(dotGit);
-  if (info.isDirectory() && !info.isSymbolicLink()) return realpath(dotGit);
+  if (info.isDirectory() && !info.isSymbolicLink()) {
+    const canonicalWorktree = await realpath(worktree);
+    const canonicalGit = await realpath(dotGit);
+    const after = await lstat(dotGit);
+    const canonicalInfo = await lstat(canonicalGit);
+    if (!after.isDirectory() || after.isSymbolicLink() || !canonicalInfo.isDirectory() || canonicalInfo.isSymbolicLink()
+      || info.dev !== after.dev || info.ino !== after.ino || info.dev !== canonicalInfo.dev || info.ino !== canonicalInfo.ino
+      || !isPathWithin(canonicalGit, canonicalWorktree) || canonicalGit === canonicalWorktree) {
+      throw new Error("Git metadata directory changed or escaped the worktree");
+    }
+    return canonicalGit;
+  }
   // A linked-worktree `.git` file can point at an arbitrary external object
   // database.  Following it would let a read-only request select and expose
   // another repository's index/objects, so isolated inspection deliberately
@@ -467,6 +478,7 @@ export function trustedGitPathEntries(worktree: string): string[] {
     const normalized = value.replace(/[\\/]+$/u, "");
     if (entries.some((item) => item.toLowerCase() === normalized.toLowerCase())) return;
     if (!trustedGitDirectory(normalized, worktree, allowMissing, windowsRoots)) return;
+    if (process.platform !== "win32" && !trustedPosixGitExecutable(normalized)) return;
     entries.push(normalized);
   };
   // Never add dirname(process.execPath) implicitly. Portable Node installs
@@ -544,7 +556,7 @@ function trustedGitDirectory(path: string, worktree: string, allowMissing: boole
       // private child: the sticky bit prevents an unrelated user from
       // replacing or removing that child. The PATH entry itself (and any
       // non-sticky writable ancestor) must still remain private.
-      if (process.platform !== "win32" && !trustedPosixDirectoryMode(info.mode, current !== candidate)) return false;
+      if (process.platform !== "win32" && (!trustedPosixOwner(info.uid) || !trustedPosixDirectoryMode(info.mode, current !== candidate))) return false;
       nearestExisting ??= current;
       const parent = dirname(current);
       if (parent === current) break;
@@ -554,7 +566,7 @@ function trustedGitDirectory(path: string, worktree: string, allowMissing: boole
     canonicalExisting = realpathSync.native(nearestExisting);
     const canonicalInfo = lstatSync(canonicalExisting);
     if (!canonicalInfo.isDirectory() || canonicalInfo.isSymbolicLink()) return false;
-    if (process.platform !== "win32" && !trustedPosixDirectoryMode(canonicalInfo.mode, missingSuffix)) return false;
+    if (process.platform !== "win32" && (!trustedPosixOwner(canonicalInfo.uid) || !trustedPosixDirectoryMode(canonicalInfo.mode, missingSuffix))) return false;
     if (process.platform !== "win32") {
       // Resolve the worktree once as well so a symlinked spelling cannot evade
       // the lexical exclusion above. A missing optional suffix is rejected if
@@ -585,6 +597,22 @@ function trustedGitDirectory(path: string, worktree: string, allowMissing: boole
     // closed. Missing fixed prefixes were handled above only after a safe
     // existing ancestor passed the ownership/symlink checks.
     return false;
+  }
+}
+
+function trustedPosixOwner(uid: number): boolean {
+  return uid === 0 || uid === (process.geteuid?.() ?? process.getuid?.());
+}
+
+function trustedPosixGitExecutable(directory: string): boolean {
+  try {
+    const info = lstatSync(join(directory, "git"));
+    return info.isFile() && !info.isSymbolicLink() && trustedPosixOwner(info.uid)
+      && (info.mode & 0o022) === 0 && (info.mode & 0o111) !== 0;
+  } catch (error) {
+    // A currently empty trusted directory is harmless; only its trusted owner
+    // can create an executable there. All other lookup failures fail closed.
+    return isErrnoCode(error, "ENOENT");
   }
 }
 

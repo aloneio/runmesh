@@ -4,7 +4,7 @@
  * assets are authenticated with this embedded key; a downloaded keyring is
  * never fetched or used by an installer.
  */
-export const FIXED_RELEASE_VERSION = "0.1.0-dev.3";
+export const FIXED_RELEASE_VERSION = "0.1.0-dev.4";
 export const FIXED_NODE_VERSION = "22.19.0";
 export const FIXED_NODE_BASE_URL = `https://nodejs.org/dist/v${FIXED_NODE_VERSION}`;
 export const FIXED_RELEASE_KEY_ID = "runmesh-preview-2026-01";
@@ -284,29 +284,29 @@ ENROLLMENT_URL='__ENROLLMENT_URL__'
 INSTALL_ROOT='/opt/runmesh'
 AUTO_INSTALL_DEPS=1
 ENROLLMENT_CODE_ARG=''
-EXPECT_CODE_ARG=0
-for arg in "$@"; do
-  case "$arg" in
+CODE_ARG_SET=0
+# The convenience command intentionally carries a single-use code in argv.
+# Without one, keep the hidden terminal prompt as an optional manual path.
+while [ "$#" -gt 0 ]; do
+  case "$1" in
     --no-auto-deps) AUTO_INSTALL_DEPS=0 ;;
-    --code) EXPECT_CODE_ARG=1 ;;
-    --code=*) ENROLLMENT_CODE_ARG="$(printf '%s' "$arg" | sed 's/^--code=//')" ;;
     install|--auto-deps|--re-enroll) : ;;
+    --code)
+      [ "$#" -ge 2 ] || { printf '%s\n' 'error: --code requires an enrollment code' >&2; exit 1; }
+      [ "$CODE_ARG_SET" -eq 0 ] || { printf '%s\n' 'error: enrollment code supplied more than once' >&2; exit 1; }
+      ENROLLMENT_CODE_ARG="$2"; CODE_ARG_SET=1; shift ;;
+    --code=*)
+      [ "$CODE_ARG_SET" -eq 0 ] || { printf '%s\n' 'error: enrollment code supplied more than once' >&2; exit 1; }
+      ENROLLMENT_CODE_ARG="$(printf '%s' "$1" | sed 's/^--code=//')"; CODE_ARG_SET=1 ;;
     *)
-      if [ "$EXPECT_CODE_ARG" -eq 1 ]; then
-        ENROLLMENT_CODE_ARG="$arg"
-        EXPECT_CODE_ARG=0
-      elif [ -z "$ENROLLMENT_CODE_ARG" ]; then
-        ENROLLMENT_CODE_ARG="$arg"
-      fi
-      ;;
+      [ "$CODE_ARG_SET" -eq 0 ] || { printf '%s\n' 'error: enrollment code supplied more than once' >&2; exit 1; }
+      ENROLLMENT_CODE_ARG="$1"; CODE_ARG_SET=1 ;;
   esac
+  shift
 done
-if [ "$EXPECT_CODE_ARG" -eq 1 ]; then printf '%s\n' 'error: --code requires the one-time enrollment code' >&2; exit 1; fi
-if [ -n "$ENROLLMENT_CODE_ARG" ]; then
-  case "$ENROLLMENT_CODE_ARG" in
-    *[!A-Za-z0-9_-]*) printf '%s\n' 'error: invalid one-time enrollment code' >&2; exit 1 ;;
-  esac
-  [ "$(printf '%s' "$ENROLLMENT_CODE_ARG" | wc -c | tr -d '[:space:]')" -eq 43 ] || { printf '%s\n' 'error: invalid one-time enrollment code' >&2; exit 1; }
+if [ "$CODE_ARG_SET" -eq 1 ]; then
+  case "$ENROLLMENT_CODE_ARG" in *[!A-Za-z0-9_-]*) printf '%s\n' 'error: invalid one-time enrollment code' >&2; exit 1;; esac
+  case "$ENROLLMENT_CODE_ARG" in ???????????????????????????????????????????) : ;; *) printf '%s\n' 'error: invalid one-time enrollment code' >&2; exit 1;; esac
 fi
 if [ "$(id -u)" -ne 0 ]; then printf '%s\n' 'error: run from an elevated root shell' >&2; exit 1; fi
 case "$(uname -s)" in
@@ -335,14 +335,16 @@ refresh_existing() {
   esac
   EXISTING_RUNNER="$INSTALL_ROOT/current/bin/runmesh"
   [ -x "$EXISTING_RUNNER" ] || { printf '%s\n' 'error: existing Runmesh installation is incomplete; restore it or remove it with runmesh uninstall before retrying' >&2; exit 1; }
+  [ "$("$EXISTING_RUNNER" --version)" = "$VERSION" ] || { printf '%s\n' 'error: installed Runner version differs from the fixed release; perform a verified manual upgrade before re-enrollment' >&2; exit 1; }
   [ -f "$PROFILE" ] && [ -f "$SERVICE_MANIFEST" ] || { printf '%s\n' 'error: existing Runmesh installation is incomplete; restore it or remove it with runmesh uninstall before retrying' >&2; exit 1; }
   grep -F 'runmesh-runner-managed:' "$SERVICE_MANIFEST" >/dev/null 2>&1 || { printf '%s\n' 'error: existing service is not managed by Runmesh; refusing to modify it' >&2; exit 1; }
   REFRESH_LOCK="$INSTALL_ROOT/.refresh.lock"
   if ! mkdir "$REFRESH_LOCK" 2>/dev/null; then printf '%s\n' 'error: another Runmesh enrollment refresh is already running' >&2; exit 1; fi
-  REFRESH_INPUT="$INSTALL_ROOT/.refresh-code.$$"
-  trap 'rm -f "$REFRESH_INPUT" 2>/dev/null || true; rmdir "$REFRESH_LOCK" 2>/dev/null || true' EXIT HUP INT TERM
+  trap 'stty echo < /dev/tty 2>/dev/null || true; rmdir "$REFRESH_LOCK" 2>/dev/null || true' EXIT HUP INT TERM
   step 'Refreshing credentials for the existing Runmesh Runner.'
-  if [ -n "$ENROLLMENT_CODE_ARG" ]; then ENROLLMENT_CODE="$ENROLLMENT_CODE_ARG"; unset ENROLLMENT_CODE_ARG
+  if [ "$CODE_ARG_SET" -eq 1 ]; then
+    ENROLLMENT_CODE="$ENROLLMENT_CODE_ARG"
+    unset ENROLLMENT_CODE_ARG
   else
     printf '%s' 'Paste the one-time enrollment code (input is hidden): ' >/dev/tty
     stty -echo < /dev/tty || { printf '%s\n' 'error: terminal input cannot be protected' >&2; exit 1; }
@@ -351,13 +353,10 @@ refresh_existing() {
     stty echo < /dev/tty 2>/dev/null || true; TTY_ECHO_DISABLED=0; printf '\n' >/dev/tty
   fi
   case "$ENROLLMENT_CODE" in *[!A-Za-z0-9_-]*) printf '%s\n' 'error: invalid one-time enrollment code' >&2; exit 1;; esac
-  printf '%s\n' "$ENROLLMENT_CODE" > "$REFRESH_INPUT"
-  REFRESH_CODE_LENGTH="$(wc -c < "$REFRESH_INPUT" | tr -d '[:space:]')"
-  [ "$REFRESH_CODE_LENGTH" -eq 44 ] || { printf '%s\n' 'error: invalid one-time enrollment code' >&2; exit 1; }
-  unset ENROLLMENT_CODE
+  case "$ENROLLMENT_CODE" in ???????????????????????????????????????????) : ;; *) printf '%s\n' 'error: invalid one-time enrollment code' >&2; exit 1;; esac
   REFRESH_ENROLL_LOG="$INSTALL_ROOT/.refresh-enroll.$$.log"
-  if "$EXISTING_RUNNER" enroll --profile "$PROFILE" --server "$ENROLLMENT_URL" --code-stdin --re-enroll < "$REFRESH_INPUT" >"$REFRESH_ENROLL_LOG" 2>&1; then :; else rc=$?; report_failure 'Refreshing credentials for the existing Runmesh Runner.' "$REFRESH_ENROLL_LOG" "$rc"; exit "$rc"; fi
-  rm -f "$REFRESH_INPUT"; REFRESH_INPUT=''
+  if printf '%s\n' "$ENROLLMENT_CODE" | "$EXISTING_RUNNER" enroll --profile "$PROFILE" --server "$ENROLLMENT_URL" --code-stdin --re-enroll >"$REFRESH_ENROLL_LOG" 2>&1; then :; else rc=$?; report_failure 'Refreshing credentials for the existing Runmesh Runner.' "$REFRESH_ENROLL_LOG" "$rc"; exit "$rc"; fi
+  unset ENROLLMENT_CODE
   REFRESH_INSTALL_LOG="$INSTALL_ROOT/.refresh-install.$$.log"
   if "$EXISTING_RUNNER" install --profile "$PROFILE" --execution-mode privileged_host --confirm-privileged-host --executable-path "$EXISTING_RUNNER" >"$REFRESH_INSTALL_LOG" 2>&1; then :; else rc=$?; report_failure 'Refreshing the installed service for the existing Runmesh Runner.' "$REFRESH_INSTALL_LOG" "$rc"; exit "$rc"; fi
   REFRESH_RESTART_LOG="$INSTALL_ROOT/.refresh-restart.$$.log"
@@ -550,7 +549,7 @@ chmod 0755 "$RUNNER" "$RUNMESH_RUNNER"
 [ "$("$RUNMESH_RUNNER" --version)" = "$VERSION" ] || { printf '%s\n' 'error: installed runmesh-runner version mismatch' >&2; exit 1; }
 "$RUNNER" --help | grep -F 'usage: runmesh-runner' >/dev/null
 "$RUNMESH_RUNNER" --help | grep -F 'usage: runmesh-runner' >/dev/null
-if [ -n "$ENROLLMENT_CODE_ARG" ]; then
+if [ "$CODE_ARG_SET" -eq 1 ]; then
   ENROLLMENT_CODE="$ENROLLMENT_CODE_ARG"
   unset ENROLLMENT_CODE_ARG
 else
@@ -561,14 +560,13 @@ else
   cleanup_tty
   printf '\n' >/dev/tty
 fi
-ENROLLMENT_INPUT="$TMP/enrollment-code"
-printf '%s\n' "$ENROLLMENT_CODE" > "$ENROLLMENT_INPUT"
-unset ENROLLMENT_CODE
+case "$ENROLLMENT_CODE" in *[!A-Za-z0-9_-]*) printf '%s\n' 'error: invalid one-time enrollment code' >&2; exit 1;; esac
+case "$ENROLLMENT_CODE" in ???????????????????????????????????????????) : ;; *) printf '%s\n' 'error: invalid one-time enrollment code' >&2; exit 1;; esac
 ENROLLMENT_ATTEMPTED=1
 step 'Enrolling the Runner and starting the service.'
 ENROLL_LOG="$TMP/enroll.log"
-if "$RUNNER" enroll --profile "$PROFILE" --server "$ENROLLMENT_URL" --code-stdin --execution-mode privileged_host --confirm-privileged-host < "$ENROLLMENT_INPUT" >"$ENROLL_LOG" 2>&1; then :; else rc=$?; report_failure 'Enrolling the Runner.' "$ENROLL_LOG" "$rc"; exit "$rc"; fi
-rm -f "$ENROLLMENT_INPUT"
+if printf '%s\n' "$ENROLLMENT_CODE" | "$RUNNER" enroll --profile "$PROFILE" --server "$ENROLLMENT_URL" --code-stdin --execution-mode privileged_host --confirm-privileged-host >"$ENROLL_LOG" 2>&1; then :; else rc=$?; report_failure 'Enrolling the Runner.' "$ENROLL_LOG" "$rc"; exit "$rc"; fi
+unset ENROLLMENT_CODE
 mv "$STAGE" "$FINAL"
 FINAL_CREATED=1
 ln -s "$FINAL" "$INSTALL_ROOT/current.new"
@@ -610,16 +608,37 @@ $AutoInstallDeps = $true
 if ($args -contains '--no-auto-deps') { $AutoInstallDeps = $false }
 if (-not $AutoInstallDeps) { throw 'Private runtime bootstrap is disabled (--no-auto-deps).' }
 $EnrollmentCodeArgument = $null
+$CodeArgumentProvided = $false
 $ExpectCodeArgument = $false
 foreach ($Argument in $args) {
-  if ($ExpectCodeArgument) { $EnrollmentCodeArgument = [string]$Argument; $ExpectCodeArgument = $false; continue }
-  if ($Argument -eq '--code') { $ExpectCodeArgument = $true; continue }
-  if ($Argument -like '--code=*') { $EnrollmentCodeArgument = [string]$Argument.Substring(7); continue }
-  if ($Argument -eq 'install' -or $Argument -eq '--auto-deps' -or $Argument -eq '--no-auto-deps' -or $Argument -eq '--re-enroll') { continue }
-  if ($null -eq $EnrollmentCodeArgument) { $EnrollmentCodeArgument = [string]$Argument }
+  if ($ExpectCodeArgument) {
+    $EnrollmentCodeArgument = [string]$Argument; $ExpectCodeArgument = $false
+    continue
+  }
+  if ($Argument -in @('install', '--auto-deps', '--no-auto-deps', '--re-enroll')) { continue }
+  if ($CodeArgumentProvided) { throw 'Enrollment code supplied more than once.' }
+  if ($Argument -eq '--code') {
+    $CodeArgumentProvided = $true; $ExpectCodeArgument = $true
+  } elseif ($Argument -like '--code=*') {
+    $CodeArgumentProvided = $true; $EnrollmentCodeArgument = [string]$Argument.Substring(7)
+  } else {
+    $CodeArgumentProvided = $true; $EnrollmentCodeArgument = [string]$Argument
+  }
 }
-if ($ExpectCodeArgument) { throw '--code requires the one-time enrollment code.' }
-if ($null -ne $EnrollmentCodeArgument -and $EnrollmentCodeArgument -notmatch '^[A-Za-z0-9_-]{43}$') { throw 'Invalid one-time enrollment code.' }
+if ($ExpectCodeArgument) { throw '--code requires an enrollment code.' }
+if ($CodeArgumentProvided -and $EnrollmentCodeArgument -notmatch '^[A-Za-z0-9_-]{43}\z') { throw 'Invalid one-time enrollment code.' }
+function Read-EnrollmentCode([string]$CodeArgument) {
+  if (-not [string]::IsNullOrEmpty($CodeArgument)) {
+    if ($CodeArgument -notmatch '^[A-Za-z0-9_-]{43}\z') { throw 'Invalid one-time enrollment code.' }
+    return $CodeArgument
+  }
+  $SecureCode = Read-Host 'Paste the one-time enrollment code (input is hidden)' -AsSecureString
+  $CodePointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureCode)
+  try { $Code = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($CodePointer) }
+  finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($CodePointer); $SecureCode.Dispose() }
+  if ($Code -notmatch '^[A-Za-z0-9_-]{43}\z') { throw 'Invalid one-time enrollment code.' }
+  return $Code
+}
 $InstallRoot = Join-Path $env:ProgramFiles 'Runmesh'
 $Principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run from an elevated Administrator PowerShell session.' }
@@ -683,16 +702,15 @@ function Refresh-Existing {
   if (-not (Test-Path -LiteralPath $CurrentRoot -PathType Container)) { throw 'Existing Runmesh current path is not a managed directory.' }
   $ExistingRunner = Join-Path $CurrentRoot 'runmesh.cmd'
   if (-not (Test-Path -LiteralPath $ExistingRunner -PathType Leaf) -or -not (Test-Path -LiteralPath $Profile -PathType Leaf) -or -not (Test-Path -LiteralPath $ServiceManifest -PathType Leaf)) { throw 'Existing Runmesh installation is incomplete; restore it or remove it with runmesh uninstall before retrying.' }
-  if ($null -eq (Select-String -LiteralPath $ServiceManifest -SimpleMatch 'runmesh-runner-managed:' -Quiet)) { throw 'Existing service is not managed by Runmesh; refusing to modify it.' }
+  $ExistingVersion = (& $ExistingRunner --version)
+  if ($LASTEXITCODE -ne 0 -or ([string]$ExistingVersion).Trim() -ne $Version) { throw 'Installed Runner version differs from the fixed release; perform a verified manual upgrade before re-enrollment.' }
+  if (-not (Select-String -LiteralPath $ServiceManifest -SimpleMatch 'runmesh-runner-managed:' -Quiet)) { throw 'Existing service is not managed by Runmesh; refusing to modify it.' }
   $RefreshLock = Join-Path $InstallRoot '.refresh.lock'
   try { New-Item -ItemType Directory -Path $RefreshLock -ErrorAction Stop | Out-Null } catch { throw 'Another Runmesh enrollment refresh is already running.' }
   try {
     Write-Step 'Refreshing credentials for the existing Runmesh Runner.'
-    if ($null -eq $EnrollmentCodeArgument) {
-      $SecureCode = Read-Host 'Paste the one-time enrollment code (input is hidden)' -AsSecureString
-      $CodePointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureCode)
-      try { $EnrollmentCode = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($CodePointer) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($CodePointer) }
-    } else { $EnrollmentCode = $EnrollmentCodeArgument; $EnrollmentCodeArgument = $null }
+    $EnrollmentCode = Read-EnrollmentCode $EnrollmentCodeArgument
+    $EnrollmentCodeArgument = $null
     if ([string]::IsNullOrWhiteSpace($EnrollmentCode) -or $EnrollmentCode -notmatch '^[A-Za-z0-9_-]{43}$') { throw 'Invalid one-time enrollment code.' }
     $RefreshEnrollLog = Join-Path $InstallRoot ('.refresh-enroll.{0}.log' -f $PID)
     $EnrollmentCode | & $ExistingRunner enroll --profile $Profile --server $EnrollmentUrl --code-stdin --re-enroll *> $RefreshEnrollLog
@@ -833,22 +851,14 @@ __VERIFIER__
   if ($LASTEXITCODE -ne 0) { throw 'Installed runmesh help check failed.' }
   & $RunmeshRunner --help | Select-String -SimpleMatch 'usage: runmesh-runner' | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'Installed runmesh-runner help check failed.' }
-  if ($null -ne $EnrollmentCodeArgument) {
-    $EnrollmentCode = $EnrollmentCodeArgument
-    $EnrollmentCodeArgument = $null
-  } else {
-    $SecureCode = Read-Host 'Paste the one-time enrollment code (input is hidden)' -AsSecureString
-    $CodePointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureCode)
-    try { $EnrollmentCode = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($CodePointer) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($CodePointer) }
-    if ([string]::IsNullOrWhiteSpace($EnrollmentCode)) { throw 'An enrollment code is required.' }
-  }
+  $EnrollmentCode = Read-EnrollmentCode $EnrollmentCodeArgument
+  $EnrollmentCodeArgument = $null
   $EnrollmentAttempted = $true
   $EnrollLog = Join-Path $TempRoot 'enroll.log'
   Invoke-LoggedStep 'Enrolling the Runner.' $EnrollLog {
     $EnrollmentCode | & $Runner enroll --profile $Profile --server $EnrollmentUrl --code-stdin --execution-mode privileged_host --confirm-privileged-host
   }
   $EnrollmentCode = $null
-  $SecureCode = $null
   Move-Item -LiteralPath $Stage -Destination $VersionRoot
   New-Item -ItemType Junction -Path $CurrentNew -Target $VersionRoot | Out-Null
   Move-Item -LiteralPath $CurrentNew -Destination $CurrentRoot
