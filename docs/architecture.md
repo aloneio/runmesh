@@ -43,7 +43,7 @@ The local CLI has implemented profile/status/doctor/workspace/env/start commands
 
 RegistryDO SQLite tables cover Runners, immutable policy snapshots and mutations, centrally managed workspaces, jobs, admin settings/sessions, auth throttle state, MCP clients, enrollment records, and internal request nonces. On construction it accepts only this complete schema; a persisted incompatible schema is rejected and must be replaced with a fresh Durable Object namespace. It never repairs, transforms, or retains partial records from another schema. There is no data-import, downgrade, or automatic profile-conversion path; the transition procedure is documented in [migration.md](migration.md).
 
-The authentication throttle reserves attempts transactionally before expensive password KDF work. Five failed attempts are admitted, then the per-kind (`setup` or `login`) block starts at 30 seconds and increases exponentially to a 15-minute maximum; success clears the state. It is not per-IP and not a full distributed rate limiter.
+The authentication throttle reserves attempts transactionally before expensive password KDF work. Five failed attempts are admitted, then the per-kind (`setup` or `login`) block starts at 30 seconds and increases exponentially to a 15-minute maximum; success clears the state. It is not per-IP and not a full distributed rate limiter. If the optional throttle write hits a provider quota or transient storage error, the Registry keeps authentication available with an in-memory per-instance fallback and exposes a `Login protection` feature notice instead of returning a global 503.
 
 ## Failure behavior
 
