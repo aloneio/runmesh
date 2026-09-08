@@ -1,5 +1,5 @@
 import { PROTOCOL_CURRENT_VERSION, PROTOCOL_MIN_VERSION } from "@aloneio/runmesh-protocol";
-import { RegistryDO, DEFAULT_RUNNER_ENROLLMENT_TTL_MS, RUNNER_ENROLLMENT_TTL_OPTIONS_MS, type McpClientRecord, type RegistryFeatureHealth, type RunnerExecutionMode, type RunnerPublicInfo, type RunnerRecord, type VerifiedMcpClient } from "./registry.js";
+import { RegistryDO, RegistryDOv2, DEFAULT_RUNNER_ENROLLMENT_TTL_MS, RUNNER_ENROLLMENT_TTL_OPTIONS_MS, type McpClientRecord, type RegistryFeatureHealth, type RunnerExecutionMode, type RunnerPublicInfo, type RunnerRecord, type VerifiedMcpClient } from "./registry.js";
 import { RunnerDO, type WorkerEnv } from "./runner-do.js";
 import type { McpAuth } from "./mcp/server.js";
 import type { CodingScope } from "./registry.js";
@@ -25,7 +25,11 @@ import { readCappedBytes, readCappedFormData, readCappedText as readBodyText } f
 import { canonicalPublicOrigin, fixedReleaseDescriptor, powershellQuote, renderPosixInstaller, renderPowerShellInstaller, resolvePublicOrigin, shellQuote, signedReleaseIsAvailable, type FixedReleaseDescriptor } from "./installer.js";
 import { validTimestamp, validityStatus, type ValidityWindow } from "./validity.js";
 
-export { RegistryDO, RunnerDO };
+// v2 Durable Object classes intentionally use fresh namespaces. The current
+// release is a clean schema break: persisted data from the retired namespace
+// must never be opened or migrated in place.
+export { RegistryDO, RegistryDOv2, RunnerDO };
+export class RunnerDOv2 extends RunnerDO {}
 
 const MAX_ADMIN_BODY_BYTES = 16_384;
 const MAX_INTERNAL_RPC_BODY_BYTES = 1_048_576;
