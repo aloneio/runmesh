@@ -1016,6 +1016,7 @@ describe("persistent local jobs", () => {
   it("merges output truncation published while finish persistence is in flight", async () => {
     const test = await fixture();
     let child: ChildProcess | undefined;
+    let finishClosedJob: (() => Promise<void>) | undefined;
     try {
       const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state });
       await manager.initialize();
@@ -1027,6 +1028,7 @@ describe("persistent local jobs", () => {
         persist: (record: JobRecord) => Promise<void>;
       };
       child = internals.processes.get(job.job_id);
+      finishClosedJob = async () => { await internals.finish(job.job_id, child?.exitCode ?? null, child?.signalCode ?? null, false); await manager.flushPersistence(); };
       expect(child).toBeDefined();
       const originalPersist = internals.persist.bind(manager);
       let injected = false;
@@ -1050,6 +1052,8 @@ describe("persistent local jobs", () => {
         child.kill();
         await closed;
       }
+      // Closing the OS process is not the metadata-durability barrier.
+      await finishClosedJob?.();
       await test.cleanup();
     }
   });
@@ -1057,6 +1061,7 @@ describe("persistent local jobs", () => {
   it("does not overwrite a cancellation published while finish persistence is in flight", async () => {
     const test = await fixture();
     let child: ChildProcess | undefined;
+    let finishClosedJob: (() => Promise<void>) | undefined;
     try {
       const events: JobEvent[] = [];
       const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state, onEvent: (event) => events.push(event) });
@@ -1069,6 +1074,7 @@ describe("persistent local jobs", () => {
         persist: (record: JobRecord) => Promise<void>;
       };
       child = internals.processes.get(job.job_id);
+      finishClosedJob = async () => { await internals.finish(job.job_id, child?.exitCode ?? null, child?.signalCode ?? null, false); await manager.flushPersistence(); };
       expect(child).toBeDefined();
       const originalPersist = internals.persist.bind(manager);
       let injected = false;
@@ -1093,6 +1099,8 @@ describe("persistent local jobs", () => {
         child.kill();
         await closed;
       }
+      // Closing the OS process is not the metadata-durability barrier.
+      await finishClosedJob?.();
       await test.cleanup();
     }
   });
