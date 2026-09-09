@@ -1,3 +1,14 @@
+# Worker installer activation for the published dev.4 Runner
+
+Production now enables the independently verified dev.4 signed Runner. Both
+restricted and explicitly confirmed privileged modes receive one fetch-and-run
+command with the one-time code already attached. No additional manual runtime
+installation or second enrollment-code entry is required. The immutable Runner
+artifact and tag are not rebuilt or replaced; these changes affect Worker
+rendering, script mode selection, tests, and deployment configuration only.
+
+The earlier candidate notes below describe the state before this activation.
+
 # 0.1.0-dev.4 — unreleased security candidate
 
 This source identity is distinct from immutable dev.3; no publication or
