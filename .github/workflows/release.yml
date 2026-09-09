@@ -4,22 +4,31 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Development preview version; must match root package.json"
+        description: "Reviewed stable version; must match root package.json"
         required: true
         type: string
 
 permissions:
   # Publishing the annotated tag and prerelease requires repository contents
   # write access. All other permissions remain unset by default.
-  contents: write
+  contents: read
 
 concurrency:
   group: runmesh-release-${{ inputs.version }}
   cancel-in-progress: false
 
 jobs:
+  verification:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
   release:
-    name: signed development preview from dev
+    name: signed stable release from verified dev
+    needs: [verification]
+    if: github.actor == github.repository_owner && github.triggering_actor == github.repository_owner
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment:
@@ -45,6 +54,8 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/dev"
           test "$GITHUB_REPOSITORY" = "aloneio/runmesh"
+          test "$GITHUB_ACTOR" = "$GITHUB_REPOSITORY_OWNER"
+          test "$GITHUB_TRIGGERING_ACTOR" = "$GITHUB_REPOSITORY_OWNER"
           git fetch --no-tags origin dev
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           git merge-base --is-ancestor "$GITHUB_SHA" origin/dev
@@ -62,12 +73,12 @@ jobs:
           ROOT_VERSION="$(node -p 'require("./package.json").version')"
           test "$RELEASE_VERSION" = "$ROOT_VERSION"
           # This workflow and the hosted installer are the fixed
-          # v0.1.0-dev.5 preview contract. Refuse a future version until its
+          # v0.1.0 preview contract. Refuse a future version until its
           # installer constants, key, and independent review are rotated.
-          test "$RELEASE_VERSION" = "0.1.0-dev.5"
+          test "$RELEASE_VERSION" = "0.1.0"
           test -n "$RELEASE_SIGNING_KEY_ID"
           # The hosted installer embeds this reviewed key ID for the fixed
-          # v0.1.0-dev.5 contract; a different valid key would make the
+          # v0.1.0 contract; a different valid key would make the
           # published asset unverifiable by the installer.
           test "$RELEASE_SIGNING_KEY_ID" = "runmesh-preview-2026-01"
           test "$(node -p 'require("./apps/runner/package.json").version')" = "$RELEASE_VERSION"
@@ -77,6 +88,7 @@ jobs:
       - run: npm ci
       - run: npm audit --audit-level=high
       - run: npm audit --omit=dev --audit-level=high
+      - run: npm run check:docs
       - run: npm run check:versions
       - run: npm run check:format
       - run: git diff --check
@@ -143,10 +155,10 @@ jobs:
           # independent transport/infrastructure verification.
           node scripts/release-verify.mjs release/assets/manifest.json release/assets/manifest.sig release/assets/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID" "$RELEASE_VERSION"
           (cd release/assets && sha256sum -c SHA256SUMS)
-      - name: Preserve signed preview assets as an unpublished CI artifact
+      - name: Preserve signed release assets as an unpublished CI artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: runmesh-signed-preview-${{ env.RELEASE_VERSION }}
+          name: runmesh-signed-release-${{ env.RELEASE_VERSION }}
           path: release/assets
           if-no-files-found: error
           retention-days: 14
@@ -207,7 +219,7 @@ jobs:
             --header 'Accept: application/vnd.github+json' \
             "repos/${GITHUB_REPOSITORY}/git/tags" \
             --field "tag=${tag}" \
-            --field "message=Runmesh ${tag} development preview" \
+            --field "message=Runmesh ${tag} stable release" \
             --field "object=${GITHUB_SHA}" \
             --field 'type=commit' \
             --jq '.sha')"
@@ -230,7 +242,7 @@ jobs:
             --jq '.object.type')"
           test "$target_sha" = "$GITHUB_SHA"
           test "$target_type" = commit
-      - name: Create development draft release
+      - name: Create stable draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -240,7 +252,7 @@ jobs:
             --verify-tag \
             --draft \
             --title "Runmesh v${RELEASE_VERSION}" \
-            --prerelease \
+            --prerelease=false \
             --notes-file docs/release-notes.md
       - name: Verify draft release assets before publication
         env:
@@ -257,7 +269,7 @@ jobs:
             import { readFile } from "node:fs/promises";
             const release = JSON.parse(await readFile(process.env.DRAFT_JSON, "utf8"));
             const expectedTag = `v${process.env.RELEASE_VERSION}`;
-            if (release.tagName !== expectedTag || release.isDraft !== true || release.isPrerelease !== true) {
+            if (release.tagName !== expectedTag || release.isDraft !== true || release.isPrerelease !== false) {
               throw new Error(`draft release metadata is invalid for ${expectedTag}`);
             }
             const expected = new Set([
@@ -295,7 +307,7 @@ jobs:
           cmp "$draft_dir/SHA256SUMS" release/assets/SHA256SUMS
           cmp "$draft_dir/trust-keyring.json" release/trust-keyring.json
           RELEASE_VERSION="$RELEASE_VERSION" tar -xOf "$draft_dir/runmesh-runner-${RELEASE_VERSION}.tgz" package/package.json | RELEASE_VERSION="$RELEASE_VERSION" node -e 'let x="";process.stdin.on("data",d=>x+=d).on("end",()=>{if(JSON.parse(x).version!==process.env.RELEASE_VERSION)process.exit(1)})'
-      - name: Publish verified development prerelease
+      - name: Publish verified stable release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -324,8 +336,8 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --draft=false \
-            --prerelease
-          test "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease --jq '[.isDraft,.isPrerelease] | @tsv')" = $'false\ttrue'
+            --prerelease=false
+          test "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease --jq '[.isDraft,.isPrerelease] | @tsv')" = $'false\tfalse'
           # Publishing a draft is the point at which GitHub applies repository
           # immutable-release protection. Fail the workflow if the repository
           # setting was disabled or the release was not locked as expected.

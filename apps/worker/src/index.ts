@@ -147,7 +147,7 @@ function runnerInstallScript(request: Request, url: URL, env: RunnerReleaseEnvir
     content =
 `#!/usr/bin/env sh
 set -eu
-printf '%s\\n' 'error: The fixed signed Runmesh v0.1.0-dev.5 release is not enabled on this deployment.' 'Use the manual verified portable-artifact route until the exact immutable release is available.' >&2
+printf '%s\\n' 'error: The fixed signed Runmesh v0.1.0 release is not enabled on this deployment.' 'Use the manual verified portable-artifact route until the exact immutable release is available.' >&2
 exit 1
 `;
   }
@@ -166,7 +166,7 @@ function runnerInstallPowerShell(request: Request, url: URL, env: RunnerReleaseE
   } else {
     content = `$ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-Write-Error 'The fixed signed Runmesh v0.1.0-dev.5 release is not enabled on this deployment. Use the manual verified portable-artifact route until the exact immutable release is available.'
+Write-Error 'The fixed signed Runmesh v0.1.0 release is not enabled on this deployment. Use the manual verified portable-artifact route until the exact immutable release is available.'
 exit 1
 `;
   }
@@ -195,7 +195,7 @@ async function handleRunnerEnrollment(request: Request, env: WorkerEnv): Promise
   const input = await readEnrollmentBody(request);
   const code = typeof input?.enrollment_code === "string" && /^[A-Za-z0-9_-]{43}$/.test(input.enrollment_code) ? input.enrollment_code : undefined;
   const publicInfo = runnerPublicInfo(input?.runner_public_info);
-  if (code === undefined || publicInfo === undefined || typeof env.RUNNER_TOKEN_PEPPER !== "string" || env.RUNNER_TOKEN_PEPPER.length === 0 || typeof env.INTERNAL_CONTROL_SECRET !== "string" || env.INTERNAL_CONTROL_SECRET.length === 0) return enrollmentError();
+  if (code === undefined || publicInfo === undefined || !isConfiguredSecret(env.RUNNER_TOKEN_PEPPER) || !isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) return enrollmentError();
   // Resolve the endpoint that will be persisted before consuming the one-time
   // code. This prevents a successful enrollment from returning an attacker-
   // controlled or unusable reconnect URL when the request arrived through a

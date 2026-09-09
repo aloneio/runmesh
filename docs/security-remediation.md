@@ -1,3 +1,9 @@
+# Current remediation and historical record
+
+The current source is the **unreleased 0.1.0 stable candidate**. Hosted distribution remains disabled. See [release readiness](release-readiness.md) for the current gates and operational contract. The following dated material is historical; it is not authority to enable an old version or to assume 0.1.0 is already published.
+
+## Historical remediation record
+
 # Complete maintenance update (dev.5)
 
 The current cleanup contract is documented in [Runner uninstall](runner-uninstall.md).
