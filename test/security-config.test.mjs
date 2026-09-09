@@ -24,7 +24,7 @@ test("development tooling and the portable Runner have separate Node contracts",
   assert.equal(root.packageManager, "npm@10.9.3");
   assert.deepEqual(lock.packages[""].engines, root.engines);
   assert.match(version, /^22\./);
-  assert.equal(runner.engines.node, ">=20");
+  assert.equal(runner.engines.node, ">=22.23.2 <23 || >=24.21.0 <25");
 });
 
 test("reviewed release identity, independent production gate and precise CI toolchain remain aligned", async () => {

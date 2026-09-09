@@ -21,7 +21,7 @@ export interface WorkerEnv {
   RUNNER: DurableObjectNamespace;
   WORKER_ID?: string;
   ADMIN_TOKEN?: string;
-  /** Required only for first-time administrator setup; provision as a secret. */
+  /** Long-lived Runner token verifier pepper; at least 32 random characters. */
   RUNNER_TOKEN_PEPPER?: string;
   INTERNAL_CONTROL_SECRET?: string;
   RUNMESH_SIGNED_RELEASE_AVAILABLE?: string;
