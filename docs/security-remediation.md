@@ -1,3 +1,9 @@
+# Complete maintenance update (dev.5)
+
+The current cleanup contract is documented in [Runner uninstall](runner-uninstall.md).
+A full purge deletes local Runner job history and logs but preserves project workspaces.
+The notes below document the prior dev.4 authentication and auditing remediation.
+
 # Security remediation and rollout notes
 
 ## Candidate and deployment boundary

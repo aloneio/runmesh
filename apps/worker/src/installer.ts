@@ -4,7 +4,7 @@
  * assets are authenticated with this embedded key; a downloaded keyring is
  * never fetched or used by an installer.
  */
-export const FIXED_RELEASE_VERSION = "0.1.0-dev.4";
+export const FIXED_RELEASE_VERSION = "0.1.0-dev.5";
 export const FIXED_NODE_VERSION = "22.19.0";
 export const FIXED_NODE_BASE_URL = `https://nodejs.org/dist/v${FIXED_NODE_VERSION}`;
 export const FIXED_RELEASE_KEY_ID = "runmesh-preview-2026-01";
@@ -257,8 +257,9 @@ const POSIX_TEMPLATE = String.raw`#!/usr/bin/env sh
 # embedded Ed25519 public key and never trusts a downloaded keyring.
 set -eu
 umask 077
-if [ -t 2 ] && [ -z "\${NO_COLOR:-}" ]; then C_RESET='\033[0m'; C_CYAN='\033[36m'; C_GREEN='\033[32m'; C_RED='\033[31m'; else C_RESET=''; C_CYAN=''; C_GREEN=''; C_RED=''; fi
-step() { printf '%b→%b %s\n' "$C_CYAN" "$C_RESET" "$1" >&2; }
+if [ -t 2 ] && [ -z "__NO_COLOR__" ]; then C_RESET='\033[0m'; C_CYAN='\033[36m'; C_GREEN='\033[32m'; C_RED='\033[31m'; else C_RESET=''; C_CYAN=''; C_GREEN=''; C_RED=''; fi
+STEP_INDEX=0
+step() { STEP_INDEX=$((STEP_INDEX + 1)); printf '  %b[%s]%b %s\n' "$C_CYAN" "$STEP_INDEX" "$C_RESET" "$1" >&2; }
 ok() { printf '%b✓%b %s\n' "$C_GREEN" "$C_RESET" "$1" >&2; }
 fail() { printf '%b✗%b %s\n' "$C_RED" "$C_RESET" "$1" >&2; }
 report_failure() {
@@ -273,7 +274,7 @@ report_failure() {
   fi
   rm -f "$log_file"
 }
-printf '\n%bRunmesh%b  Runner installer\n\n' "$C_CYAN" "$C_RESET" >&2
+printf '\n%bRunmesh Runner%b\n----------------------------------------\n' "$C_CYAN" "$C_RESET" >&2
 # Do not let inherited runtime/package-manager configuration alter a privileged
 # install. The operator's PATH is still required to point at trusted binaries.
 unset NODE_OPTIONS NODE_PATH CURL_HOME CURLRC NPM_CONFIG_USERCONFIG NPM_CONFIG_GLOBALCONFIG npm_config_userconfig npm_config_globalconfig 2>/dev/null || true
@@ -283,6 +284,9 @@ ARTIFACT='__ARTIFACT_NAME__'
 ENROLLMENT_URL='__ENROLLMENT_URL__'
 INSTALL_ROOT='/opt/runmesh'
 AUTO_INSTALL_DEPS=1
+RUNMESH_ACTION='__ACTION__'
+PURGE_REQUESTED=0
+CONFIRM_PURGE=0
 ENROLLMENT_CODE_ARG=''
 CODE_ARG_SET=0
 # The convenience command intentionally carries a single-use code in argv.
@@ -290,6 +294,9 @@ CODE_ARG_SET=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --no-auto-deps) AUTO_INSTALL_DEPS=0 ;;
+    uninstall) RUNMESH_ACTION=uninstall ;;
+    --purge) PURGE_REQUESTED=1 ;;
+    --yes) CONFIRM_PURGE=1 ;;
     install|--auto-deps|--re-enroll) : ;;
     --code)
       [ "$#" -ge 2 ] || { printf '%s\n' 'error: --code requires an enrollment code' >&2; exit 1; }
@@ -307,6 +314,11 @@ done
 if [ "$CODE_ARG_SET" -eq 1 ]; then
   case "$ENROLLMENT_CODE_ARG" in *[!A-Za-z0-9_-]*) printf '%s\n' 'error: invalid one-time enrollment code' >&2; exit 1;; esac
   case "$ENROLLMENT_CODE_ARG" in ???????????????????????????????????????????) : ;; *) printf '%s\n' 'error: invalid one-time enrollment code' >&2; exit 1;; esac
+fi
+if [ "$RUNMESH_ACTION" = uninstall ]; then
+  [ "$PURGE_REQUESTED" -eq 1 ] && [ "$CONFIRM_PURGE" -eq 1 ] && [ "$CODE_ARG_SET" -eq 0 ] || { printf '%s\n' 'error: uninstall requires --purge --yes and no enrollment code' >&2; exit 1; }
+else
+  [ "$PURGE_REQUESTED" -eq 0 ] && [ "$CONFIRM_PURGE" -eq 0 ] || { printf '%s\n' 'error: purge options are only valid for uninstall' >&2; exit 1; }
 fi
 if [ "$(id -u)" -ne 0 ]; then printf '%s\n' 'error: run from an elevated root shell' >&2; exit 1; fi
 case "$(uname -s)" in
@@ -366,9 +378,12 @@ refresh_existing() {
   rmdir "$REFRESH_LOCK" 2>/dev/null || true
   return 0
 }
-if has_path "$INSTALL_ROOT/current" && has_path "$PROFILE" && has_path "$SERVICE_MANIFEST"; then refresh_existing; exit $?; fi
-if has_path "$INSTALL_ROOT/current" || has_path "$INSTALL_ROOT/versions/$VERSION" || has_path "$INSTALL_ROOT/versions/$VERSION.staging.$$" || has_path "$PROFILE" || has_path "$SERVICE_MANIFEST"; then printf '%s\n' 'error: existing Runmesh installation or service state found; refusing to overwrite it' >&2; exit 1; fi
+if [ "$RUNMESH_ACTION" != uninstall ] && has_path "$INSTALL_ROOT/current" && has_path "$PROFILE" && has_path "$SERVICE_MANIFEST"; then refresh_existing; exit $?; fi
+if [ "$RUNMESH_ACTION" != uninstall ] && { has_path "$INSTALL_ROOT/current" || has_path "$INSTALL_ROOT/versions/$VERSION" || has_path "$INSTALL_ROOT/versions/$VERSION.staging.$$" || has_path "$PROFILE" || has_path "$SERVICE_MANIFEST"; }; then printf '%s\n' 'error: existing Runmesh installation or service state found; refusing to overwrite it' >&2; exit 1; fi
 TMP="$(mktemp -d /tmp/runmesh-installer.XXXXXX)"
+trap 'rm -rf "$TMP"' EXIT
+trap 'exit 1' HUP INT TERM
+step 'Preparing runtime'
 STAGE="$INSTALL_ROOT/versions/$VERSION.staging.$$"
 CURRENT_NEW="$INSTALL_ROOT/current.new"
 FINAL="$INSTALL_ROOT/versions/$VERSION"
@@ -388,7 +403,7 @@ RUNTIME_SIZE="$(wc -c < "$RUNTIME_ARCHIVE" | tr -d '[:space:]')"
 case "$RUNTIME_SIZE" in ''|*[!0-9]*) printf '%s\n' 'error: private Node.js runtime archive size is invalid' >&2; exit 1;; esac
 [ "$RUNTIME_SIZE" -le __MAX_NODE_RUNTIME_BYTES__ ] || { printf '%s\n' 'error: private Node.js runtime archive exceeds the fixed size limit' >&2; exit 1; }
 if command -v sha256sum >/dev/null 2>&1; then
-  printf '%s  %s\n' "$NODE_SHA256" "$RUNTIME_ARCHIVE" | sha256sum -c -
+  printf '%s  %s\n' "$NODE_SHA256" "$RUNTIME_ARCHIVE" | sha256sum -c - > /dev/null
 elif command -v shasum >/dev/null 2>&1; then
   test "$(shasum -a 256 "$RUNTIME_ARCHIVE" | awk '{print $1}')" = "$NODE_SHA256"
 else
@@ -424,9 +439,10 @@ cleanup_tty() { if [ "$TTY_ECHO_DISABLED" -eq 1 ]; then stty echo < /dev/tty 2>/
 cleanup() { cleanup_tty; rm -rf "$TMP"; }
 rollback() {
   rc="$1"
+  if [ "$RUNMESH_ACTION" = uninstall ]; then cleanup; trap - EXIT HUP INT TERM; exit "$rc"; fi
   cleanup_tty
   if [ "$CURRENT_CREATED" -eq 1 ] && [ -L "$CURRENT_NEW" ]; then rm -f "$CURRENT_NEW"; fi
-  if [ "$CURRENT_CREATED" -eq 1 ] && [ -L "$INSTALL_ROOT/current" ] && [ "$(readlink "$INSTALL_ROOT/current")" = "$FINAL" ]; then "$INSTALL_ROOT/current/bin/runmesh" uninstall --profile "$PROFILE" --purge --yes --json >/dev/null 2>&1 || true; rm -f "$INSTALL_ROOT/current"; fi
+  if [ "$CURRENT_CREATED" -eq 1 ] && [ -L "$INSTALL_ROOT/current" ] && [ "$(readlink "$INSTALL_ROOT/current")" = "$FINAL" ]; then "$INSTALL_ROOT/current/bin/runmesh" uninstall --profile "$PROFILE" --json >/dev/null 2>&1 || true; rm -f "$INSTALL_ROOT/current"; fi
   if [ "$ENROLLMENT_ATTEMPTED" -eq 1 ] && [ -f "$PROFILE" ]; then rm -f "$PROFILE"; fi
   if [ -L "$INSTALL_ROOT/current" ] && [ "$(readlink "$INSTALL_ROOT/current")" = "$FINAL" ]; then rm -f "$INSTALL_ROOT/current"; fi
   if [ -L "$CURRENT_NEW" ]; then rm -f "$CURRENT_NEW"; fi
@@ -499,29 +515,37 @@ RUNMESH_REDIRECT_CHECK
     esac
   done
 }
-step 'Downloading the fixed release assets.'
+step 'Downloading Runner'
 download manifest.json
 download manifest.sig
 download manifest.signature.json
 download SHA256SUMS
 download "$ARTIFACT"
-step 'Verifying the signed release assets.'
+step 'Verifying Runner'
 VERIFY_LOG="$TMP/release-verify.log"
 if "$NODE" --input-type=module - "$TMP" >"$VERIFY_LOG" 2>&1 <<'RUNMESH_VERIFY'
 __VERIFIER__
 RUNMESH_VERIFY
-then :; else rc=$?; report_failure 'Verifying the signed release assets.' "$VERIFY_LOG" "$rc"; exit "$rc"; fi
-ok 'Signed release assets verified.'
+then :; else rc=$?; report_failure 'Verifying Runner' "$VERIFY_LOG" "$rc"; exit "$rc"; fi
+ok 'Runner verified.'
+if [ "$RUNMESH_ACTION" = uninstall ]; then
+  step 'Preparing cleanup tools'
+  MAINTENANCE="$TMP/maintenance"
+  INSTALL_LOG="$TMP/maintenance-install.log"
+  if (cd "$TMP" && "$NODE" "$NPM_CLI" --userconfig "$NPM_CONFIG_USERCONFIG" --globalconfig "$NPM_CONFIG_GLOBALCONFIG" install --global --ignore-scripts --offline --no-audit --no-fund --prefix "$MAINTENANCE" "$TMP/$ARTIFACT") >"$INSTALL_LOG" 2>&1; then :; else rc=$?; report_failure 'Preparing cleanup tools' "$INSTALL_LOG" "$rc"; exit "$rc"; fi
+  "$NODE" "$MAINTENANCE/lib/node_modules/@aloneio/runmesh-runner/dist/runmesh.cjs" uninstall --purge --yes
+  exit $?
+fi
 mkdir -p "$INSTALL_ROOT/versions"
 if ! mkdir "$STAGE"; then printf '%s\n' 'error: installer staging path is already in use' >&2; exit 1; fi
-step 'Installing the verified Runner package.'
+step 'Installing Runner'
 export NPM_CONFIG_UPDATE_NOTIFIER=false
 INSTALL_LOG="$TMP/npm-install.log"
 if (
   cd "$TMP"
   "$NODE" "$NPM_CLI" --userconfig "$NPM_CONFIG_USERCONFIG" --globalconfig "$NPM_CONFIG_GLOBALCONFIG" install --global --ignore-scripts --offline --no-audit --no-fund --prefix "$STAGE" "$TMP/$ARTIFACT"
-)> "$INSTALL_LOG" 2>&1; then :; else rc=$?; report_failure 'Installing the verified Runner package.' "$INSTALL_LOG" "$rc"; exit "$rc"; fi
-ok 'Verified Runner package installed.'
+)> "$INSTALL_LOG" 2>&1; then :; else rc=$?; report_failure 'Installing Runner' "$INSTALL_LOG" "$rc"; exit "$rc"; fi
+ok 'Runner installed.'
 PACKAGE_ROOT="$STAGE/lib/node_modules/@aloneio/runmesh-runner"
 BUNDLE_FILENAME='runmesh.cjs'
 [ -f "$PACKAGE_ROOT/dist/$BUNDLE_FILENAME" ] || { fail 'The verified Runmesh package is missing its Runner bundle.'; exit 1; }
@@ -563,18 +587,19 @@ fi
 case "$ENROLLMENT_CODE" in *[!A-Za-z0-9_-]*) printf '%s\n' 'error: invalid one-time enrollment code' >&2; exit 1;; esac
 case "$ENROLLMENT_CODE" in ???????????????????????????????????????????) : ;; *) printf '%s\n' 'error: invalid one-time enrollment code' >&2; exit 1;; esac
 ENROLLMENT_ATTEMPTED=1
-step 'Enrolling the Runner and starting the service.'
+step 'Connecting to control plane'
 ENROLL_LOG="$TMP/enroll.log"
-if printf '%s\n' "$ENROLLMENT_CODE" | "$RUNNER" enroll --profile "$PROFILE" --server "$ENROLLMENT_URL" --code-stdin __EXECUTION_MODE_FLAGS__ >"$ENROLL_LOG" 2>&1; then :; else rc=$?; report_failure 'Enrolling the Runner.' "$ENROLL_LOG" "$rc"; exit "$rc"; fi
+if printf '%s\n' "$ENROLLMENT_CODE" | "$RUNNER" enroll --profile "$PROFILE" --server "$ENROLLMENT_URL" --code-stdin __EXECUTION_MODE_FLAGS__ >"$ENROLL_LOG" 2>&1; then :; else rc=$?; report_failure 'Connecting to control plane' "$ENROLL_LOG" "$rc"; exit "$rc"; fi
 unset ENROLLMENT_CODE
 mv "$STAGE" "$FINAL"
 FINAL_CREATED=1
 ln -s "$FINAL" "$INSTALL_ROOT/current.new"
 mv "$INSTALL_ROOT/current.new" "$INSTALL_ROOT/current"
 CURRENT_CREATED=1
+step 'Starting service'
 SERVICE_LOG="$TMP/service-install.log"
-if "$INSTALL_ROOT/current/bin/runmesh" install --profile "$PROFILE" __EXECUTION_MODE_FLAGS__ --executable-path "$INSTALL_ROOT/current/bin/runmesh" >"$SERVICE_LOG" 2>&1; then :; else rc=$?; report_failure 'Installing the Runmesh service.' "$SERVICE_LOG" "$rc"; exit "$rc"; fi
-ok "Runmesh Runner $VERSION installed and enrolled."
+if "$INSTALL_ROOT/current/bin/runmesh" install --profile "$PROFILE" __EXECUTION_MODE_FLAGS__ --executable-path "$INSTALL_ROOT/current/bin/runmesh" >"$SERVICE_LOG" 2>&1; then :; else rc=$?; report_failure 'Starting service' "$SERVICE_LOG" "$rc"; exit "$rc"; fi
+ok "Runmesh Runner $VERSION is ready."
 printf '%s\n' '  Service started automatically.' '  Logs: sudo journalctl -u runmesh-runner -f' >&2
 `;
 
@@ -608,6 +633,9 @@ $AutoInstallDeps = $true
 if ($args -contains '--no-auto-deps') { $AutoInstallDeps = $false }
 if (-not $AutoInstallDeps) { throw 'Private runtime bootstrap is disabled (--no-auto-deps).' }
 $EnrollmentCodeArgument = $null
+$MaintenanceAction = '__ACTION__'
+$PurgeRequested = $false
+$ConfirmPurge = $false
 $CodeArgumentProvided = $false
 $ExpectCodeArgument = $false
 foreach ($Argument in $args) {
@@ -615,6 +643,9 @@ foreach ($Argument in $args) {
     $EnrollmentCodeArgument = [string]$Argument; $ExpectCodeArgument = $false
     continue
   }
+  if ($Argument -eq 'uninstall') { $MaintenanceAction = 'uninstall'; continue }
+  if ($Argument -eq '--purge') { $PurgeRequested = $true; continue }
+  if ($Argument -eq '--yes') { $ConfirmPurge = $true; continue }
   if ($Argument -in @('install', '--auto-deps', '--no-auto-deps', '--re-enroll')) { continue }
   if ($CodeArgumentProvided) { throw 'Enrollment code supplied more than once.' }
   if ($Argument -eq '--code') {
@@ -639,6 +670,10 @@ function Read-EnrollmentCode([string]$CodeArgument) {
   if ($Code -notmatch '^[A-Za-z0-9_-]{43}\z') { throw 'Invalid one-time enrollment code.' }
   return $Code
 }
+if ($MaintenanceAction -eq 'uninstall') {
+  if (-not $PurgeRequested -or -not $ConfirmPurge -or $CodeArgumentProvided) { throw 'Uninstall requires --purge --yes and no enrollment code.' }
+} elseif ($PurgeRequested -or $ConfirmPurge) { throw 'Purge options are only valid for uninstall.' }
+Write-Host ""; Write-Host "Runmesh Runner" -ForegroundColor Cyan; Write-Host ""
 $InstallRoot = Join-Path $env:ProgramFiles 'Runmesh'
 $Principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run from an elevated Administrator PowerShell session.' }
@@ -654,7 +689,8 @@ $CurrentRoot = Join-Path $InstallRoot 'current'
 $CurrentNew = Join-Path $InstallRoot 'current.new'
 $Profile = Join-Path $env:ProgramData 'Runmesh\profile.json'
 $ServiceManifest = Join-Path $env:ProgramData 'Runmesh\RunmeshRunner.xml'
-function Write-Step([string]$Message) { Write-Host ("-> {0}" -f $Message) -ForegroundColor Cyan }
+$script:StepIndex = 0
+function Write-Step([string]$Message) { $script:StepIndex += 1; Write-Host ("  [{0}] {1}" -f $script:StepIndex, $Message) -ForegroundColor Cyan }
 function Write-Ok([string]$Message) { Write-Host ("[OK] {0}" -f $Message) -ForegroundColor Green }
 function Write-Fail([string]$Message) { Write-Host ("[FAIL] {0}" -f $Message) -ForegroundColor Red }
 function Write-LogFailure([string]$Message, [string]$LogPath, [int]$ExitCode, $ErrorRecord = $null) {
@@ -725,8 +761,8 @@ function Refresh-Existing {
     return $true
   } finally { Remove-Variable EnrollmentCode -ErrorAction SilentlyContinue; try { Remove-Item -LiteralPath $RefreshLock -Force -ErrorAction SilentlyContinue } catch {} }
 }
-if ((Test-Path -LiteralPath $CurrentRoot) -and (Test-Path -LiteralPath $Profile) -and (Test-Path -LiteralPath $ServiceManifest)) { if (Refresh-Existing) { exit 0 } }
-if ((Test-Path -LiteralPath $CurrentRoot) -or (Test-Path -LiteralPath $VersionRoot) -or (Test-Path -LiteralPath $CurrentNew) -or (Test-Path -LiteralPath $Stage) -or (Test-Path -LiteralPath $Profile) -or (Test-Path -LiteralPath $ServiceManifest)) { throw 'Existing Runmesh installation or service state found; refusing to overwrite it.' }
+if ($MaintenanceAction -ne 'uninstall' -and (Test-Path -LiteralPath $CurrentRoot) -and (Test-Path -LiteralPath $Profile) -and (Test-Path -LiteralPath $ServiceManifest)) { if (Refresh-Existing) { exit 0 } }
+if ($MaintenanceAction -ne 'uninstall' -and ((Test-Path -LiteralPath $CurrentRoot) -or (Test-Path -LiteralPath $VersionRoot) -or (Test-Path -LiteralPath $CurrentNew) -or (Test-Path -LiteralPath $Stage) -or (Test-Path -LiteralPath $Profile) -or (Test-Path -LiteralPath $ServiceManifest))) { throw 'Existing Runmesh installation or service state found; refusing to overwrite it.' }
 $TempRoot = Join-Path ([IO.Path]::GetTempPath()) ('runmesh-installer-' + [guid]::NewGuid().ToString('N'))
 $ServiceAttempted = $false
 $EnrollmentAttempted = $false
@@ -757,6 +793,8 @@ try {
   # Invoke-WebRequest/-MaximumRedirection are intentionally not used for the
   # release fetch: their automatic redirect behavior cannot be pinned before
   # the next request. HttpClient follows one validated Location at a time.
+  Write-Step 'Preparing runtime'
+  $ProgressPreference = 'SilentlyContinue'
   $NodeArchivePath = Join-Path $TempRoot $NodeAsset
   Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 -Uri $NodeUrl -OutFile $NodeArchivePath
   if ((Get-Item -LiteralPath $NodeArchivePath).Length -le 0 -or (Get-Item -LiteralPath $NodeArchivePath).Length -gt __MAX_NODE_RUNTIME_BYTES__) { throw 'Private Node.js runtime archive size is invalid.' }
@@ -775,6 +813,7 @@ try {
   $HttpHandler.AutomaticDecompression = [Net.DecompressionMethods]::GZip -bor [Net.DecompressionMethods]::Deflate
   $HttpClient = [Net.Http.HttpClient]::new($HttpHandler)
   $HttpClient.Timeout = [TimeSpan]::FromSeconds(60)
+  Write-Step 'Downloading Runner'
   foreach ($Name in @('manifest.json', 'manifest.sig', 'manifest.signature.json', 'SHA256SUMS', $ArtifactName)) {
     $current = [Uri]::new($ReleaseBase + '/' + $Name)
     $downloaded = $false
@@ -821,16 +860,31 @@ try {
     if (-not $downloaded) { throw 'Release download did not complete.' }
   }
   $VerifyLog = Join-Path $TempRoot 'release-verify.log'
-  Invoke-LoggedStep 'Verifying the signed release assets.' $VerifyLog {
+  Invoke-LoggedStep 'Verifying Runner' $VerifyLog {
     @'
 __VERIFIER__
 '@ | & $NodePath --input-type=module - $TempRoot
+  }
+  if ($MaintenanceAction -eq 'uninstall') {
+    $Maintenance = Join-Path $TempRoot 'maintenance'
+    $MaintenanceLog = Join-Path $TempRoot 'maintenance-install.log'
+    Push-Location -LiteralPath $TempRoot
+    try {
+      Invoke-LoggedStep 'Preparing cleanup tools' $MaintenanceLog {
+        & $NpmPath --userconfig $EmptyUserConfig --globalconfig $EmptyGlobalConfig install --global --ignore-scripts --offline --no-audit --no-fund --prefix $Maintenance (Join-Path $TempRoot $ArtifactName)
+      }
+    } finally { Pop-Location }
+    $MaintenanceRunner = Join-Path $Maintenance 'node_modules\@aloneio\runmesh-runner\dist\runmesh.cjs'
+    & $NodePath $MaintenanceRunner uninstall --purge --yes
+    if ($LASTEXITCODE -ne 0) { throw 'Runmesh cleanup is incomplete; see the remaining items above.' }
+    $Succeeded = $true
+    exit 0
   }
   New-Item -ItemType Directory -Path $VersionsRoot -Force | Out-Null
   Push-Location -LiteralPath $TempRoot
   try {
     $InstallLog = Join-Path $TempRoot 'npm-install.log'
-    Invoke-LoggedStep 'Installing the verified Runner package.' $InstallLog {
+    Invoke-LoggedStep 'Installing Runner' $InstallLog {
       & $NpmPath --userconfig $EmptyUserConfig --globalconfig $EmptyGlobalConfig install --global --ignore-scripts --offline --no-audit --no-fund --prefix $Stage (Join-Path $TempRoot $ArtifactName)
     }
   } finally {
@@ -855,7 +909,7 @@ __VERIFIER__
   $EnrollmentCodeArgument = $null
   $EnrollmentAttempted = $true
   $EnrollLog = Join-Path $TempRoot 'enroll.log'
-  Invoke-LoggedStep 'Enrolling the Runner.' $EnrollLog {
+  Invoke-LoggedStep 'Connecting to control plane' $EnrollLog {
     $EnrollmentCode | & $Runner enroll --profile $Profile --server $EnrollmentUrl --code-stdin __EXECUTION_MODE_FLAGS__
   }
   $EnrollmentCode = $null
@@ -865,11 +919,11 @@ __VERIFIER__
   $CurrentRunner = Join-Path $CurrentRoot 'runmesh.cmd'
   $ServiceAttempted = $true
   $ServiceLog = Join-Path $TempRoot 'service-install.log'
-  Invoke-LoggedStep 'Installing and starting the Runmesh service.' $ServiceLog {
+  Invoke-LoggedStep 'Starting service' $ServiceLog {
     & $CurrentRunner install --profile $Profile __EXECUTION_MODE_FLAGS__ --executable-path $CurrentRunner
   }
   $Succeeded = $true
-  Write-Ok "Runmesh Runner $Version installed and enrolled."
+  Write-Ok "Runmesh Runner $Version is ready."
   Write-Host '  Service started automatically.'
   Write-Host '  Windows status: Get-ScheduledTask -TaskName RunmeshRunner'
 } catch {
@@ -889,8 +943,8 @@ __VERIFIER__
 } finally {
   if ($null -ne $HttpClient) { $HttpClient.Dispose() }
   if ($null -ne $HttpHandler) { $HttpHandler.Dispose() }
-  if (-not $Succeeded) {
-    if ($ServiceAttempted -and $null -ne $CurrentRunner -and (Test-Path -LiteralPath $CurrentRunner)) { try { & $CurrentRunner uninstall --profile $Profile --purge --yes --json *> $null } catch {} }
+  if (-not $Succeeded -and $MaintenanceAction -ne 'uninstall') {
+    if ($ServiceAttempted -and $null -ne $CurrentRunner -and (Test-Path -LiteralPath $CurrentRunner)) { try { & $CurrentRunner uninstall --profile $Profile --json *> $null } catch {} }
     if ($EnrollmentAttempted -and (Test-Path -LiteralPath $Profile)) { try { Remove-Item -LiteralPath $Profile -Force } catch {} }
     foreach ($Path in @($CurrentNew, $CurrentRoot, $Stage, $VersionRoot)) { if (Test-Path -LiteralPath $Path) { try { Remove-Item -LiteralPath $Path -Recurse -Force } catch {} } }
   }
@@ -900,14 +954,15 @@ __VERIFIER__
 
 export type InstallerExecutionMode = "dedicated_user" | "privileged_host";
 
-function replaceInstallerTemplate(template: string, enrollmentUrl: string, literal: (value: string) => string, executionMode: InstallerExecutionMode): string {
+function replaceInstallerTemplate(template: string, enrollmentUrl: string, literal: (value: string) => string, executionMode: InstallerExecutionMode, action: "install" | "uninstall" = "install"): string {
   if (executionMode !== "dedicated_user" && executionMode !== "privileged_host") throw new Error("invalid installer execution mode");
   const modeFlags = executionMode === "privileged_host"
     ? "--execution-mode privileged_host --confirm-privileged-host"
     : "--execution-mode dedicated_user";
   const node = FIXED_NODE_RUNTIME_ASSETS;
   return template
-    .replaceAll("__EXECUTION_MODE_FLAGS__", modeFlags)
+    .replaceAll("__ACTION__", action)
+    .replaceAll("__NO_COLOR__", "${NO_COLOR:-}")    .replaceAll("__EXECUTION_MODE_FLAGS__", modeFlags)
     .replaceAll("__VERSION__", literal(FIXED_RELEASE_VERSION))
     .replaceAll("__NODE_VERSION__", literal(FIXED_NODE_VERSION))
     .replaceAll("__MAX_NODE_RUNTIME_BYTES__", String(MAX_NODE_RUNTIME_BYTES))
@@ -941,4 +996,12 @@ export function renderPosixInstaller(requestOrigin: string, executionMode: Insta
 export function renderPowerShellInstaller(requestOrigin: string, executionMode: InstallerExecutionMode = "privileged_host"): string {
   const publicOrigin = canonicalPublicOrigin(requestOrigin);
   return replaceInstallerTemplate(POWERSHELL_TEMPLATE, `${publicOrigin}/runner/enroll`, powershellLiteral, executionMode);
+}
+
+export function renderPosixUninstaller(requestOrigin: string): string {
+  return replaceInstallerTemplate(POSIX_TEMPLATE, `${canonicalPublicOrigin(requestOrigin)}/runner/enroll`, shellLiteral, "dedicated_user", "uninstall");
+}
+
+export function renderPowerShellUninstaller(requestOrigin: string): string {
+  return replaceInstallerTemplate(POWERSHELL_TEMPLATE, `${canonicalPublicOrigin(requestOrigin)}/runner/enroll`, powershellLiteral, "dedicated_user", "uninstall");
 }
