@@ -22,7 +22,7 @@ import {
   verifyPassword,
 } from "./security.js";
 import { readCappedBytes, readCappedFormData, readCappedText as readBodyText } from "./body.js";
-import { canonicalPublicOrigin, fixedReleaseDescriptor, powershellQuote, renderPosixInstaller, renderPowerShellInstaller, resolvePublicOrigin, shellQuote, signedReleaseIsAvailable, type FixedReleaseDescriptor } from "./installer.js";
+import { canonicalPublicOrigin, fixedReleaseDescriptor, powershellQuote, renderPosixInstaller, renderPowerShellInstaller, renderPosixUninstaller, renderPowerShellUninstaller, resolvePublicOrigin, shellQuote, signedReleaseIsAvailable, type FixedReleaseDescriptor } from "./installer.js";
 import { validTimestamp, validityStatus, type ValidityWindow } from "./validity.js";
 import { loadLoginSettings } from "./auth-settings.js";
 
@@ -69,6 +69,7 @@ async function handleRequest(request: Request, env: WorkerEnv, _ctx: ExecutionCo
     return Response.json({ ok: true, service: "runmesh-agent-control-plane" });
   }
   if (url.pathname === "/assets/logo.png" || url.pathname === BRAND_LOGO_ASSET || url.pathname === "/assets/favicon.png") return asset(request, env);
+  if (url.pathname === "/runner/uninstall.sh" || url.pathname === "/runner/uninstall.ps1") return runnerUninstallScript(request, env, url.pathname.endsWith(".ps1"));
   if (url.pathname === "/runner/install.sh") return runnerInstallScript(request, url, env);
   if (url.pathname === "/runner/install.ps1") return runnerInstallPowerShell(request, url, env);
   if (url.pathname === "/runner/releases/latest" || url.pathname === "/runner/releases/stable") return runnerRelease(request, env);
@@ -146,7 +147,7 @@ function runnerInstallScript(request: Request, url: URL, env: RunnerReleaseEnvir
     content =
 `#!/usr/bin/env sh
 set -eu
-printf '%s\\n' 'error: The fixed signed Runmesh v0.1.0-dev.4 release is not enabled on this deployment.' 'Use the manual verified portable-artifact route until the exact immutable release is available.' >&2
+printf '%s\\n' 'error: The fixed signed Runmesh v0.1.0-dev.5 release is not enabled on this deployment.' 'Use the manual verified portable-artifact route until the exact immutable release is available.' >&2
 exit 1
 `;
   }
@@ -165,12 +166,24 @@ function runnerInstallPowerShell(request: Request, url: URL, env: RunnerReleaseE
   } else {
     content = `$ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-Write-Error 'The fixed signed Runmesh v0.1.0-dev.4 release is not enabled on this deployment. Use the manual verified portable-artifact route until the exact immutable release is available.'
+Write-Error 'The fixed signed Runmesh v0.1.0-dev.5 release is not enabled on this deployment. Use the manual verified portable-artifact route until the exact immutable release is available.'
 exit 1
 `;
   }
   return new Response(content, { headers: publicInstallerHeaders("text/plain; charset=utf-8") });
 }
+function runnerUninstallScript(request: Request, env: RunnerReleaseEnvironment, windows: boolean): Response {
+  if (request.method !== "GET" && request.method !== "HEAD") { void discardBody(request); return methodNotAllowed("GET, HEAD"); }
+  if (!runnerReleaseDescriptor(env).distributable) return new Response("Runmesh maintenance download is not enabled on this deployment", { status: 503, headers: { "cache-control": "no-store" } });
+  try {
+    const origin = resolvePublicOrigin(request, configuredPublicOrigin(env));
+    const script = windows ? renderPowerShellUninstaller(origin) : renderPosixUninstaller(origin);
+    const headers = publicInstallerHeaders(windows ? "text/plain; charset=utf-8" : "text/x-shellscript; charset=utf-8");
+    headers.set("cache-control", "no-store");
+    return new Response(script, { headers });
+  } catch { return installerOriginUnavailable(); }
+}
+
 function installerOriginUnavailable(): Response {
   return new Response("hosted installer is unavailable for this request origin", { status: 421, headers: { "cache-control": "no-store", "referrer-policy": "no-referrer", "x-content-type-options": "nosniff" } });
 }
@@ -1569,7 +1582,7 @@ const ZH_UI_TEXT: Record<string, string> = {
   "This code is valid until ": "此注册码有效至 ",
   " and can be used once.": "，且只能使用一次。",
   "Remove this Runner from the host": "从主机移除此 Runner",
-  "Run the command for the local OS to stop and remove the managed service and local credential profile. Delete the Runner record separately from the administrator console when you no longer need its history.": "请针对本机操作系统运行命令，停止并移除托管服务及本地凭据配置。若不再需要历史记录，请在管理控制台中单独删除 Runner 记录。",
+  "Run the command for the local OS to stop the managed service and remove the Runmesh installation, configuration, local job history, logs and supported legacy remnants. Project workspaces are preserved. Delete the Runner record separately from the administrator console when you no longer need its history.": "请针对本机操作系统运行命令，停止并移除托管服务及本地凭据配置。若不再需要历史记录，请在管理控制台中单独删除 Runner 记录。",
 };
 
 function brandLogo(className: string, alt = "Runmesh · Agent Control Plane"): string {
@@ -4330,7 +4343,13 @@ if ($LASTEXITCODE -ne 0) { throw 'Runner doctor check failed.' }`,
     : `The installer verifies the fixed signed Runner artifact, downloads and verifies a private Node.js runtime for the host architecture, registers the Runner as a background service, and starts it after enrollment. The copied command includes the one-time enrollment code; no second code entry is needed. Treat the command as a secret. Selected execution mode: ${modeLabel}. The default is dedicated_user; privileged_host is an advanced, explicitly confirmed option.`;
   const warningBlock = executionMode === "privileged_host" ? `<p class="warning privileged-host-warning">${escapeHtml(privilegedWarning)} You must keep the one-time confirmation in the local install command.</p>` : `<p class="notice">Selected restricted service account mode: dedicated_user. The installer preserves this selection.</p>`;
   const enrollmentSummary = enrollment === undefined ? "The one-time enrollment code expires after 30 minutes." : `This code is valid until ${new Date(enrollment.expires_at_ms).toISOString()} and can be used once.`;
-  const removalCommands = { linux: "sudo /opt/runmesh/current/bin/runmesh uninstall --purge --yes", macos: "sudo /opt/runmesh/current/bin/runmesh uninstall --purge --yes", windows: "& 'C:\\Program Files\\Runmesh\\current\\runmesh.cmd' uninstall --purge --yes" };
+  const uninstallShell = `curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 0 --max-time 60 --max-filesize 262144 ${shellQuote(new URL("/runner/uninstall.sh", publicBase).toString())} | sudo sh -s -- --purge --yes`;
+  const uninstallWindows = `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 -TimeoutSec 60 -ErrorAction Stop -Uri ${powershellQuote(new URL("/runner/uninstall.ps1", publicBase).toString())}).Content)) --purge --yes"`;
+  const removalCommands = bootstrap ? { linux: uninstallShell, macos: uninstallShell, windows: uninstallWindows } : {
+    linux: "sudo /opt/runmesh/current/bin/runmesh uninstall --purge --yes",
+    macos: "sudo /opt/runmesh/current/bin/runmesh uninstall --purge --yes",
+    windows: "& 'C:\\Program Files\\Runmesh\\current\\runmesh.cmd' uninstall --purge --yes",
+  };
   const removalBlock = `<details class="panel"><summary><strong>Remove this Runner from the host</strong></summary><p class="muted font-12">Run the command for the local OS to stop and remove the managed service and local credential profile. Delete the Runner record separately from the administrator console when you no longer need its history.</p><p><strong>Linux / macOS</strong></p><pre><code>${escapeHtml(removalCommands.linux)}</code></pre><p><strong>Windows PowerShell (Administrator)</strong></p><pre><code>${escapeHtml(removalCommands.windows)}</code></pre></details>`;
 
   return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body enrollment-body"><a class="skip-link" href="#main-content">Skip to main content</a>${controlHeader("runners")}<main class="shell enrollment-shell" id="main-content" tabindex="-1"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><p class="eyebrow">${title}</p><h1 id="enrollment-title">Enroll Runner</h1><p class="lede">${instruction} ${enrollmentSummary}</p></div></section><div class="enrollment-meta-box"><span class="form-stat-label">Target Runner ID</span><span class="mono">${escapeHtml(runnerId)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">Selected execution mode</span><span class="mono">${escapeHtml(modeLabel)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">One-time enrollment code</span><code class="mono" data-no-i18n>${escapeHtml(code)}</code><span class="muted font-12">${commands === manualCommands ? "Paste it only into the local prompt after verification; it is deliberately excluded from copied commands." : "The copied command includes this one-time code. Treat it as a secret and use it only once."}</span></div><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><div class="enrollment-command-panels">${panels}</div>${warningBlock}<p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.</p>${removalBlock}<div class="top-actions dialog-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment">${executionModeFormFields(executionMode, csrf)}${windowFields("code")}<button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);

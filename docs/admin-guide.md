@@ -58,7 +58,7 @@ Open **MCP Clients**, enter a clear label, select the minimum scopes, create the
 - Rotate Runner credentials or MCP client URLs when access changes.
 - Revoking a Runner blocks reconnection but does not kill processes already running on the host.
 - Deleting a Runner permanently removes its policies, workspaces, jobs, and client selections.
-- To remove the local host installation, run `sudo /opt/runmesh/current/bin/runmesh uninstall --purge --yes` (Windows: `C:\Program Files\Runmesh\current\runmesh.cmd uninstall --purge --yes`). Delete the control-plane Runner record separately when its history is no longer needed.
+- Use the one-command maintenance uninstaller shown on the enrollment page for complete local removal, including old/partial installations. Local job history is deleted; project workspaces are preserved. See [complete uninstall](runner-uninstall.md). Delete the control-plane Runner record separately.
 - Emergency lock blocks new protected operations; inspect host processes separately.
 - Changing the administrator password invalidates existing admin sessions.
 

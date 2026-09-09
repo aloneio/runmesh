@@ -89,7 +89,7 @@ npm exec --offline -- wrangler deploy --config apps/worker/wrangler.jsonc --env 
 - **轮换凭据**：Runner 轮换会使旧凭据失效并断开旧连接；MCP 客户端轮换会生成新地址。
 - **撤销 Runner**：阻止重新连接，但不会自动终止主机上已经启动的进程；需要在主机上单独停止进程。
 - **删除 Runner**：永久清理该 Runner 的策略、工作区、任务元数据和客户端选择。
-- **主机删除命令**：在已安装主机运行 `sudo /opt/runmesh/current/bin/runmesh uninstall --purge --yes`（Windows 使用 `C:\Program Files\Runmesh\current\runmesh.cmd uninstall --purge --yes`），移除本机服务和凭据；控制台中的 Runner 记录需另行删除。
+- **彻底卸载**：复制注册页面的「移除 Runner」脚本命令，在本机终端或 SSH 中执行。它独立下载维护程序，清理旧版本、安装/配置/状态/日志及服务残留，不依赖旧 Runner 是否完好。会删除本地任务历史，不删除项目工作区；控制台记录需另行删除。详见[卸载说明](runner-uninstall.md)。
 - **紧急锁定**：输入 Runner ID 后立即阻止新的受保护操作；随后按需要撤销凭据并检查主机进程。
 - **修改管理员密码**：修改后所有已登录的管理会话失效。
 

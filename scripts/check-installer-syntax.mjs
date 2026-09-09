@@ -2,21 +2,21 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { renderPosixInstaller, renderPowerShellInstaller } from "../apps/worker/dist/installer.js";
+import { renderPosixInstaller, renderPowerShellInstaller, renderPosixUninstaller, renderPowerShellUninstaller } from "../apps/worker/dist/installer.js";
 import { resolveTrustedWindowsTool, trustedWindowsRoot } from "../apps/runner/dist/windows-tools.js";
 
 // Parse generated scripts only. Never execute installation, enrollment or service changes.
 const directory = await mkdtemp(join(tmpdir(), "runmesh-installer-syntax-"));
 try {
-  for (const mode of ["dedicated_user", "privileged_host"]) {
+  for (const mode of ["dedicated_user", "privileged_host", "uninstall"]) {
   if (process.platform === "win32") {
     const filename = join(directory, "installer.ps1");
-    await writeFile(filename, renderPowerShellInstaller("https://syntax.example", mode));
+    await writeFile(filename, (mode === "uninstall" ? renderPowerShellUninstaller("https://syntax.example") : renderPowerShellInstaller("https://syntax.example", mode)));
     const command = "$tokens = $null; $errors = $null; [System.Management.Automation.Language.Parser]::ParseFile($env:RUNMESH_SYNTAX_FILE, [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }";
     execFileSync(resolveTrustedWindowsTool("powershell", trustedWindowsRoot()), ["-NoProfile", "-NonInteractive", "-Command", command], { env: { ...process.env, RUNMESH_SYNTAX_FILE: filename }, stdio: "inherit", timeout: 30_000 });
   } else {
     const filename = join(directory, "installer.sh");
-    await writeFile(filename, renderPosixInstaller("https://syntax.example", mode));
+    await writeFile(filename, (mode === "uninstall" ? renderPosixUninstaller("https://syntax.example") : renderPosixInstaller("https://syntax.example", mode)));
     execFileSync("/bin/sh", ["-n", filename], { stdio: "inherit", timeout: 10_000 });
   }
   }
