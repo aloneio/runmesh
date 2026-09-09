@@ -673,8 +673,8 @@ function Read-EnrollmentCode([string]$CodeArgument) {
 if ($MaintenanceAction -eq 'uninstall') {
   if (-not $PurgeRequested -or -not $ConfirmPurge -or $CodeArgumentProvided) { throw 'Uninstall requires --purge --yes and no enrollment code.' }
 } elseif ($PurgeRequested -or $ConfirmPurge) { throw 'Purge options are only valid for uninstall.' }
-Write-Host ""; Write-Host "Runmesh Runner" -ForegroundColor Cyan; Write-Host ""
 $InstallRoot = Join-Path $env:ProgramFiles 'Runmesh'
+Write-Host ""; Write-Host "Runmesh Runner" -ForegroundColor Cyan; Write-Host ""
 $Principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run from an elevated Administrator PowerShell session.' }
 $NodeAsset = if ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq [Runtime.InteropServices.Architecture]::Arm64) { '__NODE_WIN_ARM64__' } else { '__NODE_WIN_X64__' }
