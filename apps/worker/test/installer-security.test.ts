@@ -145,7 +145,7 @@ it("accepts enrollment arguments with an optional prompt and keeps stdin forward
   expect(powershell).toContain("-AsSecureString");
   expect(powershell).toContain("Enrollment code supplied more than once.");
   expect(powershell).toContain("return $CodeArgument");
-  expect(shell.indexOf("ok 'Signed release assets verified.'")).toBeLessThan(shell.lastIndexOf("IFS= read -r ENROLLMENT_CODE"));
+  expect(shell.indexOf("ok 'Runner verified.'")).toBeLessThan(shell.lastIndexOf("IFS= read -r ENROLLMENT_CODE"));
 });
 
 it("rejects old installed versions before code input and checks the Windows marker Boolean", () => {

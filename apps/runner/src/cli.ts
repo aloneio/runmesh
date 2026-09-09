@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import { purgeInstallation } from "./purge.js";
 import { access, rm } from "node:fs/promises";
 import { parseRunnerArgs, validateRunnerConfig, type RawRunnerOptions } from "./config.js";
 import { RunnerConnection } from "./connection.js";
@@ -11,6 +12,8 @@ import { assertManagedServiceManifest, createServiceManager, createServiceProvis
 import { resolveTrustedWindowsTool, trustedWindowsEnvironment, trustedWindowsRoot } from "./windows-tools.js";
 
 export interface CliDependencies {
+  /** Injected cleanup executor; tests must never purge a host installation. */
+  readonly purgeInstallation?: typeof purgeInstallation;
   readonly store?: ProfileStore;
   readonly stdout?: (line: string) => void;
   readonly stderr?: (line: string) => void;
@@ -871,6 +874,27 @@ async function serviceCommand(parsed: ParsedCommand, store: ProfileStore, output
 }
 async function uninstall(parsed: ParsedCommand, store: ProfileStore, output: (line: string) => void, dependencies: CliDependencies): Promise<void> {
   if (parsed.values.purge === true && parsed.values.yes !== true) throw new Error("--purge requires --yes");
+  const mode = parsed.values.user === true ? "user" as const : "system" as const;
+  const platform = dependencies.servicePlatform ?? currentServicePlatform();
+  const layout = serviceLayout({ platform, mode });
+  // Canonical complete cleanup cannot depend on a still-valid profile. A
+  // previous uninstall or interrupted enrollment may already have removed it.
+  if (parsed.values.purge === true && store.filePath === serviceProfilePath(layout)) {
+    const probe = renderService({ platform, mode, executionMode: "dedicated_user" });
+    assertSystemInstallationPrivilege(probe, dependencies);
+    if (platform === "win32" && process.execPath.toLowerCase().startsWith(layout.installRoot.toLowerCase() + "\\")) {
+      throw new Error("Run the hosted uninstall command so maintenance can remove the in-use runtime from a temporary location");
+    }
+    const result = await (dependencies.purgeInstallation ?? purgeInstallation)({ platform, mode, ...(parsed.json ? {} : { progress: output }) });
+    if (parsed.json) output(JSON.stringify(result));
+    else {
+      for (const failure of result.failures) output(`  Remaining: ${failure.path} (${failure.reason})`);
+      output(result.purged ? "Runmesh Runner removed. You can install it again now." : "Runmesh cleanup is incomplete; see the remaining items above.");
+      output("Project workspaces and shared system accounts were not deleted.");
+    }
+    if (!result.purged) throw new Error("uninstall incomplete; cleanup left unresolved items");
+    return;
+  }
   const manifest = await serviceManifestFor(parsed, store, dependencies.servicePlatform, dependencies.serviceFilesystem);
   const manager = dependencies.serviceManager ?? createServiceManager({ platform: manifest.platform, mode: manifest.mode });
   if (manager.platform !== manifest.platform || manager.mode !== manifest.mode) throw new Error("service manager does not match the requested service mode");
@@ -885,7 +909,8 @@ async function uninstall(parsed: ParsedCommand, store: ProfileStore, output: (li
   if (managed && (lifecycleStatus === undefined || lifecycleStatus.registered === true || lifecycleStatus.installed || lifecycleStatus.active)) await manager.uninstall(manifest);
   const removed = await removeServiceManifest(manifest, dependencies.serviceFilesystem);
   if (parsed.values.purge === true) await store.remove();
-  // Job state and workspace roots deliberately remain untouched, including with --purge.
+  // Noncanonical/custom profile paths never authorize removal of parent directories.
+  // Complete installation cleanup is limited to the canonical branch above.
   report(output, parsed.json, { action: "uninstall", service_removed: removed, profile_removed: parsed.values.purge === true, mode: manifest.mode, commands: serviceCommandNames("uninstall", manifest) });
 }
 

@@ -1,3 +1,12 @@
+# 0.1.0-dev.5 — complete maintenance cleanup
+
+Adds a separately verified one-command uninstaller that works with old, missing
+or damaged Runner installations. Canonical `uninstall --purge --yes` now removes
+Runmesh runtime/config/state/log roots and supported service remnants, with
+explicit leftover reporting. Project workspaces are retained. Install rollback
+remains narrowly scoped. Installation status output is shorter and numbered;
+cryptographic verification is unchanged. See [maintenance details](runner-uninstall.md).
+
 # Worker installer activation for the published dev.4 Runner
 
 Production now enables the independently verified dev.4 signed Runner. Both
