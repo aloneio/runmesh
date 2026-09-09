@@ -4,8 +4,8 @@
 
 The source candidate is `0.1.0-dev.4`, distinct from immutable `0.1.0-dev.3`.
 Workspace versions, generated modules, fixed installer and release workflow
-must agree. Production distribution acknowledgement is empty until a new
-signed release is authorized, published and independently verified. Local
+must agree. Production acknowledges the published, independently verified dev.4 signed
+release. Both selected execution modes now use one-command hosted enrollment. Local
 checks do not deploy a Worker or upgrade an installed Runner. Never overwrite
 an existing immutable asset.
 
@@ -111,3 +111,20 @@ backups, branch protection, Windows ACLs and macOS service lifecycle need
 separate deployment acceptance. KDF migration, idle expiry, application step-up,
 style extraction, module decomposition and measured coverage thresholds remain
 follow-up work rather than completed claims.
+
+## One-command installer activation
+
+The Worker now serves both execution modes through the same signed installer
+contract. The default restricted selection adds `?execution_mode=dedicated_user`
+to the script URL; the original bare URL retains privileged-host behavior for
+explicitly confirmed installations. The copied command already includes its
+one-time enrollment code, so no second paste is required. Both first enrollment
+and same-version refresh pass the selected mode to the local CLI and service
+provisioner. No workspace permissions or existing service identity are silently
+rewritten. Unknown or duplicate execution_mode values are rejected.
+
+This is a Worker/UI and deployment-configuration update. The immutable dev.4
+Runner artifact and tag are unchanged; its source commit remains
+`9412b6577d5bde2dc14856cac302f490adbe7bc6`. Worker deployment revisions are
+identified separately by their Git commit and Cloudflare version ID. No new
+Runner package with different bytes is published under the existing tag.

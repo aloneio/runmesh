@@ -132,12 +132,15 @@ function runnerRelease(request: Request, env: WorkerEnv): Response {
   const descriptor = runnerReleaseDescriptor(env);
   return new Response(JSON.stringify({ ...descriptor, schema_version: 1, published_at: null }), { headers: publicInstallerHeaders("application/json; charset=utf-8") });
 }
-function runnerInstallScript(request: Request, _url: URL, env: RunnerReleaseEnvironment): Response {
+function runnerInstallScript(request: Request, url: URL, env: RunnerReleaseEnvironment): Response {
   if (request.method !== "GET" && request.method !== "HEAD") { void discardBody(request); return methodNotAllowed("GET, HEAD"); }
+  const modes = url.searchParams.getAll("execution_mode");
+  const mode = modes[0] ?? "privileged_host";
+  if (modes.length > 1 || (mode !== "dedicated_user" && mode !== "privileged_host")) return new Response("invalid installer execution mode", { status: 400, headers: { "cache-control": "no-store" } });
   const descriptor = runnerReleaseDescriptor(env);
   let content: string;
   if (descriptor.distributable) {
-    try { content = renderPosixInstaller(resolvePublicOrigin(request, configuredPublicOrigin(env))); }
+    try { content = renderPosixInstaller(resolvePublicOrigin(request, configuredPublicOrigin(env)), mode); }
     catch { return installerOriginUnavailable(); }
   } else {
     content =
@@ -149,12 +152,15 @@ exit 1
   }
   return new Response(content, { headers: publicInstallerHeaders("text/x-shellscript; charset=utf-8") });
 }
-function runnerInstallPowerShell(request: Request, _url: URL, env: RunnerReleaseEnvironment): Response {
+function runnerInstallPowerShell(request: Request, url: URL, env: RunnerReleaseEnvironment): Response {
   if (request.method !== "GET" && request.method !== "HEAD") { void discardBody(request); return methodNotAllowed("GET, HEAD"); }
+  const modes = url.searchParams.getAll("execution_mode");
+  const mode = modes[0] ?? "privileged_host";
+  if (modes.length > 1 || (mode !== "dedicated_user" && mode !== "privileged_host")) return new Response("invalid installer execution mode", { status: 400, headers: { "cache-control": "no-store" } });
   const descriptor = runnerReleaseDescriptor(env);
   let content: string;
   if (descriptor.distributable) {
-    try { content = renderPowerShellInstaller(resolvePublicOrigin(request, configuredPublicOrigin(env))); }
+    try { content = renderPowerShellInstaller(resolvePublicOrigin(request, configuredPublicOrigin(env)), mode); }
     catch { return installerOriginUnavailable(); }
   } else {
     content = `$ErrorActionPreference = 'Stop'
@@ -1506,7 +1512,7 @@ const ZH_UI_TEXT: Record<string, string> = {
   "No validation result has been reported yet.": "尚未收到校验结果。",
   "Runner will run as root, SYSTEM, or the platform-equivalent highest-privilege identity. Shell commands can access files, processes, network, environment variables, credentials, and system services reachable by that service identity. Install only on a trusted dedicated machine, VM, or container.": "Runner 将以 root、SYSTEM 或平台对应的最高权限运行。Shell 命令可访问该服务身份能够访问的文件、进程、网络、环境变量、凭据和系统服务。请仅在受信任的专用机器、虚拟机或容器中安装。",
   "You must keep the one-time confirmation in the local install command.": "本地安装命令必须保留一次性确认参数。",
-  "Selected restricted service account mode: dedicated_user. The hosted privileged installer is not used.": "当前使用受限服务账户模式（dedicated_user），不会启用托管高权限安装器。",
+  "Selected restricted service account mode: dedicated_user. The installer preserves this selection.": "当前使用受限服务账户模式（dedicated_user），不会启用托管高权限安装器。",
   "e.g. project-src": "例如：project-src",
   "e.g. Main Repository": "例如：主代码仓库",
   "/absolute/path/to/directory": "/绝对路径/目录",
@@ -4184,7 +4190,7 @@ function adminScript(nonce?: string): string {
   var statusKeys=['compatible','incompatible','update_available','permission_denied','os_access_denied','not_directory','invalid_path','missing','pending','valid','unknown','online','offline','stale','queued','running','cancelling','cancelled','succeeded','completed','failed','interrupted','invalid'];
   var replaced=value;
   statusKeys.forEach(function(key){var re=new RegExp('(^|[^A-Za-z_])'+key+'(?=$|[^A-Za-z_])','g');replaced=replaced.replace(re,function(_,prefix){return prefix+statusText(key)})});
-  var phraseKeys=['Client Routing & Status','Skip to main content','Use a dedicated restricted service identity for narrower host access.','I understand and authorize this one-time high-privilege installation acknowledgement.','Read, Write, Exec','Each base scope has a distinct ceiling: ',' permits inspection, ',' permits approved edits, and ',' permits Host shell and Job control. Runner and Workspace policy can only reduce these permissions.','Desired policy revision is ahead of the applied or Runner-reported revision.','Runner will run as root, SYSTEM, or the platform-equivalent highest-privilege identity. Shell commands can access files, processes, network, environment variables, credentials, and system services reachable by that service identity. Install only on a trusted dedicated machine, VM, or container.','Manual Runner enrollment and install uses a verified portable artifact. Install the artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. Selected execution mode: ','The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. Selected execution mode: ','The installer verifies the fixed signed Runner artifact, downloads and verifies a private Node.js runtime for the host architecture, registers the Runner as a background service, and starts it after enrollment. The copied command includes the one-time enrollment code; no second code entry is needed. Treat the command as a secret.','The default is dedicated_user; privileged_host is an advanced, explicitly confirmed option. The install step runs only after enrollment succeeds.','The default is dedicated_user; privileged_host is an advanced, explicitly confirmed option.','You must keep the one-time confirmation in the local install command.','Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.','The copied command includes this one-time code. Treat it as a secret and use it only once.','This one-time code expires in 30 minutes and will not be shown again.','Selected restricted service account mode: dedicated_user. The hosted privileged installer is not used.','Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.','This code is valid until ',' and can be used once.','RUNNER','CHECKSUM','HighestAvailable'];
+  var phraseKeys=['Client Routing & Status','Skip to main content','Use a dedicated restricted service identity for narrower host access.','I understand and authorize this one-time high-privilege installation acknowledgement.','Read, Write, Exec','Each base scope has a distinct ceiling: ',' permits inspection, ',' permits approved edits, and ',' permits Host shell and Job control. Runner and Workspace policy can only reduce these permissions.','Desired policy revision is ahead of the applied or Runner-reported revision.','Runner will run as root, SYSTEM, or the platform-equivalent highest-privilege identity. Shell commands can access files, processes, network, environment variables, credentials, and system services reachable by that service identity. Install only on a trusted dedicated machine, VM, or container.','Manual Runner enrollment and install uses a verified portable artifact. Install the artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. Selected execution mode: ','The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. Selected execution mode: ','The installer verifies the fixed signed Runner artifact, downloads and verifies a private Node.js runtime for the host architecture, registers the Runner as a background service, and starts it after enrollment. The copied command includes the one-time enrollment code; no second code entry is needed. Treat the command as a secret.','The default is dedicated_user; privileged_host is an advanced, explicitly confirmed option. The install step runs only after enrollment succeeds.','The default is dedicated_user; privileged_host is an advanced, explicitly confirmed option.','You must keep the one-time confirmation in the local install command.','Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.','The copied command includes this one-time code. Treat it as a secret and use it only once.','This one-time code expires in 30 minutes and will not be shown again.','Selected restricted service account mode: dedicated_user. The installer preserves this selection.','Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.','This code is valid until ',' and can be used once.','RUNNER','CHECKSUM','HighestAvailable'];
   phraseKeys.sort(function(a,b){return b.length-a.length}).forEach(function(key){var translated=ZH_UI_TEXT[key];if(translated&&replaced.indexOf(key)>=0)replaced=replaced.split(key).join(translated)});
   return replaced;
 }
@@ -4253,8 +4259,11 @@ export function runnerEnrollmentPage(env: RunnerReleaseEnvironment, baseUrl: str
   } catch {
     return installerOriginUnavailable();
   }
-  const shellInstallerUrl = shellQuote(new URL("/runner/install.sh", publicBase).toString());
-  const powerShellInstallerUrl = powershellQuote(new URL("/runner/install.ps1", publicBase).toString());
+  // Keep the original bare URL for privileged installs; the explicit query
+  // selects a reviewed restricted template, never an implicit privilege upgrade.
+  const installerQuery = executionMode === "dedicated_user" ? "?execution_mode=dedicated_user" : "";
+  const shellInstallerUrl = shellQuote(new URL(`/runner/install.sh${installerQuery}`, publicBase).toString());
+  const powerShellInstallerUrl = powershellQuote(new URL(`/runner/install.ps1${installerQuery}`, publicBase).toString());
   const shellCode = shellQuote(code);
   const powerShellCode = powershellQuote(code);
   const shellCommand = `curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 0 --max-time 60 --max-filesize 262144 ${shellInstallerUrl} | sudo sh -s -- ${shellCode}`;
@@ -4311,17 +4320,15 @@ if ($LASTEXITCODE -ne 0) { throw 'Runner service installation failed.' }
 & $RunnerPath doctor --json
 if ($LASTEXITCODE -ne 0) { throw 'Runner doctor check failed.' }`,
   };
-  // The hosted fixed installer is intentionally privileged-only.  A
-  // dedicated_user selection must use the explicit manual path so it cannot
-  // silently change the service identity.
-  const commands = bootstrap && executionMode === "privileged_host" ? { linux: shellCommand, macos: shellCommand, windows: powerShellCommand } : manualCommands;
+  // Both reviewed execution modes use one command after release verification.
+  const commands = bootstrap ? { linux: shellCommand, macos: shellCommand, windows: powerShellCommand } : manualCommands;
   const tabs = Object.entries(commands).map(([platform], index) => `<button role="tab" id="tab-${platform}" aria-controls="panel-${platform}" aria-selected="${index === 0 ? "true" : "false"}" tabindex="${index === 0 ? "0" : "-1"}" data-tab="${platform}">${platform === "macos" ? "macOS" : platform === "windows" ? "Windows" : "Linux"}</button>`).join("");
   const panels = Object.entries(commands).map(([platform, value], index) => `<section role="tabpanel" id="panel-${platform}" aria-labelledby="tab-${platform}" ${index === 0 ? "" : "hidden"} class="${index === 0 ? "is-active" : ""}" data-panel="${platform}"><pre><code>${escapeHtml(value)}</code></pre><button type="button" class="button secondary" data-copy="" data-copy-source="command">Copy ${commands === manualCommands ? "enrollment and install" : "installer"} command</button></section>`).join("");
   const title = commands === manualCommands ? "Manual portable-artifact enrollment" : "One-command Runner setup";
   const instruction = commands === manualCommands
     ? `Manual Runner enrollment and install uses a verified portable artifact. Install the artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. Selected execution mode: ${modeLabel}. The default is dedicated_user; privileged_host is an advanced, explicitly confirmed option. The install step runs only after enrollment succeeds.`
     : `The installer verifies the fixed signed Runner artifact, downloads and verifies a private Node.js runtime for the host architecture, registers the Runner as a background service, and starts it after enrollment. The copied command includes the one-time enrollment code; no second code entry is needed. Treat the command as a secret. Selected execution mode: ${modeLabel}. The default is dedicated_user; privileged_host is an advanced, explicitly confirmed option.`;
-  const warningBlock = executionMode === "privileged_host" ? `<p class="warning privileged-host-warning">${escapeHtml(privilegedWarning)} You must keep the one-time confirmation in the local install command.</p>` : `<p class="notice">Selected restricted service account mode: dedicated_user. The hosted privileged installer is not used.</p>`;
+  const warningBlock = executionMode === "privileged_host" ? `<p class="warning privileged-host-warning">${escapeHtml(privilegedWarning)} You must keep the one-time confirmation in the local install command.</p>` : `<p class="notice">Selected restricted service account mode: dedicated_user. The installer preserves this selection.</p>`;
   const enrollmentSummary = enrollment === undefined ? "The one-time enrollment code expires after 30 minutes." : `This code is valid until ${new Date(enrollment.expires_at_ms).toISOString()} and can be used once.`;
   const removalCommands = { linux: "sudo /opt/runmesh/current/bin/runmesh uninstall --purge --yes", macos: "sudo /opt/runmesh/current/bin/runmesh uninstall --purge --yes", windows: "& 'C:\\Program Files\\Runmesh\\current\\runmesh.cmd' uninstall --purge --yes" };
   const removalBlock = `<details class="panel"><summary><strong>Remove this Runner from the host</strong></summary><p class="muted font-12">Run the command for the local OS to stop and remove the managed service and local credential profile. Delete the Runner record separately from the administrator console when you no longer need its history.</p><p><strong>Linux / macOS</strong></p><pre><code>${escapeHtml(removalCommands.linux)}</code></pre><p><strong>Windows PowerShell (Administrator)</strong></p><pre><code>${escapeHtml(removalCommands.windows)}</code></pre></details>`;
