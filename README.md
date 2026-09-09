@@ -91,9 +91,9 @@ Runmesh is maintained by aloneio. Report security vulnerabilities through the pr
 
 ## Current security and rollout defaults
 
-The signed **0.1.0-dev.4** Runner release is published and independently verified.
-Production hosted distribution is enabled for that exact release; development
-remains disabled. Worker-only installer/UI updates do not replace signed assets.
+Source targets **0.1.0 — an unreleased stable candidate**. Production and
+development hosted distribution remain disabled in this checkout. The owner
+must publish and independently verify new immutable assets before enabling them.
 First administrator setup needs no additional bootstrap token: use password
 confirmation, CSRF and same-origin protected atomic first-success-wins setup.
 Finish initialization before exposing a new instance to untrusted visitors.
@@ -101,3 +101,5 @@ New Runners default to `dedicated_user` and new MCP clients to `coding:read`.
 Hosted installer commands include the single-use enrollment code, so no second
 code entry is needed. Omit the code argument to use the hidden manual prompt.
 Keep the complete copied command private. See [security rollout notes](docs/security-remediation.md).
+
+Release gates, runtime support and upgrade precautions: [release readiness](docs/release-readiness.md).

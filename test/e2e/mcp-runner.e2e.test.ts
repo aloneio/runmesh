@@ -95,7 +95,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     enrollmentCli.stdin?.end(`${enrollmentCode}\n`);
     const enrollmentCliLog = collectOutput(enrollmentCli);
     await waitForExit(enrollmentCli, 15_000, enrollmentCliLog);
-    expect(enrollmentCli.exitCode).toBe(0);
+    expect(enrollmentCli.exitCode, enrollmentCliLog().replaceAll(enrollmentCode, "[synthetic-code-redacted]")).toBe(0);
     expect(enrollmentCliLog()).not.toContain(enrollmentCode);
     const profile = await readFile(enrolledProfile, "utf8");
     expect(profile).toContain(`\"runner_id\": \"${runnerId}\"`);
@@ -314,6 +314,58 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
 
     const calls = await Promise.all(Array.from({ length: 8 }, () => mcpTool("read", { workspace_id: "workspace-1", path: "note.txt", limit: 128 })));
     expect(calls.every((result) => result.isError !== true && result.structuredContent?.data === "hello from a real local runner\n")).toBe(true);
+  });
+
+  it("GA-001 writable MCP add/update/move/delete returns success consistent with disk", async () => {
+    const edits = [
+      "*** Add File: ga-write.txt\n+old",
+      "*** Update File: ga-write.txt\n@@\n-old\n+new",
+      "*** Update File: ga-write.txt\n*** Move to: ga-moved.txt\n@@\n-new\n+moved",
+      "*** Delete File: ga-moved.txt",
+    ];
+    for (const [index, text] of edits.entries()) {
+      const result = await mcpTool("edit", { workspace_id: "workspace-1", patch: `*** Begin Patch\n${text}\n*** End Patch` });
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent?.changed_paths).toBeInstanceOf(Array);
+      if (index === 0) expect(await readFile(join(workspace, "ga-write.txt"), "utf8")).toBe("old\n");
+      if (index === 1) expect(await readFile(join(workspace, "ga-write.txt"), "utf8")).toBe("new\n");
+      if (index === 2) expect(await readFile(join(workspace, "ga-moved.txt"), "utf8")).toBe("moved\n");
+    }
+    expect(existsSync(join(workspace, "ga-write.txt"))).toBe(false);
+    expect(existsSync(join(workspace, "ga-moved.txt"))).toBe(false);
+  });
+
+  it("GA-003 real MCP CJK search returns bounded successful pages with an advancing cursor", async () => {
+    const directory = join(workspace, "ga-search"); await mkdir(directory);
+    for (let index = 0; index < 10; index++) await writeFile(join(directory, `${index}.txt`), (`needle${"中".repeat(4080)}\n`).repeat(10));
+    const first = await mcpTool("inspect", { action: "search", workspace_id: "workspace-1", path: "ga-search", query: "needle" });
+    expect(first.isError).not.toBe(true);
+    expect((first.structuredContent?.results as unknown[]).length).toBeGreaterThan(0);
+    expect(typeof first.structuredContent?.next_cursor).toBe("string");
+    const second = await mcpTool("inspect", { action: "search", workspace_id: "workspace-1", path: "ga-search", query: "needle", cursor: first.structuredContent?.next_cursor });
+    expect(second.isError).not.toBe(true);
+    expect(Number(second.structuredContent?.next_cursor)).toBeGreaterThan(Number(first.structuredContent?.next_cursor));
+    expect(Buffer.byteLength(JSON.stringify(first.structuredContent))).toBeLessThan(65536);
+    await rm(directory, { recursive: true });
+  });
+
+  it("GA-011 escaped patch input inside the text limit is rejected before forwarding or mutation", async () => {
+    const result = await mcpTool("edit", { workspace_id: "workspace-1", patch: `*** Begin Patch\n*** Add File: ga-too-large.txt\n+${"\\".repeat(600000)}\n*** End Patch` });
+    expect(result).toMatchObject({ isError: true, structuredContent: { error: { code: "invalid_params" } } });
+    expect(existsSync(join(workspace, "ga-too-large.txt"))).toBe(false);
+  });
+
+  it("GA-007 busy Runner returns a retryable busy error, not invalid parameters", async () => {
+    const first = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("setTimeout(()=>{},10000)"), background: true });
+    const id = first.structuredContent?.job_id as string;
+    expect(typeof id).toBe("string");
+    try {
+      const second = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('never')"), background: true });
+      expect(second).toMatchObject({ isError: true, structuredContent: { error: { code: "busy" } } });
+    } finally {
+      await mcpTool("job", { action: "cancel", job_id: id });
+      await waitFor(async () => ["cancelled", "succeeded", "failed"].includes(String((await mcpTool("job", { action: "get", job_id: id })).structuredContent?.status)), 12000);
+    }
   });
 
   it("reports a runner_offline structured error after the real runner disconnects", async () => {

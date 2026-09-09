@@ -6,19 +6,17 @@ import { PRODUCT_VERSION } from "./product-version.mjs";
 import { MAX_RELEASE_ASSET_BYTES, readBoundedReleaseFile } from "./release-io.mjs";
 
 export const RELEASE_PROJECT = "runmesh";
-export const RELEASE_CHANNEL = "dev";
+export const RELEASE_CHANNEL = PRODUCT_VERSION.includes("-dev") ? "dev" : "stable";
 export const RELEASE_MANIFEST_SCHEMA_VERSION = 1;
 export const RELEASE_PROTOCOL_MIN = 2;
 export const RELEASE_PROTOCOL_MAX = 2;
 export { MAX_RELEASE_ASSET_BYTES };
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
-// The release workflow is deliberately scoped to development previews. Keep
-// the SemVer numeric rules strict (no leading zeroes) and require the `dev`
-// prerelease lane so a stable version cannot be published accidentally from
-// the preview workflow.
+// Accept stable SemVer and the explicitly supported dev lane. Release jobs
+// still require an independently reviewed source-pinned version contract.
 const SEMVER_IDENTIFIER = "(?:0|[1-9]\\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)";
-const SEMVER = new RegExp(`^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)-dev(?:\\.${SEMVER_IDENTIFIER})*(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$`);
+const SEMVER = new RegExp(`^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-dev(?:\\.${SEMVER_IDENTIFIER})*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$`);
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 function validTimestamp(value) {
   return typeof value === "string"
@@ -31,6 +29,10 @@ export function releaseVersion(value) {
   if (typeof value !== "string" || !SEMVER.test(value)) throw new Error("release version is invalid");
   return value;
 }
+export function releaseChannel(version) { return releaseVersion(version).includes("-dev") ? "dev" : "stable"; }
+// Existing immutable previews retain their original signed schema. New
+// artifacts, including stable releases, require a maintained Node major.
+export function releaseNodeMajor(version) { return /^0\.1\.0-dev\.[1-5]$/.test(version) ? 20 : 22; }
 export function releaseTag(version) { return `v${releaseVersion(version)}`; }
 export function releaseArtifactName(version) { return `runmesh-runner-${releaseVersion(version)}.tgz`; }
 export function releaseAssetUrl(version, name) {
@@ -57,8 +59,8 @@ export async function buildManifest({ releaseDirectory, version = PRODUCT_VERSIO
     project: RELEASE_PROJECT,
     version,
     tag: releaseTag(version),
-    channel: RELEASE_CHANNEL,
-    prerelease: true,
+    channel: releaseChannel(version),
+    prerelease: releaseChannel(version) !== "stable",
     commit_sha: commitSha,
     protocol_min: RELEASE_PROTOCOL_MIN,
     protocol_max: RELEASE_PROTOCOL_MAX,
@@ -67,7 +69,7 @@ export async function buildManifest({ releaseDirectory, version = PRODUCT_VERSIO
       name: basename(expectedName),
       platform: "node",
       architecture: "portable",
-      node_major_min: 20,
+      node_major_min: releaseNodeMajor(version),
       url: releaseAssetUrl(version, expectedName),
       size: bytes.byteLength,
       sha256: createHash("sha256").update(bytes).digest("hex"),
@@ -82,15 +84,15 @@ export function validateManifest(value, expectedVersion = value?.version) {
     || value.project !== RELEASE_PROJECT
     || value.version !== version
     || value.tag !== releaseTag(version)
-    || value.channel !== RELEASE_CHANNEL
-    || value.prerelease !== true
+    || value.channel !== releaseChannel(version)
+    || value.prerelease !== (releaseChannel(version) !== "stable")
     || !COMMIT_SHA.test(value.commit_sha)
     || value.protocol_min !== RELEASE_PROTOCOL_MIN
     || value.protocol_max !== RELEASE_PROTOCOL_MAX
     || !validTimestamp(value.published_at)
     || !Array.isArray(value.artifacts)
     || value.artifacts.length !== 1) {
-    throw new Error("invalid Runmesh development manifest");
+    throw new Error("invalid Runmesh release manifest");
   }
   const artifact = value.artifacts[0];
   const expectedName = releaseArtifactName(version);
@@ -98,7 +100,7 @@ export function validateManifest(value, expectedVersion = value?.version) {
     || artifact.name !== expectedName
     || artifact.platform !== "node"
     || artifact.architecture !== "portable"
-    || artifact.node_major_min !== 20
+    || artifact.node_major_min !== releaseNodeMajor(version)
     || artifact.url !== releaseAssetUrl(version, expectedName)
     || !Number.isSafeInteger(artifact.size)
     || artifact.size <= 0
@@ -112,8 +114,8 @@ export function validateManifest(value, expectedVersion = value?.version) {
     project: RELEASE_PROJECT,
     version,
     tag: releaseTag(version),
-    channel: RELEASE_CHANNEL,
-    prerelease: true,
+    channel: releaseChannel(version),
+    prerelease: releaseChannel(version) !== "stable",
     commit_sha: value.commit_sha,
     protocol_min: RELEASE_PROTOCOL_MIN,
     protocol_max: RELEASE_PROTOCOL_MAX,
