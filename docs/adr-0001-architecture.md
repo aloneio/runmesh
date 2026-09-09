@@ -39,5 +39,5 @@ setup. Scripts accept a positional code, `--code CODE`, or `--code=CODE`; omitti
 the code retains the hidden terminal prompt. The downstream Runner receives
 standard input, not a temporary credential file. The complete convenience
 command is credential material and may be recorded in command history or
-process arguments. The dev.4 production gate remains empty until the new
-immutable signed artifact is independently verified.
+process arguments. The dev.4 production gate is enabled after independent signed-asset
+verification; development retains its disabled gate.
