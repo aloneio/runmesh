@@ -2,7 +2,7 @@
 
 Use this page when the Dashboard does not show a hosted installation command, when the target machine is offline, or when your organization's policy requires independent artifact verification. The normal product workflow is described in the [administrator guide](admin-guide.md).
 
-Runmesh supports a **fixed signed bootstrap design**, but it remains deliberately disabled in the default/local environment of `v0.1.0-dev.4`. The production acknowledgement is empty while dev.4 is an unpublished source candidate. Publish and independently verify the new signed assets before enabling distribution. A deployment exposes hosted commands only when that environment has a canonical external HTTPS `RUNMESH_PUBLIC_ORIGIN` and the exact `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.0-dev.4` acknowledgement; both conditions are required, and setting the release acknowledgement alone never exposes the installer.
+Runmesh supports a **fixed signed bootstrap design**, but it remains deliberately disabled in the default/local environment of `v0.1.0-dev.4`. The checked-in production acknowledgement enables the already published, independently verified dev.4 signed release. Both dedicated_user and privileged_host selections use a one-command installer. A deployment exposes hosted commands only when that environment has a canonical external HTTPS `RUNMESH_PUBLIC_ORIGIN` and the exact `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.0-dev.4` acknowledgement; both conditions are required, and setting the release acknowledgement alone never exposes the installer.
 
 `RUNMESH_PUBLIC_ORIGIN` is a non-secret Worker variable. Set it in the Wrangler `vars` configuration to an externally reachable origin such as `https://mcp.example.com`, with no path, query, fragment, credentials, whitespace, wildcard, or `http://` scheme. A trailing slash is normalized. The configured public Host is accepted behind a proxy. Routed domains are also accepted when the HTTPS request URL and Host agree; mismatched authorities are rejected; an invalid or missing origin keeps the release descriptor non-distributable. Local development can omit the variable, but it cannot enable hosted signed bootstrap.
 
@@ -322,3 +322,15 @@ if ($LASTEXITCODE -ne 0) { throw 'Runner doctor check failed.' }
 must return structured checks. The enrollment code is single-use and is not a
 long-term Runner credential; never place it in logs, shell history, issue
 reports, or configuration management. The resulting long-lived Runner token is private profile material.
+
+## One-command mode selection
+
+The authenticated enrollment page supplies the complete single-line command,
+including the one-time code. For dedicated-user installation it fetches
+`/runner/install.sh?execution_mode=dedicated_user` on Linux/macOS, or
+`/runner/install.ps1?execution_mode=dedicated_user` on Windows. For an explicitly
+confirmed privileged-host installation it uses the original bare script URL.
+The script downloads and verifies the runtime and signed Runner, enrolls it,
+installs the selected service identity, and starts the service automatically.
+The longer offline-verification examples remain an optional advanced path,
+not the default dashboard installation flow.

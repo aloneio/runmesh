@@ -8,15 +8,17 @@ import { resolveTrustedWindowsTool, trustedWindowsRoot } from "../apps/runner/di
 // Parse generated scripts only. Never execute installation, enrollment or service changes.
 const directory = await mkdtemp(join(tmpdir(), "runmesh-installer-syntax-"));
 try {
+  for (const mode of ["dedicated_user", "privileged_host"]) {
   if (process.platform === "win32") {
     const filename = join(directory, "installer.ps1");
-    await writeFile(filename, renderPowerShellInstaller("https://syntax.example"));
+    await writeFile(filename, renderPowerShellInstaller("https://syntax.example", mode));
     const command = "$tokens = $null; $errors = $null; [System.Management.Automation.Language.Parser]::ParseFile($env:RUNMESH_SYNTAX_FILE, [ref]$tokens, [ref]$errors) | Out-Null; if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }";
     execFileSync(resolveTrustedWindowsTool("powershell", trustedWindowsRoot()), ["-NoProfile", "-NonInteractive", "-Command", command], { env: { ...process.env, RUNMESH_SYNTAX_FILE: filename }, stdio: "inherit", timeout: 30_000 });
   } else {
     const filename = join(directory, "installer.sh");
-    await writeFile(filename, renderPosixInstaller("https://syntax.example"));
+    await writeFile(filename, renderPosixInstaller("https://syntax.example", mode));
     execFileSync("/bin/sh", ["-n", filename], { stdio: "inherit", timeout: 10_000 });
+  }
   }
   console.log(`installer syntax verified on ${process.platform}; no installer was executed`);
 } finally {

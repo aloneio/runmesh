@@ -91,9 +91,9 @@ Runmesh is maintained by aloneio. Report security vulnerabilities through the pr
 
 ## Current security and rollout defaults
 
-The source candidate is **0.1.0-dev.4**. Production hosted distribution remains
-disabled until its new immutable signed artifacts are published and independently
-verified; the existing dev.3 release does not contain these working-tree fixes.
+The signed **0.1.0-dev.4** Runner release is published and independently verified.
+Production hosted distribution is enabled for that exact release; development
+remains disabled. Worker-only installer/UI updates do not replace signed assets.
 First administrator setup needs no additional bootstrap token: use password
 confirmation, CSRF and same-origin protected atomic first-success-wins setup.
 Finish initialization before exposing a new instance to untrusted visitors.

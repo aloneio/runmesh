@@ -355,10 +355,10 @@ refresh_existing() {
   case "$ENROLLMENT_CODE" in *[!A-Za-z0-9_-]*) printf '%s\n' 'error: invalid one-time enrollment code' >&2; exit 1;; esac
   case "$ENROLLMENT_CODE" in ???????????????????????????????????????????) : ;; *) printf '%s\n' 'error: invalid one-time enrollment code' >&2; exit 1;; esac
   REFRESH_ENROLL_LOG="$INSTALL_ROOT/.refresh-enroll.$$.log"
-  if printf '%s\n' "$ENROLLMENT_CODE" | "$EXISTING_RUNNER" enroll --profile "$PROFILE" --server "$ENROLLMENT_URL" --code-stdin --re-enroll >"$REFRESH_ENROLL_LOG" 2>&1; then :; else rc=$?; report_failure 'Refreshing credentials for the existing Runmesh Runner.' "$REFRESH_ENROLL_LOG" "$rc"; exit "$rc"; fi
+  if printf '%s\n' "$ENROLLMENT_CODE" | "$EXISTING_RUNNER" enroll --profile "$PROFILE" --server "$ENROLLMENT_URL" --code-stdin --re-enroll __EXECUTION_MODE_FLAGS__ >"$REFRESH_ENROLL_LOG" 2>&1; then :; else rc=$?; report_failure 'Refreshing credentials for the existing Runmesh Runner.' "$REFRESH_ENROLL_LOG" "$rc"; exit "$rc"; fi
   unset ENROLLMENT_CODE
   REFRESH_INSTALL_LOG="$INSTALL_ROOT/.refresh-install.$$.log"
-  if "$EXISTING_RUNNER" install --profile "$PROFILE" --execution-mode privileged_host --confirm-privileged-host --executable-path "$EXISTING_RUNNER" >"$REFRESH_INSTALL_LOG" 2>&1; then :; else rc=$?; report_failure 'Refreshing the installed service for the existing Runmesh Runner.' "$REFRESH_INSTALL_LOG" "$rc"; exit "$rc"; fi
+  if "$EXISTING_RUNNER" install --profile "$PROFILE" __EXECUTION_MODE_FLAGS__ --executable-path "$EXISTING_RUNNER" >"$REFRESH_INSTALL_LOG" 2>&1; then :; else rc=$?; report_failure 'Refreshing the installed service for the existing Runmesh Runner.' "$REFRESH_INSTALL_LOG" "$rc"; exit "$rc"; fi
   REFRESH_RESTART_LOG="$INSTALL_ROOT/.refresh-restart.$$.log"
   if "$EXISTING_RUNNER" restart --profile "$PROFILE" >"$REFRESH_RESTART_LOG" 2>&1; then :; else rc=$?; report_failure 'Restarting the existing Runmesh Runner service.' "$REFRESH_RESTART_LOG" "$rc"; exit "$rc"; fi
   ok 'Runmesh Runner credentials refreshed and service restarted in place.'
@@ -565,7 +565,7 @@ case "$ENROLLMENT_CODE" in ???????????????????????????????????????????) : ;; *) 
 ENROLLMENT_ATTEMPTED=1
 step 'Enrolling the Runner and starting the service.'
 ENROLL_LOG="$TMP/enroll.log"
-if printf '%s\n' "$ENROLLMENT_CODE" | "$RUNNER" enroll --profile "$PROFILE" --server "$ENROLLMENT_URL" --code-stdin --execution-mode privileged_host --confirm-privileged-host >"$ENROLL_LOG" 2>&1; then :; else rc=$?; report_failure 'Enrolling the Runner.' "$ENROLL_LOG" "$rc"; exit "$rc"; fi
+if printf '%s\n' "$ENROLLMENT_CODE" | "$RUNNER" enroll --profile "$PROFILE" --server "$ENROLLMENT_URL" --code-stdin __EXECUTION_MODE_FLAGS__ >"$ENROLL_LOG" 2>&1; then :; else rc=$?; report_failure 'Enrolling the Runner.' "$ENROLL_LOG" "$rc"; exit "$rc"; fi
 unset ENROLLMENT_CODE
 mv "$STAGE" "$FINAL"
 FINAL_CREATED=1
@@ -573,7 +573,7 @@ ln -s "$FINAL" "$INSTALL_ROOT/current.new"
 mv "$INSTALL_ROOT/current.new" "$INSTALL_ROOT/current"
 CURRENT_CREATED=1
 SERVICE_LOG="$TMP/service-install.log"
-if "$INSTALL_ROOT/current/bin/runmesh" install --profile "$PROFILE" --execution-mode privileged_host --confirm-privileged-host --executable-path "$INSTALL_ROOT/current/bin/runmesh" >"$SERVICE_LOG" 2>&1; then :; else rc=$?; report_failure 'Installing the Runmesh service.' "$SERVICE_LOG" "$rc"; exit "$rc"; fi
+if "$INSTALL_ROOT/current/bin/runmesh" install --profile "$PROFILE" __EXECUTION_MODE_FLAGS__ --executable-path "$INSTALL_ROOT/current/bin/runmesh" >"$SERVICE_LOG" 2>&1; then :; else rc=$?; report_failure 'Installing the Runmesh service.' "$SERVICE_LOG" "$rc"; exit "$rc"; fi
 ok "Runmesh Runner $VERSION installed and enrolled."
 printf '%s\n' '  Service started automatically.' '  Logs: sudo journalctl -u runmesh-runner -f' >&2
 `;
@@ -713,10 +713,10 @@ function Refresh-Existing {
     $EnrollmentCodeArgument = $null
     if ([string]::IsNullOrWhiteSpace($EnrollmentCode) -or $EnrollmentCode -notmatch '^[A-Za-z0-9_-]{43}$') { throw 'Invalid one-time enrollment code.' }
     $RefreshEnrollLog = Join-Path $InstallRoot ('.refresh-enroll.{0}.log' -f $PID)
-    $EnrollmentCode | & $ExistingRunner enroll --profile $Profile --server $EnrollmentUrl --code-stdin --re-enroll *> $RefreshEnrollLog
+    $EnrollmentCode | & $ExistingRunner enroll --profile $Profile --server $EnrollmentUrl --code-stdin --re-enroll __EXECUTION_MODE_FLAGS__ *> $RefreshEnrollLog
     if ($LASTEXITCODE -ne 0) { Write-LogFailure 'Refreshing credentials for the existing Runmesh Runner.' $RefreshEnrollLog $LASTEXITCODE; throw 'Enrollment refresh failed.' }
     $RefreshInstallLog = Join-Path $InstallRoot ('.refresh-install.{0}.log' -f $PID)
-    & $ExistingRunner install --profile $Profile --executable-path $ExistingRunner *> $RefreshInstallLog
+    & $ExistingRunner install --profile $Profile __EXECUTION_MODE_FLAGS__ --executable-path $ExistingRunner *> $RefreshInstallLog
     if ($LASTEXITCODE -ne 0) { Write-LogFailure 'Refreshing the installed service for the existing Runmesh Runner.' $RefreshInstallLog $LASTEXITCODE; throw 'Service installation refresh failed.' }
     $RefreshRestartLog = Join-Path $InstallRoot ('.refresh-restart.{0}.log' -f $PID)
     & $ExistingRunner restart --profile $Profile *> $RefreshRestartLog
@@ -856,7 +856,7 @@ __VERIFIER__
   $EnrollmentAttempted = $true
   $EnrollLog = Join-Path $TempRoot 'enroll.log'
   Invoke-LoggedStep 'Enrolling the Runner.' $EnrollLog {
-    $EnrollmentCode | & $Runner enroll --profile $Profile --server $EnrollmentUrl --code-stdin --execution-mode privileged_host --confirm-privileged-host
+    $EnrollmentCode | & $Runner enroll --profile $Profile --server $EnrollmentUrl --code-stdin __EXECUTION_MODE_FLAGS__
   }
   $EnrollmentCode = $null
   Move-Item -LiteralPath $Stage -Destination $VersionRoot
@@ -866,7 +866,7 @@ __VERIFIER__
   $ServiceAttempted = $true
   $ServiceLog = Join-Path $TempRoot 'service-install.log'
   Invoke-LoggedStep 'Installing and starting the Runmesh service.' $ServiceLog {
-    & $CurrentRunner install --profile $Profile --execution-mode privileged_host --confirm-privileged-host --executable-path $CurrentRunner
+    & $CurrentRunner install --profile $Profile __EXECUTION_MODE_FLAGS__ --executable-path $CurrentRunner
   }
   $Succeeded = $true
   Write-Ok "Runmesh Runner $Version installed and enrolled."
@@ -898,9 +898,16 @@ __VERIFIER__
 }
 `;
 
-function replaceInstallerTemplate(template: string, enrollmentUrl: string, literal: (value: string) => string): string {
+export type InstallerExecutionMode = "dedicated_user" | "privileged_host";
+
+function replaceInstallerTemplate(template: string, enrollmentUrl: string, literal: (value: string) => string, executionMode: InstallerExecutionMode): string {
+  if (executionMode !== "dedicated_user" && executionMode !== "privileged_host") throw new Error("invalid installer execution mode");
+  const modeFlags = executionMode === "privileged_host"
+    ? "--execution-mode privileged_host --confirm-privileged-host"
+    : "--execution-mode dedicated_user";
   const node = FIXED_NODE_RUNTIME_ASSETS;
   return template
+    .replaceAll("__EXECUTION_MODE_FLAGS__", modeFlags)
     .replaceAll("__VERSION__", literal(FIXED_RELEASE_VERSION))
     .replaceAll("__NODE_VERSION__", literal(FIXED_NODE_VERSION))
     .replaceAll("__MAX_NODE_RUNTIME_BYTES__", String(MAX_NODE_RUNTIME_BYTES))
@@ -926,12 +933,12 @@ function replaceInstallerTemplate(template: string, enrollmentUrl: string, liter
     .replace("__VERIFIER__", verifierSource());
 }
 
-export function renderPosixInstaller(requestOrigin: string): string {
+export function renderPosixInstaller(requestOrigin: string, executionMode: InstallerExecutionMode = "privileged_host"): string {
   const publicOrigin = canonicalPublicOrigin(requestOrigin);
-  return replaceInstallerTemplate(POSIX_TEMPLATE, `${publicOrigin}/runner/enroll`, shellLiteral);
+  return replaceInstallerTemplate(POSIX_TEMPLATE, `${publicOrigin}/runner/enroll`, shellLiteral, executionMode);
 }
 
-export function renderPowerShellInstaller(requestOrigin: string): string {
+export function renderPowerShellInstaller(requestOrigin: string, executionMode: InstallerExecutionMode = "privileged_host"): string {
   const publicOrigin = canonicalPublicOrigin(requestOrigin);
-  return replaceInstallerTemplate(POWERSHELL_TEMPLATE, `${publicOrigin}/runner/enroll`, powershellLiteral);
+  return replaceInstallerTemplate(POWERSHELL_TEMPLATE, `${publicOrigin}/runner/enroll`, powershellLiteral, executionMode);
 }

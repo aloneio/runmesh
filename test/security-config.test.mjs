@@ -11,7 +11,8 @@ test("default Worker configuration cannot accidentally select production or enab
   assert.equal(config.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE, undefined);
   assert.equal(config.env.production.name, "runmesh");
   assert.equal(config.env.production.vars.WORKER_ID, "worker-production");
-  assert.equal(config.env.production.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE, "");
+  const root = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(config.env.production.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE, root.version);
 });
 
 test("development tooling and the portable Runner have separate Node contracts", async () => {
