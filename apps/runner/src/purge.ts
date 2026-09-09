@@ -162,7 +162,24 @@ export async function purgeInstallation(options: PurgeOptions = {}): Promise<Pur
       if (safe && info) { paths.add(safe); manifests.push(safe); }
     } catch (error) { errors(layout.manifestPath, error); }
   }
-  // Never erase a workspace nested inside an installation/state directory.
+  // Preserve lexical AND canonical workspace identities. A policy root may
+  // legitimately be a symlink (or have a symlinked ancestor); comparing only
+  // its spelling can erase the real project during installation cleanup.
+  const protectedWorkspaces: string[] = [];
+  const comparable = (path: string) => platform === "win32" || platform === "darwin" ? resolve(path).toLowerCase() : resolve(path);
+  const overlaps = (left: string, right: string) => within(comparable(left), comparable(right)) || within(comparable(right), comparable(left));
+  async function assertWorkspaceProtection(target: string): Promise<void> {
+    const targetInfo = await io.stat(target);
+    if (!targetInfo) return;
+    const canonicalTarget = targetInfo.isDirectory() && !targetInfo.isSymbolicLink() ? await io.canonical(target) : target;
+    for (const configured of protectedWorkspaces) {
+      // Unknown/missing/denied roots are not proof that their data is safe.
+      const canonicalRoot = await io.canonical(configured);
+      for (const root of [configured, canonicalRoot]) {
+        if (overlaps(root, target) || overlaps(root, canonicalTarget)) throw new Error("contains or overlaps a configured workspace; move it before purging");
+      }
+    }
+  }
   for (const state of [layout.stateRoot, ...(platform === "linux" && mode === "system" ? ["/var/lib/runmesh-runner"] : [])]) {
     for (const name of ["active-policy.json", "previous-policy.json"]) {
       const path = join(state, "policy", name);
@@ -170,13 +187,15 @@ export async function purgeInstallation(options: PurgeOptions = {}): Promise<Pur
         const safe = await safeParent(path); if (!safe) continue;
         const text = await io.text(safe, 2 * 1024 * 1024); if (!text) continue;
         const policy = JSON.parse(text) as { workspaces?: { root_path?: unknown }[] };
-        for (const workspace of policy.workspaces ?? []) {
-          if (typeof workspace.root_path !== "string") continue;
-          for (const target of paths) if (within(resolve(workspace.root_path), target)) errors(target, new Error("contains a configured workspace; move it before purging"));
+        if (!Array.isArray(policy.workspaces)) throw new Error("workspace policy is malformed; refusing cleanup");
+        for (const workspace of policy.workspaces) {
+          if (typeof workspace?.root_path !== "string" || workspace.root_path.length === 0) throw new Error("workspace identity is malformed; refusing cleanup");
+          protectedWorkspaces.push(workspace.root_path);
         }
       } catch (error) { errors(path, error); }
     }
   }
+  for (const path of paths) { try { await assertWorkspaceProtection(path); } catch (error) { errors(path, error); } }
   for (const path of paths) if (mounts.some((mount) => within(mount, path))) errors(path, new Error("contains a mounted filesystem; unmount it before purging"));
   if (result.failures.length) return result;
   const run = async (file: string, args: string[]) => {
@@ -252,6 +271,7 @@ export async function purgeInstallation(options: PurgeOptions = {}): Promise<Pur
       if (path === layout.installRoot && result.failures.length) throw new Error("retained maintenance CLI because another cleanup failed");
       const safe = await safeParent(path); if (safe !== path) { if (!safe) { result.absent.push(path); continue; } throw new Error("parent changed during cleanup"); }
       const info = await io.stat(path); if (!info) { result.absent.push(path); continue; }
+      await assertWorkspaceProtection(path);
       await removeTree(path, info, (await io.stat(dirname(path)))?.dev ?? info.dev);
       result.removed.push(path);
     } catch (error) { errors(path, error); }

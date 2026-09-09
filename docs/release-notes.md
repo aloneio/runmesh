@@ -1,3 +1,9 @@
+# 0.1.0 — unreleased stable candidate
+
+Fixes the GA audit's Patch response graph, pre-commit response budgets, concurrent commit recovery, canonical workspace protection during purge, JSON-byte-aware read/list/search pagination, input frame preflight, busy error codes, idle audit retention, fallback throttle recovery, secret validation and doctor wording. Pins private Node 22.23.2, rejects unsupported runtime floors, and introduces owner-only stable publication depending on the complete same-SHA CI matrix. Existing immutable dev.5 assets are not replaced. Hosted distribution remains OFF until release approval, publication and independent verification.
+
+See [release readiness](release-readiness.md). Entries below describe historical releases, not current candidate availability.
+
 # 0.1.0-dev.5 — complete maintenance cleanup
 
 Adds a separately verified one-command uninstaller that works with old, missing

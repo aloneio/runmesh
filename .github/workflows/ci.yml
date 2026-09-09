@@ -5,6 +5,7 @@ on:
     branches: [dev]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -28,6 +29,7 @@ jobs:
       - run: npm ci
       - run: npm audit --audit-level=high
       - run: npm audit --omit=dev --audit-level=high
+      - run: npm run check:docs
       - run: npm run check:versions
       - run: npm run check:format
       - run: git diff --check
@@ -68,7 +70,12 @@ jobs:
       - run: node scripts/check-installer-syntax.mjs
       - run: node --test test/installer-arguments.test.mjs
 
-  runner-node20:
+  runner-lts:
+    name: Runner LTS (${{ matrix.node }})
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22.23.2, 24.21.0]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -86,7 +93,20 @@ jobs:
       - run: npm run pack:smoke
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 20.19.2
+          node-version: ${{ matrix.node }}
       - run: npm install --global npm@10.9.3
       - run: npm run test --workspace=@aloneio/runmesh-runner
       - run: node apps/runner/dist/runmesh.cjs --version
+
+  verify-all:
+    if: always()
+    needs: [verify, native-runner, runner-lts]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every platform and supported runtime
+        env:
+          VERIFY: ${{ needs.verify.result }}
+          NATIVE: ${{ needs.native-runner.result }}
+          LTS: ${{ needs.runner-lts.result }}
+        run: test "$VERIFY" = success && test "$NATIVE" = success && test "$LTS" = success

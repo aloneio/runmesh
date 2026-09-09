@@ -1,3 +1,4 @@
+import { assertRpcResultFits, jsonBytes, MAX_RPC_RESULT_BYTES, withPatchCommitLock } from "./rpc-budget.js";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, link, open, rename, rm } from "node:fs/promises";
@@ -119,32 +120,15 @@ export class PatchService {
 
   public async apply(input: unknown): Promise<Record<string, unknown>> {
     const params = object(input);
-    if (typeof params.patch !== "string") {
-      throw new RpcRuntimeError("invalid_params", "patch must be a string");
-    }
-    if (Buffer.byteLength(params.patch, "utf8") > MAX_PATCH_BYTES) {
-      throw new RpcRuntimeError("invalid_params", `patch must not exceed ${MAX_PATCH_BYTES} UTF-8 bytes`);
-    }
-
+    if (typeof params.patch !== "string") throw new RpcRuntimeError("invalid_params", "patch must be a string");
+    if (Buffer.byteLength(params.patch, "utf8") > MAX_PATCH_BYTES) throw new RpcRuntimeError("invalid_params", `patch must not exceed ${MAX_PATCH_BYTES} UTF-8 bytes`);
     const parsed = parsePatch(params.patch);
-    const workspaceId = params.workspace_id;
-    const operations = await this.resolveOperations(workspaceId, parsed);
+    const workspace = this.policy.getWorkspace(params.workspace_id);
+    const operations = await this.resolveOperations(params.workspace_id, parsed);
     rejectConflictingPaths(operations);
     const baselines = await this.captureBaselines(operations);
     await this.checkExpectedHashes(params, operations, baselines);
     const planned = this.stageChanges(operations, baselines);
-    const prepared = await this.prepareChanges(planned);
-    let warnings: readonly RecoveryWarning[] = [];
-
-    try {
-      await this.options.beforeCommit?.();
-      await this.recheckBaselines(baselines);
-      warnings = await this.installChanges(prepared);
-    } catch (error) {
-      await this.removeTemporary(prepared);
-      throw error;
-    }
-
     const changes = planned.map((change) => ({
       path: change.path.relativePath,
       status: change.action === "write" ? (change.baseline.exists ? "updated" : "created") : "deleted",
@@ -152,13 +136,34 @@ export class PatchService {
       after_hash: change.action === "write" ? hash(change.bytes as Buffer) : null,
       mode: change.action === "write" ? change.mode ?? null : null,
     }));
-    const operationResults = operations.map((operation) => operationResult(operation, changes));
-    return {
-      workspace_id: operations[0]?.source?.workspaceId ?? operations[0]?.target?.workspaceId,
+    const result: Record<string, unknown> = {
+      workspace_id: workspace.workspaceId,
       changed_paths: changes,
-      operations: operationResults,
-      ...(warnings.length === 0 ? {} : { warnings }),
+      operations: operations.map((operation) => operationResult(operation, changes)),
     };
+    // Validate the exact success tree BEFORE creating temporary files or
+    // committing. Reserve 16 KiB for bounded recovery warnings.
+    assertRpcResultFits(result, 32 * 1024);
+    const prepared = await this.prepareChanges(planned);
+    try {
+      await this.options.beforeCommit?.();
+      return await withPatchCommitLock(workspace.rootPath, async () => {
+        await this.recheckBaselines(baselines);
+        const warnings = await this.installChanges(prepared);
+        if (warnings.length > 0) {
+          const retained: RecoveryWarning[] = [];
+          result.warnings = retained;
+          result.warning_count = warnings.length;
+          result.warnings_truncated = true;
+          for (const warning of warnings) {
+            retained.push({ ...warning });
+            if (jsonBytes(result) > MAX_RPC_RESULT_BYTES) { retained.pop(); break; }
+          }
+          result.warnings_truncated = retained.length !== warnings.length;
+        }
+        return result;
+      });
+    } catch (error) { await this.removeTemporary(prepared); throw error; }
   }
 
   private async resolveOperations(workspaceId: unknown, operations: readonly PatchOperation[]): Promise<readonly ResolvedOperation[]> {
@@ -1040,7 +1045,7 @@ function operationResult(operation: ResolvedOperation, changes: readonly Record<
     path: operation.source?.relativePath ?? operation.target?.relativePath,
     ...(operation.destination === undefined ? {} : { destination: operation.target?.relativePath }),
     status: "applied",
-    results: changes.filter((change) => typeof change.path === "string" && paths.includes(pathKey(change.path))),
+    results: changes.filter((change) => typeof change.path === "string" && paths.includes(pathKey(change.path))).map((change) => ({ ...change })),
   };
 }
 
