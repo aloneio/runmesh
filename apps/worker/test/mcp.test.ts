@@ -184,9 +184,9 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
 
   it("keeps hosted distribution fail-closed unless the exact fixed release acknowledgement is set", async () => {
     const release = runnerReleaseDescriptor({ RUNMESH_SIGNED_RELEASE_AVAILABLE: "not-a-version" });
-    expect(release).toMatchObject({ channel: "dev", distributable: false, current_version: "", package_name: "", package_spec: "", artifact: null, manifest_url: null, release_key_id: null });
+    expect(release).toMatchObject({ channel: "stable", distributable: false, current_version: "", package_name: "", package_spec: "", artifact: null, manifest_url: null, release_key_id: null });
     const enabled = runnerReleaseDescriptor({ RUNMESH_SIGNED_RELEASE_AVAILABLE: FIXED_RELEASE_VERSION, RUNMESH_PUBLIC_ORIGIN: "https://worker.test" });
-    expect(enabled).toMatchObject({ channel: "dev", distributable: true, current_version: FIXED_RELEASE_VERSION, latest_version: FIXED_RELEASE_VERSION, package_spec: FIXED_ARTIFACT_URL, release_key_id: FIXED_RELEASE_KEY_ID });
+    expect(enabled).toMatchObject({ channel: "stable", distributable: true, current_version: FIXED_RELEASE_VERSION, latest_version: FIXED_RELEASE_VERSION, package_spec: FIXED_ARTIFACT_URL, release_key_id: FIXED_RELEASE_KEY_ID });
   });
 
   it("recreates a Runner with a fresh lifecycle and no retired marker", async () => {
@@ -244,10 +244,10 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
       expect(text).toContain("not enabled on this deployment");
       expect(text).not.toMatch(/npm install|--code\s+[A-Za-z0-9_-]{20,}|trust-keyring\.json/i);
     }
-    expect(await release.json()).toMatchObject({ channel: "dev", distributable: false, package_name: "", package_spec: "", artifact: null, manifest_url: null, release_key_id: null, protocol: { min_version: 2, max_version: 2 } });
+    expect(await release.json()).toMatchObject({ channel: "stable", distributable: false, package_name: "", package_spec: "", artifact: null, manifest_url: null, release_key_id: null, protocol: { min_version: 2, max_version: 2 } });
     const stable = await SELF.fetch("https://worker.test/runner/releases/stable");
     expect(stable.status).toBe(200);
-    expect(await stable.json()).toMatchObject({ channel: "dev", distributable: false, artifact: null });
+    expect(await stable.json()).toMatchObject({ channel: "stable", distributable: false, artifact: null });
   });
 
   it("renders immutable signed installers with embedded key verification and no code input surface", () => {
@@ -258,7 +258,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
       expect(text).toContain("--purge --yes"); expect(text).toContain("runmesh-runner");
       expect(text).not.toMatch(/trust-keyring\.json|@latest|npmjs\.com|--code\s+[A-Za-z0-9_-]{20,}/i);
     }
-    expect(shell).toContain("--code-stdin"); expect(shell).toContain("/dev/tty"); expect(shell).toContain("stty -echo"); expect(shell).toContain("FINAL=\"$INSTALL_ROOT/versions/$VERSION\""); expect(shell).toContain("ENROLLMENT_ATTEMPTED=0"); expect(shell).toContain("trap on_exit EXIT"); expect(shell).toContain("trap 'rollback 1' HUP INT TERM"); expect(shell).toContain("command_name in curl stty readlink grep tar mktemp"); expect(shell).toContain("node-v22.19.0"); expect(shell).toContain("NODE_SHA256"); expect(shell).not.toContain("ENROLLMENT_INPUT"); expect(shell).not.toContain("REFRESH_INPUT"); expect(shell).toMatch(/printf '[^']*' \"\$ENROLLMENT_CODE\" \|/); expect(shell).toContain('"$NODE" "$NPM_CLI"'); expect(shell).toContain("--ignore-scripts --offline");
+    expect(shell).toContain("--code-stdin"); expect(shell).toContain("/dev/tty"); expect(shell).toContain("stty -echo"); expect(shell).toContain("FINAL=\"$INSTALL_ROOT/versions/$VERSION\""); expect(shell).toContain("ENROLLMENT_ATTEMPTED=0"); expect(shell).toContain("trap on_exit EXIT"); expect(shell).toContain("trap 'rollback 1' HUP INT TERM"); expect(shell).toContain("command_name in curl stty readlink grep tar mktemp"); expect(shell).toContain("node-v22.23.2"); expect(shell).toContain("NODE_SHA256"); expect(shell).not.toContain("ENROLLMENT_INPUT"); expect(shell).not.toContain("REFRESH_INPUT"); expect(shell).toMatch(/printf '[^']*' \"\$ENROLLMENT_CODE\" \|/); expect(shell).toContain('"$NODE" "$NPM_CLI"'); expect(shell).toContain("--ignore-scripts --offline");
     expect(shell).toContain("runmesh-runner"); expect(shell).toContain("current/bin/runmesh"); expect(shell).toContain('--profile "$PROFILE"');
     // npm's POSIX global install creates bin symlinks into dist/. The hosted
     // installer must unlink them before writing private-runtime wrappers, or
