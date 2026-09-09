@@ -18,3 +18,11 @@ export function runnerPackageVersion(): string {
 }
 
 export const RUNNER_VERSION = runnerPackageVersion();
+
+/** Supported, patched LTS floors; an EOL major is not a production runtime. */
+export function assertSupportedNodeVersion(version = process.versions.node): void {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+  const major = Number(match?.[1]); const minor = Number(match?.[2]); const patch = Number(match?.[3]);
+  if (match !== null && ((major === 22 && (minor > 23 || (minor === 23 && patch >= 2))) || (major === 24 && minor >= 21))) return;
+  throw new Error("Runmesh requires supported Node 22.23.2+ (22.x) or 24.21.0+ (24.x)");
+}

@@ -28,7 +28,7 @@ test("pins manually-dispatched releases to the triggering dev commit", async () 
   assert.equal(workflow.includes('test "$GITHUB_REF" = "refs/heads/dev"'), true);
   assert.equal(workflow.includes('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"'), true);
   assert.equal(workflow.includes('test "$(git rev-parse origin/dev)" = "$GITHUB_SHA"'), true);
-  assert.equal(workflow.includes('test "$RELEASE_VERSION" = "0.1.0-dev.5"'), true);
+  assert.equal(workflow.includes('test "$RELEASE_VERSION" = "0.1.0"'), true);
   assert.equal(workflow.includes('test "$RELEASE_SIGNING_KEY_ID" = "runmesh-preview-2026-01"'), true);
   assert.equal(workflow.lastIndexOf('git fetch --no-tags origin dev') > workflow.indexOf('Verify tag and release do not already exist'), true);
   assert.equal(workflow.includes("https://api.github.com/repos/"), true);
@@ -43,7 +43,7 @@ test("pins manually-dispatched releases to the triggering dev commit", async () 
   assert.equal(workflow.includes("(cd release/assets && sha256sum -c SHA256SUMS)"), true);
   assert.equal(workflow.includes("actions/upload-artifact@v4"), false);
   assert.equal(workflow.includes("contents: write"), true);
-  assert.equal(workflow.includes("contents: read"), false);
+  assert.equal(workflow.includes("contents: read"), true);
   assert.equal(workflow.includes("gh release create"), true);
   assert.equal(workflow.includes("failure()"), false, "release workflow must not auto-delete orphan tags");
   assert.equal(workflow.includes("Re-check that the annotated tag still resolves"), true);
@@ -56,7 +56,7 @@ test("pins manually-dispatched releases to the triggering dev commit", async () 
   const packSizeGateIndex = workflow.indexOf("statSync");
   assert.ok(packIndex >= 0 && packSizeGateIndex > packIndex, "final release pack must have an explicit size gate");
   assert.equal(workflow.includes("size <= 0 || size > 8 * 1024 * 1024"), true);
-  const publishIndex = workflow.indexOf("Publish verified development prerelease");
+  const publishIndex = workflow.indexOf("Publish verified stable release");
   const publishTipFetchIndex = workflow.indexOf("git fetch --no-tags origin dev", publishIndex);
   const publishTipAssertIndex = workflow.indexOf('test "$(git rev-parse origin/dev)" = "$GITHUB_SHA"', publishIndex);
   assert.ok(publishIndex >= 0 && publishTipFetchIndex > publishIndex && publishTipAssertIndex > publishTipFetchIndex, "publish must re-check the protected dev tip");
@@ -66,7 +66,7 @@ test("pins manually-dispatched releases to the triggering dev commit", async () 
   assert.equal(workflow.includes("sbom.spdx.json"), false);
   const actionRefs = [...workflow.matchAll(/^\s+(?:-\s+)?uses:\s+([^\s#]+)/gmu)].map((match) => match[1]);
   assert.ok(actionRefs.length > 0);
-  assert.ok(actionRefs.every((ref) => /^[^@]+@[0-9a-f]{40}$/u.test(ref)), `mutable GitHub Action ref: ${actionRefs.join(", ")}`);
+  assert.ok(actionRefs.every((ref) => ref === "./.github/workflows/ci.yml" || /^[^@]+@[0-9a-f]{40}$/u.test(ref)), `mutable GitHub Action ref: ${actionRefs.join(", ")}`);
   const ciWorkflow = (await readFile(join(repositoryRoot, ".github", "workflows", "ci.yml"), "utf8")).replace(/\r\n/gu, "\n");
   const ciActionRefs = [...ciWorkflow.matchAll(/^\s+(?:-\s+)?uses:\s+([^\s#]+)/gmu)].map((match) => match[1]);
   assert.ok(ciActionRefs.length > 0);
@@ -110,20 +110,22 @@ test("builds a single portable development artifact manifest from the product ve
     await writeFile(join(f.root, releaseArtifactName(productVersion)), "portable runner artifact");
     const manifest = await buildManifest({ releaseDirectory: f.root, version: productVersion, commitSha: "a".repeat(40), publishedAt: "2026-08-27T00:00:00Z" });
     assert.equal(manifest.tag, releaseTag(productVersion));
-    assert.equal(manifest.prerelease, true);
-    assert.equal(manifest.channel, "dev");
+    assert.equal(manifest.prerelease, false);
+    assert.equal(manifest.channel, "stable");
     assert.deepEqual(manifest.artifacts[0], {
       name: releaseArtifactName(productVersion),
       platform: "node",
       architecture: "portable",
-      node_major_min: 20,
+      node_major_min: 22,
       url: `https://github.com/aloneio/runmesh/releases/download/v${productVersion}/${releaseArtifactName(productVersion)}`,
       size: "portable runner artifact".length,
       sha256: "949071a9bf3f3499241d75a0b5e93ac800158e12d3a456f8520c315f4cd6c07f",
     });
     assert.throws(() => validateManifest({ ...manifest, tag: `v${productVersion}-tampered` }, productVersion));
-    assert.throws(() => validateManifest({ ...manifest, published_at: "2026-02-30T00:00:00Z" }, productVersion), /invalid Runmesh development manifest/);
-    assert.throws(() => releaseTag("1.2.3"), /release version is invalid/);
+    assert.throws(() => validateManifest({ ...manifest, published_at: "2026-02-30T00:00:00Z" }, productVersion), /invalid Runmesh release manifest/);
+    assert.equal(releaseTag("1.2.3"), "v1.2.3");
+    assert.throws(() => releaseTag("1.2.3-rc.1"), /release version is invalid/);
+    assert.throws(() => validateManifest({ ...manifest, channel: "dev", prerelease: true }, productVersion), /invalid Runmesh release manifest/);
     assert.throws(() => releaseTag("01.2.3-dev.1"), /release version is invalid/);
     await assert.rejects(buildManifest({ releaseDirectory: f.root, version: "9.9.9", commitSha: "a".repeat(40), publishedAt: "2026-08-27T00:00:00Z" }), /must match root package\.json/);
   } finally { await f.cleanup(); }
@@ -148,13 +150,13 @@ test("rejects release assets that exceed the shared bounded-input contract", asy
       project: "runmesh",
       version: productVersion,
       tag: releaseTag(productVersion),
-      channel: "dev",
-      prerelease: true,
+      channel: "stable",
+      prerelease: false,
       commit_sha: "a".repeat(40),
       protocol_min: 2,
       protocol_max: 2,
       published_at: "2026-08-27T00:00:00Z",
-      artifacts: [{ name: releaseArtifactName(productVersion), platform: "node", architecture: "portable", node_major_min: 20, url: `https://github.com/aloneio/runmesh/releases/download/${releaseTag(productVersion)}/${releaseArtifactName(productVersion)}`, size: MAX_RELEASE_ASSET_BYTES + 1, sha256: "a".repeat(64) }],
+      artifacts: [{ name: releaseArtifactName(productVersion), platform: "node", architecture: "portable", node_major_min: 22, url: `https://github.com/aloneio/runmesh/releases/download/${releaseTag(productVersion)}/${releaseArtifactName(productVersion)}`, size: MAX_RELEASE_ASSET_BYTES + 1, sha256: "a".repeat(64) }],
     };
     assert.throws(() => validateManifest(oversizedManifest, productVersion), /invalid manifest artifact/u);
   } finally { await f.cleanup(); }
@@ -227,7 +229,7 @@ test("embeds the independently reviewed fixed release key and immutable installe
     assert.match(shell, /export npm_config_userconfig="\$NPM_CONFIG_USERCONFIG" npm_config_globalconfig="\$NPM_CONFIG_GLOBALCONFIG"/u);
     assert.match(shell, /"\$NODE" "\$NPM_CLI" --userconfig "\$NPM_CONFIG_USERCONFIG" --globalconfig "\$NPM_CONFIG_GLOBALCONFIG" install/u);
     assert.match(shell, /\(\s+cd "\$TMP"\s+"\$NODE" "\$NPM_CLI" --userconfig[\s\S]*?install[\s\S]*?--ignore-scripts[\s\S]*?--offline/u);
-    assert.match(shell, /node-v22\.19\.0/u);
+    assert.match(shell, /node-v22\.23\.2/u);
     assert.match(shell, /NODE_SHA256/u);
     assert.match(powershell, /ContentLength/u);
     assert.match(powershell, /fixed size limit/u);
@@ -258,4 +260,19 @@ test("signs and rejects a tampered manifest with Ed25519", async () => {
     await assert.rejects(verifyReleaseManifest({ manifestPath: manifest, signaturePath: signature, descriptorPath: descriptor, keyringPath: keyring, expectedKeyId: keyId }), /verification failed/);
     assert.equal((await readFile(signature, "utf8")).trim().length > 0, true);
   } finally { await f.cleanup(); }
+});
+
+
+test("stable publication requires the owner and the complete same-SHA CI workflow", async () => {
+  const release = await readFile(join(repositoryRoot, ".github/workflows/release.yml"), "utf8");
+  const ci = await readFile(join(repositoryRoot, ".github/workflows/ci.yml"), "utf8");
+  assert.ok(release.includes("uses: ./.github/workflows/ci.yml"));
+  assert.ok(release.includes("needs: [verification]"));
+  assert.ok(release.includes("github.actor == github.repository_owner"));
+  assert.ok(release.includes("github.triggering_actor == github.repository_owner"));
+  assert.ok(release.includes("--prerelease=false"));
+  assert.ok(ci.includes("workflow_call:"));
+  assert.ok(ci.includes("needs: [verify, native-runner, runner-lts]"));
+  assert.ok(ci.includes("node: [22.23.2, 24.21.0]"));
+  assert.ok(!ci.includes("runner-node20"));
 });

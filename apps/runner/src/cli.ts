@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { assertSupportedNodeVersion } from "./version.js";
 import { spawnSync } from "node:child_process";
 import { purgeInstallation } from "./purge.js";
 import { access, rm } from "node:fs/promises";
@@ -207,6 +208,7 @@ export async function runEnrollCli(argv: readonly string[], dependencies: Enroll
 }
 
 export async function runCli(argv: readonly string[], dependencies: CliDependencies = {}): Promise<void> {
+  assertSupportedNodeVersion();
   const output = dependencies.stdout ?? ((line) => process.stdout.write(`${line}\n`));
   const error = dependencies.stderr ?? ((line) => process.stderr.write(`${line}\n`));
   if (argv.length === 1 && (argv[0] === "--help" || argv[0] === "-h")) { output(HELP); return; }
@@ -483,7 +485,7 @@ export async function doctor(store: ProfileStore, mode: "system" | "user" = "sys
     try { ownershipCheck = await store.checkServiceOwnership(executionMode, serviceGroup); }
     catch (error) { ownershipError = errorMessage(error); }
   }
-  add("profile_ownership", ownershipRequired, !ownershipRequired || ownershipCheck?.ok === true, !enrolled ? "not enrolled" : ownershipError ?? ownershipCheck?.detail ?? (ownershipRequired ? "canonical ownership could not be verified" : "non-system profile"));
+  add("profile_ownership", ownershipRequired, !ownershipRequired || ownershipCheck?.ok === true, !enrolled ? "not enrolled" : ownershipError ?? ownershipCheck?.detail ?? (ownershipCheck?.ok === true ? "canonical ownership verified" : ownershipRequired ? "canonical ownership could not be verified" : "non-system profile"));
   const manager = dependencies.serviceManager ?? createServiceManager({ platform: manifest.platform, mode: manifest.mode });
   let actualServiceIdentity: string | null = null;
   let privilegeState: ServicePrivilegeState = "unknown";

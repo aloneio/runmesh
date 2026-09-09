@@ -1,14 +1,20 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@aloneio/runmesh-runner",
-  "version": "0.1.0-dev.5",
+  "version": "0.1.0",
   "private": false,
   "type": "module",
   "description": "System Runner for Runmesh Agent Control Plane.",
   "license": "PolyForm-Noncommercial-1.0.0",
-  "repository": { "type": "git", "url": "https://github.com/aloneio/runmesh.git", "directory": "apps/runner" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aloneio/runmesh.git",
+    "directory": "apps/runner"
+  },
   "homepage": "https://github.com/aloneio/runmesh",
-  "bugs": { "url": "https://github.com/aloneio/runmesh/issues" },
+  "bugs": {
+    "url": "https://github.com/aloneio/runmesh/issues"
+  },
   "main": "./dist/index.bundle.cjs",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -39,7 +45,12 @@
     "runmesh-runner": "./dist/runmesh.cjs",
     "runmesh": "./dist/runmesh.cjs"
   },
-  "files": ["dist", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"],
+  "files": [
+    "dist",
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md"
+  ],
   "scripts": {
     "build": "tsc -b && node ../../scripts/build-runner-declarations.mjs && node ../../scripts/clean-runner-bundles.mjs && node ../../scripts/build-runner-bundle.mjs ./src/runmesh-entry.ts ./dist/runmesh.cjs cjs && node ../../scripts/build-runner-bundle.mjs ./src/config.ts ./dist/config.cjs cjs && node ../../scripts/build-runner-bundle.mjs ./src/index.ts ./dist/index.bundle.cjs cjs",
     "prepack": "npm run build && node ../../scripts/clean-tsbuildinfo.mjs dist",
@@ -48,10 +59,12 @@
     "typecheck": "tsc -b --pretty false",
     "start": "tsx src/runmesh-entry.ts start"
   },
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=22.23.2 <23 || >=24.21.0 <25"
+  },
   "dependencies": {},
   "devDependencies": {
-    "@aloneio/runmesh-protocol": "0.1.0-dev.5",
+    "@aloneio/runmesh-protocol": "0.1.0",
     "@types/ws": "^8.18.1",
     "tsx": "^4.21.0",
     "vitest": "^4.1.11",

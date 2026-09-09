@@ -308,6 +308,11 @@ export class RegistryDO {
   private readonly featureHealth = new Map<RegistryFeatureKey, { readonly disabled_until_ms: number | null; readonly failure_count: number; readonly last_failure_at_ms: number | null; readonly last_error: string | null }>();
   private readonly fallbackThrottle = new Map<AuthThrottleKind, { failed_attempts: number; blocked_until_ms: number }>();
   private readonly sourceThrottleFallback = new Map<string, AuthThrottleState>();
+  // Successful fallback outcomes must be reconciled before stale SQL counters
+  // can be consulted again. Keep reset timestamps, never plaintext identities.
+  private readonly sourceThrottleResets = new Map<string, number>();
+  private readonly legacyThrottleResets = new Map<AuthThrottleKind, number>();
+  private maintenanceQueue: Promise<void> = Promise.resolve();
   public constructor(
     private readonly ctx: DurableObjectState,
     private readonly env: { INTERNAL_CONTROL_SECRET?: string; RUNNER_TOKEN_PEPPER?: string },
@@ -426,6 +431,7 @@ export class RegistryDO {
       // Runner, or session data, and retain bounded fallback on quota failure.
       try { this.ctx.storage.transactionSync(() => ensureAuthSourceThrottleSchema(this.ctx.storage.sql)); }
       catch (error) { this.disableFeatureHealth("auth_throttle", error, Date.now()); }
+      await this.scheduleMaintenanceAlarm(Date.now());
     });
   }
 
@@ -452,27 +458,29 @@ export class RegistryDO {
     await this.scheduleMaintenanceAlarm(nowMs);
   }
 
-  private async scheduleMaintenanceAlarm(nowMs: number): Promise<void> {
+  private scheduleMaintenanceAlarm(nowMs: number): Promise<void> {
+    const work = this.maintenanceQueue.then(() => this.scheduleMaintenanceAlarmNow(nowMs));
+    this.maintenanceQueue = work.catch(() => undefined);
+    return work;
+  }
+
+  private async scheduleMaintenanceAlarmNow(nowMs: number): Promise<void> {
     if (this.featureHealthDisabled("maintenance_alarm", nowMs)) return;
     try {
       const nextStale = this.ctx.storage.sql.exec<{ next_ms: number | null }>(
         "SELECT MIN(COALESCE(last_heartbeat_ms, 0) + 45000) AS next_ms FROM runners WHERE state = 'online'",
       ).toArray()[0]?.next_ms;
-      // A prior alarm can outlive the last online runner (for example when a
-      // socket disconnects before its heartbeat deadline). Explicitly clear it
-      // so an otherwise idle RegistryDO is not woken for a no-op maintenance
-      // pass later.
-      if (!safeNonnegativeInteger(nextStale)) {
-        await this.ctx.storage.deleteAlarm();
-        return;
-      }
-      await this.ctx.storage.setAlarm(Math.max(nowMs + 1_000, nextStale));
+      const nextAudit = this.ctx.storage.sql.exec<{ next_ms: number | null }>(
+        "SELECT MIN(completed_at_ms) + ? AS next_ms FROM mcp_calls", MCP_AUDIT_RETENTION_MS,
+      ).toArray()[0]?.next_ms;
+      const deadlines = [nextStale, nextAudit].filter((n): n is number => safeNonnegativeInteger(n));
+      if (deadlines.length === 0) { await this.ctx.storage.deleteAlarm(); return; }
+      const deadline = Math.max(nowMs + 1_000, Math.min(...deadlines));
+      const current = await this.ctx.storage.getAlarm();
+      if (current === null || current <= nowMs || current > deadline) await this.ctx.storage.setAlarm(deadline);
       this.clearFeatureHealth("maintenance_alarm");
-    } catch (error) {
-      this.disableFeatureHealth("maintenance_alarm", error, nowMs);
-    }
+    } catch (error) { this.disableFeatureHealth("maintenance_alarm", error, nowMs); }
   }
-
   private loadFeatureHealth(): void {
     const nowMs = Date.now();
     try {
@@ -610,8 +618,12 @@ export class RegistryDO {
     const key = `${kind}:${sourceHash}`;
     if (!this.featureHealthDisabled("auth_throttle", nowMs)) {
       try {
-        return this.ctx.storage.transactionSync(() => {
+        const reserved = this.ctx.storage.transactionSync(() => {
           const read = (id: string) => this.ctx.storage.sql.exec<AuthThrottleState>("SELECT failed_attempts, blocked_until_ms, updated_at_ms FROM auth_source_throttle WHERE id = ?", id).toArray()[0];
+          const resetAt = this.sourceThrottleResets.get(key);
+          if (resetAt !== undefined) {
+            this.ctx.storage.sql.exec("DELETE FROM auth_source_throttle WHERE id = ? AND updated_at_ms <= ?", key, resetAt);
+          }
           const prior = read(key);
           if (prior !== undefined && prior.blocked_until_ms > nowMs) return { allowed: false, retry_after_ms: prior.blocked_until_ms - nowMs };
           if (nowMs >= this.sourceThrottleMaintenanceAtMs) {
@@ -636,8 +648,13 @@ export class RegistryDO {
             );
           } }, kind, sourceHash, nowMs);
         });
+        this.sourceThrottleResets.delete(key);
+        return reserved;
       } catch (error) { this.disableFeatureHealth("auth_throttle", error, nowMs); }
     }
+    // Expired counters cannot resurrect a lockout after their retention window.
+    for (const [id, resetAt] of this.sourceThrottleResets) if (resetAt < nowMs - AUTH_SOURCE_RETENTION_MS) this.sourceThrottleResets.delete(id);
+    if (!this.sourceThrottleResets.has(key) && this.sourceThrottleResets.size >= MAX_AUTH_THROTTLE_KEYS) return { allowed: false, retry_after_ms: 60_000 };
     for (const [id, state] of this.sourceThrottleFallback) if (state.updated_at_ms < nowMs - AUTH_SOURCE_RETENTION_MS) this.sourceThrottleFallback.delete(id);
     while (!this.sourceThrottleFallback.has(key) && this.sourceThrottleFallback.size >= MAX_AUTH_THROTTLE_KEYS - 2) {
       const evict = [...this.sourceThrottleFallback].filter(([id, state]) => id.length > 64 && state.blocked_until_ms <= nowMs)
@@ -652,16 +669,22 @@ export class RegistryDO {
     if (!validVerifier(sourceHash) || !success) return;
     const key = `${kind}:${sourceHash}`;
     this.sourceThrottleFallback.delete(key);
-    if (this.featureHealthDisabled("auth_throttle", nowMs)) return;
-    try { this.ctx.storage.sql.exec("DELETE FROM auth_source_throttle WHERE id = ?", key); }
-    catch (error) { this.disableFeatureHealth("auth_throttle", error, nowMs); }
+    this.sourceThrottleResets.set(key, nowMs);
+    // A DELETE may succeed after an earlier quota/write circuit breaker trip.
+    // Do not skip it merely because optional writes are still cooling down.
+    try {
+      this.ctx.storage.sql.exec("DELETE FROM auth_source_throttle WHERE id = ? AND updated_at_ms <= ?", key, nowMs);
+      this.sourceThrottleResets.delete(key);
+    } catch (error) { this.disableFeatureHealth("auth_throttle", error, nowMs); }
     // A successful login clears only its own source, never the global CPU budget.
   }
 
   public checkAuthThrottle(kind: AuthThrottleKind, nowMs: number): { allowed: boolean; retry_after_ms: number } {
     if (this.featureHealthDisabled("auth_throttle", nowMs)) return this.checkFallbackThrottle(kind, nowMs);
     try {
-      return this.ctx.storage.transactionSync(() => {
+      const reserved = this.ctx.storage.transactionSync(() => {
+      const resetAt = this.legacyThrottleResets.get(kind);
+      if (resetAt !== undefined) this.ctx.storage.sql.exec("DELETE FROM auth_throttle WHERE id = ? AND updated_at_ms <= ?", kind, resetAt);
       const row = this.authThrottleRow(kind);
       const retryAfter = row === undefined ? 0 : Math.max(0, row.blocked_until_ms - nowMs);
       if (retryAfter > 0) return { allowed: false, retry_after_ms: retryAfter };
@@ -679,6 +702,8 @@ export class RegistryDO {
       // attempts are blocked, so this means five failed KDFs then a delay.
       return { allowed: true, retry_after_ms: 0 };
       });
+      this.legacyThrottleResets.delete(kind);
+      return reserved;
     } catch (error) {
       this.disableFeatureHealth("auth_throttle", error, nowMs);
       return this.checkFallbackThrottle(kind, nowMs);
@@ -698,6 +723,7 @@ export class RegistryDO {
 
   /** Record only the outcome of a credential operation; no password is stored. */
   public recordAuthAttempt(kind: AuthThrottleKind, success: boolean, nowMs: number): void {
+    if (success) this.legacyThrottleResets.set(kind, nowMs);
     if (this.featureHealthDisabled("auth_throttle", nowMs)) {
       if (success) this.fallbackThrottle.delete(kind);
       return;
@@ -1729,7 +1755,10 @@ export class RegistryDO {
         this.pruneMcpCalls(runnerId);
         return true;
       });
-      if (success) this.clearFeatureHealth("mcp_audit");
+      if (success && !this.featureHealthDisabled("mcp_audit", nowMs)) {
+        this.clearFeatureHealth("mcp_audit");
+        this.ctx.waitUntil(this.scheduleMaintenanceAlarm(nowMs));
+      }
       return success;
     } catch (error) {
       this.disableFeatureHealth("mcp_audit", error, nowMs);
