@@ -4,11 +4,12 @@
  * assets are authenticated with this embedded key; a downloaded keyring is
  * never fetched or used by an installer.
  */
-export const FIXED_RELEASE_VERSION = "0.1.0-dev.5";
-export const FIXED_NODE_VERSION = "22.19.0";
+export const FIXED_RELEASE_VERSION = "0.1.0";
+export const FIXED_NODE_VERSION = "22.23.2";
 export const FIXED_NODE_BASE_URL = `https://nodejs.org/dist/v${FIXED_NODE_VERSION}`;
 export const FIXED_RELEASE_KEY_ID = "runmesh-preview-2026-01";
 export const FIXED_RELEASE_PUBLIC_KEY_PEM = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEASXdEYS7UorlzNJ8ij2gftFIX2rrTvhNlZm3MqE/BWXI=\n-----END PUBLIC KEY-----\n";
+export const FIXED_RELEASE_CHANNEL = "stable" as const;
 export const FIXED_RELEASE_TAG = `v${FIXED_RELEASE_VERSION}`;
 export const FIXED_ARTIFACT_NAME = `runmesh-runner-${FIXED_RELEASE_VERSION}.tgz`;
 export const FIXED_RELEASE_BASE_URL = `https://github.com/aloneio/runmesh/releases/download/${FIXED_RELEASE_TAG}`;
@@ -28,16 +29,16 @@ export const MAX_NODE_RUNTIME_BYTES = 64 * 1024 * 1024;
 // depend on a host-provided Node/npm installation.  These are the official
 // Node distribution archive digests for the supported desktop/server targets.
 export const FIXED_NODE_RUNTIME_ASSETS = {
-  "linux-x64": { archive: `node-v${FIXED_NODE_VERSION}-linux-x64.tar.xz`, sha256: "c0649af18e6a24f6fe5535a3e86b341dd49a8e71117c8b68bde973ef834f16f2" },
-  "linux-arm64": { archive: `node-v${FIXED_NODE_VERSION}-linux-arm64.tar.xz`, sha256: "0b2d9f564b6594222a62c82e1df2efe119dd4a4aff29644f4dd325bf360b6bcc" },
-  "darwin-x64": { archive: `node-v${FIXED_NODE_VERSION}-darwin-x64.tar.xz`, sha256: "41796082f45db51738d1902cae84fa4f699ff6d2550321361424e8bfe6ea1939" },
-  "darwin-arm64": { archive: `node-v${FIXED_NODE_VERSION}-darwin-arm64.tar.xz`, sha256: "1c3a9e78da501bbc1f0c99fbbb69bb7c722bc7a9bf30128b21ea502f3905892a" },
-  "win-x64": { archive: `node-v${FIXED_NODE_VERSION}-win-x64.zip`, sha256: "ea3fad0e67a991d8477d8c01344b56e69c676ccb733f065b22436994b1253f86" },
-  "win-arm64": { archive: `node-v${FIXED_NODE_VERSION}-win-arm64.zip`, sha256: "e4a7336010d58ff35b53d9dd5869095c56089c70913cf22508cf8183593e56b2" },
+  "linux-x64": { archive: `node-v${FIXED_NODE_VERSION}-linux-x64.tar.xz`, sha256: "d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307" },
+  "linux-arm64": { archive: `node-v${FIXED_NODE_VERSION}-linux-arm64.tar.xz`, sha256: "fff4078c5def658577f92c88db7db3bc0072924bfb93fe52c1e744a54e94abb8" },
+  "darwin-x64": { archive: `node-v${FIXED_NODE_VERSION}-darwin-x64.tar.xz`, sha256: "96dff79f4e19a78715da559ec7cac2028f4985a175ea0c3454625a269c21deb7" },
+  "darwin-arm64": { archive: `node-v${FIXED_NODE_VERSION}-darwin-arm64.tar.xz`, sha256: "5eff7a9011895aae3f29d06f167b84a62b028a591370c7cafb59103559fd26e1" },
+  "win-x64": { archive: `node-v${FIXED_NODE_VERSION}-win-x64.zip`, sha256: "1177b4137ba5adaa56354ae40f1080c7450e8ae09cecb47da459d1c52ac99f97" },
+  "win-arm64": { archive: `node-v${FIXED_NODE_VERSION}-win-arm64.zip`, sha256: "fec025a6da31757e3b6af84c5a1628e9d38442ca99a2161091d78f2fcfa35ef3" },
 } as const;
 
 export interface FixedReleaseDescriptor {
-  readonly channel: "dev";
+  readonly channel: "dev" | "stable";
   readonly distributable: boolean;
   readonly current_version: string;
   readonly latest_version: string;
@@ -62,11 +63,11 @@ export function signedReleaseIsAvailable(value: string | undefined): boolean {
 
 export function fixedReleaseDescriptor(available: boolean): FixedReleaseDescriptor {
   if (!available) return {
-    channel: "dev", distributable: false, current_version: "", latest_version: "", package_name: "", package_version: "", package_spec: "", artifact: null, artifacts: null,
+    channel: FIXED_RELEASE_CHANNEL, distributable: false, current_version: "", latest_version: "", package_name: "", package_version: "", package_spec: "", artifact: null, artifacts: null,
     manifest_url: null, signature_url: null, signature_descriptor_url: null, checksums_url: null, release_key_id: null, published_at: null,
   };
   return {
-    channel: "dev", distributable: true, current_version: FIXED_RELEASE_VERSION, latest_version: FIXED_RELEASE_VERSION,
+    channel: FIXED_RELEASE_CHANNEL, distributable: true, current_version: FIXED_RELEASE_VERSION, latest_version: FIXED_RELEASE_VERSION,
     package_name: "@aloneio/runmesh-runner", package_version: FIXED_RELEASE_VERSION, package_spec: FIXED_ARTIFACT_URL,
     artifact: { source: FIXED_ARTIFACT_URL }, artifacts: null, manifest_url: FIXED_MANIFEST_URL,
     signature_url: FIXED_SIGNATURE_URL, signature_descriptor_url: FIXED_SIGNATURE_DESCRIPTOR_URL,
@@ -232,8 +233,8 @@ const signature = Buffer.from(encodedSignature, "base64");
 if (signature.length !== 64 || signature.toString("base64") !== encodedSignature || !verify(null, manifestBytes, createPublicKey(publicKeyPem), signature)) fail("signature does not verify");
 const manifest = parseBytes("manifest.json", manifestBytes);
 const artifact = Array.isArray(manifest?.artifacts) && manifest.artifacts.length === 1 ? manifest.artifacts[0] : undefined;
-if (manifest?.schema_version !== 1 || manifest.project !== "runmesh" || manifest.version !== version || manifest.tag !== "v" + version || manifest.channel !== "dev" || manifest.prerelease !== true || !/^[0-9a-f]{40}$/.test(manifest.commit_sha) || manifest.protocol_min !== 2 || manifest.protocol_max !== 2 || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(manifest.published_at)) fail("manifest fields are not the fixed preview contract");
-if (artifact?.name !== artifactName || artifact.platform !== "node" || artifact.architecture !== "portable" || artifact.node_major_min !== 20 || artifact.url !== artifactUrl || !Number.isSafeInteger(artifact.size) || artifact.size <= 0 || artifact.size > maxReleaseAssetBytes || !/^[0-9a-f]{64}$/.test(artifact.sha256)) fail("manifest artifact is invalid");
+if (manifest?.schema_version !== 1 || manifest.project !== "runmesh" || manifest.version !== version || manifest.tag !== "v" + version || manifest.channel !== "__CHANNEL__" || manifest.prerelease !== __PRERELEASE__ || !/^[0-9a-f]{40}$/.test(manifest.commit_sha) || manifest.protocol_min !== 2 || manifest.protocol_max !== 2 || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(manifest.published_at)) fail("manifest fields are not the fixed preview contract");
+if (artifact?.name !== artifactName || artifact.platform !== "node" || artifact.architecture !== "portable" || artifact.node_major_min !== 22 || artifact.url !== artifactUrl || !Number.isSafeInteger(artifact.size) || artifact.size <= 0 || artifact.size > maxReleaseAssetBytes || !/^[0-9a-f]{64}$/.test(artifact.sha256)) fail("manifest artifact is invalid");
 const artifactBytes = await boundedRead(artifactName);
 const digest = createHash("sha256").update(artifactBytes).digest("hex");
 if (artifactBytes.byteLength !== artifact.size || digest !== artifact.sha256) fail("artifact size or SHA-256 mismatch");
@@ -244,6 +245,8 @@ if (!sums.split(/\r?\n/).some((line) => line === digest + "  " + artifactName ||
 function verifierSource(): string {
   return VERIFY_RELEASE
     .replaceAll("__VERSION__", FIXED_RELEASE_VERSION)
+    .replaceAll("__CHANNEL__", FIXED_RELEASE_CHANNEL)
+    .replaceAll("__PRERELEASE__", String(FIXED_RELEASE_CHANNEL !== "stable"))
     .replaceAll("__KEY_ID__", FIXED_RELEASE_KEY_ID)
     .replaceAll("__ARTIFACT_NAME__", FIXED_ARTIFACT_NAME)
     .replaceAll("__ARTIFACT_URL__", FIXED_ARTIFACT_URL)
@@ -417,7 +420,7 @@ NODE="$NODE_HOME/bin/node"
 NPM_CLI="$NODE_HOME/lib/node_modules/npm/bin/npm-cli.js"
 [ -x "$NODE" ] || { printf '%s\n' 'error: private Node.js runtime extraction failed' >&2; exit 1; }
 NODE_MAJOR="$("$NODE" -p 'process.versions.node.split(".")[0]')"
-[ "$NODE_MAJOR" -ge 20 ] || { printf '%s\n' 'error: private Node.js runtime is too old' >&2; exit 1; }
+[ "$NODE_MAJOR" -ge 22 ] || { printf '%s\n' 'error: private Node.js runtime is too old' >&2; exit 1; }
 # Keep privileged npm completely inside the private temporary directory. npm
 # otherwise consults the invoking root user's, global, and current-directory
 # npmrc files, any of which could change where or how a package is installed.
@@ -807,7 +810,7 @@ try {
   $NpmPath = Join-Path $NodeHome 'npm.cmd'
   if (-not (Test-Path -LiteralPath $NodePath -PathType Leaf) -or -not (Test-Path -LiteralPath $NpmPath -PathType Leaf)) { throw 'Private Node.js runtime extraction failed.' }
   $NodeMajor = [int]((& $NodePath --version).Trim().TrimStart('v').Split('.')[0])
-  if ($NodeMajor -lt 20) { throw 'Private Node.js runtime is too old.' }
+  if ($NodeMajor -lt 22) { throw 'Private Node.js runtime is too old.' }
   $HttpHandler = [Net.Http.HttpClientHandler]::new()
   $HttpHandler.AllowAutoRedirect = $false
   $HttpHandler.AutomaticDecompression = [Net.DecompressionMethods]::GZip -bor [Net.DecompressionMethods]::Deflate

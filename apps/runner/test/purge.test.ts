@@ -1,3 +1,7 @@
+import { lstat } from "node:fs/promises";
+import { validateCentralWorkspacePolicy } from "../src/policy-config.js";
+import { PolicyStore } from "../src/policy-store.js";
+import { runnerPolicyChecksum } from "@aloneio/runmesh-protocol";
 import { mkdtemp, mkdir, writeFile, readFile, symlink, rm, readdir, readlink, realpath, unlink, rmdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
@@ -116,5 +120,30 @@ it.skipIf(process.platform !== "linux")("pins cleanup enumeration when the direc
       await hostPurgeFilesystem.file(join(anchor, "inside"));
     });
     expect(await readFile(f.path("/outside/keep"), "utf8")).toBe("outside");
+  } finally { await f.cleanup(); }
+});
+
+// These exercise the same policy normalization/persistence used by enrollment,
+// but every filesystem path and service call belongs to the synthetic fixture.
+it.skipIf(process.platform === "win32").each(["direct", "root-alias", "parent-alias", "external"])("GA-014 preserves configured workspace through %s", async (kind) => {
+  const f = await fixture();
+  try {
+    await f.installed();
+    const target = kind === "external" ? "/home/operator/project" : "/opt/runmesh/project";
+    await f.file(target + "/important.txt", "DO_NOT_DELETE");
+    let configured = target;
+    if (kind === "root-alias") { configured = "/home/operator/project-link"; await f.link(configured, target); }
+    if (kind === "parent-alias") { configured = "/home/operator/install-link/project"; await f.link("/home/operator/install-link", "/opt/runmesh"); }
+    const permissions = { read: true, edit: true, shell: false, job_control: false };
+    const raw = { schema_version: 1 as const, runner_id: "ga-purge", revision: 1, runner_permissions: permissions, workspaces: [{ workspace_id: "project", root_path: configured, enabled: true, permissions }] };
+    const validated = await validateCentralWorkspacePolicy(raw.workspaces, { realpath: (p) => realpath(f.path(String(p))), lstat });
+    expect(validated.status[0]?.status).toBe("valid");
+    const store = new PolicyStore(f.path("/var/lib/runmesh"));
+    await store.activate({ ...raw, checksum: runnerPolicyChecksum(raw) });
+    expect((await store.load(raw.runner_id))?.workspaces[0]?.root_path).toBe(configured);
+    const result = await purgeInstallation({ platform: "linux", filesystem: f.filesystem, executor: f.executor });
+    expect(result.purged).toBe(kind === "external");
+    expect(await readFile(f.path(target + "/important.txt"), "utf8")).toBe("DO_NOT_DELETE");
+    if (kind !== "external") { expect(f.changes).toEqual([]); expect(f.calls).toEqual([]); }
   } finally { await f.cleanup(); }
 });

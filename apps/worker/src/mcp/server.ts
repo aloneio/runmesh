@@ -1,9 +1,9 @@
 import { McpServer, type AuthInfo, type ServerContext } from "@modelcontextprotocol/server";
 import {
-  LOCAL_RUNNER_OPERATION_TIMEOUT_MS,
+  LOCAL_RUNNER_OPERATION_TIMEOUT_MS, encodeWireFrame, PROTOCOL_CURRENT_VERSION, type JsonValue, RpcRequestSchema,
 } from "@aloneio/runmesh-protocol";
 import { z } from "zod";
-import { internalHeaders, isSafeIdentifier } from "../security.js";
+import { internalHeaders, isSafeIdentifier, isConfiguredSecret } from "../security.js";
 import type { ActiveRunnerContext, McpClientActiveRunner, McpRunnerSelectionResult, PolicyReadiness as RegistryPolicyReadiness } from "../registry.js";
 import type { WorkerEnv } from "../runner-do.js";
 import { PRODUCT_VERSION } from "../generated-version.js";
@@ -933,8 +933,14 @@ function safeRunnerErrorCode(value: unknown, fallback: string): string {
 
 async function callRunner(env: WorkerEnv, runnerId: string, method: string, params: Record<string, unknown>, policyRevision?: number, policyChecksum?: string): Promise<ToolCall> {
   if (!isSafeIdentifier(runnerId)) return fail("invalid_runner_id", "runner_id is invalid", "Use a runner identifier returned by runner_list.");
-  if (env.INTERNAL_CONTROL_SECRET === undefined || env.INTERNAL_CONTROL_SECRET.length === 0) return fail("service_unavailable", "The runner bridge is not configured.", "Ask the service operator to configure the internal bridge.");
+  if (!isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) return fail("service_unavailable", "The runner bridge is not configured.", "Ask the service operator to configure the internal bridge.");
   if ((policyRevision === undefined || policyChecksum === undefined || !/^[a-f0-9]{64}$/.test(policyChecksum)) && method !== "echo" && method !== "runner.info") return fail("policy_pending", "The selected runner policy could not be verified.", "Wait for the runner to apply its control-plane policy, then retry.");
+  // Validate the complete serialized request, including maximum correlation ID
+  // and escaping, before forwarding any mutating operation to the Runner.
+  try {
+    encodeWireFrame(RpcRequestSchema.parse({ type: "rpc.request", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "r".repeat(128), method,
+      params: params as JsonValue, ...(policyRevision === undefined ? {} : { policy_revision: policyRevision }) }));
+  } catch { return fail("invalid_params", "Request exceeds the wire budget or is not JSON-safe; nothing was sent to the Runner.", "Reduce patch size, paths or expected hashes and retry."); }
   const body = JSON.stringify({ method, params, ...(policyRevision === undefined ? {} : { policy_revision: policyRevision, expected_policy_revision: policyRevision, expected_policy_checksum: policyChecksum }) });
   const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "POST", "/rpc", body);
   let response: Response;
@@ -1013,7 +1019,7 @@ function safeWorkspaceMetadata(value: unknown): Record<string, unknown> | undefi
 }
 
 async function registryCall(env: WorkerEnv, path: string): Promise<ToolCall> {
-  if (env.INTERNAL_CONTROL_SECRET === undefined || env.INTERNAL_CONTROL_SECRET.length === 0) return fail("service_unavailable", "The registry is not configured.", "Ask the service operator to configure the internal bridge.");
+  if (!isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) return fail("service_unavailable", "The registry is not configured.", "Ask the service operator to configure the internal bridge.");
   const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "GET", path, "");
   try {
     const response = await env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method: "GET", headers }));
@@ -1026,7 +1032,7 @@ async function registryCall(env: WorkerEnv, path: string): Promise<ToolCall> {
 }
 
 async function registryPostCall(env: WorkerEnv, path: string, input: Record<string, unknown>): Promise<ToolCall> {
-  if (env.INTERNAL_CONTROL_SECRET === undefined || env.INTERNAL_CONTROL_SECRET.length === 0) return fail("service_unavailable", "The registry is not configured.", "Ask the service operator to configure the internal bridge.");
+  if (!isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) return fail("service_unavailable", "The registry is not configured.", "Ask the service operator to configure the internal bridge.");
   const body = JSON.stringify(input);
   const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "POST", path, body);
   try {

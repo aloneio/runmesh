@@ -1,3 +1,4 @@
+import { RpcRuntimeError } from "./errors.js";
 import { constants } from "node:fs";
 import { chmod, lstat, open, mkdir, readFile, readdir, rename, rm } from "node:fs/promises";
 import { readFileSync } from "node:fs";
@@ -262,8 +263,8 @@ export class JobManager {
     // the still-running recovered job.
     await this.reconcileRecoveredJobs();
     await this.pruneRetainedJobs(this.maxRetainedJobs - 1);
-    if (this.jobs.size >= this.maxRetainedJobs) throw new Error(`max retained jobs (${this.maxRetainedJobs}) reached while active jobs are retained`);
-    if (this.activeCount() >= this.maxConcurrentJobs) throw new Error(`max concurrent jobs (${this.maxConcurrentJobs}) reached`);
+    if (this.jobs.size >= this.maxRetainedJobs) throw new RpcRuntimeError("busy", `max retained jobs (${this.maxRetainedJobs}) reached while active jobs are retained`);
+    if (this.activeCount() >= this.maxConcurrentJobs) throw new RpcRuntimeError("busy", `max concurrent jobs (${this.maxConcurrentJobs}) reached`);
     const params = paramsObject(input);
     const workspace = this.policy.getWorkspace(params.workspace_id);
     const cwd = await this.policy.resolve(workspace.workspaceId, params.cwd ?? ".", "cwd");

@@ -1,3 +1,4 @@
+import { assertRpcResultFits, jsonBytes, MAX_RPC_RESULT_BYTES } from "./rpc-budget.js";
 import { constants, type Dirent } from "node:fs";
 import { lstat, open, opendir } from "node:fs/promises";
 import { relative, sep } from "node:path";
@@ -83,12 +84,22 @@ export class FilesystemService {
       const actual = data.subarray(0, bytesRead);
       let used = utf8SafePrefixLength(actual, requested);
       if (used === 0 && actual.byteLength > 0) used = utf8SafePrefixLength(actual, Math.min(4, actual.byteLength));
-      const end = start + used;
-      return {
+      const resultFor = (length: number) => ({
         workspace_id: workspace.workspaceId, path: relative(workspace.rootPath, path).split(sep).join("/"),
-        data: actual.subarray(0, used).toString("utf8"), encoding: "utf-8", offset: start,
-        next_cursor: end < info.size ? String(end) : null, truncated: end < info.size, size: info.size,
-      };
+        data: actual.subarray(0, length).toString("utf8"), encoding: "utf-8", offset: start,
+        next_cursor: start + length < info.size ? String(start + length) : null, truncated: start + length < info.size, size: info.size,
+      });
+      // JSON escaping, not just the source bytes, determines transport size.
+      let low = 0; let high = used;
+      while (low < high) {
+        const middle = Math.ceil((low + high) / 2);
+        if (jsonBytes(resultFor(utf8SafePrefixLength(actual, middle))) <= MAX_RPC_RESULT_BYTES) low = middle;
+        else high = middle - 1;
+      }
+      used = utf8SafePrefixLength(actual, low);
+      const result = resultFor(used);
+      assertRpcResultFits(result);
+      return result;
     } finally {
       await handle.close();
     }
@@ -122,9 +133,12 @@ export class FilesystemService {
       return true;
     });
     const page = pageEntries.map((entry) => ({ name: entry.name, type: entry.isDirectory() ? "directory" : entry.isFile() ? "file" : "other" }));
-    const next = offset + page.length;
-    const canContinue = hasMore && next < MAX_LIST_CURSOR;
-    return { workspace_id: workspace.workspaceId, path: relative(workspace.rootPath, path).split(sep).join("/"), entries: page, next_cursor: canContinue ? String(next) : null, truncated: hasMore };
+    const resultFor = () => ({ workspace_id: workspace.workspaceId, path: relative(workspace.rootPath, path).split(sep).join("/"), entries: page,
+      next_cursor: hasMore && offset + page.length < MAX_LIST_CURSOR ? String(offset + page.length) : null, truncated: hasMore });
+    while (page.length > 1 && jsonBytes(resultFor()) > MAX_RPC_RESULT_BYTES) { page.pop(); hasMore = true; }
+    const result = resultFor();
+    assertRpcResultFits(result);
+    return result;
   }
 
   public async search(input: unknown): Promise<Record<string, unknown>> {
@@ -140,9 +154,17 @@ export class FilesystemService {
     if (snapshot.type !== "directory") throw new Error("path is not a directory");
     await this.searchDirectory(resolved, snapshot, params.query, results, budget, 0, Math.min(MAX_SEARCH_RESULTS, offset + limit + 1));
     const page = results.slice(offset, offset + limit);
-    const next = offset + page.length;
-    const more = results.length > next;
-    return { workspace_id: workspace.workspaceId, query: params.query, results: page, next_cursor: more ? String(next) : null, truncated: budget.truncated || more };
+    const resultFor = () => {
+      const next = offset + page.length;
+      const more = results.length > next;
+      return { workspace_id: workspace.workspaceId, query: params.query, results: page, next_cursor: more ? String(next) : null, truncated: budget.truncated || more };
+    };
+    // Preserve an actionable cursor when long/CJK/escaped lines fill a page.
+    // Trimming after the Runner sends a frame would be too late.
+    while (page.length > 1 && jsonBytes(resultFor()) > MAX_RPC_RESULT_BYTES) page.pop();
+    const result = resultFor();
+    assertRpcResultFits(result);
+    return result;
   }
 
   private async searchDirectory(
