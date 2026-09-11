@@ -15,7 +15,7 @@ import {
 import type { CapabilityMetadata } from "./protocol-types.js";
 import WebSocket from "ws";
 import { userInfo } from "node:os";
-import { reconnectDelayMs } from "./backoff.js";
+import { reconnectDelayMs, serviceReconnectDelayMs, retryAfterDelayMs } from "./backoff.js";
 import { PolicyStore } from "./policy-store.js";
 import { effectiveCentralPermissions, validateCentralWorkspacePolicy, type CentralWorkspacePolicy } from "./policy-config.js";
 import type { RunnerConfig, WorkspaceConfig } from "./config.js";
@@ -26,11 +26,21 @@ export class RunnerAuthenticationError extends Error {
   public constructor(message = "runner credentials were rejected") { super(message); this.name = "RunnerAuthenticationError"; }
 }
 
-/** Authentication failures must not enter normal network reconnect backoff. */
+export class RunnerServiceUnavailableError extends Error {
+  public constructor(message = "runner service temporarily unavailable", public readonly retryAfterMs = 30_000) {
+    super(message); this.name = "RunnerServiceUnavailableError";
+  }
+}
+
+/** Only explicit credential/protocol rejection is fatal, not matching words in an outage message. */
 export function classifyConnectionFailure(input: { readonly statusCode?: number; readonly closeCode?: number; readonly reason?: string; readonly error?: unknown }): "authentication" | "network" {
-  if (input.statusCode === 401 || input.statusCode === 403 || input.closeCode === 4001 || input.closeCode === 1002) return "authentication";
-  const message = `${input.reason ?? ""} ${input.error instanceof Error ? input.error.message : ""}`.toLowerCase();
-  return /credential|auth(?:entication|orization)?|revoked|forbidden|unauthorized|stale session|unsupported_protocol_version/.test(message) ? "authentication" : "network";
+  if (input.error instanceof RunnerAuthenticationError) return "authentication";
+  if (input.statusCode !== undefined) return input.statusCode === 401 || input.statusCode === 403 ? "authentication" : "network";
+  if (input.closeCode === 4001 || input.closeCode === 1002) return "authentication";
+  // Older Workers used 1008 for an explicit handshake rejection. Never let
+  // legacy wording override a service-failure code or arbitrary network error.
+  if (input.closeCode === 1008 && /^(?:stale credentials|credentials revoked|unauthorized|forbidden|unsupported_protocol_version)$/i.test(input.reason ?? "")) return "authentication";
+  return "network";
 }
 
 export interface RunnerConnectionOptions {
@@ -61,6 +71,7 @@ export class RunnerConnection {
   private readonly policyStore: PolicyStore;
   private socket: WebSocket | undefined;
   private stopped = false;
+  private cancelReconnectSleep: (() => void) | undefined;
   private lifecycleGeneration = 0;
   private reconnectAttempt = 0;
   private syncSequence = 0;
@@ -98,7 +109,15 @@ export class RunnerConnection {
     this.rpcTimeoutMs = options.rpcTimeoutMs ?? LOCAL_RUNNER_OPERATION_TIMEOUT_MS;
     this.syncMs = options.syncMs ?? 30_000;
     this.random = options.random ?? Math.random;
-    this.sleep = options.sleep ?? ((delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)));
+    this.sleep = options.sleep ?? ((delayMs) => new Promise((resolve) => {
+      const finish = (): void => {
+        clearTimeout(timer);
+        if (this.cancelReconnectSleep === finish) this.cancelReconnectSleep = undefined;
+        resolve();
+      };
+      const timer = setTimeout(finish, delayMs);
+      this.cancelReconnectSleep = finish;
+    }));
     this.onStateChange = options.onStateChange ?? (() => undefined);
     this.runtime = options.runtime ?? new RunnerRuntime({ config: this.config, ...(this.config.stateDir === undefined ? {} : { stateDir: this.config.stateDir }), onJobEvent: (event) => this.forwardJobEvent(event) });
     this.policyStore = options.policyStore ?? new PolicyStore(this.config.stateDir);
@@ -164,7 +183,11 @@ export class RunnerConnection {
           this.stopped = true;
           throw error;
         }
-        await this.sleep(reconnectDelayMs(this.reconnectAttempt, this.random()));
+        const delayMs = error instanceof RunnerServiceUnavailableError
+          ? serviceReconnectDelayMs(this.reconnectAttempt, this.random(), error.retryAfterMs)
+          : reconnectDelayMs(this.reconnectAttempt, this.random());
+        console.error(`runner reconnect scheduled: class=${error instanceof RunnerServiceUnavailableError ? "service_unavailable" : "network"} delay_ms=${delayMs}`);
+        await this.sleep(delayMs);
         this.reconnectAttempt += 1;
       }
     }
@@ -173,6 +196,7 @@ export class RunnerConnection {
   public stop(): void {
     this.lifecycleGeneration += 1;
     this.stopped = true;
+    this.cancelReconnectSleep?.();
     if (this.heartbeatTimer !== undefined) clearInterval(this.heartbeatTimer);
     if (this.syncTimer !== undefined) clearInterval(this.syncTimer);
     this.socket?.close(1000, "runner stopped");
@@ -222,6 +246,7 @@ export class RunnerConnection {
       const socket = new WebSocket(url, { headers: { Authorization: `Bearer ${this.config.token}` } });
       this.socket = socket;
       let welcomed = false;
+      let welcomedAtMs = 0;
       let settled = false;
       const fail = (error: Error): void => {
         if (!settled) {
@@ -233,9 +258,12 @@ export class RunnerConnection {
         const statusCode = response.statusCode;
         const error = classifyConnectionFailure(statusCode === undefined ? {} : { statusCode }) === "authentication"
           ? new RunnerAuthenticationError(`runner authentication failed (${response.statusCode})`)
-          : new Error(`runner connection failed (${response.statusCode})`);
-        socket.terminate();
+          : statusCode === 429 || (statusCode !== undefined && statusCode >= 500)
+            ? new RunnerServiceUnavailableError(`runner service temporarily unavailable (${statusCode})`, retryAfterDelayMs(response.headers["retry-after"]))
+            : new Error(`runner connection failed (${response.statusCode})`);
         fail(error);
+        response.resume();
+        socket.terminate();
       });
       socket.once("open", () => {
         const hello: WireMessage = {
@@ -274,6 +302,7 @@ export class RunnerConnection {
             return;
           }
           welcomed = true;
+          welcomedAtMs = Date.now();
           this.onStateChange("online");
           this.lastSyncSnapshot = undefined;
           if (message.desired_policy !== undefined) this.queueDesiredPolicy(socket, message.desired_policy);
@@ -335,7 +364,11 @@ export class RunnerConnection {
         const closeReason = reason.toString("utf8");
         const failure = classifyConnectionFailure({ closeCode: code, reason: closeReason }) === "authentication"
           ? new RunnerAuthenticationError("runner credentials were revoked or rejected")
-          : new Error(welcomed ? "connection closed" : "connection closed before welcome");
+          : code === 1013 || code === 1011
+            ? new RunnerServiceUnavailableError(`runner service temporarily unavailable (close ${code})`)
+            : new Error(welcomed ? "connection closed" : "connection closed before welcome");
+        // A brief welcome during an outage must not reset the retry budget.
+        if (welcomed && Date.now() - welcomedAtMs >= 60_000) this.reconnectAttempt = 0;
         if (!this.stopped) fail(failure);
         else if (!settled) {
           settled = true;
