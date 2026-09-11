@@ -654,9 +654,13 @@ function applyHunks(file: TextFile, hunks: readonly Hunk[], path: string): Buffe
     output.push(...replacement.map((line) => line.text));
     if (match.end === file.lines.length) {
       const last = replacement[replacement.length - 1];
-      if (last?.noNewline) endsWithNewline = false;
-      else if (replacement.length > 0) endsWithNewline = true;
-      else endsWithNewline = false;
+      // The hunk rewrites the end of the file, so it alone decides the trailing
+      // newline. When it deletes the trailing lines without adding any, the
+      // preceding line becomes the new last line and still ends with a newline
+      // (it was followed by more content in the original), so the flag must be
+      // preserved rather than cleared by the removal. Only an empty result or an
+      // explicit no-newline marker on the final replacement line clears it.
+      endsWithNewline = replacement.length === 0 ? output.length > 0 : last?.noNewline !== true;
     }
     cursor = match.end;
   }

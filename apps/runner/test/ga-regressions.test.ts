@@ -8,6 +8,7 @@ import { encodeWireFrame, PROTOCOL_CURRENT_VERSION, type JsonValue } from "@alon
 import { PathPolicy } from "../src/path-policy.js";
 import { PatchService } from "../src/patch-service.js";
 import { FilesystemService } from "../src/filesystem.js";
+import { fitPrefix } from "../src/git-service.js";
 import { jsonBytes, MAX_RPC_RESULT_BYTES } from "../src/rpc-budget.js";
 
 async function fixture() {
@@ -40,6 +41,46 @@ it("GA-002: oversized aggregate success metadata is rejected BEFORE any file is 
     await expect(f.patch.apply({ workspace_id: "ga", patch: text })).rejects.toMatchObject({ code: "file_too_large" });
     expect(await readdir(join(f.root, dir))).toEqual([]);
   } finally { await f.cleanup(); }
+});
+
+it("deleting the trailing lines of a file preserves the preceding line's newline", async () => {
+  const f = await fixture();
+  try {
+    // The preceding line was followed by more content in the original, so it
+    // still ends with a newline even though the removal shortened the file.
+    await writeFile(join(f.root, "trailing.txt"), "x\na\nb\n");
+    await f.patch.apply({ workspace_id: "ga", patch: patch("*** Update File: trailing.txt\n@@\n-a\n-b") });
+    expect(await readFile(join(f.root, "trailing.txt"), "utf8")).toBe("x\n");
+
+    // Same when the original file had no trailing newline of its own.
+    await writeFile(join(f.root, "unterminated.txt"), "x\na\nb");
+    await f.patch.apply({ workspace_id: "ga", patch: patch("*** Update File: unterminated.txt\n@@\n-a\n-b") });
+    expect(await readFile(join(f.root, "unterminated.txt"), "utf8")).toBe("x\n");
+
+    // A non-empty replacement still owns the trailing newline.
+    await writeFile(join(f.root, "replace.txt"), "a\nb\n");
+    await f.patch.apply({ workspace_id: "ga", patch: patch("*** Update File: replace.txt\n@@\n-b\n+c") });
+    expect(await readFile(join(f.root, "replace.txt"), "utf8")).toBe("a\nc\n");
+    await f.patch.apply({ workspace_id: "ga", patch: patch("*** Update File: replace.txt\n@@\n-c\n+d\n\\ No newline at end of file") });
+    expect(await readFile(join(f.root, "replace.txt"), "utf8")).toBe("a\nd");
+
+    // Removing every line still yields an empty file rather than a stray newline.
+    await writeFile(join(f.root, "empty.txt"), "a\nb\n");
+    await f.patch.apply({ workspace_id: "ga", patch: patch("*** Update File: empty.txt\n@@\n-a\n-b") });
+    expect(await readFile(join(f.root, "empty.txt"), "utf8")).toBe("");
+  } finally { await f.cleanup(); }
+});
+
+it("GA-003: status truncation keeps the largest fitting prefix in logarithmic checks", () => {
+  const entries = Array.from({ length: 4096 }, (_, index) => index);
+  const checks: number[] = [];
+  const kept = fitPrefix(entries, (prefix) => { checks.push(prefix.length); return prefix.length <= 1000; });
+  expect(kept).toBe(1000);
+  // A quadratic pop loop would need ~3096 whole-response serializations here;
+  // binary search over 4097 candidate lengths needs at most 13 probes.
+  expect(checks.length).toBeLessThanOrEqual(13);
+  expect(fitPrefix(entries, () => true)).toBe(entries.length);
+  expect(fitPrefix(entries, () => false)).toBe(0);
 });
 
 it("GA-003: CJK and escaped search pages remain wire-safe and paginate without losing matches", async () => {

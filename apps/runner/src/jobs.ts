@@ -629,7 +629,13 @@ export class JobManager {
       const maxByLimit = utf8SafePrefixLength(data, Math.min(limit, data.length));
       const firstCodePoint = maxByLimit === 0 && data.length > 0 ? utf8SafePrefixLength(data, Math.min(4, data.length)) : maxByLimit;
       const used = this.fitLogResponse(job.job_id, stream, offset, info.size, data, firstCodePoint);
-      const next = offset + used;
+      // `used === 0` with bytes still remaining means `offset` falls inside a
+      // trailing partial code point (at most three bytes before EOF): no whole
+      // code point can be decoded, and this byte-cursor API never emits
+      // replacement characters. Echoing the same cursor would spin a polling
+      // client forever, so consume the unrepresentable tail and report EOF.
+      // The cursor therefore strictly advances and pagination always terminates.
+      const next = used === 0 && offset < info.size ? info.size : offset + used;
       return logResult(job.job_id, stream, offset, info.size, data.subarray(0, used).toString("utf8"), next);
     } finally {
       await handle.close();
