@@ -6,9 +6,23 @@ This document describes the implemented deployment and operator paths. The dashb
 
 ## Local validation (not deployment)
 
-Use the repository's Node 22 / npm 10.9.3 toolchain. Review the
-[security remediation and rollout notes](security-remediation.md) before
-upgrading an existing deployment or provisioning a new administrator.
+Use the repository's pinned toolchain: **Node 22.23.2** and **npm 10.9.3**.
+Both versions are exact. `.node-version` and the root `packageManager` field are
+the source of truth, and `scripts/check-toolchain.mjs` runs in every CI job and
+fails on any other pair. The root `engines.node` range (`>=22`) is only a broad
+install-time guard; it is not the supported build version.
+
+Node 22.23.2 bundles npm 10.9.8, so installing the pinned Node release is not
+enough on its own — install the exact npm afterwards:
+
+```sh
+node --version                  # must print v22.23.2
+npm install --global npm@10.9.3
+npm --version                   # must print 10.9.3
+```
+
+Review the [security remediation and rollout notes](security-remediation.md)
+before upgrading an existing deployment or provisioning a new administrator.
 
 ```sh
 npm ci

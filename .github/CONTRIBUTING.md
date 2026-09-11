@@ -55,6 +55,13 @@ not have the right to share.
 
 ## Development expectations
 
+- Build and test with the pinned toolchain: Node **22.23.2** and npm **10.9.3**.
+  `.node-version` and the root `packageManager` field are the source of truth, and
+  `scripts/check-toolchain.mjs` enforces both exactly in every CI job. The root
+  `engines.node` range (`>=22`) is only an install-time guard, not the supported
+  build version. Node 22.23.2 bundles npm 10.9.8, so after installing Node run
+  `npm install --global npm@10.9.3`; `node --version` and `npm --version` must
+  then print `v22.23.2` and `10.9.3`.
 - Preserve security boundaries. Do not log credentials, secrets, absolute
   Workspace roots, sensitive file content, commands, or process identifiers.
 - Keep TypeScript strict. Do not use placeholder security controls, broad
