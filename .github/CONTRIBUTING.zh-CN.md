@@ -37,6 +37,12 @@ Runmesh 依据 [PolyForm Noncommercial License 1.0.0](../LICENSE) 以源码可�
 
 ## 开发要求
 
+- 使用固定工具链构建与测试：Node **22.23.2** 与 npm **10.9.3**。`.node-version`
+  与根目录 `packageManager` 字段是唯一事实来源，每个 CI 任务都会运行
+  `scripts/check-toolchain.mjs` 并严格校验这两个版本。根目录 `engines.node`
+  范围（`>=22`）只是安装时的宽泛保护，并非受支持的构建版本。Node 22.23.2 自带
+  npm 10.9.8，因此安装 Node 之后还需运行 `npm install --global npm@10.9.3`；
+  此时 `node --version` 与 `npm --version` 应分别输出 `v22.23.2` 和 `10.9.3`；
 - 保持安全边界，不记录凭据、secret、绝对 Workspace 根路径、敏感文件内容、命令或进程 ID；
 - 遵守严格 TypeScript，不能用占位安全控制、宽泛权限、不安全 cast、吞错或无界 I/O 作为捷径；
 - 未说明来源、许可证、所需通知和再分发影响时，不要复制代码、资产或商标；
