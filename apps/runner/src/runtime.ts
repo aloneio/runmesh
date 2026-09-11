@@ -247,6 +247,14 @@ export class RunnerRuntime {
     return { ...info, shell: shell === undefined ? { available: false } : { available: true, kind: shell.kind, version: shell.version } };
   }
   public async dispatch(method: string, input: unknown): Promise<unknown> {
+    const generation = this.policy.generation;
+    const result = await this.dispatchAtCurrentPolicy(method, input);
+    // Read-only operations must not return data from an obsolete authorization
+    // snapshot. Already-committed edits/jobs keep their real result semantics.
+    if (["workspace.list", "env.info", "fs.stat", "fs.read", "fs.list", "fs.search", "git.status", "git.diff", "job.list", "job.get", "job.logs"].includes(method)) this.policy.assertGeneration(generation);
+    return result;
+  }
+  private async dispatchAtCurrentPolicy(method: string, input: unknown): Promise<unknown> {
     const params = object(input);
     switch (method) {
       case "workspace.list": return this.workspaceList();

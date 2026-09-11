@@ -1,3 +1,5 @@
+import { controlPlaneUnavailableResponse } from "./control-plane-errors.js";
+import { rpcPermissionRequirement } from "./mcp-authorization.js";
 import {
   JobCompletedSchema,
   JobStartedSchema,
@@ -296,6 +298,8 @@ const CLIENT_LAST_USED_WRITE_INTERVAL_MS = 60_000;
 export const DEFAULT_RUNNER_ENROLLMENT_TTL_MS = 30 * 60 * 1_000;
 export const RUNNER_ENROLLMENT_TTL_OPTIONS_MS = [5 * 60 * 1_000, 30 * 60 * 1_000, 2 * 60 * 60 * 1_000, 24 * 60 * 60 * 1_000, 7 * 24 * 60 * 60 * 1_000, 30 * 24 * 60 * 60 * 1_000] as const;
 const AUTH_THROTTLE_FAILURE_THRESHOLD = 5;
+export const REGISTRY_HISTORY_CLEANUP_INTERVAL_MS = 15 * 60_000;
+const HISTORY_CLEANUP_DEADLINE_KEY = "maintenance.history-cleanup-deadline.v1";
 const AUTH_THROTTLE_INITIAL_BLOCK_MS = 30_000;
 const AUTH_THROTTLE_MAX_BLOCK_MS = 15 * 60_000;
 
@@ -437,6 +441,17 @@ export class RegistryDO {
 
   public async alarm(): Promise<void> {
     const nowMs = Date.now();
+    try { await this.runMaintenanceAlarm(nowMs); }
+    catch (error) {
+      this.disableFeatureHealth("maintenance_alarm", error, nowMs);
+      // Avoid a tight retry burst when an account/storage backend is overloaded.
+      // If even rescheduling fails, retain the platform's bounded alarm retry.
+      try { await this.ctx.storage.setAlarm(nowMs + REGISTRY_HISTORY_CLEANUP_INTERVAL_MS); }
+      catch { throw error; }
+    }
+  }
+
+  private async runMaintenanceAlarm(nowMs: number): Promise<void> {
     if (this.ctx.storage.sql.exec("SELECT 1 FROM mcp_calls WHERE completed_at_ms <= ? LIMIT 1", nowMs - MCP_AUDIT_RETENTION_MS).toArray().length > 0) {
       this.ctx.storage.sql.exec("DELETE FROM mcp_calls WHERE completed_at_ms <= ?", nowMs - MCP_AUDIT_RETENTION_MS);
     }
@@ -449,12 +464,19 @@ export class RegistryDO {
          WHERE state = 'online' AND (last_heartbeat_ms IS NULL OR last_heartbeat_ms < ?)`, nowMs, nowMs - 45_000,
       );
     }
-    if (this.ctx.storage.sql.exec("SELECT 1 FROM feature_health WHERE disabled_until_ms <= ? LIMIT 1", nowMs).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM feature_health WHERE disabled_until_ms <= ?", nowMs);
-    if (this.ctx.storage.sql.exec("SELECT 1 FROM admin_sessions WHERE expires_at_ms <= ? LIMIT 1", nowMs).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM admin_sessions WHERE expires_at_ms <= ?", nowMs);
-    if (this.ctx.storage.sql.exec("SELECT 1 FROM internal_request_nonces WHERE expires_at_ms <= ? LIMIT 1", nowMs).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM internal_request_nonces WHERE expires_at_ms <= ?", nowMs);
-    // Keep recent expired/used metadata visible in the console; never retain raw codes.
-    const enrollmentRetentionCutoff = nowMs - 30 * 24 * 60 * 60 * 1_000;
-    if (this.ctx.storage.sql.exec("SELECT 1 FROM runner_enrollments WHERE expires_at_ms <= ? LIMIT 1", enrollmentRetentionCutoff).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE expires_at_ms <= ?", enrollmentRetentionCutoff);
+    // Liveness and exact audit expiry retain their existing deadlines. Other
+    // history cleanup runs at most once per 15 minutes, even across eviction.
+    // Authorization checks continue enforcing expiry when each record is read.
+    const nextCleanup = await this.ctx.storage.get<number>(HISTORY_CLEANUP_DEADLINE_KEY);
+    if (!safeNonnegativeInteger(nextCleanup) || nextCleanup <= nowMs || nextCleanup > nowMs + REGISTRY_HISTORY_CLEANUP_INTERVAL_MS) {
+      if (this.ctx.storage.sql.exec("SELECT 1 FROM feature_health WHERE disabled_until_ms <= ? LIMIT 1", nowMs).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM feature_health WHERE disabled_until_ms <= ?", nowMs);
+      if (this.ctx.storage.sql.exec("SELECT 1 FROM admin_sessions WHERE expires_at_ms <= ? LIMIT 1", nowMs).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM admin_sessions WHERE expires_at_ms <= ?", nowMs);
+      if (this.ctx.storage.sql.exec("SELECT 1 FROM internal_request_nonces WHERE expires_at_ms <= ? LIMIT 1", nowMs).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM internal_request_nonces WHERE expires_at_ms <= ?", nowMs);
+      // Keep recent expired/used metadata visible in the console; never retain raw codes.
+      const enrollmentRetentionCutoff = nowMs - 30 * 24 * 60 * 60 * 1_000;
+      if (this.ctx.storage.sql.exec("SELECT 1 FROM runner_enrollments WHERE expires_at_ms <= ? LIMIT 1", enrollmentRetentionCutoff).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE expires_at_ms <= ?", enrollmentRetentionCutoff);
+      await this.ctx.storage.put(HISTORY_CLEANUP_DEADLINE_KEY, nowMs + REGISTRY_HISTORY_CLEANUP_INTERVAL_MS);
+    }
     await this.scheduleMaintenanceAlarm(nowMs);
   }
 
@@ -561,15 +583,13 @@ export class RegistryDO {
   /** Atomically remembers a verified nonce until its signed request expires. */
   public consumeInternalNonce(nonce: string, expiresAtMs: number, nowMs = Date.now()): boolean {
     if (!/^[0-9a-f]{64}$/.test(nonce) || !Number.isSafeInteger(expiresAtMs) || expiresAtMs <= nowMs) return false;
-    return this.ctx.storage.transactionSync(() => {
-      this.ctx.storage.sql.exec("DELETE FROM internal_request_nonces WHERE expires_at_ms <= ?", nowMs);
-      try {
-        this.ctx.storage.sql.exec("INSERT INTO internal_request_nonces (nonce, expires_at_ms) VALUES (?, ?)", nonce, expiresAtMs);
-        return true;
-      } catch {
-        return false;
-      }
-    });
+    // Uniqueness conflicts mean replay; storage failures must propagate. Avoid
+    // scanning/deleting all expired nonces on every signed operation.
+    const result = this.ctx.storage.sql.exec(`INSERT INTO internal_request_nonces (nonce, expires_at_ms) VALUES (?, ?)
+      ON CONFLICT(nonce) DO UPDATE SET expires_at_ms = excluded.expires_at_ms
+      WHERE internal_request_nonces.expires_at_ms <= ?`, nonce, expiresAtMs, nowMs);
+    // SQLite rowsWritten also includes index entries; a replay writes zero.
+    return result.rowsWritten > 0;
   }
 
   private schemaIsCurrent(): boolean {
@@ -854,6 +874,50 @@ export class RegistryDO {
     return { client_id: row.client_id, label: row.label, scopes, secret_version: row.secret_version };
   }
 
+  /** No credential is returned; a captured request must match the live generation. */
+  public revalidateMcpClient(clientId: unknown, secretVersion: unknown): VerifiedMcpClient | undefined {
+    if (typeof clientId !== "string" || !isSafeIdentifier(clientId) || !Number.isSafeInteger(secretVersion) || (secretVersion as number) < 1) return undefined;
+    const client = this.getMcpClient(clientId);
+    if (client === undefined || client.revoked_at_ms !== null || client.secret_version !== secretVersion || !validScopes(client.scopes)) return undefined;
+    return { client_id: client.client_id, label: client.label, scopes: client.scopes, secret_version: client.secret_version };
+  }
+
+  /** Synchronous decision binds the principal, exact tool scope, job/workspace,
+   * live permissions and policy identity in one Registry event turn. */
+  public authorizeMcpRpc(input: Record<string, unknown>): { ok: true } | { ok: false; code: string } {
+    const deny = (code = "permission_denied") => ({ ok: false as const, code });
+    const client = this.revalidateMcpClient(input.client_id, input.secret_version);
+    const runnerId = input.runner_id;
+    const requirement = typeof input.method === "string" ? rpcPermissionRequirement(input.method) : undefined;
+    if (client === undefined || typeof runnerId !== "string" || !isSafeIdentifier(runnerId) || requirement === undefined) return deny();
+    if (!client.scopes.includes(requirement.scope)) return deny("insufficient_scope");
+    const selection = this.getMcpClientActiveRunner(client.client_id);
+    if (selection?.active_runner_id !== runnerId) return deny();
+    const readiness = this.getPolicyReadiness(runnerId);
+    if (!readiness.ok || readiness.applied_revision !== input.policy_revision || readiness.active_checksum !== input.policy_checksum) return deny("stale_policy");
+    let workspaceId = input.workspace_id;
+    if (requirement.job) {
+      if (typeof input.job_id !== "string" || !isSafeIdentifier(input.job_id)) return deny();
+      const job = this.getJob(runnerId, input.job_id);
+      if (typeof job !== "object" || job === null || Array.isArray(job) || (job as Record<string, unknown>).workspace_id !== workspaceId) return deny();
+    }
+    if (typeof workspaceId !== "string" || !isSafeIdentifier(workspaceId)) return deny();
+    const permissions = this.effectivePermissions(client.client_id, runnerId, workspaceId);
+    return permissions?.[requirement.permission] === true ? { ok: true } : deny();
+  }
+
+  public effectiveWorkspaceList(clientId: string, runnerId: string): { runner_id: string; revision: number; checksum: string; workspaces: Array<{ workspace_id: string; enabled: boolean; permissions: PermissionSet }> } | undefined {
+    const client = this.getMcpClient(clientId);
+    if (client === undefined || client.revoked_at_ms !== null || !client.scopes.includes("coding:read") || !this.getSnapshotAuthorization(runnerId).ok) return undefined;
+    const policy = this.getActivePolicySnapshot(runnerId);
+    if (policy === undefined) return undefined;
+    const workspaces = policy.workspaces.flatMap((workspace) => {
+      const permissions = this.effectivePermissions(clientId, runnerId, workspace.workspace_id);
+      return permissions?.read === true ? [{ workspace_id: workspace.workspace_id, enabled: true, permissions }] : [];
+    });
+    return { runner_id: runnerId, revision: policy.revision, checksum: policy.checksum, workspaces };
+  }
+
   public setClientRunnerOverride(clientId: string, runnerId: string, permissions: PermissionSet, nowMs: number): boolean {
     if (!isSafeIdentifier(clientId) || !isSafeIdentifier(runnerId) || this.getMcpClient(clientId) === undefined || this.runnerRow(runnerId) === undefined || !validPermissionSet(permissions)) return false;
     this.ctx.storage.sql.exec(`INSERT INTO client_runner_overrides (client_id, runner_id, permissions_json, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?)
@@ -862,7 +926,7 @@ export class RegistryDO {
   }
   public clientRunnerPermissions(clientId: string, runnerId: string): PermissionSet | undefined {
     const row = this.ctx.storage.sql.exec<{ permissions_json: string }>("SELECT permissions_json FROM client_runner_overrides WHERE client_id = ? AND runner_id = ?", clientId, runnerId).toArray()[0];
-    return row === undefined ? undefined : parsePermissionSet(row.permissions_json);
+    return row === undefined ? undefined : parsePermissionSet(row.permissions_json) ?? { ...LOCKED_PERMISSIONS };
   }
   public listClientRunnerOverrides(clientId: string): Array<{ runner_id: string; permissions: PermissionSet }> {
     return this.ctx.storage.sql.exec<{ runner_id: string; permissions_json: string }>("SELECT runner_id, permissions_json FROM client_runner_overrides WHERE client_id = ? ORDER BY runner_id", clientId).toArray().flatMap((row) => {
@@ -878,7 +942,7 @@ export class RegistryDO {
     if (!this.runnerAccess(runnerId).allowed) return undefined;
     const client = this.getMcpClient(clientId);
     const policy = this.getActivePolicySnapshot(runnerId);
-    if (client === undefined || policy === undefined) return undefined;
+    if (client === undefined || client.revoked_at_ms !== null || policy === undefined) return undefined;
     const workspace = policy.workspaces.find((candidate) => candidate.workspace_id === workspaceId);
     if (workspace === undefined || !workspace.enabled) return undefined;
     const override = this.clientRunnerPermissions(clientId, runnerId) ?? { read: true, edit: true, shell: true, job_control: true };
@@ -1494,15 +1558,12 @@ export class RegistryDO {
     // timestamp backwards. The normal path is one conditional write; only a
     // duplicate/clock-rollback frame needs a read to distinguish an unchanged
     // current session from a stale transport identity.
-    try {
-      const updated = this.ctx.storage.sql.exec("UPDATE runners SET state = 'online', last_heartbeat_ms = ?, updated_at_ms = ? WHERE runner_id = ? AND connection_epoch = ? AND credential_version = ? AND lifecycle_id = ? AND session_id = ? AND (last_heartbeat_ms IS NULL OR last_heartbeat_ms < ?)", nowMs, nowMs, runnerId, epoch, credentialVersion, lifecycleId, sessionId, nowMs);
-      if (updated.rowsWritten === 1) return true;
-      const current = this.ctx.storage.sql.exec<Pick<RunnerRow, "connection_epoch" | "credential_version" | "state" | "lifecycle_id" | "session_id" | "last_heartbeat_ms">>("SELECT connection_epoch, credential_version, state, lifecycle_id, session_id, last_heartbeat_ms FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
-      return current?.connection_epoch === epoch && current.credential_version === credentialVersion && current.state === "online"
-        && current.lifecycle_id === lifecycleId && current.session_id === sessionId && current.last_heartbeat_ms !== null && current.last_heartbeat_ms >= nowMs;
-    } catch {
-      return false;
-    }
+    // Storage exceptions propagate to the HTTP boundary as 503, never false.
+    const updated = this.ctx.storage.sql.exec("UPDATE runners SET state = 'online', last_heartbeat_ms = ?, updated_at_ms = ? WHERE runner_id = ? AND connection_epoch = ? AND credential_version = ? AND lifecycle_id = ? AND session_id = ? AND (last_heartbeat_ms IS NULL OR last_heartbeat_ms < ?)", nowMs, nowMs, runnerId, epoch, credentialVersion, lifecycleId, sessionId, nowMs);
+    if (updated.rowsWritten === 1) return true;
+    const current = this.ctx.storage.sql.exec<Pick<RunnerRow, "connection_epoch" | "credential_version" | "state" | "lifecycle_id" | "session_id" | "last_heartbeat_ms">>("SELECT connection_epoch, credential_version, state, lifecycle_id, session_id, last_heartbeat_ms FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
+    return current?.connection_epoch === epoch && current.credential_version === credentialVersion && current.state === "online"
+      && current.lifecycle_id === lifecycleId && current.session_id === sessionId && current.last_heartbeat_ms !== null && current.last_heartbeat_ms >= nowMs;
   }
   public markDisconnected(runnerId: string, epoch: number, credentialVersion: number, state: Exclude<RunnerConnectionState, "online">, nowMs: number, lifecycleId: string, sessionId: string): void {
     if (!validTransportIdentity(lifecycleId, sessionId)) return;
@@ -1783,6 +1844,11 @@ export class RegistryDO {
   }
 
   public async fetch(request: Request): Promise<Response> {
+    try { return await this.handleRequest(request); }
+    catch { return controlPlaneUnavailableResponse(); }
+  }
+
+  private async handleRequest(request: Request): Promise<Response> {
     const rawBody = await readCappedBody(request);
     if (rawBody === undefined) return new Response("payload too large", { status: 413 });
     const url = new URL(request.url);
@@ -1828,6 +1894,10 @@ export class RegistryDO {
     const runnerId = segments[0] === "runners" ? parseRunnerId(segments[1]) : undefined;
     const action = segments[2]; const itemId = segments[3];
     if (runnerId === undefined || segments.length > 4) return new Response("not found", { status: 404 });
+    if (request.method === "POST" && action === "mcp-authorization" && itemId === undefined) {
+      const decision = this.authorizeMcpRpc({ ...input, runner_id: runnerId });
+      return Response.json(decision, { status: decision.ok ? 200 : decision.code === "stale_policy" ? 409 : 403 });
+    }
     if (request.method === "PUT" && action === undefined) {
       const tokenVerifier = stringField(input, "token_verifier", 64); const mutationId = input.mutation_id === undefined ? undefined : mutationIdField(input);
       if (tokenVerifier === undefined || !validVerifier(tokenVerifier) || (input.mutation_id !== undefined && mutationId === undefined)) return Response.json({ error: "invalid token verifier or mutation" }, { status: 400 });
@@ -2162,6 +2232,18 @@ export class RegistryDO {
       if (ack === undefined) return Response.json({ error: "invalid policy acknowledgement" }, { status: 409 });
       return Response.json({ ack_result: ack });
     }
+    if (method === "POST" && action === "mcp" && clientId === "revalidate") {
+      const client = this.revalidateMcpClient(input.client_id, input.secret_version);
+      return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client);
+    }
+    if (method === "POST" && action === "mcp" && clientId === "authorize-rpc") {
+      const decision = this.authorizeMcpRpc(input);
+      return Response.json(decision, { status: decision.ok ? 200 : decision.code === "stale_policy" ? 409 : 403 });
+    }
+    if (method === "GET" && action === "clients" && clientId !== undefined && segments[2] === "effective-workspaces" && segments[3] !== undefined && isSafeIdentifier(segments[3])) {
+      const value = this.effectiveWorkspaceList(clientId, segments[3]);
+      return value === undefined ? new Response("not found", { status: 404 }) : Response.json(value);
+    }
     if (method === "POST" && action === "mcp" && clientId === "verify") { const verifier = stringField(input, "secret_verifier", 64); if (verifier === undefined) return new Response("not found", { status: 404 }); const client = this.verifyMcpClient(verifier, nowMs); return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client); }
     return new Response("not found", { status: 404 });
   }
@@ -2265,9 +2347,17 @@ export class RegistryDO {
   private upsertJob(runnerId: string, job: Record<string, unknown>, nowMs: number): void {
     const updated = safeNonnegativeInteger(job.updated_at_ms) ? job.updated_at_ms : nowMs;
     const jobJson = JSON.stringify(job);
+    // Lifecycle events can overtake a previously captured full snapshot. Keep
+    // timestamps and lifecycle rank monotonic, including equal-ms events, and
+    // never replace a committed terminal outcome with a stale active status.
     this.ctx.storage.sql.exec(`INSERT INTO jobs (runner_id, job_id, job_json, updated_at_ms) VALUES (?, ?, ?, ?)
       ON CONFLICT(runner_id, job_id) DO UPDATE SET job_json = excluded.job_json, updated_at_ms = excluded.updated_at_ms
-      WHERE excluded.job_json <> jobs.job_json`, runnerId, job.job_id, jobJson, updated);
+      WHERE excluded.job_json <> jobs.job_json
+        AND excluded.updated_at_ms >= jobs.updated_at_ms
+        AND (CASE json_extract(excluded.job_json, '$.status') WHEN 'queued' THEN 0 WHEN 'running' THEN 1 WHEN 'cancelling' THEN 2 ELSE 3 END)
+          >= (CASE json_extract(jobs.job_json, '$.status') WHEN 'queued' THEN 0 WHEN 'running' THEN 1 WHEN 'cancelling' THEN 2 ELSE 3 END)
+        AND (json_extract(jobs.job_json, '$.status') NOT IN ('succeeded', 'failed', 'cancelled', 'interrupted')
+          OR json_extract(excluded.job_json, '$.status') = json_extract(jobs.job_json, '$.status'))`, runnerId, job.job_id, jobJson, updated);
   }
   private pruneTerminalJobs(runnerId: string): void {
     const rows = this.ctx.storage.sql.exec<{ job_id: string; job_json: string }>("SELECT job_id, job_json FROM jobs WHERE runner_id = ? ORDER BY updated_at_ms DESC, job_id DESC", runnerId).toArray();
