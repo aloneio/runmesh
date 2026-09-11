@@ -730,24 +730,24 @@ function fitStatusResult(input: {
   readonly outputBytes: number;
   readonly truncated: boolean;
 }): Record<string, unknown> {
-  const entries = [...input.parsed.entries];
-  let truncated = input.truncated;
-  const result = (): Record<string, unknown> => ({
+  const entries = input.parsed.entries;
+  const resultFor = (kept: readonly StatusEntry[], truncated: boolean): Record<string, unknown> => ({
     workspace_id: input.workspaceId,
     path: input.path,
     branch: input.parsed.branch,
-    entries,
+    entries: kept,
     ...(input.parsed.ahead === undefined ? {} : { ahead: input.parsed.ahead }),
     ...(input.parsed.behind === undefined ? {} : { behind: input.parsed.behind }),
     truncated,
     output_bytes: input.outputBytes,
   });
-  while (!responseFits(result()) && entries.length > 0) {
-    entries.pop();
-    truncated = true;
-  }
-  if (!responseFits(result())) throw new RpcRuntimeError("git_output_too_large", "git status metadata cannot fit in one RPC frame");
-  return result();
+  if (responseFits(resultFor(entries, input.truncated))) return resultFor(entries, input.truncated);
+  // A status list can be arbitrarily long, so re-serializing the whole response
+  // after every single removal is quadratic. Binary-search the longest prefix
+  // that still fits, exactly as the diff path does.
+  const kept = fitPrefix(entries, (prefix) => responseFits(resultFor(prefix, true)));
+  if (!responseFits(resultFor(entries.slice(0, kept), true))) throw new RpcRuntimeError("git_output_too_large", "git status metadata cannot fit in one RPC frame");
+  return resultFor(entries.slice(0, kept), true);
 }
 
 function fitDiffResult(input: {
@@ -792,6 +792,29 @@ function responseFits(result: Record<string, unknown>): boolean {
     request_id: "x".repeat(MAX_REQUEST_ID_BYTES),
     result,
   }), "utf8") <= MAX_FRAME_BYTES;
+}
+
+/**
+ * Length of the longest prefix that `fits` accepts, assuming `fits` is
+ * monotonic (when a prefix does not fit, no longer prefix fits either).
+ * Locating it by binary search keeps truncation logarithmic in the number of
+ * serialized candidates instead of re-serializing the whole response after
+ * every single removal.
+ */
+export function fitPrefix<T>(items: readonly T[], fits: (prefix: readonly T[]) => boolean): number {
+  let low = 0;
+  let high = items.length;
+  let best = 0;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    if (fits(items.slice(0, middle))) {
+      best = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return best;
 }
 
 export function utf8SafePrefix<T extends Uint8Array>(output: T): T {

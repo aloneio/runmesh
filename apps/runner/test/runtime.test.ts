@@ -232,6 +232,34 @@ describe("persistent local jobs", () => {
     } finally { await test.cleanup(); }
   });
 
+  it("advances the log cursor to EOF when a log ends with an incomplete UTF-8 sequence", async () => {
+    const test = await fixture();
+    try {
+      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state });
+      await manager.initialize();
+      // "ok" followed by the first two bytes of a three-byte code point. The
+      // tail can never be decoded, so a byte-cursor reader that echoed the same
+      // cursor back would poll this job forever instead of reaching EOF.
+      const job = await manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.stdout.write(Buffer.from([0x6f, 0x6b, 0xe4, 0xb8]))"] });
+      await waitFor(() => manager.get(job.job_id), (value) => value.status === "succeeded");
+      let cursor: string | null = "0";
+      let collected = "";
+      let pages = 0;
+      while (cursor !== null) {
+        const page = await manager.logs(job.job_id, { stream: "stdout", cursor, limit: 1024 });
+        collected += page.data as string;
+        pages += 1;
+        // A stalled cursor would spin here until this bound tripped.
+        expect(pages).toBeLessThan(8);
+        const next = page.next_cursor as string | null;
+        if (next !== null) expect(Number(next)).toBeGreaterThan(Number(cursor));
+        cursor = next;
+      }
+      expect(collected).toBe("ok");
+      expect(pages).toBe(2);
+    } finally { await test.cleanup(); }
+  });
+
   it("syncs completed durable job metadata after the process exits", async () => {
     const test = await fixture();
     try {
