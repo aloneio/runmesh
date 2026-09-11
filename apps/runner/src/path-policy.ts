@@ -32,11 +32,20 @@ export interface PathSnapshot {
 /** Resolves all user paths from an allowlisted workspace id, never from a caller root. */
 export class PathPolicy {
   private workspaces: ReadonlyMap<string, WorkspaceConfig>;
+  private policyGeneration = 0;
+  public get generation(): number { return this.policyGeneration; }
+  public assertGeneration(expected: number): void {
+    if (expected !== this.policyGeneration) throw new PathPolicyError("stale_policy", "workspace policy changed during the operation");
+  }
+  public assertCurrentWorkspace(workspace: WorkspaceConfig): void {
+    if (this.workspaces.get(workspace.workspaceId) !== workspace) throw new PathPolicyError("stale_policy", "resolved workspace belongs to an obsolete policy");
+  }
   public constructor(workspaces: readonly WorkspaceConfig[]) {
     this.workspaces = new Map(workspaces.map((workspace) => [workspace.workspaceId, workspace]));
   }
   public list(): readonly WorkspaceConfig[] { return [...this.workspaces.values()]; }
   public replace(workspaces: readonly WorkspaceConfig[]): void {
+    this.policyGeneration += 1;
     // Keep denied managed workspaces in the local map so every operation fails
     // explicitly with permission_denied rather than falling back to an
     // indistinguishable unknown workspace. Public listing code filters them.
@@ -59,6 +68,7 @@ export class PathPolicy {
     return workspace;
   }
   public async resolve(workspaceId: unknown, userPath: unknown, operation: PathOperation): Promise<{ workspace: WorkspaceConfig; path: string }> {
+    const generation = this.generation;
     const workspace = this.assertPermission(workspaceId, operation === "write" ? "edit" : "read");
     if (typeof userPath !== "string" || userPath.length === 0) throw new PathPolicyError("invalid_path", "path is required");
     if (userPath.includes("\0")) throw new PathPolicyError("invalid_path", "path contains NUL");
@@ -71,6 +81,7 @@ export class PathPolicy {
     if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new PathPolicyError("invalid_path", "path escapes workspace");
     if (operation === "write") this.assertWritable(workspaceId);
     await this.checkAncestors(workspace.rootPath, rel, operation === "write");
+    this.assertGeneration(generation);
     return { workspace, path: candidate };
   }
 
@@ -80,7 +91,9 @@ export class PathPolicy {
    * allowing consumers to perform a post-open identity check.
    */
   public async snapshot(resolved: { readonly workspace: WorkspaceConfig; readonly path: string }): Promise<PathSnapshot> {
+    const generation = this.generation;
     const { workspace, path } = resolved;
+    this.assertCurrentWorkspace(workspace);
     const rel = relative(workspace.rootPath, path);
     if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new PathPolicyError("invalid_path", "path escapes workspace");
     // Bind the configured root as well as the leaf. If the root itself is
@@ -102,6 +115,7 @@ export class PathPolicy {
     if (!sameIdentity(rootBefore, rootAfter) || !sameCanonical(canonicalRoot, canonicalRootAfter)) {
       throw new PathPolicyError("path_changed", "workspace root changed during validation");
     }
+    this.assertGeneration(generation);
     return {
       canonicalPath,
       rootCanonicalPath: canonicalRoot,
@@ -118,6 +132,7 @@ export class PathPolicy {
   /** Re-check the path boundary and identity after a handle has been opened. */
   public async verifySnapshot(resolved: { readonly workspace: WorkspaceConfig; readonly path: string }, snapshot: PathSnapshot): Promise<void> {
     const current = await this.snapshot(resolved);
+    this.assertCurrentWorkspace(resolved.workspace);
     if (!sameCanonical(current.canonicalPath, snapshot.canonicalPath)
       || (snapshot.rootCanonicalPath !== undefined && !sameCanonical(current.rootCanonicalPath ?? "", snapshot.rootCanonicalPath))
       || (snapshot.rootDevice !== undefined && current.rootDevice !== snapshot.rootDevice)
