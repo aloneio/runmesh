@@ -75,12 +75,15 @@ const JobInputSchema = z.discriminatedUnion("action", [
 const SafeOutputSchema = z.object({}).passthrough();
 
 export type McpAuth = AuthInfo & { token: string };
+// Captured once per handler instance; never stored in shared Worker globals.
+type McpRequestEnv = WorkerEnv & { readonly mcpPrincipal: { readonly client_id: string; readonly secret_version: unknown } };
 
 /**
  * Fresh server factory target for createMcpHandler. Every HTTP request receives
  * an isolated McpServer and the default stateless 2025 compatibility lane.
  */
-export function createCodingMcpServer(env: WorkerEnv, auth: McpAuth): McpServer {
+export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth): McpServer {
+  const env: McpRequestEnv = { ...rawEnv, mcpPrincipal: { client_id: auth.clientId, secret_version: auth.extra?.secret_version } };
   const server = new McpServer({ name: "runmesh", version: PRODUCT_VERSION });
 
   register(server, "runner_list", z.object({}).strict(), async () => gatedRunnerList(env, auth.clientId));
@@ -115,11 +118,14 @@ export function createCodingMcpServer(env: WorkerEnv, auth: McpAuth): McpServer 
 
   function register<Input extends z.ZodType>(target: McpServer, name: ToolName, inputSchema: Input, action: (input: z.output<Input>, scopes: readonly string[]) => Promise<unknown>): void {
     const spec = TOOL_SPECS[name];
-    (target.registerTool as unknown as (toolName: string, config: Record<string, unknown>, callback: (input: z.output<Input>, context: ServerContext) => Promise<unknown>) => unknown)(name, { description: spec.description, inputSchema, outputSchema: SafeOutputSchema, annotations: spec.annotations }, async (input, context) => {
-      const contextAuth = context.http?.authInfo;
-      // The protected handler injects AuthInfo. Captured auth is intentionally
-      // a fallback for the stateless legacy lane, not a bearer-token parser.
-      const scopes = contextAuth?.scopes ?? auth.scopes;
+    (target.registerTool as unknown as (toolName: string, config: Record<string, unknown>, callback: (input: z.output<Input>, context: ServerContext) => Promise<unknown>) => unknown)(name, { description: spec.description, inputSchema, outputSchema: SafeOutputSchema, annotations: spec.annotations }, async (input, _context) => {
+      // The URL credential can be rotated while a body or SDK import is
+      // awaited. Re-read the exact generation and scopes before every tool.
+      const live = await registryPostCall(env, "/auth/mcp/revalidate", env.mcpPrincipal);
+      if (!live.ok || !isRecord(live.value) || live.value.client_id !== auth.clientId || live.value.secret_version !== env.mcpPrincipal.secret_version || !Array.isArray(live.value.scopes) || live.value.scopes.some((scope) => !SUPPORTED_SCOPES.includes(scope as CodingScope))) {
+        return failure("permission_denied", "The MCP credential is no longer authorized.", "Use the currently authorized MCP connection; do not retry a revoked URL.");
+      }
+      const scopes = live.value.scopes as string[];
       const requiredScope = "scope" in spec ? spec.scope : undefined;
       if (requiredScope !== undefined && !scopes.includes(requiredScope)) {
         return failure("insufficient_scope", `This tool requires ${requiredScope}.`, `Authorize the MCP client again with ${requiredScope}.`);
@@ -133,7 +139,7 @@ export function createCodingMcpServer(env: WorkerEnv, auth: McpAuth): McpServer 
   }
 }
 
-async function inspectTool(env: WorkerEnv, clientId: string, params: z.output<typeof InspectInputSchema>): Promise<unknown> {
+async function inspectTool(env: McpRequestEnv, clientId: string, params: z.output<typeof InspectInputSchema>): Promise<unknown> {
   const method = params.action === "list" ? "fs.list" : params.action === "search" ? "fs.search" : params.action === "stat" ? "fs.stat" : params.action === "git_status" ? "git.status" : "git.diff";
   const input: Record<string, unknown> = {
     workspace_id: params.workspace_id,
@@ -147,7 +153,7 @@ async function inspectTool(env: WorkerEnv, clientId: string, params: z.output<ty
   };
   return activeRunnerTool(env, clientId, method, input, "read", inspectResultMode(params.action));
 }
-async function shellTool(env: WorkerEnv, clientId: string, params: z.output<typeof ShellInputSchema>): Promise<unknown> {
+async function shellTool(env: McpRequestEnv, clientId: string, params: z.output<typeof ShellInputSchema>): Promise<unknown> {
   const invocation = { workspace_id: params.workspace_id, command: params.command, shell: true, created_by_client_id: clientId };
   // Background starts return a Runner JobRecord.  Keep the MCP response on
   // the stable job-metadata allow-list; command/cwd/PID/process identity are
@@ -167,7 +173,7 @@ function normalizeShellResult(result: unknown): unknown {
   return success(safeShellResult(value));
 }
 
-async function jobTool(env: WorkerEnv, clientId: string, params: z.output<typeof JobInputSchema>, scopes: readonly string[]): Promise<unknown> {
+async function jobTool(env: McpRequestEnv, clientId: string, params: z.output<typeof JobInputSchema>, scopes: readonly string[]): Promise<unknown> {
   switch (params.action) {
     case "list":
       if (!scopes.includes("coding:read")) return failure("insufficient_scope", "This job action requires coding:read.", "Authorize the MCP client again with coding:read.");
@@ -550,13 +556,13 @@ function inspectResultMode(action: InspectResultKind): RunnerResultMode { return
 type SelectionCall = ToolSuccess | ToolFailure;
 type ActiveSelectionCall = { readonly ok: true; readonly value: ActiveSelection } | ToolFailure;
 
-async function getActiveRunnerSelection(env: WorkerEnv, clientId: string): Promise<SelectionCall> {
+async function getActiveRunnerSelection(env: McpRequestEnv, clientId: string): Promise<SelectionCall> {
   const call = await registryCall(env, `/auth/clients/${encodeURIComponent(clientId)}/active-runner`);
   if (!call.ok) return call;
   return { ok: true, value: call.value as McpClientActiveRunner };
 }
 
-async function selectActiveRunner(env: WorkerEnv, clientId: string, runnerId: string, confirmSwitch: boolean): Promise<SelectionCall> {
+async function selectActiveRunner(env: McpRequestEnv, clientId: string, runnerId: string, confirmSwitch: boolean): Promise<SelectionCall> {
   const call = await registryPostCall(env, `/auth/clients/${encodeURIComponent(clientId)}/active-runner`, { runner_id: runnerId, confirm_switch: confirmSwitch });
   if (call.ok) {
     const result = call.value as McpRunnerSelectionResult;
@@ -567,7 +573,7 @@ async function selectActiveRunner(env: WorkerEnv, clientId: string, runnerId: st
   return call;
 }
 
-async function resolveActiveRunner(env: WorkerEnv, clientId: string, allowOfflineSnapshot = false): Promise<ActiveSelectionCall> {
+async function resolveActiveRunner(env: McpRequestEnv, clientId: string, allowOfflineSnapshot = false): Promise<ActiveSelectionCall> {
   const initial = await getActiveRunnerSelection(env, clientId);
   if (!initial.ok) return initial;
   let state = initial.value as McpClientActiveRunner;
@@ -606,7 +612,7 @@ function runnerFailure(error: ToolFailure["error"], selection: ActiveSelection):
   return failureWithDetails(error.code, error.message, error.hint, { runner_context: safeRunnerContext(selection.context) });
 }
 
-async function activeRunnerTool(env: WorkerEnv, clientId: string, method: string, params: Record<string, unknown>, requiredPermission?: PermissionBit, resultMode: RunnerResultMode = "raw"): Promise<unknown> {
+async function activeRunnerTool(env: McpRequestEnv, clientId: string, method: string, params: Record<string, unknown>, requiredPermission?: PermissionBit, resultMode: RunnerResultMode = "raw"): Promise<unknown> {
   const selected = await resolveActiveRunner(env, clientId);
   if (!selected.ok) return asToolResult(selected);
   const permission = requiredPermission === undefined
@@ -632,7 +638,7 @@ async function activeRunnerTool(env: WorkerEnv, clientId: string, method: string
   return result;
 }
 
-async function activeJobRunnerTool(env: WorkerEnv, clientId: string, method: string, params: Record<string, unknown>, requiredPermission: PermissionBit, resultMode: RunnerResultMode = "raw"): Promise<unknown> {
+async function activeJobRunnerTool(env: McpRequestEnv, clientId: string, method: string, params: Record<string, unknown>, requiredPermission: PermissionBit, resultMode: RunnerResultMode = "raw"): Promise<unknown> {
   const selected = await resolveActiveRunner(env, clientId);
   if (!selected.ok) return asToolResult(selected);
   const job = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/jobs/${encodeURIComponent(String(params.job_id))}`);
@@ -715,7 +721,7 @@ function projectRunnerResult(value: unknown, mode: RunnerResultMode): unknown {
   return value;
 }
 
-async function activeJobList(env: WorkerEnv, clientId: string, filters: Record<string, unknown>): Promise<unknown> {
+async function activeJobList(env: McpRequestEnv, clientId: string, filters: Record<string, unknown>): Promise<unknown> {
   const selected = await resolveActiveRunner(env, clientId, true);
   if (!selected.ok) return asToolResult(selected);
   if (filters.workspace_id !== undefined) {
@@ -754,37 +760,26 @@ async function activeJobList(env: WorkerEnv, clientId: string, filters: Record<s
   return runnerSuccess(projected, selected.value);
 }
 
-async function activeWorkspaceList(env: WorkerEnv, clientId: string): Promise<unknown> {
+async function activeWorkspaceList(env: McpRequestEnv, clientId: string): Promise<unknown> {
   const selected = await resolveActiveRunner(env, clientId, true);
   if (!selected.ok) return asToolResult(selected);
-  const call = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/active-workspaces`);
+  // The Registry projects the policy and effective intersection in one event
+  // turn: the workspace's permission ceiling is not the caller's permission.
+  const call = await registryCall(env, `/auth/clients/${encodeURIComponent(clientId)}/effective-workspaces/${encodeURIComponent(selected.value.runnerId)}`);
   if (!call.ok) return runnerFailure(call.error, selected.value);
   const value = isRecord(call.value) ? call.value : {};
   const workspaces = Array.isArray(value.workspaces) ? value.workspaces : [];
-  const visible: unknown[] = [];
-  for (const workspace of workspaces) {
-    const workspaceId = isRecord(workspace) ? workspace.workspace_id : undefined;
-    if (await checkPermission(env, clientId, selected.value.runnerId, workspaceId, "read") === undefined) {
-      const projectedWorkspace = safeWorkspaceMetadata(workspace);
-      if (projectedWorkspace !== undefined) visible.push(projectedWorkspace);
-    }
-  }
-  // The Registry currently returns only IDs/permission bits here.  Preserve
-  // that documented envelope explicitly instead of spreading future fields
-  // (especially host roots) into a public MCP response.
-  const projected: Record<string, unknown> = { workspaces: visible };
+  const projected: Record<string, unknown> = { workspaces: workspaces.flatMap((workspace) => { const safe = safeWorkspaceMetadata(workspace); return safe === undefined ? [] : [safe]; }) };
   const runnerId = safeJobIdentifier(value.runner_id);
   if (runnerId !== undefined) projected.runner_id = runnerId;
   if (isSafeNonnegativeInteger(value.revision)) projected.revision = value.revision;
   if (typeof value.checksum === "string" && /^[a-f0-9]{64}$/u.test(value.checksum)) projected.checksum = value.checksum;
-  if (selected.value.context.state !== "online") {
-    projected.source = "registry_snapshot";
-    projected.runner_state = "offline";
-  }
+  if (selected.value.context.state !== "online") { projected.source = "registry_snapshot"; projected.runner_state = "offline"; }
   return runnerSuccess(projected, selected.value);
 }
+
 type PermissionCheck = ToolFailure;
-async function checkPermission(env: WorkerEnv, clientId: string, runnerId: string, workspaceId: unknown, required: PermissionBit): Promise<PermissionCheck | undefined> {
+async function checkPermission(env: McpRequestEnv, clientId: string, runnerId: string, workspaceId: unknown, required: PermissionBit): Promise<PermissionCheck | undefined> {
   if (typeof workspaceId !== "string" || !isSafeIdentifier(workspaceId)) return fail("permission_denied", "Workspace permission could not be resolved.", "Use a workspace identifier managed by the administrator.");
   const call = await registryCall(env, `/auth/clients/${encodeURIComponent(clientId)}/effective-permissions/${encodeURIComponent(runnerId)}?workspace_id=${encodeURIComponent(workspaceId)}`);
   if (!call.ok) return fail("permission_denied", "The operation is not permitted for this workspace.", "Ask the administrator to grant the required workspace permission.");
@@ -792,7 +787,7 @@ async function checkPermission(env: WorkerEnv, clientId: string, runnerId: strin
   if (permissions?.[required] !== true) return fail(required === "edit" ? "readonly_workspace" : "permission_denied", "The operation is not permitted for this workspace.", "Ask the administrator to grant the required workspace permission.");
   return undefined;
 }
-async function policyReadiness(env: WorkerEnv, runnerId: string): Promise<{ readonly ok: true; readonly value: ActivePolicyReadiness } | { readonly ok: false; readonly error: PermissionCheck }> {
+async function policyReadiness(env: McpRequestEnv, runnerId: string): Promise<{ readonly ok: true; readonly value: ActivePolicyReadiness } | { readonly ok: false; readonly error: PermissionCheck }> {
   const readiness = await registryCall(env, `/runners/${encodeURIComponent(runnerId)}/policy-readiness`);
   if (!readiness.ok || !isRecord(readiness.value)) return { ok: false, error: fail("stale_policy", "The selected runner policy could not be verified.", "Wait for the runner to reconnect and apply the latest control-plane policy.") };
   const value = readiness.value;
@@ -831,7 +826,7 @@ async function policyReadiness(env: WorkerEnv, runnerId: string): Promise<{ read
   };
 }
 
-async function snapshotAuthorization(env: WorkerEnv, runnerId: string): Promise<ToolFailure | undefined> {
+async function snapshotAuthorization(env: McpRequestEnv, runnerId: string): Promise<ToolFailure | undefined> {
   const snapshot = await registryCall(env, `/runners/${encodeURIComponent(runnerId)}/snapshot-authorization`);
   if (!snapshot.ok || !isRecord(snapshot.value) || snapshot.value.ok !== true) return fail("policy_pending", "The selected runner has no trusted active policy snapshot.", "Wait for an active policy to be acknowledged, then retry.");
   return undefined;
@@ -839,7 +834,7 @@ async function snapshotAuthorization(env: WorkerEnv, runnerId: string): Promise<
 function safeLifecycleId(value: string): boolean {
   return value.length >= 16 && value.length <= 128 && /^[A-Za-z0-9._:-]+$/u.test(value);
 }
-async function checkAnyReadPermission(env: WorkerEnv, clientId: string, runnerId: string): Promise<PermissionCheck | undefined> {
+async function checkAnyReadPermission(env: McpRequestEnv, clientId: string, runnerId: string): Promise<PermissionCheck | undefined> {
   const snapshotPermission = await snapshotAuthorization(env, runnerId);
   if (snapshotPermission !== undefined) return snapshotPermission;
   const active = await registryCall(env, `/runners/${encodeURIComponent(runnerId)}/active-workspaces`);
@@ -851,7 +846,7 @@ async function checkAnyReadPermission(env: WorkerEnv, clientId: string, runnerId
   return fail("permission_denied", "The operation is not permitted for this runner.", "Ask the administrator to grant read access to a workspace.");
 }
 
-async function gatedRunnerList(env: WorkerEnv, clientId: string): Promise<unknown> {
+async function gatedRunnerList(env: McpRequestEnv, clientId: string): Promise<unknown> {
   const call = await registryCall(env, "/runners");
   if (!call.ok) return asToolResult(call);
   const runners = isRecord(call.value) && Array.isArray(call.value.runners) ? call.value.runners : [];
@@ -864,7 +859,7 @@ async function gatedRunnerList(env: WorkerEnv, clientId: string): Promise<unknow
 }
 type PermissionBit = "read" | "edit" | "shell" | "job_control";
 
-async function activeJobGet(env: WorkerEnv, clientId: string, jobId: string): Promise<unknown> {
+async function activeJobGet(env: McpRequestEnv, clientId: string, jobId: string): Promise<unknown> {
   const selected = await resolveActiveRunner(env, clientId, true);
   if (!selected.ok) return asToolResult(selected);
   const snapshot = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/jobs/${encodeURIComponent(jobId)}`);
@@ -920,7 +915,7 @@ type ToolCall = ToolSuccess | ToolFailure;
 const SAFE_RUNNER_ERROR_CODES = new Set([
   "baseline_changed", "busy", "expected_hash_mismatch", "file_too_large", "git_failed", "git_output_too_large", "git_timeout", "git_unavailable",
   "hunk_ambiguous", "hunk_not_found", "hunk_overlap", "invalid_params", "invalid_patch", "invalid_path", "invalid_request", "invalid_workspace", "missing_file", "mixed_newlines", "not_utf8",
-  "method_not_found", "patch_install_failed", "patch_rollback_failed", "path_traversal", "permission_denied", "policy_pending", "readonly_workspace", "runner_offline", "stale_policy", "symlink_escape", "symlink_write", "target_exists", "timeout",
+  "method_not_found", "insufficient_scope", "patch_install_failed", "patch_rollback_failed", "path_traversal", "permission_denied", "policy_pending", "readonly_workspace", "runner_offline", "stale_policy", "symlink_escape", "symlink_write", "target_exists", "timeout",
 ]);
 
 export function policyPending(): ToolFailure {
@@ -931,7 +926,7 @@ function safeRunnerErrorCode(value: unknown, fallback: string): string {
   return typeof value === "string" && SAFE_RUNNER_ERROR_CODES.has(value) ? value : fallback;
 }
 
-async function callRunner(env: WorkerEnv, runnerId: string, method: string, params: Record<string, unknown>, policyRevision?: number, policyChecksum?: string): Promise<ToolCall> {
+async function callRunner(env: McpRequestEnv, runnerId: string, method: string, params: Record<string, unknown>, policyRevision?: number, policyChecksum?: string): Promise<ToolCall> {
   if (!isSafeIdentifier(runnerId)) return fail("invalid_runner_id", "runner_id is invalid", "Use a runner identifier returned by runner_list.");
   if (!isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) return fail("service_unavailable", "The runner bridge is not configured.", "Ask the service operator to configure the internal bridge.");
   if ((policyRevision === undefined || policyChecksum === undefined || !/^[a-f0-9]{64}$/.test(policyChecksum)) && method !== "echo" && method !== "runner.info") return fail("policy_pending", "The selected runner policy could not be verified.", "Wait for the runner to apply its control-plane policy, then retry.");
@@ -941,7 +936,16 @@ async function callRunner(env: WorkerEnv, runnerId: string, method: string, para
     encodeWireFrame(RpcRequestSchema.parse({ type: "rpc.request", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "r".repeat(128), method,
       params: params as JsonValue, ...(policyRevision === undefined ? {} : { policy_revision: policyRevision }) }));
   } catch { return fail("invalid_params", "Request exceeds the wire budget or is not JSON-safe; nothing was sent to the Runner.", "Reduce patch size, paths or expected hashes and retry."); }
-  const body = JSON.stringify({ method, params, ...(policyRevision === undefined ? {} : { policy_revision: policyRevision, expected_policy_revision: policyRevision, expected_policy_checksum: policyChecksum }) });
+  const authorization = await registryPostCall(env, "/auth/mcp/authorize-rpc", {
+    ...env.mcpPrincipal, runner_id: runnerId, method,
+    workspace_id: params.expected_workspace_id ?? params.workspace_id,
+    ...(typeof params.job_id === "string" ? { job_id: params.job_id } : {}),
+    policy_revision: policyRevision, policy_checksum: policyChecksum,
+  });
+  if (!authorization.ok || !isRecord(authorization.value) || authorization.value.ok !== true) {
+    return fail("permission_denied", "The current client, workspace or policy no longer authorizes this operation.", "Refresh the current permissions and policy before retrying.");
+  }
+  const body = JSON.stringify({ method, params, mcp_authorization: env.mcpPrincipal, ...(policyRevision === undefined ? {} : { policy_revision: policyRevision, expected_policy_revision: policyRevision, expected_policy_checksum: policyChecksum }) });
   const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "POST", "/rpc", body);
   let response: Response;
   try {
@@ -1018,7 +1022,7 @@ function safeWorkspaceMetadata(value: unknown): Record<string, unknown> | undefi
   return { workspace_id: workspaceId, enabled: value.enabled, permissions: { read: permissions.read, edit: permissions.edit, shell: permissions.shell, job_control: permissions.job_control } };
 }
 
-async function registryCall(env: WorkerEnv, path: string): Promise<ToolCall> {
+async function registryCall(env: McpRequestEnv, path: string): Promise<ToolCall> {
   if (!isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) return fail("service_unavailable", "The registry is not configured.", "Ask the service operator to configure the internal bridge.");
   const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "GET", path, "");
   try {
@@ -1031,7 +1035,7 @@ async function registryCall(env: WorkerEnv, path: string): Promise<ToolCall> {
   }
 }
 
-async function registryPostCall(env: WorkerEnv, path: string, input: Record<string, unknown>): Promise<ToolCall> {
+async function registryPostCall(env: McpRequestEnv, path: string, input: Record<string, unknown>): Promise<ToolCall> {
   if (!isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) return fail("service_unavailable", "The registry is not configured.", "Ask the service operator to configure the internal bridge.");
   const body = JSON.stringify(input);
   const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "POST", path, body);
@@ -1043,7 +1047,7 @@ async function registryPostCall(env: WorkerEnv, path: string, input: Record<stri
     return fail(response.status === 404 ? "not_found" : "registry_unavailable", "The registry is unavailable.", "Retry shortly.");
   } catch { return fail("registry_unavailable", "The registry is unavailable.", "Retry shortly."); }
 }
-async function recordRunnerToolCall(env: WorkerEnv, input: {
+async function recordRunnerToolCall(env: McpRequestEnv, input: {
   readonly runnerId: string;
   readonly clientId: string;
   readonly method: string;
