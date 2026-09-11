@@ -70,6 +70,15 @@ export class RunnerConnection {
   private readonly runtime: RunnerRuntime;
   private readonly policyStore: PolicyStore;
   private socket: WebSocket | undefined;
+  /**
+   * The socket that completed the `runner.welcome` handshake. A socket is
+   * installed as `this.socket` before it is authorized, so outbound frames
+   * that are not part of the handshake itself must additionally prove that the
+   * current socket was welcomed. The Worker closes any frame that arrives while
+   * its Registry epoch is still 0 with `4001 "credentials revoked"`, and the
+   * reconnect loop reads that as a permanent credential decision.
+   */
+  private welcomedSocket: WebSocket | undefined;
   private stopped = false;
   private cancelReconnectSleep: (() => void) | undefined;
   private lifecycleGeneration = 0;
@@ -199,6 +208,7 @@ export class RunnerConnection {
     this.cancelReconnectSleep?.();
     if (this.heartbeatTimer !== undefined) clearInterval(this.heartbeatTimer);
     if (this.syncTimer !== undefined) clearInterval(this.syncTimer);
+    this.welcomedSocket = undefined;
     this.socket?.close(1000, "runner stopped");
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
@@ -245,6 +255,8 @@ export class RunnerConnection {
       url.searchParams.set("runner_id", this.config.runnerId);
       const socket = new WebSocket(url, { headers: { Authorization: `Bearer ${this.config.token}` } });
       this.socket = socket;
+      // A replacement socket is unauthorized until its own welcome arrives.
+      this.welcomedSocket = undefined;
       let welcomed = false;
       let welcomedAtMs = 0;
       let settled = false;
@@ -303,6 +315,7 @@ export class RunnerConnection {
           }
           welcomed = true;
           welcomedAtMs = Date.now();
+          this.welcomedSocket = socket;
           this.onStateChange("online");
           this.lastSyncSnapshot = undefined;
           if (message.desired_policy !== undefined) this.queueDesiredPolicy(socket, message.desired_policy);
@@ -360,7 +373,10 @@ export class RunnerConnection {
           this.syncTimer = undefined;
         }
         this.rejectPendingForSocket(socket, new Error("runner connection closed"));
-        if (currentSocket) this.socket = undefined;
+        if (currentSocket) {
+          this.socket = undefined;
+          this.welcomedSocket = undefined;
+        }
         const closeReason = reason.toString("utf8");
         const failure = classifyConnectionFailure({ closeCode: code, reason: closeReason }) === "authentication"
           ? new RunnerAuthenticationError("runner credentials were revoked or rejected")
@@ -547,7 +563,12 @@ export class RunnerConnection {
 
   private forwardJobEvent(event: import("./jobs.js").JobEvent): void {
     const socket = this.socket;
-    if (socket === undefined || socket.readyState !== WebSocket.OPEN) return;
+    // Job lifecycle frames are only valid on an authorized session. Emitting one
+    // before `runner.welcome`, or on a superseded socket, makes the Worker close
+    // with `4001 "credentials revoked"`; the reconnect loop then misreads that as
+    // a permanent credential rejection and stops retrying. The welcome handler
+    // and the periodic sync reconcile any lifecycle event dropped here.
+    if (socket === undefined || socket !== this.welcomedSocket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
     const job = { job_id: event.job.job_id, workspace_id: event.job.workspace_id, status: event.job.status, created_at_ms: event.job.created_at_ms, updated_at_ms: event.job.updated_at_ms, ...(event.job.created_by_client_id === null ? {} : { created_by_client_id: event.job.created_by_client_id }), runner_id: this.config.runnerId } as const;
     try {
       if (event.type === "started") {
