@@ -19,8 +19,8 @@
   ],
   "scripts": {
     "build": "npm run generate:version && tsc -b",
-    "test": "npm run test --workspaces && npm run test:e2e",
-    "test:unit": "npm run test --workspaces",
+    "test": "npm run test:unit && npm run test:e2e",
+    "test:unit": "npm run test --workspaces && node --test ./test/admin-navigation.test.mjs",
     "test:e2e": "node ./scripts/run-e2e.mjs",
     "typecheck": "npm run generate:version && tsc -b --pretty false",
     "validate:worker": "node ./scripts/validate-worker.mjs",

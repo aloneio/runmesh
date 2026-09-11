@@ -119,6 +119,7 @@ export class PatchService {
   ) {}
 
   public async apply(input: unknown): Promise<Record<string, unknown>> {
+    const generation = this.policy.generation;
     const params = object(input);
     if (typeof params.patch !== "string") throw new RpcRuntimeError("invalid_params", "patch must be a string");
     if (Buffer.byteLength(params.patch, "utf8") > MAX_PATCH_BYTES) throw new RpcRuntimeError("invalid_params", `patch must not exceed ${MAX_PATCH_BYTES} UTF-8 bytes`);
@@ -148,7 +149,9 @@ export class PatchService {
     try {
       await this.options.beforeCommit?.();
       return await withPatchCommitLock(workspace.rootPath, async () => {
+        this.policy.assertGeneration(generation);
         await this.recheckBaselines(baselines);
+        this.policy.assertGeneration(generation);
         const warnings = await this.installChanges(prepared);
         if (warnings.length > 0) {
           const retained: RecoveryWarning[] = [];

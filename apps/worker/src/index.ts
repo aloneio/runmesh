@@ -25,6 +25,7 @@ import { readCappedBytes, readCappedFormData, readCappedText as readBodyText } f
 import { canonicalPublicOrigin, fixedReleaseDescriptor, powershellQuote, renderPosixInstaller, renderPowerShellInstaller, renderPosixUninstaller, renderPowerShellUninstaller, resolvePublicOrigin, shellQuote, signedReleaseIsAvailable, type FixedReleaseDescriptor } from "./installer.js";
 import { validTimestamp, validityStatus, type ValidityWindow } from "./validity.js";
 import { loadLoginSettings } from "./auth-settings.js";
+import { adminJobUrl, loadAdminJobPage, JOBS_EXPLANATION, jobSnapshotNote } from "./admin-jobs.js";
 
 // v2 Durable Object classes intentionally use fresh namespaces. The current
 // release is a clean schema break: persisted data from the retired namespace
@@ -445,10 +446,21 @@ async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: URL): P
   if (request.method === "GET" && ["/admin", "/admin/runners", "/admin/clients", "/admin/settings"].includes(url.pathname)) {
     const csrf = cookieValue(request, ADMIN_CSRF_COOKIE);
     if (csrf === undefined || !constantTimeEqual(await sha256Hex(csrf), session.csrf_hash)) return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
-    const data = await loadDashboardData(env);
+    const data = await loadDashboardData(env, url.pathname === "/admin");
     return html(adminPage(url.pathname, data, csrf));
   }
   const runnerDetail = /^\/admin\/runners\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})$/.exec(url.pathname);
+  const jobDetail = /^\/admin\/runners\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\/jobs\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})$/.exec(url.pathname);
+  if (request.method === "GET" && jobDetail !== null) {
+    const csrf = cookieValue(request, ADMIN_CSRF_COOKIE);
+    if (csrf === undefined || !constantTimeEqual(await sha256Hex(csrf), session.csrf_hash)) return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
+    const runnerId = jobDetail[1] as string;
+    const page = await loadAdminJobPage(url, runnerId, jobDetail[2] as string, (path) => registryGet(env, path), async (params) => {
+      const readiness = await policyReadiness(env, runnerId);
+      return readiness.ok ? runnerRpc(env, runnerId, "job.logs", params, readiness.value.applied_revision, readiness.value.active_checksum) : undefined;
+    });
+    return page.ok ? html(adminDocument(page.title, page.body, "runners")) : adminError(page.status, page.message);
+  }
   const clientDetail = /^\/admin\/clients\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})(?:\/scopes\/detail)?$/.exec(url.pathname);
   if (request.method === "GET" && clientDetail !== null) {
     const csrf = cookieValue(request, ADMIN_CSRF_COOKIE);
@@ -476,7 +488,7 @@ async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: URL): P
     const [runnerResponse, workspaceResponse, jobsResponse, mcpCallsResponse, policyVersionsResponse, enrollmentResponse, environment, releaseResponse, notices] = await Promise.all([
       registryGet(env, `/runners/${encodeURIComponent(runnerId)}`),
       registryGet(env, `/auth/runners/${encodeURIComponent(runnerId)}/managed-workspaces`),
-      registryGet(env, `/runners/${encodeURIComponent(runnerId)}/jobs?status=running&limit=20`),
+      registryGet(env, `/runners/${encodeURIComponent(runnerId)}/jobs?limit=20`),
       registryGet(env, `/runners/${encodeURIComponent(runnerId)}/mcp-calls?limit=20`),
       registryGet(env, `/runners/${encodeURIComponent(runnerId)}/policy-versions`),
       registryGet(env, `/auth/runners/${encodeURIComponent(runnerId)}/enrollments`),
@@ -486,13 +498,13 @@ async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: URL): P
     ]);
     let runner: Record<string, unknown> | undefined;
     let workspaces: unknown[] = [];
-    let jobs: unknown[] = [];
+    let jobs: unknown[] | undefined;
     let mcpCalls: unknown[] = [];
     let policyVersions: unknown[] = [];
     let enrollment: Record<string, unknown> | undefined;
     try { runner = runnerResponse.ok ? record(await json(runnerResponse)) : undefined; } catch { runner = undefined; }
     try { workspaces = workspaceResponse.ok ? arrayField(record(await json(workspaceResponse))?.workspaces) : []; } catch { workspaces = []; }
-    try { jobs = jobsResponse.ok ? arrayField(record(await json(jobsResponse))?.jobs) : []; } catch { jobs = []; }
+    try { const value = jobsResponse.ok ? record(await json(jobsResponse))?.jobs : undefined; jobs = Array.isArray(value) ? value : undefined; } catch { jobs = undefined; }
     try { mcpCalls = mcpCallsResponse.ok ? arrayField(record(await json(mcpCallsResponse))?.calls) : []; } catch { mcpCalls = []; }
     try { policyVersions = policyVersionsResponse.ok ? arrayField(record(await json(policyVersionsResponse))?.versions) : []; } catch { policyVersions = []; }
     try { enrollment = enrollmentResponse.ok ? record(record(await json(enrollmentResponse))?.enrollment) : undefined; } catch { enrollment = undefined; }
@@ -1176,7 +1188,25 @@ const ZH_UI_TEXT: Record<string, string> = {
   "Active MCP clients": "活跃 MCP 客户端",
   "Online / total runners": "在线 / 总 Runner",
   "Running jobs": "运行中任务",
+  "Last loaded": "最后加载时间",
   "Recent jobs": "最近任务",
+  "Active shell jobs": "活跃 Shell 任务",
+  "Last recorded status": "最近记录的状态",
+  "Recent shell jobs": "最近 Shell 任务",
+  "Job details": "任务详情",
+  "Job logs": "任务日志",
+  "Read stdout": "读取标准输出",
+  "Read stderr": "读取标准错误",
+  "Next log chunk": "下一页日志",
+  "Back to Runner": "返回 Runner",
+  "Job snapshot unavailable": "任务快照不可用",
+  "Job metadata is temporarily unavailable.": "任务摘要暂时不可用。",
+  "Invalid job log query.": "日志查询参数无效。",
+  "Job was not found.": "未找到该任务。",
+  "Shell jobs are command executions, not all MCP calls. Read, search and edit operations appear in Recent MCP calls.": "Shell 任务记录命令执行，并不代表全部 MCP 调用。读取、搜索、编辑等操作请查看最近 MCP 调用。",
+  "Database snapshot; refreshed only when you open or refresh this page. Stored status may be stale while the Runner is offline.": "这是数据库快照，仅在打开或手动刷新页面时查询。Runner 离线时，已记录状态可能不是当前实际状态。",
+  "Logs stay on the Runner and are fetched only when you select a stream. No automatic polling.": "日志保留在 Runner 本地，仅在选择输出流后读取，不自动轮询。",
+  "Logs are unavailable. The Runner must be online with read permission, an applied policy and retained local logs.": "日志暂不可读。需要 Runner 在线、允许读取、策略已生效且本地日志仍保留。",
   "Recent runners": "最近 Runner",
   "Recent MCP clients": "最近 MCP 客户端",
   "View all": "查看全部",
@@ -1778,16 +1808,20 @@ const FEATURE_STATUS_UNAVAILABLE_NOTICE: AdminNotice = {
   title: "Feature health status unavailable",
   message: "Core Runner and MCP paths remain available; retry the console shortly.",
 };
-async function loadDashboardData(env: WorkerEnv): Promise<AdminData> {
-  const [clientsResponse, runnersResponse, snapshotResponse, notices] = await Promise.all([registryGet(env, "/auth/clients"), registryGet(env, "/dashboard"), registryGet(env, "/runners"), loadFeatureNotices(env)]);
+async function loadDashboardData(env: WorkerEnv, includeJobs = true): Promise<AdminData> {
+  // The dashboard includes persisted job summaries. Other top-level pages do
+  // not need job queries, and no page load performs a live Runner job scan.
+  const [clientsResponse, snapshotResponse, notices] = await Promise.all([
+    registryGet(env, "/auth/clients"), registryGet(env, includeJobs ? "/dashboard" : "/runners"), loadFeatureNotices(env),
+  ]);
   let clients: McpClientRecord[] = [];
   try { clients = clientsResponse.ok ? ((record(await json(clientsResponse))?.clients ?? []) as McpClientRecord[]) : []; } catch { clients = []; }
   let snapshotBody: Record<string, unknown> | undefined;
   try { snapshotBody = snapshotResponse.ok ? record(await json(snapshotResponse)) : undefined; } catch { snapshotBody = undefined; }
-  let runners: RunnerRecord[] = [];
-  try { runners = snapshotBody !== undefined && Array.isArray(snapshotBody.runners) ? snapshotBody.runners as RunnerRecord[] : runnersResponse.ok ? ((record(await json(runnersResponse))?.runners ?? []) as RunnerRecord[]) : []; } catch { runners = []; }
-  const jobs = snapshotBody !== undefined && Array.isArray(snapshotBody.jobs) ? snapshotBody.jobs.filter(record) as Record<string, unknown>[] : [];
-  return { clients, runners, jobs, snapshot: snapshotBody ?? {}, notices };
+  const runners = Array.isArray(snapshotBody?.runners) ? snapshotBody.runners as RunnerRecord[] : [];
+  const jobs = includeJobs && Array.isArray(snapshotBody?.jobs) ? snapshotBody.jobs.filter(record) as Record<string, unknown>[] : [];
+  const snapshotUnavailable = includeJobs && !Array.isArray(snapshotBody?.jobs);
+  return { clients, runners, jobs, snapshot: snapshotBody ?? {}, notices: snapshotUnavailable ? [...notices, { title: "Job snapshot unavailable", message: "Job metadata is temporarily unavailable." }] : notices };
 }
 async function loadFeatureNotices(env: WorkerEnv): Promise<readonly AdminNotice[]> {
   const response = await registryGet(env, "/status/features");
@@ -1977,8 +2011,12 @@ function renderAdminNotices(notices: readonly AdminNotice[]): string {
 }
 function overviewPage(data: AdminData, csrf: string): string {
   const online = data.runners.filter((runner) => runner.state === "online").length;
-  const activeJobs = data.jobs.filter((job) => ["queued", "running", "cancelling"].includes(String(job.status))).length;
-  return `<section class="page-heading"><div><p class="eyebrow">Control plane</p><h1>Dashboard</h1><p class="lede">A concise view of connected runtimes, clients, and recent work.</p></div><a class="button secondary" href="/admin">Refresh</a></section><section class="metrics" aria-label="Summary"><div class="metric"><span class="metric-label">Active MCP clients</span><strong class="metric-value">${data.clients.filter((client) => client.revoked_at_ms === null).length}</strong><span class="metric-meta">${data.clients.length} configured</span></div><div class="metric"><span class="metric-label">Online / total runners</span><strong class="metric-value">${online} / ${data.runners.length}</strong><span class="metric-meta"><span class="status-dot ${online > 0 ? "online" : "offline"}"></span> ${online} connected</span></div><div class="metric"><span class="metric-label">Running jobs</span><strong class="metric-value">${activeJobs}</strong><span class="metric-meta">${activeJobs > 0 ? "In progress" : "Idle"}</span></div><div class="metric"><span class="metric-label">Recent jobs</span><strong class="metric-value">${data.jobs.length}</strong><span class="metric-meta">Recorded</span></div></section><div class="grid-two"><section class="panel"><div class="section-title"><h2>Recent runners</h2><a href="/admin/runners">View all</a></div>${runnerList(data.runners.slice(0, 5))}</section><section class="panel"><div class="section-title"><h2>Recent MCP clients</h2><a href="/admin/clients">View all</a></div>${clientList(data.clients.slice(0, 5))}</section></div><section class="panel"><div class="section-title"><h2>Recent jobs</h2><a href="/admin/runners">Runner activity</a></div>${jobTable(data.jobs.slice(0, 10))}</section><form class="hidden" method="post" action="/admin/logout"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"></form>`;
+  const jobsAvailable = Array.isArray(data.snapshot.jobs) && Array.isArray(data.snapshot.runners);
+  const activeJobs = arrayField(data.snapshot.runners).reduce<number>((total, value) => {
+    const count = record(value)?.active_job_count;
+    return total + (typeof count === "number" && Number.isSafeInteger(count) && count >= 0 ? count : 0);
+  }, 0);
+  return `<section class="page-heading"><div><p class="eyebrow">Control plane</p><h1>Dashboard</h1><p class="lede">A concise view of connected runtimes, clients, and recent work.</p></div><a class="button secondary" href="/admin">Refresh</a></section><section class="metrics" aria-label="Summary"><div class="metric"><span class="metric-label">Active MCP clients</span><strong class="metric-value">${data.clients.filter((client) => client.revoked_at_ms === null).length}</strong><span class="metric-meta">${data.clients.length} configured</span></div><div class="metric"><span class="metric-label">Online / total runners</span><strong class="metric-value">${online} / ${data.runners.length}</strong><span class="metric-meta"><span class="status-dot ${online > 0 ? "online" : "offline"}"></span> ${online} connected</span></div><div class="metric"><span class="metric-label">Active shell jobs</span><strong class="metric-value">${jobsAvailable ? activeJobs : "—"}</strong><span class="metric-meta">Last recorded status</span></div><div class="metric"><span class="metric-label">Recent jobs</span><strong class="metric-value">${jobsAvailable ? data.jobs.length : "—"}</strong><span class="metric-meta">Recorded</span></div></section><div class="grid-two"><section class="panel"><div class="section-title"><h2>Recent runners</h2><a href="/admin/runners">View all</a></div>${runnerList(data.runners.slice(0, 5))}</section><section class="panel"><div class="section-title"><h2>Recent MCP clients</h2><a href="/admin/clients">View all</a></div>${clientList(data.clients.slice(0, 5))}</section></div><section class="panel"><div class="section-title"><h2>Recent jobs</h2><a href="/admin/runners">Runner activity</a></div><p class="muted">${JOBS_EXPLANATION}</p>${jobSnapshotNote()}${jobsAvailable ? jobTable(data.jobs.slice(0, 10)) : '<p class="empty">Job metadata is temporarily unavailable.</p>'}</section><form class="hidden" method="post" action="/admin/logout"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"></form>`;
 }
 function runnerActionCell(runner: RunnerRecord, modeFields: string, csrf: string): string {
   const runnerId = encodeURIComponent(runner.runner_id);
@@ -2028,7 +2066,18 @@ function clientsPage(data: AdminData, csrf: string): string {
 function settingsPage(csrf: string): string { return `<section class="page-heading"><div><p class="eyebrow">Workspace administration</p><h1>Settings</h1><p class="lede">Keep operator notes here; credentials and secrets are never displayed.</p></div></section><div class="grid-two"><section class="panel"><div class="section-title"><h2>Change password</h2></div><form method="post" action="/admin/password" class="stack settings-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Current password<input type="password" name="current_password" required autocomplete="current-password"></label><label>New password<input type="password" name="password" minlength="12" required autocomplete="new-password"></label><label>Confirm new password<input type="password" name="confirm_password" minlength="12" required autocomplete="new-password"></label><button class="button">Change password</button></form></section><section class="panel danger-panel"><div class="section-title"><h2 class="danger-title">Operator notes</h2></div><p class="muted settings-note">Deployment notes belong in your deployment system. This dashboard intentionally stores no notes or secrets.</p><div class="logout-box"><form method="post" action="/admin/logout" class="stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Log out</button></form></div></section></div>`; }
 function runnerList(runners: readonly RunnerRecord[]): string { return runners.length === 0 ? `<p class="empty">No runners yet.</p>` : `<ul class="item-list">${runners.map((runner) => `<li><a href="/admin/runners/${encodeURIComponent(runner.runner_id)}" class="card-row"><div class="card-row-main"><span class="strong">${escapeHtml(runner.display_name)}</span><span class="card-row-sub">${statusBadge(runner.state)}<span class="meta-separator">·</span><span class="platform-meta">${escapeHtml(safePlatform(runner))}</span></span></div><div class="card-row-aside"><span class="row-arrow">→</span></div></a></li>`).join("")}</ul>`; }
 function clientList(clients: readonly McpClientRecord[]): string { return clients.length === 0 ? `<p class="empty">No MCP clients yet.</p>` : `<ul class="item-list">${clients.map((client) => `<li><a href="/admin/clients/${encodeURIComponent(client.client_id)}" class="card-row"><div class="card-row-main"><span class="strong">${escapeHtml(client.label)}</span><span class="card-row-sub"><span class="client-runner-meta">${client.active_runner_id === null ? "Not selected" : escapeHtml(client.active_runner_id)}</span><span class="meta-separator">·</span>${client.revoked_at_ms === null ? statusBadge("online") : statusBadge("offline")}</span></div><div class="card-row-aside"><span class="row-arrow">→</span></div></a><form class="hidden" method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rename"><input name="label" value="${escapeHtml(client.label)}"></form></li>`).join("")}</ul>`; }
-function jobTable(jobs: readonly Record<string, unknown>[]): string { return jobs.length === 0 ? `<p class="empty">No recent jobs.</p>` : `<div class="table-wrap"><table class="data-table"><thead><tr><th>Job</th><th>Workspace</th><th>MCP client</th><th>Status</th><th>Updated</th></tr></thead><tbody>${jobs.map((job) => { const status = String(job.status ?? "unknown"); const safeStatus = statusClass(status); const clientId = typeof job.created_by_client_id === "string" && job.created_by_client_id.length > 0 ? job.created_by_client_id : "—"; return `<tr class="data-row"><td class="mono job-id-cell">${escapeHtml(String(job.job_id ?? "unknown"))}</td><td><span class="workspace-pill">${escapeHtml(String(job.workspace_id ?? "unknown"))}</span></td><td class="mono font-12">${escapeHtml(clientId)}</td><td><span class="badge job-status ${safeStatus}"><span class="status-dot ${safeStatus}"></span> ${escapeHtml(status)}</span></td><td class="time-cell">${escapeHtml(time(typeof job.updated_at_ms === "number" ? job.updated_at_ms : null))}</td></tr>`; }).join("")}</tbody></table></div>`; }
+function jobTable(jobs: readonly Record<string, unknown>[], runnerId?: string): string {
+  if (jobs.length === 0) return '<p class="empty">No recent jobs.</p>';
+  return `<div class="table-wrap"><table class="data-table"><thead><tr><th>Job</th><th>Workspace</th><th>MCP client</th><th>Status</th><th>Updated</th></tr></thead><tbody>${jobs.map((job) => {
+    const status = String(job.status ?? "unknown");
+    const safeStatus = statusClass(status);
+    const clientId = typeof job.created_by_client_id === "string" && job.created_by_client_id.length > 0 ? job.created_by_client_id : "—";
+    const href = adminJobUrl(job.runner_id ?? runnerId, job.job_id);
+    const label = escapeHtml(String(job.job_id ?? "unknown"));
+    const jobCell = href === undefined ? label : `<a href="${escapeHtml(href)}">${label}</a>`;
+    return `<tr class="data-row"><td class="mono job-id-cell">${jobCell}</td><td><span class="workspace-pill">${escapeHtml(String(job.workspace_id ?? "unknown"))}</span></td><td class="mono font-12">${escapeHtml(clientId)}</td><td><span class="badge job-status ${safeStatus}"><span class="status-dot ${safeStatus}"></span> ${escapeHtml(status)}</span></td><td class="time-cell">${escapeHtml(time(typeof job.updated_at_ms === "number" ? job.updated_at_ms : null))}</td></tr>`;
+  }).join("")}</tbody></table></div>`;
+}
 function mcpCallTable(calls: readonly Record<string, unknown>[]): string { return calls.length === 0 ? `<p class="empty">No MCP calls recorded yet.</p>` : `<div class="table-wrap"><table class="data-table"><thead><tr><th>Method</th><th>MCP client</th><th>Workspace / Job</th><th>Status</th><th>Duration</th><th>Completed</th></tr></thead><tbody>${calls.map((call) => { const status = call.status === "ok" ? "ok" : call.status === "error" ? "error" : "unknown"; const safeStatus = status === "ok" ? "online" : status === "error" ? "offline" : "pending"; const workspaceId = typeof call.workspace_id === "string" && call.workspace_id.length > 0 ? call.workspace_id : "—"; const jobId = typeof call.job_id === "string" && call.job_id.length > 0 ? call.job_id : "—"; const errorCode = typeof call.error_code === "string" && call.error_code.length > 0 ? ` · ${call.error_code}` : ""; const duration = typeof call.duration_ms === "number" && Number.isSafeInteger(call.duration_ms) && call.duration_ms >= 0 ? `${call.duration_ms} ms` : "—"; return `<tr class="data-row"><td class="mono">${escapeHtml(String(call.method ?? "unknown"))}</td><td class="mono font-12">${escapeHtml(String(call.client_id ?? "unknown"))}</td><td><span class="workspace-pill">${escapeHtml(workspaceId)}</span> <span class="mono font-12">${escapeHtml(jobId)}</span></td><td><span class="badge job-status ${safeStatus}"><span class="status-dot ${safeStatus}"></span> ${escapeHtml(status)}${escapeHtml(errorCode)}</span></td><td class="mono font-12">${escapeHtml(duration)}</td><td class="time-cell">${escapeHtml(time(typeof call.completed_at_ms === "number" ? call.completed_at_ms : null))}</td></tr>`; }).join("")}</tbody></table></div>`; }
 function statusBadge(state: string): string { const safe = ["online", "offline", "stale", "pending", "invalid"].includes(state) ? state : "offline"; return `<span class="badge ${safe}"><span class="status-dot ${safe}"></span>${safe}</span>`; }
 function statusClass(status: string): string { return ["queued", "running", "cancelling", "cancelled", "succeeded", "completed", "failed", "unknown", "interrupted", "pending", "invalid", "offline", "online", "valid", "permission_denied", "not_directory", "invalid_path", "missing"].includes(status) ? status : "unknown"; }
@@ -2059,7 +2108,7 @@ function scopeCheckboxes(selected: readonly string[] = ["coding:read"]): string 
   };
   return (["coding:read", "coding:write", "coding:exec"] as const).map((scope) => `<label class="check"><input type="checkbox" name="scopes" value="${scope}"${selected.includes(scope) ? " checked" : ""}> <span><strong>${titles[scope]}</strong><small>${descriptions[scope]}</small></span></label>`).join("");
 }
-function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly unknown[], jobs: readonly unknown[], environment: Record<string, unknown> | undefined, csrf: string, release: RunnerReleaseDescriptor & { readonly distributable: boolean }, policyVersions: readonly unknown[] = [], enrollment?: Record<string, unknown>, mcpCalls: readonly unknown[] = []): string {
+function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly unknown[], jobs: readonly unknown[] | undefined, environment: Record<string, unknown> | undefined, csrf: string, release: RunnerReleaseDescriptor & { readonly distributable: boolean }, policyVersions: readonly unknown[] = [], enrollment?: Record<string, unknown>, mcpCalls: readonly unknown[] = []): string {
   const runnerId = typeof runner.runner_id === "string" ? runner.runner_id : "unknown";
   const displayName = typeof runner.display_name === "string" ? runner.display_name : runnerId;
   const state = typeof runner.state === "string" ? runner.state : "offline";
@@ -2274,9 +2323,12 @@ function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly 
     </section>
     <section class="panel">
       <div class="section-title">
-        <h2>Active jobs</h2>
+        <h2>Recent shell jobs</h2>
+        <a href="/admin/runners/${encodeURIComponent(runnerId)}">Refresh</a>
       </div>
-      ${jobTable(jobs.filter(record) as Record<string, unknown>[])}
+      <p class="muted">${JOBS_EXPLANATION}</p>
+      ${jobSnapshotNote()}
+      ${jobs === undefined ? '<p class="empty">Job metadata is temporarily unavailable.</p>' : jobTable(jobs.filter(record) as Record<string, unknown>[], runnerId)}
     </section>
     <section class="panel">
       <div class="section-title">
@@ -4231,7 +4283,6 @@ function pageRoot(node){return node&&node.classList&&node.classList.contains('sh
 function pageContainer(root,key){var container=document.createElement('div');container.className='admin-page-container';container.setAttribute('data-page-container','');container.setAttribute('data-page-key',key);container.setAttribute('aria-hidden','true');container.appendChild(root);return container}
 function ensurePageViewport(){var viewport=document.querySelector('[data-admin-viewport]');var active=document.querySelector('#main-content');if(!active)return viewport;var root=pageRoot(active);if(!root)return viewport;if(!viewport){viewport=document.createElement('div');viewport.className='admin-viewport';viewport.setAttribute('data-admin-viewport','');root.parentNode.insertBefore(viewport,root);var initial=pageContainer(root,pageKey(new URL(location.href)));initial.setAttribute('data-page-title',document.title||'');initial.classList.add('is-active');initial.setAttribute('aria-hidden','false');viewport.appendChild(initial)}else if(!root.closest('[data-page-container]')){var initial=pageContainer(root,pageKey(new URL(location.href)));initial.setAttribute('data-page-title',document.title||'');initial.classList.add('is-active');initial.setAttribute('aria-hidden','false');viewport.appendChild(initial)}return viewport}
 function setActivePage(container,focus){var viewport=ensurePageViewport();if(!viewport||!container)return;var containers=Array.prototype.slice.call(viewport.querySelectorAll('[data-page-container]'));var previous=viewport.querySelector('[data-page-container].is-active');containers.forEach(function(item){var active=item===container;var wasPrevious=item===previous&&item!==container;item.classList.toggle('is-active',active);if(wasPrevious){item.classList.add('is-leaving');window.setTimeout(function(){item.classList.remove('is-leaving')},190)}else if(active)item.classList.remove('is-leaving');else item.classList.remove('is-leaving');item.setAttribute('aria-hidden',active?'false':'true');item.inert=!active;var main=item.id==='main-content'?item:item.querySelector('#main-content');if(active){if(!main)main=item.tagName==='MAIN'?item:item.querySelector('main');if(main)main.id='main-content'}else if(main)main.removeAttribute('id')});viewport.style.minHeight=Math.max.apply(Math,[0].concat(containers.map(function(item){return item.offsetHeight||0})))+'px';if(focus){var main=container.id==='main-content'?container:container.querySelector('#main-content')||container.querySelector('main');if(main&&typeof main.focus==='function')main.focus({preventScroll:true})}}
-function cachedPage(key){var viewport=ensurePageViewport();return viewport&&Array.prototype.slice.call(viewport.querySelectorAll('[data-page-container]')).find(function(item){return item.getAttribute('data-page-key')===key})}
 function bindDynamicContent(root){
   if(!root)return;
   root.querySelectorAll('[data-copy],[data-copy-source]').forEach(function(button){if(button.__runmeshBound)return;button.__runmeshBound=true;button.addEventListener('click',function(){var result=copyText(copyValue(button));var mark=function(){button.textContent=document.documentElement.lang==='zh-CN'?'已复制':'Copied';button.classList.add('copied')};if(result&&typeof result.then==='function')result.then(mark,function(){});else mark()})});
@@ -4241,11 +4292,34 @@ function bindDynamicContent(root){
   bindFeatureAlert(root);
   translateTextNodes(root);translateAttributes(root);stabilizeTabPanels();
 }
-function setupDynamicNavigation(){document.querySelectorAll('a[href^="/admin"]').forEach(function(link){if(link.__runmeshNavBound)return;link.__runmeshNavBound=true;link.addEventListener('click',function(event){if(event.defaultPrevented||event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey||link.hasAttribute('download')||link.target==='_blank')return;var target=new URL(link.href,location.href);if(target.origin!==location.origin)return;event.preventDefault();loadAdminPage(target,true)})})}
-function mountAdminPage(nextRoot,title,key,viewport,shouldPush,url){nextRoot.removeAttribute('id');var container=pageContainer(nextRoot,key);container.setAttribute('data-page-title',title||'');viewport=ensurePageViewport();viewport.appendChild(container);document.title=title||document.title;bindDynamicContent(container);bindFeatureAlert(container);setupDynamicNavigation();if(shouldPush)history.pushState({runmeshAdmin:true},'',url.pathname+url.search+url.hash);setActivePage(container,true);updateActiveNavigation(url.pathname);applyLocale(requestedLocale())}
-function loadAdminPageFrame(url){return new Promise(function(resolve,reject){var frame=document.createElement('iframe');frame.setAttribute('aria-hidden','true');frame.className='admin-preload-frame';frame.onload=function(){try{var doc=frame.contentDocument;var next=doc&&doc.querySelector('#main-content');if(!next)throw new Error('preloaded main content missing');var root=pageRoot(next);if(!root)throw new Error('preloaded page root missing');var cloned=root.cloneNode(true);var title=doc.title||'';frame.remove();resolve({root:cloned,title:title})}catch(error){frame.remove();reject(error)}};frame.onerror=function(){frame.remove();reject(new Error('preloaded page failed'))};frame.src=url.href;document.body.appendChild(frame)})}
-function loadAdminPageXhr(url){return new Promise(function(resolve,reject){var xhr=new XMLHttpRequest();xhr.open('GET',url.href,true);xhr.withCredentials=true;xhr.setRequestHeader('Accept','text/html');xhr.onload=function(){if(xhr.status>=200&&xhr.status<300)resolve(xhr.responseText);else reject(new Error('HTTP '+xhr.status))};xhr.onerror=function(){reject(new Error('XHR failed'))};xhr.send()})}
-function loadAdminPage(url,shouldPush){var key=pageKey(url),viewport=ensurePageViewport(),existing=cachedPage(key);if(existing){if(shouldPush)history.pushState({runmeshAdmin:true},'',url.pathname+url.search+url.hash);document.title=existing.getAttribute('data-page-title')||document.title;setActivePage(existing,true);updateActiveNavigation(url.pathname);applyLocale(requestedLocale());return}if(window.__runmeshLoading){window.__runmeshQueuedUrl=url;window.__runmeshQueuedPush=shouldPush;return}window.__runmeshLoading=true;var current=document.querySelector('#main-content');if(current)current.setAttribute('aria-busy','true');fetch(url.href,{credentials:'same-origin',cache:'no-store'}).then(function(response){if(!response.ok)throw new Error('HTTP '+response.status);return response.text()}).then(function(markup){var parsed=new DOMParser().parseFromString(markup,'text/html');var next=parsed.querySelector('#main-content');if(!next)throw new Error('main content missing');var nextRoot=pageRoot(next);if(!nextRoot)throw new Error('page root missing');mountAdminPage(nextRoot,parsed.title||'',key,viewport,shouldPush,url)}).catch(function(error){console.error('Runmesh navigation failed',error);return loadAdminPageXhr(url).then(function(markup){var parsed=new DOMParser().parseFromString(markup,'text/html');var next=parsed.querySelector('#main-content');if(!next)throw new Error('XHR main content missing');var nextRoot=pageRoot(next);if(!nextRoot)throw new Error('XHR page root missing');mountAdminPage(nextRoot,parsed.title||'',key,viewport,shouldPush,url)}).catch(function(){return loadAdminPageFrame(url).then(function(result){mountAdminPage(result.root,result.title,key,viewport,shouldPush,url)}).catch(function(){location.href=url.href})})}).finally(function(){window.__runmeshLoading=false;var active=document.querySelector('#main-content');if(active)active.removeAttribute('aria-busy');if(window.__runmeshQueuedUrl){var queued=window.__runmeshQueuedUrl,queuedPush=window.__runmeshQueuedPush;window.__runmeshQueuedUrl=null;loadAdminPage(queued,queuedPush)}})}
+function setupDynamicNavigation(){document.querySelectorAll('a[href^="/admin"]').forEach(function(link){if(link.__runmeshNavBound)return;link.__runmeshNavBound=true;link.addEventListener('click',function(event){if(event.defaultPrevented||event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey||link.hasAttribute('download')||link.target==='_blank')return;var target=new URL(link.href,location.href);if(target.origin!==location.origin)return;if(target.pathname===location.pathname&&target.search===location.search&&target.hash)return;event.preventDefault();loadAdminPage(target,pageKey(target)!==pageKey(new URL(location.href)))})})}
+function mountAdminPage(nextRoot,title,key,viewport,shouldPush,url){
+  nextRoot.removeAttribute('id');var container=pageContainer(nextRoot,key);container.setAttribute('data-page-title',title||'');
+  viewport=ensurePageViewport();viewport.appendChild(container);document.title=title||document.title;
+  bindDynamicContent(container);bindFeatureAlert(container);setupDynamicNavigation();
+  if(shouldPush)history.pushState({runmeshAdmin:true},'',url.pathname+url.search+url.hash);
+  setActivePage(container,true);updateActiveNavigation(url.pathname);applyLocale(requestedLocale());
+  // Retain only the newly rendered page, not stale forms or sensitive job logs.
+  Array.prototype.slice.call(viewport.querySelectorAll('[data-page-container]')).forEach(function(item){if(item!==container)item.remove()});
+  viewport.style.minHeight=(container.offsetHeight||0)+'px';
+}
+function loadAdminPage(url,shouldPush){
+  if(window.__runmeshLoading){window.__runmeshQueuedUrl=url;window.__runmeshQueuedPush=shouldPush;return}
+  window.__runmeshLoading=true;var key=pageKey(url),viewport=ensurePageViewport(),current=document.querySelector('#main-content');
+  if(current)current.setAttribute('aria-busy','true');
+  return fetch(url.href,{credentials:'same-origin',cache:'no-store'}).then(function(response){
+    if(!response.ok)throw new Error('HTTP '+response.status);return response.text();
+  }).then(function(markup){
+    var parsed=new DOMParser().parseFromString(markup,'text/html'),next=parsed.querySelector('#main-content');
+    if(!next)throw new Error('main content missing');var nextRoot=pageRoot(next);if(!nextRoot)throw new Error('page root missing');
+    mountAdminPage(nextRoot,parsed.title||'',key,viewport,shouldPush,url);
+  }).catch(function(error){
+    console.error('Runmesh navigation failed',error);location.href=url.href;
+  }).finally(function(){
+    window.__runmeshLoading=false;var active=document.querySelector('#main-content');if(active)active.removeAttribute('aria-busy');
+    if(window.__runmeshQueuedUrl){var queued=window.__runmeshQueuedUrl,queuedPush=window.__runmeshQueuedPush;window.__runmeshQueuedUrl=null;loadAdminPage(queued,queuedPush)}
+  });
+}
 function bindFeatureAlert(root){var dialog=root.querySelector('.feature-alert-dialog');if(!dialog||dialog.__runmeshBound)return;dialog.__runmeshBound=true;dialog.addEventListener('click',function(event){if(event.target===dialog)dialog.close()})}
  ensurePageViewport();var initialContainer=document.querySelector('[data-page-container].is-active');if(initialContainer){translateTextNodes(initialContainer);translateAttributes(initialContainer);stabilizeTabPanels();setActivePage(initialContainer,false)}
  window.addEventListener('popstate',function(){loadAdminPage(new URL(location.href),false)});setupDynamicNavigation();window.__runmeshDynamicNavigation=true;bindFeatureAlert(document);
@@ -4616,8 +4690,8 @@ async function verifyMcpClient(env: WorkerEnv, secretVerifier: string): Promise<
   let response: Response;
   try { response = await registryPost(env, "/auth/mcp/verify", { secret_verifier: secretVerifier }); } catch { return undefined; }
   const body = response.ok ? record(await json(response)) : undefined;
-  if (body === undefined || typeof body.client_id !== "string" || typeof body.label !== "string" || typeof body.secret_version !== "number" || !Array.isArray(body.scopes) || body.scopes.some((scope) => scope !== "coding:read" && scope !== "coding:write" && scope !== "coding:exec")) return undefined;
-  return { client_id: body.client_id, label: body.label, secret_version: body.secret_version, scopes: body.scopes as CodingScope[] };
+  if (body === undefined || typeof body.client_id !== "string" || typeof body.label !== "string" || !Number.isSafeInteger(body.secret_version) || (body.secret_version as number) < 1 || !Array.isArray(body.scopes) || body.scopes.some((scope) => scope !== "coding:read" && scope !== "coding:write" && scope !== "coding:exec")) return undefined;
+  return { client_id: body.client_id, label: body.label, secret_version: body.secret_version as number, scopes: body.scopes as CodingScope[] };
 }
 async function registryGet(env: WorkerEnv, path: string): Promise<Response> { return registryRequest(env, path, "GET", ""); }
 async function registryPost(env: WorkerEnv, path: string, payload: Record<string, unknown>): Promise<Response> { return registryRequest(env, path, "POST", JSON.stringify(payload)); }
