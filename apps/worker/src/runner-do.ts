@@ -942,7 +942,13 @@ export class RunnerDO {
     }
     // Offline cancellation has no current live identity to restore. It only
     // releases the precommit ownership; admission deliberately stays fenced.
-    if (before.sessionId === null || before.connectionEpoch === null || before.credentialVersion === null || before.reconciled === false) {
+    // The discriminator is the connection identity alone: an open precommit
+    // always runs with `reconciled === false` (beginPolicyMutation clears it),
+    // so also testing that flag here would route every live session through the
+    // release path and leave it fenced with no mutation left to recover
+    // through — admission only reopens via an owned mutation or restart
+    // reconciliation, so that state is unrecoverable until the DO restarts.
+    if (before.sessionId === null || before.connectionEpoch === null || before.credentialVersion === null) {
       const next: AdmissionState = { ...before, fenced: true, reconciled: false, mutationId: null, mutationPhase: "idle", activeRevision: null, activeChecksum: null,
         preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: null };
       return await this.persistAdmissionIfCurrent(before, next)
