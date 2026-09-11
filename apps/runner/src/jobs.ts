@@ -244,7 +244,8 @@ export class JobManager {
   }
 
   public async start(input: unknown): Promise<JobRecord> {
-    return this.reserveStart(() => this.startReserved(input));
+    const generation = this.policy.generation;
+    return this.reserveStart(() => this.startReserved(input, generation));
   }
 
   private async reserveStart<T>(operation: () => Promise<T>): Promise<T> {
@@ -255,7 +256,8 @@ export class JobManager {
     try { return await operation(); } finally { release(); }
   }
 
-  private async startReserved(input: unknown): Promise<JobRecord> {
+  private async startReserved(input: unknown, generation: number): Promise<JobRecord> {
+    this.policy.assertGeneration(generation);
     // A recovered live process has no ChildProcess handle in this Runner, so
     // reconciliation is the only way to release its admission slot after it
     // exits. Perform it before pruning/counting; otherwise an `unknown` record
@@ -268,6 +270,7 @@ export class JobManager {
     const params = paramsObject(input);
     const workspace = this.policy.getWorkspace(params.workspace_id);
     const cwd = await this.policy.resolve(workspace.workspaceId, params.cwd ?? ".", "cwd");
+    this.policy.assertGeneration(generation);
     const invocation = parseInvocation(params, workspace);
     const now = Date.now();
     const job: JobRecord = {
@@ -311,6 +314,7 @@ export class JobManager {
         await this.closeLogHandlesSafely(stdout, stderr);
         return beforeSpawn ?? job;
       }
+      this.policy.assertGeneration(generation);
       child = spawn(invocation.file, invocation.args, {
         cwd: cwd.path,
         shell: invocation.shell,

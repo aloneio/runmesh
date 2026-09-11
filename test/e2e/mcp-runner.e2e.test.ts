@@ -368,6 +368,39 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     }
   });
 
+  it("AUTH-E2E-01 readonly client gets effective permissions and cannot edit, execute or cancel", async () => {
+    const read = await mcpTool("read", { workspace_id: "workspace-1", path: "note.txt" }, clientB);
+    expect(read.isError).not.toBe(true);
+    const listing = await mcpTool("workspace_list", {}, clientB);
+    const workspaceView = (listing.structuredContent?.workspaces as { workspace_id: string; permissions: Record<string, boolean> }[]).find((w) => w.workspace_id === "workspace-1");
+    expect(workspaceView?.permissions).toEqual({ read: true, edit: false, shell: false, job_control: false });
+    const rejected = [
+      await mcpTool("edit", { workspace_id: "workspace-1", patch: "*** Begin Patch\n*** Add File: denied-by-scope.txt\n+never\n*** End Patch" }, clientB),
+      await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('never')") }, clientB),
+      await mcpTool("job", { action: "cancel", job_id: "not-an-authorized-job" }, clientB),
+    ];
+    for (const result of rejected) expect(result).toMatchObject({ isError: true, structuredContent: { error: { code: "insufficient_scope" } } });
+    expect(existsSync(join(workspace, "denied-by-scope.txt"))).toBe(false);
+  });
+
+  it("AUTH-E2E-02 task read-sharing does not grant input or cancellation rights", async () => {
+    const started = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdin.setEncoding('utf8');process.stdin.on('data',d=>process.stdout.write(d))"), background: true });
+    const id = started.structuredContent?.job_id as string;
+    expect(typeof id).toBe("string");
+    try {
+      expect((await mcpTool("job", { action: "get", job_id: id }, clientB)).isError).not.toBe(true);
+      const denied = await mcpTool("job", { action: "input", job_id: id, data: "unauthorized-input" }, clientB);
+      expect(denied).toMatchObject({ isError: true, structuredContent: { error: { code: "insufficient_scope" } } });
+      expect((await mcpTool("job", { action: "input", job_id: id, data: "authorized-input\n" })).isError).not.toBe(true);
+      await waitFor(async () => String((await mcpTool("job", { action: "logs", job_id: id }, clientB)).structuredContent?.data).includes("authorized-input"), 10000);
+      const log = await mcpTool("job", { action: "logs", job_id: id }, clientB);
+      expect(String(log.structuredContent?.data)).not.toContain("unauthorized-input");
+    } finally {
+      await mcpTool("job", { action: "cancel", job_id: id });
+      await waitFor(async () => ["cancelled", "succeeded", "failed"].includes(String((await mcpTool("job", { action: "get", job_id: id })).structuredContent?.status)), 12000);
+    }
+  });
+
   it("reports a runner_offline structured error after the real runner disconnects", async () => {
     await stop(runner); runner = undefined;
     // Close handling is asynchronous across the runner socket and DO.
