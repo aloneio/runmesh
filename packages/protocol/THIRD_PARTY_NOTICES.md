@@ -1,6 +1,6 @@
 # Third-party notices for @aloneio/runmesh-protocol
 
-This npm package does not bundle third-party source code. At version 0.1.0 it
+This npm package does not bundle third-party source code. At version 0.1.1 it
 declares the following external runtime dependency:
 
 - [`zod` 4.4.3](https://www.npmjs.com/package/zod/v/4.4.3), MIT.

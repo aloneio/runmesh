@@ -1,8 +1,12 @@
-# 0.1.0 — unreleased stable candidate
+# 0.1.1 — stable patch release candidate
 
-Fixes the GA audit's Patch response graph, pre-commit response budgets, concurrent commit recovery, canonical workspace protection during purge, JSON-byte-aware read/list/search pagination, input frame preflight, busy error codes, idle audit retention, fallback throttle recovery, secret validation and doctor wording. Pins private Node 22.23.2, rejects unsupported runtime floors, and introduces owner-only stable publication depending on the complete same-SHA CI matrix. Existing immutable dev.5 assets are not replaced. Hosted distribution remains OFF until release approval, publication and independent verification.
+Carries the post-0.1.0 Runner and control-plane hardening into a new immutable patch release instead of reusing the already published v0.1.0 identity. It adds bounded Git history inspection, patch preview/search improvements, durable workspace Context handoff with observed Git-baseline aging, clearer Job launch/audit receipts, shareable allow-listed diagnostics, validated operational runbooks, and CI parity checks. The hosted installer remains fail-closed until v0.1.1 is published, independently verified, and explicitly enabled in the production Worker.
 
-See [release readiness](release-readiness.md). Entries below describe historical releases, not current candidate availability.
+See [release readiness](release-readiness.md). The v0.1.0 release remains immutable and is not replaced.
+
+# 0.1.0 — published stable base
+
+The first stable release established the signed portable Runner, protected release workflow, cross-platform service lifecycle, bounded filesystem/Job operations, and the protocol-v2 control plane. Subsequent source changes are intentionally released under v0.1.1 rather than rebuilding or replacing these immutable assets.
 
 # 0.1.0-dev.5 — complete maintenance cleanup
 

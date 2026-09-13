@@ -28,7 +28,7 @@ test("pins manually-dispatched releases to the triggering dev commit", async () 
   assert.equal(workflow.includes('test "$GITHUB_REF" = "refs/heads/dev"'), true);
   assert.equal(workflow.includes('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"'), true);
   assert.equal(workflow.includes('test "$(git rev-parse origin/dev)" = "$GITHUB_SHA"'), true);
-  assert.equal(workflow.includes('test "$RELEASE_VERSION" = "0.1.0"'), true);
+  assert.equal(workflow.includes('test "$RELEASE_VERSION" = "0.1.1"'), true);
   assert.equal(workflow.includes('test "$RELEASE_SIGNING_KEY_ID" = "runmesh-preview-2026-01"'), true);
   assert.equal(workflow.lastIndexOf('git fetch --no-tags origin dev') > workflow.indexOf('Verify tag and release do not already exist'), true);
   assert.equal(workflow.includes("https://api.github.com/repos/"), true);
