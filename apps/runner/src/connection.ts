@@ -569,7 +569,7 @@ export class RunnerConnection {
     // a permanent credential rejection and stops retrying. The welcome handler
     // and the periodic sync reconcile any lifecycle event dropped here.
     if (socket === undefined || socket !== this.welcomedSocket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
-    const job = { job_id: event.job.job_id, workspace_id: event.job.workspace_id, status: event.job.status, created_at_ms: event.job.created_at_ms, updated_at_ms: event.job.updated_at_ms, ...(event.job.created_by_client_id === null ? {} : { created_by_client_id: event.job.created_by_client_id }), runner_id: this.config.runnerId } as const;
+    const job = { job_id: event.job.job_id, workspace_id: event.job.workspace_id, status: event.job.status, created_at_ms: event.job.created_at_ms, updated_at_ms: event.job.updated_at_ms, ...(event.job.created_by_client_id === null ? {} : { created_by_client_id: event.job.created_by_client_id }), ...(event.job.request_id === undefined || event.job.request_id === null ? {} : { request_id: event.job.request_id }), runner_id: this.config.runnerId } as const;
     try {
       if (event.type === "started") {
         socket.send(encodeWireFrame({ type: "job.started", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: event.job.job_id, job, workspace: { workspace_id: event.job.workspace_id, persistence: "persistent", labels: {} }, started_at_ms: event.job.started_at_ms ?? event.job.updated_at_ms }));

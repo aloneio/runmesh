@@ -211,6 +211,21 @@ describe("persistent local jobs", () => {
       await manager.cancel(fulfilled[0]?.value.job_id);
     } finally { await test.cleanup(); }
   });
+  it("deduplicates an explicit request_id and rejects conflicting reuse", async () => {
+    const test = await fixture();
+    try {
+      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state, maxConcurrentJobs: 1 });
+      await manager.initialize();
+      const input = { workspace_id: test.workspace.workspaceId, command: process.execPath, args: ["-e", "setTimeout(() => {}, 5000)"], created_by_client_id: "client-a", request_id: "request-a" };
+      const first = await manager.start(input);
+      const repeated = await manager.start(input);
+      expect(repeated.job_id).toBe(first.job_id);
+      expect(repeated.request_id).toBe("request-a");
+      await expect(manager.start({ ...input, args: ["-e", "process.exit(0)"] })).rejects.toMatchObject({ code: "request_id_conflict" });
+      await manager.cancel(first.job_id);
+      await waitFor(() => manager.get(first.job_id), (job) => !["queued", "running", "cancelling"].includes(job.status));
+    } finally { await test.cleanup(); }
+  });
   it("persists metadata, captures paginated logs, and preserves jobs independently of a client", async () => {
     const test = await fixture();
     try {
