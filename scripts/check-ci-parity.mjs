@@ -14,6 +14,7 @@ const criticalChecks = [
   "npm audit --audit-level=high",
   "npm audit --omit=dev --audit-level=high",
   "npm run check:docs",
+  "npm run check:runbooks",
   "npm run check:versions",
   "npm run check:format",
   "git diff --check",
