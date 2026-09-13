@@ -1,8 +1,8 @@
 # Connection recovery
 
-Version: 1  
-Applies to: Runner transport and control-plane connectivity  
-Required permissions: `coding:read` for MCP diagnostics; administrator access only for separate service-manager inspection  
+Version: 1
+Applies to: Runner transport and control-plane connectivity
+Required permissions: `coding:read` for MCP diagnostics; administrator access only for separate service-manager inspection
 
 ## Goal
 

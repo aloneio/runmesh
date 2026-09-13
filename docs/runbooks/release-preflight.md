@@ -1,8 +1,8 @@
 # Release preflight
 
-Version: 1  
-Applies to: signed Runner assets, Worker compatibility, and hosted CI evidence  
-Required permissions: none for source review; release activation requires the existing explicit administrator workflow  
+Version: 1
+Applies to: signed Runner assets, Worker compatibility, and hosted CI evidence
+Required permissions: none for source review; release activation requires the existing explicit administrator workflow
 
 ## Goal
 
