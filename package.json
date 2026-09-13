@@ -35,6 +35,7 @@
     "check:format": "node ./scripts/check-format.mjs",
     "check:architecture": "node ./scripts/check-architecture.mjs",
     "check:ci-parity": "node ./scripts/check-ci-parity.mjs",
+    "check:runbooks": "node ./scripts/check-runbooks.mjs",
     "test:release-tools": "node --test ./test/release-tools.test.mjs ./test/security-config.test.mjs ./test/installer-arguments.test.mjs",
     "check:docs": "node ./scripts/check-docs.mjs"
   },
