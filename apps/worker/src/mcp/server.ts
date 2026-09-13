@@ -1,82 +1,17 @@
 import { McpServer, type AuthInfo, type ServerContext } from "@modelcontextprotocol/server";
 import {
-  LOCAL_RUNNER_OPERATION_TIMEOUT_MS, encodeWireFrame, PROTOCOL_CURRENT_VERSION, failureMetadata, type JsonValue, RpcRequestSchema,
+  encodeWireFrame, PROTOCOL_CURRENT_VERSION, failureMetadata, type JsonValue, RpcRequestSchema,
 } from "@aloneio/runmesh-protocol";
 import { z } from "zod";
 import { internalHeaders, isSafeIdentifier, isConfiguredSecret } from "../security.js";
 import type { ActiveRunnerContext, McpClientActiveRunner, McpRunnerSelectionResult, PolicyReadiness as RegistryPolicyReadiness } from "../registry.js";
 import type { WorkerEnv } from "../runner-do.js";
 import { PRODUCT_VERSION } from "../generated-version.js";
+import { ContextInputSchema, EditInputSchema, InspectInputSchema, JobInputSchema, SafeOutputSchema, ShellInputSchema, SUPPORTED_SCOPES, TOOL_SPECS, type CodingScope, type ToolName } from "./catalog.js";
 
 const CONTENT_LIMIT = 32 * 1024;
 const STRUCTURED_LIMIT = 64 * 1024;
 const utf8Encoder = new TextEncoder();
-const SUPPORTED_SCOPES = ["coding:read", "coding:write", "coding:exec"] as const;
-type CodingScope = (typeof SUPPORTED_SCOPES)[number];
-
-type ToolSpec = {
-  readonly scope?: CodingScope;
-  readonly description: string;
-  readonly annotations: {
-    readonly readOnlyHint: boolean;
-    readonly destructiveHint: boolean;
-    readonly idempotentHint: boolean;
-    readonly openWorldHint: boolean;
-  };
-};
-
-const readAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
-const execAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true } as const;
-const writeAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
-const destructiveAnnotations = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false } as const;
-const mixedJobAnnotations = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false } as const;
-
-/**
- * The entire default public MCP API.  Runner RPC names below are intentionally
- * not aliases: they remain internal transport implementation details.
- */
-const TOOL_SPECS = {
-  runner_list: { scope: "coding:read", description: "List runners this client can read, with safe IDs, display names, and last-known connection state. Credentials and workspace roots are never returned.", annotations: readAnnotations },
-  runner_current: { scope: "coding:read", description: "Return this MCP client's sticky runner selection, or null. An unavailable selection never falls back to another runner.", annotations: readAnnotations },
-  runner_select: { scope: "coding:read", description: "Select this MCP client's active runner. Initial selection is immediate; changing a selection requires confirm_switch=true.", annotations: writeAnnotations },
-  workspace_list: { scope: "coding:read", description: "List readable workspace IDs on the active runner. Workspace roots are never returned.", annotations: readAnnotations },
-  inspect: { scope: "coding:read", description: "Inspect a workspace with bounded list, search, stat, git status, diff, log, show, or blame operations. This is read-only; workspace roots and host paths are never returned.", annotations: readAnnotations },
-  read: { scope: "coding:read", description: "Read a bounded UTF-8-safe page of a workspace-relative file. Use next_cursor or offset to continue; host roots and absolute paths are not accepted.", annotations: readAnnotations },
-  edit: { scope: "coding:write", description: "Apply a transactional, baseline-checked patch to a writable workspace. The result contains only bounded, workspace-relative change metadata.", annotations: destructiveAnnotations },
-  shell: { scope: "coding:exec", description: "Run a command through the selected runner's Host shell (Bash on Linux/macOS or PowerShell on Windows). Commands have the runner user's OS permissions and are not sandboxed; the workspace controls initial cwd and policy, not the Host shell root. Use a restricted VM/container and avoid administrator/root runners for untrusted code. background=true returns a persistent job immediately; foreground waits only up to wait_ms.", annotations: execAnnotations },
-  job: { description: "List, inspect, or read bounded logs for persistent jobs. cancel and input require coding:exec plus workspace job-control permission. Job metadata never includes command, cwd, PID, roots, or secrets.", annotations: mixedJobAnnotations },
-} as const satisfies Record<string, ToolSpec>;
-
-type ToolName = keyof typeof TOOL_SPECS;
-
-const RunnerIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "must be a safe runner identifier");
-const WorkspaceIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "must be a safe workspace identifier");
-const RelativePathSchema = z.string().min(1).max(4096).refine(isSafeRelativePath, "must be a workspace-relative path without traversal");
-const CursorSchema = z.string().max(128).regex(/^\d+$/, "must be a numeric cursor").optional();
-const BoundedLimitSchema = z.number().int().min(1).max(65_536).optional();
-const JobIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "must be a safe job identifier");
-const JobStatusSchema = z.enum(["queued", "running", "cancelling", "cancelled", "succeeded", "failed", "unknown", "interrupted"]);
-const ReadInputSchema = z.object({ workspace_id: WorkspaceIdSchema, path: RelativePathSchema, cursor: CursorSchema, offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(262_144).optional() }).strict();
-const InspectInputSchema = z.object({ action: z.enum(["list", "search", "stat", "git_status", "git_diff", "git_log", "git_show", "git_blame"]), workspace_id: WorkspaceIdSchema, path: RelativePathSchema.optional(), query: z.string().min(1).max(512).optional(), max_results: z.number().int().min(1).max(256).optional(), cursor: CursorSchema, revision: z.string().regex(/^[0-9a-fA-F]{7,64}(?:\^\{0,1\})?$/).optional(), start_line: z.number().int().min(1).max(1000000).optional(), end_line: z.number().int().min(1).max(1000000).optional() }).strict().superRefine((value, context) => {
-  if ((value.action === "search" && value.query === undefined) || (value.action !== "search" && value.query !== undefined)) context.addIssue({ code: "custom", message: "query is only valid and required for search" });
-  if (value.action === "stat" && value.path === undefined) context.addIssue({ code: "custom", message: "path is required for stat" });
-  if (["git_log", "git_show", "git_blame"].includes(value.action) && value.path === undefined) context.addIssue({ code: "custom", message: "path is required for git history inspection" });
-  if (value.action === "git_show" && value.revision === undefined) context.addIssue({ code: "custom", message: "revision is required for git_show" });
-  if (value.action !== "git_show" && value.revision !== undefined) context.addIssue({ code: "custom", message: "revision is only valid for git_show" });
-  if (value.action !== "git_blame" && (value.start_line !== undefined || value.end_line !== undefined)) context.addIssue({ code: "custom", message: "line range is only valid for git_blame" });
-});
-const EditInputSchema = z.object({ workspace_id: WorkspaceIdSchema, patch: z.string().min(1).max(1_048_576), expected_hash: z.string().regex(/^[a-f0-9]{64}$/).optional(), expected_hashes: z.record(z.string().min(1).max(4096), z.string().regex(/^[a-f0-9]{64}$/).nullable()).optional() }).strict();
-const ShellInputSchema = z.object({ workspace_id: WorkspaceIdSchema, command: z.string().min(1).max(8_192), wait_ms: z.number().int().min(1).max(LOCAL_RUNNER_OPERATION_TIMEOUT_MS).optional(), background: z.boolean().optional() }).strict();
-const JobInputSchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("list"), workspace_id: WorkspaceIdSchema.optional(), status: JobStatusSchema.optional(), limit: z.number().int().min(1).max(100).optional() }).strict(),
-  z.object({ action: z.literal("get"), job_id: JobIdSchema }).strict(),
-  z.object({ action: z.literal("logs"), job_id: JobIdSchema, stream: z.enum(["stdout", "stderr"]).optional(), cursor: CursorSchema, offset: z.number().int().min(0).optional(), limit: BoundedLimitSchema, tail: z.boolean().optional() }).strict(),
-  z.object({ action: z.literal("cancel"), job_id: JobIdSchema }).strict(),
-  z.object({ action: z.literal("input"), job_id: JobIdSchema, data: z.string().max(65_536).optional(), close_stdin: z.boolean().optional() }).strict().refine((value) => value.data !== undefined || value.close_stdin === true, "data or close_stdin is required"),
-]);
-
-/** Structured output is always a bounded object; individual tool descriptions define its safe fields. */
-const SafeOutputSchema = z.object({}).passthrough();
 
 export type McpAuth = AuthInfo & { token: string };
 // Captured once per handler instance; never stored in shared Worker globals.
@@ -90,8 +25,8 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth): McpServ
   const env: McpRequestEnv = { ...rawEnv, mcpPrincipal: { client_id: auth.clientId, secret_version: auth.extra?.secret_version } };
   const server = new McpServer({ name: "runmesh", version: PRODUCT_VERSION });
 
-  register(server, "runner_list", z.object({}).strict(), async () => gatedRunnerList(env, auth.clientId));
-  register(server, "runner_current", z.object({}).strict(), async () => {
+  register(server, "runner_list", async () => gatedRunnerList(env, auth.clientId));
+  register(server, "runner_current", async () => {
     const selection = await getActiveRunnerSelection(env, auth.clientId);
     if (selection.ok) {
       const current = selection.value as McpClientActiveRunner;
@@ -99,7 +34,7 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth): McpServ
     }
     return asToolResult(selection);
   });
-  register(server, "runner_select", z.object({ runner_id: RunnerIdSchema, confirm_switch: z.boolean().optional() }).strict(), async ({ runner_id, confirm_switch }) => {
+  register(server, "runner_select", async ({ runner_id, confirm_switch }) => {
     const selection = await selectActiveRunner(env, auth.clientId, runner_id, confirm_switch === true);
     if (selection.ok) {
       const result = selection.value as { selection: McpClientActiveRunner; changed: boolean };
@@ -111,18 +46,20 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth): McpServ
     }
     return asToolResult(selection);
   });
-  register(server, "workspace_list", z.object({}).strict(), async () => activeWorkspaceList(env, auth.clientId));
-  register(server, "inspect", InspectInputSchema, async (params) => inspectTool(env, auth.clientId, params));
-  register(server, "read", ReadInputSchema, async (params) => activeRunnerTool(env, auth.clientId, "fs.read", boundedReadParams(params, 32 * 1024), "read", "read"));
-  register(server, "edit", EditInputSchema, async (params) => activeRunnerTool(env, auth.clientId, "fs.apply_patch", params, "edit", "edit"));
-  register(server, "shell", ShellInputSchema, async (params) => shellTool(env, auth.clientId, params));
-  register(server, "job", JobInputSchema, async (params, scopes) => jobTool(env, auth.clientId, params, scopes));
+  register(server, "workspace_list", async () => activeWorkspaceList(env, auth.clientId));
+  register(server, "inspect", async (params) => inspectTool(env, auth.clientId, params));
+  register(server, "read", async (params) => activeRunnerTool(env, auth.clientId, "fs.read", boundedReadParams(params, 32 * 1024), "read", "read"));
+  register(server, "edit", async (params) => editTool(env, auth.clientId, params));
+  register(server, "shell", async (params) => shellTool(env, auth.clientId, params));
+  register(server, "job", async (params, scopes) => jobTool(env, auth.clientId, params, scopes));
+  register(server, "context", async (params, scopes) => contextTool(env, auth.clientId, params, scopes));
 
   return server;
 
-  function register<Input extends z.ZodType>(target: McpServer, name: ToolName, inputSchema: Input, action: (input: z.output<Input>, scopes: readonly string[]) => Promise<unknown>): void {
+  function register<Name extends ToolName>(target: McpServer, name: Name, action: (input: z.output<(typeof TOOL_SPECS)[Name]["inputSchema"]>, scopes: readonly string[]) => Promise<unknown>): void {
     const spec = TOOL_SPECS[name];
-    (target.registerTool as unknown as (toolName: string, config: Record<string, unknown>, callback: (input: z.output<Input>, context: ServerContext) => Promise<unknown>) => unknown)(name, { description: spec.description, inputSchema, outputSchema: SafeOutputSchema, annotations: spec.annotations }, async (input, _context) => {
+    type Input = z.output<(typeof TOOL_SPECS)[Name]["inputSchema"]>;
+    (target.registerTool as unknown as (toolName: string, config: Record<string, unknown>, callback: (input: Input, context: ServerContext) => Promise<unknown>) => unknown)(name, { description: spec.description, inputSchema: spec.inputSchema, outputSchema: SafeOutputSchema, annotations: spec.annotations }, async (input, _context) => {
       // The URL credential can be rotated while a body or SDK import is
       // awaited. Re-read the exact generation and scopes before every tool.
       const live = await registryPostCall(env, "/auth/mcp/revalidate", env.mcpPrincipal);
@@ -135,7 +72,7 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth): McpServ
         return failure("insufficient_scope", `This tool requires ${requiredScope}.`, `Authorize the MCP client again with ${requiredScope}.`);
       }
       try {
-        return await action(input as z.output<Input>, scopes);
+        return await action(input, scopes);
       } catch {
         return failure("internal_error", "The MCP tool could not complete the request.", "Retry the request. If the problem persists, contact the service operator.");
       }
@@ -144,6 +81,7 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth): McpServ
 }
 
 async function inspectTool(env: McpRequestEnv, clientId: string, params: z.output<typeof InspectInputSchema>): Promise<unknown> {
+  if (params.action === "diagnostics") return diagnosticsTool(env, clientId, params.workspace_id);
   const method = params.action === "list" ? "fs.list" : params.action === "search" ? "fs.search" : params.action === "stat" ? "fs.stat" : params.action === "git_status" ? "git.status" : params.action === "git_diff" ? "git.diff" : params.action === "git_log" ? "git.log" : params.action === "git_show" ? "git.show" : "git.blame";
   const input: Record<string, unknown> = {
     workspace_id: params.workspace_id,
@@ -152,6 +90,12 @@ async function inspectTool(env: McpRequestEnv, clientId: string, params: z.outpu
     ...(params.action === "git_blame" ? { start_line: params.start_line, end_line: params.end_line } : {}),
     ...(params.query === undefined ? {} : { query: params.query }),
     ...(params.cursor === undefined ? {} : { cursor: params.cursor }),
+    ...(params.action !== "search" || params.mode === undefined ? {} : { mode: params.mode }),
+    ...(params.action !== "search" || params.case_sensitive === undefined ? {} : { case_sensitive: params.case_sensitive }),
+    ...(params.action !== "search" || params.include_globs === undefined ? {} : { include_globs: params.include_globs }),
+    ...(params.action !== "search" || params.exclude_globs === undefined ? {} : { exclude_globs: params.exclude_globs }),
+    ...(params.action !== "search" || params.context_before === undefined ? {} : { context_before: params.context_before }),
+    ...(params.action !== "search" || params.context_after === undefined ? {} : { context_after: params.context_after }),
     ...(params.action === "list" && params.max_results !== undefined ? { limit: params.max_results } : {}),
     ...(params.action === "search" && params.max_results !== undefined ? { max_results: params.max_results } : {}),
     ...(params.action === "git_diff" ? { max_bytes: 32 * 1024 } : {}),
@@ -162,8 +106,71 @@ async function inspectTool(env: McpRequestEnv, clientId: string, params: z.outpu
   };
   return activeRunnerTool(env, clientId, method, input, "read", inspectResultMode(params.action));
 }
+async function diagnosticsTool(env: McpRequestEnv, clientId: string, workspaceId: string): Promise<unknown> {
+  const observedAtMs = Date.now();
+  const selected = await resolveActiveRunner(env, clientId, true);
+  if (!selected.ok) return asToolResult(selected);
+  const checks: Array<Record<string, unknown>> = [
+    { name: "worker_auth", state: "pass", evidence_source: "mcp_revalidation", observed_at_ms: observedAtMs },
+    { name: "runner_selection", state: selected.value.context.state === "online" ? "pass" : "fail", code: selected.value.context.state === "online" ? null : "runner_offline", evidence_source: "registry", observed_at_ms: observedAtMs },
+  ];
+  const permissionCall = await registryCall(env, `/auth/clients/${encodeURIComponent(clientId)}/effective-permissions/${encodeURIComponent(selected.value.runnerId)}?workspace_id=${encodeURIComponent(workspaceId)}`);
+  const permissionValue = permissionCall.ok && isRecord(permissionCall.value) && isRecord(permissionCall.value.permissions) ? permissionCall.value.permissions : undefined;
+  const permissions = permissionValue === undefined ? undefined : {
+    read: permissionValue.read === true,
+    edit: permissionValue.edit === true,
+    shell: permissionValue.shell === true,
+    job_control: permissionValue.job_control === true,
+  };
+  checks.push({ name: "workspace_authorization", state: permissions === undefined ? "unknown" : permissions.read ? "pass" : "fail", code: permissions === undefined ? "permission_state_unavailable" : permissions.read ? null : "permission_denied", evidence_source: "effective_permission", observed_at_ms: observedAtMs });
+
+  const readinessRaw = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/policy-readiness`);
+  const readinessValue = readinessRaw.ok && isRecord(readinessRaw.value) ? readinessRaw.value : undefined;
+  const policyState = readinessValue?.ok === true ? "pass" : readinessValue === undefined ? "unknown" : "fail";
+  checks.push({
+    name: "policy_alignment",
+    state: policyState,
+    code: policyState === "pass" ? null : typeof readinessValue?.code === "string" ? readinessValue.code : "policy_state_unavailable",
+    evidence_source: "registry_policy_readiness",
+    observed_at_ms: observedAtMs,
+    desired_revision: safePositiveIntegerValue(readinessValue?.desired_revision),
+    applied_revision: safePositiveIntegerValue(readinessValue?.applied_revision),
+    runner_reported_revision: safePositiveIntegerValue(readinessValue?.runner_reported_policy_revision),
+  });
+
+  let rpcState: "pass" | "fail" | "unknown" = "unknown";
+  let rpcCode: string | null = null;
+  let shell: Record<string, unknown> | undefined;
+  if (selected.value.context.state !== "online") rpcCode = "runner_offline";
+  else if (permissions?.read !== true) rpcCode = permissions === undefined ? "permission_state_unavailable" : "permission_denied";
+  else {
+    const readiness = await policyReadiness(env, selected.value.runnerId);
+    if (!readiness.ok) rpcCode = readiness.error.error.code;
+    else {
+      const live = await callRunner(env, selected.value.runnerId, "env.info", { workspace_id: workspaceId }, readiness.value.applied_revision, readiness.value.active_checksum);
+      rpcState = live.ok ? "pass" : "fail";
+      rpcCode = live.ok ? null : live.error.code;
+      if (live.ok && isRecord(live.value) && isRecord(live.value.shell)) {
+        shell = { available: live.value.shell.available === true };
+        if (live.value.shell.available === true && (live.value.shell.kind === "bash" || live.value.shell.kind === "powershell")) shell.kind = live.value.shell.kind;
+      }
+    }
+  }
+  checks.push({ name: "runner_rpc", state: rpcState, code: rpcCode, evidence_source: "live_rpc", observed_at_ms: Date.now() });
+  const value: Record<string, unknown> = { workspace_id: workspaceId, observed_at_ms: observedAtMs, permissions: permissions ?? null, checks };
+  if (shell !== undefined) value.shell = shell;
+  return runnerSuccess(value, selected.value);
+}
+function safePositiveIntegerValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+async function editTool(env: McpRequestEnv, clientId: string, params: z.output<typeof EditInputSchema>): Promise<unknown> {
+  const input: Record<string, unknown> = { ...params };
+  delete input.preview;
+  return activeRunnerTool(env, clientId, params.preview === true ? "fs.preview_patch" : "fs.apply_patch", input, "edit", "edit");
+}
 async function shellTool(env: McpRequestEnv, clientId: string, params: z.output<typeof ShellInputSchema>): Promise<unknown> {
-  const invocation = { workspace_id: params.workspace_id, command: params.command, shell: true, created_by_client_id: clientId };
+  const invocation = { workspace_id: params.workspace_id, command: params.command, shell: true, created_by_client_id: clientId, ...(params.request_id === undefined ? {} : { request_id: params.request_id }) };
   // Background starts return a Runner JobRecord.  Keep the MCP response on
   // the stable job-metadata allow-list; command/cwd/PID/process identity are
   // Runner-internal and must not cross this boundary.
@@ -202,6 +209,14 @@ async function jobTool(env: McpRequestEnv, clientId: string, params: z.output<ty
   }
 }
 
+async function contextTool(env: McpRequestEnv, clientId: string, params: z.output<typeof ContextInputSchema>, scopes: readonly string[]): Promise<unknown> {
+  const mutating = params.action === "checkpoint" || params.action === "rebuild";
+  const requiredScope = mutating ? "coding:write" : "coding:read";
+  if (!scopes.includes(requiredScope)) return failure("insufficient_scope", `This context action requires ${requiredScope}.`, `Authorize the MCP client again with ${requiredScope}.`);
+  const method = `context.${params.action}`;
+  return activeRunnerTool(env, clientId, method, params, mutating ? "edit" : "read", "context");
+}
+
 function isToolSuccessResult(value: unknown): value is { readonly structuredContent: Record<string, unknown> } {
   return isRecord(value) && value.isError !== true && isRecord(value.structuredContent);
 }
@@ -228,6 +243,8 @@ export function safeJobMetadata(value: unknown): Record<string, unknown> {
   // the original MCP request has completed.
   const createdByClientId = safeJobIdentifier(value.created_by_client_id);
   if (createdByClientId !== undefined) output.created_by_client_id = createdByClientId;
+  const requestId = safeJobIdentifier(value.request_id);
+  if (requestId !== undefined) output.request_id = requestId;
   if (typeof value.status === "string") output.status = safeJobStatus(value.status);
   copyRequiredTimestamp(value, output, "created_at_ms");
   copyNullableTimestamp(value, output, "started_at_ms");
@@ -313,6 +330,80 @@ export function safeReadResult(value: unknown): Record<string, unknown> {
   return output;
 }
 
+export function safeContextResult(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) return {};
+  const output: Record<string, unknown> = {};
+  copySafeWorkspaceId(value, output);
+  if (value.state === "missing" || value.state === "ready") output.state = value.state;
+  if (typeof value.deduplicated === "boolean") output.deduplicated = value.deduplicated;
+  if (typeof value.rebuilt === "boolean") output.rebuilt = value.rebuilt;
+  for (const key of ["records", "scanned_files", "scanned_bytes", "rebuilt_at_ms", "scanned_records"] as const) copySafeInteger(value, output, key);
+  if (typeof value.query === "string" && value.query.length <= 512 && !hasControlCharacters(value.query)) output.query = value.query;
+  if (value.next_cursor === null || (typeof value.next_cursor === "string" && /^\d+$/u.test(value.next_cursor))) output.next_cursor = value.next_cursor;
+  if (value.context === null) output.context = null;
+  else if (isRecord(value.context)) output.context = safeContextRecord(value.context);
+  if (Array.isArray(value.results)) output.results = value.results.slice(0, 50).flatMap((entry) => isRecord(entry) ? [safeContextIndexEntry(entry)] : []);
+  return output;
+}
+
+function safeContextRecord(value: Record<string, unknown>): Record<string, unknown> {
+  const output: Record<string, unknown> = {};
+  if (value.schema_version === 1) output.schema_version = 1;
+  const contextId = safeJobIdentifier(value.context_id); if (contextId !== undefined) output.context_id = contextId;
+  const workspaceId = safeJobIdentifier(value.workspace_id); if (workspaceId !== undefined) output.workspace_id = workspaceId;
+  const turnId = safeJobIdentifier(value.turn_id); if (turnId !== undefined) output.turn_id = turnId;
+  for (const key of ["revision", "supersedes_revision", "created_at_ms", "updated_at_ms", "policy_generation"] as const) {
+    const item = value[key];
+    if (item === null) output[key] = null;
+    else if (isSafeNonnegativeInteger(item)) output[key] = item;
+  }
+  if (typeof value.fingerprint === "string" && /^[a-f0-9]{64}$/u.test(value.fingerprint)) output.fingerprint = value.fingerprint;
+  if (value.base_commit === null) output.base_commit = null;
+  else if (typeof value.base_commit === "string" && /^[0-9a-fA-F]{7,64}$/u.test(value.base_commit)) output.base_commit = value.base_commit;
+  if (value.base_commit_status === null || value.base_commit_status === "claimed" || value.base_commit_status === "observed") output.base_commit_status = value.base_commit_status;
+  if (value.baseline_state === "current" || value.baseline_state === "stale" || value.baseline_state === "unknown") output.baseline_state = value.baseline_state;
+  if (value.current_commit === null) output.current_commit = null;
+  else if (typeof value.current_commit === "string" && /^[0-9a-fA-F]{40,64}$/u.test(value.current_commit)) output.current_commit = value.current_commit;
+  if (value.review_state === "incomplete" || value.review_state === "claimed" || value.review_state === "evidence_backed") output.review_state = value.review_state;
+  copyContextText(value, output, "goal", 4_096);
+  for (const key of ["decisions", "open_risks", "missing_checks", "next_actions"] as const) {
+    if (Array.isArray(value[key])) output[key] = value[key].slice(0, 64).flatMap((item) => typeof item === "string" && item.length <= 2_048 && !hasControlCharacters(item) ? [item] : []);
+  }
+  if (Array.isArray(value.evidence)) output.evidence = value.evidence.slice(0, 64).flatMap((item) => isRecord(item) ? [safeContextEvidence(item)] : []);
+  return output;
+}
+
+function safeContextIndexEntry(value: Record<string, unknown>): Record<string, unknown> {
+  const output: Record<string, unknown> = {};
+  const contextId = safeJobIdentifier(value.context_id); if (contextId !== undefined) output.context_id = contextId;
+  const turnId = safeJobIdentifier(value.turn_id); if (turnId !== undefined) output.turn_id = turnId;
+  if (isSafePositiveInteger(value.revision)) output.revision = value.revision;
+  if (isSafeNonnegativeInteger(value.updated_at_ms)) output.updated_at_ms = value.updated_at_ms;
+  if (value.base_commit === null) output.base_commit = null;
+  else if (typeof value.base_commit === "string" && /^[0-9a-fA-F]{7,64}$/u.test(value.base_commit)) output.base_commit = value.base_commit;
+  if (value.review_state === "incomplete" || value.review_state === "claimed" || value.review_state === "evidence_backed") output.review_state = value.review_state;
+  copyContextText(value, output, "goal", 4_096);
+  return output;
+}
+
+function safeContextEvidence(value: Record<string, unknown>): Record<string, unknown> {
+  const output: Record<string, unknown> = {};
+  if (value.kind === "job" || value.kind === "test" || value.kind === "commit" || value.kind === "note") output.kind = value.kind;
+  if (value.status === "claimed" || value.status === "observed") output.status = value.status;
+  const jobId = safeJobIdentifier(value.job_id); if (jobId !== undefined) output.job_id = jobId;
+  if (typeof value.job_status === "string") output.job_status = safeJobStatus(value.job_status);
+  if (value.exit_code === null || isSafeExitCode(value.exit_code)) output.exit_code = value.exit_code;
+  copyContextText(value, output, "ref", 256);
+  copyContextText(value, output, "summary", 1_024);
+  if (isSafeNonnegativeInteger(value.observed_at_ms)) output.observed_at_ms = value.observed_at_ms;
+  return output;
+}
+
+function copyContextText(source: Record<string, unknown>, target: Record<string, unknown>, key: string, max: number): void {
+  const value = source[key];
+  if (typeof value === "string" && value.length <= max && !hasControlCharacters(value)) target[key] = value;
+}
+
 export type InspectResultKind = "list" | "search" | "stat" | "git_status" | "git_diff" | "git_log" | "git_show" | "git_blame";
 
 /** Project each inspect operation without exposing host roots or raw errors. */
@@ -343,15 +434,34 @@ export function safeInspectResult(value: unknown, kind: InspectResultKind): Reco
   }
   if (kind === "search") {
     if (typeof value.query === "string" && value.query.length <= 512 && !hasControlCharacters(value.query)) output.query = value.query;
+    if (value.mode === "literal" || value.mode === "filename") output.mode = value.mode;
+    if (typeof value.case_sensitive === "boolean") output.case_sensitive = value.case_sensitive;
+    if (value.engine === "builtin_literal" || value.engine === "builtin_filename") output.engine = value.engine;
+    if (typeof value.snapshot_id === "string" && /^[a-f0-9]{16}$/u.test(value.snapshot_id)) output.snapshot_id = value.snapshot_id;
     if (Array.isArray(value.results)) {
       output.results = value.results.slice(0, 256).flatMap((entry) => {
         if (!isRecord(entry)) return [];
         const path = safeRelativePathValue(entry.path);
         if (path === undefined || !isSafePositiveInteger(entry.line) || typeof entry.text !== "string") return [];
-        return [{ path, line: entry.line, text: entry.text.slice(0, 4_096) }];
+        const item: Record<string, unknown> = { path, line: entry.line, text: entry.text.slice(0, 4_096) };
+        if (isSafePositiveInteger(entry.column)) item.column = entry.column;
+        if (typeof entry.match === "string") item.match = entry.match.slice(0, 1_024);
+        for (const key of ["context_before", "context_after"] as const) {
+          if (!Array.isArray(entry[key])) continue;
+          item[key] = entry[key].slice(0, 8).flatMap((contextLine) => isRecord(contextLine) && isSafePositiveInteger(contextLine.line) && typeof contextLine.text === "string" ? [{ line: contextLine.line, text: contextLine.text.slice(0, 4_096) }] : []);
+        }
+        return [item];
       });
     }
     copySafeCursorFields(value, output);
+    if (value.next_snapshot_cursor === null || (typeof value.next_snapshot_cursor === "string" && /^s1:[a-f0-9]{16}:\d+$/u.test(value.next_snapshot_cursor))) output.next_snapshot_cursor = value.next_snapshot_cursor;
+    if (["time_budget", "byte_budget", "directory_budget", "entry_budget", "file_budget", "result_budget", "response_bytes"].includes(String(value.truncated_reason))) output.truncated_reason = value.truncated_reason;
+    if (isRecord(value.scanned)) {
+      const scanned: Record<string, unknown> = {};
+      for (const key of ["bytes", "files", "directories", "entries"] as const) if (isSafeNonnegativeInteger(value.scanned[key])) scanned[key] = value.scanned[key];
+      output.scanned = scanned;
+    }
+    copySafeInteger(value, output, "returned_bytes");
     return output;
   }
   if (kind === "git_status") {
@@ -427,11 +537,26 @@ export function safeEditResult(value: unknown): Record<string, unknown> {
   if (!isRecord(value)) return {};
   const output: Record<string, unknown> = {};
   copySafeWorkspaceId(value, output);
+  if (isSha256(value.preview_id)) output.preview_id = value.preview_id;
+  for (const key of ["insertions", "deletions"] as const) copySafeInteger(value, output, key);
+  if (typeof value.previews_truncated === "boolean") output.previews_truncated = value.previews_truncated;
   if (Array.isArray(value.changed_paths)) {
     output.changed_paths = value.changed_paths.slice(0, 128).flatMap((item) => safePatchChange(item));
   }
   if (Array.isArray(value.operations)) {
     output.operations = value.operations.slice(0, 128).flatMap((item) => safePatchOperation(item));
+  }
+  if (Array.isArray(value.previews)) {
+    output.previews = value.previews.slice(0, 128).flatMap((item) => {
+      if (!isRecord(item)) return [];
+      const path = safeRelativePathValue(item.path);
+      if (path === undefined || typeof item.diff !== "string") return [];
+      const preview: Record<string, unknown> = { path, diff: item.diff.slice(0, 16 * 1_024) };
+      if (item.status === "created" || item.status === "updated" || item.status === "deleted") preview.status = item.status;
+      for (const key of ["insertions", "deletions"] as const) if (isSafeNonnegativeInteger(item[key])) preview[key] = item[key];
+      if (typeof item.truncated === "boolean") preview.truncated = item.truncated;
+      return [preview];
+    });
   }
   if (Array.isArray(value.warnings)) {
     output.warnings = value.warnings.slice(0, 128).flatMap((item) => {
@@ -511,7 +636,7 @@ function safeJobIdentifier(value: unknown): string | undefined {
 }
 
 function isSafeCursor(value: unknown): value is string {
-  return typeof value === "string" && value.length <= 128 && /^\d+$/u.test(value);
+  return typeof value === "string" && value.length <= 128 && /^(?:\d+|s1:[a-f0-9]{16}:\d+)$/u.test(value);
 }
 
 function isSafeExitCode(value: unknown): value is number {
@@ -576,7 +701,7 @@ type ActiveSelection = {
   readonly runnerId: string;
   readonly context: ActiveRunnerContext & { readonly automatic_selection: boolean };
 };
-type RunnerResultMode = "raw" | "job" | "logs" | "input" | "shell" | "read" | "edit" | "inspect:list" | "inspect:search" | "inspect:stat" | "inspect:git_status" | "inspect:git_diff" | "inspect:git_log" | "inspect:git_show" | "inspect:git_blame";
+type RunnerResultMode = "raw" | "job" | "logs" | "input" | "shell" | "read" | "edit" | "context" | "inspect:list" | "inspect:search" | "inspect:stat" | "inspect:git_status" | "inspect:git_diff" | "inspect:git_log" | "inspect:git_show" | "inspect:git_blame";
 type ActivePolicyReadiness = Omit<Extract<RegistryPolicyReadiness, { readonly ok: true }>, "lifecycle_id" | "session_id"> & {
   readonly lifecycle_id: string;
   readonly session_id: string;
@@ -655,7 +780,7 @@ async function activeRunnerTool(env: McpRequestEnv, clientId: string, method: st
   const startedAtMs = Date.now();
   const call = await callRunner(env, selected.value.runnerId, method, params, readiness.value.applied_revision, readiness.value.active_checksum);
   const result = call.ok ? runnerSuccess(projectRunnerResult(call.value, resultMode), selected.value) : runnerFailure(call.error, selected.value);
-  await recordRunnerToolCall(env, {
+  const audit = await recordRunnerToolCall(env, {
     runnerId: selected.value.runnerId,
     clientId,
     method,
@@ -663,8 +788,8 @@ async function activeRunnerTool(env: McpRequestEnv, clientId: string, method: st
     result,
     startedAtMs,
     readiness: readiness.value,
-  }).catch(() => undefined);
-  return result;
+  }).catch(() => ({ correlation_id: `call-${crypto.randomUUID()}`, audit_status: "unknown" as const }));
+  return withAuditReceipt(result, audit);
 }
 
 async function activeJobRunnerTool(env: McpRequestEnv, clientId: string, method: string, params: Record<string, unknown>, requiredPermission: PermissionBit, resultMode: RunnerResultMode = "raw"): Promise<unknown> {
@@ -690,7 +815,7 @@ async function activeJobRunnerTool(env: McpRequestEnv, clientId: string, method:
   const call = await callRunner(env, selected.value.runnerId, method, boundParams, readiness.value.applied_revision, readiness.value.active_checksum);
   if (!call.ok) {
     const failure = runnerFailure(call.error, selected.value);
-    await recordRunnerToolCall(env, {
+    const audit = await recordRunnerToolCall(env, {
       runnerId: selected.value.runnerId,
       clientId,
       method,
@@ -700,8 +825,8 @@ async function activeJobRunnerTool(env: McpRequestEnv, clientId: string, method:
       workspaceId,
       jobId: requestedJobId,
       readiness: readiness.value,
-    }).catch(() => undefined);
-    return failure;
+    }).catch(() => ({ correlation_id: `call-${crypto.randomUUID()}`, audit_status: "unknown" as const }));
+    return withAuditReceipt(failure, audit);
   }
   // A live Runner is expected to echo the addressed job identity in metadata
   // and cancellation responses.  If it does, bind both IDs to the Registry
@@ -711,7 +836,7 @@ async function activeJobRunnerTool(env: McpRequestEnv, clientId: string, method:
   // request and the Registry preflight above.
   if (!runnerJobResultMatches(call.value, requestedJobId, workspaceId)) {
     const failure = runnerFailure(fail("permission_denied", "The Runner returned a job from a different workspace.", "Refresh the job list and retry with the authorized job identifier.").error, selected.value);
-    await recordRunnerToolCall(env, {
+    const audit = await recordRunnerToolCall(env, {
       runnerId: selected.value.runnerId,
       clientId,
       method,
@@ -721,11 +846,11 @@ async function activeJobRunnerTool(env: McpRequestEnv, clientId: string, method:
       workspaceId,
       jobId: requestedJobId,
       readiness: readiness.value,
-    }).catch(() => undefined);
-    return failure;
+    }).catch(() => ({ correlation_id: `call-${crypto.randomUUID()}`, audit_status: "unknown" as const }));
+    return withAuditReceipt(failure, audit);
   }
   const result = runnerSuccess(projectRunnerResult(call.value, resultMode), selected.value);
-  await recordRunnerToolCall(env, {
+  const audit = await recordRunnerToolCall(env, {
     runnerId: selected.value.runnerId,
     clientId,
     method,
@@ -735,8 +860,8 @@ async function activeJobRunnerTool(env: McpRequestEnv, clientId: string, method:
     workspaceId,
     jobId: requestedJobId,
     readiness: readiness.value,
-  }).catch(() => undefined);
-  return result;
+  }).catch(() => ({ correlation_id: `call-${crypto.randomUUID()}`, audit_status: "unknown" as const }));
+  return withAuditReceipt(result, audit);
 }
 
 function projectRunnerResult(value: unknown, mode: RunnerResultMode): unknown {
@@ -746,6 +871,7 @@ function projectRunnerResult(value: unknown, mode: RunnerResultMode): unknown {
   if (mode === "shell") return safeShellResult(value);
   if (mode === "read") return safeReadResult(value);
   if (mode === "edit") return safeEditResult(value);
+  if (mode === "context") return safeContextResult(value);
   if (mode.startsWith("inspect:")) return safeInspectResult(value, mode.slice("inspect:".length) as InspectResultKind);
   return value;
 }
@@ -943,8 +1069,9 @@ type ToolCall = ToolSuccess | ToolFailure;
 
 const SAFE_RUNNER_ERROR_CODES = new Set([
   "baseline_changed", "busy", "expected_hash_mismatch", "file_too_large", "git_failed", "git_output_too_large", "git_timeout", "git_unavailable",
+  "context_index_corrupt", "context_index_too_large", "context_record_corrupt", "context_record_missing", "context_record_too_large", "context_rebuild_budget", "context_revision_conflict", "context_storage_unsafe", "context_turn_conflict",
   "hunk_ambiguous", "hunk_not_found", "hunk_overlap", "invalid_params", "invalid_patch", "invalid_path", "invalid_request", "invalid_workspace", "missing_file", "mixed_newlines", "not_utf8",
-  "method_not_found", "insufficient_scope", "patch_install_failed", "patch_rollback_failed", "path_traversal", "permission_denied", "policy_pending", "readonly_workspace", "runner_offline", "stale_policy", "symlink_escape", "symlink_write", "target_exists", "timeout",
+  "method_not_found", "insufficient_scope", "patch_install_failed", "patch_rollback_failed", "path_traversal", "permission_denied", "policy_pending", "readonly_workspace", "request_id_conflict", "runner_offline", "search_snapshot_changed", "stale_policy", "symlink_escape", "symlink_write", "target_exists", "timeout",
 ]);
 
 export function policyPending(): ToolFailure {
@@ -1076,6 +1203,7 @@ async function registryPostCall(env: McpRequestEnv, path: string, input: Record<
     return fail(response.status === 404 ? "not_found" : "registry_unavailable", "The registry is unavailable.", "Retry shortly.");
   } catch { return fail("registry_unavailable", "The registry is unavailable.", "Retry shortly."); }
 }
+type AuditReceipt = { readonly correlation_id: string; readonly audit_status: "recorded" | "degraded" | "unknown" };
 async function recordRunnerToolCall(env: McpRequestEnv, input: {
   readonly runnerId: string;
   readonly clientId: string;
@@ -1086,7 +1214,7 @@ async function recordRunnerToolCall(env: McpRequestEnv, input: {
   readonly workspaceId?: string;
   readonly jobId?: string;
   readonly readiness: ActivePolicyReadiness;
-}): Promise<void> {
+}): Promise<AuditReceipt> {
   const structuredContent = isRecord(input.result) && isRecord(input.result.structuredContent) ? input.result.structuredContent : undefined;
   const errorValue = structuredContent === undefined ? undefined : structuredContent.error;
   const errorCode = errorValue !== undefined && isRecord(errorValue) && typeof errorValue.code === "string"
@@ -1098,8 +1226,9 @@ async function recordRunnerToolCall(env: McpRequestEnv, input: {
   const completedAtMs = Date.now();
   const jobId = input.jobId ?? safeJobIdentifierFromResult(input.result) ?? null;
   const runnerContext = safeRunnerContextFromResult(input.result);
-  await registryPostCall(env, `/runners/${encodeURIComponent(input.runnerId)}/mcp-calls`, {
-    call_id: `call-${crypto.randomUUID()}`,
+  const correlationId = `call-${crypto.randomUUID()}`;
+  const recorded = await registryPostCall(env, `/runners/${encodeURIComponent(input.runnerId)}/mcp-calls`, {
+    call_id: correlationId,
     client_id: input.clientId,
     method: input.method,
     workspace_id: input.workspaceId ?? safeWorkspaceIdFromResult(input.result),
@@ -1117,6 +1246,14 @@ async function recordRunnerToolCall(env: McpRequestEnv, input: {
     session_id: input.readiness.session_id,
     now_ms: completedAtMs,
   });
+  if (!recorded.ok) return { correlation_id: correlationId, audit_status: "unknown" };
+  const status = isRecord(recorded.value) && (recorded.value.audit_status === "recorded" || recorded.value.audit_status === "degraded") ? recorded.value.audit_status : "unknown";
+  return { correlation_id: correlationId, audit_status: status };
+}
+function withAuditReceipt(result: unknown, receipt: AuditReceipt): unknown {
+  if (!isRecord(result) || !isRecord(result.structuredContent)) return result;
+  const structuredContent = { ...result.structuredContent, ...receipt };
+  return { ...result, structuredContent, content: [{ type: "text", text: boundedText(structuredContent, CONTENT_LIMIT) }] };
 }
 function asToolResult(call: ToolCall): unknown {
   return call.ok ? success(call.value) : call.error.details === undefined

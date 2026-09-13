@@ -133,7 +133,8 @@ describe("Worker runner transport", () => {
     const path = `/runners/${encodeURIComponent(auditRunnerId)}/mcp-calls`;
     const headers = await internalHeaders(secret, "POST", path, body, { timestamp: Date.now(), nonce: "d".repeat(64) });
     const post = await registry.fetch(`https://registry.internal${path}`, { method: "POST", headers, body });
-    expect(post.status).toBe(204);
+    expect(post.status).toBe(200);
+    await expect(post.json()).resolves.toEqual({ audit_status: "recorded" });
 
     const readHeaders = await internalHeaders(secret, "GET", `${path}?limit=1`, "", { timestamp: Date.now(), nonce: "e".repeat(64) });
     const read = await registry.fetch(`https://registry.internal${path}?limit=1`, { headers: readHeaders });

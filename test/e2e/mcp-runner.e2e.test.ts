@@ -180,7 +180,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       body: JSON.stringify({ jsonrpc: "2.0", id: requestId++, method: "tools/list", params: {} }),
     });
     const listed = await readMcp(response) as { result?: { tools?: Array<{ name?: string }> } };
-    expect(listed.result?.tools?.map((tool) => tool.name).sort()).toEqual(["edit", "inspect", "job", "read", "runner_current", "runner_list", "runner_select", "shell", "workspace_list"].sort());
+    expect(listed.result?.tools?.map((tool) => tool.name).sort()).toEqual(["context", "edit", "inspect", "job", "read", "runner_current", "runner_list", "runner_select", "shell", "workspace_list"].sort());
     const legacy = await mcpMessage("fs_read", { workspace_id: "workspace-1", path: "note.txt" });
     expect(legacy.error?.code).toBe(-32602);
   });

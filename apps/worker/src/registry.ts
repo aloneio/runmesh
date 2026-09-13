@@ -77,7 +77,7 @@ const VALID_SCOPES = new Set<CodingScope>(["coding:read", "coding:write", "codin
 
 export type PermissionBit = "read" | "edit" | "shell" | "job_control";
 export type PermissionSet = Record<PermissionBit, boolean>;
-export type RunnerProfilePreset = "locked" | "read_only" | "coding" | "full_control";
+export type RunnerProfilePreset = "locked" | "read_only" | "edit_only" | "controlled_exec" | "coding" | "full_control";
 export type WorkspaceValidationStatus = "valid" | "missing" | "not_directory" | "permission_denied" | "invalid_path";
 export type RunnerUpdateChannel = "stable" | "pinned";
 export type RunnerProtocolCompatibility = "unknown" | "compatible" | "incompatible";
@@ -2068,7 +2068,8 @@ export class RegistryDO {
       const jobId = input.job_id === undefined || input.job_id === null ? null : stringField(input, "job_id", 128);
       if (epoch === undefined || credentialVersion === undefined || nowMs === undefined || !identity.valid || callId === undefined || !validMutationId(callId) || clientId === undefined || methodName === undefined || status === undefined || startedAtMs === undefined || completedAtMs === undefined || durationMs === undefined || (errorCode === null ? false : errorCode === undefined) || (workspaceId === null ? false : workspaceId === undefined) || (jobId === null ? false : jobId === undefined)) return Response.json({ error: "invalid MCP call" }, { status: 400 });
       if (completedAtMs - startedAtMs !== durationMs) return Response.json({ error: "invalid MCP call duration" }, { status: 400 });
-      return this.recordMcpCall(runnerId, epoch, credentialVersion, {
+      const wasDegraded = this.featureHealthDisabled("mcp_audit", nowMs);
+      const accepted = this.recordMcpCall(runnerId, epoch, credentialVersion, {
         call_id: callId,
         client_id: clientId,
         method: methodName,
@@ -2080,7 +2081,10 @@ export class RegistryDO {
         started_at_ms: startedAtMs,
         completed_at_ms: completedAtMs,
         duration_ms: durationMs,
-      }, nowMs, false, identity.lifecycleId, identity.sessionId) ? new Response(null, { status: 204 }) : new Response("stale session or invalid MCP call", { status: 409 });
+      }, nowMs, false, identity.lifecycleId, identity.sessionId);
+      if (!accepted) return new Response("stale session or invalid MCP call", { status: 409 });
+      const auditStatus = wasDegraded || this.featureHealthDisabled("mcp_audit", nowMs) ? "degraded" : "recorded";
+      return Response.json({ audit_status: auditStatus }, { status: auditStatus === "recorded" ? 200 : 202 });
     }
     if (request.method === "GET" && action === "jobs" && itemId !== undefined && IdentifierSchema.safeParse(itemId).success) { const job = this.getJob(runnerId, itemId); return job === undefined ? Response.json({ error: "job not found" }, { status: 404 }) : Response.json(job); }
     if (request.method === "GET" && action === undefined && itemId === undefined) { const runner = this.getRunner(runnerId); return runner === undefined ? Response.json({ error: "runner not found" }, { status: 404 }) : Response.json(runner); }

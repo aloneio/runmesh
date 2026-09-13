@@ -259,6 +259,7 @@ export const JobMetadataSchema = z
     updated_at_ms: TimestampSchema,
     display_name: z.string().min(1).max(512).optional(),
     created_by_client_id: IdentifierSchema.optional(),
+    request_id: IdentifierSchema.optional(),
     runner_id: IdentifierSchema.optional(),
   })
   .strict();
@@ -275,8 +276,9 @@ const CorrelatedEnvelopeSchema = EnvelopeSchema.extend({
 }).strict();
 
 export const ProtectedRpcMethodSchema = z.enum([
-  "env.info", "workspace.list", "fs.stat", "fs.read", "fs.list", "fs.search", "fs.apply_patch",
+  "env.info", "workspace.list", "fs.stat", "fs.read", "fs.list", "fs.search", "fs.preview_patch", "fs.apply_patch",
   "git.status", "git.diff", "git.log", "git.show", "git.blame", "exec.start", "exec.run", "job.list", "job.get", "job.logs", "job.cancel", "job.input",
+  "context.bootstrap", "context.read", "context.search", "context.checkpoint", "context.rebuild",
 ]);
 export type ProtectedRpcMethod = z.infer<typeof ProtectedRpcMethodSchema>;
 /** Unknown methods are protected by default; only echo and runner.info are unprotected. */
