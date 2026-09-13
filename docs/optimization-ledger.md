@@ -76,3 +76,41 @@ Status: implemented on 2026-09-13.
 - The receipt is persisted with Job metadata and survives Runner recovery. Authorization and policy generation are still checked before a receipt is reused, so an old key never becomes an authorization cache.
 - Cancellation and stdin input are deliberately outside this retry path, and the implementation does not claim exactly-once process creation across every host crash boundary.
 - Verification: `apps/runner/test/runtime.test.ts` covers identical retry, conflict rejection and the existing admission/cancellation behavior.
+
+## P02 — layered diagnostics and permission explanation
+
+Status: implemented on 2026-09-13.
+
+- `inspect action=diagnostics` returns one bounded, timestamped view of MCP revalidation, sticky Runner state, the real effective workspace permission intersection, desired/applied/reported policy revisions, and a live no-side-effect `env.info` RPC probe.
+- Checks use `pass|fail|unknown` plus stable codes and evidence sources. Offline, unavailable Registry state, and stale policy remain distinguishable instead of being collapsed into a generic authentication failure.
+- The probe never runs shell commands, changes policy, creates a Job, or returns workspace roots, credentials, environment values, or raw control-plane errors.
+
+## P04 — single-source MCP tool catalog
+
+Status: implemented on 2026-09-13.
+
+- Public tool name, scope, description, annotations and input Schema now live together in `apps/worker/src/mcp/catalog.ts`; registration consumes the Schema from the same `ToolSpec` instead of accepting a second parallel Schema argument.
+- `mcp-catalog.test.ts` freezes the stable public tool surface and verifies strict/action-specific parsing so duplicate or drifting contract definitions fail CI.
+
+## P05 — capability extraction from the Worker MCP module
+
+Status: first safe structural slice implemented on 2026-09-13.
+
+- Tool catalog/Schema/annotation concerns moved out of `mcp/server.ts` into a dedicated module without changing public tool names or authorization order.
+- The extraction deliberately leaves stateful authorization and final-send sequencing in the existing server until each domain has equivalent regression coverage; this follows the plan's incremental refactor boundary instead of mixing a large file rewrite with feature changes.
+
+## P15 — MCP call / Job result correlation
+
+Status: implemented on 2026-09-13.
+
+- Runner-backed tool results now include a safe `correlation_id` tied to the metadata-only MCP audit record and, where applicable, its `job_id`.
+- Results separately report `audit_status=recorded|degraded|unknown`. Registry audit storage failure or temporary audit disablement does not rewrite the execution result, masquerade as authentication failure, or cause an operation to be sent again.
+- Audit persistence remains metadata-only and retains the existing bounded retention/pruning policy.
+
+## P19 — least-privilege workspace presets
+
+Status: implemented on 2026-09-13.
+
+- The administrator UI now distinguishes `Read Only`, `Workspace Edit`, and `Controlled Execution`: edit-only grants read/edit without Host shell or Job control; controlled execution explicitly enables the full workspace execution set.
+- The old `coding` form value remains accepted as a compatibility alias for controlled execution, while the rendered form uses the clearer least-privilege profiles.
+- Presets only populate the existing permission model; the Runner continues to enforce the live permission intersection and cannot gain authority from a UI label.
