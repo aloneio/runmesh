@@ -20,7 +20,7 @@
   "scripts": {
     "build": "npm run generate:version && tsc -b",
     "test": "npm run test:unit && npm run test:e2e",
-    "test:unit": "npm run test --workspaces && node --test ./test/admin-navigation.test.mjs ./test/workers-build-env.test.mjs",
+    "test:unit": "npm run test --workspaces && node --test ./test/admin-navigation.test.mjs",
     "test:e2e": "node ./scripts/run-e2e.mjs",
     "typecheck": "npm run generate:version && tsc -b --pretty false",
     "validate:worker": "node ./scripts/validate-worker.mjs",
@@ -37,9 +37,7 @@
     "check:ci-parity": "node ./scripts/check-ci-parity.mjs",
     "check:runbooks": "node ./scripts/check-runbooks.mjs",
     "test:release-tools": "node --test ./test/release-tools.test.mjs ./test/security-config.test.mjs ./test/installer-arguments.test.mjs",
-    "check:docs": "node ./scripts/check-docs.mjs",
-    "postinstall": "node ./scripts/configure-workers-build-env.mjs",
-    "prebuild": "node ./scripts/configure-workers-build-env.mjs"
+    "check:docs": "node ./scripts/check-docs.mjs"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.22.0",
