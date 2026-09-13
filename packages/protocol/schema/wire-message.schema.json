@@ -1335,6 +1335,44 @@
               "minLength": 1,
               "maxLength": 4096
             },
+            "failure_class": {
+              "type": "string",
+              "enum": [
+                "validation",
+                "authorization",
+                "availability",
+                "conflict",
+                "resource",
+                "execution",
+                "internal",
+                "unknown"
+              ]
+            },
+            "operation_state": {
+              "type": "string",
+              "enum": [
+                "not_started",
+                "running",
+                "committed",
+                "unknown"
+              ]
+            },
+            "retry_after_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 86400000
+            },
+            "next_action": {
+              "type": "string",
+              "enum": [
+                "correct_request",
+                "refresh_permissions",
+                "wait_and_retry",
+                "re_read_and_retry",
+                "inspect_job",
+                "contact_operator"
+              ]
+            },
             "details": {
               "$ref": "#/$defs/jsonValue"
             }
@@ -1804,6 +1842,44 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 4096
+            },
+            "failure_class": {
+              "type": "string",
+              "enum": [
+                "validation",
+                "authorization",
+                "availability",
+                "conflict",
+                "resource",
+                "execution",
+                "internal",
+                "unknown"
+              ]
+            },
+            "operation_state": {
+              "type": "string",
+              "enum": [
+                "not_started",
+                "running",
+                "committed",
+                "unknown"
+              ]
+            },
+            "retry_after_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 86400000
+            },
+            "next_action": {
+              "type": "string",
+              "enum": [
+                "correct_request",
+                "refresh_permissions",
+                "wait_and_retry",
+                "re_read_and_retry",
+                "inspect_job",
+                "contact_operator"
+              ]
             },
             "details": {
               "$ref": "#/$defs/jsonValue"
