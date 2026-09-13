@@ -1,8 +1,10 @@
 import { assertRpcResultFits, jsonBytes, MAX_RPC_RESULT_BYTES } from "./rpc-budget.js";
+import { createHash } from "node:crypto";
 import { constants, type Dirent } from "node:fs";
 import { lstat, open, opendir } from "node:fs/promises";
-import { relative, sep } from "node:path";
+import { basename, relative, sep } from "node:path";
 import { PathPolicyError, type PathPolicy, type PathSnapshot } from "./path-policy.js";
+import { RpcRuntimeError } from "./errors.js";
 import type { WorkspaceConfig } from "./config.js";
 import { utf8ForwardBoundary, utf8SafePrefixLength } from "./utf8-pagination.js";
 
@@ -23,8 +25,13 @@ const MAX_LIST_CURSOR = 100_000;
 const MAX_SEARCH_CURSOR = 100_000;
 const COMMON_HUGE_DIRECTORIES = new Set([".git", ".hg", ".svn", "node_modules", "vendor", "dist", "build", "coverage", ".cache"]);
 
-type SearchResult = { path: string; line: number; text: string };
-type SearchBudget = { bytes: number; directories: number; entries: number; files: number; deadline: number; truncated: boolean };
+type SearchContextLine = { readonly line: number; readonly text: string };
+type SearchResult = { readonly path: string; readonly line: number; readonly column: number; readonly match: string; readonly text: string; readonly context_before: readonly SearchContextLine[]; readonly context_after: readonly SearchContextLine[] };
+type SearchTruncatedReason = "time_budget" | "byte_budget" | "directory_budget" | "entry_budget" | "file_budget" | "result_budget" | "response_bytes";
+type SearchBudget = { bytes: number; directories: number; entries: number; files: number; deadline: number; truncated: boolean; truncatedReason: SearchTruncatedReason | null; readonly snapshotXor: Buffer };
+type SearchMode = "literal" | "filename";
+type SearchOptions = { readonly mode: SearchMode; readonly caseSensitive: boolean; readonly includeGlobs: readonly RegExp[]; readonly excludeGlobs: readonly RegExp[]; readonly contextBefore: number; readonly contextAfter: number };
+type IgnoreRule = { readonly negative: boolean; readonly directoryOnly: boolean; readonly matcher: RegExp; readonly exactMatcher: RegExp };
 type DirectoryEntryVisitor = (entry: Dirent<string>, index: number) => boolean | Promise<boolean>;
 
 export class FilesystemService {
@@ -143,26 +150,38 @@ export class FilesystemService {
 
   public async search(input: unknown): Promise<Record<string, unknown>> {
     const params = object(input);
-    if (typeof params.query !== "string" || params.query.length === 0 || params.query.length > 512) throw new Error("query must be a non-empty string");
+    if (typeof params.query !== "string" || params.query.length === 0 || params.query.length > 512) throw new RpcRuntimeError("invalid_params", "query must be a non-empty string");
     const resolved = await this.policy.resolve(params.workspace_id, params.path ?? ".", "search");
     const { workspace } = resolved;
     const limit = boundedInteger(params.max_results ?? params.limit, 1, 256, 100);
-    const offset = boundedInteger(params.cursor, 0, MAX_SEARCH_CURSOR, 0);
+    const cursor = parseSearchCursor(params.cursor);
+    const offset = cursor.offset;
+    const options = searchOptions(params);
     const results: SearchResult[] = [];
-    const budget: SearchBudget = { bytes: 0, directories: 0, entries: 0, files: 0, deadline: performance.now() + MAX_SEARCH_DURATION_MS, truncated: false };
+    const budget: SearchBudget = { bytes: 0, directories: 0, entries: 0, files: 0, deadline: performance.now() + MAX_SEARCH_DURATION_MS, truncated: false, truncatedReason: null, snapshotXor: Buffer.alloc(32) };
     const snapshot = await this.policy.snapshot(resolved);
     if (snapshot.type !== "directory") throw new Error("path is not a directory");
-    await this.searchDirectory(resolved, snapshot, params.query, results, budget, 0, Math.min(MAX_SEARCH_RESULTS, offset + limit + 1));
+    addSearchSnapshotPart(budget, relative(workspace.rootPath, resolved.path).split(sep).join("/"), snapshot);
+    await this.searchDirectory(resolved, snapshot, params.query, options, results, budget, 0, []);
+    const snapshotId = searchSnapshotId(workspace.workspaceId, params.query, options, budget.snapshotXor);
+    if (cursor.snapshotId !== null && cursor.snapshotId !== snapshotId) throw new RpcRuntimeError("search_snapshot_changed", "search results changed since the supplied cursor was issued", { expected_snapshot_id: cursor.snapshotId, actual_snapshot_id: snapshotId });
     const page = results.slice(offset, offset + limit);
-    const resultFor = () => {
+    let responseTrimmed = false;
+    const resultFor = (): Record<string, unknown> => {
       const next = offset + page.length;
       const more = results.length > next;
-      return { workspace_id: workspace.workspaceId, query: params.query, results: page, next_cursor: more ? String(next) : null, truncated: budget.truncated || more };
+      return { workspace_id: workspace.workspaceId, query: params.query, mode: options.mode, case_sensitive: options.caseSensitive,
+        engine: options.mode === "filename" ? "builtin_filename" : "builtin_literal", results: page,
+        next_cursor: more ? `s1:${snapshotId}:${next}` : null, snapshot_id: snapshotId,
+        truncated: budget.truncated || more || responseTrimmed,
+        truncated_reason: responseTrimmed ? "response_bytes" : budget.truncatedReason ?? (more ? "result_budget" : null),
+        scanned: { bytes: budget.bytes, files: budget.files, directories: budget.directories, entries: budget.entries } };
     };
     // Preserve an actionable cursor when long/CJK/escaped lines fill a page.
     // Trimming after the Runner sends a frame would be too late.
-    while (page.length > 1 && jsonBytes(resultFor()) > MAX_RPC_RESULT_BYTES) page.pop();
+    while (page.length > 1 && jsonBytes(resultFor()) > MAX_RPC_RESULT_BYTES) { page.pop(); responseTrimmed = true; }
     const result = resultFor();
+    result.returned_bytes = jsonBytes(result);
     assertRpcResultFits(result);
     return result;
   }
@@ -171,22 +190,24 @@ export class FilesystemService {
     resolvedDirectory: { readonly workspace: WorkspaceConfig; readonly path: string },
     directorySnapshot: PathSnapshot,
     query: string,
+    options: SearchOptions,
     results: SearchResult[],
     budget: SearchBudget,
     depth: number,
-    resultLimit: number,
+    inheritedIgnoreRules: readonly IgnoreRule[],
   ): Promise<void> {
-    if (budget.truncated || results.length >= resultLimit) return;
-    if (depth > MAX_SEARCH_DEPTH || budget.directories >= MAX_SEARCH_DIRECTORIES) { budget.truncated = true; return; }
+    if (budget.truncated || results.length >= MAX_SEARCH_RESULTS) return;
+    if (depth > MAX_SEARCH_DEPTH || budget.directories >= MAX_SEARCH_DIRECTORIES) { truncateSearch(budget, "directory_budget"); return; }
     budget.directories += 1;
     const { workspace, path: directory } = resolvedDirectory;
+    const directoryRelative = relative(workspace.rootPath, directory).split(sep).join("/");
+    const ignoreRules = await this.loadIgnoreRules(resolvedDirectory, directoryRelative, inheritedIgnoreRules, budget);
     try {
       await readDirectoryThroughHandle(this.policy, resolvedDirectory, directorySnapshot, async (entry) => {
-        if (budget.truncated || results.length >= resultLimit) return false;
-        if (budget.entries >= MAX_SEARCH_ENTRIES || performance.now() >= budget.deadline || budget.bytes >= MAX_SEARCH_TOTAL_BYTES) {
-          budget.truncated = true;
-          return false;
-        }
+        if (budget.truncated || results.length >= MAX_SEARCH_RESULTS) return false;
+        if (budget.entries >= MAX_SEARCH_ENTRIES) { truncateSearch(budget, "entry_budget"); return false; }
+        if (performance.now() >= budget.deadline) { truncateSearch(budget, "time_budget"); return false; }
+        if (budget.bytes >= MAX_SEARCH_TOTAL_BYTES) { truncateSearch(budget, "byte_budget"); return false; }
         budget.entries += 1;
         if (entry.isSymbolicLink()) return true;
         if (entry.isDirectory() && COMMON_HUGE_DIRECTORIES.has(entry.name)) return true;
@@ -195,23 +216,31 @@ export class FilesystemService {
         try { resolved = await this.policy.resolve(workspace.workspaceId, childRelative, "search"); } catch { return true; }
         let snapshot: PathSnapshot;
         try { snapshot = await this.policy.snapshot(resolved); } catch { return true; }
+        addSearchSnapshotPart(budget, childRelative, snapshot);
         if (snapshot.type === "directory") {
-          await this.searchDirectory(resolved, snapshot, query, results, budget, depth + 1, resultLimit);
-          return !budget.truncated && results.length < resultLimit;
+          const ignored = isIgnored(childRelative, true, ignoreRules);
+          if (!ignored || ignoreRules.some((rule) => rule.negative)) await this.searchDirectory(resolved, snapshot, query, options, results, budget, depth + 1, ignoreRules);
+          return !budget.truncated && results.length < MAX_SEARCH_RESULTS;
         }
         if (snapshot.type !== "file") return true;
-        if (budget.files >= MAX_SEARCH_FILES) { budget.truncated = true; return false; }
+        if (isIgnored(childRelative, false, ignoreRules) || !matchesUserGlobs(childRelative, options)) return true;
+        if (budget.files >= MAX_SEARCH_FILES) { truncateSearch(budget, "file_budget"); return false; }
         budget.files += 1;
         if (snapshot.size > MAX_SEARCH_FILE_BYTES) return true;
+        if (options.mode === "filename") {
+          const match = literalMatch(entry.name, query, options.caseSensitive);
+          if (match !== null) results.push(searchResult(childRelative, 1, entry.name, match, query.length, [], options));
+          if (results.length >= MAX_SEARCH_RESULTS) { truncateSearch(budget, "result_budget"); return false; }
+          return true;
+        }
         const loaded = await readUtf8FileSecure(this.policy, resolved, snapshot, budget).catch(() => undefined);
         if (loaded === undefined) return !budget.truncated;
-        const content = loaded.content;
-        for (const [index, line] of content.split(/\r?\n/).entries()) {
-          if (line.includes(query)) results.push({ path: childRelative, line: index + 1, text: line.slice(0, 4_096) });
-          if (results.length >= resultLimit || results.length >= MAX_SEARCH_RESULTS) {
-            budget.truncated = results.length >= MAX_SEARCH_RESULTS;
-            return false;
-          }
+        addSearchContentPart(budget, childRelative, loaded.content);
+        const lines = loaded.content.split(/\r?\n/);
+        for (const [index, line] of lines.entries()) {
+          const match = literalMatch(line, query, options.caseSensitive);
+          if (match !== null) results.push(searchResult(childRelative, index + 1, line, match, query.length, lines, options));
+          if (results.length >= MAX_SEARCH_RESULTS) { truncateSearch(budget, "result_budget"); return false; }
         }
         return true;
       });
@@ -220,6 +249,29 @@ export class FilesystemService {
       // removed or replaced while traversing it is skipped, as before.
       return;
     }
+  }
+
+  private async loadIgnoreRules(
+    resolvedDirectory: { readonly workspace: WorkspaceConfig; readonly path: string },
+    directoryRelative: string,
+    inherited: readonly IgnoreRule[],
+    budget: SearchBudget,
+  ): Promise<readonly IgnoreRule[]> {
+    if (budget.truncated || inherited.length >= 1_024) return inherited;
+    const ignoreRelative = directoryRelative === "" ? ".gitignore" : `${directoryRelative}/.gitignore`;
+    let resolved: Awaited<ReturnType<PathPolicy["resolve"]>>;
+    let snapshot: PathSnapshot;
+    try {
+      resolved = await this.policy.resolve(resolvedDirectory.workspace.workspaceId, ignoreRelative, "search");
+      snapshot = await this.policy.snapshot(resolved);
+    } catch { return inherited; }
+    if (snapshot.type !== "file" || snapshot.size > 64 * 1024 || budget.files >= MAX_SEARCH_FILES) return inherited;
+    budget.files += 1;
+    addSearchSnapshotPart(budget, ignoreRelative, snapshot);
+    const loaded = await readUtf8FileSecure(this.policy, resolved, snapshot, budget).catch(() => undefined);
+    if (loaded === undefined) return inherited;
+    addSearchContentPart(budget, ignoreRelative, loaded.content);
+    return [...inherited, ...parseIgnoreRules(loaded.content, directoryRelative, 1_024 - inherited.length)];
   }
 }
 
@@ -280,15 +332,15 @@ async function readUtf8FileSecure(
     await policy.verifySnapshot(resolved, snapshot);
     if (!info.isFile() || !sameIdentity(info, snapshot) || info.size > MAX_SEARCH_FILE_BYTES) throw new Error("file is not a bounded regular file");
     if (info.size > MAX_SEARCH_TOTAL_BYTES - budget.bytes) {
-      budget.truncated = true;
+      truncateSearch(budget, "byte_budget");
       throw new Error("search byte budget exhausted");
     }
     const data = Buffer.alloc(info.size);
     let offset = 0;
     while (offset < data.byteLength) {
-      if (performance.now() >= budget.deadline) { budget.truncated = true; throw new Error("search time budget exhausted"); }
+      if (performance.now() >= budget.deadline) { truncateSearch(budget, "time_budget"); throw new Error("search time budget exhausted"); }
       const length = Math.min(data.byteLength - offset, MAX_SEARCH_TOTAL_BYTES - budget.bytes);
-      if (length <= 0) { budget.truncated = true; throw new Error("search byte budget exhausted"); }
+      if (length <= 0) { truncateSearch(budget, "byte_budget"); throw new Error("search byte budget exhausted"); }
       const { bytesRead } = await handle.read(data, offset, length, offset);
       // Account for I/O before binary detection, decoding, or any later error.
       budget.bytes += bytesRead;
@@ -302,6 +354,150 @@ async function readUtf8FileSecure(
     await handle.close();
   }
 }
+
+function parseSearchCursor(value: unknown): { readonly offset: number; readonly snapshotId: string | null } {
+  if (value === undefined || value === null) return { offset: 0, snapshotId: null };
+  if (typeof value !== "string") throw new RpcRuntimeError("invalid_params", "search cursor must be a string");
+  if (/^\d+$/.test(value)) return { offset: boundedInteger(value, 0, MAX_SEARCH_CURSOR, 0), snapshotId: null };
+  const match = /^s1:([a-f0-9]{16}):(\d+)$/.exec(value);
+  if (match === null) throw new RpcRuntimeError("invalid_params", "search cursor is invalid");
+  return { snapshotId: match[1] as string, offset: boundedInteger(match[2], 0, MAX_SEARCH_CURSOR, 0) };
+}
+
+function searchOptions(params: Record<string, unknown>): SearchOptions {
+  const mode = params.mode ?? "literal";
+  if (mode !== "literal" && mode !== "filename") throw new RpcRuntimeError("invalid_params", "search mode must be literal or filename");
+  if (params.case_sensitive !== undefined && typeof params.case_sensitive !== "boolean") throw new RpcRuntimeError("invalid_params", "case_sensitive must be a boolean");
+  const include = searchGlobList(params.include_globs, "include_globs");
+  const exclude = searchGlobList(params.exclude_globs, "exclude_globs");
+  return {
+    mode,
+    caseSensitive: params.case_sensitive === undefined ? true : params.case_sensitive,
+    includeGlobs: include.map(compileUserGlob),
+    excludeGlobs: exclude.map(compileUserGlob),
+    contextBefore: boundedInteger(params.context_before, 0, 8, 0),
+    contextAfter: boundedInteger(params.context_after, 0, 8, 0),
+  };
+}
+
+function searchGlobList(value: unknown, field: string): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 32 || value.some((item) => typeof item !== "string" || item.length === 0 || item.length > 256 || item.includes("\0"))) {
+    throw new RpcRuntimeError("invalid_params", `${field} must contain at most 32 bounded glob strings`);
+  }
+  return value as string[];
+}
+
+function compileUserGlob(value: string): RegExp {
+  const normalized = value.replace(/\\/g, "/");
+  return new RegExp(`^${globBody(normalized)}$`, process.platform === "win32" ? "i" : "");
+}
+
+function globBody(value: string): string {
+  let result = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index] as string;
+    if (char === "*") {
+      if (value[index + 1] === "*") {
+        while (value[index + 1] === "*") index += 1;
+        if (value[index + 1] === "/") { index += 1; result += "(?:.*/)?"; }
+        else result += ".*";
+      } else result += "[^/]*";
+    } else if (char === "?") result += "[^/]";
+    else result += char.replace(/[|\\{}()[\]^$+?.-]/g, "\\$&");
+  }
+  return result;
+}
+
+function matchesUserGlobs(path: string, options: SearchOptions): boolean {
+  const candidate = path.replace(/\\/g, "/");
+  const name = basename(candidate);
+  const matches = (pattern: RegExp): boolean => pattern.test(pattern.source.includes("/") ? candidate : name) || pattern.test(candidate);
+  if (options.includeGlobs.length > 0 && !options.includeGlobs.some(matches)) return false;
+  return !options.excludeGlobs.some(matches);
+}
+
+function literalMatch(value: string, query: string, caseSensitive: boolean): number | null {
+  const index = caseSensitive ? value.indexOf(query) : value.toLocaleLowerCase().indexOf(query.toLocaleLowerCase());
+  return index < 0 ? null : index;
+}
+
+function searchResult(path: string, lineNumber: number, line: string, matchOffset: number, queryLength: number, lines: readonly string[], options: SearchOptions): SearchResult {
+  const beforeStart = Math.max(0, lineNumber - 1 - options.contextBefore);
+  const afterEnd = Math.min(lines.length, lineNumber + options.contextAfter);
+  const contextBefore = lines.slice(beforeStart, lineNumber - 1).map((text, index) => ({ line: beforeStart + index + 1, text: text.slice(0, 4_096) }));
+  const contextAfter = lines.slice(lineNumber, afterEnd).map((text, index) => ({ line: lineNumber + index + 1, text: text.slice(0, 4_096) }));
+  return {
+    path,
+    line: lineNumber,
+    column: Array.from(line.slice(0, matchOffset)).length + 1,
+    match: line.slice(matchOffset, matchOffset + queryLength).slice(0, 1_024),
+    text: line.slice(0, 4_096),
+    context_before: contextBefore,
+    context_after: contextAfter,
+  };
+}
+
+function truncateSearch(budget: SearchBudget, reason: SearchTruncatedReason): void {
+  budget.truncated = true;
+  budget.truncatedReason ??= reason;
+}
+
+function addSearchSnapshotPart(budget: SearchBudget, path: string, snapshot: PathSnapshot): void {
+  xorDigest(budget.snapshotXor, createHash("sha256").update(`${path}\0${snapshot.type}\0${snapshot.device}\0${snapshot.inode}\0${snapshot.size}\0${snapshot.modifiedAtMs}`).digest());
+}
+
+function addSearchContentPart(budget: SearchBudget, path: string, content: string): void {
+  xorDigest(budget.snapshotXor, createHash("sha256").update(path).update("\0content\0").update(content).digest());
+}
+
+function xorDigest(target: Buffer, digest: Buffer): void {
+  for (let index = 0; index < target.length; index += 1) target[index] = (target[index] as number) ^ (digest[index] as number);
+}
+
+function searchSnapshotId(workspaceId: string, query: string, options: SearchOptions, snapshotXor: Buffer): string {
+  return createHash("sha256").update(workspaceId).update("\0").update(query).update("\0").update(options.mode).update(options.caseSensitive ? "1" : "0")
+    .update(String(options.contextBefore)).update(":").update(String(options.contextAfter)).update("\0")
+    .update(options.includeGlobs.map((item) => item.source).join("\0")).update("\0").update(options.excludeGlobs.map((item) => item.source).join("\0"))
+    .update(snapshotXor).digest("hex").slice(0, 16);
+}
+
+function parseIgnoreRules(content: string, base: string, remaining: number): IgnoreRule[] {
+  const rules: IgnoreRule[] = [];
+  for (const raw of content.split(/\r?\n/)) {
+    if (rules.length >= remaining) break;
+    let line = raw.trim();
+    if (line === "" || line.startsWith("#")) continue;
+    let negative = false;
+    if (line.startsWith("!")) { negative = true; line = line.slice(1); }
+    if (line === "") continue;
+    const directoryOnly = line.endsWith("/");
+    if (directoryOnly) line = line.slice(0, -1);
+    const anchored = line.startsWith("/");
+    if (anchored) line = line.slice(1);
+    if (line === "") continue;
+    const prefix = base === "" ? "" : `${escapeRegex(base)}/`;
+    const body = globBody(line);
+    const hasSlash = line.includes("/");
+    const exactSource = anchored || hasSlash ? `^${prefix}${body}$` : `^${prefix}(?:.*/)?${body}$`;
+    const source = anchored || hasSlash ? `^${prefix}${body}(?:/.*)?$` : `^${prefix}(?:.*/)?${body}(?:/.*)?$`;
+    const flags = process.platform === "win32" ? "i" : "";
+    rules.push({ negative, directoryOnly, matcher: new RegExp(source, flags), exactMatcher: new RegExp(exactSource, flags) });
+  }
+  return rules;
+}
+
+function isIgnored(path: string, isDirectory: boolean, rules: readonly IgnoreRule[]): boolean {
+  let ignored = false;
+  for (const rule of rules) {
+    if (!rule.matcher.test(path)) continue;
+    if (rule.directoryOnly && !isDirectory && rule.exactMatcher.test(path)) continue;
+    ignored = !rule.negative;
+  }
+  return ignored;
+}
+
+function escapeRegex(value: string): string { return value.replace(/[|\\{}()[\]^$+*?.-]/g, "\\$&"); }
 
 async function openNoFollow(path: string, nonBlocking = false): Promise<Awaited<ReturnType<typeof open>>> {
   try {
