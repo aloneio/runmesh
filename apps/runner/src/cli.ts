@@ -57,7 +57,7 @@ export interface EnrollCliDependencies {
   readonly afterEnroll?: () => Promise<void>;
 }
 interface ParsedCommand { readonly command: string; readonly json: boolean; readonly values: Record<string, string | boolean | string[]>; readonly passthrough: string[]; }
-const HELP = "usage: runmesh-runner <start|enroll|status|doctor|workspace|env|install|migrate|stop|restart|uninstall> [options]\nenroll: --server <https-url> (--code <one-time-code> | --code-stdin)\nservice migration: migrate --execution-mode <dedicated_user|privileged_host> [--confirm-privileged-host]\nworkspace: list";
+const HELP = "usage: runmesh-runner <start|enroll|status|doctor|workspace|env|install|migrate|stop|restart|uninstall> [options]\ndoctor: [--shareable] emits a strict allow-listed diagnostic report without host paths, URLs, credentials, environment values, or workspace identifiers\nenroll: --server <https-url> (--code <one-time-code> | --code-stdin)\nservice migration: migrate --execution-mode <dedicated_user|privileged_host> [--confirm-privileged-host]\nworkspace: list";
 
 /**
  * Read a one-time enrollment code without placing it in argv, a URL, or the
@@ -307,7 +307,7 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
     if (parsed.command === "env") { const profile = await requireProfile(store); const info = await new EnvironmentInfoService().get(workspaceOptions(profile)); report(output, parsed.json, info); return; }
     if (parsed.command === "doctor") {
       const result = await doctor(store, parsed.values.user === true ? "user" : "system", dependencies.servicePlatform, dependencies);
-      report(output, parsed.json, result);
+      report(output, parsed.json, parsed.values.shareable === true ? shareableDoctorReport(result) : result);
       if (!result.ok) (dependencies.setExitCode ?? ((code) => { process.exitCode = code; }))(1);
       return;
     }
@@ -407,6 +407,47 @@ export interface DoctorReport {
     readonly configured_execution_mode: ExecutionMode | null;
     readonly actual_service_identity: string | null;
     readonly privilege_state: ServicePrivilegeState;
+  };
+}
+
+export interface ShareableDoctorReport {
+  readonly schema_version: 1;
+  readonly generated_at_ms: number;
+  readonly runner_version: string;
+  readonly ok: boolean;
+  readonly configured: boolean;
+  readonly checks: readonly {
+    readonly name: string;
+    readonly required: boolean;
+    readonly ok: boolean;
+    readonly status: "ok" | "warning" | "failure";
+  }[];
+  readonly service: {
+    readonly mode: "system" | "user";
+    readonly execution_mode: ExecutionMode | null;
+    readonly privilege_state: ServicePrivilegeState;
+  };
+}
+
+/** Strict allow-list projection intended for issue/support sharing. */
+export function shareableDoctorReport(report: DoctorReport, nowMs = Date.now()): ShareableDoctorReport {
+  return {
+    schema_version: 1,
+    generated_at_ms: nowMs,
+    runner_version: RUNNER_VERSION,
+    ok: report.ok,
+    configured: report.profile !== undefined,
+    checks: report.checks.map((check) => ({
+      name: check.name.startsWith("workspace:") ? "workspace" : check.name,
+      required: check.required,
+      ok: check.ok,
+      status: check.status,
+    })),
+    service: {
+      mode: report.service.mode,
+      execution_mode: report.service.execution_mode,
+      privilege_state: report.service.privilege_state,
+    },
   };
 }
 
@@ -977,6 +1018,7 @@ export function parseProductArgs(argv: readonly string[]): ParsedCommand {
     if (arg === "--user") { values.user = true; continue; }
     if (arg === "--confirm-privileged-host") { values.confirmPrivilegedHost = true; continue; }
     if (arg === "--code-stdin") { values.codeStdin = true; continue; }
+    if (arg === "--shareable" && command === "doctor") { values.shareable = true; continue; }
     const key = arg === "--execution-mode" ? "executionMode" : arg === "--server" ? "server" : arg === "--code" ? "code" : arg === "--cwd" ? "cwd" : arg === "--executable-path" ? "executablePath" : arg === "--profile" ? "profilePath" : undefined;
     const value = rest[index + 1]; if (key === undefined || value === undefined || value.startsWith("--")) throw new Error(`unknown or incomplete option: ${arg}`);
     values[key] = value; index += 1;
