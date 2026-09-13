@@ -149,6 +149,19 @@ export class GitService {
       truncated: run.truncated || safeOutput.byteLength !== run.stdout.byteLength,
     });
   }
+
+  /** Internal-safe current commit observation used to age verification evidence. */
+  public async head(input: unknown): Promise<{ readonly workspace_id: string; readonly commit: string }> {
+    const params = object(input);
+    const workspace = this.policy.getWorkspace(params.workspace_id);
+    const scope = await resolveGitPath(this.policy, params.workspace_id, ".");
+    const run = await git(scope.rootPath, ["rev-parse", "--verify", "HEAD"], 128, this.options);
+    if (run.status !== 0 || run.truncated) throw gitFailure("git HEAD inspection failed", run);
+    const commit = run.stdout.toString("utf8").trim();
+    if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/iu.test(commit)) throw new RpcRuntimeError("git_unavailable", "git HEAD is not a valid commit identifier");
+    return { workspace_id: workspace.workspaceId, commit };
+  }
+
   public async log(input: unknown): Promise<Record<string, unknown>> {
     const params = object(input);
     const workspace = this.policy.getWorkspace(params.workspace_id);
