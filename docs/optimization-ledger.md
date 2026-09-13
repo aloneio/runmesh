@@ -39,3 +39,30 @@ Status: implemented on 2026-09-13.
 
 - Added `docs/cost-baseline.md` defining provider-neutral counters, per-call derived rates, retention fields, and a seven-day release gate.
 - The baseline records observed usage and Git SHA together, avoiding hard-coded provider prices or treating missing exports as zero.
+
+## P06 — structured bounded code search
+
+Status: implemented on 2026-09-13.
+
+- `inspect search` keeps literal matching as the compatibility default and adds case sensitivity, include/exclude globs, bounded before/after context, and filename matching without granting shell access.
+- The built-in traversal honors bounded nested `.gitignore` rules, including negation, while retaining the existing path-policy, descriptor and total I/O limits.
+- Search output reports column/match/context, engine, scan counters, a specific truncation reason, and an opaque snapshot-bound continuation cursor. Legacy numeric cursors remain accepted; new cursors fail with `search_snapshot_changed` if the bounded result snapshot changes.
+- Verification: `apps/runner/test/filesystem-security.test.ts` covers globs/context, nested ignore rules, filename mode and stale cursors.
+
+## P08 — patch preview and review receipt
+
+Status: implemented on 2026-09-13.
+
+- `edit(preview=true)` runs the existing patch parser, path checks, expected hashes and staging calculation without creating temporary files or mutating the workspace.
+- Preview returns bounded per-path diff excerpts and a SHA-256 `preview_id` bound to workspace, policy generation, patch and current baselines.
+- Apply may include that `preview_id`; it recomputes authorization/baselines and rejects a stale review before creating temporary files. Normal apply remains compatible when no preview ID is supplied.
+- Hunk conflicts include a bounded excerpt from the already-authorized target file and ambiguous candidate line numbers; no other file content or host path is exposed by MCP projection.
+- Verification: `apps/runner/test/patch-git.test.ts` proves zero-write preview, reviewed apply, stale-preview rejection and bounded conflict context.
+
+## P09 — pagination and resource-budget contract
+
+Status: first compatibility slice implemented on 2026-09-13.
+
+- Search now emits `snapshot_id`, opaque `next_cursor`, `truncated`, `truncated_reason`, `returned_bytes` and explicit scan budgets; UTF-8-safe MCP projection remains bounded.
+- Existing file and Job pagination keep their stable numeric cursor contracts; this change deliberately does not force an incompatible cursor format onto those append/offset resources.
+- Cross-tool follow-up remains to migrate shared field generation into protocol helpers without changing existing response shapes.

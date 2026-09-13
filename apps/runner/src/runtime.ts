@@ -251,7 +251,7 @@ export class RunnerRuntime {
     const result = await this.dispatchAtCurrentPolicy(method, input);
     // Read-only operations must not return data from an obsolete authorization
     // snapshot. Already-committed edits/jobs keep their real result semantics.
-    if (["workspace.list", "env.info", "fs.stat", "fs.read", "fs.list", "fs.search", "git.status", "git.diff", "git.log", "git.show", "git.blame", "job.list", "job.get", "job.logs"].includes(method)) this.policy.assertGeneration(generation);
+    if (["workspace.list", "env.info", "fs.stat", "fs.read", "fs.list", "fs.search", "fs.preview_patch", "git.status", "git.diff", "git.log", "git.show", "git.blame", "job.list", "job.get", "job.logs"].includes(method)) this.policy.assertGeneration(generation);
     return result;
   }
   private async dispatchAtCurrentPolicy(method: string, input: unknown): Promise<unknown> {
@@ -266,6 +266,7 @@ export class RunnerRuntime {
       case "fs.read": this.policy.assertPermission(params.workspace_id, "read"); return this.filesystem.read(params);
       case "fs.list": this.policy.assertPermission(params.workspace_id, "read"); return this.filesystem.list(params);
       case "fs.search": this.policy.assertPermission(params.workspace_id, "read"); return this.filesystem.search(params);
+      case "fs.preview_patch": this.policy.assertPermission(params.workspace_id, "edit"); return this.patcher.preview(params);
       case "fs.apply_patch": this.policy.assertPermission(params.workspace_id, "edit"); return this.patcher.apply(params);
       case "git.status": this.policy.assertPermission(params.workspace_id, "read"); return this.git.status(params);
       case "git.diff": this.policy.assertPermission(params.workspace_id, "read"); return this.git.diff(params);

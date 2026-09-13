@@ -84,6 +84,34 @@ describe("fs.apply_patch", () => {
     } finally { await test.cleanup(); }
   });
 
+  it("previews without writing and binds apply to the reviewed baseline", async () => {
+    const test = await fixture();
+    try {
+      await writeFile(join(test.root, "note.txt"), "old\n");
+      const service = patch(test.workspace);
+      const input = { workspace_id: test.workspace.workspaceId, patch: envelope("*** Update File: note.txt\n@@\n-old\n+new") };
+      const preview = await service.preview(input);
+      expect(preview).toMatchObject({ workspace_id: test.workspace.workspaceId, preview_id: expect.stringMatching(/^[a-f0-9]{64}$/), changed_paths: [{ path: "note.txt", status: "updated" }], previews: [{ path: "note.txt", diff: expect.stringContaining("+new") }] });
+      await expect(readFile(join(test.root, "note.txt"), "utf8")).resolves.toBe("old\n");
+      const applied = await service.apply({ ...input, preview_id: preview.preview_id });
+      expect(applied.preview_id).toBe(preview.preview_id);
+      await expect(readFile(join(test.root, "note.txt"), "utf8")).resolves.toBe("new\n");
+    } finally { await test.cleanup(); }
+  });
+
+  it("rejects a stale preview and returns bounded conflict context", async () => {
+    const test = await fixture();
+    try {
+      await writeFile(join(test.root, "note.txt"), "alpha\nbeta\ngamma\n");
+      const service = patch(test.workspace);
+      const input = { workspace_id: test.workspace.workspaceId, patch: envelope("*** Update File: note.txt\n@@\n-beta\n+BETA") };
+      const preview = await service.preview(input);
+      await writeFile(join(test.root, "note.txt"), "alpha\nbeta\ngamma\nexternal\n");
+      await expect(service.apply({ ...input, preview_id: preview.preview_id })).rejects.toMatchObject({ code: "baseline_changed" });
+      await expect(service.apply({ workspace_id: test.workspace.workspaceId, patch: envelope("*** Update File: note.txt\n@@\n-missing\n+new") })).rejects.toMatchObject({ code: "hunk_not_found", details: { path: "note.txt", context_start_line: 1, context: expect.arrayContaining(["alpha", "beta", "gamma"]) } });
+    } finally { await test.cleanup(); }
+  });
+
   it("rejects missing, ambiguous, and overlapping hunk context before writing", async () => {
     const test = await fixture();
     try {

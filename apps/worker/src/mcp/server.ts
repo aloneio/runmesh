@@ -53,19 +53,25 @@ const RunnerIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9.
 const WorkspaceIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "must be a safe workspace identifier");
 const RelativePathSchema = z.string().min(1).max(4096).refine(isSafeRelativePath, "must be a workspace-relative path without traversal");
 const CursorSchema = z.string().max(128).regex(/^\d+$/, "must be a numeric cursor").optional();
+const InspectCursorSchema = z.string().max(128).regex(/^(?:\d+|s1:[a-f0-9]{16}:\d+)$/, "must be a numeric or search snapshot cursor").optional();
+const SearchGlobSchema = z.string().min(1).max(256).refine((value) => !value.includes("\0"), "glob must not contain NUL");
 const BoundedLimitSchema = z.number().int().min(1).max(65_536).optional();
 const JobIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "must be a safe job identifier");
 const JobStatusSchema = z.enum(["queued", "running", "cancelling", "cancelled", "succeeded", "failed", "unknown", "interrupted"]);
 const ReadInputSchema = z.object({ workspace_id: WorkspaceIdSchema, path: RelativePathSchema, cursor: CursorSchema, offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(262_144).optional() }).strict();
-const InspectInputSchema = z.object({ action: z.enum(["list", "search", "stat", "git_status", "git_diff", "git_log", "git_show", "git_blame"]), workspace_id: WorkspaceIdSchema, path: RelativePathSchema.optional(), query: z.string().min(1).max(512).optional(), max_results: z.number().int().min(1).max(256).optional(), cursor: CursorSchema, revision: z.string().regex(/^[0-9a-fA-F]{7,64}(?:\^\{0,1\})?$/).optional(), start_line: z.number().int().min(1).max(1000000).optional(), end_line: z.number().int().min(1).max(1000000).optional() }).strict().superRefine((value, context) => {
+const InspectInputSchema = z.object({ action: z.enum(["list", "search", "stat", "git_status", "git_diff", "git_log", "git_show", "git_blame"]), workspace_id: WorkspaceIdSchema, path: RelativePathSchema.optional(), query: z.string().min(1).max(512).optional(), max_results: z.number().int().min(1).max(256).optional(), cursor: InspectCursorSchema, mode: z.enum(["literal", "filename"]).optional(), case_sensitive: z.boolean().optional(), include_globs: z.array(SearchGlobSchema).max(32).optional(), exclude_globs: z.array(SearchGlobSchema).max(32).optional(), context_before: z.number().int().min(0).max(8).optional(), context_after: z.number().int().min(0).max(8).optional(), revision: z.string().regex(/^[0-9a-fA-F]{7,64}(?:\^\{0,1\})?$/).optional(), start_line: z.number().int().min(1).max(1000000).optional(), end_line: z.number().int().min(1).max(1000000).optional() }).strict().superRefine((value, context) => {
   if ((value.action === "search" && value.query === undefined) || (value.action !== "search" && value.query !== undefined)) context.addIssue({ code: "custom", message: "query is only valid and required for search" });
+  if (value.action !== "search" && (value.mode !== undefined || value.case_sensitive !== undefined || value.include_globs !== undefined || value.exclude_globs !== undefined || value.context_before !== undefined || value.context_after !== undefined)) context.addIssue({ code: "custom", message: "search options are only valid for search" });
+  if (value.action !== "search" && typeof value.cursor === "string" && value.cursor.startsWith("s1:")) context.addIssue({ code: "custom", message: "search snapshot cursors are only valid for search" });
   if (value.action === "stat" && value.path === undefined) context.addIssue({ code: "custom", message: "path is required for stat" });
   if (["git_log", "git_show", "git_blame"].includes(value.action) && value.path === undefined) context.addIssue({ code: "custom", message: "path is required for git history inspection" });
   if (value.action === "git_show" && value.revision === undefined) context.addIssue({ code: "custom", message: "revision is required for git_show" });
   if (value.action !== "git_show" && value.revision !== undefined) context.addIssue({ code: "custom", message: "revision is only valid for git_show" });
   if (value.action !== "git_blame" && (value.start_line !== undefined || value.end_line !== undefined)) context.addIssue({ code: "custom", message: "line range is only valid for git_blame" });
 });
-const EditInputSchema = z.object({ workspace_id: WorkspaceIdSchema, patch: z.string().min(1).max(1_048_576), expected_hash: z.string().regex(/^[a-f0-9]{64}$/).optional(), expected_hashes: z.record(z.string().min(1).max(4096), z.string().regex(/^[a-f0-9]{64}$/).nullable()).optional() }).strict();
+const EditInputSchema = z.object({ workspace_id: WorkspaceIdSchema, patch: z.string().min(1).max(1_048_576), preview: z.boolean().optional(), preview_id: z.string().regex(/^[a-f0-9]{64}$/).optional(), expected_hash: z.string().regex(/^[a-f0-9]{64}$/).optional(), expected_hashes: z.record(z.string().min(1).max(4096), z.string().regex(/^[a-f0-9]{64}$/).nullable()).optional() }).strict().superRefine((value, context) => {
+  if (value.preview === true && value.preview_id !== undefined) context.addIssue({ code: "custom", message: "preview_id is only valid when applying a patch" });
+});
 const ShellInputSchema = z.object({ workspace_id: WorkspaceIdSchema, command: z.string().min(1).max(8_192), wait_ms: z.number().int().min(1).max(LOCAL_RUNNER_OPERATION_TIMEOUT_MS).optional(), background: z.boolean().optional() }).strict();
 const JobInputSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("list"), workspace_id: WorkspaceIdSchema.optional(), status: JobStatusSchema.optional(), limit: z.number().int().min(1).max(100).optional() }).strict(),
@@ -114,7 +120,7 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth): McpServ
   register(server, "workspace_list", z.object({}).strict(), async () => activeWorkspaceList(env, auth.clientId));
   register(server, "inspect", InspectInputSchema, async (params) => inspectTool(env, auth.clientId, params));
   register(server, "read", ReadInputSchema, async (params) => activeRunnerTool(env, auth.clientId, "fs.read", boundedReadParams(params, 32 * 1024), "read", "read"));
-  register(server, "edit", EditInputSchema, async (params) => activeRunnerTool(env, auth.clientId, "fs.apply_patch", params, "edit", "edit"));
+  register(server, "edit", EditInputSchema, async (params) => editTool(env, auth.clientId, params));
   register(server, "shell", ShellInputSchema, async (params) => shellTool(env, auth.clientId, params));
   register(server, "job", JobInputSchema, async (params, scopes) => jobTool(env, auth.clientId, params, scopes));
 
@@ -152,6 +158,12 @@ async function inspectTool(env: McpRequestEnv, clientId: string, params: z.outpu
     ...(params.action === "git_blame" ? { start_line: params.start_line, end_line: params.end_line } : {}),
     ...(params.query === undefined ? {} : { query: params.query }),
     ...(params.cursor === undefined ? {} : { cursor: params.cursor }),
+    ...(params.action !== "search" || params.mode === undefined ? {} : { mode: params.mode }),
+    ...(params.action !== "search" || params.case_sensitive === undefined ? {} : { case_sensitive: params.case_sensitive }),
+    ...(params.action !== "search" || params.include_globs === undefined ? {} : { include_globs: params.include_globs }),
+    ...(params.action !== "search" || params.exclude_globs === undefined ? {} : { exclude_globs: params.exclude_globs }),
+    ...(params.action !== "search" || params.context_before === undefined ? {} : { context_before: params.context_before }),
+    ...(params.action !== "search" || params.context_after === undefined ? {} : { context_after: params.context_after }),
     ...(params.action === "list" && params.max_results !== undefined ? { limit: params.max_results } : {}),
     ...(params.action === "search" && params.max_results !== undefined ? { max_results: params.max_results } : {}),
     ...(params.action === "git_diff" ? { max_bytes: 32 * 1024 } : {}),
@@ -161,6 +173,11 @@ async function inspectTool(env: McpRequestEnv, clientId: string, params: z.outpu
     ...(params.action === "git_blame" ? { start_line: params.start_line, end_line: params.end_line, max_bytes: 64 * 1024 } : {}),
   };
   return activeRunnerTool(env, clientId, method, input, "read", inspectResultMode(params.action));
+}
+async function editTool(env: McpRequestEnv, clientId: string, params: z.output<typeof EditInputSchema>): Promise<unknown> {
+  const input: Record<string, unknown> = { ...params };
+  delete input.preview;
+  return activeRunnerTool(env, clientId, params.preview === true ? "fs.preview_patch" : "fs.apply_patch", input, "edit", "edit");
 }
 async function shellTool(env: McpRequestEnv, clientId: string, params: z.output<typeof ShellInputSchema>): Promise<unknown> {
   const invocation = { workspace_id: params.workspace_id, command: params.command, shell: true, created_by_client_id: clientId };
@@ -343,15 +360,33 @@ export function safeInspectResult(value: unknown, kind: InspectResultKind): Reco
   }
   if (kind === "search") {
     if (typeof value.query === "string" && value.query.length <= 512 && !hasControlCharacters(value.query)) output.query = value.query;
+    if (value.mode === "literal" || value.mode === "filename") output.mode = value.mode;
+    if (typeof value.case_sensitive === "boolean") output.case_sensitive = value.case_sensitive;
+    if (value.engine === "builtin_literal" || value.engine === "builtin_filename") output.engine = value.engine;
+    if (typeof value.snapshot_id === "string" && /^[a-f0-9]{16}$/u.test(value.snapshot_id)) output.snapshot_id = value.snapshot_id;
     if (Array.isArray(value.results)) {
       output.results = value.results.slice(0, 256).flatMap((entry) => {
         if (!isRecord(entry)) return [];
         const path = safeRelativePathValue(entry.path);
         if (path === undefined || !isSafePositiveInteger(entry.line) || typeof entry.text !== "string") return [];
-        return [{ path, line: entry.line, text: entry.text.slice(0, 4_096) }];
+        const item: Record<string, unknown> = { path, line: entry.line, text: entry.text.slice(0, 4_096) };
+        if (isSafePositiveInteger(entry.column)) item.column = entry.column;
+        if (typeof entry.match === "string") item.match = entry.match.slice(0, 1_024);
+        for (const key of ["context_before", "context_after"] as const) {
+          if (!Array.isArray(entry[key])) continue;
+          item[key] = entry[key].slice(0, 8).flatMap((contextLine) => isRecord(contextLine) && isSafePositiveInteger(contextLine.line) && typeof contextLine.text === "string" ? [{ line: contextLine.line, text: contextLine.text.slice(0, 4_096) }] : []);
+        }
+        return [item];
       });
     }
     copySafeCursorFields(value, output);
+    if (["time_budget", "byte_budget", "directory_budget", "entry_budget", "file_budget", "result_budget", "response_bytes"].includes(String(value.truncated_reason))) output.truncated_reason = value.truncated_reason;
+    if (isRecord(value.scanned)) {
+      const scanned: Record<string, unknown> = {};
+      for (const key of ["bytes", "files", "directories", "entries"] as const) if (isSafeNonnegativeInteger(value.scanned[key])) scanned[key] = value.scanned[key];
+      output.scanned = scanned;
+    }
+    copySafeInteger(value, output, "returned_bytes");
     return output;
   }
   if (kind === "git_status") {
@@ -427,11 +462,26 @@ export function safeEditResult(value: unknown): Record<string, unknown> {
   if (!isRecord(value)) return {};
   const output: Record<string, unknown> = {};
   copySafeWorkspaceId(value, output);
+  if (isSha256(value.preview_id)) output.preview_id = value.preview_id;
+  for (const key of ["insertions", "deletions"] as const) copySafeInteger(value, output, key);
+  if (typeof value.previews_truncated === "boolean") output.previews_truncated = value.previews_truncated;
   if (Array.isArray(value.changed_paths)) {
     output.changed_paths = value.changed_paths.slice(0, 128).flatMap((item) => safePatchChange(item));
   }
   if (Array.isArray(value.operations)) {
     output.operations = value.operations.slice(0, 128).flatMap((item) => safePatchOperation(item));
+  }
+  if (Array.isArray(value.previews)) {
+    output.previews = value.previews.slice(0, 128).flatMap((item) => {
+      if (!isRecord(item)) return [];
+      const path = safeRelativePathValue(item.path);
+      if (path === undefined || typeof item.diff !== "string") return [];
+      const preview: Record<string, unknown> = { path, diff: item.diff.slice(0, 16 * 1_024) };
+      if (item.status === "created" || item.status === "updated" || item.status === "deleted") preview.status = item.status;
+      for (const key of ["insertions", "deletions"] as const) if (isSafeNonnegativeInteger(item[key])) preview[key] = item[key];
+      if (typeof item.truncated === "boolean") preview.truncated = item.truncated;
+      return [preview];
+    });
   }
   if (Array.isArray(value.warnings)) {
     output.warnings = value.warnings.slice(0, 128).flatMap((item) => {
@@ -511,7 +561,7 @@ function safeJobIdentifier(value: unknown): string | undefined {
 }
 
 function isSafeCursor(value: unknown): value is string {
-  return typeof value === "string" && value.length <= 128 && /^\d+$/u.test(value);
+  return typeof value === "string" && value.length <= 128 && /^(?:\d+|s1:[a-f0-9]{16}:\d+)$/u.test(value);
 }
 
 function isSafeExitCode(value: unknown): value is number {
@@ -944,7 +994,7 @@ type ToolCall = ToolSuccess | ToolFailure;
 const SAFE_RUNNER_ERROR_CODES = new Set([
   "baseline_changed", "busy", "expected_hash_mismatch", "file_too_large", "git_failed", "git_output_too_large", "git_timeout", "git_unavailable",
   "hunk_ambiguous", "hunk_not_found", "hunk_overlap", "invalid_params", "invalid_patch", "invalid_path", "invalid_request", "invalid_workspace", "missing_file", "mixed_newlines", "not_utf8",
-  "method_not_found", "insufficient_scope", "patch_install_failed", "patch_rollback_failed", "path_traversal", "permission_denied", "policy_pending", "readonly_workspace", "runner_offline", "stale_policy", "symlink_escape", "symlink_write", "target_exists", "timeout",
+  "method_not_found", "insufficient_scope", "patch_install_failed", "patch_rollback_failed", "path_traversal", "permission_denied", "policy_pending", "readonly_workspace", "runner_offline", "search_snapshot_changed", "stale_policy", "symlink_escape", "symlink_write", "target_exists", "timeout",
 ]);
 
 export function policyPending(): ToolFailure {
