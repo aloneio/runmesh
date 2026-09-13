@@ -32,3 +32,10 @@ Status: implemented on 2026-09-13.
 - Worker `inspect` supports `git_log`, `git_show`, and `git_blame` with revision and line-range validation and redacted, bounded projections.
 - Capability advertisement and authorization classify all history operations as `coding:read`.
 - Verification: repository typecheck passes on Node 24; CI remains the release gate.
+
+## P03 — Cloudflare cost baseline
+
+Status: implemented on 2026-09-13.
+
+- Added `docs/cost-baseline.md` defining provider-neutral counters, per-call derived rates, retention fields, and a seven-day release gate.
+- The baseline records observed usage and Git SHA together, avoiding hard-coded provider prices or treating missing exports as zero.
