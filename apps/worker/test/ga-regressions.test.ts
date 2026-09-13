@@ -15,8 +15,8 @@ it("GA-012 rejects short, empty, whitespace and control-character deployment sec
 
 it("GA-005 stable source has a stable descriptor but no implicitly enabled distribution", () => {
   expect(runnerReleaseDescriptor({})).toMatchObject({ channel: "stable", distributable: false });
-  expect(runnerReleaseDescriptor({ RUNMESH_PUBLIC_ORIGIN: "https://ga.invalid", RUNMESH_SIGNED_RELEASE_AVAILABLE: "0.1.0" })).toMatchObject({ channel: "stable", distributable: true, package_version: "0.1.0" });
-  expect(runnerReleaseDescriptor({ RUNMESH_PUBLIC_ORIGIN: "https://ga.invalid", RUNMESH_SIGNED_RELEASE_AVAILABLE: "0.1.0-dev.5" }).distributable).toBe(false);
+  expect(runnerReleaseDescriptor({ RUNMESH_PUBLIC_ORIGIN: "https://ga.invalid", RUNMESH_SIGNED_RELEASE_AVAILABLE: "0.1.1" })).toMatchObject({ channel: "stable", distributable: true, package_version: "0.1.1" });
+  expect(runnerReleaseDescriptor({ RUNMESH_PUBLIC_ORIGIN: "https://ga.invalid", RUNMESH_SIGNED_RELEASE_AVAILABLE: "0.1.0" }).distributable).toBe(false);
 });
 
 it("GA-009 audit retention schedules expiry without any online runner and physically deletes expired rows", async () => {
