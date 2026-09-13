@@ -172,7 +172,9 @@ export class FilesystemService {
       const more = results.length > next;
       return { workspace_id: workspace.workspaceId, query: params.query, mode: options.mode, case_sensitive: options.caseSensitive,
         engine: options.mode === "filename" ? "builtin_filename" : "builtin_literal", results: page,
-        next_cursor: more ? `s1:${snapshotId}:${next}` : null, snapshot_id: snapshotId,
+        next_cursor: more ? String(next) : null,
+        next_snapshot_cursor: more ? `s1:${snapshotId}:${next}` : null,
+        snapshot_id: snapshotId,
         truncated: budget.truncated || more || responseTrimmed,
         truncated_reason: responseTrimmed ? "response_bytes" : budget.truncatedReason ?? (more ? "result_budget" : null),
         scanned: { bytes: budget.bytes, files: budget.files, directories: budget.directories, entries: budget.entries } };

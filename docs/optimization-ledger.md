@@ -46,7 +46,7 @@ Status: implemented on 2026-09-13.
 
 - `inspect search` keeps literal matching as the compatibility default and adds case sensitivity, include/exclude globs, bounded before/after context, and filename matching without granting shell access.
 - The built-in traversal honors bounded nested `.gitignore` rules, including negation, while retaining the existing path-policy, descriptor and total I/O limits.
-- Search output reports column/match/context, engine, scan counters, a specific truncation reason, and an opaque snapshot-bound continuation cursor. Legacy numeric cursors remain accepted; new cursors fail with `search_snapshot_changed` if the bounded result snapshot changes.
+- Search output reports column/match/context, engine, scan counters and a specific truncation reason. The existing numeric `next_cursor` stays compatible; `next_snapshot_cursor` is an opt-in snapshot-bound cursor that fails with `search_snapshot_changed` if the bounded result snapshot changes.
 - Verification: `apps/runner/test/filesystem-security.test.ts` covers globs/context, nested ignore rules, filename mode and stale cursors.
 
 ## P08 — patch preview and review receipt
@@ -63,6 +63,16 @@ Status: implemented on 2026-09-13.
 
 Status: first compatibility slice implemented on 2026-09-13.
 
-- Search now emits `snapshot_id`, opaque `next_cursor`, `truncated`, `truncated_reason`, `returned_bytes` and explicit scan budgets; UTF-8-safe MCP projection remains bounded.
+- Search now emits `snapshot_id`, the compatible numeric `next_cursor`, opt-in `next_snapshot_cursor`, `truncated`, `truncated_reason`, `returned_bytes` and explicit scan budgets; UTF-8-safe MCP projection remains bounded.
 - Existing file and Job pagination keep their stable numeric cursor contracts; this change deliberately does not force an incompatible cursor format onto those append/offset resources.
 - Cross-tool follow-up remains to migrate shared field generation into protocol helpers without changing existing response shapes.
+
+## P10 — Job launch receipt and bounded deduplication
+
+Status: implemented on 2026-09-13.
+
+- `shell` accepts an optional bounded `request_id`; the Runner binds it locally to the current principal, workspace and normalized launch input with a SHA-256 fingerprint.
+- A repeated `request_id` with identical input returns the original persisted `job_id`, even when the normal concurrency slot is occupied; conflicting reuse fails with `request_id_conflict`.
+- The receipt is persisted with Job metadata and survives Runner recovery. Authorization and policy generation are still checked before a receipt is reused, so an old key never becomes an authorization cache.
+- Cancellation and stdin input are deliberately outside this retry path, and the implementation does not claim exactly-once process creation across every host crash boundary.
+- Verification: `apps/runner/test/runtime.test.ts` covers identical retry, conflict rejection and the existing admission/cancellation behavior.
