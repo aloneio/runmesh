@@ -55,6 +55,12 @@ export interface RunnerReleaseDescriptor extends FixedReleaseDescriptor {
   readonly protocol: { readonly min_version: number; readonly max_version: number };
 }
 
+export interface ReleaseGateDiagnostics {
+  readonly acknowledgement_matches_fixed_release: boolean;
+  readonly canonical_public_origin_configured: boolean;
+  readonly test_mode_disabled: boolean;
+}
+
 export default {
   fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
     return handleRequest(request, env, ctx);
@@ -68,7 +74,12 @@ async function handleRequest(request: Request, env: WorkerEnv, _ctx: ExecutionCo
       await discardBody(request);
       return methodNotAllowed("GET, HEAD");
     }
-    return Response.json({ ok: true, service: "runmesh-agent-control-plane" });
+    return Response.json({
+      ok: true,
+      service: "runmesh-agent-control-plane",
+      worker_id: env.WORKER_ID,
+      release_gate: releaseGateDiagnostics(env),
+    });
   }
   if (url.pathname === "/assets/logo.png" || url.pathname === BRAND_LOGO_ASSET || url.pathname === "/assets/favicon.png") return asset(request, env);
   if (url.pathname === "/runner/uninstall.sh" || url.pathname === "/runner/uninstall.ps1") return runnerUninstallScript(request, env, url.pathname.endsWith(".ps1"));
@@ -124,10 +135,19 @@ export interface RunnerReleaseEnvironment {
   readonly RUNMESH_TEST_MODE?: string;
 }
 
+export function releaseGateDiagnostics(env: RunnerReleaseEnvironment): ReleaseGateDiagnostics {
+  let canonicalPublicOriginConfigured = false;
+  try { canonicalPublicOriginConfigured = env.RUNMESH_PUBLIC_ORIGIN !== undefined && canonicalPublicOrigin(env.RUNMESH_PUBLIC_ORIGIN).length > 0; } catch { canonicalPublicOriginConfigured = false; }
+  return {
+    acknowledgement_matches_fixed_release: signedReleaseIsAvailable(env.RUNMESH_SIGNED_RELEASE_AVAILABLE),
+    canonical_public_origin_configured: canonicalPublicOriginConfigured,
+    test_mode_disabled: env.RUNMESH_TEST_MODE !== "1",
+  };
+}
+
 export function runnerReleaseDescriptor(env: RunnerReleaseEnvironment): RunnerReleaseDescriptor {
-  let originConfigured = false;
-  try { originConfigured = env.RUNMESH_PUBLIC_ORIGIN !== undefined && canonicalPublicOrigin(env.RUNMESH_PUBLIC_ORIGIN).length > 0; } catch { originConfigured = false; }
-  const distributable = env.RUNMESH_TEST_MODE !== "1" && signedReleaseIsAvailable(env.RUNMESH_SIGNED_RELEASE_AVAILABLE) && originConfigured;
+  const gate = releaseGateDiagnostics(env);
+  const distributable = gate.acknowledgement_matches_fixed_release && gate.canonical_public_origin_configured && gate.test_mode_disabled;
   return { ...fixedReleaseDescriptor(distributable), protocol: { min_version: PROTOCOL_MIN_VERSION, max_version: PROTOCOL_CURRENT_VERSION } };
 }
 function runnerRelease(request: Request, env: WorkerEnv): Response {
