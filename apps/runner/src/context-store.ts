@@ -39,7 +39,7 @@ export type ContextRecord = {
   readonly updated_at_ms: number;
   readonly policy_generation: number | null;
   readonly base_commit: string | null;
-  readonly base_commit_status: "claimed" | null;
+  readonly base_commit_status: "claimed" | "observed" | null;
   readonly goal: string;
   readonly decisions: readonly string[];
   readonly evidence: readonly ContextEvidence[];
@@ -159,7 +159,7 @@ export class ContextStore {
         updated_at_ms: now,
         policy_generation: normalized.policyGeneration,
         base_commit: normalized.baseCommit,
-        base_commit_status: normalized.baseCommit === null ? null : "claimed",
+        base_commit_status: normalized.baseCommitStatus,
         goal: normalized.goal,
         decisions: normalized.decisions,
         evidence: normalized.evidence,
@@ -281,6 +281,7 @@ type NormalizedCheckpoint = {
   readonly expectedRevision: number | null;
   readonly policyGeneration: number | null;
   readonly baseCommit: string | null;
+  readonly baseCommitStatus: "claimed" | "observed" | null;
   readonly goal: string;
   readonly decisions: readonly string[];
   readonly evidence: readonly ContextEvidence[];
@@ -297,12 +298,14 @@ function normalizeCheckpoint(params: Record<string, unknown>, workspaceId: strin
   const policyGeneration = params.policy_generation === undefined ? null : boundedInteger(params.policy_generation, 0, Number.MAX_SAFE_INTEGER, "policy_generation");
   const baseCommit = params.base_commit === undefined || params.base_commit === null ? null : boundedString(params.base_commit, "base_commit", 7, 64);
   if (baseCommit !== null && !SAFE_COMMIT.test(baseCommit)) throw new RpcRuntimeError("invalid_params", "base_commit is invalid");
+  const baseCommitStatus = baseCommit === null ? null : params.base_commit_status === "observed" ? "observed" : "claimed";
   return {
     contextId,
     turnId,
     expectedRevision,
     policyGeneration,
     baseCommit,
+    baseCommitStatus,
     goal: boundedString(params.goal, "goal", 1, 4_096),
     decisions: stringList(params.decisions, "decisions", 64, 2_048),
     evidence: evidenceList(params.evidence),
@@ -332,6 +335,8 @@ function evidenceList(value: unknown): readonly ContextEvidence[] {
 }
 
 function checkpointFingerprint(value: NormalizedCheckpoint): string {
+  // Keep the v1 fingerprint stable: base_commit_status was added as a
+  // compatible observation annotation after v1 records already existed.
   return createHash("sha256").update(JSON.stringify({ turn_id: value.turnId, base_commit: value.baseCommit, goal: value.goal, decisions: value.decisions, evidence: value.evidence, open_risks: value.openRisks, missing_checks: value.missingChecks, next_actions: value.nextActions })).digest("hex");
 }
 
@@ -397,6 +402,7 @@ function parseRecord(value: unknown, workspaceId: string, contextId: string): Co
     expected_revision: source.revision,
     policy_generation: source.policy_generation ?? undefined,
     base_commit: source.base_commit,
+    base_commit_status: source.base_commit_status,
     goal: source.goal,
     decisions: source.decisions,
     evidence: source.evidence,
@@ -420,7 +426,7 @@ function parseRecord(value: unknown, workspaceId: string, contextId: string): Co
     updated_at_ms: boundedInteger(source.updated_at_ms, 0, Number.MAX_SAFE_INTEGER, "updated_at_ms"),
     policy_generation: normalized.policyGeneration,
     base_commit: normalized.baseCommit,
-    base_commit_status: normalized.baseCommit === null ? null : "claimed",
+    base_commit_status: normalized.baseCommitStatus,
     goal: normalized.goal,
     decisions: normalized.decisions,
     evidence: normalized.evidence,

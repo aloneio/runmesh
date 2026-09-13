@@ -360,7 +360,10 @@ function safeContextRecord(value: Record<string, unknown>): Record<string, unkno
   if (typeof value.fingerprint === "string" && /^[a-f0-9]{64}$/u.test(value.fingerprint)) output.fingerprint = value.fingerprint;
   if (value.base_commit === null) output.base_commit = null;
   else if (typeof value.base_commit === "string" && /^[0-9a-fA-F]{7,64}$/u.test(value.base_commit)) output.base_commit = value.base_commit;
-  if (value.base_commit_status === null || value.base_commit_status === "claimed") output.base_commit_status = value.base_commit_status;
+  if (value.base_commit_status === null || value.base_commit_status === "claimed" || value.base_commit_status === "observed") output.base_commit_status = value.base_commit_status;
+  if (value.baseline_state === "current" || value.baseline_state === "stale" || value.baseline_state === "unknown") output.baseline_state = value.baseline_state;
+  if (value.current_commit === null) output.current_commit = null;
+  else if (typeof value.current_commit === "string" && /^[0-9a-fA-F]{40,64}$/u.test(value.current_commit)) output.current_commit = value.current_commit;
   if (value.review_state === "incomplete" || value.review_state === "claimed" || value.review_state === "evidence_backed") output.review_state = value.review_state;
   copyContextText(value, output, "goal", 4_096);
   for (const key of ["decisions", "open_risks", "missing_checks", "next_actions"] as const) {
