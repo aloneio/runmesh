@@ -41,6 +41,7 @@ jobs:
       - run: npm run check:licenses
       - run: npm run build
       - run: npm run validate:worker -- --dry-run
+      - run: npm run validate:worker -- --dry-run --env development
       - run: npm run validate:worker -- --dry-run --env production
       - run: node scripts/check-release-contract.mjs
       - run: npm run pack:smoke
