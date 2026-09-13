@@ -1,10 +1,10 @@
-# Release readiness — 0.1.0 unreleased stable candidate
+# Release readiness — 0.1.1 unreleased stable candidate
 
 **State: UNRELEASED. Hosted distribution: DISABLED in this checkout.** A source version is not a published release. No existing immutable preview is overwritten. Live installations remain unchanged until an owner-approved rollout.
 
 ## Release identity and authority
 
-The source contract targets `0.1.0`, tag `v0.1.0`, channel `stable`, `prerelease=false`, protocol v2 and `runmesh-runner-0.1.0.tgz`. The signing key remains the independently reviewed `runmesh-preview-2026-01` public-key identity; its name does not determine release channel. Never replace the trust keyring with one downloaded alongside an untrusted artifact.
+The source contract targets `0.1.1`, tag `v0.1.1`, channel `stable`, `prerelease=false`, protocol v2 and `runmesh-runner-0.1.1.tgz`. The signing key remains the independently reviewed `runmesh-preview-2026-01` public-key identity; its name does not determine release channel. Never replace the trust keyring with one downloaded alongside an untrusted artifact.
 
 Only the repository owner may start or rerun publication. Release verification calls the complete reusable CI workflow at the triggering SHA, without inheriting signing secrets. Signing requires all verification jobs to succeed. The aggregate `verify-all` requires the general gate, Ubuntu/Windows/macOS native Runner checks and both supported Node lines. Failed, cancelled or skipped dependencies block publication; external Actions references remain immutable commit pins.
 
@@ -38,7 +38,7 @@ Audit retention has an independent expiry alarm without online Runners. Storage 
 2. Keep `RUNMESH_SIGNED_RELEASE_AVAILABLE` empty. Protect backups of Runner profiles, policy/jobs/logs, service/current pointer and verified packages. Verify provider-supported Durable Object backup/restore with an actual rehearsal. Current v2 data is retained; incompatible earlier schemas still require a fresh namespace. No automatic downgrade/import is promised.
 3. Owner approval allows new immutable signed assets, never replacement of a preview. Independently verify signature, stable channel, exact commit, tarball hash/size, checksums, notices and trust keyring. Verify the final downloaded artifact, not merely a separate smoke-test pack.
 4. Use console/out-of-band access for upgrades. Existing installers reject differently versioned managed installations; cross-version automatic upgrade is not implemented. Do not purge/restart the only maintenance Runner. Verify the new private runtime, CLI, service identity and authenticated write/search/policy canaries before general rollout.
-5. Only after publication and independent verification set `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.0` with canonical HTTPS `RUNMESH_PUBLIC_ORIGIN`. Save actual provider deployment evidence. Removing the acknowledgement disables future bootstrap but does not revoke credentials, terminate jobs, erase downloaded scripts or reverse redeemed codes.
+5. Only after publication and independent verification set `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.1` with canonical HTTPS `RUNMESH_PUBLIC_ORIGIN`. Save actual provider deployment evidence. Removing the acknowledgement disables future bootstrap but does not revoke credentials, terminate jobs, erase downloaded scripts or reverse redeemed codes.
 
 ## Operational acceptance remains separate
 
