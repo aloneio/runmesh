@@ -54,6 +54,23 @@ export const JobInputSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("cancel"), job_id: JobIdSchema }).strict(),
   z.object({ action: z.literal("input"), job_id: JobIdSchema, data: z.string().max(65_536).optional(), close_stdin: z.boolean().optional() }).strict().refine((value) => value.data !== undefined || value.close_stdin === true, "data or close_stdin is required"),
 ]);
+const ContextTextSchema = z.string().min(1).max(2_048);
+const ContextEvidenceSchema = z.object({
+  kind: z.enum(["job", "test", "commit", "note"]),
+  job_id: JobIdSchema.optional(),
+  ref: z.string().min(1).max(256).optional(),
+  summary: z.string().min(1).max(1_024).optional(),
+}).strict().superRefine((value, context) => {
+  if (value.kind === "job" && value.job_id === undefined) context.addIssue({ code: "custom", message: "job evidence requires job_id" });
+  if (value.kind !== "job" && value.job_id !== undefined) context.addIssue({ code: "custom", message: "job_id is only valid for job evidence" });
+});
+export const ContextInputSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("bootstrap"), workspace_id: WorkspaceIdSchema }).strict(),
+  z.object({ action: z.literal("read"), workspace_id: WorkspaceIdSchema, context_id: z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/), revision: z.number().int().positive().safe().optional() }).strict(),
+  z.object({ action: z.literal("search"), workspace_id: WorkspaceIdSchema, query: z.string().min(1).max(512), limit: z.number().int().min(1).max(50).optional(), cursor: CursorSchema }).strict(),
+  z.object({ action: z.literal("checkpoint"), workspace_id: WorkspaceIdSchema, context_id: z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/).optional(), turn_id: z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/), expected_revision: z.number().int().min(0).safe().optional(), base_commit: z.string().regex(/^[0-9a-fA-F]{7,64}$/).optional(), goal: z.string().min(1).max(4_096), decisions: z.array(ContextTextSchema).max(64).optional(), evidence: z.array(ContextEvidenceSchema).max(64).optional(), open_risks: z.array(ContextTextSchema).max(64).optional(), missing_checks: z.array(ContextTextSchema).max(64).optional(), next_actions: z.array(ContextTextSchema).max(64).optional() }).strict(),
+  z.object({ action: z.literal("rebuild"), workspace_id: WorkspaceIdSchema }).strict(),
+]);
 
 const emptySchema = z.object({}).strict();
 const runnerSelectSchema = z.object({ runner_id: RunnerIdSchema, confirm_switch: z.boolean().optional() }).strict();
@@ -68,6 +85,7 @@ export const TOOL_SPECS = {
   edit: { scope: "coding:write", description: "Preview or apply a transactional, baseline-checked patch to a writable workspace. The result contains only bounded, workspace-relative change metadata.", inputSchema: EditInputSchema, annotations: destructiveAnnotations },
   shell: { scope: "coding:exec", description: "Run a command through the selected runner's Host shell (Bash on Linux/macOS or PowerShell on Windows). Commands have the runner user's OS permissions and are not sandboxed; the workspace controls initial cwd and policy, not the Host shell root. Use a restricted VM/container and avoid administrator/root runners for untrusted code. background=true returns a persistent job immediately; foreground waits only up to wait_ms.", inputSchema: ShellInputSchema, annotations: execAnnotations },
   job: { description: "List, inspect, or read bounded logs for persistent jobs. cancel and input require coding:exec plus workspace job-control permission. Job metadata never includes command, cwd, PID, roots, or secrets.", inputSchema: JobInputSchema, annotations: mixedAnnotations },
+  context: { description: "Read or explicitly checkpoint workspace handoff context stored locally on the selected Runner. bootstrap/read/search are read-only; checkpoint/rebuild require coding:write plus workspace edit permission. Raw chat, system prompts, host paths, and hidden reasoning are not captured.", inputSchema: ContextInputSchema, annotations: mixedAnnotations },
 } as const satisfies Record<string, ToolSpec>;
 
 export type ToolName = keyof typeof TOOL_SPECS;

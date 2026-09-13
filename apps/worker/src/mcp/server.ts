@@ -7,7 +7,7 @@ import { internalHeaders, isSafeIdentifier, isConfiguredSecret } from "../securi
 import type { ActiveRunnerContext, McpClientActiveRunner, McpRunnerSelectionResult, PolicyReadiness as RegistryPolicyReadiness } from "../registry.js";
 import type { WorkerEnv } from "../runner-do.js";
 import { PRODUCT_VERSION } from "../generated-version.js";
-import { EditInputSchema, InspectInputSchema, JobInputSchema, SafeOutputSchema, ShellInputSchema, SUPPORTED_SCOPES, TOOL_SPECS, type CodingScope, type ToolName } from "./catalog.js";
+import { ContextInputSchema, EditInputSchema, InspectInputSchema, JobInputSchema, SafeOutputSchema, ShellInputSchema, SUPPORTED_SCOPES, TOOL_SPECS, type CodingScope, type ToolName } from "./catalog.js";
 
 const CONTENT_LIMIT = 32 * 1024;
 const STRUCTURED_LIMIT = 64 * 1024;
@@ -52,6 +52,7 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth): McpServ
   register(server, "edit", async (params) => editTool(env, auth.clientId, params));
   register(server, "shell", async (params) => shellTool(env, auth.clientId, params));
   register(server, "job", async (params, scopes) => jobTool(env, auth.clientId, params, scopes));
+  register(server, "context", async (params, scopes) => contextTool(env, auth.clientId, params, scopes));
 
   return server;
 
@@ -208,6 +209,14 @@ async function jobTool(env: McpRequestEnv, clientId: string, params: z.output<ty
   }
 }
 
+async function contextTool(env: McpRequestEnv, clientId: string, params: z.output<typeof ContextInputSchema>, scopes: readonly string[]): Promise<unknown> {
+  const mutating = params.action === "checkpoint" || params.action === "rebuild";
+  const requiredScope = mutating ? "coding:write" : "coding:read";
+  if (!scopes.includes(requiredScope)) return failure("insufficient_scope", `This context action requires ${requiredScope}.`, `Authorize the MCP client again with ${requiredScope}.`);
+  const method = `context.${params.action}`;
+  return activeRunnerTool(env, clientId, method, params, mutating ? "edit" : "read", "context");
+}
+
 function isToolSuccessResult(value: unknown): value is { readonly structuredContent: Record<string, unknown> } {
   return isRecord(value) && value.isError !== true && isRecord(value.structuredContent);
 }
@@ -319,6 +328,77 @@ export function safeReadResult(value: unknown): Record<string, unknown> {
   if (typeof value.truncated === "boolean") output.truncated = value.truncated;
   if (isSafeNonnegativeInteger(value.size)) output.size = value.size;
   return output;
+}
+
+export function safeContextResult(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) return {};
+  const output: Record<string, unknown> = {};
+  copySafeWorkspaceId(value, output);
+  if (value.state === "missing" || value.state === "ready") output.state = value.state;
+  if (typeof value.deduplicated === "boolean") output.deduplicated = value.deduplicated;
+  if (typeof value.rebuilt === "boolean") output.rebuilt = value.rebuilt;
+  for (const key of ["records", "scanned_files", "scanned_bytes", "rebuilt_at_ms", "scanned_records"] as const) copySafeInteger(value, output, key);
+  if (typeof value.query === "string" && value.query.length <= 512 && !hasControlCharacters(value.query)) output.query = value.query;
+  if (value.next_cursor === null || (typeof value.next_cursor === "string" && /^\d+$/u.test(value.next_cursor))) output.next_cursor = value.next_cursor;
+  if (value.context === null) output.context = null;
+  else if (isRecord(value.context)) output.context = safeContextRecord(value.context);
+  if (Array.isArray(value.results)) output.results = value.results.slice(0, 50).flatMap((entry) => isRecord(entry) ? [safeContextIndexEntry(entry)] : []);
+  return output;
+}
+
+function safeContextRecord(value: Record<string, unknown>): Record<string, unknown> {
+  const output: Record<string, unknown> = {};
+  if (value.schema_version === 1) output.schema_version = 1;
+  const contextId = safeJobIdentifier(value.context_id); if (contextId !== undefined) output.context_id = contextId;
+  const workspaceId = safeJobIdentifier(value.workspace_id); if (workspaceId !== undefined) output.workspace_id = workspaceId;
+  const turnId = safeJobIdentifier(value.turn_id); if (turnId !== undefined) output.turn_id = turnId;
+  for (const key of ["revision", "supersedes_revision", "created_at_ms", "updated_at_ms", "policy_generation"] as const) {
+    const item = value[key];
+    if (item === null) output[key] = null;
+    else if (isSafeNonnegativeInteger(item)) output[key] = item;
+  }
+  if (typeof value.fingerprint === "string" && /^[a-f0-9]{64}$/u.test(value.fingerprint)) output.fingerprint = value.fingerprint;
+  if (value.base_commit === null) output.base_commit = null;
+  else if (typeof value.base_commit === "string" && /^[0-9a-fA-F]{7,64}$/u.test(value.base_commit)) output.base_commit = value.base_commit;
+  if (value.base_commit_status === null || value.base_commit_status === "claimed") output.base_commit_status = value.base_commit_status;
+  if (value.review_state === "incomplete" || value.review_state === "claimed" || value.review_state === "evidence_backed") output.review_state = value.review_state;
+  copyContextText(value, output, "goal", 4_096);
+  for (const key of ["decisions", "open_risks", "missing_checks", "next_actions"] as const) {
+    if (Array.isArray(value[key])) output[key] = value[key].slice(0, 64).flatMap((item) => typeof item === "string" && item.length <= 2_048 && !hasControlCharacters(item) ? [item] : []);
+  }
+  if (Array.isArray(value.evidence)) output.evidence = value.evidence.slice(0, 64).flatMap((item) => isRecord(item) ? [safeContextEvidence(item)] : []);
+  return output;
+}
+
+function safeContextIndexEntry(value: Record<string, unknown>): Record<string, unknown> {
+  const output: Record<string, unknown> = {};
+  const contextId = safeJobIdentifier(value.context_id); if (contextId !== undefined) output.context_id = contextId;
+  const turnId = safeJobIdentifier(value.turn_id); if (turnId !== undefined) output.turn_id = turnId;
+  if (isSafePositiveInteger(value.revision)) output.revision = value.revision;
+  if (isSafeNonnegativeInteger(value.updated_at_ms)) output.updated_at_ms = value.updated_at_ms;
+  if (value.base_commit === null) output.base_commit = null;
+  else if (typeof value.base_commit === "string" && /^[0-9a-fA-F]{7,64}$/u.test(value.base_commit)) output.base_commit = value.base_commit;
+  if (value.review_state === "incomplete" || value.review_state === "claimed" || value.review_state === "evidence_backed") output.review_state = value.review_state;
+  copyContextText(value, output, "goal", 4_096);
+  return output;
+}
+
+function safeContextEvidence(value: Record<string, unknown>): Record<string, unknown> {
+  const output: Record<string, unknown> = {};
+  if (value.kind === "job" || value.kind === "test" || value.kind === "commit" || value.kind === "note") output.kind = value.kind;
+  if (value.status === "claimed" || value.status === "observed") output.status = value.status;
+  const jobId = safeJobIdentifier(value.job_id); if (jobId !== undefined) output.job_id = jobId;
+  if (typeof value.job_status === "string") output.job_status = safeJobStatus(value.job_status);
+  if (value.exit_code === null || isSafeExitCode(value.exit_code)) output.exit_code = value.exit_code;
+  copyContextText(value, output, "ref", 256);
+  copyContextText(value, output, "summary", 1_024);
+  if (isSafeNonnegativeInteger(value.observed_at_ms)) output.observed_at_ms = value.observed_at_ms;
+  return output;
+}
+
+function copyContextText(source: Record<string, unknown>, target: Record<string, unknown>, key: string, max: number): void {
+  const value = source[key];
+  if (typeof value === "string" && value.length <= max && !hasControlCharacters(value)) target[key] = value;
 }
 
 export type InspectResultKind = "list" | "search" | "stat" | "git_status" | "git_diff" | "git_log" | "git_show" | "git_blame";
@@ -618,7 +698,7 @@ type ActiveSelection = {
   readonly runnerId: string;
   readonly context: ActiveRunnerContext & { readonly automatic_selection: boolean };
 };
-type RunnerResultMode = "raw" | "job" | "logs" | "input" | "shell" | "read" | "edit" | "inspect:list" | "inspect:search" | "inspect:stat" | "inspect:git_status" | "inspect:git_diff" | "inspect:git_log" | "inspect:git_show" | "inspect:git_blame";
+type RunnerResultMode = "raw" | "job" | "logs" | "input" | "shell" | "read" | "edit" | "context" | "inspect:list" | "inspect:search" | "inspect:stat" | "inspect:git_status" | "inspect:git_diff" | "inspect:git_log" | "inspect:git_show" | "inspect:git_blame";
 type ActivePolicyReadiness = Omit<Extract<RegistryPolicyReadiness, { readonly ok: true }>, "lifecycle_id" | "session_id"> & {
   readonly lifecycle_id: string;
   readonly session_id: string;
@@ -788,6 +868,7 @@ function projectRunnerResult(value: unknown, mode: RunnerResultMode): unknown {
   if (mode === "shell") return safeShellResult(value);
   if (mode === "read") return safeReadResult(value);
   if (mode === "edit") return safeEditResult(value);
+  if (mode === "context") return safeContextResult(value);
   if (mode.startsWith("inspect:")) return safeInspectResult(value, mode.slice("inspect:".length) as InspectResultKind);
   return value;
 }
@@ -985,6 +1066,7 @@ type ToolCall = ToolSuccess | ToolFailure;
 
 const SAFE_RUNNER_ERROR_CODES = new Set([
   "baseline_changed", "busy", "expected_hash_mismatch", "file_too_large", "git_failed", "git_output_too_large", "git_timeout", "git_unavailable",
+  "context_index_corrupt", "context_index_too_large", "context_record_corrupt", "context_record_missing", "context_record_too_large", "context_rebuild_budget", "context_revision_conflict", "context_storage_unsafe", "context_turn_conflict",
   "hunk_ambiguous", "hunk_not_found", "hunk_overlap", "invalid_params", "invalid_patch", "invalid_path", "invalid_request", "invalid_workspace", "missing_file", "mixed_newlines", "not_utf8",
   "method_not_found", "insufficient_scope", "patch_install_failed", "patch_rollback_failed", "path_traversal", "permission_denied", "policy_pending", "readonly_workspace", "request_id_conflict", "runner_offline", "search_snapshot_changed", "stale_policy", "symlink_escape", "symlink_write", "target_exists", "timeout",
 ]);

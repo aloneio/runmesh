@@ -114,3 +114,35 @@ Status: implemented on 2026-09-13.
 - The administrator UI now distinguishes `Read Only`, `Workspace Edit`, and `Controlled Execution`: edit-only grants read/edit without Host shell or Job control; controlled execution explicitly enables the full workspace execution set.
 - The old `coding` form value remains accepted as a compatibility alias for controlled execution, while the rendered form uses the clearer least-privilege profiles.
 - Presets only populate the existing permission model; the Runner continues to enforce the live permission intersection and cannot gain authority from a UI label.
+
+## P11 — optional workspace context handoff
+
+Status: implementation slice completed on 2026-09-13; release validation pending.
+
+- Added a local Runner `ContextStore` with read-only `bootstrap`, targeted `read`, bounded `search`, explicit `checkpoint`, and explicit `rebuild` operations.
+- Read-only bootstrap does not create directories, indexes, records, or Jobs. Context bodies remain Runner-local and workspace-bound; raw chat, system prompts, hidden reasoning, host roots, environment values, and credentials are not captured by the API.
+- MCP exposes context as one optional mixed tool. Read actions require `coding:read`; checkpoint/rebuild require `coding:write` and the live workspace edit permission.
+
+## P12 — checkpoint deduplication and cross-record protection
+
+Status: implementation slice completed on 2026-09-13; release validation pending.
+
+- Checkpoints use a server-side `context_id`, caller-supplied bounded `turn_id`, optional `expected_revision`, immutable revision files, and a content fingerprint for retry deduplication.
+- A context cannot be continued under a different `turn_id`; stale revisions fail with a structured conflict instead of overwriting another writer.
+- The derived index is replaceable and rebuildable; immutable record files are not rewritten during index repair.
+
+## P13 — bounded local context search
+
+Status: implementation slice completed on 2026-09-13; release validation pending.
+
+- Search operates on a bounded derived local index instead of opening every context body for each query. Results contain only handoff metadata and references; full records are fetched by targeted read.
+- Index rebuild has explicit file and byte budgets and rejects unsafe/symlinked state paths. Missing indexes are reported as missing rather than being silently created by a read.
+- External embeddings and cross-workspace global memory are not introduced.
+
+## P14 — evidence-aware handoff state
+
+Status: first implementation slice completed on 2026-09-13; baseline-staleness automation remains follow-up work.
+
+- Checkpoints distinguish caller `claimed` evidence from Runner-observed Job evidence. Job evidence is resolved by the Runner, must belong to the same workspace, and records observed status/exit information at checkpoint time.
+- `review_state` is `incomplete` while checks remain, `evidence_backed` only when observed evidence is present, and otherwise `claimed`; a single exit code is never promoted to proof that the whole requirement is complete.
+- Automatic comparison of a stored `base_commit` against the current repository HEAD is intentionally not yet marked complete and remains part of the P14 follow-up.
