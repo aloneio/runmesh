@@ -422,7 +422,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     const list = await mcp(secretUrl, toolsList());
     expect(list.status).toBe(200);
     const listBody = await readMcp(list) as { result?: { tools?: { name: string }[] } };
-    expect(listBody.result?.tools?.map((tool) => tool.name).sort()).toEqual(["edit", "inspect", "job", "read", "runner_current", "runner_list", "runner_select", "shell", "workspace_list"].sort());
+    expect(listBody.result?.tools?.map((tool) => tool.name).sort()).toEqual(["context", "edit", "inspect", "job", "read", "runner_current", "runner_list", "runner_select", "shell", "workspace_list"].sort());
     const readOnlyShell = await mcp(secretUrl, { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "shell", arguments: { workspace_id: "workspace", command: "echo ignored" } } });
     const readOnlyBody = await readMcp(readOnlyShell) as { result?: { isError?: boolean; structuredContent?: { error?: { code?: string } } } };
     expect(readOnlyBody.result).toMatchObject({ isError: true, structuredContent: { error: { code: "insufficient_scope" } } });
@@ -750,9 +750,11 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(normalizedStyles).toMatch(/\.client-runner-meta\s*\{[^}]*overflow-wrap\s*:\s*anywhere/);
     expect(normalizedStyles).not.toMatch(/@media\s*\(max-width\s*:\s*540px\)[\s\S]*?\.action-btn-group\s*\{[^}]*flex-direction\s*:\s*column/);
     expect(normalizedStyles).toMatch(/@media\s*\(max-width\s*:\s*540px\)[\s\S]*?\.action-btn-group\s*\{[^}]*flex-wrap\s*:\s*nowrap/);
+    const scopesBeforeRejectedPost = await runInDurableObject(clientsRegistry, (instance) => instance.listMcpClients().find((client) => client.client_id === clientId)?.scopes);
+    expect(scopesBeforeRejectedPost).toBeDefined();
     const rejectedScopesDetailPost = await SELF.fetch(`https://worker.test/admin/clients/${clientId as string}/scopes/detail`, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", cookie: cookies(adminJar), origin: "https://worker.test" }, body: new URLSearchParams([["csrf_token", csrf], ["scopes", "coding:read"]]) });
     expect(rejectedScopesDetailPost.status).toBe(404);
-    await expect(runInDurableObject(clientsRegistry, (instance) => instance.listMcpClients().find((client) => client.client_id === clientId))).resolves.toMatchObject({ scopes: ["coding:read", "coding:write"] });
+    await expect(runInDurableObject(clientsRegistry, (instance) => instance.listMcpClients().find((client) => client.client_id === clientId)?.scopes)).resolves.toEqual(scopesBeforeRejectedPost);
     await expect(runInDurableObject(clientsRegistry, (instance) => instance.redeemRunnerEnrollment(
       "f".repeat(64),
       "e".repeat(64),
