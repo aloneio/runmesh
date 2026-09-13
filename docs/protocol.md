@@ -119,3 +119,14 @@ A new Go/Rust implementation should consume the JSON Schema and implement the sa
 ## Scope boundary
 
 This protocol does not add OAuth, AI/model calls, Cloudflare Sandbox, Cloudflare Containers, or GitHub Actions runtime. Public bootstrap scripts are Worker application endpoints outside the wire protocol. They remain fail-closed until an operator has published and independently verified the exact signed `v0.1.0` assets, configures a canonical external HTTPS `RUNMESH_PUBLIC_ORIGIN`, and explicitly sets `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.0`; both deployment conditions are required. When enabled, the installer command carrying the one-time code retrieves only fixed GitHub release assets, verifies the embedded-key Ed25519 contract, installs the verified local tarball, then uses the provided code through `--code-stdin`, or prompts locally when the code argument was omitted. The Worker-delivered script is the one-command bootstrap trust root; high-assurance operators use the independent portable-artifact verification path. Automatic update, data downgrade, and upgrade rollback are outside this release.
+
+## Structured RPC failure semantics
+
+The rpc.error.error object keeps the original code and bounded message, and may also include:
+
+- failure_class: validation, authorization, availability, conflict, resource, execution, internal, or unknown;
+- operation_state: not_started, running, committed, or unknown;
+- retry_after_ms: a bounded delay only when retrying is safe;
+- next_action: a stable client action such as refresh_permissions, re_read_and_retry, or inspect_job.
+
+Clients should branch on these fields instead of matching error text. An unknown operation state must never be automatically replayed when the request could have produced a side effect.

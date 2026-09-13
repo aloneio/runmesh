@@ -407,6 +407,10 @@ export const RpcErrorDetailsSchema = z
   .object({
     code: z.string().min(1).max(128),
     message: ShortTextSchema,
+    failure_class: z.enum(["validation", "authorization", "availability", "conflict", "resource", "execution", "internal", "unknown"]).optional(),
+    operation_state: z.enum(["not_started", "running", "committed", "unknown"]).optional(),
+    retry_after_ms: z.number().int().nonnegative().max(86_400_000).optional(),
+    next_action: z.enum(["correct_request", "refresh_permissions", "wait_and_retry", "re_read_and_retry", "inspect_job", "contact_operator"]).optional(),
     details: JsonValueSchema.optional(),
   })
   .strict();
