@@ -1,8 +1,8 @@
 # Permission denial investigation
 
-Version: 1  
-Applies to: MCP scopes, Runner/workspace policy, and live authorization  
-Required permissions: `coding:read`  
+Version: 1
+Applies to: MCP scopes, Runner/workspace policy, and live authorization
+Required permissions: `coding:read`
 
 ## Goal
 
