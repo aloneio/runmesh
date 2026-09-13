@@ -1,6 +1,6 @@
-# Release readiness — 0.1.1 unreleased stable candidate
+# Release readiness — 0.1.1 published stable patch
 
-**State: UNRELEASED. Hosted distribution: DISABLED in this checkout.** A source version is not a published release. No existing immutable preview is overwritten. Live installations remain unchanged until an owner-approved rollout.
+**State: RELEASED. Hosted distribution: ENABLED in the checked-in production configuration.** The immutable `v0.1.1` release was published from commit `24f68df078531584d430ab3f0754f527ad4dc929` after the complete same-SHA verification matrix passed. The release, tag, detached signature, checksums, trust keyring and Runner tarball were independently re-downloaded and verified before enabling this gate. Live availability still depends on the production Worker deployment reaching this `dev` configuration.
 
 ## Release identity and authority
 
@@ -35,10 +35,10 @@ Audit retention has an independent expiry alarm without online Runners. Storage 
 ## Controlled rollout
 
 1. Freeze/review the new commit. Run local gates and require same-SHA remote CI, including actual Windows/macOS and supported Node lines. Exercise privileged install/enroll/start/re-enroll/purge/reinstall/failure recovery on disposable hosts, not the Runner serving the only maintenance connection.
-2. Keep `RUNMESH_SIGNED_RELEASE_AVAILABLE` empty. Protect backups of Runner profiles, policy/jobs/logs, service/current pointer and verified packages. Verify provider-supported Durable Object backup/restore with an actual rehearsal. Current v2 data is retained; incompatible earlier schemas still require a fresh namespace. No automatic downgrade/import is promised.
-3. Owner approval allows new immutable signed assets, never replacement of a preview. Independently verify signature, stable channel, exact commit, tarball hash/size, checksums, notices and trust keyring. Verify the final downloaded artifact, not merely a separate smoke-test pack.
+2. Before publication, keep `RUNMESH_SIGNED_RELEASE_AVAILABLE` empty. For `v0.1.1`, that pre-publication gate remained closed through candidate CI. Protect backups of Runner profiles, policy/jobs/logs, service/current pointer and verified packages. Verify provider-supported Durable Object backup/restore with an actual rehearsal. Current v2 data is retained; incompatible earlier schemas still require a fresh namespace. No automatic downgrade/import is promised.
+3. Owner approval allows new immutable signed assets, never replacement of an existing release. `v0.1.1` was independently verified for signature, stable channel, exact commit, tarball hash/size, checksums, notices and trust keyring after publication. Verify the final downloaded artifact, not merely a separate smoke-test pack.
 4. Use console/out-of-band access for upgrades. Existing installers reject differently versioned managed installations; cross-version automatic upgrade is not implemented. Do not purge/restart the only maintenance Runner. Verify the new private runtime, CLI, service identity and authenticated write/search/policy canaries before general rollout.
-5. Only after publication and independent verification set `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.1` with canonical HTTPS `RUNMESH_PUBLIC_ORIGIN`. Save actual provider deployment evidence. Removing the acknowledgement disables future bootstrap but does not revoke credentials, terminate jobs, erase downloaded scripts or reverse redeemed codes.
+5. After publication and independent verification, set `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.1` with canonical HTTPS `RUNMESH_PUBLIC_ORIGIN`. This checkout now carries that exact production acknowledgement. Save actual provider deployment evidence and verify `/runner/releases/latest`, `/runner/install.sh`, and `/runner/install.ps1` after rollout. Removing the acknowledgement disables future bootstrap but does not revoke credentials, terminate jobs, erase downloaded scripts or reverse redeemed codes.
 
 ## Operational acceptance remains separate
 
