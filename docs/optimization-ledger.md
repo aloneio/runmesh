@@ -141,11 +141,12 @@ Status: implementation slice completed on 2026-09-13; release validation pending
 
 ## P14 — evidence-aware handoff state
 
-Status: first implementation slice completed on 2026-09-13; baseline-staleness automation remains follow-up work.
+Status: implementation completed on 2026-09-13 for the planned local Context scope; release validation pending.
 
 - Checkpoints distinguish caller `claimed` evidence from Runner-observed Job evidence. Job evidence is resolved by the Runner, must belong to the same workspace, and records observed status/exit information at checkpoint time.
 - `review_state` is `incomplete` while checks remain, `evidence_backed` only when observed evidence is present, and otherwise `claimed`; a single exit code is never promoted to proof that the whole requirement is complete.
-- Automatic comparison of a stored `base_commit` against the current repository HEAD is intentionally not yet marked complete and remains part of the P14 follow-up.
+- Checkpoint replaces a caller-provided Git claim with the Runner-observed isolated `HEAD` when safe Git inspection is available and marks that baseline `observed`. Read/bootstrap compare the stored observed baseline with current `HEAD` and return `baseline_state=current|stale|unknown`, so evidence cannot keep presenting itself as current after the source baseline changes.
+- The v1 record fingerprint remains compatible with records written before `base_commit_status=observed`; observation status is an additive annotation rather than a silent v1 integrity-algorithm migration.
 
 ## P27 — shareable diagnostics allow-list
 

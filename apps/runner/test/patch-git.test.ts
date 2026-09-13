@@ -263,6 +263,8 @@ describe("git inspection", () => {
       await run(test.root, ["add", "tracked.txt"]); await run(test.root, ["commit", "-m", "initial"]);
       await writeFile(join(test.root, "tracked.txt"), "new\n");
       const git = testGit(test.workspace);
+      const head = await git.head({ workspace_id: test.workspace.workspaceId });
+      expect(head).toMatchObject({ workspace_id: test.workspace.workspaceId, commit: expect.stringMatching(/^[0-9a-f]{40,64}$/) });
       const status = await git.status({ workspace_id: test.workspace.workspaceId });
       expect(status).toMatchObject({ entries: [{ path: "tracked.txt", worktree_status: "M" }] });
       const unstaged = await git.diff({ workspace_id: test.workspace.workspaceId, path: "tracked.txt" });

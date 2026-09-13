@@ -283,10 +283,10 @@ export class RunnerRuntime {
       case "job.logs": { const job = this.jobs.get(params.job_id); assertExpectedJobWorkspace(params, job.workspace_id); this.policy.assertPermission(job.workspace_id, "read"); return this.jobs.logs(job.job_id, params); }
       case "job.cancel": { const job = this.jobs.get(params.job_id); assertExpectedJobWorkspace(params, job.workspace_id); this.assertJobControl(job.workspace_id); return this.jobs.cancel(job.job_id); }
       case "job.input": { const job = this.jobs.get(params.job_id); assertExpectedJobWorkspace(params, job.workspace_id); this.assertJobControl(job.workspace_id); return this.jobs.input(job.job_id, params.data, params.close_stdin === true); }
-      case "context.bootstrap": this.policy.assertPermission(params.workspace_id, "read"); return this.context.bootstrap(params);
-      case "context.read": this.policy.assertPermission(params.workspace_id, "read"); return this.context.read(params);
+      case "context.bootstrap": this.policy.assertPermission(params.workspace_id, "read"); return this.contextWithBaseline(await this.context.bootstrap(params), params.workspace_id);
+      case "context.read": this.policy.assertPermission(params.workspace_id, "read"); return this.contextWithBaseline(await this.context.read(params), params.workspace_id);
       case "context.search": this.policy.assertPermission(params.workspace_id, "read"); return this.context.search(params);
-      case "context.checkpoint": this.policy.assertPermission(params.workspace_id, "edit"); return this.context.checkpoint(await this.contextCheckpointParams(params));
+      case "context.checkpoint": this.policy.assertPermission(params.workspace_id, "edit"); return this.contextWithBaseline(await this.context.checkpoint(await this.contextCheckpointParams(params)), params.workspace_id);
       case "context.rebuild": this.policy.assertPermission(params.workspace_id, "edit"); return this.context.rebuild(params);
       default: throw new RpcRuntimeError("method_not_found", `Unsupported method: ${method}`);
     }
@@ -324,7 +324,29 @@ export class RunnerRuntime {
       if (entry.kind !== "test" && entry.kind !== "commit" && entry.kind !== "note") throw new RpcRuntimeError("invalid_params", "context evidence kind is invalid");
       evidence.push({ kind: entry.kind, status: "claimed", ...(typeof entry.ref === "string" ? { ref: entry.ref } : {}), ...(typeof entry.summary === "string" ? { summary: entry.summary } : {}) });
     }
-    return { ...params, evidence, policy_generation: this.policy.generation };
+    let observedCommit: string | undefined;
+    try { observedCommit = (await this.git.head({ workspace_id: workspaceId })).commit; }
+    catch { /* Non-Git workspaces retain an explicit caller claim or null baseline. */ }
+    return {
+      ...params,
+      ...(observedCommit === undefined ? {} : { base_commit: observedCommit, base_commit_status: "observed" }),
+      evidence,
+      policy_generation: this.policy.generation,
+    };
+  }
+  private async contextWithBaseline(result: Record<string, unknown>, workspaceId: unknown): Promise<Record<string, unknown>> {
+    const context = result.context;
+    if (typeof workspaceId !== "string" || typeof context !== "object" || context === null || Array.isArray(context)) return result;
+    const record = context as Record<string, unknown>;
+    let currentCommit: string | null = null;
+    let baselineState: "current" | "stale" | "unknown" = "unknown";
+    if (record.base_commit_status === "observed" && typeof record.base_commit === "string") {
+      try {
+        currentCommit = (await this.git.head({ workspace_id: workspaceId })).commit;
+        baselineState = currentCommit === record.base_commit ? "current" : "stale";
+      } catch { /* Baseline age is unknown when Git cannot be inspected safely. */ }
+    }
+    return { ...result, context: { ...record, baseline_state: baselineState, current_commit: currentCommit } };
   }
   private async startJob(input: unknown): Promise<import("./jobs.js").JobRecord> {
     const params = object(input); const workspace = this.policy.getWorkspace(params.workspace_id);
