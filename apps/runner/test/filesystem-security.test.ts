@@ -88,9 +88,10 @@ describe.sequential("filesystem security regressions", () => {
       await fs.writeFile(join(test.root, "a.txt"), "cursor-canary-a\n");
       await fs.writeFile(join(test.root, "b.txt"), "cursor-canary-b\n");
       const first = await test.service.search({ workspace_id: "test", query: "cursor-canary", max_results: 1 });
-      expect(first.next_cursor).toMatch(/^s1:[a-f0-9]{16}:1$/);
+      expect(first.next_cursor).toBe("1");
+      expect(first.next_snapshot_cursor).toMatch(/^s1:[a-f0-9]{16}:1$/);
       await fs.writeFile(join(test.root, "b.txt"), "cursor-canary-c\n");
-      await expect(test.service.search({ workspace_id: "test", query: "cursor-canary", max_results: 1, cursor: first.next_cursor })).rejects.toMatchObject({ code: "search_snapshot_changed" });
+      await expect(test.service.search({ workspace_id: "test", query: "cursor-canary", max_results: 1, cursor: first.next_snapshot_cursor })).rejects.toMatchObject({ code: "search_snapshot_changed" });
     } finally { await test.cleanup(); }
   });
 
