@@ -1,6 +1,6 @@
 # Current remediation and historical record
 
-The current source is the **unreleased 0.1.0 stable candidate**. Hosted distribution remains disabled. See [release readiness](release-readiness.md) for the current gates and operational contract. The following dated material is historical; it is not authority to enable an old version or to assume 0.1.0 is already published.
+The current source is the **unreleased 0.1.1 stable patch candidate**. Hosted distribution remains disabled until the new immutable signed assets are published and independently verified. The prior v0.1.0 release remains immutable and must not be overwritten. See [release readiness](release-readiness.md) for the current gates and operational contract. The following dated material is historical; it is not authority to enable an older artifact for the current source.
 
 ## Historical remediation record
 
