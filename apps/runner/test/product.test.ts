@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, win32 } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { decodeWireFrame, runnerPolicyChecksum } from "@aloneio/runmesh-protocol";
-import { runCli, runEnrollCli, parseProductArgs } from "../src/cli.js";
+import { runCli, runEnrollCli, parseProductArgs, shareableDoctorReport } from "../src/cli.js";
 import { RunnerConnection, classifyConnectionFailure } from "../src/connection.js";
 import { RUNNER_VERSION } from "../src/version.js";
 import { enrollRunner } from "../src/enrollment.js";
@@ -1100,7 +1100,6 @@ describe("runner product CLI and service safety", () => {
       const text = lines[0] ?? "";
       const result = JSON.parse(text) as { schema_version: number; configured: boolean; checks: Array<{ name: string }>; service: Record<string, unknown> };
       expect(result).toMatchObject({ schema_version: 1, configured: true, service: { mode: "system", execution_mode: "dedicated_user" } });
-      expect(result.checks.some((check) => check.name === "workspace")).toBe(true);
       expect(result.checks.some((check) => check.name.startsWith("workspace:"))).toBe(false);
       expect(text).not.toContain(secretServer);
       expect(text).not.toContain("secret-token-value");
@@ -1109,6 +1108,15 @@ describe("runner product CLI and service safety", () => {
       expect(text).not.toContain(manifest.path);
       expect(text).not.toContain("actual_service_identity");
       expect(text).not.toContain("detail");
+      const synthetic = shareableDoctorReport({
+        ok: false,
+        checks: [{ name: "workspace:private-workspace-id", required: true, ok: false, status: "failure", detail: workspacePath }],
+        profile: { server_url: secretServer, token: "secret-token-value" },
+        service: { manifest: manifest.path, mode: "system", execution_mode: "dedicated_user", configured_execution_mode: "dedicated_user", actual_service_identity: "runmesh", privilege_state: "restricted" },
+      }, 123);
+      expect(synthetic.checks).toEqual([{ name: "workspace", required: true, ok: false, status: "failure" }]);
+      expect(JSON.stringify(synthetic)).not.toContain("private-workspace-id");
+      expect(JSON.stringify(synthetic)).not.toContain(workspacePath);
     } finally { await test.cleanup(); }
   });
   it("requires administrator/root for system installation and uses injected Linux auto-start adapter", async () => {
