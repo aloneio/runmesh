@@ -1,6 +1,6 @@
-# 0.1.1 — stable patch release candidate
+# 0.1.1 — published stable patch release
 
-Carries the post-0.1.0 Runner and control-plane hardening into a new immutable patch release instead of reusing the already published v0.1.0 identity. It adds bounded Git history inspection, patch preview/search improvements, durable workspace Context handoff with observed Git-baseline aging, clearer Job launch/audit receipts, shareable allow-listed diagnostics, validated operational runbooks, and CI parity checks. The hosted installer remains fail-closed until v0.1.1 is published, independently verified, and explicitly enabled in the production Worker.
+Carries the post-0.1.0 Runner and control-plane hardening into a new immutable patch release instead of reusing the already published v0.1.0 identity. It adds bounded Git history inspection, patch preview/search improvements, durable workspace Context handoff with observed Git-baseline aging, clearer Job launch/audit receipts, shareable allow-listed diagnostics, validated operational runbooks, and CI parity checks. The immutable v0.1.1 release was published from the verified `dev` commit, independently re-downloaded and verified, and is explicitly enabled by the checked-in production Worker configuration.
 
 See [release readiness](release-readiness.md). The v0.1.0 release remains immutable and is not replaced.
 

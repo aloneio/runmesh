@@ -1,6 +1,6 @@
 # MCP → Worker → Runner authorization and diagnosis
 
-This document describes permission hardening developed after release commit `b735c4e0f333dde1c44948d31baffd9a24703a50`. These changes are not part of the already signed v0.1.0 artifact and are included in the reviewed v0.1.1 patch candidate. Never overwrite v0.1.0 or use a local build as proof that a deployed Runner was upgraded.
+This document describes permission hardening developed after release commit `b735c4e0f333dde1c44948d31baffd9a24703a50`. These changes are not part of the already signed v0.1.0 artifact and are included in the published, independently verified v0.1.1 patch release. Never overwrite v0.1.0 or use a local build as proof that a deployed Runner was upgraded.
 
 ## Independent boundaries
 
