@@ -162,3 +162,19 @@ Status: parity gate implemented on 2026-09-13; fault-injection coverage remains 
 - Added `check:ci-parity`, which fails when either GitHub or GitLab drops one of the shared release-relevant checks such as typechecking, unit/E2E tests, release validation, license checks, Worker dry-runs, or package smoke tests.
 - The parity check also verifies pull/merge-request coverage and the `dev` push gate. GitHub retains its additional native Linux/macOS/Windows and supported-Node matrix; the check does not pretend GitLab currently has equivalent native runners.
 - Both hosted CI definitions execute the parity gate themselves, making future one-sided CI edits fail before release evidence can be treated as equivalent.
+
+## P16 — on-demand operations timeline
+
+Status: existing implementation verified on 2026-09-13.
+
+- The administrator Job detail view reads saved Registry metadata on page load and does not contact the Runner for log bodies until an operator explicitly selects stdout or stderr.
+- Log reads remain bounded to 16 KiB, pagination is explicit, offline/stale/revoked Runners retain saved metadata, and the page states that there is no automatic polling.
+- `apps/worker/test/admin-jobs.test.ts` verifies no implicit log fetch, one bounded selected-stream read, escaped log output, and metadata preservation during live-log failures; the targeted suite passed 20/20 on the oci0 implementation host.
+
+## P20 — versioned runbook catalog
+
+Status: first read-only documentation slice implemented on 2026-09-13.
+
+- Added a bounded versioned catalog for connection recovery, permission-denial investigation, and release preflight. Runbooks state applicability, required permissions, procedure, and explicit exit conditions; they are documentation only and do not execute commands automatically.
+- `check:runbooks` validates catalog IDs, versions, bounded sizes, safe relative file names, and required document sections in both hosted CI systems.
+- Importable packages, remote Skills, background installation, and any execution engine remain intentionally out of scope for this slice.
