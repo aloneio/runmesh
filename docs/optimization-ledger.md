@@ -146,3 +146,11 @@ Status: first implementation slice completed on 2026-09-13; baseline-staleness a
 - Checkpoints distinguish caller `claimed` evidence from Runner-observed Job evidence. Job evidence is resolved by the Runner, must belong to the same workspace, and records observed status/exit information at checkpoint time.
 - `review_state` is `incomplete` while checks remain, `evidence_backed` only when observed evidence is present, and otherwise `claimed`; a single exit code is never promoted to proof that the whole requirement is complete.
 - Automatic comparison of a stored `base_commit` against the current repository HEAD is intentionally not yet marked complete and remains part of the P14 follow-up.
+
+## P27 — shareable diagnostics allow-list
+
+Status: first implementation slice completed on 2026-09-13; optional system-keyring backends remain a separate evaluation.
+
+- `runmesh doctor --shareable` projects the existing diagnostic result through a strict allow-list instead of trying to redact an arbitrary full report after the fact.
+- The shareable form contains the Runner version, timestamp, aggregate configuration state, stable check names/statuses, and service mode/privilege state. It deliberately omits service manifest paths, profile fields, server URLs, tokens, environment values, native service identity, check details, and workspace identifiers.
+- Workspace-specific doctor checks are collapsed to the generic `workspace` check name so a support paste does not disclose stable workspace IDs.
