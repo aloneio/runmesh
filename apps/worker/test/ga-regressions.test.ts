@@ -1,6 +1,6 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
-import worker, { runnerReleaseDescriptor } from "../src/index.js";
+import worker, { releaseGateDiagnostics, runnerReleaseDescriptor } from "../src/index.js";
 import { isConfiguredSecret } from "../src/security.js";
 import { MCP_AUDIT_RETENTION_MS } from "../src/audit-metadata.js";
 
@@ -17,6 +17,19 @@ it("GA-005 stable source has a stable descriptor but no implicitly enabled distr
   expect(runnerReleaseDescriptor({})).toMatchObject({ channel: "stable", distributable: false });
   expect(runnerReleaseDescriptor({ RUNMESH_PUBLIC_ORIGIN: "https://ga.invalid", RUNMESH_SIGNED_RELEASE_AVAILABLE: "0.1.1" })).toMatchObject({ channel: "stable", distributable: true, package_version: "0.1.1" });
   expect(runnerReleaseDescriptor({ RUNMESH_PUBLIC_ORIGIN: "https://ga.invalid", RUNMESH_SIGNED_RELEASE_AVAILABLE: "0.1.0" }).distributable).toBe(false);
+});
+
+it("reports only safe boolean release-gate diagnostics", () => {
+  expect(releaseGateDiagnostics({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example", RUNMESH_SIGNED_RELEASE_AVAILABLE: "0.1.1" })).toEqual({
+    acknowledgement_matches_fixed_release: true,
+    canonical_public_origin_configured: true,
+    test_mode_disabled: true,
+  });
+  expect(releaseGateDiagnostics({ RUNMESH_PUBLIC_ORIGIN: "not-an-origin", RUNMESH_SIGNED_RELEASE_AVAILABLE: "0.1.0", RUNMESH_TEST_MODE: "1" })).toEqual({
+    acknowledgement_matches_fixed_release: false,
+    canonical_public_origin_configured: false,
+    test_mode_disabled: false,
+  });
 });
 
 it("GA-009 audit retention schedules expiry without any online runner and physically deletes expired rows", async () => {
