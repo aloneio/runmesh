@@ -72,7 +72,7 @@ const InspectInputSchema = z.object({ action: z.enum(["list", "search", "stat", 
 const EditInputSchema = z.object({ workspace_id: WorkspaceIdSchema, patch: z.string().min(1).max(1_048_576), preview: z.boolean().optional(), preview_id: z.string().regex(/^[a-f0-9]{64}$/).optional(), expected_hash: z.string().regex(/^[a-f0-9]{64}$/).optional(), expected_hashes: z.record(z.string().min(1).max(4096), z.string().regex(/^[a-f0-9]{64}$/).nullable()).optional() }).strict().superRefine((value, context) => {
   if (value.preview === true && value.preview_id !== undefined) context.addIssue({ code: "custom", message: "preview_id is only valid when applying a patch" });
 });
-const ShellInputSchema = z.object({ workspace_id: WorkspaceIdSchema, command: z.string().min(1).max(8_192), wait_ms: z.number().int().min(1).max(LOCAL_RUNNER_OPERATION_TIMEOUT_MS).optional(), background: z.boolean().optional() }).strict();
+const ShellInputSchema = z.object({ workspace_id: WorkspaceIdSchema, command: z.string().min(1).max(8_192), request_id: z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/).optional(), wait_ms: z.number().int().min(1).max(LOCAL_RUNNER_OPERATION_TIMEOUT_MS).optional(), background: z.boolean().optional() }).strict();
 const JobInputSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("list"), workspace_id: WorkspaceIdSchema.optional(), status: JobStatusSchema.optional(), limit: z.number().int().min(1).max(100).optional() }).strict(),
   z.object({ action: z.literal("get"), job_id: JobIdSchema }).strict(),
@@ -180,7 +180,7 @@ async function editTool(env: McpRequestEnv, clientId: string, params: z.output<t
   return activeRunnerTool(env, clientId, params.preview === true ? "fs.preview_patch" : "fs.apply_patch", input, "edit", "edit");
 }
 async function shellTool(env: McpRequestEnv, clientId: string, params: z.output<typeof ShellInputSchema>): Promise<unknown> {
-  const invocation = { workspace_id: params.workspace_id, command: params.command, shell: true, created_by_client_id: clientId };
+  const invocation = { workspace_id: params.workspace_id, command: params.command, shell: true, created_by_client_id: clientId, ...(params.request_id === undefined ? {} : { request_id: params.request_id }) };
   // Background starts return a Runner JobRecord.  Keep the MCP response on
   // the stable job-metadata allow-list; command/cwd/PID/process identity are
   // Runner-internal and must not cross this boundary.
@@ -245,6 +245,8 @@ export function safeJobMetadata(value: unknown): Record<string, unknown> {
   // the original MCP request has completed.
   const createdByClientId = safeJobIdentifier(value.created_by_client_id);
   if (createdByClientId !== undefined) output.created_by_client_id = createdByClientId;
+  const requestId = safeJobIdentifier(value.request_id);
+  if (requestId !== undefined) output.request_id = requestId;
   if (typeof value.status === "string") output.status = safeJobStatus(value.status);
   copyRequiredTimestamp(value, output, "created_at_ms");
   copyNullableTimestamp(value, output, "started_at_ms");
@@ -380,6 +382,7 @@ export function safeInspectResult(value: unknown, kind: InspectResultKind): Reco
       });
     }
     copySafeCursorFields(value, output);
+    if (value.next_snapshot_cursor === null || (typeof value.next_snapshot_cursor === "string" && /^s1:[a-f0-9]{16}:\d+$/u.test(value.next_snapshot_cursor))) output.next_snapshot_cursor = value.next_snapshot_cursor;
     if (["time_budget", "byte_budget", "directory_budget", "entry_budget", "file_budget", "result_budget", "response_bytes"].includes(String(value.truncated_reason))) output.truncated_reason = value.truncated_reason;
     if (isRecord(value.scanned)) {
       const scanned: Record<string, unknown> = {};
@@ -994,7 +997,7 @@ type ToolCall = ToolSuccess | ToolFailure;
 const SAFE_RUNNER_ERROR_CODES = new Set([
   "baseline_changed", "busy", "expected_hash_mismatch", "file_too_large", "git_failed", "git_output_too_large", "git_timeout", "git_unavailable",
   "hunk_ambiguous", "hunk_not_found", "hunk_overlap", "invalid_params", "invalid_patch", "invalid_path", "invalid_request", "invalid_workspace", "missing_file", "mixed_newlines", "not_utf8",
-  "method_not_found", "insufficient_scope", "patch_install_failed", "patch_rollback_failed", "path_traversal", "permission_denied", "policy_pending", "readonly_workspace", "runner_offline", "search_snapshot_changed", "stale_policy", "symlink_escape", "symlink_write", "target_exists", "timeout",
+  "method_not_found", "insufficient_scope", "patch_install_failed", "patch_rollback_failed", "path_traversal", "permission_denied", "policy_pending", "readonly_workspace", "request_id_conflict", "runner_offline", "search_snapshot_changed", "stale_policy", "symlink_escape", "symlink_write", "target_exists", "timeout",
 ]);
 
 export function policyPending(): ToolFailure {

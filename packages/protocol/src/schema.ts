@@ -259,6 +259,7 @@ export const JobMetadataSchema = z
     updated_at_ms: TimestampSchema,
     display_name: z.string().min(1).max(512).optional(),
     created_by_client_id: IdentifierSchema.optional(),
+    request_id: IdentifierSchema.optional(),
     runner_id: IdentifierSchema.optional(),
   })
   .strict();
