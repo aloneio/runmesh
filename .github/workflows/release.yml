@@ -106,6 +106,7 @@ jobs:
           # reproducible from GITHUB_SHA.
           git diff --exit-code
       - run: npm run validate:worker -- --dry-run
+      - run: npm run validate:worker -- --dry-run --env development
       - run: npm run validate:worker -- --dry-run --env production
       - run: node scripts/check-release-contract.mjs
       - run: npm run check:licenses

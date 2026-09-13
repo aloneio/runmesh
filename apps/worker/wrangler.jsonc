@@ -1,9 +1,12 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "runmesh-development",
+  "name": "runmesh",
   "main": "src/index.ts",
   "compatibility_date": "2026-04-02",
-  "compatibility_flags": ["global_fetch_strictly_public", "nodejs_compat"],
+  "compatibility_flags": [
+    "global_fetch_strictly_public",
+    "nodejs_compat"
+  ],
   "assets": {
     "directory": "../../assets",
     "binding": "ASSETS",
@@ -38,9 +41,47 @@
     }
   ],
   "vars": {
-    "WORKER_ID": "worker-development"
+    "WORKER_ID": "worker-production",
+    "RUNMESH_PUBLIC_ORIGIN": "https://runmesh.aloneio.workers.dev",
+    "RUNMESH_SIGNED_RELEASE_AVAILABLE": "0.1.1"
   },
   "env": {
+    "development": {
+      "name": "runmesh-development",
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "REGISTRY",
+            "class_name": "RegistryDOv2"
+          },
+          {
+            "name": "RUNNER",
+            "class_name": "RunnerDOv2"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "tag": "v1",
+          "new_sqlite_classes": [
+            "RegistryDO",
+            "RunnerDO"
+          ]
+        },
+        {
+          "tag": "v2",
+          "new_sqlite_classes": [
+            "RegistryDOv2",
+            "RunnerDOv2"
+          ]
+        }
+      ],
+      "vars": {
+        "WORKER_ID": "worker-development",
+        "RUNMESH_PUBLIC_ORIGIN": "",
+        "RUNMESH_SIGNED_RELEASE_AVAILABLE": ""
+      }
+    },
     "test": {
       "durable_objects": {
         "bindings": [
@@ -77,8 +118,6 @@
       }
     },
     "production": {
-      // Keep the protected production deploy on the maintained Worker name;
-      // Wrangler otherwise appends "-production" for a named environment.
       "name": "runmesh",
       "durable_objects": {
         "bindings": [

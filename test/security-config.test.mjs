@@ -2,17 +2,21 @@ import { readFile } from "node:fs/promises";
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-test("default Worker configuration cannot accidentally select production or enable hosted bootstrap", async () => {
+test("top-level Worker config is reviewed production while explicit development stays fail-closed", async () => {
   const source = await readFile(new URL("../apps/worker/wrangler.jsonc", import.meta.url), "utf8");
   const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
-  assert.notEqual(config.name, config.env.production.name);
-  assert.equal(config.vars.WORKER_ID, "worker-development");
-  assert.equal(config.vars.RUNMESH_PUBLIC_ORIGIN, undefined);
-  assert.equal(config.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE, undefined);
-  assert.equal(config.env.production.name, "runmesh");
-  assert.equal(config.env.production.vars.WORKER_ID, "worker-production");
   const root = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
-  assert.ok(["", root.version].includes(config.env.production.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE));
+  assert.equal(config.name, "runmesh");
+  assert.equal(config.vars.WORKER_ID, "worker-production");
+  assert.equal(config.vars.RUNMESH_PUBLIC_ORIGIN, "https://runmesh.aloneio.workers.dev");
+  assert.equal(config.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE, root.version);
+  assert.equal(config.env.production.name, config.name);
+  assert.deepEqual(config.env.production.vars, config.vars);
+  assert.equal(config.env.development.name, "runmesh-development");
+  assert.equal(config.env.development.vars.WORKER_ID, "worker-development");
+  assert.equal(config.env.development.vars.RUNMESH_PUBLIC_ORIGIN, "");
+  assert.equal(config.env.development.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE, "");
+  assert.equal(config.env.test.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE, "");
 });
 
 test("development tooling and the portable Runner have separate Node contracts", async () => {
