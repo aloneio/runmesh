@@ -23,3 +23,12 @@ The implementation uses behavior requirements and test ideas from the plan's fix
 | OneSSH | Lynricsy/OneSSH@c4939f02af072ea9d3d1b626d1c53b8ad29a92ae | GPL-3.0 | Failure observability and authorization explanation requirements; behavior reference only |
 
 Runmesh implementation remains under the repository's PolyForm Noncommercial 1.0.0 license.
+
+## P07 — read-only Git history inspection
+
+Status: implemented on 2026-09-13.
+
+- Runner exposes bounded `git.log`, `git.show`, and `git.blame` RPC methods using fixed read-only Git arguments, workspace path policy, UTF-8-safe output caps, and timeout/error classification.
+- Worker `inspect` supports `git_log`, `git_show`, and `git_blame` with revision and line-range validation and redacted, bounded projections.
+- Capability advertisement and authorization classify all history operations as `coding:read`.
+- Verification: repository typecheck passes on Node 24; CI remains the release gate.

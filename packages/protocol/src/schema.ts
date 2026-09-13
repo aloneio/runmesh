@@ -276,7 +276,7 @@ const CorrelatedEnvelopeSchema = EnvelopeSchema.extend({
 
 export const ProtectedRpcMethodSchema = z.enum([
   "env.info", "workspace.list", "fs.stat", "fs.read", "fs.list", "fs.search", "fs.apply_patch",
-  "git.status", "git.diff", "exec.start", "exec.run", "job.list", "job.get", "job.logs", "job.cancel", "job.input",
+  "git.status", "git.diff", "git.log", "git.show", "git.blame", "exec.start", "exec.run", "job.list", "job.get", "job.logs", "job.cancel", "job.input",
 ]);
 export type ProtectedRpcMethod = z.infer<typeof ProtectedRpcMethodSchema>;
 /** Unknown methods are protected by default; only echo and runner.info are unprotected. */

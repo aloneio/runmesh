@@ -612,7 +612,7 @@ export function discoverCapabilities(maxConcurrentJobs = 1): CapabilityMetadata 
     pty: false,
     network_access: true,
     max_concurrent_jobs: maxConcurrentJobs,
-    supported_rpc_methods: ["echo", "runner.info", "workspace.list", "env.info", "fs.read", "fs.stat", "fs.list", "fs.search", "fs.apply_patch", "git.status", "git.diff", "exec.start", "exec.run", "job.list", "job.get", "job.logs", "job.cancel", "job.input"],
+    supported_rpc_methods: ["echo", "runner.info", "workspace.list", "env.info", "fs.read", "fs.stat", "fs.list", "fs.search", "fs.apply_patch", "git.status", "git.diff", "git.log", "git.show", "git.blame", "exec.start", "exec.run", "job.list", "job.get", "job.logs", "job.cancel", "job.input"],
     labels: { runtime: "node" },
   };
 }
