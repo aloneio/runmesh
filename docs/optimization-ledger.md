@@ -154,3 +154,11 @@ Status: first implementation slice completed on 2026-09-13; optional system-keyr
 - `runmesh doctor --shareable` projects the existing diagnostic result through a strict allow-list instead of trying to redact an arbitrary full report after the fact.
 - The shareable form contains the Runner version, timestamp, aggregate configuration state, stable check names/statuses, and service mode/privilege state. It deliberately omits service manifest paths, profile fields, server URLs, tokens, environment values, native service identity, check details, and workspace identifiers.
 - Workspace-specific doctor checks are collapsed to the generic `workspace` check name so a support paste does not disclose stable workspace IDs.
+
+## P22 — CI parity gate
+
+Status: parity gate implemented on 2026-09-13; fault-injection coverage remains an ongoing per-feature requirement.
+
+- Added `check:ci-parity`, which fails when either GitHub or GitLab drops one of the shared release-relevant checks such as typechecking, unit/E2E tests, release validation, license checks, Worker dry-runs, or package smoke tests.
+- The parity check also verifies pull/merge-request coverage and the `dev` push gate. GitHub retains its additional native Linux/macOS/Windows and supported-Node matrix; the check does not pretend GitLab currently has equivalent native runners.
+- Both hosted CI definitions execute the parity gate themselves, making future one-sided CI edits fail before release evidence can be treated as equivalent.
