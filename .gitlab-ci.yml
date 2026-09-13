@@ -40,6 +40,7 @@ verify:
     - npm run check:licenses
     - npm run build
     - npm run validate:worker -- --dry-run
+    - npm run validate:worker -- --dry-run --env development
     - npm run validate:worker -- --dry-run --env production
     - node scripts/check-release-contract.mjs
     - npm run pack:smoke
