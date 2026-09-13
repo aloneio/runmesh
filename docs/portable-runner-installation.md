@@ -2,7 +2,7 @@
 
 Use this page when the Dashboard does not show a hosted installation command, when the target machine is offline, or when your organization's policy requires independent artifact verification. The normal product workflow is described in the [administrator guide](admin-guide.md).
 
-Runmesh 0.1.0 is an **unreleased stable candidate**. Default/local and checked-in production distribution are disabled. Both dedicated_user and privileged_host retain one-command enrollment. Only the owner may publish the reviewed immutable release; after independent signature and asset verification, configure a canonical HTTPS `RUNMESH_PUBLIC_ORIGIN` and the exact `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.0` acknowledgement. Never enable an unpublished candidate. The bundled runtime is Node 22.23.2; supported external runtimes are Node 22.23.2+ (22.x) and 24.21.0+ (24.x).
+Runmesh 0.1.1 is an **unreleased stable candidate**. Default/local and checked-in production distribution are disabled. Both dedicated_user and privileged_host retain one-command enrollment. Only the owner may publish the reviewed immutable release; after independent signature and asset verification, configure a canonical HTTPS `RUNMESH_PUBLIC_ORIGIN` and the exact `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.1` acknowledgement. Never enable an unpublished candidate. The bundled runtime is Node 22.23.2; supported external runtimes are Node 22.23.2+ (22.x) and 24.21.0+ (24.x).
 
 `RUNMESH_PUBLIC_ORIGIN` is a non-secret Worker variable. Set it in the Wrangler `vars` configuration to an externally reachable origin such as `https://mcp.example.com`, with no path, query, fragment, credentials, whitespace, wildcard, or `http://` scheme. A trailing slash is normalized. The configured public Host is accepted behind a proxy. Routed domains are also accepted when the HTTPS request URL and Host agree; mismatched authorities are rejected; an invalid or missing origin keeps the release descriptor non-distributable. Local development can omit the variable, but it cannot enable hosted signed bootstrap.
 
@@ -12,8 +12,8 @@ Until both prerequisites are satisfied, `/runner/releases/latest` and `/runner/r
 
 The one-command path (trust model A) treats the HTTPS Worker response that serves the installer as its bootstrap trust root. The installer pins all of the following in source:
 
-- version `0.1.0` and tag `v0.1.0`;
-- the exact GitHub release-asset URLs and `runmesh-runner-0.1.0.tgz` name;
+- version `0.1.1` and tag `v0.1.1`;
+- the exact GitHub release-asset URLs and `runmesh-runner-0.1.1.tgz` name;
 - signing key ID `runmesh-preview-2026-01`;
 - the reviewed Ed25519 public key from `release/trust-keyring.json`.
 
