@@ -40,7 +40,7 @@ const TOOL_SPECS = {
   runner_current: { scope: "coding:read", description: "Return this MCP client's sticky runner selection, or null. An unavailable selection never falls back to another runner.", annotations: readAnnotations },
   runner_select: { scope: "coding:read", description: "Select this MCP client's active runner. Initial selection is immediate; changing a selection requires confirm_switch=true.", annotations: writeAnnotations },
   workspace_list: { scope: "coding:read", description: "List readable workspace IDs on the active runner. Workspace roots are never returned.", annotations: readAnnotations },
-  inspect: { scope: "coding:read", description: "Inspect a workspace with bounded list, search, stat, git status, or git diff operations. This is read-only; workspace roots and host paths are never returned.", annotations: readAnnotations },
+  inspect: { scope: "coding:read", description: "Inspect a workspace with bounded list, search, stat, git status, diff, log, show, or blame operations. This is read-only; workspace roots and host paths are never returned.", annotations: readAnnotations },
   read: { scope: "coding:read", description: "Read a bounded UTF-8-safe page of a workspace-relative file. Use next_cursor or offset to continue; host roots and absolute paths are not accepted.", annotations: readAnnotations },
   edit: { scope: "coding:write", description: "Apply a transactional, baseline-checked patch to a writable workspace. The result contains only bounded, workspace-relative change metadata.", annotations: destructiveAnnotations },
   shell: { scope: "coding:exec", description: "Run a command through the selected runner's Host shell (Bash on Linux/macOS or PowerShell on Windows). Commands have the runner user's OS permissions and are not sandboxed; the workspace controls initial cwd and policy, not the Host shell root. Use a restricted VM/container and avoid administrator/root runners for untrusted code. background=true returns a persistent job immediately; foreground waits only up to wait_ms.", annotations: execAnnotations },
@@ -57,9 +57,13 @@ const BoundedLimitSchema = z.number().int().min(1).max(65_536).optional();
 const JobIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "must be a safe job identifier");
 const JobStatusSchema = z.enum(["queued", "running", "cancelling", "cancelled", "succeeded", "failed", "unknown", "interrupted"]);
 const ReadInputSchema = z.object({ workspace_id: WorkspaceIdSchema, path: RelativePathSchema, cursor: CursorSchema, offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(262_144).optional() }).strict();
-const InspectInputSchema = z.object({ action: z.enum(["list", "search", "stat", "git_status", "git_diff"]), workspace_id: WorkspaceIdSchema, path: RelativePathSchema.optional(), query: z.string().min(1).max(512).optional(), max_results: z.number().int().min(1).max(256).optional(), cursor: CursorSchema }).strict().superRefine((value, context) => {
+const InspectInputSchema = z.object({ action: z.enum(["list", "search", "stat", "git_status", "git_diff", "git_log", "git_show", "git_blame"]), workspace_id: WorkspaceIdSchema, path: RelativePathSchema.optional(), query: z.string().min(1).max(512).optional(), max_results: z.number().int().min(1).max(256).optional(), cursor: CursorSchema, revision: z.string().regex(/^[0-9a-fA-F]{7,64}(?:\^\{0,1\})?$/).optional(), start_line: z.number().int().min(1).max(1000000).optional(), end_line: z.number().int().min(1).max(1000000).optional() }).strict().superRefine((value, context) => {
   if ((value.action === "search" && value.query === undefined) || (value.action !== "search" && value.query !== undefined)) context.addIssue({ code: "custom", message: "query is only valid and required for search" });
   if (value.action === "stat" && value.path === undefined) context.addIssue({ code: "custom", message: "path is required for stat" });
+  if (["git_log", "git_show", "git_blame"].includes(value.action) && value.path === undefined) context.addIssue({ code: "custom", message: "path is required for git history inspection" });
+  if (value.action === "git_show" && value.revision === undefined) context.addIssue({ code: "custom", message: "revision is required for git_show" });
+  if (value.action !== "git_show" && value.revision !== undefined) context.addIssue({ code: "custom", message: "revision is only valid for git_show" });
+  if (value.action !== "git_blame" && (value.start_line !== undefined || value.end_line !== undefined)) context.addIssue({ code: "custom", message: "line range is only valid for git_blame" });
 });
 const EditInputSchema = z.object({ workspace_id: WorkspaceIdSchema, patch: z.string().min(1).max(1_048_576), expected_hash: z.string().regex(/^[a-f0-9]{64}$/).optional(), expected_hashes: z.record(z.string().min(1).max(4096), z.string().regex(/^[a-f0-9]{64}$/).nullable()).optional() }).strict();
 const ShellInputSchema = z.object({ workspace_id: WorkspaceIdSchema, command: z.string().min(1).max(8_192), wait_ms: z.number().int().min(1).max(LOCAL_RUNNER_OPERATION_TIMEOUT_MS).optional(), background: z.boolean().optional() }).strict();
@@ -140,16 +144,21 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth): McpServ
 }
 
 async function inspectTool(env: McpRequestEnv, clientId: string, params: z.output<typeof InspectInputSchema>): Promise<unknown> {
-  const method = params.action === "list" ? "fs.list" : params.action === "search" ? "fs.search" : params.action === "stat" ? "fs.stat" : params.action === "git_status" ? "git.status" : "git.diff";
+  const method = params.action === "list" ? "fs.list" : params.action === "search" ? "fs.search" : params.action === "stat" ? "fs.stat" : params.action === "git_status" ? "git.status" : params.action === "git_diff" ? "git.diff" : params.action === "git_log" ? "git.log" : params.action === "git_show" ? "git.show" : "git.blame";
   const input: Record<string, unknown> = {
     workspace_id: params.workspace_id,
     ...(params.path === undefined ? {} : { path: params.path }),
+    ...(params.action === "git_show" ? { revision: params.revision } : {}),
+    ...(params.action === "git_blame" ? { start_line: params.start_line, end_line: params.end_line } : {}),
     ...(params.query === undefined ? {} : { query: params.query }),
     ...(params.cursor === undefined ? {} : { cursor: params.cursor }),
     ...(params.action === "list" && params.max_results !== undefined ? { limit: params.max_results } : {}),
     ...(params.action === "search" && params.max_results !== undefined ? { max_results: params.max_results } : {}),
     ...(params.action === "git_diff" ? { max_bytes: 32 * 1024 } : {}),
     ...(params.action === "git_status" ? { max_bytes: 32 * 1024 } : {}),
+    ...(params.action === "git_log" ? { limit: params.max_results, max_bytes: 32 * 1024 } : {}),
+    ...(params.action === "git_show" ? { revision: params.revision, max_bytes: 64 * 1024 } : {}),
+    ...(params.action === "git_blame" ? { start_line: params.start_line, end_line: params.end_line, max_bytes: 64 * 1024 } : {}),
   };
   return activeRunnerTool(env, clientId, method, input, "read", inspectResultMode(params.action));
 }
@@ -304,7 +313,7 @@ export function safeReadResult(value: unknown): Record<string, unknown> {
   return output;
 }
 
-export type InspectResultKind = "list" | "search" | "stat" | "git_status" | "git_diff";
+export type InspectResultKind = "list" | "search" | "stat" | "git_status" | "git_diff" | "git_log" | "git_show" | "git_blame";
 
 /** Project each inspect operation without exposing host roots or raw errors. */
 export function safeInspectResult(value: unknown, kind: InspectResultKind): Record<string, unknown> {
@@ -375,6 +384,26 @@ export function safeInspectResult(value: unknown, kind: InspectResultKind): Reco
     copySafeInteger(value, output, "ahead");
     copySafeInteger(value, output, "behind");
     copySafeInteger(value, output, "output_bytes");
+    if (typeof value.truncated === "boolean") output.truncated = value.truncated;
+    return output;
+  }
+  if (kind === "git_log") {
+    copySafeRelativePath(value, output, "path");
+    if (Array.isArray(value.commits)) output.commits = value.commits.slice(0, 100).flatMap((entry) => {
+      if (!isRecord(entry) || typeof entry.oid !== "string" || !/^[0-9a-f]{40,64}$/i.test(entry.oid)) return [];
+      return [{ oid: entry.oid, author: typeof entry.author === "string" ? entry.author.slice(0, 512) : "", date: typeof entry.date === "string" ? entry.date.slice(0, 64) : "", subject: typeof entry.subject === "string" ? entry.subject.slice(0, 4096) : "" }];
+    });
+    copySafeInteger(value, output, "limit");
+    if (typeof value.truncated === "boolean") output.truncated = value.truncated;
+    return output;
+  }
+  if (kind === "git_show" || kind === "git_blame") {
+    copySafeRelativePath(value, output, "path");
+    if (typeof value.revision === "string") output.revision = value.revision;
+    for (const key of ["start_line", "end_line"] as const) copySafeInteger(value, output, key);
+    if (typeof value.output === "string") output.output = value.output.slice(0, 65_536);
+    if (value.encoding === "utf-8") output.encoding = "utf-8";
+    copySafeInteger(value, output, "bytes");
     if (typeof value.truncated === "boolean") output.truncated = value.truncated;
     return output;
   }
@@ -547,7 +576,7 @@ type ActiveSelection = {
   readonly runnerId: string;
   readonly context: ActiveRunnerContext & { readonly automatic_selection: boolean };
 };
-type RunnerResultMode = "raw" | "job" | "logs" | "input" | "shell" | "read" | "edit" | "inspect:list" | "inspect:search" | "inspect:stat" | "inspect:git_status" | "inspect:git_diff";
+type RunnerResultMode = "raw" | "job" | "logs" | "input" | "shell" | "read" | "edit" | "inspect:list" | "inspect:search" | "inspect:stat" | "inspect:git_status" | "inspect:git_diff" | "inspect:git_log" | "inspect:git_show" | "inspect:git_blame";
 type ActivePolicyReadiness = Omit<Extract<RegistryPolicyReadiness, { readonly ok: true }>, "lifecycle_id" | "session_id"> & {
   readonly lifecycle_id: string;
   readonly session_id: string;
