@@ -734,7 +734,15 @@ describe("Worker runner transport", () => {
   it("serves health without an object invocation", async () => {
     const response = await SELF.fetch("https://worker.test/health");
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({ ok: true });
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      worker_id: expect.any(String),
+      release_gate: {
+        acknowledgement_matches_fixed_release: expect.any(Boolean),
+        canonical_public_origin_configured: expect.any(Boolean),
+        test_mode_disabled: expect.any(Boolean),
+      },
+    });
   });
 
   it("rejects unauthenticated runner upgrades without accepting a query token", async () => {
