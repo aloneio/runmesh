@@ -3,6 +3,7 @@ import { lstatSync, realpathSync } from "node:fs";
 import { hostname } from "node:os";
 import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS } from "@aloneio/runmesh-protocol";
 import type { RunnerConfig } from "./config.js";
+import { ContextStore, type ContextEvidence } from "./context-store.js";
 import { GitService } from "./git-service.js";
 import { FilesystemService } from "./filesystem.js";
 import { JobManager, type JobEvent, type JobRecord } from "./jobs.js";
@@ -214,6 +215,7 @@ export class RunnerRuntime {
   public readonly filesystem: FilesystemService;
   public readonly jobs: JobManager;
   public readonly git: GitService;
+  public readonly context: ContextStore;
   private readonly patcher: PatchService;
   private readonly config: RunnerConfig;
   private shellRuntime: ShellRuntime | undefined;
@@ -226,6 +228,7 @@ export class RunnerRuntime {
     this.filesystem = new FilesystemService(this.policy);
     this.git = new GitService(this.policy);
     this.patcher = new PatchService(this.policy);
+    this.context = new ContextStore(options.stateDir === undefined ? {} : { stateDir: options.stateDir });
     this.jobs = new JobManager({ policy: this.policy, runnerId: options.config.runnerId, maxConcurrentJobs: options.config.maxConcurrentJobs ?? 1, ...(options.config.maxRetainedJobs === undefined ? {} : { maxRetainedJobs: options.config.maxRetainedJobs }), ...(options.config.maxLogBytesPerJob === undefined ? {} : { maxLogBytesPerJob: options.config.maxLogBytesPerJob }), ...(options.config.maxTotalLogBytes === undefined ? {} : { maxTotalLogBytes: options.config.maxTotalLogBytes }), ...(options.stateDir === undefined ? {} : { stateDir: options.stateDir }), ...(options.onJobEvent === undefined ? {} : { onEvent: options.onJobEvent }) });
   }
   public async initialize(): Promise<void> {
@@ -251,7 +254,7 @@ export class RunnerRuntime {
     const result = await this.dispatchAtCurrentPolicy(method, input);
     // Read-only operations must not return data from an obsolete authorization
     // snapshot. Already-committed edits/jobs keep their real result semantics.
-    if (["workspace.list", "env.info", "fs.stat", "fs.read", "fs.list", "fs.search", "fs.preview_patch", "git.status", "git.diff", "git.log", "git.show", "git.blame", "job.list", "job.get", "job.logs"].includes(method)) this.policy.assertGeneration(generation);
+    if (["workspace.list", "env.info", "fs.stat", "fs.read", "fs.list", "fs.search", "fs.preview_patch", "git.status", "git.diff", "git.log", "git.show", "git.blame", "job.list", "job.get", "job.logs", "context.bootstrap", "context.read", "context.search"].includes(method)) this.policy.assertGeneration(generation);
     return result;
   }
   private async dispatchAtCurrentPolicy(method: string, input: unknown): Promise<unknown> {
@@ -280,6 +283,11 @@ export class RunnerRuntime {
       case "job.logs": { const job = this.jobs.get(params.job_id); assertExpectedJobWorkspace(params, job.workspace_id); this.policy.assertPermission(job.workspace_id, "read"); return this.jobs.logs(job.job_id, params); }
       case "job.cancel": { const job = this.jobs.get(params.job_id); assertExpectedJobWorkspace(params, job.workspace_id); this.assertJobControl(job.workspace_id); return this.jobs.cancel(job.job_id); }
       case "job.input": { const job = this.jobs.get(params.job_id); assertExpectedJobWorkspace(params, job.workspace_id); this.assertJobControl(job.workspace_id); return this.jobs.input(job.job_id, params.data, params.close_stdin === true); }
+      case "context.bootstrap": this.policy.assertPermission(params.workspace_id, "read"); return this.context.bootstrap(params);
+      case "context.read": this.policy.assertPermission(params.workspace_id, "read"); return this.context.read(params);
+      case "context.search": this.policy.assertPermission(params.workspace_id, "read"); return this.context.search(params);
+      case "context.checkpoint": this.policy.assertPermission(params.workspace_id, "edit"); return this.context.checkpoint(await this.contextCheckpointParams(params));
+      case "context.rebuild": this.policy.assertPermission(params.workspace_id, "edit"); return this.context.rebuild(params);
       default: throw new RpcRuntimeError("method_not_found", `Unsupported method: ${method}`);
     }
   }
@@ -298,6 +306,25 @@ export class RunnerRuntime {
   private assertJobControl(workspaceId: string): void {
     const workspace = this.policy.assertPermission(workspaceId, "read");
     if (workspace.permissions !== undefined && !workspace.permissions.job_control) throw new RpcRuntimeError("permission_denied", "job control is disabled for this workspace");
+  }
+  private async contextCheckpointParams(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const workspaceId = typeof params.workspace_id === "string" ? params.workspace_id : "";
+    const rawEvidence = params.evidence;
+    if (rawEvidence !== undefined && !Array.isArray(rawEvidence)) throw new RpcRuntimeError("invalid_params", "context evidence must be an array");
+    const evidence: ContextEvidence[] = [];
+    for (const item of rawEvidence ?? []) {
+      const entry = object(item);
+      if (entry.kind === "job") {
+        if (typeof entry.job_id !== "string") throw new RpcRuntimeError("invalid_params", "job evidence requires job_id");
+        const job = await this.jobs.getReconciled(entry.job_id);
+        if (job.workspace_id !== workspaceId) throw new RpcRuntimeError("permission_denied", "job evidence belongs to another workspace");
+        evidence.push({ kind: "job", status: "observed", job_id: job.job_id, job_status: job.status, exit_code: job.exit_code, observed_at_ms: Date.now(), ...(typeof entry.summary === "string" ? { summary: entry.summary } : {}) });
+        continue;
+      }
+      if (entry.kind !== "test" && entry.kind !== "commit" && entry.kind !== "note") throw new RpcRuntimeError("invalid_params", "context evidence kind is invalid");
+      evidence.push({ kind: entry.kind, status: "claimed", ...(typeof entry.ref === "string" ? { ref: entry.ref } : {}), ...(typeof entry.summary === "string" ? { summary: entry.summary } : {}) });
+    }
+    return { ...params, evidence, policy_generation: this.policy.generation };
   }
   private async startJob(input: unknown): Promise<import("./jobs.js").JobRecord> {
     const params = object(input); const workspace = this.policy.getWorkspace(params.workspace_id);
