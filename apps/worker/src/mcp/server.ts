@@ -1,6 +1,6 @@
 import { McpServer, type AuthInfo, type ServerContext } from "@modelcontextprotocol/server";
 import {
-  LOCAL_RUNNER_OPERATION_TIMEOUT_MS, encodeWireFrame, PROTOCOL_CURRENT_VERSION, type JsonValue, RpcRequestSchema,
+  LOCAL_RUNNER_OPERATION_TIMEOUT_MS, encodeWireFrame, PROTOCOL_CURRENT_VERSION, failureMetadata, type JsonValue, RpcRequestSchema,
 } from "@aloneio/runmesh-protocol";
 import { z } from "zod";
 import { internalHeaders, isSafeIdentifier, isConfiguredSecret } from "../security.js";
@@ -909,7 +909,7 @@ function boundedReadParams(params: Record<string, unknown>, max: number): Record
 }
 
 type ToolSuccess = { readonly ok: true; readonly value: unknown };
-type ToolFailure = { readonly ok: false; readonly error: { readonly code: string; readonly message: string; readonly hint: string; readonly details?: unknown } };
+type ToolFailure = { readonly ok: false; readonly error: { readonly code: string; readonly message: string; readonly hint: string; readonly details?: unknown; readonly failure_class?: string; readonly operation_state?: string; readonly retry_after_ms?: number; readonly next_action?: string } };
 type ToolCall = ToolSuccess | ToolFailure;
 
 const SAFE_RUNNER_ERROR_CODES = new Set([
@@ -1102,17 +1102,17 @@ function success(value: unknown): { content: { type: "text"; text: string }[]; s
 }
 
 function failure(code: string, message: string, hint: string): { content: { type: "text"; text: string }[]; structuredContent: Record<string, unknown>; isError: true } {
-  const error = { error: { code, message: message.slice(0, 4_096), recovery_hint: hint.slice(0, 4_096) } };
+  const error = { error: { code, message: message.slice(0, 4_096), recovery_hint: hint.slice(0, 4_096), ...failureMetadata(code) } };
   return { content: [{ type: "text", text: `Error (${code}): ${error.error.message}\nRecovery: ${error.error.recovery_hint}` }], structuredContent: error, isError: true };
 }
 
 function failureWithDetails(code: string, message: string, hint: string, details: unknown): { content: { type: "text"; text: string }[]; structuredContent: Record<string, unknown>; isError: true } {
-  const error = { error: { code, message: message.slice(0, 4_096), recovery_hint: hint.slice(0, 4_096), details: redactAndBound(details, 8_192) } };
+  const error = { error: { code, message: message.slice(0, 4_096), recovery_hint: hint.slice(0, 4_096), ...failureMetadata(code), details: redactAndBound(details, 8_192) } };
   return { content: [{ type: "text", text: `Error (${code}): ${error.error.message}\nRecovery: ${error.error.recovery_hint}` }], structuredContent: error, isError: true };
 }
 
-function failWithDetails(code: string, message: string, hint: string, details: unknown): ToolFailure { return { ok: false, error: { code, message, hint, details } }; }
-function fail(code: string, message: string, hint: string): ToolFailure { return { ok: false, error: { code, message, hint } }; }
+function failWithDetails(code: string, message: string, hint: string, details: unknown): ToolFailure { return { ok: false, error: { code, message, hint, details, ...failureMetadata(code) } }; }
+function fail(code: string, message: string, hint: string): ToolFailure { return { ok: false, error: { code, message, hint, ...failureMetadata(code) } }; }
 function hintFor(code: string): string {
   if (code === "runner_offline" || code === "timeout") return "Confirm the runner is connected, then retry.";
   if (code === "policy_pending") return "The control plane has a newer policy than the runner. Wait briefly and retry.";

@@ -8,7 +8,7 @@ import { FilesystemService } from "./filesystem.js";
 import { JobManager, type JobEvent, type JobRecord } from "./jobs.js";
 import { PatchService } from "./patch-service.js";
 import { PathPolicy, PathPolicyError } from "./path-policy.js";
-import { RpcRuntimeError } from "./errors.js";
+import { RpcRuntimeError, failureMetadata, type RpcFailureClass, type RpcNextAction, type RpcOperationState } from "./errors.js";
 import type { JobMetadata } from "./protocol-types.js";
 import type { HostPlatform } from "./platform-types.js";
 import { trustedWindowsEnvironment, trustedWindowsRoot, resolveTrustedWindowsTool } from "./windows-tools.js";
@@ -319,7 +319,12 @@ export class RunnerRuntime {
 }
 
 export { RpcRuntimeError } from "./errors.js";
-export function rpcError(error: unknown): { code: string; message: string; details?: Record<string, unknown> | undefined } { if (error instanceof Error && error.message === "stale_policy") return { code: "stale_policy", message: "RPC policy revision is stale" }; if (error instanceof PathPolicyError || error instanceof RpcRuntimeError) return { code: error.code, message: error.message.slice(0, 4_096), ...(error instanceof RpcRuntimeError && error.details === undefined ? {} : { details: (error as RpcRuntimeError).details }) }; return { code: "invalid_request", message: (error instanceof Error ? error.message : "request failed").slice(0, 4_096) || "request failed" }; }
+export function rpcError(error: unknown): { code: string; message: string; failure_class: RpcFailureClass; operation_state: RpcOperationState; retry_after_ms?: number; next_action: RpcNextAction; details?: Record<string, unknown> | undefined } {
+  const code = error instanceof Error && error.message === "stale_policy" ? "stale_policy" : error instanceof PathPolicyError || error instanceof RpcRuntimeError ? error.code : "invalid_request";
+  const metadata = failureMetadata(code);
+  const message = error instanceof Error ? (error.message === "stale_policy" ? "RPC policy revision is stale" : error.message) : "request failed";
+  return { code, message: message.slice(0, 4_096) || "request failed", ...metadata, ...(error instanceof RpcRuntimeError && error.details !== undefined ? { details: error.details } : {}) };
+}
 function object(value: unknown): Record<string, unknown> { if (typeof value !== "object" || value === null || Array.isArray(value)) throw new RpcRuntimeError("invalid_params", "params must be an object"); return value as Record<string, unknown>; }
 function positiveInteger(value: unknown, field: string): number { if (!Number.isSafeInteger(value) || (value as number) < 1) throw new RpcRuntimeError("invalid_params", `${field} must be a positive integer`); return value as number; }
 /** Worker-side job authorization is bound to a Registry workspace snapshot.

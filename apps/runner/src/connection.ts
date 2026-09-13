@@ -547,7 +547,7 @@ export class RunnerConnection {
     } catch (error) {
       const details = rpcError(error);
       if (sessionCurrent() && socket.readyState === WebSocket.OPEN) {
-        try { socket.send(encodeWireFrame({ type: "rpc.error", protocol_version: request.protocol_version, request_id: request.request_id, error: { code: details.code, message: details.message, ...(details.details === undefined ? {} : { details: details.details as RpcRequest["params"] }) } })); } catch { /* close handler drives reconnect */ }
+        try { socket.send(encodeWireFrame({ type: "rpc.error", protocol_version: request.protocol_version, request_id: request.request_id, error: { code: details.code, message: details.message, failure_class: details.failure_class, operation_state: details.operation_state, ...(details.retry_after_ms === undefined ? {} : { retry_after_ms: details.retry_after_ms }), next_action: details.next_action, ...(details.details === undefined ? {} : { details: details.details as RpcRequest["params"] }) } })); } catch { /* close handler drives reconnect */ }
       }
     }
   }
