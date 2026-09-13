@@ -12,5 +12,7 @@ const readiness = await readFile(new URL("docs/release-readiness.md", root), "ut
 assert.ok(readiness.includes(pkg.version));
 assert.ok(readiness.includes("verify-all") && readiness.includes("RELEASED") && readiness.includes("ENABLED"));
 const config = JSON.parse((await readFile(new URL("apps/worker/wrangler.jsonc", root), "utf8")).replace(/^\s*\/\/.*$/gm, ""));
-assert.equal(config.env.production.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE, pkg.version, "published production checkout must acknowledge the exact current immutable release");
+assert.equal(config.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE, pkg.version, "top-level production checkout must acknowledge the exact current immutable release");
+assert.equal(config.env.production.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE, pkg.version, "named production alias must acknowledge the exact current immutable release");
+assert.equal(config.env.development.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE, "", "development environment must remain fail-closed");
 console.log(`operative documentation and enabled published-release contract verified: ${pkg.version}`);
