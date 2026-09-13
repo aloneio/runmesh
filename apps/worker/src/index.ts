@@ -1049,7 +1049,8 @@ async function handleBrowserWorkspaceAction(env: WorkerEnv, form: FormData, runn
 }
 function configuredWorkspacePreset(value: FormDataEntryValue | null): { read: boolean; edit: boolean; shell: boolean; job_control: boolean } | undefined {
   if (value === "read_only") return { read: true, edit: false, shell: false, job_control: false };
-  if (value === "coding") return { read: true, edit: true, shell: true, job_control: true };
+  if (value === "edit_only") return { read: true, edit: true, shell: false, job_control: false };
+  if (value === "controlled_exec" || value === "coding") return { read: true, edit: true, shell: true, job_control: true };
   if (value === "custom" || value === null) return undefined;
   return undefined;
 }
@@ -2420,7 +2421,8 @@ function managedWorkspaceForm(runnerId: string, workspace: Record<string, unknow
           <select name="profile">
             <option value="custom"${profile === "custom" ? " selected" : ""}>Custom</option>
             <option value="read_only"${profile === "read_only" ? " selected" : ""}>Read Only</option>
-            <option value="coding"${profile === "coding" ? " selected" : ""}>Coding</option>
+            <option value="edit_only"${profile === "edit_only" ? " selected" : ""}>Workspace Edit</option>
+            <option value="controlled_exec"${profile === "controlled_exec" ? " selected" : ""}>Controlled Execution</option>
           </select>
         </label>
         <label>Enabled
@@ -2463,9 +2465,10 @@ function managedWorkspaceForm(runnerId: string, workspace: Record<string, unknow
     </div>` : ""}
   </li>`;
 }
-function workspaceProfile(permissions: Record<string, unknown> | undefined): "custom" | "read_only" | "coding" {
+function workspaceProfile(permissions: Record<string, unknown> | undefined): "custom" | "read_only" | "edit_only" | "controlled_exec" {
   if (permissions?.read === true && permissions.edit !== true && permissions.shell !== true && permissions.job_control !== true) return "read_only";
-  if (permissions?.read === true && permissions.edit === true && permissions.shell === true && permissions.job_control === true) return "coding";
+  if (permissions?.read === true && permissions.edit === true && permissions.shell !== true && permissions.job_control !== true) return "edit_only";
+  if (permissions?.read === true && permissions.edit === true && permissions.shell === true && permissions.job_control === true) return "controlled_exec";
   return "custom";
 }
 function adminScript(nonce?: string): string {

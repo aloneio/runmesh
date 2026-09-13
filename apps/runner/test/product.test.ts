@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, win32 } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { decodeWireFrame, runnerPolicyChecksum } from "@aloneio/runmesh-protocol";
-import { runCli, runEnrollCli, parseProductArgs } from "../src/cli.js";
+import { runCli, runEnrollCli, parseProductArgs, shareableDoctorReport } from "../src/cli.js";
 import { RunnerConnection, classifyConnectionFailure } from "../src/connection.js";
 import { RUNNER_VERSION } from "../src/version.js";
 import { enrollRunner } from "../src/enrollment.js";
@@ -1073,6 +1073,50 @@ describe("runner product CLI and service safety", () => {
         setExitCode: (code) => failingExitCodes.push(code),
       });
       expect(failingExitCodes).toEqual([1]);
+    } finally { await test.cleanup(); }
+  });
+  it("emits a strict allow-listed shareable doctor report", async () => {
+    const test = await fixture();
+    try {
+      const secretServer = "wss://example.invalid/private-runner-url";
+      const workspacePath = join(test.root, "private-workspace");
+      await mkdir(workspacePath, { recursive: true });
+      await test.store.save({ ...profile(workspacePath), server_url: secretServer, token: "secret-token-value", execution_mode: "dedicated_user" });
+      const doctorPlatform = process.platform === "win32" ? "win32" : "linux";
+      const manifest = renderService({ platform: doctorPlatform, mode: "system", profilePath: test.store.filePath, executionMode: "dedicated_user" });
+      const filesystem: ServiceManifestFilesystem = { read: async () => manifest.content, write: async () => undefined, remove: async () => undefined };
+      const manager = {
+        platform: doctorPlatform, mode: "system" as const,
+        install: async () => undefined, stop: async () => undefined, restart: async () => undefined, uninstall: async () => undefined,
+        status: async () => ({ installed: true, active: true, identity: doctorPlatform === "win32" ? "NT AUTHORITY\\LOCAL SERVICE" : "runmesh" }),
+      };
+      const lines: string[] = [];
+      await runCli(["doctor", "--json", "--shareable"], {
+        store: test.store, stdout: (line) => lines.push(line), servicePlatform: doctorPlatform, serviceFilesystem: filesystem, serviceManager: manager,
+        discoverShellRuntime: async () => ({ kind: "bash", executable: "/bin/bash", buildInvocation: (command) => ({ file: "/bin/bash", args: ["-lc", command] }) }),
+        environment: new (await import("../src/runtime.js")).EnvironmentInfoService({ probe: async () => undefined }),
+        policyRevision: async () => ({ desired: 7, applied: 6 }), setExitCode: () => undefined,
+      });
+      const text = lines[0] ?? "";
+      const result = JSON.parse(text) as { schema_version: number; configured: boolean; checks: Array<{ name: string }>; service: Record<string, unknown> };
+      expect(result).toMatchObject({ schema_version: 1, configured: true, service: { mode: "system", execution_mode: "dedicated_user" } });
+      expect(result.checks.some((check) => check.name.startsWith("workspace:"))).toBe(false);
+      expect(text).not.toContain(secretServer);
+      expect(text).not.toContain("secret-token-value");
+      expect(text).not.toContain(workspacePath);
+      expect(text).not.toContain(test.store.filePath);
+      expect(text).not.toContain(manifest.path);
+      expect(text).not.toContain("actual_service_identity");
+      expect(text).not.toContain("detail");
+      const synthetic = shareableDoctorReport({
+        ok: false,
+        checks: [{ name: "workspace:private-workspace-id", required: true, ok: false, status: "failure", detail: workspacePath }],
+        profile: { server_url: secretServer, token: "secret-token-value" },
+        service: { manifest: manifest.path, mode: "system", execution_mode: "dedicated_user", configured_execution_mode: "dedicated_user", actual_service_identity: "runmesh", privilege_state: "restricted" },
+      }, 123);
+      expect(synthetic.checks).toEqual([{ name: "workspace", required: true, ok: false, status: "failure" }]);
+      expect(JSON.stringify(synthetic)).not.toContain("private-workspace-id");
+      expect(JSON.stringify(synthetic)).not.toContain(workspacePath);
     } finally { await test.cleanup(); }
   });
   it("requires administrator/root for system installation and uses injected Linux auto-start adapter", async () => {

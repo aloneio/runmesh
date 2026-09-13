@@ -26,6 +26,7 @@ export interface JobMetadata {
   updated_at_ms: number;
   display_name?: string | undefined;
   created_by_client_id?: string | undefined;
+  request_id?: string | undefined;
   runner_id?: string | undefined;
 }
 export interface PermissionSet {
