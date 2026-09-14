@@ -38,7 +38,9 @@ for (const check of criticalChecks) {
 
 assert.match(github, /pull_request:/u, "GitHub CI must run for pull requests");
 assert.match(gitlab, /merge_request_event/u, "GitLab CI must run for merge requests");
-assert.match(github, /branches:\s*\[dev\]/u, "GitHub CI must gate dev pushes");
+assert.match(github, /branches:\s*\[main, dev\]/u, "GitHub CI must gate main and dev pushes");
 assert.match(gitlab, /CI_COMMIT_BRANCH == "dev"/u, "GitLab CI must gate dev pushes");
+
+assert.match(gitlab, /CI_COMMIT_BRANCH == "main"/u, "GitLab CI must gate main pushes");
 
 console.log(`CI parity verified for ${criticalChecks.length} critical checks`);
