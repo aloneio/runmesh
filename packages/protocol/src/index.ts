@@ -30,6 +30,9 @@ export {
   RpcErrorSchema,
   RpcRequestSchema,
   RpcResponseSchema,
+  QueueGrantSchema,
+  QueueGrantPayloadSchema,
+  RunnerQueueCheckSchema,
   RunnerHeartbeatSchema,
   RunnerHelloSchema,
   RunnerMetadataSchema,
@@ -46,7 +49,8 @@ export {
   isProtectedRpcMethod,
 } from "./schema.js";
 export type {
-  CapabilityMetadata,
+  QueueGrant,
+  QueueGrantPayload,  CapabilityMetadata,
   JobCompleted,
   JobMetadata,
   JobOutput,

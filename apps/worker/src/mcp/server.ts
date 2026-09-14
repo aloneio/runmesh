@@ -170,7 +170,7 @@ async function editTool(env: McpRequestEnv, clientId: string, params: z.output<t
   return activeRunnerTool(env, clientId, params.preview === true ? "fs.preview_patch" : "fs.apply_patch", input, "edit", "edit");
 }
 async function shellTool(env: McpRequestEnv, clientId: string, params: z.output<typeof ShellInputSchema>): Promise<unknown> {
-  const invocation = { workspace_id: params.workspace_id, command: params.command, shell: true, created_by_client_id: clientId, ...(params.request_id === undefined ? {} : { request_id: params.request_id }) };
+  const invocation = { workspace_id: params.workspace_id, command: params.command, shell: true, created_by_client_id: clientId, ...(params.queue === undefined ? {} : {queue:params.queue}), ...(params.request_id === undefined ? {} : { request_id: params.request_id }) };
   // Background starts return a Runner JobRecord.  Keep the MCP response on
   // the stable job-metadata allow-list; command/cwd/PID/process identity are
   // Runner-internal and must not cross this boundary.
@@ -307,6 +307,11 @@ export function safeShellResult(value: unknown): Record<string, unknown> {
   const job = isRecord(value.job) ? value.job : value;
   Object.assign(output, safeJobMetadata(job));
   if (typeof value.completed === "boolean") output.completed = value.completed;
+  if (isRecord(value.queue)) {
+    const info: Record<string,unknown> = {};
+    for (const key of ["waiting","limit","per_client_limit","running"]) if (isSafeNonnegativeInteger(value.queue[key]) && (value.queue[key] as number)<=1000) info[key]=value.queue[key];
+    output.queue=info;
+  }
   if (isSafeNonnegativeInteger(value.wait_cap_ms)) output.wait_cap_ms = value.wait_cap_ms;
   if (value.stdout !== undefined) output.stdout = safeJobLogResult(value.stdout);
   if (value.stderr !== undefined) output.stderr = safeJobLogResult(value.stderr);
@@ -1092,7 +1097,7 @@ type ToolFailure = { readonly ok: false; readonly error: { readonly code: string
 type ToolCall = ToolSuccess | ToolFailure;
 
 const SAFE_RUNNER_ERROR_CODES = new Set([
-  "control_plane_unavailable", "registry_unavailable", "runner_upgrade_required", "baseline_changed", "busy", "expected_hash_mismatch", "file_too_large", "git_failed", "git_output_too_large", "git_timeout", "git_unavailable",
+  "control_plane_unavailable", "registry_unavailable", "runner_upgrade_required", "baseline_changed", "queue_full", "busy", "expected_hash_mismatch", "file_too_large", "git_failed", "git_output_too_large", "git_timeout", "git_unavailable",
   "context_index_corrupt", "context_index_too_large", "context_record_corrupt", "context_record_missing", "context_record_too_large", "context_rebuild_budget", "context_revision_conflict", "context_storage_unsafe", "context_turn_conflict",
   "hunk_ambiguous", "hunk_not_found", "hunk_overlap", "invalid_params", "invalid_patch", "invalid_path", "invalid_request", "invalid_workspace", "missing_file", "mixed_newlines", "not_utf8",
   "method_not_found", "insufficient_scope", "patch_install_failed", "patch_rollback_failed", "path_traversal", "permission_denied", "policy_pending", "readonly_workspace", "request_id_conflict", "runner_offline", "search_snapshot_changed", "stale_policy", "symlink_escape", "symlink_write", "target_exists", "timeout",
