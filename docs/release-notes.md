@@ -1,5 +1,7 @@
 # 0.1.3 — fair multi-client Job queues and stable single-language UI
 
+Published as an immutable stable main-branch release at `2026-09-14T14:03:29Z` from `90395a1a37e608ed40fe3646c1a06f5d4d4f4d83`; public signatures and checksums independently verified before activation.
+
 Adds bounded per-client fair queues without increasing default process concurrency. A second MCP client receives a queued Job ID immediately while another command runs. Queued launches recheck current client/workspace authorization; cancellation and policy changes cannot start stale work. Legacy peers retain immediate-only admission.
 
 Administrator pages render one language before display. Removes unconditional translation on English navigation, mixed-language labels and refresh cross-fades. History and logs remain explicitly requested and bounded; code, user data, commands and logs are not translated. Local Chromium validation covers both languages and mobile width.
