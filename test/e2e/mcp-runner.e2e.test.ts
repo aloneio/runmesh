@@ -376,7 +376,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const {adminJar,csrf}=await adminCredentials();
     const other=await createMcpClient("Queue Client B",["coding:read","coding:write","coding:exec"],adminJar,csrf);
     expect((await mcpTool("runner_select",{runner_id:runnerId},other)).isError).not.toBe(true);
-    const first=await mcpTool("shell",{workspace_id:"workspace-1",command:nodeCommand("setTimeout(()=>{},1200)"),background:true,request_id:"queue-first"});
+    const first=await mcpTool("shell",{workspace_id:"workspace-1",command:nodeCommand("const fs=require('node:fs');const t=setInterval(()=>{if(fs.existsSync('.queue-e2e-release'))clearInterval(t)},15)"),background:true,request_id:"queue-first"});
     const firstId=first.structuredContent?.job_id as string;expect(typeof firstId).toBe("string");
     let secondId:string|undefined;
     try {
@@ -384,8 +384,9 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       const second=await mcpTool("shell",{workspace_id:"workspace-1",command:nodeCommand("process.stdout.write('second-client')"),request_id:"queue-second",wait_ms:8000},other);
       secondId=second.structuredContent?.job_id as string;
       expect(second.isError,JSON.stringify(second)).not.toBe(true);
-      expect(second.structuredContent?.status).toBe("queued");expect(Date.now()-start).toBeLessThan(900);
+      expect(second.structuredContent?.status).toBe("queued");expect(Date.now()-start).toBeLessThan(5000);
       const read=await mcpTool("read",{workspace_id:"workspace-1",path:"note.txt"},other);expect(read.isError).not.toBe(true);
+      await writeFile(join(workspace,".queue-e2e-release"),"release");
       await waitFor(async()=>["succeeded","failed"].includes(String((await mcpTool("job",{action:"get",workspace_id:"workspace-1",job_id:secondId},other)).structuredContent?.status)),8000);
       const result=await mcpTool("job",{action:"get",workspace_id:"workspace-1",job_id:secondId},other);
       expect(result.structuredContent?.status,JSON.stringify(result)).toBe("succeeded");
@@ -394,6 +395,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       const replay=await mcpTool("shell",{workspace_id:"workspace-1",command:nodeCommand("process.stdout.write('second-client')"),request_id:"queue-second",background:true},other);
       expect(replay.structuredContent?.job_id).toBe(secondId);
     } finally {
+      await writeFile(join(workspace,".queue-e2e-release"),"release");
       if(secondId)await mcpTool("job",{action:"cancel",workspace_id:"workspace-1",job_id:secondId},other);
       await mcpTool("job",{action:"cancel",workspace_id:"workspace-1",job_id:firstId});
       await waitFor(async()=>!['running','cancelling','queued'].includes(String((await mcpTool("job",{action:"get",workspace_id:"workspace-1",job_id:firstId})).structuredContent?.status)),8000);
