@@ -2148,6 +2148,7 @@ function loadAdminPage(url,shouldPush){
     if(!response.ok)throw new Error('HTTP '+response.status);return response.text();
   }).then(function(markup){
     var parsed=new DOMParser().parseFromString(markup,'text/html'),next=parsed.querySelector('#main-content');
+    if(parsed.documentElement&&parsed.documentElement.lang&&parsed.documentElement.lang!==document.documentElement.lang){location.href=url.href;return;}
     if(!next)throw new Error('main content missing');var nextRoot=pageRoot(next);if(!nextRoot)throw new Error('page root missing');
     mountAdminPage(nextRoot,parsed.title||'',key,viewport,shouldPush,url);
   }).catch(function(error){
