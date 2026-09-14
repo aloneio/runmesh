@@ -886,6 +886,7 @@ function projectRunnerResult(value: unknown, mode: RunnerResultMode): unknown {
 }
 
 async function activeJobList(env: McpRequestEnv, clientId: string, filters: Record<string, unknown>): Promise<unknown> {
+  filters = { ...filters, limit: typeof filters.limit === "number" ? filters.limit : 10 };
   const selected = await resolveActiveRunner(env, clientId, true);
   if (!selected.ok) return asToolResult(selected);
   if (filters.workspace_id !== undefined) {
@@ -900,9 +901,9 @@ async function activeJobList(env: McpRequestEnv, clientId: string, filters: Reco
     if (!readiness.ok) return asToolResult(readiness.error);
     const live = await callRunner(env, selected.value.runnerId, "job.list", filters, readiness.value.applied_revision, readiness.value.active_checksum);
     if (!live.ok) return runnerFailure(live.error, selected.value);
-    const jobs = isRecord(live.value) && Array.isArray(live.value.jobs) ? live.value.jobs : undefined;
+    const jobs = Array.isArray(live.value) ? live.value : isRecord(live.value) && Array.isArray(live.value.jobs) ? live.value.jobs : undefined;
     if (jobs === undefined || jobs.some((job) => !isRecord(job) || job.workspace_id !== filters.workspace_id)) return runnerFailure(fail("permission_denied", "The Runner returned jobs from an unexpected workspace.", "Use an authorized workspace and a current Runner.").error, selected.value);
-    return runnerSuccess({ jobs: jobs.slice(0, typeof filters.limit === "number" ? filters.limit : 100).map(safeJobMetadata), source: "runner_live" }, selected.value);
+    return runnerSuccess({ jobs: jobs.slice(0, typeof filters.limit === "number" ? filters.limit : 10).map(safeJobMetadata), source: "runner_live" }, selected.value);
   }
   const call = await registryCall(env, registryJobsPath(selected.value.runnerId, filters));
   if (!call.ok) return runnerFailure(call.error, selected.value);
@@ -1241,6 +1242,9 @@ async function recordRunnerToolCall(env: McpRequestEnv, input: {
   readonly jobId?: string;
   readonly readiness: ActivePolicyReadiness;
 }): Promise<AuditReceipt> {
+  // Viewing Job metadata/output must not generate another history write.
+  // Mutating Job control and execution keep their independent audit path.
+  if (input.method === "job.get" || input.method === "job.logs" || input.method === "job.list") return {correlation_id:`call-${crypto.randomUUID()}`,audit_status:"disabled"};
   const structuredContent = isRecord(input.result) && isRecord(input.result.structuredContent) ? input.result.structuredContent : undefined;
   const errorValue = structuredContent === undefined ? undefined : structuredContent.error;
   const errorCode = errorValue !== undefined && isRecord(errorValue) && typeof errorValue.code === "string"

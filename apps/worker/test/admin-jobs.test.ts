@@ -64,3 +64,28 @@ describe("on-demand administrator job detail", () => {
     for (const id of [undefined, "../etc", "<script>", "a/b", ""]) expect(adminJobUrl("test-runner", id)).toBeUndefined();
   });
 });
+
+
+it("defaults explicitly selected logs to the latest bounded tail and never preloads another stream",async () => {
+  const f=fixture();
+  const page=await f.open("?stream=stdout");
+  expect(page.ok).toBe(true);
+  expect(f.logs).toHaveBeenCalledExactlyOnceWith({job_id:"test-job",expected_workspace_id:"work",stream:"stdout",limit:4096,tail:true});
+});
+it.each([1024,4096,16384])("respects the requested %s-byte tail",async (bytes) => {
+  const f=fixture(); expect((await f.open(`?stream=stderr&bytes=${bytes}&view=tail`)).ok).toBe(true);
+  expect(f.logs.mock.calls[0]?.[0]).toMatchObject({stream:"stderr",limit:bytes,tail:true});
+});
+it.each(["?stream=stdout&bytes=999999","?stream=stdout&bytes=4096&bytes=1024","?stream=stdout&view=tail&cursor=1"])("rejects unbounded or ambiguous log requests before I/O: %s",async (query) => {
+  const f=fixture(); expect(await f.open(query)).toMatchObject({ok:false,status:400}); expect(f.registry).not.toHaveBeenCalled(); expect(f.logs).not.toHaveBeenCalled();
+});
+
+
+it("keeps the selected default 4 KiB when paging from the beginning", async () => {
+  const f = fixture();
+  const page = await f.open("?stream=stdout&view=head");
+  expect(page.ok).toBe(true); if (!page.ok) return;
+  expect(f.logs.mock.calls[0]?.[0]).toMatchObject({ limit: 4096 });
+  expect(page.body).toContain("cursor=16384&amp;bytes=4096");
+  expect(page.body).toContain('<option value="head" selected>');
+});

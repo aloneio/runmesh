@@ -30,12 +30,16 @@ async function fixture(statuses: string[] = ["succeeded"]) {
   const runner = { idFromName: env.RUNNER.idFromName.bind(env.RUNNER), get: () => ({ fetch: runnerFetch }) } as unknown as typeof env.RUNNER;
   const cookie = `__Host-runmesh_admin_session=${session}; __Host-runmesh_admin_csrf=${csrf}`;
   const open = (path: string, authenticated = true) => worker.fetch(new Request(`https://worker.test${path}`, { redirect: "manual", headers: authenticated ? { cookie } : {} }), { ...env, REGISTRY: registry, RUNNER: runner }, {} as ExecutionContext);
-  return { open, stub, paths, runnerFetch, setReady: () => { ready = true; }, failSnapshot: () => { unavailable = true; } };
+  const saveHistory = (values: Record<string,string>, validCsrf = true) => worker.fetch(new Request("https://worker.test/admin/runners/jobs-runner/history-settings",{
+    method:"POST",headers:{cookie,origin:"https://worker.test","content-type":"application/x-www-form-urlencoded"},
+    body:new URLSearchParams({csrf_token:validCsrf ? csrf : "invalid",...values}),
+  }),{...env,REGISTRY:registry,RUNNER:runner},{} as ExecutionContext);
+  return { open, saveHistory, stub, paths, runnerFetch, setReady: () => { ready = true; }, failSnapshot: () => { unavailable = true; } };
 }
 
 it("reads the correct dashboard response and counts active jobs outside the recent 20 records", async () => {
   const f = await fixture([...Array<string>(25).fill("running"), ...Array<string>(25).fill("succeeded")]);
-  const response = await f.open("/admin"); const text = await response.text();
+  const response = await f.open("/admin?history=1"); const text = await response.text();
   expect(response.status).toBe(200); expect(response.headers.get("cache-control")).toBe("no-store");
   expect(text).toContain('Active shell jobs</span><strong class="metric-value">25</strong>');
   expect(text).toContain('href="/admin/runners/jobs-runner/jobs/job-49"');
@@ -45,7 +49,7 @@ it("reads the correct dashboard response and counts active jobs outside the rece
 
 it("shows recent jobs of all lifecycle states instead of filtering only running", async () => {
   const statuses = ["queued", "running", "cancelling", "succeeded", "failed", "cancelled", "interrupted"];
-  const f = await fixture(statuses); const response = await f.open("/admin/runners/jobs-runner"); const text = await response.text();
+  const f = await fixture(statuses); const response = await f.open("/admin/runners/jobs-runner?history=jobs&limit=20"); const text = await response.text();
   expect(response.status).toBe(200); expect(text).toContain("<h2>Recent shell jobs</h2>");
   for (let i = 0; i < statuses.length; i++) expect(text).toContain(`href="/admin/runners/jobs-runner/jobs/job-${i}"`);
   expect(f.paths).toContain("/runners/jobs-runner/jobs?limit=20"); expect(f.paths.some((path) => path.includes("status=running"))).toBe(false);
@@ -76,12 +80,12 @@ it("serves metadata without RPC, and reads a stream only with applied-policy fen
 });
 
 it("keeps a missing snapshot distinguishable from an empty history", async () => {
-  const f = await fixture(); f.failSnapshot(); const response = await f.open("/admin");
+  const f = await fixture(); f.failSnapshot(); const response = await f.open("/admin?history=1");
   expect(await response.text()).toContain("Job snapshot unavailable"); expect(f.runnerFetch).not.toHaveBeenCalled();
 });
 
 it("does not render an unavailable dashboard as zero active jobs or empty history", async () => {
-  const f = await fixture(); f.failSnapshot(); const response = await f.open("/admin"); const text = await response.text();
+  const f = await fixture(); f.failSnapshot(); const response = await f.open("/admin?history=1"); const text = await response.text();
   expect(text).toContain('Active shell jobs</span><strong class="metric-value">—</strong>');
   expect(text).toContain('<p class="empty">Job metadata is temporarily unavailable.</p>');
   expect(text).not.toContain('<p class="empty">No recent jobs.</p>');
@@ -89,17 +93,60 @@ it("does not render an unavailable dashboard as zero active jobs or empty histor
 
 it("keeps a failed Runner history query distinct from a successfully loaded empty list", async () => {
   const f = await fixture([]);
-  const empty = await (await f.open("/admin/runners/jobs-runner")).text();
+  const empty = await (await f.open("/admin/runners/jobs-runner?history=jobs&limit=20")).text();
   expect(empty).toContain('<p class="empty">No recent jobs.</p>');
-  f.failSnapshot(); const failed = await (await f.open("/admin/runners/jobs-runner")).text();
+  f.failSnapshot(); const failed = await (await f.open("/admin/runners/jobs-runner?history=jobs&limit=20")).text();
   expect(failed).toContain('<p class="empty">Job metadata is temporarily unavailable.</p>');
   expect(failed).not.toContain('<p class="empty">No recent jobs.</p>');
 });
 
-it.each(["/admin", "/admin/runners/jobs-runner", "/admin/runners/jobs-runner/jobs/job-0"])("shows an explicit last-loaded timestamp on %s without polling", async (path) => {
+it.each(["/admin?history=1", "/admin/runners/jobs-runner?history=jobs&limit=20", "/admin/runners/jobs-runner/jobs/job-0"])("shows an explicit last-loaded timestamp on %s without polling", async (path) => {
   const f = await fixture(); const response = await f.open(path); const text = await response.text();
   expect(text).toContain('<span>Last loaded</span>');
   expect(text).toMatch(/<time datetime="[0-9]{4}-[0-9]{2}-[0-9]{2}T[^" ]+Z">/);
   expect(text).not.toContain("setInterval(");
+  expect(f.runnerFetch).not.toHaveBeenCalled();
+});
+
+
+it("opening dashboard and Runner details performs no Job or audit reads until requested", async () => {
+  const f = await fixture();
+  for (const path of ["/admin","/admin/runners/jobs-runner"]) {
+    f.paths.length=0;
+    const response = await f.open(path), body=await response.text();
+    expect(response.status).toBe(200);
+    expect(f.paths.some((p) => p === "/dashboard" || /\/(jobs|mcp-calls)(?:\?|$)/.test(p))).toBe(false);
+    expect(body.includes("Jobs not loaded.")).toBe(true);
+  }
+});
+
+it("manual history requests honor the selected count and do not load other history", async () => {
+  const f = await fixture(Array(60).fill("succeeded"));
+  for (const limit of [10,20,50,100]) {
+    f.paths.length=0;
+    const response = await f.open(`/admin/runners/jobs-runner?history=jobs&limit=${limit}`);
+    expect(response.status).toBe(200);
+    expect(f.paths).toContain(`/runners/jobs-runner/jobs?limit=${limit}`);
+    expect(f.paths.some((p) => p.includes("/mcp-calls"))).toBe(false);
+  }
+});
+
+it.each(["limit=10000&history=jobs","limit=-1&history=jobs","history=jobs&history=all","history=live"])("rejects invalid history query without history reads: %s", async (query) => {
+  const f=await fixture();
+  expect((await f.open(`/admin/runners/jobs-runner?${query}`)).status).toBe(400);
+  expect(f.paths.some((p) => /\/(jobs|mcp-calls)(?:\?|$)/.test(p))).toBe(false);
+});
+
+
+it("retention settings require CSRF and local deletion requires a separate confirmation",async()=>{
+  const f=await fixture();
+  const values={mode:"batched",interval_seconds:"300",retention_days:"3",local_retention_days:"1"};
+  expect((await f.saveHistory({...values,confirm_local_cleanup:"true"},false)).status).toBe(403);
+  expect((await f.saveHistory(values)).status).toBe(400);
+  expect((await f.saveHistory({...values,confirm_local_cleanup:"true"})).status).toBe(303);
+  await runInDurableObject(f.stub,instance=>{
+    expect(instance.jobHistorySettings("jobs-runner")).toEqual({mode:"batched",interval_seconds:300,retention_days:3,local_retention_days:1});
+  });
+  expect((await f.saveHistory({...values,local_retention_days:"0",retention_days:"999"})).status).toBe(400);
   expect(f.runnerFetch).not.toHaveBeenCalled();
 });

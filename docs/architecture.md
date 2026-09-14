@@ -86,3 +86,7 @@ verification; development retains its disabled gate.
 ## Quota-isolation amendment
 
 The [quota-isolation contract](quota-resilience.md) adds transactional retention counters, independent optional D1 audit, and a per-client cloud Job recording preference. Core authorization stays in the existing DO namespace. Unrecorded Jobs have no offline cloud snapshot; workspace-bound live operations still require current Registry and Runner permission checks. Physical cleanup is bounded and can lag the seven-day visibility window during backlog or storage failure.
+
+## Batched Job history
+
+See [batched snapshots, manual loading and retention](batched-job-history.md). Production uses `RUNMESH_JOB_HISTORY_BACKEND=d1`; the default upload window is five minutes. History is loaded only on request. Source-side batching and local day-based cleanup require a newly released capable Runner; immutable v0.1.1 is unchanged.
