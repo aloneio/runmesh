@@ -8,25 +8,23 @@ Have a Cloudflare account, a public HTTPS Worker origin, a strong administrator 
 
 Runmesh does not choose operating-system permissions or workspace ownership for you.
 
-This release is a clean break from earlier Runner and Registry layouts. It does not import old tables, profiles, service manifests, or credentials. Use a fresh Durable Object namespace and enroll each current Runner again; retain any earlier deployment only as a separately backed-up archive.
+For a new installation, Wrangler provisions the configured resources. An update of an existing v2 installation must preserve its Worker, live DO namespaces, history database, secret values, Runner profiles and current services. Do not reset a namespace or re-enroll healthy Runners merely to update code. Legacy pre-v2 migration instructions are not normal upgrade instructions.
 
 ## Deploy the control plane
 
-Connect the repository to Cloudflare Workers Builds. Use `dev` as the production branch and:
+Connect the repository to Cloudflare Workers Builds. Use `main` for production, run `npm run build` from the repository root, and deploy with:
 
 ```sh
-npm exec --offline -- wrangler deploy --config apps/worker/wrangler.jsonc --env production --strict
+npm run deploy:worker -- --env production
 ```
 
-Configure these Cloudflare secrets and variables before deployment:
+Ordinary deployment requires only two independent Cloudflare secrets: `INTERNAL_CONTROL_SECRET` and `RUNNER_TOKEN_PEPPER`. Generate each from at least 32 cryptographically random bytes. Preserve their existing values during updates; replacing the pepper invalidates enrolled Runner credentials. Never commit secrets or print them in CI logs.
 
-- `ADMIN_TOKEN` for advanced automated Runner administration;
-- `RUNNER_TOKEN_PEPPER` and `INTERNAL_CONTROL_SECRET` for server-side credential protection;
-- `RUNMESH_PUBLIC_ORIGIN` as the exact external HTTPS origin, without a path, query, or credentials.
+No plaintext runtime variable is required for normal production. The public origin comes from the matching HTTPS request URL and Host, history defaults to the configured D1 backend, and signed-installer activation is compiled from the independently verified release-state record. Forwarded headers cannot choose an origin. Reverse proxies with an internal URL can explicitly set `RUNMESH_PUBLIC_ORIGIN`. `ADMIN_TOKEN` is optional and enables only the advanced programmatic Runner API; browser login, enrollment and MCP do not require it.
 
-`RUNMESH_PUBLIC_ORIGIN` is used as the default public origin and for reverse-proxy deployments. When Cloudflare routes a request through an additional custom HTTPS domain, Runmesh automatically accepts that domain when the request URL and `Host` header agree, so each new custom domain does not need a separate allowlist update.
+The new-install helper `npm run setup:secrets -- --env production` only checks missing secret names. Adding `--apply` creates only missing required keys after a second inventory check. It does not rotate existing values, delete other keys, print secret values or automatically retry an uncertain upload. It requires Cloudflare management authentication and an existing deployed Worker. See [minimal runtime configuration](runtime-config.md).
 
-Generate `ADMIN_TOKEN`, `RUNNER_TOKEN_PEPPER` and `INTERNAL_CONTROL_SECRET` from at least 32 cryptographically random bytes. Never commit them or print them in CI logs. First administrator setup requires no additional bootstrap token; CSRF, same-origin and atomic first-success-wins remain. Complete setup before exposing an uninitialized instance to untrusted traffic. New Runners default to `dedicated_user` and new MCP clients to `coding:read`; existing permissions remain unchanged.
+First administrator setup has no extra bootstrap token. CSRF, same-origin checks and atomic first-success-wins remain. Complete setup before exposing an uninitialized instance to untrusted traffic. New Runners default to `dedicated_user` and new MCP clients to `coding:read`; existing permissions remain unchanged. A separate development Worker uses the `dev` branch and its own secrets/resources.
 
 ## Enroll a Runner
 
@@ -74,7 +72,7 @@ Use a canonical HTTPS origin and configure log redaction. Keep administrator cre
 
 ## Optional cloud history and quota isolation
 
-See [quota isolation and cloud Job recording](quota-resilience.md). Production uses the independent `HISTORY_DB` D1 binding for optional audit. Core enrollment, credential and policy authority stays in RegistryDO. MCP client detail provides a switch for new cloud Job snapshots and related Job-tool audit; local Runner jobs/logs remain. Workspace-bound Job operations require Runner 0.1.1+. GitLab dev push, not GitHub verification alone, triggers the maintained Cloudflare deployment.
+See [quota isolation and cloud Job recording](quota-resilience.md). Production uses the independent `HISTORY_DB` D1 binding for optional audit. Core enrollment, credential and policy authority stays in RegistryDO. MCP client detail provides a switch for new cloud Job snapshots and related Job-tool audit; local Runner jobs/logs remain. Workspace-bound Job operations require Runner 0.1.1+. GitLab main push, not GitHub verification alone, triggers the maintained production deployment.
 
 ## Batched Job history
 

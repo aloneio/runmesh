@@ -37,7 +37,7 @@ The MCP URL is a credential and is shown only when a client is created or rotate
 
 ## Administrator quick setup
 
-1. Deploy the Cloudflare Worker and set the first administrator password.
+1. Deploy the production Worker from `main`, configure only `INTERNAL_CONTROL_SECRET` and `RUNNER_TOKEN_PEPPER`, and set the first administrator password.
 2. Add a machine on the **Runner** page and review the execution privilege warning.
 3. Copy the one-time enrollment command and run it on the target machine.
 4. Add approved workspaces and permissions in the Runner details page.
@@ -45,6 +45,8 @@ The MCP URL is a credential and is shown only when a client is created or rotate
 6. Share the URL with its intended user, and rotate or revoke it when necessary.
 
 The standard installer downloads a fixed, verified release, supplies the runtime, enrolls the Runner, and configures its service. If hosted installation is unavailable, the dashboard shows the offline-verifiable portable procedure. See the [administrator guide](docs/admin-guide.md).
+
+Ordinary production requires **two independent long-lived secrets and no manually filled plaintext runtime variables**. Domain, history-backend and reviewed-release defaults are automatic. `ADMIN_TOKEN` is optional for advanced API administration. Preserve existing secret values during upgrades. The missing-only helper and reverse-proxy exceptions are documented in [minimal runtime configuration](docs/runtime-config.md).
 
 ## Capabilities and permissions
 
@@ -69,9 +71,9 @@ Effective permission is the intersection of the client, Runner, and workspace po
 
 ## Current release boundary
 
-Runmesh is a development preview. Runner management, workspace policy, MCP clients, persistent jobs, reconnect handling, service provisioning, and gated signed installation are included. Automatic upgrades and rollback, multi-tenant organizations, billing, hosted IDEs, browser automation, model APIs, and operating-system sandboxing are outside the current compatibility promise.
+See [release readiness](docs/release-readiness.md) for the exact signed version and its current publication/activation state. Runner management, workspace policy, MCP clients, persistent jobs, reconnect handling, service provisioning, and gated signed installation are included. Automatic upgrades and rollback, multi-tenant organizations, billing, hosted IDEs, browser automation, model APIs, and operating-system sandboxing remain outside this release.
 
-This release uses a clean data boundary: provision a fresh Durable Object namespace and re-enroll Runners; it does not import earlier tables, profiles, service manifests, or credentials. Validate Cloudflare quotas, fresh-namespace behavior, native service lifecycle behavior, edge-log redaction, and the MCP clients you plan to use before production rollout.
+A new deployment provisions its own resources. Updating an existing v2 installation preserves its Worker, live namespaces, D1 binding, secrets and enrolled Runners; a normal code update is not a reason to reset or re-enroll them. Earlier pre-v2 migration procedures are separate. Validate quotas, service lifecycle behavior, edge-log redaction and the MCP clients you plan to use before rollout.
 
 ## Documentation
 
@@ -91,9 +93,10 @@ Runmesh is maintained by aloneio. Report security vulnerabilities through the pr
 
 ## Current security and rollout defaults
 
-Source targets **0.1.0 — an unreleased stable candidate**. Production and
-development hosted distribution remain disabled in this checkout. The owner
-must publish and independently verify new immutable assets before enabling them.
+The reviewed release-state record and generated release module decide whether
+production's fixed signed installer is available. A version label alone does
+not activate it. Development/test defaults remain disabled, and existing
+immutable packages are never overwritten by a Worker update.
 First administrator setup needs no additional bootstrap token: use password
 confirmation, CSRF and same-origin protected atomic first-success-wins setup.
 Finish initialization before exposing a new instance to untrusted visitors.

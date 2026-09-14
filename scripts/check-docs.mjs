@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";
+import { reviewedReleaseSource } from "./runtime-config-tools.mjs";
 const root = new URL("../", import.meta.url);
 const pkg = JSON.parse(await readFile(new URL("package.json", root), "utf8"));
 const current = ["README.md", "README.zh-CN.md", "docs/admin-guide.md", "docs/admin-guide.zh-CN.md", "docs/deployment.md", "docs/portable-runner-installation.md", "docs/architecture.md", "docs/adr-0001-architecture.md", "docs/protocol.md", "docs/runner-transport.md", "docs/release-readiness.md"];
@@ -16,7 +17,8 @@ const releaseState = JSON.parse(await readFile(new URL("release/release-state.js
 assert.equal(releaseState.version,pkg.version);
 assert.ok(["candidate","released"].includes(releaseState.state));
 const expectedGate = releaseState.state === "released" ? pkg.version : "";
-assert.equal(config.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE, expectedGate, "top-level production checkout must acknowledge the exact current immutable release");
-assert.equal(config.env.production.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE, expectedGate, "named production alias must acknowledge the exact current immutable release");
-assert.equal(config.env.development.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE, "", "development environment must remain fail-closed");
+assert.deepEqual(config.vars, {}, "source defaults replace redundant production runtime variables");
+assert.deepEqual(config.env.production.vars, config.vars);
+assert.deepEqual(config.env.development.vars, { RUNMESH_ENVIRONMENT: "development" });
+assert.equal(await readFile(new URL("apps/worker/src/generated-release.ts", root), "utf8"), reviewedReleaseSource(pkg.version, releaseState));
 console.log(`operative documentation and enabled published-release contract verified: ${pkg.version}`);

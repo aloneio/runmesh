@@ -24,13 +24,7 @@
       }
     ]
   },
-  "vars": {
-    "WORKER_ID": "worker-production",
-    "RUNMESH_PUBLIC_ORIGIN": "https://runmesh.aloneio.workers.dev",
-    "RUNMESH_SIGNED_RELEASE_AVAILABLE": "",
-    "RUNMESH_AUDIT_BACKEND": "d1",
-    "RUNMESH_JOB_HISTORY_BACKEND": "d1"
-  },
+  "vars": {},
   "env": {
     "development": {
       "name": "runmesh-development",
@@ -63,17 +57,16 @@
         }
       ],
       "vars": {
-        "WORKER_ID": "worker-development",
-        "RUNMESH_PUBLIC_ORIGIN": "",
-        "RUNMESH_SIGNED_RELEASE_AVAILABLE": "",
-        "RUNMESH_AUDIT_BACKEND": "sqlite",
-        "RUNMESH_JOB_HISTORY_BACKEND": "sqlite"
+        "RUNMESH_ENVIRONMENT": "development"
       },
       "triggers": {
         "crons": []
       },
       "main": "src/index.ts",
-      "exports": {}
+      "exports": {},
+      "version_metadata": {
+        "binding": "CF_VERSION_METADATA"
+      }
     },
     "test": {
       "durable_objects": {
@@ -137,13 +130,7 @@
           }
         ]
       },
-      "vars": {
-        "WORKER_ID": "worker-production",
-        "RUNMESH_PUBLIC_ORIGIN": "https://runmesh.aloneio.workers.dev",
-        "RUNMESH_SIGNED_RELEASE_AVAILABLE": "",
-        "RUNMESH_AUDIT_BACKEND": "d1",
-        "RUNMESH_JOB_HISTORY_BACKEND": "d1"
-      },
+      "vars": {},
       "d1_databases": [
         {
           "binding": "HISTORY_DB",
@@ -173,7 +160,10 @@
           "state": "deleted"
         }
       },
-      "main": "src/production.ts"
+      "main": "src/production.ts",
+      "version_metadata": {
+        "binding": "CF_VERSION_METADATA"
+      }
     }
   },
   "d1_databases": [
@@ -204,5 +194,8 @@
       "type": "durable-object",
       "state": "deleted"
     }
+  },
+  "version_metadata": {
+    "binding": "CF_VERSION_METADATA"
   }
 }
