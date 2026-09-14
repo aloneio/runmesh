@@ -1,6 +1,5 @@
 {
-  "version": "0.1.2",
-  "state": "released",
-  "release_commit": "0b45a519febfea865bc562f4b147b616ab6ddef6",
-  "manifest_sha256": "abfd4d24a398abe1156ea2a8e600887f04822c854a66fea6b1fdef8dfc00d2f6"
+  "version": "0.1.3",
+  "state": "candidate",
+  "release_branch": "main"
 }

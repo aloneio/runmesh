@@ -5,7 +5,7 @@
 // nothing from its former scope.
 
 export function adminStyles(): string { return `<style>
-@view-transition{navigation:auto}
+/* Explicit admin navigation is rendered without cross-document fades. */
 ::view-transition-old(app-header),::view-transition-new(app-header){animation:none}
 :root{
   color-scheme:light;
@@ -104,10 +104,10 @@ body::before{
   position:relative;
   z-index:1;
 }
-.admin-viewport{position:relative;max-width:1440px;margin:0 auto;min-height:160px;contain:layout;overflow-anchor:none}
-.admin-page-container{position:absolute;inset:0;min-height:inherit;opacity:0;visibility:hidden;pointer-events:none;transform:translateY(5px);will-change:opacity,transform;transition:opacity 160ms ease,transform 180ms ease,visibility 0s linear 180ms}
-.admin-page-container.is-active{position:relative;opacity:1;visibility:visible;pointer-events:auto;transform:none;transition-delay:0s}
-.admin-page-container.is-leaving{position:absolute;inset:0;visibility:visible;opacity:0;pointer-events:none;transform:translateY(-3px);z-index:0}
+.admin-viewport{overflow-anchor:none;position:relative;max-width:1440px;margin:0 auto;min-height:160px;contain:layout;overflow-anchor:none}
+.admin-page-container{display:none;min-height:inherit}
+.admin-page-container.is-active{display:block;position:relative}
+.admin-page-container.is-leaving{display:none}
 .admin-preload-frame{position:fixed;left:-10000px;top:0;width:1px;height:1px;border:0;opacity:0;pointer-events:none}
 @media(prefers-reduced-motion:reduce){.admin-page-container{transition:none;transform:none}.admin-page-container.is-leaving{visibility:hidden}}
 .workspace{padding-top:4px}

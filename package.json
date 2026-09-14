@@ -1,6 +1,6 @@
 {
   "name": "@aloneio/runmesh-monorepo",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "engines": {
     "node": ">=22"
@@ -20,7 +20,7 @@
   "scripts": {
     "build": "npm run generate:version && tsc -b",
     "test": "npm run test:unit && npm run test:e2e",
-    "test:unit": "npm run test --workspaces && node --test ./test/admin-navigation.test.mjs",
+    "test:unit": "npm run test --workspaces && node --test ./test/admin-navigation.test.mjs ./test/ui-catalog.test.mjs",
     "test:e2e": "node ./scripts/run-e2e.mjs",
     "typecheck": "npm run generate:version && tsc -b --pretty false",
     "validate:worker": "node ./scripts/validate-worker.mjs",

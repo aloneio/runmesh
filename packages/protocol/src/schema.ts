@@ -365,6 +365,24 @@ export const RunnerPolicyAckSchema = EnvelopeSchema.extend({
   }
 });
 
+/** A short-lived signed launch context is not itself permission to execute.
+ * A queued job must exchange it for a fresh decision on its live connection. */
+export const QueueGrantPayloadSchema = z.object({
+  version: z.literal(1), runner_id: IdentifierSchema, lifecycle_id: IdentifierSchema,
+  credential_version: z.number().int().nonnegative(), client_id: IdentifierSchema,
+  secret_version: z.number().int().positive(), workspace_id: IdentifierSchema,
+  policy_revision: z.number().int().positive(), policy_checksum: z.string().regex(/^[a-f0-9]{64}$/),
+  launch_digest: z.string().regex(/^[a-f0-9]{64}$/), expires_at_ms: TimestampSchema,
+  nonce: IdentifierSchema,
+}).strict();
+export const QueueGrantSchema = z.object({ payload: QueueGrantPayloadSchema, signature: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+export const RunnerQueueCheckSchema = CorrelatedEnvelopeSchema.extend({
+  type: z.literal("runner.queue_check"), runner_id: IdentifierSchema,
+  job_id: IdentifierSchema, grant: QueueGrantSchema,
+}).strict();
+export type QueueGrant = z.infer<typeof QueueGrantSchema>;
+export type QueueGrantPayload = z.infer<typeof QueueGrantPayloadSchema>;
+
 export const RunnerHeartbeatSchema = EnvelopeSchema.extend({
   type: z.literal("runner.heartbeat"),
   runner_id: IdentifierSchema,
@@ -468,6 +486,7 @@ export const WireMessageSchema = z.union([
   RunnerPolicyUpdateSchema,
   RunnerPolicyAckSchema,
   RunnerHeartbeatSchema,
+  RunnerQueueCheckSchema,
   RunnerSyncSchema,
   RpcRequestSchema,
   RpcResponseSchema,

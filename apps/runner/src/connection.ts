@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { QueueGrantSchema } from "@aloneio/runmesh-protocol";
 import { parseRunnerJobHistory, type RunnerJobHistory } from "./job-history.js";
 import {
   decodeWireFrame,
@@ -60,6 +62,7 @@ export interface RunnerConnectionOptions {
 }
 
 export class RunnerConnection {
+  private queueNegotiated = false;
   private readonly config: RunnerConfig;
   private readonly metadata: RunnerMetadata;
   private readonly heartbeatMs: number;
@@ -154,7 +157,7 @@ export class RunnerConnection {
       ...(executionMode === undefined ? {} : { execution_mode: executionMode }),
       ...(serviceIdentity === undefined ? {} : { service_identity: serviceIdentity }),
       ...(executionMode === undefined ? {} : { privilege_state: processPrivilegeState(executionMode, serviceIdentity) }),
-      capabilities: { ...capabilities, labels: { ...capabilities.labels, job_history_protocol: "1" } },
+      capabilities: { ...capabilities, labels: { ...capabilities.labels, job_history_protocol: "1", job_queue_protocol: "1" } },
     };
   }
 
@@ -196,6 +199,7 @@ export class RunnerConnection {
         if (this.stopped) break;
         if (error instanceof RunnerAuthenticationError || classifyConnectionFailure({ error }) === "authentication") {
           this.stopped = true;
+          this.queueNegotiated = false;
           throw error;
         }
         const delayMs = error instanceof RunnerServiceUnavailableError
@@ -211,6 +215,7 @@ export class RunnerConnection {
   public stop(): void {
     this.lifecycleGeneration += 1;
     this.stopped = true;
+    this.queueNegotiated = false;
     this.cancelReconnectSleep?.();
     if (this.cleanupTimer !== undefined) clearInterval(this.cleanupTimer);
     if (this.heartbeatTimer !== undefined) clearInterval(this.heartbeatTimer);
@@ -222,6 +227,28 @@ export class RunnerConnection {
       pending.reject(new Error("runner stopped"));
     }
     this.pending.clear();
+  }
+
+  private async authorizeQueuedJob(input: Record<string,unknown>, jobId: string, clientId: string | null): Promise<boolean> {
+    const parsed=QueueGrantSchema.safeParse(input.queue_grant);
+    const socket=this.socket;
+    if (!this.queueNegotiated || !parsed.success || this.stopped || socket===undefined || socket!==this.welcomedSocket || socket.readyState!==WebSocket.OPEN) return false;
+    const grant=parsed.data;
+    const canonical=JSON.stringify({workspace_id:input.workspace_id,command:input.command,shell:input.shell,cwd:input.cwd??".",request_id:input.request_id??null});
+    if (grant.payload.client_id!==clientId || grant.payload.runner_id!==this.config.runnerId || grant.payload.workspace_id!==input.workspace_id
+      || grant.payload.policy_revision!==this.appliedPolicyRevision || grant.payload.expires_at_ms<=Date.now()
+      || grant.payload.launch_digest!==createHash("sha256").update(canonical).digest("hex")) return false;
+    const requestId=`queue-${crypto.randomUUID()}`;
+    try {
+      const result=await new Promise<unknown>((resolve,reject)=>{
+        const timer=setTimeout(()=>{this.pending.delete(requestId);reject(new Error("Queue authorization timed out"));},5000);
+        this.pending.set(requestId,{resolve,reject,timer});
+        try {socket.send(encodeWireFrame({type:"runner.queue_check",protocol_version:PROTOCOL_CURRENT_VERSION,request_id:requestId,runner_id:this.config.runnerId,job_id:jobId,grant}));}
+        catch(error){clearTimeout(timer);this.pending.delete(requestId);reject(error);}
+      });
+      return this.socket===socket && this.welcomedSocket===socket && !this.stopped && socket.readyState===WebSocket.OPEN
+        && typeof result==="object" && result!==null && !Array.isArray(result) && "authorized" in result && result.authorized===true;
+    } catch { return false; }
   }
 
   /** Test/operator control: close only the transport; local JobManager continues. */
@@ -339,6 +366,8 @@ export class RunnerConnection {
           welcomed = true;
           welcomedAtMs = Date.now();
           this.welcomedSocket = socket;
+          this.queueNegotiated = message.extensions?.runmesh_job_queue === 1;
+          this.runtime.jobs?.setQueueAuthorizer?.(this.queueNegotiated ? (input,job) => this.authorizeQueuedJob(input,job.job_id,job.created_by_client_id) : undefined);
           this.onStateChange("online");
           this.lastSyncSnapshot = undefined;
           if (message.desired_policy !== undefined) this.queueDesiredPolicy(socket, message.desired_policy);
