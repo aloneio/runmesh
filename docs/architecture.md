@@ -6,7 +6,8 @@ MCP client with per-client secret URL and sticky active_runner_id
         ▼
 Cloudflare Worker
   ├─ setup/login/admin HTML
-  ├─ RegistryDO (SQLite)
+  ├─ RegistryDO (SQLite; core authority and optional Job snapshots)
+  ├─ D1 (optional metadata-only audit history)
   └─ RunnerDO per runner_id (hibernatable WebSocket)
         │ outbound-only WSS
         ▼
@@ -58,7 +59,7 @@ The authentication throttle reserves attempts transactionally before expensive p
 
 Admin/MCP HTML uses no-store/referrer/no-sniff/frame protections and CSRF checks. The emitted dashboard uses inline style/script content, so its CSP currently requires `unsafe-inline`; replacing that with nonce/hash or external resources is deferred hardening.
 
-The deployed core uses Workers plus SQLite-backed Durable Objects only. It does not include OAuth, AI/model APIs, Cloudflare Sandbox, Cloudflare Containers, GitHub Actions runtime, KV, D1, R2, Queues, Dynamic Workers, tunnels, or inbound services. The Runner's workspace policy is not an OS sandbox; operators must provide external isolation for hostile code.
+The authorization and transport core uses Workers plus SQLite-backed Durable Objects. Production optionally stores MCP audit metadata in independent D1 history; see [quota isolation](quota-resilience.md). It does not include OAuth, AI/model APIs, Cloudflare Sandbox, Cloudflare Containers, GitHub Actions runtime, KV, R2, Queues, Dynamic Workers, tunnels, or inbound services. The Runner's workspace policy is not an OS sandbox; operators must provide external isolation for hostile code.
 
 ## Free Plan posture
 
@@ -81,3 +82,7 @@ standard input, not a temporary credential file. The complete convenience
 command is credential material and may be recorded in command history or
 process arguments. The 0.1.1 production gate is enabled only after independent signed-asset
 verification; development retains its disabled gate.
+
+## Quota-isolation amendment
+
+The [quota-isolation contract](quota-resilience.md) adds transactional retention counters, independent optional D1 audit, and a per-client cloud Job recording preference. Core authorization stays in the existing DO namespace. Unrecorded Jobs have no offline cloud snapshot; workspace-bound live operations still require current Registry and Runner permission checks. Physical cleanup is bounded and can lag the seven-day visibility window during backlog or storage failure.
