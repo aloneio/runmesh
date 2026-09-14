@@ -42,3 +42,20 @@ it("all primary authenticated pages and lazy history controls render a single ch
 it("unknown data-like text cannot resolve Object prototype methods as translations",()=>{
  for(const value of ["constructor","__proto__","toString","valueOf"])expect(localizeUiText(value,"zh-CN")).toBe(value);
 });
+
+it("compound browser titles translate every known UI segment, not only the first label",()=>{
+ for(const [en,zh] of [
+  ["Runmesh · Agent Control Plane login","Runmesh · 智能体控制平面登录"],
+  ["Dashboard · Runmesh · Agent Control Plane","仪表盘 · Runmesh · 智能体控制平面"],
+  ["Runmesh · Agent Control Plane enrollment","Runmesh · 智能体控制平面注册"],
+ ]){expect(localizeUiText(en!,"zh-CN")).toBe(zh);expect(localizeUiText(en!,"en")).toBe(en);}
+});
+it("the public login response has a fully localized browser title",async()=>{
+ const id=env.REGISTRY.idFromName(`title-login-${crypto.randomUUID()}`),stub=env.REGISTRY.get(id);
+ await runInDurableObject(stub,instance=>{instance.setupAdmin("synthetic-title-admin",Date.now());});
+ const response=await worker.fetch(new Request("https://worker.test/login?lang=zh-CN"),{...env,REGISTRY:{idFromName:()=>id,get:()=>stub} as unknown as typeof env.REGISTRY},{} as ExecutionContext);
+ expect(response.status).toBe(200);
+ const html=await response.text(),title=/<title>([^<]+)<\/title>/.exec(html)?.[1];
+ expect(title).toBe("Runmesh · 智能体控制平面登录");
+ expect(response.headers.get("content-language")).toBe("zh-CN");
+});
