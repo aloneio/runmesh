@@ -71,7 +71,7 @@ export async function loadAdminJobPage(url: URL, runnerId: string, jobId: string
         if (result?.job_id === jobId && result.stream === stream && typeof result.data === "string") {
           const next = typeof result.next_cursor === "string" && validCursor(result.next_cursor) && Number(result.next_cursor) > Number(cursor ?? 0) ? result.next_cursor : undefined;
           const offset = typeof result.offset === "number" && Number.isSafeInteger(result.offset) && result.offset > 0 ? result.offset : undefined;
-          const older = offset === undefined ? "" : `<a class="button secondary" href="${escapeHtml(link(`stream=${stream}&cursor=${Math.max(0,offset-limit)}&bytes=${limit}`))}">Previous log chunk / 更早片段</a>`;
+          const older = offset === undefined ? "" : `<a class="button secondary" href="${escapeHtml(link(`stream=${stream}&cursor=${Math.max(0,offset-limit)}&bytes=${limit}`))}">Previous log chunk</a>`;
           logPanel = `<h3>${escapeHtml(stream)} · ${limit/1024} KiB</h3><pre class="code-block" style="white-space:pre-wrap;overflow-wrap:anywhere"><code>${escapeHtml(bytePrefix(result.data,limit))}</code></pre>${older}${next === undefined || view === "tail" ? "" : `<a class="button secondary" href="${escapeHtml(link(`stream=${stream}&cursor=${next}&bytes=${limit}`))}">Next log chunk</a>`}`;
         }
       } catch { /* Local logs are best effort; keep the saved metadata visible. */ }
@@ -88,13 +88,13 @@ export async function loadAdminJobPage(url: URL, runnerId: string, jobId: string
   const logControls = `<form method="get" action="${path}" class="scope-editor-form">
     ${workspaceId === null ? "" : `<input type="hidden" name="workspace_id" value="${escapeHtml(workspaceId)}">`}
     <select name="stream"><option value="stdout">stdout</option><option value="stderr"${stream === "stderr" ? " selected" : ""}>stderr</option></select>
-    <label>Log bytes / 日志片段大小<select name="bytes">${[1024,4096,16384].map((n) => `<option value="${n}"${n === limit ? " selected" : ""}>${n/1024} KiB</option>`).join("")}</select></label>
-    <select name="view"><option value="tail">Latest tail / 最新末尾</option><option value="head"${view === "head" ? " selected" : ""}>Beginning / 开头</option></select>
-    <button class="button secondary">Read / Refresh · 读取 / 刷新</button></form>`;
+    <label>Log bytes<select name="bytes">${[1024,4096,16384].map((n) => `<option value="${n}"${n === limit ? " selected" : ""}>${n/1024} KiB</option>`).join("")}</select></label>
+    <select name="view"><option value="tail">Latest tail</option><option value="head"${view === "head" ? " selected" : ""}>Beginning</option></select>
+    <button class="button secondary">Read / Refresh</button></form>`;
   return {
     ok: true,
     title: `Job details · ${jobId}`,
-    body: `<section class="page-heading"><div><h1>Job details</h1><p class="lede">${JOBS_EXPLANATION}</p></div><a class="button secondary" href="${escapeHtml(refresh)}">Refresh</a></section><p><a href="/admin/runners/${encodeURIComponent(runnerId)}">Back to Runner</a></p><section class="panel">${workspaceId === null ? jobSnapshotNote() : '<p class="muted">Live Runner metadata, loaded on request. / 点击后读取的 Runner 当前任务状态。</p>'}<div class="table-wrap"><table class="data-table"><tbody>${fields.map(([label, value]) => `<tr><th>${label}</th><td class="mono">${escapeHtml(value)}</td></tr>`).join("")}</tbody></table></div></section><section class="panel"><h2>Job logs</h2><p><a class="button secondary" href="${escapeHtml(link("stream=stdout"))}">Read stdout</a> <a class="button secondary" href="${escapeHtml(link("stream=stderr"))}">Read stderr</a></p>${logControls}${logPanel}</section>`,
+    body: `<section class="page-heading"><div><h1>Job details</h1><p class="lede">${JOBS_EXPLANATION}</p></div><a class="button secondary" href="${escapeHtml(refresh)}">Refresh</a></section><p><a href="/admin/runners/${encodeURIComponent(runnerId)}">Back to Runner</a></p><section class="panel">${workspaceId === null ? jobSnapshotNote() : '<p class="muted">Live Runner metadata, loaded on request.</p>'}<div class="table-wrap"><table class="data-table"><tbody>${fields.map(([label, value]) => `<tr><th>${label}</th><td class="mono">${escapeHtml(value)}</td></tr>`).join("")}</tbody></table></div></section><section class="panel"><h2>Job logs</h2><p><a class="button secondary" href="${escapeHtml(link("stream=stdout"))}">Read stdout</a> <a class="button secondary" href="${escapeHtml(link("stream=stderr"))}">Read stderr</a></p>${logControls}${logPanel}</section>`,
   };
 }
 
