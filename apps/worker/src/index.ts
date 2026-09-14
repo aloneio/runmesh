@@ -1055,12 +1055,24 @@ async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, baseUrl
     const code = codeResult.code;
     try {
       const cancelled = await cancelRunnerPolicyMutation(env, runnerId, mutationId);
-      if (!cancelled.ok) return adminError(503, "Enrollment code cleanup is uncertain; Runner remains safely fenced.");
-    } catch { return adminError(503, "Enrollment code cleanup is uncertain; Runner remains safely fenced."); }
+      if (!cancelled.ok) return enrollmentCleanupUnavailable(cancelled);
+    } catch { return enrollmentCleanupUnavailable(); }
     return runnerEnrollmentPage(env, baseUrl, runnerId, code, String(form.get("csrf_token") ?? ""), true, selection.mode, selection.confirmed, codeResult);
   }
   return adminError(404, "Runner enrollment action is not available.");
 }
+/** Report the failed phase without exposing provider messages, enrollment codes or tokens. */
+async function enrollmentCleanupUnavailable(upstream?: Response): Promise<Response> {
+  const value = upstream === undefined ? undefined : record(await json(upstream));
+  const candidate = record(value?.error)?.code;
+  const safe = new Set(["mutation_state_changed", "mutation_mismatch", "mutation_committed", "mutation_uncertain", "no_active_mutation", "runner_unavailable", "registry_unavailable", "control_plane_unavailable"]);
+  const code = typeof candidate === "string" && safe.has(candidate) ? candidate : "cleanup_unavailable";
+  const response = adminError(503, `Enrollment code was created, but the temporary Runner safety lock could not be released. Diagnostic: ${code}. No enrollment code was disclosed. Regeneration does not require deleting or reinstalling the Runner. 注册码已创建，但临时隔离解除失败；未显示注册码，请勿因此删除或重装 Runner。`);
+  response.headers.set("x-runmesh-error-code", code);
+  response.headers.set("x-runmesh-error-phase", "enrollment_fence_release");
+  return response;
+}
+
 async function consumeInternalNonce(env: WorkerEnv, nonce: string, expiresAtMs: number): Promise<boolean> {
   const body = JSON.stringify({ nonce, expires_at_ms: expiresAtMs });
   const headers = await signedInternalHeaders(env, "POST", "/auth/internal-nonces", body);
