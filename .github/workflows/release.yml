@@ -136,6 +136,8 @@ jobs:
           # still claims the triggering commit.
           git diff --exit-code
           mv "$packed" "release/assets/runmesh-runner-${RELEASE_VERSION}.tgz"
+      - name: Exercise the exact portable archive end to end before signing
+        run: node scripts/test-packed-runner.mjs "release/assets/runmesh-runner-${RELEASE_VERSION}.tgz"
       - name: Generate deterministic manifest and checksums
         run: |
           set -euo pipefail
@@ -205,6 +207,8 @@ jobs:
             echo "GitHub Release already exists for tag: $tag" >&2
             exit 1
           fi
+      - name: Require the audited production control plane before creating a release tag
+        run: node scripts/check-live-release-prereqs.mjs
       - name: Create annotated release tag
         env:
           GH_TOKEN: ${{ github.token }}
