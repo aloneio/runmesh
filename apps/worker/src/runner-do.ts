@@ -1,3 +1,4 @@
+import { signQueueGrant, verifyQueueGrant, launchDigest } from "./queue-grant.js";
 import { ControlPlaneUnavailableError, controlPlaneUnavailableResponse, registryRejectedSession } from "./control-plane-errors.js";
 import {
   ProtocolFrameError,
@@ -51,6 +52,7 @@ interface ConnectionAttachment {
   protocolVersion: number;
   authenticated: boolean;
   readonly helloDeadlineMs: number;
+  queueProtocol?: 1;
 }
 
 const HELLO_DEADLINE_MS = 10_000;
@@ -372,6 +374,7 @@ export class RunnerDO {
       }
       attachment.lifecycleId = body.lifecycle_id;
       attachment.protocolVersion = negotiation.protocol_version;
+      if (message.runner.capabilities.labels.job_queue_protocol === "1") attachment.queueProtocol = 1;
       ws.serializeAttachment(attachment);
       // `/connect` allocates/publishes the epoch, but a delayed response can
       // race a newer connection. Re-read the complete transport identity
@@ -403,7 +406,7 @@ export class RunnerDO {
       const welcome: WireMessage = {
         type: "runner.welcome", protocol_version: negotiation.protocol_version, request_id: message.request_id,
         session_id: attachment.sessionId, negotiated_protocol_version: negotiation.protocol_version,
-        ...(isRecord(body.job_history) ? { extensions: { runmesh_job_history: body.job_history as never } } : {}),
+        extensions: { ...(isRecord(body.job_history) ? {runmesh_job_history:body.job_history as never} : {}), ...(attachment.queueProtocol === 1 ? {runmesh_job_queue:1} : {}) },
         worker: {
           worker_id: this.env.WORKER_ID ?? "runmesh", worker_version: PRODUCT_VERSION,
           capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: ["echo", "runner.info"], labels: { runtime: "cloudflare" } },
@@ -444,6 +447,28 @@ export class RunnerDO {
         this.bridgeWaiters.delete(message.request_id);
         waiter.resolve(message);
       }
+      return;
+    }
+    if (message.type === "runner.queue_check") {
+      const grant = await verifyQueueGrant(this.env.INTERNAL_CONTROL_SECRET ?? "", message.grant);
+      let allowed = false;
+      if (attachment.queueProtocol === 1 && grant !== undefined && message.runner_id === attachment.runnerId
+        && grant.runner_id === attachment.runnerId && grant.lifecycle_id === attachment.lifecycleId
+        && grant.credential_version === attachment.credentialVersion
+        && await this.admitOrReconcileProtectedRpc(attachment,grant.policy_revision,grant.policy_checksum)) {
+        const response = await this.registryRequest(attachment.runnerId,"/mcp-authorization",{method:"POST",body:JSON.stringify({
+          client_id:grant.client_id,secret_version:grant.secret_version,method:"exec.start",workspace_id:grant.workspace_id,
+          policy_revision:grant.policy_revision,policy_checksum:grant.policy_checksum,
+        })});
+        let decision: unknown; try { decision=await response.json(); } catch { decision=undefined; }
+        allowed=response.ok && isRecord(decision) && decision.ok===true;
+      }
+      // No await after the final local session/policy fence. A grant never
+      // authorizes by itself, and this decision never executes a command.
+      allowed = allowed && grant !== undefined && this.admissionState !== undefined
+        && this.admitsProtectedRpc(this.admissionState,attachment,grant.policy_revision,grant.policy_checksum)
+        && this.ctx.getWebSockets("runner").includes(ws);
+      ws.send(encodeWireFrame({type:"rpc.response",protocol_version:attachment.protocolVersion,request_id:message.request_id,result:{authorized:allowed}}));
       return;
     }
     if (message.type === "job.output") {
@@ -577,6 +602,25 @@ export class RunnerDO {
       if (authorized.status === 429 || authorized.status >= 500 || !isRecord(decision) || typeof decision.ok !== "boolean") return controlPlaneUnavailableResponse(authorized);
       if (!authorized.ok || decision.ok !== true) return Response.json({ error: { code: "permission_denied", message: "MCP authorization is no longer valid" } }, { status: 403 });
     }
+    // Only the final authenticated principal may be embedded in a queue grant.
+    // Never accept a caller-supplied grant or creator identity at this boundary.
+    let dispatchParams = input.params;
+    if (attachment.queueProtocol === 1 && (method === "exec.start" || method === "exec.run") && isRecord(input.params)) {
+      const clean = { ...input.params }; delete clean.queue_grant;
+      const principal = input.mcp_authorization;
+      if (isRecord(principal) && typeof principal.client_id === "string" && isSafePositiveInteger(principal.secret_version)
+        && typeof clean.workspace_id === "string" && validLifecycleId(attachment.lifecycleId)
+        && requestPolicyRevision !== undefined && expectedPolicyChecksum !== undefined) {
+        clean.created_by_client_id = principal.client_id;
+        clean.queue_grant = await signQueueGrant(this.env.INTERNAL_CONTROL_SECRET ?? "", {
+          version:1, runner_id:attachment.runnerId,lifecycle_id:attachment.lifecycleId,credential_version:attachment.credentialVersion,
+          client_id:principal.client_id,secret_version:principal.secret_version,workspace_id:clean.workspace_id,
+          policy_revision:requestPolicyRevision,policy_checksum:expectedPolicyChecksum,
+          launch_digest:await launchDigest(clean),expires_at_ms:Date.now()+3600000,nonce:crypto.randomUUID(),
+        });
+      }
+      dispatchParams=clean;
+    }
     // No await is allowed between this final local fence and socket.send.
     // Otherwise a policy mutation can win while Registry authorization awaits.
     if (requestPolicyRevision !== undefined && expectedPolicyChecksum !== undefined
@@ -584,7 +628,7 @@ export class RunnerDO {
       return Response.json({ error: { code: "stale_policy", message: "Runner policy changed before dispatch" } }, { status: 409 });
     }
     const requestId = `bridge-${crypto.randomUUID()}`;
-    const parsed = RpcRequestSchema.safeParse({ type: "rpc.request", protocol_version: attachment.protocolVersion, request_id: requestId, method: input.method, params: input.params, ...(requestPolicyRevision === undefined ? {} : { policy_revision: requestPolicyRevision }) });
+    const parsed = RpcRequestSchema.safeParse({ type: "rpc.request", protocol_version: attachment.protocolVersion, request_id: requestId, method: input.method, params: dispatchParams, ...(requestPolicyRevision === undefined ? {} : { policy_revision: requestPolicyRevision }) });
     if (!parsed.success) return Response.json({ error: { code: "invalid_request", message: "invalid RPC request" } }, { status: 400 });
     const reply = await new Promise<BridgeReply>((resolve) => {
       const timer = setTimeout(() => {

@@ -1,3 +1,4 @@
+import { ZH_UI_TEXT } from "../src/ui-catalog.js";
 import { env, SELF, runInDurableObject } from "cloudflare:test";
 import { hmacHex, passwordVerifier, randomBase64Url, sha256Hex } from "../src/security.js";
 import { RegistryDO, RunnerDO, runnerReleaseDescriptor } from "../src/index.js";
@@ -593,7 +594,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     // in the copyable command, preventing Host-header metacharacters from
     // becoming a second command when an operator pastes the snippet.
     expect(enrollment).toContain("--server &#039;https://worker.test/runner/enroll&#039; --code-stdin");
-    expect(enrollment).toContain("data-copy"); expect(enrollment).toContain("expires in 30 minutes");
+    expect(enrollment).toContain("data-copy"); expect(enrollment).toContain("This code is valid until"); expect(enrollment).toContain("and can be used once.");
     expect(enrollment).toContain("One-time enrollment code");
     expect(enrollment).toContain('name="code_valid_days"');
     expect(enrollment).not.toContain('type="datetime-local"');
@@ -601,7 +602,8 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(createdRunner?.valid_until_ms).toBeGreaterThan(Date.now() + 6 * 24 * 60 * 60 * 1_000);
     const createdEnrollment = await runInDurableObject(env.REGISTRY.get(env.REGISTRY.idFromName("registry")), (instance) => instance.latestRunnerEnrollment("dashboard-runner"));
     expect(createdEnrollment?.expires_at_ms).toBeGreaterThan(Date.now() + 1 * 24 * 60 * 60 * 1_000);
-    const enrollmentUiText = parseUiTextMap(enrollment);
+    const enrollmentUiText = ZH_UI_TEXT;
+    expect(enrollment).not.toContain("var ZH_UI_TEXT=");
     expect(enrollmentUiText["Enroll Runner"]).toBe("注册 Runner");
     expect(enrollmentUiText["Target Runner ID"]).toBe("目标 Runner ID");
     expect(enrollmentUiText["One-time enrollment code"]).toBe("一次性注册代码");
@@ -650,11 +652,16 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(dashboard.headers.get("content-security-policy")).toContain("script-src 'nonce-");
     expect(dashboard.headers.get("content-security-policy")).not.toContain("script-src 'unsafe-inline'");
     const dashboardHtml = await dashboard.text();
-    for (const section of ["Dashboard", "MCP Clients", "Runners", "Settings", "Active MCP clients", "Online / total runners", "Running jobs", "Recent jobs", "Add Runner", "Add MCP Client"]) expect(dashboardHtml).toContain(section);
-    expect(dashboardHtml).toContain('"Clients":"MCP 客户端"');
+    for (const section of ["Dashboard", "MCP Clients", "Runners", "Settings", "Active MCP clients", "Online / total runners", "Active shell jobs", "Recent jobs", "Recent runners", "Recent MCP clients"]) expect(dashboardHtml).toContain(section);
+    const chineseDashboard = await SELF.fetch("https://worker.test/admin?lang=zh-CN", { headers: { cookie: cookies(adminJar) } });
+    expect(chineseDashboard.headers.get("content-language")).toBe("zh-CN");
+    const chineseDashboardHtml = await chineseDashboard.text();
+    expect(chineseDashboardHtml).toContain("仪表盘");
+    expect(chineseDashboardHtml).toContain("最近任务");
+    expect(chineseDashboardHtml).not.toContain("<h1>Dashboard</h1>");
     expect(dashboardHtml).toMatch(headerLogoSvgTag);
     expect(dashboardHtml).not.toMatch(/<header\b[^>]*\bapp-header\b[^>]*>[\s\S]*?<img\b/i);
-    expect(dashboardHtml).toContain('data-lang-toggle="zh-CN"'); expect(dashboardHtml).toContain("var ZH_UI_TEXT="); expect(dashboardHtml).toContain("智能体控制平面"); expect(dashboardHtml).toContain("translateTextNodes"); expect(dashboardHtml).toContain("runmesh_lang");
+    expect(dashboardHtml).toContain('data-lang-toggle="zh-CN"'); expect(dashboardHtml).not.toContain("var ZH_UI_TEXT="); expect(dashboardHtml).not.toContain("智能体控制平面"); expect(dashboardHtml).not.toContain("translateTextNodes"); expect(dashboardHtml).toContain("runmesh_lang");
     expect(dashboardHtml).toContain("@media(max-width:800px)"); expect(dashboardHtml).toContain("navigator.clipboard");
     expect(dashboardHtml).toContain('class="button secondary" href="/admin">Refresh</a>');
     expect(dashboardHtml).not.toContain("data-refresh");
@@ -689,7 +696,8 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(adminScriptText).not.toContain("runmesh-theme");
     expect(adminScriptText).not.toContain("data-theme-toggle");
     expect(localeBody).not.toMatch(/\b(?:preference|applyTheme|updateThemeLabel)\s*\(/);
-    const zhUiText = parseUiTextMap(dashboardHtml);
+    const zhUiText = ZH_UI_TEXT;
+    expect(dashboardHtml).not.toContain("var ZH_UI_TEXT=");
     expect(zhUiText["MCP Client"]).toBe("MCP 客户端");
     const descriptionTranslations: readonly [string, RegExp][] = [
       ["Inspect workspaces and read files.", /\b(?:Inspect|workspaces|read|files)\b/i],
@@ -874,14 +882,6 @@ function inlineScriptContaining(html: string, marker: string): string {
   const script = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map((match) => match[1] ?? "").find((value) => value.includes(marker));
   if (script === undefined) throw new Error(`inline script marker absent: ${marker}`);
   return script;
-}
-function parseUiTextMap(html: string): Record<string, string> {
-  const script = inlineScriptContaining(html, "var ZH_UI_TEXT=");
-  const encoded = /var\s+ZH_UI_TEXT\s*=\s*([\s\S]*?);\s*function\s+\w+/.exec(script)?.[1];
-  if (encoded === undefined) throw new Error("Chinese UI text map absent");
-  const parsed: unknown = JSON.parse(encoded);
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Chinese UI text map is invalid");
-  return parsed as Record<string, string>;
 }
 function cookieFrom(response: Response, name: string): string { const setCookie = response.headers.get("set-cookie") ?? ""; const value = new RegExp(`${name}=([^;]+)`).exec(setCookie)?.[1]; if (value === undefined) throw new Error(`cookie ${name} absent`); return value; }
 function jar(entries: readonly (readonly [string, string])[]): CookieJar { return new Map(entries); }
