@@ -1,24 +1,22 @@
 import { readFile } from "node:fs/promises";
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
+import { reviewedReleaseSource } from "../scripts/runtime-config-tools.mjs";
 
 test("top-level Worker config is reviewed production while explicit development stays fail-closed", async () => {
   const source = await readFile(new URL("../apps/worker/wrangler.jsonc", import.meta.url), "utf8");
   const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
   const root = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.equal(config.name, "runmesh");
-  assert.equal(config.vars.WORKER_ID, "worker-production");
-  assert.equal(config.vars.RUNMESH_PUBLIC_ORIGIN, "https://runmesh.aloneio.workers.dev");
+  assert.deepEqual(config.vars, {});
   const releaseState=JSON.parse(await readFile(new URL("../release/release-state.json",import.meta.url),"utf8"));
   assert.equal(releaseState.version,root.version);
   assert.ok(["candidate","released"].includes(releaseState.state));
-  assert.equal(config.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE,releaseState.state === "released" ? root.version : "");
+  assert.equal(await readFile(new URL("../apps/worker/src/generated-release.ts",import.meta.url),"utf8"), reviewedReleaseSource(root.version,releaseState));
   assert.equal(config.env.production.name, config.name);
   assert.deepEqual(config.env.production.vars, config.vars);
   assert.equal(config.env.development.name, "runmesh-development");
-  assert.equal(config.env.development.vars.WORKER_ID, "worker-development");
-  assert.equal(config.env.development.vars.RUNMESH_PUBLIC_ORIGIN, "");
-  assert.equal(config.env.development.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE, "");
+  assert.deepEqual(config.env.development.vars, { RUNMESH_ENVIRONMENT: "development" });
   assert.equal(config.env.test.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE, "");
 });
 
