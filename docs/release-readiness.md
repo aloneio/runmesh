@@ -1,6 +1,6 @@
 # Release readiness — 0.1.2
 
-**State: CANDIDATE, not RELEASED. Hosted distribution for this source version is DISABLED.** The existing deployed v0.1.1 installer remains unchanged until a verified activation commit is pushed to GitLab. `release/release-state.json` is the machine-checked lifecycle record; setting it to `released` requires the published commit and independently downloaded manifest hash.
+**State: RELEASED. Hosted distribution: ENABLED in the checked-in production configuration.** The immutable stable release was published at `2026-09-14T07:46:46Z` from `0b45a519febfea865bc562f4b147b616ab6ddef6` by successful Release workflow `34819111848`. All nine public assets were fetched without GitHub authentication and independently checked against the trusted source keyring. The manifest SHA256 is `abfd4d24a398abe1156ea2a8e600887f04822c854a66fea6b1fdef8dfc00d2f6`; the Runner tarball SHA256 is `dd0b766c3f96b66450b56f78a6c70ef9bb2eaadeee7d3e300bbb57316646056a` (681483 bytes). Production activation still requires this commit to reach Cloudflare via GitLab dev; do not equate this configuration state with a completed deployment. `release/release-state.json` records the reviewed publication identity.
 
 ## Release contract
 
@@ -12,7 +12,7 @@ The exact protected dev commit must pass `verify-all` across supported Node LTS 
 
 The signed manifest binds the artifact hash/size and commit. Draft assets must be downloaded and checked before publication, followed by a second public download check. Repository immutable releases must be enabled and the final release must report `immutable: true`.
 
-Only after these checks is the state RELEASED and hosted distribution ENABLED with `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.2`. Activation must reach both GitHub and GitLab dev, followed by public release/installer probes and an authenticated transport canary. A successful webhook or CI alone is not proof of production activation.
+Those publication checks passed; this activation sets the state RELEASED and hosted distribution ENABLED with `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.2`. Activation must reach both GitHub and GitLab dev, followed by public release/installer probes and an authenticated transport canary. A successful webhook or CI alone is not proof of production activation.
 
 ## Scope and cost evidence
 

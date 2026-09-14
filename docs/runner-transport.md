@@ -131,7 +131,7 @@ The Runner path policy is not a sandbox. No OAuth, AI/model API, Cloudflare Sand
 
 Local tests cover Worker/Runner protocol, auth UI, client URL lifecycle, sticky selection, filesystem and job pagination, disconnect/reconnect, cross-client job discovery, patch/Git safety, profile/service behavior, and bounded environment discovery. They do not prove fresh-namespace provisioning, account quotas, infrastructure log redaction, automatic installation, host lifecycle execution, or external MCP client compatibility.
 
-## Current security contract (0.1.1 published stable patch)
+## Current security contract (0.1.2 published stable release)
 
 First administrator setup requires no additional bootstrap token and remains
 CSRF-protected, same-origin and atomic first-success-wins. The default Runner
@@ -146,5 +146,5 @@ setup. Scripts accept a positional code, `--code CODE`, or `--code=CODE`; omitti
 the code retains the hidden terminal prompt. The downstream Runner receives
 standard input, not a temporary credential file. The complete convenience
 command is credential material and may be recorded in command history or
-process arguments. The 0.1.1 production gate is enabled only after independent signed-asset
+process arguments. The 0.1.2 production gate is enabled only after independent signed-asset
 verification; development retains its disabled gate.

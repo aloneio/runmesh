@@ -4,7 +4,7 @@
 
 Production selects `RUNMESH_JOB_HISTORY_BACKEND=d1` using the existing `HISTORY_DB`. Optional Job history is packed metadata, not one SQL row per Job and not full stdout/stderr uploads. Core login, enrollment, current permissions and transport identity remain in RegistryDO. A failed archive cannot revoke credentials or replay a command.
 
-Worker-side write throttling and manual UI support the existing Runner. Source-side event suppression, archive receipts and local day-based cleanup require `capabilities.labels.job_history_protocol=1`. These capabilities are implemented in development source but **are not in the immutable v0.1.1 artifact**. This change neither replaces that release nor restarts installed Runners. Distributing the new Runner requires a new reviewed release. Unsupported peers receive no new welcome settings.
+Worker-side write throttling and manual UI support the existing Runner. Source-side event suppression, archive receipts and local day-based cleanup require `capabilities.labels.job_history_protocol=1`. These capabilities are shipped in the signed immutable **v0.1.2** artifact and are not retroactively added to v0.1.1. Publication neither replaces old assets nor restarts or upgrades installed Runners. Unsupported peers receive no new welcome settings.
 
 ## Settings
 
