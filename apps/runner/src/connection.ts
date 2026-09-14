@@ -1,3 +1,4 @@
+import { parseRunnerJobHistory, type RunnerJobHistory } from "./job-history.js";
 import {
   decodeWireFrame,
   encodeWireFrame,
@@ -64,6 +65,10 @@ export class RunnerConnection {
   private readonly heartbeatMs: number;
   private readonly rpcTimeoutMs: number;
   private readonly syncMs: number;
+  private jobHistory: RunnerJobHistory | undefined;
+  private historyPending: {requestId:string;snapshot:string;socket:WebSocket} | undefined;
+  private cleanupTimer: ReturnType<typeof setInterval> | undefined;
+  private cleanupBusy = false;
   private readonly random: () => number;
   private readonly sleep: (delayMs: number) => Promise<void>;
   private readonly onStateChange: (state: "connecting" | "online" | "offline") => void;
@@ -140,6 +145,7 @@ export class RunnerConnection {
     // the optional shape here for injected test/runtime callers, but never
     // synthesize or transport a second compatibility representation.
     const serviceIdentity = executionMode === undefined ? undefined : sanitizeServiceIdentity(options.serviceIdentity ?? currentProcessServiceIdentity());
+    const capabilities = discoverCapabilities(this.config.maxConcurrentJobs ?? 1);
     this.metadata = {
       runner_id: this.config.runnerId,
       runner_version: options.version ?? RUNNER_VERSION,
@@ -148,7 +154,7 @@ export class RunnerConnection {
       ...(executionMode === undefined ? {} : { execution_mode: executionMode }),
       ...(serviceIdentity === undefined ? {} : { service_identity: serviceIdentity }),
       ...(executionMode === undefined ? {} : { privilege_state: processPrivilegeState(executionMode, serviceIdentity) }),
-      capabilities: discoverCapabilities(this.config.maxConcurrentJobs ?? 1),
+      capabilities: { ...capabilities, labels: { ...capabilities.labels, job_history_protocol: "1" } },
     };
   }
 
@@ -206,6 +212,7 @@ export class RunnerConnection {
     this.lifecycleGeneration += 1;
     this.stopped = true;
     this.cancelReconnectSleep?.();
+    if (this.cleanupTimer !== undefined) clearInterval(this.cleanupTimer);
     if (this.heartbeatTimer !== undefined) clearInterval(this.heartbeatTimer);
     if (this.syncTimer !== undefined) clearInterval(this.syncTimer);
     this.welcomedSocket = undefined;
@@ -313,6 +320,22 @@ export class RunnerConnection {
             socket.close(1008, "duplicate welcome");
             return;
           }
+          const rawHistory = message.extensions?.runmesh_job_history;
+          const history = rawHistory === undefined ? undefined : parseRunnerJobHistory(rawHistory);
+          if (rawHistory !== undefined && history === undefined) { socket.close(1008,"invalid history settings"); return; }
+          const priorHistory = this.jobHistory;
+          this.jobHistory = history;
+          this.historyPending = undefined;
+          if (this.cleanupTimer !== undefined) { clearInterval(this.cleanupTimer); this.cleanupTimer = undefined; }
+          if (history !== undefined || priorHistory !== undefined) this.runtime.configureJobRetention(history?.local_retention_days ?? 0);
+          if ((history?.local_retention_days ?? 0) > 0) {
+            this.cleanupTimer = setInterval(() => {
+              if (this.stopped || this.cleanupBusy) return;
+              this.cleanupBusy = true;
+              void this.runtime.cleanupJobs().catch(() => undefined).finally(() => { this.cleanupBusy = false; });
+            },900_000);
+            this.cleanupTimer.unref();
+          }
           welcomed = true;
           welcomedAtMs = Date.now();
           this.welcomedSocket = socket;
@@ -327,7 +350,7 @@ export class RunnerConnection {
           this.syncTimer = setInterval(() => {
             if (this.socket !== socket || this.stopped) return;
             void this.sendSync(socket).catch(() => undefined);
-          }, this.syncMs);
+          }, this.jobHistory === undefined ? this.syncMs : this.jobHistory.interval_seconds * 1000);
           // Stay pending until close so start() reconnects only after a real session ends.
           return;
         }
@@ -346,6 +369,13 @@ export class RunnerConnection {
         }
         if (message.type === "rpc.request") {
           void this.respondToRpc(socket, message, () => welcomed && this.socket === socket && !this.stopped);
+          return;
+        }
+        if (message.type === "rpc.response" && this.historyPending?.socket === socket && message.request_id === this.historyPending.requestId) {
+          const result = message.result;
+          if (typeof result === "object" && result !== null && !Array.isArray(result)
+            && ["recorded","unchanged","disabled"].includes(String(result.history_status))) this.lastSyncSnapshot = this.historyPending.snapshot;
+          this.historyPending = undefined;
           return;
         }
         if (message.type === "rpc.response" || message.type === "rpc.error") {
@@ -517,7 +547,8 @@ export class RunnerConnection {
 
   private async sendSyncNow(socket: WebSocket): Promise<void> {
     if (socket !== this.socket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
-    const jobs = await this.runtime.syncJobs();
+    if (this.jobHistory?.mode === "off") return;
+    const jobs = await this.runtime.syncJobs(this.jobHistory === undefined ? 100 : 500);
     if (socket !== this.socket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
     const workspaces = this.runtime.syncWorkspaceMetadata();
     const snapshot = JSON.stringify({ workspaces, jobs });
@@ -527,13 +558,15 @@ export class RunnerConnection {
       protocol_version: PROTOCOL_CURRENT_VERSION,
       runner_id: this.config.runnerId,
       sync_sequence: this.syncSequence++,
+      ...(this.jobHistory === undefined ? {} : {extensions:{runmesh_history_ack:true}}),
       sent_at_ms: Date.now(),
       workspaces,
       jobs,
     };
     try {
+      if (this.jobHistory !== undefined) this.historyPending = {requestId:`history-${sync.sync_sequence}`,snapshot,socket};
       socket.send(encodeWireFrame(sync));
-      this.lastSyncSnapshot = snapshot;
+      if (this.jobHistory === undefined) this.lastSyncSnapshot = snapshot;
     } catch { /* close handler drives reconnect */ }
   }
 
@@ -569,6 +602,9 @@ export class RunnerConnection {
     // a permanent credential rejection and stops retrying. The welcome handler
     // and the periodic sync reconcile any lifecycle event dropped here.
     if (socket === undefined || socket !== this.welcomedSocket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
+    // Batched/off modes do not emit lifecycle frames or event-triggered full
+    // snapshots. The local durable Job store is sampled by the sync timer.
+    if (this.jobHistory !== undefined && this.jobHistory.mode !== "immediate") return;
     const job = { job_id: event.job.job_id, workspace_id: event.job.workspace_id, status: event.job.status, created_at_ms: event.job.created_at_ms, updated_at_ms: event.job.updated_at_ms, ...(event.job.created_by_client_id === null ? {} : { created_by_client_id: event.job.created_by_client_id }), ...(event.job.request_id === undefined || event.job.request_id === null ? {} : { request_id: event.job.request_id }), runner_id: this.config.runnerId } as const;
     try {
       if (event.type === "started") {

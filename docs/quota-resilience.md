@@ -10,7 +10,7 @@ References: [DO pricing](https://developers.cloudflare.com/durable-objects/platf
 
 ## Storage paths
 
-Core credentials, enrollment and policy stay in RegistryDO SQLite. New audit metadata uses D1 when `RUNMESH_AUDIT_BACKEND=d1` and `HISTORY_DB` is bound. A missing/failing D1 binding reports degraded history and never silently falls back to DO writes. Cloud Job snapshots remain in RegistryDO but are optional per creating client. Full commands, output, file bodies, diffs and credentials remain excluded from cloud audit.
+Core credentials, enrollment and policy stay in RegistryDO SQLite. New audit metadata uses D1 when `RUNMESH_AUDIT_BACKEND=d1` and `HISTORY_DB` is bound. A missing/failing D1 binding reports degraded history and never silently falls back to DO writes. Production Job snapshots use bounded packed D1 rows when `RUNMESH_JOB_HISTORY_BACKEND=d1`; the SQLite path remains for compatibility. Per-client recording preferences still apply. See [batched Job history](batched-job-history.md). Full commands, output, file bodies, diffs and credentials remain excluded from cloud audit.
 
 D1 partitions by Registry namespace, Runner lifecycle and Runner ID. Delayed writes cannot become history for a deleted/recreated Runner. Reads recheck lifecycle after awaiting D1. Receipts distinguish `audit_status=recorded`, `degraded`, `disabled`, and `unknown` from the execution outcome.
 
@@ -57,3 +57,7 @@ Rollback preserves the existing DO namespace and additive data. Returning to `sq
 ## Tests
 
 Coverage includes actual local D1 writes, allow-listed metadata, retention/counts, namespace/lifecycle isolation, expiry, quota recovery, 1,000 suppressed retries, and cron independence. Worker tests exercise successful execution with degraded D1 audit, live Job operations without cloud rows, old-peer rejection, workspace isolation, no-backfill/idempotent settings, genuine credential rejection versus infrastructure errors, public distribution under DO failure, mutation failures and transactional retention rollback.
+
+## Batched history amendment
+
+The [batched Job contract](batched-job-history.md) adds packed D1 Job snapshots, manual newest-only reads and configurable cloud/local retention. Full stdout/stderr remains local. New source-side Runner capabilities are not retroactively present in the immutable v0.1.1 release.

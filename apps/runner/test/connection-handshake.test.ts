@@ -92,3 +92,42 @@ describe("runner welcome handshake fencing", () => {
     }
   });
 });
+
+
+it("negotiates batched history, suppresses event-driven uploads, and retries without an acknowledgement", async () => {
+  const server=new WebSocketServer({host:"127.0.0.1",port:0});
+  await new Promise<void>((resolve)=>server.once("listening",resolve));
+  const address=server.address(); if(address===null || typeof address==="string") throw new Error("missing port");
+  const received: WireMessage[]=[]; let acknowledge=true;
+  let jobs:any[]=[];
+  const runtime={initialize:async()=>{},configureJobRetention:vi.fn(),syncJobs:async()=>jobs,syncWorkspaceMetadata:()=>[],cleanupJobs:async()=>{}} as unknown as RunnerRuntime;
+  const connection=new RunnerConnection({config:{runnerId:"r",server:`ws://127.0.0.1:${address.port}`,token:"synthetic-token",workspaces:[]},runtime,policyStore:{load:async()=>undefined} as unknown as PolicyStore});
+  server.on("connection",socket=>socket.on("message",data=>{
+    const frame=decodeWireFrame(String(data)); received.push(frame);
+    if(frame.type==="runner.hello") socket.send(encodeWireFrame({...welcomeFrame(frame.request_id),extensions:{runmesh_job_history:{mode:"batched",interval_seconds:300,retention_days:7,local_retention_days:0}}}));
+    if(frame.type==="runner.sync" && acknowledge) socket.send(encodeWireFrame({type:"rpc.response",protocol_version:PROTOCOL_CURRENT_VERSION,request_id:`history-${frame.sync_sequence}`,result:{history_status:"recorded"}}));
+  }));
+  const running=connection.start().catch(()=>undefined);
+  try {
+    await waitFor(()=>received.some(x=>x.type==="runner.sync"));
+    await waitFor(()=>(connection as any).historyPending===undefined);
+    const before=received.length;
+    jobs=Array.from({length:50},(_,i)=>({job_id:`j-${i}`,runner_id:"r",workspace_id:"w",status:"succeeded",created_at_ms:1,updated_at_ms:2}));
+    for(const job of jobs) (connection as any).forwardJobEvent({type:"completed",job});
+    await new Promise(resolve=>setTimeout(resolve,30));
+    expect(received).toHaveLength(before);
+    acknowledge=false;
+    await (connection as any).sendSyncNow((connection as any).socket);
+    await waitFor(()=>received.length>before);
+    expect((received.at(-1) as any).jobs).toHaveLength(50);
+    const sent=received.length;
+    await (connection as any).sendSyncNow((connection as any).socket);
+    await waitFor(()=>received.length>sent);
+    expect(received.filter(x=>x.type.startsWith("job."))).toHaveLength(0);
+    expect((runtime as any).configureJobRetention).toHaveBeenCalledWith(0);
+  } finally {
+    connection.stop(); await running;
+    for(const socket of server.clients) socket.terminate();
+    await new Promise<void>(resolve=>server.close(()=>resolve()));
+  }
+});

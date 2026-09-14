@@ -291,8 +291,10 @@ export class RunnerRuntime {
       default: throw new RpcRuntimeError("method_not_found", `Unsupported method: ${method}`);
     }
   }
-  public async syncJobs(): Promise<JobMetadata[]> {
-    const jobs = await this.jobs.listReconciled({ limit: 100 });
+  public configureJobRetention(days: number): void { this.jobs.setRetentionDays(days); }
+  public async cleanupJobs(): Promise<void> { await this.jobs.cleanupExpired(); }
+  public async syncJobs(limit = 100): Promise<JobMetadata[]> {
+    const jobs = limit > 100 ? await this.jobs.snapshotForSync(limit) : await this.jobs.listReconciled({ limit });
     await this.jobs.flushPersistence();
     return jobs.map((job) => ({ job_id: job.job_id, workspace_id: job.workspace_id, status: job.status, created_at_ms: job.created_at_ms, updated_at_ms: job.updated_at_ms, ...(job.created_by_client_id === null ? {} : { created_by_client_id: job.created_by_client_id }), ...(job.request_id === undefined || job.request_id === null ? {} : { request_id: job.request_id }), runner_id: this.config.runnerId }));
   }

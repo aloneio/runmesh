@@ -1695,3 +1695,31 @@ describe("persistent local jobs", () => {
     } finally { await test.cleanup(); }
   });
 });
+
+
+it("expires only opted-in terminal local Job metadata and logs, not active or uncertain Jobs",async()=>{
+  const f=await fixture();
+  const manager=new JobManager({policy:policy(f.workspace),stateDir:f.state,maxRetainedJobs:10});
+  try {
+    await manager.initialize();
+    const start=await manager.start({workspace_id:f.workspace.workspaceId,command:[process.execPath,"-e","console.log('retention-test')"]});
+    await manager.waitForTerminal(start.job_id);
+    const done=manager.get(start.job_id),old=Date.now()-3*86400000;
+    const expired={...done,updated_at_ms:old,completed_at_ms:old};
+    (manager as any).jobs.set(done.job_id,expired);
+    for(const status of ["queued","running","cancelling","unknown"]) {
+      const id=`job-retention-${status}`;
+      (manager as any).jobs.set(id,{...expired,job_id:id,status,completed_at_ms:null});
+      await mkdir(join(f.state,"jobs",id));
+      await writeFile(join(f.state,"jobs",id,"sentinel"),"preserve");
+    }
+    await manager.cleanupExpired();
+    expect(await lstat(join(f.state,"jobs",done.job_id))).toBeDefined();
+    manager.setRetentionDays(1);
+    await manager.cleanupExpired();
+    await expect(lstat(join(f.state,"jobs",done.job_id))).rejects.toMatchObject({code:"ENOENT"});
+    for(const status of ["queued","running","cancelling","unknown"]) expect(await readFile(join(f.state,"jobs",`job-retention-${status}`,"sentinel"),"utf8")).toBe("preserve");
+    expect(()=>manager.setRetentionDays(-1)).toThrow();
+    expect(()=>manager.setRetentionDays(99999)).toThrow();
+  } finally {await f.cleanup();}
+});

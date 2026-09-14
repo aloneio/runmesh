@@ -86,6 +86,16 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     clientA = createdClients.clientA;
     clientB = createdClients.clientB;
 
+    // The offline-history compatibility scenario below explicitly needs an
+    // immediate archive. Production now defaults to batched; do not silently
+    // assume the first cloud snapshot exists before its scheduled upload.
+    const { adminJar: historyAdminJar, csrf: historyCsrf } = await adminCredentials();
+    const historyResponse = await submitForm(`/admin/runners/${runnerId}/history-settings`, {
+      csrf_token: historyCsrf, mode: "immediate", interval_seconds: "300",
+      retention_days: "7", local_retention_days: "0",
+    }, historyAdminJar);
+    expect(historyResponse.status).toBe(303);
+
     // Exercise the real source CLI against the Worker enrollment endpoint using
     // its isolated profile, then start from that saved profile (no service manager).
     enrolledProfile = join(root, "enrolled-profile.json");
@@ -223,6 +233,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const jobId = started.structuredContent?.job_id;
     expect(typeof jobId).toBe("string");
 
+    try {
     await writeFile(join(root, "disconnect"), "close transport\n");
     await waitFor(async () => (await mcpTool("runner_list", {}, clientA)).structuredContent?.runners?.some((runner: { runner_id?: string; state?: string }) => runner.runner_id === runnerId && runner.state === "offline"), 5_000);
 
@@ -252,6 +263,9 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
 
     const logs = await mcpTool("job", { action: "logs", job_id: jobId as string, stream: "stdout", limit: 1024 }, clientB);
     expect(logs.structuredContent?.data).toBe("");
+    } finally {
+      await writeFile(join(workspace, "recovery-finish"), "finish\n");
+    }
   }, 35_000);
 
   it("keeps background shell jobs alive after the MCP response closes and retrieves them from another stateless request", async () => {
@@ -399,6 +413,27 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       await mcpTool("job", { action: "cancel", job_id: id });
       await waitFor(async () => ["cancelled", "succeeded", "failed"].includes(String((await mcpTool("job", { action: "get", job_id: id })).structuredContent?.status)), 12000);
     }
+  });
+
+  it("queries a batched Job live without waiting for the next cloud snapshot", async () => {
+    const { adminJar, csrf } = await adminCredentials();
+    const save = async (mode: string) => submitForm(`/admin/runners/${runnerId}/history-settings`, {
+      csrf_token: csrf, mode, interval_seconds: "300", retention_days: "7", local_retention_days: "0",
+    }, adminJar);
+    expect((await save("batched")).status).toBe(303);
+    try {
+      const started = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('batched-live-log\\n')"), background: true });
+      const jobId = started.structuredContent?.job_id;
+      expect(typeof jobId).toBe("string");
+      await waitFor(async () => (await mcpTool("job", { action: "get", workspace_id: "workspace-1", job_id: jobId })).structuredContent?.status === "succeeded", 10000);
+      const listed = await mcpTool("job", { action: "list", workspace_id: "workspace-1", limit: 10 });
+      expect(listed.structuredContent?.source).toBe("runner_live");
+      expect((listed.structuredContent?.jobs as Array<{job_id?:string}>).some((job) => job.job_id === jobId)).toBe(true);
+      const saved = await mcpTool("job", { action: "list", limit: 100 });
+      expect((saved.structuredContent?.jobs as Array<{job_id?:string}>).some((job) => job.job_id === jobId)).toBe(false);
+      const logs = await mcpTool("job", { action: "logs", workspace_id: "workspace-1", job_id: jobId, stream: "stdout", limit: 1024 });
+      expect(logs.structuredContent?.data).toContain("batched-live-log");
+    } finally { expect((await save("immediate")).status).toBe(303); }
   });
 
   it("reports a runner_offline structured error after the real runner disconnects", async () => {

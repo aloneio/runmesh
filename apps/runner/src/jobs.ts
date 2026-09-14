@@ -107,6 +107,7 @@ export class JobManager {
   private readonly onEvent: (event: JobEvent) => void;
   private readonly terminate: ProcessTerminator;
   private totalLogBytes = 0;
+  private retentionDays = 0;
   private readonly jobLogBytes = new Map<string, number>();
   private logWriteChain: Promise<void> = Promise.resolve();
   private readonly jobs = new Map<string, JobRecord>();
@@ -203,6 +204,17 @@ export class JobManager {
     }
     this.totalLogBytes = await this.measureLogBytes();
     await this.pruneRetainedJobs(this.maxRetainedJobs, aliveJobIds);
+  }
+
+  /** Explicit central opt-in; count/byte caps continue to apply separately. */
+  public setRetentionDays(days: number): void {
+    if (!Number.isInteger(days) || ![0,1,3,7,14,30,90].includes(days)) throw new Error("invalid Job retention days");
+    this.retentionDays = days;
+  }
+  public async cleanupExpired(): Promise<void> { if (this.retentionDays > 0) await this.pruneRetainedJobs(); }
+  public async snapshotForSync(limit = 500): Promise<JobRecord[]> {
+    await this.reconcileRecoveredJobs();
+    return [...this.jobs.values()].sort((a,b) => b.updated_at_ms-a.updated_at_ms || b.job_id.localeCompare(a.job_id)).slice(0,Math.min(500,Math.max(1,limit)));
   }
 
   public list(input: { readonly workspace_id?: unknown; readonly status?: unknown; readonly limit?: unknown } = {}): JobRecord[] {
@@ -780,6 +792,12 @@ export class JobManager {
     const removable = [...this.jobs.values()]
       .filter((job) => !occupiesProcessSlot(job) && !aliveJobIds.has(job.job_id))
       .sort((a, b) => a.updated_at_ms - b.updated_at_ms || a.job_id.localeCompare(b.job_id));
+    if (this.retentionDays > 0) {
+      const cutoff = Date.now() - this.retentionDays * 86_400_000;
+      for (const job of removable) {
+        if (["succeeded","failed","cancelled","interrupted"].includes(job.status) && (job.completed_at_ms ?? job.updated_at_ms) <= cutoff) await this.removeRetainedJobIfCurrent(job);
+      }
+    }
     while (this.jobs.size > retainedLimit && removable.length > 0) {
       const job = removable.shift() as JobRecord;
       await this.removeRetainedJobIfCurrent(job);
