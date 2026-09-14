@@ -83,3 +83,13 @@ test("refresh and language selection do not retranslate visible DOM or cross-fad
   const container=css.match(/\.admin-page-container\{([^}]+)\}/)?.[1]??"";
   assert.ok(container.includes("display:none"));assert.doesNotMatch(container,/animation|transition|opacity|will-change/);
 });
+
+
+test("the browser keeps the server-selected locale instead of overriding it after paint", () => {
+  const code=source.slice(source.indexOf("function requestedLocale(){"),source.indexOf("function rememberLocale("));
+  for(const locale of ["en","zh-CN"]){
+    const context={document:{documentElement:{lang:locale},cookie:"fake_runmesh_lang=zh-CN"},navigator:{language:locale==="en"?"zh-CN":"en"}};
+    vm.runInNewContext(code+";result=requestedLocale()",context);
+    assert.equal(context.result,locale);
+  }
+});
