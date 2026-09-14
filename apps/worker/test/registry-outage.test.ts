@@ -67,3 +67,28 @@ it("distinguishes nonce replay from storage failure without scanning all nonce r
     } finally { sql.mockRestore(); }
   });
 });
+
+
+it.each(["client-create", "client-rotate", "runner-add", "enrollment", "permissions"])("does not disguise %s SQL failure as a conflict or missing record", async (boundary) => {
+  const stub = env.REGISTRY.get(env.REGISTRY.idFromName(`mutation-outage-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, (instance, state) => {
+    const now = Date.now();
+    instance.registerRunner("r", "a".repeat(64), now, undefined, "dedicated_user");
+    const client = { client_id: "c", label: "test", secret_verifier: "b".repeat(64), secret_prefix: "test", scopes: ["coding:read"] as const };
+    instance.createMcpClient(client, now);
+    const original = state.storage.sql.exec.bind(state.storage.sql);
+    const sql = vi.spyOn(state.storage.sql, "exec").mockImplementation((query: string, ...args: any[]) => {
+      if (/INSERT INTO mcp_clients|UPDATE mcp_clients SET secret_verifier|INSERT INTO runners|INSERT INTO runner_enrollments|UPDATE runners SET runner_permissions_json/.test(query)) throw new Error("daily rows_read limit exceeded");
+      return original(query, ...args);
+    });
+    try {
+      const operation = () => boundary === "client-create" ? instance.createMcpClient({...client, client_id:"new"}, now)
+        : boundary === "client-rotate" ? instance.rotateMcpClient("c", "d".repeat(64), "next", now)
+        : boundary === "runner-add" ? instance.addRunner("new-runner","test",now,undefined,"dedicated_user")
+        : boundary === "enrollment" ? instance.createRunnerEnrollment("r", "z".repeat(43), "e".repeat(64), now)
+        : instance.setRunnerPermissions("r", {read:true,edit:false,shell:false,job_control:false}, now);
+      expect(operation).toThrow("daily rows_read limit exceeded");
+    } finally { sql.mockRestore(); }
+    expect(instance.getMcpClient("c")?.secret_version).toBe(1);
+  });
+});

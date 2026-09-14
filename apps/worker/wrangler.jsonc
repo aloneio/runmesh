@@ -43,7 +43,8 @@
   "vars": {
     "WORKER_ID": "worker-production",
     "RUNMESH_PUBLIC_ORIGIN": "https://runmesh.aloneio.workers.dev",
-    "RUNMESH_SIGNED_RELEASE_AVAILABLE": "0.1.1"
+    "RUNMESH_SIGNED_RELEASE_AVAILABLE": "0.1.1",
+    "RUNMESH_AUDIT_BACKEND": "d1"
   },
   "env": {
     "development": {
@@ -79,7 +80,11 @@
       "vars": {
         "WORKER_ID": "worker-development",
         "RUNMESH_PUBLIC_ORIGIN": "",
-        "RUNMESH_SIGNED_RELEASE_AVAILABLE": ""
+        "RUNMESH_SIGNED_RELEASE_AVAILABLE": "",
+        "RUNMESH_AUDIT_BACKEND": "sqlite"
+      },
+      "triggers": {
+        "crons": []
       }
     },
     "test": {
@@ -114,8 +119,18 @@
       "vars": {
         "WORKER_ID": "worker-test",
         "RUNMESH_PUBLIC_ORIGIN": "",
-        "RUNMESH_SIGNED_RELEASE_AVAILABLE": ""
-      }
+        "RUNMESH_SIGNED_RELEASE_AVAILABLE": "",
+        "RUNMESH_AUDIT_BACKEND": "sqlite"
+      },
+      "triggers": {
+        "crons": []
+      },
+      "d1_databases": [
+        {
+          "binding": "HISTORY_DB",
+          "database_name": "runmesh-audit-test"
+        }
+      ]
     },
     "production": {
       "name": "runmesh",
@@ -150,8 +165,31 @@
       "vars": {
         "WORKER_ID": "worker-production",
         "RUNMESH_PUBLIC_ORIGIN": "https://runmesh.aloneio.workers.dev",
-        "RUNMESH_SIGNED_RELEASE_AVAILABLE": "0.1.1"
+        "RUNMESH_SIGNED_RELEASE_AVAILABLE": "0.1.1",
+        "RUNMESH_AUDIT_BACKEND": "d1"
+      },
+      "d1_databases": [
+        {
+          "binding": "HISTORY_DB",
+          "database_name": "runmesh-audit-history"
+        }
+      ],
+      "triggers": {
+        "crons": [
+          "*/15 * * * *"
+        ]
       }
     }
+  },
+  "d1_databases": [
+    {
+      "binding": "HISTORY_DB",
+      "database_name": "runmesh-audit-history"
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "*/15 * * * *"
+    ]
   }
 }
