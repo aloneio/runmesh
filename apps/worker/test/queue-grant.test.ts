@@ -44,3 +44,7 @@ it.each(["credential","lifecycle","expiry","policy-race"])("dequeue denies %s ch
   }finally{sockets.mockRestore();}
  });
 });
+
+it("argument arrays are included in the signed launch digest",async()=>{
+ expect(await launchDigest({workspace_id:"w",command:"node",args:["allowed"]})).not.toBe(await launchDigest({workspace_id:"w",command:"node",args:["different"]}));
+});
