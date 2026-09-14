@@ -1,3 +1,4 @@
+import { resolveRuntimeConfiguration } from "./runtime-config.js";
 import { localizeHtmlResponse } from "./ui-locale.js";
 import { ProtectedRpcMethodSchema } from "@aloneio/runmesh-protocol";
 import { rpcPermissionRequirement } from "./mcp-authorization.js";
@@ -72,6 +73,7 @@ export interface ReleaseGateDiagnostics {
 
 export default {
   async scheduled(_event: ScheduledController, env: WorkerEnv): Promise<void> {
+    env = resolveRuntimeConfiguration(env);
     if (env.HISTORY_DB === undefined) return;
     // Deriving an ID does not instantiate a DO or touch its SQLite storage.
     const history = new ExternalAuditHistory(env.HISTORY_DB, env.REGISTRY.idFromName("registry").toString());
@@ -79,6 +81,7 @@ export default {
     if (env.RUNMESH_JOB_HISTORY_BACKEND === "d1") await new PackedJobHistory(env.HISTORY_DB,env.REGISTRY.idFromName("registry").toString()).cleanup();
   },
   async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
+    env = resolveRuntimeConfiguration(env, request);
     try { return localizeHtmlResponse(request, await handleRequest(request, env, ctx)); }
     catch (error) {
       if (error instanceof ControlPlaneUnavailableError) return controlPlaneUnavailableResponse();
@@ -98,6 +101,7 @@ async function handleRequest(request: Request, env: WorkerEnv, _ctx: ExecutionCo
       ok: true,
       service: "runmesh-agent-control-plane",
       worker_version: PRODUCT_VERSION,
+      runtime_configuration: { schema: "minimal-v1", required_secrets: ["INTERNAL_CONTROL_SECRET", "RUNNER_TOKEN_PEPPER"], manual_public_origin_required: false },
       ui: { locale_rendering: "server-v1", refresh: "explicit" },
       job_queue: { protocol: 1, default_capacity: 32, default_per_client: 8, requires_compatible_runner: true },
       release_readiness: { contract: "release-chain-audit-v1", rpc_authorization_complete: ProtectedRpcMethodSchema.options.every((method) => rpcPermissionRequirement(method) !== undefined) },
