@@ -36,7 +36,7 @@ Local Runner
 
 The dashboard adds a Runner with a stable safe ID and `display_name`, then creates a 30-minute, single-use enrollment code. Regeneration deletes any unused code for that Runner before inserting the replacement. `POST /runner/enroll` atomically redeems the code and returns a new Runner token; the packaged CLI's supported flow is `runmesh enroll --server ... --code-stdin`, followed by `runmesh install`. It stores a centrally managed local profile with zero workspaces; only the Admin Panel adds central workspace roots.
 
-The dashboard displays a one-command installer with a quoted single-use enrollment code only when the fixed signed release has been published, independently verified, and explicitly enabled for the Worker **with a valid canonical external HTTPS `RUNMESH_PUBLIC_ORIGIN`**. The explicit `development` and `test` environments keep that path disabled; the top-level production configuration and its named `production` alias enable the independently verified immutable `v0.1.1` release. Otherwise it displays the manual portable-artifact route and uses `runmesh enroll --code-stdin`. The enabled installer pins the release and embedded Ed25519 key, verifies signed immutable assets, and treats Worker HTTPS delivery as bootstrap trust model A; high-assurance operators use an independent offline keyring path. It does not provide automatic update.
+The dashboard displays a one-command installer with a quoted single-use enrollment code only when the fixed signed release has been published, independently verified, and explicitly enabled for the Worker **with a valid canonical external HTTPS `RUNMESH_PUBLIC_ORIGIN`**. The explicit `development` and `test` environments keep that path disabled; the top-level production configuration and its named `production` alias enable the independently verified immutable `v0.1.2` release. Otherwise it displays the manual portable-artifact route and uses `runmesh enroll --code-stdin`. The enabled installer pins the release and embedded Ed25519 key, verifies signed immutable assets, and treats Worker HTTPS delivery as bootstrap trust model A; high-assurance operators use an independent offline keyring path. It does not provide automatic update.
 
 The local CLI has implemented profile/status/doctor/workspace/env/start commands and a service-manifest adapter. `runmesh install` invokes the Runmesh service provisioner for Runmesh-owned identities and directories (and Windows Local Service ACLs), then writes managed system service manifests with dedicated-user identity by default for direct/manual CLI use. The dashboard and direct CLI default to `dedicated_user`; `privileged_host` is an advanced choice requiring explicit confirmation. It never changes configured Workspace ownership or modes; the operator grants the service identity only the required Workspace access. Current profiles require a valid `execution_mode`, `management_mode: central`, and zero local workspace entries; an incomplete profile is rejected and must be replaced through enrollment. The local `workspace` command is inspection-only; workspace roots and permissions are configured in the Admin Panel. Doctor diagnostics report stable required/optional checks and Host shell availability. The dashboard and service-action pages render commands/manifests but do not activate a host service themselves. Hosted bootstrap scripts fail closed while either the fixed release gate or canonical public origin is absent. When the exact signed release is enabled, a new-install-only script verifies and stages the portable package, uses the supplied code after verification, or prompts locally when it was omitted, creates the canonical system profile, activates the versioned `current` path, and invokes the same local `runmesh install` provisioner. A local failure removes only the newly created version/current/service state; a remotely redeemed code cannot be rolled back and must be regenerated. When hosted bootstrap is unavailable, the operator must use a manually verified portable artifact and run `runmesh install` explicitly.
 
@@ -65,7 +65,7 @@ The authorization and transport core uses Workers plus SQLite-backed Durable Obj
 
 WebSocket Hibernation reduces idle control-plane connection cost; local Runners carry execution and disk cost. Capacity still depends on account-wide Cloudflare quotas and must be measured by the operator. Local validation does not prove deployed quotas or restart/hibernation behavior.
 
-## Current security contract (0.1.1 published stable patch)
+## Current security contract (0.1.2 published stable release)
 
 First administrator setup requires no additional bootstrap token and remains
 CSRF-protected, same-origin and atomic first-success-wins. The default Runner
@@ -80,7 +80,7 @@ setup. Scripts accept a positional code, `--code CODE`, or `--code=CODE`; omitti
 the code retains the hidden terminal prompt. The downstream Runner receives
 standard input, not a temporary credential file. The complete convenience
 command is credential material and may be recorded in command history or
-process arguments. The 0.1.1 production gate is enabled only after independent signed-asset
+process arguments. The 0.1.2 production gate is enabled only after independent signed-asset
 verification; development retains its disabled gate.
 
 ## Quota-isolation amendment
@@ -89,4 +89,4 @@ The [quota-isolation contract](quota-resilience.md) adds transactional retention
 
 ## Batched Job history
 
-See [batched snapshots, manual loading and retention](batched-job-history.md). Production uses `RUNMESH_JOB_HISTORY_BACKEND=d1`; the default upload window is five minutes. History is loaded only on request. Source-side batching and local day-based cleanup require a newly released capable Runner; immutable v0.1.1 is unchanged.
+See [batched snapshots, manual loading and retention](batched-job-history.md). Production uses `RUNMESH_JOB_HISTORY_BACKEND=d1`; the default upload window is five minutes. History is loaded only on request. Source-side batching and local day-based cleanup are shipped in immutable v0.1.2; existing v0.1.1 assets and installed services remain unchanged.
