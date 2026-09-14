@@ -79,3 +79,19 @@ test("hosted installer commands retain the convenience credential handoff", asyn
   assert.ok(document.includes("--code"));
   assert.ok(document.includes("command history"));
 });
+
+
+test("retirement cannot target v2, other environments, or a replacement production namespace", async () => {
+  const config=JSON.parse(await readFile(new URL("../apps/worker/wrangler.jsonc",import.meta.url),"utf8"));
+  const expected={RegistryDOv2:{type:"durable-object",storage:"sqlite"},RunnerDOv2:{type:"durable-object",storage:"sqlite"},RegistryDO:{type:"durable-object",state:"deleted"},RunnerDO:{type:"durable-object",state:"deleted"}};
+  for(const c of [config,config.env.production]) {
+    assert.equal(c.name,"runmesh");assert.equal(c.main,"src/production.ts");
+    assert.deepEqual(c.exports,expected);assert.equal(c.migrations,undefined);
+    assert.deepEqual(c.durable_objects.bindings,[{name:"REGISTRY",class_name:"RegistryDOv2"},{name:"RUNNER",class_name:"RunnerDOv2"}]);
+    assert.deepEqual(c.d1_databases,[{binding:"HISTORY_DB",database_name:"runmesh-audit-history"}]);
+  }
+  for(const c of [config.env.development,config.env.test]) {
+    assert.equal(c.main,"src/index.ts");assert.deepEqual(c.exports,{});
+    assert.deepEqual(c.migrations,[{tag:"v1",new_sqlite_classes:["RegistryDO","RunnerDO"]},{tag:"v2",new_sqlite_classes:["RegistryDOv2","RunnerDOv2"]}]);
+  }
+});
