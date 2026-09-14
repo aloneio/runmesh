@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "runmesh",
-  "main": "src/index.ts",
+  "main": "src/production.ts",
   "compatibility_date": "2026-04-02",
   "compatibility_flags": [
     "global_fetch_strictly_public",
@@ -24,22 +24,6 @@
       }
     ]
   },
-  "migrations": [
-    {
-      "tag": "v1",
-      "new_sqlite_classes": [
-        "RegistryDO",
-        "RunnerDO"
-      ]
-    },
-    {
-      "tag": "v2",
-      "new_sqlite_classes": [
-        "RegistryDOv2",
-        "RunnerDOv2"
-      ]
-    }
-  ],
   "vars": {
     "WORKER_ID": "worker-production",
     "RUNMESH_PUBLIC_ORIGIN": "https://runmesh.aloneio.workers.dev",
@@ -87,7 +71,9 @@
       },
       "triggers": {
         "crons": []
-      }
+      },
+      "main": "src/index.ts",
+      "exports": {}
     },
     "test": {
       "durable_objects": {
@@ -133,7 +119,9 @@
           "binding": "HISTORY_DB",
           "database_name": "runmesh-audit-test"
         }
-      ]
+      ],
+      "main": "src/index.ts",
+      "exports": {}
     },
     "production": {
       "name": "runmesh",
@@ -149,22 +137,6 @@
           }
         ]
       },
-      "migrations": [
-        {
-          "tag": "v1",
-          "new_sqlite_classes": [
-            "RegistryDO",
-            "RunnerDO"
-          ]
-        },
-        {
-          "tag": "v2",
-          "new_sqlite_classes": [
-            "RegistryDOv2",
-            "RunnerDOv2"
-          ]
-        }
-      ],
       "vars": {
         "WORKER_ID": "worker-production",
         "RUNMESH_PUBLIC_ORIGIN": "https://runmesh.aloneio.workers.dev",
@@ -182,7 +154,26 @@
         "crons": [
           "*/15 * * * *"
         ]
-      }
+      },
+      "exports": {
+        "RegistryDOv2": {
+          "type": "durable-object",
+          "storage": "sqlite"
+        },
+        "RunnerDOv2": {
+          "type": "durable-object",
+          "storage": "sqlite"
+        },
+        "RegistryDO": {
+          "type": "durable-object",
+          "state": "deleted"
+        },
+        "RunnerDO": {
+          "type": "durable-object",
+          "state": "deleted"
+        }
+      },
+      "main": "src/production.ts"
     }
   },
   "d1_databases": [
@@ -195,5 +186,23 @@
     "crons": [
       "*/15 * * * *"
     ]
+  },
+  "exports": {
+    "RegistryDOv2": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "RunnerDOv2": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    },
+    "RegistryDO": {
+      "type": "durable-object",
+      "state": "deleted"
+    },
+    "RunnerDO": {
+      "type": "durable-object",
+      "state": "deleted"
+    }
   }
 }

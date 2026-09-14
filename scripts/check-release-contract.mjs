@@ -30,7 +30,17 @@ assert.equal(config.env.development.vars.RUNMESH_PUBLIC_ORIGIN, "");
 assert.equal(config.env.development.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE, "");
 for (const environment of [config, config.env.production, config.env.development]) {
   assert.deepEqual(environment.durable_objects.bindings.map((binding) => binding.class_name).sort(), ["RegistryDOv2", "RunnerDOv2"]);
-  assert.ok(environment.migrations.some((migration) => migration.new_sqlite_classes?.includes("RegistryDOv2")));
+  if (environment.name === "runmesh") {
+    assert.equal(environment.main,"src/production.ts");
+    assert.equal(environment.migrations,undefined,"production must retain declarative lifecycle after cutover");
+    assert.deepEqual(environment.exports,{
+      RegistryDOv2:{type:"durable-object",storage:"sqlite"},RunnerDOv2:{type:"durable-object",storage:"sqlite"},
+      RegistryDO:{type:"durable-object",state:"deleted"},RunnerDO:{type:"durable-object",state:"deleted"},
+    },"retirement is limited to the two approved old production classes");
+  } else {
+    assert.equal(environment.main,"src/index.ts");assert.deepEqual(environment.exports,{});
+    assert.ok(environment.migrations.some((migration) => migration.new_sqlite_classes?.includes("RegistryDOv2")));
+  }
 }
 if (process.argv.includes("--require-distributable")) assert.equal(config.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE, root.version, "activation requires separate signed-asset verification");
 console.log(`release contract verified: ${root.version}; state=${state.state}; distribution=${expectedGate ? "enabled" : "disabled"}; development disabled`);
