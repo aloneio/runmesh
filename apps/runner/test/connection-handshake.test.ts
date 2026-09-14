@@ -131,3 +131,30 @@ it("negotiates batched history, suppresses event-driven uploads, and retries wit
     await new Promise<void>(resolve=>server.close(()=>resolve()));
   }
 });
+
+
+it.each(["batched", "off"] as const)("%s idle history performs no redundant network upload across a simulated daily cadence", async (mode) => {
+  const server = new WebSocketServer({host:"127.0.0.1",port:0});
+  await new Promise<void>((resolve) => server.once("listening",resolve));
+  const address = server.address(); if (address === null || typeof address === "string") throw new Error("missing port");
+  const frames: WireMessage[] = [];
+  const runtime = {initialize:async()=>{},configureJobRetention:vi.fn(),cleanupJobs:vi.fn(),syncJobs:vi.fn(async()=>[]),syncWorkspaceMetadata:()=>[]} as unknown as RunnerRuntime;
+  const connection = new RunnerConnection({config:{runnerId:"idle",server:`ws://127.0.0.1:${address.port}`,token:"synthetic",workspaces:[]},runtime,policyStore:{load:async()=>undefined} as unknown as PolicyStore});
+  server.on("connection",socket=>socket.on("message",data=>{
+    const frame=decodeWireFrame(String(data)); frames.push(frame);
+    if(frame.type === "runner.hello") socket.send(encodeWireFrame({...welcomeFrame(frame.request_id),extensions:{runmesh_job_history:{mode,interval_seconds:300,retention_days:7,local_retention_days:0}}}));
+    if(frame.type === "runner.sync") socket.send(encodeWireFrame({type:"rpc.response",protocol_version:PROTOCOL_CURRENT_VERSION,request_id:`history-${frame.sync_sequence}`,result:{history_status:"unchanged"}}));
+  }));
+  const started=connection.start().catch(()=>undefined);
+  try {
+    await waitFor(()=>(connection as any).welcomedSocket !== undefined);
+    if(mode === "batched") await waitFor(()=>(connection as any).lastSyncSnapshot !== undefined);
+    const initial=frames.filter((frame)=>frame.type === "runner.sync").length;
+    for(let i=0;i<288;i++) await (connection as any).sendSyncNow((connection as any).socket);
+    await new Promise((resolve)=>setTimeout(resolve,20));
+    expect(frames.filter((frame)=>frame.type === "runner.sync")).toHaveLength(initial);
+    expect((runtime as any).cleanupJobs).not.toHaveBeenCalled();
+    if(mode === "off") { expect(initial).toBe(0); expect((connection as any).syncTimer).toBeUndefined(); expect(runtime.syncJobs).not.toHaveBeenCalled(); }
+    console.log(JSON.stringify({scenario:"idle_runner_history",mode,periodic_opportunities:288,extra_uploads:0}));
+  } finally {connection.stop();await started;for(const socket of server.clients) socket.terminate();await new Promise<void>(resolve=>server.close(()=>resolve()));}
+});

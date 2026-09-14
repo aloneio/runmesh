@@ -32,6 +32,9 @@ const tsxCli = resolveWorkspaceCli(
   ["node_modules", "tsx", "dist", "cli.mjs"],
   ["apps", "runner", "node_modules", "tsx", "dist", "cli.mjs"],
 );
+const packageEntry = process.env.RUNMESH_E2E_RUNNER_ENTRY;
+if (packageEntry !== undefined && (!existsSync(packageEntry) || !packageEntry.endsWith("runmesh.cjs"))) throw new Error("Invalid packaged Runner entrypoint");
+const runnerInvocation = packageEntry === undefined ? [tsxCli, "apps/runner/src/runmesh-entry.ts"] : [resolve(packageEntry)];
 const childSpawnOptions = process.platform === "win32" ? { windowsHide: true } : {};
 const trustedTaskkill = process.platform === "win32" ? resolveTrustedWindowsTool("taskkill", trustedWindowsRoot()) : undefined;
 const adminToken = "e2e-admin-token-0123456789abcdef";
@@ -99,7 +102,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     // Exercise the real source CLI against the Worker enrollment endpoint using
     // its isolated profile, then start from that saved profile (no service manager).
     enrolledProfile = join(root, "enrolled-profile.json");
-    const enrollmentCli = spawn(process.execPath, [tsxCli, "apps/runner/src/runmesh-entry.ts", "enroll", "--server", `${workerUrl}/runner/enroll`, "--code-stdin", "--insecure-local", "--cwd", workspace, "--profile", enrolledProfile, "--json"], {
+    const enrollmentCli = spawn(process.execPath, [...runnerInvocation, "enroll", "--server", `${workerUrl}/runner/enroll`, "--code-stdin", "--insecure-local", "--cwd", workspace, "--profile", enrolledProfile, "--json"], {
       cwd: projectDirectory, env: { ...process.env, RUNMESH_RUNNER_PROFILE: enrolledProfile }, stdio: ["pipe", "pipe", "pipe"], detached: true, ...childSpawnOptions,
     });
     enrollmentCli.stdin?.end(`${enrollmentCode}\n`);
@@ -116,7 +119,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(savedProfile.workspaces).toEqual([]);
 
     runner = spawn(process.execPath, [
-      tsxCli, "apps/runner/src/runmesh-entry.ts", "start", "--profile", enrolledProfile, "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
+      ...runnerInvocation, "start", "--profile", enrolledProfile, "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
     ], {
       cwd: projectDirectory, env: { ...process.env, RUNMESH_RUNNER_PROFILE: enrolledProfile }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
     });
@@ -250,7 +253,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     // detached persistent job and registry snapshot remain available.
     await stop(runner);
     runner = spawn(process.execPath, [
-      tsxCli, "apps/runner/src/runmesh-entry.ts", "start", "--profile", enrolledProfile, "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
+      ...runnerInvocation, "start", "--profile", enrolledProfile, "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
     ], {
       cwd: projectDirectory, env: { ...process.env, RUNMESH_RUNNER_PROFILE: enrolledProfile }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
     });
@@ -413,6 +416,30 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       await mcpTool("job", { action: "cancel", job_id: id });
       await waitFor(async () => ["cancelled", "succeeded", "failed"].includes(String((await mcpTool("job", { action: "get", job_id: id })).structuredContent?.status)), 12000);
     }
+  });
+
+  it("exercises diagnostics, patch preview and all Context methods through final authorization", async () => {
+    const diagnostic = await mcpTool("inspect", {action:"diagnostics",workspace_id:"workspace-1"});
+    expect(diagnostic.isError, JSON.stringify(diagnostic)).not.toBe(true);
+    const checks = diagnostic.structuredContent?.checks as Array<{name:string;state:string}>;
+    expect(checks.find((c) => c.name === "runner_rpc")?.state).toBe("pass");
+    const preview = await mcpTool("edit", {workspace_id:"workspace-1",preview:true,patch:"*** Begin Patch\n*** Add File: preview-only.txt\n+preview\n*** End Patch"});
+    expect(preview.isError, JSON.stringify(preview)).not.toBe(true);
+    expect(existsSync(join(workspace,"preview-only.txt"))).toBe(false);
+    const operations = [
+      {action:"bootstrap"},
+      {action:"checkpoint",context_id:"e2e-handoff",turn_id:"e2e-release-audit",goal:"Validate release context chain"},
+      {action:"read",context_id:"e2e-handoff"},
+      {action:"search",query:"release"},
+      {action:"rebuild"},
+    ];
+    for (const operation of operations) {
+      const result = await mcpTool("context",{workspace_id:"workspace-1",...operation});
+      expect(result.isError, JSON.stringify({operation,result})).not.toBe(true);
+    }
+    const rejected = await mcpTool("context",{action:"checkpoint",workspace_id:"workspace-1",turn_id:"not-authorized",goal:"must not write"},clientB);
+    expect(rejected.isError).toBe(true);
+    expect(rejected.structuredContent?.error).toMatchObject({code:"insufficient_scope"});
   });
 
   it("queries a batched Job live without waiting for the next cloud snapshot", async () => {
