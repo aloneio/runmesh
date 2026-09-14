@@ -1,3 +1,31 @@
+# 0.1.2 — batched Job history, bounded reads and release-chain hardening
+
+## Runner
+
+Negotiates `job_history_protocol=1` with the audited Worker. Batched mode coalesces Job metadata at 1/5/15/60-minute intervals (five minutes by default) instead of emitting a full history update after every lifecycle event. Unchanged acknowledged snapshots are not uploaded again. Off mode creates no history sync timer. Deferred or failed archives can be retried without restarting commands.
+
+Optional local day-based cleanup is separately confirmed and deletes only expired terminal Job metadata/logs. Running and uncertain recovered processes remain protected. Existing count/byte caps still apply.
+
+## Worker and history
+
+Uses one bounded D1 JSON snapshot for up to 500 recent Job metadata records, with revision fencing and independently selectable retention. Lists and logs are read only on request, with latest 10/20/50/100 records and 1/4/16 KiB log pages. Raw commands, credentials and full private logs are not uploaded as cloud history.
+
+Completes final authorization mappings for diagnostics, patch preview and every Context method. Current scope, policy, workspace and transport checks remain in force. D1 history failure does not replay commands or fall back to core-DO history writes.
+
+## Verification and installation
+
+The release process runs end-to-end checks against the exact portable tarball before signing, checks the audited public Worker before creating a tag, and independently re-downloads draft and published assets. The manifest, Ed25519 signature, checksums and immutable annotated tag bind the release to its verified commit.
+
+This package does not automatically upgrade existing services. Install through the enabled fixed-version installer or the documented independently verified portable route. Refresh cached MCP tool schemas for workspace-bound Job operations. Existing v0.1.1 releases, credentials and live processes are not replaced by publishing this release.
+
+Measured local regression: updating one or 100 Jobs in an existing packed snapshot writes one D1 row. An unchanged simulated daily upload cadence emits no additional uploads. Required heartbeat and bounded maintenance costs remain; this is not a promise of zero total usage or unlimited free-tier capacity.
+
+See [release readiness](release-readiness.md), [batching and retention](batched-job-history.md), and [chain audit](release-chain-audit.md).
+
+---
+
+## Previous releases
+
 # 0.1.1 — published stable patch release
 
 Carries the post-0.1.0 Runner and control-plane hardening into a new immutable patch release instead of reusing the already published v0.1.0 identity. It adds bounded Git history inspection, patch preview/search improvements, durable workspace Context handoff with observed Git-baseline aging, clearer Job launch/audit receipts, shareable allow-listed diagnostics, validated operational runbooks, and CI parity checks. The immutable v0.1.1 release was published from the verified `dev` commit, independently re-downloaded and verified, and is explicitly enabled by the checked-in production Worker configuration.
