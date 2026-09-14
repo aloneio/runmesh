@@ -1,3 +1,4 @@
+import { resolveRuntimeConfiguration, type RuntimeConfiguration } from "./runtime-config.js";
 import { signQueueGrant, verifyQueueGrant, launchDigest } from "./queue-grant.js";
 import { ControlPlaneUnavailableError, controlPlaneUnavailableResponse, registryRejectedSession } from "./control-plane-errors.js";
 import {
@@ -18,7 +19,7 @@ import { bearerToken, internalHeaders, isConfiguredSecret, isSafeIdentifier, ver
 import { PRODUCT_VERSION } from "./generated-version.js";
 import { readCappedText } from "./body.js";
 
-export interface WorkerEnv {
+export interface WorkerEnv extends RuntimeConfiguration {
   /** Optional independent metadata-only audit store; never an auth fallback. */
   HISTORY_DB?: D1Database;
   RUNMESH_AUDIT_BACKEND?: string;
@@ -122,6 +123,7 @@ export class RunnerDO {
     private readonly ctx: DurableObjectState<unknown>,
     private readonly env: WorkerEnv,
   ) {
+    this.env = resolveRuntimeConfiguration(env);
     this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     this.ctx.setHibernatableWebSocketEventTimeout(30_000);
   }

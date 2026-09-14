@@ -36,9 +36,10 @@
     "check:architecture": "node ./scripts/check-architecture.mjs",
     "check:ci-parity": "node ./scripts/check-ci-parity.mjs",
     "check:runbooks": "node ./scripts/check-runbooks.mjs",
-    "test:release-tools": "node --test ./test/release-tools.test.mjs ./test/security-config.test.mjs ./test/installer-arguments.test.mjs ./test/deployment-policy.test.mjs",
+    "test:release-tools": "node --test ./test/release-tools.test.mjs ./test/security-config.test.mjs ./test/installer-arguments.test.mjs ./test/deployment-policy.test.mjs ./test/runtime-config.test.mjs",
     "check:docs": "node ./scripts/check-docs.mjs",
-    "deploy:worker": "node ./scripts/deploy-worker.mjs"
+    "deploy:worker": "node ./scripts/deploy-worker.mjs",
+    "setup:secrets": "node ./scripts/setup-secrets.mjs"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.22.0",

@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { deploymentPlan, assertReleased } from "../scripts/deployment-policy.mjs";
+import { reviewedReleaseSource } from "../scripts/runtime-config-tools.mjs";
 
 test("production accepts only main and development only dev",()=>{
   assert.equal(deploymentPlan("production",{WORKERS_CI_BRANCH:"main"}).worker,"runmesh");
@@ -29,7 +30,7 @@ test("cutover preserves the current production namespace, storage and fixed rele
   const p=JSON.parse(await readFile(new URL("../package.json",import.meta.url),"utf8"));
   assert.equal(c.name,"runmesh");assert.equal(c.env.production.name,"runmesh");
   const state=JSON.parse(await readFile(new URL("../release/release-state.json",import.meta.url),"utf8"));
-  assert.equal(c.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE,state.state === "released" ? p.version : "");
+  assert.equal(await readFile(new URL("../apps/worker/src/generated-release.ts",import.meta.url),"utf8"), reviewedReleaseSource(p.version,state));
   assert.equal(c.env.production.d1_databases[0].database_name,"runmesh-audit-history");
   assert.deepEqual(c.env.production.durable_objects.bindings.map(x=>x.class_name),["RegistryDOv2","RunnerDOv2"]);
   assert.notEqual(c.env.development.name,c.name);
