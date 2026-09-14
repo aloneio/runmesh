@@ -29,7 +29,7 @@ import {
   verifyPassword,
 } from "./security.js";
 import { readCappedBytes, readCappedFormData, readCappedText as readBodyText } from "./body.js";
-import { canonicalPublicOrigin, fixedReleaseDescriptor, powershellQuote, renderPosixInstaller, renderPowerShellInstaller, renderPosixUninstaller, renderPowerShellUninstaller, resolvePublicOrigin, shellQuote, signedReleaseIsAvailable, type FixedReleaseDescriptor } from "./installer.js";
+import { FIXED_RELEASE_VERSION, canonicalPublicOrigin, fixedReleaseDescriptor, powershellQuote, renderPosixInstaller, renderPowerShellInstaller, renderPosixUninstaller, renderPowerShellUninstaller, resolvePublicOrigin, shellQuote, signedReleaseIsAvailable, type FixedReleaseDescriptor } from "./installer.js";
 import { validTimestamp, validityStatus, type ValidityWindow } from "./validity.js";
 import { loadLoginSettings } from "./auth-settings.js";
 import { adminJobUrl, loadAdminJobPage, JOBS_EXPLANATION, jobSnapshotNote } from "./admin-jobs.js";
@@ -192,7 +192,7 @@ function runnerInstallScript(request: Request, url: URL, env: RunnerReleaseEnvir
     content =
 `#!/usr/bin/env sh
 set -eu
-printf '%s\\n' 'error: The fixed signed Runmesh v0.1.1 release is not enabled on this deployment.' 'Use the manual verified portable-artifact route until the exact immutable release is available.' >&2
+printf '%s\\n' 'error: The fixed signed Runmesh v${FIXED_RELEASE_VERSION} release is not enabled on this deployment.' 'Use the manual verified portable-artifact route until the exact immutable release is available.' >&2
 exit 1
 `;
   }
@@ -211,7 +211,7 @@ function runnerInstallPowerShell(request: Request, url: URL, env: RunnerReleaseE
   } else {
     content = `$ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-Write-Error 'The fixed signed Runmesh v0.1.1 release is not enabled on this deployment. Use the manual verified portable-artifact route until the exact immutable release is available.'
+Write-Error 'The fixed signed Runmesh v${FIXED_RELEASE_VERSION} release is not enabled on this deployment. Use the manual verified portable-artifact route until the exact immutable release is available.'
 exit 1
 `;
   }
