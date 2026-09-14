@@ -133,7 +133,8 @@ describe("Worker runner transport", () => {
     const path = `/runners/${encodeURIComponent(auditRunnerId)}/mcp-calls`;
     const headers = await internalHeaders(secret, "POST", path, body, { timestamp: Date.now(), nonce: "d".repeat(64) });
     const post = await registry.fetch(`https://registry.internal${path}`, { method: "POST", headers, body });
-    expect(post.status).toBe(204);
+    expect(post.status).toBe(200);
+    await expect(post.json()).resolves.toEqual({ audit_status: "recorded" });
 
     const readHeaders = await internalHeaders(secret, "GET", `${path}?limit=1`, "", { timestamp: Date.now(), nonce: "e".repeat(64) });
     const read = await registry.fetch(`https://registry.internal${path}?limit=1`, { headers: readHeaders });
@@ -575,6 +576,52 @@ describe("Worker runner transport", () => {
     expect(cancelled.status).toBe(409);
     socket?.close();
   });
+
+  it("does not strand an online Runner when a precommit cannot be safely restored", async () => {
+    // A dedicated Runner id keeps this scenario isolated. The case under test
+    // deliberately leaves an uncommitted precommit owned by the RunnerDO, and an
+    // open precommit is the only exclusive admission phase: on a shared Runner
+    // it would block every later enrollment behind "already in progress".
+    const onlineRunnerId = `online-cancel-${crypto.randomUUID()}`;
+    const onlineToken = "0123456789abcdef0123456789abcdef";
+    expect((await enroll(onlineRunnerId, onlineToken)).status).toBe(200);
+    const upgrade = await SELF.fetch(`https://worker.test/runner/connect?runner_id=${onlineRunnerId}`, { headers: { Upgrade: "websocket", Authorization: `Bearer ${onlineToken}` } });
+    const socket = upgrade.webSocket;
+    socket?.accept();
+    socket?.send(encodeWireFrame({ type: "runner.hello", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "hello-cancel-online", min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION,
+      runner: { runner_id: onlineRunnerId, runner_version: "test", platform: "test", architecture: "test", capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: [], labels: {} } },
+    }));
+    await new Promise<void>((resolve) => socket?.addEventListener("message", () => resolve(), { once: true }));
+    const secret = "test-internal-control-secret-not-for-production";
+    const object = env.RUNNER.get(env.RUNNER.idFromName(onlineRunnerId));
+    const post = async (path: string, body: Record<string, unknown>): Promise<Response> => {
+      const text = JSON.stringify(body);
+      const headers = await internalHeaders(secret, "POST", path, text);
+      return object.fetch(new Request(`https://runner.internal${path}`, { method: "POST", headers, body: text }));
+    };
+    const admission = async (): Promise<Record<string, unknown>> => {
+      const headers = await internalHeaders(secret, "GET", "/admission-state", "");
+      return (await object.fetch(new Request("https://runner.internal/admission-state", { headers }))).json() as Promise<Record<string, unknown>>;
+    };
+
+    // A live session holds a full connection identity while its precommit is
+    // open, so cancelling must go through the restore path rather than the
+    // offline release path.
+    const mutationId = `online-cancel-${crypto.randomUUID()}`;
+    expect((await post("/begin-policy-mutation", { mutation_id: mutationId, runner_id: onlineRunnerId })).status).toBe(204);
+    await expect(admission()).resolves.toMatchObject({ fenced: true, mutationId, mutationPhase: "precommit", reconciled: false });
+
+    const cancelled = await post("/cancel-policy-mutation", { mutation_id: mutationId });
+    expect([204, 409]).toContain(cancelled.status);
+    const after = await admission();
+    // Either the pre-mutation admission was restored (unfenced) or the mutation
+    // is still owned so it can still be committed. Releasing ownership while
+    // leaving the fence closed has no recovery path: admission only reopens
+    // through a mutation it still owns or through restart reconciliation.
+    expect(after.fenced === true && after.mutationId === null).toBe(false);
+    socket?.close();
+  });
+
   it("allows committed offline policies to supersede while preserving precommit exclusivity", async () => {
     const object = env.RUNNER.get(env.RUNNER.idFromName(runnerId));
     const secret = "test-internal-control-secret-not-for-production";
@@ -687,7 +734,15 @@ describe("Worker runner transport", () => {
   it("serves health without an object invocation", async () => {
     const response = await SELF.fetch("https://worker.test/health");
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({ ok: true });
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      worker_id: expect.any(String),
+      release_gate: {
+        acknowledgement_matches_fixed_release: expect.any(Boolean),
+        canonical_public_origin_configured: expect.any(Boolean),
+        test_mode_disabled: expect.any(Boolean),
+      },
+    });
   });
 
   it("rejects unauthenticated runner upgrades without accepting a query token", async () => {

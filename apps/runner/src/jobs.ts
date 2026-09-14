@@ -6,7 +6,7 @@ import { PROTOCOL_CURRENT_VERSION } from "@aloneio/runmesh-protocol";
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { defaultRunnerStateDir } from "./state-path.js";
 import { spawn, type ChildProcess } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { WorkspaceConfig } from "./config.js";
 import type { PathPolicy } from "./path-policy.js";
 import { utf8BackwardBoundary, utf8ForwardBoundary, utf8SafePrefixLength } from "./utf8-pagination.js";
@@ -43,6 +43,10 @@ export interface JobRecord {
   readonly output_truncated: boolean;
   /** MCP client identity that initiated the job; it does not grant ownership. */
   readonly created_by_client_id: string | null;
+  /** Optional caller-supplied idempotency key. It is metadata, never authorization. */
+  readonly request_id?: string | null;
+  /** Local-only hash binding request_id to the normalized launch input. */
+  readonly request_fingerprint?: string | null;
   /** Persisted evidence that this Runner delivered a cancellation request. */
   readonly cancellation_delivered_at_ms: number | null;
 }
@@ -103,6 +107,7 @@ export class JobManager {
   private readonly onEvent: (event: JobEvent) => void;
   private readonly terminate: ProcessTerminator;
   private totalLogBytes = 0;
+  private retentionDays = 0;
   private readonly jobLogBytes = new Map<string, number>();
   private logWriteChain: Promise<void> = Promise.resolve();
   private readonly jobs = new Map<string, JobRecord>();
@@ -201,6 +206,17 @@ export class JobManager {
     await this.pruneRetainedJobs(this.maxRetainedJobs, aliveJobIds);
   }
 
+  /** Explicit central opt-in; count/byte caps continue to apply separately. */
+  public setRetentionDays(days: number): void {
+    if (!Number.isInteger(days) || ![0,1,3,7,14,30,90].includes(days)) throw new Error("invalid Job retention days");
+    this.retentionDays = days;
+  }
+  public async cleanupExpired(): Promise<void> { if (this.retentionDays > 0) await this.pruneRetainedJobs(); }
+  public async snapshotForSync(limit = 500): Promise<JobRecord[]> {
+    await this.reconcileRecoveredJobs();
+    return [...this.jobs.values()].sort((a,b) => b.updated_at_ms-a.updated_at_ms || b.job_id.localeCompare(a.job_id)).slice(0,Math.min(500,Math.max(1,limit)));
+  }
+
   public list(input: { readonly workspace_id?: unknown; readonly status?: unknown; readonly limit?: unknown } = {}): JobRecord[] {
     return this.filteredList(input);
   }
@@ -244,7 +260,8 @@ export class JobManager {
   }
 
   public async start(input: unknown): Promise<JobRecord> {
-    return this.reserveStart(() => this.startReserved(input));
+    const generation = this.policy.generation;
+    return this.reserveStart(() => this.startReserved(input, generation));
   }
 
   private async reserveStart<T>(operation: () => Promise<T>): Promise<T> {
@@ -255,7 +272,23 @@ export class JobManager {
     try { return await operation(); } finally { release(); }
   }
 
-  private async startReserved(input: unknown): Promise<JobRecord> {
+  private async startReserved(input: unknown, generation: number): Promise<JobRecord> {
+    this.policy.assertGeneration(generation);
+    const params = paramsObject(input);
+    const workspace = this.policy.getWorkspace(params.workspace_id);
+    const cwd = await this.policy.resolve(workspace.workspaceId, params.cwd ?? ".", "cwd");
+    this.policy.assertGeneration(generation);
+    const invocation = parseInvocation(params, workspace);
+    const createdByClientId = safeOptionalIdentifier(params.created_by_client_id);
+    const requestId = safeOptionalRequestId(params.request_id);
+    const requestFingerprint = requestId === null ? null : launchRequestFingerprint(workspace.workspaceId, relativeWorkspacePath(workspace, cwd.path), invocation, createdByClientId);
+    if (requestId !== null) {
+      const existing = [...this.jobs.values()].find((job) => job.workspace_id === workspace.workspaceId && job.created_by_client_id === createdByClientId && job.request_id === requestId);
+      if (existing !== undefined) {
+        if (existing.request_fingerprint !== requestFingerprint) throw new RpcRuntimeError("request_id_conflict", "request_id is already bound to a different launch request");
+        return existing;
+      }
+    }
     // A recovered live process has no ChildProcess handle in this Runner, so
     // reconciliation is the only way to release its admission slot after it
     // exits. Perform it before pruning/counting; otherwise an `unknown` record
@@ -265,17 +298,13 @@ export class JobManager {
     await this.pruneRetainedJobs(this.maxRetainedJobs - 1);
     if (this.jobs.size >= this.maxRetainedJobs) throw new RpcRuntimeError("busy", `max retained jobs (${this.maxRetainedJobs}) reached while active jobs are retained`);
     if (this.activeCount() >= this.maxConcurrentJobs) throw new RpcRuntimeError("busy", `max concurrent jobs (${this.maxConcurrentJobs}) reached`);
-    const params = paramsObject(input);
-    const workspace = this.policy.getWorkspace(params.workspace_id);
-    const cwd = await this.policy.resolve(workspace.workspaceId, params.cwd ?? ".", "cwd");
-    const invocation = parseInvocation(params, workspace);
     const now = Date.now();
     const job: JobRecord = {
       job_id: `job-${randomUUID()}`, workspace_id: workspace.workspaceId, cwd: relativeWorkspacePath(workspace, cwd.path),
       command: invocation.command, shell: invocation.shell, status: "queued", pid: null,
       process_start_fingerprint: null, recovery_liveness: null,
       created_at_ms: now, started_at_ms: null, updated_at_ms: now, completed_at_ms: null, exit_code: null, signal: null,
-      recovery_note: null, output_truncated: false, created_by_client_id: safeOptionalIdentifier(params.created_by_client_id), cancellation_delivered_at_ms: null,
+      recovery_note: null, output_truncated: false, created_by_client_id: createdByClientId, request_id: requestId, request_fingerprint: requestFingerprint, cancellation_delivered_at_ms: null,
     };
     this.jobs.set(job.job_id, job);
     try {
@@ -311,6 +340,7 @@ export class JobManager {
         await this.closeLogHandlesSafely(stdout, stderr);
         return beforeSpawn ?? job;
       }
+      this.policy.assertGeneration(generation);
       child = spawn(invocation.file, invocation.args, {
         cwd: cwd.path,
         shell: invocation.shell,
@@ -625,7 +655,13 @@ export class JobManager {
       const maxByLimit = utf8SafePrefixLength(data, Math.min(limit, data.length));
       const firstCodePoint = maxByLimit === 0 && data.length > 0 ? utf8SafePrefixLength(data, Math.min(4, data.length)) : maxByLimit;
       const used = this.fitLogResponse(job.job_id, stream, offset, info.size, data, firstCodePoint);
-      const next = offset + used;
+      // `used === 0` with bytes still remaining means `offset` falls inside a
+      // trailing partial code point (at most three bytes before EOF): no whole
+      // code point can be decoded, and this byte-cursor API never emits
+      // replacement characters. Echoing the same cursor would spin a polling
+      // client forever, so consume the unrepresentable tail and report EOF.
+      // The cursor therefore strictly advances and pagination always terminates.
+      const next = used === 0 && offset < info.size ? info.size : offset + used;
       return logResult(job.job_id, stream, offset, info.size, data.subarray(0, used).toString("utf8"), next);
     } finally {
       await handle.close();
@@ -756,6 +792,12 @@ export class JobManager {
     const removable = [...this.jobs.values()]
       .filter((job) => !occupiesProcessSlot(job) && !aliveJobIds.has(job.job_id))
       .sort((a, b) => a.updated_at_ms - b.updated_at_ms || a.job_id.localeCompare(b.job_id));
+    if (this.retentionDays > 0) {
+      const cutoff = Date.now() - this.retentionDays * 86_400_000;
+      for (const job of removable) {
+        if (["succeeded","failed","cancelled","interrupted"].includes(job.status) && (job.completed_at_ms ?? job.updated_at_ms) <= cutoff) await this.removeRetainedJobIfCurrent(job);
+      }
+    }
     while (this.jobs.size > retainedLimit && removable.length > 0) {
       const job = removable.shift() as JobRecord;
       await this.removeRetainedJobIfCurrent(job);
@@ -1165,6 +1207,8 @@ function terminalRecoveredJob(job: JobRecord, status: "cancelled" | "interrupted
     output_truncated: job.output_truncated,
     cancellation_delivered_at_ms: job.cancellation_delivered_at_ms,
     created_by_client_id: job.created_by_client_id,
+    request_id: job.request_id ?? null,
+    request_fingerprint: job.request_fingerprint ?? null,
   };
 }
 
@@ -1200,6 +1244,10 @@ function boundedPositiveInteger(value: unknown, min: number, max: number, label:
 function relativeWorkspacePath(workspace: WorkspaceConfig, path: string): string { return path === workspace.rootPath ? "." : path.slice(workspace.rootPath.length + 1); }
 function isJobStatus(value: unknown): value is LocalJobStatus { return typeof value === "string" && ["queued", "running", "cancelling", "cancelled", "succeeded", "failed", "unknown", "interrupted"].includes(value); }
 function safeOptionalIdentifier(value: unknown): string | null { if (value === undefined) return null; if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) throw new Error("created_by_client_id is invalid"); return value; }
+function safeOptionalRequestId(value: unknown): string | null { if (value === undefined) return null; if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) throw new RpcRuntimeError("invalid_params", "request_id is invalid"); return value; }
+function launchRequestFingerprint(workspaceId: string, cwd: string, invocation: { readonly file: string; readonly args: readonly string[]; readonly command: readonly string[]; readonly shell: boolean }, clientId: string | null): string {
+  return createHash("sha256").update(JSON.stringify({ workspace_id: workspaceId, cwd, file: invocation.file, args: invocation.args, command: invocation.command, shell: invocation.shell, client_id: clientId })).digest("hex");
+}
 function isActive(job: JobRecord): boolean { return job.status === "queued" || job.status === "running" || job.status === "cancelling"; }
 /** Immutable local-child identity used when merging a newer active snapshot. */
 function sameJobProcessIdentity(left: JobRecord, right: JobRecord): boolean {
@@ -1523,6 +1571,10 @@ function normalizeJobRecord(value: unknown, expectedJobId?: string): JobRecord |
   const delivered = deliveredValue === undefined || deliveredValue === null ? null : safeTimestamp(deliveredValue) ?? null;
   const client = item.created_by_client_id;
   const normalizedClient = typeof client === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(client) ? client : null;
+  const requestId = item.request_id;
+  const normalizedRequestId = typeof requestId === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(requestId) ? requestId : null;
+  const requestFingerprint = item.request_fingerprint;
+  const normalizedRequestFingerprint = normalizedRequestId !== null && typeof requestFingerprint === "string" && /^[a-f0-9]{64}$/u.test(requestFingerprint) ? requestFingerprint : null;
   const note = item.recovery_note;
   const normalizedNote = typeof note === "string" && note.length <= 512 && !/[\u0000-\u001f\u007f]/u.test(note) ? note : null;
   // Treat an absent or malformed marker as false. This avoids claiming that
@@ -1548,6 +1600,8 @@ function normalizeJobRecord(value: unknown, expectedJobId?: string): JobRecord |
     recovery_note: normalizedNote,
     output_truncated: outputTruncated,
     created_by_client_id: normalizedClient,
+    request_id: normalizedRequestFingerprint === null ? null : normalizedRequestId,
+    request_fingerprint: normalizedRequestFingerprint,
     cancellation_delivered_at_ms: delivered,
   };
 }

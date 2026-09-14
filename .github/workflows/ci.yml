@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [dev]
+    branches: [main, dev]
   pull_request:
   workflow_dispatch:
   workflow_call:
@@ -30,6 +30,8 @@ jobs:
       - run: npm audit --audit-level=high
       - run: npm audit --omit=dev --audit-level=high
       - run: npm run check:docs
+      - run: npm run check:ci-parity
+      - run: npm run check:runbooks
       - run: npm run check:versions
       - run: npm run check:format
       - run: git diff --check
@@ -39,6 +41,7 @@ jobs:
       - run: npm run check:licenses
       - run: npm run build
       - run: npm run validate:worker -- --dry-run
+      - run: npm run validate:worker -- --dry-run --env development
       - run: npm run validate:worker -- --dry-run --env production
       - run: node scripts/check-release-contract.mjs
       - run: npm run pack:smoke

@@ -1,0 +1,15 @@
+/** Scope and policy ceilings are different boundaries: exec must not silently
+ * substitute for the independently required read/write tool scope. */
+export function rpcPermissionRequirement(method: string): { scope: "coding:read" | "coding:write" | "coding:exec"; permission: "read" | "edit" | "shell" | "job_control"; job: boolean } | undefined {
+  switch (method) {
+    case "env.info": case "workspace.list": case "context.bootstrap": case "context.read": case "context.search":
+    case "fs.stat": case "fs.read": case "fs.list": case "fs.search": case "git.status": case "git.diff": case "git.log": case "git.show": case "git.blame": return { scope: "coding:read", permission: "read", job: false };
+    case "fs.preview_patch": case "context.checkpoint": case "context.rebuild":
+    case "fs.apply_patch": return { scope: "coding:write", permission: "edit", job: false };
+    case "exec.start": case "exec.run": return { scope: "coding:exec", permission: "shell", job: false };
+    case "job.list": return { scope: "coding:read", permission: "read", job: false };
+    case "job.get": case "job.logs": return { scope: "coding:read", permission: "read", job: true };
+    case "job.cancel": case "job.input": return { scope: "coding:exec", permission: "job_control", job: true };
+    default: return undefined;
+  }
+}
