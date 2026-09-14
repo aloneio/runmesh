@@ -347,7 +347,7 @@ export class RunnerConnection {
             if (this.socket !== socket || this.stopped) return;
             try { this.sendHeartbeat(socket); } catch { /* close handler drives reconnect */ }
           }, this.heartbeatMs);
-          this.syncTimer = setInterval(() => {
+          if (this.jobHistory?.mode !== "off") this.syncTimer = setInterval(() => {
             if (this.socket !== socket || this.stopped) return;
             void this.sendSync(socket).catch(() => undefined);
           }, this.jobHistory === undefined ? this.syncMs : this.jobHistory.interval_seconds * 1000);
