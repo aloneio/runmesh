@@ -32,7 +32,8 @@ describe("maintenance bootstrap", () => {
       expect(script).toContain("Starting service");
       expect(script).toContain("signature does not verify");
     }
-    expect(shell).toContain("sha256sum -c - > /dev/null");
+    expect(shell).toContain('[ "$NODE_DIGEST" = "$NODE_SHA256" ]');
+    expect(shell).toContain("RMI_CHECKSUM_MISMATCH");
     expect(shell).toContain('[ -z "${NO_COLOR:-}" ]');
     expect(shell).not.toContain("__NO_COLOR__");
     expect(windows).toMatch(/^[\x00-\x7f]*$/u);

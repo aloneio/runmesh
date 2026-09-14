@@ -160,3 +160,7 @@ See [batched snapshots, manual loading and retention](batched-job-history.md). P
 ## Production branch cutover
 
 The serving Worker is promoted to protected GitLab main; dev is reserved for a separate development Worker. Existing v0.1.2 publication provenance above is historical and is not rewritten. Future formal publication is main-only. See [exact settings and checks](production-main-cutover.md).
+
+## Minimal-host bootstrap
+
+The [installer prerequisite contract](installer-prerequisites.md) uses pinned official gzip archives, checks service prerequisites before registration, and classifies stage errors. No system package manager is executed automatically and no new Worker runtime variables are required.

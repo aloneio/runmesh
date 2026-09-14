@@ -71,7 +71,7 @@ jobs:
       - run: npm run test --workspace=@aloneio/runmesh-runner
       - run: npm run pack:smoke
       - run: node scripts/check-installer-syntax.mjs
-      - run: node --test test/installer-arguments.test.mjs
+      - run: node --test test/installer-arguments.test.mjs test/installer-preflight.test.mjs
 
   runner-lts:
     name: Runner LTS (${{ matrix.node }})

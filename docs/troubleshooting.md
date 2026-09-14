@@ -43,3 +43,7 @@ Use `job` `list`, `get`, and paginated `logs`. Browser or MCP disconnects do not
 ## If the issue remains
 
 Record the time, page or tool, a redacted error code, the Runner display name, and non-sensitive `doctor --json` checks. Do not share passwords, complete URLs, codes, tokens, real workspace paths, file contents, or command output. Use the private process in [SECURITY.md](../.github/SECURITY.md) for security issues.
+
+## Minimal-host installer failures
+
+The POSIX bootstrap no longer requires xz. See [installer prerequisites and recovery](installer-prerequisites.md) for RMI_* error codes. Do not disable TLS/checksums or blindly retry a consumed enrollment code.
