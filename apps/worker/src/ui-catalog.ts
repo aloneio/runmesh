@@ -573,3 +573,5 @@ Object.assign(ZH_UI_TEXT, {
 });
 
 Object.assign(ZH_UI_TEXT, {"Runner credential rotation could not read the Runner state.":"Runner 凭据轮换无法读取当前状态。","Runner enrollment could not read the Runner state.":"Runner 注册操作无法读取当前状态。"});
+
+Object.assign(ZH_UI_TEXT, {"Runmesh setup": "Runmesh 初始化", "Agent Control Plane login": "智能体控制平面登录", "Agent Control Plane setup": "智能体控制平面初始化", "Agent Control Plane enrollment": "智能体控制平面注册"});
