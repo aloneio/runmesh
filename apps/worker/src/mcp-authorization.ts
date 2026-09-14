@@ -5,6 +5,7 @@ export function rpcPermissionRequirement(method: string): { scope: "coding:read"
     case "fs.stat": case "fs.read": case "fs.list": case "fs.search": case "git.status": case "git.diff": case "git.log": case "git.show": case "git.blame": return { scope: "coding:read", permission: "read", job: false };
     case "fs.apply_patch": return { scope: "coding:write", permission: "edit", job: false };
     case "exec.start": case "exec.run": return { scope: "coding:exec", permission: "shell", job: false };
+    case "job.list": return { scope: "coding:read", permission: "read", job: false };
     case "job.get": case "job.logs": return { scope: "coding:read", permission: "read", job: true };
     case "job.cancel": case "job.input": return { scope: "coding:exec", permission: "job_control", job: true };
     default: return undefined;
