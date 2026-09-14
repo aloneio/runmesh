@@ -158,3 +158,7 @@ MCP URL path credentials can be captured by infrastructure outside application c
 ## Optional cloud history and quota isolation
 
 See [quota isolation and cloud Job recording](quota-resilience.md). Production uses the independent `HISTORY_DB` D1 binding for optional audit. Core enrollment, credential and policy authority stays in RegistryDO. MCP client detail provides a switch for new cloud Job snapshots and related Job-tool audit; local Runner jobs/logs remain. Workspace-bound Job operations require Runner 0.1.1+. GitLab dev push, not GitHub verification alone, triggers the maintained Cloudflare deployment.
+
+## Batched Job history
+
+See [batched snapshots, manual loading and retention](batched-job-history.md). Production uses `RUNMESH_JOB_HISTORY_BACKEND=d1`; the default upload window is five minutes. History is loaded only on request. Source-side batching and local day-based cleanup require a newly released capable Runner; immutable v0.1.1 is unchanged.
