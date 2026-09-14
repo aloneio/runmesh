@@ -234,7 +234,7 @@ export class RunnerConnection {
     const socket=this.socket;
     if (!this.queueNegotiated || !parsed.success || this.stopped || socket===undefined || socket!==this.welcomedSocket || socket.readyState!==WebSocket.OPEN) return false;
     const grant=parsed.data;
-    const canonical=JSON.stringify({workspace_id:input.workspace_id,command:input.command,shell:input.shell,cwd:input.cwd??".",request_id:input.request_id??null});
+    const canonical=JSON.stringify({workspace_id:input.workspace_id,command:input.command,args:input.args??null,shell:input.shell,cwd:input.cwd??".",request_id:input.request_id??null});
     if (grant.payload.client_id!==clientId || grant.payload.runner_id!==this.config.runnerId || grant.payload.workspace_id!==input.workspace_id
       || grant.payload.policy_revision!==this.appliedPolicyRevision || grant.payload.expires_at_ms<=Date.now()
       || grant.payload.launch_digest!==createHash("sha256").update(canonical).digest("hex")) return false;
