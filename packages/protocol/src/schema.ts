@@ -259,6 +259,7 @@ export const JobMetadataSchema = z
     updated_at_ms: TimestampSchema,
     display_name: z.string().min(1).max(512).optional(),
     created_by_client_id: IdentifierSchema.optional(),
+    request_id: IdentifierSchema.optional(),
     runner_id: IdentifierSchema.optional(),
   })
   .strict();
@@ -275,8 +276,9 @@ const CorrelatedEnvelopeSchema = EnvelopeSchema.extend({
 }).strict();
 
 export const ProtectedRpcMethodSchema = z.enum([
-  "env.info", "workspace.list", "fs.stat", "fs.read", "fs.list", "fs.search", "fs.apply_patch",
-  "git.status", "git.diff", "exec.start", "exec.run", "job.list", "job.get", "job.logs", "job.cancel", "job.input",
+  "env.info", "workspace.list", "fs.stat", "fs.read", "fs.list", "fs.search", "fs.preview_patch", "fs.apply_patch",
+  "git.status", "git.diff", "git.log", "git.show", "git.blame", "exec.start", "exec.run", "job.list", "job.get", "job.logs", "job.cancel", "job.input",
+  "context.bootstrap", "context.read", "context.search", "context.checkpoint", "context.rebuild",
 ]);
 export type ProtectedRpcMethod = z.infer<typeof ProtectedRpcMethodSchema>;
 /** Unknown methods are protected by default; only echo and runner.info are unprotected. */
@@ -407,6 +409,10 @@ export const RpcErrorDetailsSchema = z
   .object({
     code: z.string().min(1).max(128),
     message: ShortTextSchema,
+    failure_class: z.enum(["validation", "authorization", "availability", "conflict", "resource", "execution", "internal", "unknown"]).optional(),
+    operation_state: z.enum(["not_started", "running", "committed", "unknown"]).optional(),
+    retry_after_ms: z.number().int().nonnegative().max(86_400_000).optional(),
+    next_action: z.enum(["correct_request", "refresh_permissions", "wait_and_retry", "re_read_and_retry", "inspect_job", "contact_operator"]).optional(),
     details: JsonValueSchema.optional(),
   })
   .strict();

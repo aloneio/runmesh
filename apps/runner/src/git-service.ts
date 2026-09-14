@@ -149,6 +149,64 @@ export class GitService {
       truncated: run.truncated || safeOutput.byteLength !== run.stdout.byteLength,
     });
   }
+
+  /** Internal-safe current commit observation used to age verification evidence. */
+  public async head(input: unknown): Promise<{ readonly workspace_id: string; readonly commit: string }> {
+    const params = object(input);
+    const workspace = this.policy.getWorkspace(params.workspace_id);
+    const scope = await resolveGitPath(this.policy, params.workspace_id, ".");
+    const run = await git(scope.rootPath, ["rev-parse", "--verify", "HEAD"], 128, this.options);
+    if (run.status !== 0 || run.truncated) throw gitFailure("git HEAD inspection failed", run);
+    const commit = run.stdout.toString("utf8").trim();
+    if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/iu.test(commit)) throw new RpcRuntimeError("git_unavailable", "git HEAD is not a valid commit identifier");
+    return { workspace_id: workspace.workspaceId, commit };
+  }
+
+  public async log(input: unknown): Promise<Record<string, unknown>> {
+    const params = object(input);
+    const workspace = this.policy.getWorkspace(params.workspace_id);
+    const scope = await resolveGitPath(this.policy, params.workspace_id, params.path ?? ".");
+    const limit = boundedCount(params.limit, 20, 100);
+    const cap = outputCap(params.max_bytes, DEFAULT_OUTPUT_BYTES);
+    const args = ["-c", "core.fsmonitor=false", "log", "--no-decorate", "--no-color", `-n${limit}`, "--format=%H%x00%an%x00%aI%x00%s%x00", "--", literalPathspec(scope.relativePath)];
+    const run = await git(scope.rootPath, args, cap, this.options);
+    if (run.status !== 0) throw gitFailure("git log failed", run);
+    const fields = run.stdout.toString("utf8").split("\0").filter((v) => v.length > 0);
+    const commits: Record<string, unknown>[] = [];
+    for (let i = 0; i + 3 < fields.length && commits.length < limit; i += 4) {
+      const [oid = "", author = "", date = "", subject = ""] = fields.slice(i, i + 4);
+      if (!/^[0-9a-f]{40,64}$/i.test(oid) || subject.length > 4096) continue;
+      commits.push({ oid, author: author.slice(0, 512), date: date.slice(0, 64), subject });
+    }
+    return { workspace_id: workspace.workspaceId, path: scope.relativePath, commits, limit, truncated: run.truncated, output_bytes: run.stdout.byteLength };
+  }
+
+  public async show(input: unknown): Promise<Record<string, unknown>> {
+    const params = object(input);
+    const workspace = this.policy.getWorkspace(params.workspace_id);
+    const scope = await resolveGitPath(this.policy, params.workspace_id, params.path ?? ".");
+    const revision = safeRevision(params.revision);
+    const cap = outputCap(params.max_bytes, DEFAULT_OUTPUT_BYTES);
+    const run = await git(scope.rootPath, ["-c", "core.fsmonitor=false", "show", "--no-ext-diff", "--no-color", "--no-renames", "--format=fuller", `${revision}:${scope.relativePath}`], cap, this.options);
+    if (run.status !== 0) throw gitFailure("git show failed", run);
+    const output = utf8SafePrefix(run.stdout).toString("utf8");
+    return { workspace_id: workspace.workspaceId, path: scope.relativePath, revision, output, encoding: "utf-8", bytes: run.stdout.byteLength, truncated: run.truncated || output.length < run.stdout.toString("utf8").length };
+  }
+
+  public async blame(input: unknown): Promise<Record<string, unknown>> {
+    const params = object(input);
+    const workspace = this.policy.getWorkspace(params.workspace_id);
+    const scope = await resolveGitPath(this.policy, params.workspace_id, params.path ?? ".");
+    const start = boundedCount(params.start_line, 1, 1_000_000);
+    const end = boundedCount(params.end_line, start, 1_000_000);
+    if (end < start) throw new RpcRuntimeError("invalid_params", "end_line must be greater than or equal to start_line");
+    const cap = outputCap(params.max_bytes, DEFAULT_OUTPUT_BYTES);
+    const run = await git(scope.rootPath, ["-c", "core.fsmonitor=false", "blame", "--line-porcelain", "-L", `${start},${end}`, "--", literalPathspec(scope.relativePath)], cap, this.options);
+    if (run.status !== 0) throw gitFailure("git blame failed", run);
+    const output = utf8SafePrefix(run.stdout).toString("utf8");
+    return { workspace_id: workspace.workspaceId, path: scope.relativePath, start_line: start, end_line: end, output, encoding: "utf-8", bytes: run.stdout.byteLength, truncated: run.truncated || output.length < run.stdout.toString("utf8").length };
+  }
+
 }
 
 async function resolveGitPath(policy: PathPolicy, workspaceId: unknown, path: unknown): Promise<GitPath> {
@@ -730,24 +788,24 @@ function fitStatusResult(input: {
   readonly outputBytes: number;
   readonly truncated: boolean;
 }): Record<string, unknown> {
-  const entries = [...input.parsed.entries];
-  let truncated = input.truncated;
-  const result = (): Record<string, unknown> => ({
+  const entries = input.parsed.entries;
+  const resultFor = (kept: readonly StatusEntry[], truncated: boolean): Record<string, unknown> => ({
     workspace_id: input.workspaceId,
     path: input.path,
     branch: input.parsed.branch,
-    entries,
+    entries: kept,
     ...(input.parsed.ahead === undefined ? {} : { ahead: input.parsed.ahead }),
     ...(input.parsed.behind === undefined ? {} : { behind: input.parsed.behind }),
     truncated,
     output_bytes: input.outputBytes,
   });
-  while (!responseFits(result()) && entries.length > 0) {
-    entries.pop();
-    truncated = true;
-  }
-  if (!responseFits(result())) throw new RpcRuntimeError("git_output_too_large", "git status metadata cannot fit in one RPC frame");
-  return result();
+  if (responseFits(resultFor(entries, input.truncated))) return resultFor(entries, input.truncated);
+  // A status list can be arbitrarily long, so re-serializing the whole response
+  // after every single removal is quadratic. Binary-search the longest prefix
+  // that still fits, exactly as the diff path does.
+  const kept = fitPrefix(entries, (prefix) => responseFits(resultFor(prefix, true)));
+  if (!responseFits(resultFor(entries.slice(0, kept), true))) throw new RpcRuntimeError("git_output_too_large", "git status metadata cannot fit in one RPC frame");
+  return resultFor(entries.slice(0, kept), true);
 }
 
 function fitDiffResult(input: {
@@ -792,6 +850,29 @@ function responseFits(result: Record<string, unknown>): boolean {
     request_id: "x".repeat(MAX_REQUEST_ID_BYTES),
     result,
   }), "utf8") <= MAX_FRAME_BYTES;
+}
+
+/**
+ * Length of the longest prefix that `fits` accepts, assuming `fits` is
+ * monotonic (when a prefix does not fit, no longer prefix fits either).
+ * Locating it by binary search keeps truncation logarithmic in the number of
+ * serialized candidates instead of re-serializing the whole response after
+ * every single removal.
+ */
+export function fitPrefix<T>(items: readonly T[], fits: (prefix: readonly T[]) => boolean): number {
+  let low = 0;
+  let high = items.length;
+  let best = 0;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    if (fits(items.slice(0, middle))) {
+      best = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return best;
 }
 
 export function utf8SafePrefix<T extends Uint8Array>(output: T): T {
@@ -852,6 +933,16 @@ function gitFailure(prefix: string, run: GitRun): RpcRuntimeError {
   if (run.timedOut) return new RpcRuntimeError("git_timeout", `${prefix}: command exceeded ${run.timeoutMs}ms timeout`);
   const detail = run.stderr.toString("utf8").trim() || run.stdout.toString("utf8").trim() || run.signal || "unknown git failure";
   return new RpcRuntimeError("git_failed", `${prefix}: ${detail.slice(0, 1_024)}`);
+}
+
+function boundedCount(value: unknown, fallback: number, max: number): number {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > max) throw new RpcRuntimeError("invalid_params", `value must be an integer from 1 to ${max}`);
+  return value as number;
+}
+function safeRevision(value: unknown): string {
+  if (typeof value !== "string" || !/^[0-9a-fA-F]{7,64}(?:\^\{0,1\})?$/.test(value)) throw new RpcRuntimeError("invalid_params", "revision must be a git commit identifier");
+  return value;
 }
 function object(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new RpcRuntimeError("invalid_params", "params must be an object");

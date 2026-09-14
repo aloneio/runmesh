@@ -3,7 +3,7 @@ stages:
 
 workflow:
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "dev"'
+    - if: '$CI_PIPELINE_SOURCE == "push" && ($CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev")'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_PIPELINE_SOURCE == "web"'
     - when: never
@@ -29,6 +29,8 @@ verify:
     - npm audit --audit-level=high
     - npm audit --omit=dev --audit-level=high
     - npm run check:docs
+    - npm run check:ci-parity
+    - npm run check:runbooks
     - npm run check:versions
     - npm run check:format
     - git diff --check
@@ -38,12 +40,13 @@ verify:
     - npm run check:licenses
     - npm run build
     - npm run validate:worker -- --dry-run
+    - npm run validate:worker -- --dry-run --env development
     - npm run validate:worker -- --dry-run --env production
     - node scripts/check-release-contract.mjs
     - npm run pack:smoke
     - npm run test:e2e
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "dev"'
+    - if: '$CI_PIPELINE_SOURCE == "push" && ($CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev")'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_PIPELINE_SOURCE == "web"'
     - when: never

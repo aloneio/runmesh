@@ -3,12 +3,13 @@ import { lstatSync, realpathSync } from "node:fs";
 import { hostname } from "node:os";
 import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS } from "@aloneio/runmesh-protocol";
 import type { RunnerConfig } from "./config.js";
+import { ContextStore, type ContextEvidence } from "./context-store.js";
 import { GitService } from "./git-service.js";
 import { FilesystemService } from "./filesystem.js";
 import { JobManager, type JobEvent, type JobRecord } from "./jobs.js";
 import { PatchService } from "./patch-service.js";
 import { PathPolicy, PathPolicyError } from "./path-policy.js";
-import { RpcRuntimeError } from "./errors.js";
+import { RpcRuntimeError, failureMetadata, type RpcFailureClass, type RpcNextAction, type RpcOperationState } from "./errors.js";
 import type { JobMetadata } from "./protocol-types.js";
 import type { HostPlatform } from "./platform-types.js";
 import { trustedWindowsEnvironment, trustedWindowsRoot, resolveTrustedWindowsTool } from "./windows-tools.js";
@@ -214,6 +215,7 @@ export class RunnerRuntime {
   public readonly filesystem: FilesystemService;
   public readonly jobs: JobManager;
   public readonly git: GitService;
+  public readonly context: ContextStore;
   private readonly patcher: PatchService;
   private readonly config: RunnerConfig;
   private shellRuntime: ShellRuntime | undefined;
@@ -226,6 +228,7 @@ export class RunnerRuntime {
     this.filesystem = new FilesystemService(this.policy);
     this.git = new GitService(this.policy);
     this.patcher = new PatchService(this.policy);
+    this.context = new ContextStore(options.stateDir === undefined ? {} : { stateDir: options.stateDir });
     this.jobs = new JobManager({ policy: this.policy, runnerId: options.config.runnerId, maxConcurrentJobs: options.config.maxConcurrentJobs ?? 1, ...(options.config.maxRetainedJobs === undefined ? {} : { maxRetainedJobs: options.config.maxRetainedJobs }), ...(options.config.maxLogBytesPerJob === undefined ? {} : { maxLogBytesPerJob: options.config.maxLogBytesPerJob }), ...(options.config.maxTotalLogBytes === undefined ? {} : { maxTotalLogBytes: options.config.maxTotalLogBytes }), ...(options.stateDir === undefined ? {} : { stateDir: options.stateDir }), ...(options.onJobEvent === undefined ? {} : { onEvent: options.onJobEvent }) });
   }
   public async initialize(): Promise<void> {
@@ -247,6 +250,14 @@ export class RunnerRuntime {
     return { ...info, shell: shell === undefined ? { available: false } : { available: true, kind: shell.kind, version: shell.version } };
   }
   public async dispatch(method: string, input: unknown): Promise<unknown> {
+    const generation = this.policy.generation;
+    const result = await this.dispatchAtCurrentPolicy(method, input);
+    // Read-only operations must not return data from an obsolete authorization
+    // snapshot. Already-committed edits/jobs keep their real result semantics.
+    if (["workspace.list", "env.info", "fs.stat", "fs.read", "fs.list", "fs.search", "fs.preview_patch", "git.status", "git.diff", "git.log", "git.show", "git.blame", "job.list", "job.get", "job.logs", "context.bootstrap", "context.read", "context.search"].includes(method)) this.policy.assertGeneration(generation);
+    return result;
+  }
+  private async dispatchAtCurrentPolicy(method: string, input: unknown): Promise<unknown> {
     const params = object(input);
     switch (method) {
       case "workspace.list": return this.workspaceList();
@@ -258,9 +269,13 @@ export class RunnerRuntime {
       case "fs.read": this.policy.assertPermission(params.workspace_id, "read"); return this.filesystem.read(params);
       case "fs.list": this.policy.assertPermission(params.workspace_id, "read"); return this.filesystem.list(params);
       case "fs.search": this.policy.assertPermission(params.workspace_id, "read"); return this.filesystem.search(params);
+      case "fs.preview_patch": this.policy.assertPermission(params.workspace_id, "edit"); return this.patcher.preview(params);
       case "fs.apply_patch": this.policy.assertPermission(params.workspace_id, "edit"); return this.patcher.apply(params);
       case "git.status": this.policy.assertPermission(params.workspace_id, "read"); return this.git.status(params);
       case "git.diff": this.policy.assertPermission(params.workspace_id, "read"); return this.git.diff(params);
+      case "git.log": this.policy.assertPermission(params.workspace_id, "read"); return this.git.log(params);
+      case "git.show": this.policy.assertPermission(params.workspace_id, "read"); return this.git.show(params);
+      case "git.blame": this.policy.assertPermission(params.workspace_id, "read"); return this.git.blame(params);
       case "exec.start": return this.startJob(params);
       case "exec.run": return this.run(params);
       case "job.list": this.assertJobsReadable(params.workspace_id); return this.jobs.listReconciled(params);
@@ -268,13 +283,20 @@ export class RunnerRuntime {
       case "job.logs": { const job = this.jobs.get(params.job_id); assertExpectedJobWorkspace(params, job.workspace_id); this.policy.assertPermission(job.workspace_id, "read"); return this.jobs.logs(job.job_id, params); }
       case "job.cancel": { const job = this.jobs.get(params.job_id); assertExpectedJobWorkspace(params, job.workspace_id); this.assertJobControl(job.workspace_id); return this.jobs.cancel(job.job_id); }
       case "job.input": { const job = this.jobs.get(params.job_id); assertExpectedJobWorkspace(params, job.workspace_id); this.assertJobControl(job.workspace_id); return this.jobs.input(job.job_id, params.data, params.close_stdin === true); }
+      case "context.bootstrap": this.policy.assertPermission(params.workspace_id, "read"); return this.contextWithBaseline(await this.context.bootstrap(params), params.workspace_id);
+      case "context.read": this.policy.assertPermission(params.workspace_id, "read"); return this.contextWithBaseline(await this.context.read(params), params.workspace_id);
+      case "context.search": this.policy.assertPermission(params.workspace_id, "read"); return this.context.search(params);
+      case "context.checkpoint": this.policy.assertPermission(params.workspace_id, "edit"); return this.contextWithBaseline(await this.context.checkpoint(await this.contextCheckpointParams(params)), params.workspace_id);
+      case "context.rebuild": this.policy.assertPermission(params.workspace_id, "edit"); return this.context.rebuild(params);
       default: throw new RpcRuntimeError("method_not_found", `Unsupported method: ${method}`);
     }
   }
-  public async syncJobs(): Promise<JobMetadata[]> {
-    const jobs = await this.jobs.listReconciled({ limit: 100 });
+  public configureJobRetention(days: number): void { this.jobs.setRetentionDays(days); }
+  public async cleanupJobs(): Promise<void> { await this.jobs.cleanupExpired(); }
+  public async syncJobs(limit = 100): Promise<JobMetadata[]> {
+    const jobs = limit > 100 ? await this.jobs.snapshotForSync(limit) : await this.jobs.listReconciled({ limit });
     await this.jobs.flushPersistence();
-    return jobs.map((job) => ({ job_id: job.job_id, workspace_id: job.workspace_id, status: job.status, created_at_ms: job.created_at_ms, updated_at_ms: job.updated_at_ms, ...(job.created_by_client_id === null ? {} : { created_by_client_id: job.created_by_client_id }), runner_id: this.config.runnerId }));
+    return jobs.map((job) => ({ job_id: job.job_id, workspace_id: job.workspace_id, status: job.status, created_at_ms: job.created_at_ms, updated_at_ms: job.updated_at_ms, ...(job.created_by_client_id === null ? {} : { created_by_client_id: job.created_by_client_id }), ...(job.request_id === undefined || job.request_id === null ? {} : { request_id: job.request_id }), runner_id: this.config.runnerId }));
   }
   private assertJobsReadable(workspaceId: unknown): void {
     if (workspaceId === undefined) {
@@ -286,6 +308,47 @@ export class RunnerRuntime {
   private assertJobControl(workspaceId: string): void {
     const workspace = this.policy.assertPermission(workspaceId, "read");
     if (workspace.permissions !== undefined && !workspace.permissions.job_control) throw new RpcRuntimeError("permission_denied", "job control is disabled for this workspace");
+  }
+  private async contextCheckpointParams(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const workspaceId = typeof params.workspace_id === "string" ? params.workspace_id : "";
+    const rawEvidence = params.evidence;
+    if (rawEvidence !== undefined && !Array.isArray(rawEvidence)) throw new RpcRuntimeError("invalid_params", "context evidence must be an array");
+    const evidence: ContextEvidence[] = [];
+    for (const item of rawEvidence ?? []) {
+      const entry = object(item);
+      if (entry.kind === "job") {
+        if (typeof entry.job_id !== "string") throw new RpcRuntimeError("invalid_params", "job evidence requires job_id");
+        const job = await this.jobs.getReconciled(entry.job_id);
+        if (job.workspace_id !== workspaceId) throw new RpcRuntimeError("permission_denied", "job evidence belongs to another workspace");
+        evidence.push({ kind: "job", status: "observed", job_id: job.job_id, job_status: job.status, exit_code: job.exit_code, observed_at_ms: Date.now(), ...(typeof entry.summary === "string" ? { summary: entry.summary } : {}) });
+        continue;
+      }
+      if (entry.kind !== "test" && entry.kind !== "commit" && entry.kind !== "note") throw new RpcRuntimeError("invalid_params", "context evidence kind is invalid");
+      evidence.push({ kind: entry.kind, status: "claimed", ...(typeof entry.ref === "string" ? { ref: entry.ref } : {}), ...(typeof entry.summary === "string" ? { summary: entry.summary } : {}) });
+    }
+    let observedCommit: string | undefined;
+    try { observedCommit = (await this.git.head({ workspace_id: workspaceId })).commit; }
+    catch { /* Non-Git workspaces retain an explicit caller claim or null baseline. */ }
+    return {
+      ...params,
+      ...(observedCommit === undefined ? {} : { base_commit: observedCommit, base_commit_status: "observed" }),
+      evidence,
+      policy_generation: this.policy.generation,
+    };
+  }
+  private async contextWithBaseline(result: Record<string, unknown>, workspaceId: unknown): Promise<Record<string, unknown>> {
+    const context = result.context;
+    if (typeof workspaceId !== "string" || typeof context !== "object" || context === null || Array.isArray(context)) return result;
+    const record = context as Record<string, unknown>;
+    let currentCommit: string | null = null;
+    let baselineState: "current" | "stale" | "unknown" = "unknown";
+    if (record.base_commit_status === "observed" && typeof record.base_commit === "string") {
+      try {
+        currentCommit = (await this.git.head({ workspace_id: workspaceId })).commit;
+        baselineState = currentCommit === record.base_commit ? "current" : "stale";
+      } catch { /* Baseline age is unknown when Git cannot be inspected safely. */ }
+    }
+    return { ...result, context: { ...record, baseline_state: baselineState, current_commit: currentCommit } };
   }
   private async startJob(input: unknown): Promise<import("./jobs.js").JobRecord> {
     const params = object(input); const workspace = this.policy.getWorkspace(params.workspace_id);
@@ -311,7 +374,12 @@ export class RunnerRuntime {
 }
 
 export { RpcRuntimeError } from "./errors.js";
-export function rpcError(error: unknown): { code: string; message: string; details?: Record<string, unknown> | undefined } { if (error instanceof Error && error.message === "stale_policy") return { code: "stale_policy", message: "RPC policy revision is stale" }; if (error instanceof PathPolicyError || error instanceof RpcRuntimeError) return { code: error.code, message: error.message.slice(0, 4_096), ...(error instanceof RpcRuntimeError && error.details === undefined ? {} : { details: (error as RpcRuntimeError).details }) }; return { code: "invalid_request", message: (error instanceof Error ? error.message : "request failed").slice(0, 4_096) || "request failed" }; }
+export function rpcError(error: unknown): { code: string; message: string; failure_class: RpcFailureClass; operation_state: RpcOperationState; retry_after_ms?: number; next_action: RpcNextAction; details?: Record<string, unknown> | undefined } {
+  const code = error instanceof Error && error.message === "stale_policy" ? "stale_policy" : error instanceof PathPolicyError || error instanceof RpcRuntimeError ? error.code : "invalid_request";
+  const metadata = failureMetadata(code);
+  const message = error instanceof Error ? (error.message === "stale_policy" ? "RPC policy revision is stale" : error.message) : "request failed";
+  return { code, message: message.slice(0, 4_096) || "request failed", ...metadata, ...(error instanceof RpcRuntimeError && error.details !== undefined ? { details: error.details } : {}) };
+}
 function object(value: unknown): Record<string, unknown> { if (typeof value !== "object" || value === null || Array.isArray(value)) throw new RpcRuntimeError("invalid_params", "params must be an object"); return value as Record<string, unknown>; }
 function positiveInteger(value: unknown, field: string): number { if (!Number.isSafeInteger(value) || (value as number) < 1) throw new RpcRuntimeError("invalid_params", `${field} must be a positive integer`); return value as number; }
 /** Worker-side job authorization is bound to a Registry workspace snapshot.

@@ -1,5 +1,12 @@
+import { PackedJobHistory, JobHistoryUnavailableError } from "./job-history-store.js";
+import { DEFAULT_JOB_HISTORY, ensureJobHistorySettings, parseJobHistorySettings, type JobHistorySettings } from "./job-history-settings.js";
+import { ExternalAuditHistory, AuditHistoryUnavailableError } from "./external-audit.js";
+import { controlPlaneUnavailableResponse } from "./control-plane-errors.js";
+import { ensureHistoryRetentionSchema, pruneHistory } from "./history-retention.js";
+import { rpcPermissionRequirement } from "./mcp-authorization.js";
 import {
   JobCompletedSchema,
+  type JobMetadata,
   JobStartedSchema,
   JobStatusMessageSchema,
   IdentifierSchema,
@@ -75,7 +82,7 @@ const VALID_SCOPES = new Set<CodingScope>(["coding:read", "coding:write", "codin
 
 export type PermissionBit = "read" | "edit" | "shell" | "job_control";
 export type PermissionSet = Record<PermissionBit, boolean>;
-export type RunnerProfilePreset = "locked" | "read_only" | "coding" | "full_control";
+export type RunnerProfilePreset = "locked" | "read_only" | "edit_only" | "controlled_exec" | "coding" | "full_control";
 export type WorkspaceValidationStatus = "valid" | "missing" | "not_directory" | "permission_denied" | "invalid_path";
 export type RunnerUpdateChannel = "stable" | "pinned";
 export type RunnerProtocolCompatibility = "unknown" | "compatible" | "incompatible";
@@ -189,6 +196,9 @@ export interface RegistryFeatureHealth {
   readonly last_error: string | null;
 }
 export interface McpClientRecord {
+  /** Cloud history preference only; never changes execution permissions. */
+  readonly record_jobs?: boolean;
+  readonly record_jobs_since_ms?: number;
   readonly client_id: string;
   readonly label: string;
   readonly secret_prefix: string;
@@ -281,6 +291,7 @@ type AuthThrottleRow = { id: string; failed_attempts: number; blocked_until_ms: 
 type AuthThrottleKind = "login" | "setup";
 type SessionRow = { csrf_hash: string; expires_at_ms: number; session_version: number };
 type McpClientRow = {
+  record_jobs?: number; record_jobs_since_ms?: number;
   client_id: string; label: string; secret_verifier: string; secret_prefix: string; scopes_json: string;
   secret_version: number; created_at_ms: number; updated_at_ms: number; last_used_at_ms: number | null; revoked_at_ms: number | null;
   active_runner_id: string | null; active_runner_updated_at_ms: number | null;
@@ -291,11 +302,12 @@ const MAX_SYNC_ITEMS = 1_000;
 /** Keep active jobs indefinitely; only old terminal metadata is bounded. */
 const MAX_TERMINAL_JOBS_PER_RUNNER = 1_000;
 const MAX_MCP_CALLS_PER_RUNNER = 1_000;
-const TERMINAL_JOB_STATUSES = new Set(["cancelled", "succeeded", "failed", "interrupted"]);
 const CLIENT_LAST_USED_WRITE_INTERVAL_MS = 60_000;
 export const DEFAULT_RUNNER_ENROLLMENT_TTL_MS = 30 * 60 * 1_000;
 export const RUNNER_ENROLLMENT_TTL_OPTIONS_MS = [5 * 60 * 1_000, 30 * 60 * 1_000, 2 * 60 * 60 * 1_000, 24 * 60 * 60 * 1_000, 7 * 24 * 60 * 60 * 1_000, 30 * 24 * 60 * 60 * 1_000] as const;
 const AUTH_THROTTLE_FAILURE_THRESHOLD = 5;
+export const REGISTRY_HISTORY_CLEANUP_INTERVAL_MS = 15 * 60_000;
+const HISTORY_CLEANUP_DEADLINE_KEY = "maintenance.history-cleanup-deadline.v1";
 const AUTH_THROTTLE_INITIAL_BLOCK_MS = 30_000;
 const AUTH_THROTTLE_MAX_BLOCK_MS = 15 * 60_000;
 
@@ -313,10 +325,14 @@ export class RegistryDO {
   private readonly sourceThrottleResets = new Map<string, number>();
   private readonly legacyThrottleResets = new Map<AuthThrottleKind, number>();
   private maintenanceQueue: Promise<void> = Promise.resolve();
+  private readonly packedJobs: PackedJobHistory | undefined;
+  private readonly externalAudit: ExternalAuditHistory | undefined;
   public constructor(
     private readonly ctx: DurableObjectState,
-    private readonly env: { INTERNAL_CONTROL_SECRET?: string; RUNNER_TOKEN_PEPPER?: string },
+    private readonly env: { INTERNAL_CONTROL_SECRET?: string; RUNNER_TOKEN_PEPPER?: string; HISTORY_DB?: D1Database; RUNMESH_AUDIT_BACKEND?: string; RUNMESH_JOB_HISTORY_BACKEND?: string },
   ) {
+    this.packedJobs = env.RUNMESH_JOB_HISTORY_BACKEND === "d1" && env.HISTORY_DB !== undefined ? new PackedJobHistory(env.HISTORY_DB, ctx.id.toString()) : undefined;
+    this.externalAudit = env.RUNMESH_AUDIT_BACKEND === "d1" && env.HISTORY_DB !== undefined ? new ExternalAuditHistory(env.HISTORY_DB, ctx.id.toString()) : undefined;
     this.ctx.blockConcurrencyWhile(async () => {
       // Durable Objects may be evicted and reconstructed for every request.
       // Replaying CREATE TABLE/INDEX IF NOT EXISTS on every reconstruction is
@@ -423,7 +439,7 @@ export class RegistryDO {
       }
       this.loadFeatureHealth();
       // No legacy audit body is exposed, even if optional cleanup hits a quota.
-      try { this.ctx.storage.transactionSync(() => ensureMetadataOnlyAudit(this.ctx.storage.sql)); }
+      try { this.ctx.storage.transactionSync(() => { ensureMetadataOnlyAudit(this.ctx.storage.sql); ensureHistoryRetentionSchema(this.ctx.storage.sql); ensureJobHistorySettings(this.ctx.storage.sql); }); }
       catch (error) { this.disableFeatureHealth("mcp_audit", error, Date.now()); }
 
       // Existing v2 stores pass schemaIsCurrent and skip initial DDL. Add the
@@ -437,6 +453,17 @@ export class RegistryDO {
 
   public async alarm(): Promise<void> {
     const nowMs = Date.now();
+    try { await this.runMaintenanceAlarm(nowMs); }
+    catch (error) {
+      this.disableFeatureHealth("maintenance_alarm", error, nowMs);
+      // Avoid a tight retry burst when an account/storage backend is overloaded.
+      // If even rescheduling fails, retain the platform's bounded alarm retry.
+      try { await this.ctx.storage.setAlarm(nowMs + REGISTRY_HISTORY_CLEANUP_INTERVAL_MS); }
+      catch { throw error; }
+    }
+  }
+
+  private async runMaintenanceAlarm(nowMs: number): Promise<void> {
     if (this.ctx.storage.sql.exec("SELECT 1 FROM mcp_calls WHERE completed_at_ms <= ? LIMIT 1", nowMs - MCP_AUDIT_RETENTION_MS).toArray().length > 0) {
       this.ctx.storage.sql.exec("DELETE FROM mcp_calls WHERE completed_at_ms <= ?", nowMs - MCP_AUDIT_RETENTION_MS);
     }
@@ -449,12 +476,19 @@ export class RegistryDO {
          WHERE state = 'online' AND (last_heartbeat_ms IS NULL OR last_heartbeat_ms < ?)`, nowMs, nowMs - 45_000,
       );
     }
-    if (this.ctx.storage.sql.exec("SELECT 1 FROM feature_health WHERE disabled_until_ms <= ? LIMIT 1", nowMs).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM feature_health WHERE disabled_until_ms <= ?", nowMs);
-    if (this.ctx.storage.sql.exec("SELECT 1 FROM admin_sessions WHERE expires_at_ms <= ? LIMIT 1", nowMs).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM admin_sessions WHERE expires_at_ms <= ?", nowMs);
-    if (this.ctx.storage.sql.exec("SELECT 1 FROM internal_request_nonces WHERE expires_at_ms <= ? LIMIT 1", nowMs).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM internal_request_nonces WHERE expires_at_ms <= ?", nowMs);
-    // Keep recent expired/used metadata visible in the console; never retain raw codes.
-    const enrollmentRetentionCutoff = nowMs - 30 * 24 * 60 * 60 * 1_000;
-    if (this.ctx.storage.sql.exec("SELECT 1 FROM runner_enrollments WHERE expires_at_ms <= ? LIMIT 1", enrollmentRetentionCutoff).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE expires_at_ms <= ?", enrollmentRetentionCutoff);
+    // Liveness and exact audit expiry retain their existing deadlines. Other
+    // history cleanup runs at most once per 15 minutes, even across eviction.
+    // Authorization checks continue enforcing expiry when each record is read.
+    const nextCleanup = await this.ctx.storage.get<number>(HISTORY_CLEANUP_DEADLINE_KEY);
+    if (!safeNonnegativeInteger(nextCleanup) || nextCleanup <= nowMs || nextCleanup > nowMs + REGISTRY_HISTORY_CLEANUP_INTERVAL_MS) {
+      if (this.ctx.storage.sql.exec("SELECT 1 FROM feature_health WHERE disabled_until_ms <= ? LIMIT 1", nowMs).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM feature_health WHERE disabled_until_ms <= ?", nowMs);
+      if (this.ctx.storage.sql.exec("SELECT 1 FROM admin_sessions WHERE expires_at_ms <= ? LIMIT 1", nowMs).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM admin_sessions WHERE expires_at_ms <= ?", nowMs);
+      if (this.ctx.storage.sql.exec("SELECT 1 FROM internal_request_nonces WHERE expires_at_ms <= ? LIMIT 1", nowMs).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM internal_request_nonces WHERE expires_at_ms <= ?", nowMs);
+      // Keep recent expired/used metadata visible in the console; never retain raw codes.
+      const enrollmentRetentionCutoff = nowMs - 30 * 24 * 60 * 60 * 1_000;
+      if (this.ctx.storage.sql.exec("SELECT 1 FROM runner_enrollments WHERE expires_at_ms <= ? LIMIT 1", enrollmentRetentionCutoff).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE expires_at_ms <= ?", enrollmentRetentionCutoff);
+      await this.ctx.storage.put(HISTORY_CLEANUP_DEADLINE_KEY, nowMs + REGISTRY_HISTORY_CLEANUP_INTERVAL_MS);
+    }
     await this.scheduleMaintenanceAlarm(nowMs);
   }
 
@@ -501,6 +535,8 @@ export class RegistryDO {
       }
       states.push({ feature, ...state });
     }
+    const external = this.externalAudit?.health(nowMs);
+    if (external !== undefined && !states.some((state) => state.feature === "mcp_audit")) states.push({ feature: "mcp_audit", ...external, last_failure_at_ms: null, last_error: "External audit storage is unavailable; core authorization and execution are independent." });
     return states.sort((left, right) => left.feature.localeCompare(right.feature));
   }
 
@@ -561,15 +597,13 @@ export class RegistryDO {
   /** Atomically remembers a verified nonce until its signed request expires. */
   public consumeInternalNonce(nonce: string, expiresAtMs: number, nowMs = Date.now()): boolean {
     if (!/^[0-9a-f]{64}$/.test(nonce) || !Number.isSafeInteger(expiresAtMs) || expiresAtMs <= nowMs) return false;
-    return this.ctx.storage.transactionSync(() => {
-      this.ctx.storage.sql.exec("DELETE FROM internal_request_nonces WHERE expires_at_ms <= ?", nowMs);
-      try {
-        this.ctx.storage.sql.exec("INSERT INTO internal_request_nonces (nonce, expires_at_ms) VALUES (?, ?)", nonce, expiresAtMs);
-        return true;
-      } catch {
-        return false;
-      }
-    });
+    // Uniqueness conflicts mean replay; storage failures must propagate. Avoid
+    // scanning/deleting all expired nonces on every signed operation.
+    const result = this.ctx.storage.sql.exec(`INSERT INTO internal_request_nonces (nonce, expires_at_ms) VALUES (?, ?)
+      ON CONFLICT(nonce) DO UPDATE SET expires_at_ms = excluded.expires_at_ms
+      WHERE internal_request_nonces.expires_at_ms <= ?`, nonce, expiresAtMs, nowMs);
+    // SQLite rowsWritten also includes index entries; a replay writes zero.
+    return result.rowsWritten > 0;
   }
 
   private schemaIsCurrent(): boolean {
@@ -579,10 +613,6 @@ export class RegistryDO {
       "auth_throttle", "admin_sessions", "mcp_clients", "internal_request_nonces",
       "client_runner_overrides", "runner_enrollments",
     ];
-    const tables = new Set(this.ctx.storage.sql.exec<{ name: string }>(
-      "SELECT name FROM sqlite_master WHERE type = 'table'",
-    ).toArray().map((row) => row.name));
-    if (requiredTables.some((table) => !tables.has(table))) return false;
     const requiredColumns: Readonly<Record<string, readonly string[]>> = {
       runners: ["token_verifier", "credential_version", "lifecycle_id", "configured_execution_mode", "desired_policy_revision", "policy_status", "runner_permissions_json", "current_runner_version", "protocol_min_version", "protocol_max_version", "protocol_compatibility", "update_channel", "desired_runner_version", "latest_runner_version", "update_status", "valid_from_ms", "valid_until_ms"],
       runner_policy_versions: ["source_revision", "mutation_id"],
@@ -591,6 +621,8 @@ export class RegistryDO {
       mcp_clients: ["active_runner_id", "active_runner_updated_at_ms"],
       runner_enrollments: ["not_before_ms"],
     };
+    const tables = new Set(this.ctx.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table'").toArray().map((row) => row.name));
+    if (requiredTables.some((table) => !tables.has(table))) return false;
     return Object.entries(requiredColumns).every(([table, required]) => {
       const columns = new Set(this.ctx.storage.sql.exec<{ name: string }>(`PRAGMA table_info(${table})`).toArray().map((row) => row.name));
       return required.every((column) => columns.has(column));
@@ -812,9 +844,54 @@ export class RegistryDO {
         `INSERT INTO mcp_clients (client_id, label, secret_verifier, secret_prefix, scopes_json, secret_version, created_at_ms, updated_at_ms)
          VALUES (?, ?, ?, ?, ?, 1, ?, ?)`, input.client_id, input.label, input.secret_verifier, input.secret_prefix, JSON.stringify(input.scopes), nowMs, nowMs,
       );
-    } catch { return undefined; }
+    } catch (error) { if (expectedRegistryConflict(error, [])) return undefined; throw error; }
     return this.getMcpClient(input.client_id);
   }
+  public jobHistorySettings(runnerId: string, lifecycleId?: string): JobHistorySettings {
+    const life = lifecycleId ?? this.runnerRow(runnerId)?.lifecycle_id;
+    const row = this.ctx.storage.sql.exec<{ settings_json: string }>("SELECT settings_json FROM job_history_settings WHERE runner_id=? AND lifecycle_id=?", runnerId, life ?? "").toArray()[0];
+    if (row === undefined) return { ...DEFAULT_JOB_HISTORY };
+    const parsed = parseJobHistorySettings(JSON.parse(row.settings_json));
+    if (parsed === undefined) throw new Error("invalid stored history settings");
+    return parsed;
+  }
+  public setJobHistorySettings(runnerId: string, value: unknown): boolean {
+    const settings = parseJobHistorySettings(value), runner = this.runnerRow(runnerId);
+    if (settings === undefined || runner === undefined) return false;
+    const json = JSON.stringify(settings);
+    this.ctx.storage.sql.exec("INSERT INTO job_history_settings VALUES (?,?,?) ON CONFLICT(runner_id) DO UPDATE SET lifecycle_id=excluded.lifecycle_id,settings_json=excluded.settings_json WHERE lifecycle_id<>excluded.lifecycle_id OR settings_json<>excluded.settings_json", runnerId, runner.lifecycle_id, json);
+    return true;
+  }
+  private async storePackedJobs(runnerId: string, epoch: number, credentialVersion: number, lifecycle: string, session: string, jobs: readonly JobMetadata[]): Promise<Response> {
+    const runner = this.runnerRow(runnerId);
+    if (!this.runnerMatchesTransportFence(runner,epoch,credentialVersion,true,lifecycle,session)) return new Response("stale history session",{status:409});
+    const settings = this.jobHistorySettings(runnerId,lifecycle);
+    if (settings.mode === "off") return Response.json({history_status:"disabled"});
+    const clients = new Map<string, McpClientRecord | undefined>();
+    const eligible = jobs.filter((job) => {
+      if (job.created_by_client_id === undefined) return true;
+      if (!clients.has(job.created_by_client_id)) clients.set(job.created_by_client_id,this.getMcpClient(job.created_by_client_id));
+      const client = clients.get(job.created_by_client_id);
+      return client !== undefined && client.record_jobs !== false && job.created_at_ms >= (client.record_jobs_since_ms ?? 0);
+    });
+    try {
+      if (this.packedJobs === undefined) throw new JobHistoryUnavailableError();
+      const saved = await this.packedJobs.merge(runnerId,lifecycle,eligible,settings);
+      return Response.json({history_status:saved.recorded ? "recorded" : saved.deferred ? "deferred" : "unchanged",updated_at_ms:saved.updated_at_ms});
+    } catch { return Response.json({history_status:"degraded"},{status:202}); }
+  }
+
+  public setJobRecording(clientId: string, enabled: boolean, nowMs: number): McpClientRecord | undefined {
+    if (!isSafeIdentifier(clientId) || typeof enabled !== "boolean" || !safeNonnegativeInteger(nowMs)) return undefined;
+    // Enabling starts a new capture window. Old unrecorded jobs must not be
+    // backfilled by a later Runner sync. Existing historical records remain.
+    this.ctx.storage.sql.exec("UPDATE mcp_clients SET record_jobs = ?, record_jobs_since_ms = ?, updated_at_ms = ? WHERE client_id = ? AND record_jobs <> ?", enabled ? 1 : 0, nowMs, nowMs, clientId, enabled ? 1 : 0);
+    return this.getMcpClient(clientId);
+  }
+  public recordsJobActivity(clientId: string): boolean {
+    return this.getMcpClient(clientId)?.record_jobs !== false;
+  }
+
   public updateMcpClientScopes(clientId: string, scopes: readonly CodingScope[], nowMs: number): McpClientRecord | undefined {
     if (!isSafeIdentifier(clientId) || !validScopes(scopes) || this.getMcpClient(clientId) === undefined) return undefined;
     this.ctx.storage.sql.exec("UPDATE mcp_clients SET scopes_json = ?, updated_at_ms = ? WHERE client_id = ?", JSON.stringify(scopes), nowMs, clientId);
@@ -832,7 +909,7 @@ export class RegistryDO {
         `UPDATE mcp_clients SET secret_verifier = ?, secret_prefix = ?, secret_version = secret_version + 1,
          revoked_at_ms = NULL, updated_at_ms = ? WHERE client_id = ?`, secretVerifier, secretPrefix, nowMs, clientId,
       );
-    } catch { return undefined; }
+    } catch (error) { if (expectedRegistryConflict(error, [])) return undefined; throw error; }
     return this.getMcpClient(clientId);
   }
   public revokeMcpClient(clientId: string, nowMs: number): McpClientRecord | undefined {
@@ -854,6 +931,58 @@ export class RegistryDO {
     return { client_id: row.client_id, label: row.label, scopes, secret_version: row.secret_version };
   }
 
+  /** No credential is returned; a captured request must match the live generation. */
+  public revalidateMcpClient(clientId: unknown, secretVersion: unknown): VerifiedMcpClient | undefined {
+    if (typeof clientId !== "string" || !isSafeIdentifier(clientId) || !Number.isSafeInteger(secretVersion) || (secretVersion as number) < 1) return undefined;
+    const client = this.getMcpClient(clientId);
+    if (client === undefined || client.revoked_at_ms !== null || client.secret_version !== secretVersion || !validScopes(client.scopes)) return undefined;
+    return { client_id: client.client_id, label: client.label, scopes: client.scopes, secret_version: client.secret_version };
+  }
+
+  /** Synchronous decision binds the principal, exact tool scope, job/workspace,
+   * live permissions and policy identity in one Registry event turn. */
+  public authorizeMcpRpc(input: Record<string, unknown>): { ok: true } | { ok: false; code: string } {
+    const deny = (code = "permission_denied") => ({ ok: false as const, code });
+    const client = this.revalidateMcpClient(input.client_id, input.secret_version);
+    const runnerId = input.runner_id;
+    const requirement = typeof input.method === "string" ? rpcPermissionRequirement(input.method) : undefined;
+    if (client === undefined || typeof runnerId !== "string" || !isSafeIdentifier(runnerId) || requirement === undefined) return deny();
+    if (!client.scopes.includes(requirement.scope)) return deny("insufficient_scope");
+    const selection = this.getMcpClientActiveRunner(client.client_id);
+    if (selection?.active_runner_id !== runnerId) return deny();
+    const readiness = this.getPolicyReadiness(runnerId);
+    if (!readiness.ok || readiness.applied_revision !== input.policy_revision || readiness.active_checksum !== input.policy_checksum) return deny("stale_policy");
+    let workspaceId = input.workspace_id;
+    if (requirement.job) {
+      if (typeof input.job_id !== "string" || !isSafeIdentifier(input.job_id)) return deny();
+      if (input.workspace_bound === true || this.env.RUNMESH_JOB_HISTORY_BACKEND === "d1") {
+        // Old peers might ignore expected_workspace_id. Never permit the new
+        // history-independent path based only on a caller's assertion.
+        const version = this.runnerRow(runnerId)?.current_runner_version;
+        const parts = typeof version === "string" ? /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.exec(version) : null;
+        if (parts === null || !(Number(parts[1]) > 0 || Number(parts[2]) > 1 || (Number(parts[2]) === 1 && Number(parts[3]) >= 1))) return deny("runner_upgrade_required");
+      } else {
+        const job = this.getJob(runnerId, input.job_id);
+        if (typeof job !== "object" || job === null || Array.isArray(job) || (job as Record<string, unknown>).workspace_id !== workspaceId) return deny();
+      }
+    }
+    if (typeof workspaceId !== "string" || !isSafeIdentifier(workspaceId)) return deny();
+    const permissions = this.effectivePermissions(client.client_id, runnerId, workspaceId);
+    return permissions?.[requirement.permission] === true ? { ok: true } : deny();
+  }
+
+  public effectiveWorkspaceList(clientId: string, runnerId: string): { runner_id: string; revision: number; checksum: string; workspaces: Array<{ workspace_id: string; enabled: boolean; permissions: PermissionSet }> } | undefined {
+    const client = this.getMcpClient(clientId);
+    if (client === undefined || client.revoked_at_ms !== null || !client.scopes.includes("coding:read") || !this.getSnapshotAuthorization(runnerId).ok) return undefined;
+    const policy = this.getActivePolicySnapshot(runnerId);
+    if (policy === undefined) return undefined;
+    const workspaces = policy.workspaces.flatMap((workspace) => {
+      const permissions = this.effectivePermissions(clientId, runnerId, workspace.workspace_id);
+      return permissions?.read === true ? [{ workspace_id: workspace.workspace_id, enabled: true, permissions }] : [];
+    });
+    return { runner_id: runnerId, revision: policy.revision, checksum: policy.checksum, workspaces };
+  }
+
   public setClientRunnerOverride(clientId: string, runnerId: string, permissions: PermissionSet, nowMs: number): boolean {
     if (!isSafeIdentifier(clientId) || !isSafeIdentifier(runnerId) || this.getMcpClient(clientId) === undefined || this.runnerRow(runnerId) === undefined || !validPermissionSet(permissions)) return false;
     this.ctx.storage.sql.exec(`INSERT INTO client_runner_overrides (client_id, runner_id, permissions_json, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?)
@@ -862,7 +991,7 @@ export class RegistryDO {
   }
   public clientRunnerPermissions(clientId: string, runnerId: string): PermissionSet | undefined {
     const row = this.ctx.storage.sql.exec<{ permissions_json: string }>("SELECT permissions_json FROM client_runner_overrides WHERE client_id = ? AND runner_id = ?", clientId, runnerId).toArray()[0];
-    return row === undefined ? undefined : parsePermissionSet(row.permissions_json);
+    return row === undefined ? undefined : parsePermissionSet(row.permissions_json) ?? { ...LOCKED_PERMISSIONS };
   }
   public listClientRunnerOverrides(clientId: string): Array<{ runner_id: string; permissions: PermissionSet }> {
     return this.ctx.storage.sql.exec<{ runner_id: string; permissions_json: string }>("SELECT runner_id, permissions_json FROM client_runner_overrides WHERE client_id = ? ORDER BY runner_id", clientId).toArray().flatMap((row) => {
@@ -878,7 +1007,7 @@ export class RegistryDO {
     if (!this.runnerAccess(runnerId).allowed) return undefined;
     const client = this.getMcpClient(clientId);
     const policy = this.getActivePolicySnapshot(runnerId);
-    if (client === undefined || policy === undefined) return undefined;
+    if (client === undefined || client.revoked_at_ms !== null || policy === undefined) return undefined;
     const workspace = policy.workspaces.find((candidate) => candidate.workspace_id === workspaceId);
     if (workspace === undefined || !workspace.enabled) return undefined;
     const override = this.clientRunnerPermissions(clientId, runnerId) ?? { read: true, edit: true, shell: true, job_control: true };
@@ -1103,7 +1232,7 @@ export class RegistryDO {
         const revision = this.bumpDesiredPolicy(runnerId, nowMs, mutationId);
         if (mutationId !== undefined) this.recordPolicyMutation(runnerId, mutationId, "workspace_create", fingerprint, revision, nowMs);
       });
-    } catch { return undefined; }
+    } catch (error) { if (expectedRegistryConflict(error, ["policy mutation conflict"])) return undefined; throw error; }
     return this.getManagedWorkspace(runnerId, input.workspace_id);
   }
   public updateManagedWorkspace(runnerId: string, workspaceId: string, input: { display_name: string; root_path: string; enabled: boolean; permissions: PermissionSet }, nowMs: number, mutationId?: string): WorkspaceRecord | undefined {
@@ -1120,7 +1249,7 @@ export class RegistryDO {
         const revision = this.bumpDesiredPolicy(runnerId, nowMs, mutationId);
         if (mutationId !== undefined) this.recordPolicyMutation(runnerId, mutationId, "workspace_update", fingerprint, revision, nowMs);
       });
-    } catch { return undefined; }
+    } catch (error) { if (expectedRegistryConflict(error, ["policy mutation conflict", "workspace not found"])) return undefined; throw error; }
     return this.getManagedWorkspace(runnerId, workspaceId);
   }
   public deleteManagedWorkspace(runnerId: string, workspaceId: string, nowMs: number, mutationId?: string): boolean {
@@ -1152,7 +1281,7 @@ export class RegistryDO {
         const revision = this.bumpDesiredPolicy(runnerId, nowMs, mutationId);
         if (mutationId !== undefined) this.recordPolicyMutation(runnerId, mutationId, kind, fingerprint, revision, nowMs);
       });
-    } catch { return undefined; }
+    } catch (error) { if (expectedRegistryConflict(error, ["policy mutation conflict"])) return undefined; throw error; }
     return this.getRunner(runnerId);
   }
   /**
@@ -1305,7 +1434,7 @@ export class RegistryDO {
         );
         this.createPolicySnapshot(runnerId, 1, nowMs, null, "runner-created");
       });
-    } catch { return undefined; }
+    } catch (error) { if (expectedRegistryConflict(error, ["runner already exists", "runner creation conflict", "runner creation tombstone conflict"])) return undefined; throw error; }
     return this.getRunner(runnerId);
   }
   public renameRunner(runnerId: string, displayName: string, nowMs: number): RunnerRecord | undefined {
@@ -1363,7 +1492,7 @@ export class RegistryDO {
         this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE runner_id = ? AND used_at_ms IS NULL", runnerId);
         this.ctx.storage.sql.exec("INSERT INTO runner_enrollments (enrollment_id, runner_id, verifier, created_at_ms, not_before_ms, expires_at_ms) VALUES (?, ?, ?, ?, ?, ?)", enrollmentId, runnerId, verifier, nowMs, notBeforeMs, expiresAtMs);
       });
-    } catch { return undefined; }
+    } catch (error) { if (expectedRegistryConflict(error, ["runner not found", "runner execution mode changed", "runner lifecycle changed", "runner execution mode compare-and-swap failed"])) return undefined; throw error; }
     return { enrollment_id: enrollmentId, runner_id: runnerId, created_at_ms: nowMs, not_before_ms: notBeforeMs, expires_at_ms: expiresAtMs };
   }
   /**
@@ -1494,15 +1623,12 @@ export class RegistryDO {
     // timestamp backwards. The normal path is one conditional write; only a
     // duplicate/clock-rollback frame needs a read to distinguish an unchanged
     // current session from a stale transport identity.
-    try {
-      const updated = this.ctx.storage.sql.exec("UPDATE runners SET state = 'online', last_heartbeat_ms = ?, updated_at_ms = ? WHERE runner_id = ? AND connection_epoch = ? AND credential_version = ? AND lifecycle_id = ? AND session_id = ? AND (last_heartbeat_ms IS NULL OR last_heartbeat_ms < ?)", nowMs, nowMs, runnerId, epoch, credentialVersion, lifecycleId, sessionId, nowMs);
-      if (updated.rowsWritten === 1) return true;
-      const current = this.ctx.storage.sql.exec<Pick<RunnerRow, "connection_epoch" | "credential_version" | "state" | "lifecycle_id" | "session_id" | "last_heartbeat_ms">>("SELECT connection_epoch, credential_version, state, lifecycle_id, session_id, last_heartbeat_ms FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
-      return current?.connection_epoch === epoch && current.credential_version === credentialVersion && current.state === "online"
-        && current.lifecycle_id === lifecycleId && current.session_id === sessionId && current.last_heartbeat_ms !== null && current.last_heartbeat_ms >= nowMs;
-    } catch {
-      return false;
-    }
+    // Storage exceptions propagate to the HTTP boundary as 503, never false.
+    const updated = this.ctx.storage.sql.exec("UPDATE runners SET state = 'online', last_heartbeat_ms = ?, updated_at_ms = ? WHERE runner_id = ? AND connection_epoch = ? AND credential_version = ? AND lifecycle_id = ? AND session_id = ? AND (last_heartbeat_ms IS NULL OR last_heartbeat_ms < ?)", nowMs, nowMs, runnerId, epoch, credentialVersion, lifecycleId, sessionId, nowMs);
+    if (updated.rowsWritten === 1) return true;
+    const current = this.ctx.storage.sql.exec<Pick<RunnerRow, "connection_epoch" | "credential_version" | "state" | "lifecycle_id" | "session_id" | "last_heartbeat_ms">>("SELECT connection_epoch, credential_version, state, lifecycle_id, session_id, last_heartbeat_ms FROM runners WHERE runner_id = ?", runnerId).toArray()[0];
+    return current?.connection_epoch === epoch && current.credential_version === credentialVersion && current.state === "online"
+      && current.lifecycle_id === lifecycleId && current.session_id === sessionId && current.last_heartbeat_ms !== null && current.last_heartbeat_ms >= nowMs;
   }
   public markDisconnected(runnerId: string, epoch: number, credentialVersion: number, state: Exclude<RunnerConnectionState, "online">, nowMs: number, lifecycleId: string, sessionId: string): void {
     if (!validTransportIdentity(lifecycleId, sessionId)) return;
@@ -1548,7 +1674,7 @@ export class RegistryDO {
         );
         return updated.rowsWritten === 1;
       });
-      if (success) this.clearFeatureHealth("job_recording");
+      if (success && !this.featureHealthDisabled("job_recording", nowMs)) this.clearFeatureHealth("job_recording");
       return success;
     } catch (error) {
       this.disableFeatureHealth("job_recording", error, nowMs);
@@ -1601,7 +1727,7 @@ export class RegistryDO {
         this.pruneTerminalJobs(runnerId);
         return true;
       });
-      if (success) this.clearFeatureHealth("job_recording");
+      if (success && !this.featureHealthDisabled("job_recording", nowMs)) this.clearFeatureHealth("job_recording");
       return success;
     } catch (error) {
       this.disableFeatureHealth("job_recording", error, nowMs);
@@ -1708,7 +1834,7 @@ export class RegistryDO {
     return { runners, jobs };
   }
   public getJob(runnerId: string, jobId: string): unknown | undefined { const row = this.ctx.storage.sql.exec<JobRow>("SELECT job_json FROM jobs WHERE runner_id = ? AND job_id = ?", runnerId, jobId).toArray()[0]; return row === undefined ? undefined : JSON.parse(row.job_json) as unknown; }
-  public recordMcpCall(runnerId: string, epoch: number, credentialVersion: number, call: Record<string, unknown>, nowMs: number, requireOnline: boolean, lifecycleId: string, sessionId: string): boolean {
+  public recordMcpCall(runnerId: string, epoch: number, credentialVersion: number, call: Record<string, unknown>, nowMs: number, requireOnline: boolean, lifecycleId: string, sessionId: string, captureAudit?: (metadata: Record<string, unknown>) => void): boolean {
     if (!safeNonnegativeInteger(epoch) || !safeNonnegativeInteger(credentialVersion) || !safeNonnegativeInteger(nowMs) || !validTransportIdentity(lifecycleId, sessionId)) return false;
     const completedAtMs = safeNonnegativeInteger(call.completed_at_ms) ? call.completed_at_ms : undefined;
     if (completedAtMs === undefined) return false;
@@ -1729,10 +1855,8 @@ export class RegistryDO {
         const current = this.runnerRow(runnerId);
         if (!this.runnerMatchesTransportFence(current, epoch, credentialVersion, requireOnline, lifecycleId, sessionId)) return false;
         if (this.featureHealthDisabled("mcp_audit", nowMs)) return true;
-        this.ctx.storage.sql.exec(
-          `INSERT INTO mcp_calls (runner_id, call_id, call_json, completed_at_ms) VALUES (?, ?, ?, ?)
-           ON CONFLICT(runner_id, call_id) DO UPDATE SET call_json = excluded.call_json, completed_at_ms = excluded.completed_at_ms`,
-          runnerId, callId, JSON.stringify({
+        if ((method.startsWith("exec.") || method.startsWith("job.")) && !this.recordsJobActivity(clientId)) return true;
+        const metadata = {
             runner_id: runnerId,
             call_id: callId,
             client_id: clientId,
@@ -1750,12 +1874,17 @@ export class RegistryDO {
             lifecycle_id: lifecycleId,
             session_id: sessionId,
             recorded_at_ms: nowMs,
-          }), completedAtMs,
-        );
-        this.pruneMcpCalls(runnerId);
+          };
+        if (captureAudit !== undefined) captureAudit(metadata);
+        else {
+          this.ctx.storage.sql.exec(`INSERT INTO mcp_calls (runner_id, call_id, call_json, completed_at_ms) VALUES (?, ?, ?, ?)
+            ON CONFLICT(runner_id, call_id) DO UPDATE SET call_json = excluded.call_json, completed_at_ms = excluded.completed_at_ms`,
+            runnerId, callId, JSON.stringify(metadata), completedAtMs);
+          this.pruneMcpCalls(runnerId);
+        }
         return true;
       });
-      if (success && !this.featureHealthDisabled("mcp_audit", nowMs)) {
+      if (success && captureAudit === undefined && !this.featureHealthDisabled("mcp_audit", nowMs)) {
         this.clearFeatureHealth("mcp_audit");
         this.ctx.waitUntil(this.scheduleMaintenanceAlarm(nowMs));
       }
@@ -1770,19 +1899,15 @@ export class RegistryDO {
     if (this.ctx.storage.sql.exec("SELECT 1 FROM mcp_calls WHERE runner_id = ? AND completed_at_ms <= ? LIMIT 1", runnerId, cutoff).toArray().length > 0) {
       this.ctx.storage.sql.exec("DELETE FROM mcp_calls WHERE runner_id = ? AND completed_at_ms <= ?", runnerId, cutoff);
     }
-    this.ctx.storage.sql.exec(
-      `DELETE FROM mcp_calls
-       WHERE runner_id = ? AND call_id IN (
-         SELECT call_id FROM mcp_calls
-         WHERE runner_id = ?
-         ORDER BY completed_at_ms DESC, call_id DESC
-         LIMIT -1 OFFSET ?
-       )`,
-      runnerId, runnerId, MAX_MCP_CALLS_PER_RUNNER,
-    );
+    pruneHistory(this.ctx.storage.sql, "audit", runnerId, MAX_MCP_CALLS_PER_RUNNER);
   }
 
   public async fetch(request: Request): Promise<Response> {
+    try { return await this.handleRequest(request); }
+    catch { return controlPlaneUnavailableResponse(); }
+  }
+
+  private async handleRequest(request: Request): Promise<Response> {
     const rawBody = await readCappedBody(request);
     if (rawBody === undefined) return new Response("payload too large", { status: 413 });
     const url = new URL(request.url);
@@ -1799,7 +1924,16 @@ export class RegistryDO {
       && segments.length === 3 && segments[0] === "runners" && segments[2] === "heartbeat";
     const replaySafeSession = request.method === "POST"
       && segments.length === 3 && segments[0] === "runners" && segments[2] === "session";
-    const consumeNonce = request.method === "GET" || replaySafeHeartbeat || replaySafeSession
+    const replaySafeHistory = this.env.RUNMESH_JOB_HISTORY_BACKEND === "d1" && request.method === "POST" && segments.length === 3 && segments[0] === "runners" && (segments[2] === "sync" || segments[2] === "event");
+    // These endpoints only evaluate current authority. Their replies are not
+    // execution capabilities: Worker and RunnerDO still revalidate before
+    // dispatch. Persisting a fresh nonce for every read doubles storage work.
+    // Keep timestamp/HMAC verification and all nonces for actual mutations.
+    const replaySafeAuthorization = request.method === "POST" && segments.length === 3 && (
+      (segments[0] === "auth" && segments[1] === "mcp" && ["verify", "revalidate", "authorize-rpc"].includes(segments[2]!))
+      || (segments[0] === "runners" && segments[2] === "mcp-authorization")
+    );
+    const consumeNonce = request.method === "GET" || replaySafeHeartbeat || replaySafeSession || replaySafeHistory || replaySafeAuthorization
       ? () => true
       : (nonce: string, expiresAtMs: number) => this.consumeInternalNonce(nonce, expiresAtMs);
     if (!await verifyInternalRequest(request, this.env.INTERNAL_CONTROL_SECRET, rawBody, consumeNonce)) return new Response("not found", { status: 404 });
@@ -1828,6 +1962,24 @@ export class RegistryDO {
     const runnerId = segments[0] === "runners" ? parseRunnerId(segments[1]) : undefined;
     const action = segments[2]; const itemId = segments[3];
     if (runnerId === undefined || segments.length > 4) return new Response("not found", { status: 404 });
+    if (action === "history-settings" && itemId === undefined) {
+      if (this.runnerRow(runnerId) === undefined) return new Response("not found",{status:404});
+      if (request.method === "GET") return Response.json(this.jobHistorySettings(runnerId));
+      if (request.method === "POST") {
+        if (!this.setJobHistorySettings(runnerId,input)) return new Response("invalid history settings",{status:400});
+        const settings = this.jobHistorySettings(runnerId);
+        const life = this.runnerRow(runnerId)?.lifecycle_id;
+        if (this.packedJobs !== undefined && life !== undefined) {
+          try { await this.packedJobs.setRetention(runnerId,life,settings.retention_days); }
+          catch { return Response.json({...settings,cleanup_update:"pending_next_upload"},{status:202}); }
+        }
+        return Response.json(settings);
+      }
+    }
+    if (request.method === "POST" && action === "mcp-authorization" && itemId === undefined) {
+      const decision = this.authorizeMcpRpc({ ...input, runner_id: runnerId });
+      return Response.json(decision, { status: decision.ok ? 200 : decision.code === "stale_policy" ? 409 : 403 });
+    }
     if (request.method === "PUT" && action === undefined) {
       const tokenVerifier = stringField(input, "token_verifier", 64); const mutationId = input.mutation_id === undefined ? undefined : mutationIdField(input);
       if (tokenVerifier === undefined || !validVerifier(tokenVerifier) || (input.mutation_id !== undefined && mutationId === undefined)) return Response.json({ error: "invalid token verifier or mutation" }, { status: 400 });
@@ -1858,7 +2010,7 @@ export class RegistryDO {
         return new Response("stale credentials", { status: 409 });
       }
       await this.scheduleMaintenanceAlarm(now);
-      return Response.json({ epoch, lifecycle_id: row.lifecycle_id, desired_policy: policy });
+      return Response.json({ epoch, lifecycle_id: row.lifecycle_id, desired_policy: policy, ...(this.env.RUNMESH_JOB_HISTORY_BACKEND === "d1" && metadata.data.capabilities.labels.job_history_protocol === "1" ? { job_history: this.jobHistorySettings(runnerId,row.lifecycle_id) } : {}) });
     }
     if (request.method === "POST" && action === "heartbeat") {
       const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const nowMs = integerField(input, "now_ms"); const identity = parseTransportIdentity(input);
@@ -1882,11 +2034,19 @@ export class RegistryDO {
     if (request.method === "POST" && action === "sync") {
       const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const nowMs = integerField(input, "now_ms"); const message = RunnerSyncSchema.safeParse(input.message); const identity = parseTransportIdentity(input);
       if (!message.success || epoch === undefined || credentialVersion === undefined || nowMs === undefined || !identity.valid || message.data.runner_id !== runnerId || message.data.workspaces.length > MAX_SYNC_ITEMS || message.data.jobs.length > MAX_SYNC_ITEMS || !uniqueIds(message.data.workspaces.map((workspace) => workspace.workspace_id)) || !uniqueIds(message.data.jobs.map((job) => job.job_id))) return Response.json({ error: "invalid sync" }, { status: 400 });
+      if (this.env.RUNMESH_JOB_HISTORY_BACKEND === "d1") return this.storePackedJobs(runnerId,epoch,credentialVersion,identity.lifecycleId,identity.sessionId,message.data.jobs);
       return this.syncRunner(runnerId, epoch, credentialVersion, message.data.workspaces, message.data.jobs, message.data.sync_sequence, nowMs, true, identity.lifecycleId, identity.sessionId) ? new Response(null, { status: 204 }) : new Response("stale sync or session", { status: 409 });
     }
     if (request.method === "POST" && action === "event") {
       const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const nowMs = integerField(input, "now_ms"); const identity = parseTransportIdentity(input);
       if (epoch === undefined || credentialVersion === undefined || nowMs === undefined || !identity.valid) return Response.json({ error: "invalid event identity" }, { status: 400 });
+      if (this.env.RUNMESH_JOB_HISTORY_BACKEND === "d1") {
+        // Old Runners emit events AND snapshots. Only the complete snapshot
+        // goes to optional history; no per-event nonce, Job or audit write.
+        if (parseJobEvent(input.message) === undefined) return new Response("invalid event",{status:400});
+        return this.sessionIsCurrent(runnerId,epoch,credentialVersion,true,identity.lifecycleId,identity.sessionId)
+          ? new Response(null,{status:204}) : new Response("stale session",{status:409});
+      }
       if (!this.recordJobEvent(runnerId, epoch, credentialVersion, input.message, nowMs, true, identity.lifecycleId, identity.sessionId)) return new Response("stale session or invalid event", { status: 409 });
       return new Response(null, { status: 204 });
     }
@@ -1976,12 +2136,37 @@ export class RegistryDO {
       const rawLimit = url.searchParams.get("limit");
       const limit = rawLimit === null ? undefined : /^\d+$/.test(rawLimit) ? Number(rawLimit) : undefined;
       if ((workspaceId !== undefined && !IdentifierSchema.safeParse(workspaceId).success) || (status !== undefined && !["queued", "running", "cancelling", "cancelled", "succeeded", "failed", "unknown", "interrupted"].includes(status)) || (rawLimit !== null && (limit === undefined || limit < 1 || limit > 100))) return Response.json({ error: "invalid job filters" }, { status: 400 });
+      if (this.env.RUNMESH_JOB_HISTORY_BACKEND === "d1") {
+        const current = this.runnerRow(runnerId);
+        if (current === undefined) return new Response("not found",{status:404});
+        try {
+          if (this.packedJobs === undefined) throw new JobHistoryUnavailableError();
+          const result = await this.packedJobs.list(runnerId,current.lifecycle_id,this.jobHistorySettings(runnerId,current.lifecycle_id),{ ...(workspaceId === undefined ? {} : {workspace_id:workspaceId}), ...(status === undefined ? {} : {status}), ...(limit === undefined ? {} : {limit}) });
+          if (this.runnerRow(runnerId)?.lifecycle_id !== current.lifecycle_id) return new Response("history identity changed",{status:409});
+          return Response.json({runner_id:runnerId,source:"packed_d1_snapshot",...result});
+        } catch { return Response.json({error:{code:"job_history_unavailable",message:"Job history is unavailable; query the online Runner with workspace_id."}},{status:503,headers:{"cache-control":"no-store","retry-after":"900"}}); }
+      }
       return Response.json({ runner_id: runnerId, jobs: this.listJobs(runnerId, { ...(workspaceId === undefined ? {} : { workspace_id: workspaceId }), ...(status === undefined ? {} : { status }), ...(limit === undefined ? {} : { limit }) }) });
     }
     if (request.method === "GET" && action === "mcp-calls" && itemId === undefined) {
       const rawLimit = url.searchParams.get("limit");
       const limit = rawLimit === null ? undefined : /^\d+$/.test(rawLimit) ? Number(rawLimit) : undefined;
       if (rawLimit !== null && (limit === undefined || limit < 1 || limit > 100)) return Response.json({ error: "invalid MCP call filters" }, { status: 400 });
+      if (this.env.RUNMESH_AUDIT_BACKEND === "d1") {
+        const current = this.runnerRow(runnerId);
+        if (current === undefined) return new Response("not found", { status: 404 });
+        try {
+          if (this.externalAudit === undefined) throw new AuditHistoryUnavailableError();
+          const external = await this.externalAudit.list(runnerId, current.lifecycle_id, limit);
+          if (this.runnerRow(runnerId)?.lifecycle_id !== current.lifecycle_id) return new Response("Runner identity changed", { status: 409 });
+          // Previously recorded DO rows retain their normal retention period.
+          // No fallback is used when D1 fails: an empty success would lie.
+          const combined = [...this.listMcpCalls(runnerId, limit).map(projectMcpAuditMetadata), ...external];
+          const unique = [...new Map(combined.map((row) => [String(row.call_id), row])).values()];
+          unique.sort((a, b) => Number(b.completed_at_ms) - Number(a.completed_at_ms) || String(b.call_id).localeCompare(String(a.call_id)));
+          return Response.json({ runner_id: runnerId, history_backend: "d1", calls: unique.slice(0, limit ?? 100) });
+        } catch { return Response.json({ error: { code: "audit_history_unavailable", message: "Cloud audit history is temporarily unavailable; this does not undo execution." } }, { status: 503, headers: { "cache-control": "no-store", "retry-after": "900" } }); }
+      }
       return Response.json({ runner_id: runnerId, calls: this.listMcpCalls(runnerId, limit) });
     }
     if (request.method === "POST" && action === "mcp-calls" && itemId === undefined) {
@@ -1998,7 +2183,10 @@ export class RegistryDO {
       const jobId = input.job_id === undefined || input.job_id === null ? null : stringField(input, "job_id", 128);
       if (epoch === undefined || credentialVersion === undefined || nowMs === undefined || !identity.valid || callId === undefined || !validMutationId(callId) || clientId === undefined || methodName === undefined || status === undefined || startedAtMs === undefined || completedAtMs === undefined || durationMs === undefined || (errorCode === null ? false : errorCode === undefined) || (workspaceId === null ? false : workspaceId === undefined) || (jobId === null ? false : jobId === undefined)) return Response.json({ error: "invalid MCP call" }, { status: 400 });
       if (completedAtMs - startedAtMs !== durationMs) return Response.json({ error: "invalid MCP call duration" }, { status: 400 });
-      return this.recordMcpCall(runnerId, epoch, credentialVersion, {
+      const wasDegraded = this.featureHealthDisabled("mcp_audit", nowMs);
+      let captured: Record<string, unknown> | undefined;
+      const capture = this.env.RUNMESH_AUDIT_BACKEND === "d1" ? (metadata: Record<string, unknown>) => { captured = metadata; } : undefined;
+      const accepted = this.recordMcpCall(runnerId, epoch, credentialVersion, {
         call_id: callId,
         client_id: clientId,
         method: methodName,
@@ -2010,9 +2198,25 @@ export class RegistryDO {
         started_at_ms: startedAtMs,
         completed_at_ms: completedAtMs,
         duration_ms: durationMs,
-      }, nowMs, false, identity.lifecycleId, identity.sessionId) ? new Response(null, { status: 204 }) : new Response("stale session or invalid MCP call", { status: 409 });
+      }, nowMs, false, identity.lifecycleId, identity.sessionId, capture);
+      if (!accepted) return new Response("stale session or invalid MCP call", { status: 409 });
+      const disabled = (methodName.startsWith("exec.") || methodName.startsWith("job.")) && !this.recordsJobActivity(clientId);
+      const externalSaved = capture === undefined || (!disabled && captured !== undefined && await this.externalAudit?.append(captured) === true);
+      const auditStatus = disabled ? "disabled" : !externalSaved || wasDegraded || this.featureHealthDisabled("mcp_audit", nowMs) ? "degraded" : "recorded";
+      return Response.json({ audit_status: auditStatus }, { status: auditStatus === "recorded" ? 200 : 202 });
     }
-    if (request.method === "GET" && action === "jobs" && itemId !== undefined && IdentifierSchema.safeParse(itemId).success) { const job = this.getJob(runnerId, itemId); return job === undefined ? Response.json({ error: "job not found" }, { status: 404 }) : Response.json(job); }
+    if (request.method === "GET" && action === "jobs" && itemId !== undefined && IdentifierSchema.safeParse(itemId).success) {
+      const current = this.runnerRow(runnerId);
+      if (current === undefined) return new Response("not found",{status:404});
+      let job: unknown;
+      if (this.env.RUNMESH_JOB_HISTORY_BACKEND === "d1") {
+        if (this.packedJobs === undefined) return controlPlaneUnavailableResponse();
+        try { job = await this.packedJobs.get(runnerId,current.lifecycle_id,itemId,this.jobHistorySettings(runnerId,current.lifecycle_id)); }
+        catch { return Response.json({error:{code:"job_history_unavailable"}},{status:503}); }
+        if (this.runnerRow(runnerId)?.lifecycle_id !== current.lifecycle_id) return new Response("history identity changed",{status:409});
+      } else job = this.getJob(runnerId,itemId);
+      return job === undefined ? Response.json({error:"job not yet archived; use workspace_id for live access"},{status:404}) : Response.json(job);
+    }
     if (request.method === "GET" && action === undefined && itemId === undefined) { const runner = this.getRunner(runnerId); return runner === undefined ? Response.json({ error: "runner not found" }, { status: 404 }) : Response.json(runner); }
     return new Response("not found", { status: 404 });
   }
@@ -2060,6 +2264,11 @@ export class RegistryDO {
     if (method === "POST" && action === "clients" && clientId === undefined) { const id = stringField(input, "client_id", 128); const label = stringField(input, "label", 256); const verifier = stringField(input, "secret_verifier", 64); const prefix = stringField(input, "secret_prefix", 16); const scopes = scopesField(input.scopes); if (id === undefined || label === undefined || verifier === undefined || prefix === undefined || scopes === undefined) return Response.json({ error: "invalid client" }, { status: 400 }); const client = this.createMcpClient({ client_id: id, label, secret_verifier: verifier, secret_prefix: prefix, scopes }, nowMs); return client === undefined ? new Response("conflict", { status: 409 }) : Response.json(client); }
     if (action === "clients" && clientId !== undefined && isSafeIdentifier(clientId)) {
       const subaction = segments[2];
+      if (method === "POST" && subaction === "recording") {
+        if (typeof input.record_jobs !== "boolean") return Response.json({ error: "record_jobs must be boolean" }, { status: 400 });
+        const client = this.setJobRecording(clientId, input.record_jobs, nowMs);
+        return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client);
+      }
       if (method === "POST" && subaction === "rename") { const label = stringField(input, "label", 256); const client = label === undefined ? undefined : this.renameMcpClient(clientId, label, nowMs); return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client); }
       if (method === "POST" && subaction === "rotate") { const verifier = stringField(input, "secret_verifier", 64); const prefix = stringField(input, "secret_prefix", 16); const client = verifier === undefined || prefix === undefined ? undefined : this.rotateMcpClient(clientId, verifier, prefix, nowMs); return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client); }
       if (method === "POST" && subaction === "revoke") { const client = this.revokeMcpClient(clientId, nowMs); return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client); }
@@ -2162,7 +2371,23 @@ export class RegistryDO {
       if (ack === undefined) return Response.json({ error: "invalid policy acknowledgement" }, { status: 409 });
       return Response.json({ ack_result: ack });
     }
-    if (method === "POST" && action === "mcp" && clientId === "verify") { const verifier = stringField(input, "secret_verifier", 64); if (verifier === undefined) return new Response("not found", { status: 404 }); const client = this.verifyMcpClient(verifier, nowMs); return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client); }
+    if (method === "POST" && action === "mcp" && clientId === "revalidate") {
+      const client = this.revalidateMcpClient(input.client_id, input.secret_version);
+      return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client);
+    }
+    if (method === "POST" && action === "mcp" && clientId === "authorize-rpc") {
+      const decision = this.authorizeMcpRpc(input);
+      return Response.json(decision, { status: decision.ok ? 200 : decision.code === "stale_policy" ? 409 : 403 });
+    }
+    if (method === "GET" && action === "clients" && clientId !== undefined && segments[2] === "effective-workspaces" && segments[3] !== undefined && isSafeIdentifier(segments[3])) {
+      const value = this.effectiveWorkspaceList(clientId, segments[3]);
+      return value === undefined ? new Response("not found", { status: 404 }) : Response.json(value);
+    }
+    if (method === "POST" && action === "mcp" && clientId === "verify") {
+      const verifier = stringField(input, "secret_verifier", 64);
+      const client = verifier === undefined ? undefined : this.verifyMcpClient(verifier, nowMs);
+      return client === undefined ? Response.json({ error: { code: "invalid_mcp_credential" } }, { status: 404 }) : Response.json(client);
+    }
     return new Response("not found", { status: 404 });
   }
 
@@ -2264,15 +2489,27 @@ export class RegistryDO {
   }
   private upsertJob(runnerId: string, job: Record<string, unknown>, nowMs: number): void {
     const updated = safeNonnegativeInteger(job.updated_at_ms) ? job.updated_at_ms : nowMs;
+    const existing = this.getJob(runnerId, String(job.job_id));
+    if (existing === undefined && typeof job.created_by_client_id === "string") {
+      const client = this.getMcpClient(job.created_by_client_id);
+      if (client?.record_jobs === false || (client?.record_jobs_since_ms !== undefined &&
+        (!safeNonnegativeInteger(job.created_at_ms) || job.created_at_ms < client.record_jobs_since_ms))) return;
+    }
     const jobJson = JSON.stringify(job);
+    // Lifecycle events can overtake a previously captured full snapshot. Keep
+    // timestamps and lifecycle rank monotonic, including equal-ms events, and
+    // never replace a committed terminal outcome with a stale active status.
     this.ctx.storage.sql.exec(`INSERT INTO jobs (runner_id, job_id, job_json, updated_at_ms) VALUES (?, ?, ?, ?)
       ON CONFLICT(runner_id, job_id) DO UPDATE SET job_json = excluded.job_json, updated_at_ms = excluded.updated_at_ms
-      WHERE excluded.job_json <> jobs.job_json`, runnerId, job.job_id, jobJson, updated);
+      WHERE excluded.job_json <> jobs.job_json
+        AND excluded.updated_at_ms >= jobs.updated_at_ms
+        AND (CASE json_extract(excluded.job_json, '$.status') WHEN 'queued' THEN 0 WHEN 'running' THEN 1 WHEN 'cancelling' THEN 2 ELSE 3 END)
+          >= (CASE json_extract(jobs.job_json, '$.status') WHEN 'queued' THEN 0 WHEN 'running' THEN 1 WHEN 'cancelling' THEN 2 ELSE 3 END)
+        AND (json_extract(jobs.job_json, '$.status') NOT IN ('succeeded', 'failed', 'cancelled', 'interrupted')
+          OR json_extract(excluded.job_json, '$.status') = json_extract(jobs.job_json, '$.status'))`, runnerId, job.job_id, jobJson, updated);
   }
   private pruneTerminalJobs(runnerId: string): void {
-    const rows = this.ctx.storage.sql.exec<{ job_id: string; job_json: string }>("SELECT job_id, job_json FROM jobs WHERE runner_id = ? ORDER BY updated_at_ms DESC, job_id DESC", runnerId).toArray();
-    let retained = 0;
-    for (const row of rows) { const job = JSON.parse(row.job_json) as { status?: unknown }; if (!TERMINAL_JOB_STATUSES.has(String(job.status))) continue; retained += 1; if (retained > MAX_TERMINAL_JOBS_PER_RUNNER) this.ctx.storage.sql.exec("DELETE FROM jobs WHERE runner_id = ? AND job_id = ?", runnerId, row.job_id); }
+    pruneHistory(this.ctx.storage.sql, "terminal_job", runnerId, MAX_TERMINAL_JOBS_PER_RUNNER);
   }
 
 }
@@ -2383,7 +2620,7 @@ function decodeWorkspace(row: ManagedWorkspaceRow): WorkspaceRecord[] {
   const permissions = parsePermissionSet(row.permissions_json);
   return permissions === undefined ? [] : [{ runner_id: row.runner_id, workspace_id: row.workspace_id, display_name: row.display_name, root_path: row.root_path, enabled: row.enabled === 1, permissions, created_at_ms: row.created_at_ms, updated_at_ms: row.updated_at_ms, revision: row.revision, validation_status: row.validation_status }];
 }
-function decodeMcpClient(row: McpClientRow): McpClientRecord { const scopes = parseScopes(row.scopes_json) ?? []; return { client_id: row.client_id, label: row.label, secret_prefix: row.secret_prefix, scopes, secret_version: row.secret_version, created_at_ms: row.created_at_ms, updated_at_ms: row.updated_at_ms, last_used_at_ms: row.last_used_at_ms, revoked_at_ms: row.revoked_at_ms, active_runner_id: row.active_runner_id, active_runner_updated_at_ms: row.active_runner_updated_at_ms }; }
+function decodeMcpClient(row: McpClientRow): McpClientRecord { const scopes = parseScopes(row.scopes_json) ?? []; return { record_jobs: row.record_jobs !== 0, record_jobs_since_ms: row.record_jobs_since_ms ?? 0, client_id: row.client_id, label: row.label, secret_prefix: row.secret_prefix, scopes, secret_version: row.secret_version, created_at_ms: row.created_at_ms, updated_at_ms: row.updated_at_ms, last_used_at_ms: row.last_used_at_ms, revoked_at_ms: row.revoked_at_ms, active_runner_id: row.active_runner_id, active_runner_updated_at_ms: row.active_runner_updated_at_ms }; }
 function safeRunnerContext(runner: RunnerRecord, updatedAtMs: number | null): ActiveRunnerContext {
   return { runner_id: runner.runner_id, state: runner.state, available: runner.state === "online", updated_at_ms: updatedAtMs };
 }
@@ -2487,3 +2724,8 @@ function validRunnerPublicInfo(value: RunnerPublicInfo): boolean {
 function validScopes(value: readonly CodingScope[]): boolean { return value.length > 0 && value.length <= 3 && new Set(value).size === value.length && value.every((scope) => VALID_SCOPES.has(scope)); }
 function scopesField(value: unknown): CodingScope[] | undefined { if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !VALID_SCOPES.has(item as CodingScope))) return undefined; const scopes = value as CodingScope[]; return validScopes(scopes) ? scopes : undefined; }
 function parseScopes(value: string): CodingScope[] | undefined { try { return scopesField(JSON.parse(value) as unknown); } catch { return undefined; } }
+
+/** Domain conflicts are distinct from unavailable SQLite operations. */
+function expectedRegistryConflict(error: unknown, messages: readonly string[]): boolean {
+  return error instanceof Error && (messages.includes(error.message) || /UNIQUE constraint failed:/i.test(error.message));
+}

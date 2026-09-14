@@ -415,3 +415,6 @@ function assertBoundedJsonNesting(text: string): void {
     }
   }
 }
+
+export { failureMetadata } from "./failure.js";
+export type { RpcFailureClass, RpcOperationState, RpcNextAction, RpcFailureMetadata } from "./failure.js";

@@ -910,6 +910,12 @@
                 "maxLength": 128,
                 "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
               },
+              "request_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
               "runner_id": {
                 "type": "string",
                 "minLength": 1,
@@ -1055,6 +1061,12 @@
                   "maxLength": 512
                 },
                 "created_by_client_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                },
+                "request_id": {
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 128,
@@ -1217,6 +1229,12 @@
                   "maxLength": 128,
                   "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
                 },
+                "request_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                },
                 "runner_id": {
                   "type": "string",
                   "minLength": 1,
@@ -1335,6 +1353,44 @@
               "minLength": 1,
               "maxLength": 4096
             },
+            "failure_class": {
+              "type": "string",
+              "enum": [
+                "validation",
+                "authorization",
+                "availability",
+                "conflict",
+                "resource",
+                "execution",
+                "internal",
+                "unknown"
+              ]
+            },
+            "operation_state": {
+              "type": "string",
+              "enum": [
+                "not_started",
+                "running",
+                "committed",
+                "unknown"
+              ]
+            },
+            "retry_after_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 86400000
+            },
+            "next_action": {
+              "type": "string",
+              "enum": [
+                "correct_request",
+                "refresh_permissions",
+                "wait_and_retry",
+                "re_read_and_retry",
+                "inspect_job",
+                "contact_operator"
+              ]
+            },
             "details": {
               "$ref": "#/$defs/jsonValue"
             }
@@ -1425,6 +1481,12 @@
               "maxLength": 512
             },
             "created_by_client_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
+            "request_id": {
               "type": "string",
               "minLength": 1,
               "maxLength": 128,
@@ -1650,6 +1712,12 @@
               "maxLength": 128,
               "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
             },
+            "request_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
             "runner_id": {
               "type": "string",
               "minLength": 1,
@@ -1751,6 +1819,12 @@
               "maxLength": 128,
               "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
             },
+            "request_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
             "runner_id": {
               "type": "string",
               "minLength": 1,
@@ -1804,6 +1878,44 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 4096
+            },
+            "failure_class": {
+              "type": "string",
+              "enum": [
+                "validation",
+                "authorization",
+                "availability",
+                "conflict",
+                "resource",
+                "execution",
+                "internal",
+                "unknown"
+              ]
+            },
+            "operation_state": {
+              "type": "string",
+              "enum": [
+                "not_started",
+                "running",
+                "committed",
+                "unknown"
+              ]
+            },
+            "retry_after_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 86400000
+            },
+            "next_action": {
+              "type": "string",
+              "enum": [
+                "correct_request",
+                "refresh_permissions",
+                "wait_and_retry",
+                "re_read_and_retry",
+                "inspect_job",
+                "contact_operator"
+              ]
             },
             "details": {
               "$ref": "#/$defs/jsonValue"

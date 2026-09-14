@@ -10,7 +10,6 @@ coverage/
 release/assets/
 release/download/
 .DS_Store
-.pi-loop.json.lock
 
 # Local project audit reports
 /docs/runmesh-project-audit-*.md

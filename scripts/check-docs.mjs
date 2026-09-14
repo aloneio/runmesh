@@ -10,7 +10,13 @@ for (const file of current) {
 }
 const readiness = await readFile(new URL("docs/release-readiness.md", root), "utf8");
 assert.ok(readiness.includes(pkg.version));
-assert.ok(readiness.includes("verify-all") && readiness.includes("UNRELEASED") && readiness.includes("DISABLED"));
+assert.ok(readiness.includes("verify-all") && readiness.includes("RELEASED") && readiness.includes("ENABLED"));
 const config = JSON.parse((await readFile(new URL("apps/worker/wrangler.jsonc", root), "utf8")).replace(/^\s*\/\/.*$/gm, ""));
-assert.equal(config.env.production.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE, "", "candidate checkout must not silently enable distribution; update the release state and gate only after approval");
-console.log(`operative documentation and disabled candidate contract verified: ${pkg.version}`);
+const releaseState = JSON.parse(await readFile(new URL("release/release-state.json", root), "utf8"));
+assert.equal(releaseState.version,pkg.version);
+assert.ok(["candidate","released"].includes(releaseState.state));
+const expectedGate = releaseState.state === "released" ? pkg.version : "";
+assert.equal(config.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE, expectedGate, "top-level production checkout must acknowledge the exact current immutable release");
+assert.equal(config.env.production.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE, expectedGate, "named production alias must acknowledge the exact current immutable release");
+assert.equal(config.env.development.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE, "", "development environment must remain fail-closed");
+console.log(`operative documentation and enabled published-release contract verified: ${pkg.version}`);

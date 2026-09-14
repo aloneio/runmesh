@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "runbooks": [
+    {"id":"connection-recovery","version":1,"component":"runner-transport","file":"connection-recovery.md","summary":"Diagnose an offline, stale, or repeatedly reconnecting Runner without changing credentials or routing.","required_permissions":["coding:read"]},
+    {"id":"permission-denial","version":1,"component":"authorization","file":"permission-denial.md","summary":"Explain a denied workspace operation using the live permission intersection before changing policy.","required_permissions":["coding:read"]},
+    {"id":"release-preflight","version":1,"component":"release","file":"release-preflight.md","summary":"Collect release evidence and stop before activation when signatures, compatibility, CI, or recovery conditions are not proven.","required_permissions":[]}
+  ]
+}
