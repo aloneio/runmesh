@@ -1,3 +1,6 @@
+import { historyControls, historySettingsForm, historyView, type HistoryView } from "./history-ui.js";
+import { parseJobHistorySettings, type JobHistorySettings } from "./job-history-settings.js";
+import { PackedJobHistory } from "./job-history-store.js";
 import { ExternalAuditHistory } from "./external-audit.js";
 import { PROTOCOL_CURRENT_VERSION, PROTOCOL_MIN_VERSION } from "@aloneio/runmesh-protocol";
 import { RegistryDO, RegistryDOv2, DEFAULT_RUNNER_ENROLLMENT_TTL_MS, RUNNER_ENROLLMENT_TTL_OPTIONS_MS, type McpClientRecord, type RegistryFeatureHealth, type RunnerExecutionMode, type RunnerPublicInfo, type RunnerRecord, type VerifiedMcpClient } from "./registry.js";
@@ -65,10 +68,11 @@ export interface ReleaseGateDiagnostics {
 
 export default {
   async scheduled(_event: ScheduledController, env: WorkerEnv): Promise<void> {
-    if (env.RUNMESH_AUDIT_BACKEND !== "d1" || env.HISTORY_DB === undefined) return;
+    if (env.HISTORY_DB === undefined) return;
     // Deriving an ID does not instantiate a DO or touch its SQLite storage.
     const history = new ExternalAuditHistory(env.HISTORY_DB, env.REGISTRY.idFromName("registry").toString());
-    await history.cleanup();
+    if (env.RUNMESH_AUDIT_BACKEND === "d1") await history.cleanup();
+    if (env.RUNMESH_JOB_HISTORY_BACKEND === "d1") await new PackedJobHistory(env.HISTORY_DB,env.REGISTRY.idFromName("registry").toString()).cleanup();
   },
   async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
     try { return await handleRequest(request, env, ctx); }
@@ -91,6 +95,7 @@ async function handleRequest(request: Request, env: WorkerEnv, _ctx: ExecutionCo
       service: "runmesh-agent-control-plane",
       worker_id: env.WORKER_ID,
       release_gate: releaseGateDiagnostics(env),
+      job_history: { backend: env.RUNMESH_JOB_HISTORY_BACKEND === "d1" ? "packed_d1" : "sqlite", protocol: 1, default_interval_seconds: 300, max_snapshot_jobs: 500 },
       audit_history: { backend: env.RUNMESH_AUDIT_BACKEND === "d1" ? "d1" : "durable_object", binding_configured: env.RUNMESH_AUDIT_BACKEND !== "d1" || env.HISTORY_DB !== undefined },
     });
   }
@@ -480,7 +485,7 @@ async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: URL): P
   if (request.method === "GET" && ["/admin", "/admin/runners", "/admin/clients", "/admin/settings"].includes(url.pathname)) {
     const csrf = cookieValue(request, ADMIN_CSRF_COOKIE);
     if (csrf === undefined || !constantTimeEqual(await sha256Hex(csrf), session.csrf_hash)) return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
-    const data = await loadDashboardData(env, url.pathname === "/admin");
+    const data = await loadDashboardData(env, url.pathname === "/admin" && url.searchParams.get("history") === "1" && env.RUNMESH_JOB_HISTORY_BACKEND !== "d1");
     return html(adminPage(url.pathname, data, csrf));
   }
   const runnerDetail = /^\/admin\/runners\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})$/.exec(url.pathname);
@@ -492,6 +497,9 @@ async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: URL): P
     const page = await loadAdminJobPage(url, runnerId, jobDetail[2] as string, (path) => registryGet(env, path), async (params) => {
       const readiness = await policyReadiness(env, runnerId);
       return readiness.ok ? runnerRpc(env, runnerId, "job.logs", params, readiness.value.applied_revision, readiness.value.active_checksum) : undefined;
+    }, async (params) => {
+      const readiness = await policyReadiness(env,runnerId);
+      return readiness.ok ? runnerRpc(env,runnerId,"job.get",params,readiness.value.applied_revision,readiness.value.active_checksum) : undefined;
     });
     return page.ok ? html(adminDocument(page.title, page.body, "runners")) : adminError(page.status, page.message);
   }
@@ -519,30 +527,34 @@ async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: URL): P
     const csrf = cookieValue(request, ADMIN_CSRF_COOKIE);
     if (csrf === undefined || !constantTimeEqual(await sha256Hex(csrf), session.csrf_hash)) return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
     const runnerId = runnerDetail[1] as string;
-    const [runnerResponse, workspaceResponse, jobsResponse, mcpCallsResponse, policyVersionsResponse, enrollmentResponse, environment, releaseResponse, notices] = await Promise.all([
+    const view = historyView(url);
+    if (view === undefined) return adminError(400,"Invalid history query.");
+    const [runnerResponse, workspaceResponse, jobsResponse, mcpCallsResponse, policyVersionsResponse, enrollmentResponse, environment, releaseResponse, notices, historyResponse] = await Promise.all([
       registryGet(env, `/runners/${encodeURIComponent(runnerId)}`),
       registryGet(env, `/auth/runners/${encodeURIComponent(runnerId)}/managed-workspaces`),
-      registryGet(env, `/runners/${encodeURIComponent(runnerId)}/jobs?limit=20`),
-      registryGet(env, `/runners/${encodeURIComponent(runnerId)}/mcp-calls?limit=20`),
+      view.scope === "live" ? loadLiveJobs(env,runnerId,view.workspace!,view.limit) : (view.scope === "jobs" || view.scope === "all") ? registryGet(env, `/runners/${encodeURIComponent(runnerId)}/jobs?limit=${view.limit}`) : Promise.resolve(new Response(null,{status:204})),
+      (view.scope === "audit" || view.scope === "all") ? registryGet(env, `/runners/${encodeURIComponent(runnerId)}/mcp-calls?limit=${view.limit}`) : Promise.resolve(new Response(null,{status:204})),
       registryGet(env, `/runners/${encodeURIComponent(runnerId)}/policy-versions`),
       registryGet(env, `/auth/runners/${encodeURIComponent(runnerId)}/enrollments`),
       runnerEnvironment(env, runnerId),
       Promise.resolve(runnerReleaseDescriptor(env)),
       loadFeatureNotices(env),
+      registryGet(env, `/runners/${encodeURIComponent(runnerId)}/history-settings`),
     ]);
+    const settings = historyResponse.ok ? parseJobHistorySettings(await json(historyResponse)) : undefined;
     let runner: Record<string, unknown> | undefined;
     let workspaces: unknown[] = [];
     let jobs: unknown[] | undefined;
-    let mcpCalls: unknown[] = [];
+    let mcpCalls: unknown[] | undefined;
     let policyVersions: unknown[] = [];
     let enrollment: Record<string, unknown> | undefined;
     try { runner = runnerResponse.ok ? record(await json(runnerResponse)) : undefined; } catch { runner = undefined; }
     try { workspaces = workspaceResponse.ok ? arrayField(record(await json(workspaceResponse))?.workspaces) : []; } catch { workspaces = []; }
     try { const value = jobsResponse.ok ? record(await json(jobsResponse))?.jobs : undefined; jobs = Array.isArray(value) ? value : undefined; } catch { jobs = undefined; }
-    try { mcpCalls = mcpCallsResponse.ok ? arrayField(record(await json(mcpCallsResponse))?.calls) : []; } catch { mcpCalls = []; }
+    try { mcpCalls = mcpCallsResponse.ok ? arrayField(record(await json(mcpCallsResponse))?.calls) : undefined; } catch { mcpCalls = undefined; }
     try { policyVersions = policyVersionsResponse.ok ? arrayField(record(await json(policyVersionsResponse))?.versions) : []; } catch { policyVersions = []; }
     try { enrollment = enrollmentResponse.ok ? record(record(await json(enrollmentResponse))?.enrollment) : undefined; } catch { enrollment = undefined; }
-    return runner === undefined ? adminError(404, "Runner was not found.") : html(adminDocument(`${typeof runner.display_name === "string" ? runner.display_name : runnerId} · Runner`, runnerDetailPage(runner, workspaces, jobs, environment, csrf, releaseResponse, policyVersions, enrollment, mcpCalls), "runners", notices));
+    return runner === undefined ? adminError(404, "Runner was not found.") : html(adminDocument(`${typeof runner.display_name === "string" ? runner.display_name : runnerId} · Runner`, runnerDetailPage(runner, workspaces, jobs, environment, csrf, releaseResponse, policyVersions, enrollment, mcpCalls, view, settings), "runners", notices));
   }
   if (request.method !== "POST") { await discardBody(request); return methodNotAllowed("GET, POST"); }
   const form = await formData(request);
@@ -557,6 +569,13 @@ async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: URL): P
   if (url.pathname === "/admin/logout") {
     await registryPost(env, "/auth/sessions/logout", { session_hash: session.hash });
     return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
+  }
+  const historyAction = /^\/admin\/runners\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\/history-settings$/.exec(url.pathname);
+  if (historyAction !== null) {
+    const settings = parseJobHistorySettings({mode:form.get("mode"),interval_seconds:Number(form.get("interval_seconds")),retention_days:Number(form.get("retention_days")),local_retention_days:Number(form.get("local_retention_days"))});
+    if (settings === undefined || (settings.local_retention_days > 0 && form.get("confirm_local_cleanup") !== "true")) return adminError(400,"Invalid settings or local cleanup not confirmed.");
+    const response = await registryPost(env,`/runners/${encodeURIComponent(historyAction[1]!)}/history-settings`,{...settings});
+    return response.ok ? redirect(`/admin/runners/${encodeURIComponent(historyAction[1]!)}`) : adminError(response.status === 404 ? 404 : 503,"History settings could not be saved.");
   }
   if (url.pathname === "/admin/password") return changePassword(env, form);
   if (url.pathname === "/admin/clients") return createClient(env, form, publicOrigin);
@@ -2069,7 +2088,7 @@ function overviewPage(data: AdminData, csrf: string): string {
     const count = record(value)?.active_job_count;
     return total + (typeof count === "number" && Number.isSafeInteger(count) && count >= 0 ? count : 0);
   }, 0);
-  return `<section class="page-heading"><div><p class="eyebrow">Control plane</p><h1>Dashboard</h1><p class="lede">A concise view of connected runtimes, clients, and recent work.</p></div><a class="button secondary" href="/admin">Refresh</a></section><section class="metrics" aria-label="Summary"><div class="metric"><span class="metric-label">Active MCP clients</span><strong class="metric-value">${data.clients.filter((client) => client.revoked_at_ms === null).length}</strong><span class="metric-meta">${data.clients.length} configured</span></div><div class="metric"><span class="metric-label">Online / total runners</span><strong class="metric-value">${online} / ${data.runners.length}</strong><span class="metric-meta"><span class="status-dot ${online > 0 ? "online" : "offline"}"></span> ${online} connected</span></div><div class="metric"><span class="metric-label">Active shell jobs</span><strong class="metric-value">${jobsAvailable ? activeJobs : "—"}</strong><span class="metric-meta">Last recorded status</span></div><div class="metric"><span class="metric-label">Recent jobs</span><strong class="metric-value">${jobsAvailable ? data.jobs.length : "—"}</strong><span class="metric-meta">Recorded</span></div></section><div class="grid-two"><section class="panel"><div class="section-title"><h2>Recent runners</h2><a href="/admin/runners">View all</a></div>${runnerList(data.runners.slice(0, 5))}</section><section class="panel"><div class="section-title"><h2>Recent MCP clients</h2><a href="/admin/clients">View all</a></div>${clientList(data.clients.slice(0, 5))}</section></div><section class="panel"><div class="section-title"><h2>Recent jobs</h2><a href="/admin/runners">Runner activity</a></div><p class="muted">${JOBS_EXPLANATION}</p>${jobSnapshotNote()}${jobsAvailable ? jobTable(data.jobs.slice(0, 10)) : '<p class="empty">Job metadata is temporarily unavailable.</p>'}</section><form class="hidden" method="post" action="/admin/logout"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"></form>`;
+  return `<section class="page-heading"><div><p class="eyebrow">Control plane</p><h1>Dashboard</h1><p class="lede">A concise view of connected runtimes, clients, and recent work.</p></div><a class="button secondary" href="/admin">Refresh</a></section><section class="metrics" aria-label="Summary"><div class="metric"><span class="metric-label">Active MCP clients</span><strong class="metric-value">${data.clients.filter((client) => client.revoked_at_ms === null).length}</strong><span class="metric-meta">${data.clients.length} configured</span></div><div class="metric"><span class="metric-label">Online / total runners</span><strong class="metric-value">${online} / ${data.runners.length}</strong><span class="metric-meta"><span class="status-dot ${online > 0 ? "online" : "offline"}"></span> ${online} connected</span></div><div class="metric"><span class="metric-label">Active shell jobs</span><strong class="metric-value">${jobsAvailable ? activeJobs : "—"}</strong><span class="metric-meta">Last recorded status</span></div><div class="metric"><span class="metric-label">Recent jobs</span><strong class="metric-value">${jobsAvailable ? data.jobs.length : "—"}</strong><span class="metric-meta">Recorded</span></div></section><div class="grid-two"><section class="panel"><div class="section-title"><h2>Recent runners</h2><a href="/admin/runners">View all</a></div>${runnerList(data.runners.slice(0, 5))}</section><section class="panel"><div class="section-title"><h2>Recent MCP clients</h2><a href="/admin/clients">View all</a></div>${clientList(data.clients.slice(0, 5))}</section></div><section class="panel"><div class="section-title"><h2>Recent jobs</h2><a href="/admin/runners">Runner activity</a></div><p class="muted">${JOBS_EXPLANATION}</p>${jobSnapshotNote()}${jobsAvailable ? jobTable(data.jobs.slice(0, 10)) : data.notices.some((n) => n.title === 'Job snapshot unavailable') ? '<p class="empty">Job metadata is temporarily unavailable.</p>' : '<p class="muted">Jobs not loaded. Select a Runner and click Load / Refresh. / 选择 Runner 后手动加载任务。</p>'}</section><form class="hidden" method="post" action="/admin/logout"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"></form>`;
 }
 function runnerActionCell(runner: RunnerRecord, modeFields: string, csrf: string): string {
   const runnerId = encodeURIComponent(runner.runner_id);
@@ -2161,7 +2180,7 @@ function scopeCheckboxes(selected: readonly string[] = ["coding:read"]): string 
   };
   return (["coding:read", "coding:write", "coding:exec"] as const).map((scope) => `<label class="check"><input type="checkbox" name="scopes" value="${scope}"${selected.includes(scope) ? " checked" : ""}> <span><strong>${titles[scope]}</strong><small>${descriptions[scope]}</small></span></label>`).join("");
 }
-function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly unknown[], jobs: readonly unknown[] | undefined, environment: Record<string, unknown> | undefined, csrf: string, release: RunnerReleaseDescriptor & { readonly distributable: boolean }, policyVersions: readonly unknown[] = [], enrollment?: Record<string, unknown>, mcpCalls: readonly unknown[] = []): string {
+function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly unknown[], jobs: readonly unknown[] | undefined, environment: Record<string, unknown> | undefined, csrf: string, release: RunnerReleaseDescriptor & { readonly distributable: boolean }, policyVersions: readonly unknown[] = [], enrollment?: Record<string, unknown>, mcpCalls: readonly unknown[] | undefined = undefined, view: HistoryView = {scope:"none",limit:10}, historySettings?: JobHistorySettings): string {
   const runnerId = typeof runner.runner_id === "string" ? runner.runner_id : "unknown";
   const displayName = typeof runner.display_name === "string" ? runner.display_name : runnerId;
   const state = typeof runner.state === "string" ? runner.state : "offline";
@@ -2377,17 +2396,17 @@ function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly 
     <section class="panel">
       <div class="section-title">
         <h2>Recent shell jobs</h2>
-        <a href="/admin/runners/${encodeURIComponent(runnerId)}">Refresh</a>
       </div>
       <p class="muted">${JOBS_EXPLANATION}</p>
-      ${jobSnapshotNote()}
-      ${jobs === undefined ? '<p class="empty">Job metadata is temporarily unavailable.</p>' : jobTable(jobs.filter(record) as Record<string, unknown>[], runnerId)}
+      ${historyControls(runnerId,view)}
+      ${view.scope === "none" || view.scope === "audit" ? '<p class="muted">Jobs not loaded. / 尚未读取任务，点击加载或刷新。</p>' : `${view.scope === "live" ? '<p class="muted">Runner live result / Runner 实时结果</p>' : jobSnapshotNote()}${jobs === undefined ? '<p class="empty">Job metadata is temporarily unavailable.</p>' : historyJobTable(jobs.filter(record) as Record<string, unknown>[],runnerId,view)}` }
     </section>
     <section class="panel">
       <div class="section-title">
         <h2>Recent MCP calls</h2>
       </div>
-      ${mcpCallTable(mcpCalls.filter(record) as Record<string, unknown>[])}
+      ${view.scope === "audit" || view.scope === "all" ? (mcpCalls === undefined ? '<p class="muted">Audit history unavailable. / 审计暂不可用。</p>' : mcpCallTable(mcpCalls.filter(record) as Record<string, unknown>[])) : '<p class="muted">Audit not loaded. / 尚未读取审计。</p>'}
+      ${historySettingsForm(runnerId,csrf,historySettings)}
     </section>
   </div>
   <div class="grid-two">
@@ -3055,3 +3074,17 @@ function time(value: number | null): string { return value === null || value <= 
 async function json(response: Response): Promise<unknown> { try { return await response.json(); } catch { return undefined; } }
 function arrayField(value: unknown): unknown[] { return Array.isArray(value) ? value : []; }
 function record(value: unknown): Record<string, unknown> | undefined { return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }
+
+async function loadLiveJobs(env: WorkerEnv, runnerId: string, workspaceId: string, limit: number): Promise<Response> {
+  const readiness = await policyReadiness(env,runnerId);
+  if (!readiness.ok) return new Response("policy unavailable",{status:503});
+  const response = await runnerRpc(env,runnerId,"job.list",{workspace_id:workspaceId,limit},readiness.value.applied_revision,readiness.value.active_checksum);
+  const payload = response?.ok ? record(await json(response)) : undefined;
+  const jobs = Array.isArray(payload?.result) ? payload.result : record(payload?.result)?.jobs;
+  if (!Array.isArray(jobs) || jobs.some((job) => record(job)?.workspace_id !== workspaceId)) return new Response("live Jobs unavailable",{status:503});
+  return Response.json({jobs:jobs.slice(0,limit),source:"runner_live"});
+}
+function historyJobTable(jobs: Record<string,unknown>[], runnerId: string, view: HistoryView): string {
+  const table = jobTable(jobs,runnerId);
+  return view.scope === "live" ? table.replace(/(href="[^"?]+\/jobs\/[^"?]+)"/g,`$1?workspace_id=${encodeURIComponent(view.workspace ?? "")}"`) : table;
+}
