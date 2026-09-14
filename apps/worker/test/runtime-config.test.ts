@@ -2,7 +2,7 @@ import { env, runInDurableObject } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
 import { resolveRuntimeConfiguration } from "../src/runtime-config.js";
 import { REVIEWED_RELEASE_VERSION } from "../src/generated-release.js";
-import worker from "../src/index.js";
+import worker, { RegistryDOv2 } from "../src/index.js";
 
 function portableEnv() {
   return { ...env, WORKER_ID: undefined, RUNMESH_TEST_MODE: undefined, RUNMESH_ENVIRONMENT: undefined,
@@ -78,4 +78,17 @@ it("minimal production can present browser setup without an ADMIN_TOKEN", async 
   expect(response.status).toBe(200);
   expect(response.headers.get("set-cookie")).toContain("__Host-runmesh_setup_csrf");
   await runInDurableObject(registry, (instance) => { expect(instance.getRunner("does-not-exist")).toBeUndefined(); });
+});
+
+it("minimal Registry construction initializes both optional history clients and preserves existing data", async () => {
+  const stub = env.REGISTRY.get(env.REGISTRY.idFromName(`minimal-constructor-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, (instance, state) => {
+    instance.registerRunner("preserved", "synthetic-verifier", Date.now(), undefined, "dedicated_user");
+    const before = instance.getRunnerExecutionState("preserved");
+    const next = new RegistryDOv2(state, portableEnv());
+    expect(next.getRunnerExecutionState("preserved")).toEqual(before);
+    const clients = next as unknown as { packedJobs?: unknown; externalAudit?: unknown };
+    expect(clients.packedJobs).toBeDefined();
+    expect(clients.externalAudit).toBeDefined();
+  });
 });
