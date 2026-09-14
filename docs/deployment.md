@@ -162,3 +162,7 @@ See [quota isolation and cloud Job recording](quota-resilience.md). Production u
 ## Batched Job history
 
 See [batched snapshots, manual loading and retention](batched-job-history.md). Production uses `RUNMESH_JOB_HISTORY_BACKEND=d1`; the default upload window is five minutes. History is loaded only on request. Source-side batching and local day-based cleanup are shipped in immutable v0.1.2; existing v0.1.1 assets and installed services remain unchanged.
+
+## Production branch cutover
+
+The serving Worker is promoted to protected GitLab main; dev is reserved for a separate development Worker. Existing v0.1.2 publication provenance above is historical and is not rewritten. Future formal publication is main-only. See [exact settings and checks](production-main-cutover.md).

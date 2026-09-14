@@ -25,6 +25,8 @@ export interface WorkerEnv {
   REGISTRY: DurableObjectNamespace;
   RUNNER: DurableObjectNamespace;
   WORKER_ID?: string;
+  RUNMESH_DEPLOYMENT_BRANCH?: string;
+  RUNMESH_DEPLOYMENT_COMMIT?: string;
   ADMIN_TOKEN?: string;
   /** Long-lived Runner token verifier pepper; at least 32 random characters. */
   RUNNER_TOKEN_PEPPER?: string;
