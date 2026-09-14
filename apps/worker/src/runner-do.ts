@@ -21,6 +21,7 @@ export interface WorkerEnv {
   /** Optional independent metadata-only audit store; never an auth fallback. */
   HISTORY_DB?: D1Database;
   RUNMESH_AUDIT_BACKEND?: string;
+  RUNMESH_JOB_HISTORY_BACKEND?: string;
   REGISTRY: DurableObjectNamespace;
   RUNNER: DurableObjectNamespace;
   WORKER_ID?: string;
@@ -344,7 +345,7 @@ export class RunnerDO {
         this.closeForRegistryFailure(ws, epochResponse);
         return;
       }
-      let body: { epoch?: unknown; lifecycle_id?: unknown; desired_policy?: unknown };
+      let body: { epoch?: unknown; lifecycle_id?: unknown; desired_policy?: unknown; job_history?: unknown };
       try {
         const parsed = await epochResponse.json();
         if (!isRecord(parsed)) {
@@ -400,6 +401,7 @@ export class RunnerDO {
       const welcome: WireMessage = {
         type: "runner.welcome", protocol_version: negotiation.protocol_version, request_id: message.request_id,
         session_id: attachment.sessionId, negotiated_protocol_version: negotiation.protocol_version,
+        ...(isRecord(body.job_history) ? { extensions: { runmesh_job_history: body.job_history as never } } : {}),
         worker: {
           worker_id: this.env.WORKER_ID ?? "runmesh", worker_version: PRODUCT_VERSION,
           capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: ["echo", "runner.info"], labels: { runtime: "cloudflare" } },
@@ -480,7 +482,14 @@ export class RunnerDO {
     if (message.type === "runner.sync") {
       if (message.runner_id !== attachment.runnerId) return ws.close(1008, "runner identity mismatch");
       const response = await this.registryRequest(attachment.runnerId, "/sync", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, ...transportIdentityFields(attachment), message, now_ms: Date.now() }) });
-      if (!response.ok) this.closeForRegistryFailure(ws, response);
+      if (!response.ok) { this.closeForRegistryFailure(ws,response); return; }
+      if (message.extensions?.runmesh_history_ack === true) {
+        let result: unknown;
+        try { result = await response.json(); } catch { result = undefined; }
+        const status = isRecord(result) && ["recorded","unchanged","disabled","deferred","degraded"].includes(String(result.history_status)) ? result.history_status : "degraded";
+        try { ws.send(encodeWireFrame({type:"rpc.response",protocol_version:attachment.protocolVersion,request_id:`history-${message.sync_sequence}`,result:{history_status:status as string}})); }
+        catch { /* Local Jobs remain authoritative; next connection resends. */ }
+      }
       return;
     }
     if (message.type === "rpc.request") {

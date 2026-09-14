@@ -92,3 +92,41 @@ it.each(["client-create", "client-rotate", "runner-add", "enrollment", "permissi
     expect(instance.getMcpClient("c")?.secret_version).toBe(1);
   });
 });
+
+
+it("authorization-only request replays recheck live credentials without allocating nonce rows", async () => {
+  const stub = env.REGISTRY.get(env.REGISTRY.idFromName(`auth-query-cost-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, async (instance, state) => {
+    const now = Date.now();
+    instance.createMcpClient({ client_id: "c", label: "test", secret_verifier: "c".repeat(64), secret_prefix: "test", scopes: ["coding:read"] }, now);
+    instance.verifyMcpClient("c".repeat(64), now);
+    const queries = [
+      ["/auth/mcp/verify", { secret_verifier: "c".repeat(64) }],
+      ["/auth/mcp/revalidate", { client_id: "c", secret_version: 1 }],
+      ["/auth/mcp/authorize-rpc", { client_id: "c", secret_version: 1, runner_id: "missing", method: "job.get", job_id: "j", workspace_id: "w" }],
+      ["/runners/missing/mcp-authorization", { client_id: "c", secret_version: 1, method: "job.get", job_id: "j", workspace_id: "w" }],
+    ] as const;
+    const spy = vi.spyOn(state.storage.sql, "exec");
+    try {
+      for (const [path, input] of queries) {
+        const body = JSON.stringify(input);
+        const request = new Request(`https://registry.internal${path}`, { method: "POST", body, headers: await internalHeaders(secret, "POST", path, body) });
+        const expected = path.endsWith("verify") || path.endsWith("revalidate") ? 200 : 403;
+        expect((await instance.fetch(request.clone())).status).toBe(expected);
+        expect((await instance.fetch(request.clone())).status).toBe(expected);
+        // Missing all proof headers must remain fail-closed.
+        expect((await instance.fetch(new Request(`https://registry.internal${path}`, { method: "POST", body }))).status).toBe(404);
+      }
+      expect(spy.mock.calls.some(([sql]) => sql.startsWith("INSERT INTO internal_request_nonces"))).toBe(false);
+    } finally { spy.mockRestore(); }
+    const path = "/auth/mcp/revalidate", body = JSON.stringify({client_id:"c",secret_version:1});
+    const request = new Request(`https://registry.internal${path}`, {method:"POST",body,headers:await internalHeaders(secret,"POST",path,body)});
+    expect((await instance.fetch(request.clone())).status).toBe(200);
+    instance.revokeMcpClient("c", now + 1);
+    expect((await instance.fetch(request.clone())).status).toBe(404);
+    // True mutation replay fencing is unchanged.
+    const nonce = "d".repeat(64);
+    expect(instance.consumeInternalNonce(nonce, now + 60000, now)).toBe(true);
+    expect(instance.consumeInternalNonce(nonce, now + 60000, now)).toBe(false);
+  });
+});
