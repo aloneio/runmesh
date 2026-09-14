@@ -13,28 +13,25 @@
 - 需要执行任务的机器；
 - 明确哪些目录可以被哪些客户端读取、修改或执行命令。
 
-Runmesh 不会替你创建操作系统账号，也不会自动决定工作区权限。请先规划最小权限。
+受限模式的安装器会创建所需的服务身份，但不会替你决定工作区权限或修改项目目录的归属。请先规划最小权限。
 
-本版本与之前的 Runner、Registry 数据布局是 clean break，不会导入旧表、旧配置、旧服务清单或旧凭据。请为 Durable Object 使用全新命名空间，并为每台机器重新注册当前 Runner；旧部署只能作为单独备份保留。
+新实例使用自己的资源。更新已有 v2 实例时，保留当前 Worker、命名空间、历史数据库、密钥值、Runner 配置和服务，不要为了更新代码重新建库或重新注册健康 Runner。早期版本的数据迁移说明不适用于普通升级。
 
 ## 部署控制平面
 
-在 Cloudflare Workers Builds 中连接 GitHub 或 GitLab 仓库，生产分支使用 `dev`，部署命令为：
+在 Cloudflare Workers Builds 中连接仓库，正式环境选择 `main`，根目录构建命令为 `npm run build`，部署命令为：
 
 ```sh
-npm exec --offline -- wrangler deploy --config apps/worker/wrangler.jsonc --env production --strict
+npm run deploy:worker -- --env production
 ```
 
-在 Cloudflare Variables & Secrets 中配置：
+普通生产部署只需要两个独立的长期密钥：`INTERNAL_CONTROL_SECRET` 和 `RUNNER_TOKEN_PEPPER`。分别使用至少 32 字节的密码学安全随机数，更新时保留已有值，不提交到仓库、截图或日志。替换 `RUNNER_TOKEN_PEPPER` 会使已有 Runner 凭据失效，不能把重新生成密钥当作普通升级步骤。
 
-- `ADMIN_TOKEN`：仅供自动化管理 Runner 的高级接口使用；
-- `RUNNER_TOKEN_PEPPER`：保护 Runner 凭据校验值；
-- `INTERNAL_CONTROL_SECRET`：保护控制平面内部请求；
-- `RUNMESH_PUBLIC_ORIGIN`：完整的外部 HTTPS 根地址，不带路径、查询参数或凭据。
+不再要求手工填写普通运行时变量：公网地址从 HTTPS 请求 URL 和匹配的 Host 校验获得，历史后端默认使用生产 D1 绑定，安装器门控从已独立验证的发布记录生成。反向代理使用内部 URL 时，才需要显式配置 `RUNMESH_PUBLIC_ORIGIN`。转发头不能改变可信公网地址。`ADMIN_TOKEN` 仅供高级自动化管理 API 使用，网页管理、注册码和 MCP 不需要它。
 
-`RUNMESH_PUBLIC_ORIGIN` 是配置的规范外部 HTTPS 地址，也适用于反向代理部署。配置该变量后，请求的外部 `Host` 必须与之匹配；新增自定义域名时应同步修改生产环境配置，不会自动授权任意新域名。
+`npm run setup:secrets -- --env production` 只检查缺失名称；加 `--apply` 才生成和上传缺失的必要密钥，不重新生成已有值、不打印密钥、不删除其他项。工具需要 Cloudflare 管理授权和已创建的 Worker。完整操作见[最小运行时配置](runtime-config.zh-CN.md)。
 
-请使用密码学安全随机数生成器创建 Secret；`ADMIN_TOKEN`、`RUNNER_TOKEN_PEPPER` 和 `INTERNAL_CONTROL_SECRET` 至少使用 32 字节随机值。三个 Secret 不能提交到 Git 仓库、CI 变量、截图或日志。部署完成后立即打开根地址设置管理员密码，首个完成设置的用户自动成为管理员。初始化采用先到先得；公开实例完成初始化前，请使用 Cloudflare Access 或等效访问控制保护它。
+部署后立即设置管理员密码，首个有效提交成为管理员。首次初始化不需要额外 Token，仍保留 CSRF、同源和原子检查；公开前应先完成初始化。单独的开发 Worker 选择 `dev`，使用独立密钥和资源，不复制生产凭据。
 
 ## 添加 Runner
 

@@ -18,6 +18,6 @@ if (plan.environment === "production") assertReleased(
 console.log(JSON.stringify({deployment:plan,source_commit:sha}));
 const result = spawnSync(process.execPath, [fileURLToPath(new URL("../node_modules/wrangler/bin/wrangler.js",import.meta.url)),
   "deploy","--config","apps/worker/wrangler.jsonc","--env",plan.environment,
-  "--var",`RUNMESH_DEPLOYMENT_BRANCH:${plan.branch}`,"--var",`RUNMESH_DEPLOYMENT_COMMIT:${sha}`],{cwd:root,env:process.env,stdio:"inherit"});
+  "--tag",`${plan.branch}:${sha}`],{cwd:root,env:process.env,stdio:"inherit"});
 if(result.error) throw result.error;
 process.exitCode = result.status ?? 1;

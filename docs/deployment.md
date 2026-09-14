@@ -37,35 +37,29 @@ npm run pack:runner
 
 ## Cloudflare resources and secrets
 
-The deployed core uses only:
+The deployed core uses one Worker, the current SQLite-backed `RegistryDOv2` and `RunnerDOv2` namespaces, and a separate `HISTORY_DB` D1 binding for optional metadata history. Static assets and version metadata are bindings. No additional KV, R2, queue service, inbound Runner endpoint or model API is required for the standard deployment.
 
-- one Worker;
-- SQLite-backed `RegistryDO` and `RunnerDO` classes;
-- no KV, D1, R2, Queues, Sandbox, Containers, Dynamic Workers, tunnels, inbound service, OAuth, AI/model API, or GitHub Actions runtime.
-
-Configure the three long-lived server-side secrets before deployment. Each must contain 32–512 randomly generated non-whitespace characters. First setup has no extra authorization token:
+Ordinary production requires only two long-lived server-side secrets, with independent cryptographically random values of 32–512 non-whitespace characters. First setup has no extra authorization token. Preserve existing values on upgrade:
 
 ```sh
 cd apps/worker
-npm exec --offline -- wrangler secret put ADMIN_TOKEN --env production
 npm exec --offline -- wrangler secret put RUNNER_TOKEN_PEPPER --env production
 npm exec --offline -- wrangler secret put INTERNAL_CONTROL_SECRET --env production
 ```
 
-Set the non-secret Worker variable `RUNMESH_PUBLIC_ORIGIN` in the `vars` section of `apps/worker/wrangler.jsonc` (or the equivalent environment-specific Wrangler configuration) before deployment. It must be the canonical externally reachable HTTPS origin, for example `https://mcp.example.com`: do not include a path, query, fragment, credentials, whitespace, wildcard, or an `http://` scheme. A trailing slash is normalized. When this variable is configured, the configured public Host is accepted behind an internal proxy. A routed custom domain is also accepted when its HTTPS request URL and Host agree; mismatched authorities are rejected. An untrusted Host is never used by itself as the public origin. Missing or invalid configuration keeps hosted bootstrap unavailable, while a mismatched request is rejected with a generic `421` response. Local development may omit the variable and use a loopback HTTP request origin, but the signed hosted path cannot be enabled without it.
+No plaintext runtime variable is required for ordinary production. `RUNMESH_PUBLIC_ORIGIN` is an optional reverse-proxy override; otherwise Runmesh uses the current validated HTTPS URL and matching Host. It never uses Host or forwarded headers alone. An explicit override must be an HTTPS origin without a path, query, fragment, credentials or whitespace. Invalid or explicitly empty overrides stay fail-closed. A new fork can use its own workers.dev or custom domain without editing the author's domain in source.
 
-The top-level Wrangler configuration is the canonical production Worker and uses the current release lifecycle to acknowledge the exact independently verified `v0.1.3` release alongside `RUNMESH_PUBLIC_ORIGIN`; this matches Cloudflare Workers Builds' default unqualified `wrangler deploy`. The named `production` environment mirrors those production values for explicit `--env production` deployments, while the named `development` and `test` environments keep hosted distribution fail-closed. Before changing the release acknowledgement or enabling another release, an authorized maintainer must check the repository's [immutable-release setting](https://docs.github.com/en/rest/repos/repos?apiVersion=latest#check-if-immutable-releases-are-enabled-for-a-repository) with an administration-read credential and require a successful response showing `enabled: true`; `401`, `403`, or `404` is a release blocker. The GitHub release workflow intentionally does not request that elevated permission, so its successful run alone is not proof of immutability. The workflow is pinned to this same version because the hosted installer embeds its version, URLs, and signing key; update and independently review that installer contract before introducing a later release version. Cloudflare Workers Builds may use its default deploy command against the top-level production configuration, or an explicit `npm exec --offline -- wrangler deploy --config apps/worker/wrangler.jsonc --env production --strict`; both resolve to the same `runmesh` Worker and release gate. GitHub Actions and GitLab CI only run verification.
+Production's release default is generated from `release/release-state.json`, not inferred from the package version. The generated module must agree with the exact published commit and independently verified manifest hash. Candidates and explicit empty release overrides remain disabled. The source-pinned installer still verifies immutable signed assets. Development and test remain fail-closed by default. Formal publication remains main-only, with the same repository immutability, signature, tag/commit and artifact checks. GitHub and GitLab CI run verification; the existing Cloudflare build connection performs deployment.
 
 First setup requires no additional bootstrap token. The first valid submission atomically sets the administrator password; CSRF, same-origin checks and password confirmation remain. Complete setup before untrusted exposure because an uninitialized public instance is claimable by its first successful visitor. `ADMIN_TOKEN` remains only the manual/programmatic Runner administration credential, not a browser, MCP or enrollment credential.
 
 Deploy when the account and hostname are ready. The Worker name is `runmesh`. For a direct Cloudflare Workers Builds connection, use the following as its deploy command; Cloudflare manages the connection authentication:
 
 ```sh
-npm exec --offline -- wrangler deploy --config apps/worker/wrangler.jsonc --env production --strict
+npm run deploy:worker -- --env production
 ```
 
-The checked-in top-level production configuration targets the maintained
-`runmesh.aloneio.workers.dev` deployment and enables hosted distribution for `v0.1.3` only when its release lifecycle is verified and activated; the named `production` alias mirrors it. For a fork or a different hostname, replace `RUNMESH_PUBLIC_ORIGIN` in both production views with the canonical HTTPS origin before deploying; keep the release acknowledgement disabled until the matching immutable release has been independently verified.
+The deployment wrapper checks the main/production and dev/development relationship and records branch/commit in the provider version tag, instead of adding two text variables. Keep existing Worker and database identities on upgrade. For a new account, the resource configuration provisions local account resources, and the request supplies its validated domain. `ADMIN_TOKEN` is optional and applies only to the advanced API below. See [minimal runtime configuration](runtime-config.md) for the missing-only setup helper and compatibility overrides.
 
 1. Open the deployed root URL and create the first administrator password. No separate setup authorization token is required. Later setup requests are rejected atomically; existing administrator settings are preserved.
 2. Log in and open **Admin → Runners**. Add a safe Runner ID (or let the dashboard generate one) and a human-facing `display_name`. The display name is displayed to operators and by `runner_list`; the ID is the stable protocol identifier.
@@ -103,7 +97,7 @@ The dashboard displays safe Runner details and allows Runner rename, enrollment/
 
 ### Public bootstrap and package configuration
 
-Hosted bootstrap is disabled in the explicit `development` and `test` environments. The checked-in top-level production configuration, mirrored by the named `production` alias, enables `v0.1.3` only after independent publication verification, using the canonical `RUNMESH_PUBLIC_ORIGIN` and the exact `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.3` acknowledgement. `/runner/releases/latest` and `/runner/releases/stable` report `distributable: false` whenever either gate is missing or invalid. The acknowledgement is an equality gate, not a configurable URL, package name, npm spec, checksum, or version source. Before enabling it for another deployment, verify the exact `v0.1.3` tag/commit and signed manifest/Runner tarball with `scripts/release-verify.mjs` and a trust keyring from an independently trusted checkout, then verify `SHA256SUMS` and the remaining notices/keyring separately. When disabled, generated scripts fail closed without consuming enrollment codes. When enabled, they use only source-pinned GitHub URLs and an embedded Ed25519 public key to verify `manifest.json`, its detached signature/descriptor, `SHA256SUMS`, and the fixed local tarball before npm installs it with scripts disabled. The downloaded keyring is never a trust root. See the complete [portable Runner verification and installation procedure](portable-runner-installation.md), including the one-command Worker trust limitation and high-assurance offline route. Automatic update and rollback remain outside this release.
+Hosted bootstrap remains disabled by default in development and test. Production uses the reviewed compiled release acknowledgement and a validated request or configured origin. Explicit `RUNMESH_SIGNED_RELEASE_AVAILABLE` is still an exact-version compatibility/emergency override, not a URL, package source or substitute for signature checks. Missing publication evidence or an invalid origin reports `distributable: false` without consuming a code. Every enabled installer still verifies the source-pinned manifest, signature, checksums and package with its embedded trusted public key before offline installation with scripts disabled. A downloaded keyring is never a trust root. See the [portable installation procedure](portable-runner-installation.md). No automatic Runner upgrade or rollback is introduced.
 
 ## Local Runner profiles and service manifests
 

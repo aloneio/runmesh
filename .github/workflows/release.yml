@@ -75,7 +75,7 @@ jobs:
           # workflow-local mutation. Refuse to publish if the triggering commit
           # left it stale; otherwise this step could silently release bytes that
           # are not represented by GITHUB_SHA.
-          git diff --exit-code -- apps/worker/src/generated-version.ts
+          git diff --exit-code -- apps/worker/src/generated-version.ts apps/worker/src/generated-release.ts
           npm run check:versions
           ROOT_VERSION="$(node -p 'require("./package.json").version')"
           test "$RELEASE_VERSION" = "$ROOT_VERSION"
@@ -215,7 +215,7 @@ jobs:
             exit 1
           fi
       - name: Require the audited production control plane before creating a release tag
-        run: node scripts/check-live-release-prereqs.mjs
+        run: node scripts/check-live-release-prereqs.mjs https://runmesh.aloneio.workers.dev
       - name: Create annotated release tag
         env:
           GH_TOKEN: ${{ github.token }}
