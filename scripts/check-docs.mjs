@@ -16,7 +16,6 @@ const config = JSON.parse((await readFile(new URL("apps/worker/wrangler.jsonc", 
 const releaseState = JSON.parse(await readFile(new URL("release/release-state.json", root), "utf8"));
 assert.equal(releaseState.version,pkg.version);
 assert.ok(["candidate","released"].includes(releaseState.state));
-const expectedGate = releaseState.state === "released" ? pkg.version : "";
 assert.deepEqual(config.vars, {}, "source defaults replace redundant production runtime variables");
 assert.deepEqual(config.env.production.vars, config.vars);
 assert.deepEqual(config.env.development.vars, { RUNMESH_ENVIRONMENT: "development" });
