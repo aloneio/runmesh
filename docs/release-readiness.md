@@ -1,6 +1,6 @@
 # Release readiness — 0.1.3
 
-State: CANDIDATE, not RELEASED. Distribution for this candidate is not ENABLED. The existing production installer stays available until independent publication verification and an activation commit. `release/release-state.json` records the lifecycle.
+**State: RELEASED. Distribution: ENABLED in this activation commit.** Immutable v0.1.3 was published from protected main `90395a1a37e608ed40fe3646c1a06f5d4d4f4d83` at `2026-09-14T14:03:29Z` by successful Release run `34852575044`. All nine public assets were independently fetched without GitHub authentication and verified using the source trust keyring. Manifest SHA256: `ba84fce036385127eb69f7c677ba8cc89757c038797414c66e8e2861286cbbbe`. Runner tarball: `6bf9c34bf22ddbba4f86d08767ae817ebe68b7dd5b8a88621e9bfb872aa02ddf` (691084 bytes). Production activation still requires the merged commit to reach GitLab main and Cloudflare; this record alone is not deployment evidence.
 
 Version 0.1.3, tag v0.1.3, stable channel, protocol v2 with negotiated queue frames, and runmesh-runner-0.1.3.tgz are fixed inputs. The reviewed Ed25519 key remains runmesh-preview-2026-01. Existing immutable releases retain their original bytes and provenance.
 
