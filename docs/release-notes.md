@@ -1,5 +1,7 @@
 # 0.1.2 — batched Job history, bounded reads and release-chain hardening
 
+Published as an immutable stable release at `2026-09-14T07:46:46Z` from `0b45a519febfea865bc562f4b147b616ab6ddef6`. Signed assets were independently downloaded from the public unauthenticated release URLs and verified before enabling the production installer.
+
 ## Runner
 
 Negotiates `job_history_protocol=1` with the audited Worker. Batched mode coalesces Job metadata at 1/5/15/60-minute intervals (five minutes by default) instead of emitting a full history update after every lifecycle event. Unchanged acknowledged snapshots are not uploaded again. Off mode creates no history sync timer. Deferred or failed archives can be retried without restarting commands.
