@@ -1,4 +1,6 @@
+import { ExternalAuditHistory, AuditHistoryUnavailableError } from "./external-audit.js";
 import { controlPlaneUnavailableResponse } from "./control-plane-errors.js";
+import { ensureHistoryRetentionSchema, pruneHistory } from "./history-retention.js";
 import { rpcPermissionRequirement } from "./mcp-authorization.js";
 import {
   JobCompletedSchema,
@@ -191,6 +193,9 @@ export interface RegistryFeatureHealth {
   readonly last_error: string | null;
 }
 export interface McpClientRecord {
+  /** Cloud history preference only; never changes execution permissions. */
+  readonly record_jobs?: boolean;
+  readonly record_jobs_since_ms?: number;
   readonly client_id: string;
   readonly label: string;
   readonly secret_prefix: string;
@@ -283,6 +288,7 @@ type AuthThrottleRow = { id: string; failed_attempts: number; blocked_until_ms: 
 type AuthThrottleKind = "login" | "setup";
 type SessionRow = { csrf_hash: string; expires_at_ms: number; session_version: number };
 type McpClientRow = {
+  record_jobs?: number; record_jobs_since_ms?: number;
   client_id: string; label: string; secret_verifier: string; secret_prefix: string; scopes_json: string;
   secret_version: number; created_at_ms: number; updated_at_ms: number; last_used_at_ms: number | null; revoked_at_ms: number | null;
   active_runner_id: string | null; active_runner_updated_at_ms: number | null;
@@ -293,7 +299,6 @@ const MAX_SYNC_ITEMS = 1_000;
 /** Keep active jobs indefinitely; only old terminal metadata is bounded. */
 const MAX_TERMINAL_JOBS_PER_RUNNER = 1_000;
 const MAX_MCP_CALLS_PER_RUNNER = 1_000;
-const TERMINAL_JOB_STATUSES = new Set(["cancelled", "succeeded", "failed", "interrupted"]);
 const CLIENT_LAST_USED_WRITE_INTERVAL_MS = 60_000;
 export const DEFAULT_RUNNER_ENROLLMENT_TTL_MS = 30 * 60 * 1_000;
 export const RUNNER_ENROLLMENT_TTL_OPTIONS_MS = [5 * 60 * 1_000, 30 * 60 * 1_000, 2 * 60 * 60 * 1_000, 24 * 60 * 60 * 1_000, 7 * 24 * 60 * 60 * 1_000, 30 * 24 * 60 * 60 * 1_000] as const;
@@ -317,10 +322,12 @@ export class RegistryDO {
   private readonly sourceThrottleResets = new Map<string, number>();
   private readonly legacyThrottleResets = new Map<AuthThrottleKind, number>();
   private maintenanceQueue: Promise<void> = Promise.resolve();
+  private readonly externalAudit: ExternalAuditHistory | undefined;
   public constructor(
     private readonly ctx: DurableObjectState,
-    private readonly env: { INTERNAL_CONTROL_SECRET?: string; RUNNER_TOKEN_PEPPER?: string },
+    private readonly env: { INTERNAL_CONTROL_SECRET?: string; RUNNER_TOKEN_PEPPER?: string; HISTORY_DB?: D1Database; RUNMESH_AUDIT_BACKEND?: string },
   ) {
+    this.externalAudit = env.RUNMESH_AUDIT_BACKEND === "d1" && env.HISTORY_DB !== undefined ? new ExternalAuditHistory(env.HISTORY_DB, ctx.id.toString()) : undefined;
     this.ctx.blockConcurrencyWhile(async () => {
       // Durable Objects may be evicted and reconstructed for every request.
       // Replaying CREATE TABLE/INDEX IF NOT EXISTS on every reconstruction is
@@ -427,7 +434,7 @@ export class RegistryDO {
       }
       this.loadFeatureHealth();
       // No legacy audit body is exposed, even if optional cleanup hits a quota.
-      try { this.ctx.storage.transactionSync(() => ensureMetadataOnlyAudit(this.ctx.storage.sql)); }
+      try { this.ctx.storage.transactionSync(() => { ensureMetadataOnlyAudit(this.ctx.storage.sql); ensureHistoryRetentionSchema(this.ctx.storage.sql); }); }
       catch (error) { this.disableFeatureHealth("mcp_audit", error, Date.now()); }
 
       // Existing v2 stores pass schemaIsCurrent and skip initial DDL. Add the
@@ -523,6 +530,8 @@ export class RegistryDO {
       }
       states.push({ feature, ...state });
     }
+    const external = this.externalAudit?.health(nowMs);
+    if (external !== undefined && !states.some((state) => state.feature === "mcp_audit")) states.push({ feature: "mcp_audit", ...external, last_failure_at_ms: null, last_error: "External audit storage is unavailable; core authorization and execution are independent." });
     return states.sort((left, right) => left.feature.localeCompare(right.feature));
   }
 
@@ -599,10 +608,6 @@ export class RegistryDO {
       "auth_throttle", "admin_sessions", "mcp_clients", "internal_request_nonces",
       "client_runner_overrides", "runner_enrollments",
     ];
-    const tables = new Set(this.ctx.storage.sql.exec<{ name: string }>(
-      "SELECT name FROM sqlite_master WHERE type = 'table'",
-    ).toArray().map((row) => row.name));
-    if (requiredTables.some((table) => !tables.has(table))) return false;
     const requiredColumns: Readonly<Record<string, readonly string[]>> = {
       runners: ["token_verifier", "credential_version", "lifecycle_id", "configured_execution_mode", "desired_policy_revision", "policy_status", "runner_permissions_json", "current_runner_version", "protocol_min_version", "protocol_max_version", "protocol_compatibility", "update_channel", "desired_runner_version", "latest_runner_version", "update_status", "valid_from_ms", "valid_until_ms"],
       runner_policy_versions: ["source_revision", "mutation_id"],
@@ -611,6 +616,8 @@ export class RegistryDO {
       mcp_clients: ["active_runner_id", "active_runner_updated_at_ms"],
       runner_enrollments: ["not_before_ms"],
     };
+    const tables = new Set(this.ctx.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table'").toArray().map((row) => row.name));
+    if (requiredTables.some((table) => !tables.has(table))) return false;
     return Object.entries(requiredColumns).every(([table, required]) => {
       const columns = new Set(this.ctx.storage.sql.exec<{ name: string }>(`PRAGMA table_info(${table})`).toArray().map((row) => row.name));
       return required.every((column) => columns.has(column));
@@ -832,9 +839,20 @@ export class RegistryDO {
         `INSERT INTO mcp_clients (client_id, label, secret_verifier, secret_prefix, scopes_json, secret_version, created_at_ms, updated_at_ms)
          VALUES (?, ?, ?, ?, ?, 1, ?, ?)`, input.client_id, input.label, input.secret_verifier, input.secret_prefix, JSON.stringify(input.scopes), nowMs, nowMs,
       );
-    } catch { return undefined; }
+    } catch (error) { if (expectedRegistryConflict(error, [])) return undefined; throw error; }
     return this.getMcpClient(input.client_id);
   }
+  public setJobRecording(clientId: string, enabled: boolean, nowMs: number): McpClientRecord | undefined {
+    if (!isSafeIdentifier(clientId) || typeof enabled !== "boolean" || !safeNonnegativeInteger(nowMs)) return undefined;
+    // Enabling starts a new capture window. Old unrecorded jobs must not be
+    // backfilled by a later Runner sync. Existing historical records remain.
+    this.ctx.storage.sql.exec("UPDATE mcp_clients SET record_jobs = ?, record_jobs_since_ms = ?, updated_at_ms = ? WHERE client_id = ? AND record_jobs <> ?", enabled ? 1 : 0, nowMs, nowMs, clientId, enabled ? 1 : 0);
+    return this.getMcpClient(clientId);
+  }
+  public recordsJobActivity(clientId: string): boolean {
+    return this.getMcpClient(clientId)?.record_jobs !== false;
+  }
+
   public updateMcpClientScopes(clientId: string, scopes: readonly CodingScope[], nowMs: number): McpClientRecord | undefined {
     if (!isSafeIdentifier(clientId) || !validScopes(scopes) || this.getMcpClient(clientId) === undefined) return undefined;
     this.ctx.storage.sql.exec("UPDATE mcp_clients SET scopes_json = ?, updated_at_ms = ? WHERE client_id = ?", JSON.stringify(scopes), nowMs, clientId);
@@ -852,7 +870,7 @@ export class RegistryDO {
         `UPDATE mcp_clients SET secret_verifier = ?, secret_prefix = ?, secret_version = secret_version + 1,
          revoked_at_ms = NULL, updated_at_ms = ? WHERE client_id = ?`, secretVerifier, secretPrefix, nowMs, clientId,
       );
-    } catch { return undefined; }
+    } catch (error) { if (expectedRegistryConflict(error, [])) return undefined; throw error; }
     return this.getMcpClient(clientId);
   }
   public revokeMcpClient(clientId: string, nowMs: number): McpClientRecord | undefined {
@@ -898,8 +916,16 @@ export class RegistryDO {
     let workspaceId = input.workspace_id;
     if (requirement.job) {
       if (typeof input.job_id !== "string" || !isSafeIdentifier(input.job_id)) return deny();
-      const job = this.getJob(runnerId, input.job_id);
-      if (typeof job !== "object" || job === null || Array.isArray(job) || (job as Record<string, unknown>).workspace_id !== workspaceId) return deny();
+      if (input.workspace_bound === true) {
+        // Old peers might ignore expected_workspace_id. Never permit the new
+        // history-independent path based only on a caller's assertion.
+        const version = this.runnerRow(runnerId)?.current_runner_version;
+        const parts = typeof version === "string" ? /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.exec(version) : null;
+        if (parts === null || !(Number(parts[1]) > 0 || Number(parts[2]) > 1 || (Number(parts[2]) === 1 && Number(parts[3]) >= 1))) return deny("runner_upgrade_required");
+      } else {
+        const job = this.getJob(runnerId, input.job_id);
+        if (typeof job !== "object" || job === null || Array.isArray(job) || (job as Record<string, unknown>).workspace_id !== workspaceId) return deny();
+      }
     }
     if (typeof workspaceId !== "string" || !isSafeIdentifier(workspaceId)) return deny();
     const permissions = this.effectivePermissions(client.client_id, runnerId, workspaceId);
@@ -1167,7 +1193,7 @@ export class RegistryDO {
         const revision = this.bumpDesiredPolicy(runnerId, nowMs, mutationId);
         if (mutationId !== undefined) this.recordPolicyMutation(runnerId, mutationId, "workspace_create", fingerprint, revision, nowMs);
       });
-    } catch { return undefined; }
+    } catch (error) { if (expectedRegistryConflict(error, ["policy mutation conflict"])) return undefined; throw error; }
     return this.getManagedWorkspace(runnerId, input.workspace_id);
   }
   public updateManagedWorkspace(runnerId: string, workspaceId: string, input: { display_name: string; root_path: string; enabled: boolean; permissions: PermissionSet }, nowMs: number, mutationId?: string): WorkspaceRecord | undefined {
@@ -1184,7 +1210,7 @@ export class RegistryDO {
         const revision = this.bumpDesiredPolicy(runnerId, nowMs, mutationId);
         if (mutationId !== undefined) this.recordPolicyMutation(runnerId, mutationId, "workspace_update", fingerprint, revision, nowMs);
       });
-    } catch { return undefined; }
+    } catch (error) { if (expectedRegistryConflict(error, ["policy mutation conflict", "workspace not found"])) return undefined; throw error; }
     return this.getManagedWorkspace(runnerId, workspaceId);
   }
   public deleteManagedWorkspace(runnerId: string, workspaceId: string, nowMs: number, mutationId?: string): boolean {
@@ -1216,7 +1242,7 @@ export class RegistryDO {
         const revision = this.bumpDesiredPolicy(runnerId, nowMs, mutationId);
         if (mutationId !== undefined) this.recordPolicyMutation(runnerId, mutationId, kind, fingerprint, revision, nowMs);
       });
-    } catch { return undefined; }
+    } catch (error) { if (expectedRegistryConflict(error, ["policy mutation conflict"])) return undefined; throw error; }
     return this.getRunner(runnerId);
   }
   /**
@@ -1369,7 +1395,7 @@ export class RegistryDO {
         );
         this.createPolicySnapshot(runnerId, 1, nowMs, null, "runner-created");
       });
-    } catch { return undefined; }
+    } catch (error) { if (expectedRegistryConflict(error, ["runner already exists", "runner creation conflict", "runner creation tombstone conflict"])) return undefined; throw error; }
     return this.getRunner(runnerId);
   }
   public renameRunner(runnerId: string, displayName: string, nowMs: number): RunnerRecord | undefined {
@@ -1427,7 +1453,7 @@ export class RegistryDO {
         this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE runner_id = ? AND used_at_ms IS NULL", runnerId);
         this.ctx.storage.sql.exec("INSERT INTO runner_enrollments (enrollment_id, runner_id, verifier, created_at_ms, not_before_ms, expires_at_ms) VALUES (?, ?, ?, ?, ?, ?)", enrollmentId, runnerId, verifier, nowMs, notBeforeMs, expiresAtMs);
       });
-    } catch { return undefined; }
+    } catch (error) { if (expectedRegistryConflict(error, ["runner not found", "runner execution mode changed", "runner lifecycle changed", "runner execution mode compare-and-swap failed"])) return undefined; throw error; }
     return { enrollment_id: enrollmentId, runner_id: runnerId, created_at_ms: nowMs, not_before_ms: notBeforeMs, expires_at_ms: expiresAtMs };
   }
   /**
@@ -1609,7 +1635,7 @@ export class RegistryDO {
         );
         return updated.rowsWritten === 1;
       });
-      if (success) this.clearFeatureHealth("job_recording");
+      if (success && !this.featureHealthDisabled("job_recording", nowMs)) this.clearFeatureHealth("job_recording");
       return success;
     } catch (error) {
       this.disableFeatureHealth("job_recording", error, nowMs);
@@ -1662,7 +1688,7 @@ export class RegistryDO {
         this.pruneTerminalJobs(runnerId);
         return true;
       });
-      if (success) this.clearFeatureHealth("job_recording");
+      if (success && !this.featureHealthDisabled("job_recording", nowMs)) this.clearFeatureHealth("job_recording");
       return success;
     } catch (error) {
       this.disableFeatureHealth("job_recording", error, nowMs);
@@ -1769,7 +1795,7 @@ export class RegistryDO {
     return { runners, jobs };
   }
   public getJob(runnerId: string, jobId: string): unknown | undefined { const row = this.ctx.storage.sql.exec<JobRow>("SELECT job_json FROM jobs WHERE runner_id = ? AND job_id = ?", runnerId, jobId).toArray()[0]; return row === undefined ? undefined : JSON.parse(row.job_json) as unknown; }
-  public recordMcpCall(runnerId: string, epoch: number, credentialVersion: number, call: Record<string, unknown>, nowMs: number, requireOnline: boolean, lifecycleId: string, sessionId: string): boolean {
+  public recordMcpCall(runnerId: string, epoch: number, credentialVersion: number, call: Record<string, unknown>, nowMs: number, requireOnline: boolean, lifecycleId: string, sessionId: string, captureAudit?: (metadata: Record<string, unknown>) => void): boolean {
     if (!safeNonnegativeInteger(epoch) || !safeNonnegativeInteger(credentialVersion) || !safeNonnegativeInteger(nowMs) || !validTransportIdentity(lifecycleId, sessionId)) return false;
     const completedAtMs = safeNonnegativeInteger(call.completed_at_ms) ? call.completed_at_ms : undefined;
     if (completedAtMs === undefined) return false;
@@ -1790,10 +1816,8 @@ export class RegistryDO {
         const current = this.runnerRow(runnerId);
         if (!this.runnerMatchesTransportFence(current, epoch, credentialVersion, requireOnline, lifecycleId, sessionId)) return false;
         if (this.featureHealthDisabled("mcp_audit", nowMs)) return true;
-        this.ctx.storage.sql.exec(
-          `INSERT INTO mcp_calls (runner_id, call_id, call_json, completed_at_ms) VALUES (?, ?, ?, ?)
-           ON CONFLICT(runner_id, call_id) DO UPDATE SET call_json = excluded.call_json, completed_at_ms = excluded.completed_at_ms`,
-          runnerId, callId, JSON.stringify({
+        if ((method.startsWith("exec.") || method.startsWith("job.")) && !this.recordsJobActivity(clientId)) return true;
+        const metadata = {
             runner_id: runnerId,
             call_id: callId,
             client_id: clientId,
@@ -1811,12 +1835,17 @@ export class RegistryDO {
             lifecycle_id: lifecycleId,
             session_id: sessionId,
             recorded_at_ms: nowMs,
-          }), completedAtMs,
-        );
-        this.pruneMcpCalls(runnerId);
+          };
+        if (captureAudit !== undefined) captureAudit(metadata);
+        else {
+          this.ctx.storage.sql.exec(`INSERT INTO mcp_calls (runner_id, call_id, call_json, completed_at_ms) VALUES (?, ?, ?, ?)
+            ON CONFLICT(runner_id, call_id) DO UPDATE SET call_json = excluded.call_json, completed_at_ms = excluded.completed_at_ms`,
+            runnerId, callId, JSON.stringify(metadata), completedAtMs);
+          this.pruneMcpCalls(runnerId);
+        }
         return true;
       });
-      if (success && !this.featureHealthDisabled("mcp_audit", nowMs)) {
+      if (success && captureAudit === undefined && !this.featureHealthDisabled("mcp_audit", nowMs)) {
         this.clearFeatureHealth("mcp_audit");
         this.ctx.waitUntil(this.scheduleMaintenanceAlarm(nowMs));
       }
@@ -1831,16 +1860,7 @@ export class RegistryDO {
     if (this.ctx.storage.sql.exec("SELECT 1 FROM mcp_calls WHERE runner_id = ? AND completed_at_ms <= ? LIMIT 1", runnerId, cutoff).toArray().length > 0) {
       this.ctx.storage.sql.exec("DELETE FROM mcp_calls WHERE runner_id = ? AND completed_at_ms <= ?", runnerId, cutoff);
     }
-    this.ctx.storage.sql.exec(
-      `DELETE FROM mcp_calls
-       WHERE runner_id = ? AND call_id IN (
-         SELECT call_id FROM mcp_calls
-         WHERE runner_id = ?
-         ORDER BY completed_at_ms DESC, call_id DESC
-         LIMIT -1 OFFSET ?
-       )`,
-      runnerId, runnerId, MAX_MCP_CALLS_PER_RUNNER,
-    );
+    pruneHistory(this.ctx.storage.sql, "audit", runnerId, MAX_MCP_CALLS_PER_RUNNER);
   }
 
   public async fetch(request: Request): Promise<Response> {
@@ -2052,6 +2072,21 @@ export class RegistryDO {
       const rawLimit = url.searchParams.get("limit");
       const limit = rawLimit === null ? undefined : /^\d+$/.test(rawLimit) ? Number(rawLimit) : undefined;
       if (rawLimit !== null && (limit === undefined || limit < 1 || limit > 100)) return Response.json({ error: "invalid MCP call filters" }, { status: 400 });
+      if (this.env.RUNMESH_AUDIT_BACKEND === "d1") {
+        const current = this.runnerRow(runnerId);
+        if (current === undefined) return new Response("not found", { status: 404 });
+        try {
+          if (this.externalAudit === undefined) throw new AuditHistoryUnavailableError();
+          const external = await this.externalAudit.list(runnerId, current.lifecycle_id, limit);
+          if (this.runnerRow(runnerId)?.lifecycle_id !== current.lifecycle_id) return new Response("Runner identity changed", { status: 409 });
+          // Previously recorded DO rows retain their normal retention period.
+          // No fallback is used when D1 fails: an empty success would lie.
+          const combined = [...this.listMcpCalls(runnerId, limit).map(projectMcpAuditMetadata), ...external];
+          const unique = [...new Map(combined.map((row) => [String(row.call_id), row])).values()];
+          unique.sort((a, b) => Number(b.completed_at_ms) - Number(a.completed_at_ms) || String(b.call_id).localeCompare(String(a.call_id)));
+          return Response.json({ runner_id: runnerId, history_backend: "d1", calls: unique.slice(0, limit ?? 100) });
+        } catch { return Response.json({ error: { code: "audit_history_unavailable", message: "Cloud audit history is temporarily unavailable; this does not undo execution." } }, { status: 503, headers: { "cache-control": "no-store", "retry-after": "900" } }); }
+      }
       return Response.json({ runner_id: runnerId, calls: this.listMcpCalls(runnerId, limit) });
     }
     if (request.method === "POST" && action === "mcp-calls" && itemId === undefined) {
@@ -2069,6 +2104,8 @@ export class RegistryDO {
       if (epoch === undefined || credentialVersion === undefined || nowMs === undefined || !identity.valid || callId === undefined || !validMutationId(callId) || clientId === undefined || methodName === undefined || status === undefined || startedAtMs === undefined || completedAtMs === undefined || durationMs === undefined || (errorCode === null ? false : errorCode === undefined) || (workspaceId === null ? false : workspaceId === undefined) || (jobId === null ? false : jobId === undefined)) return Response.json({ error: "invalid MCP call" }, { status: 400 });
       if (completedAtMs - startedAtMs !== durationMs) return Response.json({ error: "invalid MCP call duration" }, { status: 400 });
       const wasDegraded = this.featureHealthDisabled("mcp_audit", nowMs);
+      let captured: Record<string, unknown> | undefined;
+      const capture = this.env.RUNMESH_AUDIT_BACKEND === "d1" ? (metadata: Record<string, unknown>) => { captured = metadata; } : undefined;
       const accepted = this.recordMcpCall(runnerId, epoch, credentialVersion, {
         call_id: callId,
         client_id: clientId,
@@ -2081,9 +2118,11 @@ export class RegistryDO {
         started_at_ms: startedAtMs,
         completed_at_ms: completedAtMs,
         duration_ms: durationMs,
-      }, nowMs, false, identity.lifecycleId, identity.sessionId);
+      }, nowMs, false, identity.lifecycleId, identity.sessionId, capture);
       if (!accepted) return new Response("stale session or invalid MCP call", { status: 409 });
-      const auditStatus = wasDegraded || this.featureHealthDisabled("mcp_audit", nowMs) ? "degraded" : "recorded";
+      const disabled = (methodName.startsWith("exec.") || methodName.startsWith("job.")) && !this.recordsJobActivity(clientId);
+      const externalSaved = capture === undefined || (!disabled && captured !== undefined && await this.externalAudit?.append(captured) === true);
+      const auditStatus = disabled ? "disabled" : !externalSaved || wasDegraded || this.featureHealthDisabled("mcp_audit", nowMs) ? "degraded" : "recorded";
       return Response.json({ audit_status: auditStatus }, { status: auditStatus === "recorded" ? 200 : 202 });
     }
     if (request.method === "GET" && action === "jobs" && itemId !== undefined && IdentifierSchema.safeParse(itemId).success) { const job = this.getJob(runnerId, itemId); return job === undefined ? Response.json({ error: "job not found" }, { status: 404 }) : Response.json(job); }
@@ -2134,6 +2173,11 @@ export class RegistryDO {
     if (method === "POST" && action === "clients" && clientId === undefined) { const id = stringField(input, "client_id", 128); const label = stringField(input, "label", 256); const verifier = stringField(input, "secret_verifier", 64); const prefix = stringField(input, "secret_prefix", 16); const scopes = scopesField(input.scopes); if (id === undefined || label === undefined || verifier === undefined || prefix === undefined || scopes === undefined) return Response.json({ error: "invalid client" }, { status: 400 }); const client = this.createMcpClient({ client_id: id, label, secret_verifier: verifier, secret_prefix: prefix, scopes }, nowMs); return client === undefined ? new Response("conflict", { status: 409 }) : Response.json(client); }
     if (action === "clients" && clientId !== undefined && isSafeIdentifier(clientId)) {
       const subaction = segments[2];
+      if (method === "POST" && subaction === "recording") {
+        if (typeof input.record_jobs !== "boolean") return Response.json({ error: "record_jobs must be boolean" }, { status: 400 });
+        const client = this.setJobRecording(clientId, input.record_jobs, nowMs);
+        return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client);
+      }
       if (method === "POST" && subaction === "rename") { const label = stringField(input, "label", 256); const client = label === undefined ? undefined : this.renameMcpClient(clientId, label, nowMs); return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client); }
       if (method === "POST" && subaction === "rotate") { const verifier = stringField(input, "secret_verifier", 64); const prefix = stringField(input, "secret_prefix", 16); const client = verifier === undefined || prefix === undefined ? undefined : this.rotateMcpClient(clientId, verifier, prefix, nowMs); return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client); }
       if (method === "POST" && subaction === "revoke") { const client = this.revokeMcpClient(clientId, nowMs); return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client); }
@@ -2248,7 +2292,11 @@ export class RegistryDO {
       const value = this.effectiveWorkspaceList(clientId, segments[3]);
       return value === undefined ? new Response("not found", { status: 404 }) : Response.json(value);
     }
-    if (method === "POST" && action === "mcp" && clientId === "verify") { const verifier = stringField(input, "secret_verifier", 64); if (verifier === undefined) return new Response("not found", { status: 404 }); const client = this.verifyMcpClient(verifier, nowMs); return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client); }
+    if (method === "POST" && action === "mcp" && clientId === "verify") {
+      const verifier = stringField(input, "secret_verifier", 64);
+      const client = verifier === undefined ? undefined : this.verifyMcpClient(verifier, nowMs);
+      return client === undefined ? Response.json({ error: { code: "invalid_mcp_credential" } }, { status: 404 }) : Response.json(client);
+    }
     return new Response("not found", { status: 404 });
   }
 
@@ -2350,6 +2398,12 @@ export class RegistryDO {
   }
   private upsertJob(runnerId: string, job: Record<string, unknown>, nowMs: number): void {
     const updated = safeNonnegativeInteger(job.updated_at_ms) ? job.updated_at_ms : nowMs;
+    const existing = this.getJob(runnerId, String(job.job_id));
+    if (existing === undefined && typeof job.created_by_client_id === "string") {
+      const client = this.getMcpClient(job.created_by_client_id);
+      if (client?.record_jobs === false || (client?.record_jobs_since_ms !== undefined &&
+        (!safeNonnegativeInteger(job.created_at_ms) || job.created_at_ms < client.record_jobs_since_ms))) return;
+    }
     const jobJson = JSON.stringify(job);
     // Lifecycle events can overtake a previously captured full snapshot. Keep
     // timestamps and lifecycle rank monotonic, including equal-ms events, and
@@ -2364,9 +2418,7 @@ export class RegistryDO {
           OR json_extract(excluded.job_json, '$.status') = json_extract(jobs.job_json, '$.status'))`, runnerId, job.job_id, jobJson, updated);
   }
   private pruneTerminalJobs(runnerId: string): void {
-    const rows = this.ctx.storage.sql.exec<{ job_id: string; job_json: string }>("SELECT job_id, job_json FROM jobs WHERE runner_id = ? ORDER BY updated_at_ms DESC, job_id DESC", runnerId).toArray();
-    let retained = 0;
-    for (const row of rows) { const job = JSON.parse(row.job_json) as { status?: unknown }; if (!TERMINAL_JOB_STATUSES.has(String(job.status))) continue; retained += 1; if (retained > MAX_TERMINAL_JOBS_PER_RUNNER) this.ctx.storage.sql.exec("DELETE FROM jobs WHERE runner_id = ? AND job_id = ?", runnerId, row.job_id); }
+    pruneHistory(this.ctx.storage.sql, "terminal_job", runnerId, MAX_TERMINAL_JOBS_PER_RUNNER);
   }
 
 }
@@ -2477,7 +2529,7 @@ function decodeWorkspace(row: ManagedWorkspaceRow): WorkspaceRecord[] {
   const permissions = parsePermissionSet(row.permissions_json);
   return permissions === undefined ? [] : [{ runner_id: row.runner_id, workspace_id: row.workspace_id, display_name: row.display_name, root_path: row.root_path, enabled: row.enabled === 1, permissions, created_at_ms: row.created_at_ms, updated_at_ms: row.updated_at_ms, revision: row.revision, validation_status: row.validation_status }];
 }
-function decodeMcpClient(row: McpClientRow): McpClientRecord { const scopes = parseScopes(row.scopes_json) ?? []; return { client_id: row.client_id, label: row.label, secret_prefix: row.secret_prefix, scopes, secret_version: row.secret_version, created_at_ms: row.created_at_ms, updated_at_ms: row.updated_at_ms, last_used_at_ms: row.last_used_at_ms, revoked_at_ms: row.revoked_at_ms, active_runner_id: row.active_runner_id, active_runner_updated_at_ms: row.active_runner_updated_at_ms }; }
+function decodeMcpClient(row: McpClientRow): McpClientRecord { const scopes = parseScopes(row.scopes_json) ?? []; return { record_jobs: row.record_jobs !== 0, record_jobs_since_ms: row.record_jobs_since_ms ?? 0, client_id: row.client_id, label: row.label, secret_prefix: row.secret_prefix, scopes, secret_version: row.secret_version, created_at_ms: row.created_at_ms, updated_at_ms: row.updated_at_ms, last_used_at_ms: row.last_used_at_ms, revoked_at_ms: row.revoked_at_ms, active_runner_id: row.active_runner_id, active_runner_updated_at_ms: row.active_runner_updated_at_ms }; }
 function safeRunnerContext(runner: RunnerRecord, updatedAtMs: number | null): ActiveRunnerContext {
   return { runner_id: runner.runner_id, state: runner.state, available: runner.state === "online", updated_at_ms: updatedAtMs };
 }
@@ -2581,3 +2633,8 @@ function validRunnerPublicInfo(value: RunnerPublicInfo): boolean {
 function validScopes(value: readonly CodingScope[]): boolean { return value.length > 0 && value.length <= 3 && new Set(value).size === value.length && value.every((scope) => VALID_SCOPES.has(scope)); }
 function scopesField(value: unknown): CodingScope[] | undefined { if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !VALID_SCOPES.has(item as CodingScope))) return undefined; const scopes = value as CodingScope[]; return validScopes(scopes) ? scopes : undefined; }
 function parseScopes(value: string): CodingScope[] | undefined { try { return scopesField(JSON.parse(value) as unknown); } catch { return undefined; } }
+
+/** Domain conflicts are distinct from unavailable SQLite operations. */
+function expectedRegistryConflict(error: unknown, messages: readonly string[]): boolean {
+  return error instanceof Error && (messages.includes(error.message) || /UNIQUE constraint failed:/i.test(error.message));
+}

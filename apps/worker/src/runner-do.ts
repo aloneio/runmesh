@@ -18,6 +18,9 @@ import { PRODUCT_VERSION } from "./generated-version.js";
 import { readCappedText } from "./body.js";
 
 export interface WorkerEnv {
+  /** Optional independent metadata-only audit store; never an auth fallback. */
+  HISTORY_DB?: D1Database;
+  RUNMESH_AUDIT_BACKEND?: string;
   REGISTRY: DurableObjectNamespace;
   RUNNER: DurableObjectNamespace;
   WORKER_ID?: string;
@@ -553,14 +556,15 @@ export class RunnerDO {
       const params = input.params;
       if (!isRecord(principal) || !isRecord(params)) return Response.json({ error: { code: "permission_denied", message: "invalid MCP authorization identity" } }, { status: 403 });
       const authorized = await this.registryRequest(attachment.runnerId, "/mcp-authorization", { method: "POST", body: JSON.stringify({
-        client_id: principal.client_id, secret_version: principal.secret_version, method,
+        client_id: principal.client_id, secret_version: principal.secret_version, method, workspace_bound: principal.workspace_bound === true,
         workspace_id: params.expected_workspace_id ?? params.workspace_id,
         ...(typeof params.job_id === "string" ? { job_id: params.job_id } : {}),
         policy_revision: requestPolicyRevision, policy_checksum: expectedPolicyChecksum,
       }) });
       let decision: unknown;
       try { decision = await authorized.json(); } catch { decision = undefined; }
-      if (!authorized.ok || !isRecord(decision) || decision.ok !== true) return Response.json({ error: { code: "permission_denied", message: "MCP authorization is no longer valid" } }, { status: 403 });
+      if (authorized.status === 429 || authorized.status >= 500 || !isRecord(decision) || typeof decision.ok !== "boolean") return controlPlaneUnavailableResponse(authorized);
+      if (!authorized.ok || decision.ok !== true) return Response.json({ error: { code: "permission_denied", message: "MCP authorization is no longer valid" } }, { status: 403 });
     }
     // No await is allowed between this final local fence and socket.send.
     // Otherwise a policy mutation can win while Registry authorization awaits.
