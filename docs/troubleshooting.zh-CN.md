@@ -66,3 +66,7 @@ Runmesh 不需要公网入站端口。不要为了“修复”连接而开放 SS
 ## 仍然无法解决
 
 记录时间、页面或工具名称、脱敏后的错误代码、Runner 显示名称和 `doctor --json` 中的非敏感检查结果。不要提供密码、完整 URL、注册码、token、工作区真实路径、文件内容或命令输出。安全问题请走 [.github/SECURITY.zh-CN.md](../.github/SECURITY.zh-CN.md) 的私密流程。
+
+## 精简系统安装失败
+
+新版引导不再依赖 xz。按 RMI_* 错误码和[安装依赖说明](installer-prerequisites.zh-CN.md)处理，不要关闭 TLS/哈希或反复使用可能已消耗的注册码。

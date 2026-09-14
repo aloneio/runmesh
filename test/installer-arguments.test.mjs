@@ -13,11 +13,11 @@ function section(startMarker, endMarker) {
   assert.ok(start >= 0 && end > start, "installer parser boundaries must be present");
   return source.slice(start, end);
 }
-const posix = section("AUTO_INSTALL_DEPS=1\n", 'if [ "$(id -u)" -ne 0 ]');
+const posix = section("AUTO_INSTALL_DEPS=1\n", 'INSTALL_PHASE=preflight\n');
 const powershell = section("$EnrollmentCodeArgument = $null\n", "$InstallRoot = Join-Path");
 const codes = ["A".repeat(43), "--" + "a".repeat(41), "_" + "b".repeat(41) + "-"];
 function posixParse(args, action = "install") {
-  return spawnSync("/bin/sh", ["-c", posix.replaceAll("__ACTION__", action) + '\nprintf "%s|%s" "$CODE_ARG_SET" "$ENROLLMENT_CODE_ARG"\n', "parser-fixture", ...args], { encoding: "utf8", timeout: 5_000 });
+  return spawnSync("/bin/sh", ["-c", posix.replaceAll("__ACTION__", action).replaceAll("__CODE_EQUALS_VALUE__", "${1#--code=}") + '\nprintf "%s|%s" "$CODE_ARG_SET" "$ENROLLMENT_CODE_ARG"\n', "parser-fixture", ...args], { encoding: "utf8", timeout: 5_000 });
 }
 function powerShellParse(args, action = "install") {
   const directory = mkdtempSync(join(tmpdir(), "runmesh-parser-"));
