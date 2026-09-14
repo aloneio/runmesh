@@ -60,4 +60,4 @@ Coverage includes actual local D1 writes, allow-listed metadata, retention/count
 
 ## Batched history amendment
 
-The [batched Job contract](batched-job-history.md) adds packed D1 Job snapshots, manual newest-only reads and configurable cloud/local retention. Full stdout/stderr remains local. New source-side Runner capabilities are not retroactively present in the immutable v0.1.1 release.
+The [batched Job contract](batched-job-history.md) adds packed D1 Job snapshots, manual newest-only reads and configurable cloud/local retention. Full stdout/stderr remains local. Source-side batching and local retention are shipped in the new immutable v0.1.2 release, not retroactively added to v0.1.1.

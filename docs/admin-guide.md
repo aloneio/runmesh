@@ -78,4 +78,4 @@ See [quota isolation and cloud Job recording](quota-resilience.md). Production u
 
 ## Batched Job history
 
-See [batched snapshots, manual loading and retention](batched-job-history.md). Production uses `RUNMESH_JOB_HISTORY_BACKEND=d1`; the default upload window is five minutes. History is loaded only on request. Source-side batching and local day-based cleanup require a newly released capable Runner; immutable v0.1.1 is unchanged.
+See [batched snapshots, manual loading and retention](batched-job-history.md). Production uses `RUNMESH_JOB_HISTORY_BACKEND=d1`; the default upload window is five minutes. History is loaded only on request. Source-side batching and local day-based cleanup are shipped in v0.1.2; immutable v0.1.1 and existing services are unchanged.

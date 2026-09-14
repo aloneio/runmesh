@@ -24,7 +24,7 @@ The runtime provides protocol negotiation, correlated `request_id` exchanges, Wo
 
 Future protocol additions must remain explicit rather than silently changing the wire format. Future security hardening should remove the dashboard's inline `unsafe-inline` CSP requirements and add fresh-namespace, quota, log-redaction, and external-client acceptance evidence.
 
-## Current security contract (0.1.1 published stable patch)
+## Current security contract (0.1.2 published stable release)
 
 First administrator setup requires no additional bootstrap token and remains
 CSRF-protected, same-origin and atomic first-success-wins. The default Runner
@@ -39,7 +39,7 @@ setup. Scripts accept a positional code, `--code CODE`, or `--code=CODE`; omitti
 the code retains the hidden terminal prompt. The downstream Runner receives
 standard input, not a temporary credential file. The complete convenience
 command is credential material and may be recorded in command history or
-process arguments. The 0.1.1 production gate is enabled only after independent signed-asset
+process arguments. The 0.1.2 production gate is enabled only after independent signed-asset
 verification; development retains its disabled gate.
 
 ## Amendment — 2026-09-14: optional history isolation
