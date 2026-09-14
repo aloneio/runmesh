@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 export function validateReleaseHealth(health) {
@@ -17,9 +16,10 @@ export function validateReleaseHealth(health) {
 }
 
 async function main() {
-  const config=JSON.parse((await readFile(new URL("../apps/worker/wrangler.jsonc",import.meta.url),"utf8")).replace(/^\s*\/\/.*$/gm,""));
-  const origin=new URL(config.vars.RUNMESH_PUBLIC_ORIGIN);
-  assert.equal(origin.protocol,"https:");assert.equal(origin.origin,config.vars.RUNMESH_PUBLIC_ORIGIN);
+  const configuredOrigin = process.argv[2] ?? process.env.RUNMESH_RELEASE_PREFLIGHT_ORIGIN;
+  assert.equal(typeof configuredOrigin, "string", "Supply the deployed HTTPS origin explicitly; release preflight configuration is not a Worker runtime variable");
+  const origin = new URL(configuredOrigin);
+  assert.equal(origin.protocol, "https:"); assert.equal(origin.origin, configuredOrigin);
   const response=await fetch(new URL("/health",origin),{redirect:"error",signal:AbortSignal.timeout(15000),headers:{"cache-control":"no-cache"}});
   assert.equal(response.status,200,"public control plane is unavailable");
   const text=await response.text();assert.ok(text.length<65536,"oversized health response");

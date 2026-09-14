@@ -1,3 +1,4 @@
+import { resolveRuntimeConfiguration } from "./runtime-config.js";
 import { PackedJobHistory, JobHistoryUnavailableError } from "./job-history-store.js";
 import { DEFAULT_JOB_HISTORY, ensureJobHistorySettings, parseJobHistorySettings, type JobHistorySettings } from "./job-history-settings.js";
 import { ExternalAuditHistory, AuditHistoryUnavailableError } from "./external-audit.js";
@@ -332,6 +333,7 @@ export class RegistryDO {
     private readonly env: { INTERNAL_CONTROL_SECRET?: string; RUNNER_TOKEN_PEPPER?: string; HISTORY_DB?: D1Database; RUNMESH_AUDIT_BACKEND?: string; RUNMESH_JOB_HISTORY_BACKEND?: string },
   ) {
     this.packedJobs = env.RUNMESH_JOB_HISTORY_BACKEND === "d1" && env.HISTORY_DB !== undefined ? new PackedJobHistory(env.HISTORY_DB, ctx.id.toString()) : undefined;
+    this.env = env = resolveRuntimeConfiguration(env);
     this.externalAudit = env.RUNMESH_AUDIT_BACKEND === "d1" && env.HISTORY_DB !== undefined ? new ExternalAuditHistory(env.HISTORY_DB, ctx.id.toString()) : undefined;
     this.ctx.blockConcurrencyWhile(async () => {
       // Durable Objects may be evicted and reconstructed for every request.

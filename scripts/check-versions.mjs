@@ -1,3 +1,4 @@
+import { reviewedReleaseSource } from "./runtime-config-tools.mjs";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,5 +31,7 @@ for (const relativePath of ["apps/runner", "apps/worker", "packages/protocol"]) 
   const protocolVersion = entry?.dependencies?.["@aloneio/runmesh-protocol"] ?? entry?.devDependencies?.["@aloneio/runmesh-protocol"];
   if (relativePath !== "packages/protocol" && protocolVersion !== PRODUCT_VERSION) errors.push(`package-lock ${relativePath}: protocol dependency=${protocolVersion ?? "<missing>"}`);
 }
+const releaseState = await readJson("release/release-state.json");
+if (await readFile(resolve(repositoryRoot, "apps/worker/src/generated-release.ts"), "utf8") !== reviewedReleaseSource(PRODUCT_VERSION, releaseState)) errors.push("apps/worker/src/generated-release.ts is not synchronized with reviewed publication state");
 if (errors.length > 0) throw new Error(`version synchronization failed:\n${errors.join("\n")}`);
 console.log(`version synchronization is valid: ${PRODUCT_VERSION}`);
