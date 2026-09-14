@@ -211,6 +211,21 @@ describe("persistent local jobs", () => {
       await manager.cancel(fulfilled[0]?.value.job_id);
     } finally { await test.cleanup(); }
   });
+  it("deduplicates an explicit request_id and rejects conflicting reuse", async () => {
+    const test = await fixture();
+    try {
+      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state, maxConcurrentJobs: 1 });
+      await manager.initialize();
+      const input = { workspace_id: test.workspace.workspaceId, command: process.execPath, args: ["-e", "setTimeout(() => {}, 5000)"], created_by_client_id: "client-a", request_id: "request-a" };
+      const first = await manager.start(input);
+      const repeated = await manager.start(input);
+      expect(repeated.job_id).toBe(first.job_id);
+      expect(repeated.request_id).toBe("request-a");
+      await expect(manager.start({ ...input, args: ["-e", "process.exit(0)"] })).rejects.toMatchObject({ code: "request_id_conflict" });
+      await manager.cancel(first.job_id);
+      await waitFor(() => manager.get(first.job_id), (job) => !["queued", "running", "cancelling"].includes(job.status));
+    } finally { await test.cleanup(); }
+  });
   it("persists metadata, captures paginated logs, and preserves jobs independently of a client", async () => {
     const test = await fixture();
     try {
@@ -229,6 +244,34 @@ describe("persistent local jobs", () => {
       expect(saved).toMatchObject({ status: "succeeded" });
       expect(saved.command).toEqual([process.execPath, "-e", "process.stdout.write('x'.repeat(100000))"]);
       await expect(readFile(join(test.state, "runner.json"), "utf8")).resolves.toContain("runner-1");
+    } finally { await test.cleanup(); }
+  });
+
+  it("advances the log cursor to EOF when a log ends with an incomplete UTF-8 sequence", async () => {
+    const test = await fixture();
+    try {
+      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state });
+      await manager.initialize();
+      // "ok" followed by the first two bytes of a three-byte code point. The
+      // tail can never be decoded, so a byte-cursor reader that echoed the same
+      // cursor back would poll this job forever instead of reaching EOF.
+      const job = await manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.stdout.write(Buffer.from([0x6f, 0x6b, 0xe4, 0xb8]))"] });
+      await waitFor(() => manager.get(job.job_id), (value) => value.status === "succeeded");
+      let cursor: string | null = "0";
+      let collected = "";
+      let pages = 0;
+      while (cursor !== null) {
+        const page = await manager.logs(job.job_id, { stream: "stdout", cursor, limit: 1024 });
+        collected += page.data as string;
+        pages += 1;
+        // A stalled cursor would spin here until this bound tripped.
+        expect(pages).toBeLessThan(8);
+        const next = page.next_cursor as string | null;
+        if (next !== null) expect(Number(next)).toBeGreaterThan(Number(cursor));
+        cursor = next;
+      }
+      expect(collected).toBe("ok");
+      expect(pages).toBe(2);
     } finally { await test.cleanup(); }
   });
 
@@ -1651,4 +1694,32 @@ describe("persistent local jobs", () => {
       expect(calls).toBe(8);
     } finally { await test.cleanup(); }
   });
+});
+
+
+it("expires only opted-in terminal local Job metadata and logs, not active or uncertain Jobs",async()=>{
+  const f=await fixture();
+  const manager=new JobManager({policy:policy(f.workspace),stateDir:f.state,maxRetainedJobs:10});
+  try {
+    await manager.initialize();
+    const start=await manager.start({workspace_id:f.workspace.workspaceId,command:[process.execPath,"-e","console.log('retention-test')"]});
+    await manager.waitForTerminal(start.job_id);
+    const done=manager.get(start.job_id),old=Date.now()-3*86400000;
+    const expired={...done,updated_at_ms:old,completed_at_ms:old};
+    (manager as any).jobs.set(done.job_id,expired);
+    for(const status of ["queued","running","cancelling","unknown"]) {
+      const id=`job-retention-${status}`;
+      (manager as any).jobs.set(id,{...expired,job_id:id,status,completed_at_ms:null});
+      await mkdir(join(f.state,"jobs",id));
+      await writeFile(join(f.state,"jobs",id,"sentinel"),"preserve");
+    }
+    await manager.cleanupExpired();
+    expect(await lstat(join(f.state,"jobs",done.job_id))).toBeDefined();
+    manager.setRetentionDays(1);
+    await manager.cleanupExpired();
+    await expect(lstat(join(f.state,"jobs",done.job_id))).rejects.toMatchObject({code:"ENOENT"});
+    for(const status of ["queued","running","cancelling","unknown"]) expect(await readFile(join(f.state,"jobs",`job-retention-${status}`,"sentinel"),"utf8")).toBe("preserve");
+    expect(()=>manager.setRetentionDays(-1)).toThrow();
+    expect(()=>manager.setRetentionDays(99999)).toThrow();
+  } finally {await f.cleanup();}
 });

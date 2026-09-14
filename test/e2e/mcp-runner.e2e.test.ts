@@ -32,6 +32,9 @@ const tsxCli = resolveWorkspaceCli(
   ["node_modules", "tsx", "dist", "cli.mjs"],
   ["apps", "runner", "node_modules", "tsx", "dist", "cli.mjs"],
 );
+const packageEntry = process.env.RUNMESH_E2E_RUNNER_ENTRY;
+if (packageEntry !== undefined && (!existsSync(packageEntry) || !packageEntry.endsWith("runmesh.cjs"))) throw new Error("Invalid packaged Runner entrypoint");
+const runnerInvocation = packageEntry === undefined ? [tsxCli, "apps/runner/src/runmesh-entry.ts"] : [resolve(packageEntry)];
 const childSpawnOptions = process.platform === "win32" ? { windowsHide: true } : {};
 const trustedTaskkill = process.platform === "win32" ? resolveTrustedWindowsTool("taskkill", trustedWindowsRoot()) : undefined;
 const adminToken = "e2e-admin-token-0123456789abcdef";
@@ -86,10 +89,20 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     clientA = createdClients.clientA;
     clientB = createdClients.clientB;
 
+    // The offline-history compatibility scenario below explicitly needs an
+    // immediate archive. Production now defaults to batched; do not silently
+    // assume the first cloud snapshot exists before its scheduled upload.
+    const { adminJar: historyAdminJar, csrf: historyCsrf } = await adminCredentials();
+    const historyResponse = await submitForm(`/admin/runners/${runnerId}/history-settings`, {
+      csrf_token: historyCsrf, mode: "immediate", interval_seconds: "300",
+      retention_days: "7", local_retention_days: "0",
+    }, historyAdminJar);
+    expect(historyResponse.status).toBe(303);
+
     // Exercise the real source CLI against the Worker enrollment endpoint using
     // its isolated profile, then start from that saved profile (no service manager).
     enrolledProfile = join(root, "enrolled-profile.json");
-    const enrollmentCli = spawn(process.execPath, [tsxCli, "apps/runner/src/runmesh-entry.ts", "enroll", "--server", `${workerUrl}/runner/enroll`, "--code-stdin", "--insecure-local", "--cwd", workspace, "--profile", enrolledProfile, "--json"], {
+    const enrollmentCli = spawn(process.execPath, [...runnerInvocation, "enroll", "--server", `${workerUrl}/runner/enroll`, "--code-stdin", "--insecure-local", "--cwd", workspace, "--profile", enrolledProfile, "--json"], {
       cwd: projectDirectory, env: { ...process.env, RUNMESH_RUNNER_PROFILE: enrolledProfile }, stdio: ["pipe", "pipe", "pipe"], detached: true, ...childSpawnOptions,
     });
     enrollmentCli.stdin?.end(`${enrollmentCode}\n`);
@@ -106,7 +119,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(savedProfile.workspaces).toEqual([]);
 
     runner = spawn(process.execPath, [
-      tsxCli, "apps/runner/src/runmesh-entry.ts", "start", "--profile", enrolledProfile, "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
+      ...runnerInvocation, "start", "--profile", enrolledProfile, "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
     ], {
       cwd: projectDirectory, env: { ...process.env, RUNMESH_RUNNER_PROFILE: enrolledProfile }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
     });
@@ -180,7 +193,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       body: JSON.stringify({ jsonrpc: "2.0", id: requestId++, method: "tools/list", params: {} }),
     });
     const listed = await readMcp(response) as { result?: { tools?: Array<{ name?: string }> } };
-    expect(listed.result?.tools?.map((tool) => tool.name).sort()).toEqual(["edit", "inspect", "job", "read", "runner_current", "runner_list", "runner_select", "shell", "workspace_list"].sort());
+    expect(listed.result?.tools?.map((tool) => tool.name).sort()).toEqual(["context", "edit", "inspect", "job", "read", "runner_current", "runner_list", "runner_select", "shell", "workspace_list"].sort());
     const legacy = await mcpMessage("fs_read", { workspace_id: "workspace-1", path: "note.txt" });
     expect(legacy.error?.code).toBe(-32602);
   });
@@ -223,6 +236,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const jobId = started.structuredContent?.job_id;
     expect(typeof jobId).toBe("string");
 
+    try {
     await writeFile(join(root, "disconnect"), "close transport\n");
     await waitFor(async () => (await mcpTool("runner_list", {}, clientA)).structuredContent?.runners?.some((runner: { runner_id?: string; state?: string }) => runner.runner_id === runnerId && runner.state === "offline"), 5_000);
 
@@ -239,7 +253,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     // detached persistent job and registry snapshot remain available.
     await stop(runner);
     runner = spawn(process.execPath, [
-      tsxCli, "apps/runner/src/runmesh-entry.ts", "start", "--profile", enrolledProfile, "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
+      ...runnerInvocation, "start", "--profile", enrolledProfile, "--state-dir", runnerState, "--disconnect-control-file", join(root, "disconnect"),
     ], {
       cwd: projectDirectory, env: { ...process.env, RUNMESH_RUNNER_PROFILE: enrolledProfile }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
     });
@@ -252,6 +266,9 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
 
     const logs = await mcpTool("job", { action: "logs", job_id: jobId as string, stream: "stdout", limit: 1024 }, clientB);
     expect(logs.structuredContent?.data).toBe("");
+    } finally {
+      await writeFile(join(workspace, "recovery-finish"), "finish\n");
+    }
   }, 35_000);
 
   it("keeps background shell jobs alive after the MCP response closes and retrieves them from another stateless request", async () => {
@@ -366,6 +383,84 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       await mcpTool("job", { action: "cancel", job_id: id });
       await waitFor(async () => ["cancelled", "succeeded", "failed"].includes(String((await mcpTool("job", { action: "get", job_id: id })).structuredContent?.status)), 12000);
     }
+  });
+
+  it("AUTH-E2E-01 readonly client gets effective permissions and cannot edit, execute or cancel", async () => {
+    const read = await mcpTool("read", { workspace_id: "workspace-1", path: "note.txt" }, clientB);
+    expect(read.isError).not.toBe(true);
+    const listing = await mcpTool("workspace_list", {}, clientB);
+    const workspaceView = (listing.structuredContent?.workspaces as { workspace_id: string; permissions: Record<string, boolean> }[]).find((w) => w.workspace_id === "workspace-1");
+    expect(workspaceView?.permissions).toEqual({ read: true, edit: false, shell: false, job_control: false });
+    const rejected = [
+      await mcpTool("edit", { workspace_id: "workspace-1", patch: "*** Begin Patch\n*** Add File: denied-by-scope.txt\n+never\n*** End Patch" }, clientB),
+      await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('never')") }, clientB),
+      await mcpTool("job", { action: "cancel", job_id: "not-an-authorized-job" }, clientB),
+    ];
+    for (const result of rejected) expect(result).toMatchObject({ isError: true, structuredContent: { error: { code: "insufficient_scope" } } });
+    expect(existsSync(join(workspace, "denied-by-scope.txt"))).toBe(false);
+  });
+
+  it("AUTH-E2E-02 task read-sharing does not grant input or cancellation rights", async () => {
+    const started = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdin.setEncoding('utf8');process.stdin.on('data',d=>process.stdout.write(d))"), background: true });
+    const id = started.structuredContent?.job_id as string;
+    expect(typeof id).toBe("string");
+    try {
+      expect((await mcpTool("job", { action: "get", job_id: id }, clientB)).isError).not.toBe(true);
+      const denied = await mcpTool("job", { action: "input", job_id: id, data: "unauthorized-input" }, clientB);
+      expect(denied).toMatchObject({ isError: true, structuredContent: { error: { code: "insufficient_scope" } } });
+      expect((await mcpTool("job", { action: "input", job_id: id, data: "authorized-input\n" })).isError).not.toBe(true);
+      await waitFor(async () => String((await mcpTool("job", { action: "logs", job_id: id }, clientB)).structuredContent?.data).includes("authorized-input"), 10000);
+      const log = await mcpTool("job", { action: "logs", job_id: id }, clientB);
+      expect(String(log.structuredContent?.data)).not.toContain("unauthorized-input");
+    } finally {
+      await mcpTool("job", { action: "cancel", job_id: id });
+      await waitFor(async () => ["cancelled", "succeeded", "failed"].includes(String((await mcpTool("job", { action: "get", job_id: id })).structuredContent?.status)), 12000);
+    }
+  });
+
+  it("exercises diagnostics, patch preview and all Context methods through final authorization", async () => {
+    const diagnostic = await mcpTool("inspect", {action:"diagnostics",workspace_id:"workspace-1"});
+    expect(diagnostic.isError, JSON.stringify(diagnostic)).not.toBe(true);
+    const checks = diagnostic.structuredContent?.checks as Array<{name:string;state:string}>;
+    expect(checks.find((c) => c.name === "runner_rpc")?.state).toBe("pass");
+    const preview = await mcpTool("edit", {workspace_id:"workspace-1",preview:true,patch:"*** Begin Patch\n*** Add File: preview-only.txt\n+preview\n*** End Patch"});
+    expect(preview.isError, JSON.stringify(preview)).not.toBe(true);
+    expect(existsSync(join(workspace,"preview-only.txt"))).toBe(false);
+    const operations = [
+      {action:"bootstrap"},
+      {action:"checkpoint",context_id:"e2e-handoff",turn_id:"e2e-release-audit",goal:"Validate release context chain"},
+      {action:"read",context_id:"e2e-handoff"},
+      {action:"search",query:"release"},
+      {action:"rebuild"},
+    ];
+    for (const operation of operations) {
+      const result = await mcpTool("context",{workspace_id:"workspace-1",...operation});
+      expect(result.isError, JSON.stringify({operation,result})).not.toBe(true);
+    }
+    const rejected = await mcpTool("context",{action:"checkpoint",workspace_id:"workspace-1",turn_id:"not-authorized",goal:"must not write"},clientB);
+    expect(rejected.isError).toBe(true);
+    expect(rejected.structuredContent?.error).toMatchObject({code:"insufficient_scope"});
+  });
+
+  it("queries a batched Job live without waiting for the next cloud snapshot", async () => {
+    const { adminJar, csrf } = await adminCredentials();
+    const save = async (mode: string) => submitForm(`/admin/runners/${runnerId}/history-settings`, {
+      csrf_token: csrf, mode, interval_seconds: "300", retention_days: "7", local_retention_days: "0",
+    }, adminJar);
+    expect((await save("batched")).status).toBe(303);
+    try {
+      const started = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('batched-live-log\\n')"), background: true });
+      const jobId = started.structuredContent?.job_id;
+      expect(typeof jobId).toBe("string");
+      await waitFor(async () => (await mcpTool("job", { action: "get", workspace_id: "workspace-1", job_id: jobId })).structuredContent?.status === "succeeded", 10000);
+      const listed = await mcpTool("job", { action: "list", workspace_id: "workspace-1", limit: 10 });
+      expect(listed.structuredContent?.source).toBe("runner_live");
+      expect((listed.structuredContent?.jobs as Array<{job_id?:string}>).some((job) => job.job_id === jobId)).toBe(true);
+      const saved = await mcpTool("job", { action: "list", limit: 100 });
+      expect((saved.structuredContent?.jobs as Array<{job_id?:string}>).some((job) => job.job_id === jobId)).toBe(false);
+      const logs = await mcpTool("job", { action: "logs", workspace_id: "workspace-1", job_id: jobId, stream: "stdout", limit: 1024 });
+      expect(logs.structuredContent?.data).toContain("batched-live-log");
+    } finally { expect((await save("immediate")).status).toBe(303); }
   });
 
   it("reports a runner_offline structured error after the real runner disconnects", async () => {

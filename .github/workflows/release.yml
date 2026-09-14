@@ -18,13 +18,20 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  source:
+    name: main-only release source
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject a non-main release before verification and signing
+        run: test "$GITHUB_REF" = "refs/heads/main"
   verification:
+    needs: [source]
     permissions:
       contents: read
     uses: ./.github/workflows/ci.yml
 
   release:
-    name: signed stable release from verified dev
+    name: signed stable release from verified main
     needs: [verification]
     if: github.actor == github.repository_owner && github.triggering_actor == github.repository_owner
     permissions:
@@ -52,17 +59,17 @@ jobs:
       - name: Validate triggering commit, release identity, and secrets
         run: |
           set -euo pipefail
-          test "$GITHUB_REF" = "refs/heads/dev"
+          test "$GITHUB_REF" = "refs/heads/main"
           test "$GITHUB_REPOSITORY" = "aloneio/runmesh"
           test "$GITHUB_ACTOR" = "$GITHUB_REPOSITORY_OWNER"
           test "$GITHUB_TRIGGERING_ACTOR" = "$GITHUB_REPOSITORY_OWNER"
-          git fetch --no-tags origin dev
+          git fetch --no-tags origin main
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/dev
-          # A preview release is always for the current protected dev tip. Do
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          # A stable release is always for the current protected main tip. Do
           # not allow a manually dispatched run to publish an older ancestor
           # after newer code has landed on the branch.
-          test "$(git rev-parse origin/dev)" = "$GITHUB_SHA"
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
           npm run generate:version
           # The generated version module is committed release input, not a
           # workflow-local mutation. Refuse to publish if the triggering commit
@@ -73,12 +80,12 @@ jobs:
           ROOT_VERSION="$(node -p 'require("./package.json").version')"
           test "$RELEASE_VERSION" = "$ROOT_VERSION"
           # This workflow and the hosted installer are the fixed
-          # v0.1.0 preview contract. Refuse a future version until its
+          # v0.1.2 stable patch contract. Refuse a future version until its
           # installer constants, key, and independent review are rotated.
-          test "$RELEASE_VERSION" = "0.1.0"
+          test "$RELEASE_VERSION" = "0.1.2"
           test -n "$RELEASE_SIGNING_KEY_ID"
           # The hosted installer embeds this reviewed key ID for the fixed
-          # v0.1.0 contract; a different valid key would make the
+          # v0.1.2 contract; a different valid key would make the
           # published asset unverifiable by the installer.
           test "$RELEASE_SIGNING_KEY_ID" = "runmesh-preview-2026-01"
           test "$(node -p 'require("./apps/runner/package.json").version')" = "$RELEASE_VERSION"
@@ -106,6 +113,7 @@ jobs:
           # reproducible from GITHUB_SHA.
           git diff --exit-code
       - run: npm run validate:worker -- --dry-run
+      - run: npm run validate:worker -- --dry-run --env development
       - run: npm run validate:worker -- --dry-run --env production
       - run: node scripts/check-release-contract.mjs
       - run: npm run check:licenses
@@ -135,6 +143,8 @@ jobs:
           # still claims the triggering commit.
           git diff --exit-code
           mv "$packed" "release/assets/runmesh-runner-${RELEASE_VERSION}.tgz"
+      - name: Exercise the exact portable archive end to end before signing
+        run: node scripts/test-packed-runner.mjs "release/assets/runmesh-runner-${RELEASE_VERSION}.tgz"
       - name: Generate deterministic manifest and checksums
         run: |
           set -euo pipefail
@@ -170,9 +180,9 @@ jobs:
           test -n "$GH_TOKEN"
           # Re-check the protected branch tip immediately before publishing;
           # long-running test/build gates may otherwise release an older SHA
-          # after new code lands on dev.
-          git fetch --no-tags origin dev
-          test "$(git rev-parse origin/dev)" = "$GITHUB_SHA"
+          # after new code lands on main.
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
           tag="v${RELEASE_VERSION}"
           # A local tag check alone is racy and can miss tags that were created
           # after checkout. Probe the remote API explicitly and treat only a
@@ -204,6 +214,8 @@ jobs:
             echo "GitHub Release already exists for tag: $tag" >&2
             exit 1
           fi
+      - name: Require the audited production control plane before creating a release tag
+        run: node scripts/check-live-release-prereqs.mjs
       - name: Create annotated release tag
         env:
           GH_TOKEN: ${{ github.token }}
@@ -249,6 +261,7 @@ jobs:
           set -euo pipefail
           gh release create "v${RELEASE_VERSION}" release/assets/* \
             --repo "$GITHUB_REPOSITORY" \
+            --target main \
             --verify-tag \
             --draft \
             --title "Runmesh v${RELEASE_VERSION}" \
@@ -312,11 +325,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Re-check the protected dev tip immediately before making the
+          # Re-check the protected main tip immediately before making the
           # draft public; a new commit may have landed while the draft was
           # being uploaded and independently verified.
-          git fetch --no-tags origin dev
-          test "$(git rev-parse origin/dev)" = "$GITHUB_SHA"
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
           tag="v${RELEASE_VERSION}"
           # Re-check that the annotated tag still resolves to this exact
           # triggering commit after the draft was created.  --verify-tag only

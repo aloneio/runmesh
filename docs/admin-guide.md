@@ -71,3 +71,11 @@ Before an upgrade, quiet the Runners, record the current version, and rehearse r
 ## Production checklist
 
 Use a canonical HTTPS origin and configure log redaction. Keep administrator credentials and Worker secrets separate. Never put MCP URLs or enrollment codes in logs or tickets. Prefer restricted service accounts and minimum workspace access. Reserve high-privilege mode for dedicated trusted hosts. Review Runner, client, and job activity regularly and maintain a credential-rotation and shutdown procedure.
+
+## Optional cloud history and quota isolation
+
+See [quota isolation and cloud Job recording](quota-resilience.md). Production uses the independent `HISTORY_DB` D1 binding for optional audit. Core enrollment, credential and policy authority stays in RegistryDO. MCP client detail provides a switch for new cloud Job snapshots and related Job-tool audit; local Runner jobs/logs remain. Workspace-bound Job operations require Runner 0.1.1+. GitLab dev push, not GitHub verification alone, triggers the maintained Cloudflare deployment.
+
+## Batched Job history
+
+See [batched snapshots, manual loading and retention](batched-job-history.md). Production uses `RUNMESH_JOB_HISTORY_BACKEND=d1`; the default upload window is five minutes. History is loaded only on request. Source-side batching and local day-based cleanup are shipped in v0.1.2; immutable v0.1.1 and existing services are unchanged.
