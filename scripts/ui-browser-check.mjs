@@ -44,6 +44,12 @@ export async function checkUiWithChromium(origin,cookie,output){
    for(let i=0;i<100;i++){if(await evaluate("location.pathname==='/admin'&&!window.__runmeshLoading"))break;await sleep(50);}
    const label=await evaluate("[...document.querySelectorAll('h2')].map(h=>h.textContent).join('|')");assert.ok(label.includes(locale==="en"?"Recent jobs":"最近任务"));
   }
+  // A preference changed in another tab must reload the shell, not mix
+  // its old language with the newly fetched main-content language.
+  await tab("Network.setCookie",{name:"runmesh_lang",value:"en",url:origin,path:"/"});
+  await evaluate("document.querySelector('.control-nav a[href=\"/admin/clients\"]').click()");
+  for(let i=0;i<100;i++){if(await evaluate("location.pathname==='/admin/clients'&&document.documentElement.lang==='en'&&window.__runmeshDynamicNavigation===true"))break;await sleep(50);}
+  assert.equal(await evaluate("document.documentElement.lang"),"en");
   await tab("Emulation.setDeviceMetricsOverride",{width:390,height:844,deviceScaleFactor:1,mobile:true});
   assert.equal(await evaluate("document.documentElement.scrollWidth<=innerWidth+1"),true);
   assert.deepEqual(exceptions,[]);
