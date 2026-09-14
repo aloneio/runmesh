@@ -707,10 +707,18 @@ export class RunnerDO {
     // A restart/hibernation is an authorization boundary. Even a previously
     // reconciled value must be fenced until this session has rechecked the
     // Registry identity against its current socket epoch and credential.
-    this.admissionState = validAdmissionState(stored)
-      ? { ...stored, fenced: true, reconciled: false, activeRevision: null, activeChecksum: null, mutationId: RESTART_RECONCILE_MUTATION_ID, mutationPhase: "restart_reconcile", preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: null }
-      : { ...FENCED_ADMISSION };
-    await this.ctx.storage.put(ADMISSION_STATE_KEY, this.admissionState);
+    const validStored = validAdmissionState(stored);
+    // A restart invalidates permission admission, not ownership of an in-flight
+    // operation. Erasing the owner makes its finalizer fail and can allow a
+    // competing mutation to overtake an unresolved Registry write.
+    const ownedMutation = validStored && stored.fenced && stored.mutationId !== null
+      && stored.mutationId !== RESTART_RECONCILE_MUTATION_ID;
+    this.admissionState = ownedMutation ? conservativeAdmission(stored)
+      : validStored
+        ? { ...stored, fenced: true, reconciled: false, activeRevision: null, activeChecksum: null, mutationId: RESTART_RECONCILE_MUTATION_ID, mutationPhase: "restart_reconcile", preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: null }
+        : { ...FENCED_ADMISSION };
+    // Reconstructing an already-conservative fence must not write it again.
+    if (!validStored || !sameAdmissionState(stored, this.admissionState)) await this.ctx.storage.put(ADMISSION_STATE_KEY, this.admissionState);
     return this.admissionState;
   }
 
@@ -949,22 +957,35 @@ export class RunnerDO {
     if (mutationId === RESTART_RECONCILE_MUTATION_ID || before.runnerId === null) return Response.json({ error: { code: "mutation_uncertain", message: "mutation cannot be safely cancelled" } }, { status: 503 });
     const stateResponse = await this.registryRequest(before.runnerId, `/mutation-state?mutation_id=${encodeURIComponent(mutationId)}`, { method: "GET" });
     if (!stateResponse.ok) return Response.json({ error: { code: "registry_unavailable", message: "mutation state is unavailable" } }, { status: 503 });
-    const state = await stateResponse.json() as Record<string, unknown>;
+    const state = await stateResponse.json() as unknown;
+    if (!isRecord(state) || typeof state.runner_exists !== "boolean" || typeof state.mutation_committed !== "boolean") {
+      return Response.json({ error: { code: "mutation_uncertain", message: "mutation evidence is incomplete" } }, { status: 503 });
+    }
     if (state.runner_exists !== true || state.mutation_committed === true) return Response.json({ error: { code: "mutation_committed", message: "mutation has committed or Runner is gone" } }, { status: 409 });
+    if (!validLifecycleId(state.lifecycle_id) || !isSafeNonnegativeInteger(state.credential_version)
+      || !isSafeNonnegativeInteger(state.connection_epoch) || !["online", "offline", "stale", "revoked"].includes(String(state.runner_state))
+      || (state.session_id !== null && !validSessionId(state.session_id))) {
+      return Response.json({ error: { code: "mutation_uncertain", message: "mutation identity evidence is incomplete" } }, { status: 503 });
+    }
     const beforeLifecycle = before.lifecycleId ?? null;
-    if (beforeLifecycle !== null && state.lifecycle_id !== undefined && state.lifecycle_id !== beforeLifecycle) {
+    if (beforeLifecycle !== null && state.lifecycle_id !== beforeLifecycle) {
       return Response.json({ error: { code: "mutation_state_changed", message: "mutation belongs to another Runner lifecycle" } }, { status: 409 });
     }
-    // Offline cancellation has no current live identity to restore. It only
-    // releases the precommit ownership; admission deliberately stays fenced.
-    // The discriminator is the connection identity alone: an open precommit
-    // always runs with `reconciled === false` (beginPolicyMutation clears it),
-    // so also testing that flag here would route every live session through the
-    // release path and leave it fenced with no mutation left to recover
-    // through — admission only reopens via an owned mutation or restart
-    // reconciliation, so that state is unrecoverable until the DO restarts.
-    if (before.sessionId === null || before.connectionEpoch === null || before.credentialVersion === null) {
-      const next: AdmissionState = { ...before, fenced: true, reconciled: false, mutationId: null, mutationPhase: "idle", activeRevision: null, activeChecksum: null,
+    if (before.credentialVersion !== null && state.credential_version !== before.credentialVersion) {
+      return Response.json({ error: { code: "mutation_state_changed", message: "Runner credentials changed during the mutation" } }, { status: 409 });
+    }
+    const hasConnection = before.sessionId !== null && before.connectionEpoch !== null && before.credentialVersion !== null;
+    const socket = await this.currentRunnerSocket();
+    const attachment = socket?.deserializeAttachment() as ConnectionAttachment | null;
+    const hasBaseline = validPolicyIdentity(before.preMutationActiveRevision, before.preMutationActiveChecksum)
+      && validPolicyIdentity(before.preMutationDesiredRevision, before.preMutationDesiredChecksum);
+    // Historical session fields survive disconnects. Their presence alone is
+    // not evidence of a live session that can be restored. End only this proven
+    // uncommitted operation; keep execution fenced for fresh reconciliation.
+    if (!hasConnection || state.runner_state !== "online" || state.session_id === null || socket === undefined || !hasBaseline) {
+      const next: AdmissionState = { ...before, fenced: true, reconciled: false,
+        mutationId: hasConnection ? RESTART_RECONCILE_MUTATION_ID : null,
+        mutationPhase: hasConnection ? "restart_reconcile" : "idle", activeRevision: null, activeChecksum: null,
         preMutationActiveRevision: null, preMutationActiveChecksum: null, preMutationDesiredRevision: null, preMutationDesiredChecksum: null, lastReconciledAtMs: null };
       return await this.persistAdmissionIfCurrent(before, next)
         ? new Response(null, { status: 204 })
@@ -979,8 +1000,6 @@ export class RunnerDO {
     const active = await this.registryRequest(before.runnerId, "/active-policy", { method: "GET" });
     const policy = active.ok ? await active.json() as unknown : undefined;
     if (!isPolicy(policy) || policy.revision !== before.preMutationActiveRevision || policy.checksum !== before.preMutationActiveChecksum) return Response.json({ error: { code: "mutation_state_changed", message: "active policy snapshot cannot be verified" } }, { status: 409 });
-    const socket = await this.currentRunnerSocket();
-    const attachment = socket?.deserializeAttachment() as ConnectionAttachment | null;
     if (socket === undefined || attachment === null || attachment.runnerId !== before.runnerId || (attachment.lifecycleId ?? null) !== (before.lifecycleId ?? null) || attachment.sessionId !== before.sessionId || attachment.epoch !== before.connectionEpoch || attachment.credentialVersion !== before.credentialVersion) return Response.json({ error: { code: "runner_unavailable", message: "Runner session is no longer current" } }, { status: 503 });
     const next: AdmissionState = {
       ...before, fenced: false, reconciled: true, activeRevision: before.preMutationActiveRevision, activeChecksum: before.preMutationActiveChecksum,
