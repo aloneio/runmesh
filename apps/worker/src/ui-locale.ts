@@ -23,6 +23,10 @@ export function localizeUiText(value: string, locale: UiLocale): string {
   const direct=catalog[value]??catalog[text];if(direct!==undefined)return value.replace(text,direct.trim());
   const count=/^(\d+) (configured|connected|days?|min|minutes?|seconds?)$/.exec(text);
   if(count) return value.replace(text,`${count[1]} ${{configured:"已配置",connected:"已连接",day:"天",days:"天",min:"分钟",minute:"分钟",minutes:"分钟",second:"秒",seconds:"秒"}[count[2]!]}`);
+  if (text.includes(" · ")) {
+    const translated=text.split(" · ").map(part=>catalog[part]??part).join(" · ");
+    if(translated!==text)return value.replace(text,translated);
+  }
   const title=/^(.+?)( · |: )(.+)$/.exec(text);
   if(title && catalog[title[1]!]!==undefined) return value.replace(text,catalog[title[1]!] + title[2]! + (catalog[title[3]!]??title[3]!));
   const until=/^This code is valid until ([0-9TZ:.+-]+) and can be used once\.$/.exec(text);
