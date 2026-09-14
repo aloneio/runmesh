@@ -612,7 +612,7 @@ describe("Worker runner transport", () => {
     await expect(admission()).resolves.toMatchObject({ fenced: true, mutationId, mutationPhase: "precommit", reconciled: false });
 
     const cancelled = await post("/cancel-policy-mutation", { mutation_id: mutationId });
-    expect([204, 409]).toContain(cancelled.status);
+    expect(cancelled.status).toBe(204);
     const after = await admission();
     // Either the pre-mutation admission was restored (unfenced) or the mutation
     // is still owned so it can still be committed. Releasing ownership while
