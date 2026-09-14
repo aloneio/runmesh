@@ -1,3 +1,4 @@
+import { POSIX_INSTALLER_PREFLIGHT } from "./installer-preflight.js";
 /**
  * Fixed, source-reviewed hosted-bootstrap contract. The Worker HTTPS endpoint
  * that serves an installer is the one-command bootstrap trust root. Release
@@ -29,10 +30,10 @@ export const MAX_NODE_RUNTIME_BYTES = 64 * 1024 * 1024;
 // depend on a host-provided Node/npm installation.  These are the official
 // Node distribution archive digests for the supported desktop/server targets.
 export const FIXED_NODE_RUNTIME_ASSETS = {
-  "linux-x64": { archive: `node-v${FIXED_NODE_VERSION}-linux-x64.tar.xz`, sha256: "d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307" },
-  "linux-arm64": { archive: `node-v${FIXED_NODE_VERSION}-linux-arm64.tar.xz`, sha256: "fff4078c5def658577f92c88db7db3bc0072924bfb93fe52c1e744a54e94abb8" },
-  "darwin-x64": { archive: `node-v${FIXED_NODE_VERSION}-darwin-x64.tar.xz`, sha256: "96dff79f4e19a78715da559ec7cac2028f4985a175ea0c3454625a269c21deb7" },
-  "darwin-arm64": { archive: `node-v${FIXED_NODE_VERSION}-darwin-arm64.tar.xz`, sha256: "5eff7a9011895aae3f29d06f167b84a62b028a591370c7cafb59103559fd26e1" },
+  "linux-x64": { archive: `node-v${FIXED_NODE_VERSION}-linux-x64.tar.gz`, sha256: "b294a556e639d64338823920e5866c21c02741742d2e1529ee1a225c1ec9252a" },
+  "linux-arm64": { archive: `node-v${FIXED_NODE_VERSION}-linux-arm64.tar.gz`, sha256: "013b59cfd2819703a6f4a14ab891fc46fc2a4e3f5bcd92de3fb4929b43e35b30" },
+  "darwin-x64": { archive: `node-v${FIXED_NODE_VERSION}-darwin-x64.tar.gz`, sha256: "58e99022c2ff89395576cc7fd4d98cea24bb68081475d5f88b801ee8729fb026" },
+  "darwin-arm64": { archive: `node-v${FIXED_NODE_VERSION}-darwin-arm64.tar.gz`, sha256: "61130f394c1630d211dd50aecc4353d379480f36d3ac913cd85dbba1aed585c6" },
   "win-x64": { archive: `node-v${FIXED_NODE_VERSION}-win-x64.zip`, sha256: "1177b4137ba5adaa56354ae40f1080c7450e8ae09cecb47da459d1c52ac99f97" },
   "win-arm64": { archive: `node-v${FIXED_NODE_VERSION}-win-arm64.zip`, sha256: "fec025a6da31757e3b6af84c5a1628e9d38442ca99a2161091d78f2fcfa35ef3" },
 } as const;
@@ -255,7 +256,7 @@ function verifierSource(): string {
 }
 
 const POSIX_TEMPLATE = String.raw`#!/usr/bin/env sh
-# Fixed signed Runmesh preview bootstrap. This Worker HTTPS response is the
+# Fixed signed Runmesh bootstrap. This Worker HTTPS response is the
 # bootstrap trust root. This script verifies the GitHub artifact with its
 # embedded Ed25519 public key and never trusts a downloaded keyring.
 set -eu
@@ -271,9 +272,11 @@ report_failure() {
   rc="$3"
   fail "$label"
   printf '%s\n' "  exit code: $rc" >&2
-  if [ -s "$log_file" ]; then
+  if [ "$ENROLLMENT_ATTEMPTED" -eq 1 ]; then
+    printf '%s\n' '  Credential handoff was attempted; output is withheld to protect the code. Do not blindly retry enrollment. Inspect the service status and control-plane credential state.' >&2
+  elif [ -s "$log_file" ]; then
     printf '%s\n' '  output:' >&2
-    sed 's/^/  │ /' "$log_file" >&2
+    sed -n '1,60{s/^/  | /;p;}' "$log_file" >&2
   fi
   rm -f "$log_file"
 }
@@ -281,11 +284,14 @@ printf '\n%bRunmesh Runner%b\n----------------------------------------\n' "$C_CY
 # Do not let inherited runtime/package-manager configuration alter a privileged
 # install. The operator's PATH is still required to point at trusted binaries.
 unset NODE_OPTIONS NODE_PATH CURL_HOME CURLRC NPM_CONFIG_USERCONFIG NPM_CONFIG_GLOBALCONFIG npm_config_userconfig npm_config_globalconfig 2>/dev/null || true
+__POSIX_INSTALLER_PREFLIGHT__
 VERSION='__VERSION__'
 RELEASE_BASE='__RELEASE_BASE__'
 ARTIFACT='__ARTIFACT_NAME__'
 ENROLLMENT_URL='__ENROLLMENT_URL__'
 INSTALL_ROOT='/opt/runmesh'
+INSTALL_PHASE=arguments
+ENROLLMENT_ATTEMPTED=0
 AUTO_INSTALL_DEPS=1
 RUNMESH_ACTION='__ACTION__'
 PURGE_REQUESTED=0
@@ -307,7 +313,7 @@ while [ "$#" -gt 0 ]; do
       ENROLLMENT_CODE_ARG="$2"; CODE_ARG_SET=1; shift ;;
     --code=*)
       [ "$CODE_ARG_SET" -eq 0 ] || { printf '%s\n' 'error: enrollment code supplied more than once' >&2; exit 1; }
-      ENROLLMENT_CODE_ARG="$(printf '%s' "$1" | sed 's/^--code=//')"; CODE_ARG_SET=1 ;;
+      ENROLLMENT_CODE_ARG="__CODE_EQUALS_VALUE__"; CODE_ARG_SET=1 ;;
     *)
       [ "$CODE_ARG_SET" -eq 0 ] || { printf '%s\n' 'error: enrollment code supplied more than once' >&2; exit 1; }
       ENROLLMENT_CODE_ARG="$1"; CODE_ARG_SET=1 ;;
@@ -323,13 +329,15 @@ if [ "$RUNMESH_ACTION" = uninstall ]; then
 else
   [ "$PURGE_REQUESTED" -eq 0 ] && [ "$CONFIRM_PURGE" -eq 0 ] || { printf '%s\n' 'error: purge options are only valid for uninstall' >&2; exit 1; }
 fi
+INSTALL_PHASE=preflight
+check_base_tools
 if [ "$(id -u)" -ne 0 ]; then printf '%s\n' 'error: run from an elevated root shell' >&2; exit 1; fi
 case "$(uname -s)" in
   Linux) PROFILE='/etc/runmesh/profile.json'; SERVICE_MANIFEST='/etc/systemd/system/runmesh-runner.service' ;;
   Darwin) PROFILE='/Library/Application Support/Runmesh/profile.json'; SERVICE_MANIFEST='/Library/LaunchDaemons/io.alone.runmesh.runner.plist' ;;
   *) printf '%s\n' 'error: Linux or macOS is required' >&2; exit 1;;
 esac
-for command_name in curl stty readlink grep tar mktemp sed wc tr; do command -v "$command_name" >/dev/null 2>&1 || { printf '%s\n' "error: $command_name is required" >&2; exit 1; }; done
+check_service_prerequisites
 case "$(uname -s):$(uname -m)" in
   Linux:x86_64|Linux:amd64) NODE_ASSET='__NODE_LINUX_X64__'; NODE_SHA256='__NODE_LINUX_X64_SHA256__' ;;
   Linux:aarch64|Linux:arm64) NODE_ASSET='__NODE_LINUX_ARM64__'; NODE_SHA256='__NODE_LINUX_ARM64_SHA256__' ;;
@@ -338,7 +346,7 @@ case "$(uname -s):$(uname -m)" in
   *) printf '%s\n' 'error: unsupported operating system or CPU architecture' >&2; exit 1;;
 esac
 NODE_BASE='__NODE_BASE_URL__'
-[ "$AUTO_INSTALL_DEPS" -eq 1 ] || { printf '%s\n' 'error: private runtime bootstrap is disabled (--no-auto-deps).' >&2; exit 1; }
+
 has_path() { [ -e "$1" ] || [ -L "$1" ]; }
 refresh_existing() {
   if ! has_path "$INSTALL_ROOT/current"; then return 1; fi
@@ -369,9 +377,12 @@ refresh_existing() {
   fi
   case "$ENROLLMENT_CODE" in *[!A-Za-z0-9_-]*) printf '%s\n' 'error: invalid one-time enrollment code' >&2; exit 1;; esac
   case "$ENROLLMENT_CODE" in ???????????????????????????????????????????) : ;; *) printf '%s\n' 'error: invalid one-time enrollment code' >&2; exit 1;; esac
+  INSTALL_PHASE=enrollment
+  ENROLLMENT_ATTEMPTED=1
   REFRESH_ENROLL_LOG="$INSTALL_ROOT/.refresh-enroll.$$.log"
   if printf '%s\n' "$ENROLLMENT_CODE" | "$EXISTING_RUNNER" enroll --profile "$PROFILE" --server "$ENROLLMENT_URL" --code-stdin --re-enroll __EXECUTION_MODE_FLAGS__ >"$REFRESH_ENROLL_LOG" 2>&1; then :; else rc=$?; report_failure 'Refreshing credentials for the existing Runmesh Runner.' "$REFRESH_ENROLL_LOG" "$rc"; exit "$rc"; fi
   unset ENROLLMENT_CODE
+  INSTALL_PHASE=service_install
   REFRESH_INSTALL_LOG="$INSTALL_ROOT/.refresh-install.$$.log"
   if "$EXISTING_RUNNER" install --profile "$PROFILE" __EXECUTION_MODE_FLAGS__ --executable-path "$EXISTING_RUNNER" >"$REFRESH_INSTALL_LOG" 2>&1; then :; else rc=$?; report_failure 'Refreshing the installed service for the existing Runmesh Runner.' "$REFRESH_INSTALL_LOG" "$rc"; exit "$rc"; fi
   REFRESH_RESTART_LOG="$INSTALL_ROOT/.refresh-restart.$$.log"
@@ -383,7 +394,9 @@ refresh_existing() {
 }
 if [ "$RUNMESH_ACTION" != uninstall ] && has_path "$INSTALL_ROOT/current" && has_path "$PROFILE" && has_path "$SERVICE_MANIFEST"; then refresh_existing; exit $?; fi
 if [ "$RUNMESH_ACTION" != uninstall ] && { has_path "$INSTALL_ROOT/current" || has_path "$INSTALL_ROOT/versions/$VERSION" || has_path "$INSTALL_ROOT/versions/$VERSION.staging.$$" || has_path "$PROFILE" || has_path "$SERVICE_MANIFEST"; }; then printf '%s\n' 'error: existing Runmesh installation or service state found; refusing to overwrite it' >&2; exit 1; fi
-TMP="$(mktemp -d /tmp/runmesh-installer.XXXXXX)"
+check_bootstrap_tools
+[ "$AUTO_INSTALL_DEPS" -eq 1 ] || bootstrap_error RMI_RUNTIME_DISABLED 'Private runtime bootstrap was disabled.' 'Remove --no-auto-deps for a new installation; an existing verified installation can be refreshed without downloading a runtime.'
+TMP="$(mktemp -d "__TEMP_PARENT__/runmesh-installer.XXXXXX")" || bootstrap_error RMI_TEMP_DIRECTORY 'Cannot create a private temporary directory.' 'Check /tmp free space and permissions.'
 trap 'rm -rf "$TMP"' EXIT
 trap 'exit 1' HUP INT TERM
 step 'Preparing runtime'
@@ -394,33 +407,7 @@ RUNTIME_ARCHIVE="$TMP/$NODE_ASSET"
 RUNTIME_ROOT="$TMP/node-runtime"
 mkdir "$RUNTIME_ROOT"
 RUNTIME_URL="$NODE_BASE/$NODE_ASSET"
-if command -v curl >/dev/null 2>&1; then
-  curl -q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 3 --max-time 120 --max-filesize __MAX_NODE_RUNTIME_BYTES__ --output "$RUNTIME_ARCHIVE" "$RUNTIME_URL"
-elif command -v wget >/dev/null 2>&1; then
-  wget --https-only --timeout=120 --tries=1 --output-document="$RUNTIME_ARCHIVE" "$RUNTIME_URL"
-else
-  printf '%s\n' 'error: curl or wget is required to download the private Node.js runtime' >&2
-  exit 1
-fi
-RUNTIME_SIZE="$(wc -c < "$RUNTIME_ARCHIVE" | tr -d '[:space:]')"
-case "$RUNTIME_SIZE" in ''|*[!0-9]*) printf '%s\n' 'error: private Node.js runtime archive size is invalid' >&2; exit 1;; esac
-[ "$RUNTIME_SIZE" -le __MAX_NODE_RUNTIME_BYTES__ ] || { printf '%s\n' 'error: private Node.js runtime archive exceeds the fixed size limit' >&2; exit 1; }
-if command -v sha256sum >/dev/null 2>&1; then
-  printf '%s  %s\n' "$NODE_SHA256" "$RUNTIME_ARCHIVE" | sha256sum -c - > /dev/null
-elif command -v shasum >/dev/null 2>&1; then
-  test "$(shasum -a 256 "$RUNTIME_ARCHIVE" | awk '{print $1}')" = "$NODE_SHA256"
-else
-  printf '%s\n' 'error: sha256sum or shasum is required to verify the private Node.js runtime' >&2
-  exit 1
-fi
-tar -xJf "$RUNTIME_ARCHIVE" -C "$RUNTIME_ROOT"
-NODE_DIRECTORY="$(printf '%s' "$NODE_ASSET" | sed 's/\.tar\.xz$//')"
-NODE_HOME="$RUNTIME_ROOT/$NODE_DIRECTORY"
-NODE="$NODE_HOME/bin/node"
-NPM_CLI="$NODE_HOME/lib/node_modules/npm/bin/npm-cli.js"
-[ -x "$NODE" ] || { printf '%s\n' 'error: private Node.js runtime extraction failed' >&2; exit 1; }
-NODE_MAJOR="$("$NODE" -p 'process.versions.node.split(".")[0]')"
-[ "$NODE_MAJOR" -ge 22 ] || { printf '%s\n' 'error: private Node.js runtime is too old' >&2; exit 1; }
+prepare_private_runtime
 # Keep privileged npm completely inside the private temporary directory. npm
 # otherwise consults the invoking root user's, global, and current-directory
 # npmrc files, any of which could change where or how a package is installed.
@@ -442,6 +429,12 @@ cleanup_tty() { if [ "$TTY_ECHO_DISABLED" -eq 1 ]; then stty echo < /dev/tty 2>/
 cleanup() { cleanup_tty; rm -rf "$TMP"; }
 rollback() {
   rc="$1"
+  printf 'error [RMI_INSTALL_FAILED] stage=%s: installation did not complete.\n' "$INSTALL_PHASE" >&2
+  if [ "$ENROLLMENT_ATTEMPTED" -eq 0 ]; then
+    printf '%s\n' '  Enrollment was not attempted. Retry after fixing the prerequisite; the code may still expire by its own validity window.' >&2
+  else
+    printf '%s\n' '  Enrollment was attempted and the code may have been consumed. Check credentials before retrying; do not repeatedly redeem the same code.' >&2
+  fi
   if [ "$RUNMESH_ACTION" = uninstall ]; then cleanup; trap - EXIT HUP INT TERM; exit "$rc"; fi
   cleanup_tty
   if [ "$CURRENT_CREATED" -eq 1 ] && [ -L "$CURRENT_NEW" ]; then rm -f "$CURRENT_NEW"; fi
@@ -472,7 +465,7 @@ download() {
     attempt=$((attempt + 1))
     headers="$TMP/$name.headers"
     status_file="$TMP/$name.status"
-    if curl -q --fail --silent --show-error --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 0 --max-redirs 0 --max-filesize __MAX_RELEASE_ASSET_BYTES__ --dump-header "$headers" --output "$TMP/$name" --write-out '%{http_code}' "$url" > "$status_file"; then
+    if curl -q --fail --silent --show-error --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 15 --max-time 120 --retry 0 --max-redirs 0 --max-filesize __MAX_RELEASE_ASSET_BYTES__ --dump-header "$headers" --output "$TMP/$name" --write-out '%{http_code}' "$url" > "$status_file"; then
       curl_rc=0
     else
       curl_rc=$?
@@ -518,12 +511,14 @@ RUNMESH_REDIRECT_CHECK
     esac
   done
 }
+INSTALL_PHASE=release_download
 step 'Downloading Runner'
 download manifest.json
 download manifest.sig
 download manifest.signature.json
 download SHA256SUMS
 download "$ARTIFACT"
+INSTALL_PHASE=release_verification
 step 'Verifying Runner'
 VERIFY_LOG="$TMP/release-verify.log"
 if "$NODE" --input-type=module - "$TMP" >"$VERIFY_LOG" 2>&1 <<'RUNMESH_VERIFY'
@@ -541,6 +536,7 @@ if [ "$RUNMESH_ACTION" = uninstall ]; then
 fi
 mkdir -p "$INSTALL_ROOT/versions"
 if ! mkdir "$STAGE"; then printf '%s\n' 'error: installer staging path is already in use' >&2; exit 1; fi
+INSTALL_PHASE=package_install
 step 'Installing Runner'
 export NPM_CONFIG_UPDATE_NOTIFIER=false
 INSTALL_LOG="$TMP/npm-install.log"
@@ -589,6 +585,7 @@ else
 fi
 case "$ENROLLMENT_CODE" in *[!A-Za-z0-9_-]*) printf '%s\n' 'error: invalid one-time enrollment code' >&2; exit 1;; esac
 case "$ENROLLMENT_CODE" in ???????????????????????????????????????????) : ;; *) printf '%s\n' 'error: invalid one-time enrollment code' >&2; exit 1;; esac
+INSTALL_PHASE=enrollment
 ENROLLMENT_ATTEMPTED=1
 step 'Connecting to control plane'
 ENROLL_LOG="$TMP/enroll.log"
@@ -599,11 +596,13 @@ FINAL_CREATED=1
 ln -s "$FINAL" "$INSTALL_ROOT/current.new"
 mv "$INSTALL_ROOT/current.new" "$INSTALL_ROOT/current"
 CURRENT_CREATED=1
+INSTALL_PHASE=service_install
 step 'Starting service'
 SERVICE_LOG="$TMP/service-install.log"
 if "$INSTALL_ROOT/current/bin/runmesh" install --profile "$PROFILE" __EXECUTION_MODE_FLAGS__ --executable-path "$INSTALL_ROOT/current/bin/runmesh" >"$SERVICE_LOG" 2>&1; then :; else rc=$?; report_failure 'Starting service' "$SERVICE_LOG" "$rc"; exit "$rc"; fi
 ok "Runmesh Runner $VERSION is ready."
-printf '%s\n' '  Service started automatically.' '  Logs: sudo journalctl -u runmesh-runner -f' >&2
+printf '%s\n' '  Service started automatically.' >&2
+case "$(uname -s)" in Linux) printf '%s\n' '  Logs: journalctl -u runmesh-runner.service -n 60 --no-pager' >&2 ;; Darwin) printf '%s\n' '  Status: /opt/runmesh/current/bin/runmesh status --json' >&2 ;; esac
 `;
 
 const POWERSHELL_TEMPLATE = String.raw`$ErrorActionPreference = 'Stop'
@@ -623,7 +622,7 @@ $env:npm_config_cache = $null
 # Windows PowerShell 5.1 does not eagerly load System.Net.Http. Load it
 # explicitly before constructing HttpClientHandler so the fixed installer has
 # the same pre-follow redirect guarantees on PowerShell 5.1 and 7+.
-Add-Type -AssemblyName System.Net.Http
+try { Add-Type -AssemblyName System.Net.Http } catch { throw '[RMI_POWERSHELL_RUNTIME] System.Net.Http is unavailable. Use a supported Windows PowerShell 5.1 or PowerShell 7 session. No enrollment attempted.' }
 # This Worker HTTPS response is the bootstrap trust root. Release assets are
 # verified with the embedded Ed25519 key below, never a downloaded keyring.
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -634,7 +633,8 @@ $EnrollmentUrl = '__ENROLLMENT_URL__'
 $AllowedReleaseOrigins = @(__RELEASE_REDIRECT_ORIGINS_PS__)
 $AutoInstallDeps = $true
 if ($args -contains '--no-auto-deps') { $AutoInstallDeps = $false }
-if (-not $AutoInstallDeps) { throw 'Private runtime bootstrap is disabled (--no-auto-deps).' }
+$RuntimePhase = 'arguments'
+$EnrollmentAttempted = $false
 $EnrollmentCodeArgument = $null
 $MaintenanceAction = '__ACTION__'
 $PurgeRequested = $false
@@ -680,6 +680,8 @@ $InstallRoot = Join-Path $env:ProgramFiles 'Runmesh'
 Write-Host ""; Write-Host "Runmesh Runner" -ForegroundColor Cyan; Write-Host ""
 $Principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $Principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run from an elevated Administrator PowerShell session.' }
+$NativeArchitecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+if ($NativeArchitecture -ne [Runtime.InteropServices.Architecture]::X64 -and $NativeArchitecture -ne [Runtime.InteropServices.Architecture]::Arm64) { throw '[RMI_ARCHITECTURE] The signed Windows runtime supports x64 or ARM64; no enrollment attempted.' }
 $NodeAsset = if ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq [Runtime.InteropServices.Architecture]::Arm64) { '__NODE_WIN_ARM64__' } else { '__NODE_WIN_X64__' }
 $NodeSha256 = if ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq [Runtime.InteropServices.Architecture]::Arm64) { '__NODE_WIN_ARM64_SHA256__' } else { '__NODE_WIN_X64_SHA256__' }
 $NodeUrl = '__NODE_BASE_URL__/' + $NodeAsset
@@ -699,24 +701,10 @@ function Write-Fail([string]$Message) { Write-Host ("[FAIL] {0}" -f $Message) -F
 function Write-LogFailure([string]$Message, [string]$LogPath, [int]$ExitCode, $ErrorRecord = $null) {
   Write-Fail $Message
   Write-Host ("  exit code: {0}" -f $ExitCode) -ForegroundColor DarkGray
-  if ($null -ne $ErrorRecord) {
-    Write-Host ("  exception: {0}" -f $ErrorRecord.Exception.GetType().FullName) -ForegroundColor DarkGray
-    Write-Host ("  message: {0}" -f $ErrorRecord.Exception.Message) -ForegroundColor DarkGray
-    if ($ErrorRecord.InvocationInfo -and $ErrorRecord.InvocationInfo.PositionMessage) {
-      Write-Host '  location:' -ForegroundColor DarkGray
-      $ErrorRecord.InvocationInfo.PositionMessage.TrimEnd().Split([Environment]::NewLine) | ForEach-Object { Write-Host ("  | {0}" -f $_) -ForegroundColor DarkGray }
-    }
-    if ($ErrorRecord.ScriptStackTrace) {
-      Write-Host '  stack trace:' -ForegroundColor DarkGray
-      $ErrorRecord.ScriptStackTrace.TrimEnd().Split([Environment]::NewLine) | ForEach-Object { Write-Host ("  | {0}" -f $_) -ForegroundColor DarkGray }
-    }
-  }
-  if (Test-Path -LiteralPath $LogPath -PathType Leaf) {
-    $contents = Get-Content -LiteralPath $LogPath -ErrorAction SilentlyContinue
-    if ($null -ne $contents -and $contents.Count -gt 0) {
-      Write-Host '  output:' -ForegroundColor DarkGray
-      $contents | ForEach-Object { Write-Host ("  | {0}" -f $_) -ForegroundColor DarkGray }
-    }
+  if ($EnrollmentAttempted) {
+    Write-Host '  Credential handoff was attempted. Output is withheld to protect the code; inspect service status and credential state before retrying.'
+  } elseif (Test-Path -LiteralPath $LogPath -PathType Leaf) {
+    Get-Content -LiteralPath $LogPath -TotalCount 60 -ErrorAction SilentlyContinue | ForEach-Object { $line = $_ -replace '[A-Za-z0-9_-]{43,}', '[redacted]'; Write-Host ("  | {0}" -f $line.Substring(0, [Math]::Min($line.Length, 1024))) }
   }
 }
 function Invoke-LoggedStep([string]$Message, [string]$LogPath, [scriptblock]$Action) {
@@ -752,6 +740,8 @@ function Refresh-Existing {
     $EnrollmentCodeArgument = $null
     if ([string]::IsNullOrWhiteSpace($EnrollmentCode) -or $EnrollmentCode -notmatch '^[A-Za-z0-9_-]{43}$') { throw 'Invalid one-time enrollment code.' }
     $RefreshEnrollLog = Join-Path $InstallRoot ('.refresh-enroll.{0}.log' -f $PID)
+    $RuntimePhase = 'enrollment'
+  $EnrollmentAttempted = $true
     $EnrollmentCode | & $ExistingRunner enroll --profile $Profile --server $EnrollmentUrl --code-stdin --re-enroll __EXECUTION_MODE_FLAGS__ *> $RefreshEnrollLog
     if ($LASTEXITCODE -ne 0) { Write-LogFailure 'Refreshing credentials for the existing Runmesh Runner.' $RefreshEnrollLog $LASTEXITCODE; throw 'Enrollment refresh failed.' }
     $RefreshInstallLog = Join-Path $InstallRoot ('.refresh-install.{0}.log' -f $PID)
@@ -766,6 +756,10 @@ function Refresh-Existing {
 }
 if ($MaintenanceAction -ne 'uninstall' -and (Test-Path -LiteralPath $CurrentRoot) -and (Test-Path -LiteralPath $Profile) -and (Test-Path -LiteralPath $ServiceManifest)) { if (Refresh-Existing) { exit 0 } }
 if ($MaintenanceAction -ne 'uninstall' -and ((Test-Path -LiteralPath $CurrentRoot) -or (Test-Path -LiteralPath $VersionRoot) -or (Test-Path -LiteralPath $CurrentNew) -or (Test-Path -LiteralPath $Stage) -or (Test-Path -LiteralPath $Profile) -or (Test-Path -LiteralPath $ServiceManifest))) { throw 'Existing Runmesh installation or service state found; refusing to overwrite it.' }
+if (-not $AutoInstallDeps) { throw '[RMI_RUNTIME_DISABLED] A new installation requires the private runtime; omit --no-auto-deps. No enrollment attempted.' }
+$RuntimePhase = 'preflight'
+try { Add-Type -AssemblyName System.IO.Compression.FileSystem } catch { throw '[RMI_ZIP_SUPPORT] The .NET ZIP library is unavailable. Use a supported Windows PowerShell 5.1 or PowerShell 7 session. No enrollment attempted.' }
+foreach ($RequiredCommand in @('Invoke-WebRequest', 'Get-FileHash')) { if (-not (Get-Command $RequiredCommand -ErrorAction SilentlyContinue)) { throw ('[RMI_MISSING_TOOLS] Required PowerShell command is missing: ' + $RequiredCommand + '. Restore the standard PowerShell modules; no enrollment attempted.') } }
 $TempRoot = Join-Path ([IO.Path]::GetTempPath()) ('runmesh-installer-' + [guid]::NewGuid().ToString('N'))
 $ServiceAttempted = $false
 $EnrollmentAttempted = $false
@@ -796,26 +790,33 @@ try {
   # Invoke-WebRequest/-MaximumRedirection are intentionally not used for the
   # release fetch: their automatic redirect behavior cannot be pinned before
   # the next request. HttpClient follows one validated Location at a time.
+  $RuntimePhase = 'runtime_download'
   Write-Step 'Preparing runtime'
   $ProgressPreference = 'SilentlyContinue'
   $NodeArchivePath = Join-Path $TempRoot $NodeAsset
-  Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 -Uri $NodeUrl -OutFile $NodeArchivePath
+  try { Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 -TimeoutSec 120 -Uri $NodeUrl -OutFile $NodeArchivePath } catch { throw '[RMI_DOWNLOAD] Official runtime download failed. Check DNS, HTTPS trust, system clock, proxy and temporary disk space; do not disable TLS verification.' }
   if ((Get-Item -LiteralPath $NodeArchivePath).Length -le 0 -or (Get-Item -LiteralPath $NodeArchivePath).Length -gt __MAX_NODE_RUNTIME_BYTES__) { throw 'Private Node.js runtime archive size is invalid.' }
+  $RuntimePhase = 'runtime_checksum'
   $NodeDigest = (Get-FileHash -LiteralPath $NodeArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
-  if ($NodeDigest -ne $NodeSha256) { throw 'Private Node.js runtime checksum verification failed.' }
+  if ($NodeDigest -ne $NodeSha256) { throw '[RMI_CHECKSUM_MISMATCH] Private Node.js runtime checksum verification failed; no extraction or enrollment was attempted.' }
   $NodeExtract = Join-Path $TempRoot 'node-runtime'
-  Expand-Archive -LiteralPath $NodeArchivePath -DestinationPath $NodeExtract -Force
+  $RuntimePhase = 'runtime_extract'
+  # Use the system .NET ZIP implementation, not the optional Archive module.
+  try { [IO.Compression.ZipFile]::ExtractToDirectory($NodeArchivePath, $NodeExtract) }
+  catch { throw '[RMI_EXTRACT] Verified ZIP extraction failed. Check free disk space, directory permissions and antivirus interference; no enrollment attempted.' }
   $NodeHome = Join-Path $NodeExtract ([IO.Path]::GetFileNameWithoutExtension($NodeAsset))
   $NodePath = Join-Path $NodeHome 'node.exe'
   $NpmPath = Join-Path $NodeHome 'npm.cmd'
   if (-not (Test-Path -LiteralPath $NodePath -PathType Leaf) -or -not (Test-Path -LiteralPath $NpmPath -PathType Leaf)) { throw 'Private Node.js runtime extraction failed.' }
-  $NodeMajor = [int]((& $NodePath --version).Trim().TrimStart('v').Split('.')[0])
-  if ($NodeMajor -lt 22) { throw 'Private Node.js runtime is too old.' }
+  $RuntimePhase = 'runtime_execute'
+  try { $ActualNodeVersion = & $NodePath --version 2>&1 } catch { throw '[RMI_RUNTIME_COMPATIBILITY] Extracted Node cannot start. Check supported Windows version, architecture and application-control policy.' }
+  if ($LASTEXITCODE -ne 0 -or ([string]$ActualNodeVersion).Trim() -ne 'v__NODE_VERSION__') { throw '[RMI_RUNTIME_VERSION] The verified runtime cannot start or does not match the pinned version; no enrollment attempted.' }
   $HttpHandler = [Net.Http.HttpClientHandler]::new()
   $HttpHandler.AllowAutoRedirect = $false
   $HttpHandler.AutomaticDecompression = [Net.DecompressionMethods]::GZip -bor [Net.DecompressionMethods]::Deflate
   $HttpClient = [Net.Http.HttpClient]::new($HttpHandler)
   $HttpClient.Timeout = [TimeSpan]::FromSeconds(60)
+  $RuntimePhase = 'release_download'
   Write-Step 'Downloading Runner'
   foreach ($Name in @('manifest.json', 'manifest.sig', 'manifest.signature.json', 'SHA256SUMS', $ArtifactName)) {
     $current = [Uri]::new($ReleaseBase + '/' + $Name)
@@ -863,6 +864,7 @@ try {
     if (-not $downloaded) { throw 'Release download did not complete.' }
   }
   $VerifyLog = Join-Path $TempRoot 'release-verify.log'
+  $RuntimePhase = 'release_verification'
   Invoke-LoggedStep 'Verifying Runner' $VerifyLog {
     @'
 __VERIFIER__
@@ -887,6 +889,7 @@ __VERIFIER__
   Push-Location -LiteralPath $TempRoot
   try {
     $InstallLog = Join-Path $TempRoot 'npm-install.log'
+    $RuntimePhase = 'package_install'
     Invoke-LoggedStep 'Installing Runner' $InstallLog {
       & $NpmPath --userconfig $EmptyUserConfig --globalconfig $EmptyGlobalConfig install --global --ignore-scripts --offline --no-audit --no-fund --prefix $Stage (Join-Path $TempRoot $ArtifactName)
     }
@@ -910,6 +913,7 @@ __VERIFIER__
   if ($LASTEXITCODE -ne 0) { throw 'Installed runmesh-runner help check failed.' }
   $EnrollmentCode = Read-EnrollmentCode $EnrollmentCodeArgument
   $EnrollmentCodeArgument = $null
+  $RuntimePhase = 'enrollment'
   $EnrollmentAttempted = $true
   $EnrollLog = Join-Path $TempRoot 'enroll.log'
   Invoke-LoggedStep 'Connecting to control plane' $EnrollLog {
@@ -922,25 +926,18 @@ __VERIFIER__
   $CurrentRunner = Join-Path $CurrentRoot 'runmesh.cmd'
   $ServiceAttempted = $true
   $ServiceLog = Join-Path $TempRoot 'service-install.log'
+  $RuntimePhase = 'service_install'
   Invoke-LoggedStep 'Starting service' $ServiceLog {
     & $CurrentRunner install --profile $Profile __EXECUTION_MODE_FLAGS__ --executable-path $CurrentRunner
   }
   $Succeeded = $true
   Write-Ok "Runmesh Runner $Version is ready."
   Write-Host '  Service started automatically.'
-  Write-Host '  Windows status: Get-ScheduledTask -TaskName RunmeshRunner'
+  Write-Host ('  Status: & "' + $CurrentRunner + '" status --json')
 } catch {
-  Write-Fail 'Runmesh Runner installation failed.'
-  Write-Host ("  exception: {0}" -f $_.Exception.GetType().FullName) -ForegroundColor DarkGray
-  Write-Host ("  message: {0}" -f $_.Exception.Message) -ForegroundColor DarkGray
-  if ($_.InvocationInfo -and $_.InvocationInfo.PositionMessage) {
-    Write-Host '  location:' -ForegroundColor DarkGray
-    $_.InvocationInfo.PositionMessage.TrimEnd().Split([Environment]::NewLine) | ForEach-Object { Write-Host ("  | {0}" -f $_) -ForegroundColor DarkGray }
-  }
-  if ($_.ScriptStackTrace) {
-    Write-Host '  stack trace:' -ForegroundColor DarkGray
-    $_.ScriptStackTrace.TrimEnd().Split([Environment]::NewLine) | ForEach-Object { Write-Host ("  | {0}" -f $_) -ForegroundColor DarkGray }
-  }
+  Write-Fail ("[RMI_INSTALL_FAILED] stage={0}: Runmesh Runner installation failed." -f $RuntimePhase)
+  if ($EnrollmentAttempted) { Write-Host '  Enrollment may have consumed the code. Verify credentials before retrying; do not repeatedly redeem it.' }
+  else { Write-Host ('  ' + ($_.Exception.Message -replace '[A-Za-z0-9_-]{43,}', '[redacted]')); Write-Host '  Enrollment was not attempted; existing credentials were not changed.' }
   Write-Host '  Any local files created by this attempt will be rolled back where safe.' -ForegroundColor DarkGray
   throw
 } finally {
@@ -964,6 +961,9 @@ function replaceInstallerTemplate(template: string, enrollmentUrl: string, liter
     : "--execution-mode dedicated_user";
   const node = FIXED_NODE_RUNTIME_ASSETS;
   return template
+    .replace("__POSIX_INSTALLER_PREFLIGHT__", POSIX_INSTALLER_PREFLIGHT)
+    .replace("__CODE_EQUALS_VALUE__", "${1#--code=}")
+    .replace("__TEMP_PARENT__", "${TMPDIR:-/tmp}")
     .replaceAll("__ACTION__", action)
     .replaceAll("__NO_COLOR__", "${NO_COLOR:-}")    .replaceAll("__EXECUTION_MODE_FLAGS__", modeFlags)
     .replaceAll("__VERSION__", literal(FIXED_RELEASE_VERSION))
