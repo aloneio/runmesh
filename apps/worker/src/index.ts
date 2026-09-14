@@ -1,3 +1,6 @@
+import { ProtectedRpcMethodSchema } from "@aloneio/runmesh-protocol";
+import { rpcPermissionRequirement } from "./mcp-authorization.js";
+import { PRODUCT_VERSION } from "./generated-version.js";
 import { historyControls, historySettingsForm, historyView, type HistoryView } from "./history-ui.js";
 import { parseJobHistorySettings, type JobHistorySettings } from "./job-history-settings.js";
 import { PackedJobHistory } from "./job-history-store.js";
@@ -93,6 +96,8 @@ async function handleRequest(request: Request, env: WorkerEnv, _ctx: ExecutionCo
     return Response.json({
       ok: true,
       service: "runmesh-agent-control-plane",
+      worker_version: PRODUCT_VERSION,
+      release_readiness: { contract: "release-chain-audit-v1", rpc_authorization_complete: ProtectedRpcMethodSchema.options.every((method) => rpcPermissionRequirement(method) !== undefined) },
       worker_id: env.WORKER_ID,
       release_gate: releaseGateDiagnostics(env),
       job_history: { backend: env.RUNMESH_JOB_HISTORY_BACKEND === "d1" ? "packed_d1" : "sqlite", protocol: 1, default_interval_seconds: 300, max_snapshot_jobs: 500 },

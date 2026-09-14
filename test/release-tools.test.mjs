@@ -1,3 +1,4 @@
+import { validateReleaseHealth } from "../scripts/check-live-release-prereqs.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -275,4 +276,15 @@ test("stable publication requires the owner and the complete same-SHA CI workflo
   assert.ok(ci.includes("needs: [verify, native-runner, runner-lts]"));
   assert.ok(ci.includes("node: [22.23.2, 24.21.0]"));
   assert.ok(!ci.includes("runner-node20"));
+});
+
+
+test("release publication rejects stale or incomplete public deployment contracts", () => {
+  const health={ok:true,service:"runmesh-agent-control-plane",worker_id:"worker-production",release_gate:{test_mode_disabled:true,canonical_public_origin_configured:true},release_readiness:{contract:"release-chain-audit-v1",rpc_authorization_complete:true},job_history:{backend:"packed_d1",protocol:1},audit_history:{backend:"d1",binding_configured:true}};
+  assert.doesNotThrow(()=>validateReleaseHealth(health));
+  for(const key of ["release_readiness","job_history","audit_history"]) {
+    const invalid=structuredClone(health);delete invalid[key];assert.throws(()=>validateReleaseHealth(invalid));
+  }
+  const stale=structuredClone(health);stale.release_readiness.rpc_authorization_complete=false;assert.throws(()=>validateReleaseHealth(stale));
+  const unbound=structuredClone(health);unbound.audit_history.binding_configured=false;assert.throws(()=>validateReleaseHealth(unbound));
 });
