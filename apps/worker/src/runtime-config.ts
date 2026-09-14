@@ -20,7 +20,7 @@ export function resolveRuntimeConfiguration<T extends RuntimeConfiguration>(env:
   const environment = env.RUNMESH_ENVIRONMENT ??
     (env.WORKER_ID === "worker-development" ? "development" : env.WORKER_ID === "worker-test" || env.RUNMESH_TEST_MODE === "1" ? "test" : "production");
   const production = environment === "production" && env.RUNMESH_TEST_MODE !== "1";
-  const backend = production || env.HISTORY_DB !== undefined ? "d1" : "sqlite";
+  const backend = (environment !== "development" && environment !== "test") || env.HISTORY_DB !== undefined ? "d1" : "sqlite";
   let origin = env.RUNMESH_PUBLIC_ORIGIN;
   if (origin === undefined && request !== undefined && request.headers.has("host")) {
     try { origin = resolvePublicOrigin(request); } catch { /* Origin validation will fail closed. */ }
@@ -35,6 +35,6 @@ export function resolveRuntimeConfiguration<T extends RuntimeConfiguration>(env:
     // Explicit d1 without its binding must report unavailable, never fall back.
     RUNMESH_AUDIT_BACKEND: env.RUNMESH_AUDIT_BACKEND ?? backend,
     RUNMESH_JOB_HISTORY_BACKEND: env.RUNMESH_JOB_HISTORY_BACKEND ?? backend,
-    ...(tag === null ? {} : { RUNMESH_DEPLOYMENT_BRANCH: tag[1], RUNMESH_DEPLOYMENT_COMMIT: tag[2] }),
+    ...(env.CF_VERSION_METADATA === undefined ? {} : { RUNMESH_DEPLOYMENT_BRANCH: tag?.[1], RUNMESH_DEPLOYMENT_COMMIT: tag?.[2] }),
   };
 }
