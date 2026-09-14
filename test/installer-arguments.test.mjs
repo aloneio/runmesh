@@ -24,7 +24,10 @@ function powerShellParse(args, action = "install") {
   try {
     const file = join(directory, "parse.ps1");
     writeFileSync(file, "$ErrorActionPreference = 'Stop'\nfunction Read-Host { throw 'Unexpected interactive prompt' }\n" + powershell.replaceAll("__ACTION__", action) + '\nif ($CodeArgumentProvided) { [Console]::Write("1|" + (Read-EnrollmentCode $EnrollmentCodeArgument)) } else { [Console]::Write("0|") }\n');
-    return spawnSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), ["-NoProfile", "-NonInteractive", "-File", file, ...args], { encoding: "utf8", timeout: 15_000 });
+    // -ExecutionPolicy Bypass is required because Windows PowerShell defaults to
+    // Restricted on a stock host, which would reject this -File invocation
+    // before the parser under test ever runs. A Group Policy override still wins.
+    return spawnSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", file, ...args], { encoding: "utf8", timeout: 15_000 });
   } finally { rmSync(directory, { recursive: true, force: true }); }
 }
 for (const [platform, parse, enabled] of [["POSIX", posixParse, process.platform !== "win32"], ["PowerShell", powerShellParse, process.platform === "win32"]]) {

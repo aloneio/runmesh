@@ -6,7 +6,8 @@ MCP client with per-client secret URL and sticky active_runner_id
         ▼
 Cloudflare Worker
   ├─ setup/login/admin HTML
-  ├─ RegistryDO (SQLite)
+  ├─ RegistryDO (SQLite; core authority and optional Job snapshots)
+  ├─ D1 (optional metadata-only audit history)
   └─ RunnerDO per runner_id (hibernatable WebSocket)
         │ outbound-only WSS
         ▼
@@ -35,7 +36,7 @@ Local Runner
 
 The dashboard adds a Runner with a stable safe ID and `display_name`, then creates a 30-minute, single-use enrollment code. Regeneration deletes any unused code for that Runner before inserting the replacement. `POST /runner/enroll` atomically redeems the code and returns a new Runner token; the packaged CLI's supported flow is `runmesh enroll --server ... --code-stdin`, followed by `runmesh install`. It stores a centrally managed local profile with zero workspaces; only the Admin Panel adds central workspace roots.
 
-The dashboard displays a one-command installer with a quoted single-use enrollment code only when the fixed signed release release has been published, independently verified, and explicitly enabled for the Worker **with a valid canonical external HTTPS `RUNMESH_PUBLIC_ORIGIN`**. The default/local environment keeps that path disabled; the checked-in `production` environment keeps distribution disabled for the unreleased 0.1.0 candidate. Otherwise it displays the manual portable-artifact route and uses `runmesh enroll --code-stdin`. The enabled installer pins the release and embedded Ed25519 key, verifies signed immutable assets, and treats Worker HTTPS delivery as bootstrap trust model A; high-assurance operators use an independent offline keyring path. It does not provide automatic update.
+The dashboard displays a one-command installer with a quoted single-use enrollment code only when the fixed signed release has been published, independently verified, and explicitly enabled for the Worker **with a valid canonical external HTTPS `RUNMESH_PUBLIC_ORIGIN`**. The explicit `development` and `test` environments keep that path disabled; the top-level production configuration and its named `production` alias enable the independently verified immutable `v0.1.2` release. Otherwise it displays the manual portable-artifact route and uses `runmesh enroll --code-stdin`. The enabled installer pins the release and embedded Ed25519 key, verifies signed immutable assets, and treats Worker HTTPS delivery as bootstrap trust model A; high-assurance operators use an independent offline keyring path. It does not provide automatic update.
 
 The local CLI has implemented profile/status/doctor/workspace/env/start commands and a service-manifest adapter. `runmesh install` invokes the Runmesh service provisioner for Runmesh-owned identities and directories (and Windows Local Service ACLs), then writes managed system service manifests with dedicated-user identity by default for direct/manual CLI use. The dashboard and direct CLI default to `dedicated_user`; `privileged_host` is an advanced choice requiring explicit confirmation. It never changes configured Workspace ownership or modes; the operator grants the service identity only the required Workspace access. Current profiles require a valid `execution_mode`, `management_mode: central`, and zero local workspace entries; an incomplete profile is rejected and must be replaced through enrollment. The local `workspace` command is inspection-only; workspace roots and permissions are configured in the Admin Panel. Doctor diagnostics report stable required/optional checks and Host shell availability. The dashboard and service-action pages render commands/manifests but do not activate a host service themselves. Hosted bootstrap scripts fail closed while either the fixed release gate or canonical public origin is absent. When the exact signed release is enabled, a new-install-only script verifies and stages the portable package, uses the supplied code after verification, or prompts locally when it was omitted, creates the canonical system profile, activates the versioned `current` path, and invokes the same local `runmesh install` provisioner. A local failure removes only the newly created version/current/service state; a remotely redeemed code cannot be rolled back and must be regenerated. When hosted bootstrap is unavailable, the operator must use a manually verified portable artifact and run `runmesh install` explicitly.
 
@@ -58,13 +59,13 @@ The authentication throttle reserves attempts transactionally before expensive p
 
 Admin/MCP HTML uses no-store/referrer/no-sniff/frame protections and CSRF checks. The emitted dashboard uses inline style/script content, so its CSP currently requires `unsafe-inline`; replacing that with nonce/hash or external resources is deferred hardening.
 
-The deployed core uses Workers plus SQLite-backed Durable Objects only. It does not include OAuth, AI/model APIs, Cloudflare Sandbox, Cloudflare Containers, GitHub Actions runtime, KV, D1, R2, Queues, Dynamic Workers, tunnels, or inbound services. The Runner's workspace policy is not an OS sandbox; operators must provide external isolation for hostile code.
+The authorization and transport core uses Workers plus SQLite-backed Durable Objects. Production optionally stores MCP audit metadata in independent D1 history; see [quota isolation](quota-resilience.md). It does not include OAuth, AI/model APIs, Cloudflare Sandbox, Cloudflare Containers, GitHub Actions runtime, KV, R2, Queues, Dynamic Workers, tunnels, or inbound services. The Runner's workspace policy is not an OS sandbox; operators must provide external isolation for hostile code.
 
 ## Free Plan posture
 
 WebSocket Hibernation reduces idle control-plane connection cost; local Runners carry execution and disk cost. Capacity still depends on account-wide Cloudflare quotas and must be measured by the operator. Local validation does not prove deployed quotas or restart/hibernation behavior.
 
-## Current security contract (0.1.0 unreleased candidate)
+## Current security contract (0.1.2 published stable release)
 
 First administrator setup requires no additional bootstrap token and remains
 CSRF-protected, same-origin and atomic first-success-wins. The default Runner
@@ -79,5 +80,13 @@ setup. Scripts accept a positional code, `--code CODE`, or `--code=CODE`; omitti
 the code retains the hidden terminal prompt. The downstream Runner receives
 standard input, not a temporary credential file. The complete convenience
 command is credential material and may be recorded in command history or
-process arguments. The 0.1.0 production gate remains disabled until independent signed-asset
+process arguments. The 0.1.2 production gate is enabled only after independent signed-asset
 verification; development retains its disabled gate.
+
+## Quota-isolation amendment
+
+The [quota-isolation contract](quota-resilience.md) adds transactional retention counters, independent optional D1 audit, and a per-client cloud Job recording preference. Core authorization stays in the existing DO namespace. Unrecorded Jobs have no offline cloud snapshot; workspace-bound live operations still require current Registry and Runner permission checks. Physical cleanup is bounded and can lag the seven-day visibility window during backlog or storage failure.
+
+## Batched Job history
+
+See [batched snapshots, manual loading and retention](batched-job-history.md). Production uses `RUNMESH_JOB_HISTORY_BACKEND=d1`; the default upload window is five minutes. History is loaded only on request. Source-side batching and local day-based cleanup are shipped in immutable v0.1.2; existing v0.1.1 assets and installed services remain unchanged.

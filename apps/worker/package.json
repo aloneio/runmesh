@@ -1,18 +1,18 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@aloneio/runmesh-worker",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "tsc -b",
     "test": "vitest run --config vitest.config.ts",
     "typecheck": "tsc -b --pretty false",
-    "dev": "wrangler dev"
+    "dev": "wrangler dev --env development"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.0.0",
-    "@aloneio/runmesh-protocol": "0.1.0",
+    "@aloneio/runmesh-protocol": "0.1.2",
     "agents": "0.21.0",
     "zod": "4.4.3"
   },
