@@ -20,18 +20,18 @@ const execFileAsync = promisify(execFile);
 const productVersion = JSON.parse(await readFile(join(repositoryRoot, "package.json"), "utf8")).version;
 async function fixture() { const root = await mkdtemp(join(tmpdir(), "runmesh-release-tools-")); return { root, cleanup: () => rm(root, { recursive: true, force: true }) }; }
 
-test("pins manually-dispatched releases to the triggering dev commit", async () => {
+test("pins manually-dispatched releases to the triggering main commit", async () => {
   const workflow = (await readFile(join(repositoryRoot, ".github", "workflows", "release.yml"), "utf8")).replace(/\r\n/gu, "\n");
-  assert.equal(workflow.includes("if: github.ref == 'refs/heads/dev'"), false);
+  assert.equal(workflow.includes("if: github.ref == 'refs/heads/main'"), false);
   assert.equal(workflow.includes("ref: ${{ github.sha }}"), true);
   assert.equal(workflow.includes("timeout-minutes: 45"), true);
   assert.equal(workflow.includes('test "$GITHUB_REPOSITORY" = "aloneio/runmesh"'), true);
-  assert.equal(workflow.includes('test "$GITHUB_REF" = "refs/heads/dev"'), true);
+  assert.equal(workflow.includes('test "$GITHUB_REF" = "refs/heads/main"'), true);
   assert.equal(workflow.includes('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"'), true);
-  assert.equal(workflow.includes('test "$(git rev-parse origin/dev)" = "$GITHUB_SHA"'), true);
+  assert.equal(workflow.includes('test "$(git rev-parse origin/main)" = "$GITHUB_SHA"'), true);
   assert.equal(workflow.includes(`test "$RELEASE_VERSION" = "${productVersion}"`), true);
   assert.equal(workflow.includes('test "$RELEASE_SIGNING_KEY_ID" = "runmesh-preview-2026-01"'), true);
-  assert.equal(workflow.lastIndexOf('git fetch --no-tags origin dev') > workflow.indexOf('Verify tag and release do not already exist'), true);
+  assert.equal(workflow.lastIndexOf('git fetch --no-tags origin main') > workflow.indexOf('Verify tag and release do not already exist'), true);
   assert.equal(workflow.includes("https://api.github.com/repos/"), true);
   assert.equal(workflow.includes('test -n "$GH_TOKEN"'), true);
   assert.equal(workflow.includes("node scripts/release-verify.mjs release/download/manifest.json"), true);
@@ -58,9 +58,9 @@ test("pins manually-dispatched releases to the triggering dev commit", async () 
   assert.ok(packIndex >= 0 && packSizeGateIndex > packIndex, "final release pack must have an explicit size gate");
   assert.equal(workflow.includes("size <= 0 || size > 8 * 1024 * 1024"), true);
   const publishIndex = workflow.indexOf("Publish verified stable release");
-  const publishTipFetchIndex = workflow.indexOf("git fetch --no-tags origin dev", publishIndex);
-  const publishTipAssertIndex = workflow.indexOf('test "$(git rev-parse origin/dev)" = "$GITHUB_SHA"', publishIndex);
-  assert.ok(publishIndex >= 0 && publishTipFetchIndex > publishIndex && publishTipAssertIndex > publishTipFetchIndex, "publish must re-check the protected dev tip");
+  const publishTipFetchIndex = workflow.indexOf("git fetch --no-tags origin main", publishIndex);
+  const publishTipAssertIndex = workflow.indexOf('test "$(git rev-parse origin/main)" = "$GITHUB_SHA"', publishIndex);
+  assert.ok(publishIndex >= 0 && publishTipFetchIndex > publishIndex && publishTipAssertIndex > publishTipFetchIndex, "publish must re-check the protected main tip");
   assert.equal(workflow.includes('git push origin "v${RELEASE_VERSION}"'), false);
   assert.equal(workflow.includes("sha256sum *.tgz manifest.json manifest.sig manifest.signature.json LICENSE NOTICE THIRD_PARTY_NOTICES.md trust-keyring.json > SHA256SUMS"), true);
   assert.equal(workflow.includes("npm sbom"), false);

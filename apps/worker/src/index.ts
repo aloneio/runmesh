@@ -99,6 +99,7 @@ async function handleRequest(request: Request, env: WorkerEnv, _ctx: ExecutionCo
       worker_version: PRODUCT_VERSION,
       release_readiness: { contract: "release-chain-audit-v1", rpc_authorization_complete: ProtectedRpcMethodSchema.options.every((method) => rpcPermissionRequirement(method) !== undefined) },
       worker_id: env.WORKER_ID,
+      deployment: { branch: env.RUNMESH_DEPLOYMENT_BRANCH === "main" || env.RUNMESH_DEPLOYMENT_BRANCH === "dev" ? env.RUNMESH_DEPLOYMENT_BRANCH : null, commit: /^[a-f0-9]{40}$/.test(env.RUNMESH_DEPLOYMENT_COMMIT ?? "") ? env.RUNMESH_DEPLOYMENT_COMMIT : null },
       release_gate: releaseGateDiagnostics(env),
       job_history: { backend: env.RUNMESH_JOB_HISTORY_BACKEND === "d1" ? "packed_d1" : "sqlite", protocol: 1, default_interval_seconds: 300, max_snapshot_jobs: 500 },
       audit_history: { backend: env.RUNMESH_AUDIT_BACKEND === "d1" ? "d1" : "durable_object", binding_configured: env.RUNMESH_AUDIT_BACKEND !== "d1" || env.HISTORY_DB !== undefined },

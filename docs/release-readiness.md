@@ -25,3 +25,7 @@ Daily-cadence regression: no changed state means zero additional archive uploads
 Existing v0.1.1 hosts are not automatically upgraded or restarted. Source-side batching and local retention become available in the new signed package; live clients must refresh their cached MCP tool catalog to use workspace-bound Job fields. Hosted installation remains new-install-only; never overwrite an unmanaged installation or delete local state to upgrade the maintained Runner.
 
 All v2 migrations are the explicitly tested additive history changes. Preserve credentials, the existing DO namespace, workspaces, live processes and local logs. No paid plan, credential rotation or data reset is part of this release.
+
+## Production branch cutover
+
+The serving Worker is promoted to protected GitLab main; dev is reserved for a separate development Worker. Existing v0.1.2 publication provenance above is historical and is not rewritten. Future formal publication is main-only. See [exact settings and checks](production-main-cutover.md).
