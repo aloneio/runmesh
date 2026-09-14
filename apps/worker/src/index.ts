@@ -2100,7 +2100,7 @@ function adminScript(nonce?: string): string {
   return `<script${nonce === undefined ? "" : ` nonce="${nonce}"`}>
   (function(){
 function applyLocale(locale){document.documentElement.lang=locale;document.querySelectorAll('[data-lang-toggle]').forEach(function(link){link.setAttribute('aria-current',link.getAttribute('data-lang-toggle')===locale?'true':'false')})}
-function requestedLocale(){var query=new URLSearchParams(location.search).get('lang');if(query==='zh-CN'||query==='zh')return 'zh-CN';if(query==='en')return 'en';var match=/runmesh_lang=(zh-CN|en)/.exec(document.cookie||'');if(match)return match[1];return navigator.language&&navigator.language.toLowerCase().startsWith('zh')?'zh-CN':'en'}
+function requestedLocale(){return document.documentElement.lang==='zh-CN'?'zh-CN':'en'}
 function rememberLocale(locale){document.cookie='runmesh_lang='+locale+'; Max-Age=31536000; Path=/; SameSite=Lax'}
  document.querySelectorAll('[data-lang-toggle]').forEach(function(link){link.addEventListener('click',function(event){var locale=link.getAttribute('data-lang-toggle')||'en';rememberLocale(locale);var url=new URL(location.href);url.searchParams.set('lang',locale);event.preventDefault();location.href=url.toString()})});
 var locale=requestedLocale();if(new URLSearchParams(location.search).has('lang'))rememberLocale(locale);applyLocale(locale);
