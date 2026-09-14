@@ -1,3 +1,4 @@
+import { FairJobQueue } from "./job-queue.js";
 import { RpcRuntimeError } from "./errors.js";
 import { constants } from "node:fs";
 import { chmod, lstat, open, mkdir, readFile, readdir, rename, rm } from "node:fs/promises";
@@ -55,6 +56,9 @@ export interface JobManagerOptions {
   readonly stateDir?: string;
   readonly runnerId?: string;
   readonly maxConcurrentJobs?: number;
+  readonly maxQueuedJobs?: number;
+  readonly maxQueuedJobsPerClient?: number;
+  readonly authorizeQueuedJob?: (input: Record<string, unknown>, job: JobRecord) => Promise<boolean>;
   /** Maximum persisted job records, including active jobs. */
   readonly maxRetainedJobs?: number;
   /** Maximum aggregate stdout+stderr bytes persisted for one job. */
@@ -130,9 +134,42 @@ export class JobManager {
   private retentionChain: Promise<void> = Promise.resolve();
   /** Serializes admission through the async pre-spawn window. */
   private startChain: Promise<void> = Promise.resolve();
+  private readonly queue: FairJobQueue<{input:Record<string,unknown>;generation:number}>;
+  private readonly queuedIds = new Set<string>();
+  private queueAuthorizer: JobManagerOptions["authorizeQueuedJob"];
+  private draining = false;
+  private waitingAdmissions = 0;
+  public setQueueAuthorizer(authorize: JobManagerOptions["authorizeQueuedJob"]): void { this.queueAuthorizer = authorize; }
+  public queueStatus(): { waiting: number; limit: number; per_client_limit: number; running: number } {
+    return { waiting: this.queue.size, limit: this.queue.limit, per_client_limit: this.queue.perClient, running: this.activeCount() };
+  }
+  /** Process one waiting job per admission turn. A failing authorization must
+   * not hold the lock across the whole queue or starve newly arriving clients.
+   * No periodic probing: completion, cancellation or inspection wakes dispatch. */
+  public resumeQueue(): void {
+    if (this.draining || this.queue.size === 0) return;
+    this.draining = true;
+    void this.reserveStart(async () => {
+      if (this.queue.size > 0 && this.activeCount() < this.maxConcurrentJobs) {
+        const next = this.queue.shift(); if (next === undefined) return;
+        this.queuedIds.delete(next.id);
+        const job = this.jobs.get(next.id); if (job?.status !== "queued") return;
+        try { await this.startReserved(next.value.input, next.value.generation, job); }
+        catch {
+          const current=this.jobs.get(next.id);
+          if (current?.status === "queued") {
+            const failed={...current,status:"failed" as const,updated_at_ms:Date.now(),completed_at_ms:Date.now(),recovery_note:"Queued launch could not be authorized or started; no command was run."};
+            this.jobs.set(next.id,failed); await this.persist(failed); this.onEvent({type:"completed",job:failed});
+          }
+        }
+      }
+    }).catch(() => undefined).finally(() => { this.draining=false; if(this.queue.size>0 && this.activeCount()<this.maxConcurrentJobs)this.resumeQueue(); });
+  }
 
   public constructor(options: JobManagerOptions) {
     this.policy = options.policy;
+    this.queue = new FairJobQueue(options.maxQueuedJobs ?? 32, options.maxQueuedJobsPerClient ?? 8);
+    this.queueAuthorizer = options.authorizeQueuedJob;
     this.stateDir = options.stateDir ?? defaultRunnerStateDir();
     if (!isAbsolute(this.stateDir) || this.stateDir.length === 0 || this.stateDir.length > 4_096 || /[\u0000-\u001f\u007f]/u.test(this.stateDir) || resolve(this.stateDir) === parse(resolve(this.stateDir)).root) {
       throw new Error("stateDir must be an absolute non-root path without control characters");
@@ -224,6 +261,7 @@ export class JobManager {
   /** Reconcile recovered PIDs before returning metadata to remote callers. */
   public async listReconciled(input: { readonly workspace_id?: unknown; readonly status?: unknown; readonly limit?: unknown } = {}): Promise<JobRecord[]> {
     await this.reconcileRecoveredJobs();
+    this.resumeQueue();
     return this.filteredList(input);
   }
 
@@ -260,8 +298,11 @@ export class JobManager {
   }
 
   public async start(input: unknown): Promise<JobRecord> {
+    if (this.waitingAdmissions >= 64) throw new RpcRuntimeError("busy", "Command admission is full; retry with the same request_id");
     const generation = this.policy.generation;
-    return this.reserveStart(() => this.startReserved(input, generation));
+    this.waitingAdmissions++;
+    try { return await this.reserveStart(() => this.startReserved(input, generation)); }
+    finally { this.waitingAdmissions--; this.resumeQueue(); }
   }
 
   private async reserveStart<T>(operation: () => Promise<T>): Promise<T> {
@@ -272,7 +313,7 @@ export class JobManager {
     try { return await operation(); } finally { release(); }
   }
 
-  private async startReserved(input: unknown, generation: number): Promise<JobRecord> {
+  private async startReserved(input: unknown, generation: number, reservedJob?: JobRecord): Promise<JobRecord> {
     this.policy.assertGeneration(generation);
     const params = paramsObject(input);
     const workspace = this.policy.getWorkspace(params.workspace_id);
@@ -282,7 +323,7 @@ export class JobManager {
     const createdByClientId = safeOptionalIdentifier(params.created_by_client_id);
     const requestId = safeOptionalRequestId(params.request_id);
     const requestFingerprint = requestId === null ? null : launchRequestFingerprint(workspace.workspaceId, relativeWorkspacePath(workspace, cwd.path), invocation, createdByClientId);
-    if (requestId !== null) {
+    if (reservedJob === undefined && requestId !== null) {
       const existing = [...this.jobs.values()].find((job) => job.workspace_id === workspace.workspaceId && job.created_by_client_id === createdByClientId && job.request_id === requestId);
       if (existing !== undefined) {
         if (existing.request_fingerprint !== requestFingerprint) throw new RpcRuntimeError("request_id_conflict", "request_id is already bound to a different launch request");
@@ -295,17 +336,23 @@ export class JobManager {
     // could be deleted or ignored and a replacement process admitted beside
     // the still-running recovered job.
     await this.reconcileRecoveredJobs();
-    await this.pruneRetainedJobs(this.maxRetainedJobs - 1);
-    if (this.jobs.size >= this.maxRetainedJobs) throw new RpcRuntimeError("busy", `max retained jobs (${this.maxRetainedJobs}) reached while active jobs are retained`);
-    if (this.activeCount() >= this.maxConcurrentJobs) throw new RpcRuntimeError("busy", `max concurrent jobs (${this.maxConcurrentJobs}) reached`);
+    const mustQueue = reservedJob === undefined && (this.activeCount() >= this.maxConcurrentJobs || this.queue.size > 0);
+    const client = createdByClientId ?? "local";
+    if (reservedJob === undefined) {
+      await this.pruneRetainedJobs(this.maxRetainedJobs - 1);
+      if (this.jobs.size >= this.maxRetainedJobs) throw new RpcRuntimeError("busy", `max retained jobs (${this.maxRetainedJobs}) reached while active and queued jobs are retained`);
+    }
+    if (mustQueue && (params.queue === false || this.queueAuthorizer === undefined || this.queue.limit === 0)) throw new RpcRuntimeError("busy", `max concurrent jobs (${this.maxConcurrentJobs}) reached; queued admission is unavailable`);
+    if (mustQueue && (this.queue.size >= this.queue.limit || this.queue.count(client) >= this.queue.perClient)) throw new RpcRuntimeError("queue_full", "Waiting queue or per-client queue limit reached");
     const now = Date.now();
-    const job: JobRecord = {
+    const job: JobRecord = reservedJob ?? {
       job_id: `job-${randomUUID()}`, workspace_id: workspace.workspaceId, cwd: relativeWorkspacePath(workspace, cwd.path),
       command: invocation.command, shell: invocation.shell, status: "queued", pid: null,
       process_start_fingerprint: null, recovery_liveness: null,
       created_at_ms: now, started_at_ms: null, updated_at_ms: now, completed_at_ms: null, exit_code: null, signal: null,
       recovery_note: null, output_truncated: false, created_by_client_id: createdByClientId, request_id: requestId, request_fingerprint: requestFingerprint, cancellation_delivered_at_ms: null,
     };
+    if (reservedJob === undefined) {
     this.jobs.set(job.job_id, job);
     try {
       await ensureDirectoryPath(this.jobDir(job.job_id), "Runner job directory", true);
@@ -324,6 +371,15 @@ export class JobManager {
       throw error;
     }
 
+    }
+    if (mustQueue) {
+      const current=this.jobs.get(job.job_id);
+      if(current?.status !== "queued")return current ?? job;
+      this.queue.push(client, job.job_id, {input:params,generation}); this.queuedIds.add(job.job_id);
+      this.onEvent({type:"status",job});
+      return job;
+    }
+    this.queue.served(client);
     let stdout: Awaited<ReturnType<typeof open>> | undefined;
     let stderr: Awaited<ReturnType<typeof open>> | undefined;
     let child: ChildProcess;
@@ -335,6 +391,7 @@ export class JobManager {
       // descriptors are opening. Do not resurrect that record by spawning
       // after cancellation; the synchronous status check closes the only
       // remaining window before spawn.
+      if (reservedJob !== undefined && (this.queueAuthorizer === undefined || !await this.queueAuthorizer(params, job))) throw new RpcRuntimeError("permission_denied", "Queued launch authorization was denied or unavailable");
       const beforeSpawn = this.jobs.get(job.job_id);
       if (beforeSpawn === undefined || beforeSpawn.status !== "queued") {
         await this.closeLogHandlesSafely(stdout, stderr);
@@ -437,10 +494,12 @@ export class JobManager {
       job = await this.getReconciled(jobId);
     }
     if (job.status === "queued") {
+      this.queue.remove(job.job_id); this.queuedIds.delete(job.job_id);
       const cancelled = { ...job, status: "cancelled" as const, updated_at_ms: Date.now(), completed_at_ms: Date.now() };
       this.jobs.set(job.job_id, cancelled);
       await this.persist(cancelled);
       this.onEvent({ type: "completed", job: cancelled });
+      this.resumeQueue();
       return cancelled;
     }
     if (job.status === "unknown" || (job.status === "cancelling" && job.recovery_liveness !== null)) return this.cancelRecoveredUnknown(job);
@@ -961,7 +1020,7 @@ export class JobManager {
   private async finish(jobId: string, code: number | null, signal: NodeJS.Signals | null, spawnFailed: boolean): Promise<void> {
     const existing = this.finishing.get(jobId);
     if (existing !== undefined) return existing;
-    const task = this.finishOnce(jobId, code, signal, spawnFailed).finally(() => this.finishing.delete(jobId));
+    const task = this.finishOnce(jobId, code, signal, spawnFailed).finally(() => { this.finishing.delete(jobId); this.resumeQueue(); });
     this.finishing.set(jobId, task);
     return task;
   }
@@ -1130,7 +1189,7 @@ export class JobManager {
   }
 
   /** Count local and recovered processes against the configured admission cap. */
-  private activeCount(): number { return [...this.jobs.values()].filter(occupiesProcessSlot).length; }
+  private activeCount(): number { return [...this.jobs.values()].filter(job => !this.queuedIds.has(job.job_id) && occupiesProcessSlot(job)).length; }
   private beginTermination(jobId: string, pid: number | null, expectedChild: ChildProcess | undefined, expectedFingerprint: string | null): Promise<boolean> {
     const existing = this.terminationAttempts.get(jobId);
     if (existing !== undefined) return existing;

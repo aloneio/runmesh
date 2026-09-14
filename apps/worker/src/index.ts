@@ -1,3 +1,4 @@
+import { localizeHtmlResponse } from "./ui-locale.js";
 import { ProtectedRpcMethodSchema } from "@aloneio/runmesh-protocol";
 import { rpcPermissionRequirement } from "./mcp-authorization.js";
 import { PRODUCT_VERSION } from "./generated-version.js";
@@ -78,7 +79,7 @@ export default {
     if (env.RUNMESH_JOB_HISTORY_BACKEND === "d1") await new PackedJobHistory(env.HISTORY_DB,env.REGISTRY.idFromName("registry").toString()).cleanup();
   },
   async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
-    try { return await handleRequest(request, env, ctx); }
+    try { return localizeHtmlResponse(request, await handleRequest(request, env, ctx)); }
     catch (error) {
       if (error instanceof ControlPlaneUnavailableError) return controlPlaneUnavailableResponse();
       throw error;
@@ -97,6 +98,8 @@ async function handleRequest(request: Request, env: WorkerEnv, _ctx: ExecutionCo
       ok: true,
       service: "runmesh-agent-control-plane",
       worker_version: PRODUCT_VERSION,
+      ui: { locale_rendering: "server-v1", refresh: "explicit" },
+      job_queue: { protocol: 1, default_capacity: 32, default_per_client: 8, requires_compatible_runner: true },
       release_readiness: { contract: "release-chain-audit-v1", rpc_authorization_complete: ProtectedRpcMethodSchema.options.every((method) => rpcPermissionRequirement(method) !== undefined) },
       worker_id: env.WORKER_ID,
       deployment: { branch: env.RUNMESH_DEPLOYMENT_BRANCH === "main" || env.RUNMESH_DEPLOYMENT_BRANCH === "dev" ? env.RUNMESH_DEPLOYMENT_BRANCH : null, commit: /^[a-f0-9]{40}$/.test(env.RUNMESH_DEPLOYMENT_COMMIT ?? "") ? env.RUNMESH_DEPLOYMENT_COMMIT : null },
@@ -1067,7 +1070,7 @@ async function enrollmentCleanupUnavailable(upstream?: Response): Promise<Respon
   const candidate = record(value?.error)?.code;
   const safe = new Set(["mutation_state_changed", "mutation_mismatch", "mutation_committed", "mutation_uncertain", "no_active_mutation", "runner_unavailable", "registry_unavailable", "control_plane_unavailable"]);
   const code = typeof candidate === "string" && safe.has(candidate) ? candidate : "cleanup_unavailable";
-  const response = adminError(503, `Enrollment code was created, but the temporary Runner safety lock could not be released. Diagnostic: ${code}. No enrollment code was disclosed. Regeneration does not require deleting or reinstalling the Runner. 注册码已创建，但临时隔离解除失败；未显示注册码，请勿因此删除或重装 Runner。`);
+  const response = adminError(503, `Enrollment code was created, but the temporary Runner safety lock could not be released. Diagnostic: ${code}. No enrollment code was disclosed. Regeneration does not require deleting or reinstalling the Runner.`);
   response.headers.set("x-runmesh-error-code", code);
   response.headers.set("x-runmesh-error-phase", "enrollment_fence_release");
   return response;
@@ -1227,472 +1230,7 @@ function registryStatusUnavailable(): Response {
   return new Response("control plane status unavailable", { status: 503, headers: { "cache-control": "no-store" } });
 }
 
-const ZH_UI_TEXT: Record<string, string> = {
-  "Welcome to Runmesh": "欢迎使用 Runmesh",
-  "Agent Control Plane": "智能体控制平面",
-  "Enter the Runmesh control plane": "进入 Runmesh 控制平面",
-  "Sign in to Runmesh": "登录 Runmesh",
-  "Set up Runmesh": "初始化 Runmesh",
-  "Control Plane": "控制平面",
-  "Mesh Nodes": "网格节点",
-  "Mesh Network Active": "网格网络已激活",
-  "Distributed runtime orchestration": "分布式运行时编排",
-  "Runner Nodes": "Runner 节点",
-  "Show password": "显示密码",
-  "Hide password": "隐藏密码",
-  "Signing in...": "正在登录...",
-  "Initializing...": "正在初始化...",
-  "Create administrator password": "创建管理员密码",
-  "Create your administrator master password to begin managing distributed runtimes and MCP clients.": "创建管理员主密码，以开始管理分布式运行时和 MCP 客户端。",
-  "Runner & MCP Control Plane": "Runner 与 MCP 控制平面",
-  "Unified orchestration for distributed secure tool sandboxes, persistent agent runtimes, and MCP client bridges.": "统一编排分布式安全工具沙箱、持久化智能体运行时和 MCP 客户端桥接。",
-  "RUNMESH / CONTROL PLANE": "RUNMESH / 控制平面",
-  "Runmesh network visualization": "Runmesh 网络可视化",
-  "Password": "密码",
-  "Confirm password": "确认密码",
-  "Initialize": "初始化",
-  "Admin password": "管理员密码",
-  "Login": "登录",
-  "login": "登录",
-  "setup": "初始化",
-  "Main navigation": "主导航",
-  "Dashboard": "仪表盘",
-  "Runners": "Runner",
-  "MCP Clients": "MCP 客户端",
-  "Clients": "MCP 客户端",
-  "Settings": "设置",
-  "Control plane": "控制平面",
-  "A concise view of connected runtimes, clients, and recent work.": "集中查看已连接的运行时、客户端和最近任务。",
-  "Refresh": "刷新",
-  "Active MCP clients": "活跃 MCP 客户端",
-  "Online / total runners": "在线 / 总 Runner",
-  "Running jobs": "运行中任务",
-  "Last loaded": "最后加载时间",
-  "Recent jobs": "最近任务",
-  "Active shell jobs": "活跃 Shell 任务",
-  "Last recorded status": "最近记录的状态",
-  "Recent shell jobs": "最近 Shell 任务",
-  "Job details": "任务详情",
-  "Job logs": "任务日志",
-  "Read stdout": "读取标准输出",
-  "Read stderr": "读取标准错误",
-  "Next log chunk": "下一页日志",
-  "Back to Runner": "返回 Runner",
-  "Job snapshot unavailable": "任务快照不可用",
-  "Job metadata is temporarily unavailable.": "任务摘要暂时不可用。",
-  "Invalid job log query.": "日志查询参数无效。",
-  "Job was not found.": "未找到该任务。",
-  "Shell jobs are command executions, not all MCP calls. Read, search and edit operations appear in Recent MCP calls.": "Shell 任务记录命令执行，并不代表全部 MCP 调用。读取、搜索、编辑等操作请查看最近 MCP 调用。",
-  "Database snapshot; refreshed only when you open or refresh this page. Stored status may be stale while the Runner is offline.": "这是数据库快照，仅在打开或手动刷新页面时查询。Runner 离线时，已记录状态可能不是当前实际状态。",
-  "Logs stay on the Runner and are fetched only when you select a stream. No automatic polling.": "日志保留在 Runner 本地，仅在选择输出流后读取，不自动轮询。",
-  "Logs are unavailable. The Runner must be online with read permission, an applied policy and retained local logs.": "日志暂不可读。需要 Runner 在线、允许读取、策略已生效且本地日志仍保留。",
-  "Recent runners": "最近 Runner",
-  "Recent MCP clients": "最近 MCP 客户端",
-  "View all": "查看全部",
-  "Runner activity": "Runner 活动",
-  "Infrastructure": "基础设施",
-  "Manage safe runner metadata and one-time enrollment.": "管理 Runner 信息并完成一次性注册。",
-  "Manage safe runner metadata and one-time registration.": "管理 Runner 信息并完成一次性注册。",
-  "Manage safe runner metadata, authorization windows, and one-time registration.": "管理 Runner 信息、授权期限并完成一次性注册。",
-  "You can set both Runner authorization and enrollment-code timing.": "可以分别设置 Runner 授权和注册码的有效天数。",
-  "Add Runner": "添加 Runner",
-  "Enrollment codes expire after 30 minutes.": "注册码 30 分钟后过期。",
-  "Display name": "显示名称",
-  "Safe runner ID": "安全 Runner ID",
-  "optional": "可选",
-  "Create enrollment": "创建注册",
-  "Registered runners": "已注册 Runner",
-  "Status": "状态",
-  "Platform / architecture": "平台 / 架构",
-  "Workspaces": "工作区",
-  "Active jobs": "活跃任务",
-  "Last seen": "最后在线",
-  "Actions": "操作",
-  "More actions": "更多操作",
-  "View": "查看",
-  "Rename": "重命名",
-  "Rotate Credential": "轮换凭据",
-  "Type Runner ID to confirm": "输入 Runner ID 以确认",
-  "Type the Runner ID to confirm emergency lock": "输入 Runner ID 以确认紧急锁定",
-  "Revoke": "撤销",
-  "Delete": "删除",
-  "Install / Reinstall": "安装 / 重装",
-  "Execution mode": "执行模式",
-  "Administrator configuration": "管理员配置",
-  "Mode": "模式",
-  "System Runner execution mode": "系统 Runner 执行模式",
-  "dedicated_user · restricted service account": "dedicated_user · 受限服务账户",
-  "privileged_host · highest host privilege": "privileged_host · 主机最高权限",
-  "Choose execution mode (required)": "选择执行模式（必选）",
-  "High-privilege mode was already authorized for this Runner.": "此 Runner 已获得高权限模式授权。",
-  "Previously authorized for this Runner.": "此 Runner 已获授权。",
-  "I understand and authorize the high-privilege installation.": "我理解并授权此次高权限安装。",
-  "Integrations": "集成",
-  "Manage labels, scopes, runner routing, and one-time client secrets.": "管理标签、权限范围、Runner 路由和一次性客户端密钥。",
-  "Add MCP Client": "添加 MCP 客户端",
-  "Label": "标签",
-  "Scopes": "权限范围",
-  "Create one-time secret": "创建一次性密钥",
-  "MCP clients": "MCP 客户端",
-  "Active runner": "活跃 Runner",
-  "Choose a Runner": "选择 Runner",
-  "Confirm switch": "确认切换",
-  "Save": "保存",
-  "No runners available": "没有可用 Runner",
-  "The selected Runner is unavailable or has not completed enrollment.": "所选 Runner 不可用或尚未完成注册。",
-  "A different Runner is already selected. Check Confirm switch and try again.": "已选择其他 Runner。请勾选“确认切换”后重试。",
-  "Last used": "最后使用",
-  "Reset Runner Selection": "重置 Runner 选择",
-  "Rotate": "轮换",
-  "MCP Client": "MCP 客户端",
-  "MCP Client detail": "MCP 客户端详情",
-  "Runner-specific access can only further restrict the client's global scopes; it can never grant additional access.": "针对 Runner 的访问限制只能收紧客户端全局权限，不能额外授予权限。",
-  "Back to clients": "返回客户端",
-  "Global permissions": "全局权限",
-  "Base scopes": "基础权限范围",
-  "Save scopes": "保存权限范围",
-  "Client access on each Runner": "每个 Runner 上的客户端访问",
-  "Use Global means no additional restriction. Effective access is still limited by Runner and Workspace policy.": "选择“全局”表示不额外限制；实际权限仍受 Runner 与工作区策略约束。",
-  "Use global": "使用全局",
-  "Additional restriction": "附加限制",
-  "Save restriction": "保存限制",
-  "Reset": "重置",
-  "Workspace administration": "工作区管理",
-  "Keep operator notes here; credentials and secrets are never displayed.": "在此保留操作入口；凭据和密钥绝不会显示。",
-  "Change password": "修改密码",
-  "Current password": "当前密码",
-  "New password": "新密码",
-  "Confirm new password": "确认新密码",
-  "Operator notes": "操作说明",
-  "Deployment notes belong in your deployment system. This dashboard intentionally stores no notes or secrets.": "部署说明应保存在部署系统中；此控制台不会存储说明或密钥。",
-  "Log out": "退出登录",
-  "No runners yet.": "还没有 Runner。",
-  "No MCP clients yet.": "还没有 MCP 客户端。",
-  "No recent jobs.": "还没有最近任务。",
-  "No managed workspaces configured.": "尚未配置托管工作区。",
-  "Not selected": "未选择",
-  "Active": "活跃",
-  "active": "有效",
-  "scheduled": "待生效",
-  "expired": "已过期",
-  "none": "无",
-  "Revoked": "已撤销",
-  "Job": "任务",
-  "Workspace": "工作区",
-  "Updated": "更新时间",
-  "Runner details": "Runner 详情",
-  "Control-plane workspace roots appear only in this authenticated administrator view.": "工作区根路径只会出现在此经过认证的管理员视图中。",
-  "Back to runners": "返回 Runner",
-  "Runner ID": "Runner ID",
-  "Policy status": "策略状态",
-  "Safe metadata": "基础信息",
-  "Service and policy diagnostics": "服务与策略诊断",
-  "Runner-reported execution mode": "Runner 上报的执行模式",
-  "Service identity": "服务身份",
-  "Runner-reported privilege state": "Runner 上报的权限状态",
-  "Configured execution mode (administrator)": "管理员配置的执行模式",
-  "Reported service identity": "上报的服务身份",
-  "Desired policy revision": "期望策略版本",
-  "Active / applied policy revision": "活动 / 已应用策略版本",
-  "Runner reported revision": "Runner 上报的版本",
-  "Desired checksum": "期望校验和",
-  "Active checksum": "当前校验和",
-  "Runner reported checksum": "Runner 上报的校验和",
-  "Workspace validation status": "工作区验证状态",
-  "Platform": "平台",
-  "Architecture": "架构",
-  "Hostname": "主机名",
-  "Runner version": "Runner 版本",
-  "Stable/latest version": "稳定 / 最新版本",
-  "Protocol compatibility": "协议兼容性",
-  "Version policy": "版本策略",
-  "Runmesh Runner one-click installation": "Runmesh Runner 一键安装",
-  "Install Runmesh Runner": "安装 Runmesh Runner",
-  "This command downloads the pinned Runmesh Runner release, verifies its manifest, signature, and checksum, enrolls this host, and installs the service. The one-time code expires in 30 minutes and will not be shown again.": "此命令会下载指定版本的 Runmesh Runner，校验清单、签名和校验和，然后注册当前主机并安装服务。此代码将在 30 分钟后失效，且只显示一次。",
-  "Run only on the intended host. The command contains a single-use enrollment code; never share or log it. An elevated administrator/root shell is required; supported systems can install Node.js automatically.": "请只在目标主机上运行。命令包含单次使用的注册代码，请勿分享或记录。需要管理员/root 权限 Shell；支持的系统会自动安装 Node.js。",
-  "Copy install command": "复制安装命令",
-  "Channel": "频道",
-  "Stable": "稳定版",
-  "Pinned": "固定版本",
-  "Desired version": "期望版本",
-  "Current": "当前",
-  "Latest": "最新",
-  "Save version policy": "保存版本策略",
-  "Environment tools": "环境工具",
-  "Environment details unavailable while offline.": "离线时无法获取环境详情。",
-  "Runner permission profile": "Runner 权限配置",
-  "Changes remain pending until the connected Runner validates and applies the revision.": "变更将在已连接的 Runner 校验并应用版本前保持待处理状态。",
-  "Emergency control": "紧急控制",
-  "Save profile": "保存配置",
-  "Emergency Lock does not automatically stop existing Jobs.": "紧急锁定不会自动停止正在运行的任务。",
-  "Emergency lock all permissions": "紧急锁定所有权限",
-  "Managed workspaces": "托管工作区",
-  "Each save increments the desired policy revision.": "每次保存都会递增期望策略版本。",
-  "Add workspace": "添加工作区",
-  "Workspace ID": "工作区 ID",
-  "Absolute root path": "绝对根路径",
-  "Usage profile": "使用配置",
-  "Custom": "自定义",
-  "Read Only": "只读",
-  "Coding": "编码",
-  "Full-host confirmation": "整机访问确认",
-  "I understand this exposes the full host filesystem.": "我理解这会暴露完整宿主机文件系统。",
-  "Type Workspace ID to confirm": "输入工作区 ID 以确认",
-  "Enabled": "启用",
-  "Disabled": "禁用",
-  "Allow": "允许",
-  "Deny": "拒绝",
-  "Save workspace": "保存工作区",
-  "Create workspace": "创建工作区",
-  "Delete workspace": "删除工作区",
-  "Manual portable-artifact enrollment": "手动注册便携版 Runner",
-  "Manual Runner enrollment and install": "手动注册并安装 Runner",
-  "Enroll Runner manually": "手动注册 Runner",
-  "Enroll Runner": "注册 Runner",
-  "Target Runner ID": "目标 Runner ID",
-  "One-time enrollment code": "一次性注册代码",
-  "Hosted installers are disabled in this development preview. Download and verify the portable Runner artifact first. This one-time code expires in 30 minutes and will not be shown again.": "当前开发预览版未启用托管安装器。请先下载并校验便携版 Runner。此代码将在 30 分钟后失效，且只显示一次。",
-  "The fixed signed hosted release is not enabled on this deployment. Install the verified portable Runner artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. The install step runs only after enrollment succeeds. This one-time code expires in 30 minutes and will not be shown again.": "当前部署未启用固定签名的托管版本。请先安装已校验的便携版 Runner，再运行下面的单行命令。命令会在本地提示输入代码，粘贴后按 Enter；只有注册成功后才会继续安装。此代码将在 30 分钟后失效，且只显示一次。",
-  "The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. This one-time code expires in 30 minutes and will not be shown again.": "安装器会先校验固定签名的 Runner，再在本地提示输入代码。代码不会写入命令、URL 或进程参数。此代码将在 30 分钟后失效，且只显示一次。",
-  "The installer verifies the fixed signed Runner artifact, downloads and verifies a private Node.js runtime for the host architecture, registers the Runner as a background service, and starts it after enrollment. The copied command includes the one-time enrollment code; no second code entry is needed. Treat the command as a secret.": "安装器会校验固定签名的 Runner，按主机架构下载并校验私有 Node.js 运行时，注册后台服务，并在注册成功后自动启动。复制的命令已包含一次性注册码，无需再次输入。请将整条命令视为凭据妥善保管。",
-  "Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.": "完成校验后，请将代码粘贴到本地提示中；复制的命令不会包含代码。",
-  "The copied command includes this one-time code. Treat it as a secret and use it only once.": "复制的命令已经包含这次安装所需的一次性代码，请勿修改或分享。",
-  "Operating system": "操作系统",
-  "Copy enrollment command": "复制注册命令",
-  "Copy enrollment and install command": "复制注册并安装命令",
-  "Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.": "请勿分享此代码。它仅用于一次性注册，不是管理员密码、MCP 密钥或长期凭据。",
-  "Regenerate enrollment": "重新生成注册",
-  "Done": "完成",
-  "MCP client created": "MCP 客户端已创建",
-  "MCP client rotated": "MCP 客户端已轮换",
-  "enrollment": "注册",
-  "Signed fixed-preview enrollment": "签名固定预览版注册",
-  "One-command Runner setup": "一键安装 Runner",
-  "Copy installer command": "复制安装器命令",
-  "Copy this URL now. It will not be shown again.": "请立即复制此 URL。它不会再次显示。",
-  "Back to admin": "返回管理后台",
-  "Return": "返回",
-  "Invalid administrator password.": "管理员密码无效。",
-  "Please try again shortly.": "请稍后重试。",
-  "Invalid setup request.": "初始化请求无效。",
-  "Setup request was rejected.": "初始化请求已被拒绝。",
-  "Setup could not be completed. Try again.": "初始化无法完成，请重试。",
-  "Passwords must match and be at least 12 characters.": "两次密码必须一致且至少 12 个字符。",
-  "This instance is already initialized.": "此实例已初始化。",
-  "Invalid login request.": "登录请求无效。",
-  "Login request was rejected.": "登录请求已被拒绝。",
-  "Login could not be completed. Try again.": "登录无法完成，请重试。",
-  "Administrative request was rejected.": "管理请求已被拒绝。",
-  "MCP client was not found.": "未找到 MCP 客户端。",
-  "Runner was not found.": "未找到 Runner。",
-  "Client scopes are invalid.": "客户端权限范围无效。",
-  "Client scopes could not be updated.": "客户端权限范围无法更新。",
-  "Runner selection could not be reset.": "Runner 选择无法重置。",
-  "Runner identifier is invalid.": "Runner 标识无效。",
-  "Runner restriction could not be reset.": "Runner 限制无法重置。",
-  "Runner restriction is invalid.": "Runner 限制无效。",
-  "Runner restriction could not be saved.": "Runner 限制无法保存。",
-  "Client name is invalid.": "客户端名称无效。",
-  "Client update failed.": "客户端更新失败。",
-  "Client revoke failed.": "客户端撤销失败。",
-  "Client rotation failed.": "客户端轮换失败。",
-  "Password change is invalid.": "密码修改请求无效。",
-  "Current administrator password is invalid.": "当前管理员密码无效。",
-  "Password change could not be completed.": "密码修改无法完成。",
-  "Runner identifier or display name is invalid.": "Runner 标识或显示名称无效。",
-  "Runner could not be added.": "无法添加 Runner。",
-  "Runner update policy is invalid.": "Runner 更新策略无效。",
-  "Pinned Runner version must be an exact version.": "固定 Runner 版本必须是精确版本号。",
-  "Runner update policy could not be updated.": "Runner 更新策略无法更新。",
-  "Runner permissions are invalid.": "Runner 权限无效。",
-  "Runner permission profile could not be updated.": "Runner 权限配置无法更新。",
-  "Type the Runner ID to confirm emergency lock.": "输入 Runner ID 以确认紧急锁定。",
-  "Emergency lock could not be applied.": "紧急锁定无法应用。",
-  "Runner display name is invalid.": "Runner 显示名称无效。",
-  "Runner rename failed.": "Runner 重命名失败。",
-  "Type the Runner ID to confirm deletion.": "输入 Runner ID 以确认删除。",
-  "Runner deletion could not fence the Runner.": "Runner 删除无法先隔离该 Runner。",
-  "Runner deletion outcome is uncertain; Runner remains safely fenced.": "Runner 删除结果不确定；Runner 保持安全隔离。",
-  "Runner deletion failed; Runner remains safely fenced.": "Runner 删除失败；Runner 保持安全隔离。",
-  "Runner deletion state is uncertain; Runner remains safely fenced.": "Runner 删除状态不确定；Runner 保持安全隔离。",
-  "Runner delete failed.": "Runner 删除失败。",
-  "Type the Runner ID to confirm revocation.": "输入 Runner ID 以确认撤销。",
-  "Runner revocation could not fence the Runner.": "Runner 撤销无法先隔离该 Runner。",
-  "Runner revocation outcome is uncertain; Runner remains safely fenced.": "Runner 撤销结果不确定；Runner 保持安全隔离。",
-  "Runner revocation failed; Runner remains safely fenced.": "Runner 撤销失败；Runner 保持安全隔离。",
-  "Runner revocation state is uncertain; Runner remains safely fenced.": "Runner 撤销状态不确定；Runner 保持安全隔离。",
-  "Runner revoke failed.": "Runner 撤销失败。",
-  "Runner credential rotation could not fence the Runner.": "Runner 凭据轮换无法先隔离该 Runner。",
-  "Runner credential rotation outcome is uncertain; Runner remains safely fenced.": "Runner 凭据轮换结果不确定；Runner 保持安全隔离。",
-  "Runner credential rotation failed; Runner remains safely fenced.": "Runner 凭据轮换失败；Runner 保持安全隔离。",
-  "Runner credential rotation state is uncertain; Runner remains safely fenced.": "Runner 凭据轮换状态不确定；Runner 保持安全隔离。",
-  "Runner credential rotation failed.": "Runner 凭据轮换失败。",
-  "Workspace identifier is invalid.": "工作区标识无效。",
-  "Type the Workspace ID to confirm deletion.": "输入工作区 ID 以确认删除。",
-  "Workspace could not be deleted.": "工作区无法删除。",
-  "Workspace name or absolute root path is invalid.": "工作区名称或绝对根路径无效。",
-  "Full Host Workspace requires explicit confirmation.": "整机工作区需要明确确认。",
-  "Workspace permission profile is invalid.": "工作区权限配置无效。",
-  "Workspace could not be saved.": "工作区无法保存。",
-  "Client name or scopes are invalid.": "客户端名称或权限范围无效。",
-  "Client could not be created.": "客户端无法创建。",
-  "Enrollment code could not be generated.": "注册码无法生成。",
-  "Never": "从未",
-  "Unknown": "未知",
-  "Not configured": "未配置",
-  "Not enrolled": "未注册",
-  "Available": "可用",
-  "Unavailable": "不可用",
-  "online": "在线",
-  "offline": "离线",
-  "stale": "过期",
-  "pending": "待处理",
-  "invalid": "无效",
-  "queued": "排队中",
-  "running": "运行中",
-  "cancelling": "取消中",
-  "succeeded": "成功",
-  "completed": "已完成",
-  "failed": "失败",
-  "unknown": "未知",
-  "read": "读取",
-  "edit": "编辑",
-  "shell": "Shell",
-  "job control": "任务控制",
-  "Summary": "摘要",
-  "Runner summary": "Runner 摘要",
-  "configured": "已配置",
-  "connected": "已连接",
-  "In progress": "进行中",
-  "Idle": "空闲",
-  "Recorded": "已记录",
-  "Some control-plane features are temporarily paused.": "部分控制平面功能已临时暂停。",
-  "The console remains available, but dependent paths will stop retrying until the quota recovers or the anomaly clears.": "控制台仍可使用；依赖这些额度的路径会停止重试，直到额度恢复或异常解除。",
-  "Feature health status unavailable": "功能健康状态暂不可用",
-  "Core Runner and MCP paths remain available; retry the console shortly.": "核心 Runner 和 MCP 路径仍可用；请稍后重试控制台。",
-  "Job recording paused": "任务记录已暂停",
-  "Job history and MCP call recording are temporarily disabled.": "任务历史和 MCP 调用记录已临时禁用。",
-  "MCP call audit paused": "MCP 调用审计已暂停",
-  "MCP call recording is temporarily disabled.": "MCP 调用记录已临时禁用。",
-  "Maintenance alarm paused": "维护定时器已暂停",
-  "Background cleanup and stale-runner checks are temporarily disabled.": "后台清理和 Runner 过期检查已临时禁用。",
-  "Dismiss": "知道了",
-  "Socket connected": "Socket 已连接",
-  "Disconnected": "已断开",
-  "Unique runtime": "唯一运行时",
-  "Revision applied / desired": "已应用 / 期望版本",
-  "Heartbeat": "心跳",
-  "Policy is recorded for operators; package download, update, and rollback remain deferred.": "策略仅供操作员查看；软件包下载、更新和回滚暂不执行。",
-  "Hosted distribution is not configured. Portable artifact/manual version management only.": "托管分发尚未配置；目前只能使用便携版制品并手动管理版本。",
-  "Effective Global Scopes": "生效的全局权限范围",
-  "Read": "读取",
-  "Write": "写入",
-  "Exec": "执行",
-  "Each base scope has a distinct ceiling: Read permits inspection, Write permits approved edits, and Exec permits Host shell and Job control. Runner and Workspace policy can only reduce these permissions.": "每个基础权限范围都有独立上限：Read 允许查看，Write 允许已批准的编辑，Exec 允许使用主机 Shell 和任务控制。Runner 与工作区策略只能收紧这些权限。",
-  " permits inspection, ": " 允许查看，",
-  " permits approved edits, and ": " 允许已批准的编辑，并且 ",
-  " permits Host shell and Job control. Runner and Workspace policy can only reduce these permissions.": " 允许使用主机 Shell 和任务控制。Runner 与工作区策略只能收紧这些权限。",
-  "Client Routing & Status": "客户端路由与状态",
-  "Client ID": "客户端 ID",
-  "Last Used": "最后使用",
-  "Workspace Permissions": "工作区权限",
-  "Unknown–Unknown · unknown": "未知–未知 · 未知",
-  "Copy MCP URL": "复制 MCP URL",
-  "No runners registered.": "尚未注册 Runner。",
-  "Inspect workspaces and read files.": "检查工作区并读取文件。",
-  "Apply approved edits.": "应用已批准的编辑。",
-  "Use Host shell and control Jobs.": "使用主机 Shell 并控制任务。",
-  "Runmesh · Agent Control Plane": "Runmesh · 智能体控制平面",
-  // Remaining template copy kept here so the Chinese locale does not fall
-  // back to English on the secondary views and enrollment flow.
-  "Language": "语言",
-  "Skip to main content": "跳转到主要内容",
-  "Use a dedicated restricted service identity for narrower host access.": "使用专用的受限服务账户，进一步限制主机访问范围。",
-  "I understand and authorize this one-time high-privilege installation acknowledgement.": "我已了解风险，并授权本次高权限安装。",
-  "e.g. Production Runner 01": "例如：生产 Runner 01",
-  "generated-id": "自动生成的 ID",
-  "e.g. Cursor / Claude Desktop": "例如：Cursor / Claude Desktop",
-  "MCP clients yet.": "MCP 客户端。",
-  "Status: ": "状态：",
-  "Validation: ": "验证：",
-  "Validation": "验证",
-  "Selected execution mode": "当前执行模式",
-  "The hosted privileged installer is not used.": "不会使用托管高权限安装器。",
-  "Selected restricted service account mode: dedicated_user.": "当前使用受限服务账户模式（dedicated_user）。",
-  "This one-time code expires in 30 minutes and will not be shown again.": "此代码将在 30 分钟后失效，且只显示一次。",
-  "The one-time enrollment code expires after 30 minutes.": "一次性注册码将在 30 分钟后过期。",
-  "Do not share this code.": "请勿分享此代码。",
-  "Use Global means no additional restriction.": "选择“全局”表示不额外限制。",
-  "Effective access is still limited by Runner and Workspace policy.": "实际权限仍受 Runner 与工作区策略约束。",
-  "Runner-reported privilege state is mismatch; verify the service identity before granting access.": "Runner 上报的权限状态不匹配。授予访问权限前，请先核验服务身份。",
-  "No trusted administrator execution-mode selection is recorded; choose and confirm a mode before (re)installing.": "尚未记录管理员确认的执行模式。重新安装前，请选择并确认一种模式。",
-  "Runner reports privileged_host, but that self-report is not authorization; re-enroll only after an administrator explicitly confirms the desired mode.": "Runner 上报为 privileged_host，但这不等同于授权。只有管理员明确确认目标模式后，才能重新注册。",
-  "dedicated_user is configured while a full-host workspace is enabled; migrate the service or narrow the workspace.": "当前使用 dedicated_user，但启用了整机工作区。请迁移服务或缩小工作区范围。",
-  "Workspace validation reported os_access_denied; review the service identity and migrate to privileged_host or grant the required OS access.": "工作区校验返回 os_access_denied。请检查服务身份，迁移到 privileged_host，或补充必要的操作系统权限。",
-  "The managed service manifest changed but the Runner process was not restarted.": "托管服务配置已变更，但 Runner 进程尚未重启。",
-  "Runner is online but has zero valid workspaces.": "Runner 已在线，但没有有效工作区。",
-  "No validation result has been reported yet.": "尚未收到校验结果。",
-  "Runner will run as root, SYSTEM, or the platform-equivalent highest-privilege identity. Shell commands can access files, processes, network, environment variables, credentials, and system services reachable by that service identity. Install only on a trusted dedicated machine, VM, or container.": "Runner 将以 root、SYSTEM 或平台对应的最高权限运行。Shell 命令可访问该服务身份能够访问的文件、进程、网络、环境变量、凭据和系统服务。请仅在受信任的专用机器、虚拟机或容器中安装。",
-  "You must keep the one-time confirmation in the local install command.": "本地安装命令必须保留一次性确认参数。",
-  "Selected restricted service account mode: dedicated_user. The installer preserves this selection.": "当前使用受限服务账户模式（dedicated_user），不会启用托管高权限安装器。",
-  "e.g. project-src": "例如：project-src",
-  "e.g. Main Repository": "例如：主代码仓库",
-  "/absolute/path/to/directory": "/绝对路径/目录",
-  "compatible": "兼容",
-  "incompatible": "不兼容",
-  "update_available": "有更新",
-  "permission_denied": "无权限",
-  "os_access_denied": "操作系统拒绝访问",
-  "not_directory": "不是目录",
-  "invalid_path": "路径无效",
-  "missing": "缺失",
-  "valid": "有效",
-  "Read, Write, Exec": "读取、写入、执行",
-  "Each base scope has a distinct ceiling: ": "每个基础权限范围都有独立上限：",
-  "Desired policy revision is ahead of the applied or Runner-reported revision.": "期望策略版本高于已应用版本或 Runner 报告的版本。",
-  "e.g. ": "例如：",
-  "RUNNER": "Runner",
-  "CHECKSUM": "校验和",
-  "HighestAvailable": "最高权限",
-  "系统 RUNNER 执行模式": "系统 Runner 执行模式",
-  "活跃 RUNNER": "活跃 Runner",
-  "RUNNER 详情": "Runner 详情",
-  "RUNNER ID": "Runner ID",
-  "RUNNER 版本": "Runner 版本",
-  "RUNNER 报告的执行模式": "Runner 上报的执行模式",
-  "RUNNER 报告的权限状态": "Runner 上报的权限状态",
-  "RUNNER 报告的版本": "Runner 上报的版本",
-  "期望 CHECKSUM": "期望校验和",
-  "活动 CHECKSUM": "活动校验和",
-  "RUNNER 报告的 CHECKSUM": "Runner 上报的校验和",
-  "Manual Runner enrollment and install uses a verified portable artifact. Install the artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. Selected execution mode: ": "请先安装已验证的便携版 Runner，再运行下面的命令。命令会在本机提示输入代码，粘贴后按 Enter。当前执行模式：",
-  "The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. Selected execution mode: ": "安装器会先校验固定签名的 Runner，再在本机提示输入代码。代码不会写入命令、URL 或进程参数。当前执行模式：",
-  "The default is dedicated_user; privileged_host is an advanced, explicitly confirmed option. The install step runs only after enrollment succeeds.": "推荐使用 privileged_host；如需进一步隔离，也可以选择 dedicated_user。注册成功后才会继续安装。",
-  "The default is dedicated_user; privileged_host is an advanced, explicitly confirmed option.": "推荐使用 privileged_host；如需进一步隔离，也可以选择 dedicated_user。",
-  "Runner authorization": "Runner 授权",
-  "One-time code": "一次性注册码",
-  "Valid days": "有效天数",
-  "0 means no expiry. The authorization starts when you save it.": "填 0 表示永久有效；授权从保存时开始生效。",
-  "The code starts now and must remain valid for at least 1 day.": "注册码从现在开始生效，有效期至少为 1 天。",
-  "Runner authorization window": "Runner 授权期限",
-  "This controls whether new protected operations are admitted. The Runner may remain connected for heartbeat and recovery while scheduled or expired.": "这里控制是否允许新的受保护操作。即使尚未生效或已过期，Runner 仍可保持连接以发送心跳和执行恢复。",
-  "Active from": "生效时间",
-  "Expires at": "到期时间",
-  "Latest enrollment code": "最新注册码",
-  "Codes are single-use. Only timing metadata is retained; the code itself is never stored or shown here after this page.": "注册码只能使用一次。系统只保留时间信息，离开此页面后不会保存或再次显示注册码。",
-  "Consumed": "使用时间",
-  "Generate new enrollment code": "生成新注册码",
-  "Save authorization window": "保存授权期限",
-  "0 means no expiry. Saving starts a new authorization window now.": "填 0 表示永久有效；保存后授权期限立即重新开始计算。",
-  "Runner or enrollment validity settings are invalid.": "Runner 或注册码有效期设置无效。",
-  "Enrollment validity settings are invalid.": "注册码有效期设置无效。",
-  "Runner authorization validity settings are invalid.": "Runner 授权期限设置无效。",
-  "Runner authorization validity could not be updated.": "Runner 授权期限无法更新。",
-  "This code is valid until ": "此注册码有效至 ",
-  " and can be used once.": "，且只能使用一次。",
-  "Remove this Runner from the host": "从主机移除此 Runner",
-  "Run the command for the local OS to stop the managed service and remove the Runmesh installation, configuration, local job history, logs and supported legacy remnants. Project workspaces are preserved. Delete the Runner record separately from the administrator console when you no longer need its history.": "请针对本机操作系统运行命令，停止并移除托管服务及本地凭据配置。若不再需要历史记录，请在管理控制台中单独删除 Runner 记录。",
-};
+
 
 function brandLogo(className: string, alt = "Runmesh · Agent Control Plane"): string {
   return `<img class="${className}" src="${BRAND_LOGO_ASSET}" alt="${escapeHtml(alt)}" width="1672" height="941" decoding="async">`;
@@ -1964,7 +1502,7 @@ async function clientDetailPage(_env: WorkerEnv, client: Record<string, unknown>
     return `<tr class="data-row">
       <td>
         <div class="table-primary-cell">
-          <span class="strong">${escapeHtml(runner.display_name)}</span>
+          <span class="strong"><span data-no-i18n>${escapeHtml(runner.display_name)}</span></span>
           <span class="sub-id mono">${escapeHtml(runner.runner_id)}</span>
         </div>
       </td>
@@ -2009,7 +1547,7 @@ async function clientDetailPage(_env: WorkerEnv, client: Record<string, unknown>
         <h1 class="detail-title">${escapeHtml(label)}</h1>
         ${statusBadge(isRevoked ? "offline" : "online")}
       </div>
-      <p class="detail-id mono">${escapeHtml(clientId)}</p>
+      <p class="detail-id mono"><span data-no-i18n>${escapeHtml(clientId)}</span></p>
       <p class="lede">Runner-specific access can only further restrict the client's global scopes; it can never grant additional access.</p>
     </div>
     <div class="detail-header-actions">
@@ -2029,14 +1567,13 @@ async function clientDetailPage(_env: WorkerEnv, client: Record<string, unknown>
       ${scopeEditor}
       <form method="post" action="/admin/clients/${encodeURIComponent(clientId)}/recording" class="scope-editor-form">
         <input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">
-        <label for="record-jobs">Cloud Job history / 云端任务记录</label>
+        <label for="record-jobs">Cloud Job history</label>
         <select id="record-jobs" name="record_jobs">
-          <option value="true"${client.record_jobs !== false ? " selected" : ""}>Record new jobs / 记录新任务</option>
-          <option value="false"${client.record_jobs === false ? " selected" : ""}>Do not record new jobs / 新任务不记录</option>
+          <option value="true"${client.record_jobs !== false ? " selected" : ""}>Record new jobs</option>
+          <option value="false"${client.record_jobs === false ? " selected" : ""}>Do not record new jobs</option>
         </select>
         <p class="muted">When disabled, new Job snapshots and Job tool audit entries are not stored in the cloud. Local Runner job metadata and logs remain. Existing cloud history is not deleted. Use workspace_id with Job operations (Runner 0.1.1+); offline history is unavailable for unrecorded jobs.</p>
-        <p class="muted">关闭后不保存新任务的云端快照及相关工具审计；本地任务和日志保留，既有云端历史不会删除。操作未记录任务时需携带 workspace_id，并使用 0.1.1 或更新的 Runner。</p>
-        <button class="button secondary">Save recording preference / 保存记录设置</button>
+        <button class="button secondary">Save recording preference</button>
       </form>
     </section>
     <section class="panel">
@@ -2045,7 +1582,7 @@ async function clientDetailPage(_env: WorkerEnv, client: Record<string, unknown>
       </div>
       <dl class="details">
         <dt>Client ID</dt>
-        <dd class="mono">${escapeHtml(clientId)}</dd>
+        <dd class="mono"><span data-no-i18n>${escapeHtml(clientId)}</span></dd>
         <dt>Active Runner</dt>
         <dd>${activeRunnerSelector(client as unknown as McpClientRecord, runners, csrf)}</dd>
         <dt>Last Used</dt>
@@ -2106,7 +1643,7 @@ function overviewPage(data: AdminData, csrf: string): string {
     const count = record(value)?.active_job_count;
     return total + (typeof count === "number" && Number.isSafeInteger(count) && count >= 0 ? count : 0);
   }, 0);
-  return `<section class="page-heading"><div><p class="eyebrow">Control plane</p><h1>Dashboard</h1><p class="lede">A concise view of connected runtimes, clients, and recent work.</p></div><a class="button secondary" href="/admin">Refresh</a></section><section class="metrics" aria-label="Summary"><div class="metric"><span class="metric-label">Active MCP clients</span><strong class="metric-value">${data.clients.filter((client) => client.revoked_at_ms === null).length}</strong><span class="metric-meta">${data.clients.length} configured</span></div><div class="metric"><span class="metric-label">Online / total runners</span><strong class="metric-value">${online} / ${data.runners.length}</strong><span class="metric-meta"><span class="status-dot ${online > 0 ? "online" : "offline"}"></span> ${online} connected</span></div><div class="metric"><span class="metric-label">Active shell jobs</span><strong class="metric-value">${jobsAvailable ? activeJobs : "—"}</strong><span class="metric-meta">Last recorded status</span></div><div class="metric"><span class="metric-label">Recent jobs</span><strong class="metric-value">${jobsAvailable ? data.jobs.length : "—"}</strong><span class="metric-meta">Recorded</span></div></section><div class="grid-two"><section class="panel"><div class="section-title"><h2>Recent runners</h2><a href="/admin/runners">View all</a></div>${runnerList(data.runners.slice(0, 5))}</section><section class="panel"><div class="section-title"><h2>Recent MCP clients</h2><a href="/admin/clients">View all</a></div>${clientList(data.clients.slice(0, 5))}</section></div><section class="panel"><div class="section-title"><h2>Recent jobs</h2><a href="/admin/runners">Runner activity</a></div><p class="muted">${JOBS_EXPLANATION}</p>${jobSnapshotNote()}${jobsAvailable ? jobTable(data.jobs.slice(0, 10)) : data.notices.some((n) => n.title === 'Job snapshot unavailable') ? '<p class="empty">Job metadata is temporarily unavailable.</p>' : '<p class="muted">Jobs not loaded. Select a Runner and click Load / Refresh. / 选择 Runner 后手动加载任务。</p>'}</section><form class="hidden" method="post" action="/admin/logout"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"></form>`;
+  return `<section class="page-heading"><div><p class="eyebrow">Control plane</p><h1>Dashboard</h1><p class="lede">A concise view of connected runtimes, clients, and recent work.</p></div><a class="button secondary" href="/admin">Refresh</a></section><section class="metrics" aria-label="Summary"><div class="metric"><span class="metric-label">Active MCP clients</span><strong class="metric-value">${data.clients.filter((client) => client.revoked_at_ms === null).length}</strong><span class="metric-meta">${data.clients.length} configured</span></div><div class="metric"><span class="metric-label">Online / total runners</span><strong class="metric-value">${online} / ${data.runners.length}</strong><span class="metric-meta"><span class="status-dot ${online > 0 ? "online" : "offline"}"></span> ${online} connected</span></div><div class="metric"><span class="metric-label">Active shell jobs</span><strong class="metric-value">${jobsAvailable ? activeJobs : "—"}</strong><span class="metric-meta">Last recorded status</span></div><div class="metric"><span class="metric-label">Recent jobs</span><strong class="metric-value">${jobsAvailable ? data.jobs.length : "—"}</strong><span class="metric-meta">Recorded</span></div></section><div class="grid-two"><section class="panel"><div class="section-title"><h2>Recent runners</h2><a href="/admin/runners">View all</a></div>${runnerList(data.runners.slice(0, 5))}</section><section class="panel"><div class="section-title"><h2>Recent MCP clients</h2><a href="/admin/clients">View all</a></div>${clientList(data.clients.slice(0, 5))}</section></div><section class="panel"><div class="section-title"><h2>Recent jobs</h2><a href="/admin/runners">Runner activity</a></div><p class="muted">${JOBS_EXPLANATION}</p>${jobSnapshotNote()}${jobsAvailable ? jobTable(data.jobs.slice(0, 10)) : data.notices.some((n) => n.title === 'Job snapshot unavailable') ? '<p class="empty">Job metadata is temporarily unavailable.</p>' : '<p class="muted">Jobs not loaded. Select a Runner and click Load / Refresh.</p>'}</section><form class="hidden" method="post" action="/admin/logout"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"></form>`;
 }
 function runnerActionCell(runner: RunnerRecord, modeFields: string, csrf: string): string {
   const runnerId = encodeURIComponent(runner.runner_id);
@@ -2136,10 +1673,10 @@ function runnersPage(data: AdminData, csrf: string): string {
     const modeFields = configuredMode === null
       ? executionModeFormFields(undefined, csrf, true)
       : executionModeFormFields(mode, csrf, false);
-    return `<tr class="data-row"><td><div class="table-primary-cell"><a class="strong" href="/admin/runners/${encodeURIComponent(runner.runner_id)}">${escapeHtml(runner.display_name)}</a><span class="sub-id mono">${escapeHtml(runner.runner_id)}</span></div></td><td>${statusBadge(runner.state)}</td><td><span class="platform-tag">${escapeHtml(safePlatform(runner))}</span></td><td><span class="mono font-12">${escapeHtml(modeLabel)}</span>${configuredMode === null ? "<span class=\"warning-text\"> · selection required</span>" : ""}</td><td class="time-cell">${escapeHtml(time(runner.last_heartbeat_ms))}</td>${runnerActionCell(runner, modeFields, csrf)}</tr>`;
+    return `<tr class="data-row"><td><div class="table-primary-cell"><a class="strong" href="/admin/runners/${encodeURIComponent(runner.runner_id)}"><span data-no-i18n>${escapeHtml(runner.display_name)}</span></a><span class="sub-id mono">${escapeHtml(runner.runner_id)}</span></div></td><td>${statusBadge(runner.state)}</td><td><span class="platform-tag">${escapeHtml(safePlatform(runner))}</span></td><td><span class="mono font-12">${escapeHtml(modeLabel)}</span>${configuredMode === null ? "<span class=\"warning-text\"> · selection required</span>" : ""}</td><td class="time-cell">${escapeHtml(time(runner.last_heartbeat_ms))}</td>${runnerActionCell(runner, modeFields, csrf)}</tr>`;
   }).join("") || `<tr><td colspan="6" class="empty"><div class="empty-state-box"><p>No runners yet.</p></div></td></tr>`;
   const warning = PRIVILEGED_HOST_WARNING;
-  return `<section class="page-heading"><div><p class="eyebrow">Infrastructure</p><h1>Runners</h1><p class="lede">Manage safe runner metadata, authorization windows, and one-time registration.</p></div></section><section class="panel add-panel" id="add-runner"><div class="section-title"><h2>Add Runner</h2><span class="muted font-12">You can set both Runner authorization and enrollment-code timing.</span></div><form method="post" action="/admin/runners" class="form-grid add-form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Display name<input name="display_name" maxlength="256" required autocomplete="off" placeholder="e.g. Production Runner 01"></label><label>Safe runner ID <span class="muted font-11">optional</span><input name="runner_id" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" placeholder="generated-id"></label>${windowFields("runner")}${windowFields("code")}<fieldset class="execution-mode-fieldset"><legend>System Runner execution mode</legend><label class="check"><input type="radio" name="execution_mode" value="dedicated_user" checked data-execution-mode="dedicated_user"><span><strong>受限服务账户模式（dedicated_user，默认推荐）</strong><small>Use a dedicated restricted service identity for narrower host access.</small></span></label><label class="check"><input type="radio" name="execution_mode" value="privileged_host" data-execution-mode="privileged_host"><span><strong>整机控制 / 高权限模式（高级选项，需明确授权）</strong><small>Linux root · macOS root LaunchDaemon · Windows SYSTEM / HighestAvailable</small></span></label><p class="warning privileged-host-warning" hidden>${escapeHtml(warning)}</p><label class="check"><input type="checkbox" name="confirm_privileged_host" value="true" data-privileged-confirmation><span>I understand and authorize this one-time high-privilege installation acknowledgement.</span></label></fieldset><div class="form-submit-wrap"><button class="button">Create enrollment</button></div></form></section><section class="panel"><div class="table-wrap"><table class="data-table runner-table"><caption class="sr-only">Registered runners</caption><thead><tr><th>Display name</th><th>Status</th><th>Platform / architecture</th><th>Execution mode</th><th>Last seen</th><th>Actions</th></tr></thead><tbody>${table}</tbody></table></div></section>`;
+  return `<section class="page-heading"><div><p class="eyebrow">Infrastructure</p><h1>Runners</h1><p class="lede">Manage safe runner metadata, authorization windows, and one-time registration.</p></div></section><section class="panel add-panel" id="add-runner"><div class="section-title"><h2>Add Runner</h2><span class="muted font-12">You can set both Runner authorization and enrollment-code timing.</span></div><form method="post" action="/admin/runners" class="form-grid add-form-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Display name<input name="display_name" maxlength="256" required autocomplete="off" placeholder="e.g. Production Runner 01"></label><label>Safe runner ID <span class="muted font-11">optional</span><input name="runner_id" maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" placeholder="generated-id"></label>${windowFields("runner")}${windowFields("code")}<fieldset class="execution-mode-fieldset"><legend>System Runner execution mode</legend><label class="check"><input type="radio" name="execution_mode" value="dedicated_user" checked data-execution-mode="dedicated_user"><span><strong>Restricted service account (dedicated_user, recommended)</strong><small>Use a dedicated restricted service identity for narrower host access.</small></span></label><label class="check"><input type="radio" name="execution_mode" value="privileged_host" data-execution-mode="privileged_host"><span><strong>Full host control (advanced, explicit authorization required)</strong><small>Linux root · macOS root LaunchDaemon · Windows SYSTEM / HighestAvailable</small></span></label><p class="warning privileged-host-warning" hidden>${escapeHtml(warning)}</p><label class="check"><input type="checkbox" name="confirm_privileged_host" value="true" data-privileged-confirmation><span>I understand and authorize this one-time high-privilege installation acknowledgement.</span></label></fieldset><div class="form-submit-wrap"><button class="button">Create enrollment</button></div></form></section><section class="panel"><div class="table-wrap"><table class="data-table runner-table"><caption class="sr-only">Registered runners</caption><thead><tr><th>Display name</th><th>Status</th><th>Platform / architecture</th><th>Execution mode</th><th>Last seen</th><th>Actions</th></tr></thead><tbody>${table}</tbody></table></div></section>`;
 }
 function activeRunnerLabel(client: McpClientRecord, runners: readonly RunnerRecord[]): string { const runner = client.active_runner_id === null ? undefined : runners.find((item) => item.runner_id === client.active_runner_id); return runner === undefined ? "Not selected" : runner.display_name; }
 function activeRunnerSelector(client: McpClientRecord, runners: readonly RunnerRecord[], csrf: string): string {
@@ -2150,12 +1687,12 @@ function activeRunnerSelector(client: McpClientRecord, runners: readonly RunnerR
   return `<div class="runner-selection-controls"><form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/active-runner" class="runner-selection-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><select name="runner_id" aria-label="Active Runner"><option value="" disabled${client.active_runner_id === null ? " selected" : ""}>Choose a Runner</option>${options}</select><label class="check"><input type="checkbox" name="confirm_switch" value="true"><span>Confirm switch</span></label><button class="small secondary">Save</button></form>${reset}</div>`;
 }
 function clientsPage(data: AdminData, csrf: string): string {
-  const rows = data.clients.map((client) => `<tr class="data-row"><td><div class="table-primary-cell"><a class="strong" href="/admin/clients/${encodeURIComponent(client.client_id)}">${escapeHtml(client.label)}</a><span class="sub-id mono">${escapeHtml(client.client_id)}</span></div></td><td><div class="scope-tags">${client.scopes.map((s) => `<span class="scope-pill">${escapeHtml(displayScopeLabel(s))}</span>`).join("")}</div></td><td>${activeRunnerSelector(client, data.runners, csrf)}</td><td class="time-cell">${escapeHtml(time(client.last_used_at_ms))}</td><td>${client.revoked_at_ms === null ? statusBadge("online") : statusBadge("offline")}</td><td class="actions"><div class="action-btn-group"><a class="button small secondary" href="/admin/clients/${encodeURIComponent(client.client_id)}">View</a><form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rename" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input name="label" value="${escapeHtml(client.label)}" aria-label="Rename ${escapeHtml(client.label)}" maxlength="256"><button class="small secondary">Rename</button></form>${client.revoked_at_ms === null ? `<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rotate" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Rotate</button></form>` : ""}<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/reset-runner" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Reset Runner Selection</button></form>${client.revoked_at_ms === null ? `<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/revoke" class="inline-action-form danger-action"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small danger">Revoke</button></form>` : ""}</div></td></tr>`).join("") || `<tr><td colspan="6" class="empty"><div class="empty-state-box"><p>No MCP clients yet.</p></div></td></tr>`;
+  const rows = data.clients.map((client) => `<tr class="data-row"><td><div class="table-primary-cell"><a class="strong" href="/admin/clients/${encodeURIComponent(client.client_id)}"><span data-no-i18n>${escapeHtml(client.label)}</span></a><span class="sub-id mono">${escapeHtml(client.client_id)}</span></div></td><td><div class="scope-tags">${client.scopes.map((s) => `<span class="scope-pill">${escapeHtml(displayScopeLabel(s))}</span>`).join("")}</div></td><td>${activeRunnerSelector(client, data.runners, csrf)}</td><td class="time-cell">${escapeHtml(time(client.last_used_at_ms))}</td><td>${client.revoked_at_ms === null ? statusBadge("online") : statusBadge("offline")}</td><td class="actions"><div class="action-btn-group"><a class="button small secondary" href="/admin/clients/${encodeURIComponent(client.client_id)}">View</a><form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rename" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><input name="label" value="${escapeHtml(client.label)}" aria-label="Rename ${escapeHtml(client.label)}" maxlength="256"><button class="small secondary">Rename</button></form>${client.revoked_at_ms === null ? `<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rotate" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Rotate</button></form>` : ""}<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/reset-runner" class="inline-action-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small secondary">Reset Runner Selection</button></form>${client.revoked_at_ms === null ? `<form method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/revoke" class="inline-action-form danger-action"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="small danger">Revoke</button></form>` : ""}</div></td></tr>`).join("") || `<tr><td colspan="6" class="empty"><div class="empty-state-box"><p>No MCP clients yet.</p></div></td></tr>`;
   return `<section class="page-heading"><div><p class="eyebrow">Integrations</p><h1>MCP Clients</h1><p class="lede">Manage labels, scopes, runner routing, and one-time client secrets.</p></div></section><section class="panel add-panel" id="add-client"><div class="section-title"><h2>Add MCP Client</h2></div><form method="post" action="/admin/clients" class="form-grid add-client-grid"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Label<input name="label" maxlength="256" required placeholder="e.g. Cursor / Claude Desktop"></label><fieldset><legend>Scopes</legend><div class="scope-selector-row">${scopeCheckboxes()}</div></fieldset><div class="form-submit-wrap"><button class="button">Create one-time secret</button></div></form></section><section class="panel"><div class="table-wrap"><table class="data-table client-table"><caption class="sr-only">MCP clients</caption><thead><tr><th>Label</th><th>Scopes</th><th>Active runner</th><th>Last used</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
 }
 function settingsPage(csrf: string): string { return `<section class="page-heading"><div><p class="eyebrow">Workspace administration</p><h1>Settings</h1><p class="lede">Keep operator notes here; credentials and secrets are never displayed.</p></div></section><div class="grid-two"><section class="panel"><div class="section-title"><h2>Change password</h2></div><form method="post" action="/admin/password" class="stack settings-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>Current password<input type="password" name="current_password" required autocomplete="current-password"></label><label>New password<input type="password" name="password" minlength="12" required autocomplete="new-password"></label><label>Confirm new password<input type="password" name="confirm_password" minlength="12" required autocomplete="new-password"></label><button class="button">Change password</button></form></section><section class="panel danger-panel"><div class="section-title"><h2 class="danger-title">Operator notes</h2></div><p class="muted settings-note">Deployment notes belong in your deployment system. This dashboard intentionally stores no notes or secrets.</p><div class="logout-box"><form method="post" action="/admin/logout" class="stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><button class="button secondary">Log out</button></form></div></section></div>`; }
-function runnerList(runners: readonly RunnerRecord[]): string { return runners.length === 0 ? `<p class="empty">No runners yet.</p>` : `<ul class="item-list">${runners.map((runner) => `<li><a href="/admin/runners/${encodeURIComponent(runner.runner_id)}" class="card-row"><div class="card-row-main"><span class="strong">${escapeHtml(runner.display_name)}</span><span class="card-row-sub">${statusBadge(runner.state)}<span class="meta-separator">·</span><span class="platform-meta">${escapeHtml(safePlatform(runner))}</span></span></div><div class="card-row-aside"><span class="row-arrow">→</span></div></a></li>`).join("")}</ul>`; }
-function clientList(clients: readonly McpClientRecord[]): string { return clients.length === 0 ? `<p class="empty">No MCP clients yet.</p>` : `<ul class="item-list">${clients.map((client) => `<li><a href="/admin/clients/${encodeURIComponent(client.client_id)}" class="card-row"><div class="card-row-main"><span class="strong">${escapeHtml(client.label)}</span><span class="card-row-sub"><span class="client-runner-meta">${client.active_runner_id === null ? "Not selected" : escapeHtml(client.active_runner_id)}</span><span class="meta-separator">·</span>${client.revoked_at_ms === null ? statusBadge("online") : statusBadge("offline")}</span></div><div class="card-row-aside"><span class="row-arrow">→</span></div></a><form class="hidden" method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rename"><input name="label" value="${escapeHtml(client.label)}"></form></li>`).join("")}</ul>`; }
+function runnerList(runners: readonly RunnerRecord[]): string { return runners.length === 0 ? `<p class="empty">No runners yet.</p>` : `<ul class="item-list">${runners.map((runner) => `<li><a href="/admin/runners/${encodeURIComponent(runner.runner_id)}" class="card-row"><div class="card-row-main"><span class="strong"><span data-no-i18n>${escapeHtml(runner.display_name)}</span></span><span class="card-row-sub">${statusBadge(runner.state)}<span class="meta-separator">·</span><span class="platform-meta">${escapeHtml(safePlatform(runner))}</span></span></div><div class="card-row-aside"><span class="row-arrow">→</span></div></a></li>`).join("")}</ul>`; }
+function clientList(clients: readonly McpClientRecord[]): string { return clients.length === 0 ? `<p class="empty">No MCP clients yet.</p>` : `<ul class="item-list">${clients.map((client) => `<li><a href="/admin/clients/${encodeURIComponent(client.client_id)}" class="card-row"><div class="card-row-main"><span class="strong"><span data-no-i18n>${escapeHtml(client.label)}</span></span><span class="card-row-sub"><span class="client-runner-meta">${client.active_runner_id === null ? "Not selected" : escapeHtml(client.active_runner_id)}</span><span class="meta-separator">·</span>${client.revoked_at_ms === null ? statusBadge("online") : statusBadge("offline")}</span></div><div class="card-row-aside"><span class="row-arrow">→</span></div></a><form class="hidden" method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rename"><input name="label" value="${escapeHtml(client.label)}"></form></li>`).join("")}</ul>`; }
 function jobTable(jobs: readonly Record<string, unknown>[], runnerId?: string): string {
   if (jobs.length === 0) return '<p class="empty">No recent jobs.</p>';
   return `<div class="table-wrap"><table class="data-table"><thead><tr><th>Job</th><th>Workspace</th><th>MCP client</th><th>Status</th><th>Updated</th></tr></thead><tbody>${jobs.map((job) => {
@@ -2165,10 +1702,10 @@ function jobTable(jobs: readonly Record<string, unknown>[], runnerId?: string): 
     const href = adminJobUrl(job.runner_id ?? runnerId, job.job_id);
     const label = escapeHtml(String(job.job_id ?? "unknown"));
     const jobCell = href === undefined ? label : `<a href="${escapeHtml(href)}">${label}</a>`;
-    return `<tr class="data-row"><td class="mono job-id-cell">${jobCell}</td><td><span class="workspace-pill">${escapeHtml(String(job.workspace_id ?? "unknown"))}</span></td><td class="mono font-12">${escapeHtml(clientId)}</td><td><span class="badge job-status ${safeStatus}"><span class="status-dot ${safeStatus}"></span> ${escapeHtml(status)}</span></td><td class="time-cell">${escapeHtml(time(typeof job.updated_at_ms === "number" ? job.updated_at_ms : null))}</td></tr>`;
+    return `<tr class="data-row"><td class="mono job-id-cell">${jobCell}</td><td><span class="workspace-pill">${escapeHtml(String(job.workspace_id ?? "unknown"))}</span></td><td class="mono font-12"><span data-no-i18n>${escapeHtml(clientId)}</span></td><td><span class="badge job-status ${safeStatus}"><span class="status-dot ${safeStatus}"></span> ${escapeHtml(status)}</span></td><td class="time-cell">${escapeHtml(time(typeof job.updated_at_ms === "number" ? job.updated_at_ms : null))}</td></tr>`;
   }).join("")}</tbody></table></div>`;
 }
-function mcpCallTable(calls: readonly Record<string, unknown>[]): string { return calls.length === 0 ? `<p class="empty">No MCP calls recorded yet.</p>` : `<div class="table-wrap"><table class="data-table"><thead><tr><th>Method</th><th>MCP client</th><th>Workspace / Job</th><th>Status</th><th>Duration</th><th>Completed</th></tr></thead><tbody>${calls.map((call) => { const status = call.status === "ok" ? "ok" : call.status === "error" ? "error" : "unknown"; const safeStatus = status === "ok" ? "online" : status === "error" ? "offline" : "pending"; const workspaceId = typeof call.workspace_id === "string" && call.workspace_id.length > 0 ? call.workspace_id : "—"; const jobId = typeof call.job_id === "string" && call.job_id.length > 0 ? call.job_id : "—"; const errorCode = typeof call.error_code === "string" && call.error_code.length > 0 ? ` · ${call.error_code}` : ""; const duration = typeof call.duration_ms === "number" && Number.isSafeInteger(call.duration_ms) && call.duration_ms >= 0 ? `${call.duration_ms} ms` : "—"; return `<tr class="data-row"><td class="mono">${escapeHtml(String(call.method ?? "unknown"))}</td><td class="mono font-12">${escapeHtml(String(call.client_id ?? "unknown"))}</td><td><span class="workspace-pill">${escapeHtml(workspaceId)}</span> <span class="mono font-12">${escapeHtml(jobId)}</span></td><td><span class="badge job-status ${safeStatus}"><span class="status-dot ${safeStatus}"></span> ${escapeHtml(status)}${escapeHtml(errorCode)}</span></td><td class="mono font-12">${escapeHtml(duration)}</td><td class="time-cell">${escapeHtml(time(typeof call.completed_at_ms === "number" ? call.completed_at_ms : null))}</td></tr>`; }).join("")}</tbody></table></div>`; }
+function mcpCallTable(calls: readonly Record<string, unknown>[]): string { return calls.length === 0 ? `<p class="empty">No MCP calls recorded yet.</p>` : `<div class="table-wrap"><table class="data-table"><thead><tr><th>Method</th><th>MCP client</th><th>Workspace / Job</th><th>Status</th><th>Duration</th><th>Completed</th></tr></thead><tbody>${calls.map((call) => { const status = call.status === "ok" ? "ok" : call.status === "error" ? "error" : "unknown"; const safeStatus = status === "ok" ? "online" : status === "error" ? "offline" : "pending"; const workspaceId = typeof call.workspace_id === "string" && call.workspace_id.length > 0 ? call.workspace_id : "—"; const jobId = typeof call.job_id === "string" && call.job_id.length > 0 ? call.job_id : "—"; const errorCode = typeof call.error_code === "string" && call.error_code.length > 0 ? ` · ${call.error_code}` : ""; const duration = typeof call.duration_ms === "number" && Number.isSafeInteger(call.duration_ms) && call.duration_ms >= 0 ? `${call.duration_ms} ms` : "—"; return `<tr class="data-row"><td class="mono">${escapeHtml(String(call.method ?? "unknown"))}</td><td class="mono font-12">${escapeHtml(String(call.client_id ?? "unknown"))}</td><td><span class="workspace-pill"><span data-no-i18n>${escapeHtml(workspaceId)}</span></span> <span class="mono font-12">${escapeHtml(jobId)}</span></td><td><span class="badge job-status ${safeStatus}"><span class="status-dot ${safeStatus}"></span> ${escapeHtml(status)}${escapeHtml(errorCode)}</span></td><td class="mono font-12">${escapeHtml(duration)}</td><td class="time-cell">${escapeHtml(time(typeof call.completed_at_ms === "number" ? call.completed_at_ms : null))}</td></tr>`; }).join("")}</tbody></table></div>`; }
 function statusBadge(state: string): string { const safe = ["online", "offline", "stale", "pending", "invalid"].includes(state) ? state : "offline"; return `<span class="badge ${safe}"><span class="status-dot ${safe}"></span>${safe}</span>`; }
 function statusClass(status: string): string { return ["queued", "running", "cancelling", "cancelled", "succeeded", "completed", "failed", "unknown", "interrupted", "pending", "invalid", "offline", "online", "valid", "permission_denied", "not_directory", "invalid_path", "missing"].includes(status) ? status : "unknown"; }
 function safePlatform(runner: RunnerRecord): string { return runner.public_info === null ? "Not enrolled" : `${runner.public_info.platform} / ${runner.public_info.architecture}`; }
@@ -2278,10 +1815,10 @@ function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly 
     <div class="detail-title-group">
       <div class="detail-title-row">
         <p class="eyebrow">Runner details</p>
-        <h1 class="detail-title">${escapeHtml(displayName)}</h1>
+        <h1 class="detail-title"><span data-no-i18n>${escapeHtml(displayName)}</span></h1>
         ${statusBadge(state)}
       </div>
-      <p class="detail-id mono">${escapeHtml(runnerId)}</p>
+      <p class="detail-id mono"><span data-no-i18n>${escapeHtml(runnerId)}</span></p>
       <p class="lede">Control-plane workspace roots appear only in this authenticated administrator view.</p>
     </div>
     <div class="detail-header-actions">
@@ -2417,13 +1954,13 @@ function runnerDetailPage(runner: Record<string, unknown>, workspaces: readonly 
       </div>
       <p class="muted">${JOBS_EXPLANATION}</p>
       ${historyControls(runnerId,view)}
-      ${view.scope === "none" || view.scope === "audit" ? '<p class="muted">Jobs not loaded. / 尚未读取任务，点击加载或刷新。</p>' : `${view.scope === "live" ? '<p class="muted">Runner live result / Runner 实时结果</p>' : jobSnapshotNote()}${jobs === undefined ? '<p class="empty">Job metadata is temporarily unavailable.</p>' : historyJobTable(jobs.filter(record) as Record<string, unknown>[],runnerId,view)}` }
+      ${view.scope === "none" || view.scope === "audit" ? '<p class="muted">Jobs not loaded.</p>' : `${view.scope === "live" ? '<p class="muted">Runner live result</p>' : jobSnapshotNote()}${jobs === undefined ? '<p class="empty">Job metadata is temporarily unavailable.</p>' : historyJobTable(jobs.filter(record) as Record<string, unknown>[],runnerId,view)}` }
     </section>
     <section class="panel">
       <div class="section-title">
         <h2>Recent MCP calls</h2>
       </div>
-      ${view.scope === "audit" || view.scope === "all" ? (mcpCalls === undefined ? '<p class="muted">Audit history unavailable. / 审计暂不可用。</p>' : mcpCallTable(mcpCalls.filter(record) as Record<string, unknown>[])) : '<p class="muted">Audit not loaded. / 尚未读取审计。</p>'}
+      ${view.scope === "audit" || view.scope === "all" ? (mcpCalls === undefined ? '<p class="muted">Audit history unavailable.</p>' : mcpCallTable(mcpCalls.filter(record) as Record<string, unknown>[])) : '<p class="muted">Audit not loaded.</p>'}
       ${historySettingsForm(runnerId,csrf,historySettings)}
     </section>
   </div>
@@ -2560,39 +2097,12 @@ function workspaceProfile(permissions: Record<string, unknown> | undefined): "cu
   return "custom";
 }
 function adminScript(nonce?: string): string {
-  const translationJson = JSON.stringify(ZH_UI_TEXT);
   return `<script${nonce === undefined ? "" : ` nonce="${nonce}"`}>
   (function(){
-  var ZH_UI_TEXT=${translationJson};function translateKnown(value){
-  var trimmed=value.trim();
-  if(!trimmed)return value;
-  var rawMapped=ZH_UI_TEXT[value];
-  if(rawMapped)return rawMapped;
-  var mapped=ZH_UI_TEXT[trimmed];
-  if(mapped)return value.replace(trimmed,mapped);
-  var suffix=' configured';
-  if(trimmed.slice(-suffix.length)===suffix&&/^[0-9]+$/.test(trimmed.slice(0,-suffix.length)))return value.replace(trimmed,trimmed.slice(0,-suffix.length)+' 已配置');
-  suffix=' connected';
-  if(trimmed.slice(-suffix.length)===suffix&&/^[0-9]+$/.test(trimmed.slice(0,-suffix.length)))return value.replace(trimmed,trimmed.slice(0,-suffix.length)+' 已连接');
-  if(trimmed.indexOf('Status:')===0)return value.replace(trimmed,'状态：'+statusText(trimmed.slice(7).trim()));
-  if(trimmed.indexOf('Validation:')===0)return value.replace(trimmed,'验证：'+statusText(trimmed.slice(11).trim()));
-  var separator=' · ';
-  var separatorAt=trimmed.indexOf(separator);
-  if(separatorAt>0){var status=trimmed.slice(0,separatorAt);if(ZH_UI_TEXT[status])return value.replace(trimmed,statusText(status)+' · '+trimmed.slice(separatorAt+separator.length))}
-  var statusKeys=['compatible','incompatible','update_available','permission_denied','os_access_denied','not_directory','invalid_path','missing','pending','valid','unknown','online','offline','stale','queued','running','cancelling','cancelled','succeeded','completed','failed','interrupted','invalid'];
-  var replaced=value;
-  statusKeys.forEach(function(key){var re=new RegExp('(^|[^A-Za-z_])'+key+'(?=$|[^A-Za-z_])','g');replaced=replaced.replace(re,function(_,prefix){return prefix+statusText(key)})});
-  var phraseKeys=['Client Routing & Status','Skip to main content','Use a dedicated restricted service identity for narrower host access.','I understand and authorize this one-time high-privilege installation acknowledgement.','Read, Write, Exec','Each base scope has a distinct ceiling: ',' permits inspection, ',' permits approved edits, and ',' permits Host shell and Job control. Runner and Workspace policy can only reduce these permissions.','Desired policy revision is ahead of the applied or Runner-reported revision.','Runner will run as root, SYSTEM, or the platform-equivalent highest-privilege identity. Shell commands can access files, processes, network, environment variables, credentials, and system services reachable by that service identity. Install only on a trusted dedicated machine, VM, or container.','Manual Runner enrollment and install uses a verified portable artifact. Install the artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. Selected execution mode: ','The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. Selected execution mode: ','The installer verifies the fixed signed Runner artifact, downloads and verifies a private Node.js runtime for the host architecture, registers the Runner as a background service, and starts it after enrollment. The copied command includes the one-time enrollment code; no second code entry is needed. Treat the command as a secret.','The default is dedicated_user; privileged_host is an advanced, explicitly confirmed option. The install step runs only after enrollment succeeds.','The default is dedicated_user; privileged_host is an advanced, explicitly confirmed option.','You must keep the one-time confirmation in the local install command.','Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.','The copied command includes this one-time code. Treat it as a secret and use it only once.','This one-time code expires in 30 minutes and will not be shown again.','Selected restricted service account mode: dedicated_user. The installer preserves this selection.','Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.','This code is valid until ',' and can be used once.','RUNNER','CHECKSUM','HighestAvailable'];
-  phraseKeys.sort(function(a,b){return b.length-a.length}).forEach(function(key){var translated=ZH_UI_TEXT[key];if(translated&&replaced.indexOf(key)>=0)replaced=replaced.split(key).join(translated)});
-  return replaced;
-}
-function translateTextNodes(root){var walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode:function(node){if(!node.nodeValue||!node.nodeValue.trim())return NodeFilter.FILTER_REJECT;for(var el=node.parentElement;el;el=el.parentElement){if(el.hasAttribute('data-no-i18n')||el.tagName==='CODE'||el.tagName==='PRE'||el.tagName==='SCRIPT'||el.tagName==='STYLE'||el.tagName==='INPUT'||el.tagName==='TEXTAREA')return NodeFilter.FILTER_REJECT}return NodeFilter.FILTER_ACCEPT}});var nodes=[];while(walker.nextNode())nodes.push(walker.currentNode);nodes.forEach(function(node){node.nodeValue=translateKnown(node.nodeValue||'')})}
-function translateAttributes(root){['aria-label','alt','placeholder','title'].forEach(function(name){root.querySelectorAll('['+name+']').forEach(function(element){if(element.closest('[data-no-i18n]'))return;var value=element.getAttribute(name)||'';var translated=translateKnown(value);if(translated===value&&value.indexOf('Rename ')===0)translated='重命名 '+value.slice(7);element.setAttribute(name,translated)})})}
-function statusText(value){return ZH_UI_TEXT[value]||value}
- function applyLocale(locale){var zh=locale==='zh-CN';document.documentElement.lang=zh?'zh-CN':'en';document.querySelectorAll('[data-lang-toggle]').forEach(function(item){var active=item.getAttribute('data-lang-toggle')===locale;item.setAttribute('aria-current',active?'true':'false')});if(zh){translateTextNodes(document.body);translateAttributes(document);var title=document.title;var titleParts=['MCP client created','MCP client rotated','MCP Clients','MCP Client','Runmesh · Agent Control Plane','Agent Control Plane','Dashboard','Runners','Clients','Settings','login','setup','enrollment'];titleParts.forEach(function(part){if(ZH_UI_TEXT[part])title=title.split(part).join(ZH_UI_TEXT[part])});document.title=title}}
-function requestedLocale(){var query=new URLSearchParams(location.search).get('lang');if(query==='zh-CN'||query==='zh')return 'zh-CN';if(query==='en')return 'en';var match=/runmesh_lang=(zh-CN|en)/.exec(document.cookie||'');if(match)return match[1];return navigator.language&&navigator.language.toLowerCase().startsWith('zh')?'zh-CN':'en'}
+function applyLocale(locale){document.documentElement.lang=locale;document.querySelectorAll('[data-lang-toggle]').forEach(function(link){link.setAttribute('aria-current',link.getAttribute('data-lang-toggle')===locale?'true':'false')})}
+function requestedLocale(){return document.documentElement.lang==='zh-CN'?'zh-CN':'en'}
 function rememberLocale(locale){document.cookie='runmesh_lang='+locale+'; Max-Age=31536000; Path=/; SameSite=Lax'}
- document.querySelectorAll('[data-lang-toggle]').forEach(function(link){link.addEventListener('click',function(event){var locale=link.getAttribute('data-lang-toggle')||'en';rememberLocale(locale);var url=new URL(location.href);url.searchParams.set('lang',locale);if(typeof loadAdminPage==='function'&&link.closest('[data-app-header]')){event.preventDefault();loadAdminPage(url,true)}else if(url.search!==location.search){event.preventDefault();location.href=url.toString()}})});
+ document.querySelectorAll('[data-lang-toggle]').forEach(function(link){link.addEventListener('click',function(event){var locale=link.getAttribute('data-lang-toggle')||'en';rememberLocale(locale);var url=new URL(location.href);url.searchParams.set('lang',locale);event.preventDefault();location.href=url.toString()})});
 var locale=requestedLocale();if(new URLSearchParams(location.search).has('lang'))rememberLocale(locale);applyLocale(locale);
 function copyText(text){if(navigator.clipboard&&navigator.clipboard.writeText)return navigator.clipboard.writeText(text);var area=document.createElement('textarea');area.value=text;area.setAttribute('readonly','');area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.select();try{document.execCommand('copy')}catch(_){}area.remove();return Promise.resolve()}
 function copyValue(button){var panel=button.hasAttribute('data-copy-source')&&button.closest('[role=tabpanel]');if(panel){var code=panel.querySelector('pre code');return code?(code.textContent||''):''}var value=button.getAttribute('data-copy');return value===null?'':value}
@@ -2609,7 +2119,7 @@ function pageKey(url){return url.pathname+(url.search||'')}
 function pageRoot(node){return node&&node.classList&&node.classList.contains('shell')?node:(node&&node.closest&&node.closest('.shell'))||node}
 function pageContainer(root,key){var container=document.createElement('div');container.className='admin-page-container';container.setAttribute('data-page-container','');container.setAttribute('data-page-key',key);container.setAttribute('aria-hidden','true');container.appendChild(root);return container}
 function ensurePageViewport(){var viewport=document.querySelector('[data-admin-viewport]');var active=document.querySelector('#main-content');if(!active)return viewport;var root=pageRoot(active);if(!root)return viewport;if(!viewport){viewport=document.createElement('div');viewport.className='admin-viewport';viewport.setAttribute('data-admin-viewport','');root.parentNode.insertBefore(viewport,root);var initial=pageContainer(root,pageKey(new URL(location.href)));initial.setAttribute('data-page-title',document.title||'');initial.classList.add('is-active');initial.setAttribute('aria-hidden','false');viewport.appendChild(initial)}else if(!root.closest('[data-page-container]')){var initial=pageContainer(root,pageKey(new URL(location.href)));initial.setAttribute('data-page-title',document.title||'');initial.classList.add('is-active');initial.setAttribute('aria-hidden','false');viewport.appendChild(initial)}return viewport}
-function setActivePage(container,focus){var viewport=ensurePageViewport();if(!viewport||!container)return;var containers=Array.prototype.slice.call(viewport.querySelectorAll('[data-page-container]'));var previous=viewport.querySelector('[data-page-container].is-active');containers.forEach(function(item){var active=item===container;var wasPrevious=item===previous&&item!==container;item.classList.toggle('is-active',active);if(wasPrevious){item.classList.add('is-leaving');window.setTimeout(function(){item.classList.remove('is-leaving')},190)}else if(active)item.classList.remove('is-leaving');else item.classList.remove('is-leaving');item.setAttribute('aria-hidden',active?'false':'true');item.inert=!active;var main=item.id==='main-content'?item:item.querySelector('#main-content');if(active){if(!main)main=item.tagName==='MAIN'?item:item.querySelector('main');if(main)main.id='main-content'}else if(main)main.removeAttribute('id')});viewport.style.minHeight=Math.max.apply(Math,[0].concat(containers.map(function(item){return item.offsetHeight||0})))+'px';if(focus){var main=container.id==='main-content'?container:container.querySelector('#main-content')||container.querySelector('main');if(main&&typeof main.focus==='function')main.focus({preventScroll:true})}}
+function setActivePage(container,focus){var viewport=ensurePageViewport();if(!viewport||!container)return;var containers=Array.prototype.slice.call(viewport.querySelectorAll('[data-page-container]'));var previous=viewport.querySelector('[data-page-container].is-active');containers.forEach(function(item){var active=item===container;var wasPrevious=item===previous&&item!==container;item.classList.toggle('is-active',active);if(wasPrevious){item.classList.remove('is-leaving')}else if(active)item.classList.remove('is-leaving');else item.classList.remove('is-leaving');item.setAttribute('aria-hidden',active?'false':'true');item.inert=!active;var main=item.id==='main-content'?item:item.querySelector('#main-content');if(active){if(!main)main=item.tagName==='MAIN'?item:item.querySelector('main');if(main)main.id='main-content'}else if(main)main.removeAttribute('id')});viewport.style.minHeight=Math.max.apply(Math,[0].concat(containers.map(function(item){return item.offsetHeight||0})))+'px';if(focus){var main=container.id==='main-content'?container:container.querySelector('#main-content')||container.querySelector('main');if(main&&typeof main.focus==='function')main.focus({preventScroll:true})}}
 function bindDynamicContent(root){
   if(!root)return;
   root.querySelectorAll('[data-copy],[data-copy-source]').forEach(function(button){if(button.__runmeshBound)return;button.__runmeshBound=true;button.addEventListener('click',function(){var result=copyText(copyValue(button));var mark=function(){button.textContent=document.documentElement.lang==='zh-CN'?'已复制':'Copied';button.classList.add('copied')};if(result&&typeof result.then==='function')result.then(mark,function(){});else mark()})});
@@ -2617,7 +2127,7 @@ function bindDynamicContent(root){
   root.querySelectorAll('.pwd-toggle-btn').forEach(function(btn){if(btn.__runmeshBound)return;btn.__runmeshBound=true;btn.addEventListener('click',function(){var wrap=btn.closest('.password-input-wrap');if(!wrap)return;var input=wrap.querySelector('input');if(!input)return;var isPwd=input.type==='password';input.type=isPwd?'text':'password';var label=isPwd?(document.documentElement.lang==='zh-CN'?'隐藏密码':'Hide password'):(document.documentElement.lang==='zh-CN'?'显示密码':'Show password');btn.setAttribute('aria-label',label);btn.setAttribute('title',label)})});
   root.querySelectorAll('form').forEach(function(form){var controls=form.querySelectorAll('input[name="execution_mode"],select[name="execution_mode"]');if(!controls.length)return;controls.forEach(function(input){if(input.__runmeshBound)return;input.__runmeshBound=true;input.addEventListener('change',function(){syncExecutionMode(form)})});syncExecutionMode(form)});
   bindFeatureAlert(root);
-  translateTextNodes(root);translateAttributes(root);stabilizeTabPanels();
+  stabilizeTabPanels();
 }
 function setupDynamicNavigation(){document.querySelectorAll('a[href^="/admin"]').forEach(function(link){if(link.__runmeshNavBound)return;link.__runmeshNavBound=true;link.addEventListener('click',function(event){if(event.defaultPrevented||event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey||link.hasAttribute('download')||link.target==='_blank')return;var target=new URL(link.href,location.href);if(target.origin!==location.origin)return;if(target.pathname===location.pathname&&target.search===location.search&&target.hash)return;event.preventDefault();loadAdminPage(target,pageKey(target)!==pageKey(new URL(location.href)))})})}
 function mountAdminPage(nextRoot,title,key,viewport,shouldPush,url){
@@ -2638,6 +2148,7 @@ function loadAdminPage(url,shouldPush){
     if(!response.ok)throw new Error('HTTP '+response.status);return response.text();
   }).then(function(markup){
     var parsed=new DOMParser().parseFromString(markup,'text/html'),next=parsed.querySelector('#main-content');
+    if(parsed.documentElement&&parsed.documentElement.lang&&parsed.documentElement.lang!==document.documentElement.lang){location.href=url.href;return;}
     if(!next)throw new Error('main content missing');var nextRoot=pageRoot(next);if(!nextRoot)throw new Error('page root missing');
     mountAdminPage(nextRoot,parsed.title||'',key,viewport,shouldPush,url);
   }).catch(function(error){
@@ -2648,7 +2159,7 @@ function loadAdminPage(url,shouldPush){
   });
 }
 function bindFeatureAlert(root){var dialog=root.querySelector('.feature-alert-dialog');if(!dialog||dialog.__runmeshBound)return;dialog.__runmeshBound=true;dialog.addEventListener('click',function(event){if(event.target===dialog)dialog.close()})}
- ensurePageViewport();var initialContainer=document.querySelector('[data-page-container].is-active');if(initialContainer){translateTextNodes(initialContainer);translateAttributes(initialContainer);stabilizeTabPanels();setActivePage(initialContainer,false)}
+ ensurePageViewport();var initialContainer=document.querySelector('[data-page-container].is-active');if(initialContainer){stabilizeTabPanels();setActivePage(initialContainer,false)}
  window.addEventListener('popstate',function(){loadAdminPage(new URL(location.href),false)});setupDynamicNavigation();window.__runmeshDynamicNavigation=true;bindFeatureAlert(document);
   })();
   </script>`;
@@ -2753,7 +2264,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Runner doctor check failed.' }`,
   };
   const removalBlock = `<details class="panel"><summary><strong>Remove this Runner from the host</strong></summary><p class="muted font-12">Run the command for the local OS to stop and remove the managed service and local credential profile. Delete the Runner record separately from the administrator console when you no longer need its history.</p><p><strong>Linux / macOS</strong></p><pre><code>${escapeHtml(removalCommands.linux)}</code></pre><p><strong>Windows PowerShell (Administrator)</strong></p><pre><code>${escapeHtml(removalCommands.windows)}</code></pre></details>`;
 
-  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body enrollment-body"><a class="skip-link" href="#main-content">Skip to main content</a>${controlHeader("runners")}<main class="shell enrollment-shell" id="main-content" tabindex="-1"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><p class="eyebrow">${title}</p><h1 id="enrollment-title">Enroll Runner</h1><p class="lede">${instruction} ${enrollmentSummary}</p></div></section><div class="enrollment-meta-box"><span class="form-stat-label">Target Runner ID</span><span class="mono">${escapeHtml(runnerId)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">Selected execution mode</span><span class="mono">${escapeHtml(modeLabel)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">One-time enrollment code</span><code class="mono" data-no-i18n>${escapeHtml(code)}</code><span class="muted font-12">${commands === manualCommands ? "Paste it only into the local prompt after verification; it is deliberately excluded from copied commands." : "The copied command includes this one-time code. Treat it as a secret and use it only once."}</span></div><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><div class="enrollment-command-panels">${panels}</div>${warningBlock}<p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.</p>${removalBlock}<div class="top-actions dialog-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment">${executionModeFormFields(executionMode, csrf)}${windowFields("code")}<button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
+  return html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane enrollment</title>${adminStyles()}</head><body class="ops-body enrollment-body"><a class="skip-link" href="#main-content">Skip to main content</a>${controlHeader("runners")}<main class="shell enrollment-shell" id="main-content" tabindex="-1"><dialog open aria-labelledby="enrollment-title" class="enrollment-dialog"><section class="page-heading"><div><p class="eyebrow">${title}</p><h1 id="enrollment-title">Enroll Runner</h1><p class="lede">${instruction} ${enrollmentSummary}</p></div></section><div class="enrollment-meta-box"><span class="form-stat-label">Target Runner ID</span><span class="mono"><span data-no-i18n>${escapeHtml(runnerId)}</span></span></div><div class="enrollment-meta-box"><span class="form-stat-label">Selected execution mode</span><span class="mono">${escapeHtml(modeLabel)}</span></div><div class="enrollment-meta-box"><span class="form-stat-label">One-time enrollment code</span><code class="mono" data-no-i18n>${escapeHtml(code)}</code><span class="muted font-12">${commands === manualCommands ? "Paste it only into the local prompt after verification; it is deliberately excluded from copied commands." : "The copied command includes this one-time code. Treat it as a secret and use it only once."}</span></div><div role="tablist" aria-label="Operating system" class="tabs">${tabs}</div><div class="enrollment-command-panels">${panels}</div>${warningBlock}<p class="warning">Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.</p>${removalBlock}<div class="top-actions dialog-actions"><form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment">${executionModeFormFields(executionMode, csrf)}${windowFields("code")}<button class="button secondary">Regenerate enrollment</button></form><a class="button" href="/admin/runners">Done</a></div></dialog></main>${adminScript()}</body></html>`);
 }
   function secretCreatedPage(title: string, url: string): string { return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${escapeHtml(title)} · Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="ops-body secret-result-body"><a class="skip-link" href="#main-content">Skip to main content</a>${controlHeader("clients")}<main class="shell secret-result-shell" id="main-content" tabindex="-1"><section class="auth-card secret-card"><p class="brand-kicker">Runmesh</p><h1>${escapeHtml(title)}</h1><p class="lede">Copy this URL now. It will not be shown again.</p><code>${escapeHtml(url)}</code><div class="secret-actions"><button type="button" class="button" data-copy="${escapeHtml(url)}">Copy MCP URL</button><a class="button secondary" href="/admin">Back to admin</a></div></section></main>${adminScript()}</body></html>`; }
 function secretUrl(base: string, secret: string): string { const url = new URL(base); url.pathname = `/${secret}/mcp`; url.search = ""; return url.toString(); }
