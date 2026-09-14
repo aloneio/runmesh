@@ -367,6 +367,7 @@ export class RunnerRuntime {
     const startParams = { ...params };
     delete startParams.wait_ms;
     const job = await this.startJob(startParams);
+    if (job.status === "queued") return { job, completed: false, queue: this.jobs.queueStatus(), wait_cap_ms: LOCAL_RUNNER_OPERATION_TIMEOUT_MS };
     const deadline = Date.now() + requested;
     while (Date.now() < deadline) { const current = this.jobs.get(job.job_id); if (!isActive(current)) return { job: current, completed: true, stdout: await this.jobs.logs(job.job_id, { stream: "stdout", limit: 16 * 1024, tail: true }), stderr: await this.jobs.logs(job.job_id, { stream: "stderr", limit: 16 * 1024, tail: true }) }; await delay(Math.min(50, deadline - Date.now())); }
     return { job: this.jobs.get(job.job_id), completed: false, wait_cap_ms: LOCAL_RUNNER_OPERATION_TIMEOUT_MS };

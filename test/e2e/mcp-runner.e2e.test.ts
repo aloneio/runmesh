@@ -372,12 +372,48 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(existsSync(join(workspace, "ga-too-large.txt"))).toBe(false);
   });
 
+  it("multiple MCP clients queue commands on the same Runner while reads remain available", async () => {
+    const {adminJar,csrf}=await adminCredentials();
+    const other=await createMcpClient("Queue Client B",["coding:read","coding:write","coding:exec"],adminJar,csrf);
+    expect((await mcpTool("runner_select",{runner_id:runnerId},other)).isError).not.toBe(true);
+    const first=await mcpTool("shell",{workspace_id:"workspace-1",command:nodeCommand("const fs=require('node:fs');const t=setInterval(()=>{if(fs.existsSync('.queue-e2e-release'))clearInterval(t)},15)"),background:true,request_id:"queue-first"});
+    const firstId=first.structuredContent?.job_id as string;expect(typeof firstId).toBe("string");
+    let secondId:string|undefined;
+    try {
+      const start=Date.now();
+      const second=await mcpTool("shell",{workspace_id:"workspace-1",command:nodeCommand("process.stdout.write('second-client')"),request_id:"queue-second",wait_ms:8000},other);
+      secondId=second.structuredContent?.job_id as string;
+      expect(second.isError,JSON.stringify(second)).not.toBe(true);
+      expect(second.structuredContent?.status).toBe("queued");expect(Date.now()-start).toBeLessThan(5000);
+      const read=await mcpTool("read",{workspace_id:"workspace-1",path:"note.txt"},other);expect(read.isError).not.toBe(true);
+      await writeFile(join(workspace,".queue-e2e-release"),"release");
+      await waitFor(async()=>["succeeded","failed"].includes(String((await mcpTool("job",{action:"get",workspace_id:"workspace-1",job_id:secondId},other)).structuredContent?.status)),8000);
+      const result=await mcpTool("job",{action:"get",workspace_id:"workspace-1",job_id:secondId},other);
+      expect(result.structuredContent?.status,JSON.stringify(result)).toBe("succeeded");
+      const logs=await mcpTool("job",{action:"logs",workspace_id:"workspace-1",job_id:secondId,stream:"stdout",limit:1024},other);
+      expect(logs.structuredContent?.data).toBe("second-client");
+      const replay=await mcpTool("shell",{workspace_id:"workspace-1",command:nodeCommand("process.stdout.write('second-client')"),request_id:"queue-second",background:true},other);
+      expect(replay.structuredContent?.job_id).toBe(secondId);
+    } finally {
+      await writeFile(join(workspace,".queue-e2e-release"),"release");
+      if(secondId)await mcpTool("job",{action:"cancel",workspace_id:"workspace-1",job_id:secondId},other);
+      await mcpTool("job",{action:"cancel",workspace_id:"workspace-1",job_id:firstId});
+      await waitFor(async()=>!['running','cancelling','queued'].includes(String((await mcpTool("job",{action:"get",workspace_id:"workspace-1",job_id:firstId})).structuredContent?.status)),8000);
+    }
+  });
+
+  it.skipIf(process.env.RUNMESH_BROWSER_CHECK !== "1" || process.platform !== "linux")("renders stable single-locale dashboard and navigation in Chromium", async () => {
+    const {checkUiWithChromium}=await import("../../scripts/ui-browser-check.mjs");
+    const {adminJar}=await adminCredentials();
+    await checkUiWithChromium(workerUrl,cookieHeader(adminJar),process.env.RUNMESH_BROWSER_OUTPUT);
+  },45000);
+
   it("GA-007 busy Runner returns a retryable busy error, not invalid parameters", async () => {
     const first = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("setTimeout(()=>{},10000)"), background: true });
     const id = first.structuredContent?.job_id as string;
     expect(typeof id).toBe("string");
     try {
-      const second = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('never')"), background: true });
+      const second = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('never')"), background: true, queue: false });
       expect(second).toMatchObject({ isError: true, structuredContent: { error: { code: "busy" } } });
     } finally {
       await mcpTool("job", { action: "cancel", job_id: id });

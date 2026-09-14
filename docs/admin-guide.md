@@ -79,3 +79,7 @@ See [quota isolation and cloud Job recording](quota-resilience.md). Production u
 ## Batched Job history
 
 See [batched snapshots, manual loading and retention](batched-job-history.md). Production uses `RUNMESH_JOB_HISTORY_BACKEND=d1`; the default upload window is five minutes. History is loaded only on request. Source-side batching and local day-based cleanup are shipped in v0.1.2; immutable v0.1.1 and existing services are unchanged.
+
+## Shared Runner queue and localized UI
+
+See [queue/UI contract](job-queue-and-localization.md) for capability negotiation, current authorization, bounded fair scheduling, restart interruption and server-side locale rendering. A Worker deployment does not upgrade installed Runner 0.1.2.
