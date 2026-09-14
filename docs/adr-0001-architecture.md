@@ -41,3 +41,7 @@ standard input, not a temporary credential file. The complete convenience
 command is credential material and may be recorded in command history or
 process arguments. The 0.1.1 production gate is enabled only after independent signed-asset
 verification; development retains its disabled gate.
+
+## Amendment — 2026-09-14: optional history isolation
+
+The owner-approved quota work introduces D1 only for optional metadata audit, not credential authority or stale-authentication fallback. The v2 Registry gains tested additive retention counters/indexes and per-client recording preferences. Outbound-only transport, current authorization, local Job authority and immutable Runner assets are unchanged. See [implementation and acceptance](quota-resilience.md) for recording semantics, quota limits, migration overlap and physical-retention qualifications.

@@ -154,3 +154,7 @@ This release has a clean data boundary. RegistryDO accepts only the current comp
 The local short-operation maximum is 8 seconds and the Worker bridge timeout is 12 seconds; use `exec_start` for longer work. Registry retains active jobs and up to 1,000 terminal jobs per Runner. Local per-Job and aggregate logs are bounded; quota exhaustion is recorded as `output_truncated` and requires operator review.
 
 MCP URL path credentials can be captured by infrastructure outside application code. Configure Cloudflare log redaction, retain a rotation/revocation procedure, and perform deployed acceptance testing before production use.
+
+## Optional cloud history and quota isolation
+
+See [quota isolation and cloud Job recording](quota-resilience.md). Production uses the independent `HISTORY_DB` D1 binding for optional audit. Core enrollment, credential and policy authority stays in RegistryDO. MCP client detail provides a switch for new cloud Job snapshots and related Job-tool audit; local Runner jobs/logs remain. Workspace-bound Job operations require Runner 0.1.1+. GitLab dev push, not GitHub verification alone, triggers the maintained Cloudflare deployment.

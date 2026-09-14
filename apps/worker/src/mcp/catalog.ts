@@ -49,10 +49,10 @@ export const EditInputSchema = z.object({ workspace_id: WorkspaceIdSchema, patch
 export const ShellInputSchema = z.object({ workspace_id: WorkspaceIdSchema, command: z.string().min(1).max(8_192), request_id: z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/).optional(), wait_ms: z.number().int().min(1).max(LOCAL_RUNNER_OPERATION_TIMEOUT_MS).optional(), background: z.boolean().optional() }).strict();
 export const JobInputSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("list"), workspace_id: WorkspaceIdSchema.optional(), status: JobStatusSchema.optional(), limit: z.number().int().min(1).max(100).optional() }).strict(),
-  z.object({ action: z.literal("get"), job_id: JobIdSchema }).strict(),
-  z.object({ action: z.literal("logs"), job_id: JobIdSchema, stream: z.enum(["stdout", "stderr"]).optional(), cursor: CursorSchema, offset: z.number().int().min(0).optional(), limit: BoundedLimitSchema, tail: z.boolean().optional() }).strict(),
-  z.object({ action: z.literal("cancel"), job_id: JobIdSchema }).strict(),
-  z.object({ action: z.literal("input"), job_id: JobIdSchema, data: z.string().max(65_536).optional(), close_stdin: z.boolean().optional() }).strict().refine((value) => value.data !== undefined || value.close_stdin === true, "data or close_stdin is required"),
+  z.object({ action: z.literal("get"), job_id: JobIdSchema, workspace_id: WorkspaceIdSchema.optional() }).strict(),
+  z.object({ action: z.literal("logs"), job_id: JobIdSchema, workspace_id: WorkspaceIdSchema.optional(), stream: z.enum(["stdout", "stderr"]).optional(), cursor: CursorSchema, offset: z.number().int().min(0).optional(), limit: BoundedLimitSchema, tail: z.boolean().optional() }).strict(),
+  z.object({ action: z.literal("cancel"), job_id: JobIdSchema, workspace_id: WorkspaceIdSchema.optional() }).strict(),
+  z.object({ action: z.literal("input"), job_id: JobIdSchema, workspace_id: WorkspaceIdSchema.optional(), data: z.string().max(65_536).optional(), close_stdin: z.boolean().optional() }).strict().refine((value) => value.data !== undefined || value.close_stdin === true, "data or close_stdin is required"),
 ]);
 const ContextTextSchema = z.string().min(1).max(2_048);
 const ContextEvidenceSchema = z.object({
@@ -84,7 +84,7 @@ export const TOOL_SPECS = {
   read: { scope: "coding:read", description: "Read a bounded UTF-8-safe page of a workspace-relative file. Use next_cursor or offset to continue; host roots and absolute paths are not accepted.", inputSchema: ReadInputSchema, annotations: readAnnotations },
   edit: { scope: "coding:write", description: "Preview or apply a transactional, baseline-checked patch to a writable workspace. The result contains only bounded, workspace-relative change metadata.", inputSchema: EditInputSchema, annotations: destructiveAnnotations },
   shell: { scope: "coding:exec", description: "Run a command through the selected runner's Host shell (Bash on Linux/macOS or PowerShell on Windows). Commands have the runner user's OS permissions and are not sandboxed; the workspace controls initial cwd and policy, not the Host shell root. Use a restricted VM/container and avoid administrator/root runners for untrusted code. background=true returns a persistent job immediately; foreground waits only up to wait_ms.", inputSchema: ShellInputSchema, annotations: execAnnotations },
-  job: { description: "List, inspect, or read bounded logs for persistent jobs. cancel and input require coding:exec plus workspace job-control permission. Job metadata never includes command, cwd, PID, roots, or secrets.", inputSchema: JobInputSchema, annotations: mixedAnnotations },
+  job: { description: "List, inspect, or read bounded logs for persistent jobs. cancel and input require coding:exec plus workspace job-control permission. Pass workspace_id with get/logs/cancel/input to operate without cloud Job history (Runner 0.1.1+). Job metadata never includes command, cwd, PID, roots, or secrets.", inputSchema: JobInputSchema, annotations: mixedAnnotations },
   context: { description: "Read or explicitly checkpoint workspace handoff context stored locally on the selected Runner. bootstrap/read/search are read-only; checkpoint/rebuild require coding:write plus workspace edit permission. Raw chat, system prompts, host paths, and hidden reasoning are not captured.", inputSchema: ContextInputSchema, annotations: mixedAnnotations },
 } as const satisfies Record<string, ToolSpec>;
 
