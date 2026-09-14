@@ -33,3 +33,5 @@ These changes require Runner 0.1.3 for queue negotiation. Worker-only deployment
 Tests include real multi-client queued execution plus concurrent file reads, fairness, limits, cancellation, idempotency, policy changes, signed-context tampering/expiry/identity mismatch, authorization races, restart non-replay, locale selection/escaping and browser navigation. Existing quota and enrollment recovery checks remain mandatory.
 
 Reference: https://developers.cloudflare.com/workers/runtime-apis/html-rewriter/
+
+Post-deployment locale verification also checks compound browser titles (login, setup, enrollment and administrator pages). Every known UI segment is translated rather than only the first segment; this Worker-only follow-up does not modify the immutable Runner package.
