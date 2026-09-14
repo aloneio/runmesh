@@ -74,3 +74,12 @@ test("mounting a refreshed page removes obsolete forms and sensitive log DOM", (
   assert.equal(viewport.children.length, 1); assert.equal(viewport.children[0], fresh); assert.equal(viewport.style.minHeight, "240px");
   assert.equal(context.document.title, "Fresh"); assert.equal(calls.length, 0);
 });
+
+
+test("refresh and language selection do not retranslate visible DOM or cross-fade task panels", async () => {
+  assert.doesNotMatch(source, /function translateTextNodes|function translateAttributes|ZH_UI_TEXT=|node.nodeValue=/);
+  const active=extract("setActivePage","bindDynamicContent");assert.doesNotMatch(active,/setTimeout/);
+  const css=readFileSync(new URL("../apps/worker/src/admin-styles.ts",import.meta.url),"utf8");
+  const container=css.match(/\.admin-page-container\{([^}]+)\}/)?.[1]??"";
+  assert.ok(container.includes("display:none"));assert.doesNotMatch(container,/animation|transition|opacity|will-change/);
+});

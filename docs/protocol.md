@@ -118,7 +118,7 @@ A new Go/Rust implementation should consume the JSON Schema and implement the sa
 
 ## Scope boundary
 
-This protocol does not add OAuth, AI/model calls, Cloudflare Sandbox, Cloudflare Containers, or GitHub Actions runtime. Public bootstrap scripts are Worker application endpoints outside the wire protocol. They remain fail-closed until an operator has published and independently verified the exact signed `v0.1.2` assets, configures a canonical external HTTPS `RUNMESH_PUBLIC_ORIGIN`, and explicitly sets `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.2`; both deployment conditions are required. When enabled, the installer command carrying the one-time code retrieves only fixed GitHub release assets, verifies the embedded-key Ed25519 contract, installs the verified local tarball, then uses the provided code through `--code-stdin`, or prompts locally when the code argument was omitted. The Worker-delivered script is the one-command bootstrap trust root; high-assurance operators use the independent portable-artifact verification path. Automatic update, data downgrade, and upgrade rollback are outside this release.
+This protocol does not add OAuth, AI/model calls, Cloudflare Sandbox, Cloudflare Containers, or GitHub Actions runtime. Public bootstrap scripts are Worker application endpoints outside the wire protocol. They remain fail-closed until an operator has published and independently verified the exact signed `v0.1.3` assets, configures a canonical external HTTPS `RUNMESH_PUBLIC_ORIGIN`, and explicitly sets `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.3`; both deployment conditions are required. When enabled, the installer command carrying the one-time code retrieves only fixed GitHub release assets, verifies the embedded-key Ed25519 contract, installs the verified local tarball, then uses the provided code through `--code-stdin`, or prompts locally when the code argument was omitted. The Worker-delivered script is the one-command bootstrap trust root; high-assurance operators use the independent portable-artifact verification path. Automatic update, data downgrade, and upgrade rollback are outside this release.
 
 ## Structured RPC failure semantics
 
@@ -130,3 +130,7 @@ The rpc.error.error object keeps the original code and bounded message, and may 
 - next_action: a stable client action such as refresh_permissions, re_read_and_retry, or inspect_job.
 
 Clients should branch on these fields instead of matching error text. An unknown operation state must never be automatically replayed when the request could have produced a side effect.
+
+## Shared Runner queue and localized UI
+
+See [queue/UI contract](job-queue-and-localization.md) for capability negotiation, current authorization, bounded fair scheduling, restart interruption and server-side locale rendering. A Worker deployment does not upgrade installed Runner 0.1.2.
