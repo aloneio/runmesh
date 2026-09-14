@@ -9,7 +9,10 @@ test("top-level Worker config is reviewed production while explicit development 
   assert.equal(config.name, "runmesh");
   assert.equal(config.vars.WORKER_ID, "worker-production");
   assert.equal(config.vars.RUNMESH_PUBLIC_ORIGIN, "https://runmesh.aloneio.workers.dev");
-  assert.equal(config.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE, root.version);
+  const releaseState=JSON.parse(await readFile(new URL("../release/release-state.json",import.meta.url),"utf8"));
+  assert.equal(releaseState.version,root.version);
+  assert.ok(["candidate","released"].includes(releaseState.state));
+  assert.equal(config.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE,releaseState.state === "released" ? root.version : "");
   assert.equal(config.env.production.name, config.name);
   assert.deepEqual(config.env.production.vars, config.vars);
   assert.equal(config.env.development.name, "runmesh-development");
