@@ -1,3 +1,4 @@
+import { ExternalAuditHistory } from "./external-audit.js";
 import { PROTOCOL_CURRENT_VERSION, PROTOCOL_MIN_VERSION } from "@aloneio/runmesh-protocol";
 import { RegistryDO, RegistryDOv2, DEFAULT_RUNNER_ENROLLMENT_TTL_MS, RUNNER_ENROLLMENT_TTL_OPTIONS_MS, type McpClientRecord, type RegistryFeatureHealth, type RunnerExecutionMode, type RunnerPublicInfo, type RunnerRecord, type VerifiedMcpClient } from "./registry.js";
 import { RunnerDO, type WorkerEnv } from "./runner-do.js";
@@ -27,6 +28,7 @@ import { validTimestamp, validityStatus, type ValidityWindow } from "./validity.
 import { loadLoginSettings } from "./auth-settings.js";
 import { adminJobUrl, loadAdminJobPage, JOBS_EXPLANATION, jobSnapshotNote } from "./admin-jobs.js";
 import { adminStyles } from "./admin-styles.js";
+import { ControlPlaneUnavailableError, controlPlaneUnavailableResponse } from "./control-plane-errors.js";
 
 // v2 Durable Object classes intentionally use fresh namespaces. The current
 // release is a clean schema break: persisted data from the retired namespace
@@ -62,8 +64,18 @@ export interface ReleaseGateDiagnostics {
 }
 
 export default {
-  fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
-    return handleRequest(request, env, ctx);
+  async scheduled(_event: ScheduledController, env: WorkerEnv): Promise<void> {
+    if (env.RUNMESH_AUDIT_BACKEND !== "d1" || env.HISTORY_DB === undefined) return;
+    // Deriving an ID does not instantiate a DO or touch its SQLite storage.
+    const history = new ExternalAuditHistory(env.HISTORY_DB, env.REGISTRY.idFromName("registry").toString());
+    await history.cleanup();
+  },
+  async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
+    try { return await handleRequest(request, env, ctx); }
+    catch (error) {
+      if (error instanceof ControlPlaneUnavailableError) return controlPlaneUnavailableResponse();
+      throw error;
+    }
   },
 } satisfies ExportedHandler<WorkerEnv>;
 
@@ -79,6 +91,7 @@ async function handleRequest(request: Request, env: WorkerEnv, _ctx: ExecutionCo
       service: "runmesh-agent-control-plane",
       worker_id: env.WORKER_ID,
       release_gate: releaseGateDiagnostics(env),
+      audit_history: { backend: env.RUNMESH_AUDIT_BACKEND === "d1" ? "d1" : "durable_object", binding_configured: env.RUNMESH_AUDIT_BACKEND !== "d1" || env.HISTORY_DB !== undefined },
     });
   }
   if (url.pathname === "/assets/logo.png" || url.pathname === BRAND_LOGO_ASSET || url.pathname === "/assets/favicon.png") return asset(request, env);
@@ -550,9 +563,16 @@ async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: URL): P
   if (url.pathname === "/admin/runners") return createBrowserRunner(env, form, publicOrigin);
   const runnerMatch = /^\/admin\/runners\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\/(rename|rotate|revoke|delete|enrollment|validity|permissions|version-policy|emergency-lock|workspace-create|workspace-update|workspace-delete)$/.exec(url.pathname);
   if (runnerMatch !== null) return handleBrowserRunnerAction(env, form, publicOrigin, runnerMatch[1] as string, runnerMatch[2] as "rename" | "rotate" | "revoke" | "delete" | "enrollment" | "validity" | "permissions" | "version-policy" | "emergency-lock" | "workspace-create" | "workspace-update" | "workspace-delete");
-  const clientMatch = /^\/admin\/clients\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\/(rename|rotate|revoke|reset-runner|select-runner|active-runner|override|reset-override|scopes)$/.exec(url.pathname);
+  const clientMatch = /^\/admin\/clients\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\/(rename|rotate|revoke|reset-runner|select-runner|active-runner|override|reset-override|scopes|recording)$/.exec(url.pathname);
   if (clientMatch === null) return notFound();
-  const clientId = clientMatch[1] as string; const action = clientMatch[2] as "rename" | "rotate" | "revoke" | "reset-runner" | "select-runner" | "active-runner" | "override" | "reset-override" | "scopes";
+  const clientId = clientMatch[1] as string; const action = clientMatch[2] as "rename" | "rotate" | "revoke" | "reset-runner" | "select-runner" | "active-runner" | "override" | "reset-override" | "scopes" | "recording";
+  if (action === "recording") {
+    const value = form.get("record_jobs");
+    if (value !== "true" && value !== "false") return adminError(400, "Recording preference is invalid.");
+    const response = await registryPost(env, `/auth/clients/${encodeURIComponent(clientId)}/recording`, { record_jobs: value === "true" });
+    if (response.status >= 500 || response.status === 429) return controlPlaneUnavailableResponse(response);
+    return response.ok ? redirect(`/admin/clients/${encodeURIComponent(clientId)}`) : adminError(response.status === 404 ? 404 : 400, "Recording preference could not be updated.");
+  }
   if (action === "scopes") {
     const scopes = selectedScopes(form);
     if (scopes === undefined) return adminError(400, "Client scopes are invalid.");
@@ -1970,6 +1990,17 @@ async function clientDetailPage(_env: WorkerEnv, client: Record<string, unknown>
       </div>
       <p class="muted scope-help">Each base scope has a distinct ceiling: <span class="mono">Read</span> permits inspection, <span class="mono">Write</span> permits approved edits, and <span class="mono">Exec</span> permits Host shell and Job control. Runner and Workspace policy can only reduce these permissions.</p>
       ${scopeEditor}
+      <form method="post" action="/admin/clients/${encodeURIComponent(clientId)}/recording" class="scope-editor-form">
+        <input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">
+        <label for="record-jobs">Cloud Job history / 云端任务记录</label>
+        <select id="record-jobs" name="record_jobs">
+          <option value="true"${client.record_jobs !== false ? " selected" : ""}>Record new jobs / 记录新任务</option>
+          <option value="false"${client.record_jobs === false ? " selected" : ""}>Do not record new jobs / 新任务不记录</option>
+        </select>
+        <p class="muted">When disabled, new Job snapshots and Job tool audit entries are not stored in the cloud. Local Runner job metadata and logs remain. Existing cloud history is not deleted. Use workspace_id with Job operations (Runner 0.1.1+); offline history is unavailable for unrecorded jobs.</p>
+        <p class="muted">关闭后不保存新任务的云端快照及相关工具审计；本地任务和日志保留，既有云端历史不会删除。操作未记录任务时需携带 workspace_id，并使用 0.1.1 或更新的 Runner。</p>
+        <button class="button secondary">Save recording preference / 保存记录设置</button>
+      </form>
     </section>
     <section class="panel">
       <div class="section-title">
@@ -2947,9 +2978,18 @@ async function settleRunnerMutation(env: WorkerEnv, runnerId: string, mutationId
 
 async function verifyMcpClient(env: WorkerEnv, secretVerifier: string): Promise<VerifiedMcpClient | undefined> {
   let response: Response;
-  try { response = await registryPost(env, "/auth/mcp/verify", { secret_verifier: secretVerifier }); } catch { return undefined; }
-  const body = response.ok ? record(await json(response)) : undefined;
-  if (body === undefined || typeof body.client_id !== "string" || typeof body.label !== "string" || !Number.isSafeInteger(body.secret_version) || (body.secret_version as number) < 1 || !Array.isArray(body.scopes) || body.scopes.some((scope) => scope !== "coding:read" && scope !== "coding:write" && scope !== "coding:exec")) return undefined;
+  try { response = await registryPost(env, "/auth/mcp/verify", { secret_verifier: secretVerifier }); } catch { throw new ControlPlaneUnavailableError(); }
+  // Only an authoritative credential rejection means the secret is invalid.
+  // Quota errors, a failed DO constructor and malformed upstream replies do
+  // not prove revocation and must never turn a working MCP URL into a 404.
+  if (response.status === 401 || response.status === 403) return undefined;
+  if (response.status === 404) {
+    const rejected = record(await json(response));
+    if (record(rejected?.error)?.code === "invalid_mcp_credential") return undefined;
+  }
+  if (!response.ok) throw new ControlPlaneUnavailableError();
+  const body = record(await json(response));
+  if (body === undefined || typeof body.client_id !== "string" || typeof body.label !== "string" || !Number.isSafeInteger(body.secret_version) || (body.secret_version as number) < 1 || !Array.isArray(body.scopes) || body.scopes.some((scope) => scope !== "coding:read" && scope !== "coding:write" && scope !== "coding:exec")) throw new ControlPlaneUnavailableError();
   return { client_id: body.client_id, label: body.label, secret_version: body.secret_version as number, scopes: body.scopes as CodingScope[] };
 }
 async function registryGet(env: WorkerEnv, path: string): Promise<Response> { return registryRequest(env, path, "GET", ""); }
