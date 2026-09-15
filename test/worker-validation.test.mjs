@@ -50,7 +50,9 @@ test("validator cannot manufacture success from marker halves on different strea
 
 test("validator drains child stdio before deciding whether the success marker exists", async () => {
   const writer = `setTimeout(()=>require('node:fs').writeSync(1,${JSON.stringify(marker + "\n")}),80);`;
-  const result = await validate(`const child=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(writer)}],{stdio:['ignore',1,2],windowsHide:true});child.unref();`);
+  // The writer must actually survive its parent on Windows as well as POSIX.
+  // It has one bounded timer and exits naturally after writing, not a daemon.
+  const result = await validate(`const child=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(writer)}],{stdio:['ignore',1,2],windowsHide:true,detached:true});child.unref();`);
   assert.equal(result.code, 0, result.stderr);
 });
 
