@@ -20,3 +20,7 @@ export interface PolicyPorts {
   runnerRow(runnerId: string): RunnerRow | undefined;
   sessionIsCurrent(runnerId: string, epoch: number, credentialVersion: number, requireOnline: boolean, lifecycleId: string, sessionId: string): boolean;
 }
+
+export interface LifecyclePorts {
+  createPolicySnapshot(runnerId: string, revision: number, nowMs: number, sourceRevision: number | null, mutationId: string): void;
+}
