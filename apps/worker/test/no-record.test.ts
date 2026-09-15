@@ -8,6 +8,45 @@ import { randomBase64Url, sha256Hex, internalHeaders } from "../src/security.js"
 
 const full = { read: true, edit: true, shell: true, job_control: true };
 
+it.each(["read", "job"])("R07 explicit bound %s reads reject legacy fallback without additional history writes", async tool => {
+  const f = await fixture(() => Response.json({ type: "rpc.response", result: { workspace_id:"w",path:"a",job_id:"j",stream:"stdout",data:"old",offset:0,size:3,...bytePageMetadata("old",0,3,3) } }));
+  const args = tool === "read" ? {workspace_id:"w",path:"a",consistency:"snapshot"} : {action:"logs",workspace_id:"w",job_id:"j",consistency:"append"};
+  const result = (await f.call(tool,args)).body.result;
+  expect(result).toMatchObject({isError:true,structuredContent:{error:{code:"runner_upgrade_required",operation_state:"not_started"}}});
+  expect(result.structuredContent.data).toBeUndefined();expect(f.forwarded).toHaveLength(1);
+  await runInDurableObject(f.stub,(_instance,state)=>{
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM jobs").one().n).toBe(0);
+    // Existing file-read audit remains one metadata row; Job no-record remains zero.
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM mcp_calls").one().n).toBe(tool === "read" ? 1 : 0);
+  });
+});
+
+it.each(["read", "job"])("R07 valid bound %s results survive the MCP envelope without an extra RPC", async tool => {
+  const id="a".repeat(64),cursor=`${tool==="read"?"f1":"l1"}:${id}:2`;
+  const raw={workspace_id:"w",path:"a",job_id:"j",stream:"stdout",encoding:"utf-8",data:"ok",offset:0,size:4,
+    ...bytePageMetadata("ok",0,2,4),page_protocol:2,consistency:tool==="read"?"snapshot":"append",snapshot_id:id,next_cursor:cursor,resume_cursor:cursor,cursor_expires_at_ms:1000,secret:"private-secret"};
+  const f=await fixture(()=>Response.json({type:"rpc.response",result:raw}));
+  const args=tool==="read"?{workspace_id:"w",path:"a",consistency:"snapshot"}:{action:"logs",workspace_id:"w",job_id:"j",consistency:"append"};
+  const result=(await f.call(tool,args)).body.result;
+  expect(result.isError).not.toBe(true);
+  expect(result.structuredContent).toMatchObject({page_protocol:2,snapshot_id:id,next_cursor:cursor,resume_cursor:cursor,audit_status:tool==="read"?"recorded":"disabled"});
+  expect(JSON.stringify(result)).not.toContain("private-secret");expect(f.forwarded).toHaveLength(1);
+});
+
+it("R07 invalid bound peer evidence is rejected, not silently stripped into a live page", async () => {
+  const cursor=`f1:${"a".repeat(64)}:2`;
+  const f=await fixture(()=>Response.json({type:"rpc.response",result:{workspace_id:"w",path:"a",data:"ok",offset:0,size:4,
+    ...bytePageMetadata("ok",0,2,4),page_protocol:2,consistency:"snapshot",snapshot_id:"b".repeat(64),next_cursor:cursor,resume_cursor:`f1:${"a".repeat(64)}:3`,cursor_expires_at_ms:1000}}));
+  expect((await f.call("read",{workspace_id:"w",path:"a",consistency:"snapshot"})).body.result).toMatchObject({isError:true,structuredContent:{error:{code:"cursor_mismatch"}}});
+});
+
+it.each(["cursor_expired", "cursor_mismatch", "snapshot_too_large"])("R07 preserves %s safely across the authenticated bridge", async code => {
+  const f=await fixture(()=>Response.json({type:"rpc.error",error:{code,message:"/private/path",operation_state:"not_started"}},{status:400}));
+  const result=(await f.call("read",{workspace_id:"w",path:"a",consistency:"snapshot"})).body.result;
+  expect(result).toMatchObject({isError:true,structuredContent:{error:{code,operation_state:"not_started"}}});
+  expect(JSON.stringify(result)).not.toContain("private/path");
+});
+
 it.each(["log_unavailable", "log_changed", "file_changed", "read_budget_exhausted"])("R07 preserves %s across MCP without leaking paths or creating history writes", async code => {
   const f = await fixture(() => Response.json({ type: "rpc.error", error: { code, message: "private /home/private/secret", operation_state: "not_started", details: { token: "private-token" } } }, { status: 400 }));
   const result = (await f.call("job", { action: "logs", job_id: "j", workspace_id: "w" })).body.result;

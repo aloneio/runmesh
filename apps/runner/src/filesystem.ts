@@ -1,7 +1,8 @@
 import { assertRpcResultFits, jsonBytes, MAX_RPC_RESULT_BYTES } from "./rpc-budget.js";
 import { bytePageMetadata } from "@aloneio/runmesh-protocol";
 import { readPageBytes } from "./page-read.js";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { boundPageRequest, bindBytePage, fileSnapshots, captureFile, fileObservation } from "./bound-cursors.js";
 import { constants, type Dirent } from "node:fs";
 import { lstat, open, opendir } from "node:fs/promises";
 import { basename, relative, sep } from "node:path";
@@ -37,6 +38,7 @@ type IgnoreRule = { readonly negative: boolean; readonly directoryOnly: boolean;
 type DirectoryEntryVisitor = (entry: Dirent<string>, index: number) => boolean | Promise<boolean>;
 
 export class FilesystemService {
+  private readonly cursorOwner = randomBytes(16).toString("hex");
   public constructor(private readonly policy: PathPolicy) {}
 
   /** Return bounded metadata without decoding file contents. */
@@ -69,38 +71,53 @@ export class FilesystemService {
 
   public async read(input: unknown): Promise<Record<string, unknown>> {
     const params = object(input);
+    const cursor = boundPageRequest(params, "file");
     const resolved = await this.policy.resolve(params.workspace_id, params.path, "read");
     const { workspace, path } = resolved;
-    const requestedOffset = boundedInteger(params.cursor ?? params.offset, 0, Number.MAX_SAFE_INTEGER, 0);
+    const requestedOffset = cursor.offset ?? boundedInteger(params.cursor ?? params.offset, 0, Number.MAX_SAFE_INTEGER, 0);
     const requested = boundedInteger(params.limit, 1, MAX_READ_BYTES, MAX_READ_BYTES);
     const snapshot = await this.policy.snapshot(resolved);
     if (snapshot.type !== "file") throw new Error("path is not a file");
-    // O_NOFOLLOW protects the leaf on POSIX; the post-open snapshot also
-    // catches Windows junction/reparse swaps in any ancestor before bytes are
-    // read. The descriptor remains bound if an ancestor changes afterwards.
+    // Open and revalidate even for a cached page: a cursor never substitutes
+    // for current path/OS/policy authorization. Buffers are process-local.
     const handle = await openNoFollow(path, true);
     try {
       const info = await handle.stat();
       await this.policy.verifySnapshot(resolved, snapshot);
       if (!info.isFile() || !sameIdentity(info, snapshot)) throw symlinkEscape();
+      const scope = JSON.stringify([this.cursorOwner, workspace.workspaceId, path, snapshot.rootDevice, snapshot.rootInode, this.policy.generation]);
+      let entry = cursor.id === undefined ? undefined : fileSnapshots.get(cursor.id, scope);
+      if (entry !== undefined && entry.value.observation !== fileObservation(info)) {
+        fileSnapshots.delete(entry.id); throw new RpcRuntimeError("file_changed", "The file no longer matches this snapshot; start a fresh read");
+      }
+      if (cursor.bound && entry === undefined) {
+        const captured = await captureFile(handle, info);
+        entry = fileSnapshots.put(scope, captured, captured.data.length);
+      }
+      if (cursor.id !== undefined && requestedOffset > info.size) throw new RpcRuntimeError("cursor_mismatch", "The cursor is outside the snapshot");
       const rawStart = Math.min(requestedOffset, info.size);
       const probeStart = Math.max(0, rawStart - 3);
-      const probe = await readPageBytes(handle, probeStart, Math.min(7, info.size - probeStart), "file_changed");
+      const probe = entry === undefined ? await readPageBytes(handle, probeStart, Math.min(7, info.size - probeStart), "file_changed") : entry.value.data.subarray(probeStart, probeStart + 7);
       const start = probeStart + utf8ForwardBoundary(probe, rawStart - probeStart);
-      const actual = await readPageBytes(handle, start, Math.min(info.size - start, requested + 3), "file_changed");
+      const actual = entry === undefined ? await readPageBytes(handle, start, Math.min(info.size - start, requested + 3), "file_changed") : entry.value.data.subarray(start, start + requested + 3);
       const after = await handle.stat();
       await this.policy.verifySnapshot(resolved, snapshot);
-      if (!sameIdentity(after, snapshot) || after.size !== info.size || after.mtimeMs !== info.mtimeMs || after.ctimeMs !== info.ctimeMs) throw new RpcRuntimeError("file_changed", "The file changed while this page was being read; request a fresh page");
+      if (!sameIdentity(after, snapshot) || fileObservation(after) !== fileObservation(info)) {
+        if (entry !== undefined) fileSnapshots.delete(entry.id);
+        throw new RpcRuntimeError("file_changed", "The file changed while this page was being read; request a fresh page");
+      }
+      if (entry !== undefined) fileSnapshots.get(entry.id, scope);
       let used = utf8SafePrefixLength(actual, requested);
       if (used === 0 && actual.byteLength > 0) used = utf8SafePrefixLength(actual, Math.min(4, actual.byteLength));
       const initial = used;
-      const resultFor = (length: number) => ({
-        workspace_id: workspace.workspaceId, path: relative(workspace.rootPath, path).split(sep).join("/"),
-        data: actual.subarray(0, length).toString("utf8"), encoding: "utf-8", offset: start,
-        size: info.size,
-        ...bytePageMetadata(actual.subarray(0, length).toString("utf8"), start, start + length, info.size, length < initial),
-      });
-      // JSON escaping, not just the source bytes, determines transport size.
+      const resultFor = (length: number) => {
+        const page = {
+          workspace_id: workspace.workspaceId, path: relative(workspace.rootPath, path).split(sep).join("/"),
+          data: actual.subarray(0, length).toString("utf8"), encoding: "utf-8", offset: start, size: info.size,
+          ...bytePageMetadata(actual.subarray(0, length).toString("utf8"), start, start + length, info.size, length < initial),
+        };
+        return entry === undefined ? page : bindBytePage(page, entry, "file", entry.value.hash);
+      };
       let low = 0; let high = used;
       while (low < high) {
         const middle = Math.ceil((low + high) / 2);
@@ -111,9 +128,7 @@ export class FilesystemService {
       const result = resultFor(used);
       assertRpcResultFits(result);
       return result;
-    } finally {
-      await handle.close();
-    }
+    } finally { await handle.close(); }
   }
 
   public async list(input: unknown): Promise<Record<string, unknown>> {

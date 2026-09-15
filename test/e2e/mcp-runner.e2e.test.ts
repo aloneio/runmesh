@@ -217,6 +217,40 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(JSON.stringify(result)).not.toContain(workspace);
   });
 
+  it("R07 real MCP snapshot cursors preserve content and reject an inter-page file replacement", async () => {
+    const path="bound-page.txt",text="中😀\r\nabcé";await writeFile(join(workspace,path),text);
+    let page=await mcpTool("read",{workspace_id:"workspace-1",path,limit:3,consistency:"snapshot"});
+    expect(page.isError).not.toBe(true);const snapshot=page.structuredContent?.snapshot_id;
+    expect(snapshot).toMatch(/^[a-f0-9]{64}$/);
+    let output="",iterations=0;
+    while(true) {
+      expect(page.structuredContent).toMatchObject({page_protocol:2,consistency:"snapshot",snapshot_id:snapshot});
+      output+=page.structuredContent?.data;expect(++iterations).toBeLessThan(12);
+      if(page.structuredContent?.next_cursor===null)break;
+      page=await mcpTool("read",{workspace_id:"workspace-1",path,limit:3,cursor:page.structuredContent?.next_cursor});
+      expect(page.isError).not.toBe(true);
+    }
+    expect(output).toBe(text);
+    const cursor=page.structuredContent?.resume_cursor;await writeFile(join(workspace,path),"a different source");
+    expect(await mcpTool("read",{workspace_id:"workspace-1",path,cursor})).toMatchObject({isError:true,structuredContent:{error:{code:"file_changed"}}});
+  });
+
+  it("R07 real append cursors resume an incomplete character without treating growth as rotation", async () => {
+    const marker="bound-log-finish";
+    const started=await mcpTool("shell",{workspace_id:"workspace-1",background:true,command:nodeCommand("const fs=require('node:fs');process.stdout.write(Buffer.from([0xe4,0xb8]));const t=setInterval(()=>{if(fs.existsSync('bound-log-finish')){clearInterval(t);process.stdout.write(Buffer.from([0xad]));}},25);")});
+    const jobId=started.structuredContent?.job_id as string;expect(typeof jobId).toBe("string");
+    try {
+      let partial:ToolResult={};
+      await waitFor(async()=>{partial=await mcpTool("job",{action:"logs",workspace_id:"workspace-1",job_id:jobId,consistency:"append"});return partial.structuredContent?.page_state==="incomplete";},10000);
+      expect(partial.structuredContent).toMatchObject({page_protocol:2,data:"",pending_bytes:2,resume_offset:0});
+      const cursor=partial.structuredContent?.resume_cursor,snapshot=partial.structuredContent?.snapshot_id;
+      await writeFile(join(workspace,marker),"finish");
+      await waitFor(async()=>(await mcpTool("job",{action:"get",workspace_id:"workspace-1",job_id:jobId})).structuredContent?.status==="succeeded",10000);
+      const done=await mcpTool("job",{action:"logs",workspace_id:"workspace-1",job_id:jobId,cursor});
+      expect(done).toMatchObject({structuredContent:{data:"中",page_protocol:2,page_state:"end",snapshot_id:snapshot}});
+    } finally { await writeFile(join(workspace,marker),"finish"); }
+  });
+
   it("paginates live filesystem UTF-8 reads without replacement characters", async () => {
     let cursor: string | undefined;
     let output = "";

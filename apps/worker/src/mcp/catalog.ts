@@ -1,4 +1,4 @@
-import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS, BytePageMetadataSchema } from "@aloneio/runmesh-protocol";
+import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS, BytePageMetadataSchema, BoundFileCursorSchema, BoundLogCursorSchema, isBoundCursor } from "@aloneio/runmesh-protocol";
 import { z } from "zod";
 
 export const SUPPORTED_SCOPES = ["coding:read", "coding:write", "coding:exec"] as const;
@@ -27,13 +27,20 @@ export const RunnerIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Z
 export const WorkspaceIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "must be a safe workspace identifier");
 export const RelativePathSchema = z.string().min(1).max(4096).refine(isSafeRelativePath, "must be a workspace-relative path without traversal");
 export const CursorSchema = z.string().max(128).regex(/^\d+$/, "must be a numeric cursor").optional();
+export const FileCursorSchema = z.union([CursorSchema.unwrap(), BoundFileCursorSchema]).optional();
+export const LogCursorSchema = z.union([CursorSchema.unwrap(), BoundLogCursorSchema]).optional();
+function checkBoundInput(value: { cursor?: string | undefined; offset?: number | undefined; tail?: boolean | undefined; consistency?: string | undefined }, context: z.RefinementCtx, kind: "file" | "log"): void {
+  const mode = kind === "file" ? "snapshot" : "append";
+  if (isBoundCursor(value.cursor, kind) && (value.offset !== undefined || value.tail === true || value.consistency === "live")) context.addIssue({ code: "custom", message: "bound cursors cannot be combined with offset, tail or live consistency" });
+  if (value.consistency === mode && value.cursor !== undefined && !isBoundCursor(value.cursor, kind)) context.addIssue({ code: "custom", message: "start a bound read without a legacy numeric cursor" });
+}
 export const InspectCursorSchema = z.string().max(128).regex(/^(?:\d+|s1:[a-f0-9]{16}:\d+)$/, "must be a numeric or search snapshot cursor").optional();
 export const SearchGlobSchema = z.string().min(1).max(256).refine((value) => !value.includes("\0"), "glob must not contain NUL");
 export const BoundedLimitSchema = z.number().int().min(1).max(65_536).optional();
 export const JobIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "must be a safe job identifier");
 export const JobStatusSchema = z.enum(["queued", "running", "cancelling", "cancelled", "succeeded", "failed", "unknown", "interrupted"]);
 
-export const ReadInputSchema = z.object({ workspace_id: WorkspaceIdSchema, path: RelativePathSchema, cursor: CursorSchema, offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(262_144).optional() }).strict();
+export const ReadInputSchema = z.object({ workspace_id: WorkspaceIdSchema, path: RelativePathSchema, cursor: FileCursorSchema, offset: z.number().int().min(0).safe().optional(), consistency: z.enum(["live", "snapshot"]).optional(), limit: z.number().int().min(1).max(262_144).optional() }).strict().superRefine((value, context) => checkBoundInput(value, context, "file"));
 export const InspectInputSchema = z.object({ action: z.enum(["list", "search", "stat", "git_status", "git_diff", "git_log", "git_show", "git_blame", "diagnostics"]), workspace_id: WorkspaceIdSchema, path: RelativePathSchema.optional(), query: z.string().min(1).max(512).optional(), max_results: z.number().int().min(1).max(256).optional(), cursor: InspectCursorSchema, mode: z.enum(["literal", "filename"]).optional(), case_sensitive: z.boolean().optional(), include_globs: z.array(SearchGlobSchema).max(32).optional(), exclude_globs: z.array(SearchGlobSchema).max(32).optional(), context_before: z.number().int().min(0).max(8).optional(), context_after: z.number().int().min(0).max(8).optional(), revision: z.string().regex(/^[0-9a-fA-F]{7,64}(?:\^\{0,1\})?$/).optional(), start_line: z.number().int().min(1).max(1_000_000).optional(), end_line: z.number().int().min(1).max(1_000_000).optional() }).strict().superRefine((value, context) => {
   if ((value.action === "search" && value.query === undefined) || (value.action !== "search" && value.query !== undefined)) context.addIssue({ code: "custom", message: "query is only valid and required for search" });
   if (value.action !== "search" && (value.mode !== undefined || value.case_sensitive !== undefined || value.include_globs !== undefined || value.exclude_globs !== undefined || value.context_before !== undefined || value.context_after !== undefined)) context.addIssue({ code: "custom", message: "search options are only valid for search" });
@@ -51,7 +58,7 @@ export const ShellInputSchema = z.object({ workspace_id: WorkspaceIdSchema, comm
 export const JobInputSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("list"), workspace_id: WorkspaceIdSchema.optional(), status: JobStatusSchema.optional(), limit: z.number().int().min(1).max(100).optional() }).strict(),
   z.object({ action: z.literal("get"), job_id: JobIdSchema, workspace_id: WorkspaceIdSchema.optional() }).strict(),
-  z.object({ action: z.literal("logs"), job_id: JobIdSchema, workspace_id: WorkspaceIdSchema.optional(), stream: z.enum(["stdout", "stderr"]).optional(), cursor: CursorSchema, offset: z.number().int().min(0).optional(), limit: BoundedLimitSchema, tail: z.boolean().optional() }).strict(),
+  z.object({ action: z.literal("logs"), job_id: JobIdSchema, workspace_id: WorkspaceIdSchema.optional(), stream: z.enum(["stdout", "stderr"]).optional(), cursor: LogCursorSchema, offset: z.number().int().min(0).safe().optional(), consistency: z.enum(["live", "append"]).optional(), limit: BoundedLimitSchema, tail: z.boolean().optional() }).strict().superRefine((value, context) => checkBoundInput(value, context, "log")),
   z.object({ action: z.literal("cancel"), job_id: JobIdSchema, workspace_id: WorkspaceIdSchema.optional() }).strict(),
   z.object({ action: z.literal("input"), job_id: JobIdSchema, workspace_id: WorkspaceIdSchema.optional(), data: z.string().max(65_536).optional(), close_stdin: z.boolean().optional() }).strict().refine((value) => value.data !== undefined || value.close_stdin === true, "data or close_stdin is required"),
 ]);
@@ -81,9 +88,13 @@ export const SafeOutputSchema = z.object({}).passthrough();
 // documents typed pages, not an authorization or a content snapshot promise.
 export const ReadOutputSchema = SafeOutputSchema.extend({
   data: z.string().max(65_536).optional(), encoding: z.literal("utf-8").optional(),
-  offset: z.number().int().nonnegative().safe().optional(), next_cursor: CursorSchema.nullable(),
+  offset: z.number().int().nonnegative().safe().optional(), next_cursor: FileCursorSchema.nullable(),
   truncated: z.boolean().optional(), size: z.number().int().nonnegative().safe().optional(),
   ...BytePageMetadataSchema.partial().shape,
+  page_protocol: z.union([z.literal(1), z.literal(2)]).optional(),
+  snapshot_id: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
+  consistency: z.literal("snapshot").optional(), resume_cursor: BoundFileCursorSchema.optional(),
+  cursor_expires_at_ms: z.number().int().nonnegative().safe().optional(),
 });
 
 export const TOOL_SPECS = {
@@ -92,10 +103,10 @@ export const TOOL_SPECS = {
   runner_select: { scope: "coding:read", description: "Select this MCP client's active runner. Initial selection is immediate; changing a selection requires confirm_switch=true.", inputSchema: runnerSelectSchema, annotations: writeAnnotations },
   workspace_list: { scope: "coding:read", description: "List readable workspace IDs on the active runner. Workspace roots are never returned.", inputSchema: emptySchema, annotations: readAnnotations },
   inspect: { scope: "coding:read", description: "Inspect a workspace with bounded list, search, stat, Git history, or layered diagnostics. This is read-only; workspace roots and host paths are never returned.", inputSchema: InspectInputSchema, annotations: readAnnotations },
-  read: { scope: "coding:read", description: "Read a bounded UTF-8-safe page of a workspace-relative file. Use next_cursor or offset to continue. New Runner page_state distinguishes more, end and incomplete UTF-8; resume_offset is for an explicit later refresh, not polling. Numeric cursors are not content snapshots. Host roots and absolute paths are not accepted.", inputSchema: ReadInputSchema, outputSchema: ReadOutputSchema, annotations: readAnnotations },
+  read: { scope: "coding:read", description: "Read a bounded UTF-8-safe page of a workspace-relative file. Use next_cursor or offset to continue. New Runner page_state distinguishes more, end and incomplete UTF-8; resume_offset is for an explicit later refresh, not polling. Numeric cursors are live observations. Opt in with consistency=snapshot for a bounded 1 MiB content snapshot; continue using its opaque next_cursor, not offset. Expired cursors require a fresh read. Host roots and absolute paths are not accepted.", inputSchema: ReadInputSchema, outputSchema: ReadOutputSchema, annotations: readAnnotations },
   edit: { scope: "coding:write", description: "Preview or apply a transactional, baseline-checked patch to a writable workspace. The result contains only bounded, workspace-relative change metadata.", inputSchema: EditInputSchema, annotations: destructiveAnnotations },
   shell: { scope: "coding:exec", description: "Run a command through the selected runner's Host shell (Bash on Linux/macOS or PowerShell on Windows). Commands have the runner user's OS permissions and are not sandboxed; the workspace controls initial cwd and policy, not the Host shell root. Use a restricted VM/container and avoid administrator/root runners for untrusted code. background=true returns a persistent job immediately; foreground waits only up to wait_ms. Compatible Runners accept queued Jobs when execution slots are full; queue=false requests immediate admission only. Waiting Jobs return their ID immediately.", inputSchema: ShellInputSchema, annotations: execAnnotations },
-  job: { description: "List, inspect, or read bounded logs for persistent jobs. cancel and input require coding:exec plus workspace job-control permission. Pass workspace_id with get/logs/cancel/input to operate without cloud Job history (Runner 0.1.1+). Job metadata never includes command, cwd, PID, roots, or secrets.", inputSchema: JobInputSchema, annotations: mixedAnnotations },
+  job: { description: "List, inspect, or read bounded logs for persistent jobs. consistency=append opts log reads into generation-bound cursors that permit append; use resume_cursor for later explicit refresh. Rotation, truncation or expiry requires a fresh read, not command re-execution. cancel and input require coding:exec plus workspace job-control permission. Pass workspace_id with get/logs/cancel/input to operate without cloud Job history (Runner 0.1.1+). Job metadata never includes command, cwd, PID, roots, or secrets.", inputSchema: JobInputSchema, annotations: mixedAnnotations },
   context: { description: "Read or explicitly checkpoint workspace handoff context stored locally on the selected Runner. bootstrap/read/search are read-only; checkpoint/rebuild require coding:write plus workspace edit permission. Omit context_id to create a checkpoint; use the returned ID for updates. New Runners reject unknown supplied IDs. Raw chat, system prompts, host paths, and hidden reasoning are not captured.", inputSchema: ContextInputSchema, annotations: mixedAnnotations },
 } as const satisfies Record<string, ToolSpec>;
 

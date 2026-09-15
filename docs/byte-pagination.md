@@ -2,6 +2,8 @@
 
 Development slice of **R07 / original P09**, based on `daa7800c256c0143432f5ca105fdd07a3183d179`. This is not a production deployment or a replacement for the immutable v0.1.3 Runner.
 
+This page describes the retained version-1/live behavior. The subsequent optional version-2 modes and their separate snapshot/generation guarantees are documented in [bound cursors](bound-cursors.md); ordinary numeric pages remain unchanged.
+
 ## Correctness changes
 
 File and Job-log pages retain numeric byte cursors. An incomplete final UTF-8 code point no longer yields a non-advancing file cursor or consumes a log prefix that could become decodable after a later append. A final incomplete page returns no continuation cursor and explicitly reports the pending bytes. No polling is added.

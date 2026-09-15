@@ -1,8 +1,8 @@
 import { MCP_RPC_ACTIONS } from "./actions.js";
-import { projectBytePageMetadata } from "./byte-pages.js";
+import { projectBytePageMetadata, boundPageResponseProblem } from "./byte-pages.js";
 import { MCP_CATALOG_METADATA } from "./catalog-contract.js";
 import { capabilityDiagnostics } from "./capability-diagnostics.js";
-import { rpcOperation } from "@aloneio/runmesh-protocol";
+import { rpcOperation, isBoundCursor } from "@aloneio/runmesh-protocol";
 import type { RpcOperationState } from "@aloneio/runmesh-protocol";
 import { McpServer, type AuthInfo, type ServerContext } from "@modelcontextprotocol/server";
 import {
@@ -294,7 +294,7 @@ export function safeJobLogResult(value: unknown): Record<string, unknown> {
   if (value.next_cursor === null || isSafeCursor(value.next_cursor)) output.next_cursor = value.next_cursor;
   if (typeof value.truncated === "boolean") output.truncated = value.truncated;
   if (isSafeNonnegativeInteger(value.size)) output.size = value.size;
-  projectBytePageMetadata(value, output);
+  projectBytePageMetadata(value, output, "log");
   if (typeof value.source_truncated === "boolean") output.source_truncated = value.source_truncated;
   return output;
 }
@@ -348,7 +348,7 @@ export function safeReadResult(value: unknown): Record<string, unknown> {
   if (value.next_cursor === null || isSafeCursor(value.next_cursor)) output.next_cursor = value.next_cursor;
   if (typeof value.truncated === "boolean") output.truncated = value.truncated;
   if (isSafeNonnegativeInteger(value.size)) output.size = value.size;
-  projectBytePageMetadata(value, output);
+  projectBytePageMetadata(value, output, "file");
   return output;
 }
 
@@ -1109,7 +1109,7 @@ type ToolFailure = { readonly ok: false; readonly error: { readonly code: string
 type ToolCall = ToolSuccess | ToolFailure;
 
 const SAFE_RUNNER_ERROR_CODES = new Set([
-  "log_unavailable", "file_changed", "log_changed", "read_budget_exhausted",
+  "log_unavailable", "file_changed", "log_changed", "read_budget_exhausted", "cursor_expired", "cursor_mismatch", "snapshot_too_large",
   "internal_error", "shell_unavailable", "control_plane_unavailable", "registry_unavailable", "runner_upgrade_required", "baseline_changed", "queue_full", "busy", "expected_hash_mismatch", "file_too_large", "git_failed", "git_output_too_large", "git_timeout", "git_unavailable",
   "context_index_missing", "context_index_stale", "context_index_corrupt", "context_index_too_large", "context_record_corrupt", "context_record_missing", "context_record_too_large", "context_rebuild_budget", "context_revision_conflict", "context_storage_unsafe", "context_turn_conflict",
   "hunk_ambiguous", "hunk_not_found", "hunk_overlap", "internal_error", "invalid_params", "invalid_patch", "invalid_path", "invalid_request", "invalid_workspace", "missing_file", "mixed_newlines", "not_utf8",
@@ -1155,7 +1155,14 @@ async function callRunner(env: McpRequestEnv, runnerId: string, method: string, 
     return fail("runner_offline", "The bridge reply was not received; the operation may already have started.", "Inspect the original Job or workspace state before submitting another mutation.", "unknown");
   }
   const payload = await json(response);
-  if (response.ok && isRecord(payload) && payload.type === "rpc.response" && Object.hasOwn(payload, "result")) return { ok: true, value: payload.result };
+  if (response.ok && isRecord(payload) && payload.type === "rpc.response" && Object.hasOwn(payload, "result")) {
+    if ((method === "fs.read" || method === "job.logs") && (params.consistency === "snapshot" || params.consistency === "append" || isBoundCursor(params.cursor))) {
+      const projected = method === "fs.read" ? safeReadResult(payload.result) : safeJobLogResult(payload.result);
+      const problem = boundPageResponseProblem(method, params, payload.result, projected);
+      if (problem !== undefined) return fail(problem, "The Runner did not return the requested bound page; no content is accepted.", problem === "runner_upgrade_required" ? "Use a verified compatible Runner or explicitly choose a fresh live read without a bound cursor." : "Start a fresh bounded read; do not join pages from different resources or generations.", "not_started");
+    }
+    return { ok: true, value: payload.result };
+  }
   const bridgeError = isRecord(payload) && isRecord(payload.error) ? payload.error : undefined;
   const code = safeRunnerErrorCode(bridgeError?.code, response.status === 503 ? "runner_offline" : "runner_rpc_failed");
   // Runner error details can include host filesystem paths. MCP exposes stable
@@ -1331,6 +1338,8 @@ function failureWithDetails(code: string, message: string, hint: string, details
 function failWithDetails(code: string, message: string, hint: string, details: unknown, state?: RpcOperationState): ToolFailure { return { ok: false, error: { code, message, hint, details, ...failureMetadata(code, state) } }; }
 function fail(code: string, message: string, hint: string, state?: RpcOperationState): ToolFailure { return { ok: false, error: { code, message, hint, ...failureMetadata(code, state) } }; }
 function hintFor(code: string, state?: RpcOperationState): string {
+  if (code === "cursor_expired" || code === "cursor_mismatch") return "Start a fresh bounded read for this resource and current policy; do not silently reuse the old offset or re-run a command.";
+  if (code === "snapshot_too_large") return "Snapshots are limited to 1 MiB. Explicitly choose live pages for a larger file; no snapshot consistency is then promised.";
   if (state !== undefined && state !== "not_started" && code !== "context_index_stale") return "Inspect the original Job receipt or workspace state; do not repeat a mutation, input or cancellation while its outcome is unresolved.";
   if (code === "log_unavailable") return "Inspect the existing Job and its local log storage; do not re-run the command to retrieve output.";
   if (code === "file_changed" || code === "log_changed") return "Read a fresh bounded page; do not join this result to a page from a changed byte source.";
