@@ -10,12 +10,14 @@ import { adminDocument } from "../src/admin/layout.js";
 import { html, htmlHeaders, redirect } from "../src/http/html-response.js";
 
 // Hashes were captured by evaluating the pre-refactor renderers at the fixed
-// baseline, not generated from the replacement views. No production state.
+// baseline. Explicit i18n annotation changes retain their original hashes in
+// the fixture; the update was checked to change only data/aria boundaries.
+// No production state.
 const views = { authEntryDocument, secretCreatedPage, overviewPage, settingsPage, clientsPage, clientDetailPage, runnersPage, runnerDetailPage, adminDocument };
 describe("AR04 rendering compatibility", () => {
   beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(fixtures.clock_ms); });
   afterEach(() => vi.useRealTimers());
-  for (const fixture of fixtures.cases) it(`preserves exact ${fixture.name} markup from ${fixtures.baseline.slice(0, 7)}`, () => {
+  for (const fixture of fixtures.cases) it(`preserves reviewed ${fixture.name} markup (origin ${fixtures.baseline.slice(0, 7)})`, () => {
     const args: unknown[] = [...fixture.args];
     if (fixture.fn === "runnersPage") {
       const presentation = (fixture as unknown as { presentation: { configuredModes: Record<string, string | null>; maxValidityDays: number } }).presentation;

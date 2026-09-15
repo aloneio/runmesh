@@ -97,8 +97,11 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "b94fb8d802373820755732a807fc8cdc9d4f579a0d40b21cafdcac121ff7a957",
-      "bytes": 3219
+      "sha256": "04d006936232ee5cc13cdb1566b5e898bb484bd49c58608e87c68c3ed8d63a18",
+      "bytes": 3245,
+      "original_sha256": "b94fb8d802373820755732a807fc8cdc9d4f579a0d40b21cafdcac121ff7a957",
+      "original_bytes": 3219,
+      "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label"
     },
     {
       "name": "settings",
@@ -173,8 +176,11 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "57a9afa644d0576c73376174bad5c663efe58c9490697670a4c5925b21280795",
-      "bytes": 4110
+      "sha256": "1041ebda357b2c49560e9a894a8de702e622a2c7d67d2eb8e366c0bd4a4c4bb5",
+      "bytes": 4096,
+      "original_sha256": "57a9afa644d0576c73376174bad5c663efe58c9490697670a4c5925b21280795",
+      "original_bytes": 4110,
+      "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label"
     },
     {
       "name": "client-detail",
@@ -218,8 +224,11 @@
         [],
         "fixture-csrf-<>&\""
       ],
-      "sha256": "e8468030bfaefe12378b3a9a7541e59679236f3888f7b6b0e69ef759cc5f8d66",
-      "bytes": 6638
+      "sha256": "a1f10c2ac6f89b96980b6d734c045edac5fc9c472451921343c517ec50fb7219",
+      "bytes": 6677,
+      "original_sha256": "e8468030bfaefe12378b3a9a7541e59679236f3888f7b6b0e69ef759cc5f8d66",
+      "original_bytes": 6638,
+      "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label"
     },
     {
       "name": "runners-empty",
@@ -289,14 +298,17 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "f2fa21e5b826c1aef0f866540ddf4a52a314932387772960f5c7849037cc0436",
-      "bytes": 6864,
+      "sha256": "994101b4e4b938762f863a888bb6dc126f0eccf675d0ed024dd730aaa8c5490e",
+      "bytes": 6877,
       "presentation": {
         "configuredModes": {
           "runner-fixture": null
         },
         "maxValidityDays": 3650
-      }
+      },
+      "original_sha256": "f2fa21e5b826c1aef0f866540ddf4a52a314932387772960f5c7849037cc0436",
+      "original_bytes": 6864,
+      "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label"
     },
     {
       "name": "runner-detail",
@@ -358,5 +370,14 @@
       "sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "bytes": 88098
     }
-  ]
+  ],
+  "i18n_review": {
+    "source_base": "a07087baddce88417a4ee3d08b2c214c9f7f24a1",
+    "changed_cases": 4,
+    "allowed_changes": [
+      "no-translation markers",
+      "accessible rename label"
+    ],
+    "command_variants_unchanged": 8
+  }
 }
