@@ -1,3 +1,5 @@
+import { defineToolHandlers, REGISTERED_TOOL_NAMES, type ToolHandlers } from "./handler-registry.js";
+import { validateToolOutput } from "./action-output-contracts.js";
 import { safeContextStorageReport } from "@aloneio/runmesh-protocol";
 import { reauthorizePrincipal } from "./reauthorization.js";
 import { MCP_RPC_ACTIONS } from "./actions.js";
@@ -15,7 +17,7 @@ import { internalHeaders, isSafeIdentifier, isConfiguredSecret } from "../securi
 import type { ActiveRunnerContext, McpClientActiveRunner, McpRunnerSelectionResult, PolicyReadiness as RegistryPolicyReadiness } from "../contracts/runner-selection.js";
 import type { WorkerEnv } from "../platform/env.js";
 import { PRODUCT_VERSION } from "../generated-version.js";
-import { ContextInputSchema, EditInputSchema, InspectInputSchema, JobInputSchema, SafeOutputSchema, ShellInputSchema, SUPPORTED_SCOPES, TOOL_SPECS, type ToolName } from "./catalog.js";
+import { ContextInputSchema, EditInputSchema, InspectInputSchema, JobInputSchema, ShellInputSchema, SUPPORTED_SCOPES, TOOL_SPECS, type ToolName } from "./catalog.js";
 
 const CONTENT_LIMIT = 32 * 1024;
 const STRUCTURED_LIMIT = 64 * 1024;
@@ -33,41 +35,40 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth): McpServ
   const env: McpRequestEnv = { ...rawEnv, mcpPrincipal: { client_id: auth.clientId, secret_version: auth.extra?.secret_version } };
   const server = new McpServer({ name: "runmesh", version: PRODUCT_VERSION });
 
-  register(server, "runner_list", async () => gatedRunnerList(env, auth.clientId));
-  register(server, "runner_current", async () => {
-    const selection = await getActiveRunnerSelection(env, auth.clientId);
-    if (selection.ok) {
-      const current = selection.value as McpClientActiveRunner;
-      return success(safeSelectionValue(current));
-    }
-    return asToolResult(selection);
+  const handlers = defineToolHandlers({
+    runner_list: async () => gatedRunnerList(env, auth.clientId),
+    runner_current: async () => {
+      const selection = await getActiveRunnerSelection(env, auth.clientId);
+      return selection.ok ? success(safeSelectionValue(selection.value)) : asToolResult(selection);
+    },
+    runner_select: async ({ runner_id, confirm_switch }) => {
+      const selection = await selectActiveRunner(env, auth.clientId, runner_id, confirm_switch === true);
+      if (selection.ok) {
+        const result = selection.value as { selection: McpClientActiveRunner; changed: boolean };
+        return success({ ...safeSelectionValue(result.selection), changed: result.changed });
+      }
+      if (selection.error.code === "runner_switch_confirmation_required") {
+        const current = selection.error.details;
+        return failureWithDetails(selection.error.code, selection.error.message, selection.error.hint, current === undefined ? {} : { current_active_runner: safeSelectionValue(current) });
+      }
+      return asToolResult(selection);
+    },
+    workspace_list: async () => activeWorkspaceList(env, auth.clientId),
+    inspect: async (params, scopes) => inspectTool(env, auth.clientId, params, scopes),
+    read: async params => activeRunnerTool(env, auth.clientId, MCP_RPC_ACTIONS.read.read, boundedReadParams(params, 32 * 1024), "read", "read"),
+    edit: async params => editTool(env, auth.clientId, params),
+    shell: async params => shellTool(env, auth.clientId, params),
+    job: async (params, scopes) => jobTool(env, auth.clientId, params, scopes),
+    context: async (params, scopes) => contextTool(env, auth.clientId, params, scopes),
   });
-  register(server, "runner_select", async ({ runner_id, confirm_switch }) => {
-    const selection = await selectActiveRunner(env, auth.clientId, runner_id, confirm_switch === true);
-    if (selection.ok) {
-      const result = selection.value as { selection: McpClientActiveRunner; changed: boolean };
-      return success({ ...safeSelectionValue(result.selection), changed: result.changed });
-    }
-    if (selection.error.code === "runner_switch_confirmation_required") {
-      const current = selection.error.details;
-      return failureWithDetails(selection.error.code, selection.error.message, selection.error.hint, current === undefined ? {} : { current_active_runner: safeSelectionValue(current) });
-    }
-    return asToolResult(selection);
-  });
-  register(server, "workspace_list", async () => activeWorkspaceList(env, auth.clientId));
-  register(server, "inspect", async (params, scopes) => inspectTool(env, auth.clientId, params, scopes));
-  register(server, "read", async (params) => activeRunnerTool(env, auth.clientId, MCP_RPC_ACTIONS.read.read, boundedReadParams(params, 32 * 1024), "read", "read"));
-  register(server, "edit", async (params) => editTool(env, auth.clientId, params));
-  register(server, "shell", async (params) => shellTool(env, auth.clientId, params));
-  register(server, "job", async (params, scopes) => jobTool(env, auth.clientId, params, scopes));
-  register(server, "context", async (params, scopes) => contextTool(env, auth.clientId, params, scopes));
+  for (const name of REGISTERED_TOOL_NAMES) register(server, name, handlers[name]);
 
   return server;
 
-  function register<Name extends ToolName>(target: McpServer, name: Name, action: (input: z.output<(typeof TOOL_SPECS)[Name]["inputSchema"]>, scopes: readonly string[]) => Promise<unknown>): void {
+  function register<Name extends ToolName>(target: McpServer, name: Name, action: ToolHandlers[Name]): void {
     const spec = TOOL_SPECS[name];
     type Input = z.output<(typeof TOOL_SPECS)[Name]["inputSchema"]>;
-    (target.registerTool as unknown as (toolName: string, config: Record<string, unknown>, callback: (input: Input, context: ServerContext) => Promise<unknown>) => unknown)(name, { description: spec.description, inputSchema: spec.inputSchema, outputSchema: "outputSchema" in spec ? spec.outputSchema : SafeOutputSchema, annotations: spec.annotations, _meta: MCP_CATALOG_METADATA }, async (input, _context) => {
+    (target.registerTool as unknown as (toolName: string, config: Record<string, unknown>, callback: (input: Input, context: ServerContext) => Promise<unknown>) => unknown)(name, { description: spec.description, inputSchema: spec.inputSchema, outputSchema: spec.outputSchema, annotations: spec.annotations, _meta: MCP_CATALOG_METADATA }, async (input, _context) => {
       // The URL credential can be rotated while a body or SDK import is
       // awaited. Re-read the exact generation and scopes before every tool.
       const live = await reauthorizePrincipal(async signal => {
@@ -92,12 +93,27 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth): McpServ
         return failure("insufficient_scope", `This tool requires ${requiredScope}.`, `Authorize the MCP client again with ${requiredScope}.`);
       }
       try {
-        return await action(input, scopes);
+        return verifyToolResult(name, input, await action(input, scopes));
       } catch {
         return failure("internal_error", "The MCP tool could not confirm the operation outcome.", "Inspect the existing Job or change receipt before deciding what to do next; do not blindly repeat a write or command. Contact the operator if the outcome cannot be established.");
       }
     });
   }
+}
+
+/** Preserve the existing auth/error wrapper; validate only successful public
+ * results. A broken output contract never authorizes retrying a mutation. */
+function verifyToolResult(name: ToolName, input: unknown, result: unknown): unknown {
+  if (isRecord(result) && result.isError === true) return result;
+  if (isToolSuccessResult(result) && validateToolOutput(name, input, result.structuredContent)) return result;
+  const value = isToolSuccessResult(result) ? result.structuredContent : {};
+  const receipt: Record<string, unknown> = {};
+  for (const key of ["job_id", "workspace_id", "correlation_id"] as const) {
+    const id = safeJobIdentifier(value[key]); if (id !== undefined) receipt[key] = id;
+  }
+  if (value.runner_context !== undefined) receipt.runner_context = safeRunnerContext(value.runner_context);
+  if (["recorded", "degraded", "unknown", "disabled"].includes(String(value.audit_status))) receipt.audit_status = value.audit_status;
+  return failureWithDetails("tool_result_invalid", "The tool did not return the documented result; no success is inferred.", "Inspect the original Job or workspace state. Do not repeat a mutation, input or cancellation based on this response.", receipt, "unknown");
 }
 
 async function inspectTool(env: McpRequestEnv, clientId: string, params: z.output<typeof InspectInputSchema>, scopes: readonly string[]): Promise<unknown> {

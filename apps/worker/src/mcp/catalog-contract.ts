@@ -1,7 +1,7 @@
 import { canonicalJson, sha256Hex, RPC_OPERATION_CONTRACT } from "@aloneio/runmesh-protocol";
 import { z } from "zod";
 import { MCP_ACTION_REQUIREMENTS } from "./actions.js";
-import { TOOL_SPECS, SafeOutputSchema } from "./catalog.js";
+import { TOOL_SPECS } from "./catalog.js";
 
 /** Public schema/annotation fingerprint, not an authorization or source-code
  * signature. Cross-field Zod refinements still execute at the input boundary. */
@@ -9,7 +9,7 @@ export function catalogContract() {
   return { schema_version: 1, operation_contract: RPC_OPERATION_CONTRACT,
     tools: Object.entries(TOOL_SPECS).map(([name, spec]) => ({ name, description: spec.description,
       inputSchema: { type: "object", ...z.toJSONSchema(spec.inputSchema, { io: "input", target: "draft-2020-12" }) },
-      outputSchema: z.toJSONSchema("outputSchema" in spec ? spec.outputSchema : SafeOutputSchema, { io: "output", target: "draft-2020-12" }), annotations: spec.annotations,
+      outputSchema: z.toJSONSchema(spec.outputSchema, { io: "output", target: "draft-2020-12" }), annotations: spec.annotations,
       scope: "scope" in spec ? spec.scope : null,
       actions: MCP_ACTION_REQUIREMENTS.filter(action => action.tool === name) })) };
 }
