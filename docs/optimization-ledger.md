@@ -2,6 +2,10 @@
 
 This ledger tracks changes made from the 2026-09-11 optimization plan. It records behavior adopted from upstream references without copying their implementation.
 
+## R07 / P09 — byte-page correctness and output availability (2026-09-15)
+
+Development slice only: files/logs share additive byte metadata, incomplete UTF-8 tails stop non-advancing pagination without losing a later append, unavailable logs are distinct from empty logs, and inline log failures preserve actual Job exits. File reads recheck sampled metadata; short reads and serialized response budgets are bounded. The read catalog now describes optional typed page fields. Existing numeric cursors remain non-snapshot cursors; cross-page binding, full output schemas and other tools' pagination remain open. See [byte pagination](byte-pagination.md) and [Chinese explanation](byte-pagination.zh-CN.md). No production or released Runner update is implied.
+
 ## R01 / R07 — capability and operation-contract alignment (2026-09-15)
 
 Development implementation slice, not production acceptance: the 25 protected RPC operations share one immutable definition across wire method validation, Registry requirements, Runner advertisement and read-completion generation checks. Twenty-four Runner action bindings and a canonical catalog fingerprint are shared with on-demand diagnostics. The public surface remains 10 tools. Missing old-peer reports are unknown; neither implementation claims nor directory metadata authorize execution.

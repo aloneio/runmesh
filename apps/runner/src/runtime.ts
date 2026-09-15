@@ -393,8 +393,17 @@ export class RunnerRuntime {
     const job = await this.startJob(startParams);
     if (job.status === "queued") return { job, completed: false, queue: this.jobs.queueStatus(), wait_cap_ms: LOCAL_RUNNER_OPERATION_TIMEOUT_MS };
     const deadline = Date.now() + requested;
-    while (Date.now() < deadline) { const current = this.jobs.get(job.job_id); if (!isActive(current)) return { job: current, completed: true, stdout: await this.jobs.logs(job.job_id, { stream: "stdout", limit: 16 * 1024, tail: true }), stderr: await this.jobs.logs(job.job_id, { stream: "stderr", limit: 16 * 1024, tail: true }) }; await delay(Math.min(50, deadline - Date.now())); }
+    while (Date.now() < deadline) { const current = this.jobs.get(job.job_id); if (!isActive(current)) return { job: current, completed: true, stdout: await this.executionLogs(job.job_id, "stdout"), stderr: await this.executionLogs(job.job_id, "stderr") }; await delay(Math.min(50, deadline - Date.now())); }
     return { job: this.jobs.get(job.job_id), completed: false, wait_cap_ms: LOCAL_RUNNER_OPERATION_TIMEOUT_MS };
+  }
+
+  /** A completed execution is not undone by optional inline log retrieval.
+   * Keep its real exit code and report unavailable output separately; never
+   * surface filesystem exception text or invite another command execution.
+   */
+  private async executionLogs(jobId: string, stream: "stdout" | "stderr"): Promise<Record<string, unknown>> {
+    try { return await this.jobs.logs(jobId, { stream, limit: 16 * 1024, tail: true }); }
+    catch { return { job_id: jobId, stream, available: false, error: { code: "log_unavailable" } }; }
   }
 }
 

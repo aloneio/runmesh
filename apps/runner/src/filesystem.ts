@@ -1,4 +1,6 @@
 import { assertRpcResultFits, jsonBytes, MAX_RPC_RESULT_BYTES } from "./rpc-budget.js";
+import { bytePageMetadata } from "@aloneio/runmesh-protocol";
+import { readPageBytes } from "./page-read.js";
 import { createHash } from "node:crypto";
 import { constants, type Dirent } from "node:fs";
 import { lstat, open, opendir } from "node:fs/promises";
@@ -83,18 +85,20 @@ export class FilesystemService {
       if (!info.isFile() || !sameIdentity(info, snapshot)) throw symlinkEscape();
       const rawStart = Math.min(requestedOffset, info.size);
       const probeStart = Math.max(0, rawStart - 3);
-      const probe = Buffer.alloc(Math.min(7, info.size - probeStart));
-      const { bytesRead: probeRead } = await handle.read(probe, 0, probe.byteLength, probeStart);
-      const start = probeStart + utf8ForwardBoundary(probe.subarray(0, probeRead), rawStart - probeStart);
-      const data = Buffer.alloc(Math.min(info.size - start, requested + 3));
-      const { bytesRead } = await handle.read(data, 0, data.byteLength, start);
-      const actual = data.subarray(0, bytesRead);
+      const probe = await readPageBytes(handle, probeStart, Math.min(7, info.size - probeStart), "file_changed");
+      const start = probeStart + utf8ForwardBoundary(probe, rawStart - probeStart);
+      const actual = await readPageBytes(handle, start, Math.min(info.size - start, requested + 3), "file_changed");
+      const after = await handle.stat();
+      await this.policy.verifySnapshot(resolved, snapshot);
+      if (!sameIdentity(after, snapshot) || after.size !== info.size || after.mtimeMs !== info.mtimeMs || after.ctimeMs !== info.ctimeMs) throw new RpcRuntimeError("file_changed", "The file changed while this page was being read; request a fresh page");
       let used = utf8SafePrefixLength(actual, requested);
       if (used === 0 && actual.byteLength > 0) used = utf8SafePrefixLength(actual, Math.min(4, actual.byteLength));
+      const initial = used;
       const resultFor = (length: number) => ({
         workspace_id: workspace.workspaceId, path: relative(workspace.rootPath, path).split(sep).join("/"),
         data: actual.subarray(0, length).toString("utf8"), encoding: "utf-8", offset: start,
-        next_cursor: start + length < info.size ? String(start + length) : null, truncated: start + length < info.size, size: info.size,
+        size: info.size,
+        ...bytePageMetadata(actual.subarray(0, length).toString("utf8"), start, start + length, info.size, length < initial),
       });
       // JSON escaping, not just the source bytes, determines transport size.
       let low = 0; let high = used;
