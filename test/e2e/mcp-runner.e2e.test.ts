@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolveTrustedWindowsTool, trustedWindowsRoot } from "../../apps/runner/src/windows-tools.js";
 
@@ -462,10 +462,16 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const preview = await mcpTool("edit", {workspace_id:"workspace-1",preview:true,patch:"*** Begin Patch\n*** Add File: preview-only.txt\n+preview\n*** End Patch"});
     expect(preview.isError, JSON.stringify(preview)).not.toBe(true);
     expect(existsSync(join(workspace,"preview-only.txt"))).toBe(false);
+    const checkpointInput = {action:"checkpoint",turn_id:"e2e-release-audit",goal:"Validate release context chain",expected_revision:0};
+    const created = await mcpTool("context",{workspace_id:"workspace-1",...checkpointInput});
+    expect(created.isError, JSON.stringify(created)).not.toBe(true);
+    const contextId = (created.structuredContent?.context as {context_id:string}).context_id;
+    expect(contextId).toMatch(/^ctx-/);
+    const duplicate = await mcpTool("context",{workspace_id:"workspace-1",...checkpointInput});
+    expect(duplicate.structuredContent?.deduplicated).toBe(true);
     const operations = [
       {action:"bootstrap"},
-      {action:"checkpoint",context_id:"e2e-handoff",turn_id:"e2e-release-audit",goal:"Validate release context chain"},
-      {action:"read",context_id:"e2e-handoff"},
+      {action:"read",context_id:contextId},
       {action:"search",query:"release"},
       {action:"rebuild"},
     ];
@@ -473,6 +479,8 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       const result = await mcpTool("context",{workspace_id:"workspace-1",...operation});
       expect(result.isError, JSON.stringify({operation,result})).not.toBe(true);
     }
+    const nonexistent = await mcpTool("context",{workspace_id:"workspace-1",...checkpointInput,context_id:"invented-context"});
+    expect(nonexistent.structuredContent?.error).toMatchObject({code:"context_revision_conflict"});
     const rejected = await mcpTool("context",{action:"checkpoint",workspace_id:"workspace-1",turn_id:"not-authorized",goal:"must not write"},clientB);
     expect(rejected.isError).toBe(true);
     expect(rejected.structuredContent?.error).toMatchObject({code:"insufficient_scope"});
@@ -497,6 +505,39 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       const logs = await mcpTool("job", { action: "logs", workspace_id: "workspace-1", job_id: jobId, stream: "stdout", limit: 1024 });
       expect(logs.structuredContent?.data).toContain("batched-live-log");
     } finally { expect((await save("immediate")).status).toBe(303); }
+  });
+
+  it("R03 reads three real commits and literal blame through MCP without shell permission", async () => {
+    const git = (args: string[]) => execFileSync("git", args, { cwd: workspace, stdio: "ignore" });
+    git(["init"]); git(["config", "user.name", "Fixture"]); git(["config", "user.email", "fixture@example.invalid"]);
+    const file = "review-history.txt";
+    for (const value of ["first", "second", "third"]) {
+      await writeFile(join(workspace, file), `${value}\nunchanged\n`);
+      git(["add", "-f", "--", file]); git(["commit", "-m", value, "--", file]);
+    }
+    const history = await mcpTool("inspect", { action: "git_log", workspace_id: "workspace-1", path: file, max_results: 10 }, clientB);
+    expect(history.isError, JSON.stringify(history)).not.toBe(true);
+    expect((history.structuredContent?.commits as Array<{subject:string}>).map(row => row.subject)).toEqual(["third", "second", "first"]);
+    expect(history.structuredContent?.truncated).toBe(false);
+    const blamed = await mcpTool("inspect", { action: "git_blame", workspace_id: "workspace-1", path: file, start_line: 1, end_line: 2 }, clientB);
+    expect(blamed.isError, JSON.stringify(blamed)).not.toBe(true);
+    expect(blamed.structuredContent?.output).toContain("\tthird");
+  });
+
+  it("R04 retains one checkpoint revision for repeated observed Job evidence across real MCP calls", async () => {
+    const started = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('observed-evidence')") });
+    expect(started.isError, JSON.stringify(started)).not.toBe(true);
+    const id = started.structuredContent?.job_id;
+    expect(typeof id).toBe("string");
+    const input = { action: "checkpoint", workspace_id: "workspace-1", turn_id: "e2e-observed-retry", goal: "retain one observed checkpoint", expected_revision: 0, evidence: [{ kind: "job", job_id: id }] };
+    const first = await mcpTool("context", input);
+    expect(first.isError, JSON.stringify(first)).not.toBe(true);
+    await delay(25);
+    const next = await mcpTool("context", input);
+    expect(next.isError, JSON.stringify(next)).not.toBe(true);
+    expect(next.structuredContent?.deduplicated).toBe(true);
+    expect((next.structuredContent?.context as { revision: number }).revision).toBe(1);
+    expect((next.structuredContent?.context as { evidence: unknown }).evidence).toEqual((first.structuredContent?.context as { evidence: unknown }).evidence);
   });
 
   it("reports a runner_offline structured error after the real runner disconnects", async () => {
