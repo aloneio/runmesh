@@ -199,3 +199,10 @@ Status: first read-only documentation slice implemented on 2026-09-13.
 - Added a bounded versioned catalog for connection recovery, permission-denial investigation, and release preflight. Runbooks state applicability, required permissions, procedure, and explicit exit conditions; they are documentation only and do not execute commands automatically.
 - `check:runbooks` validates catalog IDs, versions, bounded sizes, safe relative file names, and required document sections in both hosted CI systems.
 - Importable packages, remote Skills, background installation, and any execution engine remain intentionally out of scope for this slice.
+
+
+## AR06 — Registry domain extraction (development)
+
+Based on `ca511cf0fa9411b85a52ba78547aeab7e4b27dec`: Auth, Policy, Runner Lifecycle and local History now own their existing operations behind a stable Registry facade. Narrow typed ports and one native synchronous SQL/transaction adapter replace access to the whole Registry object. Existing HTTP routing, schema bootstrap, maintenance and external-D1 coordination remain in the facade. No namespace, table, wire catalog, runtime variable, Runner package or production deployment changes.
+
+Forty baseline characterization scenarios compare exact ordered SQL/argument hashes, native transaction events, rows read/written and receipts. Cross-domain policy-write failure rolls back Runner creation and its ledgers. Separate construction/adapter tests and architecture guards cover no-I/O construction and forbidden concrete dependencies. These local equivalence checks do not constitute production load or account-quota acceptance. See [Registry domains](registry-domains.md) and [中文说明](registry-domains.zh-CN.md). Remaining HTTP/schema/maintenance extraction and finer data ownership are independent future refactors, not silently included in this entry.
