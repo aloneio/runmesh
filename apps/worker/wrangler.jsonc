@@ -27,7 +27,7 @@
   "vars": {},
   "env": {
     "development": {
-      "name": "runmesh-development",
+      "name": "runmeshdev",
       "durable_objects": {
         "bindings": [
           {
@@ -203,6 +203,6 @@
     "binding": "CF_VERSION_METADATA"
   },
   "build": {
-    "command": "node -e \"import(require('node:url').pathToFileURL(require.resolve('./scripts/generate-build-provenance.mjs',{paths:[process.cwd(),require('node:path').resolve('../..')]})))\""
+    "command": "node -e \"import(require('node:url').pathToFileURL(require.resolve('./scripts/prepare-worker-build.mjs',{paths:[process.cwd(),require('node:path').resolve('../..')]})))\""
   }
 }

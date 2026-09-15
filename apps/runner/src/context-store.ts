@@ -4,7 +4,8 @@ import { RpcRuntimeError } from "./errors.js";
 import { defaultRunnerStateDir } from "./state-path.js";
 import { contextStorageLimits, contextStorageSummary, scanContextStorage, type ContextStorageLimits } from "./context-storage.js";
 import { ContextRepository } from "./context/repository.js";
-import { pathExists, writeImmutable } from "./context/files.js";
+import { nativeContextFiles } from "./context/files.js";
+import type { ContextFilePort, ContextRecordPort } from "./context/ports.js";
 import { pruneContext } from "./context/retention.js";
 import { rebuildContext } from "./context/recovery.js";
 import { CONTEXT_SCHEMA_VERSION, INDEX_SCHEMA_VERSION, MAX_RECORD_BYTES, MAX_INDEX_BYTES, MAX_CONTEXTS, workspaceIdFrom, object, safeId, boundedString, boundedInteger, boundedIntegerString, normalizeCheckpoint, conflict, emptyIndex, latestForTurn, semanticFingerprint, checkpointFingerprint, indexEntry, indexProjection, type ContextRecord, type ContextIndex, type CheckpointIntent } from "./context/model.js";
@@ -14,6 +15,9 @@ export type { ContextEvidence, ContextRecord } from "./context/model.js";
 // reconstructed service instances; immutable writes remain exclusive.
 const contextWrites = new Map<string, Promise<void>>();
 
+/** @internal Trusted internal dependencies only; durable formats and serialization stay owned here. */
+export interface ContextStoreDependencies { readonly repository?: ContextRecordPort; readonly files?: ContextFilePort }
+
 export interface ContextStoreOptions { readonly stateDir?: string; readonly storageLimits?: Partial<ContextStorageLimits> }
 
 /**
@@ -21,19 +25,24 @@ export interface ContextStoreOptions { readonly stateDir?: string; readonly stor
  * directories, indexes or records; checkpoint/rebuild/prune explicitly mutate state.
  */
 export class ContextStore {
-  private readonly repository: ContextRepository;
+  private readonly repository: ContextRecordPort;
+  private readonly files: ContextFilePort;
   private readonly stateDir: string;
   private readonly contextsDir: string;
   private readonly storageLimits: ContextStorageLimits;
 
-  public constructor(options: ContextStoreOptions = {}) {
+  public constructor(options?: ContextStoreOptions);
+  /** @internal Trusted internal adapter injection is not part of the package API. */
+  public constructor(options: ContextStoreOptions, dependencies: ContextStoreDependencies);
+  public constructor(options: ContextStoreOptions = {}, dependencies: ContextStoreDependencies = {}) {
+    this.files = dependencies.files ?? nativeContextFiles;
     this.storageLimits = contextStorageLimits(options.storageLimits);
     this.stateDir = options.stateDir ?? defaultRunnerStateDir();
     if (!isAbsolute(this.stateDir) || this.stateDir.length === 0 || this.stateDir.length > 4_096 || /[\u0000-\u001f\u007f]/u.test(this.stateDir) || resolve(this.stateDir) === parse(resolve(this.stateDir)).root) {
       throw new Error("stateDir must be an absolute non-root path without control characters");
     }
     this.contextsDir = join(this.stateDir, "contexts");
-    this.repository = new ContextRepository(this.stateDir, this.contextsDir);
+    this.repository = dependencies.repository ?? new ContextRepository(this.stateDir, this.contextsDir, this.files);
   }
 
   public async bootstrap(input: unknown): Promise<Record<string, unknown>> {
@@ -85,7 +94,7 @@ export class ContextStore {
     return pruneContext(input, assertAuthorized, { serialize: (workspaceId, action) => this.serialize(workspaceId, action),
       readIndex: (...args) => this.readIndex(...args),
       workspaceDir: (...args) => this.workspaceDir(...args),
-      recordPath: (...args) => this.recordPath(...args) });
+      recordPath: (...args) => this.recordPath(...args) }, this.files);
   }
 
   public checkpoint(input: unknown, assertAuthorized: () => void = () => {}): Promise<Record<string, unknown>> {
@@ -105,7 +114,7 @@ export class ContextStore {
       if (current !== undefined && current.turn_id !== normalized.turnId) throw conflict("context_turn_conflict", "context belongs to a different turn");
       const previous = current === undefined ? undefined : await this.readRecord(workspaceId, current.context_id, current.revision);
       if (previous !== undefined && previous.fingerprint !== current!.fingerprint) throw new RpcRuntimeError("context_index_corrupt", "Context index does not match its immutable record");
-      if (current !== undefined && await pathExists(this.recordPath(workspaceId, current.context_id, current.revision + 1))) throw new RpcRuntimeError("context_index_stale", "A newer context record exists; rebuild the derived index before writing");
+      if (current !== undefined && await this.files.pathExists(this.recordPath(workspaceId, current.context_id, current.revision + 1))) throw new RpcRuntimeError("context_index_stale", "A newer context record exists; rebuild the derived index before writing");
       // Content equality excludes collection time, not the evidence's actual
       // identity/status. A last-write retry may carry its original parent
       // revision; an older or conflicting write must still fail.
@@ -154,10 +163,10 @@ export class ContextStore {
       // Persist the intent first, including for a new turn beside an existing
       // index. An interrupted write must not generate another random context.
       const intent: CheckpointIntent = { schema_version: 1, workspace_id: workspaceId, context_id: contextId, revision, fingerprint };
-      await writeImmutable(this.pendingPath(workspaceId), `${JSON.stringify(intent)}\n`, assertAuthorized);
+      await this.files.writeImmutable(this.pendingPath(workspaceId), `${JSON.stringify(intent)}\n`, assertAuthorized);
       try { await this.writeRecord(record, assertAuthorized); }
       catch (error) {
-        if (!await pathExists(this.recordPath(workspaceId, contextId, revision))) {
+        if (!await this.files.pathExists(this.recordPath(workspaceId, contextId, revision))) {
           await this.clearPending(intent);
           throw error;
         }
@@ -176,7 +185,7 @@ export class ContextStore {
       readPending: (...args) => this.readPending(...args),
       readRecord: (...args) => this.readRecord(...args),
       writeIndex: (...args) => this.writeIndex(...args),
-      clearPending: (...args) => this.clearPending(...args) });
+      clearPending: (...args) => this.clearPending(...args) }, this.files);
   }
 
   private hasContextRecords(workspaceId: string): Promise<boolean> { return this.repository.hasContextRecords(workspaceId); }

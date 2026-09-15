@@ -1,23 +1,16 @@
+import { adminJobUrl } from "./admin/job-views.js";
 import { isSafeIdentifier } from "./security.js";
-
-export const JOBS_EXPLANATION = "Shell jobs are command executions, not all MCP calls. Read, search and edit operations appear in Recent MCP calls.";
-export const JOBS_SNAPSHOT_NOTE = "Database snapshot; refreshed only when you open or refresh this page. Stored status may be stale while the Runner is offline.";
-export function jobSnapshotNote(): string {
-  const loadedAt = new Date().toISOString();
-  return `<p class="muted font-12">${JOBS_SNAPSHOT_NOTE}</p><p class="muted font-12"><span>Last loaded</span>: <time datetime="${loadedAt}">${loadedAt}</time></p>`;
-}
+import { JOBS_EXPLANATION } from "./admin/job-views.js";
+import { jobSnapshotNote } from "./admin/job-views.js";
 
 const LOG_LIMIT = 16 * 1024;
 
 type JobPage = { readonly ok: true; readonly title: string; readonly body: string }
   | { readonly ok: false; readonly status: 400 | 404 | 503; readonly message: string };
-type ReadRegistry = (path: string) => Promise<Response>;
-type ReadLogs = (params: Record<string, unknown>) => Promise<Response | undefined>;
 
-export function adminJobUrl(runnerId: unknown, jobId: unknown): string | undefined {
-  return typeof runnerId === "string" && isSafeIdentifier(runnerId) && typeof jobId === "string" && isSafeIdentifier(jobId)
-    ? `/admin/runners/${encodeURIComponent(runnerId)}/jobs/${encodeURIComponent(jobId)}` : undefined;
-}
+type ReadRegistry = (path: string) => Promise<Response>;
+
+type ReadLogs = (params: Record<string, unknown>) => Promise<Response | undefined>;
 
 /** Metadata is read from Registry. Only an explicit stream link contacts the Runner. */
 export async function loadAdminJobPage(url: URL, runnerId: string, jobId: string, readRegistry: ReadRegistry, readLogs: ReadLogs, readLiveJob?: ReadLogs): Promise<JobPage> {
@@ -99,9 +92,13 @@ export async function loadAdminJobPage(url: URL, runnerId: string, jobId: string
 }
 
 function validCursor(value: string): boolean { return /^\d{1,16}$/.test(value) && Number.isSafeInteger(Number(value)); }
+
 function record(value: unknown): Record<string, unknown> | undefined { return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }
+
 async function responseRecord(response: Response): Promise<Record<string, unknown> | undefined> { try { return record(await response.json()); } catch { return undefined; } }
+
 function timestamp(value: unknown): string { return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 8.64e15 ? new Date(value).toISOString() : "—"; }
+
 function escapeHtml(value: unknown): string { return String(value ?? "—").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!); }
 
 function bytePrefix(value: string, max: number): string {
@@ -110,3 +107,8 @@ function bytePrefix(value: string, max: number): string {
   for (const c of value) { const n=encoder.encode(c).length; if (length+n>max) break; out+=c; length+=n; }
   return out;
 }
+
+export { JOBS_EXPLANATION } from "./admin/job-views.js";
+export { JOBS_SNAPSHOT_NOTE } from "./admin/job-views.js";
+export { jobSnapshotNote } from "./admin/job-views.js";
+export { adminJobUrl } from "./admin/job-views.js";

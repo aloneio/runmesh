@@ -1,4 +1,4 @@
-import { canonicalJson, sha256Hex } from "./crypto.js";
+import { canonicalJson, sha256Hex } from "./hash.js";
 
 export type OperationScope = "coding:read" | "coding:write" | "coding:exec";
 export type OperationPermission = "read" | "edit" | "shell" | "job_control";

@@ -16,7 +16,10 @@
       "id": "domain",
       "description": "Public pure rules in Node; no DO, disk or subprocess adapters",
       "files": [
-        "test/domain/public-rules.test.ts"
+        "test/domain/admin-projections.test.ts",
+        "test/domain/messages.test.ts",
+        "test/domain/public-rules.test.ts",
+        "test/domain/runner-deletion.test.ts"
       ]
     },
     {
@@ -34,6 +37,7 @@
         "apps/runner/test/baseline-observation.test.ts",
         "apps/runner/test/byte-pagination.test.ts",
         "apps/runner/test/capability-contracts.test.ts",
+        "apps/runner/test/composition-ports.test.ts",
         "apps/runner/test/config.test.ts",
         "apps/runner/test/connection-handshake.test.ts",
         "apps/runner/test/connection-outage.test.ts",
@@ -123,6 +127,7 @@
       "description": "Node build, release and gate tests; not a signed publication",
       "files": [
         "test/architecture.test.mjs",
+        "test/browser-assets.test.mjs",
         "test/build-provenance.test.mjs",
         "test/ci-layout.test.mjs",
         "test/ci-remediation.test.mjs",
@@ -134,10 +139,13 @@
         "test/live-provenance.test.mjs",
         "test/main-promotion-policy.test.mjs",
         "test/mcp-connector.test.mjs",
+        "test/message-types.test.mjs",
         "test/package-verification.test.mjs",
+        "test/public-contract-baseline.test.mjs",
         "test/release-tools.test.mjs",
         "test/runtime-config.test.mjs",
         "test/security-config.test.mjs",
+        "test/test-collection.test.mjs",
         "test/verification-tools.test.mjs",
         "test/worker-validation.test.mjs"
       ]

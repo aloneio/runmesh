@@ -1,4 +1,5 @@
-import type { CodingScope } from "../registry.js";
+import { message } from "../i18n/messages.js";
+import type { CodingScope } from "../contracts/administration.js";
 import { escapeHtml, record, statusClass } from "./format.js";
 import { isFullHostPath } from "./host-path-label.js";
 
@@ -8,7 +9,7 @@ export function passwordToggle(): string {
   </button>`;
 }
 
-export function permissionSelect(name: string, selected: boolean): string { return `<label class="perm-select-label"><span>${escapeHtml(name.replaceAll("_", " "))}</span><select name="${escapeHtml(name)}"><option value="true"${selected ? " selected" : ""}>Allow</option><option value="false"${selected ? "" : " selected"}>Deny</option></select></label>`; }
+export function permissionSelect(name: string, selected: boolean): string { return `<label class="perm-select-label"><span>${escapeHtml(name.replaceAll("_", " "))}</span><select name="${escapeHtml(name)}"><option value="true"${selected ? " selected" : ""}>${message("text.allow", "en")}</option><option value="false"${selected ? "" : " selected"}>${message("text.deny", "en")}</option></select></label>`; }
 
 export function scopeCheckboxes(selected: readonly string[] = ["coding:read"]): string {
   const descriptions: Record<CodingScope, string> = {
@@ -35,7 +36,7 @@ export function permissionForm(runnerId: string, permissions: Record<string, unk
       ${permissionSelect("job_control", current("job_control"))}
     </div>
     <div class="form-submit-wrap full-width-submit">
-      <button class="button">Save profile</button>
+      <button class="button">${message("text.save.profile", "en")}</button>
     </div>
   </form>`;
 }
@@ -73,28 +74,28 @@ export function managedWorkspaceForm(runnerId: string, workspace: Record<string,
         </label>
         <label>Usage profile
           <select name="profile">
-            <option value="custom"${profile === "custom" ? " selected" : ""}>Custom</option>
-            <option value="read_only"${profile === "read_only" ? " selected" : ""}>Read Only</option>
-            <option value="edit_only"${profile === "edit_only" ? " selected" : ""}>Workspace Edit</option>
-            <option value="controlled_exec"${profile === "controlled_exec" ? " selected" : ""}>Controlled Execution</option>
+            <option value="custom"${profile === "custom" ? " selected" : ""}>${message("text.custom", "en")}</option>
+            <option value="read_only"${profile === "read_only" ? " selected" : ""}>${message("text.read.only", "en")}</option>
+            <option value="edit_only"${profile === "edit_only" ? " selected" : ""}>${message("text.workspace.edit", "en")}</option>
+            <option value="controlled_exec"${profile === "controlled_exec" ? " selected" : ""}>${message("text.controlled.execution", "en")}</option>
           </select>
         </label>
         <label>Enabled
           <select name="enabled">
-            <option value="true"${enabled ? " selected" : ""}>Enabled</option>
-            <option value="false"${enabled ? "" : " selected"}>Disabled</option>
+            <option value="true"${enabled ? " selected" : ""}>${message("text.enabled", "en")}</option>
+            <option value="false"${enabled ? "" : " selected"}>${message("text.disabled", "en")}</option>
           </select>
         </label>
         <label class="full-host-label">Full-host confirmation
           <input type="hidden" name="confirm_full_host" value="false">
           <span class="check-line">
             <input type="checkbox" name="confirm_full_host" value="true"${fullHostConfirmed ? " checked" : ""}>
-            <span>I understand this exposes the full host filesystem.</span>
+            <span>${message("text.i.understand.this.exposes.the.full.host.filesystem", "en")}</span>
           </span>
         </label>
       </div>
       <div class="workspace-perms-section">
-        <span class="form-stat-label">Workspace Permissions</span>
+        <span class="form-stat-label">${message("text.workspace.permissions", "en")}</span>
         <div class="perm-selects-row">
           ${permissionSelect("read", current("read"))}
           ${permissionSelect("edit", current("edit"))}
@@ -114,7 +115,7 @@ export function managedWorkspaceForm(runnerId: string, workspace: Record<string,
         <label>Type Workspace ID to confirm
           <input name="confirmation" pattern="[A-Za-z0-9][A-Za-z0-9._:-]*" required placeholder="${escapeHtml(workspaceId)}">
         </label>
-        <button class="small danger">Delete workspace</button>
+        <button class="small danger">${message("text.delete.workspace", "en")}</button>
       </form>
     </div>` : ""}
   </li>`;

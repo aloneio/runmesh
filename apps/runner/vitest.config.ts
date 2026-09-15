@@ -10,7 +10,10 @@ const protocolPackage = JSON.parse(
 ) as { name: string };
 
 export default defineConfig({
+  root: fileURLToPath(new URL("./", import.meta.url)),
   test: {
+    include: ["test/**/*.test.ts"],
+    exclude: ["**/node_modules/**", "**/.git/**", "**/.audit/**", "**/dist/**"],
     setupFiles: [fileURLToPath(new URL("./test/setup.ts", import.meta.url))],
     // Filesystem/process tests are materially slower on Windows (and on
     // freshly provisioned CI hosts) than Vitest's five-second default. Keep

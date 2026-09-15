@@ -1,3 +1,4 @@
+import type { JobFilePort, JobProcessPort } from "./jobs/ports.js";
 import { FairJobQueue } from "./job-queue.js";
 import { RpcRuntimeError } from "./errors.js";
 import { isAbsolute, join, parse, resolve } from "node:path";
@@ -14,6 +15,9 @@ import { terminalRecoveredJob } from "./jobs/recovery.js";
 import { nativeJobFiles } from "./jobs/storage.js";
 import { nativeJobProcesses, type ProcessTerminator } from "./jobs/process.js";
 import { JobLogReader } from "./jobs/logs.js";
+
+/** @internal Internal composition seam; no CLI or wire configuration exposes adapters. */
+export interface JobManagerDependencies { readonly files?: JobFilePort; readonly processes?: JobProcessPort }
 
 export interface JobManagerOptions {
   readonly policy: PathPolicy;
@@ -52,8 +56,8 @@ type TerminationCheck =
  */
 export class JobManager {
   private readonly cursorOwner = randomUUID();
-  private readonly files = nativeJobFiles;
-  private readonly processAdapter = nativeJobProcesses;
+  private readonly files: JobFilePort;
+  private readonly processAdapter: JobProcessPort;
   private readonly logReader: JobLogReader;
   private readonly policy: PathPolicy;
   private readonly stateDir: string;
@@ -122,7 +126,12 @@ export class JobManager {
     }).catch(() => undefined).finally(() => { this.draining=false; if(this.queue.size>0 && this.activeCount()<this.maxConcurrentJobs)this.resumeQueue(); });
   }
 
-  public constructor(options: JobManagerOptions) {
+  public constructor(options: JobManagerOptions);
+  /** @internal Trusted internal adapter injection is not part of the package API. */
+  public constructor(options: JobManagerOptions, dependencies: JobManagerDependencies);
+  public constructor(options: JobManagerOptions, dependencies: JobManagerDependencies = {}) {
+    this.files = dependencies.files ?? nativeJobFiles;
+    this.processAdapter = dependencies.processes ?? nativeJobProcesses;
     this.policy = options.policy;
     this.queue = new FairJobQueue(options.maxQueuedJobs ?? 32, options.maxQueuedJobsPerClient ?? 8);
     this.queueAuthorizer = options.authorizeQueuedJob;

@@ -1,3 +1,4 @@
+import { PermissionBitsSchema } from "./permission-schema.js";
 import { RPC_OPERATION_METHODS } from "./operations.js";
 import { z } from "zod";
 
@@ -219,12 +220,7 @@ import { isCanonicalPermissionSet } from "./permissions.js";
  * when their prerequisites are enabled. Invalid combinations are rejected at
  * every wire boundary rather than silently expanded.
  */
-export const PermissionSetSchema = z.object({
-  read: z.boolean(),
-  edit: z.boolean(),
-  shell: z.boolean(),
-  job_control: z.boolean(),
-}).strict().superRefine((value, context) => {
+export const PermissionSetSchema = PermissionBitsSchema.superRefine((value, context) => {
   if (!isCanonicalPermissionSet(value)) context.addIssue({ code: "custom", message: "permission dependencies are invalid" });
 });
 

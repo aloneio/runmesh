@@ -1,3 +1,4 @@
+import { message } from "../i18n/messages.js";
 import { escapeHtml } from "./format.js";
 
 export const BRAND_LOGO_ASSET = "/assets/logo-transparent.svg";
@@ -124,8 +125,8 @@ export function meshVisualGraphic(): string {
       </svg>
     </div>
     <div class="mesh-visual-caption">
-      <div class="mesh-caption-badge"><span class="status-dot online"></span> <span>Mesh Network Active</span></div>
-      <p class="mesh-caption-sub">Distributed runtime orchestration</p>
+      <div class="mesh-caption-badge"><span class="status-dot online"></span> <span>${message("text.mesh.network.active", "en")}</span></div>
+      <p class="mesh-caption-sub">${message("text.distributed.runtime.orchestration", "en")}</p>
     </div>
   </div>`;
 }
