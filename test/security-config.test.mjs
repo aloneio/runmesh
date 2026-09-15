@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { reviewedReleaseSource } from "../scripts/runtime-config-tools.mjs";
+import { checkCommand } from "../scripts/ci-contract.mjs";
 
 test("top-level Worker config is reviewed production while explicit development stays fail-closed", async () => {
   const source = await readFile(new URL("../apps/worker/wrangler.jsonc", import.meta.url), "utf8");
@@ -39,10 +40,15 @@ test("reviewed release identity, independent production gate and precise CI tool
   assert.ok(installer.includes(`FIXED_RELEASE_VERSION = "${root.version}"`));
   for (const file of ["ci.yml", "release.yml"]) {
     const workflow = await readFile(new URL(`../.github/workflows/${file}`, import.meta.url), "utf8");
-    assert.ok(workflow.includes("--dry-run --env production"));
+    if (file === "ci.yml") {
+      assert.ok(workflow.includes(checkCommand("worker_prod")));
+      assert.ok(workflow.includes(checkCommand("release_contract")));
+    } else {
+      assert.ok(workflow.includes("--dry-run --env production"));
+      assert.ok(workflow.includes("check-release-contract.mjs"));
+    }
     assert.ok(workflow.includes("node-version-file: .node-version"));
     assert.ok(workflow.includes("npm@10.9.3"));
-    assert.ok(workflow.includes("check-release-contract.mjs"));
   }
 });
 

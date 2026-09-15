@@ -5,9 +5,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -b",
-    "test": "vitest run --config vitest.config.ts",
-    "typecheck": "tsc -b --pretty false",
+    "build": "node ../../scripts/generate-build-provenance.mjs && tsc -b",
+    "test": "node ../../scripts/generate-build-provenance.mjs && vitest run --config vitest.config.ts",
+    "typecheck": "node ../../scripts/generate-build-provenance.mjs && tsc -b --pretty false",
     "dev": "wrangler dev --env development"
   },
   "dependencies": {

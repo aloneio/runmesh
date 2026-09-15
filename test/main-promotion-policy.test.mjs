@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { githubMainPromotion, gitlabMainPromotion } from "../scripts/main-promotion-policy.mjs";
 import { githubPolicyWorkflow, gitlabPolicyEntrypoint, gitlabPolicyJob, GITLAB_POLICY_MARKER } from "../scripts/promotion-configuration.mjs";
+import { checkCommand } from "../scripts/ci-contract.mjs";
 
 const repo = { id: 123, full_name: "sample/project" };
 const event = () => ({ action: "opened", repository: repo, pull_request: { number: 42, state: "open",
@@ -79,9 +80,10 @@ test("embedded GitLab program actually exits nonzero for invalid sources without
   assert.equal(bad.status, 1); assert.match(bad.stderr, /main_source_policy_denied/u);
 });
 test("both ordinary CI systems execute the generated-policy consistency check", async () => {
-  for (const file of [".github/workflows/ci.yml", ".gitlab-ci.yml", "scripts/check-ci-parity.mjs"]) {
-    assert.ok((await readFile(new URL("../" + file, import.meta.url), "utf8")).includes("npm run check:promotion-policy"));
+  for (const file of [".github/workflows/ci.yml", ".gitlab-ci.yml"]) {
+    assert.ok((await readFile(new URL("../" + file, import.meta.url), "utf8")).includes(checkCommand("promotion")));
   }
+  assert.ok((await readFile(new URL("../scripts/check-ci-parity.mjs", import.meta.url), "utf8")).includes("validateCiWiring"));
 });
 
 test("GitLab requires the documented MR project identity, not a nonexistent target alias", () => {

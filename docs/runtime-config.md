@@ -22,7 +22,7 @@ Use independent cryptographically random values, at least 32 random bytes encode
 | `RUNMESH_AUDIT_BACKEND` | Production defaults to D1 | Explicit backend overrides are still supported |
 | `RUNMESH_JOB_HISTORY_BACKEND` | Production defaults to packed D1 | Missing production D1 does not fall back to DO history writes |
 | `RUNMESH_SIGNED_RELEASE_AVAILABLE` | Generated from reviewed release state | An explicit empty value still disables hosted installation |
-| `RUNMESH_DEPLOYMENT_BRANCH` / `RUNMESH_DEPLOYMENT_COMMIT` | Cloudflare version metadata tag set by deploy:worker | Old variables remain readable; no source SHA is invented |
+| `RUNMESH_DEPLOYMENT_BRANCH` / `RUNMESH_DEPLOYMENT_COMMIT` | Verified build-time Git source, compared with provider metadata | Old variables are not treated as proof of compiled source |
 
 The development environment has one non-secret mode marker, `RUNMESH_ENVIRONMENT=development`. Test-only vars remain confined to the local test environment. A fork's public domain does not have to replace an owner's hard-coded URL. Request authority is never taken from X-Forwarded-Host. A reverse proxy using an internal request URL must supply an explicit validated public-origin override.
 
@@ -32,7 +32,7 @@ Bindings are not redundant runtime variables: keep the live Registry/Runner DO n
 
 The generated-release module is checked against `release/release-state.json`, including the exact version, publication commit and independently verified manifest hash. A candidate compiles a disabled installer default. A package version number alone never activates distribution. Explicit old or invalid version overrides are not normalized into a successful gate. Existing signature validation and immutable assets are unchanged.
 
-Main-only release and deployment checks remain. Deployment metadata uses the provider's version tag `main:<commit>` or `dev:<commit>`, not two extra plaintext variables. Deploying without the wrapper can leave the tag unknown; health must then report null rather than claiming a source commit.
+Main-only release and deployment checks remain. The build records its actual clean Git commit/tree without adding runtime variables. A provider version tag corroborates it when present; absent tags no longer erase a known compiled source. Dirty, missing or conflicting source stays explicitly unconfirmed. See [Worker build provenance](build-provenance.md) and its one-request post-deployment checker.
 
 ## New-install helper
 
