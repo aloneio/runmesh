@@ -25,7 +25,7 @@ export function historySettingsForm(runnerId: string, csrf: string, settings: Jo
   return `<section class="panel"><h2>Job history and retention</h2>
   <form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/history-settings" class="stack">
   <input type="hidden" name="csrf_token" value="${escape(csrf)}">
-  <label>Cloud recording<select name="mode">${[["off","Disabled"],["batched","Batched"],["immediate","Immediate (higher usage)"]].map(([v,label]) => `<option value="${v}"${v === settings.mode ? " selected" : ""}>${label}</option>`).join("")}</select></label>
+  <label>Cloud recording<select name="mode">${[["off","Do not upload"],["batched","Batched"],["immediate","Immediate (higher usage)"]].map(([v,label]) => `<option value="${v}"${v === settings.mode ? " selected" : ""}>${label}</option>`).join("")}</select></label>
   <label>Upload interval<select name="interval_seconds">${HISTORY_INTERVALS.map((n) => option(n,settings.interval_seconds,`${n/60} min`)).join("")}</select></label>
   <label>Cloud terminal history retention<select name="retention_days">${HISTORY_DAYS.map((n) => option(n,settings.retention_days,`${n} days`)).join("")}</select></label>
   <label>Local terminal Jobs and logs<select name="local_retention_days">${option(0,settings.local_retention_days,"Existing count/size limits only")}${HISTORY_DAYS.map((n) => option(n,settings.local_retention_days,`${n} days`)).join("")}</select></label>
