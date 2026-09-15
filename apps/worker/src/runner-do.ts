@@ -34,6 +34,7 @@ interface ConnectionAttachment {
   authenticated: boolean;
   readonly helloDeadlineMs: number;
   queueProtocol?: 1;
+  historyProtocol?: 2;
 }
 
 const HELLO_DEADLINE_MS = 10_000;
@@ -331,7 +332,7 @@ export class RunnerDO {
         this.closeForRegistryFailure(ws, epochResponse);
         return;
       }
-      let body: { epoch?: unknown; lifecycle_id?: unknown; desired_policy?: unknown; job_history?: unknown };
+      let body: { epoch?: unknown; lifecycle_id?: unknown; desired_policy?: unknown; job_history?: unknown; job_reporting?: unknown };
       try {
         const parsed = await epochResponse.json();
         if (!isRecord(parsed)) {
@@ -357,6 +358,7 @@ export class RunnerDO {
       attachment.lifecycleId = body.lifecycle_id;
       attachment.protocolVersion = negotiation.protocol_version;
       if (message.runner.capabilities.labels.job_queue_protocol === "1") attachment.queueProtocol = 1;
+      if (message.runner.capabilities.labels.job_reporting_protocol === "2" && body.job_reporting === 2 && isRecord(body.job_history)) attachment.historyProtocol = 2;
       ws.serializeAttachment(attachment);
       // `/connect` allocates/publishes the epoch, but a delayed response can
       // race a newer connection. Re-read the complete transport identity
@@ -388,7 +390,7 @@ export class RunnerDO {
       const welcome: WireMessage = {
         type: "runner.welcome", protocol_version: negotiation.protocol_version, request_id: message.request_id,
         session_id: attachment.sessionId, negotiated_protocol_version: negotiation.protocol_version,
-        extensions: { ...(isRecord(body.job_history) ? {runmesh_job_history:body.job_history as never} : {}), ...(attachment.queueProtocol === 1 ? {runmesh_job_queue:1} : {}) },
+        extensions: { ...(isRecord(body.job_history) ? {runmesh_job_history:body.job_history as never} : {}), ...(attachment.queueProtocol === 1 ? {runmesh_job_queue:1} : {}), ...(attachment.historyProtocol === 2 ? {runmesh_job_reporting:2} : {}) },
         worker: {
           worker_id: this.env.WORKER_ID ?? "runmesh", worker_version: PRODUCT_VERSION,
           capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: ["echo", "runner.info"], labels: { runtime: "cloudflare" } },
@@ -434,6 +436,7 @@ export class RunnerDO {
     if (message.type === "runner.queue_check") {
       const grant = await verifyQueueGrant(this.env.INTERNAL_CONTROL_SECRET ?? "", message.grant);
       let allowed = false;
+      let recordHistory = false;
       if (attachment.queueProtocol === 1 && grant !== undefined && message.runner_id === attachment.runnerId
         && grant.runner_id === attachment.runnerId && grant.lifecycle_id === attachment.lifecycleId
         && grant.credential_version === attachment.credentialVersion
@@ -441,16 +444,18 @@ export class RunnerDO {
         const response = await this.registryRequest(attachment.runnerId,"/mcp-authorization",{method:"POST",body:JSON.stringify({
           client_id:grant.client_id,secret_version:grant.secret_version,method:"exec.start",workspace_id:grant.workspace_id,
           policy_revision:grant.policy_revision,policy_checksum:grant.policy_checksum,
+          ...(attachment.historyProtocol === 2 ? {include_job_recording:true} : {}),
         })});
         let decision: unknown; try { decision=await response.json(); } catch { decision=undefined; }
         allowed=response.ok && isRecord(decision) && decision.ok===true;
+        recordHistory = allowed && isRecord(decision) && decision.record_history === true;
       }
       // No await after the final local session/policy fence. A grant never
       // authorizes by itself, and this decision never executes a command.
       allowed = allowed && grant !== undefined && this.admissionState !== undefined
         && this.admitsProtectedRpc(this.admissionState,attachment,grant.policy_revision,grant.policy_checksum)
         && this.ctx.getWebSockets("runner").includes(ws);
-      ws.send(encodeWireFrame({type:"rpc.response",protocol_version:attachment.protocolVersion,request_id:message.request_id,result:{authorized:allowed}}));
+      ws.send(encodeWireFrame({type:"rpc.response",protocol_version:attachment.protocolVersion,request_id:message.request_id,result:{authorized:allowed,...(attachment.historyProtocol === 2 ? {record_history:recordHistory} : {})}}));
       return;
     }
     if (message.type === "job.output") {
@@ -569,6 +574,8 @@ export class RunnerDO {
     // A public MCP request carries a non-secret principal fence, protected by
     // the Worker HMAC. Do not trust its earlier permission preflight: async
     // policy reconciliation can overlap client revocation or override edits.
+    const reportingLaunch = attachment.historyProtocol === 2 && (method === "exec.start" || method === "exec.run");
+    let recordHistory = !Object.prototype.hasOwnProperty.call(input, "mcp_authorization");
     if (Object.prototype.hasOwnProperty.call(input, "mcp_authorization")) {
       const principal = input.mcp_authorization;
       const params = input.params;
@@ -578,19 +585,24 @@ export class RunnerDO {
         workspace_id: params.expected_workspace_id ?? params.workspace_id,
         ...(typeof params.job_id === "string" ? { job_id: params.job_id } : {}),
         policy_revision: requestPolicyRevision, policy_checksum: expectedPolicyChecksum,
+        ...(reportingLaunch ? { include_job_recording: true } : {}),
       }) });
       let decision: unknown;
       try { decision = await authorized.json(); } catch { decision = undefined; }
       if (authorized.status === 429 || authorized.status >= 500 || !isRecord(decision) || typeof decision.ok !== "boolean") return controlPlaneUnavailableResponse(authorized);
       if (!authorized.ok || decision.ok !== true) return Response.json({ error: { code: "permission_denied", message: "MCP authorization is no longer valid" } }, { status: 403 });
+      // Reuse this exact final decision; no extra lookup or cached permission.
+      // Missing optional capture evidence suppresses history, not execution.
+      recordHistory = decision.record_history === true;
     }
     // Only the final authenticated principal may be embedded in a queue grant.
     // Never accept a caller-supplied grant or creator identity at this boundary.
     let dispatchParams = input.params;
-    if (attachment.queueProtocol === 1 && (method === "exec.start" || method === "exec.run") && isRecord(input.params)) {
-      const clean = { ...input.params }; delete clean.queue_grant;
+    if ((method === "exec.start" || method === "exec.run") && isRecord(input.params)) {
+      const clean = { ...input.params }; delete clean.queue_grant; delete clean.record_history;
+      if (reportingLaunch) clean.record_history = recordHistory;
       const principal = input.mcp_authorization;
-      if (isRecord(principal) && typeof principal.client_id === "string" && isSafePositiveInteger(principal.secret_version)
+      if (attachment.queueProtocol === 1 && isRecord(principal) && typeof principal.client_id === "string" && isSafePositiveInteger(principal.secret_version)
         && typeof clean.workspace_id === "string" && validLifecycleId(attachment.lifecycleId)
         && requestPolicyRevision !== undefined && expectedPolicyChecksum !== undefined) {
         clean.created_by_client_id = principal.client_id;

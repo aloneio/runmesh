@@ -61,3 +61,7 @@ Coverage includes actual local D1 writes, allow-listed metadata, retention/count
 ## Batched history amendment
 
 The [batched Job contract](batched-job-history.md) adds packed D1 Job snapshots, manual newest-only reads and configurable cloud/local retention. Full stdout/stderr remains local. Source-side batching and local retention are shipped in the new immutable v0.1.2 release, not retroactively added to v0.1.1.
+
+## Source-reporting amendment (development)
+
+[Reporting protocol 2](demand-job-history.md) excludes newly admitted no-record Jobs at the Runner, binds that observation to the existing final authorization and queue digest, and replaces acknowledged-idle history polling with change-driven scheduling. Empty eligible updates return before opening D1. A log read never changes recording. Old peers and records without the new local hint retain cloud-filtered compatibility; the currently installed signed Runner is not changed by this source amendment. Existing heartbeat and authorization costs remain separate.

@@ -210,7 +210,8 @@ export class JobManager {
   public async cleanupExpired(): Promise<void> { if (this.retentionDays > 0) await this.pruneRetainedJobs(); }
   public async snapshotForSync(limit = 500): Promise<JobRecord[]> {
     await this.reconcileRecoveredJobs();
-    return [...this.jobs.values()].sort((a,b) => b.updated_at_ms-a.updated_at_ms || b.job_id.localeCompare(a.job_id)).slice(0,Math.min(500,Math.max(1,limit)));
+    return [...this.jobs.values()].filter(job => job.record_history !== false)
+      .sort((a,b) => b.updated_at_ms-a.updated_at_ms || b.job_id.localeCompare(a.job_id)).slice(0,Math.min(500,Math.max(1,limit)));
   }
 
   public list(input: { readonly workspace_id?: unknown; readonly status?: unknown; readonly limit?: unknown } = {}): JobRecord[] {
@@ -234,6 +235,11 @@ export class JobManager {
       .filter((job) => (workspaceId === undefined || job.workspace_id === workspaceId) && (status === undefined || job.status === status))
       .sort((a, b) => b.updated_at_ms - a.updated_at_ms || a.job_id.localeCompare(b.job_id))
       .slice(0, limit);
+  }
+
+  public hasPendingHistoryRecovery(): boolean {
+    return [...this.jobs.values()].some(job => job.record_history !== false
+      && (job.status === "unknown" || (job.status === "cancelling" && job.recovery_liveness !== null)));
   }
 
   public async reconcileRecoveredJobs(): Promise<void> {
@@ -280,6 +286,7 @@ export class JobManager {
     this.policy.assertGeneration(generation);
     const invocation = parseInvocation(params, workspace);
     const createdByClientId = safeOptionalIdentifier(params.created_by_client_id);
+    if (params.record_history !== undefined && typeof params.record_history !== "boolean") throw new RpcRuntimeError("invalid_params", "record_history must be a boolean");
     const requestId = safeOptionalRequestId(params.request_id);
     const requestFingerprint = requestId === null ? null : launchRequestFingerprint(workspace.workspaceId, relativeWorkspacePath(workspace, cwd.path), invocation, createdByClientId);
     if (reservedJob === undefined && requestId !== null) {
@@ -310,6 +317,7 @@ export class JobManager {
       process_start_fingerprint: null, recovery_liveness: null,
       created_at_ms: now, started_at_ms: null, updated_at_ms: now, completed_at_ms: null, exit_code: null, signal: null,
       recovery_note: null, output_truncated: false, created_by_client_id: createdByClientId, request_id: requestId, request_fingerprint: requestFingerprint, cancellation_delivered_at_ms: null,
+      ...(params.record_history === undefined ? {} : { record_history: params.record_history as boolean }),
     };
     if (reservedJob === undefined) {
     this.jobs.set(job.job_id, job);
@@ -374,6 +382,9 @@ export class JobManager {
       // finish must then observe an active job rather than the queued record.
       running = {
         ...job, status: "running", pid: child.pid ?? null, process_start_fingerprint: processFingerprint, started_at_ms: Date.now(), updated_at_ms: Date.now(),
+        // A fresh dequeue check may restrict capture, never retroactively
+        // enable a Job that was admitted without cloud recording.
+        ...(params.record_history === false ? { record_history: false } : {}),
       };
       this.jobs.set(job.job_id, running);
       this.processes.set(job.job_id, child);

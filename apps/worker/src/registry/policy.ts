@@ -17,9 +17,10 @@ import type { PolicyPorts } from './ports.js';
  * SQL text, arguments, transaction callbacks and await positions are retained. */
 export class RegistryPolicy {
   public constructor(private readonly storage: RegistryStorage, private readonly ports: PolicyPorts, private readonly jobHistoryBackend: string | undefined) {}
-  public authorizeMcpRpc(input: Record<string, unknown>): { ok: true } | { ok: false; code: string } {
+  public authorizeMcpRpc(input: Record<string, unknown>): { ok: true; record_history?: boolean } | { ok: false; code: string } {
     const deny = (code = "permission_denied") => ({ ok: false as const, code });
-    const client = this.ports.revalidateMcpClient(input.client_id, input.secret_version);
+    const includeRecording = input.include_job_recording === true && (input.method === "exec.start" || input.method === "exec.run");
+    const client = this.ports.revalidateMcpClient(input.client_id, input.secret_version, includeRecording);
     const runnerId = input.runner_id;
     const requirement = typeof input.method === "string" ? rpcPermissionRequirement(input.method) : undefined;
     if (client === undefined || typeof runnerId !== "string" || !isSafeIdentifier(runnerId) || requirement === undefined) return deny();
@@ -44,7 +45,8 @@ export class RegistryPolicy {
     }
     if (typeof workspaceId !== "string" || !isSafeIdentifier(workspaceId)) return deny();
     const permissions = this.effectivePermissions(client.client_id, runnerId, workspaceId);
-    return permissions?.[requirement.permission] === true ? { ok: true } : deny();
+    return permissions?.[requirement.permission] === true
+      ? { ok: true, ...(includeRecording ? { record_history: client.record_history === true } : {}) } : deny();
   }
 
   public effectiveWorkspaceList(clientId: string, runnerId: string): { runner_id: string; revision: number; checksum: string; workspaces: Array<{ workspace_id: string; enabled: boolean; permissions: PermissionSet }> } | undefined {

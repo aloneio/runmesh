@@ -99,3 +99,16 @@ it("cancellation while a dequeue authorization is pending never spawns the task"
   await sleep(60);expect(f.jobs.get(queued.job_id).status).toBe("cancelled");expect(f.jobs.get(queued.job_id).pid).toBeNull();expect(f.started).toEqual(["hold"]);
  }finally{release?.(false);await f.close();}
 });
+
+it.each([true, false])("dequeue may suppress reporting but never enable an originally private job: %s", async initiallyRecorded => {
+ const authorize=vi.fn(async(...args:unknown[])=>{(args[0] as Record<string,unknown>).record_history=!initiallyRecorded;return true;});
+ const f=await fixture(authorize);try{
+  const hold=await f.hold("a","hold");
+  const next=await f.launch("b","private-dequeued",80,{record_history:initiallyRecorded});
+  expect(next.status).toBe("queued");await f.release("hold");
+  await wait(()=>[hold,next].every(j=>f.jobs.get(j.job_id).status==="succeeded"));
+  expect(f.jobs.get(next.job_id)).toHaveProperty("record_history",false);
+  expect((await f.jobs.snapshotForSync()).some(j=>j.job_id===next.job_id)).toBe(false);
+  expect(await f.jobs.logs(next.job_id)).toMatchObject({data:"private-dequeued"});
+ }finally{await f.close();}
+});

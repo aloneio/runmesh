@@ -48,3 +48,9 @@ it.each(["credential","lifecycle","expiry","policy-race"])("dequeue denies %s ch
 it("argument arrays are included in the signed launch digest",async()=>{
  expect(await launchDigest({workspace_id:"w",command:"node",args:["allowed"]})).not.toBe(await launchDigest({workspace_id:"w",command:"node",args:["different"]}));
 });
+
+it("trusted job recording is bound to the queue launch digest without changing legacy digests", async () => {
+  const input = { workspace_id: "w", command: "node", shell: true };
+  expect(await launchDigest({ ...input, record_history: false })).not.toBe(await launchDigest({ ...input, record_history: true }));
+  expect(await launchDigest(input)).not.toBe(await launchDigest({ ...input, record_history: false }));
+});

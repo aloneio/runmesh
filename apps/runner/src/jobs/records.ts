@@ -31,6 +31,9 @@ export interface JobRecord {
   readonly output_truncated: boolean;
   /** MCP client identity that initiated the job; it does not grant ownership. */
   readonly created_by_client_id: string | null;
+  /** Local-only capture decision from the authenticated launch. Absence is
+   * legacy/unknown; explicit false must survive restart and idempotent retry. */
+  readonly record_history?: boolean;
   /** Optional caller-supplied idempotency key. It is metadata, never authorization. */
   readonly request_id?: string | null;
   /** Local-only hash binding request_id to the normalized launch input. */
@@ -123,6 +126,9 @@ export function normalizeJobRecord(value: unknown, expectedJobId?: string): JobR
     recovery_note: normalizedNote,
     output_truncated: outputTruncated,
     created_by_client_id: normalizedClient,
+    // Malformed explicit markers suppress history without discarding an
+    // otherwise recoverable process record. They must never opt it in.
+    ...(Object.hasOwn(item, "record_history") ? { record_history: item.record_history === true } : {}),
     request_id: normalizedRequestFingerprint === null ? null : normalizedRequestId,
     request_fingerprint: normalizedRequestFingerprint,
     cancellation_delivered_at_ms: delivered,

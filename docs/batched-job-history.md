@@ -6,6 +6,10 @@ Production selects `RUNMESH_JOB_HISTORY_BACKEND=d1` using the existing `HISTORY_
 
 Worker-side write throttling and manual UI support the existing Runner. Source-side event suppression, archive receipts and local day-based cleanup require `capabilities.labels.job_history_protocol=1`. These capabilities are shipped in the signed immutable **v0.1.2** artifact and are not retroactively added to v0.1.1. Publication neither replaces old assets nor restarts or upgrades installed Runners. Unsupported peers receive no new welcome settings.
 
+## Development amendment: change-driven reporting
+
+The development implementation adds explicit reporting protocol 2 on the existing D1 path. A trusted per-Job recording decision is applied at the Runner before upload, and acknowledged idle history no longer keeps a periodic snapshot timer. Log reads remain on demand. Legacy peers/records retain their compatibility boundary. See [change-driven history](demand-job-history.md) / [中文](demand-job-history.zh-CN.md); this amendment is not installed by merging source or retroactively included in v0.1.3.
+
 ## Settings
 
 In Runner detail, use **Job history and retention / 任务记录与保留**. The form requires an administrator session, same-origin checks and CSRF.
@@ -41,7 +45,7 @@ Each Registry namespace / Runner / lifecycle has at most **500 recent Job metada
 
 This is a recent snapshot, not a lossless event archive. Local count/size caps can prune terminal jobs before a long upload interval, and records can leave the cloud 500-item cap before their retention period. Reaching a metadata cap never kills a local process.
 
-A capable Runner suppresses lifecycle-driven uploads in batched/off mode. It marks a snapshot delivered only on a recorded/unchanged/disabled receipt. Deferred/failed uploads or missing receipts are retried at a later scheduled opportunity without restarting commands. Old released peers cannot consume these receipts; their final idle snapshot may remain stale until activity or reconnection. Workspace-bound live queries remain authoritative.
+A history-protocol-1 Runner suppresses lifecycle-driven uploads in batched/off mode and samples periodically. A reporting-protocol-2 pair instead coalesces state changes into one-shot uploads, with a recovery-only exception and bounded retries described in the amendment. It marks a snapshot delivered only on a recorded/unchanged/disabled receipt. Deferred/failed uploads or missing receipts are retried at a later scheduled opportunity without restarting commands. Old released peers cannot consume these receipts; their final idle snapshot may remain stale until activity or reconnection. Workspace-bound live queries remain authoritative.
 
 Client no-record preferences still filter new snapshots; re-enabling does not backfill previously unrecorded jobs. A preference change is not a cross-database transaction: an already admitted upload may finish afterward. Turning recording off does not silently delete prior history.
 

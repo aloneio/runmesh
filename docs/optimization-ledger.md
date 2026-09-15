@@ -214,3 +214,10 @@ Forty baseline characterization scenarios compare exact ordered SQL/argument has
 ## AR07 Job/Context side-effect boundaries
 
 Development implementation based on `a9b9bb5ef1e7275285c4ccfa54db0c685a03c23e`: native Job storage/process ports, bounded log reader, Context record/file/recovery boundaries and pure retention planning. The ordered Job state owner and checkpoint serialization remain. Public signatures, persisted formats, limits and existing timer sites are unchanged. See [Runner boundaries](runner-boundaries.md) and [中文说明](runner-boundaries.zh-CN.md). Source, packaged Runner, hosted CI and production are separate verification levels; this entry is not production activation.
+
+## Job reporting audit follow-up (development source)
+
+- Base `ab3ad6d66fc54792e3a4c77e4e1a298d16612358`: negotiated source-side capture hints, immutable opt-out across retries/recovery, one-shot dirty-history scheduling, receipt-generation fencing and cached retry payloads.
+- Empty/fully filtered batches skip D1; current cloud preference/time-window filtering remains authoritative. Read-only log calls do not start reporting. Heartbeat timing, execution authorization and local logs are preserved.
+- Verification includes native local Jobs, actual loopback frames, final Worker bridge decisions, queue-time restriction, restart/idle/immediate-mode races and source/installed-package E2E. Execution evidence lives in the corresponding CI and delivery report; this entry does not assert production activation.
+- Compatibility and residual legacy/recovered-process behavior: `docs/demand-job-history.md` and `docs/demand-job-history.zh-CN.md`.
