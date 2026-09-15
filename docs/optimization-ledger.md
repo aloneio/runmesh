@@ -2,6 +2,8 @@
 
 This ledger tracks changes made from the 2026-09-11 optimization plan. It records behavior adopted from upstream references without copying their implementation.
 
+> Status correction (2026-09-15): the dated entries below are historical implementation notes, not complete acceptance. The optimization review found concrete R02/R03/R04/R05 counterexamples despite earlier CI success. See [first correctness repair slice](review-correctness-20260915.md) for the regression-backed corrections, record compatibility, installed-version limits and remaining R01/R06 verification. Current source changes are not automatically present in an older signed Runner archive.
+
 ## P01 — structured failure semantics
 
 Status: implemented on 2026-09-13.

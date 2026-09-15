@@ -1,3 +1,4 @@
+import type { RpcOperationState } from "@aloneio/runmesh-protocol";
 import { McpServer, type AuthInfo, type ServerContext } from "@modelcontextprotocol/server";
 import {
   encodeWireFrame, PROTOCOL_CURRENT_VERSION, failureMetadata, type JsonValue, RpcRequestSchema,
@@ -361,7 +362,7 @@ export function safeContextResult(value: unknown): Record<string, unknown> {
 
 function safeContextRecord(value: Record<string, unknown>): Record<string, unknown> {
   const output: Record<string, unknown> = {};
-  if (value.schema_version === 1) output.schema_version = 1;
+  if (value.schema_version === 1 || value.schema_version === 2) output.schema_version = value.schema_version;
   const contextId = safeJobIdentifier(value.context_id); if (contextId !== undefined) output.context_id = contextId;
   const workspaceId = safeJobIdentifier(value.workspace_id); if (workspaceId !== undefined) output.workspace_id = workspaceId;
   const turnId = safeJobIdentifier(value.turn_id); if (turnId !== undefined) output.turn_id = turnId;
@@ -374,6 +375,9 @@ function safeContextRecord(value: Record<string, unknown>): Record<string, unkno
   if (value.base_commit === null) output.base_commit = null;
   else if (typeof value.base_commit === "string" && /^[0-9a-fA-F]{7,64}$/u.test(value.base_commit)) output.base_commit = value.base_commit;
   if (value.base_commit_status === null || value.base_commit_status === "claimed" || value.base_commit_status === "observed") output.base_commit_status = value.base_commit_status;
+  for (const key of ["base_worktree_state", "working_tree_state"] as const) if (value[key] === "clean" || value[key] === "dirty" || value[key] === "unknown") output[key] = value[key];
+  if (value.commit_state === "current" || value.commit_state === "stale" || value.commit_state === "unknown") output.commit_state = value.commit_state;
+  if (value.baseline_scope === "git-tracked-and-untracked-status") output.baseline_scope = value.baseline_scope;
   if (value.baseline_state === "current" || value.baseline_state === "stale" || value.baseline_state === "unknown") output.baseline_state = value.baseline_state;
   if (value.current_commit === null) output.current_commit = null;
   else if (typeof value.current_commit === "string" && /^[0-9a-fA-F]{40,64}$/u.test(value.current_commit)) output.current_commit = value.current_commit;
@@ -776,7 +780,7 @@ function runnerSuccess(value: unknown, selection: ActiveSelection): unknown {
   return success({ data: value, runner_context: runnerContext });
 }
 function runnerFailure(error: ToolFailure["error"], selection: ActiveSelection): unknown {
-  return failureWithDetails(error.code, error.message, error.hint, { runner_context: safeRunnerContext(selection.context) });
+  return failureWithDetails(error.code, error.message, error.hint, { runner_context: safeRunnerContext(selection.context) }, error.operation_state);
 }
 
 async function activeRunnerTool(env: McpRequestEnv, clientId: string, method: string, params: Record<string, unknown>, requiredPermission?: PermissionBit, resultMode: RunnerResultMode = "raw"): Promise<unknown> {
@@ -1093,12 +1097,12 @@ function boundedReadParams(params: Record<string, unknown>, max: number): Record
 }
 
 type ToolSuccess = { readonly ok: true; readonly value: unknown };
-type ToolFailure = { readonly ok: false; readonly error: { readonly code: string; readonly message: string; readonly hint: string; readonly details?: unknown; readonly failure_class?: string; readonly operation_state?: string; readonly retry_after_ms?: number; readonly next_action?: string } };
+type ToolFailure = { readonly ok: false; readonly error: { readonly code: string; readonly message: string; readonly hint: string; readonly details?: unknown; readonly failure_class?: string; readonly operation_state?: RpcOperationState; readonly retry_after_ms?: number; readonly next_action?: string } };
 type ToolCall = ToolSuccess | ToolFailure;
 
 const SAFE_RUNNER_ERROR_CODES = new Set([
-  "control_plane_unavailable", "registry_unavailable", "runner_upgrade_required", "baseline_changed", "queue_full", "busy", "expected_hash_mismatch", "file_too_large", "git_failed", "git_output_too_large", "git_timeout", "git_unavailable",
-  "context_index_corrupt", "context_index_too_large", "context_record_corrupt", "context_record_missing", "context_record_too_large", "context_rebuild_budget", "context_revision_conflict", "context_storage_unsafe", "context_turn_conflict",
+  "internal_error", "shell_unavailable", "control_plane_unavailable", "registry_unavailable", "runner_upgrade_required", "baseline_changed", "queue_full", "busy", "expected_hash_mismatch", "file_too_large", "git_failed", "git_output_too_large", "git_timeout", "git_unavailable",
+  "context_index_missing", "context_index_stale", "context_index_corrupt", "context_index_too_large", "context_record_corrupt", "context_record_missing", "context_record_too_large", "context_rebuild_budget", "context_revision_conflict", "context_storage_unsafe", "context_turn_conflict",
   "hunk_ambiguous", "hunk_not_found", "hunk_overlap", "invalid_params", "invalid_patch", "invalid_path", "invalid_request", "invalid_workspace", "missing_file", "mixed_newlines", "not_utf8",
   "method_not_found", "insufficient_scope", "patch_install_failed", "patch_rollback_failed", "path_traversal", "permission_denied", "policy_pending", "readonly_workspace", "request_id_conflict", "runner_offline", "search_snapshot_changed", "stale_policy", "symlink_escape", "symlink_write", "target_exists", "timeout",
 ]);
@@ -1127,8 +1131,8 @@ async function callRunner(env: McpRequestEnv, runnerId: string, method: string, 
     ...(typeof params.job_id === "string" ? { job_id: params.job_id } : {}),
     policy_revision: policyRevision, policy_checksum: policyChecksum,
   });
-  if (!authorization.ok) return authorization;
-  if (!isRecord(authorization.value) || typeof authorization.value.ok !== "boolean") return fail("registry_unavailable", "Authorization service returned an invalid response.", "Retry later; nothing was sent to the Runner.");
+  if (!authorization.ok) return { ok: false, error: { ...authorization.error, ...failureMetadata(authorization.error.code, "not_started") } };
+  if (!isRecord(authorization.value) || typeof authorization.value.ok !== "boolean") return fail("registry_unavailable", "Authorization service returned an invalid response.", "Retry later; nothing was sent to the Runner.", "not_started");
   if (authorization.value.ok !== true) {
     if (authorization.value.code === "runner_upgrade_required") return fail("runner_upgrade_required", "History-independent Job operations require Runner 0.1.1 or newer.", "Install a verified supported Runner before disabling cloud Job history.");
     return fail("permission_denied", "The current client, workspace or policy no longer authorizes this operation.", "Refresh the current permissions and policy before retrying.");
@@ -1139,16 +1143,19 @@ async function callRunner(env: McpRequestEnv, runnerId: string, method: string, 
   try {
     response = await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/rpc", { method: "POST", headers, body }));
   } catch {
-    return fail("runner_offline", "The runner is not reachable.", "Confirm the runner is connected, then retry.");
+    return fail("runner_offline", "The bridge reply was not received; the operation may already have started.", "Inspect the original Job or workspace state before submitting another mutation.", "unknown");
   }
   const payload = await json(response);
-  if (isRecord(payload) && payload.type === "rpc.response") return { ok: true, value: payload.result };
+  if (response.ok && isRecord(payload) && payload.type === "rpc.response" && Object.hasOwn(payload, "result")) return { ok: true, value: payload.result };
   const bridgeError = isRecord(payload) && isRecord(payload.error) ? payload.error : undefined;
   const code = safeRunnerErrorCode(bridgeError?.code, response.status === 503 ? "runner_offline" : "runner_rpc_failed");
   // Runner error details can include host filesystem paths. MCP exposes stable
   // error codes plus a safe recovery action rather than copying that text.
   const message = code === "runner_offline" ? "The runner is not connected." : "The runner rejected the request.";
-  return fail(code, message, hintFor(code));
+  const rawState = bridgeError?.operation_state;
+  const knownCode = typeof bridgeError?.code === "string" && SAFE_RUNNER_ERROR_CODES.has(bridgeError.code);
+  const observedState = knownCode && (rawState === "not_started" || rawState === "unknown" || rawState === "running" || rawState === "committed") ? rawState : undefined;
+  return fail(code, message, hintFor(code), observedState);
 }
 
 function registryJobsPath(runnerId: string, filters: Record<string, unknown>): string {
@@ -1292,8 +1299,8 @@ function withAuditReceipt(result: unknown, receipt: AuditReceipt): unknown {
 }
 function asToolResult(call: ToolCall): unknown {
   return call.ok ? success(call.value) : call.error.details === undefined
-    ? failure(call.error.code, call.error.message, call.error.hint)
-    : failureWithDetails(call.error.code, call.error.message, call.error.hint, call.error.details);
+    ? failure(call.error.code, call.error.message, call.error.hint, call.error.operation_state)
+    : failureWithDetails(call.error.code, call.error.message, call.error.hint, call.error.details, call.error.operation_state);
 }
 
 function success(value: unknown): { content: { type: "text"; text: string }[]; structuredContent: Record<string, unknown> } {
@@ -1302,20 +1309,23 @@ function success(value: unknown): { content: { type: "text"; text: string }[]; s
   return { content: [{ type: "text", text: boundedText(structuredContent, CONTENT_LIMIT) }], structuredContent };
 }
 
-function failure(code: string, message: string, hint: string): { content: { type: "text"; text: string }[]; structuredContent: Record<string, unknown>; isError: true } {
-  const error = { error: { code, message: message.slice(0, 4_096), recovery_hint: hint.slice(0, 4_096), ...failureMetadata(code) } };
+function failure(code: string, message: string, hint: string, state?: RpcOperationState): { content: { type: "text"; text: string }[]; structuredContent: Record<string, unknown>; isError: true } {
+  const error = { error: { code, message: message.slice(0, 4_096), recovery_hint: hint.slice(0, 4_096), ...failureMetadata(code, state) } };
   return { content: [{ type: "text", text: `Error (${code}): ${error.error.message}\nRecovery: ${error.error.recovery_hint}` }], structuredContent: error, isError: true };
 }
 
-function failureWithDetails(code: string, message: string, hint: string, details: unknown): { content: { type: "text"; text: string }[]; structuredContent: Record<string, unknown>; isError: true } {
-  const error = { error: { code, message: message.slice(0, 4_096), recovery_hint: hint.slice(0, 4_096), ...failureMetadata(code), details: redactAndBound(details, 8_192) } };
+function failureWithDetails(code: string, message: string, hint: string, details: unknown, state?: RpcOperationState): { content: { type: "text"; text: string }[]; structuredContent: Record<string, unknown>; isError: true } {
+  const error = { error: { code, message: message.slice(0, 4_096), recovery_hint: hint.slice(0, 4_096), ...failureMetadata(code, state), details: redactAndBound(details, 8_192) } };
   return { content: [{ type: "text", text: `Error (${code}): ${error.error.message}\nRecovery: ${error.error.recovery_hint}` }], structuredContent: error, isError: true };
 }
 
-function failWithDetails(code: string, message: string, hint: string, details: unknown): ToolFailure { return { ok: false, error: { code, message, hint, details, ...failureMetadata(code) } }; }
-function fail(code: string, message: string, hint: string): ToolFailure { return { ok: false, error: { code, message, hint, ...failureMetadata(code) } }; }
+function failWithDetails(code: string, message: string, hint: string, details: unknown, state?: RpcOperationState): ToolFailure { return { ok: false, error: { code, message, hint, details, ...failureMetadata(code, state) } }; }
+function fail(code: string, message: string, hint: string, state?: RpcOperationState): ToolFailure { return { ok: false, error: { code, message, hint, ...failureMetadata(code, state) } }; }
 function hintFor(code: string): string {
-  if (code === "runner_offline" || code === "timeout") return "Confirm the runner is connected, then retry.";
+  if (code === "runner_offline" || code === "timeout") return "The outcome may be unknown. Inspect the original Job or current workspace before retrying; do not replay input, cancellation or a mutation blindly.";
+  if (code === "context_index_missing" || code === "context_index_stale") return "Context records may already be committed. Explicitly rebuild the context index, then retry the same checkpoint input and expected revision.";
+  if (code === "request_id_conflict") return "Inspect the original Job receipt; do not reuse its request_id for a different command.";
+  if (code === "search_snapshot_changed") return "Restart the bounded search with a fresh cursor.";
   if (code === "policy_pending") return "The control plane has a newer policy than the runner. Wait briefly and retry.";
   if (code === "invalid_patch") return "Use the documented *** Begin Patch envelope and exact, non-overlapping hunks.";
   if (code === "missing_file") return "Choose an existing source file or use Add File for a new target.";
@@ -1325,9 +1335,9 @@ function hintFor(code: string): string {
   if (code === "patch_install_failed" || code === "patch_rollback_failed") return "Inspect workspace state, then retry a smaller patch; no host paths were exposed.";
   if (code === "file_too_large" || code === "not_utf8" || code === "mixed_newlines") return "Use a supported bounded UTF-8 text file or split the change.";
   if (code === "path_traversal" || code === "invalid_path") return "Use a workspace-relative path without .. segments or an absolute path.";
-  if (code === "busy") return "Wait for active runner requests to complete, then retry.";
+  if (code === "busy" || code === "queue_full") return "Wait for active runner requests to complete, then retry.";
   if (code === "method_not_found") return "Update the runner to a version that supports this tool.";
-  return "Correct the request parameters and retry.";
+  return "Inspect the operation state and request details before deciding whether another call is safe.";
 }
 
 async function json(response: Response): Promise<unknown> {

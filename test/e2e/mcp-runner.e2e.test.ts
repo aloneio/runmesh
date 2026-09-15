@@ -462,10 +462,16 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const preview = await mcpTool("edit", {workspace_id:"workspace-1",preview:true,patch:"*** Begin Patch\n*** Add File: preview-only.txt\n+preview\n*** End Patch"});
     expect(preview.isError, JSON.stringify(preview)).not.toBe(true);
     expect(existsSync(join(workspace,"preview-only.txt"))).toBe(false);
+    const checkpointInput = {action:"checkpoint",turn_id:"e2e-release-audit",goal:"Validate release context chain",expected_revision:0};
+    const created = await mcpTool("context",{workspace_id:"workspace-1",...checkpointInput});
+    expect(created.isError, JSON.stringify(created)).not.toBe(true);
+    const contextId = (created.structuredContent?.context as {context_id:string}).context_id;
+    expect(contextId).toMatch(/^ctx-/);
+    const duplicate = await mcpTool("context",{workspace_id:"workspace-1",...checkpointInput});
+    expect(duplicate.structuredContent?.deduplicated).toBe(true);
     const operations = [
       {action:"bootstrap"},
-      {action:"checkpoint",context_id:"e2e-handoff",turn_id:"e2e-release-audit",goal:"Validate release context chain"},
-      {action:"read",context_id:"e2e-handoff"},
+      {action:"read",context_id:contextId},
       {action:"search",query:"release"},
       {action:"rebuild"},
     ];
@@ -473,6 +479,8 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       const result = await mcpTool("context",{workspace_id:"workspace-1",...operation});
       expect(result.isError, JSON.stringify({operation,result})).not.toBe(true);
     }
+    const nonexistent = await mcpTool("context",{workspace_id:"workspace-1",...checkpointInput,context_id:"invented-context"});
+    expect(nonexistent.structuredContent?.error).toMatchObject({code:"context_revision_conflict"});
     const rejected = await mcpTool("context",{action:"checkpoint",workspace_id:"workspace-1",turn_id:"not-authorized",goal:"must not write"},clientB);
     expect(rejected.isError).toBe(true);
     expect(rejected.structuredContent?.error).toMatchObject({code:"insufficient_scope"});

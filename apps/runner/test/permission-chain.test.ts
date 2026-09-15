@@ -66,3 +66,39 @@ it("RUN-CONTEXT-01 observes the Git baseline and marks old handoff evidence stal
     expect(read.context).toMatchObject({ base_commit: firstCommit, base_commit_status: "observed", baseline_state: "stale", current_commit: secondCommit });
   } finally { await f.cleanup(); }
 });
+
+
+it.each(["tracked", "untracked"])("R05 does not claim evidence is current after an uncommitted %s change", async (kind) => {
+  const f=await fixture();
+  try {
+    git(f.workspace.rootPath,["init"]);git(f.workspace.rootPath,["config","user.name","Fixture"]);git(f.workspace.rootPath,["config","user.email","fixture@example.invalid"]);
+    await writeFile(join(f.workspace.rootPath,"tracked.txt"),"one\n");git(f.workspace.rootPath,["add","tracked.txt"]);git(f.workspace.rootPath,["commit","-m","baseline"]);
+    const first=await f.runtime.dispatch("context.checkpoint",{workspace_id:"w",turn_id:"dirty",goal:"verify baseline"}) as any;
+    expect(first.context.baseline_state).toBe("current");
+    await writeFile(join(f.workspace.rootPath,kind==="tracked"?"tracked.txt":"new.txt"),"changed\n");
+    const next=await f.runtime.dispatch("context.read",{workspace_id:"w",context_id:first.context.context_id}) as any;
+    expect(next.context.current_commit).toBe(first.context.base_commit);
+    expect(next.context.baseline_state).toBe("stale");
+  } finally {await f.cleanup();}
+});
+
+
+it("R04 never commits context after permission changed during evidence collection", async () => {
+  const f=await fixture();
+  vi.spyOn(f.runtime.git,"observeBaseline").mockImplementation(async()=>{
+    f.runtime.applyPolicy([{...f.workspace,permissions:ro,readonly:true,shell:false}]);
+    return {commit:"a".repeat(40),working_tree_state:"clean"};
+  });
+  try {
+    await expect(f.runtime.dispatch("context.checkpoint",{workspace_id:"w",turn_id:"revoke",goal:"denied"})).rejects.toMatchObject({code:"stale_policy"});
+    expect(await f.runtime.context.bootstrap({workspace_id:"w"})).toMatchObject({state:"missing"});
+  } finally {await f.cleanup();}
+});
+it("R05 unavailable or truncated worktree evidence stays unknown and cannot be forged", async () => {
+  const f=await fixture();
+  vi.spyOn(f.runtime.git,"observeBaseline").mockResolvedValue({commit:"a".repeat(40),working_tree_state:"unknown"});
+  try {
+    const result=await f.runtime.dispatch("context.checkpoint",{workspace_id:"w",turn_id:"unknown",goal:"unknown",base_worktree_state:"clean",base_commit_status:"observed"}) as any;
+    expect(result.context).toMatchObject({baseline_state:"unknown",base_worktree_state:"unknown",working_tree_state:"unknown"});
+  } finally {await f.cleanup();}
+});
