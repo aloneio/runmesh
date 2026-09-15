@@ -1,3 +1,4 @@
+import { safeContextResult } from "../src/mcp/server.js";
 import { ExternalAuditHistory } from "../src/external-audit.js";
 import { env, runInDurableObject } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
@@ -6,7 +7,7 @@ import { runnerPolicyChecksum } from "@aloneio/runmesh-protocol";
 import { randomBase64Url, sha256Hex, internalHeaders } from "../src/security.js";
 
 const full = { read: true, edit: true, shell: true, job_control: true };
-async function fixture() {
+async function fixture(responder?: (request: Record<string, any>) => Response | Promise<Response>) {
   const id = env.REGISTRY.idFromName(`no-record-${crypto.randomUUID()}`), stub = env.REGISTRY.get(id);
   const secret = randomBase64Url(), verifier = await sha256Hex(secret);
   await runInDurableObject(stub, (instance, state) => {
@@ -24,6 +25,7 @@ async function fixture() {
   const job = { job_id: "j", workspace_id: "w", created_by_client_id: "c", status: "running", created_at_ms: Date.now(), updated_at_ms: Date.now() };
   const localEnv = { ...env, REGISTRY: { idFromName: () => id, get: () => stub }, RUNNER: { idFromName: () => id, get: () => ({ fetch: async (req: Request) => {
     const input = await req.json() as Record<string, any>; forwarded.push(input);
+    if (responder !== undefined) return responder(input);
     const result = input.method === "job.list" ? { jobs: [job] } : input.method === "exec.run" ? { job, completed: false } : job;
     return Response.json({ type: "rpc.response", result });
   } }) } } as unknown as typeof env;
@@ -32,7 +34,7 @@ async function fixture() {
     const text = await response.text(), data = text.split("\n").find((line) => line.startsWith("data:"))?.slice(5).trim();
     return { status: response.status, body: response.status === 200 ? JSON.parse(data ?? text) : undefined };
   }
-  return { stub, call, forwarded, job };
+  return { stub, call, forwarded, job, localEnv };
 }
 
 it("unrecorded Job operations and live listing do not require any cloud Job row", async () => {
@@ -149,4 +151,57 @@ it.each([false, true])("the production D1 audit path isolates history writes and
       expect(rows[0].method).toBe("exec.run");
     }
   });
+});
+
+
+it.each([
+  ["queue_full", "resource", "not_started", "wait_and_retry"],
+  ["request_id_conflict", "conflict", "not_started", "re_read_and_retry"],
+  ["search_snapshot_changed", "conflict", "not_started", "re_read_and_retry"],
+  ["timeout", "availability", "unknown", "inspect_job"],
+  ["context_index_stale", "conflict", "unknown", "inspect_job"],
+])("R02 preserves %s semantics through the actual MCP error envelope", async (code, classification, state, action) => {
+  const f=await fixture(() => Response.json({type:"rpc.error",error:{code,message:"DO_NOT_EXPOSE /private/path secret",operation_state:state}}, {status:400}));
+  const result=await f.call("shell",{workspace_id:"w",command:"synthetic"});
+  expect(result.body.result.isError).toBe(true);
+  expect(result.body.result.structuredContent.error).toMatchObject({code,failure_class:classification,operation_state:state,next_action:action});
+  expect(JSON.stringify(result.body)).not.toContain("DO_NOT_EXPOSE");
+  expect(f.forwarded).toHaveLength(1);
+});
+it("R02 loses a post-dispatch reply without advising another command execution", async () => {
+  const f=await fixture(()=>{throw new Error("synthetic reply lost");});
+  const result=await f.call("shell",{workspace_id:"w",command:"synthetic"});
+  expect(result.body.result.structuredContent.error).toMatchObject({operation_state:"unknown",next_action:"inspect_job"});
+  expect(result.body.result.structuredContent.error.retry_after_ms).toBeUndefined();expect(f.forwarded).toHaveLength(1);
+});
+it("R02 authorization dependency failure proves nothing was sent", async () => {
+  const f=await fixture();
+  const original=f.localEnv.REGISTRY.get.bind(f.localEnv.REGISTRY);
+  (f.localEnv.REGISTRY as any).get=(id:DurableObjectId)=>({fetch:(request:Request)=>new URL(request.url).pathname==="/auth/mcp/authorize-rpc"?Response.json({error:{code:"unavailable"}},{status:503}):original(id).fetch(request)});
+  const result=await f.call("shell",{workspace_id:"w",command:"synthetic"});
+  expect(result.body.result.structuredContent.error).toMatchObject({operation_state:"not_started",next_action:"wait_and_retry"});expect(f.forwarded).toHaveLength(0);
+});
+it("R02 a malformed or unsuccessful bridge success envelope is never treated as success", async () => {
+  for(const reply of [()=>Response.json({type:"rpc.response"}),()=>Response.json({type:"rpc.response",result:{completed:true}},{status:503})]) {
+    const f=await fixture(reply); const result=await f.call("shell",{workspace_id:"w",command:"synthetic"});
+    expect(result.body.result.isError).toBe(true); expect(result.body.result.structuredContent.error.operation_state).toBe("unknown");
+  }
+});
+
+it("R05 exposes v2 freshness status but never raw worktree details", () => {
+  const record={schema_version:2,context_id:"c",workspace_id:"w",base_worktree_state:"clean",working_tree_state:"dirty",commit_state:"current",baseline_state:"stale",baseline_scope:"git-tracked-and-untracked-status",root_path:"/private",entries:[{path:"private"}]};
+  const result=safeContextResult({context:record});
+  expect(result.context).toMatchObject({schema_version:2,base_worktree_state:"clean",working_tree_state:"dirty",commit_state:"current",baseline_state:"stale",baseline_scope:"git-tracked-and-untracked-status"});
+  expect(JSON.stringify(result)).not.toContain("private");
+});
+
+
+it("R02 a non-replayable operation state overrides the human-readable retry suggestion too", async () => {
+  const f = await fixture(() => Response.json({ error: { code: "busy", operation_state: "unknown", retry_after_ms: 1000 } }, { status: 409 }));
+  const result = await f.call("shell", { workspace_id: "w", command: "synthetic" });
+  const error = result.body.result.structuredContent.error;
+  expect(error).toMatchObject({ operation_state: "unknown", next_action: "inspect_job" });
+  expect(error.retry_after_ms).toBeUndefined();
+  expect(error.recovery_hint).toContain("do not repeat");
+  expect(error.recovery_hint).not.toContain("then retry");
 });

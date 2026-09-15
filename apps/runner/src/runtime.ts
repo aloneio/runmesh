@@ -286,8 +286,19 @@ export class RunnerRuntime {
       case "context.bootstrap": this.policy.assertPermission(params.workspace_id, "read"); return this.contextWithBaseline(await this.context.bootstrap(params), params.workspace_id);
       case "context.read": this.policy.assertPermission(params.workspace_id, "read"); return this.contextWithBaseline(await this.context.read(params), params.workspace_id);
       case "context.search": this.policy.assertPermission(params.workspace_id, "read"); return this.context.search(params);
-      case "context.checkpoint": this.policy.assertPermission(params.workspace_id, "edit"); return this.contextWithBaseline(await this.context.checkpoint(await this.contextCheckpointParams(params)), params.workspace_id);
-      case "context.rebuild": this.policy.assertPermission(params.workspace_id, "edit"); return this.context.rebuild(params);
+      case "context.checkpoint": {
+        this.policy.assertPermission(params.workspace_id, "edit");
+        const generation = this.policy.generation;
+        const authorized = () => { this.policy.assertGeneration(generation); this.policy.assertPermission(params.workspace_id, "edit"); };
+        const checkpoint = await this.contextCheckpointParams(params);
+        authorized();
+        return this.contextWithBaseline(await this.context.checkpoint(checkpoint, authorized), params.workspace_id);
+      }
+      case "context.rebuild": {
+        this.policy.assertPermission(params.workspace_id, "edit");
+        const generation = this.policy.generation;
+        return this.context.rebuild(params, () => { this.policy.assertGeneration(generation); this.policy.assertPermission(params.workspace_id, "edit"); });
+      }
       default: throw new RpcRuntimeError("method_not_found", `Unsupported method: ${method}`);
     }
   }
@@ -326,12 +337,14 @@ export class RunnerRuntime {
       if (entry.kind !== "test" && entry.kind !== "commit" && entry.kind !== "note") throw new RpcRuntimeError("invalid_params", "context evidence kind is invalid");
       evidence.push({ kind: entry.kind, status: "claimed", ...(typeof entry.ref === "string" ? { ref: entry.ref } : {}), ...(typeof entry.summary === "string" ? { summary: entry.summary } : {}) });
     }
-    let observedCommit: string | undefined;
-    try { observedCommit = (await this.git.head({ workspace_id: workspaceId })).commit; }
-    catch { /* Non-Git workspaces retain an explicit caller claim or null baseline. */ }
+    const baseline = await this.git.observeBaseline({ workspace_id: workspaceId });
     return {
       ...params,
-      ...(observedCommit === undefined ? {} : { base_commit: observedCommit, base_commit_status: "observed" }),
+      // Client claims cannot label themselves as observations. The bounded
+      // Git probe controls both source status and working-tree cleanliness.
+      base_commit: baseline.commit ?? params.base_commit ?? null,
+      base_commit_status: baseline.commit === null ? "claimed" : "observed",
+      base_worktree_state: baseline.working_tree_state,
       evidence,
       policy_generation: this.policy.generation,
     };
@@ -342,14 +355,21 @@ export class RunnerRuntime {
     const record = context as Record<string, unknown>;
     let currentCommit: string | null = null;
     let baselineState: "current" | "stale" | "unknown" = "unknown";
+    let commitState: "current" | "stale" | "unknown" = "unknown";
+    let workingTreeState: "clean" | "dirty" | "unknown" = "unknown";
     if (record.base_commit_status === "observed" && typeof record.base_commit === "string") {
-      try {
-        currentCommit = (await this.git.head({ workspace_id: workspaceId })).commit;
-        baselineState = currentCommit === record.base_commit ? "current" : "stale";
-      } catch { /* Baseline age is unknown when Git cannot be inspected safely. */ }
+      const observed = await this.git.observeBaseline({ workspace_id: workspaceId });
+      currentCommit = observed.commit;
+      workingTreeState = observed.working_tree_state;
+      if (currentCommit !== null) {
+        commitState = currentCommit === record.base_commit ? "current" : "stale";
+        if (commitState === "stale") baselineState = "stale";
+        else if (record.base_worktree_state === "clean" && workingTreeState !== "unknown") baselineState = workingTreeState === "clean" ? "current" : "stale";
+      }
     }
-    return { ...result, context: { ...record, baseline_state: baselineState, current_commit: currentCommit } };
+    return { ...result, context: { ...record, baseline_state: baselineState, commit_state: commitState, working_tree_state: workingTreeState, baseline_scope: "git-tracked-and-untracked-status", current_commit: currentCommit } };
   }
+
   private async startJob(input: unknown): Promise<import("./jobs.js").JobRecord> {
     const params = object(input); const workspace = this.policy.getWorkspace(params.workspace_id);
     this.policy.assertPermission(workspace.workspaceId, "read");
@@ -376,7 +396,7 @@ export class RunnerRuntime {
 
 export { RpcRuntimeError } from "./errors.js";
 export function rpcError(error: unknown): { code: string; message: string; failure_class: RpcFailureClass; operation_state: RpcOperationState; retry_after_ms?: number; next_action: RpcNextAction; details?: Record<string, unknown> | undefined } {
-  const code = error instanceof Error && error.message === "stale_policy" ? "stale_policy" : error instanceof PathPolicyError || error instanceof RpcRuntimeError ? error.code : "invalid_request";
+  const code = error instanceof Error && error.message === "stale_policy" ? "stale_policy" : error instanceof PathPolicyError || error instanceof RpcRuntimeError ? error.code : "internal_error";
   const metadata = failureMetadata(code);
   const message = error instanceof Error ? (error.message === "stale_policy" ? "RPC policy revision is stale" : error.message) : "request failed";
   return { code, message: message.slice(0, 4_096) || "request failed", ...metadata, ...(error instanceof RpcRuntimeError && error.details !== undefined ? { details: error.details } : {}) };
