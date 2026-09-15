@@ -1,3 +1,5 @@
+import type { RunnerConnectionState, PolicyReadiness, ActiveRunnerContext, McpClientActiveRunner, McpRunnerSelectionResult } from "./contracts/runner-selection.js";
+export type { RunnerConnectionState, PolicyReadiness, ActiveRunnerContext, McpClientActiveRunner, McpRunnerSelectionResult } from "./contracts/runner-selection.js";
 import { resolveRuntimeConfiguration } from "./runtime-config.js";
 import { PackedJobHistory, JobHistoryUnavailableError } from "./job-history-store.js";
 import { DEFAULT_JOB_HISTORY, ensureJobHistorySettings, parseJobHistorySettings, type JobHistorySettings } from "./job-history-settings.js";
@@ -29,28 +31,10 @@ import { ensureMetadataOnlyAudit, MCP_AUDIT_RETENTION_MS, projectMcpAuditMetadat
 import { AUTH_SOURCE_RETENTION_MS, MAX_AUTH_THROTTLE_KEYS, ensureAuthSourceThrottleSchema, reserveSourceAuthAttempt, type AuthThrottleState } from "./auth-throttle.js";
 import { validTimestamp, validWindow, validityStatus, type ValidityWindow, type ValidityStatus } from "./validity.js";
 
-export type RunnerConnectionState = "online" | "offline" | "stale";
 /** Administrator-selected service execution mode.  This is control-plane
  * configuration; Runner-reported values are kept separately as diagnostics. */
 export type RunnerExecutionMode = "dedicated_user" | "privileged_host";
 
-export type PolicyReadiness =
-  | {
-      readonly ok: true;
-      readonly policy_status: "applied";
-      readonly desired_revision: number;
-      readonly desired_checksum: string;
-      readonly applied_revision: number;
-      readonly active_checksum: string;
-      readonly runner_reported_policy_revision: number;
-      readonly runner_reported_policy_checksum: string;
-      readonly connection_epoch: number;
-      readonly credential_version: number;
-      /** Opaque runner-id lifecycle identity for transport fencing. */
-      readonly lifecycle_id: string | null;
-      readonly session_id: string;
-    }
-  | { readonly ok: false; readonly code: "policy_pending" | "stale_policy"; readonly reason: string };
 export type PolicyAcknowledgementResult = "applied" | "invalid" | "stale";
 
 export interface RunnerMutationState {
@@ -213,20 +197,6 @@ export interface McpClientRecord {
   readonly active_runner_id: string | null;
   readonly active_runner_updated_at_ms: number | null;
 }
-export interface ActiveRunnerContext {
-  readonly runner_id: string;
-  readonly state: RunnerConnectionState | "unavailable";
-  readonly available: boolean;
-  readonly updated_at_ms: number | null;
-}
-export interface McpClientActiveRunner {
-  readonly active_runner_id: string | null;
-  readonly active_runner_updated_at_ms: number | null;
-  readonly runner: ActiveRunnerContext | null;
-}
-export type McpRunnerSelectionResult =
-  | { readonly ok: true; readonly selection: McpClientActiveRunner; readonly changed: boolean }
-  | { readonly ok: false; readonly code: "client_not_found" | "runner_not_found" | "runner_unavailable" | "runner_switch_confirmation_required"; readonly selection?: McpClientActiveRunner };
 export interface VerifiedMcpClient {
   readonly client_id: string;
   readonly label: string;

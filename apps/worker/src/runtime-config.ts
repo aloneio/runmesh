@@ -1,4 +1,4 @@
-import { resolvePublicOrigin } from "./installer.js";
+import { resolvePublicOrigin } from "./public-origin.js";
 import { REVIEWED_RELEASE_VERSION } from "./generated-release.js";
 
 /** Pure resolution: no database access, credential generation, or timers. */

@@ -12,8 +12,8 @@ import {
 } from "@aloneio/runmesh-protocol";
 import { z } from "zod";
 import { internalHeaders, isSafeIdentifier, isConfiguredSecret } from "../security.js";
-import type { ActiveRunnerContext, McpClientActiveRunner, McpRunnerSelectionResult, PolicyReadiness as RegistryPolicyReadiness } from "../registry.js";
-import type { WorkerEnv } from "../runner-do.js";
+import type { ActiveRunnerContext, McpClientActiveRunner, McpRunnerSelectionResult, PolicyReadiness as RegistryPolicyReadiness } from "../contracts/runner-selection.js";
+import type { WorkerEnv } from "../platform/env.js";
 import { PRODUCT_VERSION } from "../generated-version.js";
 import { ContextInputSchema, EditInputSchema, InspectInputSchema, JobInputSchema, SafeOutputSchema, ShellInputSchema, SUPPORTED_SCOPES, TOOL_SPECS, type ToolName } from "./catalog.js";
 
