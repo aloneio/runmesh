@@ -90,10 +90,12 @@ main-source-policy:
         if (environment.CI_MERGE_REQUEST_TARGET_BRANCH_NAME !== "main") {
           return { policy: "main-from-dev-v1", applies: false };
         }
+        // The MR project is its target project. GitLab does not define a
+        // CI_MERGE_REQUEST_TARGET_PROJECT_ID environment variable.
         const id = environment.CI_PROJECT_ID;
         if (!/^[1-9][0-9]*$/u.test(id ?? "")
           || environment.CI_MERGE_REQUEST_SOURCE_PROJECT_ID !== id
-          || environment.CI_MERGE_REQUEST_TARGET_PROJECT_ID !== id
+          || environment.CI_MERGE_REQUEST_PROJECT_ID !== id
           || environment.CI_MERGE_REQUEST_SOURCE_BRANCH_NAME !== "dev") reject();
         return { policy: "main-from-dev-v1", allowed: true };
       }

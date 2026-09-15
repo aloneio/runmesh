@@ -10,7 +10,7 @@ const event = () => ({ action: "opened", repository: repo, pull_request: { numbe
   base: { ref: "main", repo }, head: { ref: "dev", repo, sha: "a".repeat(40) } } });
 const github = { GITHUB_EVENT_NAME: "pull_request", GITHUB_REPOSITORY_ID: "123", GITHUB_REPOSITORY: "sample/project", GITHUB_REF: "refs/pull/42/merge" };
 const gitlab = { CI_PIPELINE_SOURCE: "merge_request_event", CI_MERGE_REQUEST_IID: "42", CI_PROJECT_ID: "123",
-  CI_MERGE_REQUEST_SOURCE_PROJECT_ID: "123", CI_MERGE_REQUEST_TARGET_PROJECT_ID: "123",
+  CI_MERGE_REQUEST_SOURCE_PROJECT_ID: "123", CI_MERGE_REQUEST_PROJECT_ID: "123",
   CI_MERGE_REQUEST_SOURCE_BRANCH_NAME: "dev", CI_MERGE_REQUEST_TARGET_BRANCH_NAME: "main" };
 
 for (const action of ["opened", "reopened", "synchronize", "edited", "ready_for_review"]) {
@@ -82,4 +82,11 @@ test("both ordinary CI systems execute the generated-policy consistency check", 
   for (const file of [".github/workflows/ci.yml", ".gitlab-ci.yml", "scripts/check-ci-parity.mjs"]) {
     assert.ok((await readFile(new URL("../" + file, import.meta.url), "utf8")).includes("npm run check:promotion-policy"));
   }
+});
+
+test("GitLab requires the documented MR project identity, not a nonexistent target alias", () => {
+  assert.equal(gitlabMainPromotion(gitlab).allowed, true);
+  const value = { ...gitlab, CI_MERGE_REQUEST_TARGET_PROJECT_ID: "123" };
+  delete value.CI_MERGE_REQUEST_PROJECT_ID;
+  assert.throws(() => gitlabMainPromotion(value));
 });
