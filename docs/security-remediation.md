@@ -21,9 +21,10 @@ release. Both selected execution modes now use one-command hosted enrollment. Lo
 checks do not deploy a Worker or upgrade an installed Runner. Never overwrite
 an existing immutable asset.
 
-Development requires Node 22.23.2 and npm 10.9.3. The portable Runner retains
-Node `>=20`. Default Wrangler targets `runmesh-development`; intentional
-production commands use `--env production`.
+Current tooling requires Node 22.23.2 and npm 10.9.3. The portable Runner supports
+Node `>=22.23.2 <23 || >=24.21.0 <25`. Top-level Wrangler targets production
+`runmesh`; explicit `--env development` targets `runmeshdev`. Use the branch-checked
+deployment wrapper rather than inferring an environment from the working directory.
 
 ## First setup: explicit product decision
 

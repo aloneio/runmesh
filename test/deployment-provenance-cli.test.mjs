@@ -13,9 +13,11 @@ async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), "runmesh-deploy-proof-"));
   t.after(() => rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 }));
   git(root, "init", "--initial-branch=main");
-  for (const directory of ["scripts", "release", "apps/worker/src", "node_modules/wrangler/bin"]) await mkdir(join(root, directory), { recursive: true });
-  for (const script of ["deploy-worker.mjs", "deployment-policy.mjs", "build-provenance.mjs", "generate-build-provenance.mjs"]) await copyFile(new URL(`../scripts/${script}`, import.meta.url), join(root, "scripts", script));
-  await writeFile(join(root, ".gitignore"), "apps/worker/src/generated-provenance.ts*\n");
+  for (const directory of ["scripts", "release", "apps/worker/src", "apps/worker/browser", "node_modules/wrangler/bin"]) await mkdir(join(root, directory), { recursive: true });
+  for (const script of ["deploy-worker.mjs", "deployment-policy.mjs", "build-provenance.mjs", "generate-build-provenance.mjs", "prepare-worker-build.mjs", "generate-browser-assets.mjs"]) await copyFile(new URL(`../scripts/${script}`, import.meta.url), join(root, "scripts", script));
+  await writeFile(join(root, ".gitignore"), "apps/worker/src/generated-provenance.ts*\napps/worker/src/generated-admin-client.ts*\n");
+  await writeFile(join(root, "apps/worker/wrangler.jsonc"), JSON.stringify({ name: "runmesh", env: { production: { name: "runmesh" }, development: { name: "runmeshdev" } } }));
+  await writeFile(join(root, "apps/worker/browser/admin-client.js"), "(function () {})();\n");
   await writeFile(join(root, "package.json"), JSON.stringify({ version: "0.1.3" }));
   await writeFile(join(root, "release/release-state.json"), JSON.stringify({ version: "0.1.3", state: "released", release_commit: "a".repeat(40), manifest_sha256: "b".repeat(64) }));
   await writeFile(join(root, "node_modules/wrangler/bin/wrangler.js"), 'console.log("FAKE_UPLOADER_REACHED", JSON.stringify(process.argv.slice(2)));\n');
@@ -32,12 +34,13 @@ test("R01 actual deployment wrapper tags clean source without runtime variables"
   const f = await fixture(t); const result = f.invoke();
   assert.equal(result.status, 0, result.stderr); assert.match(result.stdout, /FAKE_UPLOADER_REACHED/u);
   assert.ok(result.stdout.includes(`main:${f.commit}`)); assert.ok(!result.stdout.includes("--var"));
+  assert.ok(result.stdout.includes('"--name","runmesh"'));
   assert.equal(git(f.root, "status", "--porcelain"), "");
 });
 
 test("R01 actual deployment wrapper rejects inconsistent or untracked source before upload", async t => {
   const f = await fixture(t);
-  for (const extra of [{ WORKERS_CI_COMMIT_SHA: "a".repeat(40) }, { CI_COMMIT_SHA: "b".repeat(40) }, { WORKERS_CI_BRANCH: "dev" }]) {
+  for (const extra of [{ WRANGLER_CI_OVERRIDE_NAME: "runmeshdev" }, { WORKERS_CI_COMMIT_SHA: "a".repeat(40) }, { CI_COMMIT_SHA: "b".repeat(40) }, { WORKERS_CI_BRANCH: "dev" }]) {
     const result = f.invoke(extra); assert.notEqual(result.status, 0); assert.ok(!result.stdout.includes("FAKE_UPLOADER_REACHED"));
   }
   await writeFile(join(f.root, "untracked-source.ts"), "unreviewed content\n");

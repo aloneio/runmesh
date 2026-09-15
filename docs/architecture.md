@@ -14,8 +14,9 @@ Each MCP client has an independently revocable secret URL and sticky Runner sele
 
 | Area | Modules | Boundary |
 | --- | --- | --- |
-| HTTP composition | `apps/worker/src/index.ts` | Routing, response/session protection and retained orchestration |
-| Presentation | Extracted `apps/worker/src/admin/` renderers | View data and rendering, no automatic Jobs/log polling |
+| HTTP composition | `apps/worker/src/index.ts`, `apps/worker/src/http/` | Entry assembly, routing, request/response and session protection |
+| Application use cases | `apps/worker/src/application/` | Shared lifecycle/policy coordination, Runner deletion and display projections |
+| Presentation | `apps/worker/src/admin/`, `apps/worker/src/i18n/` | View/message contracts, opaque data and rendering, no automatic Jobs/log polling |
 | MCP | `apps/worker/src/mcp/` | Catalog, handler binding, output validation, bounded projection, reauthorization |
 | Foundations | `public-origin.ts`, `platform/env.ts`, `contracts/` | Origin rules, platform types, narrow application contracts |
 | Registry domains | `registry/auth.ts`, `policy.ts`, `lifecycle.ts`, `history.ts` | Business groups, narrow ports, original synchronous storage owner |
@@ -25,7 +26,7 @@ Each MCP client has an independently revocable secret URL and sticky Runner sele
 | Context adapters | `apps/runner/src/context/` | Storage/recovery and pure retention planning; executor revalidates paths and authorization |
 | Shared protocol | `packages/protocol/src/` | Wire contracts, permissions, operation requirements, pagination and failure metadata |
 
-These are incremental boundaries, not a claim of independent tables or elimination of every large module. Cross-table transactions deliberately stay within one Registry. Domain, foundation and application dependencies are checked in both CI systems; type-inclusive cycles are reported separately from forbidden runtime cycles.
+These are incremental boundaries, not a claim of independent tables or elimination of every large module. Cross-table transactions deliberately stay within one Registry. Domain, foundation and application dependencies are checked in both CI systems; runtime and type-inclusive cycles are classified separately and both are rejected.
 
 ## Authorization, transactions and failures
 
@@ -50,3 +51,5 @@ Full command/output and Context bodies stay on the Runner. Cloud history is boun
 Pure rules, adapter/schema contracts, Runner integration, local Cloudflare integration, source transport and installed-package transport are distinct layers. Native runs, signed-release verification and production/account observations are separate evidence. Generated facts mark unobserved runtime checks as not_run instead of copying old success forward.
 
 Compatibility facades and broad lifecycle coordinators remain. Extraction does not establish complete correctness or remove all legacy private-state fault injection. Build provenance, host catalog refresh and account acceptance need independent verified delivery. Do not infer them from a product version, this document, or a green unit-test command.
+
+The current [modular remediation contract](architecture-remediation.md) documents the role matrix, display DTOs, shared deletion use case, native adapters, test collection and compatibility boundaries.
