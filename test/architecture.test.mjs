@@ -38,6 +38,10 @@ const bad = [
   ["package cross-app import", { "apps/worker/src/a.ts": 'import "@aloneio/runmesh-runner";', "apps/runner/src/index.ts": "export {};" }],
   ["unresolved source", { "apps/runner/src/a.ts": 'import "./missing.js";' }],
   ["syntax failure", { "apps/runner/src/a.ts": 'import {' }],
+  ["configuration to installer", { "apps/worker/src/runtime-config.ts": 'import "./installer.js";', "apps/worker/src/installer.ts": "export {};" }],
+  ["contract to implementation", { "apps/worker/src/contracts/selection.ts": 'import type { X } from "../registry.js";', "apps/worker/src/registry.ts": "export type X = string;" }],
+  ["MCP concrete transport type", { "apps/worker/src/mcp/server.ts": 'import type { Env } from "../runner-do.js";', "apps/worker/src/runner-do.ts": "export type Env = {};" }],
+  ["MCP concrete Registry type", { "apps/worker/src/mcp/server.ts": 'import type { State } from "../registry.js";', "apps/worker/src/registry.ts": "export type State = {};" }],
   ["retired runtime setting", { "apps/runner/src/a.ts": 'export const x = "RUNMESH_SCHEMA_READY";' }],
 ];
 for (const [name, sources] of bad) test(`AR01 rejects ${name}`, async t => {
@@ -74,4 +78,15 @@ test("AR01 source symlinks cannot silently bypass module discovery", async t => 
   try { await symlink(join(f.root, "outside.ts"), join(f.root, "packages/protocol/src/alias.ts")); }
   catch (error) { if (process.platform === "win32" && error.code === "EPERM") return t.skip("Host does not grant file symlink creation"); throw error; }
   assert.notEqual(f.run().status, 0);
+});
+
+test("AR03 narrow contracts and platform types need no concrete adapter dependency", async t => {
+  const f = await fixture(t, {
+    "apps/worker/src/contracts/selection.ts": "export type Selection = {id: string};",
+    "apps/worker/src/platform/env.ts": "export interface Env { readonly name: string }",
+    "apps/worker/src/public-origin.ts": "export const canonical = (value: string) => new URL(value).origin;",
+    "apps/worker/src/runtime-config.ts": 'import { canonical } from "./public-origin.js"; export const value=canonical;',
+    "apps/worker/src/mcp/server.ts": 'import type { Selection } from "../contracts/selection.js"; import type { Env } from "../platform/env.js"; export type Input = [Selection, Env];',
+  });
+  const result = f.run(); assert.equal(result.status, 0, result.stderr);
 });

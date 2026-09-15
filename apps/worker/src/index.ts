@@ -10,7 +10,8 @@ import { PackedJobHistory } from "./job-history-store.js";
 import { ExternalAuditHistory } from "./external-audit.js";
 import { PROTOCOL_CURRENT_VERSION, PROTOCOL_MIN_VERSION } from "@aloneio/runmesh-protocol";
 import { RegistryDO, RegistryDOv2, DEFAULT_RUNNER_ENROLLMENT_TTL_MS, RUNNER_ENROLLMENT_TTL_OPTIONS_MS, type McpClientRecord, type RegistryFeatureHealth, type RunnerExecutionMode, type RunnerPublicInfo, type RunnerRecord, type VerifiedMcpClient } from "./registry.js";
-import { RunnerDO, type WorkerEnv } from "./runner-do.js";
+import { RunnerDO } from "./runner-do.js";
+import type { WorkerEnv } from "./platform/env.js";
 import type { McpAuth } from "./mcp/server.js";
 import type { CodingScope } from "./registry.js";
 import {
