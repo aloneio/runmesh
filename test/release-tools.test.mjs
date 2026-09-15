@@ -14,6 +14,7 @@ import { verifyReleaseAssets } from "../scripts/release-verify.mjs";
 import { signReleaseManifest, verifyReleaseManifest } from "../scripts/release-signature.mjs";
 import { resolveTrustedTaskkillPath } from "../scripts/windows-tools.mjs";
 import { MAX_RELEASE_ASSET_BYTES, readBoundedReleaseFile } from "../scripts/release-io.mjs";
+import { AGGREGATE_JOBS, checkCommand } from "../scripts/ci-contract.mjs";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const execFileAsync = promisify(execFile);
@@ -80,7 +81,8 @@ test("pins manually-dispatched releases to the triggering main commit", async ()
   assert.equal(gitlabWorkflow.includes("cloudflare_deploy:"), false);
   assert.equal(gitlabWorkflow.includes("wrangler deploy"), false);
   assert.equal(gitlabWorkflow.includes("CLOUDFLARE_API_TOKEN"), false);
-  for (const command of ["npm run validate:worker -- --dry-run", "npm run validate:worker -- --dry-run --env production", "npm run test:e2e"]) {
+  for (const id of ["worker_default", "worker_prod", "transport"]) {
+    const command = checkCommand(id);
     assert.equal(gitlabWorkflow.includes(command), true, `GitLab verify must include ${command}`);
   }
 });
@@ -273,8 +275,9 @@ test("stable publication requires the owner and the complete same-SHA CI workflo
   assert.ok(release.includes("github.triggering_actor == github.repository_owner"));
   assert.ok(release.includes("--prerelease=false"));
   assert.ok(ci.includes("workflow_call:"));
-  assert.ok(ci.includes("needs: [verify, native-runner, runner-lts]"));
-  assert.ok(ci.includes("node: [22.23.2, 24.21.0]"));
+  const verifyAll = ci.slice(ci.indexOf("  verify-all:"), ci.indexOf("\n  browser:", ci.indexOf("  verify-all:")));
+  for (const job of AGGREGATE_JOBS) assert.ok(verifyAll.includes(`      - ${job}`), `verify-all must require ${job}`);
+  assert.match(ci, /node:\n\s+- 22\.23\.2\n\s+- 24\.21\.0/u);
   assert.ok(!ci.includes("runner-node20"));
 });
 

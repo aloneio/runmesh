@@ -17,4 +17,11 @@ release/download/
 
 # Local verification evidence and CI package cache are never source.
 /.verification/
+# Machine-generated source identity, never a tracked self-reference.
+/apps/worker/src/generated-provenance.ts*
+
+# GitLab dependency cache, never application source.
 /.npm/
+
+# Sanitized CI observations are output, never build input.
+/ci-results/
