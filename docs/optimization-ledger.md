@@ -2,6 +2,10 @@
 
 This ledger tracks changes made from the 2026-09-11 optimization plan. It records behavior adopted from upstream references without copying their implementation.
 
+## R07 / P09 — opt-in file snapshots and log generation cursors (2026-09-15)
+
+Development slice following `6e1b0bb`: opt-in process-local file content snapshots and append-log generation cursors, bounded caches and fixed expiry, per-page authorization, strict resource-aware output checks and explicit legacy-peer rejection. Numeric live pages remain compatible. Full-log tamper attestation, production acceptance and all-tool pagination are not implied. See [bound cursors](bound-cursors.md) and [Chinese explanation](bound-cursors.zh-CN.md) for limits and compatibility.
+
 ## R07 / P09 — byte-page correctness and output availability (2026-09-15)
 
 Development slice only: files/logs share additive byte metadata, incomplete UTF-8 tails stop non-advancing pagination without losing a later append, unavailable logs are distinct from empty logs, and inline log failures preserve actual Job exits. File reads recheck sampled metadata; short reads and serialized response budgets are bounded. The read catalog now describes optional typed page fields. Existing numeric cursors remain non-snapshot cursors; cross-page binding, full output schemas and other tools' pagination remain open. See [byte pagination](byte-pagination.md) and [Chinese explanation](byte-pagination.zh-CN.md). No production or released Runner update is implied.
