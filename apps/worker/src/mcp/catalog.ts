@@ -1,3 +1,4 @@
+import { ContextPruneOptionsSchema, ContextStorageReportSchema, ContextPruneReportSchema } from "@aloneio/runmesh-protocol";
 import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS, BytePageMetadataSchema, BoundFileCursorSchema, BoundLogCursorSchema, isBoundCursor } from "@aloneio/runmesh-protocol";
 import { z } from "zod";
 
@@ -78,6 +79,10 @@ export const ContextInputSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("search"), workspace_id: WorkspaceIdSchema, query: z.string().min(1).max(512), limit: z.number().int().min(1).max(50).optional(), cursor: CursorSchema }).strict(),
   z.object({ action: z.literal("checkpoint"), workspace_id: WorkspaceIdSchema, context_id: z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/).optional(), turn_id: z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/), expected_revision: z.number().int().min(0).safe().optional(), base_commit: z.string().regex(/^[0-9a-fA-F]{7,64}$/).optional(), goal: z.string().min(1).max(4_096), decisions: z.array(ContextTextSchema).max(64).optional(), evidence: z.array(ContextEvidenceSchema).max(64).optional(), open_risks: z.array(ContextTextSchema).max(64).optional(), missing_checks: z.array(ContextTextSchema).max(64).optional(), next_actions: z.array(ContextTextSchema).max(64).optional() }).strict(),
   z.object({ action: z.literal("rebuild"), workspace_id: WorkspaceIdSchema }).strict(),
+  z.object({ action: z.literal("storage"), workspace_id: WorkspaceIdSchema }).strict(),
+  ContextPruneOptionsSchema.extend({ action: z.literal("prune"), workspace_id: WorkspaceIdSchema }).strict().refine(
+    value => (value.apply === true) === (value.expected_plan_hash !== undefined),
+    "Apply requires expected_plan_hash from a fresh preview; previews must omit it"),
 ]);
 
 const emptySchema = z.object({}).strict();
@@ -97,6 +102,8 @@ export const ReadOutputSchema = SafeOutputSchema.extend({
   cursor_expires_at_ms: z.number().int().nonnegative().safe().optional(),
 });
 
+export const ContextOutputSchema = SafeOutputSchema.extend({ ...ContextStorageReportSchema.partial().shape, ...ContextPruneReportSchema.partial().shape });
+
 export const TOOL_SPECS = {
   runner_list: { scope: "coding:read", description: "List runners this client can read, with safe IDs, display names, and last-known connection state. Credentials and workspace roots are never returned.", inputSchema: emptySchema, annotations: readAnnotations },
   runner_current: { scope: "coding:read", description: "Return this MCP client's sticky runner selection, or null. An unavailable selection never falls back to another runner.", inputSchema: emptySchema, annotations: readAnnotations },
@@ -107,7 +114,7 @@ export const TOOL_SPECS = {
   edit: { scope: "coding:write", description: "Preview or apply a transactional, baseline-checked patch to a writable workspace. The result contains only bounded, workspace-relative change metadata.", inputSchema: EditInputSchema, annotations: destructiveAnnotations },
   shell: { scope: "coding:exec", description: "Run a command through the selected runner's Host shell (Bash on Linux/macOS or PowerShell on Windows). Commands have the runner user's OS permissions and are not sandboxed; the workspace controls initial cwd and policy, not the Host shell root. Use a restricted VM/container and avoid administrator/root runners for untrusted code. background=true returns a persistent job immediately; foreground waits only up to wait_ms. Compatible Runners accept queued Jobs when execution slots are full; queue=false requests immediate admission only. Waiting Jobs return their ID immediately.", inputSchema: ShellInputSchema, annotations: execAnnotations },
   job: { description: "List, inspect, or read bounded logs for persistent jobs. consistency=append opts log reads into generation-bound cursors that permit append; use resume_cursor for later explicit refresh. Rotation, truncation or expiry requires a fresh read, not command re-execution. cancel and input require coding:exec plus workspace job-control permission. Pass workspace_id with get/logs/cancel/input to operate without cloud Job history (Runner 0.1.1+). Job metadata never includes command, cwd, PID, roots, or secrets.", inputSchema: JobInputSchema, annotations: mixedAnnotations },
-  context: { description: "Read or explicitly checkpoint workspace handoff context stored locally on the selected Runner. bootstrap/read/search are read-only; checkpoint/rebuild require coding:write plus workspace edit permission. Omit context_id to create a checkpoint; use the returned ID for updates. New Runners reject unknown supplied IDs. Raw chat, system prompts, host paths, and hidden reasoning are not captured.", inputSchema: ContextInputSchema, annotations: mixedAnnotations },
+  context: { description: "Read or explicitly checkpoint workspace handoff context stored locally on the selected Runner. bootstrap/read/search are read-only; checkpoint/rebuild require coding:write plus workspace edit permission. Omit context_id to create a checkpoint; use the returned ID for updates. New Runners reject unknown supplied IDs. Raw chat, system prompts, host paths, and hidden reasoning are not captured. storage reads bounded local usage without writes; prune requires coding:write, keep_days and keep_revisions, defaults to preview, and apply=true requires expected_plan_hash from that preview. Pruning only removes superseded revisions, never the latest; do not automatically apply a preview.", inputSchema: ContextInputSchema, outputSchema: ContextOutputSchema, annotations: mixedAnnotations },
 } as const satisfies Record<string, ToolSpec>;
 
 export type ToolName = keyof typeof TOOL_SPECS;

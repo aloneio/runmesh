@@ -1,3 +1,4 @@
+import { safeContextStorageReport } from "@aloneio/runmesh-protocol";
 import { MCP_RPC_ACTIONS } from "./actions.js";
 import { projectBytePageMetadata, boundPageResponseProblem } from "./byte-pages.js";
 import { MCP_CATALOG_METADATA } from "./catalog-contract.js";
@@ -227,7 +228,15 @@ async function contextTool(env: McpRequestEnv, clientId: string, params: z.outpu
   const requirement = rpcOperation(method)!;
   const requiredScope = requirement.scope;
   if (!scopes.includes(requiredScope)) return failure("insufficient_scope", `This context action requires ${requiredScope}.`, `Authorize the MCP client again with ${requiredScope}.`);
-  return activeRunnerTool(env, clientId, method, params, requirement.permission, "context");
+  const result = await activeRunnerTool(env, clientId, method, params, requirement.permission, "context");
+  if ((params.action === "storage" || params.action === "prune") && isToolSuccessResult(result)) {
+    const report = safeContextStorageReport(result.structuredContent);
+    const valid = report !== undefined && report.workspace_id === params.workspace_id && (params.action === "storage"
+      ? report.storage_schema === 1
+      : report.retention_schema === 1 && report.applied === (params.apply === true) && report.keep_days === params.keep_days && report.keep_revisions === params.keep_revisions && report.max_delete === (params.max_delete ?? 128));
+    if (!valid) return failure("context_result_invalid", "The Runner did not provide a consistent Context storage receipt.", "Inspect local Context storage before another write; do not infer an empty store, completed cleanup or rollback from this response.", params.action === "prune" && params.apply === true ? "unknown" : "not_started");
+  }
+  return result;
 }
 
 function isToolSuccessResult(value: unknown): value is { readonly structuredContent: Record<string, unknown> } {
@@ -354,6 +363,7 @@ export function safeReadResult(value: unknown): Record<string, unknown> {
 
 export function safeContextResult(value: unknown): Record<string, unknown> {
   if (!isRecord(value)) return {};
+  if (value.storage_schema !== undefined || value.retention_schema !== undefined) return safeContextStorageReport(value) ?? {};
   const output: Record<string, unknown> = {};
   copySafeWorkspaceId(value, output);
   if (value.state === "missing" || value.state === "ready") output.state = value.state;
@@ -1109,6 +1119,7 @@ type ToolFailure = { readonly ok: false; readonly error: { readonly code: string
 type ToolCall = ToolSuccess | ToolFailure;
 
 const SAFE_RUNNER_ERROR_CODES = new Set([
+  "context_storage_full", "context_scan_budget", "context_plan_changed", "context_prune_partial", "context_result_invalid",
   "log_unavailable", "file_changed", "log_changed", "read_budget_exhausted", "cursor_expired", "cursor_mismatch", "snapshot_too_large",
   "internal_error", "shell_unavailable", "control_plane_unavailable", "registry_unavailable", "runner_upgrade_required", "baseline_changed", "queue_full", "busy", "expected_hash_mismatch", "file_too_large", "git_failed", "git_output_too_large", "git_timeout", "git_unavailable",
   "context_index_missing", "context_index_stale", "context_index_corrupt", "context_index_too_large", "context_record_corrupt", "context_record_missing", "context_record_too_large", "context_rebuild_budget", "context_revision_conflict", "context_storage_unsafe", "context_turn_conflict",
@@ -1338,6 +1349,10 @@ function failureWithDetails(code: string, message: string, hint: string, details
 function failWithDetails(code: string, message: string, hint: string, details: unknown, state?: RpcOperationState): ToolFailure { return { ok: false, error: { code, message, hint, details, ...failureMetadata(code, state) } }; }
 function fail(code: string, message: string, hint: string, state?: RpcOperationState): ToolFailure { return { ok: false, error: { code, message, hint, ...failureMetadata(code, state) } }; }
 function hintFor(code: string, state?: RpcOperationState): string {
+  if (code === "context_storage_full") return "Inspect context storage and review retention for old revisions. A context-count limit requires separately reviewed archival of complete contexts; existing records were not automatically deleted.";
+  if (code === "context_plan_changed") return "Review a fresh context retention preview; do not reuse a stale plan hash.";
+  if (code === "context_prune_partial") return "Some old revisions may have been removed. Inspect storage and request a fresh preview; no batch rollback or automatic retry occurred.";
+  if (code === "context_scan_budget") return "Context inspection exceeded its local budget. Preserve the records for operator review; do not assume the inventory is complete.";
   if (code === "cursor_expired" || code === "cursor_mismatch") return "Start a fresh bounded read for this resource and current policy; do not silently reuse the old offset or re-run a command.";
   if (code === "snapshot_too_large") return "Snapshots are limited to 1 MiB. Explicitly choose live pages for a larger file; no snapshot consistency is then promised.";
   if (state !== undefined && state !== "not_started" && code !== "context_index_stale") return "Inspect the original Job receipt or workspace state; do not repeat a mutation, input or cancellation while its outcome is unresolved.";
