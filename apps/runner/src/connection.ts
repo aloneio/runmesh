@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { QueueGrantSchema } from "@aloneio/runmesh-protocol";
+import { QueueGrantSchema, RPC_OPERATION_METHODS } from "@aloneio/runmesh-protocol";
 import { parseRunnerJobHistory, type RunnerJobHistory } from "./job-history.js";
 import {
   decodeWireFrame,
@@ -677,7 +677,7 @@ export function discoverCapabilities(maxConcurrentJobs = 1): CapabilityMetadata 
     pty: false,
     network_access: true,
     max_concurrent_jobs: maxConcurrentJobs,
-    supported_rpc_methods: ["echo", "runner.info", "workspace.list", "env.info", "fs.read", "fs.stat", "fs.list", "fs.search", "fs.preview_patch", "fs.apply_patch", "git.status", "git.diff", "git.log", "git.show", "git.blame", "exec.start", "exec.run", "job.list", "job.get", "job.logs", "job.cancel", "job.input", "context.bootstrap", "context.read", "context.search", "context.checkpoint", "context.rebuild"],
+    supported_rpc_methods: ["echo", "runner.info", ...RPC_OPERATION_METHODS],
     labels: { runtime: "node" },
   };
 }

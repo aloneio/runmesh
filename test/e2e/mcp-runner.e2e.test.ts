@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolveTrustedWindowsTool, trustedWindowsRoot } from "../../apps/runner/src/windows-tools.js";
+import { catalogContract, MCP_CATALOG_SUMMARY } from "../../apps/worker/src/mcp/catalog-contract.js";
 
 type ToolResult = {
   readonly content?: { readonly type: string; readonly text: string }[];
@@ -192,8 +193,19 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
       body: JSON.stringify({ jsonrpc: "2.0", id: requestId++, method: "tools/list", params: {} }),
     });
-    const listed = await readMcp(response) as { result?: { tools?: Array<{ name?: string }> } };
+    const listed = await readMcp(response) as { result?: { tools?: Array<{ name?: string; description?: string; inputSchema?: unknown; outputSchema?: unknown; annotations?: unknown; _meta?: Record<string,unknown> }> } };
     expect(listed.result?.tools?.map((tool) => tool.name).sort()).toEqual(["context", "edit", "inspect", "job", "read", "runner_current", "runner_list", "runner_select", "shell", "workspace_list"].sort());
+    const expected = catalogContract();
+    for (const advertised of listed.result!.tools!) {
+      const wanted = expected.tools.find(tool => tool.name === advertised.name)!;
+      expect(advertised.description).toBe(wanted.description);
+      expect(advertised.inputSchema).toEqual(wanted.inputSchema);
+      expect(advertised.outputSchema).toEqual(wanted.outputSchema);
+      expect(advertised.annotations).toEqual(wanted.annotations);
+      expect(advertised._meta?.["io.runmesh/catalog"]).toEqual({schema_version:1,sha256:MCP_CATALOG_SUMMARY.sha256});
+    }
+    const health = await (await fetch(`${workerUrl}/health`)).json() as {mcp_catalog:unknown};
+    expect(health.mcp_catalog).toEqual(MCP_CATALOG_SUMMARY);
     const legacy = await mcpMessage("fs_read", { workspace_id: "workspace-1", path: "note.txt" });
     expect(legacy.error?.code).toBe(-32602);
   });
@@ -459,6 +471,11 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(diagnostic.isError, JSON.stringify(diagnostic)).not.toBe(true);
     const checks = diagnostic.structuredContent?.checks as Array<{name:string;state:string}>;
     expect(checks.find((c) => c.name === "runner_rpc")?.state).toBe("pass");
+    expect(diagnostic.structuredContent?.capabilities).toMatchObject({report_state:"reported",contract_match:true,host_catalog_state:"not_observed",worker_catalog:MCP_CATALOG_SUMMARY,runner:{features:{job_queue:1,context_record:2}}});
+    const readonlyDiagnostic = await mcpTool("inspect",{action:"diagnostics",workspace_id:"workspace-1"},clientB);
+    const capability = readonlyDiagnostic.structuredContent?.capabilities as {actions:Array<{method:string;permission_snapshot:string;runner_support:string}>};
+    expect(capability.actions.find(action=>action.method==="context.checkpoint")).toMatchObject({runner_support:"supported",permission_snapshot:"denied"});
+    expect(JSON.stringify(readonlyDiagnostic)).not.toContain(workspace);
     const preview = await mcpTool("edit", {workspace_id:"workspace-1",preview:true,patch:"*** Begin Patch\n*** Add File: preview-only.txt\n+preview\n*** End Patch"});
     expect(preview.isError, JSON.stringify(preview)).not.toBe(true);
     expect(existsSync(join(workspace,"preview-only.txt"))).toBe(false);

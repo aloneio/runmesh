@@ -3,10 +3,45 @@ import { ExternalAuditHistory } from "../src/external-audit.js";
 import { env, runInDurableObject } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
 import worker from "../src/index.js";
-import { runnerPolicyChecksum } from "@aloneio/runmesh-protocol";
+import { runnerPolicyChecksum, RPC_OPERATION_METHODS, RPC_OPERATION_CONTRACT } from "@aloneio/runmesh-protocol";
 import { randomBase64Url, sha256Hex, internalHeaders } from "../src/security.js";
 
 const full = { read: true, edit: true, shell: true, job_control: true };
+
+it("R01 diagnoses implementation capabilities with one existing RPC and no Job or audit history writes", async () => {
+  const f = await fixture(() => Response.json({ type: "rpc.response", result: {
+    hostname: "private-machine", workspaces: [{root_path:"/private/workspace"}], tools: { token: "private-token" },
+    shell: {available:true,kind:"bash",version:"do-not-publish"},
+    runtime_capabilities: { schema_version: 1, runner_version: "0.1.3", operation_contract_sha256: RPC_OPERATION_CONTRACT.sha256,
+      supported_rpc_methods: [...RPC_OPERATION_METHODS], features: {job_queue:1,job_history:1,context_record:2}, max_concurrent_jobs:1 },
+  } }));
+  const result = (await f.call("inspect", {action:"diagnostics",workspace_id:"w"})).body.result;
+  expect(result.isError).not.toBe(true);
+  expect(result.structuredContent.capabilities).toMatchObject({report_state:"reported",contract_match:true,host_catalog_state:"not_observed",runner:{runner_version:"0.1.3"},worker_catalog:{tool_count:10,action_count:24}});
+  expect(f.forwarded.map(call => call.method)).toEqual(["env.info"]);
+  for (const secret of ["private-machine", "/private/workspace", "private-token", "do-not-publish"]) expect(JSON.stringify(result)).not.toContain(secret);
+  await runInDurableObject(f.stub, (_instance, state) => {
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM jobs").one().n).toBe(0);
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM mcp_calls").one().n).toBe(0);
+  });
+});
+
+it("R01 keeps an old Runner reachable while reporting its missing capabilities as unknown", async () => {
+  const f = await fixture(() => Response.json({type:"rpc.response",result:{shell:{available:true,kind:"bash"}}}));
+  const result = (await f.call("inspect",{action:"diagnostics",workspace_id:"w"})).body.result;
+  expect(result.isError).not.toBe(true);
+  expect(result.structuredContent.capabilities).toMatchObject({report_state:"not_reported",runner:null,contract_match:null});
+  expect(result.structuredContent.checks.find((check: any) => check.name === "runner_rpc").state).toBe("pass");
+  expect(result.structuredContent.capabilities.actions.every((action: any) => action.runner_support === "unknown")).toBe(true);
+});
+
+it("R01 malformed capability reports do not leak peer fields or fabricate a complete inventory", async () => {
+  const f = await fixture(() => Response.json({type:"rpc.response",result:{runtime_capabilities:{schema_version:1,runner_version:"999.1.0",secret:"private-secret"}}}));
+  const result = (await f.call("inspect",{action:"diagnostics",workspace_id:"w"})).body.result;
+  expect(result.isError).not.toBe(true);
+  expect(result.structuredContent.capabilities).toMatchObject({report_state:"invalid",runner:null});
+  expect(JSON.stringify(result)).not.toContain("private-secret");
+});
 async function fixture(responder?: (request: Record<string, any>) => Response | Promise<Response>) {
   const id = env.REGISTRY.idFromName(`no-record-${crypto.randomUUID()}`), stub = env.REGISTRY.get(id);
   const secret = randomBase64Url(), verifier = await sha256Hex(secret);

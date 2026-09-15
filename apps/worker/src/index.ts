@@ -1,3 +1,4 @@
+import { MCP_CATALOG_SUMMARY } from "./mcp/catalog-contract.js";
 import { resolveRuntimeConfiguration } from "./runtime-config.js";
 import { localizeHtmlResponse } from "./ui-locale.js";
 import { ProtectedRpcMethodSchema } from "@aloneio/runmesh-protocol";
@@ -101,6 +102,7 @@ async function handleRequest(request: Request, env: WorkerEnv, _ctx: ExecutionCo
       ok: true,
       service: "runmesh-agent-control-plane",
       worker_version: PRODUCT_VERSION,
+      mcp_catalog: MCP_CATALOG_SUMMARY,
       runtime_configuration: { schema: "minimal-v1", required_secrets: ["INTERNAL_CONTROL_SECRET", "RUNNER_TOKEN_PEPPER"], manual_public_origin_required: false },
       ui: { locale_rendering: "server-v1", refresh: "explicit" },
       job_queue: { protocol: 1, default_capacity: 32, default_per_client: 8, requires_compatible_runner: true },

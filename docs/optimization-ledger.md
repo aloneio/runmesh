@@ -2,6 +2,12 @@
 
 This ledger tracks changes made from the 2026-09-11 optimization plan. It records behavior adopted from upstream references without copying their implementation.
 
+## R01 / R07 — capability and operation-contract alignment (2026-09-15)
+
+Development implementation slice, not production acceptance: the 25 protected RPC operations share one immutable definition across wire method validation, Registry requirements, Runner advertisement and read-completion generation checks. Twenty-four Runner action bindings and a canonical catalog fingerprint are shared with on-demand diagnostics. The public surface remains 10 tools. Missing old-peer reports are unknown; neither implementation claims nor directory metadata authorize execution.
+
+Tests cover real tools/list schema comparison, malformed/absent reports, independent scopes, post-read revocation and no extra persistence. See [capability contracts](capability-contracts.md) and [Chinese explanation](capability-contracts.zh-CN.md). Production provenance, host-side refresh, complete output schemas, capability switches and pagination remain open. Older implemented labels below do not establish five-layer completion.
+
 > Status correction (2026-09-15): the dated entries below are historical implementation notes, not complete acceptance. The optimization review found concrete R02/R03/R04/R05 counterexamples despite earlier CI success. See [first correctness repair slice](review-correctness-20260915.md) for the regression-backed corrections, record compatibility, installed-version limits and remaining R01/R06 verification. Current source changes are not automatically present in an older signed Runner archive.
 
 ## P01 — structured failure semantics
