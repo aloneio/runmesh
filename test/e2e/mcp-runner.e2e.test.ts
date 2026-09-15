@@ -1,3 +1,4 @@
+import { BUILD_PROVENANCE } from "../../apps/worker/src/generated-provenance.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -146,6 +147,19 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     await stop(runner); await stop(worker);
     if (root) await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   }, 30_000);
+
+  it("R01 actual local Worker exposes its compiled source without a deployment tag", async () => {
+    const response = await fetch(`${workerUrl}/health`, { cache: "no-store" });
+    expect(response.headers.get("cache-control")).toContain("no-store");
+    const health = await response.json() as any;
+    const compiled: { state: string; commit: string | null; tree: string | null; branch: string | null } = BUILD_PROVENANCE;
+    if (compiled.state === "clean") {
+      expect(health.deployment).toMatchObject({ state: "identified", source: "git_build", commit: compiled.commit, tree: compiled.tree, branch: compiled.branch });
+    } else {
+      expect(health.deployment).toMatchObject({ state: compiled.state === "conflict" ? "conflict" : "unavailable", commit: null, branch: null });
+    }
+    console.log(JSON.stringify({ scenario: "actual_worker_build_provenance", state: health.deployment.state, commit: health.deployment.commit, tree: health.deployment.tree }));
+  });
 
   it("enrolls from the browser-issued one-time code, saves an isolated profile, starts, and performs a real read", async () => {
     expect(enrollmentCode).toMatch(/^[A-Za-z0-9_-]{43}$/);
