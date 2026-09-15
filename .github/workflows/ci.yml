@@ -36,6 +36,7 @@ jobs:
       - run: npm run check:format
       - run: npm run check:architecture
       - run: npm run check:verification
+      - run: npm run check:promotion-policy
       - run: git diff --check
       - run: npm run typecheck
       - run: npm run test:unit

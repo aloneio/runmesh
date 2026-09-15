@@ -36,7 +36,7 @@
     "check:architecture": "node ./scripts/check-architecture.mjs",
     "check:ci-parity": "node ./scripts/check-ci-parity.mjs",
     "check:runbooks": "node ./scripts/check-runbooks.mjs",
-    "test:release-tools": "node --test ./test/release-tools.test.mjs ./test/security-config.test.mjs ./test/installer-arguments.test.mjs ./test/deployment-policy.test.mjs ./test/runtime-config.test.mjs ./test/installer-preflight.test.mjs ./test/worker-validation.test.mjs ./test/architecture.test.mjs ./test/verification-tools.test.mjs ./test/package-verification.test.mjs",
+    "test:release-tools": "node --test ./test/release-tools.test.mjs ./test/security-config.test.mjs ./test/installer-arguments.test.mjs ./test/deployment-policy.test.mjs ./test/runtime-config.test.mjs ./test/installer-preflight.test.mjs ./test/worker-validation.test.mjs ./test/architecture.test.mjs ./test/verification-tools.test.mjs ./test/package-verification.test.mjs ./test/main-promotion-policy.test.mjs",
     "check:docs": "node ./scripts/check-docs.mjs && node scripts/check-project-facts.mjs",
     "deploy:worker": "node ./scripts/deploy-worker.mjs",
     "setup:secrets": "node ./scripts/setup-secrets.mjs",
@@ -44,7 +44,8 @@
     "test:contracts": "node node_modules/vitest/vitest.mjs run --config vitest.contracts.config.mjs",
     "check:verification": "node scripts/check-verification-plan.mjs",
     "generate:facts": "node scripts/check-project-facts.mjs --write",
-    "test:package:e2e": "node scripts/run-package-e2e.mjs"
+    "test:package:e2e": "node scripts/run-package-e2e.mjs",
+    "check:promotion-policy": "node scripts/check-main-policy.mjs"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.22.0",
