@@ -15,7 +15,7 @@ export interface PolicyPorts {
   getMcpClient(clientId: string): McpClientRecord | undefined;
   getMcpClientActiveRunner(clientId: string): McpClientActiveRunner | undefined;
   getRunner(runnerId: string): RunnerRecord | undefined;
-  revalidateMcpClient(clientId: unknown, secretVersion: unknown): VerifiedMcpClient | undefined;
+  revalidateMcpClient(clientId: unknown, secretVersion: unknown, includeJobRecording?: boolean): VerifiedMcpClient | undefined;
   runnerAccess(runnerId: string, nowMs?: number): { allowed: boolean; status: ValidityStatus | "missing" };
   runnerRow(runnerId: string): RunnerRow | undefined;
   sessionIsCurrent(runnerId: string, epoch: number, credentialVersion: number, requireOnline: boolean, lifecycleId: string, sessionId: string): boolean;

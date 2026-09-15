@@ -455,6 +455,9 @@ export class RegistryDO {
       const client = clients.get(job.created_by_client_id);
       return client !== undefined && client.record_jobs !== false && job.created_at_ms >= (client.record_jobs_since_ms ?? 0);
     });
+    // Empty/ineligible updates are not deletions. Retention has its own
+    // bounded cleanup path; do not open D1 just to merge nothing.
+    if (eligible.length === 0) return Response.json({ history_status: "unchanged" });
     try {
       if (this.packedJobs === undefined) throw new JobHistoryUnavailableError();
       const saved = await this.packedJobs.merge(runnerId,lifecycle,eligible,settings);
@@ -476,9 +479,9 @@ export class RegistryDO {
 
   public verifyMcpClient(secretVerifier: string, nowMs: number): VerifiedMcpClient | undefined { return this.auth.verifyMcpClient(secretVerifier, nowMs); }
 
-  public revalidateMcpClient(clientId: unknown, secretVersion: unknown): VerifiedMcpClient | undefined { return this.auth.revalidateMcpClient(clientId, secretVersion); }
+  public revalidateMcpClient(clientId: unknown, secretVersion: unknown, includeJobRecording = false): VerifiedMcpClient | undefined { return this.auth.revalidateMcpClient(clientId, secretVersion, includeJobRecording); }
 
-  public authorizeMcpRpc(input: Record<string, unknown>): { ok: true } | { ok: false; code: string } { return this.policy.authorizeMcpRpc(input); }
+  public authorizeMcpRpc(input: Record<string, unknown>): { ok: true; record_history?: boolean } | { ok: false; code: string } { return this.policy.authorizeMcpRpc(input); }
 
   public effectiveWorkspaceList(clientId: string, runnerId: string): { runner_id: string; revision: number; checksum: string; workspaces: Array<{ workspace_id: string; enabled: boolean; permissions: PermissionSet }> } | undefined { return this.policy.effectiveWorkspaceList(clientId, runnerId); }
 
@@ -707,7 +710,7 @@ export class RegistryDO {
         return new Response("stale credentials", { status: 409 });
       }
       await this.scheduleMaintenanceAlarm(now);
-      return Response.json({ epoch, lifecycle_id: row.lifecycle_id, desired_policy: policy, ...(this.env.RUNMESH_JOB_HISTORY_BACKEND === "d1" && metadata.data.capabilities.labels.job_history_protocol === "1" ? { job_history: this.jobHistorySettings(runnerId,row.lifecycle_id) } : {}) });
+      return Response.json({ epoch, lifecycle_id: row.lifecycle_id, desired_policy: policy, ...(this.env.RUNMESH_JOB_HISTORY_BACKEND === "d1" && metadata.data.capabilities.labels.job_history_protocol === "1" ? { job_history: this.jobHistorySettings(runnerId,row.lifecycle_id), ...(metadata.data.capabilities.labels.job_reporting_protocol === "2" ? {job_reporting: 2} : {}) } : {}) });
     }
     if (request.method === "POST" && action === "heartbeat") {
       const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const nowMs = integerField(input, "now_ms"); const identity = parseTransportIdentity(input);

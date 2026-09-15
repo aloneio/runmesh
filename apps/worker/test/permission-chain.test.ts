@@ -89,3 +89,19 @@ it.each(["{}", "null", "[]", '{"read":true,"edit":"true","shell":true,"job_contr
     expect(instance.effectivePermissions("c", "r", "w")).toEqual({ read: false, edit: false, shell: false, job_control: false });
   });
 });
+
+it("trusted launch reporting comes from current recording preference, not an input claim", async () => {
+  const f = await fixture();
+  await runInDurableObject(f.stub, instance => {
+    const ready = instance.getPolicyReadiness("r"); expect(ready.ok).toBe(true); if (!ready.ok) throw new Error("missing policy");
+    const input = { client_id: "c", secret_version: 1, runner_id: "r", workspace_id: "w", method: "exec.start",
+      policy_revision: ready.applied_revision, policy_checksum: ready.active_checksum, include_job_recording: true, record_history: true };
+    instance.setJobRecording("c", false, Date.now());
+    expect(instance.authorizeMcpRpc(input)).toEqual({ ok: true, record_history: false });
+    instance.setJobRecording("c", true, Date.now());
+    expect(instance.authorizeMcpRpc({ ...input, record_history: false })).toEqual({ ok: true, record_history: true });
+    expect(instance.authorizeMcpRpc({ ...input, include_job_recording: false })).toEqual({ ok: true });
+    instance.revokeMcpClient("c", Date.now());
+    expect(instance.authorizeMcpRpc(input)).toMatchObject({ ok: false });
+  });
+});

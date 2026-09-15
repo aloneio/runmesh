@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { HistoryUploadScheduler, type HistoryUploadClock } from "./history-upload.js";
 import { QueueGrantSchema, RPC_OPERATION_METHODS } from "@aloneio/runmesh-protocol";
 import { parseRunnerJobHistory, type RunnerJobHistory } from "./job-history.js";
 import {
@@ -54,6 +55,8 @@ export interface RunnerConnectionOptions {
   readonly heartbeatMs?: number;
   readonly rpcTimeoutMs?: number;
   readonly syncMs?: number;
+  /** Inject a finite scheduler clock for transport tests; not a deployment setting. */
+  readonly historyClock?: HistoryUploadClock;
   readonly random?: () => number;
   readonly sleep?: (delayMs: number) => Promise<void>;
   readonly onStateChange?: (state: "connecting" | "online" | "offline") => void;
@@ -63,13 +66,16 @@ export interface RunnerConnectionOptions {
 
 export class RunnerConnection {
   private queueNegotiated = false;
+  private reportingNegotiated = false;
+  private readonly historyUploads: HistoryUploadScheduler;
+  private demandSnapshot: { revision: number; socket: WebSocket; jobs: RunnerSync["jobs"]; workspaces: RunnerSync["workspaces"]; snapshot: string } | undefined;
   private readonly config: RunnerConfig;
   private readonly metadata: RunnerMetadata;
   private readonly heartbeatMs: number;
   private readonly rpcTimeoutMs: number;
   private readonly syncMs: number;
   private jobHistory: RunnerJobHistory | undefined;
-  private historyPending: {requestId:string;snapshot:string;socket:WebSocket} | undefined;
+  private historyPending: {requestId:string;snapshot:string;socket:WebSocket;revision?:number} | undefined;
   private cleanupTimer: ReturnType<typeof setInterval> | undefined;
   private cleanupBusy = false;
   private readonly random: () => number;
@@ -138,6 +144,10 @@ export class RunnerConnection {
     this.onStateChange = options.onStateChange ?? (() => undefined);
     this.runtime = options.runtime ?? new RunnerRuntime({ config: this.config, ...(this.config.stateDir === undefined ? {} : { stateDir: this.config.stateDir }), onJobEvent: (event) => this.forwardJobEvent(event) });
     this.policyStore = options.policyStore ?? new PolicyStore(this.config.stateDir);
+    this.historyUploads = new HistoryUploadScheduler(async revision => {
+      const socket = this.socket;
+      if (socket !== undefined) await this.sendDemandSync(socket, revision);
+    }, options.historyClock);
     const executionMode = options.executionMode;
     // Metadata is echoed through the authenticated control plane and later
     // shown in administrator diagnostics.  Treat an injected identity as
@@ -157,7 +167,7 @@ export class RunnerConnection {
       ...(executionMode === undefined ? {} : { execution_mode: executionMode }),
       ...(serviceIdentity === undefined ? {} : { service_identity: serviceIdentity }),
       ...(executionMode === undefined ? {} : { privilege_state: processPrivilegeState(executionMode, serviceIdentity) }),
-      capabilities: { ...capabilities, labels: { ...capabilities.labels, job_history_protocol: "1", job_queue_protocol: "1" } },
+      capabilities: { ...capabilities, labels: { ...capabilities.labels, job_history_protocol: "1", job_queue_protocol: "1", job_reporting_protocol: "2" } },
     };
   }
 
@@ -216,6 +226,7 @@ export class RunnerConnection {
     this.lifecycleGeneration += 1;
     this.stopped = true;
     this.queueNegotiated = false;
+    this.historyUploads.stop(); this.reportingNegotiated = false; this.demandSnapshot = undefined;
     this.cancelReconnectSleep?.();
     if (this.cleanupTimer !== undefined) clearInterval(this.cleanupTimer);
     if (this.heartbeatTimer !== undefined) clearInterval(this.heartbeatTimer);
@@ -234,7 +245,7 @@ export class RunnerConnection {
     const socket=this.socket;
     if (!this.queueNegotiated || !parsed.success || this.stopped || socket===undefined || socket!==this.welcomedSocket || socket.readyState!==WebSocket.OPEN) return false;
     const grant=parsed.data;
-    const canonical=JSON.stringify({workspace_id:input.workspace_id,command:input.command,args:input.args??null,shell:input.shell,cwd:input.cwd??".",request_id:input.request_id??null});
+    const canonical=JSON.stringify({workspace_id:input.workspace_id,command:input.command,args:input.args??null,shell:input.shell,cwd:input.cwd??".",request_id:input.request_id??null,...(typeof input.record_history === "boolean" ? {record_history:input.record_history} : {})});
     if (grant.payload.client_id!==clientId || grant.payload.runner_id!==this.config.runnerId || grant.payload.workspace_id!==input.workspace_id
       || grant.payload.policy_revision!==this.appliedPolicyRevision || grant.payload.expires_at_ms<=Date.now()
       || grant.payload.launch_digest!==createHash("sha256").update(canonical).digest("hex")) return false;
@@ -246,8 +257,10 @@ export class RunnerConnection {
         try {socket.send(encodeWireFrame({type:"runner.queue_check",protocol_version:PROTOCOL_CURRENT_VERSION,request_id:requestId,runner_id:this.config.runnerId,job_id:jobId,grant}));}
         catch(error){clearTimeout(timer);this.pending.delete(requestId);reject(error);}
       });
-      return this.socket===socket && this.welcomedSocket===socket && !this.stopped && socket.readyState===WebSocket.OPEN
+      const allowed = this.socket===socket && this.welcomedSocket===socket && !this.stopped && socket.readyState===WebSocket.OPEN
         && typeof result==="object" && result!==null && !Array.isArray(result) && "authorized" in result && result.authorized===true;
+      if (allowed && this.reportingNegotiated && (!("record_history" in result) || result.record_history !== true)) input.record_history = false;
+      return allowed;
     } catch { return false; }
   }
 
@@ -352,6 +365,8 @@ export class RunnerConnection {
           if (rawHistory !== undefined && history === undefined) { socket.close(1008,"invalid history settings"); return; }
           const priorHistory = this.jobHistory;
           this.jobHistory = history;
+          this.reportingNegotiated = message.extensions?.runmesh_job_reporting === 2 && history !== undefined;
+          this.historyUploads.stop(); this.demandSnapshot = undefined;
           this.historyPending = undefined;
           if (this.cleanupTimer !== undefined) { clearInterval(this.cleanupTimer); this.cleanupTimer = undefined; }
           if (history !== undefined || priorHistory !== undefined) this.runtime.configureJobRetention(history?.local_retention_days ?? 0);
@@ -371,12 +386,14 @@ export class RunnerConnection {
           this.onStateChange("online");
           this.lastSyncSnapshot = undefined;
           if (message.desired_policy !== undefined) this.queueDesiredPolicy(socket, message.desired_policy);
-          void this.sendSync(socket).catch(() => undefined);
+          if (this.reportingNegotiated && history !== undefined) {
+            if (history.mode !== "off") this.historyUploads.start(history.interval_seconds * 1000, history.mode === "immediate");
+          } else void this.sendSync(socket).catch(() => undefined);
           this.heartbeatTimer = setInterval(() => {
             if (this.socket !== socket || this.stopped) return;
             try { this.sendHeartbeat(socket); } catch { /* close handler drives reconnect */ }
           }, this.heartbeatMs);
-          if (this.jobHistory?.mode !== "off") this.syncTimer = setInterval(() => {
+          if (!this.reportingNegotiated && this.jobHistory?.mode !== "off") this.syncTimer = setInterval(() => {
             if (this.socket !== socket || this.stopped) return;
             void this.sendSync(socket).catch(() => undefined);
           }, this.jobHistory === undefined ? this.syncMs : this.jobHistory.interval_seconds * 1000);
@@ -403,7 +420,13 @@ export class RunnerConnection {
         if (message.type === "rpc.response" && this.historyPending?.socket === socket && message.request_id === this.historyPending.requestId) {
           const result = message.result;
           if (typeof result === "object" && result !== null && !Array.isArray(result)
-            && ["recorded","unchanged","disabled"].includes(String(result.history_status))) this.lastSyncSnapshot = this.historyPending.snapshot;
+            && ["recorded","unchanged","disabled"].includes(String(result.history_status))) {
+            this.lastSyncSnapshot = this.historyPending.snapshot;
+            if (this.historyPending.revision !== undefined) {
+              if (result.history_status === "disabled") this.historyUploads.stop();
+              else this.historyUploads.acknowledge(this.historyPending.revision);
+            }
+          }
           this.historyPending = undefined;
           return;
         }
@@ -426,6 +449,7 @@ export class RunnerConnection {
         // the newer session's heartbeat/sync timers from that stale event.
         const currentSocket = this.socket === socket;
         if (currentSocket) {
+          this.historyUploads.stop(); this.reportingNegotiated = false; this.demandSnapshot = undefined;
           if (this.heartbeatTimer !== undefined) clearInterval(this.heartbeatTimer);
           if (this.syncTimer !== undefined) clearInterval(this.syncTimer);
           this.heartbeatTimer = undefined;
@@ -554,12 +578,16 @@ export class RunnerConnection {
         protocol_version: PROTOCOL_CURRENT_VERSION,
         runner_id: this.config.runnerId,
         sent_at_ms: Date.now(),
-        active_job_ids: this.runtime.jobs.list().filter((job) => ["queued", "running", "cancelling"].includes(job.status)).map((job) => job.job_id),
+        active_job_ids: this.runtime.jobs.list().filter((job) => job.record_history !== false && ["queued", "running", "cancelling"].includes(job.status)).map((job) => job.job_id),
       }));
     } catch { /* close handler drives reconnect */ }
   }
 
   private sendSync(socket: WebSocket): Promise<void> {
+    if (this.reportingNegotiated) {
+      if (socket === this.socket && socket === this.welcomedSocket && !this.stopped) this.historyUploads.changed();
+      return Promise.resolve();
+    }
     // Never let a stalled snapshot from a dead socket block the first sync on
     // a replacement connection. The old promise may still settle eventually,
     // but its sendSyncNow identity checks make it a no-op for the new session.
@@ -572,6 +600,31 @@ export class RunnerConnection {
     // returning the failure to the caller for its normal best-effort handling.
     this.syncQueue = next.catch(() => undefined);
     return next;
+  }
+
+  /** Reuse an unacknowledged payload rather than rescanning local records
+   * on every retry. A newer change has a different scheduler generation. */
+  private async sendDemandSync(socket: WebSocket, revision: number): Promise<void> {
+    const current = (): boolean => this.reportingNegotiated && socket === this.socket && socket === this.welcomedSocket && !this.stopped && socket.readyState === WebSocket.OPEN;
+    if (!current() || this.jobHistory?.mode === "off") return;
+    let captured = this.demandSnapshot;
+    if (captured?.socket !== socket || captured.revision !== revision) {
+      const jobs = await this.runtime.syncJobs(500);
+      if (!current()) return;
+      const workspaces = this.runtime.syncWorkspaceMetadata();
+      captured = { revision, socket, jobs, workspaces, snapshot: JSON.stringify({ workspaces, jobs }) };
+      this.demandSnapshot = captured;
+      this.historyUploads.setRecoveryPending(this.runtime.needsHistoryReconciliation?.() === true);
+    }
+    if (captured.jobs.length === 0 || captured.snapshot === this.lastSyncSnapshot) {
+      this.historyUploads.acknowledge(revision); return;
+    }
+    const sync: RunnerSync = { type: "runner.sync", protocol_version: PROTOCOL_CURRENT_VERSION, runner_id: this.config.runnerId,
+      sync_sequence: this.syncSequence++, sent_at_ms: Date.now(), workspaces: captured.workspaces, jobs: captured.jobs,
+      extensions: { runmesh_history_ack: true } };
+    this.historyPending = { requestId: `history-${sync.sync_sequence}`, snapshot: captured.snapshot, socket, revision };
+    // The scheduler retains this generation until a matching receipt arrives.
+    socket.send(encodeWireFrame(sync));
   }
 
   private async sendSyncNow(socket: WebSocket): Promise<void> {
@@ -631,6 +684,13 @@ export class RunnerConnection {
     // a permanent credential rejection and stops retrying. The welcome handler
     // and the periodic sync reconcile any lifecycle event dropped here.
     if (socket === undefined || socket !== this.welcomedSocket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
+    // Log reads and output bytes do not dirty metadata. A no-record Job
+    // never starts an upload timer and remains available to local live tools.
+    if (event.job.record_history === false) return;
+    if (this.reportingNegotiated) {
+      if (event.type !== "output") this.historyUploads.changed();
+      return;
+    }
     // Batched/off modes do not emit lifecycle frames or event-triggered full
     // snapshots. The local durable Job store is sampled by the sync timer.
     if (this.jobHistory !== undefined && this.jobHistory.mode !== "immediate") return;

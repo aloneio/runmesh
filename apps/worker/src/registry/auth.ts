@@ -295,11 +295,12 @@ export class RegistryAuth {
     return { client_id: row.client_id, label: row.label, scopes, secret_version: row.secret_version };
   }
 
-  public revalidateMcpClient(clientId: unknown, secretVersion: unknown): VerifiedMcpClient | undefined {
+  public revalidateMcpClient(clientId: unknown, secretVersion: unknown, includeJobRecording = false): VerifiedMcpClient | undefined {
     if (typeof clientId !== "string" || !isSafeIdentifier(clientId) || !Number.isSafeInteger(secretVersion) || (secretVersion as number) < 1) return undefined;
     const client = this.getMcpClient(clientId);
     if (client === undefined || client.revoked_at_ms !== null || client.secret_version !== secretVersion || !validScopes(client.scopes)) return undefined;
-    return { client_id: client.client_id, label: client.label, scopes: client.scopes, secret_version: client.secret_version };
+    return { client_id: client.client_id, label: client.label, scopes: client.scopes, secret_version: client.secret_version,
+      ...(includeJobRecording ? { record_history: client.record_jobs !== false } : {}) };
   }
 
   public getMcpClientActiveRunner(clientId: string): McpClientActiveRunner | undefined {

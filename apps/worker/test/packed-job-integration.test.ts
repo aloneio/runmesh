@@ -70,3 +70,31 @@ it("archive failure reports degraded history without changing Runner availabilit
     expect((await send("jobs?limit=10",{},"GET")).status).toBe(503);
   });
 });
+
+it("empty and entirely opted-out snapshots never open the D1 archive", async () => {
+  await fixture(async (instance, state, send, identity) => {
+    const merge = vi.fn(() => { throw new Error("empty archive must not be opened"); });
+    (instance as any).packedJobs = { merge };
+    expect(await (await send("sync", sync(identity, []))).json()).toMatchObject({ history_status: "unchanged" });
+    instance.setJobRecording("c", false, Date.now());
+    expect(await (await send("sync", sync(identity))).json()).toMatchObject({ history_status: "unchanged" });
+    expect(merge).not.toHaveBeenCalled();
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM jobs").one().n).toBe(0);
+  });
+});
+
+it.each([true, false])("reporting capability negotiation is explicit, new peer=%s", async capable => {
+  await fixture(async (_instance, _state, send, identity) => {
+    const response = await send("connect", { session_id: "new-reporting-session", credential_version: identity.credential_version,
+      now_ms: Date.now(), min_protocol_version: 2, max_protocol_version: 2,
+      metadata: { runner_id: "r", runner_version: "0.1.3", platform: "test", architecture: "test",
+        capabilities: { filesystem: true, process_execution: true, workspace_sync: true, pty: false, network_access: false,
+          max_concurrent_jobs: 1, supported_rpc_methods: ["exec.start"],
+          labels: { job_history_protocol: "1", ...(capable ? { job_reporting_protocol: "2" } : {}) } } } });
+    expect(response.status).toBe(200);
+    const result = await response.json() as Record<string, unknown>;
+    expect(result.job_history).toEqual(DEFAULT_JOB_HISTORY);
+    if (capable) expect(result.job_reporting).toBe(2);
+    else expect(result).not.toHaveProperty("job_reporting");
+  });
+});

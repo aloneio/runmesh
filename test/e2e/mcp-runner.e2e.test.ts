@@ -607,6 +607,38 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(rejected.structuredContent?.error).toMatchObject({code:"insufficient_scope"});
   });
 
+  it("trusted no-record Jobs stay out of source snapshots after log reads, retries and re-enabling", async () => {
+    const { adminJar, csrf } = await adminCredentials();
+    const client = await createMcpClient("No-record source E2E", ["coding:read", "coding:write", "coding:exec"], adminJar, csrf);
+    expect((await mcpTool("runner_select", { runner_id: runnerId }, client)).isError).not.toBe(true);
+    const launch = (request: string) => mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('private-local-log')"), request_id: request, wait_ms: 4000 }, client);
+    const original = await launch("recording-owner"); expect(original.isError).not.toBe(true);
+    const owner = original.structuredContent?.created_by_client_id;
+    expect(typeof owner).toBe("string");
+    const setRecording = async (enabled: boolean) => {
+      expect((await submitForm(`/admin/clients/${owner}/recording`, { csrf_token: csrf, record_jobs: String(enabled) }, adminJar)).status).toBe(303);
+    };
+    const readRecord = async (jobId: string) => JSON.parse(await readFile(join(runnerState, "jobs", jobId, "meta.json"), "utf8"));
+    expect((await readRecord(original.structuredContent?.job_id as string)).record_history).toBe(true);
+    await setRecording(false);
+    const hidden = await launch("private-retry"); expect(hidden.isError).not.toBe(true);
+    const hiddenId = hidden.structuredContent?.job_id as string;
+    expect((await readRecord(hiddenId)).record_history).toBe(false);
+    const logs = await mcpTool("job", { action: "logs", workspace_id: "workspace-1", job_id: hiddenId, stream: "stdout" }, client);
+    expect(logs.structuredContent?.data).toContain("private-local-log");
+    await setRecording(true);
+    const retried = await launch("private-retry"); expect(retried.structuredContent?.job_id).toBe(hiddenId);
+    expect((await readRecord(hiddenId)).record_history).toBe(false);
+    const recorded = await launch("recording-resumed"); expect(recorded.isError).not.toBe(true);
+    expect((await readRecord(recorded.structuredContent?.job_id as string)).record_history).toBe(true);
+    await waitFor(async () => {
+      const history = await mcpTool("job", { action: "list", limit: 100 }, client);
+      const ids = (history.structuredContent?.jobs as Array<{job_id:string}>).map(job => job.job_id);
+      expect(ids).not.toContain(hiddenId);
+      return ids.includes(recorded.structuredContent?.job_id as string);
+    }, 10000);
+  });
+
   it("queries a batched Job live without waiting for the next cloud snapshot", async () => {
     const { adminJar, csrf } = await adminCredentials();
     const save = async (mode: string) => submitForm(`/admin/runners/${runnerId}/history-settings`, {
