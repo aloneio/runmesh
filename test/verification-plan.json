@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "groups": [
+    {
+      "id": "protocol",
+      "description": "Wire schemas and deterministic shared contracts",
+      "files": [
+        "packages/protocol/test/context-storage.test.ts",
+        "packages/protocol/test/cursors.test.ts",
+        "packages/protocol/test/operations.test.ts",
+        "packages/protocol/test/pagination.test.ts",
+        "packages/protocol/test/wire.test.ts"
+      ]
+    },
+    {
+      "id": "domain",
+      "description": "Public pure rules in Node; no DO, disk or subprocess adapters",
+      "files": [
+        "test/domain/public-rules.test.ts"
+      ]
+    },
+    {
+      "id": "contracts",
+      "description": "Documentation examples against actual schemas; not handler execution",
+      "files": [
+        "test/contracts/documentation.test.ts",
+        "test/contracts/job-file-adapter.test.ts"
+      ]
+    },
+    {
+      "id": "runner",
+      "description": "Local Runner unit, filesystem, process and adapter integration; not all pure",
+      "files": [
+        "apps/runner/test/baseline-observation.test.ts",
+        "apps/runner/test/byte-pagination.test.ts",
+        "apps/runner/test/capability-contracts.test.ts",
+        "apps/runner/test/config.test.ts",
+        "apps/runner/test/connection-handshake.test.ts",
+        "apps/runner/test/connection-outage.test.ts",
+        "apps/runner/test/context-governance.test.ts",
+        "apps/runner/test/context-recovery.test.ts",
+        "apps/runner/test/context-retention-plan.test.ts",
+        "apps/runner/test/context-retention-recovery.test.ts",
+        "apps/runner/test/context-store.test.ts",
+        "apps/runner/test/error-semantics.test.ts",
+        "apps/runner/test/filesystem-security.test.ts",
+        "apps/runner/test/ga-regressions.test.ts",
+        "apps/runner/test/git-directory-race.test.ts",
+        "apps/runner/test/git-ownership.test.ts",
+        "apps/runner/test/job-queue.test.ts",
+        "apps/runner/test/patch-git.test.ts",
+        "apps/runner/test/permission-chain.test.ts",
+        "apps/runner/test/product.test.ts",
+        "apps/runner/test/purge-native.test.ts",
+        "apps/runner/test/purge.test.ts",
+        "apps/runner/test/runner-boundaries.test.ts",
+        "apps/runner/test/runtime.test.ts",
+        "apps/runner/test/service-restart-backoff.test.ts",
+        "apps/runner/test/snapshot-cursors.test.ts"
+      ]
+    },
+    {
+      "id": "worker",
+      "description": "Local workerd/Miniflare unit and integration; not deployed Cloudflare",
+      "files": [
+        "apps/worker/test/admin-jobs.test.ts",
+        "apps/worker/test/admin-view-contracts.test.ts",
+        "apps/worker/test/audit-metadata.test.ts",
+        "apps/worker/test/byte-pagination.test.ts",
+        "apps/worker/test/capability-contracts.test.ts",
+        "apps/worker/test/concurrency.test.ts",
+        "apps/worker/test/enrollment-fence-recovery.test.ts",
+        "apps/worker/test/external-audit.test.ts",
+        "apps/worker/test/foundation-boundaries.test.ts",
+        "apps/worker/test/ga-regressions.test.ts",
+        "apps/worker/test/hibernation.test.ts",
+        "apps/worker/test/hosted-one-command.test.ts",
+        "apps/worker/test/idle-budget.test.ts",
+        "apps/worker/test/idle-maintenance.test.ts",
+        "apps/worker/test/installer-security.test.ts",
+        "apps/worker/test/job-snapshots.test.ts",
+        "apps/worker/test/jobs-dashboard.test.ts",
+        "apps/worker/test/login-outage.test.ts",
+        "apps/worker/test/maintenance.test.ts",
+        "apps/worker/test/mcp-catalog.test.ts",
+        "apps/worker/test/mcp-job-redaction.test.ts",
+        "apps/worker/test/mcp-output-contracts.test.ts",
+        "apps/worker/test/mcp.test.ts",
+        "apps/worker/test/no-record.test.ts",
+        "apps/worker/test/packed-job-history.test.ts",
+        "apps/worker/test/packed-job-integration.test.ts",
+        "apps/worker/test/permission-chain.test.ts",
+        "apps/worker/test/production-entrypoint.test.ts",
+        "apps/worker/test/queue-grant.test.ts",
+        "apps/worker/test/quota-resilience.test.ts",
+        "apps/worker/test/reauthorization-budget.test.ts",
+        "apps/worker/test/reauthorization.test.ts",
+        "apps/worker/test/registry-domain-boundaries.test.ts",
+        "apps/worker/test/registry-domains.test.ts",
+        "apps/worker/test/registry-outage.test.ts",
+        "apps/worker/test/rpc-contract.test.ts",
+        "apps/worker/test/runtime-config.test.ts",
+        "apps/worker/test/session-generation.test.ts",
+        "apps/worker/test/setup-hardening.test.ts",
+        "apps/worker/test/snapshot-cursors.test.ts",
+        "apps/worker/test/source-throttle-http.test.ts",
+        "apps/worker/test/source-throttle-upgrade.test.ts",
+        "apps/worker/test/source-throttle.test.ts",
+        "apps/worker/test/throttle-csp.test.ts",
+        "apps/worker/test/transport-outage.test.ts",
+        "apps/worker/test/transport.test.ts",
+        "apps/worker/test/ui-locale.test.ts"
+      ]
+    },
+    {
+      "id": "tooling",
+      "description": "Node build, release and gate tests; not a signed publication",
+      "files": [
+        "test/architecture.test.mjs",
+        "test/deployment-policy.test.mjs",
+        "test/installer-arguments.test.mjs",
+        "test/installer-preflight.test.mjs",
+        "test/package-verification.test.mjs",
+        "test/release-tools.test.mjs",
+        "test/runtime-config.test.mjs",
+        "test/security-config.test.mjs",
+        "test/verification-tools.test.mjs",
+        "test/worker-validation.test.mjs"
+      ]
+    },
+    {
+      "id": "presentation",
+      "description": "Generated UI and language source checks",
+      "files": [
+        "test/admin-navigation.test.mjs",
+        "test/ui-catalog.test.mjs"
+      ]
+    },
+    {
+      "id": "transport",
+      "description": "Real local Worker-Runner MCP integration; run twice for source and installed package",
+      "files": [
+        "test/e2e/mcp-runner.e2e.test.ts"
+      ]
+    }
+  ],
+  "external_checks": [
+    "signed_release",
+    "production",
+    "account_quotas",
+    "host_catalog"
+  ]
+}

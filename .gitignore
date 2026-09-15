@@ -14,3 +14,7 @@ release/download/
 # Local project audit reports
 /docs/runmesh-project-audit-*.md
 /.audit/
+
+# Local verification evidence and CI package cache are never source.
+/.verification/
+/.npm/
