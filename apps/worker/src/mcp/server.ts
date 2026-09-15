@@ -1,4 +1,5 @@
 import { MCP_RPC_ACTIONS } from "./actions.js";
+import { projectBytePageMetadata } from "./byte-pages.js";
 import { MCP_CATALOG_METADATA } from "./catalog-contract.js";
 import { capabilityDiagnostics } from "./capability-diagnostics.js";
 import { rpcOperation } from "@aloneio/runmesh-protocol";
@@ -64,7 +65,7 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth): McpServ
   function register<Name extends ToolName>(target: McpServer, name: Name, action: (input: z.output<(typeof TOOL_SPECS)[Name]["inputSchema"]>, scopes: readonly string[]) => Promise<unknown>): void {
     const spec = TOOL_SPECS[name];
     type Input = z.output<(typeof TOOL_SPECS)[Name]["inputSchema"]>;
-    (target.registerTool as unknown as (toolName: string, config: Record<string, unknown>, callback: (input: Input, context: ServerContext) => Promise<unknown>) => unknown)(name, { description: spec.description, inputSchema: spec.inputSchema, outputSchema: SafeOutputSchema, annotations: spec.annotations, _meta: MCP_CATALOG_METADATA }, async (input, _context) => {
+    (target.registerTool as unknown as (toolName: string, config: Record<string, unknown>, callback: (input: Input, context: ServerContext) => Promise<unknown>) => unknown)(name, { description: spec.description, inputSchema: spec.inputSchema, outputSchema: "outputSchema" in spec ? spec.outputSchema : SafeOutputSchema, annotations: spec.annotations, _meta: MCP_CATALOG_METADATA }, async (input, _context) => {
       // The URL credential can be rotated while a body or SDK import is
       // awaited. Re-read the exact generation and scopes before every tool.
       const live = await registryPostCall(env, "/auth/mcp/revalidate", env.mcpPrincipal);
@@ -287,11 +288,14 @@ export function safeJobLogResult(value: unknown): Record<string, unknown> {
   const jobId = safeJobIdentifier(value.job_id);
   if (jobId !== undefined) output.job_id = jobId;
   if (value.stream === "stdout" || value.stream === "stderr") output.stream = value.stream;
+  if (value.available === false && isRecord(value.error) && value.error.code === "log_unavailable") return { ...output, available: false, error: { code: "log_unavailable" } };
   if (typeof value.data === "string") output.data = value.data.slice(0, 65_536);
   if (isSafeNonnegativeInteger(value.offset)) output.offset = value.offset;
   if (value.next_cursor === null || isSafeCursor(value.next_cursor)) output.next_cursor = value.next_cursor;
   if (typeof value.truncated === "boolean") output.truncated = value.truncated;
   if (isSafeNonnegativeInteger(value.size)) output.size = value.size;
+  projectBytePageMetadata(value, output);
+  if (typeof value.source_truncated === "boolean") output.source_truncated = value.source_truncated;
   return output;
 }
 
@@ -344,6 +348,7 @@ export function safeReadResult(value: unknown): Record<string, unknown> {
   if (value.next_cursor === null || isSafeCursor(value.next_cursor)) output.next_cursor = value.next_cursor;
   if (typeof value.truncated === "boolean") output.truncated = value.truncated;
   if (isSafeNonnegativeInteger(value.size)) output.size = value.size;
+  projectBytePageMetadata(value, output);
   return output;
 }
 
@@ -1104,6 +1109,7 @@ type ToolFailure = { readonly ok: false; readonly error: { readonly code: string
 type ToolCall = ToolSuccess | ToolFailure;
 
 const SAFE_RUNNER_ERROR_CODES = new Set([
+  "log_unavailable", "file_changed", "log_changed", "read_budget_exhausted",
   "internal_error", "shell_unavailable", "control_plane_unavailable", "registry_unavailable", "runner_upgrade_required", "baseline_changed", "queue_full", "busy", "expected_hash_mismatch", "file_too_large", "git_failed", "git_output_too_large", "git_timeout", "git_unavailable",
   "context_index_missing", "context_index_stale", "context_index_corrupt", "context_index_too_large", "context_record_corrupt", "context_record_missing", "context_record_too_large", "context_rebuild_budget", "context_revision_conflict", "context_storage_unsafe", "context_turn_conflict",
   "hunk_ambiguous", "hunk_not_found", "hunk_overlap", "internal_error", "invalid_params", "invalid_patch", "invalid_path", "invalid_request", "invalid_workspace", "missing_file", "mixed_newlines", "not_utf8",
@@ -1326,6 +1332,9 @@ function failWithDetails(code: string, message: string, hint: string, details: u
 function fail(code: string, message: string, hint: string, state?: RpcOperationState): ToolFailure { return { ok: false, error: { code, message, hint, ...failureMetadata(code, state) } }; }
 function hintFor(code: string, state?: RpcOperationState): string {
   if (state !== undefined && state !== "not_started" && code !== "context_index_stale") return "Inspect the original Job receipt or workspace state; do not repeat a mutation, input or cancellation while its outcome is unresolved.";
+  if (code === "log_unavailable") return "Inspect the existing Job and its local log storage; do not re-run the command to retrieve output.";
+  if (code === "file_changed" || code === "log_changed") return "Read a fresh bounded page; do not join this result to a page from a changed byte source.";
+  if (code === "read_budget_exhausted") return "Reduce the page size and inspect storage availability before reading again.";
   if (code === "runner_offline" || code === "timeout") return "The outcome may be unknown. Inspect the original Job or current workspace before retrying; do not replay input, cancellation or a mutation blindly.";
   if (code === "context_index_missing" || code === "context_index_stale") return "Context records may already be committed. An authorized workspace editor must explicitly rebuild the index before retrying the same checkpoint input and expected revision.";
   if (code === "request_id_conflict") return "Inspect the original Job receipt; do not reuse its request_id for a different command.";

@@ -3,10 +3,38 @@ import { ExternalAuditHistory } from "../src/external-audit.js";
 import { env, runInDurableObject } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
 import worker from "../src/index.js";
-import { runnerPolicyChecksum, RPC_OPERATION_METHODS, RPC_OPERATION_CONTRACT } from "@aloneio/runmesh-protocol";
+import { runnerPolicyChecksum, RPC_OPERATION_METHODS, RPC_OPERATION_CONTRACT, bytePageMetadata } from "@aloneio/runmesh-protocol";
 import { randomBase64Url, sha256Hex, internalHeaders } from "../src/security.js";
 
 const full = { read: true, edit: true, shell: true, job_control: true };
+
+it.each(["log_unavailable", "log_changed", "file_changed", "read_budget_exhausted"])("R07 preserves %s across MCP without leaking paths or creating history writes", async code => {
+  const f = await fixture(() => Response.json({ type: "rpc.error", error: { code, message: "private /home/private/secret", operation_state: "not_started", details: { token: "private-token" } } }, { status: 400 }));
+  const result = (await f.call("job", { action: "logs", job_id: "j", workspace_id: "w" })).body.result;
+  expect(result).toMatchObject({ isError: true, structuredContent: { error: { code, operation_state: "not_started" } } });
+  expect(result.structuredContent.error.code).not.toBe("permission_denied");
+  expect(JSON.stringify(result)).not.toContain("private");
+  expect(f.forwarded).toHaveLength(1);
+  await runInDurableObject(f.stub, (_instance, state) => {
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM jobs").one().n).toBe(0);
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM mcp_calls").one().n).toBe(0);
+  });
+});
+
+it("R07 serves typed byte pages through the real MCP envelope with cloud history disabled", async () => {
+  const f = await fixture(() => Response.json({ type: "rpc.response", result: { job_id: "j", stream: "stdout", data: "", offset: 2, size: 4, ...bytePageMetadata("", 2, 2, 4) } }));
+  const result = (await f.call("job", { action: "logs", job_id: "j", workspace_id: "w" })).body.result;
+  expect(result.isError).not.toBe(true);
+  expect(result.structuredContent).toMatchObject({ page_protocol: 1, page_state: "incomplete", resume_offset: 2, pending_bytes: 2, next_cursor: null, audit_status: "disabled" });
+});
+
+it("R07 inline log unavailability does not convert command exit 7 into a tool failure or empty output", async () => {
+  const f = await fixture(() => Response.json({ type: "rpc.response", result: { completed: true, job: { job_id: "j", workspace_id: "w", status: "failed", exit_code: 7 }, stdout: { job_id: "j", stream: "stdout", available: false, error: { code: "log_unavailable", message: "/private/log" } } } }));
+  const result = (await f.call("shell", { workspace_id: "w", command: "synthetic" })).body.result;
+  expect(result.isError).not.toBe(true);
+  expect(result.structuredContent).toMatchObject({ status: "failed", exit_code: 7, completed: true, stdout: { available: false, error: { code: "log_unavailable" } } });
+  expect(JSON.stringify(result)).not.toContain("private");
+});
 
 it("R01 diagnoses implementation capabilities with one existing RPC and no Job or audit history writes", async () => {
   const f = await fixture(() => Response.json({ type: "rpc.response", result: {

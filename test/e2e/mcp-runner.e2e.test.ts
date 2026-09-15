@@ -224,6 +224,9 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       const page = await mcpTool("read", {
         workspace_id: "workspace-1", path: "utf8.txt", ...(cursor === undefined ? {} : { cursor }), limit: 4,
       });
+      expect(page.structuredContent?.page_protocol).toBe(1);
+      expect(page.structuredContent?.returned_bytes).toBe(Buffer.byteLength(String(page.structuredContent?.data)));
+      expect(page.structuredContent?.snapshot_id).toBeNull();
       output += page.structuredContent?.data as string;
       const next = page.structuredContent?.next_cursor;
       cursor = typeof next === "string" ? next : undefined;
@@ -305,6 +308,35 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(readonlyPatch).toMatchObject({ isError: true, structuredContent: { error: { code: "readonly_workspace" } } });
   });
 
+  it("R07 incomplete file tails terminate across real MCP with an explicit resume offset", async () => {
+    await writeFile(join(workspace, "partial-page.txt"), Buffer.from([0x6f, 0x6b, 0xe4, 0xb8]));
+    const first = await mcpTool("read", { workspace_id: "workspace-1", path: "partial-page.txt", limit: 1024 });
+    expect(first.structuredContent).toMatchObject({ data: "ok", next_cursor: "2", page_protocol: 1 });
+    const last = await mcpTool("read", { workspace_id: "workspace-1", path: "partial-page.txt", cursor: "2", limit: 1024 });
+    expect(last.isError, JSON.stringify(last)).not.toBe(true);
+    expect(last.structuredContent).toMatchObject({ data: "", next_cursor: null, page_state: "incomplete", pending_bytes: 2, resume_offset: 2, truncated: true });
+  });
+
+  it("R07 escaped Job output keeps real byte cursors after the MCP context envelope is added", async () => {
+    const started = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write(String.fromCharCode(0).repeat(25000))"), background: true });
+    const jobId = started.structuredContent?.job_id as string;
+    await waitFor(async () => (await mcpTool("job", { action: "get", job_id: jobId })).structuredContent?.status === "succeeded", 10000);
+    let cursor: string | undefined, bytes = 0, pages = 0;
+    do {
+      const result = await mcpTool("job", { action: "logs", workspace_id: "workspace-1", job_id: jobId, stream: "stdout", limit: 65536, ...(cursor === undefined ? {} : { cursor }) });
+      expect(result.isError, JSON.stringify(result)).not.toBe(true);
+      const page = result.structuredContent!;
+      expect(page.page_protocol).toBe(1);
+      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(64 * 1024);
+      expect(page.returned_bytes).toBe(Buffer.byteLength(String(page.data)));
+      expect(Number(page.returned_bytes)).toBeLessThanOrEqual(16 * 1024);
+      bytes += Number(page.returned_bytes); pages += 1; expect(pages).toBeLessThan(10);
+      if (page.next_cursor !== null) expect(Number(page.next_cursor)).toBeGreaterThan(Number(cursor ?? 0));
+      cursor = typeof page.next_cursor === "string" ? page.next_cursor : undefined;
+    } while (cursor !== undefined);
+    expect(bytes).toBe(25000);
+  });
+
   it("paginates multibyte stdout to EOF and returns stderr", async () => {
     const job = await mcpTool("shell", {
       workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('😀é😀'); process.stderr.write('stderr-page\\n')"), background: true,
@@ -316,6 +348,8 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     let output = "";
     do {
       const page = await mcpTool("job", { action: "logs", job_id: jobId, stream: "stdout", ...(cursor === undefined ? {} : { cursor }), limit: 4 });
+      expect(page.structuredContent?.returned_bytes).toBe(Buffer.byteLength(String(page.structuredContent?.data)));
+      expect(page.structuredContent?.page_protocol).toBe(1);
       output += page.structuredContent?.data as string;
       const next = page.structuredContent?.next_cursor;
       cursor = typeof next === "string" ? next : undefined;

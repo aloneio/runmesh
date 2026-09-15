@@ -9,7 +9,7 @@ export function catalogContract() {
   return { schema_version: 1, operation_contract: RPC_OPERATION_CONTRACT,
     tools: Object.entries(TOOL_SPECS).map(([name, spec]) => ({ name, description: spec.description,
       inputSchema: { type: "object", ...z.toJSONSchema(spec.inputSchema, { io: "input", target: "draft-2020-12" }) },
-      outputSchema: z.toJSONSchema(SafeOutputSchema, { io: "output", target: "draft-2020-12" }), annotations: spec.annotations,
+      outputSchema: z.toJSONSchema("outputSchema" in spec ? spec.outputSchema : SafeOutputSchema, { io: "output", target: "draft-2020-12" }), annotations: spec.annotations,
       scope: "scope" in spec ? spec.scope : null,
       actions: MCP_ACTION_REQUIREMENTS.filter(action => action.tool === name) })) };
 }

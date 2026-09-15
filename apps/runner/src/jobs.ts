@@ -8,6 +8,8 @@ import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:p
 import { defaultRunnerStateDir } from "./state-path.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { bytePageMetadata } from "@aloneio/runmesh-protocol";
+import { readPageBytes } from "./page-read.js";
 import type { WorkspaceConfig } from "./config.js";
 import type { PathPolicy } from "./path-policy.js";
 import { utf8BackwardBoundary, utf8ForwardBoundary, utf8SafePrefixLength } from "./utf8-pagination.js";
@@ -71,7 +73,10 @@ export interface JobManagerOptions {
 }
 export type JobEvent = { readonly type: "started" | "output" | "status" | "completed"; readonly job: JobRecord; readonly stream?: "stdout" | "stderr"; readonly data?: string };
 
-const MAX_LOG_RESPONSE_BYTES = 64 * 1024;
+// Reserve room for the MCP context/audit envelope, as filesystem pages do.
+// The transport ceiling remains 64 KiB; filling it locally would discard the
+// continuation cursor when the Worker adds its own bounded metadata.
+const MAX_LOG_RESPONSE_BYTES = 48 * 1024;
 const MAX_LOG_READ_BYTES = 64 * 1024;
 const MAX_INPUT_BYTES = 64 * 1024;
 const DEFAULT_MAX_RETAINED_JOBS = 100;
@@ -697,8 +702,9 @@ export class JobManager {
     let handle: Awaited<ReturnType<typeof open>>;
     try {
       handle = await openJobLog(this.logPath(job.job_id, stream), "read");
-    } catch {
-      return { job_id: job.job_id, stream, data: "", offset: 0, next_cursor: null, truncated: false, size: 0 };
+    } catch (error) {
+      const reason = isErrno(error, "ENOENT") ? "missing" : isErrno(error, "EACCES") || isErrno(error, "EPERM") ? "access_denied" : isErrno(error, "ENOTDIR") || isErrno(error, "ELOOP") ? "unsafe_path" : "io_error";
+      throw new RpcRuntimeError("log_unavailable", "The requested log is unavailable; the Job execution result is unchanged", { reason });
     }
     try {
       const info = await handle.stat();
@@ -708,20 +714,20 @@ export class JobManager {
       // Read enough bytes to finish one multibyte code point when a tiny caller
       // limit lands in its middle; the JSON response cap below remains absolute.
       const readLength = Math.min(info.size - offset, limit + 3);
-      const buffer = Buffer.alloc(readLength);
-      const { bytesRead } = await handle.read(buffer, 0, readLength, offset);
-      const data = buffer.subarray(0, bytesRead);
+      const data = await readPageBytes(handle, offset, readLength, "log_changed");
+      const after = await handle.stat();
+      const current = await lstat(this.logPath(job.job_id, stream));
+      if (!current.isFile() || current.isSymbolicLink() || current.dev !== info.dev || current.ino !== info.ino || after.size < info.size || (after.size === info.size && (after.mtimeMs !== info.mtimeMs || after.ctimeMs !== info.ctimeMs))) throw new RpcRuntimeError("log_changed", "The log changed while this page was being read; request a fresh page");
       const maxByLimit = utf8SafePrefixLength(data, Math.min(limit, data.length));
       const firstCodePoint = maxByLimit === 0 && data.length > 0 ? utf8SafePrefixLength(data, Math.min(4, data.length)) : maxByLimit;
       const used = this.fitLogResponse(job.job_id, stream, offset, info.size, data, firstCodePoint);
-      // `used === 0` with bytes still remaining means `offset` falls inside a
-      // trailing partial code point (at most three bytes before EOF): no whole
-      // code point can be decoded, and this byte-cursor API never emits
-      // replacement characters. Echoing the same cursor would spin a polling
-      // client forever, so consume the unrepresentable tail and report EOF.
-      // The cursor therefore strictly advances and pagination always terminates.
-      const next = used === 0 && offset < info.size ? info.size : offset + used;
-      return logResult(job.job_id, stream, offset, info.size, data.subarray(0, used).toString("utf8"), next);
+      // A partial final code point stops automatic paging. Preserve its byte
+      // offset for an explicit later refresh: appending the remaining bytes
+      // must not lose a character merely because an earlier read saw EOF.
+      return logResult(job.job_id, stream, offset, info.size, data.subarray(0, used).toString("utf8"), offset + used, used < firstCodePoint, job.output_truncated);
+    } catch (error) {
+      if (error instanceof RpcRuntimeError) throw error;
+      throw new RpcRuntimeError("log_unavailable", "The requested log could not be read; the Job execution result is unchanged", { reason: "io_error" });
     } finally {
       await handle.close();
     }
@@ -735,7 +741,7 @@ export class JobManager {
       const midpoint = Math.floor((low + high) / 2);
       const length = utf8SafePrefixLength(data, midpoint);
       const next = offset + length;
-      const candidate = logResult(jobId, stream, offset, size, data.subarray(0, length).toString("utf8"), next);
+      const candidate = logResult(jobId, stream, offset, size, data.subarray(0, length).toString("utf8"), next, true);
       if (wireResponseBytes(candidate) <= MAX_LOG_RESPONSE_BYTES) {
         best = length;
         low = midpoint + 1;
@@ -745,7 +751,7 @@ export class JobManager {
     }
     // A valid UTF-8 character always fits in a 64 KiB response; the fallback
     // protects this invariant even for hostile/corrupt raw log bytes.
-    return best === 0 && initial > 0 && wireResponseBytes(logResult(jobId, stream, offset, size, data.subarray(0, initial).toString("utf8"), offset + initial)) <= MAX_LOG_RESPONSE_BYTES ? initial : best;
+    return best === 0 && initial > 0 && wireResponseBytes(logResult(jobId, stream, offset, size, data.subarray(0, initial).toString("utf8"), offset + initial, true)) <= MAX_LOG_RESPONSE_BYTES ? initial : best;
   }
 
   private reserveLogBytes(jobId: string, chunk: Buffer): { readonly data: Buffer; readonly truncated: boolean } {
@@ -1317,8 +1323,8 @@ function sameJobProcessIdentity(left: JobRecord, right: JobRecord): boolean {
 }
 /** Unknown is a recovered live-process state and must occupy a start slot. */
 function occupiesProcessSlot(job: JobRecord): boolean { return isActive(job) || job.status === "unknown"; }
-function logResult(jobId: string, stream: "stdout" | "stderr", offset: number, size: number, data: string, next: number): Record<string, unknown> {
-  return { job_id: jobId, stream, data, offset, next_cursor: next < size ? String(next) : null, truncated: next < size, size };
+function logResult(jobId: string, stream: "stdout" | "stderr", offset: number, size: number, data: string, next: number, responseLimited = false, sourceTruncated = false): Record<string, unknown> {
+  return { job_id: jobId, stream, data, offset, size, ...bytePageMetadata(data, offset, next, size, responseLimited), source_truncated: sourceTruncated };
 }
 function wireResponseBytes(result: Record<string, unknown>): number {
   // Include the largest supported request-id and JSON wire envelope so the
