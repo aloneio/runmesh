@@ -1,4 +1,5 @@
 import { safeContextStorageReport } from "@aloneio/runmesh-protocol";
+import { reauthorizePrincipal } from "./reauthorization.js";
 import { MCP_RPC_ACTIONS } from "./actions.js";
 import { projectBytePageMetadata, boundPageResponseProblem } from "./byte-pages.js";
 import { MCP_CATALOG_METADATA } from "./catalog-contract.js";
@@ -14,7 +15,7 @@ import { internalHeaders, isSafeIdentifier, isConfiguredSecret } from "../securi
 import type { ActiveRunnerContext, McpClientActiveRunner, McpRunnerSelectionResult, PolicyReadiness as RegistryPolicyReadiness } from "../registry.js";
 import type { WorkerEnv } from "../runner-do.js";
 import { PRODUCT_VERSION } from "../generated-version.js";
-import { ContextInputSchema, EditInputSchema, InspectInputSchema, JobInputSchema, SafeOutputSchema, ShellInputSchema, SUPPORTED_SCOPES, TOOL_SPECS, type CodingScope, type ToolName } from "./catalog.js";
+import { ContextInputSchema, EditInputSchema, InspectInputSchema, JobInputSchema, SafeOutputSchema, ShellInputSchema, SUPPORTED_SCOPES, TOOL_SPECS, type ToolName } from "./catalog.js";
 
 const CONTENT_LIMIT = 32 * 1024;
 const STRUCTURED_LIMIT = 64 * 1024;
@@ -69,11 +70,23 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth): McpServ
     (target.registerTool as unknown as (toolName: string, config: Record<string, unknown>, callback: (input: Input, context: ServerContext) => Promise<unknown>) => unknown)(name, { description: spec.description, inputSchema: spec.inputSchema, outputSchema: "outputSchema" in spec ? spec.outputSchema : SafeOutputSchema, annotations: spec.annotations, _meta: MCP_CATALOG_METADATA }, async (input, _context) => {
       // The URL credential can be rotated while a body or SDK import is
       // awaited. Re-read the exact generation and scopes before every tool.
-      const live = await registryPostCall(env, "/auth/mcp/revalidate", env.mcpPrincipal);
-      if (!live.ok || !isRecord(live.value) || live.value.client_id !== auth.clientId || live.value.secret_version !== env.mcpPrincipal.secret_version || !Array.isArray(live.value.scopes) || live.value.scopes.some((scope) => !SUPPORTED_SCOPES.includes(scope as CodingScope))) {
+      const live = await reauthorizePrincipal(async signal => {
+        if (!isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) throw new Error("internal service unavailable");
+        const path = "/auth/mcp/revalidate", body = JSON.stringify(env.mcpPrincipal);
+        const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "POST", path, body);
+        return env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method: "POST", headers, body, signal }));
+      }, env.mcpPrincipal);
+      if (live.state === "unavailable") {
+        return failure("registry_unavailable", "Current authorization could not be checked because its dependency is temporarily unavailable.", "Keep the current connection and retry after the dependency recovers; no operation was dispatched.", "not_started");
+      }
+      if (live.state === "malformed") {
+        return failure("authorization_response_invalid", "The authorization dependency returned an invalid response.", "Ask the operator to check the control plane; no operation was dispatched and credential revocation was not established.", "not_started");
+      }
+      if (live.state === "denied") {
         return failure("permission_denied", "The MCP credential is no longer authorized.", "Use the currently authorized MCP connection; do not retry a revoked URL.");
       }
-      const scopes = live.value.scopes as string[];
+      if (live.state !== "allowed") return failure("registry_unavailable", "Current authorization could not be checked.", "Check the control plane before retrying.", "not_started");
+      const scopes = live.scopes;
       const requiredScope = "scope" in spec ? spec.scope : undefined;
       if (requiredScope !== undefined && !scopes.includes(requiredScope)) {
         return failure("insufficient_scope", `This tool requires ${requiredScope}.`, `Authorize the MCP client again with ${requiredScope}.`);
@@ -81,7 +94,7 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth): McpServ
       try {
         return await action(input, scopes);
       } catch {
-        return failure("internal_error", "The MCP tool could not complete the request.", "Retry the request. If the problem persists, contact the service operator.");
+        return failure("internal_error", "The MCP tool could not confirm the operation outcome.", "Inspect the existing Job or change receipt before deciding what to do next; do not blindly repeat a write or command. Contact the operator if the outcome cannot be established.");
       }
     });
   }
