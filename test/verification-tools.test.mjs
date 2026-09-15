@@ -1,3 +1,4 @@
+import { CI_CHECKS } from "../scripts/ci-contract.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -26,7 +27,7 @@ test("AR08 a listed Node test omitted from execution cannot silently pass the ga
   const changed = structuredClone(pkg);
   changed.scripts["test:release-tools"] = "node --test test/missing.test.mjs";
   assert.throws(() => validateTestWiring(plan, changed, github, gitlab));
-  assert.throws(() => validateTestWiring(plan, pkg, github.replaceAll("- run: npm run test:package:e2e", "# npm run test:package:e2e"), gitlab));
+  assert.throws(() => validateTestWiring(plan, pkg, github.replaceAll("- run: node scripts/ci-check.mjs installed_transport", "# removed installed transport"), gitlab));
 });
 
 test("AR08 every existing test has exactly one declared layer", async () => {
@@ -91,10 +92,7 @@ test("AR08 generated text changes when source facts or examples change", () => {
   assert.notEqual(renderExamples([example]), renderExamples([{ ...example, arguments: { limit: 13 } }]));
 });
 test("AR08 layered and actual-package commands are required in both CI systems", async () => {
-  for (const path of [".github/workflows/ci.yml", ".gitlab-ci.yml", "scripts/check-ci-parity.mjs"]) {
-    const text = await readFile(join(root, path), "utf8");
-    for (const command of ["npm run check:verification", "npm run test:package:e2e"]) assert.ok(text.includes(command), `${path} missing ${command}`);
-  }
+  for (const command of ["npm run check:verification", "npm run test:package:e2e"]) assert.ok(Object.values(CI_CHECKS).includes(command));
   const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
   for (const command of ["test:domain", "test:contracts"]) assert.ok(pkg.scripts["test:unit"].includes(`npm run ${command}`));
 });

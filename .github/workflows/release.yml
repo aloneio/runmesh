@@ -150,6 +150,13 @@ jobs:
           set -euo pipefail
           published_at="$(date --utc --date="@$(git log -1 --format=%ct)" +%Y-%m-%dT%H:%M:%SZ)"
           node scripts/release-manifest.mjs release/assets "$RELEASE_VERSION" "$(git rev-parse HEAD)" "$published_at"
+      - name: Require reviewed security regression evidence
+        run: node scripts/check-release-readiness.mjs
+      - name: Require both providers at the exact protected main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITLAB_READ_API_TOKEN: ${{ secrets.GITLAB_READ_API_TOKEN }}
+        run: node scripts/check-crossforge-ci.mjs
       - name: Sign and verify manifest and local release assets
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
@@ -166,7 +173,7 @@ jobs:
           node scripts/release-verify.mjs release/assets/manifest.json release/assets/manifest.sig release/assets/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID" "$RELEASE_VERSION"
           (cd release/assets && sha256sum -c SHA256SUMS)
       - name: Preserve signed release assets as an unpublished CI artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: runmesh-signed-release-${{ env.RELEASE_VERSION }}
           path: release/assets

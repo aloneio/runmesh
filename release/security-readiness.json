@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "basis_commit": "93698cae7939e4034a176d151a113d700ee63615",
+  "scope": "Known audit findings; current CI work does not fix application authorization. Revalidate against the proposed release candidate.",
+  "findings": [
+    { "id": "SEC01", "state": "open", "area": "admin-final-admission" },
+    { "id": "SEC02", "state": "open", "area": "workspace-root-identity" },
+    { "id": "SEC03", "state": "open", "area": "git-object-source" },
+    { "id": "SEC04", "state": "open", "area": "admin-session-unavailable" },
+    { "id": "SEC05", "state": "open", "area": "admin-password-unavailable" },
+    { "id": "SEC06", "state": "open", "area": "runner-list-permission-outage" },
+    { "id": "SEC07", "state": "open", "area": "job-list-permission-outage" },
+    { "id": "SEC08", "state": "open", "area": "workspace-upstream-contract" },
+    { "id": "SEC09", "state": "open", "area": "policy-readiness-unavailable" },
+    { "id": "SEC10", "state": "open", "area": "final-audit-result" }
+  ]
+}

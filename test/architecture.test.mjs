@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { checkCommand } from "../scripts/ci-contract.mjs";
 
 const project = fileURLToPath(new URL("../", import.meta.url));
 async function fixture(t, sources) {
@@ -82,8 +83,9 @@ test("AR01 side-effect imports are runtime edges, not type-only edges", async t 
 });
 
 test("AR01 build gates are required in both hosted CI definitions and parity checking", async () => {
-  for (const path of [".github/workflows/ci.yml", ".gitlab-ci.yml", "scripts/check-ci-parity.mjs"])
-    assert.match(await readFile(join(project, path), "utf8"), /npm run check:architecture/, `${path} omits the architecture gate`);
+  for (const path of [".github/workflows/ci.yml", ".gitlab-ci.yml"])
+    assert.ok((await readFile(join(project, path), "utf8")).includes(checkCommand("architecture")), `${path} omits the architecture gate`);
+  assert.ok((await readFile(join(project, "scripts/check-ci-parity.mjs"), "utf8")).includes("validateCiWiring"), "parity checker must validate the parsed CI contract");
 });
 
 test("AR01 source symlinks cannot silently bypass module discovery", async t => {
