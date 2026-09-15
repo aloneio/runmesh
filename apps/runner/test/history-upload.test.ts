@@ -92,3 +92,14 @@ it("new immediate activity replaces a recovery-only timer but never shortens an 
   scheduler.changed(); expect(clock.delay()).toBe(300_000);
   scheduler.stop();
 });
+
+it("a delayed receipt prioritizes newer immediate changes even while recovered processes remain", async () => {
+  const clock = new Clock(); let captured = 0;
+  const scheduler = new HistoryUploadScheduler(async revision => {
+    captured = revision; scheduler.setRecoveryPending(true); scheduler.changed();
+  }, clock);
+  scheduler.start(300_000, true); await clock.tick(); expect(clock.delay()).toBe(300_000);
+  scheduler.acknowledge(captured);
+  expect(scheduler.status().pending).toBe(true); expect(clock.delay()).toBe(0);
+  scheduler.stop();
+});
