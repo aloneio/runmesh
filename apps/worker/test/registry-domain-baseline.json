@@ -1,0 +1,518 @@
+{
+  "admin_missing": {
+    "calls": 1,
+    "trace": "5e15024f9a36202f7277cef85b571f87388804be35ce593fdaf419ee260ac207",
+    "reads": 1,
+    "writes": 0,
+    "result": {
+      "initialized": false
+    }
+  },
+  "admin_setup": {
+    "calls": 4,
+    "trace": "25960ee31386d4b583e37e0d71282513568bb26f3612ba659c4e4591ecd740f2",
+    "reads": 2,
+    "writes": 1,
+    "result": true
+  },
+  "admin_duplicate": {
+    "calls": 3,
+    "trace": "0b31fe7763a7f78046ced780809405e4f59cdb277cecc97f8688c2f0537fd642",
+    "reads": 1,
+    "writes": 0,
+    "result": false
+  },
+  "admin_session": {
+    "calls": 4,
+    "trace": "b8a61b9cb72c3880ca4951a1ed8624eb69ed932dc0fac1c31de49bd145fd38b4",
+    "reads": 1,
+    "writes": 3,
+    "result": true
+  },
+  "admin_session_read": {
+    "calls": 2,
+    "trace": "5670a35ba2e38e95d484ad49da84a56e52c00dab6dbae52fb723fe01c70f29a6",
+    "reads": 3,
+    "writes": 0,
+    "result": {
+      "csrf_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    }
+  },
+  "admin_password_change": {
+    "calls": 5,
+    "trace": "993d53c5d0b236da94bda54a606ef9e9f13aa055b1047933edddade0caa5e6c7",
+    "reads": 2,
+    "writes": 2,
+    "result": true
+  },
+  "admin_session_revoked": {
+    "calls": 2,
+    "trace": "5670a35ba2e38e95d484ad49da84a56e52c00dab6dbae52fb723fe01c70f29a6",
+    "reads": 1,
+    "writes": 0,
+    "result": null
+  },
+  "nonce_admit": {
+    "calls": 1,
+    "trace": "921d33a332be97d40444c7ff8e2ca5ea9e4ef5ef2ef8a58a51ca677a4de721bb",
+    "reads": 0,
+    "writes": 3,
+    "result": true
+  },
+  "nonce_replay": {
+    "calls": 1,
+    "trace": "921d33a332be97d40444c7ff8e2ca5ea9e4ef5ef2ef8a58a51ca677a4de721bb",
+    "reads": 1,
+    "writes": 0,
+    "result": false
+  },
+  "client_create": {
+    "calls": 2,
+    "trace": "582dd4d84a69a3731ef3e79ce02c840eef62276328e1d4f1977011f42b356f05",
+    "reads": 1,
+    "writes": 4,
+    "result": {
+      "record_jobs": true,
+      "record_jobs_since_ms": 0,
+      "client_id": "c",
+      "label": "Synthetic client",
+      "secret_prefix": "test",
+      "scopes": [
+        "coding:read",
+        "coding:write",
+        "coding:exec"
+      ],
+      "secret_version": 1,
+      "created_at_ms": 1789459200000,
+      "updated_at_ms": 1789459200000,
+      "last_used_at_ms": null,
+      "revoked_at_ms": null,
+      "active_runner_id": null,
+      "active_runner_updated_at_ms": null
+    }
+  },
+  "client_authenticate": {
+    "calls": 2,
+    "trace": "042f2650fbafe89d8396a85150b3a22030a771d6bb6284b48cebe6f59b82756c",
+    "reads": 2,
+    "writes": 1,
+    "result": {
+      "client_id": "c",
+      "label": "Synthetic client",
+      "scopes": [
+        "coding:read",
+        "coding:write",
+        "coding:exec"
+      ],
+      "secret_version": 1
+    }
+  },
+  "client_revalidate": {
+    "calls": 1,
+    "trace": "2456ae612883121a2138f85b18aa37f72ad468068ca49c3e6b17bad1a50c09b3",
+    "reads": 1,
+    "writes": 0,
+    "result": {
+      "client_id": "c",
+      "label": "Synthetic client",
+      "scopes": [
+        "coding:read",
+        "coding:write",
+        "coding:exec"
+      ],
+      "secret_version": 1
+    }
+  },
+  "client_bad_generation": {
+    "calls": 1,
+    "trace": "2456ae612883121a2138f85b18aa37f72ad468068ca49c3e6b17bad1a50c09b3",
+    "reads": 1,
+    "writes": 0,
+    "result": null
+  },
+  "runner_register": {
+    "calls": 12,
+    "trace": "4ba32c5615b7fc02233d0787df5ad293e99a812f175ecaab694e1e5c0b70fcaf",
+    "reads": 5,
+    "writes": 9,
+    "result": true
+  },
+  "runner_register_retry": {
+    "calls": 6,
+    "trace": "d649fff3f707b537113b44c0925ac3f0b4e45c0e4e70fee673128e6e035a304f",
+    "reads": 4,
+    "writes": 0,
+    "result": true
+  },
+  "runner_permissions": {
+    "calls": 13,
+    "trace": "62cf656c9a8018f5307087d7fb80f989fed8b6a1864d25bb18b6149e370de1b0",
+    "reads": 11,
+    "writes": 8,
+    "result": {
+      "valid_from_ms": null,
+      "valid_until_ms": null,
+      "validity_status": "active",
+      "runner_id": "r",
+      "display_name": "r",
+      "state": "offline",
+      "connection_epoch": 0,
+      "configured_execution_mode": "dedicated_user",
+      "credential_version": 1,
+      "session_id": null,
+      "metadata": null,
+      "public_info": null,
+      "last_heartbeat_ms": null,
+      "last_sync_sequence": null,
+      "desired_policy_revision": 2,
+      "desired_policy_checksum": "93d5a87ce5f211cdc9ce08eab9c78cef979add8206fbf25b04f5ffb61a030b97",
+      "applied_policy_revision": null,
+      "active_policy_checksum": null,
+      "runner_reported_policy_revision": null,
+      "runner_reported_policy_checksum": null,
+      "policy_status": "offline_pending",
+      "runner_permissions": {
+        "read": true,
+        "edit": true,
+        "shell": true,
+        "job_control": true
+      },
+      "current_runner_version": null,
+      "protocol_min_version": null,
+      "protocol_max_version": null,
+      "protocol_compatibility": "unknown",
+      "update_channel": "stable",
+      "desired_runner_version": null,
+      "latest_runner_version": null,
+      "update_status": "unknown",
+      "updated_at_ms": 1789459200000
+    }
+  },
+  "workspace_create": {
+    "calls": 13,
+    "trace": "052354f5052b82210cfc2c3588717d541546f52fb088982d192d87e9b808006b",
+    "reads": 13,
+    "writes": 9,
+    "result": {
+      "runner_id": "r",
+      "workspace_id": "w",
+      "display_name": "Workspace",
+      "root_path": "/synthetic/workspace",
+      "enabled": true,
+      "permissions": {
+        "read": true,
+        "edit": true,
+        "shell": true,
+        "job_control": true
+      },
+      "created_at_ms": 1789459200000,
+      "updated_at_ms": 1789459200000,
+      "revision": 1,
+      "validation_status": null
+    }
+  },
+  "policy_desired": {
+    "calls": 2,
+    "trace": "2650ab18e38be15f59cdf9972c96ba56e0bf3c74da06ca80f22d3baa1e5248aa",
+    "reads": 2,
+    "writes": 0,
+    "result": {
+      "schema_version": 1,
+      "runner_id": "r",
+      "revision": 3,
+      "checksum": "9c5cbdb7f7e4ac71b13c500585fa2a625ef358a9cf107f34831ab9377e5448a2",
+      "runner_permissions": {
+        "read": true,
+        "edit": true,
+        "shell": true,
+        "job_control": true
+      },
+      "workspaces": [
+        {
+          "workspace_id": "w",
+          "root_path": "/synthetic/workspace",
+          "enabled": true,
+          "permissions": {
+            "read": true,
+            "edit": true,
+            "shell": true,
+            "job_control": true
+          }
+        }
+      ]
+    }
+  },
+  "session_begin": {
+    "calls": 4,
+    "trace": "8abec46af83477b2180c3104dd2f7644514a33340b396a54b067b7222d722361",
+    "reads": 2,
+    "writes": 1,
+    "result": 1
+  },
+  "policy_ack": {
+    "calls": 11,
+    "trace": "8da46798ffed3f25651c858a544ebdf3073daae07e66c910976a3879912fa0b5",
+    "reads": 9,
+    "writes": 3,
+    "result": "applied"
+  },
+  "selection": {
+    "calls": 7,
+    "trace": "b1ba537129bf79ace251ec9c4a8decfa0110f2d4fbaa7ab02b7e230c8ea43be7",
+    "reads": 5,
+    "writes": 1,
+    "result": {
+      "ok": true,
+      "selection": {
+        "active_runner_id": "r",
+        "active_runner_updated_at_ms": 1789459200000,
+        "runner": {
+          "runner_id": "r",
+          "state": "online",
+          "available": true,
+          "updated_at_ms": 1789459200000
+        }
+      },
+      "changed": true
+    }
+  },
+  "effective_permissions": {
+    "calls": 5,
+    "trace": "c2e8d0f4ae4fcf1a6877d7dacdd51a531922505fcf4b929b213ac23dc0be89c0",
+    "reads": 4,
+    "writes": 0,
+    "result": {
+      "read": true,
+      "edit": true,
+      "shell": true,
+      "job_control": true
+    }
+  },
+  "final_authorization": {
+    "calls": 13,
+    "trace": "ced9bdbf8334cf5f4be51560347c734f98ba22a8954d769a6a88c07cf9df3477",
+    "reads": 12,
+    "writes": 0,
+    "result": {
+      "ok": true
+    }
+  },
+  "heartbeat": {
+    "calls": 1,
+    "trace": "495d9c212bd27f930a96f43c247b0ebad6456753e83a6fc6e72a25c0de13d5cc",
+    "reads": 1,
+    "writes": 1,
+    "result": true
+  },
+  "heartbeat_replay": {
+    "calls": 2,
+    "trace": "34c938b772cd8d9d11ad6adc31e6bd545f597148c5634b54a6dc7a53cf47091e",
+    "reads": 2,
+    "writes": 0,
+    "result": true
+  },
+  "snapshot": {
+    "calls": 8,
+    "trace": "c2ce8878f21425662b08c61bfb608a75a085743a058387fda8eb0328d3a0aeba",
+    "reads": 3,
+    "writes": 5,
+    "result": true
+  },
+  "snapshot_replay": {
+    "calls": 3,
+    "trace": "b7844c7b6505237e61892eca5b1804c722f06113a3f3920e5fad9d7275efa5b7",
+    "reads": 1,
+    "writes": 0,
+    "result": false
+  },
+  "jobs_read": {
+    "calls": 1,
+    "trace": "f5df42144b79fcaecf0c94a0ce0124927f4562a44b7f1ea61e55c169725115b9",
+    "reads": 1,
+    "writes": 0,
+    "result": [
+      {
+        "runner_id": "r",
+        "job_id": "j",
+        "workspace_id": "w",
+        "status": "running",
+        "created_by_client_id": "c",
+        "created_at_ms": 1789459200000,
+        "updated_at_ms": 1789459200000
+      }
+    ]
+  },
+  "job_detail": {
+    "calls": 1,
+    "trace": "1b8169ab8cb55baa6efb3a3f533bd65507b9ccfe4dc5372eef598487a7385865",
+    "reads": 1,
+    "writes": 0,
+    "result": {
+      "runner_id": "r",
+      "job_id": "j",
+      "workspace_id": "w",
+      "status": "running",
+      "created_by_client_id": "c",
+      "created_at_ms": 1789459200000,
+      "updated_at_ms": 1789459200000
+    }
+  },
+  "recording_off": {
+    "calls": 2,
+    "trace": "77c8429c02935ab8a827b0ef4bee81e669c8894be1dc39a99c85c0422edcdf38",
+    "reads": 2,
+    "writes": 1,
+    "result": {
+      "record_jobs": false,
+      "record_jobs_since_ms": 1789459200003,
+      "client_id": "c",
+      "label": "Synthetic client",
+      "secret_prefix": "test",
+      "scopes": [
+        "coding:read",
+        "coding:write",
+        "coding:exec"
+      ],
+      "secret_version": 1,
+      "created_at_ms": 1789459200000,
+      "updated_at_ms": 1789459200003,
+      "last_used_at_ms": 1789459200000,
+      "revoked_at_ms": null,
+      "active_runner_id": "r",
+      "active_runner_updated_at_ms": 1789459200000
+    }
+  },
+  "unrecorded_snapshot": {
+    "calls": 7,
+    "trace": "554042be73f8c85f9734e6c29fcd713cb96857129ead02b5587240f2d6529ad4",
+    "reads": 3,
+    "writes": 1,
+    "result": true
+  },
+  "unrecorded_missing": {
+    "calls": 1,
+    "trace": "fd095724bac116b72c442b7ae7fb702f4c884b243a8a2d16be3b92799f7116b1",
+    "reads": 0,
+    "writes": 0,
+    "result": null
+  },
+  "dashboard": {
+    "calls": 4,
+    "trace": "9408c07c5bbb5a7904ab7810642a248862bd3a2559401f030d22120bfb092e51",
+    "reads": 5,
+    "writes": 0,
+    "result": {
+      "runners": [
+        {
+          "valid_from_ms": null,
+          "valid_until_ms": null,
+          "validity_status": "active",
+          "runner_id": "r",
+          "display_name": "r",
+          "state": "online",
+          "connection_epoch": 1,
+          "configured_execution_mode": "dedicated_user",
+          "credential_version": 1,
+          "session_id": "session",
+          "metadata": {
+            "runner_version": "0.1.3",
+            "platform": "linux",
+            "architecture": "x64",
+            "hostname": "synthetic"
+          },
+          "public_info": null,
+          "last_heartbeat_ms": 1789459200001,
+          "last_sync_sequence": 1,
+          "desired_policy_revision": 3,
+          "desired_policy_checksum": "9c5cbdb7f7e4ac71b13c500585fa2a625ef358a9cf107f34831ab9377e5448a2",
+          "applied_policy_revision": 3,
+          "active_policy_checksum": "9c5cbdb7f7e4ac71b13c500585fa2a625ef358a9cf107f34831ab9377e5448a2",
+          "runner_reported_policy_revision": 3,
+          "runner_reported_policy_checksum": "9c5cbdb7f7e4ac71b13c500585fa2a625ef358a9cf107f34831ab9377e5448a2",
+          "policy_status": "applied",
+          "runner_permissions": {
+            "read": true,
+            "edit": true,
+            "shell": true,
+            "job_control": true
+          },
+          "current_runner_version": "0.1.3",
+          "protocol_min_version": 2,
+          "protocol_max_version": 2,
+          "protocol_compatibility": "compatible",
+          "update_channel": "stable",
+          "desired_runner_version": null,
+          "latest_runner_version": null,
+          "update_status": "unknown",
+          "updated_at_ms": 1789459200004,
+          "workspace_count": 1,
+          "active_job_count": 1
+        }
+      ],
+      "jobs": [
+        {
+          "runner_id": "r",
+          "job_id": "j",
+          "workspace_id": "w",
+          "status": "running",
+          "created_by_client_id": "c",
+          "updated_at_ms": 1789459200000
+        }
+      ]
+    }
+  },
+  "permissions_deny": {
+    "calls": 3,
+    "trace": "a00218a72f096167ad34ef008485e363a3232a4f387858c9fa145e1427c46367",
+    "reads": 2,
+    "writes": 2,
+    "result": true
+  },
+  "exec_denied": {
+    "calls": 13,
+    "trace": "ced9bdbf8334cf5f4be51560347c734f98ba22a8954d769a6a88c07cf9df3477",
+    "reads": 13,
+    "writes": 0,
+    "result": {
+      "ok": false,
+      "code": "permission_denied"
+    }
+  },
+  "client_rotate": {
+    "calls": 0,
+    "trace": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "reads": 0,
+    "writes": 0,
+    "result": null
+  },
+  "rotated_denied": {
+    "calls": 13,
+    "trace": "ced9bdbf8334cf5f4be51560347c734f98ba22a8954d769a6a88c07cf9df3477",
+    "reads": 13,
+    "writes": 0,
+    "result": {
+      "ok": true
+    }
+  },
+  "runner_revoke": {
+    "calls": 8,
+    "trace": "7b8711b6b00224f79c9041fc53f693b750636b23897fb900d9e70fee098c6998",
+    "reads": 3,
+    "writes": 4,
+    "result": true
+  },
+  "stale_session": {
+    "calls": 1,
+    "trace": "d1cbfdc38e19cfca35324c399171b69233834d69a1fae71041d380ce211c2750",
+    "reads": 1,
+    "writes": 0,
+    "result": false
+  },
+  "stale_snapshot": {
+    "calls": 3,
+    "trace": "b7844c7b6505237e61892eca5b1804c722f06113a3f3920e5fad9d7275efa5b7",
+    "reads": 1,
+    "writes": 0,
+    "result": false
+  }
+}
