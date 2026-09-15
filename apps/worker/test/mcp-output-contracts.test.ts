@@ -73,10 +73,20 @@ const validCases: Array<{ tool: ToolName; input: unknown; value: unknown }> = [
   { tool: "context", input: { action: "bootstrap" }, value: { workspace_id: "w", state: "missing", context: null } },
   { tool: "context", input: { action: "read" }, value: { workspace_id: "w", context: { schema_version: 1, context_id: "ctx-1", goal: "hello" } } },
   { tool: "context", input: { action: "checkpoint" }, value: { workspace_id: "w", context: { schema_version: 2, context_id: "ctx-1", revision: 1 }, deduplicated: true } },
-  { tool: "context", input: { action: "search" }, value: { results: [], next_cursor: null } },
+  { tool: "context", input: { action: "search" }, value: { state: "ready", results: [], next_cursor: null, scanned_records: 4 } },
   { tool: "context", input: { action: "rebuild" }, value: { rebuilt: true, records: 0 } },
 ];
 describe("AR05 successful output boundaries", () => {
+  it.each(["read", "checkpoint"])("rejects an empty or null Context %s record", action => {
+    expect(validateToolOutput("context", { action }, { context: {} })).toBe(false);
+    expect(validateToolOutput("context", { action }, { context: null })).toBe(false);
+  });
+  it("rejects unidentified list entries rather than reporting usable references", () => {
+    expect(validateToolOutput("context", { action: "search" }, { results: [{}] })).toBe(false);
+    expect(validateToolOutput("job", { action: "list" }, { jobs: [{}] })).toBe(false);
+    expect(validateToolOutput("context", { action: "bootstrap" }, { state: "ready", context: null })).toBe(false);
+    expect(validateToolOutput("context", { action: "rebuild" }, { rebuilt: true })).toBe(false);
+  });
   for (const c of validCases) it(`accepts bounded ${c.tool} ${JSON.stringify(c.input)} without inventing absent legacy fields`, () => {
     expect(validateToolOutput(c.tool, c.input, c.value)).toBe(true);
     expect(validateToolOutput(c.tool, c.input, { ...(c.value as object), unexpected: "must-not-leak" })).toBe(false);

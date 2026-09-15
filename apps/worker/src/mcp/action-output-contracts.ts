@@ -13,7 +13,8 @@ const i = InspectOutputSchema.shape;
 const j = JobMetadataOutputSchema.shape;
 const c = ContextOutputSchema.shape;
 const job = result({ ...j, job_id: j.job_id.unwrap(), status: j.status.unwrap(), source: z.enum(["runner_live", "registry_snapshot"]).optional(), runner_state: z.literal("offline").optional() });
-const contextRecord = result({ ...pick(ContextOutputSchema, ["workspace_id", "state", "context", "deduplicated"]), context: c.context.unwrap() });
+const identifiedContext = c.context.unwrap().unwrap().required({ context_id: true });
+const contextRecord = result({ ...pick(ContextOutputSchema, ["workspace_id", "state", "context", "deduplicated"]), context: identifiedContext });
 
 /** Closed per-action variants are separate from the stable aggregate public
  * tool schema. Every action in the RPC map must have an output validator. */
@@ -30,15 +31,16 @@ export const ACTION_OUTPUT_CONTRACTS = {
     diagnostics: result({ ...pick(InspectOutputSchema, ["workspace_id", "observed_at_ms", "permissions", "checks", "capabilities", "shell"]), observed_at_ms: i.observed_at_ms.unwrap(), permissions: i.permissions.unwrap(), checks: i.checks.unwrap() }),
   } satisfies Record<keyof typeof MCP_RPC_ACTIONS.inspect, z.ZodType>,
   job: {
-    list: TOOL_OUTPUT_SCHEMAS.job.pick({ jobs: true, runner_id: true, source: true, runner_state: true }).extend(metadata).required({ jobs: true }),
+    list: TOOL_OUTPUT_SCHEMAS.job.pick({ runner_id: true, source: true, runner_state: true }).extend({ ...metadata, jobs: z.array(JobMetadataOutputSchema.required({ job_id: true, status: true })).max(1000) }),
     get: job, cancel: job,
     logs: result(LogOutputSchema.shape).refine(value => value.available === false ? value.error?.code === "log_unavailable" : typeof value.data === "string" && typeof value.offset === "number" && value.next_cursor !== undefined),
     input: TOOL_OUTPUT_SCHEMAS.job.pick({ accepted: true, eof: true }).extend(metadata).required({ accepted: true }),
   } satisfies Record<keyof typeof MCP_RPC_ACTIONS.job, z.ZodType>,
   context: {
-    bootstrap: contextRecord, read: contextRecord, checkpoint: contextRecord,
-    search: result({ ...pick(ContextOutputSchema, ["workspace_id", "query", "next_cursor", "results"]), results: c.results.unwrap() }),
-    rebuild: result({ ...pick(ContextOutputSchema, ["workspace_id", "rebuilt", "records", "scanned_files", "scanned_bytes", "scanned_records", "rebuilt_at_ms"]), rebuilt: z.literal(true) }),
+    bootstrap: contextRecord.extend({ context: identifiedContext.nullable() }).refine(value => value.context !== null || value.state === "missing"),
+    read: contextRecord, checkpoint: contextRecord,
+    search: result({ ...pick(ContextOutputSchema, ["workspace_id", "state", "query", "next_cursor", "results", "scanned_records"]), results: z.array(c.results.unwrap().element.required({ context_id: true })).max(50) }),
+    rebuild: result({ ...pick(ContextOutputSchema, ["workspace_id", "rebuilt", "records", "scanned_files", "scanned_bytes", "scanned_records", "rebuilt_at_ms"]), rebuilt: z.literal(true), records: c.records.unwrap() }),
     storage: ContextStorageReportSchema.extend(metadata),
     prune: ContextPruneReportSchema.extend(metadata),
   } satisfies Record<keyof typeof MCP_RPC_ACTIONS.context, z.ZodType>,
