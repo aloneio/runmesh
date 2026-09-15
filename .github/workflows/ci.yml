@@ -81,6 +81,7 @@ jobs:
       - run: npm run test:contracts
       - run: node --test test/verification-tools.test.mjs test/package-verification.test.mjs
       - run: node --test test/architecture.test.mjs
+      - run: node --test test/build-provenance.test.mjs test/deployment-provenance-cli.test.mjs test/live-provenance.test.mjs
 
   runner-lts:
     name: Runner LTS (${{ matrix.node }})

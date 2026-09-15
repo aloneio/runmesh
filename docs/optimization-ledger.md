@@ -6,6 +6,10 @@ This development change inventories every existing test without dropping legacy 
 
 This ledger tracks changes made from the 2026-09-11 optimization plan. It records behavior adopted from upstream references without copying their implementation.
 
+## R01 / R09 — build source provenance (2026-09-15)
+
+Development implementation, not production acceptance. An ignored generated Worker module records a verified clean Git commit/tree and a main/dev branch only when observed. Provider tags are checked for agreement instead of being the only source. Dirty/unavailable/conflicting builds remain explicit; strict deployment rejects them before upload. Health is no-store and exposes bounded safe version metadata without database I/O. A one-request HTTPS observer requires the exact expected source. See [build provenance](build-provenance.md) and [中文说明](build-provenance.zh-CN.md). This is self-reported source identity, not a signed artifact attestation, host-catalog refresh or account usage measurement.
+
 ## R08 / P13 — Context storage and explicit superseded-revision retention (2026-09-15)
 
 Development slice only: logical on-disk revision bytes/counts now gate new checkpoints; the index no longer silently evicts an older context. Existing full-store receipts remain deduplicated. Read-only metadata inventory and reviewed, hash-bound pruning of old superseded revisions use two actions within the existing Context tool. Latest records and index remain unchanged; partial unlink batches require fresh inspection, not assumed rollback. See [storage budgets](context-storage.md) and [Chinese explanation](context-storage.zh-CN.md). Whole-context deletion, saved automatic policy, host-global quotas, unknown-state migration and production activation remain open. The current catalog contains 27 protected methods and 26 Runner-backed actions; earlier counts below are historical.
