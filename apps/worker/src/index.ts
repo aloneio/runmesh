@@ -1,3 +1,4 @@
+import { deploymentProvenance } from "./deployment-provenance.js";
 import { MCP_CATALOG_SUMMARY } from "./mcp/catalog-contract.js";
 import { resolveRuntimeConfiguration } from "./runtime-config.js";
 import { localizeHtmlResponse } from "./ui-locale.js";
@@ -108,11 +109,11 @@ async function handleRequest(request: Request, env: WorkerEnv, _ctx: ExecutionCo
       job_queue: { protocol: 1, default_capacity: 32, default_per_client: 8, requires_compatible_runner: true },
       release_readiness: { contract: "release-chain-audit-v1", rpc_authorization_complete: ProtectedRpcMethodSchema.options.every((method) => rpcPermissionRequirement(method) !== undefined) },
       worker_id: env.WORKER_ID,
-      deployment: { branch: env.RUNMESH_DEPLOYMENT_BRANCH === "main" || env.RUNMESH_DEPLOYMENT_BRANCH === "dev" ? env.RUNMESH_DEPLOYMENT_BRANCH : null, commit: /^[a-f0-9]{40}$/.test(env.RUNMESH_DEPLOYMENT_COMMIT ?? "") ? env.RUNMESH_DEPLOYMENT_COMMIT : null },
+      deployment: deploymentProvenance(env),
       release_gate: releaseGateDiagnostics(env),
       job_history: { backend: env.RUNMESH_JOB_HISTORY_BACKEND === "d1" ? "packed_d1" : "sqlite", protocol: 1, default_interval_seconds: 300, max_snapshot_jobs: 500 },
       audit_history: { backend: env.RUNMESH_AUDIT_BACKEND === "d1" ? "d1" : "durable_object", binding_configured: env.RUNMESH_AUDIT_BACKEND !== "d1" || env.HISTORY_DB !== undefined },
-    });
+    }, { headers: { "cache-control": "no-store" } });
   }
   if (url.pathname === "/assets/logo.png" || url.pathname === BRAND_LOGO_ASSET || url.pathname === "/assets/favicon.png") return asset(request, env);
   if (url.pathname === "/runner/uninstall.sh" || url.pathname === "/runner/uninstall.ps1") return runnerUninstallScript(request, env, url.pathname.endsWith(".ps1"));
