@@ -41,7 +41,7 @@ Ordinary production requires INTERNAL_CONTROL_SECRET and RUNNER_TOKEN_PEPPER as 
 
 Normal updates preserve Worker names, v2 namespaces, D1 bindings, credentials and registered services. Unknown incompatible schemas remain an error, not permission to reset a database or widen authorization. Only explicitly supported state changes are allowed; no general import or automatic downgrade guarantee exists. Legacy pre-v2 migration is separate from ordinary upgrades.
 
-The default service identity is dedicated_user; privileged_host needs explicit choice. Host shell commands have the operating-system account's privileges. Workspace policy is not a sandbox for hostile code.
+The default service identity is dedicated_user; privileged_host needs explicit choice. New MCP clients default to coding:read. First administrator setup needs no additional bootstrap token and retains CSRF, same-origin and atomic first-success-wins checks; complete initialization before exposing an uninitialized instance. Host shell commands have the operating-system account's privileges. Workspace policy is not a sandbox for hostile code.
 
 Full command/output and Context bodies stay on the Runner. Cloud history is bounded metadata; no-record preferences do not remove authorization. Jobs/logs load explicitly. Local snapshots, cursors and cleanup have their own byte/count/time budgets. Local tests cannot prove account-wide Cloudflare cost or deployed hibernation behavior.
 
