@@ -2,7 +2,7 @@ import { parse } from "@babel/parser";
 import { builtinModules } from "node:module";
 import { readdir, readFile, lstat } from "node:fs/promises";
 import { join, posix } from "node:path";
-import { SOURCE_ROOTS, SOURCE_PACKAGES, MISSING_GENERATED, RETIRED_PATTERNS, layer, dependencyProblem } from "./architecture-policy.mjs";
+import { SOURCE_ROOTS, SOURCE_PACKAGES, MISSING_GENERATED, RETIRED_PATTERNS, layer, dependencyProblem, specifierProblem } from "./architecture-policy.mjs";
 
 const builtin = new Set(builtinModules.map(name => name.replace(/^node:/u, "")));
 const extensions = /\.(?:[cm]?[jt]s|[jt]sx)$/u;
@@ -112,6 +112,8 @@ export async function checkArchitecture(root) {
     catch { failures.push(`${file}: source parsing failed`); continue; }
     for (const edge of imports) {
       if (typeof edge.specifier !== "string") { failures.push(`${file}:${edge.line}: computed module loading is not statically reviewable`); continue; }
+      const platformReason = specifierProblem(file, edge.specifier, edge.typeOnly);
+      if (platformReason) failures.push(`${file}:${edge.line}: ${platformReason}`);
       const target = resolve(file, edge.specifier);
       if (target.reason) failures.push(`${file}:${edge.line}: ${target.reason}`);
       if (target.path) edges.push({ from: file, to: target.path, typeOnly: edge.typeOnly });

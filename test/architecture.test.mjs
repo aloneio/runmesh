@@ -24,6 +24,14 @@ async function fixture(t, sources) {
 }
 
 const bad = [
+  ["Job adapter to manager", { "apps/runner/src/jobs/storage.ts": 'import "../jobs.js";', "apps/runner/src/jobs.ts": "export {};" }],
+  ["Context adapter to facade", { "apps/runner/src/context/repository.ts": 'import "../context-store.js";', "apps/runner/src/context-store.ts": "export {};" }],
+  ["log reader to process executor", { "apps/runner/src/jobs/logs.ts": 'import "./process.js";', "apps/runner/src/jobs/process.ts": "export {};" }],
+  ["Context model to file adapter", { "apps/runner/src/context/model.ts": 'import "./files.js";', "apps/runner/src/context/files.ts": "export {};" }],
+  ["pure planner to inventory adapter", { "apps/runner/src/context/retention-plan.ts": 'import type { Inventory } from "../context-storage.js";', "apps/runner/src/context-storage.ts": "export type Inventory = {};" }],
+  ["pure planner filesystem access", { "apps/runner/src/context/retention-plan.ts": 'import { readFile } from "node:fs/promises";' }],
+  ["pure Job model process access", { "apps/runner/src/jobs/records.ts": 'import { spawn } from "node:child_process";' }],
+  ["Runner ports to concrete adapter", { "apps/runner/src/jobs/ports.ts": 'import type { State } from "./storage.js";', "apps/runner/src/jobs/storage.ts": "export type State = {};" }],
   ["Registry domain to facade", { "apps/worker/src/registry/auth.ts": 'import { RegistryDO } from "../registry.js";', "apps/worker/src/registry.ts": "export class RegistryDO {}" }],
   ["Registry domain to concrete peer", { "apps/worker/src/registry/auth.ts": 'import { RegistryPolicy } from "./policy.js";', "apps/worker/src/registry/policy.ts": "export class RegistryPolicy {}" }],
   ["Registry contract to implementation", { "apps/worker/src/registry/ports.ts": 'import type { RegistryAuth } from "./auth.js";', "apps/worker/src/registry/auth.ts": "export class RegistryAuth {}" }],
