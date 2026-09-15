@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtemp, mkdir, writeFile, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { captureBuildProvenance, writeBuildProvenance } from "../scripts/build-provenance.mjs";
+import { join, resolve } from "node:path";
+import { captureBuildProvenance, writeBuildProvenance, sourceDirectoryIdentity, sameDirectoryIdentity } from "../scripts/build-provenance.mjs";
 
 const gitEnvironment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
 function git(root, ...args) {
@@ -100,4 +100,37 @@ test("R01 source observation does not write the Git index or execute fsmonitor",
   const index = join(f.root, ".git/index"), before = await readFile(index), time = (await stat(index)).mtimeMs;
   assert.equal(captureBuildProvenance(f.root, {}).state, "clean");
   assert.deepEqual(await readFile(index), before); assert.equal((await stat(index)).mtimeMs, time);
+});
+
+
+test("source root identity accepts actual directory aliases, not different directories with similar names", async t => {
+  const f = await fixture(t);
+  const sibling = await mkdtemp(join(tmpdir(), "runmesh-provenance-other-"));
+  t.after(() => rm(sibling, { recursive: true, force: true }));
+  const identity = sourceDirectoryIdentity(f.root);
+  assert.ok(sameDirectoryIdentity(identity, sourceDirectoryIdentity(resolve(f.root, "."))));
+  assert.equal(sameDirectoryIdentity(identity, sourceDirectoryIdentity(sibling)), false);
+  assert.equal(sourceDirectoryIdentity(join(f.root, "source.txt")), undefined);
+  assert.equal(sourceDirectoryIdentity(join(f.root, "missing-directory")), undefined);
+  if (process.platform === "win32") {
+    assert.ok(sameDirectoryIdentity(identity, sourceDirectoryIdentity(f.root.replaceAll("\\", "/"))));
+    const fromGit = git(f.root, "rev-parse", "--show-toplevel");
+    assert.ok(sameDirectoryIdentity(identity, sourceDirectoryIdentity(fromGit)));
+    assert.equal(captureBuildProvenance(f.root, {}).state, "clean");
+  }
+});
+
+test("source root identity rejects absent/zero IDs and distinct 64-bit identities", () => {
+  const a = { device: 1n, inode: 9007199254740992n };
+  assert.ok(sameDirectoryIdentity(a, { ...a }));
+  for (const value of [undefined, null, { device: 2n, inode: a.inode }, { device: 1n, inode: a.inode + 1n }, { device: 1n, inode: 0n }, { device: 1, inode: Number(a.inode) }]) {
+    assert.equal(sameDirectoryIdentity(a, value), false);
+  }
+  assert.equal(sameDirectoryIdentity(undefined, undefined), false);
+  assert.equal(sameDirectoryIdentity({ device: 0n, inode: 0n }, { device: 0n, inode: 0n }), false);
+});
+
+test("nested source directories cannot claim the enclosing repository identity", async t => {
+  const f = await fixture(t);
+  assert.equal(captureBuildProvenance(join(f.root, "apps"), {}).state, "unavailable");
 });

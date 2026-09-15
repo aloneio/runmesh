@@ -59,3 +59,7 @@ This is a self-reported build-source statement, not a cryptographic attestation 
 The signed Runner version, actual Worker source, provider version ID and actual client's tool catalog remain separate facts. These changes must still pass same-SHA CI and be explicitly promoted to main before production deployment can be observed. There is no account-level Cloudflare log access or new account telemetry collector in this slice.
 
 Primary references: [Workers Builds configuration](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/), [default Git metadata variables](https://developers.cloudflare.com/changelog/post/2025-06-10-default-env-vars/), [version metadata binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/version-metadata/).
+
+## Filesystem aliases
+
+The checkout root and Git-reported worktree root are compared by their actual directory device and file identity using BigInt, not by spelling or case-folding paths. This handles equivalent Windows short/long paths without accepting another directory. Missing, zero or unavailable identities remain fail-closed. The root identity is checked again before returning a clean observation; index flags, source cleanliness, exact commit and CI metadata checks remain required.
