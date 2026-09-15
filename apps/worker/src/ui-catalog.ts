@@ -1,4 +1,5 @@
-export const ZH_UI_TEXT: Record<string, string> = {
+// Canonical source-text catalog. No later overlays: duplicate keys must fail tests.
+export const ZH_UI_TEXT: Readonly<Record<string, string>> = Object.freeze({
   "Welcome to Runmesh": "欢迎使用 Runmesh",
   "Agent Control Plane": "智能体控制平面",
   "Enter the Runmesh control plane": "进入 Runmesh 控制平面",
@@ -71,7 +72,7 @@ export const ZH_UI_TEXT: Record<string, string> = {
   "Display name": "显示名称",
   "Safe runner ID": "安全 Runner ID",
   "optional": "可选",
-  "Create enrollment": "创建注册",
+  "Create enrollment": "生成注册码",
   "Registered runners": "已注册 Runner",
   "Status": "状态",
   "Platform / architecture": "平台 / 架构",
@@ -105,7 +106,7 @@ export const ZH_UI_TEXT: Record<string, string> = {
   "Scopes": "权限范围",
   "Create one-time secret": "创建一次性密钥",
   "MCP clients": "MCP 客户端",
-  "Active runner": "活跃 Runner",
+  "Active runner": "当前 Runner",
   "Choose a Runner": "选择 Runner",
   "Confirm switch": "确认切换",
   "Save": "保存",
@@ -227,12 +228,12 @@ export const ZH_UI_TEXT: Record<string, string> = {
   "The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. This one-time code expires in 30 minutes and will not be shown again.": "安装器会先校验固定签名的 Runner，再在本地提示输入代码。代码不会写入命令、URL 或进程参数。此代码将在 30 分钟后失效，且只显示一次。",
   "The installer verifies the fixed signed Runner artifact, downloads and verifies a private Node.js runtime for the host architecture, registers the Runner as a background service, and starts it after enrollment. The copied command includes the one-time enrollment code; no second code entry is needed. Treat the command as a secret.": "安装器会校验固定签名的 Runner，按主机架构下载并校验私有 Node.js 运行时，注册后台服务，并在注册成功后自动启动。复制的命令已包含一次性注册码，无需再次输入。请将整条命令视为凭据妥善保管。",
   "Paste it only into the local prompt after verification; it is deliberately excluded from copied commands.": "完成校验后，请将代码粘贴到本地提示中；复制的命令不会包含代码。",
-  "The copied command includes this one-time code. Treat it as a secret and use it only once.": "复制的命令已经包含这次安装所需的一次性代码，请勿修改或分享。",
+  "The copied command includes this one-time code. Treat it as a secret and use it only once.": "复制的命令包含此一次性注册码。请将整条命令视为秘密，仅使用一次。",
   "Operating system": "操作系统",
   "Copy enrollment command": "复制注册命令",
   "Copy enrollment and install command": "复制注册并安装命令",
   "Do not share this code. It is single-use enrollment material, not an administrator password, MCP secret, or long-term credential.": "请勿分享此代码。它仅用于一次性注册，不是管理员密码、MCP 密钥或长期凭据。",
-  "Regenerate enrollment": "重新生成注册",
+  "Regenerate enrollment": "重新生成注册码",
   "Done": "完成",
   "MCP client created": "MCP 客户端已创建",
   "MCP client rotated": "MCP 客户端已轮换",
@@ -316,7 +317,7 @@ export const ZH_UI_TEXT: Record<string, string> = {
   "Unavailable": "不可用",
   "online": "在线",
   "offline": "离线",
-  "stale": "过期",
+  "stale": "状态陈旧",
   "pending": "待处理",
   "invalid": "无效",
   "queued": "排队中",
@@ -330,7 +331,7 @@ export const ZH_UI_TEXT: Record<string, string> = {
   "edit": "编辑",
   "shell": "Shell",
   "job control": "任务控制",
-  "Summary": "摘要",
+  "Summary": "概览",
   "Runner summary": "Runner 摘要",
   "configured": "已配置",
   "connected": "已连接",
@@ -374,8 +375,6 @@ export const ZH_UI_TEXT: Record<string, string> = {
   "Apply approved edits.": "应用已批准的编辑。",
   "Use Host shell and control Jobs.": "使用主机 Shell 并控制任务。",
   "Runmesh · Agent Control Plane": "Runmesh · 智能体控制平面",
-  // Remaining template copy kept here so the Chinese locale does not fall
-  // back to English on the secondary views and enrollment flow.
   "Language": "语言",
   "Skip to main content": "跳转到主要内容",
   "Use a dedicated restricted service identity for narrower host access.": "使用专用的受限服务账户，进一步限制主机访问范围。",
@@ -405,7 +404,7 @@ export const ZH_UI_TEXT: Record<string, string> = {
   "No validation result has been reported yet.": "尚未收到校验结果。",
   "Runner will run as root, SYSTEM, or the platform-equivalent highest-privilege identity. Shell commands can access files, processes, network, environment variables, credentials, and system services reachable by that service identity. Install only on a trusted dedicated machine, VM, or container.": "Runner 将以 root、SYSTEM 或平台对应的最高权限运行。Shell 命令可访问该服务身份能够访问的文件、进程、网络、环境变量、凭据和系统服务。请仅在受信任的专用机器、虚拟机或容器中安装。",
   "You must keep the one-time confirmation in the local install command.": "本地安装命令必须保留一次性确认参数。",
-  "Selected restricted service account mode: dedicated_user. The installer preserves this selection.": "当前使用受限服务账户模式（dedicated_user），不会启用托管高权限安装器。",
+  "Selected restricted service account mode: dedicated_user. The installer preserves this selection.": "已选择受限服务账户模式（dedicated_user），安装器会保留此选择。",
   "e.g. project-src": "例如：project-src",
   "e.g. Main Repository": "例如：主代码仓库",
   "/absolute/path/to/directory": "/绝对路径/目录",
@@ -438,8 +437,8 @@ export const ZH_UI_TEXT: Record<string, string> = {
   "RUNNER 报告的 CHECKSUM": "Runner 上报的校验和",
   "Manual Runner enrollment and install uses a verified portable artifact. Install the artifact first, then run the single-line command below. It will ask for this code locally; paste it and press Enter. Selected execution mode: ": "请先安装已验证的便携版 Runner，再运行下面的命令。命令会在本机提示输入代码，粘贴后按 Enter。当前执行模式：",
   "The installer verifies the fixed signed Runner artifact before it asks locally for this one-time code. It never places the code in this command, a URL, or process arguments. Selected execution mode: ": "安装器会先校验固定签名的 Runner，再在本机提示输入代码。代码不会写入命令、URL 或进程参数。当前执行模式：",
-  "The default is dedicated_user; privileged_host is an advanced, explicitly confirmed option. The install step runs only after enrollment succeeds.": "推荐使用 privileged_host；如需进一步隔离，也可以选择 dedicated_user。注册成功后才会继续安装。",
-  "The default is dedicated_user; privileged_host is an advanced, explicitly confirmed option.": "推荐使用 privileged_host；如需进一步隔离，也可以选择 dedicated_user。",
+  "The default is dedicated_user; privileged_host is an advanced, explicitly confirmed option. The install step runs only after enrollment succeeds.": "默认使用 dedicated_user；privileged_host 是需要明确确认的高级选项。只有注册成功后才会继续安装。",
+  "The default is dedicated_user; privileged_host is an advanced, explicitly confirmed option.": "默认使用 dedicated_user；privileged_host 是需要明确确认的高级选项。",
   "Runner authorization": "Runner 授权",
   "One-time code": "一次性注册码",
   "Valid days": "有效天数",
@@ -462,11 +461,7 @@ export const ZH_UI_TEXT: Record<string, string> = {
   "This code is valid until ": "此注册码有效至 ",
   " and can be used once.": "，且只能使用一次。",
   "Remove this Runner from the host": "从主机移除此 Runner",
-  "Run the command for the local OS to stop the managed service and remove the Runmesh installation, configuration, local job history, logs and supported legacy remnants. Project workspaces are preserved. Delete the Runner record separately from the administrator console when you no longer need its history.": "请针对本机操作系统运行命令，停止并移除托管服务及本地凭据配置。若不再需要历史记录，请在管理控制台中单独删除 Runner 记录。",
-};
-
-// Canonical author-facing strings; each response renders one locale only.
-Object.assign(ZH_UI_TEXT, {
+  "Run the command for the local OS to stop the managed service and remove the Runmesh installation, configuration, local job history, logs and supported legacy remnants. Project workspaces are preserved. Delete the Runner record separately from the administrator console when you no longer need its history.": "请按本机操作系统运行命令，停止托管服务并删除 Runmesh 安装文件、配置、本地任务历史、日志及支持清理的旧版残留。项目工作区会保留。不再需要历史记录时，请另行在管理控制台删除 Runner 记录。",
   "Cloud Job history": "云端任务记录",
   "Record new jobs": "记录新任务",
   "Do not record new jobs": "不记录新任务",
@@ -483,7 +478,6 @@ Object.assign(ZH_UI_TEXT, {
   "History settings unavailable.": "历史设置暂不可用。",
   "Job history and retention": "任务记录与保留",
   "Cloud recording": "云端记录",
-  "Disabled": "不上传",
   "Batched": "定时合并",
   "Immediate (higher usage)": "立即上传（较高消耗）",
   "Upload interval": "上传间隔",
@@ -506,21 +500,11 @@ Object.assign(ZH_UI_TEXT, {
   "Audit not loaded.": "尚未读取审计。",
   "Restricted service account (dedicated_user, recommended)": "受限服务账户模式（dedicated_user，默认推荐）",
   "Full host control (advanced, explicit authorization required)": "整机控制 / 高权限模式（高级选项，需明确授权）",
-  "Read stdout": "读取标准输出",
-  "Read stderr": "读取标准错误",
-  "Job logs": "任务日志",
   "Log content has not been requested.": "尚未请求日志内容。",
   "Queue full": "队列已满",
   "Queued": "排队中",
-  "Summary": "概览",
-  "Hide password": "隐藏密码",
-  "Show password": "显示密码",
-  "When disabled, new Job snapshots and Job tool audit entries are not stored in the cloud. Local Runner job metadata and logs remain. Existing cloud history is not deleted. Use workspace_id with Job operations (Runner 0.1.1+); offline history is unavailable for unrecorded jobs.": "关闭后不保存新任务的云端快照及任务工具审计；本地任务元数据和日志仍保留，已有云端历史不会删除。操作未记录任务时需携带 workspace_id，并使用 Runner 0.1.1 或更新版本；未记录任务没有离线历史。"
-});
-
-Object.assign(ZH_UI_TEXT, {
+  "When disabled, new Job snapshots and Job tool audit entries are not stored in the cloud. Local Runner job metadata and logs remain. Existing cloud history is not deleted. Use workspace_id with Job operations (Runner 0.1.1+); offline history is unavailable for unrecorded jobs.": "关闭后不保存新任务的云端快照及任务工具审计；本地任务元数据和日志仍保留，已有云端历史不会删除。操作未记录任务时需携带 workspace_id，并使用 Runner 0.1.1 或更新版本；未记录任务没有离线历史。",
   "Active Runner": "当前 Runner",
-  "Client Routing & Status": "客户端路由与状态",
   "Completed": "完成时间",
   "Controlled Execution": "受控执行",
   "Duration": "耗时",
@@ -537,10 +521,7 @@ Object.assign(ZH_UI_TEXT, {
   "permits approved edits, and": "允许经授权的编辑；",
   "permits inspection,": "允许查看；",
   "· No runners available": "· 暂无可用 Runner",
-  "· selection required": "· 需要选择 Runner"
-});
-
-Object.assign(ZH_UI_TEXT, {
+  "· selection required": "· 需要选择 Runner",
   "Authentication changed. Sign in again.": "认证状态已变化，请重新登录。",
   "Authentication service unavailable. Try again.": "认证服务暂不可用，请稍后重试。",
   "Enrollment code could not be generated; Runner remains safely fenced.": "无法生成注册码；Runner 继续保持安全隔离。",
@@ -569,9 +550,23 @@ Object.assign(ZH_UI_TEXT, {
   "Runner execution mode or privileged-host confirmation is invalid.": "Runner 执行模式或高权限确认无效。",
   "Runner revocation cleanup is uncertain; Runner remains safely fenced.": "无法确认 Runner 撤销操作的清理结果；继续保持安全隔离。",
   "Runner selection could not be updated.": "无法更新 Runner 选择。",
-  "The one-time enrollment code expires after 30 minutes.": "一次性注册码将在 30 分钟后过期。"
+  "Runner credential rotation could not read the Runner state.": "Runner 凭据轮换无法读取当前状态。",
+  "Runner enrollment could not read the Runner state.": "Runner 注册操作无法读取当前状态。",
+  "Runmesh setup": "Runmesh 初始化",
+  "Agent Control Plane login": "智能体控制平面登录",
+  "Agent Control Plane setup": "智能体控制平面初始化",
+  "Agent Control Plane enrollment": "智能体控制平面注册",
+  "Do not upload": "不上传",
+  "cancelled": "已取消",
+  "interrupted": "已中断",
+  "ok": "成功",
+  "error": "错误",
+  "Full host control (privileged_host)": "整机控制 / 高权限模式（privileged_host）",
+  "Restricted service account (dedicated_user)": "受限服务账户模式（dedicated_user）",
+  "Manual Runner enrollment and install uses a verified portable artifact. Install the artifact first, then run the commands below. It will ask for this code locally; paste it and press Enter.": "手动注册与安装需使用已验证的便携版 Runner。请先安装该制品，再运行下方命令；按本机提示粘贴注册码并按 Enter。",
+  "Selected execution mode:": "所选执行模式：",
+  "The install step runs only after enrollment succeeds.": "只有注册成功后才会继续安装。",
+  "Windows PowerShell (Administrator)": "Windows PowerShell（管理员）",
+  "Enrollment code cleanup is uncertain; Runner remains safely fenced.": "无法确认注册码清理结果；Runner 继续保持安全隔离。",
+  "Client name": "客户端名称"
 });
-
-Object.assign(ZH_UI_TEXT, {"Runner credential rotation could not read the Runner state.":"Runner 凭据轮换无法读取当前状态。","Runner enrollment could not read the Runner state.":"Runner 注册操作无法读取当前状态。"});
-
-Object.assign(ZH_UI_TEXT, {"Runmesh setup": "Runmesh 初始化", "Agent Control Plane login": "智能体控制平面登录", "Agent Control Plane setup": "智能体控制平面初始化", "Agent Control Plane enrollment": "智能体控制平面注册"});
