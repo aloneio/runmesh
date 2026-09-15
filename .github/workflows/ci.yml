@@ -73,6 +73,7 @@ jobs:
       - run: node scripts/check-installer-syntax.mjs
       - run: node --test test/installer-arguments.test.mjs test/installer-preflight.test.mjs
       - run: node --test test/worker-validation.test.mjs
+      - run: node --test test/build-provenance.test.mjs test/deployment-provenance-cli.test.mjs test/live-provenance.test.mjs
 
   runner-lts:
     name: Runner LTS (${{ matrix.node }})
