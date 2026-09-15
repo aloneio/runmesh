@@ -11,11 +11,25 @@ export function layer(path) {
     : path.startsWith("apps/worker/src/") ? "worker"
     : path.startsWith("apps/runner/src/") ? "runner" : "outside";
 }
+const pureRunner = /^(?:apps\/runner\/src\/jobs\/(?:records|values|recovery)|apps\/runner\/src\/context\/(?:model|retention-plan|storage-types))\.[jt]s$/u;
+/** Pure record/planning modules may hash data, but may not acquire platform I/O. */
+export function specifierProblem(from, specifier, typeOnly) {
+  if (pureRunner.test(from) && /^(?:node:|fs(?:\/|$)|child_process$|process$|timers(?:\/|$)|worker_threads$|net$|http$|https$)/u.test(specifier)
+    && !["node:crypto", "crypto"].includes(specifier)) return "Runner record and planning modules must not access filesystem, processes or timers";
+  if (/^apps\/runner\/src\/(?:jobs|context)\/ports\.[jt]s$/u.test(from) && specifier.startsWith("node:") && !typeOnly) return "Runner ports may reference platform types but not load platform implementations";
+  return undefined;
+}
 export function dependencyProblem(from, to) {
   const owner = layer(from), target = layer(to);
   if (target === "outside") return "source dependency leaves the application/protocol boundary";
   if (owner === "protocol" && target !== "protocol") return "protocol must not depend on an application";
   if (owner !== "protocol" && target !== "protocol" && target !== owner) return "Worker and Runner must not depend on one another";
+  if (/^apps\/runner\/src\/(?:jobs|context)\//u.test(from)) {
+    if (/^apps\/runner\/src\/(?:jobs|context-store|runtime|connection|cli|index|service|profile)\.[jt]s$/u.test(to)) return "Runner internals must not import their facade, transport or service entrypoints";
+    if (pureRunner.test(from) && target === "runner" && !pureRunner.test(to) && !/^apps\/runner\/src\/(?:errors|config)\.[jt]s$/u.test(to)) return "Runner record and planning modules must not depend on concrete I/O adapters";
+    if (/\/(?:jobs|context)\/ports\.[jt]s$/u.test(from) && target === "runner" && !pureRunner.test(to)) return "Runner ports must not depend on concrete adapters";
+    if (/\/jobs\/logs\.[jt]s$/u.test(from) && /\/jobs\/(?:process|storage)\.[jt]s$/u.test(to)) return "Job log reading uses narrow ports, not process or record-storage implementations";
+  }
   if (from.startsWith("apps/worker/src/registry/")) {
     if (/^apps\/worker\/src\/(?:registry|runner-do|index|external-audit|job-history-store)\.[jt]s$/u.test(to)
       || /^apps\/worker\/src\/(?:mcp|ui)\//u.test(to)) return "Registry domains must not depend on concrete DO, HTTP/UI or remote history adapters";
