@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { test } from "node:test";
 
-const source = readFileSync(new URL("../apps/worker/src/index.ts", import.meta.url), "utf8");
+const source = readFileSync(new URL("../apps/worker/src/admin/client-script.ts", import.meta.url), "utf8");
 function extract(name, next) {
   const start = source.indexOf(`function ${name}(`), end = source.indexOf(`\nfunction ${next}(`, start);
   assert.ok(start > 0 && end > start); return source.slice(start, end);

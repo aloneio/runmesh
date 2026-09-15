@@ -1,6 +1,6 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {readFileSync} from "node:fs";
+import {readFileSync,readdirSync} from "node:fs";
 import vm from "node:vm";
 import {transformSync} from "esbuild";
 const code=readFileSync(new URL("../apps/worker/src/ui-catalog.ts",import.meta.url),"utf8");
@@ -19,9 +19,14 @@ test("literal administrator errors all have a Chinese translation",()=>{
  assert.deepEqual([...missing].sort(),[]);
 });
 test("authored static labels are canonical English instead of joined Chinese/English",()=>{
- for(const file of ["index.ts","history-ui.ts","admin-jobs.ts"]){
+ const views=readdirSync(new URL("../apps/worker/src/admin/",import.meta.url)).filter(file=>file.endsWith(".ts")&&file!=="client-script.ts").map(file=>`admin/${file}`);
+ for(const file of ["index.ts","history-ui.ts","admin-jobs.ts",...views]){
   let source=readFileSync(new URL(`../apps/worker/src/${file}`,import.meta.url),"utf8");
-  source=source.split("function adminScript(")[0].replace(/^function languageSwitch\(.*$/gm,"");
+  source=source.split("function adminScript(")[0].replace(/^(?:export )?function languageSwitch\(.*$/gm,"");
+  // Preserve the two pre-existing enrollment-mode descriptions in this
+  // rendering-only move. They were below the old browser-script cutoff;
+  // all other extracted labels are now checked rather than skipped.
+  if(file==="admin/enrollment-view.ts")source=source.replace(/^  const (?:modeLabel|privilegedWarning) = .*$/gm,"");
   assert.doesNotMatch(source,/[\u4e00-\u9fff]/,file);
  }
 });
