@@ -769,7 +769,7 @@ async function resolveActiveRunner(env: McpRequestEnv, clientId: string, allowOf
     return failWithDetails("runner_unavailable", "The selected runner is unavailable.", "Call runner_current to inspect the selection; select another runner explicitly if needed.", { runner_context: { ...(context ?? { runner_id: state.active_runner_id, state: "unavailable", available: false, updated_at_ms: state.active_runner_updated_at_ms }), automatic_selection: automatic } });
   }
   if (context.state !== "online" && !allowOfflineSnapshot) {
-    return failWithDetails("runner_offline", "The selected runner is not connected.", "Confirm the selected runner is connected, then retry.", { runner_context: { ...context, automatic_selection: automatic } });
+    return failWithDetails("runner_offline", "The selected runner is not connected.", "Confirm the selected runner is connected, then retry.", { runner_context: { ...context, automatic_selection: automatic } }, "not_started");
   }
   return { ok: true, value: { runnerId: context.runner_id, context: { ...context, automatic_selection: automatic } } };
 }
@@ -1324,7 +1324,7 @@ function fail(code: string, message: string, hint: string, state?: RpcOperationS
 function hintFor(code: string, state?: RpcOperationState): string {
   if (state !== undefined && state !== "not_started" && code !== "context_index_stale") return "Inspect the original Job receipt or workspace state; do not repeat a mutation, input or cancellation while its outcome is unresolved.";
   if (code === "runner_offline" || code === "timeout") return "The outcome may be unknown. Inspect the original Job or current workspace before retrying; do not replay input, cancellation or a mutation blindly.";
-  if (code === "context_index_missing" || code === "context_index_stale") return "Context records may already be committed. Explicitly rebuild the context index, then retry the same checkpoint input and expected revision.";
+  if (code === "context_index_missing" || code === "context_index_stale") return "Context records may already be committed. An authorized workspace editor must explicitly rebuild the index before retrying the same checkpoint input and expected revision.";
   if (code === "request_id_conflict") return "Inspect the original Job receipt; do not reuse its request_id for a different command.";
   if (code === "search_snapshot_changed") return "Restart the bounded search with a fresh cursor.";
   if (code === "policy_pending") return "The control plane has a newer policy than the runner. Wait briefly and retry.";

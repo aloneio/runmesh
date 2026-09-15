@@ -22,13 +22,17 @@ A retry of the most recent committed checkpoint may contain the parent revision 
 
 Immutable record creation is the authority; the index is derived. If an index update fails after record creation, the result explicitly says the record may already be committed. A missing or stale index is not treated as an empty database. The caller runs the authorized `context rebuild`, then retries the same input and expected revision. Recovery does not delete or rewrite prior record bodies.
 
+A small private checkpoint intent is persisted before the immutable record. This closes the separate new-turn failure window where an older valid index could otherwise hide the committed new record and allow duplicate random IDs. While that intent is unresolved, reads and writes report `context_index_stale`, not empty history or successful recovery. The explicit rebuild checks the intent's binding and record fingerprint before clearing it; malformed or changed ownership stays blocked. This adds bounded local metadata writes only for actual new revisions, not cloud writes or writes during deduplicated retries. Process-interruption recovery is tested; it is not a universal power-loss or multi-process transaction guarantee.
+
+Rebuild streams directory entries instead of allocating an unbounded directory listing. It retains the 4,096-file and 32 MiB input bounds and also caps entries at 8,192 with a four-second cooperative work budget. A filesystem I/O call itself is not made cancelable by that deadline. Exceeding a budget leaves the saved state in place for explicit operator recovery.
+
 Instances in one managed Runner process serialize by state-directory/workspace. Record creation remains exclusive. This is not a distributed or multi-process writer lock; do not run multiple independent Runner processes against the same state directory. The current rollout does not add a state-directory migration.
 
 Current policy is rechecked after evidence collection, before record writes and before an explicit rebuild publishes its index. Once the immutable record is committed, completing its derived index is housekeeping, not another execution grant. A permission change cannot retroactively undo an already committed operation.
 
 ## R05: freshness without unsupported certainty
 
-A checkpoint records the observed HEAD plus a bounded working-tree status: clean, dirty or unknown. Observation samples HEAD, a status output capped at 32 KiB, then HEAD again. The subprocess probes share a two-second observation budget rather than each receiving the full RPC timeout. Existing bounded subprocess shutdown and metadata-path validation still apply. A moving HEAD, exhausted budget, truncated status or inaccessible Git state is unknown.
+A checkpoint records the observed HEAD plus a bounded working-tree status: clean, dirty or unknown. Observation samples HEAD, a status output capped at 32 KiB, bounded tracked-index flags and HEAD again. The subprocess probes share a 1.5-second observation budget rather than each receiving the full RPC timeout; process shutdown and safe metadata I/O may extend cleanup beyond that budget. A moving HEAD, exhausted budget, truncated status or inaccessible Git state is unknown. Index flags that hide changes, including assume-unchanged and skip-worktree, also prevent a clean claim without modifying those flags.
 
 `commit_state` says whether the observed commit still matches. `baseline_state=current` additionally requires a recorded clean baseline and a currently clean status. A newly dirty tracked/untracked tree is stale; a checkpoint made on an already dirty tree remains unknown because this slice does not fingerprint all dirty file contents. Legacy records lacking worktree evidence are unknown, not silently upgraded to current.
 
@@ -50,6 +54,8 @@ A future formal Runner release must verify the exact portable archive and this c
 ## Evidence and remaining work
 
 The original six review counterexamples were added as failing regression tests before the fixes. Runner and Worker tests now include actual MCP error projection, post-dispatch reply loss, pre-dispatch dependency failure, malformed RPC replies, old record compatibility, v2 integrity, simultaneous same-process stores, missing/stale index recovery, dirty trees and permission changes during evidence collection.
+
+Additional failing probes identified new-turn orphan duplication beside an existing index, false-empty reads after a committed checkpoint, hidden tracked-index changes and repeated timeout budgets. Coverage now includes actual process exit before index publication, 100 identical retries with zero record/index writes, and end-to-end Git history and observed-Job checkpoint retries through the real MCP transport. Human-readable recovery hints are checked together with machine-readable execution state; an unknown result must not suggest replay just because the error code can ordinarily mean busy.
 
 R01 remains a deployment/client verification track: code, signed archive, live process and host tool directory are separate facts. The existing MCP connection can still expose an older tool schema even after its Runner updates. No cloud deployment or host cache refresh is inferred from source tests. R06 still requires authorized provider usage exports; local microbenchmarks do not prove the account's full quota usage.
 

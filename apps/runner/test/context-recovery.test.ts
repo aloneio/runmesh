@@ -1,5 +1,6 @@
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { ContextStore } from "../src/context-store.js";
@@ -50,4 +51,20 @@ it("R04 successful no-change retries perform no record or index writes", async (
   for (let i = 0; i < 100; i++) expect(await f.store.checkpoint(input)).toEqual({ ...first, deduplicated: true });
   expect(record).not.toHaveBeenCalled(); expect(index).not.toHaveBeenCalled();
   expect(await readFile(join(f.directory, "index.json"))).toEqual(before);
+});
+
+it("R04 a real process exit between record and index preserves one recoverable new-turn receipt", async () => {
+  const f = await fixture();
+  await f.store.checkpoint({ workspace_id: "w", turn_id: "old", goal: "preserve old index" });
+  const input = { workspace_id: "w", turn_id: "process-exit", goal: "recover after actual process exit", expected_revision: 0 };
+  const script = `import { ContextStore } from ${JSON.stringify(new URL("../src/context-store.ts", import.meta.url).href)};
+    const store = new ContextStore({stateDir:${JSON.stringify(f.stateDir)}});
+    store.writeIndex = async () => { process.exit(71); };
+    await store.checkpoint(${JSON.stringify(input)});`;
+  const child = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], { encoding: "utf8", timeout: 15000 });
+  expect(child.status, child.stderr).toBe(71);
+  const restart = new ContextStore({ stateDir: f.stateDir });
+  await expect(restart.checkpoint(input)).rejects.toMatchObject({ code: "context_index_stale" });
+  expect(await restart.rebuild({ workspace_id: "w" })).toMatchObject({ records: 2 });
+  expect(await restart.checkpoint(input)).toMatchObject({ deduplicated: true, context: { revision: 1 } });
 });

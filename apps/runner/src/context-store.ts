@@ -263,6 +263,7 @@ export class ContextStore {
         if (committed.fingerprint !== pending.fingerprint) throw new RpcRuntimeError("context_record_corrupt", "Pending checkpoint and immutable record disagree");
         if (!records.some(record => record.context_id === pending.context_id && record.revision >= pending.revision)) throw new RpcRuntimeError("context_rebuild_budget", "Pending checkpoint cannot fit in the rebuilt index");
       }
+      if (performance.now() > deadline) throw new RpcRuntimeError("context_rebuild_budget", "Context rebuild time budget was exhausted before index publication");
       const rebuiltAtMs = Date.now();
       await this.writeIndex({ schema_version: INDEX_SCHEMA_VERSION, workspace_id: workspaceId, rebuilt_at_ms: rebuiltAtMs, records }, assertAuthorized);
       if (pending !== undefined) await this.clearPending(pending);

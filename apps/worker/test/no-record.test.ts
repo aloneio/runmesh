@@ -205,3 +205,12 @@ it("R02 a non-replayable operation state overrides the human-readable retry sugg
   expect(error.recovery_hint).toContain("do not repeat");
   expect(error.recovery_hint).not.toContain("then retry");
 });
+
+
+it("R02 a known offline selection fails before dispatch with a safe retry state", async () => {
+  const f = await fixture();
+  await runInDurableObject(f.stub, (_instance, state) => { state.storage.sql.exec("UPDATE runners SET state='offline' WHERE runner_id='r'"); });
+  const response = await f.call("shell", { workspace_id: "w", command: "synthetic" });
+  expect(response.body.result.structuredContent.error).toMatchObject({ code: "runner_offline", operation_state: "not_started", next_action: "wait_and_retry" });
+  expect(f.forwarded).toHaveLength(0);
+});
