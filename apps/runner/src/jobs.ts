@@ -1,59 +1,20 @@
-import { boundPageRequest, bindBytePage, logGenerations, observeLog, verifyLogGeneration, changedLog } from "./bound-cursors.js";
 import { FairJobQueue } from "./job-queue.js";
 import { RpcRuntimeError } from "./errors.js";
-import { constants } from "node:fs";
-import { chmod, lstat, open, mkdir, readFile, readdir, rename, rm } from "node:fs/promises";
-import { readFileSync } from "node:fs";
-import { PROTOCOL_CURRENT_VERSION } from "@aloneio/runmesh-protocol";
-import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, parse, resolve } from "node:path";
 import { defaultRunnerStateDir } from "./state-path.js";
-import { spawn, type ChildProcess } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import { bytePageMetadata } from "@aloneio/runmesh-protocol";
-import { readPageBytes } from "./page-read.js";
-import type { WorkspaceConfig } from "./config.js";
-import { PathPolicyError, type PathPolicy } from "./path-policy.js";
-import { utf8BackwardBoundary, utf8ForwardBoundary, utf8SafePrefixLength } from "./utf8-pagination.js";
-import { trustedWindowsEnvironment, trustedWindowsRoot } from "./windows-tools.js";
+import { randomUUID } from "node:crypto";
+import type { ChildProcess } from "node:child_process";
+import type { open } from "node:fs/promises";
+import type { PathPolicy } from "./path-policy.js";
+import type { JobRecord, RecoveryLiveness, LocalJobStatus, JobEvent } from "./jobs/records.js";
+export type { JobRecord, RecoveryLiveness, LocalJobStatus, JobEvent } from "./jobs/records.js";
+import { isActive, occupiesProcessSlot, sameJobProcessIdentity, safeJobId, normalizeJobRecord, isJobStatus } from "./jobs/records.js";
+import { parseInvocation, paramsObject, bounded, positiveInteger, boundedPositiveInteger, relativeWorkspacePath, safeOptionalIdentifier, safeOptionalRequestId, launchRequestFingerprint } from "./jobs/values.js";
+import { terminalRecoveredJob } from "./jobs/recovery.js";
+import { nativeJobFiles } from "./jobs/storage.js";
+import { nativeJobProcesses, type ProcessTerminator } from "./jobs/process.js";
+import { JobLogReader } from "./jobs/logs.js";
 
-export type LocalJobStatus = "queued" | "running" | "cancelling" | "cancelled" | "succeeded" | "failed" | "unknown" | "interrupted";
-export interface RecoveryLiveness {
-  readonly checked_at_ms: number;
-  readonly alive: boolean;
-  /** `null` means the platform could not safely compare a process-start fingerprint. */
-  readonly fingerprint_matches: boolean | null;
-}
-export interface JobRecord {
-  readonly job_id: string;
-  readonly workspace_id: string;
-  readonly cwd: string;
-  readonly command: readonly string[];
-  readonly shell: boolean;
-  readonly status: LocalJobStatus;
-  readonly pid: number | null;
-  /** Linux /proc process starttime, when the host exposes it. */
-  readonly process_start_fingerprint: string | null;
-  /** One recovery-time liveness observation; it is not a claim that a job completed. */
-  readonly recovery_liveness: RecoveryLiveness | null;
-  readonly created_at_ms: number;
-  readonly started_at_ms: number | null;
-  readonly updated_at_ms: number;
-  readonly completed_at_ms: number | null;
-  readonly exit_code: number | null;
-  readonly signal: string | null;
-  /** Recovery explanation safe to expose to MCP clients. */
-  readonly recovery_note: string | null;
-  /** True when the persisted output cap discarded one or more bytes. */
-  readonly output_truncated: boolean;
-  /** MCP client identity that initiated the job; it does not grant ownership. */
-  readonly created_by_client_id: string | null;
-  /** Optional caller-supplied idempotency key. It is metadata, never authorization. */
-  readonly request_id?: string | null;
-  /** Local-only hash binding request_id to the normalized launch input. */
-  readonly request_fingerprint?: string | null;
-  /** Persisted evidence that this Runner delivered a cancellation request. */
-  readonly cancellation_delivered_at_ms: number | null;
-}
 export interface JobManagerOptions {
   readonly policy: PathPolicy;
   readonly stateDir?: string;
@@ -72,40 +33,28 @@ export interface JobManagerOptions {
   /** Test-only process-tree terminator seam; production uses the native implementation. */
   readonly terminateProcess?: (pid: number | null, expectedFingerprint?: string | null) => Promise<boolean>;
 }
-export type JobEvent = { readonly type: "started" | "output" | "status" | "completed"; readonly job: JobRecord; readonly stream?: "stdout" | "stderr"; readonly data?: string };
 
-// Reserve room for the MCP context/audit envelope, as filesystem pages do.
-// The transport ceiling remains 64 KiB; filling it locally would discard the
-// continuation cursor when the Worker adds its own bounded metadata.
-const MAX_LOG_RESPONSE_BYTES = 48 * 1024;
-const MAX_LOG_READ_BYTES = 64 * 1024;
 const MAX_INPUT_BYTES = 64 * 1024;
 const DEFAULT_MAX_RETAINED_JOBS = 100;
 const DEFAULT_MAX_LOG_BYTES_PER_JOB = 4 * 1024 * 1024;
 const DEFAULT_MAX_TOTAL_LOG_BYTES = 32 * 1024 * 1024;
 const MAX_RETAINED_JOBS = 10_000;
 const MAX_CONFIGURED_LOG_BYTES = 512 * 1024 * 1024;
-// Recovery metadata is generated from bounded command/identity fields, but a
-// corrupted or attacker-created file must not make startup allocate without a
-// limit.  Eight MiB accommodates the legal worst-case UTF-8 command array
-// while keeping recovery memory bounded.
-const MAX_METADATA_BYTES = 8 * 1024 * 1024;
-const METADATA_READ_CHUNK_BYTES = 64 * 1024;
 
 type TerminationCheck =
   | { readonly safe: true }
   | { readonly safe: false; readonly kind: "terminal" | "identity"; readonly message: string };
 
-/** Internal terminator shape carries the non-exported ChildProcess identity. */
-type ProcessTerminator = (pid: number | null, expectedFingerprint?: string | null, expectedChild?: ChildProcess) => Promise<boolean>;
-
 /**
- * Local persistent process supervisor.  Process stdio is inherited directly by
- * append-only log descriptors, rather than by a transport-owned WriteStream.
- * This keeps process output independent of a Runner/WebSocket request lifetime.
+ * Local process supervisor and durability coordinator. Child pipe data is
+ * drained into bounded local log writes independently of WebSocket requests.
+ * State publication, queue admission and cancellation ordering stay here.
  */
 export class JobManager {
   private readonly cursorOwner = randomUUID();
+  private readonly files = nativeJobFiles;
+  private readonly processAdapter = nativeJobProcesses;
+  private readonly logReader: JobLogReader;
   private readonly policy: PathPolicy;
   private readonly stateDir: string;
   private readonly jobsDir: string;
@@ -194,21 +143,24 @@ export class JobManager {
     // the published declaration graph do not need @types/node. Native
     // termination still receives the stronger local ChildProcess identity.
     this.terminate = options.terminateProcess === undefined
-      ? terminateProcess
+      ? this.processAdapter.terminateProcess
       : async (pid, expectedFingerprint) => options.terminateProcess?.(pid, expectedFingerprint) ?? false;
+    this.logReader = new JobLogReader(this.files, { cursorOwner: this.cursorOwner, jobsDir: this.jobsDir, runnerId: this.runnerId,
+      generation: () => this.policy.generation, assertGeneration: generation => this.policy.assertGeneration(generation),
+      logPath: (jobId, stream) => this.logPath(jobId, stream) });
   }
 
   public async initialize(): Promise<void> {
     // State is a credential/job-output boundary. Walk and inspect each path
     // component before creating children so a pre-existing symlink/junction
     // cannot redirect the supervisor into an attacker-controlled tree.
-    await ensureJobStorageDirectories(this.stateDir, this.jobsDir);
-    await atomicJson(this.runnerStatePath, { runner_id: this.runnerId, workspaces: this.policy.list().map((workspace) => workspace.workspaceId), updated_at_ms: Date.now(), version: 1 });
+    await this.files.ensureJobStorageDirectories(this.stateDir, this.jobsDir);
+    await this.files.atomicJson(this.runnerStatePath, { runner_id: this.runnerId, workspaces: this.policy.list().map((workspace) => workspace.workspaceId), updated_at_ms: Date.now(), version: 1 });
     const aliveJobIds = new Set<string>();
-    for (const entry of await readdir(this.jobsDir, { withFileTypes: true })) {
+    for (const entry of await this.files.readdir(this.jobsDir, { withFileTypes: true })) {
       if (!entry.isDirectory() || !safeJobId(entry.name)) continue;
       const metaPath = join(this.jobsDir, entry.name, "meta.json");
-      const parsed = await readJson<unknown>(metaPath).catch(() => undefined);
+      const parsed = await this.files.readJson<unknown>(metaPath).catch(() => undefined);
       // The directory name is the storage boundary.  Never trust a job_id
       // read from JSON to select another path (or even another retained
       // record) during recovery.
@@ -222,7 +174,7 @@ export class JobManager {
         // Inspect each recovered process exactly once. A second PID probe can
         // observe a different process and turn a PID-reuse race into a false
         // conclusion during retention pruning.
-        const inspection = await inspectProcess(job.pid, job.process_start_fingerprint);
+        const inspection = await this.processAdapter.inspectProcess(job.pid, job.process_start_fingerprint);
         if (inspection.alive && inspection.fingerprintMatches !== false) aliveJobIds.add(job.job_id);
         const recovery_liveness: RecoveryLiveness = {
           checked_at_ms: Date.now(), alive: inspection.alive, fingerprint_matches: inspection.fingerprintMatches,
@@ -362,7 +314,7 @@ export class JobManager {
     if (reservedJob === undefined) {
     this.jobs.set(job.job_id, job);
     try {
-      await ensureDirectoryPath(this.jobDir(job.job_id), "Runner job directory", true);
+      await this.files.ensureDirectoryPath(this.jobDir(job.job_id), "Runner job directory", true);
       await this.persist(job);
     } catch (error) {
       // No child exists yet. If cancellation did not replace the queued
@@ -373,7 +325,7 @@ export class JobManager {
       if (this.jobs.get(job.job_id) === job) {
         this.jobs.delete(job.job_id);
         this.jobLogBytes.delete(job.job_id);
-        await rm(this.jobDir(job.job_id), { recursive: true, force: true }).catch(() => undefined);
+        await this.files.rm(this.jobDir(job.job_id), { recursive: true, force: true }).catch(() => undefined);
       }
       throw error;
     }
@@ -392,8 +344,8 @@ export class JobManager {
     let child: ChildProcess;
     let running: JobRecord;
     try {
-      stdout = await openJobLog(this.logPath(job.job_id, "stdout"), "append");
-      stderr = await openJobLog(this.logPath(job.job_id, "stderr"), "append");
+      stdout = await this.files.openJobLog(this.logPath(job.job_id, "stdout"), "append");
+      stderr = await this.files.openJobLog(this.logPath(job.job_id, "stderr"), "append");
       // A remote cancel can terminalize the queued record while the log
       // descriptors are opening. Do not resurrect that record by spawning
       // after cancellation; the synchronous status check closes the only
@@ -405,7 +357,7 @@ export class JobManager {
         return beforeSpawn ?? job;
       }
       this.policy.assertGeneration(generation);
-      child = spawn(invocation.file, invocation.args, {
+      child = this.processAdapter.spawn(invocation.file, invocation.args, {
         cwd: cwd.path,
         shell: invocation.shell,
         detached: process.platform !== "win32",
@@ -416,7 +368,7 @@ export class JobManager {
       // work can let an ultra-short-lived child exit and its PID be reused.
       // A later cancellation compares this immutable birth marker before it
       // sends a PID-based process-group signal.
-      const processFingerprint = linuxProcessStartFingerprintSync(child.pid ?? null);
+      const processFingerprint = this.processAdapter.fingerprintSync(child.pid ?? null);
       // Publish the active record and attach all listeners in the same
       // synchronous turn as spawn. A child can exit before the next await;
       // finish must then observe an active job rather than the queued record.
@@ -615,7 +567,7 @@ export class JobManager {
       return { safe: false, kind: "identity", message: "job process identity could not be verified; cancellation was not sent" };
     }
     if (expectedChild.exitCode !== null || expectedChild.signalCode !== null) return { safe: false, kind: "terminal", message: "job process has already exited; cancellation was not sent" };
-    const inspection = await inspectProcess(job.pid, job.process_start_fingerprint);
+    const inspection = await this.processAdapter.inspectProcess(job.pid, job.process_start_fingerprint);
     if (!inspection.alive) return { safe: false, kind: "terminal", message: "job process has already exited; cancellation was not sent" };
     // Linux exposes a process starttime, so cancellation is fail-closed when
     // either the recorded marker or the verification read is unavailable. A
@@ -697,89 +649,7 @@ export class JobManager {
   }
 
   public async logs(jobId: unknown, input: unknown = {}): Promise<Record<string, unknown>> {
-    const job = this.get(jobId);
-    const params = paramsObject(input);
-    const cursor = boundPageRequest(params, "log");
-    const generation = this.policy.generation;
-    const stream = params.stream === "stderr" ? "stderr" : "stdout";
-    const limit = bounded(params.limit, 1, MAX_LOG_READ_BYTES, 16 * 1024);
-    const scope = JSON.stringify([this.cursorOwner, this.jobsDir, this.runnerId, job.job_id, job.workspace_id, stream, generation]);
-    let entry = cursor.id === undefined ? undefined : logGenerations.get(cursor.id, scope);
-    let handle: Awaited<ReturnType<typeof open>>;
-    try {
-      handle = await openJobLog(this.logPath(job.job_id, stream), "read");
-    } catch (error) {
-      const reason = isErrno(error, "ENOENT") ? "missing" : isErrno(error, "EACCES") || isErrno(error, "EPERM") ? "access_denied" : isErrno(error, "ENOTDIR") || isErrno(error, "ELOOP") ? "unsafe_path" : "io_error";
-      throw new RpcRuntimeError("log_unavailable", "The requested log is unavailable; the Job execution result is unchanged", { reason });
-    }
-    try {
-      const info = await handle.stat();
-      if (entry !== undefined) await verifyLogGeneration(handle, info, entry.value);
-      if (cursor.offset !== undefined && cursor.offset > info.size) throw changedLog();
-      const observation = cursor.bound ? await observeLog(handle, info) : undefined;
-      if (observation !== undefined && entry === undefined) entry = logGenerations.put(scope, observation, Buffer.byteLength(scope) + Buffer.byteLength(JSON.stringify(observation)) + 256);
-      const requestedOffset = cursor.offset ?? bounded(params.cursor ?? params.offset, 0, info.size, 0);
-      const requested = params.tail === true ? Math.max(0, info.size - limit) : requestedOffset;
-      const offset = await utf8AlignedStart(handle, requested, info.size, params.tail === true);
-      // Read enough bytes to finish one multibyte code point when a tiny caller
-      // limit lands in its middle; the JSON response cap below remains absolute.
-      const readLength = Math.min(info.size - offset, limit + 3);
-      const data = await readPageBytes(handle, offset, readLength, "log_changed");
-      const after = await handle.stat();
-      const current = await lstat(this.logPath(job.job_id, stream));
-      if (!current.isFile() || current.isSymbolicLink() || current.dev !== info.dev || current.ino !== info.ino || after.size < info.size || (after.size === info.size && (after.mtimeMs !== info.mtimeMs || after.ctimeMs !== info.ctimeMs))) throw new RpcRuntimeError("log_changed", "The log changed while this page was being read; request a fresh page");
-      if (entry !== undefined && observation !== undefined) {
-        await verifyLogGeneration(handle, after, observation);
-        // Keep the largest successfully observed watermark across concurrent
-        // reads. Growth alone is not a new log generation.
-        const live = logGenerations.get(entry.id, scope);
-        await verifyLogGeneration(handle, await handle.stat(), live.value);
-        if (observation.size > live.value.size) Object.assign(live.value, observation);
-      }
-      const maxByLimit = utf8SafePrefixLength(data, Math.min(limit, data.length));
-      const firstCodePoint = maxByLimit === 0 && data.length > 0 ? utf8SafePrefixLength(data, Math.min(4, data.length)) : maxByLimit;
-      const used = this.fitLogResponse(job.job_id, stream, offset, info.size, data, firstCodePoint, entry);
-      // A partial final code point stops automatic paging. Preserve its byte
-      // offset for an explicit later refresh: appending the remaining bytes
-      // must not lose a character merely because an earlier read saw EOF.
-      const page = logResult(job.job_id, stream, offset, info.size, data.subarray(0, used).toString("utf8"), offset + used, used < firstCodePoint, job.output_truncated);
-      if (entry === undefined) return page;
-      const finalPath = await lstat(this.logPath(job.job_id, stream));
-      if (!finalPath.isFile() || finalPath.isSymbolicLink() || finalPath.dev !== info.dev || finalPath.ino !== info.ino) throw changedLog();
-      this.policy.assertGeneration(generation);
-      logGenerations.get(entry.id, scope);
-      return bindBytePage(page, entry, "log", entry.id);
-    } catch (error) {
-      if (entry !== undefined && error instanceof RpcRuntimeError && error.code === "log_changed") logGenerations.delete(entry.id);
-      if (error instanceof RpcRuntimeError || error instanceof PathPolicyError) throw error;
-      throw new RpcRuntimeError("log_unavailable", "The requested log could not be read; the Job execution result is unchanged", { reason: "io_error" });
-    } finally {
-      await handle.close();
-    }
-  }
-
-  private fitLogResponse(jobId: string, stream: "stdout" | "stderr", offset: number, size: number, data: Buffer, initial: number, entry?: { id: string; expiresAt: number }): number {
-    const pageFor = (length: number) => {
-      const page = logResult(jobId, stream, offset, size, data.subarray(0, length).toString("utf8"), offset + length, true);
-      return entry === undefined ? page : bindBytePage(page, entry, "log", entry.id);
-    };
-    let low = 0;
-    let high = initial;
-    let best = 0;
-    while (low <= high) {
-      const midpoint = Math.floor((low + high) / 2);
-      const length = utf8SafePrefixLength(data, midpoint);
-      const candidate = pageFor(length);
-      if (wireResponseBytes(candidate) <= MAX_LOG_RESPONSE_BYTES) {
-        best = length;
-        low = midpoint + 1;
-      } else {
-        high = midpoint - 1;
-      }
-    }
-    // A valid UTF-8 character always fits in a 64 KiB response; the fallback
-    // protects this invariant even for hostile/corrupt raw log bytes.
-    return best === 0 && initial > 0 && wireResponseBytes(pageFor(initial)) <= MAX_LOG_RESPONSE_BYTES ? initial : best;
+    return this.logReader.read(this.get(jobId), input);
   }
 
   private reserveLogBytes(jobId: string, chunk: Buffer): { readonly data: Buffer; readonly truncated: boolean } {
@@ -818,7 +688,7 @@ export class JobManager {
         this.releaseLogBytes(jobId, reserved.data.byteLength);
         return;
       }
-      try { await appendJobLog(this.logPath(jobId, stream), reserved.data); }
+      try { await this.files.appendJobLog(this.logPath(jobId, stream), reserved.data); }
       catch {
         this.releaseLogBytes(jobId, reserved.data.byteLength);
         // The write chain is also detached from the stream callback.  A
@@ -854,7 +724,7 @@ export class JobManager {
   }
 
   private async jobLogSize(jobId: string): Promise<number> {
-    const sizes = await Promise.all((["stdout", "stderr"] as const).map(async (stream) => await safeFileSize(this.logPath(jobId, stream))));
+    const sizes = await Promise.all((["stdout", "stderr"] as const).map(async (stream) => await this.files.safeFileSize(this.logPath(jobId, stream))));
     return (sizes[0] ?? 0) + (sizes[1] ?? 0);
   }
 
@@ -921,9 +791,9 @@ export class JobManager {
     const size = this.jobLogBytes.get(job.job_id) ?? await this.jobLogSize(job.job_id);
     // jobLogSize() is asynchronous; do not trust the pre-await identity check.
     if (!canRemove()) return false;
-    await rm(this.jobDir(job.job_id), { recursive: true, force: true, maxRetries: 3, retryDelay: 25 });
+    await this.files.rm(this.jobDir(job.job_id), { recursive: true, force: true, maxRetries: 3, retryDelay: 25 });
     // A state transition is not expected for terminal records, but it can
-    // occur in injected/recovery paths while rm() is in flight. Never delete a
+    // occur in injected/recovery paths while this.files.rm() is in flight. Never delete a
     // newer map entry or subtract its accounting in that case.
     if (!canRemove()) return false;
     this.totalLogBytes = Math.max(0, this.totalLogBytes - size);
@@ -935,7 +805,7 @@ export class JobManager {
   private async reconcileRecoveredJob(jobId: string): Promise<void> {
     const job = this.jobs.get(jobId);
     if (job === undefined || job.status !== "unknown" && !(job.status === "cancelling" && job.recovery_liveness !== null)) return;
-    const inspection = await inspectProcess(job.pid, job.process_start_fingerprint);
+    const inspection = await this.processAdapter.inspectProcess(job.pid, job.process_start_fingerprint);
     if (inspection.alive && inspection.fingerprintMatches !== false) return;
     // The inspection yielded to the event loop. Re-read the record before
     // publishing interruption/cancellation so a concurrent cancel or another
@@ -966,7 +836,6 @@ export class JobManager {
     }
   }
 
-
   private async cancelRecoveredUnknown(job: JobRecord): Promise<JobRecord> {
     // Capture the current recovery target before the async probe. A concurrent
     // reconciliation/cancel may have replaced this record while the caller's
@@ -975,7 +844,7 @@ export class JobManager {
     if (initial === undefined) return job;
     if (initial.pid !== job.pid || initial.process_start_fingerprint !== job.process_start_fingerprint || !(initial.status === "unknown" || (initial.status === "cancelling" && initial.recovery_liveness !== null))) return initial;
     if (initial.status === "cancelling" && initial.cancellation_delivered_at_ms !== null) return initial;
-    const inspection = await inspectProcess(initial.pid, initial.process_start_fingerprint);
+    const inspection = await this.processAdapter.inspectProcess(initial.pid, initial.process_start_fingerprint);
     if (!inspection.alive || inspection.fingerprintMatches !== true) {
       // The probe yielded. A concurrent reconciliation/cancellation may have
       // already committed a newer terminal (or cancelling) state; return that
@@ -999,7 +868,7 @@ export class JobManager {
     // immediately before signalling so a vanished/reused PID is never killed.
     const current = this.jobs.get(recovered.job_id);
     if (current === undefined || !isActive(current)) return current ?? recovered;
-    const latestInspection = await inspectProcess(current.pid, current.process_start_fingerprint);
+    const latestInspection = await this.processAdapter.inspectProcess(current.pid, current.process_start_fingerprint);
     if (!latestInspection.alive || latestInspection.fingerprintMatches !== true) {
       const beforeTerminal = this.jobs.get(recovered.job_id);
       if (beforeTerminal === undefined || beforeTerminal.status !== current.status || beforeTerminal.pid !== current.pid || beforeTerminal.process_start_fingerprint !== current.process_start_fingerprint) return beforeTerminal ?? current;
@@ -1197,7 +1066,7 @@ export class JobManager {
     await this.logWriteChain.catch(() => undefined);
     await Promise.all((["stdout", "stderr"] as const).map(async (stream) => {
       try {
-        const handle = await openJobLog(this.logPath(jobId, stream), "read");
+        const handle = await this.files.openJobLog(this.logPath(jobId, stream), "read");
         try { await handle.sync(); } finally { await handle.close(); }
       } catch {
         // Child close guarantees descriptor closure. sync is a best-effort
@@ -1276,7 +1145,7 @@ export class JobManager {
       if (this.terminalPersisting.has(job.job_id) && isActive(job)) return;
       const prePublishTerminal = !isActive(job) && current !== undefined && isActive(current);
       if (current !== job && !prePublishTerminal) return;
-      await atomicJson(path, job);
+      await this.files.atomicJson(path, job);
     });
     this.persistChains.set(job.job_id, next);
     return next.finally(() => {
@@ -1284,427 +1153,3 @@ export class JobManager {
     });
   }
 }
-
-function terminalRecoveredJob(job: JobRecord, status: "cancelled" | "interrupted", recovery_liveness: RecoveryLiveness): JobRecord {
-  return {
-    ...job,
-    status,
-    updated_at_ms: Date.now(),
-    completed_at_ms: Date.now(),
-    exit_code: null,
-    signal: null,
-    recovery_liveness,
-    recovery_note: status === "cancelled"
-      ? "cancellation delivery was confirmed after Runner restart; the process exit code is unavailable"
-      : "terminal outcome unavailable after Runner restart",
-    output_truncated: job.output_truncated,
-    cancellation_delivered_at_ms: job.cancellation_delivered_at_ms,
-    created_by_client_id: job.created_by_client_id,
-    request_id: job.request_id ?? null,
-    request_fingerprint: job.request_fingerprint ?? null,
-  };
-}
-
-function parseInvocation(params: Record<string, unknown>, workspace: WorkspaceConfig): { file: string; args: string[]; command: string[]; shell: boolean } {
-  const requestedShell = params.shell === true;
-  if (requestedShell && !workspace.shell) throw new Error("shell execution is disabled for this workspace");
-  const shellRuntime = params.shell_runtime;
-  if (requestedShell && typeof shellRuntime === "object" && shellRuntime !== null && !Array.isArray(shellRuntime)) {
-    const invocation = shellRuntime as { file?: unknown; args?: unknown };
-    if (!validInvocationPart(invocation.file, false) || !Array.isArray(invocation.args) || invocation.args.length > 256 || invocation.args.some((item) => !validInvocationPart(item, true))) throw new Error("shell runtime invocation is invalid");
-    if (typeof params.command !== "string" || params.command.length === 0 || params.command.length > 8_192 || params.command.includes("\0")) throw new Error("command is required");
-    return { file: invocation.file, args: invocation.args as string[], command: [params.command], shell: false };
-  }
-  if (Array.isArray(params.command)) {
-    if (params.command.length === 0 || params.command.length > 256 || params.command.some((item, index) => !validInvocationPart(item, index !== 0))) throw new Error("command must be a bounded string array");
-    return { file: params.command[0] as string, args: params.command.slice(1) as string[], command: params.command as string[], shell: requestedShell };
-  }
-  if (typeof params.command !== "string" || params.command.length === 0 || params.command.length > 8_192 || params.command.includes("\0")) throw new Error("command is required");
-  const args = params.args === undefined ? [] : stringArray(params.args, "args");
-  if (!requestedShell) return { file: params.command, args, command: [params.command, ...args], shell: false };
-  return { file: [params.command, ...args].join(" "), args: [], command: [params.command, ...args], shell: true };
-}
-function paramsObject(value: unknown): Record<string, unknown> { if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("params must be an object"); return value as Record<string, unknown>; }
-function stringArray(value: unknown, label: string): string[] { if (!Array.isArray(value) || value.length > 256 || value.some((item) => typeof item !== "string" || item.includes("\0") || item.length > 8_192)) throw new Error(`${label} must be string array`); return value as string[]; }
-/** Bound every OS process argument before it reaches spawn/exec. The command
- * executable itself may not be empty; empty argument values remain valid. */
-function validInvocationPart(value: unknown, allowEmpty: boolean): value is string {
-  return typeof value === "string" && (allowEmpty || value.length > 0) && value.length <= 8_192 && !value.includes("\0");
-}
-function bounded(value: unknown, min: number, max: number, fallback: number): number { if (value === undefined || value === null) return fallback; if (typeof value === "string" && /^\d+$/.test(value)) value = Number(value); if (!Number.isSafeInteger(value) || (value as number) < min || (value as number) > max) throw new Error("invalid pagination value"); return value as number; }
-function positiveInteger(value: unknown, label: string): number { if (!Number.isSafeInteger(value) || (value as number) < 1) throw new Error(`${label} must be a positive integer`); return value as number; }
-function boundedPositiveInteger(value: unknown, min: number, max: number, label: string): number { if (!Number.isSafeInteger(value) || (value as number) < min || (value as number) > max) throw new Error(`${label} must be an integer from ${min} to ${max}`); return value as number; }
-function relativeWorkspacePath(workspace: WorkspaceConfig, path: string): string { return path === workspace.rootPath ? "." : path.slice(workspace.rootPath.length + 1); }
-function isJobStatus(value: unknown): value is LocalJobStatus { return typeof value === "string" && ["queued", "running", "cancelling", "cancelled", "succeeded", "failed", "unknown", "interrupted"].includes(value); }
-function safeOptionalIdentifier(value: unknown): string | null { if (value === undefined) return null; if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) throw new Error("created_by_client_id is invalid"); return value; }
-function safeOptionalRequestId(value: unknown): string | null { if (value === undefined) return null; if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) throw new RpcRuntimeError("invalid_params", "request_id is invalid"); return value; }
-function launchRequestFingerprint(workspaceId: string, cwd: string, invocation: { readonly file: string; readonly args: readonly string[]; readonly command: readonly string[]; readonly shell: boolean }, clientId: string | null): string {
-  return createHash("sha256").update(JSON.stringify({ workspace_id: workspaceId, cwd, file: invocation.file, args: invocation.args, command: invocation.command, shell: invocation.shell, client_id: clientId })).digest("hex");
-}
-function isActive(job: JobRecord): boolean { return job.status === "queued" || job.status === "running" || job.status === "cancelling"; }
-/** Immutable local-child identity used when merging a newer active snapshot. */
-function sameJobProcessIdentity(left: JobRecord, right: JobRecord): boolean {
-  return left.job_id === right.job_id
-    && left.pid === right.pid
-    && left.process_start_fingerprint === right.process_start_fingerprint
-    && left.started_at_ms === right.started_at_ms;
-}
-/** Unknown is a recovered live-process state and must occupy a start slot. */
-function occupiesProcessSlot(job: JobRecord): boolean { return isActive(job) || job.status === "unknown"; }
-function logResult(jobId: string, stream: "stdout" | "stderr", offset: number, size: number, data: string, next: number, responseLimited = false, sourceTruncated = false): Record<string, unknown> {
-  return { job_id: jobId, stream, data, offset, size, ...bytePageMetadata(data, offset, next, size, responseLimited), source_truncated: sourceTruncated };
-}
-function wireResponseBytes(result: Record<string, unknown>): number {
-  // Include the largest supported request-id and JSON wire envelope so the
-  // bounded local result stays under the documented 64 KiB response budget.
-  return Buffer.byteLength(JSON.stringify({ type: "rpc.response", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "x".repeat(128), result }), "utf8");
-}
-
-const NOFOLLOW = process.platform === "win32" ? 0 : constants.O_NOFOLLOW ?? 0;
-
-/**
- * Ensure the state and jobs directories are real directories before any
- * metadata/log path is opened. The component-by-component walk also avoids
- * recursively creating through a symlinked ancestor. State roots provisioned
- * by the service manager may be group-readable (0750), but must never be
- * group/other writable; the jobs child is tightened to owner-only (0700).
- */
-async function ensureJobStorageDirectories(stateDir: string, jobsDir: string): Promise<void> {
-  await ensureDirectoryPath(stateDir, "Runner state directory", false);
-  await ensureDirectoryPath(jobsDir, "Runner jobs directory", true);
-}
-
-async function ensureDirectoryPath(path: string, label: string, privateMode: boolean): Promise<void> {
-  const normalized = resolve(path);
-  const root = parse(normalized).root;
-  const components = relative(root, normalized).split(sep).filter((part) => part.length > 0);
-  let current = root;
-  for (const component of components) {
-    current = join(current, component);
-    let info = await lstat(current).catch((error: unknown) => {
-      if (isErrno(error, "ENOENT")) return undefined;
-      throw error;
-    });
-    if (info === undefined) {
-      await mkdir(current, { mode: 0o700 });
-      info = await lstat(current);
-    }
-    if (!info.isDirectory() || info.isSymbolicLink()) throw pathError(`${label} must be a regular directory`, "ENOTDIR");
-    if (current === normalized && process.platform !== "win32") {
-      if (!privateMode && (info.mode & 0o022) !== 0) throw new Error(`${label} is writable by group or others`);
-      if (privateMode && (info.mode & 0o077) !== 0) {
-        try { await chmod(current, 0o700); } catch { throw pathError(`${label} is not private`, "EPERM"); }
-        const tightened = await lstat(current);
-        if (!tightened.isDirectory() || tightened.isSymbolicLink() || (tightened.mode & 0o077) !== 0) throw pathError(`${label} is not private`, "EPERM");
-      }
-    }
-  }
-}
-
-function isErrno(error: unknown, code: string): boolean {
-  return typeof error === "object" && error !== null && "code" in error && (error as { readonly code?: unknown }).code === code;
-}
-
-function pathError(message: string, code: string): NodeJS.ErrnoException {
-  const error = new Error(message) as NodeJS.ErrnoException;
-  error.code = code;
-  return error;
-}
-
-/** Reject symlink/non-regular file substitutions while allowing first create. */
-async function assertRegularFile(path: string, allowMissing = true): Promise<void> {
-  try {
-    const info = await lstat(path);
-    if (!info.isFile() || info.isSymbolicLink()) throw pathError("state file is not a regular file", "ENOTDIR");
-  } catch (error) {
-    if (allowMissing && isErrno(error, "ENOENT")) return;
-    throw error;
-  }
-}
-
-async function assertRegularDirectory(path: string): Promise<void> {
-  const info = await lstat(path);
-  if (!info.isDirectory() || info.isSymbolicLink()) throw pathError("state parent is not a regular directory", "ENOTDIR");
-}
-
-async function openJobLog(path: string, mode: "read" | "append"): Promise<Awaited<ReturnType<typeof open>>> {
-  await assertRegularDirectory(dirname(path));
-  await assertRegularFile(path);
-  const flags = mode === "read"
-    ? constants.O_RDONLY | NOFOLLOW
-    : constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | NOFOLLOW;
-  return open(path, flags, 0o600);
-}
-
-async function appendJobLog(path: string, data: Buffer): Promise<void> {
-  const handle = await openJobLog(path, "append");
-  try { await handle.writeFile(data); } finally { await handle.close(); }
-}
-
-async function safeFileSize(path: string): Promise<number> {
-  try {
-    await assertRegularDirectory(dirname(path));
-    const info = await lstat(path);
-    return info.isFile() && !info.isSymbolicLink() ? info.size : 0;
-  } catch (error) {
-    if (isErrno(error, "ENOENT")) return 0;
-    return 0;
-  }
-}
-
-async function atomicJson(path: string, value: unknown): Promise<void> {
-  await assertRegularDirectory(dirname(path));
-  await assertRegularFile(path);
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  try {
-    const handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW, 0o600);
-    try {
-      await handle.writeFile(`${JSON.stringify(value)}\n`);
-      await handle.sync();
-    } finally { await handle.close(); }
-    await rename(temporary, path);
-  } finally {
-    // Do not leave command metadata or partial snapshots behind when a disk
-    // full/permission error interrupts the atomic replacement.
-    await rm(temporary, { force: true }).catch(() => undefined);
-  }
-}
-async function readJson<T>(path: string): Promise<T> {
-  await assertRegularDirectory(dirname(path));
-  await assertRegularFile(path, false);
-  const handle = await open(path, constants.O_RDONLY | NOFOLLOW);
-  try {
-    const info = await handle.stat();
-    if (!info.isFile() || info.size > MAX_METADATA_BYTES) throw metadataTooLarge(path);
-    const chunks: Buffer[] = [];
-    let total = 0;
-    // Read in bounded chunks rather than FileHandle.readFile(), which allocates
-    // based on the current file size.  The one-byte allowance detects a file
-    // that grows beyond the initial stat between reads.
-    for (;;) {
-      const remaining = MAX_METADATA_BYTES - total;
-      const buffer = Buffer.alloc(Math.min(METADATA_READ_CHUNK_BYTES, remaining + 1));
-      const { bytesRead } = await handle.read(buffer, 0, buffer.byteLength, total);
-      if (bytesRead === 0) break;
-      total += bytesRead;
-      if (total > MAX_METADATA_BYTES) throw metadataTooLarge(path);
-      chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
-    }
-    // Verify the descriptor size after reading. A concurrent truncation or
-    // append can otherwise produce a syntactically valid but mixed metadata
-    // snapshot (the one-byte growth allowance only detects large growth).
-    const final = await handle.stat();
-    if (!final.isFile() || final.dev !== info.dev || final.ino !== info.ino || final.size !== info.size || total !== info.size) {
-      throw new Error("job metadata changed while being read");
-    }
-    return JSON.parse(Buffer.concat(chunks, total).toString("utf8")) as T;
-  }
-  finally { await handle.close(); }
-}
-
-function metadataTooLarge(path: string): Error {
-  const error = new Error(`job metadata exceeds ${MAX_METADATA_BYTES} bytes: ${path}`) as NodeJS.ErrnoException;
-  error.code = "EFBIG";
-  return error;
-}
-
-async function inspectProcess(pid: number | null, expectedFingerprint: string | null): Promise<{ alive: boolean; fingerprintMatches: boolean | null }> {
-  if (pid === null || pid <= 0) return { alive: false, fingerprintMatches: null };
-  try { process.kill(pid, 0); } catch (error) { return { alive: (error as NodeJS.ErrnoException).code === "EPERM", fingerprintMatches: null }; }
-  const fingerprint = await linuxProcessStartFingerprint(pid);
-  return { alive: true, fingerprintMatches: expectedFingerprint === null || fingerprint === null ? null : fingerprint === expectedFingerprint };
-}
-
-/** Read Linux /proc/<pid>/stat field 22 (starttime); unavailable hosts return null. */
-function linuxProcessStartFingerprintSync(pid: number | null): string | null {
-  if (process.platform !== "linux" || pid === null || pid <= 0) return null;
-  try {
-    const value = readFileSync(`/proc/${pid}/stat`, "utf8");
-    const close = value.lastIndexOf(")");
-    if (close < 0) return null;
-    const fields = value.slice(close + 2).trim().split(/\s+/);
-    const starttime = fields[19]; // stat fields after comm start at field 3; field 22 is index 19.
-    return starttime === undefined || !/^\d+$/.test(starttime) ? null : starttime;
-  } catch { return null; }
-}
-
-async function linuxProcessStartFingerprint(pid: number | null): Promise<string | null> {
-  if (process.platform !== "linux" || pid === null || pid <= 0) return null;
-  try {
-    const value = await readFile(`/proc/${pid}/stat`, "utf8");
-    const close = value.lastIndexOf(")");
-    if (close < 0) return null;
-    const fields = value.slice(close + 2).trim().split(/\s+/);
-    const starttime = fields[19]; // stat fields after comm start at field 3; field 22 is index 19.
-    return starttime === undefined || !/^\d+$/.test(starttime) ? null : starttime;
-  } catch { return null; }
-}
-
-async function terminateProcess(pid: number | null, expectedFingerprint: string | null = null, expectedChild?: ChildProcess): Promise<boolean> {
-  if (pid === null || pid <= 0) return false;
-  // A recovered Windows record has only a bare PID. Without the original
-  // ChildProcess handle there is no portable creation-time identity proof, so
-  // fail closed instead of taskkilling a potentially reused PID.
-  if (process.platform === "win32") {
-    if (expectedChild === undefined || !isTerminationTargetValid(pid, expectedFingerprint, expectedChild)) return false;
-    return terminateWindowsProcessTree(pid);
-  }
-  // Re-check the identity inside the native terminator as well as in the
-  // JobManager caller. The child can exit between the caller's async probe and
-  // this synchronous signal call; fail closed instead of sending to a reused
-  // process group.
-  if (!isTerminationTargetValid(pid, expectedFingerprint, expectedChild)) return false;
-  const target = -pid;
-  try { process.kill(target, "SIGTERM"); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return false; throw error; }
-  // Return after delivery rather than after the grace period so `close` cannot
-  // race past cancellation classification. Before escalating, prove that the
-  // original leader still exists. A bare PID is not sufficient after a
-  // restart/reuse window: on Linux use /proc starttime, while local ChildProcess
-  // handles provide the best available proof on other POSIX hosts. Recovered
-  // jobs without either proof deliberately skip SIGKILL rather than risking an
-  // unrelated process group.
-  void new Promise((resolve) => setTimeout(resolve, 1_000)).then(() => {
-    if (!isTerminationTargetValid(pid, expectedFingerprint, expectedChild)) return;
-    try { process.kill(target, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
-  }).catch(() => undefined);
-  return true;
-}
-
-function isTerminationTargetValid(pid: number, expectedFingerprint: string | null, expectedChild?: ChildProcess): boolean {
-  if (expectedChild !== undefined && (expectedChild.pid !== pid || expectedChild.exitCode !== null || expectedChild.signalCode !== null)) return false;
-  try { process.kill(pid, 0); } catch { return false; }
-  if (process.platform === "linux") return expectedFingerprint !== null && linuxProcessStartFingerprintSync(pid) === expectedFingerprint;
-  // There is no portable process-start fingerprint on these hosts. Recovered
-  // jobs have no live handle and therefore cannot be safely escalated.
-  return expectedChild !== undefined;
-}
-
-/** taskkill /T /F is Windows-specific best effort: protected/orphaned descendants may resist it. */
-async function terminateWindowsProcessTree(pid: number): Promise<boolean> {
-  return new Promise<boolean>((resolve, reject) => {
-    const systemRoot = trustedWindowsRoot();
-    const killer = spawn(`${systemRoot}\\System32\\taskkill.exe`, ["/PID", String(pid), "/T", "/F"], {
-      // A Runner may be invoked by an administrator from a writable working
-      // directory. Use an absolute inbox utility path, a system cwd, and a
-      // minimal environment so process-tree cancellation cannot be redirected
-      // through PATH/current-directory executable shadowing.
-      cwd: `${systemRoot}\\System32`,
-      env: trustedWindowsEnvironment(systemRoot),
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    let settled = false;
-    const finish = (value: boolean): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      resolve(value);
-    };
-    const timeout = setTimeout(() => {
-      // A stuck taskkill must not keep a cancellation/terminal state pending
-      // forever. Killing the helper does not claim the target was terminated;
-      // callers retain the durable cancelling/interrupted evidence instead.
-      try { killer.kill(); } catch { /* helper already exited */ }
-      finish(false);
-    }, 10_000);
-    killer.once("error", (error) => {
-      if (settled) return;
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") reject(new Error("taskkill is unavailable; Windows process-tree cancellation cannot be performed"));
-      else reject(error);
-      settled = true;
-      clearTimeout(timeout);
-    });
-    killer.once("close", (code) => finish(code === 0));
-  });
-}
-
-async function utf8AlignedStart(handle: Awaited<ReturnType<typeof open>>, requested: number, size: number, preferBackward: boolean): Promise<number> {
-  if (requested === 0 || requested >= size) return requested;
-  const begin = Math.max(0, requested - 3);
-  const bytes = Buffer.alloc(Math.min(7, size - begin));
-  const { bytesRead } = await handle.read(bytes, 0, bytes.length, begin);
-  const data = bytes.subarray(0, bytesRead);
-  const relative = requested - begin;
-  return begin + (preferBackward ? utf8BackwardBoundary(data, relative) : utf8ForwardBoundary(data, relative));
-}
-function safeJobId(value: string): boolean { return /^job-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(value); }
-function normalizeJobRecord(value: unknown, expectedJobId?: string): JobRecord | undefined {
-  if (!isRecord(value)) return undefined;
-  const item = value as Record<string, unknown>;
-  const jobId = item.job_id;
-  if (typeof jobId !== "string" || !safeJobId(jobId) || (expectedJobId !== undefined && jobId !== expectedJobId)) return undefined;
-  const workspaceId = item.workspace_id;
-  if (typeof workspaceId !== "string" || !safeIdentifier(workspaceId)) return undefined;
-  const cwd = item.cwd;
-  if (typeof cwd !== "string" || cwd.length === 0 || cwd.length > 4_096 || cwd.includes("\0") || isAbsoluteJobPath(cwd) || cwd.split(/[\\/]+/u).includes("..")) return undefined;
-  const command = item.command;
-  if (!Array.isArray(command) || command.length === 0 || command.length > 256 || command.some((part) => typeof part !== "string" || part.length > 8_192 || part.includes("\0"))) return undefined;
-  if (typeof item.shell !== "boolean" || !isJobStatus(item.status)) return undefined;
-  // These nullable fields predate the recovery metadata additions and may be
-  // absent in a persisted record from an older Runner.  Treat omission as the
-  // same value as an explicit null, while still rejecting malformed values
-  // when a field is present.
-  const pid = item.pid;
-  if (pid !== undefined && pid !== null && (!Number.isSafeInteger(pid) || (pid as number) <= 0)) return undefined;
-  const created = safeTimestamp(item.created_at_ms);
-  const updated = safeTimestamp(item.updated_at_ms);
-  if (created === undefined || updated === undefined) return undefined;
-  const started = nullableTimestamp(item.started_at_ms);
-  const completed = nullableTimestamp(item.completed_at_ms);
-  if (started === undefined || completed === undefined) return undefined;
-  const exitCode = item.exit_code;
-  if (exitCode !== undefined && exitCode !== null && (!Number.isSafeInteger(exitCode) || Math.abs(exitCode as number) > 2 ** 31)) return undefined;
-  const signal = item.signal;
-  if (signal !== undefined && signal !== null && (typeof signal !== "string" || signal.length > 64 || /[\u0000-\u001f\u007f]/u.test(signal))) return undefined;
-  const fingerprint = item.process_start_fingerprint;
-  const normalizedFingerprint = typeof fingerprint === "string" && fingerprint.length <= 128 && /^\d+$/u.test(fingerprint) ? fingerprint : null;
-  const recovery = item.recovery_liveness;
-  const normalizedRecovery = validRecoveryLiveness(recovery) ? recovery : null;
-  const deliveredValue = item.cancellation_delivered_at_ms;
-  const delivered = deliveredValue === undefined || deliveredValue === null ? null : safeTimestamp(deliveredValue) ?? null;
-  const client = item.created_by_client_id;
-  const normalizedClient = typeof client === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(client) ? client : null;
-  const requestId = item.request_id;
-  const normalizedRequestId = typeof requestId === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(requestId) ? requestId : null;
-  const requestFingerprint = item.request_fingerprint;
-  const normalizedRequestFingerprint = normalizedRequestId !== null && typeof requestFingerprint === "string" && /^[a-f0-9]{64}$/u.test(requestFingerprint) ? requestFingerprint : null;
-  const note = item.recovery_note;
-  const normalizedNote = typeof note === "string" && note.length <= 512 && !/[\u0000-\u001f\u007f]/u.test(note) ? note : null;
-  // Treat an absent or malformed marker as false. This avoids claiming that
-  // output was truncated based on a truthy, non-boolean value in corrupt
-  // metadata while preserving the record itself for recovery.
-  const outputTruncated = typeof item.output_truncated === "boolean" ? item.output_truncated : false;
-  return {
-    job_id: jobId,
-    workspace_id: workspaceId,
-    cwd,
-    command: [...command] as string[],
-    shell: item.shell,
-    status: item.status,
-    pid: pid === undefined ? null : pid as number | null,
-    process_start_fingerprint: normalizedFingerprint,
-    recovery_liveness: normalizedRecovery,
-    created_at_ms: created,
-    started_at_ms: started,
-    updated_at_ms: updated,
-    completed_at_ms: completed,
-    exit_code: exitCode === undefined ? null : exitCode as number | null,
-    signal: signal === undefined ? null : signal as string | null,
-    recovery_note: normalizedNote,
-    output_truncated: outputTruncated,
-    created_by_client_id: normalizedClient,
-    request_id: normalizedRequestFingerprint === null ? null : normalizedRequestId,
-    request_fingerprint: normalizedRequestFingerprint,
-    cancellation_delivered_at_ms: delivered,
-  };
-}
-function validRecoveryLiveness(value: unknown): value is RecoveryLiveness {
-  if (!isRecord(value)) return false;
-  const item = value as Record<string, unknown>;
-  return safeTimestamp(item.checked_at_ms) !== undefined && typeof item.alive === "boolean" && (item.fingerprint_matches === null || typeof item.fingerprint_matches === "boolean");
-}
-function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
-function safeIdentifier(value: string): boolean { return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(value); }
-function safeTimestamp(value: unknown): number | undefined { return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined; }
-function nullableTimestamp(value: unknown): number | null | undefined { return value === null || value === undefined ? null : safeTimestamp(value) ?? undefined; }
-function isAbsoluteJobPath(value: string): boolean { return value.startsWith("/") || /^[A-Za-z]:[\\/]/u.test(value) || value.startsWith("\\\\"); }
