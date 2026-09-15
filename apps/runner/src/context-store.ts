@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { chmod, lstat, mkdir, open, readdir, rename, rm } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, opendir, readdir, rename, rm } from "node:fs/promises";
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { RpcRuntimeError } from "./errors.js";
 import { defaultRunnerStateDir } from "./state-path.js";
 
-const CONTEXT_SCHEMA_VERSION = 1;
+const CONTEXT_SCHEMA_VERSION = 2;
 const INDEX_SCHEMA_VERSION = 1;
 const MAX_RECORD_BYTES = 64 * 1024;
 const MAX_INDEX_BYTES = 2 * 1024 * 1024;
@@ -14,6 +14,9 @@ const MAX_REBUILD_FILES = 4_096;
 const MAX_REBUILD_BYTES = 32 * 1024 * 1024;
 const NOFOLLOW = process.platform === "win32" ? 0 : constants.O_NOFOLLOW ?? 0;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+// One Runner owns a state directory. Share in-process serialization across
+// reconstructed service instances; immutable writes remain exclusive.
+const contextWrites = new Map<string, Promise<void>>();
 const SAFE_COMMIT = /^[0-9a-fA-F]{7,64}$/u;
 
 export type ContextEvidence = {
@@ -28,7 +31,7 @@ export type ContextEvidence = {
 };
 
 export type ContextRecord = {
-  readonly schema_version: 1;
+  readonly schema_version: 1 | 2;
   readonly context_id: string;
   readonly workspace_id: string;
   readonly revision: number;
@@ -40,6 +43,7 @@ export type ContextRecord = {
   readonly policy_generation: number | null;
   readonly base_commit: string | null;
   readonly base_commit_status: "claimed" | "observed" | null;
+  readonly base_worktree_state: "clean" | "dirty" | "unknown";
   readonly goal: string;
   readonly decisions: readonly string[];
   readonly evidence: readonly ContextEvidence[];
@@ -77,7 +81,7 @@ export interface ContextStoreOptions { readonly stateDir?: string }
 export class ContextStore {
   private readonly stateDir: string;
   private readonly contextsDir: string;
-  private readonly chains = new Map<string, Promise<void>>();
+
 
   public constructor(options: ContextStoreOptions = {}) {
     this.stateDir = options.stateDir ?? defaultRunnerStateDir();
@@ -124,28 +128,37 @@ export class ContextStore {
     return { workspace_id: workspaceId, query, results: page, next_cursor: next < matches.length ? String(next) : null, scanned_records: index.records.length, state: "ready" };
   }
 
-  public checkpoint(input: unknown): Promise<Record<string, unknown>> {
+  public checkpoint(input: unknown, assertAuthorized: () => void = () => {}): Promise<Record<string, unknown>> {
     const params = object(input);
     const workspaceId = safeId(params.workspace_id, "workspace_id");
     return this.serialize(workspaceId, async () => {
+      assertAuthorized();
       const normalized = normalizeCheckpoint(params, workspaceId);
       await this.ensureWritableWorkspace(workspaceId);
-      const index = await this.readIndex(workspaceId, false) ?? emptyIndex(workspaceId);
-      let current = normalized.contextId === null
-        ? latestForTurn(index, normalized.turnId)
-        : index.records.find((entry) => entry.context_id === normalized.contextId);
-      if (normalized.contextId !== null && current === undefined && normalized.expectedRevision !== null) throw conflict("context_revision_conflict", "context does not exist at the expected revision");
+      const savedIndex = await this.readIndex(workspaceId, false);
+      if (savedIndex === undefined && await this.hasContextRecords(workspaceId)) throw new RpcRuntimeError("context_index_missing", "Existing context records need an explicit index rebuild before another checkpoint");
+      const index = savedIndex ?? emptyIndex(workspaceId);
+      const sameTurn = index.records.filter((entry) => entry.turn_id === normalized.turnId);
+      if (normalized.contextId === null && sameTurn.length > 1) throw conflict("context_turn_conflict", "More than one context uses this turn; select an explicit context_id");
+      const current = normalized.contextId === null ? latestForTurn(index, normalized.turnId) : index.records.find((entry) => entry.context_id === normalized.contextId);
+      if (normalized.contextId !== null && current === undefined) throw conflict("context_revision_conflict", "The requested context does not exist");
       if (current !== undefined && current.turn_id !== normalized.turnId) throw conflict("context_turn_conflict", "context belongs to a different turn");
-      if (current !== undefined && normalized.expectedRevision !== null && current.revision !== normalized.expectedRevision) throw conflict("context_revision_conflict", "context revision changed", { expected_revision: normalized.expectedRevision, actual_revision: current.revision });
-      const contextId = current?.context_id ?? normalized.contextId ?? `ctx-${randomUUID()}`;
+      const previous = current === undefined ? undefined : await this.readRecord(workspaceId, current.context_id, current.revision);
+      if (previous !== undefined && previous.fingerprint !== current!.fingerprint) throw new RpcRuntimeError("context_index_corrupt", "Context index does not match its immutable record");
+      if (current !== undefined && await pathExists(this.recordPath(workspaceId, current.context_id, current.revision + 1))) throw new RpcRuntimeError("context_index_stale", "A newer context record exists; rebuild the derived index before writing");
+      // Content equality excludes collection time, not the evidence's actual
+      // identity/status. A last-write retry may carry its original parent
+      // revision; an older or conflicting write must still fail.
+      const sameContent = previous !== undefined && semanticFingerprint(normalized) === semanticFingerprint(normalizeCheckpoint({
+        ...previous, policy_generation: previous.policy_generation ?? undefined,
+      }, workspaceId));
+      const compatibleRevision = normalized.expectedRevision === null || normalized.expectedRevision === current?.revision || normalized.expectedRevision === previous?.supersedes_revision || (previous?.revision === 1 && normalized.expectedRevision === 0);
+      if (sameContent && compatibleRevision) { assertAuthorized(); return { workspace_id: workspaceId, deduplicated: true, context: previous }; }
+      if (normalized.expectedRevision !== null && normalized.expectedRevision !== (current?.revision ?? 0)) throw conflict("context_revision_conflict", "context revision changed", { expected_revision: normalized.expectedRevision, actual_revision: current?.revision ?? 0 });
+      const contextId = current?.context_id ?? `ctx-${randomUUID()}`;
       const fingerprint = checkpointFingerprint(normalized);
-      if (current !== undefined && current.fingerprint === fingerprint) {
-        const record = await this.readRecord(workspaceId, current.context_id, current.revision);
-        return { workspace_id: workspaceId, deduplicated: true, context: record };
-      }
       const now = Date.now();
       const revision = (current?.revision ?? 0) + 1;
-      const previous = current === undefined ? undefined : await this.readRecord(workspaceId, current.context_id, current.revision);
       const reviewState: ContextRecord["review_state"] = normalized.missingChecks.length > 0 ? "incomplete" : normalized.evidence.some((item) => item.status === "observed") ? "evidence_backed" : "claimed";
       const record: ContextRecord = {
         schema_version: CONTEXT_SCHEMA_VERSION,
@@ -160,6 +173,7 @@ export class ContextStore {
         policy_generation: normalized.policyGeneration,
         base_commit: normalized.baseCommit,
         base_commit_status: normalized.baseCommitStatus,
+        base_worktree_state: normalized.baseWorktreeState,
         goal: normalized.goal,
         decisions: normalized.decisions,
         evidence: normalized.evidence,
@@ -168,19 +182,21 @@ export class ContextStore {
         next_actions: normalized.nextActions,
         review_state: reviewState,
       };
-      await this.writeRecord(record);
+      await this.writeRecord(record, assertAuthorized);
       const entry = indexEntry(record);
       const records = index.records.filter((item) => item.context_id !== contextId);
       records.push(entry);
       if (records.length > MAX_CONTEXTS) records.sort((left, right) => right.updated_at_ms - left.updated_at_ms).splice(MAX_CONTEXTS);
-      await this.writeIndex({ schema_version: INDEX_SCHEMA_VERSION, workspace_id: workspaceId, rebuilt_at_ms: index.rebuilt_at_ms, records });
+      try { await this.writeIndex({ schema_version: INDEX_SCHEMA_VERSION, workspace_id: workspaceId, rebuilt_at_ms: index.rebuilt_at_ms, records }); }
+      catch { throw new RpcRuntimeError("context_index_stale", "Checkpoint record was committed but its derived index was not updated; rebuild the index, then retry the same input", { context_id: contextId, revision }); }
       return { workspace_id: workspaceId, deduplicated: false, context: record };
     });
   }
 
-  public rebuild(input: unknown): Promise<Record<string, unknown>> {
+  public rebuild(input: unknown, assertAuthorized: () => void = () => {}): Promise<Record<string, unknown>> {
     const workspaceId = workspaceIdFrom(input);
     return this.serialize(workspaceId, async () => {
+      assertAuthorized();
       const workspaceDir = this.workspaceDir(workspaceId);
       if (!await pathExists(workspaceDir)) return { workspace_id: workspaceId, rebuilt: false, records: 0, state: "missing" };
       await assertPrivateDirectory(workspaceDir, "context workspace directory");
@@ -203,6 +219,7 @@ export class ContextStore {
           scannedBytes += bytes;
           if (scannedBytes > MAX_REBUILD_BYTES) throw new RpcRuntimeError("context_rebuild_budget", "context rebuild byte budget was exhausted");
           const record = parseRecord(value, workspaceId, item.name);
+          if (String(record.revision) + ".json" !== revisionFile.name) throw new RpcRuntimeError("context_record_corrupt", "Context record revision does not match its filename");
           if (latest === undefined || record.revision > latest.revision) latest = record;
         }
         if (latest !== undefined) records.push(indexEntry(latest));
@@ -210,9 +227,19 @@ export class ContextStore {
       records.sort((left, right) => right.updated_at_ms - left.updated_at_ms);
       if (records.length > MAX_CONTEXTS) records.splice(MAX_CONTEXTS);
       const rebuiltAtMs = Date.now();
-      await this.writeIndex({ schema_version: INDEX_SCHEMA_VERSION, workspace_id: workspaceId, rebuilt_at_ms: rebuiltAtMs, records });
+      await this.writeIndex({ schema_version: INDEX_SCHEMA_VERSION, workspace_id: workspaceId, rebuilt_at_ms: rebuiltAtMs, records }, assertAuthorized);
       return { workspace_id: workspaceId, rebuilt: true, records: records.length, scanned_files: scannedFiles, scanned_bytes: scannedBytes, rebuilt_at_ms: rebuiltAtMs };
     });
+  }
+
+  private async hasContextRecords(workspaceId: string): Promise<boolean> {
+    const directory = await opendir(this.workspaceDir(workspaceId));
+    let scanned = 0;
+    for await (const item of directory) {
+      if (++scanned > MAX_CONTEXTS * 2) throw new RpcRuntimeError("context_rebuild_budget", "Context directory inspection exceeded its budget");
+      if (item.isDirectory() || item.isSymbolicLink()) return true;
+    }
+    return false;
   }
 
   private async readIndex(workspaceId: string, allowMissing: boolean): Promise<ContextIndex | undefined> {
@@ -231,28 +258,30 @@ export class ContextStore {
   private async readRecord(workspaceId: string, contextId: string, revision: number): Promise<ContextRecord> {
     try {
       const { value } = await readJsonBounded(this.recordPath(workspaceId, contextId, revision), MAX_RECORD_BYTES);
-      return parseRecord(value, workspaceId, contextId);
+      const record = parseRecord(value, workspaceId, contextId);
+      if (record.revision !== revision) throw new RpcRuntimeError("context_record_corrupt", "Context record revision does not match its filename");
+      return record;
     } catch (error) {
       if (isErrno(error, "ENOENT")) throw new RpcRuntimeError("context_record_missing", "context record is missing; rebuild the local index if this was unexpected");
       throw error;
     }
   }
 
-  private async writeRecord(record: ContextRecord): Promise<void> {
+  private async writeRecord(record: ContextRecord, assertAuthorized: () => void): Promise<void> {
     const directory = this.contextDir(record.workspace_id, record.context_id);
     await ensurePrivateDirectory(directory);
     const path = this.recordPath(record.workspace_id, record.context_id, record.revision);
     const data = `${JSON.stringify(record)}\n`;
     if (Buffer.byteLength(data) > MAX_RECORD_BYTES) throw new RpcRuntimeError("context_record_too_large", "context checkpoint exceeds the local record budget");
-    await writeImmutable(path, data);
+    await writeImmutable(path, data, assertAuthorized);
   }
 
-  private async writeIndex(index: ContextIndex): Promise<void> {
+  private async writeIndex(index: ContextIndex, assertAuthorized: () => void = () => {}): Promise<void> {
     const workspaceDir = this.workspaceDir(index.workspace_id);
     await ensurePrivateDirectory(workspaceDir);
     const data = `${JSON.stringify(index)}\n`;
     if (Buffer.byteLength(data) > MAX_INDEX_BYTES) throw new RpcRuntimeError("context_index_too_large", "context index exceeds its local budget");
-    await atomicReplace(this.indexPath(index.workspace_id), data);
+    await atomicReplace(this.indexPath(index.workspace_id), data, assertAuthorized);
   }
 
   private async ensureWritableWorkspace(workspaceId: string): Promise<void> {
@@ -267,11 +296,12 @@ export class ContextStore {
   private recordPath(workspaceId: string, contextId: string, revision: number): string { return join(this.contextDir(workspaceId, contextId), `${revision}.json`); }
 
   private serialize<T>(workspaceId: string, action: () => Promise<T>): Promise<T> {
-    const prior = this.chains.get(workspaceId) ?? Promise.resolve();
+    const key = this.workspaceDir(workspaceId);
+    const prior = contextWrites.get(key) ?? Promise.resolve();
     const run = prior.catch(() => undefined).then(action);
     const marker = run.then(() => undefined, () => undefined);
-    this.chains.set(workspaceId, marker);
-    return run.finally(() => { if (this.chains.get(workspaceId) === marker) this.chains.delete(workspaceId); });
+    contextWrites.set(key, marker);
+    return run.finally(() => { if (contextWrites.get(key) === marker) contextWrites.delete(key); });
   }
 }
 
@@ -282,6 +312,7 @@ type NormalizedCheckpoint = {
   readonly policyGeneration: number | null;
   readonly baseCommit: string | null;
   readonly baseCommitStatus: "claimed" | "observed" | null;
+  readonly baseWorktreeState: "clean" | "dirty" | "unknown";
   readonly goal: string;
   readonly decisions: readonly string[];
   readonly evidence: readonly ContextEvidence[];
@@ -306,6 +337,7 @@ function normalizeCheckpoint(params: Record<string, unknown>, workspaceId: strin
     policyGeneration,
     baseCommit,
     baseCommitStatus,
+    baseWorktreeState: params.base_worktree_state === "clean" || params.base_worktree_state === "dirty" ? params.base_worktree_state : "unknown",
     goal: boundedString(params.goal, "goal", 1, 4_096),
     decisions: stringList(params.decisions, "decisions", 64, 2_048),
     evidence: evidenceList(params.evidence),
@@ -334,10 +366,15 @@ function evidenceList(value: unknown): readonly ContextEvidence[] {
   });
 }
 
-function checkpointFingerprint(value: NormalizedCheckpoint): string {
-  // Keep the v1 fingerprint stable: base_commit_status was added as a
-  // compatible observation annotation after v1 records already existed.
-  return createHash("sha256").update(JSON.stringify({ turn_id: value.turnId, base_commit: value.baseCommit, goal: value.goal, decisions: value.decisions, evidence: value.evidence, open_risks: value.openRisks, missing_checks: value.missingChecks, next_actions: value.nextActions })).digest("hex");
+function checkpointFingerprint(value: NormalizedCheckpoint, version: 1 | 2 = CONTEXT_SCHEMA_VERSION): string {
+  // The v1 layout is frozen for reads of old records. New v2 records also
+  // protect observation source, policy and worktree state in their digest.
+  const original = { turn_id: value.turnId, base_commit: value.baseCommit, goal: value.goal, decisions: value.decisions, evidence: value.evidence, open_risks: value.openRisks, missing_checks: value.missingChecks, next_actions: value.nextActions };
+  const payload = version === 1 ? original : { ...original, policy_generation: value.policyGeneration, base_commit_status: value.baseCommitStatus, base_worktree_state: value.baseWorktreeState };
+  return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+}
+function semanticFingerprint(value: NormalizedCheckpoint): string {
+  return checkpointFingerprint({ ...value, evidence: value.evidence.map(({ observed_at_ms: _observed, ...fact }) => fact) });
 }
 
 function indexEntry(record: ContextRecord): ContextIndexEntry {
@@ -394,7 +431,8 @@ function parseIndex(value: unknown, workspaceId: string): ContextIndex {
 
 function parseRecord(value: unknown, workspaceId: string, contextId: string): ContextRecord {
   const source = object(value);
-  if (source.schema_version !== CONTEXT_SCHEMA_VERSION || source.workspace_id !== workspaceId || source.context_id !== contextId) throw new RpcRuntimeError("context_record_corrupt", "context record binding is invalid");
+  if ((source.schema_version !== 1 && source.schema_version !== CONTEXT_SCHEMA_VERSION) || source.workspace_id !== workspaceId || source.context_id !== contextId) throw new RpcRuntimeError("context_record_corrupt", "context record binding is invalid");
+  if (source.schema_version === 2 && !["clean", "dirty", "unknown"].includes(String(source.base_worktree_state))) throw new RpcRuntimeError("context_record_corrupt", "Context worktree observation is invalid");
   const normalized = normalizeCheckpoint({
     workspace_id: workspaceId,
     context_id: contextId,
@@ -403,6 +441,7 @@ function parseRecord(value: unknown, workspaceId: string, contextId: string): Co
     policy_generation: source.policy_generation ?? undefined,
     base_commit: source.base_commit,
     base_commit_status: source.base_commit_status,
+    base_worktree_state: source.base_worktree_state,
     goal: source.goal,
     decisions: source.decisions,
     evidence: source.evidence,
@@ -411,11 +450,11 @@ function parseRecord(value: unknown, workspaceId: string, contextId: string): Co
     next_actions: source.next_actions,
   }, workspaceId);
   const fingerprint = boundedString(source.fingerprint, "fingerprint", 64, 64);
-  if (!/^[a-f0-9]{64}$/u.test(fingerprint) || checkpointFingerprint(normalized) !== fingerprint) throw new RpcRuntimeError("context_record_corrupt", "context record fingerprint is invalid");
+  if (!/^[a-f0-9]{64}$/u.test(fingerprint) || checkpointFingerprint(normalized, source.schema_version as 1 | 2) !== fingerprint) throw new RpcRuntimeError("context_record_corrupt", "context record fingerprint is invalid");
   const review = source.review_state;
   if (review !== "incomplete" && review !== "claimed" && review !== "evidence_backed") throw new RpcRuntimeError("context_record_corrupt", "context review state is invalid");
   return {
-    schema_version: CONTEXT_SCHEMA_VERSION,
+    schema_version: source.schema_version as 1 | 2,
     context_id: contextId,
     workspace_id: workspaceId,
     revision: boundedInteger(source.revision, 1, Number.MAX_SAFE_INTEGER, "revision"),
@@ -427,6 +466,7 @@ function parseRecord(value: unknown, workspaceId: string, contextId: string): Co
     policy_generation: normalized.policyGeneration,
     base_commit: normalized.baseCommit,
     base_commit_status: normalized.baseCommitStatus,
+    base_worktree_state: normalized.baseWorktreeState,
     goal: normalized.goal,
     decisions: normalized.decisions,
     evidence: normalized.evidence,
@@ -458,13 +498,15 @@ async function readJsonBounded(path: string, maxBytes: number): Promise<{ readon
   } finally { await handle.close(); }
 }
 
-async function writeImmutable(path: string, data: string): Promise<void> {
+async function writeImmutable(path: string, data: string, assertAuthorized: () => void): Promise<void> {
   await assertRegularParent(path);
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   let created = false;
   try {
+    assertAuthorized();
     handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW, 0o600);
     created = true;
+    assertAuthorized();
     await handle.writeFile(data);
     await handle.sync();
   } catch (error) {
@@ -474,12 +516,13 @@ async function writeImmutable(path: string, data: string): Promise<void> {
   } finally { await handle?.close().catch(() => undefined); }
 }
 
-async function atomicReplace(path: string, data: string): Promise<void> {
+async function atomicReplace(path: string, data: string, assertAuthorized: () => void): Promise<void> {
   await assertRegularParent(path);
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
     const handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW, 0o600);
     try { await handle.writeFile(data); await handle.sync(); } finally { await handle.close(); }
+    assertAuthorized();
     await rename(temporary, path);
   } finally { await rm(temporary, { force: true }).catch(() => undefined); }
 }

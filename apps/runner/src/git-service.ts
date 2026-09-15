@@ -162,23 +162,51 @@ export class GitService {
     return { workspace_id: workspace.workspaceId, commit };
   }
 
+  /** Conservative sampled baseline, not a filesystem transaction. Never
+   * treat a truncated/unavailable status or a moving HEAD as a clean tree. */
+  public async observeBaseline(input: unknown): Promise<{ commit: string | null; working_tree_state: "clean" | "dirty" | "unknown" }> {
+    let commit: string | null = null;
+    const deadline = performance.now() + Math.min(this.options.timeoutMs ?? 2_000, 2_000);
+    const probe = () => {
+      const remaining = Math.floor(deadline - performance.now());
+      if (remaining < 1) throw new RpcRuntimeError("git_timeout", "Context baseline observation budget exhausted");
+      return new GitService(this.policy, { ...this.options, timeoutMs: remaining });
+    };
+    try {
+      const params = object(input);
+      commit = (await probe().head(params)).commit;
+      const status = await probe().status({ ...params, max_bytes: 32 * 1024 });
+      const after = (await probe().head(params)).commit;
+      if (after !== commit || status.truncated !== false || !Array.isArray(status.entries)) return { commit: after, working_tree_state: "unknown" };
+      return { commit, working_tree_state: status.entries.length === 0 ? "clean" : "dirty" };
+    } catch { return { commit, working_tree_state: "unknown" }; }
+  }
+
   public async log(input: unknown): Promise<Record<string, unknown>> {
     const params = object(input);
     const workspace = this.policy.getWorkspace(params.workspace_id);
     const scope = await resolveGitPath(this.policy, params.workspace_id, params.path ?? ".");
     const limit = boundedCount(params.limit, 20, 100);
     const cap = outputCap(params.max_bytes, DEFAULT_OUTPUT_BYTES);
-    const args = ["-c", "core.fsmonitor=false", "log", "--no-decorate", "--no-color", `-n${limit}`, "--format=%H%x00%an%x00%aI%x00%s%x00", "--", literalPathspec(scope.relativePath)];
+    // -z terminates every tformat record with NUL. Do not trim/filter fields:
+    // empty subjects are legal and must not shift the next commit's fields.
+    const args = ["-c", "core.fsmonitor=false", "log", "-z", "--no-decorate", "--no-color", `-n${limit + 1}`, "--format=tformat:%H%x00%an%x00%aI%x00%s", "--", literalPathspec(scope.relativePath)];
     const run = await git(scope.rootPath, args, cap, this.options);
     if (run.status !== 0) throw gitFailure("git log failed", run);
-    const fields = run.stdout.toString("utf8").split("\0").filter((v) => v.length > 0);
+    const fields = run.stdout.toString("utf8").split("\0");
+    const partial = fields.pop() !== "" || fields.length % 4 !== 0;
+    let truncated = run.truncated || partial;
     const commits: Record<string, unknown>[] = [];
-    for (let i = 0; i + 3 < fields.length && commits.length < limit; i += 4) {
+    for (let i = 0; i + 3 < fields.length; i += 4) {
       const [oid = "", author = "", date = "", subject = ""] = fields.slice(i, i + 4);
-      if (!/^[0-9a-f]{40,64}$/i.test(oid) || subject.length > 4096) continue;
-      commits.push({ oid, author: author.slice(0, 512), date: date.slice(0, 64), subject });
+      if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(oid)) throw new RpcRuntimeError("git_failed", "Git returned an invalid history record");
+      if (commits.length >= limit) { truncated = true; break; }
+      if (author.length > 512 || subject.length > 4096) truncated = true;
+      commits.push({ oid, author: author.slice(0, 512), date: date.slice(0, 64), subject: subject.slice(0, 4096) });
     }
-    return { workspace_id: workspace.workspaceId, path: scope.relativePath, commits, limit, truncated: run.truncated, output_bytes: run.stdout.byteLength };
+    const result = () => ({ workspace_id: workspace.workspaceId, path: scope.relativePath, commits, limit, truncated, output_bytes: run.stdout.byteLength });
+    while (commits.length && Buffer.byteLength(JSON.stringify(result()), "utf8") > MAX_PROCESS_OUTPUT_BYTES) { commits.pop(); truncated = true; }
+    return result();
   }
 
   public async show(input: unknown): Promise<Record<string, unknown>> {
@@ -187,7 +215,7 @@ export class GitService {
     const scope = await resolveGitPath(this.policy, params.workspace_id, params.path ?? ".");
     const revision = safeRevision(params.revision);
     const cap = outputCap(params.max_bytes, DEFAULT_OUTPUT_BYTES);
-    const run = await git(scope.rootPath, ["-c", "core.fsmonitor=false", "show", "--no-ext-diff", "--no-color", "--no-renames", "--format=fuller", `${revision}:${scope.relativePath}`], cap, this.options);
+    const run = await git(scope.rootPath, ["-c", "core.fsmonitor=false", "show", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", "--format=fuller", `${revision}:${scope.relativePath}`], cap, this.options);
     if (run.status !== 0) throw gitFailure("git show failed", run);
     const output = utf8SafePrefix(run.stdout).toString("utf8");
     return { workspace_id: workspace.workspaceId, path: scope.relativePath, revision, output, encoding: "utf-8", bytes: run.stdout.byteLength, truncated: run.truncated || output.length < run.stdout.toString("utf8").length };
@@ -201,7 +229,7 @@ export class GitService {
     const end = boundedCount(params.end_line, start, 1_000_000);
     if (end < start) throw new RpcRuntimeError("invalid_params", "end_line must be greater than or equal to start_line");
     const cap = outputCap(params.max_bytes, DEFAULT_OUTPUT_BYTES);
-    const run = await git(scope.rootPath, ["-c", "core.fsmonitor=false", "blame", "--line-porcelain", "-L", `${start},${end}`, "--", literalPathspec(scope.relativePath)], cap, this.options);
+    const run = await git(scope.rootPath, ["-c", "core.fsmonitor=false", "blame", "--no-textconv", "--line-porcelain", "-L", `${start},${end}`, "--", scope.relativePath], cap, this.options);
     if (run.status !== 0) throw gitFailure("git blame failed", run);
     const output = utf8SafePrefix(run.stdout).toString("utf8");
     return { workspace_id: workspace.workspaceId, path: scope.relativePath, start_line: start, end_line: end, output, encoding: "utf-8", bytes: run.stdout.byteLength, truncated: run.truncated || output.length < run.stdout.toString("utf8").length };
