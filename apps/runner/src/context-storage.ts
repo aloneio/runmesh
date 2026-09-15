@@ -1,3 +1,5 @@
+import type { ContextStorageLimits, Stamp, ContextStorageFile, ContextStorageInventory } from "./context/storage-types.js";
+export type { ContextStorageLimits, ContextStorageFile, ContextStorageInventory } from "./context/storage-types.js";
 import { createHash } from "node:crypto";
 import { lstat, opendir } from "node:fs/promises";
 import { join, parse, relative, resolve, sep } from "node:path";
@@ -6,19 +8,16 @@ import { RpcRuntimeError } from "./errors.js";
 /** Logical revision-file bytes, not filesystem allocated blocks or total disk.
  * The index is separately bounded to 2 MiB by ContextStore. No timers/writes. */
 export const CONTEXT_STORAGE_LIMITS = Object.freeze({ maxBytes: 32 * 1024 * 1024, maxRecords: 4096, maxContexts: 256 });
-export interface ContextStorageLimits { readonly maxBytes: number; readonly maxRecords: number; readonly maxContexts: number }
+
 export function contextStorageLimits(input: Partial<ContextStorageLimits> = {}): ContextStorageLimits {
   if (typeof input !== "object" || input === null || Array.isArray(input) || Object.keys(input).some(key => !Object.hasOwn(CONTEXT_STORAGE_LIMITS, key))) throw new Error("Invalid Context storage limits");
   const result = { ...CONTEXT_STORAGE_LIMITS, ...input };
   for (const key of Object.keys(CONTEXT_STORAGE_LIMITS) as (keyof ContextStorageLimits)[]) if (!Number.isSafeInteger(result[key]) || result[key] < 1 || result[key] > CONTEXT_STORAGE_LIMITS[key]) throw new Error("Context storage limits can only lower the bounded defaults");
   return Object.freeze(result);
 }
-type Stamp = { readonly dev: number; readonly ino: number; readonly size: number; readonly mtimeMs: number; readonly ctimeMs: number };
-export interface ContextStorageFile { readonly contextId: string; readonly revision: number; readonly stamp: Stamp }
-export interface ContextStorageInventory {
-  readonly exists: boolean; readonly files: readonly ContextStorageFile[]; readonly contexts: number;
-  readonly bytes: number; readonly metadataBytes: number; readonly pending: boolean; readonly digest: string;
-}
+
+
+
 export function sameStorageStamp(a: Stamp, b: Stamp): boolean { return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs; }
 function stamp(value: Stamp): Stamp { return { dev: value.dev, ino: value.ino, size: value.size, mtimeMs: value.mtimeMs, ctimeMs: value.ctimeMs }; }
 const unsafe = () => new RpcRuntimeError("context_storage_unsafe", "Context storage contains an unsafe or unrecognized entry; preserve it for operator inspection");
