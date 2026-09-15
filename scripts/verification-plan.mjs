@@ -1,3 +1,4 @@
+import { validateCiWiring } from "./ci-policy.mjs";
 import assert from "node:assert/strict";
 import { lstat, readdir, readFile } from "node:fs/promises";
 import { join, posix } from "node:path";
@@ -54,11 +55,7 @@ export function validateTestWiring(plan, pkg, github, gitlab) {
     for (const file of group.files) assert.ok(args.includes(file), "classified Node test missing from its executable command");
   }
   for (const command of ["test:domain", "test:contracts"]) assert.ok(pkg.scripts["test:unit"].includes(`npm run ${command}`), "layer missing from aggregate verification");
-  for (const config of [github, gitlab]) {
-    for (const command of ["check:verification", "check:docs", "test:unit", "test:release-tools", "test:e2e", "test:package:e2e"]) {
-      assert.ok(config.split("\n").some(line => new RegExp(`^\\s*- (?:run: )?npm run ${command}\\s*$`, "u").test(line)), "critical verification command absent from CI execution");
-    }
-  }
+  validateCiWiring(pkg, github, gitlab);
 }
 
 /** Source-only guard for the new domain lane. Crypto is computation; disk,

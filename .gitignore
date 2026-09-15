@@ -22,3 +22,6 @@ release/download/
 
 # GitLab dependency cache, never application source.
 /.npm/
+
+# Sanitized CI observations are output, never build input.
+/ci-results/
