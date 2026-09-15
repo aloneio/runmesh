@@ -17,6 +17,7 @@ const criticalChecks = [
   "npm run check:runbooks",
   "npm run check:versions",
   "npm run check:format",
+  "npm run check:architecture",
   "git diff --check",
   "npm run typecheck",
   "npm run test:unit",

@@ -34,6 +34,7 @@ jobs:
       - run: npm run check:runbooks
       - run: npm run check:versions
       - run: npm run check:format
+      - run: npm run check:architecture
       - run: git diff --check
       - run: npm run typecheck
       - run: npm run test:unit
@@ -73,6 +74,7 @@ jobs:
       - run: node scripts/check-installer-syntax.mjs
       - run: node --test test/installer-arguments.test.mjs test/installer-preflight.test.mjs
       - run: node --test test/worker-validation.test.mjs
+      - run: node --test test/architecture.test.mjs
 
   runner-lts:
     name: Runner LTS (${{ matrix.node }})
