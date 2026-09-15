@@ -1,3 +1,7 @@
+import { MCP_RPC_ACTIONS } from "./actions.js";
+import { MCP_CATALOG_METADATA } from "./catalog-contract.js";
+import { capabilityDiagnostics } from "./capability-diagnostics.js";
+import { rpcOperation } from "@aloneio/runmesh-protocol";
 import type { RpcOperationState } from "@aloneio/runmesh-protocol";
 import { McpServer, type AuthInfo, type ServerContext } from "@modelcontextprotocol/server";
 import {
@@ -48,8 +52,8 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth): McpServ
     return asToolResult(selection);
   });
   register(server, "workspace_list", async () => activeWorkspaceList(env, auth.clientId));
-  register(server, "inspect", async (params) => inspectTool(env, auth.clientId, params));
-  register(server, "read", async (params) => activeRunnerTool(env, auth.clientId, "fs.read", boundedReadParams(params, 32 * 1024), "read", "read"));
+  register(server, "inspect", async (params, scopes) => inspectTool(env, auth.clientId, params, scopes));
+  register(server, "read", async (params) => activeRunnerTool(env, auth.clientId, MCP_RPC_ACTIONS.read.read, boundedReadParams(params, 32 * 1024), "read", "read"));
   register(server, "edit", async (params) => editTool(env, auth.clientId, params));
   register(server, "shell", async (params) => shellTool(env, auth.clientId, params));
   register(server, "job", async (params, scopes) => jobTool(env, auth.clientId, params, scopes));
@@ -60,7 +64,7 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth): McpServ
   function register<Name extends ToolName>(target: McpServer, name: Name, action: (input: z.output<(typeof TOOL_SPECS)[Name]["inputSchema"]>, scopes: readonly string[]) => Promise<unknown>): void {
     const spec = TOOL_SPECS[name];
     type Input = z.output<(typeof TOOL_SPECS)[Name]["inputSchema"]>;
-    (target.registerTool as unknown as (toolName: string, config: Record<string, unknown>, callback: (input: Input, context: ServerContext) => Promise<unknown>) => unknown)(name, { description: spec.description, inputSchema: spec.inputSchema, outputSchema: SafeOutputSchema, annotations: spec.annotations }, async (input, _context) => {
+    (target.registerTool as unknown as (toolName: string, config: Record<string, unknown>, callback: (input: Input, context: ServerContext) => Promise<unknown>) => unknown)(name, { description: spec.description, inputSchema: spec.inputSchema, outputSchema: SafeOutputSchema, annotations: spec.annotations, _meta: MCP_CATALOG_METADATA }, async (input, _context) => {
       // The URL credential can be rotated while a body or SDK import is
       // awaited. Re-read the exact generation and scopes before every tool.
       const live = await registryPostCall(env, "/auth/mcp/revalidate", env.mcpPrincipal);
@@ -81,9 +85,9 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth): McpServ
   }
 }
 
-async function inspectTool(env: McpRequestEnv, clientId: string, params: z.output<typeof InspectInputSchema>): Promise<unknown> {
-  if (params.action === "diagnostics") return diagnosticsTool(env, clientId, params.workspace_id);
-  const method = params.action === "list" ? "fs.list" : params.action === "search" ? "fs.search" : params.action === "stat" ? "fs.stat" : params.action === "git_status" ? "git.status" : params.action === "git_diff" ? "git.diff" : params.action === "git_log" ? "git.log" : params.action === "git_show" ? "git.show" : "git.blame";
+async function inspectTool(env: McpRequestEnv, clientId: string, params: z.output<typeof InspectInputSchema>, scopes: readonly string[]): Promise<unknown> {
+  if (params.action === "diagnostics") return diagnosticsTool(env, clientId, params.workspace_id, scopes);
+  const method = MCP_RPC_ACTIONS.inspect[params.action];
   const input: Record<string, unknown> = {
     workspace_id: params.workspace_id,
     ...(params.path === undefined ? {} : { path: params.path }),
@@ -107,7 +111,7 @@ async function inspectTool(env: McpRequestEnv, clientId: string, params: z.outpu
   };
   return activeRunnerTool(env, clientId, method, input, "read", inspectResultMode(params.action));
 }
-async function diagnosticsTool(env: McpRequestEnv, clientId: string, workspaceId: string): Promise<unknown> {
+async function diagnosticsTool(env: McpRequestEnv, clientId: string, workspaceId: string, scopes: readonly string[]): Promise<unknown> {
   const observedAtMs = Date.now();
   const selected = await resolveActiveRunner(env, clientId, true);
   if (!selected.ok) return asToolResult(selected);
@@ -142,6 +146,7 @@ async function diagnosticsTool(env: McpRequestEnv, clientId: string, workspaceId
   let rpcState: "pass" | "fail" | "unknown" = "unknown";
   let rpcCode: string | null = null;
   let shell: Record<string, unknown> | undefined;
+  let runtimeCapabilities: unknown;
   if (selected.value.context.state !== "online") rpcCode = "runner_offline";
   else if (permissions?.read !== true) rpcCode = permissions === undefined ? "permission_state_unavailable" : "permission_denied";
   else {
@@ -150,6 +155,7 @@ async function diagnosticsTool(env: McpRequestEnv, clientId: string, workspaceId
     else {
       const live = await callRunner(env, selected.value.runnerId, "env.info", { workspace_id: workspaceId }, readiness.value.applied_revision, readiness.value.active_checksum);
       rpcState = live.ok ? "pass" : "fail";
+      if (live.ok && isRecord(live.value)) runtimeCapabilities = live.value.runtime_capabilities;
       rpcCode = live.ok ? null : live.error.code;
       if (live.ok && isRecord(live.value) && isRecord(live.value.shell)) {
         shell = { available: live.value.shell.available === true };
@@ -158,7 +164,7 @@ async function diagnosticsTool(env: McpRequestEnv, clientId: string, workspaceId
     }
   }
   checks.push({ name: "runner_rpc", state: rpcState, code: rpcCode, evidence_source: "live_rpc", observed_at_ms: Date.now() });
-  const value: Record<string, unknown> = { workspace_id: workspaceId, observed_at_ms: observedAtMs, permissions: permissions ?? null, checks };
+  const value: Record<string, unknown> = { workspace_id: workspaceId, observed_at_ms: observedAtMs, permissions: permissions ?? null, checks, capabilities: capabilityDiagnostics(runtimeCapabilities, scopes, permissions) };
   if (shell !== undefined) value.shell = shell;
   return runnerSuccess(value, selected.value);
 }
@@ -168,15 +174,15 @@ function safePositiveIntegerValue(value: unknown): number | null {
 async function editTool(env: McpRequestEnv, clientId: string, params: z.output<typeof EditInputSchema>): Promise<unknown> {
   const input: Record<string, unknown> = { ...params };
   delete input.preview;
-  return activeRunnerTool(env, clientId, params.preview === true ? "fs.preview_patch" : "fs.apply_patch", input, "edit", "edit");
+  return activeRunnerTool(env, clientId, params.preview === true ? MCP_RPC_ACTIONS.edit.preview : MCP_RPC_ACTIONS.edit.apply, input, "edit", "edit");
 }
 async function shellTool(env: McpRequestEnv, clientId: string, params: z.output<typeof ShellInputSchema>): Promise<unknown> {
   const invocation = { workspace_id: params.workspace_id, command: params.command, shell: true, created_by_client_id: clientId, ...(params.queue === undefined ? {} : {queue:params.queue}), ...(params.request_id === undefined ? {} : { request_id: params.request_id }) };
   // Background starts return a Runner JobRecord.  Keep the MCP response on
   // the stable job-metadata allow-list; command/cwd/PID/process identity are
   // Runner-internal and must not cross this boundary.
-  if (params.background === true) return activeRunnerTool(env, clientId, "exec.start", invocation, "shell", "job");
-  const result = await activeRunnerTool(env, clientId, "exec.run", { ...invocation, ...(params.wait_ms === undefined ? {} : { wait_ms: params.wait_ms }) }, "shell", "shell");
+  if (params.background === true) return activeRunnerTool(env, clientId, MCP_RPC_ACTIONS.shell.start, invocation, "shell", "job");
+  const result = await activeRunnerTool(env, clientId, MCP_RPC_ACTIONS.shell.run, { ...invocation, ...(params.wait_ms === undefined ? {} : { wait_ms: params.wait_ms }) }, "shell", "shell");
   return normalizeShellResult(result);
 }
 
@@ -199,31 +205,28 @@ function normalizeShellResult(result: unknown): unknown {
 }
 
 async function jobTool(env: McpRequestEnv, clientId: string, params: z.output<typeof JobInputSchema>, scopes: readonly string[]): Promise<unknown> {
+  const requirement = rpcOperation(MCP_RPC_ACTIONS.job[params.action])!;
+  if (!scopes.includes(requirement.scope)) return failure("insufficient_scope", `This job action requires ${requirement.scope}.`, `Authorize the MCP client again with ${requirement.scope}.`);
   switch (params.action) {
     case "list":
-      if (!scopes.includes("coding:read")) return failure("insufficient_scope", "This job action requires coding:read.", "Authorize the MCP client again with coding:read.");
       return activeJobList(env, clientId, params);
     case "get":
-      if (!scopes.includes("coding:read")) return failure("insufficient_scope", "This job action requires coding:read.", "Authorize the MCP client again with coding:read.");
       return activeJobGet(env, clientId, params.job_id, params.workspace_id);
     case "logs":
-      if (!scopes.includes("coding:read")) return failure("insufficient_scope", "This job action requires coding:read.", "Authorize the MCP client again with coding:read.");
-      return activeJobRunnerTool(env, clientId, "job.logs", boundedReadParams(params, 16 * 1024), "read", "logs");
+      return activeJobRunnerTool(env, clientId, MCP_RPC_ACTIONS.job.logs, boundedReadParams(params, 16 * 1024), "read", "logs");
     case "cancel":
-      if (!scopes.includes("coding:exec")) return failure("insufficient_scope", "This job action requires coding:exec.", "Authorize the MCP client again with coding:exec.");
-      return activeJobRunnerTool(env, clientId, "job.cancel", params, "job_control", "job");
+      return activeJobRunnerTool(env, clientId, MCP_RPC_ACTIONS.job.cancel, params, "job_control", "job");
     case "input":
-      if (!scopes.includes("coding:exec")) return failure("insufficient_scope", "This job action requires coding:exec.", "Authorize the MCP client again with coding:exec.");
-      return activeJobRunnerTool(env, clientId, "job.input", params, "job_control", "input");
+      return activeJobRunnerTool(env, clientId, MCP_RPC_ACTIONS.job.input, params, "job_control", "input");
   }
 }
 
 async function contextTool(env: McpRequestEnv, clientId: string, params: z.output<typeof ContextInputSchema>, scopes: readonly string[]): Promise<unknown> {
-  const mutating = params.action === "checkpoint" || params.action === "rebuild";
-  const requiredScope = mutating ? "coding:write" : "coding:read";
+  const method = MCP_RPC_ACTIONS.context[params.action];
+  const requirement = rpcOperation(method)!;
+  const requiredScope = requirement.scope;
   if (!scopes.includes(requiredScope)) return failure("insufficient_scope", `This context action requires ${requiredScope}.`, `Authorize the MCP client again with ${requiredScope}.`);
-  const method = `context.${params.action}`;
-  return activeRunnerTool(env, clientId, method, params, mutating ? "edit" : "read", "context");
+  return activeRunnerTool(env, clientId, method, params, requirement.permission, "context");
 }
 
 function isToolSuccessResult(value: unknown): value is { readonly structuredContent: Record<string, unknown> } {

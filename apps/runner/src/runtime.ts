@@ -1,7 +1,8 @@
+import { RUNNER_VERSION } from "./version.js";
 import { spawn } from "node:child_process";
 import { lstatSync, realpathSync } from "node:fs";
 import { hostname } from "node:os";
-import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS } from "@aloneio/runmesh-protocol";
+import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS, RPC_OPERATION_METHODS, RPC_OPERATION_CONTRACT, rpcOperation } from "@aloneio/runmesh-protocol";
 import type { RunnerConfig } from "./config.js";
 import { ContextStore, type ContextEvidence } from "./context-store.js";
 import { GitService } from "./git-service.js";
@@ -247,14 +248,17 @@ export class RunnerRuntime {
   public async envInfo(): Promise<Record<string, unknown>> {
     const info = await this.environment.get(this.policy.list().filter((workspace) => workspace.permissions?.read !== false));
     const shell = this.shellRuntime;
-    return { ...info, shell: shell === undefined ? { available: false } : { available: true, kind: shell.kind, version: shell.version } };
+    return { ...info,
+      runtime_capabilities: { schema_version: 1, runner_version: RUNNER_VERSION, operation_contract_sha256: RPC_OPERATION_CONTRACT.sha256,
+        supported_rpc_methods: [...RPC_OPERATION_METHODS], features: { job_queue: 1, job_history: 1, context_record: 2 }, max_concurrent_jobs: this.config.maxConcurrentJobs ?? 1 },
+      shell: shell === undefined ? { available: false } : { available: true, kind: shell.kind, version: shell.version } };
   }
   public async dispatch(method: string, input: unknown): Promise<unknown> {
     const generation = this.policy.generation;
     const result = await this.dispatchAtCurrentPolicy(method, input);
     // Read-only operations must not return data from an obsolete authorization
     // snapshot. Already-committed edits/jobs keep their real result semantics.
-    if (["workspace.list", "env.info", "fs.stat", "fs.read", "fs.list", "fs.search", "fs.preview_patch", "git.status", "git.diff", "git.log", "git.show", "git.blame", "job.list", "job.get", "job.logs", "context.bootstrap", "context.read", "context.search"].includes(method)) this.policy.assertGeneration(generation);
+    if (rpcOperation(method)?.revalidate_after_read === true) this.policy.assertGeneration(generation);
     return result;
   }
   private async dispatchAtCurrentPolicy(method: string, input: unknown): Promise<unknown> {
