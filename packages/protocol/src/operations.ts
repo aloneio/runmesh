@@ -27,6 +27,7 @@ export const RPC_OPERATIONS = Object.freeze({
   "exec.start": execute, "exec.run": execute,
   "job.list": read, "job.get": jobRead, "job.logs": jobRead, "job.cancel": jobControl, "job.input": jobControl,
   "context.bootstrap": read, "context.read": read, "context.search": read, "context.checkpoint": write, "context.rebuild": write,
+  "context.storage": read, "context.prune": write,
 } satisfies Record<string, RpcOperationSpec>);
 export type RpcOperationName = keyof typeof RPC_OPERATIONS;
 export const RPC_OPERATION_METHODS = Object.freeze(Object.keys(RPC_OPERATIONS) as RpcOperationName[]);

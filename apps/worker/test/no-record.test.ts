@@ -8,6 +8,73 @@ import { randomBase64Url, sha256Hex, internalHeaders } from "../src/security.js"
 
 const full = { read: true, edit: true, shell: true, job_control: true };
 
+const contextUsage = { workspace_id: "w", storage_schema: 1, state: "ready", record_files: 4, record_bytes: 3000, context_count: 1, metadata_bytes: 800,
+  limit_bytes: 33554432, limit_records: 4096, limit_contexts: 256, over_limit: false, pending_checkpoint: false, accounting: "logical_revision_bytes" };
+const contextPreview = { workspace_id: "w", retention_schema: 1, applied: false, complete: true, plan_hash: "a".repeat(64), keep_days: 30, keep_revisions: 2,
+  max_delete: 128, candidate_records: 2, candidate_bytes: 1000, eligible_records: 2, preserved_contexts: 1, has_more: false, scanned_files: 3, scanned_bytes: 1800, deleted_records: 0, deleted_bytes: 0 };
+
+it("R08 authenticated storage inventory uses one RPC and strips local paths while preserving ordinary metadata audit", async () => {
+  const f = await fixture(() => Response.json({ type: "rpc.response", result: { ...contextUsage, path: "/private-state", token: "private-token" } }));
+  const result = (await f.call("context", { action: "storage", workspace_id: "w" })).body.result;
+  expect(result.isError).not.toBe(true); expect(result.structuredContent).toMatchObject(contextUsage);
+  expect(f.forwarded.map(call => call.method)).toEqual(["context.storage"]);
+  expect(JSON.stringify(result)).not.toContain("private");
+  await runInDurableObject(f.stub, (_instance, state) => {
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM jobs").one().n).toBe(0);
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM mcp_calls").one().n).toBe(1);
+  });
+});
+
+it("R08 read-only scope permits inventory but cannot preview or apply retention", async () => {
+  const f = await fixture(() => Response.json({ type: "rpc.response", result: contextUsage }));
+  await runInDurableObject(f.stub, (_instance, state) => { state.storage.sql.exec("UPDATE mcp_clients SET scopes_json=? WHERE client_id='c'", JSON.stringify(["coding:read"])); });
+  expect((await f.call("context", { action: "storage", workspace_id: "w" })).body.result.isError).not.toBe(true);
+  for (const extra of [{}, { apply: true, expected_plan_hash: "a".repeat(64) }]) {
+    const result = (await f.call("context", { action: "prune", workspace_id: "w", keep_days: 30, keep_revisions: 2, ...extra })).body.result;
+    expect(result).toMatchObject({ isError: true, structuredContent: { error: { code: "insufficient_scope" } } });
+  }
+  expect(f.forwarded).toHaveLength(1);
+});
+
+it("R08 preview does not turn into apply and validated apply returns only bounded receipt data", async () => {
+  const f = await fixture(request => Response.json({ type: "rpc.response", result: { ...contextPreview,
+    ...(request.params.apply === true ? { applied: true, deleted_records: 2, deleted_bytes: 1000 } : {}), secret: "private-value" } }));
+  const input = { action: "prune", workspace_id: "w", keep_days: 30, keep_revisions: 2 };
+  const preview = (await f.call("context", input)).body.result;
+  expect(preview.structuredContent).toMatchObject(contextPreview);
+  expect(f.forwarded[0]?.params.apply).toBeUndefined();
+  const result = (await f.call("context", { ...input, apply: true, expected_plan_hash: preview.structuredContent.plan_hash })).body.result;
+  expect(result.structuredContent).toMatchObject({ applied: true, deleted_records: 2 });
+  expect(JSON.stringify(result)).not.toContain("private-value");
+  expect(f.forwarded.map(call => call.method)).toEqual(["context.prune", "context.prune"]);
+});
+
+it.each([{ apply: true }, { apply: "true" }, { expected_plan_hash: "a".repeat(64) }, { max_delete: 129 }, { keep_revisions: 0 }])("R08 invalid prune confirmation/bounds %j never reach the Runner", async extra => {
+  const f = await fixture();
+  const result = (await f.call("context", { action: "prune", workspace_id: "w", keep_days: 30, keep_revisions: 2, ...extra })).body.result;
+  expect(result.isError).toBe(true); expect(f.forwarded).toHaveLength(0);
+});
+
+it("R08 contradictory successful retention output is not accepted as a cleanup receipt", async () => {
+  const f = await fixture(() => Response.json({ type: "rpc.response", result: { ...contextPreview, applied: true } }));
+  const result = (await f.call("context", { action: "prune", workspace_id: "w", keep_days: 30, keep_revisions: 2, apply: true, expected_plan_hash: contextPreview.plan_hash })).body.result;
+  expect(result).toMatchObject({ isError: true, structuredContent: { error: { code: "context_result_invalid", operation_state: "unknown" } } });
+});
+
+it.each(["context_storage_full", "context_plan_changed", "context_scan_budget", "context_prune_partial"])("R08 %s survives the bridge without private details or automatic replay", async code => {
+  const f = await fixture(() => Response.json({ type: "rpc.error", error: { code, message: "private-state-path", operation_state: code === "context_prune_partial" ? "unknown" : "not_started" } }, { status: 400 }));
+  const result = (await f.call("context", { action: "prune", workspace_id: "w", keep_days: 30, keep_revisions: 2 })).body.result;
+  expect(result).toMatchObject({ isError: true, structuredContent: { error: { code } } });
+  expect(JSON.stringify(result)).not.toContain("private-state-path"); expect(f.forwarded).toHaveLength(1);
+  if (code === "context_prune_partial") expect(result.structuredContent.error.operation_state).toBe("unknown");
+});
+
+it("R08 workspace selection cannot use an inventory or retention call to reach another workspace", async () => {
+  const f = await fixture();
+  for (const args of [{ action: "storage" }, { action: "prune", keep_days: 30, keep_revisions: 2 }]) expect((await f.call("context", { ...args, workspace_id: "forbidden" })).body.result.isError).toBe(true);
+  expect(f.forwarded).toHaveLength(0);
+});
+
 it.each(["read", "job"])("R07 explicit bound %s reads reject legacy fallback without additional history writes", async tool => {
   const f = await fixture(() => Response.json({ type: "rpc.response", result: { workspace_id:"w",path:"a",job_id:"j",stream:"stdout",data:"old",offset:0,size:3,...bytePageMetadata("old",0,3,3) } }));
   const args = tool === "read" ? {workspace_id:"w",path:"a",consistency:"snapshot"} : {action:"logs",workspace_id:"w",job_id:"j",consistency:"append"};
@@ -84,7 +151,7 @@ it("R01 diagnoses implementation capabilities with one existing RPC and no Job o
   } }));
   const result = (await f.call("inspect", {action:"diagnostics",workspace_id:"w"})).body.result;
   expect(result.isError).not.toBe(true);
-  expect(result.structuredContent.capabilities).toMatchObject({report_state:"reported",contract_match:true,host_catalog_state:"not_observed",runner:{runner_version:"0.1.3"},worker_catalog:{tool_count:10,action_count:24}});
+  expect(result.structuredContent.capabilities).toMatchObject({report_state:"reported",contract_match:true,host_catalog_state:"not_observed",runner:{runner_version:"0.1.3"},worker_catalog:{tool_count:10,action_count:26}});
   expect(f.forwarded.map(call => call.method)).toEqual(["env.info"]);
   for (const secret of ["private-machine", "/private/workspace", "private-token", "do-not-publish"]) expect(JSON.stringify(result)).not.toContain(secret);
   await runInDurableObject(f.stub, (_instance, state) => {

@@ -2,6 +2,10 @@
 
 This ledger tracks changes made from the 2026-09-11 optimization plan. It records behavior adopted from upstream references without copying their implementation.
 
+## R08 / P13 — Context storage and explicit superseded-revision retention (2026-09-15)
+
+Development slice only: logical on-disk revision bytes/counts now gate new checkpoints; the index no longer silently evicts an older context. Existing full-store receipts remain deduplicated. Read-only metadata inventory and reviewed, hash-bound pruning of old superseded revisions use two actions within the existing Context tool. Latest records and index remain unchanged; partial unlink batches require fresh inspection, not assumed rollback. See [storage budgets](context-storage.md) and [Chinese explanation](context-storage.zh-CN.md). Whole-context deletion, saved automatic policy, host-global quotas, unknown-state migration and production activation remain open. The current catalog contains 27 protected methods and 26 Runner-backed actions; earlier counts below are historical.
+
 ## R07 / P09 — opt-in file snapshots and log generation cursors (2026-09-15)
 
 Development slice following `6e1b0bb`: opt-in process-local file content snapshots and append-log generation cursors, bounded caches and fixed expiry, per-page authorization, strict resource-aware output checks and explicit legacy-peer rejection. Numeric live pages remain compatible. Full-log tamper attestation, production acceptance and all-tool pagination are not implied. See [bound cursors](bound-cursors.md) and [Chinese explanation](bound-cursors.zh-CN.md) for limits and compatibility.

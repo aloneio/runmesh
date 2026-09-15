@@ -534,6 +534,42 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     }
   });
 
+  it("R08 real MCP inventories Context and prunes only reviewed superseded records", async () => {
+    const files = await import("node:fs/promises");
+    let contextId = "";
+    for (let revision = 1; revision <= 3; revision++) {
+      const created = await mcpTool("context", { action: "checkpoint", workspace_id: "workspace-1", turn_id: "retention-e2e", goal: `Retention version ${revision}`,
+        ...(contextId ? { context_id: contextId, expected_revision: revision - 1 } : {}) });
+      expect(created.isError, JSON.stringify(created)).not.toBe(true);
+      contextId = (created.structuredContent?.context as { context_id: string }).context_id;
+    }
+    const directory = join(runnerState, "contexts", "workspace-1", contextId);
+    // Only this test's private fixture is aged; immutable content fingerprints
+    // do not include these retention timestamps. No production state is used.
+    for (const revision of [1, 2]) {
+      const path = join(directory, `${revision}.json`), record = JSON.parse(await files.readFile(path, "utf8"));
+      record.created_at_ms = record.updated_at_ms = Date.now() - 90 * 86400000;
+      await files.writeFile(path, `${JSON.stringify(record)}\n`);
+    }
+    const latest = await files.readFile(join(directory, "3.json"));
+    const usage = await mcpTool("context", { action: "storage", workspace_id: "workspace-1" }, clientB);
+    expect(usage.isError, JSON.stringify(usage)).not.toBe(true);
+    expect(usage.structuredContent).toMatchObject({ storage_schema: 1, accounting: "logical_revision_bytes" });
+    expect(JSON.stringify(usage)).not.toContain(runnerState);
+    const input = { action: "prune", workspace_id: "workspace-1", keep_days: 30, keep_revisions: 1 };
+    expect((await mcpTool("context", input, clientB)).structuredContent?.error).toMatchObject({ code: "insufficient_scope" });
+    const preview = await mcpTool("context", input);
+    expect(preview.isError, JSON.stringify(preview)).not.toBe(true);
+    expect(preview.structuredContent).toMatchObject({ applied: false, candidate_records: 2, deleted_records: 0 });
+    expect(await files.readdir(directory)).toHaveLength(3);
+    const applied = await mcpTool("context", { ...input, apply: true, expected_plan_hash: preview.structuredContent?.plan_hash });
+    expect(applied.isError, JSON.stringify(applied)).not.toBe(true);
+    expect(applied.structuredContent).toMatchObject({ applied: true, deleted_records: 2, complete: true });
+    expect(await files.readdir(directory)).toEqual(["3.json"]);
+    expect(await files.readFile(join(directory, "3.json"))).toEqual(latest);
+    expect((await mcpTool("context", { action: "read", workspace_id: "workspace-1", context_id: contextId })).structuredContent?.context).toMatchObject({ revision: 3 });
+  });
+
   it("exercises diagnostics, patch preview and all Context methods through final authorization", async () => {
     const diagnostic = await mcpTool("inspect", {action:"diagnostics",workspace_id:"workspace-1"});
     expect(diagnostic.isError, JSON.stringify(diagnostic)).not.toBe(true);

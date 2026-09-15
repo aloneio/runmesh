@@ -8,7 +8,7 @@ export const MCP_RPC_ACTIONS = Object.freeze({
   edit: Object.freeze({ preview: "fs.preview_patch", apply: "fs.apply_patch" }),
   shell: Object.freeze({ start: "exec.start", run: "exec.run" }),
   job: Object.freeze({ list: "job.list", get: "job.get", logs: "job.logs", cancel: "job.cancel", input: "job.input" }),
-  context: Object.freeze({ bootstrap: "context.bootstrap", read: "context.read", search: "context.search", checkpoint: "context.checkpoint", rebuild: "context.rebuild" }),
+  context: Object.freeze({ bootstrap: "context.bootstrap", read: "context.read", search: "context.search", checkpoint: "context.checkpoint", rebuild: "context.rebuild", storage: "context.storage", prune: "context.prune" }),
 } as const satisfies Record<string, Readonly<Record<string, RpcOperationName>>>);
 
 export const MCP_ACTION_REQUIREMENTS = Object.freeze(Object.entries(MCP_RPC_ACTIONS).flatMap(([tool, actions]) =>

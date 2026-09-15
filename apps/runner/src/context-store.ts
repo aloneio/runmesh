@@ -4,6 +4,7 @@ import { chmod, lstat, mkdir, open, opendir, rename, rm } from "node:fs/promises
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { RpcRuntimeError } from "./errors.js";
 import { defaultRunnerStateDir } from "./state-path.js";
+import { contextStorageLimits, contextStorageSummary, scanContextStorage, verifyContextStorageFile, checkContextDirectory, sameStorageStamp, type ContextStorageLimits, type ContextStorageFile } from "./context-storage.js";
 
 const CONTEXT_SCHEMA_VERSION = 2;
 const INDEX_SCHEMA_VERSION = 1;
@@ -82,7 +83,7 @@ type CheckpointIntent = {
   readonly fingerprint: string;
 };
 
-export interface ContextStoreOptions { readonly stateDir?: string }
+export interface ContextStoreOptions { readonly stateDir?: string; readonly storageLimits?: Partial<ContextStorageLimits> }
 
 /**
  * Explicit, workspace-scoped handoff storage. Read-only methods never create
@@ -91,9 +92,11 @@ export interface ContextStoreOptions { readonly stateDir?: string }
 export class ContextStore {
   private readonly stateDir: string;
   private readonly contextsDir: string;
+  private readonly storageLimits: ContextStorageLimits;
 
 
   public constructor(options: ContextStoreOptions = {}) {
+    this.storageLimits = contextStorageLimits(options.storageLimits);
     this.stateDir = options.stateDir ?? defaultRunnerStateDir();
     if (!isAbsolute(this.stateDir) || this.stateDir.length === 0 || this.stateDir.length > 4_096 || /[\u0000-\u001f\u007f]/u.test(this.stateDir) || resolve(this.stateDir) === parse(resolve(this.stateDir)).root) {
       throw new Error("stateDir must be an absolute non-root path without control characters");
@@ -136,6 +139,94 @@ export class ContextStore {
     const page = matches.slice(offset, offset + limit).map(indexProjection);
     const next = offset + page.length;
     return { workspace_id: workspaceId, query, results: page, next_cursor: next < matches.length ? String(next) : null, scanned_records: index.records.length, state: "ready" };
+  }
+
+  public storage(input: unknown): Promise<Record<string, unknown>> {
+    const workspaceId = workspaceIdFrom(input);
+    return this.serialize(workspaceId, async () => ({ workspace_id: workspaceId, ...contextStorageSummary(await scanContextStorage(this.workspaceDir(workspaceId)), this.storageLimits) }));
+  }
+
+  /** Only superseded revisions may be pruned. The current index/record never
+   * changes, so an interrupted unlink batch needs a new preview, not journal
+   * replay or a fabricated all-files transaction. No automatic retention. */
+  public async prune(input: unknown, assertAuthorized: () => void = () => {}): Promise<Record<string, unknown>> {
+    const params = object(input), workspaceId = safeId(params.workspace_id, "workspace_id");
+    const keepDays = boundedInteger(params.keep_days, 1, 3650, "keep_days");
+    const keepRevisions = boundedInteger(params.keep_revisions, 1, 1000, "keep_revisions");
+    const maxDelete = params.max_delete === undefined ? 128 : boundedInteger(params.max_delete, 1, 128, "max_delete");
+    if (params.apply !== undefined && typeof params.apply !== "boolean") throw new RpcRuntimeError("invalid_params", "apply must be a boolean");
+    const apply = params.apply === true;
+    if (apply !== (params.expected_plan_hash !== undefined) || (apply && (typeof params.expected_plan_hash !== "string" || !/^[a-f0-9]{64}$/u.test(params.expected_plan_hash)))) throw new RpcRuntimeError("invalid_params", "Apply requires the exact expected_plan_hash from a fresh preview; previews must omit it");
+    const generation = params.policy_generation === undefined ? null : boundedInteger(params.policy_generation, 0, Number.MAX_SAFE_INTEGER, "policy_generation");
+    return this.serialize(workspaceId, async () => {
+      assertAuthorized();
+      const index = await this.readIndex(workspaceId, true);
+      const directory = this.workspaceDir(workspaceId), inventory = await scanContextStorage(directory);
+      if (index === undefined && inventory.files.length > 0) throw new RpcRuntimeError("context_index_missing", "Rebuild the index before planning retention");
+      const deadline = performance.now() + 4000;
+      let scannedBytes = 0, scannedFiles = 0;
+      const groups = new Map<string, ContextStorageFile[]>();
+      for (const file of inventory.files) { const group = groups.get(file.contextId) ?? []; group.push(file); groups.set(file.contextId, group); }
+      if (index !== undefined && (index.records.length !== groups.size || new Set(index.records.map(record => record.context_id)).size !== groups.size)) throw new RpcRuntimeError("context_index_stale", "The index does not cover the stored contexts; preserve the records and rebuild before retention");
+      const candidates: { file: ContextStorageFile; hash: string; latest: ContextStorageFile }[] = [];
+      const readChecked = async (file: ContextStorageFile) => {
+        if (++scannedFiles > MAX_REBUILD_FILES || performance.now() > deadline || scannedBytes + file.stamp.size > MAX_REBUILD_BYTES) throw new RpcRuntimeError("context_scan_budget", "Context retention inspection exceeded its budget; no records were removed");
+        await verifyContextStorageFile(directory, file);
+        const loaded = await readJsonBounded(this.recordPath(workspaceId, file.contextId, file.revision), MAX_RECORD_BYTES);
+        scannedBytes += loaded.bytes;
+        const record = parseRecord(loaded.value, workspaceId, file.contextId);
+        if (record.revision !== file.revision) throw new RpcRuntimeError("context_record_corrupt", "Context revision does not match its filename");
+        await verifyContextStorageFile(directory, file);
+        return { record, hash: loaded.sha256 };
+      };
+      const cutoff = Date.now() - keepDays * 86400000;
+      for (const [contextId, group] of groups) {
+        group.sort((a, b) => b.revision - a.revision);
+        const latest = group[0]!;
+        const entry = index?.records.find(record => record.context_id === contextId);
+        if (entry?.revision !== latest.revision) throw new RpcRuntimeError("context_index_stale", "Stored revision and index differ; rebuild before retention");
+        const current = await readChecked(latest);
+        if (entry.fingerprint !== current.record.fingerprint) throw new RpcRuntimeError("context_index_corrupt", "Index and current record disagree");
+        for (const file of group.slice(keepRevisions)) {
+          const loaded = await readChecked(file);
+          if (loaded.record.updated_at_ms < cutoff) candidates.push({ file, hash: loaded.hash, latest });
+        }
+      }
+      candidates.sort((a, b) => a.file.contextId < b.file.contextId ? -1 : a.file.contextId > b.file.contextId ? 1 : a.file.revision - b.file.revision);
+      const selected = candidates.slice(0, maxDelete);
+      const hash = createHash("sha256").update(JSON.stringify({ schema: 1, workspaceId, generation, keepDays, keepRevisions, maxDelete, inventory: inventory.digest, selected: selected.map(item => [item.file.contextId, item.file.revision, item.hash]) })).digest("hex");
+      const summary = { workspace_id: workspaceId, retention_schema: 1, applied: false, complete: true, plan_hash: hash,
+        keep_days: keepDays, keep_revisions: keepRevisions, max_delete: maxDelete,
+        candidate_records: selected.length, candidate_bytes: selected.reduce((sum, item) => sum + item.file.stamp.size, 0),
+        eligible_records: candidates.length, preserved_contexts: groups.size, has_more: selected.length < candidates.length,
+        scanned_files: scannedFiles, scanned_bytes: scannedBytes, deleted_records: 0, deleted_bytes: 0 };
+      if (performance.now() > deadline) throw new RpcRuntimeError("context_scan_budget", "Context retention inspection exceeded its time budget; no records were removed");
+      assertAuthorized();
+      if (!apply) return summary;
+      if (params.expected_plan_hash !== hash) throw new RpcRuntimeError("context_plan_changed", "The retention preview is stale; request and review a new preview");
+      let deletedRecords = 0, deletedBytes = 0;
+      for (const item of selected) {
+        try {
+          if (performance.now() > deadline) throw new RpcRuntimeError("context_scan_budget", "The retention time budget was exhausted");
+          await verifyContextStorageFile(directory, item.file);
+          const loaded = await readJsonBounded(this.recordPath(workspaceId, item.file.contextId, item.file.revision), MAX_RECORD_BYTES);
+          if (loaded.sha256 !== item.hash) throw new RpcRuntimeError("context_plan_changed", "A selected revision changed after preview");
+          await verifyContextStorageFile(directory, item.latest);
+          await verifyContextStorageFile(directory, item.file);
+          // No intervening await between this current authorization check
+          // and issuing the single-file deletion. OS-level races are not an
+          // atomic multi-file transaction; preserve the current revision.
+          assertAuthorized();
+          await rm(this.recordPath(workspaceId, item.file.contextId, item.file.revision));
+          deletedRecords += 1; deletedBytes += item.file.stamp.size;
+        } catch (error) {
+          if (deletedRecords > 0) throw new RpcRuntimeError("context_prune_partial", "Retention stopped after some old revisions were removed; inspect storage and create a new preview, do not assume rollback", { deleted_records: deletedRecords, deleted_bytes: deletedBytes });
+          if (error instanceof RpcRuntimeError || (error instanceof Error && "code" in error && error.code === "stale_policy")) throw error;
+          throw new RpcRuntimeError("context_plan_changed", "Retention could not safely remove the reviewed revision; preserve storage and request a new preview");
+        }
+      }
+      return { ...summary, applied: true, deleted_records: deletedRecords, deleted_bytes: deletedBytes };
+    });
   }
 
   public checkpoint(input: unknown, assertAuthorized: () => void = () => {}): Promise<Record<string, unknown>> {
@@ -195,10 +286,12 @@ export class ContextStore {
       const entry = indexEntry(record);
       const records = index.records.filter((item) => item.context_id !== contextId);
       records.push(entry);
-      if (records.length > MAX_CONTEXTS) records.sort((left, right) => right.updated_at_ms - left.updated_at_ms).splice(MAX_CONTEXTS);
+      if (records.length > this.storageLimits.maxContexts) throw new RpcRuntimeError("context_storage_full", "Context count limit reached; existing history was not evicted");
       const nextIndex: ContextIndex = { schema_version: INDEX_SCHEMA_VERSION, workspace_id: workspaceId, rebuilt_at_ms: index.rebuilt_at_ms, records };
       if (Buffer.byteLength(JSON.stringify(record)) + 1 > MAX_RECORD_BYTES) throw new RpcRuntimeError("context_record_too_large", "Context checkpoint exceeds the local record budget");
       if (Buffer.byteLength(JSON.stringify(nextIndex)) + 1 > MAX_INDEX_BYTES) throw new RpcRuntimeError("context_index_too_large", "Context index exceeds its local budget");
+      const usage = await scanContextStorage(this.workspaceDir(workspaceId));
+      if (usage.files.length + 1 > this.storageLimits.maxRecords || usage.bytes + Buffer.byteLength(JSON.stringify(record)) + 1 > this.storageLimits.maxBytes || usage.contexts + (current === undefined ? 1 : 0) > this.storageLimits.maxContexts) throw new RpcRuntimeError("context_storage_full", "Context storage budget reached; inspect storage and explicitly review retention before adding a new revision");
       // Persist the intent first, including for a new turn beside an existing
       // index. An interrupted write must not generate another random context.
       const intent: CheckpointIntent = { schema_version: 1, workspace_id: workspaceId, context_id: contextId, revision, fingerprint };
@@ -211,7 +304,7 @@ export class ContextStore {
         }
         throw new RpcRuntimeError("context_index_stale", "Checkpoint outcome needs an explicit index rebuild before another write", { context_id: contextId, revision });
       }
-      try { await this.writeIndex(nextIndex); await this.clearPending(intent); }
+      try { await this.writeIndex(nextIndex, assertAuthorized); await this.clearPending(intent); }
       catch { throw new RpcRuntimeError("context_index_stale", "Checkpoint record was committed but its derived index was not updated; rebuild the index, then retry the same input", { context_id: contextId, revision }); }
       return { workspace_id: workspaceId, deduplicated: false, context: record };
     });
@@ -257,7 +350,7 @@ export class ContextStore {
         if (latest !== undefined) records.push(indexEntry(latest));
       }
       records.sort((left, right) => right.updated_at_ms - left.updated_at_ms);
-      if (records.length > MAX_CONTEXTS) records.splice(MAX_CONTEXTS);
+      if (records.length > MAX_CONTEXTS) throw new RpcRuntimeError("context_storage_full", "Rebuild would silently hide stored contexts; preserve and archive them explicitly instead");
       if (pending !== undefined && await pathExists(this.recordPath(workspaceId, pending.context_id, pending.revision))) {
         const committed = await this.readRecord(workspaceId, pending.context_id, pending.revision);
         if (committed.fingerprint !== pending.fingerprint) throw new RpcRuntimeError("context_record_corrupt", "Pending checkpoint and immutable record disagree");
@@ -355,7 +448,8 @@ export class ContextStore {
   private recordPath(workspaceId: string, contextId: string, revision: number): string { return join(this.contextDir(workspaceId, contextId), `${revision}.json`); }
 
   private serialize<T>(workspaceId: string, action: () => Promise<T>): Promise<T> {
-    const key = this.workspaceDir(workspaceId);
+    const path = resolve(this.workspaceDir(workspaceId));
+    const key = process.platform === "win32" ? path.toLowerCase() : path;
     const prior = contextWrites.get(key) ?? Promise.resolve();
     const run = prior.catch(() => undefined).then(action);
     const marker = run.then(() => undefined, () => undefined);
@@ -536,24 +630,28 @@ function parseRecord(value: unknown, workspaceId: string, contextId: string): Co
   };
 }
 
-async function readJsonBounded(path: string, maxBytes: number): Promise<{ readonly value: unknown; readonly bytes: number }> {
+async function readJsonBounded(path: string, maxBytes: number): Promise<{ readonly value: unknown; readonly bytes: number; readonly sha256: string }> {
   await assertRegularParent(path);
   const info = await lstat(path);
   if (!info.isFile() || info.isSymbolicLink() || info.size > maxBytes) throw new RpcRuntimeError("context_record_corrupt", "context file is not a bounded regular file");
   const handle = await open(path, constants.O_RDONLY | NOFOLLOW);
   try {
     const finalInfo = await handle.stat();
-    if (!finalInfo.isFile() || finalInfo.size > maxBytes) throw new RpcRuntimeError("context_record_corrupt", "context file changed or exceeds its budget");
+    if (!finalInfo.isFile() || !sameStorageStamp(info, finalInfo) || finalInfo.size > maxBytes) throw new RpcRuntimeError("context_record_corrupt", "context file changed or exceeds its budget");
     const data = Buffer.alloc(finalInfo.size);
     let offset = 0;
+    let attempts = 0;
     while (offset < data.byteLength) {
+      if (++attempts > 64) throw new RpcRuntimeError("context_scan_budget", "Context read exceeded its bounded partial-read attempts");
       const { bytesRead } = await handle.read(data, offset, data.byteLength - offset, offset);
       if (bytesRead === 0) break;
       offset += bytesRead;
     }
     const after = await handle.stat();
-    if (after.size !== finalInfo.size || offset !== data.byteLength) throw new RpcRuntimeError("context_record_corrupt", "context file changed while reading");
-    return { value: JSON.parse(data.toString("utf8")) as unknown, bytes: data.byteLength };
+    if (!sameStorageStamp(after, finalInfo) || offset !== data.byteLength) throw new RpcRuntimeError("context_record_corrupt", "context file changed while reading");
+    let value: unknown;
+    try { value = JSON.parse(data.toString("utf8")); } catch { throw new RpcRuntimeError("context_record_corrupt", "Context record is not valid JSON"); }
+    return { value, bytes: data.byteLength, sha256: createHash("sha256").update(data).digest("hex") };
   } finally { await handle.close(); }
 }
 
@@ -614,7 +712,7 @@ async function assertPrivateDirectory(path: string, label: string): Promise<void
 }
 
 async function assertRegularParent(path: string): Promise<void> {
-  await assertPrivateDirectory(dirname(path), "context parent directory");
+  await checkContextDirectory(dirname(path));
 }
 
 async function pathExists(path: string): Promise<boolean> {

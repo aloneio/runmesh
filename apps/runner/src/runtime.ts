@@ -290,6 +290,12 @@ export class RunnerRuntime {
       case "context.bootstrap": this.policy.assertPermission(params.workspace_id, "read"); return this.contextWithBaseline(await this.context.bootstrap(params), params.workspace_id);
       case "context.read": this.policy.assertPermission(params.workspace_id, "read"); return this.contextWithBaseline(await this.context.read(params), params.workspace_id);
       case "context.search": this.policy.assertPermission(params.workspace_id, "read"); return this.context.search(params);
+      case "context.storage": this.policy.assertPermission(params.workspace_id, "read"); return this.context.storage(params);
+      case "context.prune": {
+        this.policy.assertPermission(params.workspace_id, "edit");
+        const generation = this.policy.generation;
+        return this.context.prune({ ...params, policy_generation: generation }, () => { this.policy.assertGeneration(generation); this.policy.assertPermission(params.workspace_id, "edit"); });
+      }
       case "context.checkpoint": {
         this.policy.assertPermission(params.workspace_id, "edit");
         const generation = this.policy.generation;

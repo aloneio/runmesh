@@ -23,8 +23,8 @@ it("catalog has a reproducible bounded fingerprint without creating new public t
   expect(MCP_CATALOG_SUMMARY.tool_count).toBe(10);
   expect(MCP_CATALOG_SUMMARY.sha256).toBe(sha256Hex(canonicalJson(catalogContract())));
   expect(MCP_CATALOG_SUMMARY.tool_names).toEqual(Object.keys(TOOL_SPECS));
-  expect(MCP_ACTION_REQUIREMENTS).toHaveLength(24);
-  expect(new Set(MCP_ACTION_REQUIREMENTS.map(a => `${a.tool}.${a.action}`)).size).toBe(24);
+  expect(MCP_ACTION_REQUIREMENTS).toHaveLength(26);
+  expect(new Set(MCP_ACTION_REQUIREMENTS.map(a => `${a.tool}.${a.action}`)).size).toBe(26);
   for (const action of MCP_ACTION_REQUIREMENTS) expect(RPC_OPERATION_METHODS).toContain(action.method);
   expect(new TextEncoder().encode(JSON.stringify(capabilityDiagnostics(report(), allScopes, full))).length).toBeLessThan(16 * 1024);
 });
