@@ -1,14 +1,14 @@
 /** Source-only dependency policy; tooling/test dependencies are not runtime layers. */
-export const SOURCE_ROOTS = ["apps/worker/src", "apps/runner/src", "packages/protocol/src"];
+export const SOURCE_ROOTS = ["apps/worker/src", "apps/runner/src", "packages/protocol/src", "apps/worker/browser"];
 export const SOURCE_PACKAGES = {
   "@aloneio/runmesh-protocol": "packages/protocol/src/index.ts",
   "@aloneio/runmesh-runner": "apps/runner/src/index.ts",
   "@aloneio/runmesh-worker": "apps/worker/src/index.ts",
 };
-export const MISSING_GENERATED = new Set(["apps/worker/src/generated-provenance.ts"]);
+export const MISSING_GENERATED = new Set(["apps/worker/src/generated-provenance.ts", "apps/worker/src/generated-admin-client.ts"]);
 export function layer(path) {
   return path.startsWith("packages/protocol/src/") ? "protocol"
-    : path.startsWith("apps/worker/src/") ? "worker"
+    : (path.startsWith("apps/worker/src/") || path.startsWith("apps/worker/browser/")) ? "worker"
     : path.startsWith("apps/runner/src/") ? "runner" : "outside";
 }
 const pureRunner = /^(?:apps\/runner\/src\/jobs\/(?:records|values|recovery)|apps\/runner\/src\/context\/(?:model|retention-plan|storage-types))\.[jt]s$/u;
@@ -19,8 +19,58 @@ export function specifierProblem(from, specifier, typeOnly) {
   if (/^apps\/runner\/src\/(?:jobs|context)\/ports\.[jt]s$/u.test(from) && specifier.startsWith("node:") && !typeOnly) return "Runner ports may reference platform types but not load platform implementations";
   return undefined;
 }
+/** Explicit worker roles. Unknown modules are extensions, not trusted foundations. */
+const workerRootRoles = {
+  "index.ts": "entry", "production.ts": "entry", "registry.ts": "registry_facade", "runner-do.ts": "transport_owner",
+  "admin-styles.ts": "presentation", "history-ui.ts": "presentation", "ui-locale.ts": "presentation", "ui-catalog.ts": "presentation",
+  "admin-jobs.ts": "http", "installer.ts": "distribution", "installer-preflight.ts": "distribution",
+  "job-history-store.ts": "persistence", "external-audit.ts": "persistence", "history-retention.ts": "persistence", "audit-metadata.ts": "persistence", "auth-throttle.ts": "persistence",
+  "auth-settings.ts": "application",
+};
+const foundations = new Set(["public-origin.ts", "mcp-authorization.ts", "job-history-settings.ts", "validity.ts", "body.ts", "security.ts", "runtime-config.ts", "queue-grant.ts", "values.ts", "generated-release.ts", "generated-provenance.ts", "generated-admin-client.ts", "generated-version.ts", "deployment-provenance.ts", "control-plane-errors.ts"]);
+export function workerRole(path) {
+  if (path.startsWith("apps/worker/browser/")) return "browser";
+  if (!path.startsWith("apps/worker/src/")) return layer(path);
+  const name = path.slice("apps/worker/src/".length).replace(/\.js$/u, ".ts");
+  if (workerRootRoles[name]) return workerRootRoles[name];
+  if (foundations.has(name)) return "foundation";
+  if (name.startsWith("admin/") || name.startsWith("i18n/")) return "presentation";
+  if (name.startsWith("registry/")) return /registry\/(records|ports|storage|values|schema)\.[jt]s$/u.test(name) ? "registry_foundation" : "registry_domain";
+  for (const role of ["contracts", "domain", "application", "platform", "http", "distribution", "mcp", "presentation"]) if (name.startsWith(role + "/")) return role;
+  return "extension";
+}
+export const WORKER_ALLOWED_DEPENDENCIES = Object.freeze({
+  browser: ["browser"],
+  contracts: ["contracts", "protocol"],
+  domain: ["domain", "contracts", "foundation", "protocol"],
+  foundation: ["foundation", "contracts", "platform", "protocol"],
+  extension: ["extension", "foundation", "contracts", "protocol"],
+  presentation: ["presentation", "contracts", "foundation", "distribution", "protocol"],
+  distribution: ["distribution", "contracts", "foundation", "protocol"],
+  application: ["application", "domain", "contracts", "foundation", "platform", "protocol"],
+  platform: ["platform", "contracts", "foundation", "protocol"],
+  persistence: ["persistence", "contracts", "foundation", "platform", "protocol"],
+  registry_foundation: ["registry_foundation", "foundation", "contracts", "protocol"],
+  registry_domain: ["registry_foundation", "registry_domain", "persistence", "foundation", "contracts", "protocol"],
+  registry_facade: ["registry_domain", "registry_foundation", "persistence", "foundation", "contracts", "platform", "protocol"],
+  transport_owner: ["transport_owner", "foundation", "contracts", "platform", "protocol"],
+  mcp: ["mcp", "contracts", "foundation", "platform", "protocol"],
+  http: ["http", "application", "domain", "presentation", "distribution", "foundation", "contracts", "platform", "mcp", "protocol"],
+});
 export function dependencyProblem(from, to) {
   const owner = layer(from), target = layer(to);
+  if (/^apps\/runner\/src\/(patch|git)\//u.test(from) && /^apps\/runner\/src\/(patch-service|git-service|cli|runtime)\.[jt]s$/u.test(to)) return "File/Git internals cannot depend on their coordinator or entrypoints";
+  if (/^apps\/runner\/src\/patch\/(parse|transform|preview)\.[jt]s$/u.test(from) && /\/patch\/files\.[jt]s$/u.test(to)) return "Patch planning must not depend on file mutation adapters";
+
+  if (from.startsWith("apps/runner/src/services/") && /^apps\/runner\/src\/(?:service|cli|runtime)\.[jt]s$/u.test(to)) return "Service adapters must not depend on their facade or CLI/runtime entrypoints";
+  if (from.startsWith("apps/runner/src/cli/") && /^apps\/runner\/src\/cli\.[jt]s$/u.test(to)) return "CLI commands must not import the dispatcher facade";
+
+  if (owner === "worker" && target === "worker") {
+    const sourceRole = workerRole(from), targetRole = workerRole(to);
+    const allowed = WORKER_ALLOWED_DEPENDENCIES[sourceRole];
+    if (allowed && !allowed.includes(targetRole)) return `Worker layer ${sourceRole} must not depend on ${targetRole}`;
+    if (from.startsWith("apps/worker/src/mcp/results/") && /^apps\/worker\/src\/mcp\/(handlers\/|transport\.|dispatch\.|server\.|audit\.|selection\.|authorization\.)/u.test(to)) return "MCP result projection must not depend on dispatch, transport or handlers";
+  }
   if (target === "outside") return "source dependency leaves the application/protocol boundary";
   if (owner === "protocol" && target !== "protocol") return "protocol must not depend on an application";
   if (owner !== "protocol" && target !== "protocol" && target !== owner) return "Worker and Runner must not depend on one another";
@@ -32,7 +82,7 @@ export function dependencyProblem(from, to) {
   }
   if (from.startsWith("apps/worker/src/registry/")) {
     if (/^apps\/worker\/src\/(?:registry|runner-do|index|external-audit|job-history-store)\.[jt]s$/u.test(to)
-      || /^apps\/worker\/src\/(?:mcp|ui)\//u.test(to)) return "Registry domains must not depend on concrete DO, HTTP/UI or remote history adapters";
+      || /^apps\/worker\/src\/(?:mcp|ui|admin|http)\//u.test(to)) return "Registry domains must not depend on concrete DO, HTTP/UI or remote history adapters";
     const domain = /^apps\/worker\/src\/registry\/(auth|policy|lifecycle|history)\.[jt]s$/u;
     if (domain.test(from) && domain.test(to) && from !== to) return "Registry domains collaborate through narrow ports, not concrete peer services";
     if (/\/registry\/(?:records|ports|storage|values)\.[jt]s$/u.test(from) && domain.test(to)) return "Registry foundations must not depend on domain implementations";

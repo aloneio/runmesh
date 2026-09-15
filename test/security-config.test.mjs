@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { reviewedReleaseSource } from "../scripts/runtime-config-tools.mjs";
@@ -16,7 +16,7 @@ test("top-level Worker config is reviewed production while explicit development 
   assert.equal(await readFile(new URL("../apps/worker/src/generated-release.ts",import.meta.url),"utf8"), reviewedReleaseSource(root.version,releaseState));
   assert.equal(config.env.production.name, config.name);
   assert.deepEqual(config.env.production.vars, config.vars);
-  assert.equal(config.env.development.name, "runmesh-development");
+  assert.equal(config.env.development.name, "runmeshdev");
   assert.deepEqual(config.env.development.vars, { RUNMESH_ENVIRONMENT: "development" });
   assert.equal(config.env.test.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE, "");
 });
@@ -53,7 +53,17 @@ test("reviewed release identity, independent production gate and precise CI tool
 });
 
 test("first setup has no extra token contract, while documentation preserves restricted defaults", async () => {
-  const worker = await readFile(new URL("../apps/worker/src/index.ts", import.meta.url), "utf8");
+  async function sources(directory) {
+    const files = [];
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const path = new URL(entry.name + (entry.isDirectory() ? "/" : ""), directory);
+      assert.ok(!entry.isSymbolicLink(), "Worker source must not be hidden behind symlinks");
+      if (entry.isDirectory()) files.push(...await sources(path));
+      else if (entry.isFile() && entry.name.endsWith(".ts")) files.push(await readFile(path, "utf8"));
+    }
+    return files;
+  }
+  const worker = (await sources(new URL("../apps/worker/src/", import.meta.url))).join("\n");
   const environment = await readFile(new URL("../apps/worker/src/runner-do.ts", import.meta.url), "utf8");
   assert.ok(!worker.includes("ADMIN_SETUP_TOKEN") && !environment.includes("ADMIN_SETUP_TOKEN"));
   assert.ok(!worker.includes('name="setup_token"'));
@@ -65,8 +75,8 @@ test("first setup has no extra token contract, while documentation preserves res
 });
 
 test("audit transport cannot regain generic tool arguments or response payloads", async () => {
-  const source = await readFile(new URL("../apps/worker/src/mcp/server.ts", import.meta.url), "utf8");
-  const auditFunction = source.slice(source.indexOf("async function recordRunnerToolCall"), source.indexOf("function asToolResult"));
+  const source = await readFile(new URL("../apps/worker/src/mcp/audit.ts", import.meta.url), "utf8");
+  const auditFunction = source.slice(source.indexOf("async function recordRunnerToolCall"));
   assert.ok(auditFunction.length > 0);
   assert.ok(!auditFunction.includes("params: redactAndBound"));
   assert.ok(!auditFunction.includes("result: redactAndBound"));
@@ -79,8 +89,8 @@ test("hosted installer commands retain the convenience credential handoff", asyn
   const source = await readFile(new URL("../apps/worker/src/admin/enrollment-view.ts", import.meta.url), "utf8");
   assert.ok(source.includes("sudo sh -s -- ${shellCode}"));
   assert.ok(source.includes(".Content)) ${powerShellCode}"));
-  const entrypoint = await readFile(new URL("../apps/worker/src/index.ts", import.meta.url), "utf8");
-  assert.ok(entrypoint.includes('from "./admin/enrollment-view.js"'));
+  const entrypoint = await readFile(new URL("../apps/worker/src/http/admin-presentation.ts", import.meta.url), "utf8");
+  assert.ok(entrypoint.includes('from "../admin/enrollment-view.js"'));
   assert.ok(entrypoint.includes("return html(enrollmentDocument("));
   const document = await readFile(new URL("../docs/security-remediation.md", import.meta.url), "utf8");
   assert.ok(document.includes("--code"));

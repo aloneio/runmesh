@@ -1,0 +1,17 @@
+{
+  "source_commit": "6e43324a9681e75c4f4fe623759e6049f44edff2",
+  "tools": [
+    "context",
+    "edit",
+    "inspect",
+    "job",
+    "read",
+    "runner_current",
+    "runner_list",
+    "runner_select",
+    "shell",
+    "workspace_list"
+  ],
+  "mcp_catalog_sha256": "bb7aa6107f9f3b0a96e111a187bdebd63030ce272d142b41e07554cfbc92654a",
+  "wire_schema_sha256": "e599c561aae4435dc0b07414baa2358fdf2da44263ff288b825a44ca8b4bfd99"
+}

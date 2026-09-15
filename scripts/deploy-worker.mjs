@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { deploymentPlan, assertReleased } from "./deployment-policy.mjs";
+import { deploymentPlan, assertReleased, assertDeploymentTarget } from "./deployment-policy.mjs";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const git = (...args) => execFileSync("git", args, {cwd:root,encoding:"utf8",stdio:["ignore","pipe","pipe"]}).trim();
 let prepared;
@@ -12,6 +12,7 @@ try {
   assert.ok(args.length === 2 && args[0] === "--env", "Use deploy:worker -- --env production|development");
   let local; try { local = git("symbolic-ref", "--quiet", "--short", "HEAD"); } catch { /* Workers Builds may use a detached commit. */ }
   const plan = deploymentPlan(args[1], process.env, local);
+  assertDeploymentTarget(plan, JSON.parse(readFileSync(new URL("../apps/worker/wrangler.jsonc", import.meta.url), "utf8")), process.env);
   const sha = git("rev-parse", "HEAD");
   assert.match(sha, /^[a-f0-9]{40}$/);
   const build = await writeBuildProvenance(root, process.env, { strict: true });
@@ -31,7 +32,7 @@ if (prepared !== undefined) {
   const { plan, sha, build } = prepared;
   console.log(JSON.stringify({deployment:plan,source_commit:sha,source_tree:build.tree}));
   const result = spawnSync(process.execPath, [fileURLToPath(new URL("../node_modules/wrangler/bin/wrangler.js",import.meta.url)),
-    "deploy","--config","apps/worker/wrangler.jsonc","--env",plan.environment,
+    "deploy","--config","apps/worker/wrangler.jsonc","--env",plan.environment,"--name",plan.worker,
     "--tag",`${plan.branch}:${sha}`],{cwd:root,env:process.env,stdio:"inherit"});
   if (result.error) console.error("deployment_upload_unavailable: inspect the provider outcome before retrying; no automatic retry was performed");
   process.exitCode = result.status ?? 1;
