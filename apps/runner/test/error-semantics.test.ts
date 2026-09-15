@@ -56,3 +56,11 @@ it("permits dependency retries only when the caller proves it never dispatched",
   expect(protocolFailure("registry_unavailable", "not_started")).toMatchObject({operation_state:"not_started",next_action:"wait_and_retry"});
   expect(protocolFailure("busy", "unknown")).toEqual({failure_class:"resource",operation_state:"unknown",next_action:"inspect_job"});
 });
+
+it("uses the same function object, not another copy of the error table", () => { expect(failureMetadata).toBe(protocolFailure); });
+it("preserves unknown-error guidance when an adapter forwards the same state", () => {
+  expect(protocolFailure("not_registered_code", "unknown")).toEqual(protocolFailure("not_registered_code"));
+});
+it("does not label unexpected runtime errors as validation failures before execution", () => {
+  expect(rpcError(new Error("synthetic internal failure"))).toMatchObject({code:"internal_error",operation_state:"unknown"});
+});

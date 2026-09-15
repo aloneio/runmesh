@@ -23,8 +23,9 @@ export function failureMetadata(code: string, observedState?: RpcOperationState)
   else if (["patch_install_failed", "patch_rollback_failed", "symlink_write", "symlink_escape", "git_failed", "git_timeout"].includes(code)) result = { failure_class: "execution", operation_state: code === "patch_rollback_failed" ? "unknown" : "not_started", next_action: "inspect_job" };
   else if (code === "context_index_stale") result = { failure_class: "conflict", operation_state: "unknown", next_action: "inspect_job" };
   else if (["context_index_missing", "context_index_corrupt", "context_record_corrupt", "context_storage_unsafe"].includes(code)) result = { failure_class: "conflict", operation_state: "not_started", next_action: "contact_operator" };
+  else if (code === "internal_error" || code === "runner_rpc_failed") result = { failure_class: "internal", operation_state: "unknown", next_action: "contact_operator" };
   else result = { failure_class: "unknown", operation_state: "unknown", next_action: "contact_operator" };
-  if (observedState !== undefined) {
+  if (observedState !== undefined && observedState !== result.operation_state) {
     result = { ...result, operation_state: observedState };
     if (observedState === "not_started" && result.failure_class === "availability") result = { ...result, next_action: "wait_and_retry" };
     if (observedState !== "not_started") {
