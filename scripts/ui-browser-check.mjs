@@ -48,7 +48,7 @@ export async function checkUiWithChromium(origin,cookie,output){
   // its old language with the newly fetched main-content language.
   await tab("Network.setCookie",{name:"runmesh_lang",value:"en",url:origin,path:"/"});
   await evaluate("document.querySelector('.control-nav a[href=\"/admin/clients\"]').click()");
-  for(let i=0;i<100;i++){if(await evaluate("location.pathname==='/admin/clients'&&document.documentElement.lang==='en'&&window.__runmeshDynamicNavigation===true"))break;await sleep(50);}
+  for(let i=0;i<100;i++){if(await evaluate("document.readyState==='complete'&&document.documentElement!==null&&location.pathname==='/admin/clients'&&document.documentElement.lang==='en'&&window.__runmeshDynamicNavigation===true"))break;await sleep(50);}
   assert.equal(await evaluate("document.documentElement.lang"),"en");
   await tab("Emulation.setDeviceMetricsOverride",{width:390,height:844,deviceScaleFactor:1,mobile:true});
   assert.equal(await evaluate("document.documentElement.scrollWidth<=innerWidth+1"),true);
