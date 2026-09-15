@@ -52,7 +52,7 @@ export class HistoryUploadScheduler {
     if (!this.active || !Number.isSafeInteger(revision) || revision < 1 || revision > this.revision) return;
     this.acknowledged = Math.max(this.acknowledged, revision); this.attempts = 0;
     this.cancelTimer?.(); this.cancelTimer = undefined;
-    this.schedule(this.recoveryPending ? this.intervalMs : this.immediate ? 0 : this.intervalMs);
+    this.schedule(this.immediate && this.revision > this.acknowledged ? 0 : this.intervalMs);
   }
 
   /** Recovered PIDs have no child exit event. Reconcile only while such a
