@@ -1,0 +1,21 @@
+import { controlHeader } from "./layout.js";
+import { passwordToggle } from "./forms.js";
+import { escapeHtml } from "./format.js";
+import { adminStyles } from "../admin-styles.js";
+import { languageSwitch, brandLogo, meshVisualGraphic } from "./brand.js";
+import { adminScript } from "./client-script.js";
+
+export function authEntryDocument(kind: "login" | "setup", csrf: string): string {
+  const setup = kind === "setup";
+  const brandHeadline = setup ? "Set up Runmesh" : "Runner &amp; MCP Control Plane";
+  const brandDescription = setup
+    ? "Create your administrator master password to begin managing distributed runtimes and MCP clients."
+    : "Unified orchestration for distributed secure tool sandboxes, persistent agent runtimes, and MCP client bridges.";
+  const title = setup ? "Runmesh · Agent Control Plane setup" : "Runmesh · Agent Control Plane login";
+  const form = setup
+    ? `<div class="input-group"><label for="password">Password</label><div class="password-input-wrap"><input id="password" type="password" name="password" autocomplete="new-password" required minlength="12">${passwordToggle()}</div></div><div class="input-group"><label for="confirm_password">Confirm password</label><div class="password-input-wrap"><input id="confirm_password" type="password" name="confirm_password" autocomplete="new-password" required minlength="12">${passwordToggle()}</div></div>`
+    : `<div class="input-group"><label for="admin_password">Admin password</label><div class="password-input-wrap"><input id="admin_password" type="password" name="password" autocomplete="current-password" required>${passwordToggle()}</div></div>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${title}</title>${adminStyles()}</head><body class="auth-body login-entry-body">${languageSwitch()}<div class="login-layout"><aside class="login-brand-pane"><div class="login-brand-header"><a class="login-brand-title-wrap" href="/" aria-label="Runmesh · Agent Control Plane">${brandLogo("login-brand-logo")}</a><p class="brand-kicker">RUNMESH / CONTROL PLANE</p><h2 class="login-brand-headline">${brandHeadline}</h2><p class="login-brand-desc">${brandDescription}</p></div>${meshVisualGraphic()}</aside><main class="login-form-pane"><div class="login-form-container"><div class="auth-header-mobile"><a class="login-brand-title-wrap" href="/" aria-label="Runmesh · Agent Control Plane">${brandLogo("login-brand-logo")}</a></div><div class="login-title-group"><p class="brand-kicker">Runmesh</p><h1>${setup ? "Welcome to Runmesh" : "Runmesh"}</h1><p class="subtitle">Agent Control Plane</p><p class="login-invite">${setup ? "Create administrator password" : "Enter the Runmesh control plane"}</p></div><form method="post" action="/${setup ? "setup" : "login"}" class="login-form stack"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">${form}<button class="login-submit-btn">${setup ? "Initialize" : "Login"}</button></form></div></main></div>${adminScript()}</body></html>`;
+}
+
+export function secretCreatedPage(title: string, url: string): string { return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>${escapeHtml(title)} · Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="ops-body secret-result-body"><a class="skip-link" href="#main-content">Skip to main content</a>${controlHeader("clients")}<main class="shell secret-result-shell" id="main-content" tabindex="-1"><section class="auth-card secret-card"><p class="brand-kicker">Runmesh</p><h1>${escapeHtml(title)}</h1><p class="lede">Copy this URL now. It will not be shown again.</p><code>${escapeHtml(url)}</code><div class="secret-actions"><button type="button" class="button" data-copy="${escapeHtml(url)}">Copy MCP URL</button><a class="button secondary" href="/admin">Back to admin</a></div></section></main>${adminScript()}</body></html>`; }
