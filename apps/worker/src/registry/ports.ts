@@ -24,3 +24,17 @@ export interface PolicyPorts {
 export interface LifecyclePorts {
   createPolicySnapshot(runnerId: string, revision: number, nowMs: number, sourceRevision: number | null, mutationId: string): void;
 }
+
+export interface HistoryPorts {
+  clearFeatureHealth(feature: RegistryFeatureKey): void;
+  disableFeatureHealth(feature: RegistryFeatureKey, error: unknown, nowMs?: number, cooldownMs?: number): void;
+  featureHealthDisabled(feature: RegistryFeatureKey, nowMs?: number): boolean;
+  getMcpClient(clientId: string): McpClientRecord | undefined;
+  listRunners(): RunnerRecord[];
+  recordsJobActivity(clientId: string): boolean;
+  runnerMatchesTransportFence(current: RunnerRow | undefined, epoch: number, credentialVersion: number, requireOnline: boolean, lifecycleId: string, sessionId: string): current is RunnerRow;
+  runnerRow(runnerId: string): RunnerRow | undefined;
+  scheduleMaintenanceAlarm(nowMs: number): Promise<void>;
+  syncSequenceCanAdvance(current: RunnerRow, syncSequence: number): boolean;
+  waitUntil(promise: Promise<unknown>): void;
+}
