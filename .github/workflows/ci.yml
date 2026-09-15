@@ -72,6 +72,7 @@ jobs:
       - run: npm run pack:smoke
       - run: node scripts/check-installer-syntax.mjs
       - run: node --test test/installer-arguments.test.mjs test/installer-preflight.test.mjs
+      - run: node --test test/worker-validation.test.mjs
 
   runner-lts:
     name: Runner LTS (${{ matrix.node }})

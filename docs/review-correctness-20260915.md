@@ -60,3 +60,9 @@ Additional failing probes identified new-turn orphan duplication beside an exist
 R01 remains a deployment/client verification track: code, signed archive, live process and host tool directory are separate facts. The existing MCP connection can still expose an older tool schema even after its Runner updates. No cloud deployment or host cache refresh is inferred from source tests. R06 still requires authorized provider usage exports; local microbenchmarks do not prove the account's full quota usage.
 
 The first slice deliberately excludes R07–R10's complete contract generation, physical Context retention, large domain refactoring and installation orchestration. Each requires its own tests and release evidence; none is marked complete by this document.
+
+## Follow-up: trustworthy cross-platform Worker validation
+
+The GitLab review printed Wrangler's successful dry-run marker but failed the wrapper: a long telemetry trailer in the same output chunk could erase the marker before it was checked. Isolated tests also reproduced interleaved stdout/stderr corruption, premature decisions at process exit before pipes closed, and acceptance of an explicit nonzero exit after success-looking output. Five of the initial seven regression cases failed before the fix.
+
+The validator now searches each complete incoming chunk before retaining a bounded per-stream suffix, decides on stdio close rather than process exit, and distinguishes a genuine failure from intentional cleanup of a successfully completed but lingering CLI. Timeouts, missing markers and interrupted validation remain failures. The wrapper always invokes dry-run and adds no deployment bypass or runtime hook. A fake-checkout test executes the actual wrapper without real credentials; the same regression suite is run by both primary CI systems and the native Linux/macOS/Windows matrix, followed by real Wrangler validation.
