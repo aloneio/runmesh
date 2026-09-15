@@ -10,7 +10,7 @@ The build now generates `apps/worker/src/generated-provenance.ts` from the actua
 
 ## Supported build paths
 
-The root `npm run build`, typecheck/version generation, Worker workspace build/test, explicit deployment wrapper and local Wrangler custom build all prepare the module. Do not use `--no-bundle` or `--no-build` as a supported release shortcut.
+The root `npm run build`, typecheck/version generation, Worker workspace build/test/typecheck, explicit deployment wrapper and local Wrangler custom build all prepare the module. Do not use `--no-bundle` or `--no-build` as a supported release shortcut.
 
 For Workers Builds configure repository-root build `npm run build` and deploy `npm run deploy:worker -- --env production` from main, or `--env development` from dev in the separate development Worker. Workers Builds documentation states that it does not honor Wrangler Custom Builds as its build configuration; the root build command therefore remains explicit rather than relying on the local Wrangler hook alone.
 
@@ -48,7 +48,9 @@ The projection is pure and does not access Registry, Runner DO, D1, Git, a files
 npm run check:deployment -- https://your-worker.example <expected-full-commit> main
 ```
 
-Use the actual expected 40-character commit. The observer performs one HTTPS health read, rejects redirects and secret-bearing URLs, caps response bytes at 16 KiB, and requires identified clean source with the expected commit and branch. It does not redeploy, retry, poll, read account tokens or print a raw failure response. An old version-only health response is a failed provenance check, not proof of a failed Worker.
+Use the actual expected 40-character commit. The observer performs one HTTPS health read, rejects redirects and secret-bearing URLs, explicitly omits browser credentials, and requires identified clean source with the expected commit and branch. Response handling has a 16 KiB byte limit, at most 256 stream reads, and a 10-second deadline covering the response body. Failed, oversized, excessively fragmented or aborted responses are cancelled; invalid UTF-8 is rejected rather than silently replaced. It does not redeploy, retry, poll, read account tokens or print a raw failure response. An old version-only health response is a failed provenance check, not proof of a failed Worker.
+
+Deployment preflight failures print a fixed error and recovery categories, not an assertion stack, local path or raw branch metadata. This pre-upload failure is distinct from an uploader failure with an uncertain provider outcome. Neither path automatically retries a deployment.
 
 ## Trust and rollout boundary
 
