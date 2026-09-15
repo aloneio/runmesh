@@ -1,6 +1,6 @@
 # Job and Context side-effect boundaries (AR07)
 
-Development refactor based on `a9b9bb5ef1e7275285c4ccfa54db0c685a03c23e`. This separates existing Runner responsibilities; it adds no tool, execution capability, automatic retention, state migration or service upgrade.
+Historical AR07 baseline: `a9b9bb5ef1e7275285c4ccfa54db0c685a03c23e`. This separates existing Runner responsibilities; it adds no tool, execution capability, automatic retention, state migration or service upgrade.
 
 ## Ownership
 
@@ -47,3 +47,7 @@ Architecture CI rejects nested Job/Context modules importing their facade or ser
 No new durable files, state fields, tables, cloud requests, persistent timers, mandatory settings or dependencies. Existing limits, expiry and permission/path checks remain. Pure planning makes one bounded candidate-array copy; this is not a zero-allocation claim. Function/port calls are not remote services, and existing I/O still costs resources.
 
 Public JobManager/ContextStore signatures and exported types remain compatible. Worker, wire/catalog, Wrangler, release records and published assets are unchanged. An unsigned development test package is not a replacement for immutable v0.1.3. Promotion and signed release remain separately authorized. Production restart, enrollment and credential rotation are not part of AR07.
+
+## Subsequent composition refinement
+
+The current modular remediation adds trusted internal JobManager and ContextStore adapter injection while retaining production defaults and shared state ownership. Internal overloads are excluded from the standalone published declaration surface. `composition-ports.test.ts` verifies failure injection without private-member replacement. Native service adapters, CLI commands, Patch and Git modules are documented in [modular remediation](architecture-remediation.md); the earlier invariants above remain binding.

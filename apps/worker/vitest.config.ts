@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  root: fileURLToPath(new URL("./", import.meta.url)),
   plugins: [cloudflareTest({
     // Use an isolated Wrangler environment so production's hosted bootstrap
     // vars never leak into requests exercised by the local Worker harness.
@@ -15,6 +16,8 @@ export default defineConfig({
     } },
   })],
   test: {
+    include: ["test/**/*.test.ts"],
+    exclude: ["**/node_modules/**", "**/.git/**", "**/.audit/**", "**/dist/**"],
     pool: "@cloudflare/vitest-pool-workers",
     // Durable-object startup/KDF tests can exceed Vitest's five-second
     // default on a cold Miniflare isolate. This is a test harness bound only.

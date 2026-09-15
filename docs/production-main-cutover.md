@@ -18,7 +18,7 @@ After saving, trigger a build for main and confirm its commit matches GitLab mai
 
 ## Separate development Worker
 
-The owner will create a separate Worker for dev. The development environment's existing name is runmesh-development and deploy command is `npm run deploy:worker -- --env development`. Its production branch field should be dev: this means the primary branch of that separate Worker, not the real production service. Its credentials and state must be isolated. This promotion does not create the development Worker or copy production credentials.
+The separate development Worker now targets `runmeshdev` with `npm run deploy:worker -- --env development`. Its Workers Builds production branch should be `dev` (the primary branch of this development Worker, not the production service). The wrapper rejects a conflicting `WRANGLER_CI_OVERRIDE_NAME`. Keep the account, credentials and state isolated; source validation does not prove the dashboard trigger has been updated.
 
 ## Verification
 
