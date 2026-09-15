@@ -19,6 +19,7 @@ const criticalChecks = [
   "npm run check:format",
   "npm run check:architecture",
   "npm run check:verification",
+  "npm run check:promotion-policy",
   "git diff --check",
   "npm run typecheck",
   "npm run test:unit",
