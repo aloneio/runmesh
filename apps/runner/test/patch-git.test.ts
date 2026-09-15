@@ -336,3 +336,35 @@ describe("git inspection", () => {
     } finally { await test.cleanup(); }
   });
 });
+
+
+describe("review R03 Git history correctness", () => {
+  it.each([1, 3, 100])("returns all %i commits without dropping record separators", async (count) => {
+    const f = await fixture();
+    try {
+      await run(f.root, ["init"]); await run(f.root, ["config", "user.name", "Fixture"]); await run(f.root, ["config", "user.email", "fixture@example.invalid"]);
+      for (let i=0;i<count;i++) {
+        await writeFile(join(f.root,"tracked.txt"), `${i}\n`);
+        await run(f.root,["add","--","tracked.txt"]); await run(f.root,["commit","--allow-empty-message","-m",i===0?"":`change ${i}`]);
+      }
+      const result = await testGit(f.workspace).log({workspace_id:f.workspace.workspaceId,path:".",limit:100});
+      expect(result.commits).toHaveLength(count); expect(result.truncated).toBe(false);
+      expect((result.commits as Array<{subject:string}>).at(-1)?.subject).toBe("");
+      if (count>1) {
+        const limited=await testGit(f.workspace).log({workspace_id:f.workspace.workspaceId,path:".",limit:1});
+        expect(limited.commits).toHaveLength(1); expect(limited.truncated).toBe(true);
+      }
+    } finally { await f.cleanup(); }
+  }, 60000);
+  it.each(["tracked.txt", "space name.txt", "brackets[1].txt", "unicode-中文.txt", "--leading.txt"])("blames a literal filename %s without pathspec expansion", async (name) => {
+    const f=await fixture();
+    try {
+      await run(f.root,["init"]); await run(f.root,["config","user.name","Fixture"]); await run(f.root,["config","user.email","fixture@example.invalid"]);
+      await writeFile(join(f.root,name),"first line\nsecond line\n"); await run(f.root,["add","--",name]); await run(f.root,["commit","-m","fixture"]);
+      const before=await readFile(join(f.root,name));
+      const result=await testGit(f.workspace).blame({workspace_id:f.workspace.workspaceId,path:name,start_line:1,end_line:2});
+      expect(result.output).toContain("\tfirst line"); expect(result.output).toContain("\tsecond line");
+      expect(result.truncated).toBe(false); expect(await readFile(join(f.root,name))).toEqual(before);
+    } finally { await f.cleanup(); }
+  });
+});
