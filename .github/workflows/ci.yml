@@ -35,6 +35,7 @@ jobs:
       - run: npm run check:versions
       - run: npm run check:format
       - run: npm run check:architecture
+      - run: npm run check:verification
       - run: git diff --check
       - run: npm run typecheck
       - run: npm run test:unit
@@ -47,6 +48,7 @@ jobs:
       - run: node scripts/check-release-contract.mjs
       - run: npm run pack:smoke
       - run: npm run test:e2e
+      - run: npm run test:package:e2e
 
   native-runner:
     name: Runner native checks (${{ matrix.os }})
@@ -74,6 +76,9 @@ jobs:
       - run: node scripts/check-installer-syntax.mjs
       - run: node --test test/installer-arguments.test.mjs test/installer-preflight.test.mjs
       - run: node --test test/worker-validation.test.mjs
+      - run: npm run test:domain
+      - run: npm run test:contracts
+      - run: node --test test/verification-tools.test.mjs test/package-verification.test.mjs
       - run: node --test test/architecture.test.mjs
 
   runner-lts:

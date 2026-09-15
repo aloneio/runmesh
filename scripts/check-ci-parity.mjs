@@ -18,6 +18,7 @@ const criticalChecks = [
   "npm run check:versions",
   "npm run check:format",
   "npm run check:architecture",
+  "npm run check:verification",
   "git diff --check",
   "npm run typecheck",
   "npm run test:unit",
@@ -30,6 +31,7 @@ const criticalChecks = [
   "node scripts/check-release-contract.mjs",
   "npm run pack:smoke",
   "npm run test:e2e",
+  "npm run test:package:e2e",
 ];
 
 for (const check of criticalChecks) {

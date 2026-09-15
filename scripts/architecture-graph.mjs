@@ -14,7 +14,7 @@ const sourceVariants = path => [...new Set([
 ])];
 
 /** Syntax inspection only: never import or evaluate scanned source. */
-function dependencies(text, filename) {
+export function dependencies(text, filename) {
   const ast = parse(text, { sourceType: "unambiguous", plugins: ["typescript", ...(filename.endsWith("x") ? ["jsx"] : [])], createImportExpressions: true, attachComment: false });
   const found = [];
   const add = (node, source, typeOnly = false) => {
