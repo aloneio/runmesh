@@ -22,7 +22,7 @@ assert.deepEqual(config.vars, {}, "ordinary production deployment must not requi
 assert.equal(readFileSync(new URL("../apps/worker/src/generated-release.ts", import.meta.url), "utf8"), reviewedReleaseSource(root.version, state), "compiled activation must match reviewed publication evidence");
 assert.equal(config.env.production.name, config.name, "named production alias must target the same Worker");
 assert.deepEqual(config.env.production.vars, config.vars, "named production alias must mirror top-level production vars");
-assert.equal(config.env.development.name, "runmesh-development");
+assert.equal(config.env.development.name, "runmeshdev");
 assert.deepEqual(config.env.development.vars, { RUNMESH_ENVIRONMENT: "development" });
 for (const environment of [config, config.env.production, config.env.development]) {
   assert.deepEqual(environment.durable_objects.bindings.map((binding) => binding.class_name).sort(), ["RegistryDOv2", "RunnerDOv2"]);

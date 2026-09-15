@@ -123,5 +123,6 @@ export async function checkArchitecture(root) {
   const runtimeCycles = cycles(files, edges.filter(edge => !edge.typeOnly));
   for (const cycle of runtimeCycles) failures.push(`runtime dependency cycle: ${cycle.join(" -> ")}`);
   const allCycles = cycles(files, edges);
+  for (const cycle of allCycles) if (!runtimeCycles.some(other => JSON.stringify(other) === JSON.stringify(cycle))) failures.push(`type-inclusive dependency cycle: ${cycle.join(" -> ")}`);
   return { failures, files, edges, runtimeCycles, typeCycles: allCycles.filter(group => !runtimeCycles.some(other => JSON.stringify(other) === JSON.stringify(group))), sourceBytes: bytes };
 }

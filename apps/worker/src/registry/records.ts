@@ -1,11 +1,16 @@
+import type { CodingScope } from "../contracts/administration.js";
+import type { RegistryFeatureKey } from "../contracts/feature-health.js";
 import type { RunnerConnectionState } from "../contracts/runner-selection.js";
+import type { RunnerExecutionMode } from "../contracts/administration.js";
 import type { RunnerMetadata } from "@aloneio/runmesh-protocol";
-import type { ValidityWindow } from "../validity.js";
+import type { RunnerPublicInfo } from "../contracts/runner-metadata.js";
 import type { ValidityStatus } from "../validity.js";
+import type { ValidityWindow } from "../validity.js";
 
-/** Internal Registry row/return shapes and fixed defaults. No storage access. */
-export type RunnerExecutionMode = "dedicated_user" | "privileged_host";
+export type { RunnerExecutionMode, CodingScope } from "../contracts/administration.js";
+
 export type PolicyAcknowledgementResult = "applied" | "invalid" | "stale";
+
 export interface RunnerMutationState {
   readonly runner_exists: boolean;
   /** Opaque identity for the current runner_id lifecycle. Internal callers
@@ -31,27 +36,27 @@ export interface RunnerMutationState {
   readonly credential_version: number | null;
   readonly session_id: string | null;
 }
-export type CodingScope = "coding:read" | "coding:write" | "coding:exec";
+
 export const VALID_SCOPES = new Set<CodingScope>(["coding:read", "coding:write", "coding:exec"]);
+
 export type PermissionBit = "read" | "edit" | "shell" | "job_control";
+
 export type PermissionSet = Record<PermissionBit, boolean>;
+
 export type RunnerProfilePreset = "locked" | "read_only" | "edit_only" | "controlled_exec" | "coding" | "full_control";
+
 export type WorkspaceValidationStatus = "valid" | "missing" | "not_directory" | "permission_denied" | "invalid_path";
+
 export type RunnerUpdateChannel = "stable" | "pinned";
+
 export type RunnerProtocolCompatibility = "unknown" | "compatible" | "incompatible";
+
 export type RunnerUpdateStatus = "unknown" | "up_to_date" | "update_available" | "pinned" | "incompatible";
+
 export const LOCKED_PERMISSIONS: PermissionSet = { read: false, edit: false, shell: false, job_control: false };
+
 export const READ_ONLY_PERMISSIONS: PermissionSet = { read: true, edit: false, shell: false, job_control: false };
-export interface RunnerPublicInfo {
-  readonly platform: string;
-  readonly architecture: string;
-  readonly hostname: string;
-  readonly runner_version: string;
-  readonly protocol_version: number;
-  readonly execution_mode?: RunnerExecutionMode;
-  readonly service_identity?: string;
-  readonly privilege_state?: "privileged" | "restricted" | "mismatch" | "unknown";
-}
+
 export interface RunnerRecord extends ValidityWindow {
   readonly validity_status: ValidityStatus;
   readonly runner_id: string;
@@ -89,6 +94,7 @@ export interface RunnerRecord extends ValidityWindow {
   readonly update_status: RunnerUpdateStatus;
   readonly updated_at_ms: number;
 }
+
 export interface WorkspaceRecord {
   readonly runner_id: string;
   readonly workspace_id: string;
@@ -102,10 +108,12 @@ export interface WorkspaceRecord {
   readonly revision: number;
   readonly validation_status: WorkspaceValidationStatus | null;
 }
+
 export interface DashboardRunnerRecord extends RunnerRecord {
   readonly workspace_count: number;
   readonly active_job_count: number;
 }
+
 export interface DashboardJobRecord {
   readonly runner_id: string;
   readonly job_id: string;
@@ -114,6 +122,7 @@ export interface DashboardJobRecord {
   readonly created_by_client_id: string | null;
   readonly updated_at_ms: number;
 }
+
 export interface DashboardMcpCallRecord {
   readonly runner_id: string;
   readonly call_id: string;
@@ -135,18 +144,12 @@ export interface DashboardMcpCallRecord {
   readonly session_id: string;
   readonly recorded_at_ms: number;
 }
+
 export interface DashboardSnapshot {
   readonly runners: readonly DashboardRunnerRecord[];
   readonly jobs: readonly DashboardJobRecord[];
 }
-export type RegistryFeatureKey = "job_recording" | "mcp_audit" | "mcp_usage_tracking" | "auth_throttle" | "maintenance_alarm";
-export interface RegistryFeatureHealth {
-  readonly feature: RegistryFeatureKey;
-  readonly disabled_until_ms: number | null;
-  readonly failure_count: number;
-  readonly last_failure_at_ms: number | null;
-  readonly last_error: string | null;
-}
+
 export interface McpClientRecord {
   /** Cloud history preference only; never changes execution permissions. */
   readonly record_jobs?: boolean;
@@ -164,14 +167,7 @@ export interface McpClientRecord {
   readonly active_runner_id: string | null;
   readonly active_runner_updated_at_ms: number | null;
 }
-export interface VerifiedMcpClient {
-  /** Optional internal launch observation; never an execution grant. */
-  readonly record_history?: boolean;
-  readonly client_id: string;
-  readonly label: string;
-  readonly scopes: readonly CodingScope[];
-  readonly secret_version: number;
-}
+
 export type RunnerRow = ValidityWindow & {
   [key: string]: string | number | null;
   runner_id: string;
@@ -206,46 +202,81 @@ export type RunnerRow = ValidityWindow & {
   update_status: RunnerUpdateStatus;
   updated_at_ms: number;
 };
+
 export type EnrollmentRow = { enrollment_id: string; runner_id: string; verifier: string; created_at_ms: number; not_before_ms: number; expires_at_ms: number; used_at_ms: number | null };
+
 export type PolicyVersionRow = {
   runner_id: string; revision: number; checksum: string; policy_json: string; status: string;
   created_at_ms: number; acknowledged_at_ms: number | null; validation_summary_json: string | null;
   source_revision: number | null; mutation_id: string | null;
 };
+
 export type PolicyMutationKind = "workspace_create" | "workspace_update" | "workspace_delete" | "permissions" | "emergency_lock";
+
 export type PolicyMutationRow = { runner_id: string; mutation_id: string; kind: PolicyMutationKind; fingerprint: string; revision: number; committed_at_ms: number };
+
 export type CredentialMutationKind = "credential_rotate" | "credential_enroll" | "credential_revoke" | "runner_delete" | "runner_create";
+
 export type CredentialMutationRow = { kind: CredentialMutationKind; pre_credential_version: number; lifecycle_id: string };
+
 export type ManagedWorkspaceRow = {
   runner_id: string; workspace_id: string; display_name: string; root_path: string; enabled: number;
   permissions_json: string; created_at_ms: number; updated_at_ms: number; revision: number; validation_status: WorkspaceValidationStatus | null;
 };
+
 export type JobRow = { job_json: string };
+
 export type McpCallRow = { call_json: string };
+
 export type FeatureHealthRow = { feature: RegistryFeatureKey; disabled_until_ms: number | null; failure_count: number; last_failure_at_ms: number | null; last_error: string | null };
+
 export type AdminSettingsRow = { password_verifier: string; session_version: number; created_at_ms: number; updated_at_ms: number };
+
 export type AuthThrottleRow = { id: string; failed_attempts: number; blocked_until_ms: number; updated_at_ms: number };
+
 export type AuthThrottleKind = "login" | "setup";
+
 export type SessionRow = { csrf_hash: string; expires_at_ms: number; session_version: number };
+
 export type McpClientRow = {
   record_jobs?: number; record_jobs_since_ms?: number;
   client_id: string; label: string; secret_verifier: string; secret_prefix: string; scopes_json: string;
   secret_version: number; created_at_ms: number; updated_at_ms: number; last_used_at_ms: number | null; revoked_at_ms: number | null;
   active_runner_id: string | null; active_runner_updated_at_ms: number | null;
 };
+
 export type InternalInput = Record<string, unknown>;
+
 export const MAX_INTERNAL_BODY_BYTES = 1_048_576;
+
 export const MAX_SYNC_ITEMS = 1_000;
+
 export const MAX_TERMINAL_JOBS_PER_RUNNER = 1_000;
+
 export const MAX_MCP_CALLS_PER_RUNNER = 1_000;
+
 export const CLIENT_LAST_USED_WRITE_INTERVAL_MS = 60_000;
-export const DEFAULT_RUNNER_ENROLLMENT_TTL_MS = 30 * 60 * 1_000;
-export const RUNNER_ENROLLMENT_TTL_OPTIONS_MS = [5 * 60 * 1_000, 30 * 60 * 1_000, 2 * 60 * 60 * 1_000, 24 * 60 * 60 * 1_000, 7 * 24 * 60 * 60 * 1_000, 30 * 24 * 60 * 60 * 1_000] as const;
+
 export const AUTH_THROTTLE_FAILURE_THRESHOLD = 5;
+
 export const REGISTRY_HISTORY_CLEANUP_INTERVAL_MS = 15 * 60_000;
+
 export const HISTORY_CLEANUP_DEADLINE_KEY = "maintenance.history-cleanup-deadline.v1";
+
 export const AUTH_THROTTLE_INITIAL_BLOCK_MS = 30_000;
+
 export const AUTH_THROTTLE_MAX_BLOCK_MS = 15 * 60_000;
+
 export type ParsedTransportIdentity =
   | { readonly valid: true; readonly lifecycleId: string; readonly sessionId: string }
   | { readonly valid: false; readonly lifecycleId: undefined; readonly sessionId: undefined };
+
+export type { VerifiedMcpClient } from "../contracts/mcp-principal.js";
+
+export { DEFAULT_RUNNER_ENROLLMENT_TTL_MS } from "../contracts/enrollment-options.js";
+
+export { RUNNER_ENROLLMENT_TTL_OPTIONS_MS } from "../contracts/enrollment-options.js";
+
+export type { RunnerPublicInfo } from "../contracts/runner-metadata.js";
+export type { RegistryFeatureKey } from "../contracts/feature-health.js";
+export type { RegistryFeatureHealth } from "../contracts/feature-health.js";

@@ -25,3 +25,6 @@ release/download/
 
 # Sanitized CI observations are output, never build input.
 /ci-results/
+
+# Deterministic browser source generated before builds and typechecking.
+/apps/worker/src/generated-admin-client.ts*

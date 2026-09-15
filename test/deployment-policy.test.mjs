@@ -1,12 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { deploymentPlan, assertReleased } from "../scripts/deployment-policy.mjs";
+import { deploymentPlan, assertReleased, assertDeploymentTarget } from "../scripts/deployment-policy.mjs";
 import { reviewedReleaseSource } from "../scripts/runtime-config-tools.mjs";
 
 test("production accepts only main and development only dev",()=>{
   assert.equal(deploymentPlan("production",{WORKERS_CI_BRANCH:"main"}).worker,"runmesh");
-  assert.equal(deploymentPlan("development",{WORKERS_CI_BRANCH:"dev"}).worker,"runmesh-development");
+  assert.equal(deploymentPlan("development",{WORKERS_CI_BRANCH:"dev"}).worker,"runmeshdev");
   for(const [env,branch] of [["production","dev"],["production","feature/x"],["development","main"],["production",undefined],["unknown","main"]]) assert.throws(()=>deploymentPlan(env,{},branch));
 });
 test("deployment rejects PRs, tags, conflicting metadata and a mismatched checkout",()=>{
@@ -34,4 +34,16 @@ test("cutover preserves the current production namespace, storage and fixed rele
   assert.equal(c.env.production.d1_databases[0].database_name,"runmesh-audit-history");
   assert.deepEqual(c.env.production.durable_objects.bindings.map(x=>x.class_name),["RegistryDOv2","RunnerDOv2"]);
   assert.notEqual(c.env.development.name,c.name);
+});
+
+test("deployment targets, configured environments and provider overrides must agree", async () => {
+  const config = JSON.parse(await readFile(new URL("../apps/worker/wrangler.jsonc", import.meta.url), "utf8"));
+  for (const [environment, branch, worker] of [["development", "dev", "runmeshdev"], ["production", "main", "runmesh"]]) {
+    const plan = deploymentPlan(environment, {}, branch);
+    assert.equal(assertDeploymentTarget(plan, config, { WRANGLER_CI_OVERRIDE_NAME: worker }), worker);
+    for (const wrong of ["", "other", environment === "development" ? "runmesh" : "runmeshdev"])
+      assert.throws(() => assertDeploymentTarget(plan, config, { WRANGLER_CI_OVERRIDE_NAME: wrong }));
+    const drifted = structuredClone(config); drifted.env[environment].name = "other";
+    assert.throws(() => assertDeploymentTarget(plan, drifted));
+  }
 });

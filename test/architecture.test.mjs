@@ -1,3 +1,4 @@
+import { checkArchitecture } from "../scripts/architecture-graph.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, writeFile, cp, rm, symlink } from "node:fs/promises";
@@ -11,7 +12,7 @@ const project = fileURLToPath(new URL("../", import.meta.url));
 async function fixture(t, sources) {
   const root = await mkdtemp(join(tmpdir(), "runmesh-architecture-"));
   t.after(() => rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 }));
-  for (const folder of ["apps/worker/src", "apps/runner/src", "packages/protocol/src", "scripts"])
+  for (const folder of ["apps/worker/src", "apps/worker/browser", "apps/runner/src", "packages/protocol/src", "scripts"])
     await mkdir(join(root, folder), { recursive: true });
   for (const file of ["check-architecture.mjs", "architecture-graph.mjs", "architecture-policy.mjs"]) {
     try { await cp(join(project, "scripts", file), join(root, "scripts", file)); }
@@ -25,6 +26,18 @@ async function fixture(t, sources) {
 }
 
 const bad = [
+  ["service adapter to service facade", { "apps/runner/src/services/systemd.ts": 'import "../service.js";', "apps/runner/src/service.ts": "export {};" }],
+  ["command to CLI facade", { "apps/runner/src/cli/doctor.ts": 'import "../cli.js";', "apps/runner/src/cli.ts": "export {};" }],
+  ["patch planner to file mutator", { "apps/runner/src/patch/parse.ts": 'import "./files.js";', "apps/runner/src/patch/files.ts": "export {};" }],
+  ["browser to Worker application", { "apps/worker/browser/main.js": 'import "../src/application/delete-runner.js";', "apps/worker/src/application/delete-runner.ts": "export {};" }],
+
+  ["Registry to admin view", { "apps/worker/src/registry/auth.ts": 'import "../admin/client-views.js";', "apps/worker/src/admin/client-views.ts": "export {};" }],
+  ["Registry to HTTP", { "apps/worker/src/registry/auth.ts": 'import "../http/html-response.js";', "apps/worker/src/http/html-response.ts": "export {};" }],
+  ["view to Registry facade type", { "apps/worker/src/admin/view-models.ts": 'import type { X } from "../registry.js";', "apps/worker/src/registry.ts": "export type X = string;" }],
+  ["view to Registry records", { "apps/worker/src/admin/view-models.ts": 'export type { X } from "../registry/records.js";', "apps/worker/src/registry/records.ts": "export type X = string;" }],
+  ["use case to HTTP", { "apps/worker/src/application/example.ts": 'void import("../http/input.js");', "apps/worker/src/http/input.ts": "export {};" }],
+  ["projection to dispatch", { "apps/worker/src/mcp/results/files.ts": 'import "../dispatch.js";', "apps/worker/src/mcp/dispatch.ts": "export {};" }],
+  ["renamed wrapper cannot bypass domain boundary", { "apps/worker/src/registry/auth.ts": 'import "../renamed.js";', "apps/worker/src/renamed.ts": 'export * from "./admin/format.js";', "apps/worker/src/admin/format.ts": "export {};" }],
   ["Job adapter to manager", { "apps/runner/src/jobs/storage.ts": 'import "../jobs.js";', "apps/runner/src/jobs.ts": "export {};" }],
   ["Context adapter to facade", { "apps/runner/src/context/repository.ts": 'import "../context-store.js";', "apps/runner/src/context-store.ts": "export {};" }],
   ["log reader to process executor", { "apps/runner/src/jobs/logs.ts": 'import "./process.js";', "apps/runner/src/jobs/process.ts": "export {};" }],
@@ -64,7 +77,7 @@ for (const [name, sources] of bad) test(`AR01 rejects ${name}`, async t => {
   assert.match(result.stderr, /Architecture check failed/);
 });
 
-test("AR01 accepts same-layer imports and reports type cycles independently", async t => {
+test("architecture rejects type-only cycles without confusing them with runtime cycles", async t => {
   const f = await fixture(t, {
     "packages/protocol/src/index.ts": 'export type { A } from "./a.js";',
     "packages/protocol/src/a.ts": 'import type { B } from "./b.js"; export type A = {b?: B};',
@@ -73,8 +86,10 @@ test("AR01 accepts same-layer imports and reports type cycles independently", as
     "apps/runner/src/a.ts": 'import { readFile } from "node:fs/promises"; void import("./b.js");',
     "apps/runner/src/b.ts": 'export const message = "import(unknownPath)"; // import "../../worker/src/a.js"',
   });
-  const result = f.run(); assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /"runtime_cycles":0/); assert.match(result.stdout, /"type_cycles":1/);
+  const report = await checkArchitecture(f.root);
+  assert.equal(report.runtimeCycles.length, 0); assert.equal(report.typeCycles.length, 1);
+  assert.ok(report.failures.some(value => value.includes("type-inclusive dependency cycle")));
+  assert.notEqual(f.run().status, 0);
 });
 
 test("AR01 side-effect imports are runtime edges, not type-only edges", async t => {
