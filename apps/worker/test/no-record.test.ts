@@ -195,7 +195,9 @@ async function fixture(responder?: (request: Record<string, any>) => Response | 
   const localEnv = { ...env, REGISTRY: { idFromName: () => id, get: () => stub }, RUNNER: { idFromName: () => id, get: () => ({ fetch: async (req: Request) => {
     const input = await req.json() as Record<string, any>; forwarded.push(input);
     if (responder !== undefined) return responder(input);
-    const result = input.method === "job.list" ? { jobs: [job] } : input.method === "exec.run" ? { job, completed: false } : job;
+    // job.input returns a byte acknowledgement, not a JobRecord. The former
+    // mock concealed an empty projected success without testing stdin data.
+    const result = input.method === "job.list" ? { jobs: [job] } : input.method === "job.input" ? { accepted: new TextEncoder().encode(String(input.params.data ?? "")).byteLength, eof: input.params.eof === true } : input.method === "exec.run" ? { job, completed: false } : job;
     return Response.json({ type: "rpc.response", result });
   } }) } } as unknown as typeof env;
   async function call(name: string, args: Record<string, unknown>) {
@@ -214,6 +216,7 @@ it("unrecorded Job operations and live listing do not require any cloud Job row"
     expect(result.body.result.structuredContent.audit_status).toBe("disabled");
     expect(f.forwarded.at(-1)?.params.expected_workspace_id).toBe("w");
     expect(f.forwarded.at(-1)?.mcp_authorization.workspace_bound).toBe(true);
+    if (action === "input") expect(result.body.result.structuredContent).toMatchObject({ accepted: 4, eof: false });
   }
   const list = await f.call("job", { action: "list", workspace_id: "w" });
   expect(list.body.result.structuredContent).toMatchObject({ source: "runner_live", jobs: [{ job_id: "j", workspace_id: "w" }] });
@@ -223,6 +226,28 @@ it("unrecorded Job operations and live listing do not require any cloud Job row"
     expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM jobs").one().n).toBe(0);
     expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM mcp_calls").one().n).toBe(0);
   });
+});
+
+it("AR05 an invalid stdin acknowledgement cannot become a successful empty object", async () => {
+  const f = await fixture(() => Response.json({ type: "rpc.response", result: { job_id: "j", workspace_id: "w", status: "running", token: "private-fixture" } }));
+  const result = (await f.call("job", { action: "input", job_id: "j", workspace_id: "w", data: "test" })).body.result;
+  expect(result).toMatchObject({ isError: true, structuredContent: { error: { code: "tool_result_invalid", operation_state: "unknown" } } });
+  expect(result.structuredContent.error.retry_after_ms).toBeUndefined();
+  expect(result.structuredContent.error.recovery_hint).toContain("Do not repeat");
+  expect(JSON.stringify(result)).not.toContain("private-fixture");
+  expect(f.forwarded).toHaveLength(1);
+  await runInDurableObject(f.stub, (_instance, state) => {
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM jobs").one().n).toBe(0);
+    expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM mcp_calls").one().n).toBe(0);
+  });
+});
+
+it("AR05 an incomplete execution result retains a safe Job identifier without replay", async () => {
+  const f = await fixture(() => Response.json({ type: "rpc.response", result: { job: { job_id: "j", workspace_id: "w", root_path: "/private-fixture" }, completed: false } }));
+  const result = (await f.call("shell", { workspace_id: "w", command: "synthetic" })).body.result;
+  expect(result).toMatchObject({ isError: true, structuredContent: { error: { code: "tool_result_invalid", operation_state: "unknown", details: { job_id: "j", workspace_id: "w", audit_status: "disabled" } } } });
+  expect(JSON.stringify(result)).not.toContain("private-fixture");
+  expect(f.forwarded).toHaveLength(1);
 });
 
 it("recording preference cannot grant access to another workspace or an old Runner", async () => {
