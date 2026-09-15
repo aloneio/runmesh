@@ -24,6 +24,11 @@ async function fixture(t, sources) {
 }
 
 const bad = [
+  ["Registry domain to facade", { "apps/worker/src/registry/auth.ts": 'import { RegistryDO } from "../registry.js";', "apps/worker/src/registry.ts": "export class RegistryDO {}" }],
+  ["Registry domain to concrete peer", { "apps/worker/src/registry/auth.ts": 'import { RegistryPolicy } from "./policy.js";', "apps/worker/src/registry/policy.ts": "export class RegistryPolicy {}" }],
+  ["Registry contract to implementation", { "apps/worker/src/registry/ports.ts": 'import type { RegistryAuth } from "./auth.js";', "apps/worker/src/registry/auth.ts": "export class RegistryAuth {}" }],
+  ["Registry domain to remote history adapter", { "apps/worker/src/registry/history.ts": 'import { PackedJobHistory } from "../job-history-store.js";', "apps/worker/src/job-history-store.ts": "export class PackedJobHistory {}" }],
+  ["Registry domain to MCP handler", { "apps/worker/src/registry/policy.ts": 'import "../mcp/server.js";', "apps/worker/src/mcp/server.ts": "export {};" }],
   ["Worker to Runner", { "apps/worker/src/a.ts": 'import "../../runner/src/b.js";', "apps/runner/src/b.ts": "export {};" }],
   ["Runner to Worker", { "apps/runner/src/a.ts": 'export * from "../../worker/src/b.js";', "apps/worker/src/b.ts": "export {};" }],
   ["protocol reverse import", { "packages/protocol/src/a.ts": 'import "../../../apps/runner/src/b.js";', "apps/runner/src/b.ts": "export {};" }],
