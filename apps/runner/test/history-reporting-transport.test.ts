@@ -75,6 +75,25 @@ async function fixture(mode: "batched" | "off" | "immediate" = "batched", heartb
   };
 }
 
+it("keeps control RPC responsive while two execution slots are occupied", async () => {
+  const f = await fixture();
+  try {
+    const first = await f.call("exec.start", { workspace_id: "w", command: [process.execPath, "-e", "setTimeout(() => {}, 5000)"], shell: false, created_by_client_id: "client-a", record_history: false });
+    expect(first.status).toBe("running");
+    const slow = f.launch("client-b", false, 1500);
+    await pause(100);
+    const control = await Promise.race([
+      f.call("job.list", { workspace_id: "w" }),
+      pause(750).then(() => { throw new Error("control RPC was blocked behind execution"); }),
+    ]);
+    expect((control as any[]).filter((job: any) => job.status === "running")).toHaveLength(2);
+    const info = await f.call("env.info", { workspace_id: "w" });
+    expect(info).toMatchObject({ runtime_capabilities: { max_concurrent_jobs: 2 }, job_scheduler: { running: 2, max_concurrent_jobs: 2, available_slots: 0 } });
+    await f.call("job.cancel", { job_id: first.job_id, expected_workspace_id: "w" });
+    await expect(slow).resolves.toMatchObject({ completed: true, job: { status: "succeeded" } });
+  } finally { await f.close(); }
+});
+
 it("negotiated no-record execution and explicit log reads create no history traffic or sampling timer", async () => {
   const captures = vi.spyOn(RunnerRuntime.prototype, "syncJobs"); const f = await fixture();
   try {

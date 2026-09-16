@@ -470,28 +470,34 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const {adminJar,csrf}=await adminCredentials();
     const other=await createMcpClient("Queue Client B",["coding:read","coding:write","coding:exec"],adminJar,csrf);
     expect((await mcpTool("runner_select",{runner_id:runnerId},other)).isError).not.toBe(true);
-    const first=await mcpTool("shell",{workspace_id:"workspace-1",command:nodeCommand("const fs=require('node:fs');const t=setInterval(()=>{if(fs.existsSync('.queue-e2e-release'))clearInterval(t)},15)"),background:true,request_id:"queue-first"});
+    const holdCommand=(path:string)=>nodeCommand(`const fs=require('node:fs');const t=setInterval(()=>{if(fs.existsSync(${JSON.stringify(path)}))clearInterval(t)},15)`);
+    const first=await mcpTool("shell",{workspace_id:"workspace-1",command:holdCommand('.queue-e2e-release-1'),background:true,request_id:"queue-first"});
     const firstId=first.structuredContent?.job_id as string;expect(typeof firstId).toBe("string");
-    let secondId:string|undefined;
+    const second=await mcpTool("shell",{workspace_id:"workspace-1",command:holdCommand('.queue-e2e-release-2'),background:true,request_id:"queue-second-slot"});
+    const secondSlotId=second.structuredContent?.job_id as string;expect(typeof secondSlotId).toBe("string");
+    let queuedId:string|undefined;
     try {
       const start=Date.now();
-      const second=await mcpTool("shell",{workspace_id:"workspace-1",command:nodeCommand("process.stdout.write('second-client')"),request_id:"queue-second",wait_ms:8000},other);
-      secondId=second.structuredContent?.job_id as string;
-      expect(second.isError,JSON.stringify(second)).not.toBe(true);
-      expect(second.structuredContent?.status).toBe("queued");expect(Date.now()-start).toBeLessThan(5000);
+      const queued=await mcpTool("shell",{workspace_id:"workspace-1",command:nodeCommand("process.stdout.write('second-client')"),request_id:"queue-third",wait_ms:8000},other);
+      queuedId=queued.structuredContent?.job_id as string;
+      expect(queued.isError,JSON.stringify(queued)).not.toBe(true);
+      expect(queued.structuredContent?.status).toBe("queued");expect(Date.now()-start).toBeLessThan(5000);
       const read=await mcpTool("read",{workspace_id:"workspace-1",path:"note.txt"},other);expect(read.isError).not.toBe(true);
-      await writeFile(join(workspace,".queue-e2e-release"),"release");
-      await waitFor(async()=>["succeeded","failed"].includes(String((await mcpTool("job",{action:"get",workspace_id:"workspace-1",job_id:secondId},other)).structuredContent?.status)),8000);
-      const result=await mcpTool("job",{action:"get",workspace_id:"workspace-1",job_id:secondId},other);
+      await writeFile(join(workspace,".queue-e2e-release-1"),"release");
+      await writeFile(join(workspace,".queue-e2e-release-2"),"release");
+      await waitFor(async()=>["succeeded","failed"].includes(String((await mcpTool("job",{action:"get",workspace_id:"workspace-1",job_id:queuedId},other)).structuredContent?.status)),8000);
+      const result=await mcpTool("job",{action:"get",workspace_id:"workspace-1",job_id:queuedId},other);
       expect(result.structuredContent?.status,JSON.stringify(result)).toBe("succeeded");
-      const logs=await mcpTool("job",{action:"logs",workspace_id:"workspace-1",job_id:secondId,stream:"stdout",limit:1024},other);
+      const logs=await mcpTool("job",{action:"logs",workspace_id:"workspace-1",job_id:queuedId,stream:"stdout",limit:1024},other);
       expect(logs.structuredContent?.data).toBe("second-client");
-      const replay=await mcpTool("shell",{workspace_id:"workspace-1",command:nodeCommand("process.stdout.write('second-client')"),request_id:"queue-second",background:true},other);
-      expect(replay.structuredContent?.job_id).toBe(secondId);
+      const replay=await mcpTool("shell",{workspace_id:"workspace-1",command:nodeCommand("process.stdout.write('second-client')"),request_id:"queue-third",background:true},other);
+      expect(replay.structuredContent?.job_id).toBe(queuedId);
     } finally {
-      await writeFile(join(workspace,".queue-e2e-release"),"release");
-      if(secondId)await mcpTool("job",{action:"cancel",workspace_id:"workspace-1",job_id:secondId},other);
+      await writeFile(join(workspace,".queue-e2e-release-1"),"release");
+      await writeFile(join(workspace,".queue-e2e-release-2"),"release");
+      if(queuedId)await mcpTool("job",{action:"cancel",workspace_id:"workspace-1",job_id:queuedId},other);
       await mcpTool("job",{action:"cancel",workspace_id:"workspace-1",job_id:firstId});
+      await mcpTool("job",{action:"cancel",workspace_id:"workspace-1",job_id:secondSlotId});
       await waitFor(async()=>!['running','cancelling','queued'].includes(String((await mcpTool("job",{action:"get",workspace_id:"workspace-1",job_id:firstId})).structuredContent?.status)),8000);
     }
   });
@@ -504,14 +510,17 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
 
   it("GA-007 busy Runner returns a retryable busy error, not invalid parameters", async () => {
     const first = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("setTimeout(()=>{},10000)"), background: true });
-    const id = first.structuredContent?.job_id as string;
-    expect(typeof id).toBe("string");
+    const firstId = first.structuredContent?.job_id as string;
+    expect(typeof firstId).toBe("string");
+    const second = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("setTimeout(()=>{},10000)"), background: true });
+    const secondId = second.structuredContent?.job_id as string;
+    expect(typeof secondId).toBe("string");
     try {
-      const second = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('never')"), background: true, queue: false });
-      expect(second).toMatchObject({ isError: true, structuredContent: { error: { code: "busy" } } });
+      const third = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('never')"), background: true, queue: false });
+      expect(third).toMatchObject({ isError: true, structuredContent: { error: { code: "busy" } } });
     } finally {
-      await mcpTool("job", { action: "cancel", job_id: id });
-      await waitFor(async () => ["cancelled", "succeeded", "failed"].includes(String((await mcpTool("job", { action: "get", job_id: id })).structuredContent?.status)), 12000);
+      for (const id of [firstId, secondId]) await mcpTool("job", { action: "cancel", job_id: id });
+      for (const id of [firstId, secondId]) await waitFor(async () => ["cancelled", "succeeded", "failed"].includes(String((await mcpTool("job", { action: "get", job_id: id })).structuredContent?.status)), 12000);
     }
   });
 

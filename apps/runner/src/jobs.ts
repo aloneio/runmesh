@@ -102,8 +102,16 @@ export class JobManager {
   private draining = false;
   private waitingAdmissions = 0;
   public setQueueAuthorizer(authorize: JobManagerOptions["authorizeQueuedJob"]): void { this.queueAuthorizer = authorize; }
-  public queueStatus(): { waiting: number; limit: number; per_client_limit: number; running: number } {
-    return { waiting: this.queue.size, limit: this.queue.limit, per_client_limit: this.queue.perClient, running: this.activeCount() };
+  public queueStatus(): { waiting: number; limit: number; per_client_limit: number; running: number; max_concurrent_jobs: number; available_slots: number } {
+    const running = this.activeCount();
+    return {
+      waiting: this.queue.size,
+      limit: this.queue.limit,
+      per_client_limit: this.queue.perClient,
+      running,
+      max_concurrent_jobs: this.maxConcurrentJobs,
+      available_slots: Math.max(0, this.maxConcurrentJobs - running),
+    };
   }
   /** Process one waiting job per admission turn. A failing authorization must
    * not hold the lock across the whole queue or starve newly arriving clients.

@@ -1,8 +1,9 @@
 import { RPC_OPERATION_METHODS } from "@aloneio/runmesh-protocol";
 import { userInfo } from "node:os";
+import { DEFAULT_MAX_CONCURRENT_JOBS } from "../config.js";
 import type { CapabilityMetadata } from "../protocol-types.js";
 
-export function discoverCapabilities(maxConcurrentJobs = 1): CapabilityMetadata {
+export function discoverCapabilities(maxConcurrentJobs = DEFAULT_MAX_CONCURRENT_JOBS): CapabilityMetadata {
   return {
     filesystem: true,
     process_execution: true,
