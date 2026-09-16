@@ -1,3 +1,4 @@
+import type { DevelopmentReleaseRefreshScheduler } from "../distribution/release.js";
 import type { AdminData } from "../admin/view-models.js";
 import { adminDocument } from "../admin/layout.js";
 import { adminError } from "./responses.js";
@@ -25,11 +26,11 @@ export function adminPage(pathname: string, data: AdminData, csrf: string): stri
   return adminDocument(active[0]?.toUpperCase() + active.slice(1), body, active, data.notices);
 }
 
-export async function runnerEnrollmentPage(env: RunnerReleaseEnvironment, baseUrl: string, runnerId: string, code: string | undefined, csrf: string, reEnroll = false, executionMode: ConsoleExecutionMode = "dedicated_user", confirmPrivilegedHost = false, enrollment?: Pick<Extract<EnrollmentCodeResult, { readonly ok: true }>, "created_at_ms" | "not_before_ms" | "expires_at_ms">, releaseCache?: DevelopmentReleaseCache | null): Promise<Response> {
+export async function runnerEnrollmentPage(env: RunnerReleaseEnvironment, baseUrl: string, runnerId: string, code: string | undefined, csrf: string, reEnroll = false, executionMode: ConsoleExecutionMode = "dedicated_user", confirmPrivilegedHost = false, enrollment?: Pick<Extract<EnrollmentCodeResult, { readonly ok: true }>, "created_at_ms" | "not_before_ms" | "expires_at_ms">, releaseCache?: DevelopmentReleaseCache | null, scheduleRefresh?: DevelopmentReleaseRefreshScheduler): Promise<Response> {
   if (code === undefined) return adminError(503, "Enrollment code could not be generated.");
   if (executionMode !== "dedicated_user" && executionMode !== "privileged_host") return adminError(400, "Runner execution mode is invalid.");
   if (executionMode === "privileged_host" && !confirmPrivilegedHost) return adminError(400, "Privileged-host enrollment requires the one-time risk acknowledgement.");
-  const release = await resolveRunnerReleaseDescriptor(env, fetch, releaseCache);
+  const release = await resolveRunnerReleaseDescriptor(env, fetch, releaseCache, scheduleRefresh);
   const bootstrap = release.distributable;
   // Validate the origin for both the hosted and manual paths.  The manual
   // fallback still emits a server URL into a copyable command; deriving it
