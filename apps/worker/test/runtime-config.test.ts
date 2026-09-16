@@ -2,7 +2,7 @@ import { env, runInDurableObject } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
 import { resolveRuntimeConfiguration } from "../src/runtime-config.js";
 import { REVIEWED_RELEASE_VERSION } from "../src/generated-release.js";
-import worker, { RegistryDOv2 } from "../src/index.js";
+import worker, { RegistryDOv2, runnerReleaseDescriptor } from "../src/index.js";
 
 function portableEnv() {
   return { ...env, WORKER_ID: undefined, RUNMESH_TEST_MODE: undefined, RUNMESH_ENVIRONMENT: undefined,
@@ -28,8 +28,11 @@ it("new production needs only stable server secrets, not owner-specific domains 
   expect(await response.json()).toMatchObject({ worker_id: "worker-production", runtime_configuration: { schema: "minimal-v1", manual_public_origin_required: false }, job_history: { backend: "packed_d1" } });
 });
 
-it("development, test and explicit emergency disables never infer release activation", () => {
-  for (const extra of [{ RUNMESH_ENVIRONMENT: "development" }, { RUNMESH_TEST_MODE: "1" }, { WORKER_ID: "worker-test" }, { RUNMESH_SIGNED_RELEASE_AVAILABLE: "" }, { RUNMESH_ENVIRONMENT: "invalid" }]) {
+it("development reuses only the reviewed signed Runner while test, unknown and explicit emergency disables stay closed", () => {
+  const development = resolveRuntimeConfiguration({ ...portableEnv(), RUNMESH_ENVIRONMENT: "development" }, request("/"));
+  expect(development.RUNMESH_SIGNED_RELEASE_AVAILABLE).toBe(REVIEWED_RELEASE_VERSION);
+  expect(runnerReleaseDescriptor(development)).toMatchObject({ channel: "stable", distributable: true, package_version: REVIEWED_RELEASE_VERSION });
+  for (const extra of [{ RUNMESH_TEST_MODE: "1" }, { WORKER_ID: "worker-test" }, { RUNMESH_SIGNED_RELEASE_AVAILABLE: "" }, { RUNMESH_ENVIRONMENT: "invalid" }]) {
     expect(resolveRuntimeConfiguration({ ...portableEnv(), ...extra }, request("/")).RUNMESH_SIGNED_RELEASE_AVAILABLE).toBe("");
   }
   expect(resolveRuntimeConfiguration({ RUNMESH_SIGNED_RELEASE_AVAILABLE: "wrong-version" }).RUNMESH_SIGNED_RELEASE_AVAILABLE).toBe("wrong-version");
