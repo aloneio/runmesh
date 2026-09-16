@@ -8,7 +8,6 @@ import { parse } from "yaml";
 import { DEV_RELEASE_INTERVAL, releaseCadence, nextDevVersion, createDevPlan, validateDevPlan, assertPlanContext } from "../scripts/dev-release/policy.mjs";
 import { devAssetNames, planMessage, publishDevelopmentRelease } from "../scripts/dev-release/publisher.mjs";
 import { githubJson } from "../scripts/dev-release/github.mjs";
-import { waitForGitlab } from "../scripts/dev-release/verify-ci.mjs";
 import { buildManifest, buildDevelopmentManifest } from "../scripts/release-manifest.mjs";
 import { bundleRunner } from "../scripts/build-runner-bundle.mjs";
 import { publicationPreflight } from "../scripts/dev-release/preflight.mjs";
@@ -152,24 +151,6 @@ test("preflight refuses obsolete drafts before signing and does not trust a succ
   assert.deepEqual(g.writes, []);
 });
 
-function gitlabFixture(status = "success") {
-  const p = { id: 10, project_id: 85844627, sha: plan().source_sha, ref: "dev", source: "push", status };
-  const jobs = ["verify", "browser"].map(name => ({ name, status: "success", allow_failure: false, pipeline: { id: 10 }, commit: { id: p.sha } }));
-  return { p, jobs, get: async path => path.startsWith("pipelines?") ? [{ id: 10 }] : path.includes("/jobs?") ? jobs : p };
-}
-test("GitLab evidence requires exact commit and both real successful jobs", async () => {
-  const f = gitlabFixture(); assert.equal((await waitForGitlab(plan(), f.get)).state, "passed");
-  for (const mutate of [f => { f.p.sha = "f".repeat(40); }, f => { f.jobs[0].allow_failure = true; }, f => { f.jobs[1].status = "skipped"; }]) {
-    const bad = gitlabFixture(); mutate(bad); await assert.rejects(waitForGitlab(plan(), bad.get));
-  }
-});
-test("GitLab pending evidence has a bounded wait; failure is never green", async () => {
-  let pauses = 0;
-  await assert.rejects(waitForGitlab(plan(), async () => [], { attempts: 3, pause: async () => { pauses++; } }), /Timed out/u);
-  assert.equal(pauses, 2);
-  for (const status of ["failed", "canceled", "skipped", "manual"]) { const f = gitlabFixture(status); await assert.rejects(waitForGitlab(plan(), f.get)); }
-});
-
 test("workflow is dev-push-only, counts independently, isolates signing and retains exact-source verification", async () => {
   const workflow = parse(await readFile(new URL("../.github/workflows/dev-release.yml", import.meta.url), "utf8"));
   assert.deepEqual(workflow.on, { push: { branches: ["dev"] } });
@@ -180,7 +161,9 @@ test("workflow is dev-push-only, counts independently, isolates signing and reta
   assert.equal(workflow.jobs.publish.permissions.contents, "write");
   assert.equal(workflow.jobs.publish.env.BUILD_ATTEMPT, "${{ needs.build.outputs.attempt }}");
   const sign = workflow.jobs.publish.steps.findIndex(s => s.env?.RELEASE_SIGNING_KEY);
-  const gate = workflow.jobs.publish.steps.findIndex(s => s.run?.includes("verify-ci.mjs")); assert.ok(gate >= 0 && sign > gate);
+  const preflight = workflow.jobs.publish.steps.findIndex(s => s.id === "publication-preflight"); assert.ok(preflight >= 0 && sign > preflight);
+  assert.equal(JSON.stringify(workflow.jobs.publish).includes("verify-ci.mjs"), false);
+  assert.equal(JSON.stringify(workflow.jobs.publish).includes("GITLAB_READ_API_TOKEN"), false);
   for (const [id, job] of Object.entries(workflow.jobs)) for (const step of job.steps ?? []) {
     if (step.uses?.startsWith("actions/checkout@")) { assert.equal(step.with.ref, "${{ github.sha }}"); assert.equal(step.with["persist-credentials"], false); }
     if (id !== "publish") assert.ok(!JSON.stringify(step).includes("secrets.RELEASE_SIGNING_KEY"));

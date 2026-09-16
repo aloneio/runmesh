@@ -40,7 +40,8 @@ describe("maintenance bootstrap", () => {
   });
   it("offers one-line reinstall-safe uninstall with no enrollment credential", async () => {
     const code = "A".repeat(43);
-    const html = await runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example", RUNMESH_SIGNED_RELEASE_AVAILABLE: FIXED_RELEASE_VERSION }, "https://worker.example", "test", code, "csrf").text();
+    const response = await runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example", RUNMESH_SIGNED_RELEASE_AVAILABLE: FIXED_RELEASE_VERSION }, "https://worker.example", "test", code, "csrf");
+    const html = await response.text();
     expect(html).toContain("/runner/uninstall.sh"); expect(html).toContain("/runner/uninstall.ps1");
     for (const command of [...html.matchAll(/<pre><code>([\s\S]*?)<\/code><\/pre>/g)].map((m) => m[1]!)) {
       if (command.includes("uninstall.")) { expect(command).not.toContain(code); expect(command).toContain("--purge --yes"); expect(command).not.toContain("\n"); }

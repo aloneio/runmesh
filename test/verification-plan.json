@@ -78,6 +78,7 @@
         "apps/worker/test/capability-contracts.test.ts",
         "apps/worker/test/concurrency.test.ts",
         "apps/worker/test/deployment-provenance.test.ts",
+        "apps/worker/test/dev-runner-distribution.test.ts",
         "apps/worker/test/enrollment-fence-recovery.test.ts",
         "apps/worker/test/external-audit.test.ts",
         "apps/worker/test/feature-health-ports.test.ts",

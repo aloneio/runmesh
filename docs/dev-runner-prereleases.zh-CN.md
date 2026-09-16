@@ -27,7 +27,7 @@ main 只改版本号、仍为候选状态、与最新正式发行不一致、尚
 
 应通过正常审阅合并将 main 同步到 dev，发行任务不会自动合并或改写分支。仅 cherry-pick 或 squash 后文件相似，不自动通过保守的祖先关系校验；main 后续的新提交也需要包含在待发源码中。
 
-签名前和草稿转公开前均重新观察正式基线。正式发行已经变化时，未公开的批次报 `dev_release_superseded`，不改编号、不覆盖标签或资产，也不转为公开。升级前已经上传的草稿仍保留为草稿。已经公开且不可变的发行改走只读核验：使用原源码的信任公钥及已验证构建产物比较，不重新签名；单独重跑发布任务时不要求当前 GitLab 证据。完整重跑工作流仍可能执行前面的源码/构建检查。
+签名前和草稿转公开前均重新观察正式基线。正式发行已经变化时，未公开的批次报 `dev_release_superseded`，不改编号、不覆盖标签或资产，也不转为公开。升级前已经上传的草稿仍保留为草稿。已经公开且不可变的发行改走只读核验：使用原源码的信任公钥及已验证构建产物比较，不重新签名；单独重跑发布任务时跳过重新签名与可变发布门禁。完整重跑工作流仍可能执行前面的源码/构建检查。
 
 下载签名证据后还会重读 main 和 Latest，防止混合不同时间点的观察。最终发布前检查缩小并发窗口，但 GitHub 的分支读取与发布 API 不是一个原子事务，不能把这些检查描述成阻止外部同时修改 main 的分布式锁。发生冲突也不会删除或重写已有不可变发行。
 
@@ -41,7 +41,7 @@ main 只改版本号、仍为候选状态、与最新正式发行不一致、尚
 
 既有 Job 工作区绑定的版本下限也正确识别该开发通道：`0.1.4-dev.0` 高于正式 `0.1.1`，而 `0.1.1-dev.0` 及更旧预览版仍被拒绝。版本兼容不会绕过客户端、工作区、策略和实际 Job 身份检查。
 
-签名前还要求同一 SHA 的 GitLab dev push pipeline 中 `verify` 和 `browser` 均成功且不允许失败。最多观察 40 次、间隔 30 秒；失败、缺失或无法访问的证据都不会当作通过。本项目的 GitLab 镜像为私有，必须在 GitHub 的 `dev-release` 环境配置 `GITLAB_READ_API_TOKEN`，使用项目级 `read_api`、Reporter 权限令牌，不复制操作者的广泛管理令牌。缺少配置会明确失败，不退回匿名查询。GitHub 完整验证则是当前发行运行的显式前置复用工作流。
+开发预发布只在同一次运行要求的 GitHub 复用验证全部成功后签名。该聚合门禁包含仓库验证、浏览器测试、Linux/Windows/macOS 原生 Runner 检查和维护中的 Node LTS 检查。GitLab `dev` 是 GitHub `verify-all` 之后的下游镜像／部署触发源；GitLab SaaS 计算分钟和 Cloudflare 外部 commit status 明确不再作为 Runner 签名前置条件。stable/main 正式发布继续保留独立的跨平台发布策略。
 
 复用既有 `RELEASE_SIGNING_KEY`、`RELEASE_SIGNING_KEY_ID` 和受信公钥目录。私钥只交给发布任务的签名步骤。独立环境 `dev-release` 应仅允许 **dev 分支**，不要放宽原来 main-only 的 `release` 环境。
 
@@ -53,10 +53,10 @@ main 只改版本号、仍为候选状态、与最新正式发行不一致、尚
 
 修复临时 CI、镜像、API 或环境问题后，可使用 **Re-run failed jobs**。发布任务读取构建任务保存的 attempt，而不是盲目使用重跑的新 attempt，因此复用成功构建时仍能取得原产物。完整重跑产生独立命名的构建产物。不同批次使用不同运行 ID 锁和版本号，避免共享等待队列淘汰中间批次。
 
-预发布完成后可显式安装到开发环境测试；它不会自动升级或重启当前 Runner，不会把开发分支提升到 main，也不会改动正式安装入口。下载后必须用受信源码中的公钥校验，再按项目既有方式进行开发安装；执行权限与 Node 支持范围不因开发版而放宽。
+预发布完成后即成为 development Worker 可消费的候选版本。`runmeshdev` 只发现标签符合 dev 版本契约、资产完整且 `immutable=true` 的 GitHub prerelease，并把安装器固定到该精确 tag；安装器仍使用内嵌的受信 Ed25519 公钥校验签名清单、channel、prerelease 标志、artifact URL 和校验和。发现失败时 development 安装入口关闭，绝不回退稳定版 Runner。production 仍固定到独立审核的 stable release。发布不会自动升级／重启已经连接的 Runner，也不会把 dev 提升到 main。
 
 ## 解耦与证据
 
-`policy.mjs` 负责纯计数、版本和计划规则；`plan.mjs` 观察源码/Actions 上下文；`build.mjs` 负责隔离打包；`verify-ci.mjs` 适配 GitLab 证据；`publisher.mjs` 管理可测试的发布状态转换；`github.mjs` 与 `publish.mjs` 承担网络和文件系统适配。共享打包、manifest 和签名实现继续复用，Runner/Worker 运行时代码不依赖这些自动化模块。
+`policy.mjs` 负责纯计数、版本和计划规则；`plan.mjs` 观察源码/Actions 上下文；`build.mjs` 负责隔离打包；要求的 GitHub 复用 CI 负责发行验证；`publisher.mjs` 管理可测试的发布状态转换；`github.mjs` 与 `publish.mjs` 承担网络和文件系统适配。共享打包、manifest 和签名实现继续复用，Runner/Worker 运行时代码不依赖这些自动化模块。
 
-`test/dev-release.test.mjs` 已登记到双端既有 tooling 检查，覆盖计数、非法版本、计划绑定、正式发行隔离、运行时版本、API 故障、草稿续传、重复执行、标签/资产冲突、同提交 CI 及工作流权限依赖。真实签名、远端调度、GitLab 可用性和安装是否成功，仍以对应实际运行结果为准，不以本地模拟冒充已上线。
+`test/dev-release.test.mjs` 已登记到双端既有 tooling 检查，覆盖计数、非法版本、计划绑定、正式发行隔离、运行时版本、API 故障、草稿续传、重复执行、标签/资产冲突、同提交 CI 及工作流权限依赖。真实签名、远端调度、GitHub 不可变发布和安装是否成功，仍以对应实际运行结果为准，不以本地模拟冒充已上线。

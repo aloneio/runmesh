@@ -28,10 +28,10 @@ it("new production needs only stable server secrets, not owner-specific domains 
   expect(await response.json()).toMatchObject({ worker_id: "worker-production", runtime_configuration: { schema: "minimal-v1", manual_public_origin_required: false }, job_history: { backend: "packed_d1" } });
 });
 
-it("development reuses only the reviewed signed Runner while test, unknown and explicit emergency disables stay closed", () => {
+it("development selects only the signed dev discovery lane while test, unknown and explicit emergency disables stay closed", () => {
   const development = resolveRuntimeConfiguration({ ...portableEnv(), RUNMESH_ENVIRONMENT: "development" }, request("/"));
-  expect(development.RUNMESH_SIGNED_RELEASE_AVAILABLE).toBe(REVIEWED_RELEASE_VERSION);
-  expect(runnerReleaseDescriptor(development)).toMatchObject({ channel: "stable", distributable: true, package_version: REVIEWED_RELEASE_VERSION });
+  expect(development.RUNMESH_SIGNED_RELEASE_AVAILABLE).toBe("dev");
+  expect(runnerReleaseDescriptor(development)).toMatchObject({ channel: "stable", distributable: false });
   for (const extra of [{ RUNMESH_TEST_MODE: "1" }, { WORKER_ID: "worker-test" }, { RUNMESH_SIGNED_RELEASE_AVAILABLE: "" }, { RUNMESH_ENVIRONMENT: "invalid" }]) {
     expect(resolveRuntimeConfiguration({ ...portableEnv(), ...extra }, request("/")).RUNMESH_SIGNED_RELEASE_AVAILABLE).toBe("");
   }
