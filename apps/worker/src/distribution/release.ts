@@ -170,7 +170,7 @@ export async function discoverDevelopmentRunnerRelease(fetchImpl: typeof fetch =
   const useCache = fetchImpl === fetch && verifyRelease === verifyDevelopmentRunnerRelease; const now = Date.now();
   if (useCache && cachedDevRelease !== undefined && cachedDevRelease.expires_at_ms > now) return cachedDevRelease.descriptor;
   const response = await fetchImpl(DEV_RELEASE_DISCOVERY_URL, {
-    method: "GET", redirect: "error", cache: "no-store", credentials: "omit", signal: AbortSignal.timeout(10_000),
+    method: "GET", redirect: "manual", cache: "no-store", credentials: "omit", signal: AbortSignal.timeout(10_000),
     headers: { accept: "application/vnd.github+json", "user-agent": "runmeshdev-release-discovery/1", "x-github-api-version": "2026-03-10" },
   });
   const releases = await boundedJson(response);
