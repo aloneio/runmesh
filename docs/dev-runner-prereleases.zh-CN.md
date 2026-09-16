@@ -27,6 +27,8 @@ main 为 `0.1.1` 时则从 `0.1.2-dev.0` 开始。批次序号在该工作流内
 
 对最终 `.tgz` 离线安装并执行既有真实 MCP→Worker→Runner 测试，包版本和 CLI 实际 `--version` 都必须等于计划版本。完整源码 CI 仍执行 Linux、Windows、macOS、LTS、浏览器和集成检查。发行验证使用独立运行 ID 的并发组，不会被后续普通 dev 推送取消。
 
+既有 Job 工作区绑定的版本下限也正确识别该开发通道：`0.1.4-dev.0` 高于正式 `0.1.1`，而 `0.1.1-dev.0` 及更旧预览版仍被拒绝。版本兼容不会绕过客户端、工作区、策略和实际 Job 身份检查。
+
 签名前还要求同一 SHA 的 GitLab dev push pipeline 中 `verify` 和 `browser` 均成功且不允许失败。最多观察 40 次、间隔 30 秒；失败、缺失或无法访问的证据都不会当作通过。本项目的 GitLab 镜像为私有，必须在 GitHub 的 `dev-release` 环境配置 `GITLAB_READ_API_TOKEN`，使用项目级 `read_api`、Reporter 权限令牌，不复制操作者的广泛管理令牌。缺少配置会明确失败，不退回匿名查询。GitHub 完整验证则是当前发行运行的显式前置复用工作流。
 
 复用既有 `RELEASE_SIGNING_KEY`、`RELEASE_SIGNING_KEY_ID` 和受信公钥目录。私钥只交给发布任务的签名步骤。独立环境 `dev-release` 应仅允许 **dev 分支**，不要放宽原来 main-only 的 `release` 环境。
