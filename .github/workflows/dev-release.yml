@@ -58,6 +58,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "dev-release-plan-$GITHUB_RUN_ID" --dir .dev-release
       - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: node scripts/dev-release/plan.mjs
       - name: Preserve the immutable plan before building or publishing
         if: github.run_attempt == 1
@@ -153,11 +155,23 @@ jobs:
           set -euo pipefail
           gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "dev-release-plan-$GITHUB_RUN_ID" --dir .dev-release
           gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "dev-release-unsigned-$GITHUB_RUN_ID-$BUILD_ATTEMPT" --dir .dev-release/assets
+      - name: Verify completed releases or require a current stable baseline
+        id: publication-preflight
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/dev-release/preflight.mjs .dev-release/plan.json
       - name: Require successful GitLab verification of the same dev source
+        if: steps.publication-preflight.outputs.already_published != 'true'
         env:
           GITLAB_READ_API_TOKEN: ${{ secrets.GITLAB_READ_API_TOKEN }}
         run: node scripts/dev-release/verify-ci.mjs .dev-release/plan.json
+      - name: Recheck the stable baseline after waiting for cross-provider CI
+        if: steps.publication-preflight.outputs.already_published != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/dev-release/baseline.mjs .dev-release/plan.json
       - name: Sign using the existing trusted release key
+        if: steps.publication-preflight.outputs.already_published != 'true'
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
         run: |
@@ -171,6 +185,7 @@ jobs:
           (cd .dev-release/assets && sha256sum *.tgz manifest.json manifest.sig manifest.signature.json LICENSE NOTICE THIRD_PARTY_NOTICES.md trust-keyring.json > SHA256SUMS)
           git diff --exit-code
       - name: Publish an immutable prerelease, never Latest, with download verification
+        if: steps.publication-preflight.outputs.already_published != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/dev-release/publish.mjs .dev-release/plan.json
