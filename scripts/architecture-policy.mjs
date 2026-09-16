@@ -1,3 +1,5 @@
+import { isBuiltin } from "node:module";
+
 /** Source-only dependency policy; tooling/test dependencies are not runtime layers. */
 export const SOURCE_ROOTS = ["apps/worker/src", "apps/runner/src", "packages/protocol/src", "apps/worker/browser"];
 export const SOURCE_PACKAGES = {
@@ -11,12 +13,38 @@ export function layer(path) {
     : (path.startsWith("apps/worker/src/") || path.startsWith("apps/worker/browser/")) ? "worker"
     : path.startsWith("apps/runner/src/") ? "runner" : "outside";
 }
-const pureRunner = /^(?:apps\/runner\/src\/jobs\/(?:records|values|recovery)|apps\/runner\/src\/context\/(?:model|retention-plan|storage-types))\.[jt]s$/u;
-/** Pure record/planning modules may hash data, but may not acquire platform I/O. */
+/** All parser-supported extensions receive the same architecture role. */
+const canonicalSource = path => path.replace(/\.(?:[cm]?[jt]s|[jt]sx)$/u, ".ts");
+const runnerIoModules = new Set([
+  "jobs/ports.ts", "jobs/storage.ts", "jobs/process.ts", "jobs/logs.ts",
+  "context/ports.ts", "context/files.ts", "context/repository.ts", "context/retention.ts", "context/recovery.ts",
+]);
+/** New Job/Context files are pure until an adapter role is explicitly reviewed. */
+function isPureRunner(path) {
+  const name = canonicalSource(path).replace(/^apps\/runner\/src\//u, "");
+  return /^(?:jobs|context)\//u.test(name) && !runnerIoModules.has(name);
+}
+const cloudPlatform = /^(?:cloudflare:|cloudflare(?:\/|$)|workerd(?:\/|$)|@cloudflare\/)/u;
+const serverSdk = /^(?:@modelcontextprotocol\/|agents(?:\/|$))/u;
+const purePackages = /^(?:zod(?:\/|$)|@aloneio\/runmesh-protocol$)/u;
+const cloudRoles = new Set(["entry", "platform", "transport_owner", "registry_facade", "persistence"]);
+const pureWorkerRoles = new Set(["contracts", "domain", "presentation", "browser", "registry_foundation", "registry_domain"]);
 export function specifierProblem(from, specifier, typeOnly) {
-  if (pureRunner.test(from) && /^(?:node:|fs(?:\/|$)|child_process$|process$|timers(?:\/|$)|worker_threads$|net$|http$|https$)/u.test(specifier)
-    && !["node:crypto", "crypto"].includes(specifier)) return "Runner record and planning modules must not access filesystem, processes or timers";
-  if (/^apps\/runner\/src\/(?:jobs|context)\/ports\.[jt]s$/u.test(from) && specifier.startsWith("node:") && !typeOnly) return "Runner ports may reference platform types but not load platform implementations";
+  const source = canonicalSource(from);
+  const builtin = specifier.startsWith("node:") || isBuiltin(specifier);
+  const external = !specifier.startsWith(".") && !specifier.startsWith("/");
+  if (isPureRunner(source) && external && !purePackages.test(specifier) && !["node:crypto", "crypto"].includes(specifier))
+    return "Runner record and planning modules must not access platform I/O or unreviewed external packages";
+  if (/^apps\/runner\/src\/(?:jobs|context|connection)\/ports\.ts$/u.test(source) && builtin && !typeOnly)
+    return "Runner ports may reference platform types but not load platform implementations";
+  if (/^apps\/runner\/src\/connection\/ports\.ts$/u.test(source) && external && !typeOnly)
+    return "Connection ports must not load external platform implementations";
+  if (layer(from) === "worker") {
+    const role = workerRole(from);
+    if (cloudPlatform.test(specifier) && !cloudRoles.has(role)) return `Worker layer ${role} must not depend on Cloudflare platform packages, including types`;
+    if (serverSdk.test(specifier) && !["entry", "http", "mcp"].includes(role)) return `Worker layer ${role} must not depend on server SDK packages, including types`;
+    if (pureWorkerRoles.has(role) && external && !purePackages.test(specifier)) return `Worker layer ${role} must not depend on unreviewed external packages`;
+  }
   return undefined;
 }
 /** Explicit worker roles. Unknown modules are extensions, not trusted foundations. */
@@ -31,11 +59,11 @@ const foundations = new Set(["public-origin.ts", "mcp-authorization.ts", "job-hi
 export function workerRole(path) {
   if (path.startsWith("apps/worker/browser/")) return "browser";
   if (!path.startsWith("apps/worker/src/")) return layer(path);
-  const name = path.slice("apps/worker/src/".length).replace(/\.js$/u, ".ts");
+  const name = canonicalSource(path.slice("apps/worker/src/".length));
   if (workerRootRoles[name]) return workerRootRoles[name];
   if (foundations.has(name)) return "foundation";
   if (name.startsWith("admin/") || name.startsWith("i18n/")) return "presentation";
-  if (name.startsWith("registry/")) return /registry\/(records|ports|storage|values|schema)\.[jt]s$/u.test(name) ? "registry_foundation" : "registry_domain";
+  if (name.startsWith("registry/")) return /registry\/(records|ports|storage|values|schema|feature-health-model|maintenance-plan)\.[jt]s$/u.test(name) ? "registry_foundation" : "registry_domain";
   for (const role of ["contracts", "domain", "application", "platform", "http", "distribution", "mcp", "presentation"]) if (name.startsWith(role + "/")) return role;
   return "extension";
 }
@@ -58,7 +86,10 @@ export const WORKER_ALLOWED_DEPENDENCIES = Object.freeze({
   http: ["http", "application", "domain", "presentation", "distribution", "foundation", "contracts", "platform", "mcp", "protocol"],
 });
 export function dependencyProblem(from, to) {
+  from = canonicalSource(from); to = canonicalSource(to);
   const owner = layer(from), target = layer(to);
+  if (from.startsWith("apps/runner/src/connection/") && /^apps\/runner\/src\/(?:connection|runtime|policy-store|jobs|cli|index)\.ts$/u.test(to)) return "Connection modules must use narrow ports, not coordinator or concrete runtime classes";
+
   if (/^apps\/runner\/src\/(patch|git)\//u.test(from) && /^apps\/runner\/src\/(patch-service|git-service|cli|runtime)\.[jt]s$/u.test(to)) return "File/Git internals cannot depend on their coordinator or entrypoints";
   if (/^apps\/runner\/src\/patch\/(parse|transform|preview)\.[jt]s$/u.test(from) && /\/patch\/files\.[jt]s$/u.test(to)) return "Patch planning must not depend on file mutation adapters";
 
@@ -76,8 +107,8 @@ export function dependencyProblem(from, to) {
   if (owner !== "protocol" && target !== "protocol" && target !== owner) return "Worker and Runner must not depend on one another";
   if (/^apps\/runner\/src\/(?:jobs|context)\//u.test(from)) {
     if (/^apps\/runner\/src\/(?:jobs|context-store|runtime|connection|cli|index|service|profile)\.[jt]s$/u.test(to)) return "Runner internals must not import their facade, transport or service entrypoints";
-    if (pureRunner.test(from) && target === "runner" && !pureRunner.test(to) && !/^apps\/runner\/src\/(?:errors|config)\.[jt]s$/u.test(to)) return "Runner record and planning modules must not depend on concrete I/O adapters";
-    if (/\/(?:jobs|context)\/ports\.[jt]s$/u.test(from) && target === "runner" && !pureRunner.test(to)) return "Runner ports must not depend on concrete adapters";
+    if (isPureRunner(from) && target === "runner" && !isPureRunner(to) && !/^apps\/runner\/src\/(?:errors|config)\.[jt]s$/u.test(to)) return "Runner record and planning modules must not depend on concrete I/O adapters";
+    if (/\/(?:jobs|context)\/ports\.[jt]s$/u.test(from) && target === "runner" && !isPureRunner(to)) return "Runner ports must not depend on concrete adapters";
     if (/\/jobs\/logs\.[jt]s$/u.test(from) && /\/jobs\/(?:process|storage)\.[jt]s$/u.test(to)) return "Job log reading uses narrow ports, not process or record-storage implementations";
   }
   if (from.startsWith("apps/worker/src/registry/")) {

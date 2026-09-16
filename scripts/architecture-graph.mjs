@@ -43,7 +43,7 @@ export function dependencies(text, filename) {
   walk(ast.program); return found;
 }
 
-/** Strongly connected components; type-inclusive components are advisory. */
+/** Strongly connected components; runtime and type-inclusive components both fail the gate. */
 export function cycles(files, edges) {
   const graph = new Map(files.map(file => [file, []]));
   for (const edge of edges) graph.get(edge.from)?.push(edge.to);
@@ -116,7 +116,11 @@ export async function checkArchitecture(root) {
       if (platformReason) failures.push(`${file}:${edge.line}: ${platformReason}`);
       const target = resolve(file, edge.specifier);
       if (target.reason) failures.push(`${file}:${edge.line}: ${target.reason}`);
-      if (target.path) edges.push({ from: file, to: target.path, typeOnly: edge.typeOnly });
+      if (target.path) {
+        const resolvedReason = dependencyProblem(file, target.path);
+        if (resolvedReason && resolvedReason !== target.reason) failures.push(`${file}:${edge.line}: ${resolvedReason}`);
+        edges.push({ from: file, to: target.path, typeOnly: edge.typeOnly });
+      }
     }
   }
   const files = [...sources.keys()].sort();

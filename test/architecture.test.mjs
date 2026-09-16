@@ -120,3 +120,58 @@ test("AR03 narrow contracts and platform types need no concrete adapter dependen
   });
   const result = f.run(); assert.equal(result.status, 0, result.stderr);
 });
+
+for (const extension of ["ts", "mts", "cts", "tsx", "js", "mjs", "cjs", "jsx"]) {
+  test(`AR09 platform boundaries include ${extension} modules and type imports`, async t => {
+    const f = await fixture(t, {
+      [`apps/worker/src/domain/new-rule.${extension}`]: 'import "cloudflare:workers";',
+      [`apps/runner/src/jobs/new-planner.${extension}`]: 'import "dgram";',
+    });
+    const report = await checkArchitecture(f.root);
+    assert.ok(report.failures.some(value => value.includes("Cloudflare platform")));
+    assert.ok(report.failures.some(value => value.includes("record and planning")));
+  });
+}
+for (const specifier of ["fs/promises", "node:fs/promises", "dgram", "dns/promises", "node:test", "timers/promises", "ws"]) {
+  test(`AR09 newly named planners reject ${specifier}`, async t => {
+    const f = await fixture(t, { "apps/runner/src/context/pure/renamed.ts": `import "${specifier}";` });
+    assert.notEqual((await checkArchitecture(f.root)).failures.length, 0);
+  });
+}
+test("AR09 pure Worker roles reject external platform types and renamed barrels", async t => {
+  const f = await fixture(t, {
+    "apps/worker/src/contracts/renamed.mts": 'import type { DurableObject } from "cloudflare:workers";',
+    "apps/worker/src/domain/rules.ts": 'export * from "./new-wrapper.js";',
+    "apps/worker/src/domain/new-wrapper.ts": 'export * from "@cloudflare/workers-types";',
+    "apps/worker/browser/view.js": 'import "@modelcontextprotocol/server";',
+    "apps/runner/src/jobs/ports.ts": 'import "fs";',
+  });
+  const report = await checkArchitecture(f.root);
+  for (const name of ["renamed.mts", "new-wrapper.ts", "view.js", "ports.ts"]) assert.ok(report.failures.some(value => value.includes(name)), name);
+});
+test("AR09 reviewed adapters, pure hashing and platform type ports remain legal", async t => {
+  const f = await fixture(t, {
+    "apps/worker/src/platform/native.ts": 'import "cloudflare:workers";',
+    "apps/worker/src/mcp/sdk.ts": 'import "@modelcontextprotocol/server";',
+    "apps/runner/src/jobs/pure/fingerprint.mts": 'import { createHash } from "node:crypto";',
+    "apps/runner/src/jobs/ports.ts": 'import type { FileHandle } from "fs/promises";',
+    "apps/runner/src/jobs/storage.ts": 'import "node:fs/promises";',
+  });
+  assert.deepEqual((await checkArchitecture(f.root)).failures, []);
+});
+
+for (const [from,to] of [
+  ["connection/ports.ts","runtime.ts"], ["connection/policy-candidate.ts","connection.ts"],
+  ["connection/job-events.ts","jobs.ts"], ["jobs/retention-plan.ts","jobs/storage.ts"],
+]) test(`AR10/AR13 rejects ${from} importing ${to}`,async t=>{
+  const prefix="apps/runner/src/", parts=from.split("/").length-1;
+  const f=await fixture(t,{[prefix+from]:`import type { State } from "${"../".repeat(parts)}${to.replace(/\.ts$/u,".js")}";`,[prefix+to]:"export type State = {};"});
+  assert.notEqual((await checkArchitecture(f.root)).failures.length,0);
+});
+
+test("AR10 connection ports may reference WebSocket types but cannot load ws",async t=>{
+  const legal=await fixture(t,{"apps/runner/src/connection/ports.ts":'import type WebSocket from "ws";'});
+  assert.deepEqual((await checkArchitecture(legal.root)).failures,[]);
+  const illegal=await fixture(t,{"apps/runner/src/connection/ports.ts":'import WebSocket from "ws";'});
+  assert.ok((await checkArchitecture(illegal.root)).failures.some(value=>value.includes("Connection ports")));
+});
