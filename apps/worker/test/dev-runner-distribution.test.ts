@@ -77,7 +77,40 @@ describe("development Runner distribution", () => {
     let forbiddenCalls = 0;
     const forbidden = vi.fn(async () => { forbiddenCalls += 1; return new Response("forbidden", { status: 403 }); }) as unknown as typeof fetch;
     await expect(discoverDevelopmentRunnerRelease(forbidden, async () => undefined)).rejects.toThrow("development release discovery failed");
-    expect(forbiddenCalls).toBe(1);
+    expect(forbiddenCalls).toBe(3);
+  });
+
+  it("uses only previously verified dev descriptors as the cross-isolate outage fallback", async () => {
+    const seed = await discoverDevelopmentRunnerRelease(responseFetch([release("0.1.4-dev.0", "2026-09-16T08:00:00Z")]), async () => undefined, null);
+    let stored: Response | undefined = new Response(JSON.stringify({ schema_version: 1, verified_at_ms: Date.now(), descriptor: seed }));
+    const cache = { match: vi.fn(async () => stored?.clone()), put: vi.fn(async (_request: Request, response: Response) => { stored = response.clone(); }) };
+    const offline = responseFetch({ error: "offline" }, 503);
+    const fresh = await discoverDevelopmentRunnerRelease(offline, async () => undefined, cache);
+    expect(fresh).toMatchObject({ channel: "dev", package_version: "0.1.4-dev.0" });
+    expect(offline).not.toHaveBeenCalled();
+
+    stored = new Response(JSON.stringify({ schema_version: 1, verified_at_ms: Date.now() - 120_000, descriptor: seed }));
+    const staleOffline = responseFetch({ error: "offline" }, 503);
+    const stale = await discoverDevelopmentRunnerRelease(staleOffline, async () => undefined, cache);
+    expect(stale).toMatchObject({ channel: "dev", package_version: "0.1.4-dev.0" });
+    expect(staleOffline).toHaveBeenCalledTimes(3);
+
+    stored = new Response(JSON.stringify({ schema_version: 1, verified_at_ms: Date.now(), descriptor: { ...seed, package_spec: "https://example.invalid/tampered.tgz" } }));
+    const malformedOffline = responseFetch({ error: "offline" }, 503);
+    await expect(discoverDevelopmentRunnerRelease(malformedOffline, async () => undefined, cache)).rejects.toThrow("development release discovery failed");
+  });
+
+  it("persists a dev descriptor only after its verifier succeeds", async () => {
+    let stored: Response | undefined;
+    const cache = { match: vi.fn(async () => stored?.clone()), put: vi.fn(async (_request: Request, response: Response) => { stored = response.clone(); }) };
+    const fetchImpl = responseFetch([release("0.1.4-dev.0", "2026-09-16T08:00:00Z")]);
+    const verifier = vi.fn(async () => undefined);
+    const descriptor = await discoverDevelopmentRunnerRelease(fetchImpl, verifier, cache);
+    expect(descriptor.package_version).toBe("0.1.4-dev.0");
+    expect(verifier).toHaveBeenCalledTimes(1);
+    expect(cache.put).toHaveBeenCalledTimes(1);
+    const cached = await stored?.json() as { descriptor?: { package_version?: string } };
+    expect(cached.descriptor?.package_version).toBe("0.1.4-dev.0");
   });
 
   it("never publicly caches an unavailable development release or installer", async () => {
