@@ -7,7 +7,7 @@ import { policyReadiness } from "../authorization.js";
 import { registryCall } from "../transport.js";
 import { resolveActiveRunner } from "../selection.js";
 import { runnerSuccess } from "../results/envelope.js";
-import { safePositiveIntegerValue } from "../results/primitives.js";
+import { isSafeNonnegativeInteger, safePositiveIntegerValue } from "../results/primitives.js";
 
 export async function diagnosticsTool(env: McpRequestEnv, clientId: string, workspaceId: string, scopes: readonly string[]): Promise<unknown> {
   const observedAtMs = Date.now();
@@ -45,6 +45,7 @@ export async function diagnosticsTool(env: McpRequestEnv, clientId: string, work
   let rpcCode: string | null = null;
   let shell: Record<string, unknown> | undefined;
   let runtimeCapabilities: unknown;
+  let jobScheduler: Record<string, number> | undefined;
   if (selected.value.context.state !== "online") rpcCode = "runner_offline";
   else if (permissions?.read !== true) rpcCode = permissions === undefined ? "permission_state_unavailable" : "permission_denied";
   else {
@@ -53,7 +54,19 @@ export async function diagnosticsTool(env: McpRequestEnv, clientId: string, work
     else {
       const live = await callRunner(env, selected.value.runnerId, "env.info", { workspace_id: workspaceId }, readiness.value.applied_revision, readiness.value.active_checksum);
       rpcState = live.ok ? "pass" : "fail";
-      if (live.ok && isRecord(live.value)) runtimeCapabilities = live.value.runtime_capabilities;
+      if (live.ok && isRecord(live.value)) {
+        runtimeCapabilities = live.value.runtime_capabilities;
+        const scheduler = live.value.job_scheduler;
+        if (isRecord(scheduler)
+          && isSafeNonnegativeInteger(scheduler.waiting) && scheduler.waiting <= 1000
+          && isSafeNonnegativeInteger(scheduler.limit) && scheduler.limit <= 1000
+          && isSafeNonnegativeInteger(scheduler.per_client_limit) && scheduler.per_client_limit <= 1000
+          && isSafeNonnegativeInteger(scheduler.running) && scheduler.running <= 1000
+          && typeof scheduler.max_concurrent_jobs === "number" && Number.isSafeInteger(scheduler.max_concurrent_jobs) && scheduler.max_concurrent_jobs >= 1 && scheduler.max_concurrent_jobs <= 64
+          && isSafeNonnegativeInteger(scheduler.available_slots) && scheduler.available_slots <= 64) {
+          jobScheduler = { waiting: scheduler.waiting, limit: scheduler.limit, per_client_limit: scheduler.per_client_limit, running: scheduler.running, max_concurrent_jobs: scheduler.max_concurrent_jobs, available_slots: scheduler.available_slots };
+        }
+      }
       rpcCode = live.ok ? null : live.error.code;
       if (live.ok && isRecord(live.value) && isRecord(live.value.shell)) {
         shell = { available: live.value.shell.available === true };
@@ -64,5 +77,6 @@ export async function diagnosticsTool(env: McpRequestEnv, clientId: string, work
   checks.push({ name: "runner_rpc", state: rpcState, code: rpcCode, evidence_source: "live_rpc", observed_at_ms: Date.now() });
   const value: Record<string, unknown> = { workspace_id: workspaceId, observed_at_ms: observedAtMs, permissions: permissions ?? null, checks, capabilities: capabilityDiagnostics(runtimeCapabilities, scopes, permissions) };
   if (shell !== undefined) value.shell = shell;
+  if (jobScheduler !== undefined) value.job_scheduler = jobScheduler;
   return runnerSuccess(value, selected.value);
 }

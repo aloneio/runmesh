@@ -48,7 +48,7 @@ export const LogOutputSchema = z.object({
 }).strict();
 const shell = {
   ...JobMetadataOutputSchema.shape, completed: z.boolean().optional(), wait_cap_ms: count.optional(),
-  queue: z.object({ waiting: count.max(1000).optional(), limit: count.max(1000).optional(), per_client_limit: count.max(1000).optional(), running: count.max(1000).optional() }).strict().optional(),
+  queue: z.object({ waiting: count.max(1000).optional(), limit: count.max(1000).optional(), per_client_limit: count.max(1000).optional(), running: count.max(1000).optional(), max_concurrent_jobs: positive.max(64).optional(), available_slots: count.max(64).optional() }).strict().optional(),
   stdout: LogOutputSchema.optional(), stderr: LogOutputSchema.optional(),
 };
 export const RunnerListOutputSchema = z.object({ ...common, runners: z.array(z.object({ runner_id: id, display_name: text(256), state: z.enum(["online", "offline", "stale", "unavailable"]), available: z.boolean(), updated_at_ms: count.nullable() }).strict()).optional() }).strict();
@@ -87,6 +87,7 @@ export const InspectOutputSchema = z.object({
   commits: z.array(z.object({ oid: z.string().regex(/^[a-f0-9]{40,64}$/iu), author: text(512), date: text(64), subject: text(4096) }).strict()).max(100).optional(), limit: count.optional(),
   revision: text(65_536).optional(), start_line: count.optional(), end_line: count.optional(), output: text(65_536).optional(), bytes: count.optional(), staged: z.boolean().optional(), diff: text(65_536).optional(),
   observed_at_ms: count.optional(), permissions: permissions.nullable().optional(), capabilities: capabilities.optional(),
+  job_scheduler: z.object({ waiting: count.max(1000), limit: count.max(1000), per_client_limit: count.max(1000), running: count.max(1000), max_concurrent_jobs: positive.max(64), available_slots: count.max(64) }).strict().optional(),
   checks: z.array(z.object({ name: text(128), state: z.enum(["pass", "fail", "unknown"]), code: text(128).nullable().optional(), evidence_source: text(128), observed_at_ms: count, desired_revision: positive.nullable().optional(), applied_revision: positive.nullable().optional(), runner_reported_revision: positive.nullable().optional() }).strict()).max(32).optional(),
   shell: z.object({ available: z.boolean(), kind: z.enum(["bash", "powershell"]).optional() }).strict().optional(),
 }).strict();
