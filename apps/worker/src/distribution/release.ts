@@ -22,6 +22,8 @@ export interface RunnerReleaseEnvironment {
 
 const DEV_RELEASE_DISCOVERY_URL = "https://api.github.com/repos/aloneio/runmesh/releases?per_page=20";
 const DEV_RELEASE_CACHE_MS = 60_000;
+const DEV_RELEASE_STALE_MS = 60 * 60_000;
+const DEV_RELEASE_CACHE_KEY = new Request("https://runmeshdev.aloneiodev.workers.dev/__internal/verified-dev-runner-release-v1");
 const DEV_RELEASE_FETCH_ATTEMPTS = 3;
 const DEV_RELEASE_RETRY_DELAY_MS = 75;
 const MAX_DISCOVERY_BYTES = 512 * 1024;
@@ -33,6 +35,16 @@ const UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/u;
 const ALLOWED_RELEASE_ORIGINS = new Set<string>(FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS);
 const REQUIRED_STATIC_ASSETS = ["LICENSE", "NOTICE", "SHA256SUMS", "THIRD_PARTY_NOTICES.md", "manifest.json", "manifest.sig", "manifest.signature.json", "trust-keyring.json"] as const;
 let cachedDevRelease: { readonly expires_at_ms: number; readonly descriptor: RunnerReleaseDescriptor } | undefined;
+
+export interface DevelopmentReleaseCache {
+  match(request: Request): Promise<Response | undefined>;
+  put(request: Request, response: Response): Promise<void>;
+}
+interface CachedDevelopmentReleaseRecord {
+  readonly schema_version: 1;
+  readonly verified_at_ms: number;
+  readonly descriptor: RunnerReleaseDescriptor;
+}
 
 function protocol() { return { min_version: PROTOCOL_MIN_VERSION, max_version: PROTOCOL_CURRENT_VERSION } as const; }
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
@@ -48,6 +60,31 @@ function isCurrentDevelopmentVersion(version: string): boolean {
 }
 function unavailableDevelopmentRelease(): RunnerReleaseDescriptor {
   return { channel: "dev", distributable: false, current_version: "", latest_version: "", package_name: "", package_version: "", package_spec: "", artifact: null, artifacts: null, manifest_url: null, signature_url: null, signature_descriptor_url: null, checksums_url: null, release_key_id: null, published_at: null, protocol: protocol() };
+}
+function validatedCachedDevelopmentRelease(value: unknown): CachedDevelopmentReleaseRecord | undefined {
+  if (!isRecord(value) || value.schema_version !== 1 || !Number.isSafeInteger(value.verified_at_ms) || Number(value.verified_at_ms) <= 0 || !isRecord(value.descriptor)) return undefined;
+  const descriptor = value.descriptor;
+  if (descriptor.channel !== "dev" || descriptor.distributable !== true || typeof descriptor.package_version !== "string" || !isCurrentDevelopmentVersion(descriptor.package_version)) return undefined;
+  const target = installerReleaseTarget(descriptor.package_version, "dev");
+  if (descriptor.current_version !== target.version || descriptor.latest_version !== target.version || descriptor.package_name !== "@aloneio/runmesh-runner" || descriptor.package_version !== target.version || descriptor.package_spec !== target.artifact_url) return undefined;
+  if (!isRecord(descriptor.artifact) || descriptor.artifact.source !== target.artifact_url || descriptor.artifacts !== null || descriptor.manifest_url !== target.manifest_url || descriptor.signature_url !== target.signature_url || descriptor.signature_descriptor_url !== target.signature_descriptor_url || descriptor.checksums_url !== target.checksums_url || descriptor.release_key_id !== target.release_key_id || !validTimestamp(descriptor.published_at)) return undefined;
+  if (!isRecord(descriptor.protocol) || descriptor.protocol.min_version !== PROTOCOL_MIN_VERSION || descriptor.protocol.max_version !== PROTOCOL_CURRENT_VERSION) return undefined;
+  return { schema_version: 1, verified_at_ms: Number(value.verified_at_ms), descriptor: descriptor as RunnerReleaseDescriptor };
+}
+function defaultDevelopmentReleaseCache(): DevelopmentReleaseCache | undefined {
+  try {
+    if (typeof caches === "undefined") return undefined;
+    return (caches as unknown as { readonly default?: DevelopmentReleaseCache }).default;
+  } catch { return undefined; }
+}
+async function readDevelopmentReleaseCache(cache: DevelopmentReleaseCache | undefined): Promise<CachedDevelopmentReleaseRecord | undefined> {
+  if (cache === undefined) return undefined;
+  try { const response = await cache.match(DEV_RELEASE_CACHE_KEY); return response === undefined || !response.ok ? undefined : validatedCachedDevelopmentRelease(await response.json()); } catch { return undefined; }
+}
+async function writeDevelopmentReleaseCache(cache: DevelopmentReleaseCache | undefined, descriptor: RunnerReleaseDescriptor, verifiedAtMs: number): Promise<void> {
+  if (cache === undefined) return;
+  const body: CachedDevelopmentReleaseRecord = { schema_version: 1, verified_at_ms: verifiedAtMs, descriptor };
+  try { await cache.put(DEV_RELEASE_CACHE_KEY, new Response(JSON.stringify(body), { headers: { "content-type": "application/json; charset=utf-8", "cache-control": "public, max-age=3600" } })); } catch { /* Cache availability must not affect signed release correctness. */ }
 }
 
 export function releaseGateDiagnostics(env: RunnerReleaseEnvironment): ReleaseGateDiagnostics {
@@ -69,8 +106,8 @@ export function runnerReleaseDescriptor(env: RunnerReleaseEnvironment): RunnerRe
 }
 
 function retryableReleaseResponse(response: Response): boolean {
-  if (response.status === 429 || response.status >= 500) return true;
-  return response.status === 403 && (response.headers.get("x-ratelimit-remaining") === "0" || response.headers.has("retry-after"));
+  if (response.status === 403 || response.status === 429 || response.status >= 500) return true;
+  return false;
 }
 async function releaseFetch(input: string, init: Omit<RequestInit, "signal">, fetchImpl: typeof fetch): Promise<Response> {
   let lastError: unknown;
@@ -189,22 +226,41 @@ function developmentDescriptor(value: unknown): RunnerReleaseDescriptor | undefi
 }
 
 type DevelopmentReleaseVerifier = (descriptor: RunnerReleaseDescriptor, fetchImpl: typeof fetch) => Promise<void>;
-export async function discoverDevelopmentRunnerRelease(fetchImpl: typeof fetch = fetch, verifyRelease: DevelopmentReleaseVerifier = verifyDevelopmentRunnerRelease): Promise<RunnerReleaseDescriptor> {
-  const useCache = fetchImpl === fetch && verifyRelease === verifyDevelopmentRunnerRelease; const now = Date.now();
-  if (useCache && cachedDevRelease !== undefined && cachedDevRelease.expires_at_ms > now) return cachedDevRelease.descriptor;
-  const response = await releaseFetch(DEV_RELEASE_DISCOVERY_URL, {
-    method: "GET", redirect: "manual", cache: "no-store", credentials: "omit",
-    headers: { accept: "application/vnd.github+json", "user-agent": "runmeshdev-release-discovery/1", "x-github-api-version": "2026-03-10" },
-  }, fetchImpl);
-  const releases = await boundedJson(response);
-  if (!Array.isArray(releases)) throw new Error("development release discovery response is invalid");
-  const candidates = releases.flatMap(value => { const descriptor = developmentDescriptor(value); return descriptor === undefined ? [] : [descriptor]; });
-  candidates.sort((a, b) => Date.parse(b.published_at ?? "") - Date.parse(a.published_at ?? ""));
-  for (const descriptor of candidates) {
-    try { await verifyRelease(descriptor, fetchImpl); if (useCache) cachedDevRelease = { expires_at_ms: now + DEV_RELEASE_CACHE_MS, descriptor }; return descriptor; }
-    catch { /* A malformed or unverifiable prerelease is never advertised. */ }
+export async function discoverDevelopmentRunnerRelease(fetchImpl: typeof fetch = fetch, verifyRelease: DevelopmentReleaseVerifier = verifyDevelopmentRunnerRelease, cacheOverride?: DevelopmentReleaseCache | null): Promise<RunnerReleaseDescriptor> {
+  const useRuntimeCache = fetchImpl === fetch && verifyRelease === verifyDevelopmentRunnerRelease;
+  const cache = cacheOverride === null ? undefined : cacheOverride ?? (useRuntimeCache ? defaultDevelopmentReleaseCache() : undefined);
+  const now = Date.now();
+  if (useRuntimeCache && cachedDevRelease !== undefined && cachedDevRelease.expires_at_ms > now) return cachedDevRelease.descriptor;
+  const cached = await readDevelopmentReleaseCache(cache);
+  if (cached !== undefined && now - cached.verified_at_ms <= DEV_RELEASE_CACHE_MS) {
+    if (useRuntimeCache) cachedDevRelease = { expires_at_ms: now + DEV_RELEASE_CACHE_MS, descriptor: cached.descriptor };
+    return cached.descriptor;
   }
-  throw new Error("no immutable signed development Runner release is available");
+  try {
+    const response = await releaseFetch(DEV_RELEASE_DISCOVERY_URL, {
+      method: "GET", redirect: "manual", cache: "no-store", credentials: "omit",
+      headers: { accept: "application/vnd.github+json", "user-agent": "runmeshdev-release-discovery/1", "x-github-api-version": "2026-03-10" },
+    }, fetchImpl);
+    const releases = await boundedJson(response);
+    if (!Array.isArray(releases)) throw new Error("development release discovery response is invalid");
+    const candidates = releases.flatMap(value => { const descriptor = developmentDescriptor(value); return descriptor === undefined ? [] : [descriptor]; });
+    candidates.sort((a, b) => Date.parse(b.published_at ?? "") - Date.parse(a.published_at ?? ""));
+    for (const descriptor of candidates) {
+      try {
+        await verifyRelease(descriptor, fetchImpl);
+        if (useRuntimeCache) cachedDevRelease = { expires_at_ms: now + DEV_RELEASE_CACHE_MS, descriptor };
+        await writeDevelopmentReleaseCache(cache, descriptor, now);
+        return descriptor;
+      } catch { /* A malformed or unverifiable prerelease is never advertised. */ }
+    }
+    throw new Error("no immutable signed development Runner release is available");
+  } catch (error) {
+    if (cached !== undefined && now - cached.verified_at_ms <= DEV_RELEASE_STALE_MS) {
+      if (useRuntimeCache) cachedDevRelease = { expires_at_ms: now + DEV_RELEASE_CACHE_MS, descriptor: cached.descriptor };
+      return cached.descriptor;
+    }
+    throw error;
+  }
 }
 
 /** Development is dev-only. Discovery failure is fail-closed; stable is never used as a fallback. */
