@@ -1,3 +1,5 @@
+import { RegistryFeatureHealthStore } from "./registry/feature-health.js";
+import { historyCleanupDue, nextMaintenanceDeadline } from "./registry/maintenance-plan.js";
 import { createCoreRegistrySchema, registrySchemaIsCurrent, hasPersistedRegistrySchema } from "./registry/schema.js";
 import type { RunnerConnectionState } from "./contracts/runner-selection.js";
 import type { PolicyReadiness } from "./contracts/runner-selection.js";
@@ -30,7 +32,7 @@ import { validTimestamp } from "./validity.js";
 import { validWindow } from "./validity.js";
 import type { ValidityWindow } from "./validity.js";
 import type { ValidityStatus } from "./validity.js";
-import type { RunnerExecutionMode, PolicyAcknowledgementResult, RunnerMutationState, CodingScope, PermissionSet, WorkspaceValidationStatus, RunnerUpdateChannel, RunnerPublicInfo, RunnerRecord, WorkspaceRecord, DashboardSnapshot, RegistryFeatureKey, RegistryFeatureHealth, McpClientRecord, VerifiedMcpClient, RunnerRow, EnrollmentRow, FeatureHealthRow, AdminSettingsRow, AuthThrottleKind, InternalInput } from './registry/records.js';
+import type { RunnerExecutionMode, PolicyAcknowledgementResult, RunnerMutationState, CodingScope, PermissionSet, WorkspaceValidationStatus, RunnerUpdateChannel, RunnerPublicInfo, RunnerRecord, WorkspaceRecord, DashboardSnapshot, RegistryFeatureKey, RegistryFeatureHealth, McpClientRecord, VerifiedMcpClient, RunnerRow, EnrollmentRow, AdminSettingsRow, AuthThrottleKind, InternalInput } from './registry/records.js';
 import { MAX_INTERNAL_BODY_BYTES, MAX_SYNC_ITEMS, DEFAULT_RUNNER_ENROLLMENT_TTL_MS, REGISTRY_HISTORY_CLEANUP_INTERVAL_MS, HISTORY_CLEANUP_DEADLINE_KEY } from './registry/records.js';
 import { authThrottleKind, validLifecycleId, parseTransportIdentity, matchesTransportIdentity, requestedExecutionMode, requestedExpectedExecutionMode, requestedExpectedLifecycleId, requestedPrivilegedConfirmation, requestedRunnerEnrollmentTtl, parseJobEvent, uniqueIds, parseRunnerId, parseJsonObject, stringField, integerField, nullableIntegerField, safeNonnegativeInteger, nullableChecksumField, runnerPublicInfoField, permissionSetField, workspaceStatusesField, validVerifier, validMutationId, mutationIdField, scopesField } from './registry/values.js';
 import { RegistryAuth } from './registry/auth.js';
@@ -72,7 +74,7 @@ export class RegistryDO {
   private readonly policy: RegistryPolicy;
   private readonly lifecycle: RegistryLifecycle;
   private readonly history: RegistryHistory;
-  private readonly featureHealth = new Map<RegistryFeatureKey, { readonly disabled_until_ms: number | null; readonly failure_count: number; readonly last_failure_at_ms: number | null; readonly last_error: string | null }>();
+  private readonly featureHealth: RegistryFeatureHealthStore;
 
   private maintenanceQueue: Promise<void> = Promise.resolve();
 
@@ -86,6 +88,7 @@ export class RegistryDO {
   ) {
     this.env = env = resolveRuntimeConfiguration(env);
     const storage = registryStorage(ctx.storage);
+    this.featureHealth = new RegistryFeatureHealthStore(storage.sql);
     this.auth = new RegistryAuth(storage, {
       disableFeatureHealth: (...args) => this.disableFeatureHealth(...args),
       featureHealthDisabled: (...args) => this.featureHealthDisabled(...args),
@@ -174,7 +177,7 @@ export class RegistryDO {
     // history cleanup runs at most once per 15 minutes, even across eviction.
     // Authorization checks continue enforcing expiry when each record is read.
     const nextCleanup = await this.ctx.storage.get<number>(HISTORY_CLEANUP_DEADLINE_KEY);
-    if (!safeNonnegativeInteger(nextCleanup) || nextCleanup <= nowMs || nextCleanup > nowMs + REGISTRY_HISTORY_CLEANUP_INTERVAL_MS) {
+    if (historyCleanupDue(nextCleanup, nowMs, REGISTRY_HISTORY_CLEANUP_INTERVAL_MS)) {
       if (this.ctx.storage.sql.exec("SELECT 1 FROM feature_health WHERE disabled_until_ms <= ? LIMIT 1", nowMs).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM feature_health WHERE disabled_until_ms <= ?", nowMs);
       if (this.ctx.storage.sql.exec("SELECT 1 FROM admin_sessions WHERE expires_at_ms <= ? LIMIT 1", nowMs).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM admin_sessions WHERE expires_at_ms <= ?", nowMs);
       if (this.ctx.storage.sql.exec("SELECT 1 FROM internal_request_nonces WHERE expires_at_ms <= ? LIMIT 1", nowMs).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM internal_request_nonces WHERE expires_at_ms <= ?", nowMs);
@@ -201,44 +204,24 @@ export class RegistryDO {
       const nextAudit = this.ctx.storage.sql.exec<{ next_ms: number | null }>(
         "SELECT MIN(completed_at_ms) + ? AS next_ms FROM mcp_calls", MCP_AUDIT_RETENTION_MS,
       ).toArray()[0]?.next_ms;
-      const deadlines = [nextStale, nextAudit].filter((n): n is number => safeNonnegativeInteger(n));
-      if (deadlines.length === 0) { await this.ctx.storage.deleteAlarm(); return; }
-      const deadline = Math.max(nowMs + 1_000, Math.min(...deadlines));
+      const deadline = nextMaintenanceDeadline(nowMs, nextStale, nextAudit);
+      if (deadline === null) { await this.ctx.storage.deleteAlarm(); return; }
       const current = await this.ctx.storage.getAlarm();
       if (current === null || current <= nowMs || current > deadline) await this.ctx.storage.setAlarm(deadline);
       this.clearFeatureHealth("maintenance_alarm");
     } catch (error) { this.disableFeatureHealth("maintenance_alarm", error, nowMs); }
   }
 
-  private loadFeatureHealth(): void {
-    const nowMs = Date.now();
-    try {
-      for (const row of this.ctx.storage.sql.exec<FeatureHealthRow>("SELECT feature, disabled_until_ms, failure_count, last_failure_at_ms, last_error FROM feature_health").toArray()) {
-        if (row.disabled_until_ms === null) continue;
-        if (row.disabled_until_ms <= nowMs) continue;
-        this.featureHealth.set(row.feature, row);
-      }
-    } catch { /* optional feature state must never make the Registry unavailable */ }
-  }
+  private loadFeatureHealth(): void { this.featureHealth.load(); }
 
   public featureHealthSnapshot(nowMs = Date.now()): RegistryFeatureHealth[] {
-    const states: RegistryFeatureHealth[] = [];
-    for (const [feature, state] of this.featureHealth.entries()) {
-      if (state.disabled_until_ms !== null && state.disabled_until_ms <= nowMs) {
-        this.featureHealth.delete(feature);
-        continue;
-      }
-      states.push({ feature, ...state });
-    }
+    const states = this.featureHealth.snapshot(nowMs);
     const external = this.externalAudit?.health(nowMs);
     if (external !== undefined && !states.some((state) => state.feature === "mcp_audit")) states.push({ feature: "mcp_audit", ...external, last_failure_at_ms: null, last_error: "External audit storage is unavailable; core authorization and execution are independent." });
     return states.sort((left, right) => left.feature.localeCompare(right.feature));
   }
 
-  private clearFeatureHealth(feature: RegistryFeatureKey): void {
-    if (!this.featureHealth.delete(feature)) return;
-    try { this.ctx.storage.sql.exec("DELETE FROM feature_health WHERE feature = ?", feature); } catch { /* feature state cleanup is best-effort */ }
-  }
+  private clearFeatureHealth(feature: RegistryFeatureKey): void { this.featureHealth.clear(feature); }
 
   private runnerMatchesTransportFence(current: RunnerRow | undefined, epoch: number, credentialVersion: number, requireOnline: boolean, lifecycleId: string, sessionId: string): current is RunnerRow {
     return current !== undefined && current.connection_epoch === epoch && current.credential_version === credentialVersion && (!requireOnline || current.state === "online") && matchesTransportIdentity(current, lifecycleId, sessionId);
@@ -250,44 +233,11 @@ export class RegistryDO {
   }
 
   private disableFeatureHealth(feature: RegistryFeatureKey, error: unknown, nowMs = Date.now(), cooldownMs = 15 * 60_000): void {
-    const previous = this.featureHealth.get(feature);
-    const failure_count = (previous?.failure_count ?? 0) + 1;
-    const last_error = this.summarizeFeatureError(error);
-    const disabled_until_ms = nowMs + cooldownMs;
-    const state = {
-      disabled_until_ms,
-      failure_count,
-      last_failure_at_ms: nowMs,
-      last_error,
-    };
-    this.featureHealth.set(feature, state);
-    try {
-      this.ctx.storage.sql.exec(
-        `INSERT INTO feature_health (feature, disabled_until_ms, failure_count, last_failure_at_ms, last_error, updated_at_ms)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(feature) DO UPDATE SET disabled_until_ms = excluded.disabled_until_ms, failure_count = excluded.failure_count,
-         last_failure_at_ms = excluded.last_failure_at_ms, last_error = excluded.last_error, updated_at_ms = excluded.updated_at_ms`,
-        feature, state.disabled_until_ms, state.failure_count, state.last_failure_at_ms, state.last_error, nowMs,
-      );
-    } catch { /* in-memory breaker still prevents repeated optional writes in this DO instance */ }
-    if (feature === "maintenance_alarm") void this.ctx.storage.setAlarm(Math.max(nowMs + 1_000, disabled_until_ms)).catch(() => undefined);
+    const disabledUntil = this.featureHealth.disable(feature, error, nowMs, cooldownMs);
+    if (feature === "maintenance_alarm") void this.ctx.storage.setAlarm(Math.max(nowMs + 1_000, disabledUntil)).catch(() => undefined);
   }
 
-  private summarizeFeatureError(error: unknown): string {
-    if (error instanceof Error) return `${error.name}: ${error.message}`.slice(0, 240);
-    if (typeof error === "string") return error.slice(0, 240);
-    try { return JSON.stringify(error).slice(0, 240); } catch { return "feature write failed"; }
-  }
-
-  private featureHealthDisabled(feature: RegistryFeatureKey, nowMs = Date.now()): boolean {
-    const state = this.featureHealth.get(feature);
-    if (state === undefined) return false;
-    if (state.disabled_until_ms !== null && state.disabled_until_ms <= nowMs) {
-      this.featureHealth.delete(feature);
-      return false;
-    }
-    return state.disabled_until_ms !== null && state.disabled_until_ms > nowMs;
-  }
+  private featureHealthDisabled(feature: RegistryFeatureKey, nowMs = Date.now()): boolean { return this.featureHealth.disabled(feature, nowMs); }
 
   public consumeInternalNonce(nonce: string, expiresAtMs: number, nowMs = Date.now()): boolean { return this.auth.consumeInternalNonce(nonce, expiresAtMs, nowMs); }
 

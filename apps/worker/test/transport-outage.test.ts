@@ -1,3 +1,5 @@
+import { RunnerDO } from "../src/runner-do.js";
+import { BridgeReplies } from "../src/platform/bridge-replies.js";
 import { env, runInDurableObject } from "cloudflare:test";
 import { encodeWireFrame, PROTOCOL_CURRENT_VERSION as version, PROTOCOL_MIN_VERSION, type WireMessage } from "@aloneio/runmesh-protocol";
 import { expect, it, vi } from "vitest";
@@ -20,8 +22,10 @@ function socket(kind: string) {
 const failures = [429, 500, 502, 503, 504].flatMap((status) => ["hello", "heartbeat", "sync", "event", "session"].map((kind) => ({ status, kind })));
 it.each(failures)("uses retryable close 1013 for $kind with upstream $status", async ({ status, kind }) => {
   const stub = env.RUNNER.get(env.RUNNER.idFromName(`outage-transport-${crypto.randomUUID()}`));
-  await runInDurableObject(stub, async (instance) => {
-    const request = vi.spyOn(instance as any, "registryRequest").mockResolvedValue(new Response("private upstream error", { status }));
+  await runInDurableObject(stub, async (_existing, state) => {
+    const request = vi.fn().mockResolvedValue(new Response("private upstream error", { status }));
+    const replies = new BridgeReplies();
+    const instance = new RunnerDO(state, env, { registryRequest: request, replies });
     const f = socket(kind);
     try {
       await instance.webSocketMessage(f.ws, encodeWireFrame(frame(kind)));
@@ -33,8 +37,10 @@ it.each(failures)("uses retryable close 1013 for $kind with upstream $status", a
 
 it.each(["hello", "heartbeat", "sync", "event", "session"])("retains fatal close 4001 for a verified stale %s identity", async (kind) => {
   const stub = env.RUNNER.get(env.RUNNER.idFromName(`outage-revoke-${crypto.randomUUID()}`));
-  await runInDurableObject(stub, async (instance) => {
-    const request = vi.spyOn(instance as any, "registryRequest").mockResolvedValue(new Response("stale session", { status: 409 }));
+  await runInDurableObject(stub, async (_existing, state) => {
+    const request = vi.fn().mockResolvedValue(new Response("stale session", { status: 409 }));
+    const replies = new BridgeReplies();
+    const instance = new RunnerDO(state, env, { registryRequest: request, replies });
     const f = socket(kind);
     try { await instance.webSocketMessage(f.ws, encodeWireFrame(frame(kind))); expect(f.close).toHaveBeenCalledWith(4001, "credentials revoked"); }
     finally { request.mockRestore(); }
@@ -43,8 +49,10 @@ it.each(["hello", "heartbeat", "sync", "event", "session"])("retains fatal close
 
 it.each([429, 500, 502, 503, 504, 401, 403, 200])("does not turn an authentication dependency failure (%s) into a fake 401", async (status) => {
   const stub = env.RUNNER.get(env.RUNNER.idFromName(`outage-upgrade-${crypto.randomUUID()}`));
-  await runInDurableObject(stub, async (instance) => {
-    const request = vi.spyOn(instance as any, "registryRequest").mockResolvedValue(new Response("malformed or unavailable", { status }));
+  await runInDurableObject(stub, async (_existing, state) => {
+    const request = vi.fn().mockResolvedValue(new Response("malformed or unavailable", { status }));
+    const replies = new BridgeReplies();
+    const instance = new RunnerDO(state, env, { registryRequest: request, replies });
     try {
       const response = await instance.fetch(new Request(`https://runner.internal/runner/${runner}`, { headers: { Upgrade: "websocket", Authorization: "Bearer synthetic-runner-token" } }));
       expect(response.status).toBe(status === 401 || status === 403 ? 401 : status === 429 ? 429 : 503);
@@ -55,11 +63,13 @@ it.each([429, 500, 502, 503, 504, 401, 403, 200])("does not turn an authenticati
 
 it("rejects pending RPC replies when the session cannot be verified", async () => {
   const stub = env.RUNNER.get(env.RUNNER.idFromName(`outage-reply-${crypto.randomUUID()}`));
-  await runInDurableObject(stub, async (instance) => {
-    const request = vi.spyOn(instance as any, "registryRequest").mockRejectedValue(new Error("storage unavailable"));
+  await runInDurableObject(stub, async (_existing, state) => {
+    const request = vi.fn().mockRejectedValue(new Error("storage unavailable"));
+    const replies = new BridgeReplies();
+    const instance = new RunnerDO(state, env, { registryRequest: request, replies });
     const f = socket("session"), resolve = vi.fn();
     const timer = setTimeout(() => {}, 10000);
-    (instance as any).bridgeWaiters.set("rpc-outage", { resolve, timer, socket: f.ws });
+    replies.register("rpc-outage", { resolve, timer, socket: f.ws });
     try {
       await instance.webSocketMessage(f.ws, encodeWireFrame(frame("session")));
       expect(resolve).toHaveBeenCalledTimes(1);
