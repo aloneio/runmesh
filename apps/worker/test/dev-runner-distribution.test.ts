@@ -27,6 +27,7 @@ describe("development Runner distribution", () => {
       { ...release("0.1.4-dev.9", "2026-09-16T13:00:00Z"), tag_name: "v0.1.4" },
     ]);
     const descriptor = await discoverDevelopmentRunnerRelease(fetchImpl, async () => undefined);
+    expect(fetchImpl).toHaveBeenCalledWith("https://api.github.com/repos/aloneio/runmesh/releases?per_page=20", expect.objectContaining({ redirect: "manual", cache: "no-store" }));
     expect(descriptor).toMatchObject({ channel: "dev", distributable: true, package_version: "0.1.4-dev.1" });
     expect(descriptor.package_spec).toBe("https://github.com/aloneio/runmesh/releases/download/v0.1.4-dev.1/runmesh-runner-0.1.4-dev.1.tgz");
   });
