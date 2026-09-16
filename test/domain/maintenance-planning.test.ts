@@ -48,7 +48,7 @@ it("retention preserves active and recovered-live jobs, original identities and 
   expect(expiredRetainedJob({...jobs[4]!,completed_at_ms:250},250)).toBe(true);
 });
 it("legacy Job frame projection preserves metadata and does not turn output or unknown completion into an event",()=>{
-  const job=normalizeJobRecord({job_id:"job-00000000-0000-0000-0000-000000000001",workspace_id:"w",cwd:".",command:["PRIVATE_COMMAND"],shell:false,status:"succeeded",created_at_ms:100,updated_at_ms:200,completed_at_ms:200,exit_code:0,created_by_client_id:"c",request_id:"r"});
+  const job=normalizeJobRecord({job_id:"job-00000000-0000-0000-0000-000000000001",workspace_id:"w",cwd:".",command:["PRIVATE_COMMAND"],shell:false,status:"succeeded",created_at_ms:100,updated_at_ms:200,completed_at_ms:200,exit_code:0,created_by_client_id:"c",request_id:"r",request_fingerprint:"a".repeat(64)});
   if(job===undefined)throw new Error("invalid fixture");
   const message=jobEventMessage({type:"completed",job},"runner");
   expect(message).toMatchObject({type:"job.completed",completed_at_ms:200,outcome:"succeeded",exit_code:0,job:{runner_id:"runner",created_by_client_id:"c",request_id:"r"}});
