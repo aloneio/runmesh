@@ -45,6 +45,7 @@ import { runnerDetailPage } from "../admin/runner-detail-view.js";
 import { runnerEnvironment } from "../application/runner-queries.js";
 import type { RunnerSummaryViewModel } from "../contracts/admin-views.js";
 import { resolveRunnerReleaseDescriptor } from "../distribution/release.js";
+import { registryDevelopmentReleaseCache } from "./release-cache.js";
 import { runnerReportedExecutionMode } from "../domain/execution-mode.js";
 import { runnerRpc } from "../platform/control-plane.js";
 import { secretCreatedPage } from "../admin/auth-views.js";
@@ -112,7 +113,7 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
       registryGet(env, `/runners/${encodeURIComponent(runnerId)}/policy-versions`),
       registryGet(env, `/auth/runners/${encodeURIComponent(runnerId)}/enrollments`),
       runnerEnvironment(env, runnerId),
-      resolveRunnerReleaseDescriptor(env),
+      resolveRunnerReleaseDescriptor(env, fetch, registryDevelopmentReleaseCache(env)),
       loadFeatureNotices(env),
       registryGet(env, `/runners/${encodeURIComponent(runnerId)}/history-settings`),
     ]);

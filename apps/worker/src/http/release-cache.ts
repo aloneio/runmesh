@@ -1,0 +1,30 @@
+import type { DevelopmentReleaseCache } from "../distribution/release.js";
+import { registryGet, registryPost } from "../platform/control-plane.js";
+import type { WorkerEnv } from "../platform/env.js";
+
+const VERIFIED_DEV_RELEASE_PATH = "/distribution/dev-runner-release";
+
+function record(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** HTTP composition adapter for the globally persisted descriptor that has
+ * already passed release.ts Ed25519 verification. The distribution layer
+ * revalidates every cached field before use. */
+export function registryDevelopmentReleaseCache(env: WorkerEnv): DevelopmentReleaseCache {
+  return {
+    async match(): Promise<Response | undefined> {
+      const response = await registryGet(env, VERIFIED_DEV_RELEASE_PATH);
+      if (!response.ok) { await response.body?.cancel().catch(() => undefined); return undefined; }
+      return response;
+    },
+    async put(_request: Request, response: Response): Promise<void> {
+      let value: unknown;
+      try { value = await response.json(); } catch { throw new Error("development release cache record is invalid"); }
+      if (!record(value)) throw new Error("development release cache record is invalid");
+      const stored = await registryPost(env, VERIFIED_DEV_RELEASE_PATH, value);
+      if (!stored.ok) { await stored.body?.cancel().catch(() => undefined); throw new Error("development release registry cache write failed"); }
+      await stored.body?.cancel().catch(() => undefined);
+    },
+  };
+}

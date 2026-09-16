@@ -264,15 +264,15 @@ export async function discoverDevelopmentRunnerRelease(fetchImpl: typeof fetch =
 }
 
 /** Development is dev-only. Discovery failure is fail-closed; stable is never used as a fallback. */
-export async function resolveRunnerReleaseDescriptor(env: RunnerReleaseEnvironment, fetchImpl: typeof fetch = fetch): Promise<RunnerReleaseDescriptor> {
+export async function resolveRunnerReleaseDescriptor(env: RunnerReleaseEnvironment, fetchImpl: typeof fetch = fetch, cacheOverride?: DevelopmentReleaseCache | null): Promise<RunnerReleaseDescriptor> {
   if (!isDevelopment(env)) return runnerReleaseDescriptor(env);
   const gate = releaseGateDiagnostics(env);
   if (!gate.acknowledgement_matches_fixed_release || !gate.canonical_public_origin_configured || !gate.test_mode_disabled) return unavailableDevelopmentRelease();
-  try { return await discoverDevelopmentRunnerRelease(fetchImpl); }
+  try { return await discoverDevelopmentRunnerRelease(fetchImpl, verifyDevelopmentRunnerRelease, cacheOverride); }
   catch { return unavailableDevelopmentRelease(); }
 }
 
-export async function resolveDevelopmentRunnerRelease(env: RunnerReleaseEnvironment, fetchImpl: typeof fetch = fetch): Promise<RunnerReleaseDescriptor> {
+export async function resolveDevelopmentRunnerRelease(env: RunnerReleaseEnvironment, fetchImpl: typeof fetch = fetch, cacheOverride?: DevelopmentReleaseCache | null): Promise<RunnerReleaseDescriptor> {
   if (!isDevelopment(env)) return unavailableDevelopmentRelease();
-  return resolveRunnerReleaseDescriptor(env, fetchImpl);
+  return resolveRunnerReleaseDescriptor(env, fetchImpl, cacheOverride);
 }

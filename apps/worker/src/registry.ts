@@ -67,6 +67,8 @@ export { DEFAULT_RUNNER_ENROLLMENT_TTL_MS } from './registry/records.js';
 export { RUNNER_ENROLLMENT_TTL_OPTIONS_MS } from './registry/records.js';
 export { REGISTRY_HISTORY_CLEANUP_INTERVAL_MS } from './registry/records.js';
 
+const VERIFIED_DEV_RELEASE_STORAGE_KEY = "distribution:verified-dev-runner-release:v1";
+
 /** Public Registry facade: platform lifecycle, schema and existing HTTP routes.
  * Domain ports are synchronous closures, not remote RPCs or cached grants. */
 export class RegistryDO {
@@ -491,6 +493,21 @@ export class RegistryDO {
     if (request.method === "GET" && segments.length === 1 && segments[0] === "runners") return Response.json({ runners: this.listRunners() });
     if (request.method === "GET" && segments.length === 1 && segments[0] === "dashboard") return Response.json(this.dashboardSnapshot());
     if (request.method === "GET" && segments.length === 2 && segments[0] === "status" && segments[1] === "features") return Response.json({ features: this.featureHealthSnapshot(now) });
+    if (segments.length === 2 && segments[0] === "distribution" && segments[1] === "dev-runner-release") {
+      if (request.method === "GET") {
+        const cached = await this.ctx.storage.get<unknown>(VERIFIED_DEV_RELEASE_STORAGE_KEY);
+        return cached === undefined ? new Response("not found", { status: 404, headers: { "cache-control": "no-store" } }) : Response.json(cached, { headers: { "cache-control": "no-store" } });
+      }
+      if (request.method === "POST") {
+        const verifiedAtMs = integerField(input, "verified_at_ms");
+        if (input.schema_version !== 1 || verifiedAtMs === undefined || verifiedAtMs <= 0 || verifiedAtMs > now + 60_000 || typeof input.descriptor !== "object" || input.descriptor === null || Array.isArray(input.descriptor)) return Response.json({ error: "invalid development release cache record" }, { status: 400 });
+        const current = await this.ctx.storage.get<{ readonly verified_at_ms?: unknown }>(VERIFIED_DEV_RELEASE_STORAGE_KEY);
+        if (current !== undefined && Number.isSafeInteger(current.verified_at_ms) && Number(current.verified_at_ms) >= verifiedAtMs) return new Response(null, { status: 204 });
+        await this.ctx.storage.put(VERIFIED_DEV_RELEASE_STORAGE_KEY, input);
+        return new Response(null, { status: 204 });
+      }
+      return new Response("not found", { status: 404 });
+    }
     const runnerId = segments[0] === "runners" ? parseRunnerId(segments[1]) : undefined;
     const action = segments[2]; const itemId = segments[3];
     if (runnerId === undefined || segments.length > 4) return new Response("not found", { status: 404 });
