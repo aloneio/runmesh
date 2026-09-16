@@ -42,6 +42,6 @@ systemd、launchd、Windows Task Scheduler 分开维护；`service.ts` 保留兼
 
 基线回归覆盖十个 MCP 工具的 Schema、说明、注解和线协议文件字节。认证页面、竞态、失败恢复、真实安装包及 Chromium 测试继续保留。Linux 验证不能冒充 Windows／macOS 原生验证或托管 CI 结果。
 
-development 固定部署 `runmeshdev`，production 仍为 `runmesh`。部署包装器在上传前核对分支／环境、Wrangler 配置及 `WRANGLER_CI_OVERRIDE_NAME`，并显式传 Worker 名称。此检查不替代账户认证，也不证明控制台构建触发器已配置正确。进入 main、线上验收与不可变签名发版仍是独立操作。
+development 固定部署 `runmeshdev`，production 仍为 `runmesh`。oci0 上的 `runmesh-dev-sync.timer` 观察 GitHub `dev`；只有同一 SHA 的 `verify-all` 成功后才以 fast-forward 方式同步到 GitLab `dev`，由该 push 触发 Cloudflare Workers Builds；分叉时停止，不 force push，也不把跨平台长期令牌复制到 GitHub Actions。development 可复用已独立审核并签名的稳定 Runner，从而保留一条命令安装，但不会把未签名的 dev 分支产物冒充 Runner 正式发行。部署包装器仍核对分支／环境、Wrangler 配置及 `WRANGLER_CI_OVERRIDE_NAME`。进入 main、线上验收与不可变签名发版仍是独立操作。
 
 兼容 facade、有界旧文本适配器和有状态协调者是有意保留的边界。已有白盒竞态测试应逐步迁到受支持的故障接口，不应为通过重构而删掉。单纯文件缩短不是整改验收标准。
