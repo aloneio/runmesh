@@ -22,6 +22,8 @@ export interface RunnerReleaseEnvironment {
 
 const DEV_RELEASE_DISCOVERY_URL = "https://api.github.com/repos/aloneio/runmesh/releases?per_page=20";
 const DEV_RELEASE_CACHE_MS = 60_000;
+const DEV_RELEASE_FETCH_ATTEMPTS = 3;
+const DEV_RELEASE_RETRY_DELAY_MS = 75;
 const MAX_DISCOVERY_BYTES = 512 * 1024;
 const DEV_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-dev\.(0|[1-9]\d*)$/u;
 const STABLE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
@@ -66,6 +68,26 @@ export function runnerReleaseDescriptor(env: RunnerReleaseEnvironment): RunnerRe
   return { ...fixedReleaseDescriptor(distributable), protocol: protocol() };
 }
 
+function retryableReleaseResponse(response: Response): boolean {
+  if (response.status === 429 || response.status >= 500) return true;
+  return response.status === 403 && (response.headers.get("x-ratelimit-remaining") === "0" || response.headers.has("retry-after"));
+}
+async function releaseFetch(input: string, init: Omit<RequestInit, "signal">, fetchImpl: typeof fetch): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < DEV_RELEASE_FETCH_ATTEMPTS; attempt++) {
+    try {
+      const response = await fetchImpl(input, { ...init, signal: AbortSignal.timeout(10_000) });
+      if (!retryableReleaseResponse(response) || attempt + 1 === DEV_RELEASE_FETCH_ATTEMPTS) return response;
+      await response.body?.cancel().catch(() => undefined);
+    } catch (error) {
+      lastError = error;
+      if (attempt + 1 === DEV_RELEASE_FETCH_ATTEMPTS) throw error;
+    }
+    await new Promise(resolve => setTimeout(resolve, DEV_RELEASE_RETRY_DELAY_MS * (attempt + 1)));
+  }
+  throw lastError instanceof Error ? lastError : new Error("development release fetch failed");
+}
+
 async function boundedJson(response: Response): Promise<unknown> {
   if (!response.ok) throw new Error("development release discovery failed");
   const declared = response.headers.get("content-length");
@@ -87,7 +109,7 @@ async function boundedReleaseBytes(url: string, limit: number, fetchImpl: typeof
   let current = new URL(url);
   for (let redirect = 0; redirect <= 4; redirect++) {
     if (current.protocol !== "https:" || !ALLOWED_RELEASE_ORIGINS.has(current.origin)) throw new Error("development release redirect origin is not trusted");
-    const response = await fetchImpl(current.toString(), { method: "GET", redirect: "manual", cache: "no-store", credentials: "omit", signal: AbortSignal.timeout(10_000), headers: { accept: "application/octet-stream", "user-agent": "runmeshdev-release-verifier/1" } });
+    const response = await releaseFetch(current.toString(), { method: "GET", redirect: "manual", cache: "no-store", credentials: "omit", headers: { accept: "application/octet-stream", "user-agent": "runmeshdev-release-verifier/1" } }, fetchImpl);
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location"); await response.body?.cancel().catch(() => undefined);
       if (location === null || redirect === 4) throw new Error("development release redirect is invalid");
@@ -130,11 +152,12 @@ const FIXED_DEVELOPMENT_TRUST: DevelopmentReleaseTrust = { key_id: FIXED_RELEASE
 export async function verifyDevelopmentRunnerRelease(descriptor: RunnerReleaseDescriptor, fetchImpl: typeof fetch = fetch, trust: DevelopmentReleaseTrust = FIXED_DEVELOPMENT_TRUST): Promise<void> {
   if (descriptor.channel !== "dev" || !descriptor.distributable || !isCurrentDevelopmentVersion(descriptor.package_version)) throw new Error("development release descriptor is invalid");
   const target = installerReleaseTarget(descriptor.package_version, "dev");
-  const [manifestBytes, signatureBytes, signatureDescriptorBytes] = await Promise.all([
-    boundedReleaseBytes(target.manifest_url, 64 * 1024, fetchImpl),
-    boundedReleaseBytes(target.signature_url, 1024, fetchImpl),
-    boundedReleaseBytes(target.signature_descriptor_url, 16 * 1024, fetchImpl),
-  ]);
+  // Fetch sequentially: three concurrent unauthenticated GitHub asset requests
+  // multiplied transient edge failures and made a valid dev release intermittently
+  // unavailable. Each fixed-origin GET has its own bounded retry budget.
+  const manifestBytes = await boundedReleaseBytes(target.manifest_url, 64 * 1024, fetchImpl);
+  const signatureBytes = await boundedReleaseBytes(target.signature_url, 1024, fetchImpl);
+  const signatureDescriptorBytes = await boundedReleaseBytes(target.signature_descriptor_url, 16 * 1024, fetchImpl);
   const signatureDescriptor = parseJsonBytes(signatureDescriptorBytes);
   if (!isRecord(signatureDescriptor) || signatureDescriptor.schema_version !== 1 || signatureDescriptor.algorithm !== "ed25519" || signatureDescriptor.key_id !== trust.key_id || signatureDescriptor.encoding !== "base64" || signatureDescriptor.signed_file !== "manifest.json") throw new Error("development release signature descriptor is invalid");
   const signature = canonicalBase64(new TextDecoder("utf-8", { fatal: true }).decode(signatureBytes).trim());
@@ -169,10 +192,10 @@ type DevelopmentReleaseVerifier = (descriptor: RunnerReleaseDescriptor, fetchImp
 export async function discoverDevelopmentRunnerRelease(fetchImpl: typeof fetch = fetch, verifyRelease: DevelopmentReleaseVerifier = verifyDevelopmentRunnerRelease): Promise<RunnerReleaseDescriptor> {
   const useCache = fetchImpl === fetch && verifyRelease === verifyDevelopmentRunnerRelease; const now = Date.now();
   if (useCache && cachedDevRelease !== undefined && cachedDevRelease.expires_at_ms > now) return cachedDevRelease.descriptor;
-  const response = await fetchImpl(DEV_RELEASE_DISCOVERY_URL, {
-    method: "GET", redirect: "manual", cache: "no-store", credentials: "omit", signal: AbortSignal.timeout(10_000),
+  const response = await releaseFetch(DEV_RELEASE_DISCOVERY_URL, {
+    method: "GET", redirect: "manual", cache: "no-store", credentials: "omit",
     headers: { accept: "application/vnd.github+json", "user-agent": "runmeshdev-release-discovery/1", "x-github-api-version": "2026-03-10" },
-  });
+  }, fetchImpl);
   const releases = await boundedJson(response);
   if (!Array.isArray(releases)) throw new Error("development release discovery response is invalid");
   const candidates = releases.flatMap(value => { const descriptor = developmentDescriptor(value); return descriptor === undefined ? [] : [descriptor]; });

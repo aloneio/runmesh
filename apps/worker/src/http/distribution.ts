@@ -28,7 +28,9 @@ function unavailableScript(channel: "dev" | "stable", windows: boolean): string 
 export async function runnerRelease(request: Request, env: WorkerEnv, selection: ReleaseSelection = "selected"): Promise<Response> {
   if (request.method !== "GET" && request.method !== "HEAD") { void discardBody(request); return methodNotAllowed("GET, HEAD"); }
   const descriptor = await selectedRelease(env, selection);
-  return new Response(JSON.stringify({ ...descriptor, schema_version: 1 }), { headers: publicInstallerHeaders("application/json; charset=utf-8") });
+  const headers = publicInstallerHeaders("application/json; charset=utf-8");
+  if (descriptor.channel === "dev" && !descriptor.distributable) headers.set("cache-control", "no-store");
+  return new Response(JSON.stringify({ ...descriptor, schema_version: 1 }), { headers });
 }
 
 export async function runnerInstallScript(request: Request, url: URL, env: WorkerEnv): Promise<Response> {
@@ -40,7 +42,9 @@ export async function runnerInstallScript(request: Request, url: URL, env: Worke
     try { content = renderPosixInstaller(resolvePublicOrigin(request, configuredPublicOrigin(env)), mode, releaseTarget(descriptor)); }
     catch { return installerOriginUnavailable(); }
   } else content = unavailableScript(descriptor.channel, false);
-  return new Response(content, { headers: publicInstallerHeaders("text/x-shellscript; charset=utf-8") });
+  const headers = publicInstallerHeaders("text/x-shellscript; charset=utf-8");
+  if (descriptor.channel === "dev" && !descriptor.distributable) headers.set("cache-control", "no-store");
+  return new Response(content, { headers });
 }
 
 export async function runnerInstallPowerShell(request: Request, url: URL, env: WorkerEnv): Promise<Response> {
@@ -52,7 +56,9 @@ export async function runnerInstallPowerShell(request: Request, url: URL, env: W
     try { content = renderPowerShellInstaller(resolvePublicOrigin(request, configuredPublicOrigin(env)), mode, releaseTarget(descriptor)); }
     catch { return installerOriginUnavailable(); }
   } else content = unavailableScript(descriptor.channel, true);
-  return new Response(content, { headers: publicInstallerHeaders("text/plain; charset=utf-8") });
+  const headers = publicInstallerHeaders("text/plain; charset=utf-8");
+  if (descriptor.channel === "dev" && !descriptor.distributable) headers.set("cache-control", "no-store");
+  return new Response(content, { headers });
 }
 
 export async function runnerUninstallScript(request: Request, env: WorkerEnv, windows: boolean): Promise<Response> {
