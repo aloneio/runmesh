@@ -19,3 +19,9 @@ The former protocol type cycle has been removed by separating primitive permissi
 The parser is now an explicit exact-version development dependency already present in the lockfile, not a new runtime component. No Worker/Runner settings, storage, privileges, timers, requests or public tool schemas change in AR01.
 
 Reference for parser options and supported syntax: https://babeljs.io/docs/babel-parser
+
+## External imports (AR09)
+
+External Cloudflare and server SDK packages are checked against internal Worker roles, including type imports. Reviewed HTTP/MCP adapters may load their server SDK; pure domain, contracts, presentation and browser modules may not. Node platform classification uses the complete runtime `isBuiltin` predicate rather than a partial bare-module list. Pure Job/Context modules only allow reviewed pure packages and hashing; new names default to pure instead of silently escaping a filename regular expression.
+
+All supported source extensions are normalized before role assignment, and resolved import targets are checked again. Negative fixtures include `.mts`, `.cts`, JSX, bare `dgram`/`dns/promises`, type-only Cloudflare imports, renamed barrels and coordinator reverse dependencies. Positive fixtures preserve native adapters, pure hashing and type-only platform ports. Connection submodules cannot import the connection, runtime, policy-store or Job facade. See [the implementation contract](architecture-remediation.md#ar09ar14-platform-boundaries-and-failure-seams).
