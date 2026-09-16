@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { discoverDevelopmentRunnerRelease, resolveRunnerReleaseDescriptor, verifyDevelopmentRunnerRelease } from "../src/distribution/release.js";
 import { FIXED_RELEASE_VERSION, installerReleaseTarget, renderPosixInstaller, renderPowerShellInstaller } from "../src/installer.js";
+import { runnerInstallScript, runnerRelease } from "../src/http/distribution.js";
 
 const staticAssets = ["LICENSE", "NOTICE", "SHA256SUMS", "THIRD_PARTY_NOTICES.md", "manifest.json", "manifest.sig", "manifest.signature.json", "trust-keyring.json"];
 function release(version: string, publishedAt: string, overrides: Record<string, unknown> = {}) {
@@ -60,6 +61,39 @@ describe("development Runner distribution", () => {
       throw new Error(`unexpected release URL: ${url}`);
     }) as unknown as typeof fetch;
     await expect(verifyDevelopmentRunnerRelease(descriptor, tamperedFetch, { key_id: "test-dev-key", public_key_pem: publicKeyPem })).rejects.toThrow("signature does not verify");
+  });
+
+  it("retries bounded transient GitHub failures but does not weaken release validation", async () => {
+    let calls = 0;
+    const fetchImpl = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) return new Response("temporary", { status: 503 });
+      return new Response(JSON.stringify([release("0.1.4-dev.0", "2026-09-16T08:00:00Z")]), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const descriptor = await discoverDevelopmentRunnerRelease(fetchImpl, async () => undefined);
+    expect(calls).toBe(2);
+    expect(descriptor).toMatchObject({ channel: "dev", distributable: true, package_version: "0.1.4-dev.0" });
+
+    let forbiddenCalls = 0;
+    const forbidden = vi.fn(async () => { forbiddenCalls += 1; return new Response("forbidden", { status: 403 }); }) as unknown as typeof fetch;
+    await expect(discoverDevelopmentRunnerRelease(forbidden, async () => undefined)).rejects.toThrow("development release discovery failed");
+    expect(forbiddenCalls).toBe(1);
+  });
+
+  it("never publicly caches an unavailable development release or installer", async () => {
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("temporary", { status: 503 })));
+    try {
+      const releaseResponse = await runnerRelease(new Request("https://runmeshdev.example/runner/releases/dev"), devEnv as never, "dev");
+      expect(releaseResponse.headers.get("cache-control")).toBe("no-store");
+      expect(await releaseResponse.json()).toMatchObject({ channel: "dev", distributable: false });
+
+      const installerResponse = await runnerInstallScript(new Request("https://runmeshdev.example/runner/install.sh"), new URL("https://runmeshdev.example/runner/install.sh"), devEnv as never);
+      expect(installerResponse.headers.get("cache-control")).toBe("no-store");
+      expect(await installerResponse.text()).toContain("Development never falls back to the stable Runner");
+    } finally {
+      vi.stubGlobal("fetch", originalFetch);
+    }
   });
 
   it("development fails closed and never falls back to the stable Runner", async () => {
