@@ -1,0 +1,176 @@
+name: Dev Runner Prerelease
+
+# Keep this workflow push-only and unfiltered: run_number is the dev push
+# counter. Manual recovery uses rerun, never workflow_dispatch on this file.
+on:
+  push:
+    branches: [dev]
+
+permissions:
+  contents: read
+
+# Different batches must not evict each other's pending runs. Every batch has
+# a unique version; only retries of this same run share a publication lock.
+concurrency:
+  group: dev-prerelease-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  cadence:
+    if: github.repository == 'aloneio/runmesh' && github.ref == 'refs/heads/dev' && github.event.deleted == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      due: ${{ steps.cadence.outputs.due }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+      - id: cadence
+        run: node scripts/dev-release/plan.mjs cadence
+
+  plan:
+    needs: [cadence]
+    if: needs.cadence.outputs.due == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+      - name: Restore this run's original plan on retry
+        if: github.run_attempt > 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "dev-release-plan-$GITHUB_RUN_ID" --dir .dev-release
+      - id: plan
+        run: node scripts/dev-release/plan.mjs
+      - name: Preserve the immutable plan before building or publishing
+        if: github.run_attempt == 1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: dev-release-plan-${{ github.run_id }}
+          path: .dev-release/plan.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: false
+
+  verification:
+    needs: [plan]
+    uses: ./.github/workflows/ci.yml
+    with:
+      release_verification: true
+    permissions:
+      contents: read
+
+  build:
+    needs: [plan, verification]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      attempt: ${{ steps.build-context.outputs.attempt }}
+    permissions:
+      contents: read
+      actions: read
+    env:
+      RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm install --global npm@10.9.3
+      - run: node scripts/check-toolchain.mjs
+      - run: npm ci
+      - id: build-context
+        run: echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - name: Load this run's frozen plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "dev-release-plan-$GITHUB_RUN_ID" --dir .dev-release
+      - run: npm run build:dev-release -- .dev-release/plan.json
+      - name: Test the exact development archive and its installed version
+        run: node scripts/test-packed-runner.mjs ".dev-release/assets/runmesh-runner-$RELEASE_VERSION.tgz" .dev-release/plan.json
+      - run: git diff --exit-code
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: dev-release-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .dev-release/assets
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: false
+
+  publish:
+    needs: [plan, verification, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: dev-release
+    permissions:
+      contents: write
+      actions: read
+    env:
+      RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+      BUILD_ATTEMPT: ${{ needs.build.outputs.attempt }}
+      RELEASE_SIGNING_KEY_ID: ${{ secrets.RELEASE_SIGNING_KEY_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm install --global npm@10.9.3
+      - run: node scripts/check-toolchain.mjs
+      - run: npm ci --ignore-scripts
+      - name: Download only artifacts from this run and attempt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "dev-release-plan-$GITHUB_RUN_ID" --dir .dev-release
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "dev-release-unsigned-$GITHUB_RUN_ID-$BUILD_ATTEMPT" --dir .dev-release/assets
+      - name: Require successful GitLab verification of the same dev source
+        env:
+          GITLAB_READ_API_TOKEN: ${{ secrets.GITLAB_READ_API_TOKEN }}
+        run: node scripts/dev-release/verify-ci.mjs .dev-release/plan.json
+      - name: Sign using the existing trusted release key
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_SIGNING_KEY"
+          test -n "$RELEASE_SIGNING_KEY_ID"
+          node scripts/release-signature.mjs validate-key release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
+          node scripts/release-signature.mjs sign .dev-release/assets/manifest.json .dev-release/assets/manifest.sig .dev-release/assets/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
+          node scripts/release-signature.mjs verify .dev-release/assets/manifest.json .dev-release/assets/manifest.sig .dev-release/assets/manifest.signature.json release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
+          cp release/trust-keyring.json LICENSE NOTICE THIRD_PARTY_NOTICES.md .dev-release/assets/
+          (cd .dev-release/assets && sha256sum *.tgz manifest.json manifest.sig manifest.signature.json LICENSE NOTICE THIRD_PARTY_NOTICES.md trust-keyring.json > SHA256SUMS)
+          git diff --exit-code
+      - name: Publish an immutable prerelease, never Latest, with download verification
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/dev-release/publish.mjs .dev-release/plan.json
