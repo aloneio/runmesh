@@ -30,6 +30,19 @@ export function assertReleaseIdentity(release, plan, complete = false) {
   if (!release.draft) { assert.equal(release.immutable, true, "published prerelease is not immutable"); assertReleaseIdentity({ ...release, draft: true }, plan, true); }
 }
 
+/** GitHub returns 404 from release-by-tag for drafts. Use a bounded list as
+ * the sole recovery path and reject ambiguity instead of creating duplicates. */
+export async function findDevelopmentRelease(planInput, api) {
+  const plan = validateDevPlan(planInput), releasePath = `releases/tags/${encodeURIComponent(plan.tag)}`;
+  let release = await api(releasePath, { missing: true });
+  if (release !== null) return release;
+  const releases = await api("releases?per_page=30");
+  assert.ok(Array.isArray(releases) && releases.length <= 30, "invalid release recovery listing");
+  const matches = releases.filter(candidate => candidate?.tag_name === plan.tag);
+  assert.ok(matches.length <= 1, "ambiguous release recovery state");
+  return matches[0] ?? null;
+}
+
 /** No ambient filesystem, credentials or network: publication sequencing is
  * tested through these narrow adapters. Never overwrites tags or assets. */
 export async function publishDevelopmentRelease(planInput, io) {
@@ -38,7 +51,7 @@ export async function publishDevelopmentRelease(planInput, io) {
   await io.verifyLocal();
   const checkTag = ref => verifyDevTag(plan, ref, io.api);
   let ref = await io.api(tagPath, { missing: true });
-  let release = await io.api(releasePath, { missing: true });
+  let release = await findDevelopmentRelease(plan, io.api);
   if (release !== null) { assertReleaseIdentity(release, plan); assert.ok(ref, "release has no expected tag"); }
   if (ref !== null) await checkTag(ref);
   // Completed releases stay verifiable after main upgrades or source history
@@ -70,7 +83,7 @@ export async function publishDevelopmentRelease(planInput, io) {
     const existing = new Set(release.assets.map(asset => asset.name));
     const missing = devAssetNames(plan.version).filter(name => !existing.has(name));
     if (missing.length > 0) await io.uploadMissing(missing);
-    release = await io.api(releasePath); assertReleaseIdentity(release, plan, true);
+    release = await io.api(`releases/${release.id}`); assertReleaseIdentity(release, plan, true);
     await io.verifyRemote(devAssetNames(plan.version), true);
     await io.assertCurrentSource(); await checkTag(await io.api(tagPath));
     // Final asynchronous prerequisite before the publishing API. Separate
@@ -78,7 +91,7 @@ export async function publishDevelopmentRelease(planInput, io) {
     await io.assertCurrentBaseline();
     if (release.draft) await io.api(`releases/${release.id}`, { method: "PATCH", body: { draft: false, prerelease: true, make_latest: "false" } });
   }
-  const published = await io.api(releasePath); assertReleaseIdentity(published, plan, true);
+  const published = await io.api(`releases/${release.id}`); assertReleaseIdentity(published, plan, true);
   assert.equal(published.draft, false); assert.equal(published.immutable, true);
   await checkTag(await io.api(tagPath)); await io.verifyRemote(devAssetNames(plan.version), true);
   return { tag: plan.tag, source_sha: plan.source_sha, release_id: published.id, prerelease: true, immutable: true };

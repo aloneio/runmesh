@@ -9,12 +9,12 @@ import { assertPlanContext } from "./policy.mjs";
 import { assertSource, command, mainModule, readPlan, root } from "./io.mjs";
 import { githubJson } from "./github.mjs";
 import { assertCurrentBaseline } from "./baseline.mjs";
-import { assertReleaseIdentity, devAssetNames, verifyDevTag } from "./publisher.mjs";
+import { assertReleaseIdentity, devAssetNames, findDevelopmentRelease, verifyDevTag } from "./publisher.mjs";
 
 /** Completed releases are immutable history, not candidates against today's
  * main. Missing/draft releases must pass current-baseline checks before signing. */
 export async function publicationPreflight(plan, io) {
-  const release = await io.api(`releases/tags/${encodeURIComponent(plan.tag)}`, { missing: true });
+  const release = await findDevelopmentRelease(plan, io.api);
   if (release !== null) assertReleaseIdentity(release, plan);
   if (release !== null && !release.draft) {
     await verifyDevTag(plan, await io.api(`git/ref/tags/${encodeURIComponent(plan.tag)}`), io.api);
