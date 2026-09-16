@@ -1,3 +1,6 @@
+import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
+import worker from "../src/index.js";
+import { registryDevelopmentReleaseCache } from "../src/http/release-cache.js";
 import { describe, expect, it, vi } from "vitest";
 import { discoverDevelopmentRunnerRelease, resolveRunnerReleaseDescriptor, verifyDevelopmentRunnerRelease } from "../src/distribution/release.js";
 import { FIXED_RELEASE_VERSION, installerReleaseTarget, renderPosixInstaller, renderPowerShellInstaller } from "../src/installer.js";
@@ -113,6 +116,75 @@ describe("development Runner distribution", () => {
     expect(cached.descriptor?.package_version).toBe("0.1.4-dev.0");
   });
 
+  it("returns a stale verified dev release without waiting for a slow upstream refresh", async () => {
+    const seed = await discoverDevelopmentRunnerRelease(responseFetch([release("0.1.4-dev.0", "2026-09-16T08:00:00Z")]), async () => undefined, null);
+    let stored = new Response(JSON.stringify({ schema_version: 1, verified_at_ms: Date.now() - 120_000, descriptor: seed }));
+    const cache = { match: async () => stored.clone(), put: vi.fn(async (_request: Request, value: Response) => { stored = value.clone(); }) };
+    let finish!: (value: Response) => void;
+    const slow = vi.fn(() => new Promise<Response>(resolve => { finish = resolve; })) as unknown as typeof fetch;
+    const tasks: Promise<void>[] = [];
+    const result = await discoverDevelopmentRunnerRelease(slow, async () => undefined, cache, task => { tasks.push(task); });
+    expect(result.package_version).toBe("0.1.4-dev.0");
+    expect(tasks).toHaveLength(1);
+    expect(cache.put).not.toHaveBeenCalled();
+    finish(new Response(JSON.stringify([release("0.1.4-dev.1", "2026-09-16T09:00:00Z")])));
+    await Promise.all(tasks);
+    expect(cache.put).toHaveBeenCalledTimes(1);
+    expect(await stored.json()).toMatchObject({ descriptor: { package_version: "0.1.4-dev.1" } });
+  });
+
+  it("failed or unverified refreshes never extend the original cached verification time", async () => {
+    const seed = await discoverDevelopmentRunnerRelease(responseFetch([release("0.1.4-dev.0", "2026-09-16T08:00:00Z")]), async () => undefined, null);
+    const timestamp = Date.now() - 120_000;
+    const cache = { match: async () => Response.json({ schema_version: 1, verified_at_ms: timestamp, descriptor: seed }), put: vi.fn(async () => undefined) };
+    const tasks: Promise<void>[] = [];
+    const invalid = responseFetch([release("0.1.4-dev.1", "2026-09-16T09:00:00Z")]);
+    const result = await discoverDevelopmentRunnerRelease(invalid, async () => { throw new Error("invalid signature"); }, cache, task => { tasks.push(task); });
+    expect(result.package_version).toBe(seed.package_version);
+    await expect(Promise.all(tasks)).resolves.toEqual([undefined]);
+    expect(cache.put).not.toHaveBeenCalled();
+    expect(await (await cache.match()).json()).toMatchObject({ verified_at_ms: timestamp });
+  });
+
+  it.each([3_600_000, 3_600_001, -60_000])("does not serve expired or future-dated cache records (age=%s)", async age => {
+    const seed = await discoverDevelopmentRunnerRelease(responseFetch([release("0.1.4-dev.0", "2026-09-16T08:00:00Z")]), async () => undefined, null);
+    const cache = { match: async () => Response.json({ schema_version: 1, verified_at_ms: Date.now() - age, descriptor: seed }), put: vi.fn(async () => undefined) };
+    const tasks: Promise<void>[] = [];
+    await expect(discoverDevelopmentRunnerRelease(responseFetch([], 404), async () => undefined, cache, task => { tasks.push(task); })).rejects.toThrow();
+    expect(tasks).toHaveLength(0);
+    expect(cache.put).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the hard expiry after a slow persistent-cache read", async () => {
+    const seed = await discoverDevelopmentRunnerRelease(responseFetch([release("0.1.4-dev.0", "2026-09-16T08:00:00Z")]), async () => undefined, null);
+    const started = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(started);
+    const cache = {
+      match: async () => { clock.mockReturnValue(started + 2_000); return Response.json({ schema_version: 1, verified_at_ms: started - 3_599_000, descriptor: seed }); },
+      put: vi.fn(async () => undefined),
+    };
+    const schedule = vi.fn();
+    try {
+      await expect(discoverDevelopmentRunnerRelease(responseFetch([], 404), async () => undefined, cache, schedule)).rejects.toThrow();
+      expect(schedule).not.toHaveBeenCalled();
+    } finally { clock.mockRestore(); }
+  });
+
+  it("orders development versions numerically rather than by publication timestamp", async () => {
+    const result = await discoverDevelopmentRunnerRelease(responseFetch([
+      release("0.1.4-dev.2", "2026-09-16T10:00:00Z"),
+      release("0.1.4-dev.10", "2026-09-16T09:00:00Z"),
+    ]), async () => undefined, null);
+    expect(result.package_version).toBe("0.1.4-dev.10");
+  });
+
+  it("never reflects extra untrusted cache fields into a release descriptor", async () => {
+    const seed = await discoverDevelopmentRunnerRelease(responseFetch([release("0.1.4-dev.0", "2026-09-16T08:00:00Z")]), async () => undefined, null);
+    const cache = { match: async () => Response.json({ schema_version: 1, verified_at_ms: Date.now(), descriptor: { ...seed, extra: "PRIVATE_SENTINEL", artifact: { ...seed.artifact, extra: "PRIVATE_SENTINEL" } } }), put: vi.fn(async () => undefined) };
+    const result = await discoverDevelopmentRunnerRelease(responseFetch([], 404), async () => undefined, cache);
+    expect(JSON.stringify(result)).not.toContain("PRIVATE_SENTINEL");
+  });
+
   it("never publicly caches an unavailable development release or installer", async () => {
     const originalFetch = globalThis.fetch;
     vi.stubGlobal("fetch", vi.fn(async () => new Response("temporary", { status: 503 })));
@@ -161,4 +233,25 @@ describe("development Runner distribution", () => {
     expect(() => installerReleaseTarget("0.1.4", "dev")).toThrow();
     expect(() => installerReleaseTarget("0.1.4-dev.01", "dev")).toThrow();
   });
+  it("wires waitUntil through the public dev installer HTTP route", async () => {
+    const runtimeEnv = { ...env, ...devEnv, RUNMESH_TEST_MODE: "" };
+    const seed = await discoverDevelopmentRunnerRelease(responseFetch([release("0.1.4-dev.0", "2026-09-16T08:00:00Z")]), async () => undefined, null);
+    const cache = registryDevelopmentReleaseCache(runtimeEnv as never);
+    await cache.put(new Request("https://runmesh.invalid/cache-test"), Response.json({ schema_version: 1, verified_at_ms: Date.now() - 120_000, descriptor: seed }));
+    let finish!: (value: Response) => void;
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(resolve => { finish = resolve; })));
+    const ctx = createExecutionContext();
+    const background = vi.spyOn(ctx, "waitUntil");
+    try {
+      const response = await worker.fetch(new Request("https://runmeshdev.example/runner/install.sh?channel=stable", { headers: { host: "runmeshdev.example" } }), runtimeEnv as never, ctx);
+      const body = await response.text();
+      expect(body).toContain("VERSION='0.1.4-dev.0'");
+      expect(body).not.toContain("releases/download/v0.1.3/");
+      expect(background).toHaveBeenCalled();
+      finish(new Response("not found", { status: 404 }));
+      await waitOnExecutionContext(ctx);
+    } finally { if (finish !== undefined) finish(new Response("not found", { status: 404 })); await waitOnExecutionContext(ctx); vi.stubGlobal("fetch", originalFetch); }
+  });
+
 });
