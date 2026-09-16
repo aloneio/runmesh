@@ -17,6 +17,7 @@ release/download/
 
 # Local verification evidence and CI package cache are never source.
 /.verification/
+/.dev-release/
 # Machine-generated source identity, never a tracked self-reference.
 /apps/worker/src/generated-provenance.ts*
 

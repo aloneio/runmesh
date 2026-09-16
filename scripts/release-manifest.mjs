@@ -3,6 +3,7 @@ import { readdir, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PRODUCT_VERSION } from "./product-version.mjs";
+import { validateDevPlan } from "./dev-release/policy.mjs";
 import { MAX_RELEASE_ASSET_BYTES, readBoundedReleaseFile } from "./release-io.mjs";
 
 export const RELEASE_PROJECT = "runmesh";
@@ -42,6 +43,17 @@ export function releaseAssetUrl(version, name) {
 
 export async function buildManifest({ releaseDirectory, version = PRODUCT_VERSION, commitSha, publishedAt }) {
   if (version !== PRODUCT_VERSION) throw new Error(`release version must match root package.json (${PRODUCT_VERSION})`);
+  return buildVersionedManifest({ releaseDirectory, version, commitSha, publishedAt });
+}
+
+/** The development lane may vary only version metadata from the clean source;
+ * its signed artifact embeds the frozen plan. Stable callers remain strict. */
+export async function buildDevelopmentManifest({ releaseDirectory, plan: input }) {
+  const plan = validateDevPlan(input);
+  return buildVersionedManifest({ releaseDirectory, version: plan.version, commitSha: plan.source_sha, publishedAt: plan.published_at });
+}
+
+async function buildVersionedManifest({ releaseDirectory, version, commitSha, publishedAt }) {
   if (!COMMIT_SHA.test(commitSha)) throw new Error("commit_sha must be a lowercase 40-character Git SHA");
   if (!validTimestamp(publishedAt)) throw new Error("published_at must be a valid UTC ISO timestamp without milliseconds");
   const names = (await readdir(releaseDirectory)).filter((name) => name.endsWith(".tgz")).sort();

@@ -20,19 +20,27 @@ export function validateCrossforgeEvidence(expected, data) {
     assert.equal(job.run_id, gh.id); assert.equal(job.head_sha, expected.sha);
     assert.equal(job.status, "completed"); assert.equal(job.conclusion, "success");
   }
-  assert.equal(gl.project_id, 85844627); assert.equal(gl.sha, expected.sha); assert.equal(gl.ref, expected.branch);
-  assert.equal(gl.source, "push"); assert.equal(gl.status, "success");
-  assert.ok(Number.isSafeInteger(gl.id) && gl.id > 0);
-  assert.ok(Array.isArray(data.gitlabJobs));
-  for (const name of ["verify", "browser"]) {
-    const jobs = data.gitlabJobs.filter(job => job.name === name);
-    assert.equal(jobs.length, 1, `missing/ambiguous required GitLab job: ${name}`);
-    assert.equal(jobs[0].status, "success"); assert.equal(jobs[0].allow_failure, false);
-    assert.equal(jobs[0].pipeline?.id, gl.id); assert.equal(jobs[0].commit?.id, expected.sha);
-  }
+  validateGitlabEvidence(expected, gl, data.gitlabJobs);
   return { schema_version: 1, evidence: "observed_provider_ci", commit: expected.sha, branch: expected.branch,
     github: { run_id: gh.id, attempt: gh.run_attempt, state: "passed" }, gitlab: { project_id: gl.project_id, pipeline_id: gl.id, state: "passed" },
     signed_release: "not_run", production: "not_run" };
+}
+
+/** Shared by stable cross-provider checks and the dev lane, whose GitHub
+ * verification is a required reusable-workflow dependency of the same run. */
+export function validateGitlabEvidence(expected, gl, jobs) {
+  assert.match(expected.sha, /^[a-f0-9]{40}$/u); assert.ok(["main", "dev"].includes(expected.branch));
+  assert.equal(gl.project_id, 85844627); assert.equal(gl.sha, expected.sha); assert.equal(gl.ref, expected.branch);
+  assert.equal(gl.source, "push"); assert.equal(gl.status, "success");
+  assert.ok(Number.isSafeInteger(gl.id) && gl.id > 0);
+  assert.ok(Array.isArray(jobs));
+  for (const name of ["verify", "browser"]) {
+    const matches = jobs.filter(job => job.name === name);
+    assert.equal(matches.length, 1, `missing/ambiguous required GitLab job: ${name}`);
+    assert.equal(matches[0].status, "success"); assert.equal(matches[0].allow_failure, false);
+    assert.equal(matches[0].pipeline?.id, gl.id); assert.equal(matches[0].commit?.id, expected.sha);
+  }
+  return { project_id: gl.project_id, pipeline_id: gl.id, commit: expected.sha, branch: expected.branch, state: "passed" };
 }
 
 export async function readProviderJson(url, headers, fetchImpl = fetch) {
