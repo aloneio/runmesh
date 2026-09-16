@@ -1,3 +1,9 @@
+import type { BridgeReply, BridgeReplyPort, RegistryRequestPort } from "./contracts/runner-transport.js";
+import { BridgeReplies } from "./platform/bridge-replies.js";
+import { requestRunnerRegistry } from "./platform/runner-registry.js";
+
+/** @internal Trusted composition, never an HTTP or deployment option. */
+export interface RunnerDoDependencies { readonly registryRequest?: RegistryRequestPort; readonly replies?: BridgeReplyPort }
 import type { WorkerEnv } from "./platform/env.js";
 export type { WorkerEnv } from "./platform/env.js";
 import { resolveRuntimeConfiguration } from "./runtime-config.js";
@@ -41,8 +47,6 @@ const HELLO_DEADLINE_MS = 10_000;
 const BRIDGE_TIMEOUT_MS = WORKER_BRIDGE_TIMEOUT_MS;
 const MAX_BRIDGE_IN_FLIGHT = 32;
 const MAX_BRIDGE_BODY_BYTES = 2 * 1024 * 1024;
-type BridgeReply = Extract<WireMessage, { type: "rpc.response" | "rpc.error" }>;
-type BridgeWaiter = { readonly resolve: (value: BridgeReply) => void; readonly timer: ReturnType<typeof setTimeout>; readonly socket: WebSocket };
 
 
 type MutationPhase = "idle" | "precommit" | "committed_pending" | "offline_pending" | "invalid" | "restart_reconcile";
@@ -94,7 +98,8 @@ function conservativeAdmission(next: AdmissionState): AdmissionState {
 }
 
 export class RunnerDO {
-  private readonly bridgeWaiters = new Map<string, BridgeWaiter>();
+  private readonly replies: BridgeReplyPort;
+  private readonly requestRegistry: RegistryRequestPort;
   /** Guards duplicate/concurrent hello frames on one hibernating socket. */
   private readonly helloInFlight = new WeakSet<WebSocket>();
   private admissionState: AdmissionState | undefined;
@@ -103,8 +108,11 @@ export class RunnerDO {
   public constructor(
     private readonly ctx: DurableObjectState<unknown>,
     private readonly env: WorkerEnv,
+    dependencies: RunnerDoDependencies = {},
   ) {
     this.env = resolveRuntimeConfiguration(env);
+    this.replies = dependencies.replies ?? new BridgeReplies();
+    this.requestRegistry = dependencies.registryRequest ?? ((runnerId, action, init) => requestRunnerRegistry(this.env, runnerId, action, init));
     this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     this.ctx.setHibernatableWebSocketEventTimeout(30_000);
   }
@@ -425,12 +433,7 @@ export class RunnerDO {
       return;
     }
     if (message.type === "rpc.response" || message.type === "rpc.error") {
-      const waiter = this.bridgeWaiters.get(message.request_id);
-      if (waiter !== undefined && waiter.socket === ws) {
-        clearTimeout(waiter.timer);
-        this.bridgeWaiters.delete(message.request_id);
-        waiter.resolve(message);
-      }
+      this.replies.deliver(ws, message);
       return;
     }
     if (message.type === "runner.queue_check") {
@@ -548,7 +551,7 @@ export class RunnerDO {
     const socket = await this.currentRunnerSocket();
     const attachment = socket?.deserializeAttachment() as ConnectionAttachment | null;
     if (socket === undefined || attachment === null || attachment.epoch === 0 || attachment.protocolVersion === 0) return Response.json({ error: { code: "runner_offline", message: "runner is not connected" } }, { status: 503 });
-    if (this.bridgeWaiters.size >= MAX_BRIDGE_IN_FLIGHT) return Response.json({ error: { code: "busy", message: "bridge concurrency limit reached" } }, { status: 429 });
+    if (this.replies.size >= MAX_BRIDGE_IN_FLIGHT) return Response.json({ error: { code: "busy", message: "bridge concurrency limit reached" } }, { status: 429 });
     const requestPolicyRevision = typeof input.policy_revision === "number" && Number.isSafeInteger(input.policy_revision) && input.policy_revision > 0 ? input.policy_revision : undefined;
     const expectedPolicyRevision = typeof input.expected_policy_revision === "number" && Number.isSafeInteger(input.expected_policy_revision) && input.expected_policy_revision > 0 ? input.expected_policy_revision : undefined;
     const expectedPolicyChecksum = typeof input.expected_policy_checksum === "string" && /^[a-f0-9]{64}$/.test(input.expected_policy_checksum) ? input.expected_policy_checksum : undefined;
@@ -626,12 +629,12 @@ export class RunnerDO {
     if (!parsed.success) return Response.json({ error: { code: "invalid_request", message: "invalid RPC request" } }, { status: 400 });
     const reply = await new Promise<BridgeReply>((resolve) => {
       const timer = setTimeout(() => {
-        this.bridgeWaiters.delete(requestId);
+        this.replies.forget(requestId);
         resolve({ type: "rpc.error", protocol_version: attachment.protocolVersion, request_id: requestId, error: { code: "timeout", message: "runner RPC timed out" } });
       }, BRIDGE_TIMEOUT_MS);
-      this.bridgeWaiters.set(requestId, { resolve, timer, socket });
+      this.replies.register(requestId, { resolve, timer, socket });
       try { socket.send(encodeWireFrame(parsed.data)); } catch (error) {
-        clearTimeout(timer); this.bridgeWaiters.delete(requestId);
+        clearTimeout(timer); this.replies.forget(requestId);
         // Keep the error-code check resilient when the protocol package is
         // loaded through more than one module graph and `instanceof` does not
         // recognize an otherwise valid ProtocolFrameError.
@@ -651,13 +654,10 @@ export class RunnerDO {
   }
 
   private rejectBridgeWaiters(socket: WebSocket, message: string): void {
-    for (const [requestId, waiter] of this.bridgeWaiters) {
-      if (waiter.socket !== socket) continue;
-      clearTimeout(waiter.timer);
-      this.bridgeWaiters.delete(requestId);
-      const attachment = waiter.socket.deserializeAttachment() as ConnectionAttachment | null;
-      waiter.resolve({ type: "rpc.error", protocol_version: attachment?.protocolVersion ?? PROTOCOL_CURRENT_VERSION, request_id: requestId, error: { code: "runner_offline", message } });
-    }
+    this.replies.reject(socket, (requestId, currentSocket) => {
+      const attachment = currentSocket.deserializeAttachment() as ConnectionAttachment | null;
+      return { type: "rpc.error", protocol_version: attachment?.protocolVersion ?? PROTOCOL_CURRENT_VERSION, request_id: requestId, error: { code: "runner_offline", message } };
+    });
   }
 
   private async admitOrReconcileProtectedRpc(attachment: ConnectionAttachment, revision: number, checksum: string): Promise<boolean> {
@@ -1163,15 +1163,9 @@ export class RunnerDO {
   }
 
   private registryRequest(runnerId: string, action: string, init: RequestInit): Promise<Response> {
-    if (!isConfiguredSecret(this.env.INTERNAL_CONTROL_SECRET)) return Promise.resolve(new Response("control plane is not configured", { status: 503 }));
-    const id = this.env.REGISTRY.idFromName("registry");
-    const path = `/runners/${encodeURIComponent(runnerId)}${action}`;
-    const body = typeof init.body === "string" ? init.body : "";
-    const headersPromise = internalHeaders(this.env.INTERNAL_CONTROL_SECRET, init.method ?? "GET", path, body);
-    return headersPromise
-      .then((headers) => this.env.REGISTRY.get(id).fetch(new Request(`https://registry.internal${path}`, { ...init, headers })))
-      .catch(() => new Response("registry unavailable", { status: 503 }));
+    return this.requestRegistry(runnerId, action, init);
   }
+
 }
 
 function parseJsonObject(body: string): Record<string, unknown> | undefined {
