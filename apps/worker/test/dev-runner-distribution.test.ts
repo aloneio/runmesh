@@ -155,6 +155,21 @@ describe("development Runner distribution", () => {
     expect(cache.put).not.toHaveBeenCalled();
   });
 
+  it("rechecks the hard expiry after a slow persistent-cache read", async () => {
+    const seed = await discoverDevelopmentRunnerRelease(responseFetch([release("0.1.4-dev.0", "2026-09-16T08:00:00Z")]), async () => undefined, null);
+    const started = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(started);
+    const cache = {
+      match: async () => { clock.mockReturnValue(started + 2_000); return Response.json({ schema_version: 1, verified_at_ms: started - 3_599_000, descriptor: seed }); },
+      put: vi.fn(async () => undefined),
+    };
+    const schedule = vi.fn();
+    try {
+      await expect(discoverDevelopmentRunnerRelease(responseFetch([], 404), async () => undefined, cache, schedule)).rejects.toThrow();
+      expect(schedule).not.toHaveBeenCalled();
+    } finally { clock.mockRestore(); }
+  });
+
   it("orders development versions numerically rather than by publication timestamp", async () => {
     const result = await discoverDevelopmentRunnerRelease(responseFetch([
       release("0.1.4-dev.2", "2026-09-16T10:00:00Z"),
