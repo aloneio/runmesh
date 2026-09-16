@@ -64,7 +64,7 @@ const validCases: Array<{ tool: ToolName; input: unknown; value: unknown }> = [
   { tool: "read", input: {}, value: { data: "中文", offset: 0, next_cursor: null } },
   { tool: "edit", input: {}, value: { operations: [], changed_paths: [] } },
   { tool: "edit", input: { preview: true }, value: { preview_id: "a".repeat(64), previews: [] } },
-  { tool: "shell", input: {}, value: { job_id: "j", status: "failed", completed: true, exit_code: 7, stdout: { available: false, error: { code: "log_unavailable" } } } },
+  { tool: "shell", input: {}, value: { job_id: "j", status: "failed", completed: true, exit_code: 7, queue: { waiting: 2, limit: 32, per_client_limit: 8, running: 2, max_concurrent_jobs: 2, available_slots: 0 }, stdout: { available: false, error: { code: "log_unavailable" } } } },
   { tool: "job", input: { action: "get" }, value: { job_id: "j", status: "running" } },
   { tool: "job", input: { action: "cancel" }, value: { job_id: "j", status: "cancelling" } },
   { tool: "job", input: { action: "list" }, value: { jobs: [], source: "runner_live" } },

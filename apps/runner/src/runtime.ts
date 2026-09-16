@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { lstatSync, realpathSync } from "node:fs";
 import { hostname } from "node:os";
 import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS, RPC_OPERATION_METHODS, RPC_OPERATION_CONTRACT, rpcOperation } from "@aloneio/runmesh-protocol";
-import type { RunnerConfig } from "./config.js";
+import { effectiveMaxConcurrentJobs, type RunnerConfig } from "./config.js";
 import { ContextStore, type ContextEvidence } from "./context-store.js";
 import { GitService } from "./git-service.js";
 import { FilesystemService } from "./filesystem.js";
@@ -221,16 +221,18 @@ export class RunnerRuntime {
   private readonly config: RunnerConfig;
   private shellRuntime: ShellRuntime | undefined;
   private readonly environment: EnvironmentInfoService;
+  private readonly maxConcurrentJobs: number;
 
   public constructor(options: RunnerRuntimeOptions) {
     this.config = options.config;
+    this.maxConcurrentJobs = effectiveMaxConcurrentJobs(options.config.maxConcurrentJobs);
     this.environment = options.environment ?? new EnvironmentInfoService();
     this.policy = new PathPolicy(options.config.workspaces);
     this.filesystem = new FilesystemService(this.policy);
     this.git = new GitService(this.policy);
     this.patcher = new PatchService(this.policy);
     this.context = new ContextStore(options.stateDir === undefined ? {} : { stateDir: options.stateDir });
-    this.jobs = new JobManager({ policy: this.policy, runnerId: options.config.runnerId, maxConcurrentJobs: options.config.maxConcurrentJobs ?? 1, ...(options.config.maxRetainedJobs === undefined ? {} : { maxRetainedJobs: options.config.maxRetainedJobs }), ...(options.config.maxLogBytesPerJob === undefined ? {} : { maxLogBytesPerJob: options.config.maxLogBytesPerJob }), ...(options.config.maxTotalLogBytes === undefined ? {} : { maxTotalLogBytes: options.config.maxTotalLogBytes }), ...(options.stateDir === undefined ? {} : { stateDir: options.stateDir }), ...(options.onJobEvent === undefined ? {} : { onEvent: options.onJobEvent }) });
+    this.jobs = new JobManager({ policy: this.policy, runnerId: options.config.runnerId, maxConcurrentJobs: this.maxConcurrentJobs, ...(options.config.maxRetainedJobs === undefined ? {} : { maxRetainedJobs: options.config.maxRetainedJobs }), ...(options.config.maxLogBytesPerJob === undefined ? {} : { maxLogBytesPerJob: options.config.maxLogBytesPerJob }), ...(options.config.maxTotalLogBytes === undefined ? {} : { maxTotalLogBytes: options.config.maxTotalLogBytes }), ...(options.stateDir === undefined ? {} : { stateDir: options.stateDir }), ...(options.onJobEvent === undefined ? {} : { onEvent: options.onJobEvent }) });
   }
   public async initialize(): Promise<void> {
     await this.jobs.initialize();
@@ -250,7 +252,8 @@ export class RunnerRuntime {
     const shell = this.shellRuntime;
     return { ...info,
       runtime_capabilities: { schema_version: 1, runner_version: RUNNER_VERSION, operation_contract_sha256: RPC_OPERATION_CONTRACT.sha256,
-        supported_rpc_methods: [...RPC_OPERATION_METHODS], features: { job_queue: 1, job_history: 1, context_record: 2 }, max_concurrent_jobs: this.config.maxConcurrentJobs ?? 1 },
+        supported_rpc_methods: [...RPC_OPERATION_METHODS], features: { job_queue: 1, job_history: 1, context_record: 2 }, max_concurrent_jobs: this.maxConcurrentJobs },
+      job_scheduler: this.jobs.queueStatus(),
       shell: shell === undefined ? { available: false } : { available: true, kind: shell.kind, version: shell.version } };
   }
   public async dispatch(method: string, input: unknown): Promise<unknown> {

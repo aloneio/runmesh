@@ -28,7 +28,7 @@ export const ACTION_OUTPUT_CONTRACTS = {
     git_log: result({ ...pick(InspectOutputSchema, ["workspace_id", "path", "commits", "limit"]), commits: i.commits.unwrap() }),
     git_show: result({ ...pick(InspectOutputSchema, ["workspace_id", "path", "revision", "output", "encoding", "bytes"]), output: i.output.unwrap() }),
     git_blame: result({ ...pick(InspectOutputSchema, ["workspace_id", "path", "start_line", "end_line", "output", "encoding", "bytes"]), output: i.output.unwrap() }),
-    diagnostics: result({ ...pick(InspectOutputSchema, ["workspace_id", "observed_at_ms", "permissions", "checks", "capabilities", "shell"]), observed_at_ms: i.observed_at_ms.unwrap(), permissions: i.permissions.unwrap(), checks: i.checks.unwrap() }),
+    diagnostics: result({ ...pick(InspectOutputSchema, ["workspace_id", "observed_at_ms", "permissions", "checks", "capabilities", "job_scheduler", "shell"]), observed_at_ms: i.observed_at_ms.unwrap(), permissions: i.permissions.unwrap(), checks: i.checks.unwrap() }),
   } satisfies Record<keyof typeof MCP_RPC_ACTIONS.inspect, z.ZodType>,
   job: {
     list: TOOL_OUTPUT_SCHEMAS.job.pick({ runner_id: true, source: true, runner_state: true }).extend({ ...metadata, jobs: z.array(JobMetadataOutputSchema.required({ job_id: true, status: true })).max(1000) }),

@@ -21,7 +21,7 @@ import WebSocket from "ws";
 import { reconnectDelayMs, serviceReconnectDelayMs, retryAfterDelayMs } from "./backoff.js";
 import { PolicyStore } from "./policy-store.js";
 import { validateCentralWorkspacePolicy, type CentralWorkspacePolicy } from "./policy-config.js";
-import type { RunnerConfig } from "./config.js";
+import { effectiveMaxConcurrentJobs, type RunnerConfig } from "./config.js";
 import { RunnerRuntime, rpcError } from "./runtime.js";
 import { RUNNER_VERSION } from "./version.js";
 
@@ -155,7 +155,7 @@ export class RunnerConnection {
     // the optional shape here for injected test/runtime callers, but never
     // synthesize or transport a second compatibility representation.
     const serviceIdentity = executionMode === undefined ? undefined : sanitizeServiceIdentity(options.serviceIdentity ?? currentProcessServiceIdentity());
-    const capabilities = discoverCapabilities(this.config.maxConcurrentJobs ?? 1);
+    const capabilities = discoverCapabilities(effectiveMaxConcurrentJobs(this.config.maxConcurrentJobs));
     this.metadata = {
       runner_id: this.config.runnerId,
       runner_version: options.version ?? RUNNER_VERSION,
