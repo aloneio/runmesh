@@ -6,6 +6,13 @@ export function devAssetNames(version) {
   return [`runmesh-runner-${version}.tgz`, "manifest.json", "manifest.sig", "manifest.signature.json", "SHA256SUMS", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md", "trust-keyring.json"].sort();
 }
 export function planMessage(plan) { return `Runmesh development prerelease\n${JSON.stringify(validateDevPlan(plan))}\n`; }
+export async function verifyDevTag(plan, ref, api) {
+  assert.equal(ref?.object?.type, "tag", "expected an annotated tag");
+  assert.match(ref.object.sha, /^[a-f0-9]{40}$/u);
+  const object = await api(`git/tags/${ref.object.sha}`);
+  assert.equal(object.object?.type, "commit"); assert.equal(object.object?.sha, plan.source_sha);
+  assert.equal(object.tag, plan.tag); assert.equal(object.message, planMessage(plan));
+}
 export function assertReleaseIdentity(release, plan, complete = false) {
   assert.ok(release && Number.isSafeInteger(release.id) && release.id > 0);
   assert.equal(release.tag_name, plan.tag); assert.equal(release.prerelease, true);
@@ -28,19 +35,20 @@ export function assertReleaseIdentity(release, plan, complete = false) {
 export async function publishDevelopmentRelease(planInput, io) {
   const plan = validateDevPlan(planInput), tagPath = `git/ref/tags/${encodeURIComponent(plan.tag)}`;
   const releasePath = `releases/tags/${encodeURIComponent(plan.tag)}`;
-  await io.verifyLocal(); await io.assertCurrentSource();
-  const checkTag = async ref => {
-    assert.equal(ref?.object?.type, "tag", "expected an annotated tag");
-    assert.match(ref.object.sha, /^[a-f0-9]{40}$/u);
-    const object = await io.api(`git/tags/${ref.object.sha}`);
-    assert.equal(object.object?.type, "commit"); assert.equal(object.object?.sha, plan.source_sha);
-    assert.equal(object.tag, plan.tag); assert.equal(object.message, planMessage(plan));
-  };
+  await io.verifyLocal();
+  const checkTag = ref => verifyDevTag(plan, ref, io.api);
   let ref = await io.api(tagPath, { missing: true });
   let release = await io.api(releasePath, { missing: true });
   if (release !== null) { assertReleaseIdentity(release, plan); assert.ok(ref, "release has no expected tag"); }
   if (ref !== null) await checkTag(ref);
-  else {
+  // Completed releases stay verifiable after main upgrades or source history
+  // changes. Only the mutating path requires today's baseline and ancestry.
+  if (release !== null && !release.draft) {
+    await io.verifyRemote(devAssetNames(plan.version), true);
+    return { tag: plan.tag, source_sha: plan.source_sha, release_id: release.id, prerelease: true, immutable: true };
+  }
+  await io.assertCurrentSource(); await io.assertCurrentBaseline();
+  if (ref === null) {
     const object = await io.api("git/tags", { method: "POST", body: {
       tag: plan.tag, message: planMessage(plan), object: plan.source_sha, type: "commit",
       tagger: { name: "aloneio", email: "git@aloneio.aleeas.com", date: plan.published_at },
@@ -50,6 +58,7 @@ export async function publishDevelopmentRelease(planInput, io) {
     await checkTag(ref);
   }
   if (release === null) {
+    await io.assertCurrentBaseline();
     release = await io.api("releases", { method: "POST", body: { tag_name: plan.tag, target_commitish: plan.source_sha,
       name: `Runmesh ${plan.tag} (development)`, body: planMessage(plan), draft: true, prerelease: true, make_latest: "false" } });
     assertReleaseIdentity(release, plan);
@@ -64,6 +73,9 @@ export async function publishDevelopmentRelease(planInput, io) {
     release = await io.api(releasePath); assertReleaseIdentity(release, plan, true);
     await io.verifyRemote(devAssetNames(plan.version), true);
     await io.assertCurrentSource(); await checkTag(await io.api(tagPath));
+    // Final asynchronous prerequisite before the publishing API. Separate
+    // GitHub endpoints are not an atomic compare-and-publish transaction.
+    await io.assertCurrentBaseline();
     if (release.draft) await io.api(`releases/${release.id}`, { method: "PATCH", body: { draft: false, prerelease: true, make_latest: "false" } });
   }
   const published = await io.api(releasePath); assertReleaseIdentity(published, plan, true);
