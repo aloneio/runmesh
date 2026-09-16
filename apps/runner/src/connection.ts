@@ -1,6 +1,7 @@
+import { jobEventMessage } from "./connection/job-events.js";
 import { createHash } from "node:crypto";
 import { HistoryUploadScheduler, type HistoryUploadClock } from "./history-upload.js";
-import { QueueGrantSchema, RPC_OPERATION_METHODS } from "@aloneio/runmesh-protocol";
+import { QueueGrantSchema } from "@aloneio/runmesh-protocol";
 import { parseRunnerJobHistory, type RunnerJobHistory } from "./job-history.js";
 import {
   decodeWireFrame,
@@ -16,35 +17,26 @@ import {
   type RpcRequest,
   type WireMessage,
 } from "@aloneio/runmesh-protocol";
-import type { CapabilityMetadata } from "./protocol-types.js";
 import WebSocket from "ws";
-import { userInfo } from "node:os";
 import { reconnectDelayMs, serviceReconnectDelayMs, retryAfterDelayMs } from "./backoff.js";
 import { PolicyStore } from "./policy-store.js";
-import { effectiveCentralPermissions, validateCentralWorkspacePolicy, type CentralWorkspacePolicy } from "./policy-config.js";
-import type { RunnerConfig, WorkspaceConfig } from "./config.js";
+import { validateCentralWorkspacePolicy, type CentralWorkspacePolicy } from "./policy-config.js";
+import type { RunnerConfig } from "./config.js";
 import { RunnerRuntime, rpcError } from "./runtime.js";
 import { RUNNER_VERSION } from "./version.js";
 
-export class RunnerAuthenticationError extends Error {
-  public constructor(message = "runner credentials were rejected") { super(message); this.name = "RunnerAuthenticationError"; }
-}
+import { RunnerAuthenticationError, RunnerServiceUnavailableError, classifyConnectionFailure } from "./connection/failures.js";
+export { RunnerAuthenticationError, RunnerServiceUnavailableError, classifyConnectionFailure } from "./connection/failures.js";
+import { candidateWorkspaces, effectivePolicyWorkspaces, validationContext } from "./connection/policy-candidate.js";
+import { discoverCapabilities, currentProcessServiceIdentity, sanitizeServiceIdentity, processPrivilegeState } from "./connection/metadata.js";
+export { discoverCapabilities, currentProcessServiceIdentity } from "./connection/metadata.js";
+import type { ConnectionRuntimePort, ConnectionPolicyStorePort, ConnectionTransportFactory } from "./connection/ports.js";
 
-export class RunnerServiceUnavailableError extends Error {
-  public constructor(message = "runner service temporarily unavailable", public readonly retryAfterMs = 30_000) {
-    super(message); this.name = "RunnerServiceUnavailableError";
-  }
-}
-
-/** Only explicit credential/protocol rejection is fatal, not matching words in an outage message. */
-export function classifyConnectionFailure(input: { readonly statusCode?: number; readonly closeCode?: number; readonly reason?: string; readonly error?: unknown }): "authentication" | "network" {
-  if (input.error instanceof RunnerAuthenticationError) return "authentication";
-  if (input.statusCode !== undefined) return input.statusCode === 401 || input.statusCode === 403 ? "authentication" : "network";
-  if (input.closeCode === 4001 || input.closeCode === 1002) return "authentication";
-  // Older Workers used 1008 for an explicit handshake rejection. Never let
-  // legacy wording override a service-failure code or arbitrary network error.
-  if (input.closeCode === 1008 && /^(?:stale credentials|credentials revoked|unauthorized|forbidden|unsupported_protocol_version)$/i.test(input.reason ?? "")) return "authentication";
-  return "network";
+/** @internal Trusted composition only; no CLI, wire or deployment configuration. */
+export interface RunnerConnectionDependencies {
+  readonly runtime?: ConnectionRuntimePort;
+  readonly policyStore?: ConnectionPolicyStorePort;
+  readonly createSocket?: ConnectionTransportFactory;
 }
 
 export interface RunnerConnectionOptions {
@@ -81,8 +73,9 @@ export class RunnerConnection {
   private readonly random: () => number;
   private readonly sleep: (delayMs: number) => Promise<void>;
   private readonly onStateChange: (state: "connecting" | "online" | "offline") => void;
-  private readonly runtime: RunnerRuntime;
-  private readonly policyStore: PolicyStore;
+  private readonly runtime: ConnectionRuntimePort;
+  private readonly policyStore: ConnectionPolicyStorePort;
+  private readonly createSocket: ConnectionTransportFactory;
   private socket: WebSocket | undefined;
   /**
    * The socket that completed the `runner.welcome` handshake. A socket is
@@ -123,7 +116,11 @@ export class RunnerConnection {
   private syncQueue: Promise<void> = Promise.resolve();
   private syncQueueSocket: WebSocket | undefined;
 
-  public constructor(options: RunnerConnectionOptions) {
+  public constructor(options: RunnerConnectionOptions);
+  /** @internal Internal ports preserve the published single-argument constructor. */
+  public constructor(options: RunnerConnectionOptions, dependencies: RunnerConnectionDependencies);
+  public constructor(options: RunnerConnectionOptions, dependencies: RunnerConnectionDependencies = {}) {
+    this.createSocket = dependencies.createSocket ?? ((url, options) => new WebSocket(url, options));
     this.config = options.config;
     // Heartbeats keep an online Runner lease alive in RegistryDO. A 30s
     // cadence stays below the 45s stale threshold while cutting steady
@@ -142,8 +139,8 @@ export class RunnerConnection {
       this.cancelReconnectSleep = finish;
     }));
     this.onStateChange = options.onStateChange ?? (() => undefined);
-    this.runtime = options.runtime ?? new RunnerRuntime({ config: this.config, ...(this.config.stateDir === undefined ? {} : { stateDir: this.config.stateDir }), onJobEvent: (event) => this.forwardJobEvent(event) });
-    this.policyStore = options.policyStore ?? new PolicyStore(this.config.stateDir);
+    this.runtime = dependencies.runtime ?? options.runtime ?? new RunnerRuntime({ config: this.config, ...(this.config.stateDir === undefined ? {} : { stateDir: this.config.stateDir }), onJobEvent: (event) => this.forwardJobEvent(event) });
+    this.policyStore = dependencies.policyStore ?? options.policyStore ?? new PolicyStore(this.config.stateDir);
     this.historyUploads = new HistoryUploadScheduler(async revision => {
       const socket = this.socket;
       if (socket !== undefined) await this.sendDemandSync(socket, revision);
@@ -300,7 +297,7 @@ export class RunnerConnection {
         url.pathname = url.pathname.endsWith("/") ? `${url.pathname}runner/connect` : `${url.pathname}/runner/connect`;
       }
       url.searchParams.set("runner_id", this.config.runnerId);
-      const socket = new WebSocket(url, { headers: { Authorization: `Bearer ${this.config.token}` } });
+      const socket = this.createSocket(url, { headers: { Authorization: `Bearer ${this.config.token}` } });
       this.socket = socket;
       // A replacement socket is unauthorized until its own welcome arrives.
       this.welcomedSocket = undefined;
@@ -694,15 +691,9 @@ export class RunnerConnection {
     // Batched/off modes do not emit lifecycle frames or event-triggered full
     // snapshots. The local durable Job store is sampled by the sync timer.
     if (this.jobHistory !== undefined && this.jobHistory.mode !== "immediate") return;
-    const job = { job_id: event.job.job_id, workspace_id: event.job.workspace_id, status: event.job.status, created_at_ms: event.job.created_at_ms, updated_at_ms: event.job.updated_at_ms, ...(event.job.created_by_client_id === null ? {} : { created_by_client_id: event.job.created_by_client_id }), ...(event.job.request_id === undefined || event.job.request_id === null ? {} : { request_id: event.job.request_id }), runner_id: this.config.runnerId } as const;
     try {
-      if (event.type === "started") {
-        socket.send(encodeWireFrame({ type: "job.started", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: event.job.job_id, job, workspace: { workspace_id: event.job.workspace_id, persistence: "persistent", labels: {} }, started_at_ms: event.job.started_at_ms ?? event.job.updated_at_ms }));
-      } else if (event.type === "completed" && (event.job.status === "succeeded" || event.job.status === "failed" || event.job.status === "cancelled")) {
-        socket.send(encodeWireFrame({ type: "job.completed", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: event.job.job_id, job, completed_at_ms: event.job.completed_at_ms ?? event.job.updated_at_ms, outcome: event.job.status, exit_code: event.job.exit_code }));
-      } else if (event.type === "status") {
-        socket.send(encodeWireFrame({ type: "job.status", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: event.job.job_id, job }));
-      }
+      const message = jobEventMessage(event, this.config.runnerId);
+      if (message !== undefined) socket.send(encodeWireFrame(message));
     } catch { /* local persistence remains authoritative; transport is best effort */ }
     // Event delivery is intentionally best effort, while the periodic sync is
     // the durable reconciliation path.  Push a snapshot after lifecycle
@@ -710,69 +701,4 @@ export class RunnerConnection {
     // the event frame races the next job/list request.
     if (event.type !== "output") void this.sendSync(socket).catch(() => undefined);
   }
-}
-
-function effectivePolicyWorkspaces(policy: NonNullable<RunnerWelcome["desired_policy"]>, workspaces: readonly WorkspaceConfig[]): WorkspaceConfig[] {
-  return workspaces.map((workspace) => {
-    const source = policy.workspaces.find((item) => item.workspace_id === workspace.workspaceId);
-    if (source === undefined) throw new Error("policy validation lost a workspace");
-    const permissions = effectiveCentralPermissions(policy.runner_permissions, source.permissions);
-    return { ...workspace, permissions, readonly: !permissions.edit, shell: permissions.shell };
-  });
-}
-
-async function candidateWorkspaces(policy: NonNullable<RunnerWelcome["desired_policy"]>, executionMode?: "dedicated_user" | "privileged_host", serviceIdentity?: string): Promise<WorkspaceConfig[]> {
-  const validation = await validateCentralWorkspacePolicy(policy.workspaces as CentralWorkspacePolicy[], {
-    ...(executionMode === undefined ? {} : { executionMode }),
-    ...(serviceIdentity === undefined ? {} : { serviceIdentity }),
-  });
-  if (validation.status.some((item) => item.status !== "valid")) throw new Error("persisted active policy is not locally valid");
-  return effectivePolicyWorkspaces(policy, validation.workspaces);
-}
-export function discoverCapabilities(maxConcurrentJobs = 1): CapabilityMetadata {
-  return {
-    filesystem: true,
-    process_execution: true,
-    workspace_sync: true,
-    pty: false,
-    network_access: true,
-    max_concurrent_jobs: maxConcurrentJobs,
-    supported_rpc_methods: ["echo", "runner.info", ...RPC_OPERATION_METHODS],
-    labels: { runtime: "node" },
-  };
-}
-
-/** Return the local process identity without invoking a shell or exposing a path. */
-export function currentProcessServiceIdentity(): string | undefined {
-  try {
-    if (process.platform !== "win32" && process.getuid?.() === 0) return "root";
-    const username = userInfo().username.trim();
-    return username.length > 0 && username.length <= 512 && !/[\u0000-\u001f\u007f]/u.test(username) ? username : undefined;
-  } catch {
-    const username = process.platform === "win32" ? process.env.USERNAME : undefined;
-    return typeof username === "string" && username.length > 0 && username.length <= 512 && !/[\u0000-\u001f\u007f]/u.test(username) ? username : undefined;
-  }
-}
-
-function sanitizeServiceIdentity(value: string | undefined): string | undefined {
-  if (value === undefined) return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 && trimmed.length <= 256 && !/[\u0000-\u001f\u007f-\u009f]/u.test(trimmed) ? trimmed : undefined;
-}
-
-function validationContext(metadata: RunnerMetadata): { readonly executionMode?: "dedicated_user" | "privileged_host"; readonly serviceIdentity?: string } {
-  return {
-    ...(metadata.execution_mode === undefined ? {} : { executionMode: metadata.execution_mode }),
-    ...(metadata.service_identity === undefined ? {} : { serviceIdentity: metadata.service_identity }),
-  };
-}
-
-function processPrivilegeState(mode: "dedicated_user" | "privileged_host", identity: string | undefined): "privileged" | "restricted" | "mismatch" | "unknown" {
-  if (identity === undefined) return "unknown";
-  const normalized = identity.trim().replaceAll("/", "\\").toLowerCase();
-  const privileged = process.platform === "win32"
-    ? normalized === "system" || normalized === "nt authority\\system" || normalized === "s-1-5-18"
-    : normalized === "root";
-  if (mode === "privileged_host") return privileged ? "privileged" : "mismatch";
-  return privileged ? "mismatch" : "restricted";
 }
