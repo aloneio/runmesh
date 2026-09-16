@@ -26,8 +26,8 @@ export function validateCrossforgeEvidence(expected, data) {
     signed_release: "not_run", production: "not_run" };
 }
 
-/** Shared by stable cross-provider checks and the dev lane, whose GitHub
- * verification is a required reusable-workflow dependency of the same run. */
+/** Stable-release cross-provider evidence. Development prereleases use their
+ * required GitHub reusable verification and do not depend on GitLab compute. */
 export function validateGitlabEvidence(expected, gl, jobs) {
   assert.match(expected.sha, /^[a-f0-9]{40}$/u); assert.ok(["main", "dev"].includes(expected.branch));
   assert.equal(gl.project_id, 85844627); assert.equal(gl.sha, expected.sha); assert.equal(gl.ref, expected.branch);

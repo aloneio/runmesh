@@ -13,7 +13,7 @@ import { MAX_VALIDITY_DAYS } from "../domain/execution-mode.js";
 import { overviewPage } from "../admin/dashboard-views.js";
 import { resolveConnectionOrigin } from "./origin.js";
 import { runnerConfiguredExecutionMode } from "../domain/execution-mode.js";
-import { runnerReleaseDescriptor } from "../distribution/release.js";
+import { resolveRunnerReleaseDescriptor } from "../distribution/release.js";
 import type { RunnerReleaseEnvironment } from "../distribution/release.js";
 import { runnersPage } from "../admin/runner-list-view.js";
 import { settingsPage } from "../admin/dashboard-views.js";
@@ -24,11 +24,11 @@ export function adminPage(pathname: string, data: AdminData, csrf: string): stri
   return adminDocument(active[0]?.toUpperCase() + active.slice(1), body, active, data.notices);
 }
 
-export function runnerEnrollmentPage(env: RunnerReleaseEnvironment, baseUrl: string, runnerId: string, code: string | undefined, csrf: string, reEnroll = false, executionMode: ConsoleExecutionMode = "dedicated_user", confirmPrivilegedHost = false, enrollment?: Pick<Extract<EnrollmentCodeResult, { readonly ok: true }>, "created_at_ms" | "not_before_ms" | "expires_at_ms">): Response {
+export async function runnerEnrollmentPage(env: RunnerReleaseEnvironment, baseUrl: string, runnerId: string, code: string | undefined, csrf: string, reEnroll = false, executionMode: ConsoleExecutionMode = "dedicated_user", confirmPrivilegedHost = false, enrollment?: Pick<Extract<EnrollmentCodeResult, { readonly ok: true }>, "created_at_ms" | "not_before_ms" | "expires_at_ms">): Promise<Response> {
   if (code === undefined) return adminError(503, "Enrollment code could not be generated.");
   if (executionMode !== "dedicated_user" && executionMode !== "privileged_host") return adminError(400, "Runner execution mode is invalid.");
   if (executionMode === "privileged_host" && !confirmPrivilegedHost) return adminError(400, "Privileged-host enrollment requires the one-time risk acknowledgement.");
-  const release = runnerReleaseDescriptor(env);
+  const release = await resolveRunnerReleaseDescriptor(env);
   const bootstrap = release.distributable;
   // Validate the origin for both the hosted and manual paths.  The manual
   // fallback still emits a server URL into a copyable command; deriving it

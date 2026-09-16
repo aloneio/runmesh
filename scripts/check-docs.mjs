@@ -6,7 +6,10 @@ const pkg = JSON.parse(await readFile(new URL("package.json", root), "utf8"));
 const current = ["README.md", "README.zh-CN.md", "docs/admin-guide.md", "docs/admin-guide.zh-CN.md", "docs/deployment.md", "docs/portable-runner-installation.md", "docs/architecture.md", "docs/adr-0001-architecture.md", "docs/protocol.md", "docs/runner-transport.md", "docs/release-readiness.md"];
 for (const file of current) {
   const text = await readFile(new URL(file, root), "utf8");
-  for (const match of text.matchAll(/RUNMESH_SIGNED_RELEASE_AVAILABLE=([0-9A-Za-z.+-]+)/g)) assert.equal(match[1], pkg.version, `${file}: stale activation command`);
+  for (const match of text.matchAll(/RUNMESH_SIGNED_RELEASE_AVAILABLE=([0-9A-Za-z.+-]+)/g)) {
+    if (match[1] === "dev") assert.equal(file, "docs/deployment.md", `${file}: unreviewed development release sentinel`);
+    else assert.equal(match[1], pkg.version, `${file}: stale activation command`);
+  }
   assert.ok(!/0\.1\.0-dev\.[1-5]|Node\.js 20 or newer|first-setup authorization secret/.test(text), `${file}: stale operative release or setup contract`);
 }
 const readiness = await readFile(new URL("docs/release-readiness.md", root), "utf8");

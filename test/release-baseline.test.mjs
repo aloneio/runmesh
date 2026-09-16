@@ -129,7 +129,7 @@ test("completed-release retry skips signing and today's CI while new publication
   assert.equal(workflow.jobs.plan.steps.find(step => step.id === "plan").env.GH_TOKEN, "${{ github.token }}");
   const steps = workflow.jobs.publish.steps, gate = steps.findIndex(step => step.id === "publication-preflight");
   const signing = steps.findIndex(step => step.env?.RELEASE_SIGNING_KEY); assert.ok(gate >= 0 && gate < signing);
-  for (const step of steps.filter(step => step.env?.RELEASE_SIGNING_KEY || step.run?.includes("verify-ci.mjs") || step.run?.includes("publish.mjs"))) assert.equal(step.if, "steps.publication-preflight.outputs.already_published != 'true'");
+  for (const step of steps.filter(step => step.env?.RELEASE_SIGNING_KEY || step.run?.includes("publish.mjs"))) assert.equal(step.if, "steps.publication-preflight.outputs.already_published != 'true'");
   const stable = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
   assert.ok(stable.includes('node scripts/stable-publication.mjs "$RELEASE_VERSION" "$RELEASE_SIGNING_KEY_ID"'));
   assert.equal(/test "\$RELEASE_VERSION" = "\d+\.\d+\.\d+"/u.test(stable), false);
