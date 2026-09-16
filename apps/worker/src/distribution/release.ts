@@ -271,12 +271,13 @@ async function refreshDevelopmentRunnerRelease(fetchImpl: typeof fetch, verifyRe
 export async function discoverDevelopmentRunnerRelease(fetchImpl: typeof fetch = fetch, verifyRelease: DevelopmentReleaseVerifier = verifyDevelopmentRunnerRelease, cacheOverride?: DevelopmentReleaseCache | null, scheduleRefresh?: DevelopmentReleaseRefreshScheduler): Promise<RunnerReleaseDescriptor> {
   const useRuntimeCache = fetchImpl === fetch && verifyRelease === verifyDevelopmentRunnerRelease;
   const cache = cacheOverride === null ? undefined : cacheOverride ?? (useRuntimeCache ? defaultDevelopmentReleaseCache() : undefined);
-  const now = Date.now();
+  let now = Date.now();
   if (useRuntimeCache && cachedDevRelease !== undefined && cachedDevRelease.expires_at_ms > now && usableCacheAge(cachedDevRelease.verified_at_ms, now, DEV_RELEASE_STALE_MS)) return cachedDevRelease.descriptor;
   const cached = await readDevelopmentReleaseCache(cache);
+  now = Date.now(); // Storage latency cannot extend the original verification deadline.
   const cacheAgeMs = cached === undefined || cached.verified_at_ms > now ? Number.POSITIVE_INFINITY : now - cached.verified_at_ms;
   if (cached !== undefined && cacheAgeMs <= DEV_RELEASE_CACHE_MS) {
-    if (useRuntimeCache) cachedDevRelease = { expires_at_ms: Math.min(now + DEV_RELEASE_CACHE_MS, cached.verified_at_ms + DEV_RELEASE_STALE_MS), verified_at_ms: cached.verified_at_ms, descriptor: cached.descriptor };
+    if (useRuntimeCache) cachedDevRelease = { expires_at_ms: cached.verified_at_ms + DEV_RELEASE_CACHE_MS, verified_at_ms: cached.verified_at_ms, descriptor: cached.descriptor };
     return cached.descriptor;
   }
   if (cached !== undefined && cacheAgeMs < DEV_RELEASE_STALE_MS && scheduleRefresh !== undefined) {
