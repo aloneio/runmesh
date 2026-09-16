@@ -59,6 +59,7 @@ export default {
 } satisfies ExportedHandler<WorkerEnv>;
 
 async function handleRequest(request: Request, env: WorkerEnv, _ctx: ExecutionContext): Promise<Response> {
+  const scheduleReleaseRefresh = (work: Promise<void>): void => _ctx.waitUntil(work);
   const url = new URL(request.url);
   if (url.pathname === "/health") {
     if (request.method !== "GET" && request.method !== "HEAD") {
@@ -82,12 +83,12 @@ async function handleRequest(request: Request, env: WorkerEnv, _ctx: ExecutionCo
     }, { headers: { "cache-control": "no-store" } });
   }
   if (url.pathname === "/assets/logo.png" || url.pathname === BRAND_LOGO_ASSET || url.pathname === "/assets/favicon.png") return asset(request, env);
-  if (url.pathname === "/runner/uninstall.sh" || url.pathname === "/runner/uninstall.ps1") return runnerUninstallScript(request, env, url.pathname.endsWith(".ps1"));
-  if (url.pathname === "/runner/install.sh") return runnerInstallScript(request, url, env);
-  if (url.pathname === "/runner/install.ps1") return runnerInstallPowerShell(request, url, env);
-  if (url.pathname === "/runner/releases/latest") return runnerRelease(request, env, "selected");
-  if (url.pathname === "/runner/releases/stable") return runnerRelease(request, env, "stable");
-  if (url.pathname === "/runner/releases/dev") return runnerRelease(request, env, "dev");
+  if (url.pathname === "/runner/uninstall.sh" || url.pathname === "/runner/uninstall.ps1") return runnerUninstallScript(request, env, url.pathname.endsWith(".ps1"), scheduleReleaseRefresh);
+  if (url.pathname === "/runner/install.sh") return runnerInstallScript(request, url, env, scheduleReleaseRefresh);
+  if (url.pathname === "/runner/install.ps1") return runnerInstallPowerShell(request, url, env, scheduleReleaseRefresh);
+  if (url.pathname === "/runner/releases/latest") return runnerRelease(request, env, "selected", scheduleReleaseRefresh);
+  if (url.pathname === "/runner/releases/stable") return runnerRelease(request, env, "stable", scheduleReleaseRefresh);
+  if (url.pathname === "/runner/releases/dev") return runnerRelease(request, env, "dev", scheduleReleaseRefresh);
   // Public health/static/release probes remain available while provisioning,
   // but every control-plane route fails closed before attempting HMAC/WebCrypto
   // when the Worker↔Durable-Object secret is absent or empty.
@@ -100,10 +101,10 @@ async function handleRequest(request: Request, env: WorkerEnv, _ctx: ExecutionCo
   if (url.pathname.startsWith("/internal/runners/")) return forwardRunnerRpc(request, env, url);
   if (url.pathname === "/runner/enroll") return handleRunnerEnrollment(request, env);
   if (url.pathname.startsWith("/admin/runners")) {
-    return isRunnerAdminRequest(request, env) ? handleRunnerAdmin(request, env, url) : handleBrowserAdmin(request, env, url);
+    return isRunnerAdminRequest(request, env) ? handleRunnerAdmin(request, env, url) : handleBrowserAdmin(request, env, url, scheduleReleaseRefresh);
   }
   if (url.pathname === "/" || url.pathname === "/setup" || url.pathname === "/login") return handleLanding(request, env, url);
-  if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) return handleBrowserAdmin(request, env, url);
+  if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) return handleBrowserAdmin(request, env, url, scheduleReleaseRefresh);
   if (url.pathname === "/runner/connect") {
     if (request.method !== "GET" || request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return new Response("WebSocket upgrade required", { status: 426 });
     const runnerId = url.searchParams.get("runner_id");

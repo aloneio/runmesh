@@ -1,3 +1,4 @@
+import type { DevelopmentReleaseRefreshScheduler } from "../distribution/release.js";
 import { deleteRunnerFromControlPlane } from "./runner-deletion.js";
 import { adminError } from "./responses.js";
 import { beginRunnerPolicyMutation } from "../application/runner-policy.js";
@@ -41,7 +42,7 @@ import { registryDevelopmentReleaseCache } from "./release-cache.js";
  * the form to the mode observed when that one-time code was rendered; the
  * destination mode is never replayed from a hidden field.
  */
-export async function createBrowserRunner(env: WorkerEnv, form: FormData, baseUrl: string): Promise<Response> {
+export async function createBrowserRunner(env: WorkerEnv, form: FormData, baseUrl: string, scheduleRefresh?: DevelopmentReleaseRefreshScheduler): Promise<Response> {
   const submittedId = form.get("runner_id"); const displayName = form.get("display_name");
   const selection = executionModeFromForm(form);
   if (selection === undefined) return adminError(400, "Runner execution mode or privileged-host confirmation is invalid.");
@@ -91,10 +92,10 @@ export async function createBrowserRunner(env: WorkerEnv, form: FormData, baseUr
   // rotation must not slip between finalization and code issuance.
   try { await revokeRunnerTransport(env, runnerId, mutationId, true); }
   catch { return adminError(503, "Runner creation cleanup is uncertain; Runner remains safely fenced."); }
-  return runnerEnrollmentPage(env, baseUrl, runnerId, code, String(form.get("csrf_token") ?? ""), false, selection.mode, selection.confirmed, codeResult, registryDevelopmentReleaseCache(env));
+  return runnerEnrollmentPage(env, baseUrl, runnerId, code, String(form.get("csrf_token") ?? ""), false, selection.mode, selection.confirmed, codeResult, registryDevelopmentReleaseCache(env), scheduleRefresh);
 }
 
-export async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, baseUrl: string, runnerId: string, action: "rename" | "rotate" | "revoke" | "delete" | "enrollment" | "validity" | "permissions" | "version-policy" | "emergency-lock" | "workspace-create" | "workspace-update" | "workspace-delete"): Promise<Response> {
+export async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, baseUrl: string, runnerId: string, action: "rename" | "rotate" | "revoke" | "delete" | "enrollment" | "validity" | "permissions" | "version-policy" | "emergency-lock" | "workspace-create" | "workspace-update" | "workspace-delete", scheduleRefresh?: DevelopmentReleaseRefreshScheduler): Promise<Response> {
   const enrollmentWindow = action === "rotate" || action === "enrollment" ? enrollmentWindowFromForm(form) : undefined;
   const enrollmentTtlMs = action === "rotate" || action === "enrollment" ? formEnrollmentTtl(form) : undefined;
   if ((action === "rotate" || action === "enrollment") && (enrollmentWindow === undefined || enrollmentTtlMs === undefined)) return adminError(400, "Enrollment validity settings are invalid.");
@@ -207,7 +208,7 @@ export async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, 
     const code = codeResult.code;
     try { await revokeRunnerTransport(env, runnerId, mutationId, true); }
     catch { return adminError(503, "Runner credential cleanup is uncertain; Runner remains safely fenced."); }
-    return runnerEnrollmentPage(env, baseUrl, runnerId, code, String(form.get("csrf_token") ?? ""), true, selection.mode, selection.confirmed, codeResult, registryDevelopmentReleaseCache(env));
+    return runnerEnrollmentPage(env, baseUrl, runnerId, code, String(form.get("csrf_token") ?? ""), true, selection.mode, selection.confirmed, codeResult, registryDevelopmentReleaseCache(env), scheduleRefresh);
   }
   if (action === "enrollment") {
     const mutationId = `runner-enrollment-${crypto.randomUUID()}`;
@@ -250,7 +251,7 @@ export async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, 
       const cancelled = await cancelRunnerPolicyMutation(env, runnerId, mutationId);
       if (!cancelled.ok) return enrollmentCleanupUnavailable(cancelled);
     } catch { return enrollmentCleanupUnavailable(); }
-    return runnerEnrollmentPage(env, baseUrl, runnerId, code, String(form.get("csrf_token") ?? ""), true, selection.mode, selection.confirmed, codeResult, registryDevelopmentReleaseCache(env));
+    return runnerEnrollmentPage(env, baseUrl, runnerId, code, String(form.get("csrf_token") ?? ""), true, selection.mode, selection.confirmed, codeResult, registryDevelopmentReleaseCache(env), scheduleRefresh);
   }
   return adminError(404, "Runner enrollment action is not available.");
 }
