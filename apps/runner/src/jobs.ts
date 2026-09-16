@@ -1,3 +1,5 @@
+import { availableLogBytes } from "./jobs/log-budget.js";
+import { retainedJobCandidates, expiredRetainedJob } from "./jobs/retention-plan.js";
 import type { JobFilePort, JobProcessPort } from "./jobs/ports.js";
 import { FairJobQueue } from "./job-queue.js";
 import { RpcRuntimeError } from "./errors.js";
@@ -675,7 +677,7 @@ export class JobManager {
   private reserveLogBytes(jobId: string, chunk: Buffer): { readonly data: Buffer; readonly truncated: boolean } {
     if (chunk.byteLength === 0) return { data: chunk, truncated: false };
     const jobBytes = this.jobLogBytes.get(jobId) ?? 0;
-    const available = Math.max(0, Math.min(this.maxLogBytesPerJob - jobBytes, this.maxTotalLogBytes - this.totalLogBytes));
+    const available = availableLogBytes(jobBytes, this.totalLogBytes, this.maxLogBytesPerJob, this.maxTotalLogBytes);
     const data = chunk.subarray(0, available);
     if (data.byteLength > 0) {
       this.jobLogBytes.set(jobId, jobBytes + data.byteLength);
@@ -772,13 +774,11 @@ export class JobManager {
   }
 
   private async pruneRetainedJobsNow(retainedLimit: number, aliveJobIds: ReadonlySet<string>): Promise<void> {
-    const removable = [...this.jobs.values()]
-      .filter((job) => !occupiesProcessSlot(job) && !aliveJobIds.has(job.job_id))
-      .sort((a, b) => a.updated_at_ms - b.updated_at_ms || a.job_id.localeCompare(b.job_id));
+    const removable = retainedJobCandidates(this.jobs.values(), aliveJobIds);
     if (this.retentionDays > 0) {
       const cutoff = Date.now() - this.retentionDays * 86_400_000;
       for (const job of removable) {
-        if (["succeeded","failed","cancelled","interrupted"].includes(job.status) && (job.completed_at_ms ?? job.updated_at_ms) <= cutoff) await this.removeRetainedJobIfCurrent(job);
+        if (expiredRetainedJob(job, cutoff)) await this.removeRetainedJobIfCurrent(job);
       }
     }
     while (this.jobs.size > retainedLimit && removable.length > 0) {
