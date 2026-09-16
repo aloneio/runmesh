@@ -6,7 +6,12 @@ on:
       - dev
   pull_request: null
   workflow_dispatch: null
-  workflow_call: null
+  workflow_call:
+    inputs:
+      release_verification:
+        description: Keep this release's exact-source verification independent of newer pushes
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -171,5 +176,5 @@ jobs:
           overwrite: false
           archive: true
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'ordinary' }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ (inputs.release_verification || github.event_name == 'workflow_dispatch') && github.run_id || 'ordinary' }}
+  cancel-in-progress: ${{ !inputs.release_verification && github.event_name != 'workflow_dispatch' }}

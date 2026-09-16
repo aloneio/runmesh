@@ -1,5 +1,5 @@
 import type { PolicyReadiness } from "../contracts/runner-selection.js";
-import { rpcPermissionRequirement } from "../mcp-authorization.js";
+import { rpcPermissionRequirement, supportsHistoryIndependentJobs } from "../mcp-authorization.js";
 import { RunnerPolicySchema } from "@aloneio/runmesh-protocol";
 import { intersectPermissionSets } from "@aloneio/runmesh-protocol";
 import { permissionSetFromScopes } from "@aloneio/runmesh-protocol";
@@ -36,8 +36,7 @@ export class RegistryPolicy {
         // Old peers might ignore expected_workspace_id. Never permit the new
         // history-independent path based only on a caller's assertion.
         const version = this.ports.runnerRow(runnerId)?.current_runner_version;
-        const parts = typeof version === "string" ? /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.exec(version) : null;
-        if (parts === null || !(Number(parts[1]) > 0 || Number(parts[2]) > 1 || (Number(parts[2]) === 1 && Number(parts[3]) >= 1))) return deny("runner_upgrade_required");
+        if (!supportsHistoryIndependentJobs(version)) return deny("runner_upgrade_required");
       } else {
         const job = this.ports.getJob(runnerId, input.job_id);
         if (typeof job !== "object" || job === null || Array.isArray(job) || (job as Record<string, unknown>).workspace_id !== workspaceId) return deny();
