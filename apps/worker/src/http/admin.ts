@@ -1,3 +1,4 @@
+import type { DevelopmentReleaseRefreshScheduler } from "../distribution/release.js";
 import { runnerSummary, runnerDetail as projectRunnerDetail, clientDetail as projectClientDetail } from "../application/admin-projections.js";
 import { ADMIN_CSRF_COOKIE } from "./constants.js";
 import { ADMIN_SESSION_COOKIE } from "./constants.js";
@@ -55,7 +56,7 @@ import { validLabel } from "./input.js";
 import { verifyAdminPost } from "./session.js";
 import type { WorkerEnv } from "../platform/env.js";
 
-export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
+export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: URL, scheduleRefresh?: DevelopmentReleaseRefreshScheduler): Promise<Response> {
   const session = await adminSession(request, env);
   if (session === undefined) { if (request.method !== "GET") await discardBody(request); return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]); }
   if (request.method === "GET" && ["/admin", "/admin/runners", "/admin/clients", "/admin/settings"].includes(url.pathname)) {
@@ -113,7 +114,7 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
       registryGet(env, `/runners/${encodeURIComponent(runnerId)}/policy-versions`),
       registryGet(env, `/auth/runners/${encodeURIComponent(runnerId)}/enrollments`),
       runnerEnvironment(env, runnerId),
-      resolveRunnerReleaseDescriptor(env, fetch, registryDevelopmentReleaseCache(env)),
+      resolveRunnerReleaseDescriptor(env, fetch, registryDevelopmentReleaseCache(env), scheduleRefresh),
       loadFeatureNotices(env),
       registryGet(env, `/runners/${encodeURIComponent(runnerId)}/history-settings`),
     ]);
@@ -155,9 +156,9 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
   }
   if (url.pathname === "/admin/password") return changePassword(env, form);
   if (url.pathname === "/admin/clients") return createClient(env, form, publicOrigin);
-  if (url.pathname === "/admin/runners") return createBrowserRunner(env, form, publicOrigin);
+  if (url.pathname === "/admin/runners") return createBrowserRunner(env, form, publicOrigin, scheduleRefresh);
   const runnerMatch = /^\/admin\/runners\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\/(rename|rotate|revoke|delete|enrollment|validity|permissions|version-policy|emergency-lock|workspace-create|workspace-update|workspace-delete)$/.exec(url.pathname);
-  if (runnerMatch !== null) return handleBrowserRunnerAction(env, form, publicOrigin, runnerMatch[1] as string, runnerMatch[2] as "rename" | "rotate" | "revoke" | "delete" | "enrollment" | "validity" | "permissions" | "version-policy" | "emergency-lock" | "workspace-create" | "workspace-update" | "workspace-delete");
+  if (runnerMatch !== null) return handleBrowserRunnerAction(env, form, publicOrigin, runnerMatch[1] as string, runnerMatch[2] as "rename" | "rotate" | "revoke" | "delete" | "enrollment" | "validity" | "permissions" | "version-policy" | "emergency-lock" | "workspace-create" | "workspace-update" | "workspace-delete", scheduleRefresh);
   const clientMatch = /^\/admin\/clients\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\/(rename|rotate|revoke|reset-runner|select-runner|active-runner|override|reset-override|scopes|recording)$/.exec(url.pathname);
   if (clientMatch === null) return notFound();
   const clientId = clientMatch[1] as string; const action = clientMatch[2] as "rename" | "rotate" | "revoke" | "reset-runner" | "select-runner" | "active-runner" | "override" | "reset-override" | "scopes" | "recording";
