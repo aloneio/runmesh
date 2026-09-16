@@ -1,0 +1,18 @@
+[Unit]
+Description=Fast-forward verified Runmesh dev from GitHub to GitLab
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=xwzy
+Group=xwzy
+WorkingDirectory=/home/xwzy/runmesh
+Environment=HOME=/home/xwzy
+Environment=PATH=/usr/local/lib/nodejs/node-v22.23.2/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env node /home/xwzy/runmesh/scripts/sync-gitlab-dev.mjs
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/home/xwzy/runmesh

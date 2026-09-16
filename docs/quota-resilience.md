@@ -50,7 +50,7 @@ Failed history reads return unavailable, not a fake empty list. Audit failure ne
 
 Production uses `HISTORY_DB`, database name `runmesh-audit-history`, and `RUNMESH_AUDIT_BACKEND=d1`. Development/test use the compatible SQLite mode; test D1 stays local. Wrangler auto-provisioning resolves/creates resources through the existing Cloudflare build connection. Missing build authorization must block deployment, not reset Registry or introduce a token in source.
 
-Verify and merge the same commit into GitHub dev, then fast-forward GitLab dev to trigger Cloudflare Workers Builds. Check `/health` backend/binding indicators, then an authenticated audit canary. Binding presence alone does not prove D1 writes or establish the deployed SHA.
+Verify and merge into GitHub `dev`. After the mandatory GitHub CI aggregate succeeds, the repository automation fast-forwards that exact commit to GitLab `dev`, which triggers Cloudflare Workers Builds. Divergence fails closed instead of being force-pushed. Check `/health` backend/binding indicators, then an authenticated audit canary. Binding presence alone does not prove D1 writes or establish the deployed SHA.
 
 Rollback preserves the existing DO namespace and additive data. Returning to `sqlite` is explicit operator action, never automatic D1-failure fallback, and restores consumption of core quota. Do not delete databases, rotate credentials, purge Jobs or replace immutable Runner releases for this Worker-only rollout.
 
