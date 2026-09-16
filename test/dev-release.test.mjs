@@ -68,7 +68,7 @@ test("GitHub adapter fixes origin, disallows redirects and caps responses", asyn
   await assert.rejects(githubJson("releases", { token: "private", fetchImpl: async () => new Response("x".repeat(1024 * 1024 + 1)) }), /byte limit/u);
 });
 
-function publisherFixture({ published = false, draft = false, wrongTag = false, badBytes = false, immutable = true } = {}) {
+function publisherFixture({ published = false, draft = false, wrongTag = false, badBytes = false, immutable = true, tagLookupMissing = false } = {}) {
   const p = plan(), objectSha = "d".repeat(40), writes = [], verifications = [];
   let object = published || draft || wrongTag ? { sha: objectSha, object: { type: "commit", sha: wrongTag ? "e".repeat(40) : p.source_sha }, tag: p.tag, message: planMessage(p) } : null;
   let ref = object ? { object: { type: "tag", sha: objectSha } } : null;
@@ -84,9 +84,11 @@ function publisherFixture({ published = false, draft = false, wrongTag = false, 
       if (path === "git/tags") { object = { sha: objectSha, object: { type: "commit", sha: options.body.object }, tag: options.body.tag, message: options.body.message }; return object; }
       if (path.startsWith("git/tags/")) return object;
       if (path === "git/refs") { ref = { object: { type: "tag", sha: objectSha } }; return ref; }
-      if (path.startsWith("releases/tags/")) return release && structuredClone(release);
+      if (path.startsWith("releases/tags/")) return tagLookupMissing ? null : release && structuredClone(release);
+      if (path === "releases?per_page=30") return release === null ? [] : [structuredClone(release)];
       if (path === "releases") { release = { ...options.body, id: 1, assets: [], immutable: false }; return structuredClone(release); }
       if (path === "releases/1" && options.method === "PATCH") { release = { ...release, ...options.body, immutable }; return structuredClone(release); }
+      if (path === "releases/1") return release && structuredClone(release);
       throw new Error(`unexpected endpoint: ${path}`);
     },
   };
@@ -106,6 +108,12 @@ test("interrupted drafts upload only missing assets", async () => {
   const f = publisherFixture({ draft: true }); await publishDevelopmentRelease(f.plan, f.io);
   assert.equal(f.writes.filter(w => w.path === "git/tags" || w.path === "releases").length, 0);
   const uploaded = f.writes.find(w => w.upload).upload; assert.equal(uploaded.length, 8); assert.ok(!uploaded.includes("manifest.json"));
+});
+test("recovers an existing draft when GitHub release-by-tag returns 404", async () => {
+  const f = publisherFixture({ draft: true, tagLookupMissing: true }); await publishDevelopmentRelease(f.plan, f.io);
+  assert.equal(f.writes.filter(w => w.path === "releases" && w.method === "POST").length, 0);
+  assert.ok(f.writes.some(w => w.upload));
+  assert.ok(f.writes.some(w => w.path === "releases/1" && w.method === "PATCH"));
 });
 test("conflicting tag identity or draft bytes stops without clobbering", async () => {
   for (const options of [{ wrongTag: true }, { draft: true, badBytes: true }]) {
@@ -146,6 +154,8 @@ test("completed batches remain verifiable after main and dev history changes", a
 test("preflight refuses obsolete drafts before signing and does not trust a success label alone", async () => {
   const f = publisherFixture({ draft: true }); f.io.assertCurrentBaseline = async () => { throw new Error("dev_release_superseded"); };
   await assert.rejects(publicationPreflight(f.plan, f.io), /superseded/u); assert.deepEqual(f.writes, []);
+  const recovered = publisherFixture({ draft: true, tagLookupMissing: true }); recovered.io.assertCurrentBaseline = async () => { throw new Error("dev_release_superseded"); };
+  await assert.rejects(publicationPreflight(recovered.plan, recovered.io), /superseded/u); assert.deepEqual(recovered.writes, []);
   const g = publisherFixture({ published: true });
   await assert.rejects(publicationPreflight(g.plan, { ...g.io, verifyPublished: async () => { throw new Error("bad signature"); } }), /bad signature/u);
   assert.deepEqual(g.writes, []);
