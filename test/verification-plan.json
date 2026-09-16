@@ -135,6 +135,7 @@
         "test/deployment-policy.test.mjs",
         "test/deployment-provenance-cli.test.mjs",
         "test/dev-auto-deploy.test.mjs",
+        "test/dev-release.test.mjs",
         "test/installer-arguments.test.mjs",
         "test/installer-preflight.test.mjs",
         "test/live-provenance.test.mjs",
