@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { reconnectDelayMs } from "../src/backoff.js";
-import { parseRunnerArgs, validateRunnerConfig } from "../src/config.js";
+import { DEFAULT_MAX_CONCURRENT_JOBS, parseRunnerArgs, validateRunnerConfig } from "../src/config.js";
 import { validateCentralWorkspacePolicy } from "../src/policy-config.js";
 import { defaultRunnerStateDir } from "../src/state-path.js";
 
@@ -23,6 +23,12 @@ describe("runner configuration", () => {
     await expect(validateRunnerConfig({ server: "wss://example.test", token: "short", runnerId: "runner-1" })).rejects.toThrow("token");
     await expect(validateRunnerConfig({ server: "wss://user:password@example.test", token: "0123456789abcdef", runnerId: "runner-1" })).rejects.toThrow("credentials");
     await expect(validateRunnerConfig({ server: "wss://example.test/path?token=leak", token: "0123456789abcdef", runnerId: "runner-1" })).rejects.toThrow("query");
+  });
+  it("defaults to two execution slots while preserving explicit operator limits", async () => {
+    const base = { server: "ws://127.0.0.1:8787", insecureLocal: true, token: "0123456789abcdef", runnerId: "runner-1" } as const;
+    await expect(validateRunnerConfig(base)).resolves.toMatchObject({ maxConcurrentJobs: DEFAULT_MAX_CONCURRENT_JOBS });
+    await expect(validateRunnerConfig({ ...base, maxConcurrentJobs: 1 })).resolves.toMatchObject({ maxConcurrentJobs: 1 });
+    await expect(validateRunnerConfig({ ...base, maxConcurrentJobs: 64 })).resolves.toMatchObject({ maxConcurrentJobs: 64 });
   });
   it("rejects overlapping central workspace roots", async () => {
     const root = await mkdtemp(join(tmpdir(), "runmesh-runner-overlap-"));

@@ -24,7 +24,7 @@ export interface RunnerConfig {
   readonly token: string;
   readonly runnerId: string;
   readonly workspaces: readonly WorkspaceConfig[];
-  /** Local supervisor concurrency; defaults to one to match advertised capability. */
+  /** Local supervisor concurrency; omitted values use the conservative product default. */
   readonly maxConcurrentJobs?: number;
   readonly maxRetainedJobs?: number;
   readonly maxLogBytesPerJob?: number;
@@ -66,6 +66,12 @@ const MAX_SERVER_URL_LENGTH = 2_048;
 const MAX_TOKEN_LENGTH = 4_096;
 const MAX_DISCONNECT_AFTER_MS = 24 * 60 * 60 * 1_000;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
+export const DEFAULT_MAX_CONCURRENT_JOBS = 2;
+
+/** Keep execution admission and advertised capability on one effective value. */
+export function effectiveMaxConcurrentJobs(value: number | undefined): number {
+  return value ?? DEFAULT_MAX_CONCURRENT_JOBS;
+}
 
 export async function validateRunnerConfig(options: RawRunnerOptions): Promise<RunnerConfig> {
   if (typeof options !== "object" || options === null || Array.isArray(options)) throw new Error("runner options must be an object");
@@ -143,7 +149,7 @@ export async function validateRunnerConfig(options: RawRunnerOptions): Promise<R
       throw new Error("--state-dir must not overlap a workspace root");
     }
   }
-  return { server, token, runnerId, workspaces, ...(options.maxConcurrentJobs === undefined ? {} : { maxConcurrentJobs: options.maxConcurrentJobs }), ...(options.maxRetainedJobs === undefined ? {} : { maxRetainedJobs: options.maxRetainedJobs }), ...(options.maxLogBytesPerJob === undefined ? {} : { maxLogBytesPerJob: options.maxLogBytesPerJob }), ...(options.maxTotalLogBytes === undefined ? {} : { maxTotalLogBytes: options.maxTotalLogBytes }), ...(stateDir === undefined ? {} : { stateDir }), ...(options.disconnectAfterMs === undefined ? {} : { disconnectAfterMs: options.disconnectAfterMs }), ...(options.disconnectControlFile === undefined ? {} : { disconnectControlFile: options.disconnectControlFile }) };
+  return { server, token, runnerId, workspaces, maxConcurrentJobs: effectiveMaxConcurrentJobs(options.maxConcurrentJobs), ...(options.maxRetainedJobs === undefined ? {} : { maxRetainedJobs: options.maxRetainedJobs }), ...(options.maxLogBytesPerJob === undefined ? {} : { maxLogBytesPerJob: options.maxLogBytesPerJob }), ...(options.maxTotalLogBytes === undefined ? {} : { maxTotalLogBytes: options.maxTotalLogBytes }), ...(stateDir === undefined ? {} : { stateDir }), ...(options.disconnectAfterMs === undefined ? {} : { disconnectAfterMs: options.disconnectAfterMs }), ...(options.disconnectControlFile === undefined ? {} : { disconnectControlFile: options.disconnectControlFile }) };
 }
 
 /**

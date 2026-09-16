@@ -194,6 +194,33 @@ describe("workspace path policy", () => {
 });
 
 describe("persistent local jobs", () => {
+  it("uses two product execution slots by default and reports effective scheduler capacity", async () => {
+    const test = await fixture();
+    let first: JobRecord | undefined;
+    let second: JobRecord | undefined;
+    let runtime: RunnerRuntime | undefined;
+    try {
+      const config: RunnerConfig = { server: "ws://127.0.0.1", token: "0123456789abcdef", runnerId: "runner-1", workspaces: [test.workspace] };
+      runtime = new RunnerRuntime({ config, stateDir: test.state });
+      await runtime.initialize();
+      first = await runtime.dispatch("exec.start", { workspace_id: test.workspace.workspaceId, command: process.execPath, args: ["-e", "setTimeout(() => {}, 5000)"] }) as JobRecord;
+      second = await runtime.dispatch("exec.start", { workspace_id: test.workspace.workspaceId, command: process.execPath, args: ["-e", "setTimeout(() => {}, 5000)"] }) as JobRecord;
+      expect(first.status).toBe("running");
+      expect(second.status).toBe("running");
+      expect(runtime.jobs.queueStatus()).toMatchObject({ running: 2, waiting: 0, max_concurrent_jobs: 2, available_slots: 0 });
+      await expect(runtime.envInfo()).resolves.toMatchObject({
+        runtime_capabilities: { max_concurrent_jobs: 2 },
+        job_scheduler: { running: 2, waiting: 0, max_concurrent_jobs: 2, available_slots: 0 },
+      });
+    } finally {
+      // The runtime owns the live ChildProcess handles; cancel through that same
+      // supervisor rather than constructing a second manager over persisted state.
+      if (runtime !== undefined) {
+        for (const job of [first, second]) if (job !== undefined) await runtime.jobs.cancel(job.job_id).catch(() => undefined);
+      }
+      await test.cleanup();
+    }
+  });
   it("atomically reserves concurrent job capacity across overlapping starts", async () => {
     const test = await fixture();
     try {
