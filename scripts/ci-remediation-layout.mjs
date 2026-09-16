@@ -32,7 +32,8 @@ export function proposedCiFiles(input) {
     if (!pkg.scripts["test:release-tools"].includes(file)) pkg.scripts["test:release-tools"] += ` ./${file}`;
     const group = plan.groups.find(g => g.id === "tooling"); if (!group.files.includes(file)) group.files.push(file);
   }
-  gh.concurrency = { group: "ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'ordinary' }}", "cancel-in-progress": "${{ github.event_name != 'workflow_dispatch' }}" };
+  gh.on.workflow_call = { inputs: { release_verification: { description: "Keep this release's exact-source verification independent of newer pushes", type: "boolean", default: false } } };
+  gh.concurrency = { group: "ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ (inputs.release_verification || github.event_name == 'workflow_dispatch') && github.run_id || 'ordinary' }}", "cancel-in-progress": "${{ !inputs.release_verification && github.event_name != 'workflow_dispatch' }}" };
   gh.jobs.verify["timeout-minutes"] = 30;
   const existing = gh.jobs.verify.steps;
   // Non-critical setup stays as reviewed; each former command maps exactly
