@@ -85,7 +85,9 @@ async function handleRequest(request: Request, env: WorkerEnv, _ctx: ExecutionCo
   if (url.pathname === "/runner/uninstall.sh" || url.pathname === "/runner/uninstall.ps1") return runnerUninstallScript(request, env, url.pathname.endsWith(".ps1"));
   if (url.pathname === "/runner/install.sh") return runnerInstallScript(request, url, env);
   if (url.pathname === "/runner/install.ps1") return runnerInstallPowerShell(request, url, env);
-  if (url.pathname === "/runner/releases/latest" || url.pathname === "/runner/releases/stable") return runnerRelease(request, env);
+  if (url.pathname === "/runner/releases/latest") return runnerRelease(request, env, "selected");
+  if (url.pathname === "/runner/releases/stable") return runnerRelease(request, env, "stable");
+  if (url.pathname === "/runner/releases/dev") return runnerRelease(request, env, "dev");
   // Public health/static/release probes remain available while provisioning,
   // but every control-plane route fails closed before attempting HMAC/WebCrypto
   // when the Worker↔Durable-Object secret is absent or empty.
