@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { validateStableReleaseProof } from "./baseline-policy.mjs";
 
 export const DEV_RELEASE_INTERVAL = 5;
 export const DEV_RELEASE_REPOSITORY = "aloneio/runmesh";
@@ -25,8 +26,10 @@ export function nextDevVersion(stableVersion, pushNumber) {
 
 export function validateDevPlan(value) {
   assert.ok(value && typeof value === "object" && !Array.isArray(value));
-  assert.deepEqual(Object.keys(value).sort(), keys, "unexpected development plan fields");
-  assert.equal(value.schema_version, 1); assert.equal(value.channel, "dev");
+  assert.ok(value.schema_version === 1 || value.schema_version === 2, "unsupported development plan schema");
+  assert.deepEqual(Object.keys(value).sort(), value.schema_version === 2 ? [...keys, "stable_release"].sort() : keys, "unexpected development plan fields");
+  if (value.schema_version === 2) validateStableReleaseProof(value.stable_release);
+  assert.equal(value.channel, "dev");
   assert.equal(value.repository, DEV_RELEASE_REPOSITORY);
   for (const key of ["source_sha", "source_tree", "stable_sha"]) assert.match(value[key], sha);
   assert.ok(Number.isSafeInteger(value.run_id) && value.run_id > 0);
@@ -34,12 +37,13 @@ export function validateDevPlan(value) {
   assert.equal(value.tag, `v${value.version}`);
   assert.match(value.published_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/u);
   assert.equal(new Date(value.published_at).toISOString().replace(".000Z", "Z"), value.published_at);
-  return Object.freeze({ ...value });
+  return Object.freeze({ ...value, ...(value.schema_version === 2 ? { stable_release: validateStableReleaseProof(value.stable_release) } : {}) });
 }
 
 export function createDevPlan(input) {
   const version = nextDevVersion(input.stable_version, input.push_number);
-  return validateDevPlan({ schema_version: 1, channel: "dev", repository: DEV_RELEASE_REPOSITORY, ...input, version, tag: `v${version}` });
+  assert.equal(input.schema_version, undefined, "plan schema is owned by the constructor");
+  return validateDevPlan({ schema_version: 2, channel: "dev", repository: DEV_RELEASE_REPOSITORY, ...input, version, tag: `v${version}` });
 }
 
 export function assertPlanContext(plan, env) {

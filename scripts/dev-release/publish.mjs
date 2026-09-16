@@ -8,6 +8,7 @@ import { assertPlanContext } from "./policy.mjs";
 import { assertSource, command, git, readPlan, root } from "./io.mjs";
 import { githubJson } from "./github.mjs";
 import { devAssetNames, publishDevelopmentRelease } from "./publisher.mjs";
+import { assertCurrentBaseline } from "./baseline.mjs";
 
 assert.equal(process.argv.length, 3); const plan = await readPlan(process.argv[2]);
 assertPlanContext(plan, process.env);
@@ -25,6 +26,7 @@ async function verify(directory) {
 }
 const result = await publishDevelopmentRelease(plan, {
   api: githubJson,
+  assertCurrentBaseline: () => assertCurrentBaseline(plan),
   verifyLocal: async () => { assert.deepEqual((await readdir(directory)).sort(), names); await verify(directory); },
   assertCurrentSource: async () => {
     await assertSource(plan);
