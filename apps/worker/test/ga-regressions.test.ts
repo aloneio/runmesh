@@ -76,12 +76,13 @@ it("GA-010 fallback success clears stale SQL lockout before recovered reservatio
 });
 
 
-it("disabled hosted installers identify the actual fixed release, not a stale literal", async () => {
+it("disabled hosted installers fail closed without advertising a fallback release", async () => {
   for (const path of ["/runner/install.sh", "/runner/install.ps1"]) {
-    const response = await worker.fetch(new Request(`https://ga.invalid${path}`), {...env,RUNMESH_SIGNED_RELEASE_AVAILABLE:""}, {} as ExecutionContext);
+    const response = await worker.fetch(new Request(`https://ga.invalid${path}`), { ...env, RUNMESH_SIGNED_RELEASE_AVAILABLE: "" }, {} as ExecutionContext);
     expect(response.status).toBe(200);
     const body = await response.text();
-    expect(body).toContain(`The fixed signed Runmesh v${FIXED_RELEASE_VERSION} release is not enabled`);
+    expect(body).toContain("The fixed signed Runmesh stable Runner release is not enabled on this deployment.");
+    expect(body).not.toContain(`v${FIXED_RELEASE_VERSION}`);
     expect(body).toContain("exit 1");
   }
 });

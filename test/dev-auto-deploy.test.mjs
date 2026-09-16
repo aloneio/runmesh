@@ -16,6 +16,12 @@ test("only a completed successful GitHub Actions verify-all check satisfies the 
   for (const runs of [[], [check("verify", "completed", "success")], [check("verify-all", "in_progress", null)], [check("verify-all", "completed", "failure")], [check("verify-all", "completed", "success", "other")]]) assert.equal(verifiedDev({ check_runs: runs }), false);
   assert.equal(verifiedDev(undefined), false); assert.equal(GITLAB_DEV_REMOTE, "gitlab");
 });
+test("mirrored dev pushes trigger deployment without duplicating GitLab SaaS verification", async () => {
+  const gitlab = await readFile(new URL("../.gitlab-ci.yml", import.meta.url), "utf8");
+  assert.ok(gitlab.includes('$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"'));
+  assert.ok(!gitlab.includes('$CI_PIPELINE_SOURCE == "push" && ($CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev")'));
+  assert.ok(!gitlab.includes('$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "dev"'));
+});
 test("repository CI needs no cross-provider credential and the host bridge is unprivileged and periodic", async () => {
   const ci = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
   assert.ok(!ci.includes("GITLAB_DEV_SYNC_TOKEN")); assert.ok(!ci.includes("sync-gitlab-dev"));

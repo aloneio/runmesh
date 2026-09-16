@@ -39,7 +39,7 @@ export const NATIVE_COMMANDS = Object.freeze([
 export const LTS_COMMANDS = Object.freeze(["npm ci", "npm run build", "npm run pack:smoke", "npm run test --workspace=@aloneio/runmesh-runner", "node apps/runner/dist/runmesh.cjs --version"]);
 export const checkCommand = id => `node scripts/ci-check.mjs ${id}`;
 export const GITLAB_EVENTS = Object.freeze([
-  '$CI_PIPELINE_SOURCE == "push" && ($CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "dev")',
+  '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"',
   '$CI_PIPELINE_SOURCE == "merge_request_event"',
   '$CI_PIPELINE_SOURCE == "web"',
   '$CI_PIPELINE_SOURCE == "schedule"',

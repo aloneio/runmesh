@@ -22,6 +22,39 @@ export const FIXED_SIGNATURE_URL = `${FIXED_RELEASE_BASE_URL}/manifest.sig`;
 export const FIXED_SIGNATURE_DESCRIPTOR_URL = `${FIXED_RELEASE_BASE_URL}/manifest.signature.json`;
 export const FIXED_CHECKSUMS_URL = `${FIXED_RELEASE_BASE_URL}/SHA256SUMS`;
 
+export interface InstallerReleaseTarget {
+  readonly version: string;
+  readonly channel: "dev" | "stable";
+  readonly tag: string;
+  readonly release_base_url: string;
+  readonly artifact_name: string;
+  readonly artifact_url: string;
+  readonly manifest_url: string;
+  readonly signature_url: string;
+  readonly signature_descriptor_url: string;
+  readonly checksums_url: string;
+  readonly release_key_id: string;
+  readonly public_key_pem: string;
+}
+
+const DEV_RELEASE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-dev\.(0|[1-9]\d*)$/u;
+
+export function installerReleaseTarget(version: string, channel: "dev" | "stable"): InstallerReleaseTarget {
+  if (channel === "stable" && version !== FIXED_RELEASE_VERSION) throw new Error("stable installer release is not the reviewed fixed release");
+  if (channel === "dev" && !DEV_RELEASE_VERSION.test(version)) throw new Error("invalid development Runner release version");
+  const tag = `v${version}`;
+  const artifactName = `runmesh-runner-${version}.tgz`;
+  const releaseBase = `https://github.com/aloneio/runmesh/releases/download/${tag}`;
+  return Object.freeze({
+    version, channel, tag, release_base_url: releaseBase, artifact_name: artifactName, artifact_url: `${releaseBase}/${artifactName}`,
+    manifest_url: `${releaseBase}/manifest.json`, signature_url: `${releaseBase}/manifest.sig`,
+    signature_descriptor_url: `${releaseBase}/manifest.signature.json`, checksums_url: `${releaseBase}/SHA256SUMS`,
+    release_key_id: FIXED_RELEASE_KEY_ID, public_key_pem: FIXED_RELEASE_PUBLIC_KEY_PEM,
+  });
+}
+
+export const FIXED_INSTALLER_RELEASE = installerReleaseTarget(FIXED_RELEASE_VERSION, "stable");
+
 // Bound every fixed release asset before signature verification. The current
 // Runner package is about 0.5 MiB; leave room for ordinary growth while still
 // preventing an over-sized allowed-origin response from filling a host's
@@ -174,16 +207,16 @@ const sums = await boundedRead("SHA256SUMS", "utf8");
 if (!sums.split(/\r?\n/).some((line) => line === digest + "  " + artifactName || line === digest + " *" + artifactName)) fail("SHA256SUMS does not match authenticated artifact");
 `;
 
-function verifierSource(): string {
+function verifierSource(release: InstallerReleaseTarget = FIXED_INSTALLER_RELEASE): string {
   return VERIFY_RELEASE
-    .replaceAll("__VERSION__", FIXED_RELEASE_VERSION)
-    .replaceAll("__CHANNEL__", FIXED_RELEASE_CHANNEL)
-    .replaceAll("__PRERELEASE__", String(FIXED_RELEASE_CHANNEL !== "stable"))
-    .replaceAll("__KEY_ID__", FIXED_RELEASE_KEY_ID)
-    .replaceAll("__ARTIFACT_NAME__", FIXED_ARTIFACT_NAME)
-    .replaceAll("__ARTIFACT_URL__", FIXED_ARTIFACT_URL)
+    .replaceAll("__VERSION__", release.version)
+    .replaceAll("__CHANNEL__", release.channel)
+    .replaceAll("__PRERELEASE__", String(release.channel !== "stable"))
+    .replaceAll("__KEY_ID__", release.release_key_id)
+    .replaceAll("__ARTIFACT_NAME__", release.artifact_name)
+    .replaceAll("__ARTIFACT_URL__", release.artifact_url)
     .replaceAll("__MAX_RELEASE_ASSET_BYTES__", String(MAX_RELEASE_ASSET_BYTES))
-    .replace("__PUBLIC_KEY_PEM__", JSON.stringify(FIXED_RELEASE_PUBLIC_KEY_PEM));
+    .replace("__PUBLIC_KEY_PEM__", JSON.stringify(release.public_key_pem));
 }
 
 const POSIX_TEMPLATE = String.raw`#!/usr/bin/env sh
@@ -885,7 +918,7 @@ __VERIFIER__
 
 export type InstallerExecutionMode = "dedicated_user" | "privileged_host";
 
-function replaceInstallerTemplate(template: string, enrollmentUrl: string, literal: (value: string) => string, executionMode: InstallerExecutionMode, action: "install" | "uninstall" = "install"): string {
+function replaceInstallerTemplate(template: string, enrollmentUrl: string, literal: (value: string) => string, executionMode: InstallerExecutionMode, action: "install" | "uninstall" = "install", release: InstallerReleaseTarget = FIXED_INSTALLER_RELEASE): string {
   if (executionMode !== "dedicated_user" && executionMode !== "privileged_host") throw new Error("invalid installer execution mode");
   const modeFlags = executionMode === "privileged_host"
     ? "--execution-mode privileged_host --confirm-privileged-host"
@@ -897,7 +930,7 @@ function replaceInstallerTemplate(template: string, enrollmentUrl: string, liter
     .replace("__TEMP_PARENT__", "${TMPDIR:-/tmp}")
     .replaceAll("__ACTION__", action)
     .replaceAll("__NO_COLOR__", "${NO_COLOR:-}")    .replaceAll("__EXECUTION_MODE_FLAGS__", modeFlags)
-    .replaceAll("__VERSION__", literal(FIXED_RELEASE_VERSION))
+    .replaceAll("__VERSION__", literal(release.version))
     .replaceAll("__NODE_VERSION__", literal(FIXED_NODE_VERSION))
     .replaceAll("__MAX_NODE_RUNTIME_BYTES__", String(MAX_NODE_RUNTIME_BYTES))
     .replaceAll("__NODE_BASE_URL__", literal(FIXED_NODE_BASE_URL))
@@ -913,29 +946,29 @@ function replaceInstallerTemplate(template: string, enrollmentUrl: string, liter
     .replaceAll("__NODE_WIN_X64_SHA256__", node["win-x64"].sha256)
     .replaceAll("__NODE_WIN_ARM64__", literal(node["win-arm64"].archive))
     .replaceAll("__NODE_WIN_ARM64_SHA256__", node["win-arm64"].sha256)
-    .replaceAll("__RELEASE_BASE__", literal(FIXED_RELEASE_BASE_URL))
-    .replaceAll("__ARTIFACT_NAME__", literal(FIXED_ARTIFACT_NAME))
+    .replaceAll("__RELEASE_BASE__", literal(release.release_base_url))
+    .replaceAll("__ARTIFACT_NAME__", literal(release.artifact_name))
     .replaceAll("__ENROLLMENT_URL__", literal(enrollmentUrl))
     .replaceAll("__MAX_RELEASE_ASSET_BYTES__", String(MAX_RELEASE_ASSET_BYTES))
     .replace("__RELEASE_REDIRECT_ORIGINS_JSON__", JSON.stringify(FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS))
     .replace("__RELEASE_REDIRECT_ORIGINS_PS__", FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS.map((value) => powershellQuote(value)).join(", "))
-    .replace("__VERIFIER__", verifierSource());
+    .replace("__VERIFIER__", verifierSource(release));
 }
 
-export function renderPosixInstaller(requestOrigin: string, executionMode: InstallerExecutionMode = "privileged_host"): string {
+export function renderPosixInstaller(requestOrigin: string, executionMode: InstallerExecutionMode = "privileged_host", release: InstallerReleaseTarget = FIXED_INSTALLER_RELEASE): string {
   const publicOrigin = canonicalPublicOrigin(requestOrigin);
-  return replaceInstallerTemplate(POSIX_TEMPLATE, `${publicOrigin}/runner/enroll`, shellLiteral, executionMode);
+  return replaceInstallerTemplate(POSIX_TEMPLATE, `${publicOrigin}/runner/enroll`, shellLiteral, executionMode, "install", release);
 }
 
-export function renderPowerShellInstaller(requestOrigin: string, executionMode: InstallerExecutionMode = "privileged_host"): string {
+export function renderPowerShellInstaller(requestOrigin: string, executionMode: InstallerExecutionMode = "privileged_host", release: InstallerReleaseTarget = FIXED_INSTALLER_RELEASE): string {
   const publicOrigin = canonicalPublicOrigin(requestOrigin);
-  return replaceInstallerTemplate(POWERSHELL_TEMPLATE, `${publicOrigin}/runner/enroll`, powershellLiteral, executionMode);
+  return replaceInstallerTemplate(POWERSHELL_TEMPLATE, `${publicOrigin}/runner/enroll`, powershellLiteral, executionMode, "install", release);
 }
 
-export function renderPosixUninstaller(requestOrigin: string): string {
-  return replaceInstallerTemplate(POSIX_TEMPLATE, `${canonicalPublicOrigin(requestOrigin)}/runner/enroll`, shellLiteral, "dedicated_user", "uninstall");
+export function renderPosixUninstaller(requestOrigin: string, release: InstallerReleaseTarget = FIXED_INSTALLER_RELEASE): string {
+  return replaceInstallerTemplate(POSIX_TEMPLATE, `${canonicalPublicOrigin(requestOrigin)}/runner/enroll`, shellLiteral, "dedicated_user", "uninstall", release);
 }
 
-export function renderPowerShellUninstaller(requestOrigin: string): string {
-  return replaceInstallerTemplate(POWERSHELL_TEMPLATE, `${canonicalPublicOrigin(requestOrigin)}/runner/enroll`, powershellLiteral, "dedicated_user", "uninstall");
+export function renderPowerShellUninstaller(requestOrigin: string, release: InstallerReleaseTarget = FIXED_INSTALLER_RELEASE): string {
+  return replaceInstallerTemplate(POWERSHELL_TEMPLATE, `${canonicalPublicOrigin(requestOrigin)}/runner/enroll`, powershellLiteral, "dedicated_user", "uninstall", release);
 }
