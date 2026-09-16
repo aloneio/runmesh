@@ -32,6 +32,7 @@ import { settleRunnerMutation } from "../application/runner-lifecycle.js";
 import { validLabel } from "./input.js";
 import { validRunnerVersion } from "./input.js";
 import type { WorkerEnv } from "../platform/env.js";
+import { registryDevelopmentReleaseCache } from "./release-cache.js";
 
 /**
  * Render mode fields for an authenticated action. Unconfigured rows render an
@@ -90,7 +91,7 @@ export async function createBrowserRunner(env: WorkerEnv, form: FormData, baseUr
   // rotation must not slip between finalization and code issuance.
   try { await revokeRunnerTransport(env, runnerId, mutationId, true); }
   catch { return adminError(503, "Runner creation cleanup is uncertain; Runner remains safely fenced."); }
-  return runnerEnrollmentPage(env, baseUrl, runnerId, code, String(form.get("csrf_token") ?? ""), false, selection.mode, selection.confirmed, codeResult);
+  return runnerEnrollmentPage(env, baseUrl, runnerId, code, String(form.get("csrf_token") ?? ""), false, selection.mode, selection.confirmed, codeResult, registryDevelopmentReleaseCache(env));
 }
 
 export async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, baseUrl: string, runnerId: string, action: "rename" | "rotate" | "revoke" | "delete" | "enrollment" | "validity" | "permissions" | "version-policy" | "emergency-lock" | "workspace-create" | "workspace-update" | "workspace-delete"): Promise<Response> {
@@ -206,7 +207,7 @@ export async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, 
     const code = codeResult.code;
     try { await revokeRunnerTransport(env, runnerId, mutationId, true); }
     catch { return adminError(503, "Runner credential cleanup is uncertain; Runner remains safely fenced."); }
-    return runnerEnrollmentPage(env, baseUrl, runnerId, code, String(form.get("csrf_token") ?? ""), true, selection.mode, selection.confirmed, codeResult);
+    return runnerEnrollmentPage(env, baseUrl, runnerId, code, String(form.get("csrf_token") ?? ""), true, selection.mode, selection.confirmed, codeResult, registryDevelopmentReleaseCache(env));
   }
   if (action === "enrollment") {
     const mutationId = `runner-enrollment-${crypto.randomUUID()}`;
@@ -249,7 +250,7 @@ export async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, 
       const cancelled = await cancelRunnerPolicyMutation(env, runnerId, mutationId);
       if (!cancelled.ok) return enrollmentCleanupUnavailable(cancelled);
     } catch { return enrollmentCleanupUnavailable(); }
-    return runnerEnrollmentPage(env, baseUrl, runnerId, code, String(form.get("csrf_token") ?? ""), true, selection.mode, selection.confirmed, codeResult);
+    return runnerEnrollmentPage(env, baseUrl, runnerId, code, String(form.get("csrf_token") ?? ""), true, selection.mode, selection.confirmed, codeResult, registryDevelopmentReleaseCache(env));
   }
   return adminError(404, "Runner enrollment action is not available.");
 }
