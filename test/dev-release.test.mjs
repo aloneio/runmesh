@@ -11,8 +11,9 @@ import { githubJson } from "../scripts/dev-release/github.mjs";
 import { waitForGitlab } from "../scripts/dev-release/verify-ci.mjs";
 import { buildManifest, buildDevelopmentManifest } from "../scripts/release-manifest.mjs";
 import { bundleRunner } from "../scripts/build-runner-bundle.mjs";
+import { publicationPreflight } from "../scripts/dev-release/preflight.mjs";
 
-const plan = () => createDevPlan({ source_sha: "a".repeat(40), source_tree: "b".repeat(40), stable_sha: "c".repeat(40), stable_version: "0.1.3", push_number: 5, run_id: 123, published_at: "2026-09-16T00:00:00Z" });
+const plan = () => createDevPlan({ source_sha: "a".repeat(40), source_tree: "b".repeat(40), stable_sha: "c".repeat(40), stable_version: "0.1.3", stable_release: { release_id: 9, commit_sha: "c".repeat(40), manifest_sha256: "f".repeat(64) }, push_number: 5, run_id: 123, published_at: "2026-09-16T00:00:00Z" });
 const env = () => ({ GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/heads/dev", GITHUB_REPOSITORY: "aloneio/runmesh", GITHUB_SHA: "a".repeat(40), GITHUB_RUN_NUMBER: "5", GITHUB_RUN_ID: "123" });
 async function temp(t) { const dir = await mkdtemp(join(tmpdir(), "runmesh-dev-release-test-")); t.after(() => rm(dir, { recursive: true, force: true })); return dir; }
 
@@ -75,7 +76,7 @@ function publisherFixture({ published = false, draft = false, wrongTag = false, 
   const asset = name => ({ name, size: 50, state: "uploaded" });
   let release = published || draft ? { id: 1, tag_name: p.tag, body: planMessage(p), draft: !published, prerelease: true, immutable: published && immutable, assets: (published ? devAssetNames(p.version) : ["manifest.json"]).map(asset) } : null;
   const io = {
-    verifyLocal: async () => {}, assertCurrentSource: async () => {},
+    verifyLocal: async () => {}, assertCurrentSource: async () => {}, assertCurrentBaseline: async () => {},
     verifyRemote: async (names, complete) => { verifications.push({ names, complete }); if (badBytes && names.length) throw new Error("remote bytes differ"); },
     uploadMissing: async names => { writes.push({ upload: names }); release.assets.push(...names.map(asset)); },
     api: async (path, options = {}) => {
@@ -120,6 +121,35 @@ test("unavailable remote evidence and revoked source stop all publication", asyn
 });
 test("a public but unlocked release is not reported as successful", async () => {
   const f = publisherFixture({ published: true, immutable: false }); await assert.rejects(publishDevelopmentRelease(f.plan, f.io), /immutable/u);
+});
+
+test("a superseded pending batch makes no tag, upload or publication writes", async () => {
+  for (const options of [{}, { draft: true }]) {
+    const f = publisherFixture(options);
+    f.io.assertCurrentBaseline = async () => { throw new Error("dev_release_superseded"); };
+    await assert.rejects(publishDevelopmentRelease(f.plan, f.io), /superseded/u); assert.deepEqual(f.writes, []);
+  }
+});
+test("main advancing during draft upload blocks the final public transition", async () => {
+  const f = publisherFixture({ draft: true }); let checks = 0;
+  f.io.assertCurrentBaseline = async () => { if (++checks === 2) throw new Error("dev_release_superseded"); };
+  await assert.rejects(publishDevelopmentRelease(f.plan, f.io), /superseded/u);
+  assert.ok(f.writes.some(w => w.upload)); assert.ok(!f.writes.some(w => w.method === "PATCH"));
+});
+test("completed batches remain verifiable after main and dev history changes", async () => {
+  const f = publisherFixture({ published: true });
+  f.io.assertCurrentBaseline = f.io.assertCurrentSource = async () => { throw new Error("must not check today's source"); };
+  await publishDevelopmentRelease(f.plan, f.io); assert.deepEqual(f.writes, []);
+  let verified = false;
+  assert.deepEqual(await publicationPreflight(f.plan, { ...f.io, verifyPublished: async () => { verified = true; } }), { already_published: true });
+  assert.equal(verified, true); assert.deepEqual(f.writes, []);
+});
+test("preflight refuses obsolete drafts before signing and does not trust a success label alone", async () => {
+  const f = publisherFixture({ draft: true }); f.io.assertCurrentBaseline = async () => { throw new Error("dev_release_superseded"); };
+  await assert.rejects(publicationPreflight(f.plan, f.io), /superseded/u); assert.deepEqual(f.writes, []);
+  const g = publisherFixture({ published: true });
+  await assert.rejects(publicationPreflight(g.plan, { ...g.io, verifyPublished: async () => { throw new Error("bad signature"); } }), /bad signature/u);
+  assert.deepEqual(g.writes, []);
 });
 
 function gitlabFixture(status = "success") {

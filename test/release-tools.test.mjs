@@ -30,8 +30,9 @@ test("pins manually-dispatched releases to the triggering main commit", async ()
   assert.equal(workflow.includes('test "$GITHUB_REF" = "refs/heads/main"'), true);
   assert.equal(workflow.includes('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"'), true);
   assert.equal(workflow.includes('test "$(git rev-parse origin/main)" = "$GITHUB_SHA"'), true);
-  assert.equal(workflow.includes(`test "$RELEASE_VERSION" = "${productVersion}"`), true);
-  assert.equal(workflow.includes('test "$RELEASE_SIGNING_KEY_ID" = "runmesh-preview-2026-01"'), true);
+  assert.equal(workflow.includes('node scripts/stable-publication.mjs "$RELEASE_VERSION" "$RELEASE_SIGNING_KEY_ID"'), true);
+  assert.equal(/test "\$RELEASE_VERSION" = "\d+\.\d+\.\d+"/u.test(workflow), false);
+  assert.equal(workflow.includes('test "$RELEASE_VERSION" = "$ROOT_VERSION"'), true);
   assert.equal(workflow.lastIndexOf('git fetch --no-tags origin main') > workflow.indexOf('Verify tag and release do not already exist'), true);
   assert.equal(workflow.includes("https://api.github.com/repos/"), true);
   assert.equal(workflow.includes('test -n "$GH_TOKEN"'), true);

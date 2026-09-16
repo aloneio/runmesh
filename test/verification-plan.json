@@ -144,6 +144,7 @@
         "test/message-types.test.mjs",
         "test/package-verification.test.mjs",
         "test/public-contract-baseline.test.mjs",
+        "test/release-baseline.test.mjs",
         "test/release-tools.test.mjs",
         "test/runtime-config.test.mjs",
         "test/security-config.test.mjs",
