@@ -17,6 +17,7 @@
       "description": "Public pure rules in Node; no DO, disk or subprocess adapters",
       "files": [
         "test/domain/admin-projections.test.ts",
+        "test/domain/maintenance-planning.test.ts",
         "test/domain/messages.test.ts",
         "test/domain/public-rules.test.ts",
         "test/domain/runner-deletion.test.ts"
@@ -79,6 +80,7 @@
         "apps/worker/test/deployment-provenance.test.ts",
         "apps/worker/test/enrollment-fence-recovery.test.ts",
         "apps/worker/test/external-audit.test.ts",
+        "apps/worker/test/feature-health-ports.test.ts",
         "apps/worker/test/foundation-boundaries.test.ts",
         "apps/worker/test/ga-regressions.test.ts",
         "apps/worker/test/hibernation.test.ts",
