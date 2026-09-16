@@ -79,15 +79,11 @@ jobs:
           npm run check:versions
           ROOT_VERSION="$(node -p 'require("./package.json").version')"
           test "$RELEASE_VERSION" = "$ROOT_VERSION"
-          # This workflow and the hosted installer are the fixed
-          # v0.1.3 stable patch contract. Refuse a future version until its
-          # installer constants, key, and independent review are rotated.
-          test "$RELEASE_VERSION" = "0.1.3"
           test -n "$RELEASE_SIGNING_KEY_ID"
-          # The hosted installer embeds this reviewed key ID for the fixed
-          # v0.1.3 contract; a different valid key would make the
-          # published asset unverifiable by the installer.
-          test "$RELEASE_SIGNING_KEY_ID" = "runmesh-preview-2026-01"
+          # Resolve the version and key from the reviewed source contract.
+          # A future version requires a matching candidate lifecycle, installer
+          # and public key, not another hard-coded number in this workflow.
+          node scripts/stable-publication.mjs "$RELEASE_VERSION" "$RELEASE_SIGNING_KEY_ID"
           test "$(node -p 'require("./apps/runner/package.json").version')" = "$RELEASE_VERSION"
           test "$(node -p 'require("./apps/worker/package.json").version')" = "$RELEASE_VERSION"
           test "$(node -p 'require("./packages/protocol/package.json").version')" = "$RELEASE_VERSION"

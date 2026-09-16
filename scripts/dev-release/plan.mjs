@@ -3,6 +3,7 @@ import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { releaseCadence, createDevPlan, assertPlanContext, DEV_RELEASE_REPOSITORY } from "./policy.mjs";
 import { assertSource, git, readPlan, root } from "./io.mjs";
+import { observeStableBaseline } from "./baseline.mjs";
 
 const env = process.env;
 assert.equal(env.GITHUB_REPOSITORY, DEV_RELEASE_REPOSITORY);
@@ -26,14 +27,14 @@ if (process.argv[2] === "cadence" && process.argv.length === 3) {
     // The workflow downloads this run's immutable plan artifact before calling
     // us. Missing/expired evidence fails closed, never silently picks a new tag.
     plan = await readPlan(filename);
+    // Preserve identity. Publication preflight distinguishes an old completed
+    // release (read-only verification) from an obsolete unpublished batch.
   } else {
     assert.equal(Number(env.GITHUB_RUN_ATTEMPT), 1);
-    await git("fetch", "--no-tags", "origin", "main:refs/remotes/origin/main");
-    const stableSha = await git("rev-parse", "origin/main");
-    const stablePackage = JSON.parse(await git("show", `${stableSha}:package.json`));
+    const baseline = await observeStableBaseline(env.GITHUB_SHA);
     const publishedAt = new Date(Number(await git("show", "-s", "--format=%ct", env.GITHUB_SHA)) * 1000).toISOString().replace(".000Z", "Z");
     plan = createDevPlan({ source_sha: env.GITHUB_SHA, source_tree: await git("rev-parse", "HEAD^{tree}"),
-      stable_sha: stableSha, stable_version: stablePackage.version, push_number: cadence.push_number,
+      ...baseline, push_number: cadence.push_number,
       run_id: Number(env.GITHUB_RUN_ID), published_at: publishedAt });
     await assertSource(plan);
     await writeFile(filename, JSON.stringify(plan, null, 2) + "\n", { flag: "wx" });
