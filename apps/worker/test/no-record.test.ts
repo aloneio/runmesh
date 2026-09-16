@@ -8,6 +8,22 @@ import { randomBase64Url, sha256Hex, internalHeaders } from "../src/security.js"
 
 const full = { read: true, edit: true, shell: true, job_control: true };
 
+it.each(["0.1.1", "0.1.2-dev.0", "0.1.4-dev.0", "0.1.4-dev.12", "0.2.0-dev.0", "1.0.0-dev.0"])("development release %s preserves history-independent Job compatibility, not permission grants", async version => {
+  const f = await fixture();
+  await runInDurableObject(f.stub, (_instance, state) => { state.storage.sql.exec("UPDATE runners SET current_runner_version=? WHERE runner_id='r'", version); });
+  const result = (await f.call("job", { action: "get", job_id: "j", workspace_id: "w" })).body.result;
+  expect(result.isError).not.toBe(true); expect(f.forwarded).toHaveLength(1);
+  expect((await f.call("job", { action: "cancel", job_id: "j", workspace_id: "forbidden" })).body.result.isError).toBe(true);
+  expect(f.forwarded).toHaveLength(1);
+});
+
+it.each(["0.1.0", "0.1.0-dev.5", "0.1.1-dev.0", "0.1.4-beta.0", "0.1.4-dev.01", "0.1.4-dev.0\n", "unknown"])("unsupported version %s cannot bypass the existing Job floor", async version => {
+  const f = await fixture();
+  await runInDurableObject(f.stub, (_instance, state) => { state.storage.sql.exec("UPDATE runners SET current_runner_version=? WHERE runner_id='r'", version); });
+  const result = (await f.call("job", { action: "get", job_id: "j", workspace_id: "w" })).body.result;
+  expect(result.structuredContent.error.code).toBe("runner_upgrade_required"); expect(f.forwarded).toHaveLength(0);
+});
+
 const contextUsage = { workspace_id: "w", storage_schema: 1, state: "ready", record_files: 4, record_bytes: 3000, context_count: 1, metadata_bytes: 800,
   limit_bytes: 33554432, limit_records: 4096, limit_contexts: 256, over_limit: false, pending_checkpoint: false, accounting: "logical_revision_bytes" };
 const contextPreview = { workspace_id: "w", retention_schema: 1, applied: false, complete: true, plan_hash: "a".repeat(64), keep_days: 30, keep_revisions: 2,
