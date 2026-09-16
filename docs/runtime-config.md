@@ -21,7 +21,7 @@ Use independent cryptographically random values, at least 32 random bytes encode
 | `RUNMESH_PUBLIC_ORIGIN` | Validated HTTPS URL plus matching Host | Keep only for reverse-proxy overrides; an explicit empty/invalid value stays fail-closed |
 | `RUNMESH_AUDIT_BACKEND` | Production defaults to D1 | Explicit backend overrides are still supported |
 | `RUNMESH_JOB_HISTORY_BACKEND` | Production defaults to packed D1 | Missing production D1 does not fall back to DO history writes |
-| `RUNMESH_SIGNED_RELEASE_AVAILABLE` | Generated from reviewed release state | An explicit empty value still disables hosted installation |
+| `RUNMESH_SIGNED_RELEASE_AVAILABLE` | Production: reviewed stable version; development: `dev` discovery sentinel | An explicit empty value disables hosted installation. Development accepts only a current-series immutable signed dev prerelease and never falls back to stable. |
 | `RUNMESH_DEPLOYMENT_BRANCH` / `RUNMESH_DEPLOYMENT_COMMIT` | Verified build-time Git source, compared with provider metadata | Old variables are not treated as proof of compiled source |
 
 The development environment has one non-secret mode marker, `RUNMESH_ENVIRONMENT=development`. Test-only vars remain confined to the local test environment. A fork's public domain does not have to replace an owner's hard-coded URL. Request authority is never taken from X-Forwarded-Host. A reverse proxy using an internal request URL must supply an explicit validated public-origin override.

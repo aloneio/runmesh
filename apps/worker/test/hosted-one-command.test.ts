@@ -10,7 +10,7 @@ const modes = ["dedicated_user", "privileged_host"] as const;
 describe("verified one-command enrollment", () => {
   it.each(modes)("renders exactly one bootstrap line per platform for %s", async (mode) => {
     const code = "C".repeat(43);
-    const response = runnerEnrollmentPage(hostedEnv, origin, "runner-test", code, "csrf", false, mode, mode === "privileged_host");
+    const response = await runnerEnrollmentPage(hostedEnv, origin, "runner-test", code, "csrf", false, mode, mode === "privileged_host");
     expect(response.status).toBe(200);
     const html = await response.text();
     const commands = [...html.matchAll(/<pre><code>([\s\S]*?)<\/code><\/pre>/g)].slice(0, 3).map((match) => match[1]!);
@@ -32,12 +32,12 @@ describe("verified one-command enrollment", () => {
   });
 
   it("keeps the default restricted without requiring a multi-step install", async () => {
-    const response = runnerEnrollmentPage(hostedEnv, origin, "runner-test", "D".repeat(43), "csrf");
+    const response = await runnerEnrollmentPage(hostedEnv, origin, "runner-test", "D".repeat(43), "csrf");
     const html = await response.text();
     expect(html).toContain("install.sh?execution_mode=dedicated_user");
     expect(html).toContain("Copy installer command");
     expect(html).toContain('<p class="eyebrow">One-command Runner setup</p>');
-    expect(runnerEnrollmentPage(hostedEnv, origin, "runner-test", "D".repeat(43), "csrf", false, "privileged_host", false).status).toBe(400);
+    expect((await runnerEnrollmentPage(hostedEnv, origin, "runner-test", "D".repeat(43), "csrf", false, "privileged_host", false)).status).toBe(400);
   });
 
   it.each(modes)("serves the selected %s script without embedding credentials", async (mode) => {
@@ -73,7 +73,7 @@ describe("verified one-command enrollment", () => {
   });
 
   it("retains the explicit manual fallback only when signed distribution is disabled", async () => {
-    const response = runnerEnrollmentPage({ ...hostedEnv, RUNMESH_SIGNED_RELEASE_AVAILABLE: "" }, origin, "runner-test", "E".repeat(43), "csrf");
+    const response = await runnerEnrollmentPage({ ...hostedEnv, RUNMESH_SIGNED_RELEASE_AVAILABLE: "" }, origin, "runner-test", "E".repeat(43), "csrf");
     expect(await response.text()).toContain('<p class="eyebrow">Manual portable-artifact enrollment</p>');
   });
 });
