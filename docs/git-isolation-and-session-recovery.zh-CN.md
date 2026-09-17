@@ -28,6 +28,12 @@ Runner 将可恢复的 `4000` 记录为 `session_conflict`，沿用带抖动的�
 
 ## 回归与交付边界
 
+`git_unavailable` 明确归为 availability，默认状态为 `not_started`；旧 Runner 明确报告的状态（包括 `unknown`）仍予保留。恢复动作是由管理员修正配置，不是重放 Job 或自动重试。只更新 Worker 不能声称已升级 Runner 的状态报告。
+
+完整 MCP 链路测试使用独立的根目录 Runner 与只读客户端，检查五个 Git 错误以及省略或部分提供历史查询可选参数的情况。`git_log` 数量和 `git_blame` 行范围未提供时，不向 RPC 对象写入 `undefined`，避免被严格 JSON 校验误拒绝。另一个独立 SQLite Worker 先接受 sync sequence 2，再以 `4000` 拒绝 sequence 1，随后以相同凭据完成新连接和 echo。这与普通 socket replacement、D1 历史批处理语义不同。
+
+线上验收首先核对实际 dev 域名及干净源码提交，再通过已获授权的 dev MCP 客户端检查根目录 Git 错误。`test/helpers/session-conflict-probe.ts` 中的可复用会话探针只能用于明确授权的隔离测试 Runner；它会替换该身份现有的连接。即使测试失败也应恢复暂停的测试服务。不得增加公开测试后门、绕过管理员认证，或仅凭本地测试、健康响应声称线上通过。
+
 回归覆盖根目录、普通目录、同级前缀、路径穿越；五个 Git 方法的根目录安全拒绝；独立只读 workspace 内真实执行 status、diff、log、show、blame；各传输路径的上游错误分类；旧会话 RPC 输出拦截；真实 WebSocket 冲突与重试。既有所有者、符号链接、元数据竞争和握手测试仍需通过。
 
 源码测试不能替代已安装签名 Runner 的验收。源码修改不会更新中央 workspace 策略，也不会升级服务。应保留不可变发布资产和当前 Runner。要求先不部署时，不应向会自动部署的分支推送；先保留经过验证的本地提交。

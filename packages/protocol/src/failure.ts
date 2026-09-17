@@ -14,6 +14,10 @@ export interface RpcFailureMetadata {
  * when their own control flow proves that no side effect was started. */
 export function failureMetadata(code: string, observedState?: RpcOperationState): RpcFailureMetadata {
   let result: RpcFailureMetadata;
+  // Git isolation/launch failures require operator configuration, not Job
+  // replay. Preserve an older Runner's explicit unknown state without losing
+  // the known availability class or suggesting an automatic retry.
+  if (code === "git_unavailable") return { failure_class: "availability", operation_state: observedState ?? "not_started", next_action: "contact_operator" };
   if (code === "context_prune_partial") return { failure_class: "conflict", operation_state: "unknown", next_action: "contact_operator" };
   if (["invalid_params", "invalid_request", "method_not_found", "invalid_path", "path_traversal", "invalid_patch", "not_utf8", "mixed_newlines"].includes(code)) result = { failure_class: "validation", operation_state: "not_started", next_action: "correct_request" };
   else if (["permission_denied", "insufficient_scope", "readonly_workspace", "stale_policy", "policy_pending"].includes(code)) result = { failure_class: "authorization", operation_state: "not_started", next_action: "refresh_permissions" };
