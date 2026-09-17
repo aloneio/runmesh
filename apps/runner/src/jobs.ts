@@ -1,3 +1,4 @@
+import { deliverJobInput } from "./jobs/input.js";
 import { availableLogBytes } from "./jobs/log-budget.js";
 import { retainedJobCandidates, expiredRetainedJob } from "./jobs/retention-plan.js";
 import type { JobFilePort, JobProcessPort } from "./jobs/ports.js";
@@ -666,15 +667,7 @@ export class JobManager {
     const stdin = child.stdin;
     if (stdin === null || stdin.destroyed || stdin.writableEnded) throw new Error("job does not accept input");
     const accepted = data === undefined ? 0 : Buffer.byteLength(data, "utf8");
-    if (data !== undefined && data.length > 0 && !stdin.write(data, "utf8")) {
-      await new Promise<void>((resolve, reject) => { stdin.once("drain", resolve); stdin.once("error", reject); });
-    }
-    if (closeStdin) {
-      await new Promise<void>((resolve, reject) => {
-        stdin.once("error", reject);
-        stdin.end(() => resolve());
-      });
-    }
+    await deliverJobInput(stdin, data, closeStdin);
     return { accepted, eof: closeStdin };
   }
 
