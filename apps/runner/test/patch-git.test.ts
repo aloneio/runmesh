@@ -19,7 +19,10 @@ async function fixture(readonly = false): Promise<{ readonly root: string; reado
     root,
     outside,
     workspace: { workspaceId: "workspace-1", rootPath: await realpath(root), readonly, shell: false },
-    cleanup: () => rm(base, { recursive: true, force: true }),
+    // Native filesystem cleanup may transiently report ENOTEMPTY/EBUSY.
+    // Retry only this temporary fixture within a bounded cleanup budget;
+    // persistent failures still reject rather than hiding test failures.
+    cleanup: () => rm(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }),
   };
 }
 function patch(workspace: WorkspaceConfig, options: ConstructorParameters<typeof PatchService>[1] = {}): PatchService {
@@ -29,7 +32,9 @@ function envelope(body: string): string { return `*** Begin Patch\n${body}\n*** 
 async function run(root: string, args: readonly string[]): Promise<void> {
   const { spawn } = await import("node:child_process");
   await new Promise<void>((resolve, reject) => {
-    const child = spawn("git", [...args], { cwd: root, shell: false, stdio: "ignore" });
+    // Fixture commits must not launch automatic maintenance that can outlive
+    // the command and race removal of the temporary repository.
+    const child = spawn("git", ["-c", "gc.auto=0", "-c", "maintenance.auto=false", ...args], { cwd: root, shell: false, stdio: "ignore" });
     child.once("error", reject);
     child.once("close", (code) => code === 0 ? resolve() : reject(new Error(`git ${args.join(" ")} failed`)));
   });
