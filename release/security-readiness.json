@@ -1,17 +1,107 @@
 {
   "schema_version": 1,
-  "basis_commit": "93698cae7939e4034a176d151a113d700ee63615",
-  "scope": "Known audit findings; current CI work does not fix application authorization. Revalidate against the proposed release candidate.",
+  "basis_commit": "4861aa5b2c2900b79d80ed4e1effb50f53d2abd7",
+  "scope": "Reviewed pre-release source fixes and retained prior protections. Closure is not release or deployment approval; execute all owned regressions on the exact clean candidate before signing.",
   "findings": [
-    { "id": "SEC01", "state": "open", "area": "admin-final-admission" },
-    { "id": "SEC02", "state": "open", "area": "workspace-root-identity" },
-    { "id": "SEC03", "state": "open", "area": "git-object-source" },
-    { "id": "SEC04", "state": "open", "area": "admin-session-unavailable" },
-    { "id": "SEC05", "state": "open", "area": "admin-password-unavailable" },
-    { "id": "SEC06", "state": "open", "area": "runner-list-permission-outage" },
-    { "id": "SEC07", "state": "open", "area": "job-list-permission-outage" },
-    { "id": "SEC08", "state": "open", "area": "workspace-upstream-contract" },
-    { "id": "SEC09", "state": "open", "area": "policy-readiness-unavailable" },
-    { "id": "SEC10", "state": "open", "area": "final-audit-result" }
+    {
+      "id": "SEC01",
+      "state": "closed",
+      "area": "admin-final-admission",
+      "fixed_commit": "b10809c08a3a6c8ccbdc8f05f48313741613370a",
+      "regressions": [
+        "apps/worker/test/release-admin-security.test.ts"
+      ],
+      "resolution": "source-fixed-and-regression-tested"
+    },
+    {
+      "id": "SEC02",
+      "state": "closed",
+      "area": "workspace-root-identity",
+      "fixed_commit": "b10809c08a3a6c8ccbdc8f05f48313741613370a",
+      "regressions": [
+        "apps/runner/test/release-boundary-security.test.ts"
+      ],
+      "resolution": "source-fixed-and-regression-tested"
+    },
+    {
+      "id": "SEC03",
+      "state": "closed",
+      "area": "git-object-source",
+      "fixed_commit": "b10809c08a3a6c8ccbdc8f05f48313741613370a",
+      "regressions": [
+        "apps/runner/test/release-boundary-security.test.ts"
+      ],
+      "resolution": "source-fixed-and-regression-tested"
+    },
+    {
+      "id": "SEC04",
+      "state": "closed",
+      "area": "admin-session-unavailable",
+      "fixed_commit": "b10809c08a3a6c8ccbdc8f05f48313741613370a",
+      "regressions": [
+        "apps/worker/test/release-admin-security.test.ts"
+      ],
+      "resolution": "source-fixed-and-regression-tested"
+    },
+    {
+      "id": "SEC05",
+      "state": "closed",
+      "area": "admin-password-unavailable",
+      "fixed_commit": "b10809c08a3a6c8ccbdc8f05f48313741613370a",
+      "regressions": [
+        "apps/worker/test/release-admin-security.test.ts"
+      ],
+      "resolution": "source-fixed-and-regression-tested"
+    },
+    {
+      "id": "SEC06",
+      "state": "closed",
+      "area": "runner-list-permission-outage",
+      "fixed_commit": "b10809c08a3a6c8ccbdc8f05f48313741613370a",
+      "regressions": [
+        "apps/worker/test/release-mcp-security.test.ts"
+      ],
+      "resolution": "existing-protection-revalidated"
+    },
+    {
+      "id": "SEC07",
+      "state": "closed",
+      "area": "job-list-permission-outage",
+      "fixed_commit": "b10809c08a3a6c8ccbdc8f05f48313741613370a",
+      "regressions": [
+        "apps/worker/test/release-mcp-security.test.ts"
+      ],
+      "resolution": "source-fixed-and-regression-tested"
+    },
+    {
+      "id": "SEC08",
+      "state": "closed",
+      "area": "workspace-upstream-contract",
+      "fixed_commit": "b10809c08a3a6c8ccbdc8f05f48313741613370a",
+      "regressions": [
+        "apps/worker/test/release-mcp-security.test.ts"
+      ],
+      "resolution": "source-fixed-and-regression-tested"
+    },
+    {
+      "id": "SEC09",
+      "state": "closed",
+      "area": "policy-readiness-unavailable",
+      "fixed_commit": "b10809c08a3a6c8ccbdc8f05f48313741613370a",
+      "regressions": [
+        "apps/worker/test/release-mcp-security.test.ts"
+      ],
+      "resolution": "existing-protection-revalidated"
+    },
+    {
+      "id": "SEC10",
+      "state": "closed",
+      "area": "final-audit-result",
+      "fixed_commit": "b10809c08a3a6c8ccbdc8f05f48313741613370a",
+      "regressions": [
+        "apps/worker/test/release-mcp-security.test.ts"
+      ],
+      "resolution": "source-fixed-and-regression-tested"
+    }
   ]
 }
