@@ -1,6 +1,6 @@
 {
-  "source_commit": "0cd50ef6c8da8c11894eba2e7645befee2686774",
-  "change_reason": "Intentional inspect.inputSchema action-constraint correction; other public fields and the wire schema are unchanged.",
+  "source_commit": "8159b081a8d89c423add7bd492516262839e66bf",
+  "change_reason": "Reviewed agent-facing input publication, cross-field constraints, safe shell annotations and recovery descriptions; the wire schema is unchanged.",
   "tools": [
     "context",
     "edit",
@@ -13,6 +13,6 @@
     "shell",
     "workspace_list"
   ],
-  "mcp_catalog_sha256": "ff1ad08fb8744c7d3dbe82fa77de6e5dba1b64cf9e2d1760d911710886b220b9",
+  "mcp_catalog_sha256": "98092badf8b2be0438fa17a1ea9c1f6178cf3bf97bae9f0ffca54457d520a8d9",
   "wire_schema_sha256": "e599c561aae4435dc0b07414baa2358fdf2da44263ff288b825a44ca8b4bfd99"
 }
