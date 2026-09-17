@@ -1,3 +1,4 @@
+import { constants } from "node:fs";
 import { createHash } from "node:crypto";
 import { open, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -79,7 +80,8 @@ export function compareLayers(source, { server, host } = {}) {
 }
 
 export async function readCatalog(path) {
-  const file = await open(path, "r");
+  // Reject FIFOs at the descriptor check without waiting for a writer.
+  const file = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
   try {
     const info = await file.stat();
     if (!info.isFile()) throw new Error("invalid_catalog");
