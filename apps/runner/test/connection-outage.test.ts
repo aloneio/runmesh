@@ -21,7 +21,7 @@ describe("availability-aware connection recovery", () => {
   it.each([429, 500, 502, 503, 504])("keeps HTTP %s retryable even when an error mentions authentication", (statusCode) => {
     expect(classifyConnectionFailure({ statusCode, reason: "authentication storage unavailable" })).toBe("network");
   });
-  it.each([1011, 1012, 1013, 1006, 4002])("does not reclassify close %s by untrusted reason text", (closeCode) => {
+  it.each([1011, 1012, 1013, 1006, 4000, 4002])("does not reclassify close %s by untrusted reason text", (closeCode) => {
     expect(classifyConnectionFailure({ closeCode, reason: "credentials revoked: service unavailable" })).toBe("network");
   });
   it("does not treat a generic storage/auth-service error message as a credential decision", () => {
@@ -73,14 +73,21 @@ describe("availability-aware connection recovery", () => {
     try { await connection.start(); expect(waits).toEqual([120000]); }
     finally { connection.stop(); server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); log.mockRestore(); }
   });
-  it("exercises a real WebSocket 1013 close without leaving the reconnect loop", async () => {
+  it.each([4000, 1013])("exercises a real WebSocket %s close without leaving the reconnect loop", async (closeCode) => {
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     await new Promise<void>((resolve) => server.once("listening", resolve));
-    server.on("connection", (socket) => socket.once("message", () => socket.close(1013, "authentication dependency unavailable")));
+    server.on("connection", (socket) => socket.once("message", () => socket.close(closeCode, closeCode === 4000 ? "stale runner session" : "authentication dependency unavailable")));
     const address = server.address(); if (typeof address === "string") throw new Error("missing test port");
     const waits: number[] = [], connection = runner(async (ms) => { waits.push(ms); connection.stop(); }, `ws://127.0.0.1:${address.port}`);
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
-    try { await connection.start(); expect(waits).toEqual([30000]); }
+    try {
+      await connection.start();
+      expect(waits).toEqual([closeCode === 4000 ? 750 : 30000]);
+      if (closeCode === 4000) {
+        expect(log.mock.calls.flat().join(" ")).toContain("session_conflict");
+        expect(log.mock.calls.flat().join(" ")).not.toContain("credentials were revoked");
+      }
+    }
     finally { connection.stop(); for (const socket of server.clients) socket.terminate(); await new Promise<void>((resolve) => server.close(() => resolve())); log.mockRestore(); }
   });
 });

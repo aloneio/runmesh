@@ -213,6 +213,27 @@ describe("fs.apply_patch", () => {
 });
 
 describe("git inspection", () => {
+  it("runs all five read-only Git operations in a dedicated workspace", async () => {
+    const test = await fixture(true);
+    try {
+      await run(test.root, ["init"]);
+      await run(test.root, ["config", "user.email", "git@aloneio.aleeas.com"]);
+      await run(test.root, ["config", "user.name", "aloneio"]);
+      await writeFile(join(test.root, "tracked.txt"), "original\nunchanged\n");
+      await run(test.root, ["add", "tracked.txt"]);
+      await run(test.root, ["commit", "-m", "Create isolated Git regression fixture"]);
+      const git = testGit(test.workspace);
+      const params = { workspace_id: test.workspace.workspaceId, path: "tracked.txt" };
+      const { commit } = await git.head(params);
+      await writeFile(join(test.root, "tracked.txt"), "changed\nunchanged\n");
+      expect(await git.status(params)).toMatchObject({ entries: [{ path: "tracked.txt", worktree_status: "M" }] });
+      expect(await git.diff(params)).toMatchObject({ diff: expect.stringContaining("+changed") });
+      expect(await git.log(params)).toMatchObject({ commits: [{ oid: commit }] });
+      expect(await git.show({ ...params, revision: commit })).toMatchObject({ output: "original\nunchanged\n" });
+      expect(await git.blame({ ...params, start_line: 2, end_line: 2 })).toMatchObject({ output: expect.stringContaining("\tunchanged") });
+    } finally { await test.cleanup(); }
+  });
+
   it("clips malformed UTF-8 at the first invalid byte without quadratic retries", () => {
     const malformed = Buffer.concat([
       Buffer.from("prefix😀", "utf8"),

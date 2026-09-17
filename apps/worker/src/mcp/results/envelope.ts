@@ -60,6 +60,7 @@ export function failWithDetails(code: string, message: string, hint: string, det
 export function fail(code: string, message: string, hint: string, state?: RpcOperationState): ToolFailure { return { ok: false, error: { code, message, hint, ...failureMetadata(code, state) } }; }
 
 export function hintFor(code: string, state?: RpcOperationState): string {
+  if (code === "git_unavailable") return "Ask an administrator to verify the Git installation and configure a dedicated, non-filesystem-root workspace with trusted Git executables outside it. Do not weaken executable isolation.";
   if (code === "context_storage_full") return "Inspect context storage and review retention for old revisions. A context-count limit requires separately reviewed archival of complete contexts; existing records were not automatically deleted.";
   if (code === "context_plan_changed") return "Review a fresh context retention preview; do not reuse a stale plan hash.";
   if (code === "context_prune_partial") return "Some old revisions may have been removed. Inspect storage and request a fresh preview; no batch rollback or automatic retry occurred.";

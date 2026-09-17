@@ -2,6 +2,11 @@ export class RunnerAuthenticationError extends Error {
   public constructor(message = "runner credentials were rejected") { super(message); this.name = "RunnerAuthenticationError"; }
 }
 
+/** Session fencing requires a fresh handshake, not credential replacement. */
+export class RunnerSessionConflictError extends Error {
+  public constructor() { super("runner session is stale or was replaced; reconnecting"); this.name = "RunnerSessionConflictError"; }
+}
+
 export class RunnerServiceUnavailableError extends Error {
   public constructor(message = "runner service temporarily unavailable", public readonly retryAfterMs = 30_000) {
     super(message); this.name = "RunnerServiceUnavailableError";

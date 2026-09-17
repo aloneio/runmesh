@@ -8,6 +8,7 @@ import { trustedWindowsRoot } from "../windows-tools.js";
 
 export function isolatedGitEnvironment(directory: string, worktree: string): NodeJS.ProcessEnv {
   const pathEntries = trustedGitPathEntries(worktree);
+  if (pathEntries.length === 0) throw new Error("no trusted Git executable directory outside the workspace; configure a dedicated workspace directory");
   const path = pathEntries.join(process.platform === "win32" ? ";" : ":");
   // Start from an allow-list rather than inheriting the Runner's environment:
   // credentials, NODE_OPTIONS, custom Git helpers, and user config locations
@@ -54,6 +55,11 @@ export function trustedGitCwd(): string {
  * developer runtimes continue to work.
  */
 export function trustedGitPathEntries(worktree: string): string[] {
+  let canonicalWorktree: string;
+  try { canonicalWorktree = realpathSync.native(worktree); } catch { canonicalWorktree = normalize(worktree); }
+  // Keep filesystem/drive-root behavior explicit even when Windows has a
+  // system Git installation on a different drive from the workspace root.
+  if (dirname(canonicalWorktree) === canonicalWorktree) return [];
   const entries: string[] = [];
   const add = (value: string | undefined, allowMissing = false, windowsRoots: readonly string[] = []): void => {
     if (value === undefined || value.trim() === "") return;
@@ -149,14 +155,13 @@ function trustedGitDirectory(path: string, worktree: string, allowMissing: boole
     const canonicalInfo = lstatSync(canonicalExisting);
     if (!canonicalInfo.isDirectory() || canonicalInfo.isSymbolicLink()) return false;
     if (process.platform !== "win32" && (!trustedPosixOwner(canonicalInfo.uid) || !trustedPosixDirectoryMode(canonicalInfo.mode, missingSuffix))) return false;
+    // Workspace exclusion also applies to Windows machine-wide locations:
+    // a filesystem/drive-root workspace cannot contain a trusted executable.
+    // Check both spellings so symlink aliases and missing suffixes fail closed.
+    let canonicalWorktree: string;
+    try { canonicalWorktree = realpathSync.native(worktree); } catch { canonicalWorktree = worktree; }
+    if (isLexicallyWithin(candidate, worktree) || isPathWithin(canonicalExisting, canonicalWorktree)) return false;
     if (process.platform !== "win32") {
-      // Resolve the worktree once as well so a symlinked spelling cannot evade
-      // the lexical exclusion above. A missing optional suffix is rejected if
-      // either its lexical spelling or its existing ancestor is in the
-      // workspace boundary; a later mkdir cannot then turn it into an escape.
-      let canonicalWorktree: string;
-      try { canonicalWorktree = realpathSync.native(worktree); } catch { canonicalWorktree = worktree; }
-      if (isLexicallyWithin(candidate, worktree) || isPathWithin(canonicalExisting, canonicalWorktree)) return false;
       if (missingSuffix) return true;
       const canonical = realpathSync.native(candidate);
       const canonicalInfo = lstatSync(canonical);
@@ -173,7 +178,7 @@ function trustedGitDirectory(path: string, worktree: string, allowMissing: boole
     const canonical = realpathSync.native(candidate);
     const finalInfo = lstatSync(canonical);
     if (!finalInfo.isDirectory() || finalInfo.isSymbolicLink()) return false;
-    return windowsRoots.some((root) => isPathWithin(canonical, root));
+    return !isPathWithin(canonical, canonicalWorktree) && windowsRoots.some((root) => isPathWithin(canonical, root));
   } catch {
     // EACCES, malformed/reparse paths, and all other lookup failures fail
     // closed. Missing fixed prefixes were handled above only after a safe
@@ -211,19 +216,18 @@ function isErrnoCode(error: unknown, code: string): boolean {
 }
 
 function isLexicallyWithin(candidate: string, root: string): boolean {
-  const child = normalizePathForComparison(candidate);
-  const parent = normalizePathForComparison(root);
-  return child === parent || child.startsWith(`${parent}/`);
+  return isPathWithin(candidate, root);
 }
 
 export function isPathWithin(candidate: string, root: string): boolean {
   const child = normalizePathForComparison(candidate);
   const parent = normalizePathForComparison(root);
-  return child === parent || child.startsWith(`${parent}/`);
+  return child === parent || child.startsWith(parent.endsWith("/") ? parent : `${parent}/`);
 }
 
 function normalizePathForComparison(value: string): string {
-  const normalized = process.platform === "win32" ? value.replaceAll("\\", "/") : value;
+  const path = normalize(value);
+  const normalized = process.platform === "win32" ? path.replaceAll("\\", "/") : path;
   const root = normalized === "/" || /^[A-Za-z]:\/$/u.test(normalized);
   const withoutTrailingSeparators = root ? normalized : normalized.replace(/\/+$/u, "");
   return process.platform === "win32" ? withoutTrailingSeparators.toLowerCase() : withoutTrailingSeparators;

@@ -8,7 +8,7 @@ import type { WorkerEnv } from "./platform/env.js";
 export type { WorkerEnv } from "./platform/env.js";
 import { resolveRuntimeConfiguration } from "./runtime-config.js";
 import { signQueueGrant, verifyQueueGrant, launchDigest } from "./queue-grant.js";
-import { ControlPlaneUnavailableError, controlPlaneUnavailableResponse, registryRejectedSession } from "./control-plane-errors.js";
+import { ControlPlaneUnavailableError, controlPlaneUnavailableResponse, registryRejectedSession, registrySessionClose } from "./control-plane-errors.js";
 import {
   ProtocolFrameError,
   decodeWireFrame,
@@ -281,17 +281,16 @@ export class RunnerDO {
     try { await this.handleWebSocketMessage(ws, raw); }
     catch {
       // No frame (including an RPC result) may cross a failed session check.
-      // 1013 is retryable; 4001 is reserved for a confirmed identity rejection.
+      // 1013 is retryable; only explicit credential rejection uses 4001.
       this.rejectBridgeWaiters(ws, "control plane temporarily unavailable");
       try { ws.close(1013, "control plane temporarily unavailable"); } catch { /* already closed */ }
     }
   }
 
   private closeForRegistryFailure(ws: WebSocket, response: Response): void {
-    const rejected = registryRejectedSession(response);
-    const reason = rejected ? "credentials revoked" : "control plane temporarily unavailable";
+    const { code, reason } = registrySessionClose(response);
     this.rejectBridgeWaiters(ws, reason);
-    ws.close(rejected ? 4001 : 1013, reason);
+    ws.close(code, reason);
   }
 
   private async handleWebSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
@@ -372,10 +371,7 @@ export class RunnerDO {
       // race a newer connection. Re-read the complete transport identity
       // before binding admission or sending welcome so an old socket cannot
       // become authorized after a replacement wins.
-      if (!(await this.isCurrent(attachment, true))) {
-        ws.close(4000, "replaced by newer session");
-        return;
-      }
+      if (!(await this.verifySocketSession(ws, attachment, true))) return;
       const beforeHello = await this.admission();
       const persistedHello = await this.persistHelloAdmission(beforeHello, attachment);
       if (!persistedHello) {
@@ -427,11 +423,13 @@ export class RunnerDO {
       && message.type !== "job.started"
       && message.type !== "job.status"
       && message.type !== "job.completed";
-    if (attachment.epoch === 0 || attachment.protocolVersion !== message.protocol_version || (requiresSessionProbe && !(await this.isCurrent(attachment)))) {
-      this.rejectBridgeWaiters(ws, "credentials revoked");
-      ws.close(4001, "credentials revoked");
+    if (attachment.epoch === 0 || attachment.protocolVersion !== message.protocol_version) {
+      const reason = attachment.epoch === 0 ? "runner session not established" : "protocol version mismatch";
+      this.rejectBridgeWaiters(ws, reason);
+      ws.close(attachment.epoch === 0 ? 4000 : 1002, reason);
       return;
     }
+    if (requiresSessionProbe && !(await this.verifySocketSession(ws, attachment))) return;
     if (message.type === "rpc.response" || message.type === "rpc.error") {
       this.replies.deliver(ws, message);
       return;
@@ -481,7 +479,8 @@ export class RunnerDO {
       if (message.runner_id !== attachment.runnerId) return ws.close(1008, "runner identity mismatch");
       const expectedAdmission = { ...(await this.admission()) };
       const response = await this.registryRequest(attachment.runnerId, "/policy-ack", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, ...transportIdentityFields(attachment), desired_revision: message.desired_revision, desired_checksum: message.desired_checksum, applied_revision: message.applied_revision, applied_checksum: message.applied_checksum, runner_reported_policy_revision: message.runner_reported_policy_revision, runner_reported_policy_checksum: message.runner_reported_policy_checksum, status: message.status, workspace_status: message.workspace_status }) });
-      if (!response.ok && !registryRejectedSession(response)) {
+      if (!response.ok) {
+        if (registryRejectedSession(response) && expectedAdmission.mutationPhase === "precommit") await this.markInvalidAdmission(attachment, expectedAdmission);
         this.closeForRegistryFailure(ws, response);
         return;
       }
@@ -1134,11 +1133,22 @@ export class RunnerDO {
     await this.ctx.storage.setAlarm(earliest);
   }
 
-  private async isCurrent(attachment: ConnectionAttachment, requireOnline = false): Promise<boolean> {
-    const response = await this.registryRequest(attachment.runnerId, "/session", {
+  private sessionResponse(attachment: ConnectionAttachment, requireOnline = false): Promise<Response> {
+    return this.registryRequest(attachment.runnerId, "/session", {
       method: "POST",
       body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, ...transportIdentityFields(attachment), require_online: requireOnline }),
     });
+  }
+
+  private async verifySocketSession(ws: WebSocket, attachment: ConnectionAttachment, requireOnline = false): Promise<boolean> {
+    const response = await this.sessionResponse(attachment, requireOnline);
+    if (response.status === 204) return true;
+    this.closeForRegistryFailure(ws, response);
+    return false;
+  }
+
+  private async isCurrent(attachment: ConnectionAttachment, requireOnline = false): Promise<boolean> {
+    const response = await this.sessionResponse(attachment, requireOnline);
     if (response.status === 204) return true;
     if (registryRejectedSession(response)) return false;
     throw new ControlPlaneUnavailableError();

@@ -28,6 +28,10 @@ import { writeFile } from "node:fs/promises";
 export async function createIsolatedGitContext(worktree: string): Promise<IsolatedGitContext> {
   let directory: string | undefined;
   try {
+    const canonicalWorktree = await realpath(worktree);
+    if (dirname(canonicalWorktree) === canonicalWorktree) {
+      throw new Error("filesystem-root workspaces cannot isolate Git inspection safely; configure a dedicated workspace directory");
+    }
     const gitDirectory = await locateGitDirectory(worktree);
     const commonDirectory = await locateCommonDirectory(gitDirectory);
     directory = await mkdtemp(join(tmpdir(), "runmesh-git-"));

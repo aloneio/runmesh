@@ -1,5 +1,7 @@
 # Runner transport and local runtime
 
+See [Git isolation and session recovery](git-isolation-and-session-recovery.md) for filesystem-root restrictions and the distinct credential, session-conflict, and availability close semantics.
+
 The Worker control plane uses `ADMIN_TOKEN`, `RUNNER_TOKEN_PEPPER`, and `INTERNAL_CONTROL_SECRET` as separate server-side credentials. MCP URL secrets, browser administrator credentials, and Runner enrollment codes are separate lanes.
 
 ## MCP URL authentication and Runner routing
