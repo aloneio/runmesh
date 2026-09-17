@@ -175,8 +175,9 @@ async function readRegularBytes(path: string, maxBytes: number): Promise<Buffer>
   if (!info.isFile() || info.isSymbolicLink() || info.size > maxBytes) throw new Error(`Git metadata file is invalid: ${path}`);
   // Keep the descriptor identity stable across the read. A lstat followed by
   // readFile(path) can otherwise be redirected to a symlink/replaced inode by
-  // a concurrent writer in an untrusted worktree.
-  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  // a concurrent writer in an untrusted worktree. Nonblocking open also lets
+  // the descriptor check reject a FIFO replacement without waiting for a peer.
+  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   try {
     const opened = await handle.stat();
     if (!opened.isFile() || opened.dev !== info.dev || opened.ino !== info.ino || opened.size > maxBytes) {

@@ -175,6 +175,86 @@ it.skipIf(process.platform !== "linux").each(["read", "patch", "context", "metad
   }
 });
 
+it.skipIf(process.platform !== "linux").each(["git-metadata", "profile", "policy", "purge"])("SEC18 rejects remaining metadata FIFO races before waiting for a writer (%s)", async kind => {
+  const { createIsolatedGitContext } = await import("../src/git/isolated-context.js");
+  const { ProfileStore } = await import("../src/profile.js");
+  const { PolicyStore } = await import("../src/policy-store.js");
+  const { hostPurgeFilesystem } = await import("../src/purge.js");
+  const base = await mkdtemp(join(tmpdir(), "runmesh-release-metadata-fifo-"));
+  const store = new PolicyStore(base);
+  const path = kind === "git-metadata" ? join(base, ".git", "HEAD") : kind === "policy" ? store.activePath : join(base, "profile.json");
+  let swapped = false, nonblocking = false, descriptorOpened = false;
+  const closed = vi.fn();
+  try {
+    if (kind === "git-metadata") await mkdir(join(base, ".git"), { mode: 0o700 });
+    if (kind === "policy") await mkdir(store.directory, { mode: 0o700 });
+    await writeFile(path, kind === "git-metadata" ? "ref: refs/heads/main\n" : "{}\n", { mode: 0o600 });
+    vi.mocked(open).mockImplementation(async (candidate, flags, mode) => {
+      if (String(candidate) !== path || swapped) return originalFs.open(candidate, flags, mode);
+      swapped = true;
+      await originalFs.unlink(path);
+      execFileSync("mkfifo", [path]);
+      nonblocking = typeof flags === "number" && (flags & constants.O_NONBLOCK) !== 0;
+      // Fail the old implementation without stranding a libuv worker. The
+      // repaired path opens the real FIFO without a peer and must close it.
+      if (!nonblocking) throw new Error("fixture refused a blocking metadata open");
+      const handle = await originalFs.open(candidate, flags, mode);
+      descriptorOpened = true;
+      const close = handle.close.bind(handle);
+      vi.spyOn(handle, "close").mockImplementation(async () => { closed(); await close(); });
+      return handle;
+    });
+    const attempt = async (): Promise<unknown> => {
+      if (kind === "git-metadata") {
+        const context = await createIsolatedGitContext(base);
+        await context.cleanup();
+        return "unexpected-git-context";
+      }
+      if (kind === "profile") return new ProfileStore({ filePath: path }).load();
+      if (kind === "policy") return store.load("r");
+      return hostPurgeFilesystem.text(path, 4096);
+    };
+    await expect(attempt()).rejects.toThrow();
+    expect(swapped).toBe(true); expect(nonblocking).toBe(true);
+    expect(descriptorOpened).toBe(true); expect(closed).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.mocked(open).mockImplementation(originalFs.open);
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+it.skipIf(process.platform !== "linux").each(["patch", "policy"])("SEC18 directory durability opens reject FIFO replacements (%s)", async kind => {
+  const { fsyncDirectory } = await import("../src/patch/files.js");
+  const { PolicyStore } = await import("../src/policy-store.js");
+  const { runnerPolicyChecksum } = await import("@aloneio/runmesh-protocol");
+  const base = await mkdtemp(join(tmpdir(), "runmesh-release-directory-fifo-"));
+  const store = new PolicyStore(base), directory = store.directory;
+  let swapped = false, nonblocking = false, directoryOnly = false;
+  try {
+    if (kind === "patch") await mkdir(directory, { mode: 0o700 });
+    vi.mocked(open).mockImplementation(async (candidate, flags, mode) => {
+      if (String(candidate) === directory && !swapped) {
+        swapped = true;
+        await originalFs.rename(directory, join(base, "preserved-policy"));
+        execFileSync("mkfifo", [directory]);
+        nonblocking = typeof flags === "number" && (flags & constants.O_NONBLOCK) !== 0;
+        directoryOnly = typeof flags === "number" && (flags & constants.O_DIRECTORY) !== 0;
+        if (!nonblocking || !directoryOnly) throw new Error("fixture refused an unrestricted directory open");
+      }
+      return originalFs.open(candidate, flags, mode);
+    });
+    if (kind === "patch") await fsyncDirectory(directory);
+    else {
+      const unsigned = { schema_version: 1 as const, runner_id: "r", revision: 1, runner_permissions: { read: true, edit: true, shell: true, job_control: true }, workspaces: [] };
+      await expect(store.activate({ ...unsigned, checksum: runnerPolicyChecksum(unsigned) })).rejects.toThrow();
+    }
+    expect(swapped).toBe(true); expect(nonblocking).toBe(true); expect(directoryOnly).toBe(true);
+  } finally {
+    vi.mocked(open).mockImplementation(originalFs.open);
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
 it.skipIf(process.platform !== "linux")("SEC17 rejects an existing FIFO before patch baseline I/O", async () => {
   const { captureBaseline } = await import("../src/patch/files.js");
   const base = await mkdtemp(join(tmpdir(), "runmesh-release-existing-fifo-"));
