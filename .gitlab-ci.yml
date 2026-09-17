@@ -18,6 +18,8 @@ cache:
     - .npm/
 verify:
   stage: verify
+  variables:
+    GIT_DEPTH: "0"
   script:
     - npm install --global npm@10.9.3
     - node scripts/ci-check.mjs toolchain

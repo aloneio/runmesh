@@ -38,3 +38,21 @@ test("security evidence cannot invent an untested second file", () => {
   assert.equal(securityTestFiles(f.manifest).length, 2);
   assert.throws(() => projectSecurityEvidence(f.manifest, commit, f.reports, root));
 });
+
+test("candidate security gates retain ancestry and cannot reuse old evidence", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { parseCi } = await import("../scripts/ci-policy.mjs");
+  const read = file => readFile(new URL(`../${file}`, import.meta.url), "utf8");
+  const gh = parseCi(await read(".github/workflows/ci.yml")), gl = parseCi(await read(".gitlab-ci.yml"));
+  const checkout = gh.jobs.verify.steps.filter(step => step.uses?.startsWith("actions/checkout@"));
+  assert.equal(checkout.length, 1); assert.equal(checkout[0].with["fetch-depth"], 0);
+  assert.equal(checkout[0].if, undefined); assert.equal(gl.verify.variables.GIT_DEPTH, "0");
+  const pkg = JSON.parse(await read("package.json"));
+  assert.equal(pkg.scripts["test:security"], "node scripts/run-security-regressions.mjs && node scripts/check-release-readiness.mjs");
+  const release = parseCi(await read(".github/workflows/release.yml")).jobs.release.steps;
+  const execute = release.findIndex(step => step.run === "node scripts/run-security-regressions.mjs");
+  const verify = release.findIndex(step => step.run === "node scripts/check-release-readiness.mjs");
+  const sign = release.findIndex(step => step.name === "Sign and verify manifest and local release assets");
+  assert.ok(execute >= 0 && execute < verify && verify < sign);
+  assert.equal(release[execute].if, undefined); assert.equal(release[execute]["continue-on-error"], undefined);
+});
