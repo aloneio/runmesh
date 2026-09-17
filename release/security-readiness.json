@@ -132,6 +132,38 @@
         "apps/worker/test/mcp-failure-chain.test.ts"
       ],
       "resolution": "source-fixed-and-regression-tested"
+    },
+    {
+      "id": "SEC14",
+      "state": "closed",
+      "area": "final-and-queued-authorization-receipts",
+      "fixed_commit": "7b670a95ed84900df12bed07677f911f7ed58a73",
+      "regressions": [
+        "apps/worker/test/bridge-admission-errors.test.ts",
+        "apps/worker/test/queue-grant.test.ts"
+      ],
+      "resolution": "source-fixed-and-regression-tested"
+    },
+    {
+      "id": "SEC15",
+      "state": "closed",
+      "area": "bounded-control-plane-receipt-observations",
+      "fixed_commit": "7b670a95ed84900df12bed07677f911f7ed58a73",
+      "regressions": [
+        "apps/worker/test/mcp-failure-chain.test.ts",
+        "apps/worker/test/release-admin-security.test.ts"
+      ],
+      "resolution": "source-fixed-and-regression-tested"
+    },
+    {
+      "id": "SEC16",
+      "state": "closed",
+      "area": "registry-job-snapshot-identity",
+      "fixed_commit": "7b670a95ed84900df12bed07677f911f7ed58a73",
+      "regressions": [
+        "apps/worker/test/mcp-failure-chain.test.ts"
+      ],
+      "resolution": "source-fixed-and-regression-tested"
     }
   ]
 }
