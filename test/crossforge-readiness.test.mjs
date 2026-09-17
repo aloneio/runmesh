@@ -53,15 +53,17 @@ test("CI07 stalled response cancellation uses the request deadline", async t => 
   finally { clearTimeout(timeout); }
 });
 function securityFixture() {
-  const findings = Array.from({ length: 11 }, (_, index) => ({ id: `SEC${String(index + 1).padStart(2, "0")}`, state: "closed", fixed_commit: "b".repeat(40), regressions: ["apps/worker/test/permission-chain.test.ts"] }));
+  const findings = Array.from({ length: 13 }, (_, index) => ({ id: `SEC${String(index + 1).padStart(2, "0")}`, state: "closed", fixed_commit: "b".repeat(40), regressions: ["apps/worker/test/permission-chain.test.ts"] }));
   return { manifest: { schema_version: 1, findings }, evidence: { schema_version: 1, commit: sha, findings: findings.map(f => ({ id: f.id, state: "passed", passed: 1, failed: 0, skipped: 0, files: f.regressions })) } };
 }
 test("CI03 security closure uses current runtime evidence, not a self-referential tracked SHA", () => {
-  const f = securityFixture(); assert.equal(assertSecurityReadiness(f.manifest, sha, f.evidence).findings, 11);
+  const f = securityFixture(); assert.equal(assertSecurityReadiness(f.manifest, sha, f.evidence).findings, 13);
   for (const mutate of [x => x.manifest.findings[0].state = "open", x => x.evidence.commit = "c".repeat(40), x => x.evidence.findings.pop(), x => x.evidence.findings[0].skipped = 1, x => x.evidence.findings[0].passed = 0, x => x.evidence.findings[0].files = [], x => x.manifest.findings[0].regressions = ["test/e2e/../../private.test.ts"]]) {
     const changed = securityFixture(); mutate(changed); assert.throws(() => assertSecurityReadiness(changed.manifest, sha, changed.evidence));
   }
-  const replaced = securityFixture();
-  replaced.manifest.findings[10].id = "SEC12"; replaced.evidence.findings[10].id = "SEC12";
-  assert.throws(() => assertSecurityReadiness(replaced.manifest, sha, replaced.evidence));
+  for (const index of [10, 11, 12]) {
+    const replaced = securityFixture();
+    replaced.manifest.findings[index].id = "SEC14"; replaced.evidence.findings[index].id = "SEC14";
+    assert.throws(() => assertSecurityReadiness(replaced.manifest, sha, replaced.evidence));
+  }
 });

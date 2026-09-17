@@ -5,14 +5,14 @@ import { securityTestFiles, projectSecurityEvidence } from "../scripts/security-
 const root = resolve("/synthetic-runmesh"), file = "apps/worker/test/release-admin-security.test.ts", commit = "a".repeat(40);
 function fixture() {
   return {
-    manifest: { schema_version: 1, findings: Array.from({ length: 11 }, (_, n) => ({ id: `SEC${String(n + 1).padStart(2, "0")}`, regressions: [file] })) },
+    manifest: { schema_version: 1, findings: Array.from({ length: 13 }, (_, n) => ({ id: `SEC${String(n + 1).padStart(2, "0")}`, regressions: [file] })) },
     reports: [{ success: true, numFailedTests: 0, numPendingTests: 0, numTodoTests: 0, numTotalTests: 1, numPassedTests: 1,
       testResults: [{ name: join(root, file), status: "passed", assertionResults: [{ fullName: "synthetic security assertion", status: "passed", failureMessages: [] }] }] }],
   };
 }
 test("security evidence binds reviewed findings to candidate assertions", () => {
   const f = fixture(), report = projectSecurityEvidence(f.manifest, commit, f.reports, root);
-  assert.equal(report.commit, commit); assert.equal(report.findings.length, 11);
+  assert.equal(report.commit, commit); assert.equal(report.findings.length, 13);
   assert.deepEqual(report.findings[0], { id: "SEC01", state: "passed", passed: 1, failed: 0, skipped: 0, files: [file] });
 });
 for (const [name, mutate] of Object.entries({
@@ -31,7 +31,9 @@ for (const [name, mutate] of Object.entries({
   "duplicate finding": f => f.manifest.findings[1].id = "SEC01",
   "unsafe regression path": f => f.manifest.findings[0].regressions = ["apps/worker/test/../../private.test.ts"],
   "missing mandatory finding": f => f.manifest.findings.pop(),
-  "replacement for deadline finding": f => f.manifest.findings[10].id = "SEC12",
+  "replacement for deadline finding": f => f.manifest.findings[10].id = "SEC14",
+  "replacement for completion receipt finding": f => f.manifest.findings[11].id = "SEC14",
+  "replacement for selection identity finding": f => f.manifest.findings[12].id = "SEC14",
   "nonempty failure payload": f => f.reports[0].testResults[0].assertionResults[0].failureMessages = ["failure"],
 })) test(`security evidence refuses ${name}`, () => { const f = fixture(); mutate(f); assert.throws(() => projectSecurityEvidence(f.manifest, commit, f.reports, root)); });
 test("security evidence cannot invent an untested second file", () => {
@@ -47,6 +49,19 @@ test("the tracked security manifest retains reauthorization deadline coverage", 
   assert.equal(finding?.state, "closed");
   assert.deepEqual(finding.regressions, ["apps/worker/test/reauthorization-budget.test.ts"]);
   assert.ok(securityTestFiles(manifest).includes(finding.regressions[0]));
+});
+
+test("the tracked security manifest retains completion and selection identity coverage", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { REQUIRED_SECURITY_FINDINGS } = await import("../scripts/release-readiness.mjs");
+  const manifest = JSON.parse(await readFile(new URL("../release/security-readiness.json", import.meta.url), "utf8"));
+  for (const id of ["SEC12", "SEC13"]) {
+    assert.ok(REQUIRED_SECURITY_FINDINGS.includes(id));
+    const finding = manifest.findings.find(value => value.id === id);
+    assert.equal(finding?.state, "closed");
+    assert.deepEqual(finding.regressions, ["apps/worker/test/mcp-failure-chain.test.ts"]);
+    assert.ok(securityTestFiles(manifest).includes(finding.regressions[0]));
+  }
 });
 
 test("candidate security gates retain ancestry and cannot reuse old evidence", async () => {
