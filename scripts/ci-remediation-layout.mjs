@@ -26,6 +26,7 @@ export function proposedCiFiles(input) {
   pkg.devDependencies.yaml = "2.9.1";
   pkg.devDependencies.playwright = "1.63.0";
   pkg.scripts["test:browser"] = "node scripts/run-browser-e2e.mjs";
+  pkg.scripts["test:security"] = "node scripts/run-security-regressions.mjs && node scripts/check-release-readiness.mjs";
   pkg.scripts["browser:install"] = "node node_modules/playwright/cli.js install --with-deps chromium";
   const tests = ["test/ci-remediation.test.mjs", "test/crossforge-readiness.test.mjs", "test/ci-layout.test.mjs"];
   for (const file of tests) {
@@ -39,10 +40,15 @@ export function proposedCiFiles(input) {
   // Non-critical setup stays as reviewed; each former command maps exactly
   // once to the new wrapper, rather than growing a second execution list.
   for (const [id, command] of Object.entries(CI_CHECKS)) {
+    // The historical input predates this new gate; insert it explicitly below.
+    if (id === "security") continue;
     const matches = existing.filter(step => step.run === command);
     assert.equal(matches.length, 1, `baseline critical command drifted: ${command}`);
     matches[0].run = checkCommand(id);
   }
+  const unitIndex = existing.findIndex(step => step.run === checkCommand("unit"));
+  assert.ok(unitIndex >= 0, "legacy unit gate is required");
+  existing.splice(unitIndex + 1, 0, { run: checkCommand("security") });
   // The old parity entrypoint now consumes the shared parsed CI contract.
   // It remains an ordinary explicit step; it is not self-granted permission.
   gh.jobs.verify.steps.push(upload("ci-verify-${{ github.run_id }}-${{ github.run_attempt }}"));
@@ -102,7 +108,7 @@ export function proposedCiFiles(input) {
     let release = input.release.replace("actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2", `${UPLOAD_ACTION} # v7.0.1`);
     const seam = "      - name: Sign and verify manifest and local release assets";
     assert.ok(release.includes(seam));
-    release = release.replace(seam, `      - name: Require reviewed security regression evidence\n        run: node scripts/check-release-readiness.mjs\n      - name: Require both providers at the exact protected main commit\n        env:\n          GH_TOKEN: \${{ github.token }}\n          GITLAB_READ_API_TOKEN: \${{ secrets.GITLAB_READ_API_TOKEN }}\n        run: node scripts/check-crossforge-ci.mjs\n${seam}`);
+    release = release.replace(seam, `      - name: Execute reviewed security regressions for the exact candidate\n        run: node scripts/run-security-regressions.mjs\n      - name: Require reviewed security regression evidence\n        run: node scripts/check-release-readiness.mjs\n      - name: Require both providers at the exact protected main commit\n        env:\n          GH_TOKEN: \${{ github.token }}\n          GITLAB_READ_API_TOKEN: \${{ secrets.GITLAB_READ_API_TOKEN }}\n        run: node scripts/check-crossforge-ci.mjs\n${seam}`);
     files[".github/workflows/release.yml"] = release;
   }
   // These files own generated main-branch admission. Add only schedule

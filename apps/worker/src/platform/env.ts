@@ -1,6 +1,8 @@
 import type { RuntimeConfiguration } from "../runtime-config.js";
 
 export interface WorkerEnv extends RuntimeConfiguration {
+  /** Request-local browser admission; never a deployment binding or cached grant. */
+  readonly adminSessionHash?: string;
   /** Optional independent metadata-only audit store; never an auth fallback. */
   HISTORY_DB?: D1Database;
   RUNMESH_AUDIT_BACKEND?: string;

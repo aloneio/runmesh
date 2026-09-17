@@ -12,7 +12,7 @@ import { trustedWindowsEnvironment } from "../windows-tools.js";
 import { trustedWindowsRoot } from "../windows-tools.js";
 
 export async function git(cwd: string, args: readonly string[], cap: number, options: GitServiceOptions, deadline?: number): Promise<GitRun> {
-  const context = await createIsolatedGitContext(cwd);
+  const context = await createIsolatedGitContext(cwd, deadline);
   if (deadline !== undefined && performance.now() >= deadline) {
     await context.cleanup();
     return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), status: null, signal: null, truncated: true, timedOut: true, timeoutMs: 0 };

@@ -24,6 +24,11 @@ export function controlPlaneUnavailable(): Response {
 }
 
 export async function registryRequest(env: WorkerEnv, path: string, method: string, body: string, signal?: AbortSignal): Promise<Response> {
+  if (env.adminSessionHash !== undefined && method !== "GET" && method !== "HEAD") {
+    const target = new URL(path, "https://registry.internal");
+    target.searchParams.set("admin_session", env.adminSessionHash);
+    path = `${target.pathname}${target.search}`;
+  }
   const headers = await signedInternalHeaders(env, method, path, body);
   if (headers === undefined) return controlPlaneUnavailable();
   try {

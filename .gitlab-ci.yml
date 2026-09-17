@@ -35,6 +35,7 @@ verify:
     - node scripts/ci-check.mjs whitespace
     - node scripts/ci-check.mjs types
     - node scripts/ci-check.mjs unit
+    - node scripts/ci-check.mjs security
     - node scripts/ci-check.mjs tooling
     - node scripts/ci-check.mjs licenses
     - node scripts/ci-check.mjs build

@@ -1,3 +1,4 @@
+import { verifyToolResult } from "./validated-result.js";
 import { activeRunnerTool } from "./dispatch.js";
 import { activeWorkspaceList } from "./selection.js";
 import { asToolResult } from "./results/envelope.js";
@@ -12,8 +13,6 @@ import { getActiveRunnerSelection } from "./selection.js";
 import { inspectTool } from "./handlers/files.js";
 import { internalHeaders } from "../security.js";
 import { isConfiguredSecret } from "../security.js";
-import { isRecord } from "./results/primitives.js";
-import { isToolSuccessResult } from "./results/envelope.js";
 import { jobTool } from "./handlers/jobs.js";
 import { MCP_CATALOG_METADATA } from "./catalog-contract.js";
 import { MCP_RPC_ACTIONS } from "./actions.js";
@@ -24,8 +23,6 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { PRODUCT_VERSION } from "../generated-version.js";
 import { reauthorizePrincipal } from "./reauthorization.js";
 import { REGISTERED_TOOL_NAMES } from "./handler-registry.js";
-import { safeJobIdentifier } from "./results/primitives.js";
-import { safeRunnerContext } from "./results/selection.js";
 import { safeSelectionValue } from "./results/selection.js";
 import { selectActiveRunner } from "./selection.js";
 import type { ServerContext } from "@modelcontextprotocol/server";
@@ -35,7 +32,6 @@ import { SUPPORTED_SCOPES } from "./catalog.js";
 import { TOOL_SPECS } from "./catalog.js";
 import type { ToolHandlers } from "./handler-registry.js";
 import type { ToolName } from "./catalog.js";
-import { validateToolOutput } from "./action-output-contracts.js";
 import type { WorkerEnv } from "../platform/env.js";
 import { z } from "zod";
 
@@ -111,21 +107,6 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth): McpServ
       }
     });
   }
-}
-
-/** Preserve the existing auth/error wrapper; validate only successful public
- * results. A broken output contract never authorizes retrying a mutation. */
-function verifyToolResult(name: ToolName, input: unknown, result: unknown): unknown {
-  if (isRecord(result) && result.isError === true) return result;
-  if (isToolSuccessResult(result) && validateToolOutput(name, input, result.structuredContent)) return result;
-  const value = isToolSuccessResult(result) ? result.structuredContent : {};
-  const receipt: Record<string, unknown> = {};
-  for (const key of ["job_id", "workspace_id", "correlation_id"] as const) {
-    const id = safeJobIdentifier(value[key]); if (id !== undefined) receipt[key] = id;
-  }
-  if (value.runner_context !== undefined) receipt.runner_context = safeRunnerContext(value.runner_context);
-  if (["recorded", "degraded", "unknown", "disabled"].includes(String(value.audit_status))) receipt.audit_status = value.audit_status;
-  return failureWithDetails("tool_result_invalid", "The tool did not return the documented result; no success is inferred.", "Inspect the original Job or workspace state. Do not repeat a mutation, input or cancellation based on this response.", receipt, "unknown");
 }
 
 export const MCP_TOOL_NAMES = Object.freeze(Object.keys(TOOL_SPECS));

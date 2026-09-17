@@ -1,6 +1,6 @@
 # Current remediation and historical record
 
-The current source is the **published 0.1.1 stable patch**. The immutable signed assets were published from the verified `dev` commit and independently re-downloaded and verified before the checked-in production hosted-distribution gate was enabled. The prior v0.1.0 release remains immutable and must not be overwritten. See [release readiness](release-readiness.md) for the current gates and operational contract. The following dated material is historical; it is not authority to enable an older artifact for the current source.
+The current pre-release review and explicit verification limits are recorded in [the 2026-09-17 audit](release-audit-20260917.md). Reviewed source fixes do not change an already-published artifact or prove a production rollout. See [release readiness](release-readiness.md) for the immutable release activation record and [the security ledger](../release/security-readiness.json) for candidate regression requirements. All dated material below is historical, including its version and CI descriptions.
 
 ## Historical remediation record
 

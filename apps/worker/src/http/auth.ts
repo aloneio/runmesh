@@ -112,8 +112,9 @@ async function submitLogin(request: Request, env: WorkerEnv): Promise<Response> 
 export async function changePassword(env: WorkerEnv, form: FormData): Promise<Response> {
   const current = form.get("current_password"); const password = form.get("password"); const confirmation = form.get("confirm_password");
   if (typeof current !== "string" || typeof password !== "string" || typeof confirmation !== "string" || !validPassword(password) || password !== confirmation) return adminError(400, "Password change is invalid.");
-  const settings = await registryGet(env, "/auth/settings"); const verifier = record(settings.ok ? await json(settings) : undefined)?.password_verifier;
-  if (typeof verifier !== "string" || !await verifyPassword(current, verifier)) return adminError(403, "Current administrator password is invalid.");
+  const settings = await loadLoginSettings(signal => registryRequest(env, "/auth/settings", "GET", "", signal));
+  if (settings === undefined) return adminError(503, "Authentication service unavailable. Try again.");
+  if (!await verifyPassword(current, settings.password_verifier)) return adminError(403, "Current administrator password is invalid.");
   const response = await registryPost(env, "/auth/password", { password_verifier: await passwordVerifier(password) });
   if (!response.ok) return adminError(503, "Password change could not be completed.");
   return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);

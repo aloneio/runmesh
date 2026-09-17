@@ -146,6 +146,8 @@ jobs:
           set -euo pipefail
           published_at="$(date --utc --date="@$(git log -1 --format=%ct)" +%Y-%m-%dT%H:%M:%SZ)"
           node scripts/release-manifest.mjs release/assets "$RELEASE_VERSION" "$(git rev-parse HEAD)" "$published_at"
+      - name: Execute reviewed security regressions for the exact candidate
+        run: node scripts/run-security-regressions.mjs
       - name: Require reviewed security regression evidence
         run: node scripts/check-release-readiness.mjs
       - name: Require both providers at the exact protected main commit

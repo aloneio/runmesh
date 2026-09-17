@@ -474,6 +474,12 @@ export class RegistryDO {
     const input = rawBody.length === 0 ? {} : parseJsonObject(rawBody);
     if (input === undefined) return Response.json({ error: "invalid JSON object" }, { status: 400 });
     const now = Date.now();
+    // The session is bound by the HMAC to method, target and body. Verify it
+    // after all admission awaits, in the same event turn as synchronous writes.
+    const browserSession = url.searchParams.get("admin_session");
+    if (browserSession !== null && (url.searchParams.getAll("admin_session").length !== 1 || !validVerifier(browserSession) || this.verifyAdminSession(browserSession, now) === undefined)) {
+      return new Response("administrative session is no longer authorized", { status: 403, headers: { "cache-control": "no-store" } });
+    }
     if (request.method === "POST" && segments.length === 2 && segments[0] === "enrollments" && segments[1] === "lookup") {
       const verifier = stringField(input, "verifier", 64);
       const target = verifier === undefined ? undefined : this.lookupRunnerEnrollment(verifier, now);

@@ -1,3 +1,4 @@
+import { verifyRunnerToolResult } from "../validated-result.js";
 import { asToolResult } from "../results/envelope.js";
 import { boundedReadParams } from "../request-values.js";
 import { callRunner } from "../transport.js";
@@ -105,7 +106,7 @@ async function activeJobRunnerTool(env: McpRequestEnv, clientId: string, method:
     }).catch(() => ({ correlation_id: `call-${crypto.randomUUID()}`, audit_status: "unknown" as const }));
     return withAuditReceipt(failure, audit);
   }
-  const result = runnerSuccess(projectRunnerResult(call.value, resultMode), selected.value);
+  const result = verifyRunnerToolResult(method, boundParams, runnerSuccess(projectRunnerResult(call.value, resultMode), selected.value));
   const audit = await recordRunnerToolCall(env, {
     runnerId: selected.value.runnerId,
     clientId,
@@ -147,7 +148,9 @@ async function activeJobList(env: McpRequestEnv, clientId: string, filters: Reco
   const visible: unknown[] = [];
   for (const job of jobs) {
     const workspaceId = isRecord(job) ? job.workspace_id : undefined;
-    if (await checkPermission(env, clientId, selected.value.runnerId, workspaceId, "read") === undefined) {
+    const permission = await checkPermission(env, clientId, selected.value.runnerId, workspaceId, "read");
+    if (permission !== undefined && permission.error.code !== "permission_denied") return asToolResult(permission);
+    if (permission === undefined) {
       // Registry snapshots contain Runner-internal JobRecord fields (cwd,
       // command, PID, and process identity).  Keep the MCP contract to the
       // documented metadata allow-list even when a future Registry adds more

@@ -42,6 +42,7 @@ jobs:
       - run: node scripts/ci-check.mjs whitespace
       - run: node scripts/ci-check.mjs types
       - run: node scripts/ci-check.mjs unit
+      - run: node scripts/ci-check.mjs security
       - run: node scripts/ci-check.mjs tooling
       - run: node scripts/ci-check.mjs licenses
       - run: node scripts/ci-check.mjs build

@@ -16,6 +16,7 @@ export const CI_CHECKS = Object.freeze({
   whitespace: "git diff --check",
   types: "npm run typecheck",
   unit: "npm run test:unit",
+  security: "npm run test:security",
   tooling: "npm run test:release-tools",
   licenses: "npm run check:licenses",
   build: "npm run build",
