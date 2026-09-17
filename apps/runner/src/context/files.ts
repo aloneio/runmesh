@@ -13,7 +13,9 @@ export async function readJsonBounded(path: string, maxBytes: number): Promise<{
   await assertRegularParent(path);
   const info = await lstat(path);
   if (!info.isFile() || info.isSymbolicLink() || info.size > maxBytes) throw new RpcRuntimeError("context_record_corrupt", "context file is not a bounded regular file");
-  const handle = await open(path, constants.O_RDONLY | NOFOLLOW);
+  // The descriptor stamp below is meaningful only if a substituted FIFO
+  // cannot block open before that validation runs.
+  const handle = await open(path, constants.O_RDONLY | NOFOLLOW | (constants.O_NONBLOCK ?? 0));
   try {
     const finalInfo = await handle.stat();
     if (!finalInfo.isFile() || !sameStorageStamp(info, finalInfo) || finalInfo.size > maxBytes) throw new RpcRuntimeError("context_record_corrupt", "context file changed or exceeds its budget");

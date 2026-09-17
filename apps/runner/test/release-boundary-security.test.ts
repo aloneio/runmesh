@@ -125,3 +125,72 @@ it.skipIf(process.platform !== "linux")("SEC03 rejects a regular-to-FIFO race wi
     await rm(base, { recursive: true, force: true });
   }
 });
+
+
+it.skipIf(process.platform !== "linux").each(["read", "patch", "context", "metadata", "log-read", "log-append"])("SEC17 rejects special-file races without a blocking open (%s)", async kind => {
+  const { captureBaseline } = await import("../src/patch/files.js");
+  const { readJsonBounded } = await import("../src/context/files.js");
+  const { readJson, openJobLog } = await import("../src/jobs/storage.js");
+  const base = await mkdtemp(join(tmpdir(), "runmesh-release-special-"));
+  const path = join(base, "record.json");
+  let swapped = false, nonblocking = false;
+  let peer: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    await writeFile(path, "{}\n");
+    const policy = new PathPolicy([{ workspaceId: "w", rootPath: base, readonly: false, shell: false }]);
+    vi.mocked(open).mockImplementation(async (candidate, flags, mode) => {
+      if (String(candidate) === path && !swapped) {
+        swapped = true;
+        await originalFs.unlink(path);
+        execFileSync("mkfifo", [path]);
+        nonblocking = typeof flags === "number" && (flags & constants.O_NONBLOCK) !== 0;
+        // Never let a failing regression strand a libuv filesystem worker.
+        if (!nonblocking) throw new Error("fixture refused a blocking special-file open");
+        // A peer also exercises the post-open type guard for log appends.
+        peer = await originalFs.open(path, constants.O_RDWR | constants.O_NONBLOCK);
+      }
+      return originalFs.open(candidate, flags, mode);
+    });
+    const attempt = async (): Promise<unknown> => {
+      if (kind === "read") return new FilesystemService(policy).read({ workspace_id: "w", path: "record.json" });
+      if (kind === "patch") return captureBaseline({ workspaceId: "w", relativePath: "record.json", path }, policy);
+      if (kind === "context") return readJsonBounded(path, 4096);
+      if (kind === "metadata") return readJson(path);
+      const handle = await openJobLog(path, kind === "log-read" ? "read" : "append");
+      await handle.close();
+      return "unexpected-special-file-handle";
+    };
+    await expect(attempt()).rejects.toMatchObject({ code: expect.any(String) });
+    expect(swapped).toBe(true);
+    expect(nonblocking).toBe(true);
+    // Neither a reader nor a log writer may consume or append pipe data.
+    if (peer !== undefined) {
+      const result = await peer.read(Buffer.alloc(1), 0, 1, null).catch(error => ({ error: (error as NodeJS.ErrnoException).code }));
+      expect(result).toMatchObject({ error: "EAGAIN" });
+    }
+  } finally {
+    vi.mocked(open).mockImplementation(originalFs.open);
+    await peer?.close();
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+it.skipIf(process.platform !== "linux")("SEC17 rejects an existing FIFO before patch baseline I/O", async () => {
+  const { captureBaseline } = await import("../src/patch/files.js");
+  const base = await mkdtemp(join(tmpdir(), "runmesh-release-existing-fifo-"));
+  const path = join(base, "pipe");
+  let opened = false;
+  try {
+    execFileSync("mkfifo", [path]);
+    const policy = new PathPolicy([{ workspaceId: "w", rootPath: base, readonly: false, shell: false }]);
+    vi.mocked(open).mockImplementation(async (candidate, flags, mode) => {
+      if (String(candidate) === path) { opened = true; throw new Error("fixture refused opening an existing FIFO"); }
+      return originalFs.open(candidate, flags, mode);
+    });
+    await expect(captureBaseline({ workspaceId: "w", relativePath: "pipe", path }, policy)).rejects.toMatchObject({ code: "invalid_path" });
+    expect(opened).toBe(false);
+  } finally {
+    vi.mocked(open).mockImplementation(originalFs.open);
+    await rm(base, { recursive: true, force: true });
+  }
+});

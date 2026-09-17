@@ -81,10 +81,23 @@ export async function assertRegularDirectory(path: string): Promise<void> {
 export async function openJobLog(path: string, mode: "read" | "append"): Promise<Awaited<ReturnType<typeof open>>> {
   await assertRegularDirectory(dirname(path));
   await assertRegularFile(path);
-  const flags = mode === "read"
+  const flags = (mode === "read"
     ? constants.O_RDONLY | NOFOLLOW
-    : constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | NOFOLLOW;
-  return open(path, flags, 0o600);
+    : constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | NOFOLLOW) | (constants.O_NONBLOCK ?? 0);
+  const handle = await open(path, flags, 0o600);
+  try {
+    // lstat cannot prevent a regular-to-special-file swap before open. Do not
+    // hand a pipe/device descriptor to either the log reader or the writer.
+    const opened = await handle.stat();
+    const current = await lstat(path);
+    if (!opened.isFile() || !current.isFile() || current.isSymbolicLink() || opened.dev !== current.dev || opened.ino !== current.ino) {
+      throw pathError("state file changed or is not a regular file", "ENOTDIR");
+    }
+    return handle;
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
 }
 
 export async function appendJobLog(path: string, data: Buffer): Promise<void> {
@@ -124,7 +137,7 @@ export async function atomicJson(path: string, value: unknown): Promise<void> {
 export async function readJson<T>(path: string): Promise<T> {
   await assertRegularDirectory(dirname(path));
   await assertRegularFile(path, false);
-  const handle = await open(path, constants.O_RDONLY | NOFOLLOW);
+  const handle = await open(path, constants.O_RDONLY | NOFOLLOW | (constants.O_NONBLOCK ?? 0));
   try {
     const info = await handle.stat();
     if (!info.isFile() || info.size > MAX_METADATA_BYTES) throw metadataTooLarge(path);
