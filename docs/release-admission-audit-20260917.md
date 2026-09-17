@@ -15,6 +15,8 @@ The audit started from dev `a84ecee35737423b1ae039ead00a82c855b4cd0c` in an isol
 
 The authorization fixtures inject faulty internal responses using synthetic test credentials. They establish defects at those boundaries, not a proven unauthenticated external exploit or a bypass of every downstream check.
 
+The source repair is `7b670a95ed84900df12bed07677f911f7ed58a73`. Mandatory findings SEC14-SEC16 retain the final-admission, bounded-observation and Job-identity regressions.
+
 ## Executed reproduction and acceptance boundary
 
 Before the source repairs, the expanded bridge/queue tests had 18 failures and 29 passes; the MCP boundary suite had 10 failures and 156 passes. All 354 assertions in the first repaired six-file focused run passed without skips. An exploratory dev-push CI change passed focused CI tests but failed the existing deployment-cost regression. It was withdrawn after confirming that dev verification intentionally runs on GitHub before mirroring to GitLab; the existing main/MR/manual/scheduled GitLab policy is retained. Additional stream regressions cover stalled bodies, late responses after abort, explicit denial parsing and reused byte buffers.
