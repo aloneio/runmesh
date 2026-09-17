@@ -5,14 +5,14 @@ import { securityTestFiles, projectSecurityEvidence } from "../scripts/security-
 const root = resolve("/synthetic-runmesh"), file = "apps/worker/test/release-admin-security.test.ts", commit = "a".repeat(40);
 function fixture() {
   return {
-    manifest: { schema_version: 1, findings: Array.from({ length: 16 }, (_, n) => ({ id: `SEC${String(n + 1).padStart(2, "0")}`, regressions: [file] })) },
+    manifest: { schema_version: 1, findings: Array.from({ length: 17 }, (_, n) => ({ id: `SEC${String(n + 1).padStart(2, "0")}`, regressions: [file] })) },
     reports: [{ success: true, numFailedTests: 0, numPendingTests: 0, numTodoTests: 0, numTotalTests: 1, numPassedTests: 1,
       testResults: [{ name: join(root, file), status: "passed", assertionResults: [{ fullName: "synthetic security assertion", status: "passed", failureMessages: [] }] }] }],
   };
 }
 test("security evidence binds reviewed findings to candidate assertions", () => {
   const f = fixture(), report = projectSecurityEvidence(f.manifest, commit, f.reports, root);
-  assert.equal(report.commit, commit); assert.equal(report.findings.length, 16);
+  assert.equal(report.commit, commit); assert.equal(report.findings.length, 17);
   assert.deepEqual(report.findings[0], { id: "SEC01", state: "passed", passed: 1, failed: 0, skipped: 0, files: [file] });
 });
 for (const [name, mutate] of Object.entries({
@@ -31,12 +31,13 @@ for (const [name, mutate] of Object.entries({
   "duplicate finding": f => f.manifest.findings[1].id = "SEC01",
   "unsafe regression path": f => f.manifest.findings[0].regressions = ["apps/worker/test/../../private.test.ts"],
   "missing mandatory finding": f => f.manifest.findings.pop(),
-  "replacement for deadline finding": f => f.manifest.findings[10].id = "SEC17",
-  "replacement for completion receipt finding": f => f.manifest.findings[11].id = "SEC17",
-  "replacement for selection identity finding": f => f.manifest.findings[12].id = "SEC17",
-  "replacement for final admission finding": f => f.manifest.findings[13].id = "SEC17",
-  "replacement for bounded observation finding": f => f.manifest.findings[14].id = "SEC17",
-  "replacement for Job snapshot identity finding": f => f.manifest.findings[15].id = "SEC17",
+  "replacement for deadline finding": f => f.manifest.findings[10].id = "SEC18",
+  "replacement for completion receipt finding": f => f.manifest.findings[11].id = "SEC18",
+  "replacement for selection identity finding": f => f.manifest.findings[12].id = "SEC18",
+  "replacement for final admission finding": f => f.manifest.findings[13].id = "SEC18",
+  "replacement for bounded observation finding": f => f.manifest.findings[14].id = "SEC18",
+  "replacement for Job snapshot identity finding": f => f.manifest.findings[15].id = "SEC18",
+  "replacement for special-file boundary finding": f => f.manifest.findings[16].id = "SEC18",
   "nonempty failure payload": f => f.reports[0].testResults[0].assertionResults[0].failureMessages = ["failure"],
 })) test(`security evidence refuses ${name}`, () => { const f = fixture(); mutate(f); assert.throws(() => projectSecurityEvidence(f.manifest, commit, f.reports, root)); });
 test("security evidence cannot invent an untested second file", () => {
@@ -102,4 +103,16 @@ test("the tracked manifest requires final admission, bounded observations and Jo
     assert.deepEqual(finding.regressions, files);
     for (const file of files) assert.ok(securityTestFiles(manifest).includes(file));
   }
+});
+
+
+test("the tracked manifest requires Runner special-file boundary coverage", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { REQUIRED_SECURITY_FINDINGS } = await import("../scripts/release-readiness.mjs");
+  const manifest = JSON.parse(await readFile(new URL("../release/security-readiness.json", import.meta.url), "utf8"));
+  assert.ok(REQUIRED_SECURITY_FINDINGS.includes("SEC17"));
+  const finding = manifest.findings.find(value => value.id === "SEC17");
+  assert.equal(finding?.state, "closed");
+  assert.deepEqual(finding.regressions, ["apps/runner/test/release-boundary-security.test.ts"]);
+  assert.ok(securityTestFiles(manifest).includes(finding.regressions[0]));
 });
