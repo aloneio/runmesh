@@ -114,7 +114,6 @@ function parseHunks(lines: readonly string[], start: number): { readonly hunks: 
   while (index < lines.length - 1 && !isOperationHeader(lines[index] as string)) {
     const marker = lines[index] as string;
     if (marker === "*** End of File") { index += 1; continue; }
-    if (marker === "*** End of File") { index += 1; continue; }
     if (!marker.startsWith("@@")) throw new RpcRuntimeError("invalid_patch", "Update or Move body must use @@ hunk markers");
     if (hunks.length >= MAX_HUNKS) throw new RpcRuntimeError("invalid_patch", `patch has too many hunks (maximum ${MAX_HUNKS})`);
     index += 1;

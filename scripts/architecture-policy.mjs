@@ -7,7 +7,7 @@ export const SOURCE_PACKAGES = {
   "@aloneio/runmesh-runner": "apps/runner/src/index.ts",
   "@aloneio/runmesh-worker": "apps/worker/src/index.ts",
 };
-export const MISSING_GENERATED = new Set(["apps/worker/src/generated-provenance.ts", "apps/worker/src/generated-admin-client.ts"]);
+export const MISSING_GENERATED = new Set(["apps/worker/src/generated-provenance.ts", "apps/worker/src/generated-admin-client.ts", "apps/worker/src/generated-release-validation.ts"]);
 export function layer(path) {
   return path.startsWith("packages/protocol/src/") ? "protocol"
     : (path.startsWith("apps/worker/src/") || path.startsWith("apps/worker/browser/")) ? "worker"
@@ -18,11 +18,12 @@ const canonicalSource = path => path.replace(/\.(?:[cm]?[jt]s|[jt]sx)$/u, ".ts")
 const runnerIoModules = new Set([
   "jobs/ports.ts", "jobs/storage.ts", "jobs/process.ts", "jobs/logs.ts",
   "context/ports.ts", "context/files.ts", "context/repository.ts", "context/retention.ts", "context/recovery.ts",
+  "patch/files.ts", "connection/ports.ts", "connection/metadata.ts", "connection/policy-candidate.ts",
 ]);
-/** New Job/Context files are pure until an adapter role is explicitly reviewed. */
+/** New Job/Context/Patch/Connection modules are pure until an adapter role is reviewed. */
 function isPureRunner(path) {
   const name = canonicalSource(path).replace(/^apps\/runner\/src\//u, "");
-  return /^(?:jobs|context)\//u.test(name) && !runnerIoModules.has(name);
+  return name === "path-contracts.ts" || /^(?:jobs|context|patch|connection)\//u.test(name) && !runnerIoModules.has(name);
 }
 const cloudPlatform = /^(?:cloudflare:|cloudflare(?:\/|$)|workerd(?:\/|$)|@cloudflare\/)/u;
 const serverSdk = /^(?:@modelcontextprotocol\/|agents(?:\/|$))/u;
@@ -33,7 +34,7 @@ export function specifierProblem(from, specifier, typeOnly) {
   const source = canonicalSource(from);
   const builtin = specifier.startsWith("node:") || isBuiltin(specifier);
   const external = !specifier.startsWith(".") && !specifier.startsWith("/");
-  if (isPureRunner(source) && external && !purePackages.test(specifier) && !["node:crypto", "crypto"].includes(specifier))
+  if (isPureRunner(source) && external && !purePackages.test(specifier) && !["node:crypto", "crypto", "node:path", "path"].includes(specifier))
     return "Runner record and planning modules must not access platform I/O or unreviewed external packages";
   if (/^apps\/runner\/src\/(?:jobs|context|connection)\/ports\.ts$/u.test(source) && builtin && !typeOnly)
     return "Runner ports may reference platform types but not load platform implementations";
@@ -55,7 +56,7 @@ const workerRootRoles = {
   "job-history-store.ts": "persistence", "external-audit.ts": "persistence", "history-retention.ts": "persistence", "audit-metadata.ts": "persistence", "auth-throttle.ts": "persistence",
   "auth-settings.ts": "application",
 };
-const foundations = new Set(["public-origin.ts", "mcp-authorization.ts", "job-history-settings.ts", "validity.ts", "body.ts", "security.ts", "runtime-config.ts", "queue-grant.ts", "values.ts", "generated-release.ts", "generated-provenance.ts", "generated-admin-client.ts", "generated-version.ts", "deployment-provenance.ts", "control-plane-errors.ts"]);
+const foundations = new Set(["public-origin.ts", "mcp-authorization.ts", "job-history-settings.ts", "validity.ts", "body.ts", "security.ts", "runtime-config.ts", "queue-grant.ts", "values.ts", "generated-release.ts", "generated-provenance.ts", "generated-admin-client.ts", "generated-release-validation.ts", "generated-version.ts", "deployment-provenance.ts", "control-plane-errors.ts"]);
 export function workerRole(path) {
   if (path.startsWith("apps/worker/browser/")) return "browser";
   if (!path.startsWith("apps/worker/src/")) return layer(path);
@@ -74,7 +75,7 @@ export const WORKER_ALLOWED_DEPENDENCIES = Object.freeze({
   foundation: ["foundation", "contracts", "platform", "protocol"],
   extension: ["extension", "foundation", "contracts", "protocol"],
   presentation: ["presentation", "contracts", "foundation", "distribution", "protocol"],
-  distribution: ["distribution", "contracts", "foundation", "protocol"],
+  distribution: ["distribution", "domain", "contracts", "foundation", "protocol"],
   application: ["application", "domain", "contracts", "foundation", "platform", "protocol"],
   platform: ["platform", "contracts", "foundation", "protocol"],
   persistence: ["persistence", "contracts", "foundation", "platform", "protocol"],
@@ -105,6 +106,8 @@ export function dependencyProblem(from, to) {
   if (target === "outside") return "source dependency leaves the application/protocol boundary";
   if (owner === "protocol" && target !== "protocol") return "protocol must not depend on an application";
   if (owner !== "protocol" && target !== "protocol" && target !== owner) return "Worker and Runner must not depend on one another";
+  if (isPureRunner(from) && target === "runner" && !isPureRunner(to)
+    && !/^apps\/runner\/src\/(?:errors|config|protocol-types)\.ts$/u.test(to)) return "Runner record and planning modules must not depend on concrete I/O adapters";
   if (/^apps\/runner\/src\/(?:jobs|context)\//u.test(from)) {
     if (/^apps\/runner\/src\/(?:jobs|context-store|runtime|connection|cli|index|service|profile)\.[jt]s$/u.test(to)) return "Runner internals must not import their facade, transport or service entrypoints";
     if (isPureRunner(from) && target === "runner" && !isPureRunner(to) && !/^apps\/runner\/src\/(?:errors|config)\.[jt]s$/u.test(to)) return "Runner record and planning modules must not depend on concrete I/O adapters";
@@ -119,6 +122,7 @@ export function dependencyProblem(from, to) {
     if (/\/registry\/(?:records|ports|storage|values)\.[jt]s$/u.test(from) && domain.test(to)) return "Registry foundations must not depend on domain implementations";
   }
   if (from.startsWith("apps/worker/src/contracts/") && target === "worker" && !to.startsWith("apps/worker/src/contracts/")) return "application contracts must not depend on implementation or platform adapters";
+  if (from.startsWith("apps/worker/src/distribution/") && /^apps\/worker\/src\/installer(?:-preflight)?\.ts$/u.test(to)) return "Release discovery must not depend on installer rendering";
   if (from === "apps/worker/src/runtime-config.ts" && /\/installer(?:-preflight)?\.[jt]s$/u.test(to)) return "runtime configuration must not depend on distribution templates";
   if (from === "apps/worker/src/public-origin.ts" && target !== "protocol") return "public origin validation must remain a foundation module";
   if (from.startsWith("apps/worker/src/mcp/") && target === "worker" && /\/(?:registry|runner-do|index)\.[jt]s$/u.test(to) && !to.startsWith("apps/worker/src/mcp/")) return "MCP must use application contracts/platform types, not concrete DO/entry modules";

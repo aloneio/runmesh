@@ -1,3 +1,6 @@
+import type { DevelopmentReleaseDependencies } from "../contracts/runner-release.js";
+import { createDevelopmentReleaseRuntime } from "../domain/release-selection.js";
+import { defaultDevelopmentReleaseCache, verifyDevelopmentRunnerRelease } from "../distribution/release-io.js";
 import type { DevelopmentReleaseCache } from "../distribution/release.js";
 import { registryGet, registryPost } from "../platform/control-plane.js";
 import type { WorkerEnv } from "../platform/env.js";
@@ -27,4 +30,10 @@ export function registryDevelopmentReleaseCache(env: WorkerEnv): DevelopmentRele
       await stored.body?.cancel().catch(() => undefined);
     },
   };
+}
+
+// One value cache per Worker isolate. Requests never share an unfinished I/O promise.
+const releaseRuntime = createDevelopmentReleaseRuntime();
+export function developmentReleaseDependencies(cache?: DevelopmentReleaseCache | null): DevelopmentReleaseDependencies {
+  return { fetch, verify: verifyDevelopmentRunnerRelease, cache: cache === null ? undefined : cache ?? defaultDevelopmentReleaseCache(), now: () => Date.now(), runtime: releaseRuntime };
 }

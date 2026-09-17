@@ -39,7 +39,7 @@ export function validateStablePublication({ version, packageVersion, state, inst
 
 export async function checkStablePublication(root, version, keyId, requireCandidate = true) {
   const read = path => readFile(resolve(root, path), "utf8");
-  const installer = installerPublicationContract(await read("apps/worker/src/installer.ts"));
+  const installer = installerPublicationContract(await read("apps/worker/src/domain/release-config.ts"));
   const trustedKey = await loadTrustedReleaseKey(resolve(root, "release/trust-keyring.json"), keyId ?? installer.key_id);
   return validateStablePublication({ version, packageVersion: JSON.parse(await read("package.json")).version,
     state: JSON.parse(await read("release/release-state.json")), installer, keyId: keyId ?? installer.key_id, trustedKey, requireCandidate });

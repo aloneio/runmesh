@@ -1,3 +1,4 @@
+import { runnerRegistryFaults } from "./helpers/runner-registry-faults.js";
 import { env, runInDurableObject } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
 import { encodeWireFrame, decodeWireFrame } from "@aloneio/runmesh-protocol";
@@ -7,8 +8,9 @@ import { launchDigest, verifyQueueGrant } from "../src/queue-grant.js";
  * The real bridge encodes the request and resolves its websocket response. */
 async function bridge(recording: boolean | undefined, negotiated = true, fault?: "unavailable" | "denied" | "policy-race") {
   const stub = env.RUNNER.get(env.RUNNER.idFromName(`reporting-bridge-${crypto.randomUUID()}`));
-  await runInDurableObject(stub, async instance => {
-    const target = instance as any;
+  await runInDurableObject(stub, async (_existing, state) => {
+    const { runner, registry } = runnerRegistryFaults(state, env);
+    const target = runner as any;
     const attachment = { runnerId: "r", sessionId: "s", epoch: 1, credentialVersion: 1, lifecycleId: "reporting-lifecycle",
       protocolVersion: 2, authenticated: true, queueProtocol: 1, ...(negotiated ? { historyProtocol: 2 } : {}) };
     let authorized = false;
@@ -25,7 +27,7 @@ async function bridge(recording: boolean | undefined, negotiated = true, fault?:
     target.admissionState = {};
     target.admitOrReconcileProtectedRpc = async () => true;
     target.admitsProtectedRpc = () => !(authorized && fault === "policy-race");
-    target.registryRequest = async (_runner: string, path: string, init: RequestInit) => {
+    registry.request = async (_runner: string, path: string, init: RequestInit) => {
       requests.push({ path, ...(typeof init.body === "string" ? { input: JSON.parse(init.body) } : {}) });
       if (path === "/access") return Response.json({ allowed: true });
       if (path !== "/mcp-authorization") throw new Error("unexpected extra lookup");

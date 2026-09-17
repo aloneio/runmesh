@@ -1,10 +1,11 @@
+import { writeReleaseValidation, releaseValidationModule } from "../scripts/generate-release-validation.mjs";
 import { validateReleaseHealth } from "../scripts/check-live-release-prereqs.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { generateKeyPairSync } from "node:crypto";
+import { generateKeyPairSync, createHash, sign } from "node:crypto";
 import { build } from "esbuild";
-import { mkdtemp, readFile, rm, truncate, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -291,4 +292,100 @@ test("release publication rejects stale or incomplete public deployment contract
   }
   const stale=structuredClone(health);stale.release_readiness.rpc_authorization_complete=false;assert.throws(()=>validateReleaseHealth(stale));
   const unbound=structuredClone(health);unbound.audit_history.binding_configured=false;assert.throws(()=>validateReleaseHealth(unbound));
+});
+
+
+test("AR15 generates one bounded field validator without evaluating source", async () => {
+  const f = await fixture();
+  try {
+    const directory = join(f.root, "apps/worker/src/domain");
+    await mkdir(directory, { recursive: true });
+    const input = join(directory, "release-manifest.ts");
+    await writeFile(input, 'throw new Error("must not evaluate authored input"); export const marker: number = 1;\n');
+    assert.equal(await writeReleaseValidation(f.root), true);
+    assert.equal(await writeReleaseValidation(f.root), false);
+    const first = await readFile(join(f.root, "apps/worker/src/generated-release-validation.ts"), "utf8");
+    await writeFile(input, 'export const marker: number = 2;\n');
+    assert.equal(await writeReleaseValidation(f.root), true);
+    assert.notEqual(await readFile(join(f.root, "apps/worker/src/generated-release-validation.ts"), "utf8"), first);
+    await writeFile(input, 'import type { Stats } from "node:fs"; export const marker = 1;\n');
+    await assert.rejects(releaseValidationModule(f.root), /no runtime or type imports/u);
+    await writeFile(input, " ".repeat(32769));
+    await assert.rejects(releaseValidationModule(f.root), /bounded/u);
+    assert.equal(await readFile(join(repositoryRoot, "apps/worker/src/generated-release-validation.ts"), "utf8"), await releaseValidationModule(repositoryRoot));
+  } finally { await f.cleanup(); }
+});
+
+test("AR15 Worker and both generated installer verifiers agree on signed manifest fields", { timeout: 60_000 }, async () => {
+  const f = await fixture();
+  try {
+    const modules = {};
+    for (const [name, source] of Object.entries({ installer: "installer.ts", io: "distribution/release-io.ts", selection: "domain/release-selection.ts" })) {
+      const outfile = join(f.root, `${name}.mjs`);
+      await build({ entryPoints: [join(repositoryRoot, "apps/worker/src", source)], outfile, bundle: true, platform: "node", format: "esm", target: "node22" });
+      modules[name] = await import(pathToFileURL(outfile).href);
+    }
+    const version = productVersion.replace(/(\d+)$/u, value => String(Number(value) + 1)) + "-dev.0";
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+    const trust = { key_id: "synthetic-parity-key", public_key_pem: String(publicKey.export({ type: "spki", format: "pem" })) };
+    const target = { ...modules.installer.installerReleaseTarget(version, "dev"), release_key_id: trust.key_id, public_key_pem: trust.public_key_pem };
+    const shell = modules.installer.renderPosixInstaller("https://worker.test", "dedicated_user", target);
+    const powershell = modules.installer.renderPowerShellInstaller("https://worker.test", "dedicated_user", target);
+    const posixCode = /<<'RUNMESH_VERIFY'\n([\s\S]+?)\nRUNMESH_VERIFY\n/u.exec(shell)?.[1];
+    const psStart = powershell.indexOf("Invoke-LoggedStep 'Verifying Runner'");
+    const powerShellCode = /@'\n([\s\S]+?)\n'@ \| & \$NodePath --input-type=module - \$TempRoot/u.exec(powershell.slice(psStart))?.[1];
+    assert.ok(posixCode && powerShellCode, "extract the actual generated verifier, not a hand-written predicate");
+    assert.equal(posixCode, powerShellCode);
+    const paths = [join(f.root, "posix-verifier.mjs"), join(f.root, "powershell-verifier.mjs")];
+    await writeFile(paths[0], posixCode); await writeFile(paths[1], powerShellCode);
+    const artifact = Buffer.from("synthetic portable artifact, never installed");
+    const digest = createHash("sha256").update(artifact).digest("hex");
+    const base = { schema_version: 1, project: "runmesh", version, tag: `v${version}`, channel: "dev", prerelease: true, commit_sha: "a".repeat(40), protocol_min: 2, protocol_max: 2, published_at: "2026-09-16T08:00:00Z", artifacts: [{ name: target.artifact_name, platform: "node", architecture: "portable", node_major_min: 22, url: target.artifact_url, size: artifact.length, sha256: digest }] };
+    const metadata = { draft: false, prerelease: true, immutable: true, tag_name: `v${version}`, published_at: base.published_at, assets: ["LICENSE", "NOTICE", "SHA256SUMS", "THIRD_PARTY_NOTICES.md", "manifest.json", "manifest.sig", "manifest.signature.json", "trust-keyring.json", target.artifact_name].map(name => ({ name })) };
+    const descriptor = modules.selection.developmentDescriptor(metadata);
+    assert.ok(descriptor);
+    const changeArtifact = value => ({ ...base, artifacts: [{ ...base.artifacts[0], ...value }] });
+    const cases = [
+      ["valid", base, true],
+      ["valid leap day", { ...base, published_at: "2028-02-29T08:00:00Z" }, true],
+      ["unknown signed fields", { ...base, optional_future_metadata: "safe" }, true],
+      ["impossible month", { ...base, published_at: "2026-99-99T99:99:99Z" }, false],
+      ["normalized invalid day", { ...base, published_at: "2026-02-30T08:00:00Z" }, false],
+      ["invalid leap day", { ...base, published_at: "2026-02-29T08:00:00Z" }, false],
+      ["offset timestamp", { ...base, published_at: "2026-09-16T08:00:00+00:00" }, false],
+      ["non-string timestamp", { ...base, published_at: [base.published_at] }, false],
+      ["coerced commit", { ...base, commit_sha: [base.commit_sha] }, false],
+      ["wrong protocol", { ...base, protocol_max: 99 }, false],
+      ["wrong channel", { ...base, channel: "stable" }, false],
+      ["wrong prerelease flag", { ...base, prerelease: false }, false],
+      ["extra artifact", { ...base, artifacts: [...base.artifacts, ...base.artifacts] }, false],
+      ["null artifact", { ...base, artifacts: [null] }, false],
+      ["non-integer size", changeArtifact({ size: 1.5 }), false],
+      ["oversized artifact", changeArtifact({ size: modules.installer.MAX_RELEASE_ASSET_BYTES + 1 }), false],
+      ["coerced size", changeArtifact({ size: String(artifact.length) }), false],
+      ["coerced digest", changeArtifact({ sha256: [digest] }), false],
+      ["untrusted artifact URL", changeArtifact({ url: "https://example.invalid/untrusted.tgz" }), false],
+      ["wrong artifact name", changeArtifact({ name: "unexpected.tgz" }), false],
+    ];
+    for (const [name, manifest, expected] of cases) {
+      // Every negative fixture has a genuine valid test signature, so these
+      // failures prove field validation rather than an unrelated crypto error.
+      const manifestBytes = Buffer.from(JSON.stringify(manifest));
+      const signature = Buffer.from(sign(null, manifestBytes, privateKey).toString("base64"));
+      const signatureDescriptor = Buffer.from(JSON.stringify({ schema_version: 1, algorithm: "ed25519", key_id: trust.key_id, encoding: "base64", signed_file: "manifest.json" }));
+      const assets = new Map([[target.manifest_url, manifestBytes], [target.signature_url, signature], [target.signature_descriptor_url, signatureDescriptor]]);
+      const fetchImpl = async input => { const bytes = assets.get(String(input)); assert.ok(bytes, "fixed release URLs only"); return new Response(bytes); };
+      const accepted = await modules.io.verifyDevelopmentRunnerRelease(descriptor, fetchImpl, trust).then(() => true, () => false);
+      assert.equal(accepted, expected, `Worker: ${name}`);
+      await writeFile(join(f.root, "manifest.json"), manifestBytes);
+      await writeFile(join(f.root, "manifest.sig"), signature);
+      await writeFile(join(f.root, "manifest.signature.json"), signatureDescriptor);
+      await writeFile(join(f.root, target.artifact_name), artifact);
+      await writeFile(join(f.root, "SHA256SUMS"), `${digest}  ${target.artifact_name}\n`);
+      for (const path of paths) {
+        const result = await execFileAsync(process.execPath, [path, f.root], { timeout: 5_000, maxBuffer: 128 * 1024 }).then(() => true, () => false);
+        assert.equal(result, expected, `${path}: ${name}`);
+      }
+    }
+  } finally { await f.cleanup(); }
 });

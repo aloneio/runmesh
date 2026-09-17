@@ -1,3 +1,5 @@
+import type { PathSnapshot, ResolvedPolicyPath } from "./path-contracts.js";
+export type { PathSnapshot } from "./path-contracts.js";
 import { lstat, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, normalize, relative, sep, win32 } from "node:path";
 import type { WorkspaceConfig } from "./config.js";
@@ -7,26 +9,6 @@ export type PolicyPermission = "read" | "edit";
 
 export class PathPolicyError extends Error {
   public constructor(public readonly code: string, message: string) { super(message); this.name = "PathPolicyError"; }
-}
-
-/**
- * Point-in-time identity for a path that passed the workspace boundary.
- * Consumers must compare it after opening a handle: a canonical path string
- * alone is not atomic while another local process can replace an ancestor.
- */
-export interface PathSnapshot {
-  readonly canonicalPath: string;
-  /** Identity of the configured workspace root at snapshot time. Optional so
-   * callers compiled against the pre-snapshot shape remain source-compatible;
-   * snapshots returned by this module always populate these fields. */
-  readonly rootCanonicalPath?: string;
-  readonly rootDevice?: number;
-  readonly rootInode?: number;
-  readonly device: number;
-  readonly inode: number;
-  readonly type: "file" | "directory" | "other";
-  readonly size: number;
-  readonly modifiedAtMs: number;
 }
 
 /** Resolves all user paths from an allowlisted workspace id, never from a caller root. */
@@ -67,7 +49,7 @@ export class PathPolicy {
     if (workspace.readonly) throw new PathPolicyError("readonly_workspace", "workspace is readonly");
     return workspace;
   }
-  public async resolve(workspaceId: unknown, userPath: unknown, operation: PathOperation): Promise<{ workspace: WorkspaceConfig; path: string }> {
+  public async resolve(workspaceId: unknown, userPath: unknown, operation: PathOperation): Promise<ResolvedPolicyPath> {
     const generation = this.generation;
     const workspace = this.assertPermission(workspaceId, operation === "write" ? "edit" : "read");
     if (typeof userPath !== "string" || userPath.length === 0) throw new PathPolicyError("invalid_path", "path is required");

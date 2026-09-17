@@ -29,3 +29,4 @@ release/download/
 
 # Deterministic browser source generated before builds and typechecking.
 /apps/worker/src/generated-admin-client.ts*
+apps/worker/src/generated-release-validation.ts

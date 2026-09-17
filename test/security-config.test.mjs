@@ -35,9 +35,9 @@ test("development tooling and the portable Runner have separate Node contracts",
 
 test("reviewed release identity, independent production gate and precise CI toolchain remain aligned", async () => {
   const root = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
-  const installer = await readFile(new URL("../apps/worker/src/installer.ts", import.meta.url), "utf8");
+  const releaseConfig = await readFile(new URL("../apps/worker/src/domain/release-config.ts", import.meta.url), "utf8");
   assert.notEqual(root.version, "0.1.0-dev.3");
-  assert.ok(installer.includes(`FIXED_RELEASE_VERSION = "${root.version}"`));
+  assert.ok(releaseConfig.includes(`FIXED_RELEASE_VERSION = "${root.version}"`));
   for (const file of ["ci.yml", "release.yml"]) {
     const workflow = await readFile(new URL(`../.github/workflows/${file}`, import.meta.url), "utf8");
     if (file === "ci.yml") {
