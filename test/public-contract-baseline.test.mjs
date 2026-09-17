@@ -7,7 +7,7 @@ const ordered = value => Array.isArray(value) ? value.map(ordered) : value && ty
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, ordered(value[key])])) : value;
 const digest = value => createHash("sha256").update(value).digest("hex");
 const baseline = JSON.parse(await readFile(new URL("fixtures/public-contract-baseline.json", import.meta.url), "utf8"));
-test("architecture refactoring preserves all public MCP inputs, outputs, descriptions and annotations", async () => {
+test("public MCP inputs, outputs, descriptions and annotations match the reviewed contract baseline", async () => {
   const catalog = await sourceCatalog(); catalog.tools.sort((a,b) => a.name.localeCompare(b.name));
   assert.deepEqual(catalog.tools.map(tool => tool.name), baseline.tools);
   assert.equal(digest(JSON.stringify(ordered(catalog))), baseline.mcp_catalog_sha256);
