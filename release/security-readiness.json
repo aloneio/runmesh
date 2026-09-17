@@ -27,7 +27,7 @@
       "id": "SEC03",
       "state": "closed",
       "area": "git-object-source",
-      "fixed_commit": "b10809c08a3a6c8ccbdc8f05f48313741613370a",
+      "fixed_commit": "177ce76de39cd83ecb90e21c3b9f37a394311afb",
       "regressions": [
         "apps/runner/test/release-boundary-security.test.ts"
       ],
@@ -37,7 +37,7 @@
       "id": "SEC04",
       "state": "closed",
       "area": "admin-session-unavailable",
-      "fixed_commit": "b10809c08a3a6c8ccbdc8f05f48313741613370a",
+      "fixed_commit": "177ce76de39cd83ecb90e21c3b9f37a394311afb",
       "regressions": [
         "apps/worker/test/release-admin-security.test.ts"
       ],
@@ -47,7 +47,7 @@
       "id": "SEC05",
       "state": "closed",
       "area": "admin-password-unavailable",
-      "fixed_commit": "b10809c08a3a6c8ccbdc8f05f48313741613370a",
+      "fixed_commit": "177ce76de39cd83ecb90e21c3b9f37a394311afb",
       "regressions": [
         "apps/worker/test/release-admin-security.test.ts"
       ],
@@ -100,6 +100,16 @@
       "fixed_commit": "b10809c08a3a6c8ccbdc8f05f48313741613370a",
       "regressions": [
         "apps/worker/test/release-mcp-security.test.ts"
+      ],
+      "resolution": "source-fixed-and-regression-tested"
+    },
+    {
+      "id": "SEC11",
+      "state": "closed",
+      "area": "reauthorization-observation-deadline",
+      "fixed_commit": "177ce76de39cd83ecb90e21c3b9f37a394311afb",
+      "regressions": [
+        "apps/worker/test/reauthorization-budget.test.ts"
       ],
       "resolution": "source-fixed-and-regression-tested"
     }

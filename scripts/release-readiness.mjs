@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 
+export const REQUIRED_SECURITY_FINDINGS = Object.freeze(Array.from({ length: 11 }, (_, index) => `SEC${String(index + 1).padStart(2, "0")}`));
+
 /** CI configuration alone must not silently mark known security incidents as
  * fixed. Closure requires reviewed source-linked regression evidence. */
 export function assertSecurityReadiness(manifest, currentSource, verification) {
   assert.equal(manifest?.schema_version, 1);
   assert.match(currentSource, /^[a-f0-9]{40}$/u);
-  assert.ok(Array.isArray(manifest.findings) && manifest.findings.length >= 10 && manifest.findings.length <= 64);
+  assert.ok(Array.isArray(manifest.findings) && manifest.findings.length >= REQUIRED_SECURITY_FINDINGS.length && manifest.findings.length <= 64);
   assert.equal(verification?.schema_version, 1);
   assert.equal(verification.commit, currentSource, "runtime evidence must identify this candidate");
   assert.ok(Array.isArray(verification.findings) && verification.findings.length === manifest.findings.length);
@@ -28,6 +30,6 @@ export function assertSecurityReadiness(manifest, currentSource, verification) {
     assert.equal(evidence[0].failed, 0); assert.equal(evidence[0].skipped, 0);
     assert.deepEqual(evidence[0].files, finding.regressions);
   }
-  for (let index = 1; index <= 10; index++) assert.ok(ids.has(`SEC${String(index).padStart(2, "0")}`));
+  for (const id of REQUIRED_SECURITY_FINDINGS) assert.ok(ids.has(id), `${id} is missing from security closure`);
   return { security_readiness: "verified", findings: ids.size, commit: currentSource };
 }

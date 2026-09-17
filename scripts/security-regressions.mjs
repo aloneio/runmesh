@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { REQUIRED_SECURITY_FINDINGS } from "./release-readiness.mjs";
 
 const regressionPath = /^apps\/(runner|worker)\/test\/[A-Za-z0-9._/-]+\.test\.ts$/u;
 export function securityTestFiles(manifest) {
   assert.equal(manifest?.schema_version, 1);
-  assert.ok(Array.isArray(manifest.findings) && manifest.findings.length >= 10 && manifest.findings.length <= 64);
+  assert.ok(Array.isArray(manifest.findings) && manifest.findings.length >= REQUIRED_SECURITY_FINDINGS.length && manifest.findings.length <= 64);
   const ids = new Set(), files = new Set();
   for (const finding of manifest.findings) {
     assert.match(finding.id, /^SEC[0-9]{2}$/u); assert.ok(!ids.has(finding.id)); ids.add(finding.id);
@@ -14,7 +15,7 @@ export function securityTestFiles(manifest) {
       assert.ok(!file.split("/").includes("..")); files.add(file);
     }
   }
-  for (let n = 1; n <= 10; n++) assert.ok(ids.has(`SEC${String(n).padStart(2, "0")}`));
+  for (const id of REQUIRED_SECURITY_FINDINGS) assert.ok(ids.has(id), `${id} is missing from security execution`);
   return [...files].sort();
 }
 

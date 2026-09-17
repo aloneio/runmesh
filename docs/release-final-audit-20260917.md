@@ -40,6 +40,8 @@ Pre-commit local results on the candidate's modified source were:
 
 These pre-commit observations are not substituted for clean-commit evidence. Security evidence is generated separately from the exact clean candidate by `npm run test:security`; every owned security case must pass without skips. Any later clean-candidate results must identify their own commit. Skipped cases in ordinary lanes are not claimed as executed native-platform coverage.
 
+The expanded security manifest binds the follow-up corrections to source commit `177ce76de39cd83ecb90e21c3b9f37a394311afb`. SEC11 owns the reauthorization deadline suite. The execution collector and closure verifier share the mandatory finding IDs, and regression tests reject deleting or substituting SEC11 even when report counts still match.
+
 The initial shared-cache installation failed with `EACCES`. An independent cache subsequently installed successfully. Some host execution requests were rejected by the tool platform; rejected requests are not recorded as executed checks. The installed MCP host catalog still exposed nine tools and its Job `get` schema rejected `workspace_id`; a newly created Job was visible through the live workspace Job list but its history-based `get` returned `not_found`. This requires fresh source/server/host catalog comparison and installed-component acceptance, not speculative source edits or a claim of deployment success.
 
 Raw command logs remain in the separate audit evidence directory on oci0. The canonical CI and security report generators produce their own bounded evidence. No cleanup, production deployment, stable publication or installed-Runner restart is part of this audit.
