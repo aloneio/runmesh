@@ -112,6 +112,26 @@
         "apps/worker/test/reauthorization-budget.test.ts"
       ],
       "resolution": "source-fixed-and-regression-tested"
+    },
+    {
+      "id": "SEC12",
+      "state": "closed",
+      "area": "control-plane-completion-receipts",
+      "fixed_commit": "bc7883b62db6a36a5f6984467cf4bf6c3f907145",
+      "regressions": [
+        "apps/worker/test/mcp-failure-chain.test.ts"
+      ],
+      "resolution": "source-fixed-and-regression-tested"
+    },
+    {
+      "id": "SEC13",
+      "state": "closed",
+      "area": "sticky-runner-selection-identity",
+      "fixed_commit": "bc7883b62db6a36a5f6984467cf4bf6c3f907145",
+      "regressions": [
+        "apps/worker/test/mcp-failure-chain.test.ts"
+      ],
+      "resolution": "source-fixed-and-regression-tested"
     }
   ]
 }
