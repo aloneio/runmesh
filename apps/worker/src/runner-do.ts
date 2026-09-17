@@ -1,3 +1,4 @@
+import { boundedJsonReceipt, boundedJsonResponse } from "./platform/bounded-json.js";
 import type { BridgeReply, BridgeReplyPort, RegistryRequestPort } from "./contracts/runner-transport.js";
 import { BridgeReplies } from "./platform/bridge-replies.js";
 import { requestRunnerRegistry } from "./platform/runner-registry.js";
@@ -447,13 +448,13 @@ export class RunnerDO {
         && grant.runner_id === attachment.runnerId && grant.lifecycle_id === attachment.lifecycleId
         && grant.credential_version === attachment.credentialVersion
         && await this.admitOrReconcileProtectedRpc(attachment,grant.policy_revision,grant.policy_checksum)) {
-        const response = await this.registryRequest(attachment.runnerId,"/mcp-authorization",{method:"POST",body:JSON.stringify({
+        const response = await boundedJsonResponse(signal => this.registryRequest(attachment.runnerId,"/mcp-authorization",{method:"POST",signal,body:JSON.stringify({
           client_id:grant.client_id,secret_version:grant.secret_version,method:"exec.start",workspace_id:grant.workspace_id,
           policy_revision:grant.policy_revision,policy_checksum:grant.policy_checksum,
           ...(attachment.historyProtocol === 2 ? {include_job_recording:true} : {}),
-        })});
-        let decision: unknown; try { decision=await response.json(); } catch { decision=undefined; }
-        allowed=response.ok && isRecord(decision) && decision.ok===true;
+        })}));
+        const decision = response?.value;
+        allowed=response?.status===200 && isRecord(decision) && decision.ok===true;
         recordHistory = allowed && isRecord(decision) && decision.record_history === true;
       }
       // No await after the final local session/policy fence. A grant never
@@ -461,7 +462,7 @@ export class RunnerDO {
       allowed = allowed && grant !== undefined && this.admissionState !== undefined
         && this.admitsProtectedRpc(this.admissionState,attachment,grant.policy_revision,grant.policy_checksum)
         && this.ctx.getWebSockets("runner").includes(ws);
-      ws.send(encodeWireFrame({type:"rpc.response",protocol_version:attachment.protocolVersion,request_id:message.request_id,result:{authorized:allowed,...(attachment.historyProtocol === 2 ? {record_history:recordHistory} : {})}}));
+      ws.send(encodeWireFrame({type:"rpc.response",protocol_version:attachment.protocolVersion,request_id:message.request_id,result:{authorized:allowed,...(attachment.historyProtocol === 2 ? {record_history:allowed && recordHistory} : {})}}));
       return;
     }
     if (message.type === "job.output") {
@@ -563,8 +564,8 @@ export class RunnerDO {
     if (method !== "echo" && method !== "runner.info") {
       let access: Record<string, unknown>;
       try {
-        const response = await this.registryRequest(attachment.runnerId, "/access", { method: "GET" });
-        const value: unknown = response.ok ? await response.json() : undefined;
+        const response = await boundedJsonResponse(signal => this.registryRequest(attachment.runnerId, "/access", { method: "GET", signal }));
+        const value = response?.value;
         if (!isRecord(value) || typeof value.allowed !== "boolean") return preDispatchError("runner_access_unavailable", "Runner authorization status could not be verified", 503);
         access = value;
       } catch { return preDispatchError("runner_access_unavailable", "Runner authorization status could not be verified", 503); }
@@ -592,17 +593,21 @@ export class RunnerDO {
       const principal = input.mcp_authorization;
       const params = input.params;
       if (!isRecord(principal) || !isRecord(params)) return preDispatchError("permission_denied", "invalid MCP authorization identity", 403);
-      const authorized = await this.registryRequest(attachment.runnerId, "/mcp-authorization", { method: "POST", body: JSON.stringify({
-        client_id: principal.client_id, secret_version: principal.secret_version, method, workspace_bound: principal.workspace_bound === true,
-        workspace_id: params.expected_workspace_id ?? params.workspace_id,
-        ...(typeof params.job_id === "string" ? { job_id: params.job_id } : {}),
-        policy_revision: requestPolicyRevision, policy_checksum: expectedPolicyChecksum,
-        ...(reportingLaunch ? { include_job_recording: true } : {}),
-      }) });
-      let decision: unknown;
-      try { decision = await authorized.json(); } catch { decision = undefined; }
-      if (authorized.status === 429 || authorized.status >= 500 || !isRecord(decision) || typeof decision.ok !== "boolean") return preDispatchError("control_plane_unavailable", "MCP authorization could not be verified", 503, controlPlaneUnavailableResponse(authorized).headers);
-      if (!authorized.ok || decision.ok !== true) return preDispatchError("permission_denied", "MCP authorization is no longer valid", 403);
+      let authorized: Response | undefined;
+      const receipt = await boundedJsonReceipt(async signal => {
+        authorized = await this.registryRequest(attachment.runnerId, "/mcp-authorization", { method: "POST", signal, body: JSON.stringify({
+          client_id: principal.client_id, secret_version: principal.secret_version, method, workspace_bound: principal.workspace_bound === true,
+          workspace_id: params.expected_workspace_id ?? params.workspace_id,
+          ...(typeof params.job_id === "string" ? { job_id: params.job_id } : {}),
+          policy_revision: requestPolicyRevision, policy_checksum: expectedPolicyChecksum,
+          ...(reportingLaunch ? { include_job_recording: true } : {}),
+        }) });
+        return authorized;
+      }, [200, 403, 409]);
+      const decision = receipt?.value;
+      if (receipt === undefined || !isRecord(decision) || typeof decision.ok !== "boolean"
+        || (receipt.status !== 200 && !((receipt.status === 403 || receipt.status === 409) && decision.ok === false))) return preDispatchError("control_plane_unavailable", "MCP authorization could not be verified", 503, controlPlaneUnavailableResponse(authorized).headers);
+      if (receipt.status !== 200 || decision.ok !== true) return preDispatchError("permission_denied", "MCP authorization is no longer valid", 403);
       // Reuse this exact final decision; no extra lookup or cached permission.
       // Missing optional capture evidence suppresses history, not execution.
       recordHistory = decision.record_history === true;

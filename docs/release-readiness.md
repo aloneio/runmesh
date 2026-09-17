@@ -19,3 +19,5 @@ The [2026-09-17 follow-up](release-followup-20260917.md) records additional sour
 The [cumulative candidate audit](release-final-audit-20260917.md) records later repository regression runs and further authentication-boundary repairs. Clean-candidate security evidence and stable publication/deployment acceptance remain distinct requirements.
 
 The [independent oci0 candidate review](release-review-20260917-1612.md) found a failed unit gate, corrected permission-sensitive test fixtures and browser mutation outage statuses, and records the remaining post-repair verification gap. Its pre-repair 25/26 gate results do not approve the modified candidate for release.
+
+The [final admission and bounded receipt audit](release-admission-audit-20260917.md) records further bridge/dequeue authorization, stream-budget and Job-identity repairs and confirms that the existing nonduplicating GitLab dev-mirroring policy remains intact. Its source regression results remain separate from clean-candidate, provider, installed-component and stable-release acceptance.

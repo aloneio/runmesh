@@ -1,3 +1,5 @@
+import { boundedJsonReceipt, boundedJsonResponse } from "../platform/bounded-json.js";
+import { MAX_FRAME_BYTES } from "@aloneio/runmesh-protocol";
 import { boundPageResponseProblem } from "./byte-pages.js";
 import { encodeWireFrame } from "@aloneio/runmesh-protocol";
 import { fail } from "./results/envelope.js";
@@ -84,10 +86,9 @@ export async function registryCall(env: McpRequestEnv, path: string): Promise<To
   if (!isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) return fail("service_unavailable", "The registry is not configured.", "Ask the service operator to configure the internal bridge.", "not_started");
   const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "GET", path, "");
   try {
-    const response = await env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method: "GET", headers }));
-    if (response.status === 200) return { ok: true, value: await json(response) };
-    void response.body?.cancel().catch(() => undefined);
-    return fail(response.status === 404 ? "not_found" : "registry_unavailable", response.status === 404 ? "The requested registry record was not found." : "The registry is unavailable.", response.status === 404 ? "Use runner_list to discover valid identifiers." : "Retry shortly; the runner may still be available for live tools.", "not_started");
+    const response = await boundedJsonResponse(signal => env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method: "GET", headers, signal })), 5000, MAX_FRAME_BYTES);
+    if (response?.status === 200) return { ok: true, value: response.value };
+    return fail(response?.status === 404 ? "not_found" : "registry_unavailable", response?.status === 404 ? "The requested registry record was not found." : "The registry is unavailable.", response?.status === 404 ? "Use runner_list to discover valid identifiers." : "Retry shortly; the runner may still be available for live tools.", "not_started");
   } catch {
     return fail("registry_unavailable", "The registry is unavailable.", "Retry shortly; the runner may still be available for live tools.", "not_started");
   }
@@ -98,21 +99,23 @@ export async function registryPostCall(env: McpRequestEnv, path: string, input: 
   const body = JSON.stringify(input);
   const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "POST", path, body);
   try {
-    const response = await env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method: "POST", headers, body }));
+    const response = await boundedJsonReceipt(signal => env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method: "POST", headers, body, signal })), receiptKind === "audit" ? [200, 403, 409, 202] : [200, 403, 409]);
     // Authority and selection require completed JSON receipts at 200. Only
     // the audit caller opts into the documented disabled/degraded 202 receipt;
     // neither that receipt nor a conflict/denial can become an execution grant.
-    const deferredAudit = receiptKind === "audit" && response.status === 202;
-    if (response.status === 200 || response.status === 409 || response.status === 403 || deferredAudit) {
-      const value = await json(response);
+    const deferredAudit = receiptKind === "audit" && response?.status === 202;
+    if (response !== undefined && (response.status === 200 || response.status === 409 || response.status === 403 || deferredAudit)) {
+      const value = response.value;
       if (response.status === 200 || (isRecord(value) && (deferredAudit
         ? value.audit_status === "disabled" || value.audit_status === "degraded"
         : value.ok === false && typeof value.code === "string"))) return { ok: true, value };
-    } else { void response.body?.cancel().catch(() => undefined); }
-    return fail(response.status === 404 ? "not_found" : "registry_unavailable", "The Registry did not return a completed or explicit denial receipt.", "Inspect the current state before retrying a mutation.", "unknown");
+    }
+    return fail(response?.status === 404 ? "not_found" : "registry_unavailable", "The Registry did not return a completed or explicit denial receipt.", "Inspect the current state before retrying a mutation.", "unknown");
   } catch { return fail("registry_unavailable", "The Registry reply was not received.", "Inspect the current state before retrying a mutation.", "unknown"); }
 }
 
 async function json(response: Response): Promise<unknown> {
-  try { return await response.json(); } catch { return undefined; }
+  // The bridge already bounds dispatch time. Bound its body separately so a
+  // legitimate foreground command keeps its existing wait budget.
+  return (await boundedJsonReceipt(async () => response, [response.status], 5000, MAX_FRAME_BYTES))?.value;
 }
