@@ -329,7 +329,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const duringGap = await mcpTool("job", { action: "get", job_id: jobId as string }, clientB);
     expect(duringGap).toMatchObject({ structuredContent: { runner_state: "offline", source: "registry_snapshot" } });
     const missingDuringGap = await mcpTool("job", { action: "get", job_id: "job-00000000-0000-0000-0000-000000000000" }, clientB);
-    expect(missingDuringGap).toMatchObject({ isError: true, structuredContent: { error: { code: "not_found" } } });
+    expect(missingDuringGap).toMatchObject({ isError: true, structuredContent: { error: { code: "job_history_unavailable", operation_state: "not_started", next_action: "correct_request", recovery_hint: expect.stringContaining("workspace_id") } } });
 
     // Restart the Runner process after the deliberate transport-only gap; its
     // detached persistent job and registry snapshot remain available.

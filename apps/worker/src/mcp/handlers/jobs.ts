@@ -4,7 +4,9 @@ import { callRunner } from "../transport.js";
 import { checkAnyReadPermission } from "../authorization.js";
 import { checkPermission } from "../authorization.js";
 import { fail } from "../results/envelope.js";
+import { failWithDetails } from "../results/envelope.js";
 import { failure } from "../results/envelope.js";
+import { hintFor } from "../results/envelope.js";
 import { isRecord } from "../results/primitives.js";
 import { isSafeIdentifier } from "../../security.js";
 import { JobInputSchema } from "../catalog.js";
@@ -50,7 +52,7 @@ async function activeJobRunnerTool(env: McpRequestEnv, clientId: string, method:
   if (!selected.ok) return asToolResult(selected);
   const workspaceBound = typeof params.workspace_id === "string";
   const job: ToolCall = workspaceBound ? { ok: true, value: { workspace_id: params.workspace_id } }
-    : await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/jobs/${encodeURIComponent(String(params.job_id))}`);
+    : await jobSnapshot(env, selected.value.runnerId, String(params.job_id));
   if (!job.ok) return runnerFailure(job.error, selected.value);
   const workspaceId = isRecord(job.value) && typeof job.value.workspace_id === "string" ? job.value.workspace_id : undefined;
   const requestedJobId = typeof params.job_id === "string" ? params.job_id : undefined;
@@ -89,7 +91,7 @@ async function activeJobRunnerTool(env: McpRequestEnv, clientId: string, method:
   // workspace_id by contract, so they are still bound by the exact job_id
   // request and the Registry preflight above.
   if (!runnerJobResultMatches(call.value, requestedJobId, workspaceId)) {
-    const failure = runnerFailure(fail("permission_denied", "The Runner returned a job from a different workspace.", "Refresh the job list and retry with the authorized job identifier.").error, selected.value);
+    const failure = runnerFailure(failWithDetails("tool_result_invalid", "The Runner reply does not match the requested Job identity.", hintFor("tool_result_invalid", "unknown"), { job_id: requestedJobId, workspace_id: workspaceId }, "unknown").error, selected.value);
     const audit = await recordRunnerToolCall(env, {
       runnerId: selected.value.runnerId,
       clientId,
@@ -171,7 +173,7 @@ async function activeJobGet(env: McpRequestEnv, clientId: string, jobId: string,
   if (expectedWorkspaceId !== undefined) return activeJobRunnerTool(env, clientId, "job.get", { job_id: jobId, workspace_id: expectedWorkspaceId }, "read", "job");
   const selected = await resolveActiveRunner(env, clientId, true);
   if (!selected.ok) return asToolResult(selected);
-  const snapshot = await registryCall(env, `/runners/${encodeURIComponent(selected.value.runnerId)}/jobs/${encodeURIComponent(jobId)}`);
+  const snapshot = await jobSnapshot(env, selected.value.runnerId, jobId);
   if (!snapshot.ok) return runnerFailure(snapshot.error, selected.value);
   const workspaceId = isRecord(snapshot.value) && typeof snapshot.value.workspace_id === "string" ? snapshot.value.workspace_id : undefined;
   if (workspaceId === undefined || !isSafeIdentifier(workspaceId)) {
@@ -187,10 +189,19 @@ async function activeJobGet(env: McpRequestEnv, clientId: string, jobId: string,
   const live = await callRunner(env, selected.value.runnerId, "job.get", { job_id: jobId, expected_workspace_id: workspaceId }, readiness.value.applied_revision, readiness.value.active_checksum);
   if (live.ok) {
     if (!runnerJobResultMatches(live.value, jobId, workspaceId)) {
-      return runnerFailure(fail("permission_denied", "The Runner returned a job from a different workspace.", "Refresh the job list and retry with the authorized job identifier.").error, selected.value);
+      return runnerFailure(failWithDetails("tool_result_invalid", "The Runner reply does not match the requested Job identity.", hintFor("tool_result_invalid", "unknown"), { job_id: jobId, workspace_id: workspaceId }, "unknown").error, selected.value);
     }
     return runnerSuccess(safeJobMetadata(live.value), selected.value);
   }
   if (live.error.code !== "runner_offline") return runnerFailure(live.error, selected.value);
   return runnerSuccess({ ...safeJobMetadata(snapshot.value), source: "registry_snapshot", runner_state: "offline" }, selected.value);
+}
+
+/** Missing optional cloud history is not proof that a local Job is absent.
+ * Never discover a different workspace or replay a command automatically. */
+async function jobSnapshot(env: McpRequestEnv, runnerId: string, jobId: string): Promise<ToolCall> {
+  const result = await registryCall(env, `/runners/${encodeURIComponent(runnerId)}/jobs/${encodeURIComponent(jobId)}`);
+  return !result.ok && result.error.code === "not_found"
+    ? failWithDetails("job_history_unavailable", "The cloud Job record is unavailable; the original Job may still exist on this Runner.", hintFor("job_history_unavailable"), { job_id: jobId }, "not_started")
+    : result;
 }

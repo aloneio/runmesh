@@ -13,6 +13,7 @@ import {
   ProtocolFrameError,
   decodeWireFrame,
   encodeWireFrame,
+  failureMetadata,
   negotiateProtocolVersion,
   PROTOCOL_CURRENT_VERSION,
   PROTOCOL_MIN_VERSION,
@@ -48,6 +49,10 @@ const BRIDGE_TIMEOUT_MS = WORKER_BRIDGE_TIMEOUT_MS;
 const MAX_BRIDGE_IN_FLIGHT = 32;
 const MAX_BRIDGE_BODY_BYTES = 2 * 1024 * 1024;
 
+/** Only use before socket dispatch. A missing reply uses unknown instead. */
+function preDispatchError(code: string, message: string, status: number, headers?: Headers): Response {
+  return Response.json({ error: { code, message, ...failureMetadata(code, "not_started") } }, { status, ...(headers === undefined ? {} : { headers }) });
+}
 
 type MutationPhase = "idle" | "precommit" | "committed_pending" | "offline_pending" | "invalid" | "restart_reconcile";
 
@@ -545,33 +550,38 @@ export class RunnerDO {
     const body = await readCappedText(request, MAX_BRIDGE_BODY_BYTES);
     if (body === undefined || !await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
     let input: { method?: unknown; params?: unknown; policy_revision?: unknown; expected_policy_revision?: unknown; expected_policy_checksum?: unknown; mcp_authorization?: unknown };
-    try { input = JSON.parse(body) as { method?: unknown; params?: unknown; policy_revision?: unknown; expected_policy_revision?: unknown; expected_policy_checksum?: unknown; mcp_authorization?: unknown }; } catch { return Response.json({ error: { code: "invalid_request", message: "invalid JSON object" } }, { status: 400 }); }
-    if (typeof input !== "object" || input === null || Array.isArray(input)) return Response.json({ error: { code: "invalid_request", message: "invalid JSON object" } }, { status: 400 });
+    try { input = JSON.parse(body) as { method?: unknown; params?: unknown; policy_revision?: unknown; expected_policy_revision?: unknown; expected_policy_checksum?: unknown; mcp_authorization?: unknown }; } catch { return preDispatchError("invalid_request", "invalid JSON object", 400); }
+    if (typeof input !== "object" || input === null || Array.isArray(input)) return preDispatchError("invalid_request", "invalid JSON object", 400);
     const socket = await this.currentRunnerSocket();
     const attachment = socket?.deserializeAttachment() as ConnectionAttachment | null;
-    if (socket === undefined || attachment === null || attachment.epoch === 0 || attachment.protocolVersion === 0) return Response.json({ error: { code: "runner_offline", message: "runner is not connected" } }, { status: 503 });
-    if (this.replies.size >= MAX_BRIDGE_IN_FLIGHT) return Response.json({ error: { code: "busy", message: "bridge concurrency limit reached" } }, { status: 429 });
+    if (socket === undefined || attachment === null || attachment.epoch === 0 || attachment.protocolVersion === 0) return preDispatchError("runner_offline", "runner is not connected", 503);
+    if (this.replies.size >= MAX_BRIDGE_IN_FLIGHT) return preDispatchError("busy", "bridge concurrency limit reached", 429);
     const requestPolicyRevision = typeof input.policy_revision === "number" && Number.isSafeInteger(input.policy_revision) && input.policy_revision > 0 ? input.policy_revision : undefined;
     const expectedPolicyRevision = typeof input.expected_policy_revision === "number" && Number.isSafeInteger(input.expected_policy_revision) && input.expected_policy_revision > 0 ? input.expected_policy_revision : undefined;
     const expectedPolicyChecksum = typeof input.expected_policy_checksum === "string" && /^[a-f0-9]{64}$/.test(input.expected_policy_checksum) ? input.expected_policy_checksum : undefined;
     const method = typeof input.method === "string" ? input.method : "";
     if (method !== "echo" && method !== "runner.info") {
       let access: Record<string, unknown>;
-      try { access = await (await this.registryRequest(attachment.runnerId, "/access", { method: "GET" })).json() as Record<string, unknown>; } catch { return Response.json({ error: { code: "runner_access_unavailable", message: "Runner authorization status could not be verified" } }, { status: 503 }); }
+      try {
+        const response = await this.registryRequest(attachment.runnerId, "/access", { method: "GET" });
+        const value: unknown = response.ok ? await response.json() : undefined;
+        if (!isRecord(value) || typeof value.allowed !== "boolean") return preDispatchError("runner_access_unavailable", "Runner authorization status could not be verified", 503);
+        access = value;
+      } catch { return preDispatchError("runner_access_unavailable", "Runner authorization status could not be verified", 503); }
       if (access.allowed !== true) {
         const status = access.status === "scheduled" ? "runner_not_active" : access.status === "expired" ? "runner_expired" : "runner_not_authorized";
-        return Response.json({ error: { code: status, message: status === "runner_expired" ? "Runner authorization has expired; renew it in the administrator console" : status === "runner_not_active" ? "Runner authorization has not started; update it in the administrator console" : "Runner authorization is unavailable" } }, { status: 403 });
+        return preDispatchError(status, status === "runner_expired" ? "Runner authorization has expired; renew it in the administrator console" : status === "runner_not_active" ? "Runner authorization has not started; update it in the administrator console" : "Runner authorization is unavailable", 403);
       }
     }
     if (requestPolicyRevision === undefined && method !== "echo" && method !== "runner.info") {
-      return Response.json({ error: { code: "stale_policy", message: "Protected RPC requires a policy revision" } }, { status: 409 });
+      return preDispatchError("stale_policy", "Protected RPC requires a policy revision", 409);
     }
     if (requestPolicyRevision !== undefined && (expectedPolicyRevision !== requestPolicyRevision || expectedPolicyChecksum === undefined)) {
-      return Response.json({ error: { code: "stale_policy", message: "Protected RPC requires a verified policy identity" } }, { status: 409 });
+      return preDispatchError("stale_policy", "Protected RPC requires a verified policy identity", 409);
     }
     if (requestPolicyRevision !== undefined && expectedPolicyChecksum !== undefined) {
       const admission = await this.admitOrReconcileProtectedRpc(attachment, requestPolicyRevision, expectedPolicyChecksum);
-      if (!admission) return Response.json({ error: { code: "stale_policy", message: "Runner policy admission is fenced or stale" } }, { status: 409 });
+      if (!admission) return preDispatchError("stale_policy", "Runner policy admission is fenced or stale", 409);
     }
     // A public MCP request carries a non-secret principal fence, protected by
     // the Worker HMAC. Do not trust its earlier permission preflight: async
@@ -581,7 +591,7 @@ export class RunnerDO {
     if (Object.prototype.hasOwnProperty.call(input, "mcp_authorization")) {
       const principal = input.mcp_authorization;
       const params = input.params;
-      if (!isRecord(principal) || !isRecord(params)) return Response.json({ error: { code: "permission_denied", message: "invalid MCP authorization identity" } }, { status: 403 });
+      if (!isRecord(principal) || !isRecord(params)) return preDispatchError("permission_denied", "invalid MCP authorization identity", 403);
       const authorized = await this.registryRequest(attachment.runnerId, "/mcp-authorization", { method: "POST", body: JSON.stringify({
         client_id: principal.client_id, secret_version: principal.secret_version, method, workspace_bound: principal.workspace_bound === true,
         workspace_id: params.expected_workspace_id ?? params.workspace_id,
@@ -591,8 +601,8 @@ export class RunnerDO {
       }) });
       let decision: unknown;
       try { decision = await authorized.json(); } catch { decision = undefined; }
-      if (authorized.status === 429 || authorized.status >= 500 || !isRecord(decision) || typeof decision.ok !== "boolean") return controlPlaneUnavailableResponse(authorized);
-      if (!authorized.ok || decision.ok !== true) return Response.json({ error: { code: "permission_denied", message: "MCP authorization is no longer valid" } }, { status: 403 });
+      if (authorized.status === 429 || authorized.status >= 500 || !isRecord(decision) || typeof decision.ok !== "boolean") return preDispatchError("control_plane_unavailable", "MCP authorization could not be verified", 503, controlPlaneUnavailableResponse(authorized).headers);
+      if (!authorized.ok || decision.ok !== true) return preDispatchError("permission_denied", "MCP authorization is no longer valid", 403);
       // Reuse this exact final decision; no extra lookup or cached permission.
       // Missing optional capture evidence suppresses history, not execution.
       recordHistory = decision.record_history === true;
@@ -621,15 +631,18 @@ export class RunnerDO {
     // Otherwise a policy mutation can win while Registry authorization awaits.
     if (requestPolicyRevision !== undefined && expectedPolicyChecksum !== undefined
       && (this.admissionState === undefined || !this.admitsProtectedRpc(this.admissionState, attachment, requestPolicyRevision, expectedPolicyChecksum))) {
-      return Response.json({ error: { code: "stale_policy", message: "Runner policy changed before dispatch" } }, { status: 409 });
+      return preDispatchError("stale_policy", "Runner policy changed before dispatch", 409);
     }
     const requestId = `bridge-${crypto.randomUUID()}`;
     const parsed = RpcRequestSchema.safeParse({ type: "rpc.request", protocol_version: attachment.protocolVersion, request_id: requestId, method: input.method, params: dispatchParams, ...(requestPolicyRevision === undefined ? {} : { policy_revision: requestPolicyRevision }) });
-    if (!parsed.success) return Response.json({ error: { code: "invalid_request", message: "invalid RPC request" } }, { status: 400 });
+    if (!parsed.success) return preDispatchError("invalid_request", "invalid RPC request", 400);
+    // Authorization above awaits I/O. Recheck capacity at the synchronous
+    // reservation point so concurrent admissions cannot all pass the first gate.
+    if (this.replies.size >= MAX_BRIDGE_IN_FLIGHT) return preDispatchError("busy", "bridge concurrency limit reached", 429);
     const reply = await new Promise<BridgeReply>((resolve) => {
       const timer = setTimeout(() => {
         this.replies.forget(requestId);
-        resolve({ type: "rpc.error", protocol_version: attachment.protocolVersion, request_id: requestId, error: { code: "timeout", message: "runner RPC timed out" } });
+        resolve({ type: "rpc.error", protocol_version: attachment.protocolVersion, request_id: requestId, error: { code: "timeout", message: "runner RPC timed out", ...failureMetadata("timeout", "unknown") } });
       }, BRIDGE_TIMEOUT_MS);
       this.replies.register(requestId, { resolve, timer, socket });
       try { socket.send(encodeWireFrame(parsed.data)); } catch (error) {
@@ -643,10 +656,10 @@ export class RunnerDO {
             ? "frame_too_large"
             : undefined;
         if (protocolCode === "frame_too_large") {
-          resolve({ type: "rpc.error", protocol_version: attachment.protocolVersion, request_id: requestId, error: { code: "request_too_large", message: "runner RPC exceeds the wire-frame limit" } });
+          resolve({ type: "rpc.error", protocol_version: attachment.protocolVersion, request_id: requestId, error: { code: "request_too_large", message: "runner RPC exceeds the wire-frame limit", ...failureMetadata("request_too_large", "not_started") } });
           return;
         }
-        resolve({ type: "rpc.error", protocol_version: attachment.protocolVersion, request_id: requestId, error: { code: "runner_offline", message: "runner is not connected" } });
+        resolve({ type: "rpc.error", protocol_version: attachment.protocolVersion, request_id: requestId, error: { code: "runner_offline", message: "runner is not connected", ...failureMetadata("runner_offline", "unknown") } });
       }
     });
     return reply.type === "rpc.response" ? Response.json(reply) : Response.json(reply, { status: reply.error.code === "timeout" ? 504 : reply.error.code === "request_too_large" ? 413 : 502 });
@@ -655,7 +668,7 @@ export class RunnerDO {
   private rejectBridgeWaiters(socket: WebSocket, message: string): void {
     this.replies.reject(socket, (requestId, currentSocket) => {
       const attachment = currentSocket.deserializeAttachment() as ConnectionAttachment | null;
-      return { type: "rpc.error", protocol_version: attachment?.protocolVersion ?? PROTOCOL_CURRENT_VERSION, request_id: requestId, error: { code: "runner_offline", message } };
+      return { type: "rpc.error", protocol_version: attachment?.protocolVersion ?? PROTOCOL_CURRENT_VERSION, request_id: requestId, error: { code: "runner_offline", message, ...failureMetadata("runner_offline", "unknown") } };
     });
   }
 

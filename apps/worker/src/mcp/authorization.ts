@@ -15,13 +15,15 @@ export async function checkPermission(env: McpRequestEnv, clientId: string, runn
   const call = await registryCall(env, `/auth/clients/${encodeURIComponent(clientId)}/effective-permissions/${encodeURIComponent(runnerId)}?workspace_id=${encodeURIComponent(workspaceId)}`);
   if (!call.ok) return call.error.code === "not_found" ? fail("permission_denied", "The operation is not permitted for this workspace.", "Ask the administrator to grant the required workspace permission.") : call;
   const permissions = isRecord(call.value) && isRecord(call.value.permissions) ? call.value.permissions : undefined;
+  if (permissions === undefined || typeof permissions[required] !== "boolean") return fail("authorization_response_invalid", "Workspace authorization returned an invalid response.", "Ask the operator to check the authorization dependency; this does not establish denied permissions.", "not_started");
   if (permissions?.[required] !== true) return fail(required === "edit" ? "readonly_workspace" : "permission_denied", "The operation is not permitted for this workspace.", "Ask the administrator to grant the required workspace permission.");
   return undefined;
 }
 
 export async function policyReadiness(env: McpRequestEnv, runnerId: string): Promise<{ readonly ok: true; readonly value: ActivePolicyReadiness } | { readonly ok: false; readonly error: PermissionCheck }> {
   const readiness = await registryCall(env, `/runners/${encodeURIComponent(runnerId)}/policy-readiness`);
-  if (!readiness.ok || !isRecord(readiness.value)) return { ok: false, error: fail("stale_policy", "The selected runner policy could not be verified.", "Wait for the runner to reconnect and apply the latest control-plane policy.") };
+  if (!readiness.ok) return { ok: false, error: readiness };
+  if (!isRecord(readiness.value)) return { ok: false, error: fail("authorization_response_invalid", "Policy readiness returned an invalid response.", "Ask the operator to check the control plane; no operation was dispatched.", "not_started") };
   const value = readiness.value;
   const desiredRevision = typeof value.desired_revision === "number" && Number.isSafeInteger(value.desired_revision) && value.desired_revision > 0 ? value.desired_revision : undefined;
   const desiredChecksum = typeof value.desired_checksum === "string" && /^[a-f0-9]{64}$/u.test(value.desired_checksum) ? value.desired_checksum : undefined;
@@ -73,7 +75,9 @@ export async function checkAnyReadPermission(env: McpRequestEnv, clientId: strin
   if (!isRecord(active.value) || !Array.isArray(active.value.workspaces)) return fail("permission_denied", "The operation is not permitted for this runner.", "Ask the administrator to grant read access to a workspace.");
   for (const item of active.value.workspaces) {
     if (!isRecord(item) || typeof item.workspace_id !== "string" || item.enabled !== true) continue;
-    if (await checkPermission(env, clientId, runnerId, item.workspace_id, "read") === undefined) return undefined;
+    const permission = await checkPermission(env, clientId, runnerId, item.workspace_id, "read");
+    if (permission === undefined) return undefined;
+    if (permission.error.code !== "permission_denied" && permission.error.code !== "readonly_workspace") return permission;
   }
   return fail("permission_denied", "The operation is not permitted for this runner.", "Ask the administrator to grant read access to a workspace.");
 }

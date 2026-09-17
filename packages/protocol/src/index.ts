@@ -420,7 +420,7 @@ function assertBoundedJsonNesting(text: string): void {
   }
 }
 
-export { failureMetadata } from "./failure.js";
+export { failureMetadata, isKnownRpcFailureCode, RPC_FAILURE_CODES } from "./failure.js";
 export { BytePageMetadataSchema, bytePageMetadata } from "./pagination.js";
 export type { RpcFailureClass, RpcOperationState, RpcNextAction, RpcFailureMetadata } from "./failure.js";
 

@@ -30,7 +30,8 @@ export function runnerSuccess(value: unknown, selection: ActiveSelection): unkno
 }
 
 export function runnerFailure(error: ToolFailure["error"], selection: ActiveSelection): unknown {
-  return failureWithDetails(error.code, error.message, error.hint, { runner_context: safeRunnerContext(selection.context) }, error.operation_state);
+  // Preserve Worker-created receipts, never raw Runner error details.
+  return failureWithDetails(error.code, error.message, error.hint, { ...(isRecord(error.details) ? error.details : {}), runner_context: safeRunnerContext(selection.context) }, error.operation_state);
 }
 
 export function asToolResult(call: ToolCall): unknown {
@@ -47,12 +48,12 @@ export function success(value: unknown): { content: { type: "text"; text: string
 
 export function failure(code: string, message: string, hint: string, state?: RpcOperationState): { content: { type: "text"; text: string }[]; structuredContent: Record<string, unknown>; isError: true } {
   const error = { error: { code, message: message.slice(0, 4_096), recovery_hint: hint.slice(0, 4_096), ...failureMetadata(code, state) } };
-  return { content: [{ type: "text", text: `Error (${code}): ${error.error.message}\nRecovery: ${error.error.recovery_hint}` }], structuredContent: error, isError: true };
+  return { content: [{ type: "text", text: boundedText(error, CONTENT_LIMIT) }], structuredContent: error, isError: true };
 }
 
 export function failureWithDetails(code: string, message: string, hint: string, details: unknown, state?: RpcOperationState): { content: { type: "text"; text: string }[]; structuredContent: Record<string, unknown>; isError: true } {
   const error = { error: { code, message: message.slice(0, 4_096), recovery_hint: hint.slice(0, 4_096), ...failureMetadata(code, state), details: redactAndBound(details, 8_192) } };
-  return { content: [{ type: "text", text: `Error (${code}): ${error.error.message}\nRecovery: ${error.error.recovery_hint}` }], structuredContent: error, isError: true };
+  return { content: [{ type: "text", text: boundedText(error, CONTENT_LIMIT) }], structuredContent: error, isError: true };
 }
 
 export function failWithDetails(code: string, message: string, hint: string, details: unknown, state?: RpcOperationState): ToolFailure { return { ok: false, error: { code, message, hint, details, ...failureMetadata(code, state) } }; }
@@ -68,6 +69,14 @@ export function hintFor(code: string, state?: RpcOperationState): string {
   if (code === "cursor_expired" || code === "cursor_mismatch") return "Start a fresh bounded read for this resource and current policy; do not silently reuse the old offset or re-run a command.";
   if (code === "snapshot_too_large") return "Snapshots are limited to 1 MiB. Explicitly choose live pages for a larger file; no snapshot consistency is then promised.";
   if (state !== undefined && state !== "not_started" && code !== "context_index_stale") return "Inspect the original Job receipt or workspace state; do not repeat a mutation, input or cancellation while its outcome is unresolved.";
+  if (code === "runner_expired" || code === "runner_not_active" || code === "runner_not_authorized") return "Ask the administrator to check the selected Runner's authorization period and grants. Reconnecting or re-running the command cannot renew authorization.";
+  if (code === "runner_access_unavailable") return "The control plane could not verify Runner authorization. Wait for it to recover; this does not establish expired or revoked credentials.";
+  if (code === "runner_upgrade_required") return "Install a verified compatible Runner before using this capability; do not repeatedly submit an unsupported operation.";
+  if (code === "job_history_unavailable") return "Repeat only the Job query with the original job_id and its workspace_id from the shell receipt. Refresh the MCP tool catalog if workspace_id is not offered. Do not re-run the command or switch runners to recover its output.";
+  if (code === "invalid_workspace") return "Call workspace_list on the selected Runner and use a returned workspace_id; a workspace ID is not a host directory.";
+  if (code === "context_record_missing") return "Use context bootstrap or search to find an existing context_id. Do not invent an ID or repeat a checkpoint as a new context.";
+  if (code === "request_too_large") return "Reduce the request size; the complete encoded request exceeds the transport budget and was not dispatched.";
+  if (code === "path_changed") return "Re-inspect the workspace-relative path and its identity before making a fresh request; do not reuse a stale file baseline.";
   if (code === "log_unavailable") return "Inspect the existing Job and its local log storage; do not re-run the command to retrieve output.";
   if (code === "file_changed" || code === "log_changed") return "Read a fresh bounded page; do not join this result to a page from a changed byte source.";
   if (code === "read_budget_exhausted") return "Reduce the page size and inspect storage availability before reading again.";
