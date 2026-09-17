@@ -26,9 +26,10 @@
     },
     {
       "id": "contracts",
-      "description": "Documentation examples against actual schemas; not handler execution",
+      "description": "Published schemas, documentation examples and failure-code contracts; not handler execution",
       "files": [
         "test/contracts/documentation.test.ts",
+        "test/contracts/failure-catalog.test.ts",
         "test/contracts/job-file-adapter.test.ts"
       ]
     },
@@ -76,6 +77,7 @@
         "apps/worker/test/admin-jobs.test.ts",
         "apps/worker/test/admin-view-contracts.test.ts",
         "apps/worker/test/audit-metadata.test.ts",
+        "apps/worker/test/bridge-admission-errors.test.ts",
         "apps/worker/test/byte-pagination.test.ts",
         "apps/worker/test/capability-contracts.test.ts",
         "apps/worker/test/concurrency.test.ts",
@@ -96,8 +98,10 @@
         "apps/worker/test/jobs-dashboard.test.ts",
         "apps/worker/test/login-outage.test.ts",
         "apps/worker/test/maintenance.test.ts",
+        "apps/worker/test/mcp-agent-inputs.test.ts",
         "apps/worker/test/mcp-catalog.test.ts",
         "apps/worker/test/mcp-connector-contract.test.ts",
+        "apps/worker/test/mcp-failure-chain.test.ts",
         "apps/worker/test/mcp-job-redaction.test.ts",
         "apps/worker/test/mcp-output-contracts.test.ts",
         "apps/worker/test/mcp.test.ts",

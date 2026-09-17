@@ -6,6 +6,7 @@ import { hintFor } from "./results/envelope.js";
 import { internalHeaders } from "../security.js";
 import { isBoundCursor } from "@aloneio/runmesh-protocol";
 import { isConfiguredSecret } from "../security.js";
+import { isKnownRpcFailureCode } from "@aloneio/runmesh-protocol";
 import { isRecord } from "./results/primitives.js";
 import { isSafeIdentifier } from "../security.js";
 import type { JsonValue } from "@aloneio/runmesh-protocol";
@@ -16,22 +17,13 @@ import { safeJobLogResult } from "./results/jobs.js";
 import { safeReadResult } from "./results/files.js";
 import type { ToolCall } from "./contracts.js";
 
-const SAFE_RUNNER_ERROR_CODES = new Set([
-  "context_storage_full", "context_scan_budget", "context_plan_changed", "context_prune_partial", "context_result_invalid",
-  "log_unavailable", "file_changed", "log_changed", "read_budget_exhausted", "cursor_expired", "cursor_mismatch", "snapshot_too_large",
-  "internal_error", "shell_unavailable", "control_plane_unavailable", "registry_unavailable", "runner_upgrade_required", "baseline_changed", "queue_full", "busy", "expected_hash_mismatch", "file_too_large", "git_failed", "git_output_too_large", "git_timeout", "git_unavailable",
-  "context_index_missing", "context_index_stale", "context_index_corrupt", "context_index_too_large", "context_record_corrupt", "context_record_missing", "context_record_too_large", "context_rebuild_budget", "context_revision_conflict", "context_storage_unsafe", "context_turn_conflict",
-  "hunk_ambiguous", "hunk_not_found", "hunk_overlap", "internal_error", "invalid_params", "invalid_patch", "invalid_path", "invalid_request", "invalid_workspace", "missing_file", "mixed_newlines", "not_utf8",
-  "method_not_found", "insufficient_scope", "patch_install_failed", "patch_rollback_failed", "path_traversal", "permission_denied", "policy_pending", "readonly_workspace", "request_id_conflict", "runner_offline", "search_snapshot_changed", "stale_policy", "symlink_escape", "symlink_write", "target_exists", "timeout",
-]);
-
 function safeRunnerErrorCode(value: unknown, fallback: string): string {
-  return typeof value === "string" && SAFE_RUNNER_ERROR_CODES.has(value) ? value : fallback;
+  return isKnownRpcFailureCode(value) ? value : fallback;
 }
 
 export async function callRunner(env: McpRequestEnv, runnerId: string, method: string, params: Record<string, unknown>, policyRevision?: number, policyChecksum?: string, workspaceBoundJob = false): Promise<ToolCall> {
   if (!isSafeIdentifier(runnerId)) return fail("invalid_runner_id", "runner_id is invalid", "Use a runner identifier returned by runner_list.");
-  if (!isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) return fail("service_unavailable", "The runner bridge is not configured.", "Ask the service operator to configure the internal bridge.");
+  if (!isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) return fail("service_unavailable", "The runner bridge is not configured.", "Ask the service operator to configure the internal bridge.", "not_started");
   if ((policyRevision === undefined || policyChecksum === undefined || !/^[a-f0-9]{64}$/.test(policyChecksum)) && method !== "echo" && method !== "runner.info") return fail("policy_pending", "The selected runner policy could not be verified.", "Wait for the runner to apply its control-plane policy, then retry.");
   // Validate the complete serialized request, including maximum correlation ID
   // and escaping, before forwarding any mutating operation to the Runner.
@@ -69,12 +61,12 @@ export async function callRunner(env: McpRequestEnv, runnerId: string, method: s
     return { ok: true, value: payload.result };
   }
   const bridgeError = isRecord(payload) && isRecord(payload.error) ? payload.error : undefined;
-  const code = safeRunnerErrorCode(bridgeError?.code, response.status === 503 ? "runner_offline" : "runner_rpc_failed");
+  const code = safeRunnerErrorCode(bridgeError?.code, "runner_rpc_failed");
   // Runner error details can include host filesystem paths. MCP exposes stable
   // error codes plus a safe recovery action rather than copying that text.
   const message = code === "runner_offline" ? "The runner is not connected." : "The runner rejected the request.";
   const rawState = bridgeError?.operation_state;
-  const knownCode = typeof bridgeError?.code === "string" && SAFE_RUNNER_ERROR_CODES.has(bridgeError.code);
+  const knownCode = isKnownRpcFailureCode(bridgeError?.code);
   const observedState = knownCode && (rawState === "not_started" || rawState === "unknown" || rawState === "running" || rawState === "committed") ? rawState : undefined;
   return fail(code, message, hintFor(code, observedState), observedState);
 }
@@ -89,15 +81,15 @@ export function registryJobsPath(runnerId: string, filters: Record<string, unkno
 }
 
 export async function registryCall(env: McpRequestEnv, path: string): Promise<ToolCall> {
-  if (!isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) return fail("service_unavailable", "The registry is not configured.", "Ask the service operator to configure the internal bridge.");
+  if (!isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) return fail("service_unavailable", "The registry is not configured.", "Ask the service operator to configure the internal bridge.", "not_started");
   const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "GET", path, "");
   try {
     const response = await env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method: "GET", headers }));
     const value = await json(response);
     if (response.ok) return { ok: true, value };
-    return fail(response.status === 404 ? "not_found" : "registry_unavailable", response.status === 404 ? "The requested registry record was not found." : "The registry is unavailable.", response.status === 404 ? "Use runner_list to discover valid identifiers." : "Retry shortly; the runner may still be available for live tools.");
+    return fail(response.status === 404 ? "not_found" : "registry_unavailable", response.status === 404 ? "The requested registry record was not found." : "The registry is unavailable.", response.status === 404 ? "Use runner_list to discover valid identifiers." : "Retry shortly; the runner may still be available for live tools.", "not_started");
   } catch {
-    return fail("registry_unavailable", "The registry is unavailable.", "Retry shortly; the runner may still be available for live tools.");
+    return fail("registry_unavailable", "The registry is unavailable.", "Retry shortly; the runner may still be available for live tools.", "not_started");
   }
 }
 
