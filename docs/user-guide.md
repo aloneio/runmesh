@@ -30,6 +30,12 @@ Do not edit the path or add a Bearer token. If the client cannot connect, check 
 
 Workspace names are administrator-defined identifiers. The actual host path is never returned through MCP.
 
+## Inspect Git history
+
+`inspect` publishes separate input branches for each `action`. Use `git_log` with `path` to list commits, `git_show` with `path` and a required `revision` commit identifier to read a historical file, and `git_blame` with `path` and optional `start_line` / `end_line` to inspect line attribution. `revision` belongs only to `git_show`; do not send it with `git_blame`. This does not add revision-specific blame support. Search options and search snapshot cursors belong only to `search`.
+
+Clients that cache tool definitions must refresh the Runmesh tool catalog after a Worker update. A cached broad schema is not permission to send fields from another action; the server still validates every call.
+
 ## Edit files
 
 Use `edit` only after reading the target. Runmesh checks the baseline before applying a change. If someone changed the file after you read it, the edit is rejected so you can reload instead of overwriting work.

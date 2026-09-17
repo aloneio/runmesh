@@ -13,7 +13,7 @@ export async function inspectTool(env: McpRequestEnv, clientId: string, params: 
   const input: Record<string, unknown> = {
     workspace_id: params.workspace_id,
     ...(params.path === undefined ? {} : { path: params.path }),
-    ...(params.query === undefined ? {} : { query: params.query }),
+    ...(params.action === "search" ? { query: params.query } : {}),
     ...(params.cursor === undefined ? {} : { cursor: params.cursor }),
     ...(params.action !== "search" || params.mode === undefined ? {} : { mode: params.mode }),
     ...(params.action !== "search" || params.case_sensitive === undefined ? {} : { case_sensitive: params.case_sensitive }),

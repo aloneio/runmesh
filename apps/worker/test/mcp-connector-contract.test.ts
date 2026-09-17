@@ -2,6 +2,9 @@ import { env, SELF, runInDurableObject } from "cloudflare:test";
 import { expect, it } from "vitest";
 import { randomBase64Url, sha256Hex } from "../src/security.js";
 import { catalogContract, MCP_CATALOG_SUMMARY } from "../src/mcp/catalog-contract.js";
+import { InspectInputSchema } from "../src/mcp/catalog.js";
+import { fromJsonSchema } from "@modelcontextprotocol/server";
+import { inspectInputCases } from "../../../test/helpers/inspect-input-cases.js";
 
 type Tool = { name: string; description?: string; inputSchema: Record<string, unknown>; outputSchema?: unknown;
   annotations?: unknown; _meta?: Record<string, unknown> };
@@ -70,5 +73,28 @@ it("does not lose workspace_id on any Job action during SDK schema export", asyn
     expect(branch.properties.workspace_id, action).toMatchObject({ type: "string" });
     expect(branch.required, action).not.toContain("workspace_id");
     expect(branch.additionalProperties, action).toBe(false);
+  }
+});
+
+it("publishes inspect action constraints that match runtime validation", async () => {
+  const tool = (await emittedTools()).find(tool => tool.name === "inspect")!;
+  const advertised = fromJsonSchema(tool.inputSchema);
+  for (const { name, input, valid } of inspectInputCases) {
+    expect(InspectInputSchema.safeParse(input).success, `runtime: ${name}`).toBe(valid);
+    const result = await advertised["~standard"].validate(input);
+    expect(result.issues === undefined, `tools/list: ${name}`).toBe(valid);
+  }
+  const branches = (tool.inputSchema.oneOf ?? tool.inputSchema.anyOf) as Array<{
+    properties: Record<string, { const?: string }>;
+    required: string[]; additionalProperties: boolean;
+  }>;
+  expect(branches).toHaveLength(9);
+  for (const branch of branches) {
+    const action = branch.properties.action?.const;
+    expect(branch.additionalProperties, action).toBe(false);
+    expect(Object.hasOwn(branch.properties, "revision"), action).toBe(action === "git_show");
+    expect(branch.required.includes("revision"), action).toBe(action === "git_show");
+    expect(Object.hasOwn(branch.properties, "start_line"), action).toBe(action === "git_blame");
+    expect(Object.hasOwn(branch.properties, "end_line"), action).toBe(action === "git_blame");
   }
 });

@@ -43,16 +43,36 @@ export const JobIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z
 export const JobStatusSchema = z.enum(["queued", "running", "cancelling", "cancelled", "succeeded", "failed", "unknown", "interrupted"]);
 
 export const ReadInputSchema = z.object({ workspace_id: WorkspaceIdSchema, path: RelativePathSchema, cursor: FileCursorSchema, offset: z.number().int().min(0).safe().optional(), consistency: z.enum(["live", "snapshot"]).optional(), limit: z.number().int().min(1).max(262_144).optional() }).strict().superRefine((value, context) => checkBoundInput(value, context, "file"));
-export const InspectInputSchema = z.object({ action: z.enum(["list", "search", "stat", "git_status", "git_diff", "git_log", "git_show", "git_blame", "diagnostics"]), workspace_id: WorkspaceIdSchema, path: RelativePathSchema.optional(), query: z.string().min(1).max(512).optional(), max_results: z.number().int().min(1).max(256).optional(), cursor: InspectCursorSchema, mode: z.enum(["literal", "filename"]).optional(), case_sensitive: z.boolean().optional(), include_globs: z.array(SearchGlobSchema).max(32).optional(), exclude_globs: z.array(SearchGlobSchema).max(32).optional(), context_before: z.number().int().min(0).max(8).optional(), context_after: z.number().int().min(0).max(8).optional(), revision: z.string().regex(/^[0-9a-fA-F]{7,64}(?:\^\{0,1\})?$/).optional(), start_line: z.number().int().min(1).max(1_000_000).optional(), end_line: z.number().int().min(1).max(1_000_000).optional() }).strict().superRefine((value, context) => {
-  if ((value.action === "search" && value.query === undefined) || (value.action !== "search" && value.query !== undefined)) context.addIssue({ code: "custom", message: "query is only valid and required for search" });
-  if (value.action !== "search" && (value.mode !== undefined || value.case_sensitive !== undefined || value.include_globs !== undefined || value.exclude_globs !== undefined || value.context_before !== undefined || value.context_after !== undefined)) context.addIssue({ code: "custom", message: "search options are only valid for search" });
-  if (value.action !== "search" && typeof value.cursor === "string" && value.cursor.startsWith("s1:")) context.addIssue({ code: "custom", message: "search snapshot cursors are only valid for search" });
-  if (value.action === "stat" && value.path === undefined) context.addIssue({ code: "custom", message: "path is required for stat" });
-  if (["git_log", "git_show", "git_blame"].includes(value.action) && value.path === undefined) context.addIssue({ code: "custom", message: "path is required for git history inspection" });
-  if (value.action === "git_show" && value.revision === undefined) context.addIssue({ code: "custom", message: "revision is required for git_show" });
-  if (value.action !== "git_show" && value.revision !== undefined) context.addIssue({ code: "custom", message: "revision is only valid for git_show" });
-  if (value.action !== "git_blame" && (value.start_line !== undefined || value.end_line !== undefined)) context.addIssue({ code: "custom", message: "line range is only valid for git_blame" });
-});
+// Structural branches survive both SDK and catalog JSON Schema conversion;
+// superRefine-only action rules are invisible to tools/list consumers.
+// Keep the historically accepted common numeric cursor/limit inputs, even on
+// actions that ignore them. This change aligns the contract, not RPC behavior.
+const InspectCommonInputSchema = z.object({
+  workspace_id: WorkspaceIdSchema,
+  path: RelativePathSchema.optional(),
+  max_results: z.number().int().min(1).max(256).optional(),
+  cursor: CursorSchema,
+}).strict();
+export const InspectInputSchema = z.discriminatedUnion("action", [
+  InspectCommonInputSchema.extend({ action: z.literal("list") }),
+  InspectCommonInputSchema.extend({
+    action: z.literal("search"), query: z.string().min(1).max(512), cursor: InspectCursorSchema,
+    mode: z.enum(["literal", "filename"]).optional(), case_sensitive: z.boolean().optional(),
+    include_globs: z.array(SearchGlobSchema).max(32).optional(), exclude_globs: z.array(SearchGlobSchema).max(32).optional(),
+    context_before: z.number().int().min(0).max(8).optional(), context_after: z.number().int().min(0).max(8).optional(),
+  }),
+  InspectCommonInputSchema.extend({ action: z.literal("stat"), path: RelativePathSchema }),
+  InspectCommonInputSchema.extend({ action: z.literal("git_status") }),
+  InspectCommonInputSchema.extend({ action: z.literal("git_diff") }),
+  InspectCommonInputSchema.extend({ action: z.literal("git_log"), path: RelativePathSchema }),
+  InspectCommonInputSchema.extend({ action: z.literal("git_show"), path: RelativePathSchema,
+    revision: z.string().regex(/^[0-9a-fA-F]{7,64}(?:\^\{0,1\})?$/).describe("Commit identifier; required and accepted only for git_show."),
+  }),
+  InspectCommonInputSchema.extend({ action: z.literal("git_blame"), path: RelativePathSchema,
+    start_line: z.number().int().min(1).max(1_000_000).optional(), end_line: z.number().int().min(1).max(1_000_000).optional(),
+  }),
+  InspectCommonInputSchema.extend({ action: z.literal("diagnostics") }),
+]);
 export const EditInputSchema = z.object({ workspace_id: WorkspaceIdSchema, patch: z.string().min(1).max(1_048_576), preview: z.boolean().optional(), preview_id: z.string().regex(/^[a-f0-9]{64}$/).optional(), expected_hash: z.string().regex(/^[a-f0-9]{64}$/).optional(), expected_hashes: z.record(z.string().min(1).max(4096), z.string().regex(/^[a-f0-9]{64}$/).nullable()).optional() }).strict().superRefine((value, context) => {
   if (value.preview === true && value.preview_id !== undefined) context.addIssue({ code: "custom", message: "preview_id is only valid when applying a patch" });
 });
