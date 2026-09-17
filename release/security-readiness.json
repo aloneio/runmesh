@@ -184,6 +184,16 @@
         "apps/runner/test/release-boundary-security.test.ts"
       ],
       "resolution": "source-fixed-and-regression-tested"
+    },
+    {
+      "id": "SEC19",
+      "state": "closed",
+      "area": "runner-stdin-delivery-lifecycle",
+      "fixed_commit": "873537248bbe0274d0bd9e94f82a0ebfa1f43a0f",
+      "regressions": [
+        "apps/runner/test/job-input.test.ts"
+      ],
+      "resolution": "source-fixed-and-regression-tested"
     }
   ]
 }
