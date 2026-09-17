@@ -115,8 +115,12 @@ async function writeAndSync(path: string, content: string | Uint8Array): Promise
 /** Directory fsync is unavailable on some Windows filesystems; atomic rename still applies there. */
 async function syncDirectory(path: string): Promise<void> {
   if (process.platform === "win32") return;
-  const handle = await open(path, "r");
-  try { await handle.sync(); } finally { await handle.close(); }
+  // A replaced directory must fail before open can wait on a FIFO peer.
+  const handle = await open(path, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    if (!(await handle.stat()).isDirectory()) throw new Error("policy sync target is not a directory");
+    await handle.sync();
+  } finally { await handle.close(); }
 }
 function isErrno(error: unknown, code: string): boolean { return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === code; }
 
@@ -175,7 +179,8 @@ async function readPrivateFile(path: string): Promise<string> {
   if (info.isSymbolicLink() || !info.isFile()) throw new Error("active policy is not a regular file");
   if (info.size > MAX_POLICY_BYTES) throw new Error(`active policy exceeds ${MAX_POLICY_BYTES} bytes`);
   if (process.platform !== "win32" && (info.mode & 0o077) !== 0) throw new Error("active policy file is not private");
-  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  // lstat cannot prevent a FIFO replacement between validation and open.
+  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   try {
     const opened = await handle.stat();
     if (!opened.isFile() || opened.dev !== info.dev || opened.ino !== info.ino) throw new Error("active policy changed while being opened");

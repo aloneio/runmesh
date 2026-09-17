@@ -58,9 +58,9 @@ export const hostPurgeFilesystem: PurgeFilesystem = {
     try {
       const before = await lstat(path);
       if (!before.isFile() || before.isSymbolicLink() || before.size > limit) throw new Error("unsafe or oversized metadata");
-      handle = await open(path, constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW));
+      handle = await open(path, constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW) | (constants.O_NONBLOCK ?? 0));
       const after = await handle.stat();
-      if (before.dev !== after.dev || before.ino !== after.ino) throw new Error("metadata changed while opening");
+      if (!after.isFile() || after.size > limit || before.dev !== after.dev || before.ino !== after.ino) throw new Error("metadata changed while opening");
       const bytes = Buffer.alloc(limit + 1); let offset = 0;
       while (offset <= limit) { const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, offset); if (bytesRead === 0) break; offset += bytesRead; }
       if (offset > limit) throw new Error("oversized metadata");

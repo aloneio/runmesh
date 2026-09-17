@@ -291,7 +291,10 @@ export async function fsyncDirectory(directory: string, policy?: PathPolicy, par
   let handle;
   try {
     if (policy !== undefined) await verifyParentBoundary(policy, parentBoundary);
-    handle = await open(directory, "r");
+    // Keep directory resolution unchanged, but never wait on a replaced FIFO
+    // before checking the descriptor or attempting this durability barrier.
+    handle = await open(directory, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NONBLOCK ?? 0));
+    if (!(await handle.stat()).isDirectory()) return;
     await handle.sync();
   } catch {
     // Some platforms do not permit syncing a directory. Data correctness does
