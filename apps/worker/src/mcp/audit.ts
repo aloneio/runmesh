@@ -53,7 +53,7 @@ export async function recordRunnerToolCall(env: McpRequestEnv, input: {
     lifecycle_id: input.readiness.lifecycle_id,
     session_id: input.readiness.session_id,
     now_ms: completedAtMs,
-  });
+  }, "audit");
   if (!recorded.ok) return { correlation_id: correlationId, audit_status: "unknown" };
   const status = isRecord(recorded.value) && (recorded.value.audit_status === "recorded" || recorded.value.audit_status === "degraded" || recorded.value.audit_status === "disabled") ? recorded.value.audit_status : "unknown";
   return { correlation_id: correlationId, audit_status: status };

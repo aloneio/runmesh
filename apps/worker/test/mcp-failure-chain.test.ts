@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { failureMetadata, isKnownRpcFailureCode, RPC_FAILURE_CODES, PROTOCOL_CURRENT_VERSION } from "@aloneio/runmesh-protocol";
-import { callRunner } from "../src/mcp/transport.js";
+import { callRunner, registryCall, registryPostCall } from "../src/mcp/transport.js";
+import { getActiveRunnerSelection, resolveActiveRunner, selectActiveRunner } from "../src/mcp/selection.js";
 import { jobTool } from "../src/mcp/handlers/jobs.js";
 import { checkPermission, checkAnyReadPermission, policyReadiness } from "../src/mcp/authorization.js";
 import { failure, failureWithDetails, runnerFailure, hintFor } from "../src/mcp/results/envelope.js";
@@ -60,12 +61,102 @@ describe("stable failures across Runner, bridge and MCP", () => {
     expect(await invoke(f.env)).toMatchObject({ ok: false, error: { code: "permission_denied", operation_state: "not_started" } });
     expect(f.dispatch).not.toHaveBeenCalled();
   });
+  it.each([201, 202, 206, 207, 403, 409])("does not accept an authorization grant carried by HTTP %s", async status => {
+    const f = fixture();
+    f.registry.mockImplementation(async () => Response.json({ ok: true, code: "permission_denied" }, { status }));
+    expect(await invoke(f.env)).toMatchObject({ ok: false, error: { code: "registry_unavailable", operation_state: "not_started" } });
+    expect(f.dispatch).not.toHaveBeenCalled();
+  });
+  it.each([201, 202, 203, 206, 207])("keeps an RPC success payload carried by HTTP %s ambiguous", async status => {
+    const f = fixture(() => Response.json({ type: "rpc.response", result: {} }, { status }));
+    expect(await invoke(f.env)).toMatchObject({ ok: false, error: { code: "runner_rpc_failed", operation_state: "unknown" } });
+    expect(f.dispatch).toHaveBeenCalledTimes(1);
+  });
+  it.each([201, 202, 203, 206, 207])("rejects an incomplete Registry snapshot carried by HTTP %s", async status => {
+    const f = fixture();
+    f.registry.mockImplementation(async () => Response.json({ permissions: { read: true } }, { status }));
+    expect(await registryCall(f.env, "/snapshot")).toMatchObject({ ok: false, error: { code: "registry_unavailable", operation_state: "not_started" } });
+    expect(f.dispatch).not.toHaveBeenCalled();
+  });
+  it.each(["read", "mutation"] as const)("cancels an incomplete %s receipt without waiting for its unfinished body", async kind => {
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode("{")); }, cancel });
+    const f = fixture();
+    f.registry.mockImplementation(async () => new Response(body, { status: 202 }));
+    const result = kind === "read" ? await registryCall(f.env, "/snapshot") : await registryPostCall(f.env, "/mutation", {});
+    expect(result).toMatchObject({ ok: false, error: { code: "registry_unavailable", operation_state: kind === "read" ? "not_started" : "unknown" } });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(f.registry).toHaveBeenCalledTimes(1);
+    expect(f.dispatch).not.toHaveBeenCalled();
+  });
+  it.each(["disabled", "degraded"])("retains the documented %s audit receipt without permitting an authorization grant", async audit_status => {
+    const f = fixture();
+    f.registry.mockImplementation(async () => Response.json({ audit_status }, { status: 202 }));
+    expect(await registryPostCall(f.env, "/audit", {}, "audit")).toEqual({ ok: true, value: { audit_status } });
+    expect(await invoke(f.env)).toMatchObject({ ok: false, error: { code: "registry_unavailable", operation_state: "not_started" } });
+    expect(f.dispatch).not.toHaveBeenCalled();
+  });
+  it.each(["recorded", "unknown", undefined, "invalid"])("does not fabricate a %s audit completion from HTTP 202", async audit_status => {
+    const f = fixture();
+    f.registry.mockImplementation(async () => Response.json({ audit_status }, { status: 202 }));
+    expect(await registryPostCall(f.env, "/audit", {}, "audit")).toMatchObject({ ok: false, error: { code: "registry_unavailable", operation_state: "unknown" } });
+    expect(f.dispatch).not.toHaveBeenCalled();
+  });
   it("keeps lost replies ambiguous and never replays the command", async () => {
     const f = fixture();
     f.dispatch.mockRejectedValueOnce(new Error("connection reset"));
     const result = await invoke(f.env);
     expect(result).toMatchObject({ ok: false, error: { code: "runner_offline", operation_state: "unknown", next_action: "inspect_job" } });
     expect(f.dispatch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("sticky Runner selection receipt integrity", () => {
+  it.each([
+    null, {}, [],
+    { active_runner_id: "runner-selected", active_runner_updated_at_ms: 1, runner: selection.context },
+    { active_runner_id: null, active_runner_updated_at_ms: null, runner: selection.context },
+    { active_runner_id: "runner-test", active_runner_updated_at_ms: 1, runner: { ...selection.context, available: "false" } },
+    { active_runner_id: "runner-test", active_runner_updated_at_ms: 1, runner: { ...selection.context, state: "unknown" } },
+  ])("rejects malformed or mismatched sticky state without selecting another Runner: %j", async value => {
+    const f = fixture();
+    f.registry.mockImplementation(async () => Response.json(value));
+    expect(await resolveActiveRunner(f.env, "client-test")).toMatchObject({ ok: false, error: { code: "registry_unavailable", operation_state: "not_started" } });
+    expect(f.registry).toHaveBeenCalledTimes(1);
+    expect(f.registry.mock.calls[0]![0].method).toBe("GET");
+    expect(f.dispatch).not.toHaveBeenCalled();
+  });
+  it.each([null, {}, { ok: "true" }, { ok: true, changed: true, selection: { active_runner_id: "runner-other", active_runner_updated_at_ms: 1, runner: { ...selection.context, runner_id: "runner-other" } } }])("does not confirm a malformed or misdirected selection mutation: %j", async value => {
+    const f = fixture();
+    f.registry.mockImplementation(async () => Response.json(value));
+    expect(await selectActiveRunner(f.env, "client-test", "runner-test", false)).toMatchObject({ ok: false, error: { code: "registry_unavailable", operation_state: "unknown" } });
+    expect(f.registry).toHaveBeenCalledTimes(1);
+    expect(f.dispatch).not.toHaveBeenCalled();
+  });
+  it.each(["online", "offline", "stale", "unavailable"] as const)("retains a valid %s selection while removing unrelated internal fields", async state => {
+    const f = fixture();
+    const context = { ...selection.context, state, available: state === "online" };
+    f.registry.mockImplementation(async () => Response.json({ active_runner_id: "runner-test", active_runner_updated_at_ms: 1,
+      runner: { ...context, root: "/private" }, operator_token: "private-token" }));
+    const result = await getActiveRunnerSelection(f.env, "client-test");
+    expect(result).toEqual({ ok: true, value: { active_runner_id: "runner-test", active_runner_updated_at_ms: 1,
+      runner: { runner_id: "runner-test", state, available: state === "online", updated_at_ms: 1 } } });
+    expect(JSON.stringify(result)).not.toMatch(/private|automatic_selection/);
+  });
+  it.each([true, false])("retains a completed selection receipt with changed=%s", async changed => {
+    const f = fixture();
+    f.registry.mockImplementation(async () => Response.json({ ok: true, changed,
+      selection: { active_runner_id: "runner-test", active_runner_updated_at_ms: 1, runner: selection.context } }));
+    expect(await selectActiveRunner(f.env, "client-test", "runner-test", false)).toMatchObject({ ok: true, value: { changed, selection: { active_runner_id: "runner-test" } } });
+    expect(f.registry).toHaveBeenCalledTimes(1);
+  });
+  it.each(["client_not_found", "runner_not_found", "runner_unavailable", "runner_switch_confirmation_required"])("retains the explicit %s selection denial", async code => {
+    const f = fixture();
+    f.registry.mockImplementation(async () => Response.json({ ok: false, code,
+      selection: { active_runner_id: "runner-test", active_runner_updated_at_ms: 1, runner: selection.context } }, { status: 409 }));
+    expect(await selectActiveRunner(f.env, "client-test", "runner-other", false)).toMatchObject({ ok: false, error: { code } });
+    expect(f.registry).toHaveBeenCalledTimes(1);
+    expect(f.dispatch).not.toHaveBeenCalled();
   });
 });
 
