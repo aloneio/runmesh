@@ -105,7 +105,12 @@ async function submitLogin(request: Request, env: WorkerEnv): Promise<Response> 
     session_hash: await sha256Hex(rawSession), csrf_hash: await sha256Hex(rawCsrf), expires_at_ms: Date.now() + ADMIN_SESSION_TTL_MS, expected_session_version: sessionVersion,
   });
   if (sessionResponse.status === 409) return adminError(403, "Authentication changed. Sign in again.", [clearCookie(LOGIN_CSRF_COOKIE)]);
-  if (!sessionResponse.ok) return adminError(503, "Login could not be completed. Try again.");
+  // The Registry commits session creation with 204. An accepted or otherwise
+  // unexpected receipt must not issue cookies for an unconfirmed session.
+  if (sessionResponse.status !== 204) {
+    void sessionResponse.body?.cancel().catch(() => undefined);
+    return adminError(503, "Login could not be completed. Try again.");
+  }
   return redirect("/admin", [sessionCookie(rawSession), csrfCookie(rawCsrf), clearCookie(LOGIN_CSRF_COOKIE)]);
 }
 
@@ -116,7 +121,10 @@ export async function changePassword(env: WorkerEnv, form: FormData): Promise<Re
   if (settings === undefined) return adminError(503, "Authentication service unavailable. Try again.");
   if (!await verifyPassword(current, settings.password_verifier)) return adminError(403, "Current administrator password is invalid.");
   const response = await registryPost(env, "/auth/password", { password_verifier: await passwordVerifier(password) });
-  if (!response.ok) return adminError(503, "Password change could not be completed.");
+  if (response.status !== 204) {
+    void response.body?.cancel().catch(() => undefined);
+    return adminError(503, "Password change could not be completed.");
+  }
   return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
 }
 

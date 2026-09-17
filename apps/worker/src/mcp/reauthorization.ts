@@ -28,28 +28,36 @@ export async function reauthorizePrincipal(
 ): Promise<ReauthorizationDecision> {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 5000) return { state: "unavailable" };
   const controller = new AbortController();
+  const deadline = performance.now() + timeoutMs;
+  const expired = (): boolean => controller.signal.aborted || performance.now() >= deadline;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   const observe = async (): Promise<ReauthorizationDecision> => {
     try {
       const response = await fetchDecision(controller.signal);
-      if (controller.signal.aborted) { void response.body?.cancel().catch(() => undefined); return { state: "unavailable" }; }
+      if (expired()) { void response.body?.cancel().catch(() => undefined); return { state: "unavailable" }; }
       if ([401, 403, 404].includes(response.status)) { void response.body?.cancel().catch(() => undefined); return { state: "denied" }; }
       if (response.status !== 200) { void response.body?.cancel().catch(() => undefined); return { state: "unavailable" }; }
       if (response.body === null) return { state: "malformed" };
       reader = response.body.getReader();
       const chunks: Uint8Array[] = []; let size = 0;
       for (let reads = 0; ; reads++) {
-        if (controller.signal.aborted) return { state: "unavailable" };
+        if (expired()) return { state: "unavailable" };
         if (reads >= 256) return { state: "malformed" };
         const item = await reader.read();
+        // Promise continuations can run before the timer callback. Recheck
+        // elapsed time after every read, including the final done receipt.
+        if (expired()) return { state: "unavailable" };
         if (item.done) break;
         if (!(item.value instanceof Uint8Array) || (size += item.value.byteLength) > 16384) return { state: "malformed" };
         chunks.push(item.value);
       }
       const bytes = new Uint8Array(size); let offset = 0;
       for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-      try { return projectReauthorization(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)), expected); }
+      try {
+        const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+        return expired() ? { state: "unavailable" } : projectReauthorization(value, expected);
+      }
       catch { return { state: "malformed" }; }
     } catch { return { state: "unavailable" }; }
     finally {
@@ -63,5 +71,5 @@ export async function reauthorizePrincipal(
         timer = setTimeout(() => { controller.abort(); void reader?.cancel().catch(() => undefined); resolve({ state: "unavailable" }); }, timeoutMs);
       }),
     ]);
-  } finally { if (timer !== undefined) clearTimeout(timer); }
+  } finally { if (timer !== undefined) clearTimeout(timer); controller.abort(); }
 }

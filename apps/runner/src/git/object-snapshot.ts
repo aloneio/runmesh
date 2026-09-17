@@ -20,7 +20,9 @@ export async function snapshotGitObjects(source: string, destination: string, de
   const copy = async (from: string, to: string, expected: Stats): Promise<void> => {
     check();
     if (!expected.isFile() || expected.isSymbolicLink() || expected.size > MAX_OBJECT_BYTES - bytes) throw new Error("Git object is not a bounded regular file");
-    const input = await open(from, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    // A checked regular file can become a FIFO before open. Do not let
+    // that race park a filesystem worker while waiting for a pipe writer.
+    const input = await open(from, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
     try {
       const opened = await input.stat();
       if (!opened.isFile() || !same(expected, opened) || opened.size !== expected.size) throw new Error("Git object changed before its snapshot");

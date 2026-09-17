@@ -1,8 +1,9 @@
 // Audit-only tests: an isolated DO and disposable session, never production.
 import { env, runInDurableObject } from "cloudflare:test";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import worker from "../src/index.js";
 import { randomBase64Url, sha256Hex, passwordVerifier } from "../src/security.js";
+import { LOGIN_CSRF_COOKIE } from "../src/http/constants.js";
 
 async function fixture() {
   const id = env.REGISTRY.idFromName(`audit-admin-${crypto.randomUUID()}`), stub = env.REGISTRY.get(id);
@@ -110,4 +111,123 @@ it("SEC04 bounds a stalled authorization body and cancels its reader", async () 
   let signal: AbortSignal | undefined, cancelled = false;
   const result = await boundedJsonResponse(async value => { signal = value; return new Response(new ReadableStream({ cancel() { cancelled = true; } })); }, 10);
   expect(result).toBeUndefined(); expect(signal?.aborted).toBe(true); expect(cancelled).toBe(true);
+});
+
+it.each([200, 202, 401, 403, 404, 429, 500, 502, 503, 504, "transport"])("SEC04 logout does not acknowledge an unconfirmed revocation (%s)", async failure => {
+  const f = await fixture();
+  const original = f.localEnv.REGISTRY.get.bind(f.localEnv.REGISTRY);
+  let attempts = 0;
+  (f.localEnv.REGISTRY as any).get = (id: DurableObjectId) => ({ fetch: (request: Request) => {
+    if (new URL(request.url).pathname !== "/auth/sessions/logout") return original(id).fetch(request);
+    attempts++;
+    if (failure === "transport") throw new Error("synthetic transport failure");
+    return new Response("synthetic revocation failure", { status: failure as number });
+  } });
+  const response = await worker.fetch(new Request("https://audit.test/admin/logout", { method: "POST", headers: f.headers, body: new URLSearchParams({ csrf_token: f.csrf }) }), f.localEnv, {} as ExecutionContext);
+  expect(response.status).toBe(503); expect(response.headers.get("location")).toBeNull();
+  expect(response.headers.get("set-cookie")).toBeNull(); expect(attempts).toBe(1);
+  await response.body?.cancel();
+  expect(await runInDurableObject(f.stub, instance => instance.verifyAdminSession(f.hash, Date.now()))).toBeDefined();
+});
+
+it("SEC04 successful logout revokes the server session before clearing cookies", async () => {
+  const f = await fixture();
+  const response = await worker.fetch(new Request("https://audit.test/admin/logout", { method: "POST", headers: f.headers, body: new URLSearchParams({ csrf_token: f.csrf }) }), f.localEnv, {} as ExecutionContext);
+  expect(response.status).toBe(303); expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
+  await response.body?.cancel();
+  expect(await runInDurableObject(f.stub, instance => instance.verifyAdminSession(f.hash, Date.now()))).toBeUndefined();
+});
+
+it("SEC04 bounds empty response chunks even when they consume no byte budget", async () => {
+  const { boundedJsonResponse } = await import("../src/platform/bounded-json.js");
+  let pulls = 0, cancelled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (++pulls <= 4096) controller.enqueue(new Uint8Array());
+      else { controller.enqueue(new TextEncoder().encode("{}")); controller.close(); }
+    },
+    cancel() { cancelled = true; },
+  });
+  expect(await boundedJsonResponse(async () => new Response(stream), 5000, 2)).toBeUndefined();
+  expect(cancelled).toBe(true); expect(pulls).toBeLessThanOrEqual(1026);
+});
+
+it("SEC04 accepts occasional empty chunks and fragmented UTF-8 within the byte budget", async () => {
+  const { boundedJsonResponse } = await import("../src/platform/bounded-json.js");
+  const value = { value: "中文😀" }, bytes = new TextEncoder().encode(JSON.stringify(value));
+  const stream = new ReadableStream<Uint8Array>({ start(controller) {
+    for (const byte of bytes) { controller.enqueue(new Uint8Array()); controller.enqueue(Uint8Array.of(byte)); }
+    controller.close();
+  } });
+  expect(await boundedJsonResponse(async () => new Response(stream), 5000, bytes.length)).toEqual({ status: 200, value });
+});
+
+it.each([200, 201, 202, 206, 401, 403, 404, 429, 500, 503, "transport"])("SEC04 login requires a completed session-creation receipt (%s)", async failure => {
+  const f = await fixture();
+  const original = f.localEnv.REGISTRY.get.bind(f.localEnv.REGISTRY);
+  let attempts = 0;
+  (f.localEnv.REGISTRY as any).get = (id: DurableObjectId) => ({ fetch: (request: Request) => {
+    if (new URL(request.url).pathname !== "/auth/sessions") return original(id).fetch(request);
+    attempts++;
+    if (failure === "transport") throw new Error("synthetic session receipt failure");
+    return new Response("synthetic unconfirmed session", { status: failure });
+  } });
+  const headers = { ...f.headers, cookie: `${LOGIN_CSRF_COOKIE}=${f.csrf}` };
+  const body = new URLSearchParams({ csrf_token: f.csrf, password: "synthetic-admin-password" });
+  const response = await worker.fetch(new Request("https://audit.test/", { method: "POST", headers, body }), f.localEnv, {} as ExecutionContext);
+  expect(response.status).toBe(503); expect(response.headers.get("location")).toBeNull();
+  expect(response.headers.get("set-cookie")).toBeNull(); expect(attempts).toBe(1);
+  await response.body?.cancel();
+});
+
+it("SEC04 a completed login persists its session before issuing browser cookies", async () => {
+  const f = await fixture();
+  const headers = { ...f.headers, cookie: `${LOGIN_CSRF_COOKIE}=${f.csrf}` };
+  const body = new URLSearchParams({ csrf_token: f.csrf, password: "synthetic-admin-password" });
+  const response = await worker.fetch(new Request("https://audit.test/", { method: "POST", headers, body }), f.localEnv, {} as ExecutionContext);
+  expect(response.status).toBe(303); expect(response.headers.get("location")).toBe("/admin");
+  expect(response.headers.get("set-cookie")).toContain("__Host-runmesh_admin_session=");
+  await response.body?.cancel();
+  expect(await runInDurableObject(f.stub, (_instance, state) => state.storage.sql.exec<{ total: number }>("SELECT COUNT(*) AS total FROM admin_sessions").one().total)).toBe(2);
+});
+
+it.each([200, 201, 202, 206, 401, 403, 404, 409, 429, 500, 503, "transport"])("SEC04 password change requires a completed mutation receipt (%s)", async failure => {
+  const f = await fixture();
+  const original = f.localEnv.REGISTRY.get.bind(f.localEnv.REGISTRY);
+  const previous = await runInDurableObject(f.stub, instance => instance.adminPasswordVerifier());
+  let attempts = 0;
+  (f.localEnv.REGISTRY as any).get = (id: DurableObjectId) => ({ fetch: (request: Request) => {
+    if (new URL(request.url).pathname !== "/auth/password") return original(id).fetch(request);
+    attempts++;
+    if (failure === "transport") throw new Error("synthetic password receipt failure");
+    return new Response("synthetic unconfirmed password", { status: failure });
+  } });
+  const body = new URLSearchParams({ csrf_token: f.csrf, current_password: "synthetic-admin-password", password: "new-synthetic-admin-password", confirm_password: "new-synthetic-admin-password" });
+  const response = await worker.fetch(new Request("https://audit.test/admin/password", { method: "POST", headers: f.headers, body }), f.localEnv, {} as ExecutionContext);
+  expect(response.status).toBe(503); expect(response.headers.get("location")).toBeNull();
+  expect(response.headers.get("set-cookie")).toBeNull(); expect(attempts).toBe(1);
+  await response.body?.cancel();
+  expect(await runInDurableObject(f.stub, instance => instance.adminPasswordVerifier())).toBe(previous);
+  expect(await runInDurableObject(f.stub, instance => instance.verifyAdminSession(f.hash, Date.now()))).toBeDefined();
+});
+
+it("SEC04 a completed password change revokes the old server session", async () => {
+  const f = await fixture();
+  const previous = await runInDurableObject(f.stub, instance => instance.adminPasswordVerifier());
+  const body = new URLSearchParams({ csrf_token: f.csrf, current_password: "synthetic-admin-password", password: "new-synthetic-admin-password", confirm_password: "new-synthetic-admin-password" });
+  const response = await worker.fetch(new Request("https://audit.test/admin/password", { method: "POST", headers: f.headers, body }), f.localEnv, {} as ExecutionContext);
+  expect(response.status).toBe(303); expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
+  await response.body?.cancel();
+  expect(await runInDurableObject(f.stub, instance => instance.adminPasswordVerifier())).not.toBe(previous);
+  expect(await runInDurableObject(f.stub, instance => instance.verifyAdminSession(f.hash, Date.now()))).toBeUndefined();
+});
+
+it.each([401, 403, 404, 503])("SEC04 an expired status observation (%s) is unavailable, not a fresh denial", async status => {
+  const { boundedJsonResponse } = await import("../src/platform/bounded-json.js");
+  let clock = 0, signal: AbortSignal | undefined;
+  const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
+  try {
+    const response = await boundedJsonResponse(async input => { signal = input; clock = 10; return new Response("synthetic late status", { status }); }, 10);
+    expect(response).toBeUndefined(); expect(signal?.aborted).toBe(true);
+  } finally { now.mockRestore(); }
 });
