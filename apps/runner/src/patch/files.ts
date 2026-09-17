@@ -113,7 +113,10 @@ async function openNoFollow(path: string): Promise<Awaited<ReturnType<typeof ope
     // guard and the parent snapshot is verified around every operation.
     const info = await lstat(path);
     if (info.isSymbolicLink()) throw new RpcRuntimeError("symlink_write", "symlink paths are not allowed");
-    return await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    if (!info.isFile()) throw new RpcRuntimeError("invalid_path", "path is not a regular file");
+    // A FIFO substituted after lstat must not strand a filesystem worker before
+    // the descriptor/type and path-identity checks in readRegularFileCapped.
+    return await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   } catch (error) {
     if (error instanceof RpcRuntimeError) throw error;
     if ((error as NodeJS.ErrnoException).code === "ELOOP") throw new RpcRuntimeError("symlink_write", "symlink paths are not allowed");
