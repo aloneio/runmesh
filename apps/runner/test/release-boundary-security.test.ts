@@ -1,13 +1,20 @@
 // Audit-only regressions. All paths and contents are disposable fixtures.
 // Expectations express the intended boundary; a failure is audit evidence.
-import { it, expect } from "vitest";
-import { mkdtemp, mkdir, writeFile, readFile, rename, symlink, readdir, rm } from "node:fs/promises";
+import { it, expect, vi } from "vitest";
+import { constants } from "node:fs";
+import { mkdtemp, mkdir, writeFile, readFile, rename, symlink, readdir, rm, open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { PathPolicy } from "../src/path-policy.js";
 import { FilesystemService } from "../src/filesystem.js";
 import { GitService } from "../src/git-service.js";
+
+vi.mock("node:fs/promises", async importOriginal => {
+  const original = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...original, open: vi.fn(original.open) };
+});
+const originalFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
 
 it.skipIf(process.platform !== "linux")("AUDIT-PATH: replacing a workspace-root ancestor cannot redirect a read outside the admitted root", async () => {
   const base = await mkdtemp(join(tmpdir(), "runmesh-audit-parent-"));
@@ -91,4 +98,30 @@ it("SEC03 rejects an oversized sparse object and an exhausted deadline", async (
     await expect(snapshotGitObjects(source, target)).rejects.toThrow(/bounded/);
     await expect(snapshotGitObjects(source, target, 0)).rejects.toThrow(/budget/);
   } finally { await rm(base, { recursive: true, force: true }); }
+});
+
+it.skipIf(process.platform !== "linux")("SEC03 rejects a regular-to-FIFO race without waiting for a writer", async () => {
+  const { snapshotGitObjects } = await import("../src/git/object-snapshot.js");
+  const base = await mkdtemp(join(tmpdir(), "runmesh-release-fifo-"));
+  const source = join(base, "objects"), target = join(base, "snapshot"), name = "b".repeat(38);
+  let swapped = false, nonblocking = false;
+  try {
+    await mkdir(source); await mkdir(target); await mkdir(join(source, "aa"));
+    const object = join(source, "aa", name); await writeFile(object, "synthetic-object");
+    vi.mocked(open).mockImplementation(async (path, flags, mode) => {
+      if (String(path).endsWith(`/${name}`) && !swapped) {
+        swapped = true; await originalFs.unlink(object); execFileSync("mkfifo", [object]);
+        nonblocking = typeof flags === "number" && (flags & constants.O_NONBLOCK) !== 0;
+        // A regression must fail, not leave a filesystem worker blocked.
+        if (!nonblocking) throw new Error("fixture refused a blocking FIFO open");
+      }
+      return originalFs.open(path, flags, mode);
+    });
+    await expect(snapshotGitObjects(source, target)).rejects.toThrow("Git object changed before its snapshot");
+    expect(swapped).toBe(true); expect(nonblocking).toBe(true);
+    await expect(readFile(join(target, "aa", name))).rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    vi.mocked(open).mockImplementation(originalFs.open);
+    await rm(base, { recursive: true, force: true });
+  }
 });

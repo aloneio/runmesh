@@ -13,3 +13,7 @@ Production retains the current v2 DO identities, production-only legacy tombston
 ## Post-release source changes
 
 The [2026-09-17 pre-release audit](release-audit-20260917.md) covers later dev changes, not the immutable v0.1.3 assets above. A new stable version and exact-candidate security evidence are required before publishing those changes. Do not interpret this historical activation record as their release or deployment approval.
+
+The [2026-09-17 follow-up](release-followup-20260917.md) records additional source repairs whose full candidate verification is still pending. Its isolated helper checks and earlier baseline CI are not acceptance evidence for the repaired checkout.
+
+The [cumulative candidate audit](release-final-audit-20260917.md) records later repository regression runs and further authentication-boundary repairs. Clean-candidate security evidence and stable publication/deployment acceptance remain distinct requirements.

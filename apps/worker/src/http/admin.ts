@@ -153,7 +153,11 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
     publicOrigin = resolveConnectionOrigin(request, configuredPublicOrigin(env));
   } catch { return installerOriginUnavailable(); }
   if (url.pathname === "/admin/logout") {
-    await registryPost(env, "/auth/sessions/logout", { session_hash: session.hash });
+    const response = await registryPost(env, "/auth/sessions/logout", { session_hash: session.hash });
+    if (response.status !== 204) {
+      void response.body?.cancel().catch(() => undefined);
+      return adminError(503, "Authentication service unavailable. Try again.");
+    }
     return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
   }
   const historyAction = /^\/admin\/runners\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\/history-settings$/.exec(url.pathname);
