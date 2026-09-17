@@ -7,7 +7,6 @@ import { isRecord } from "./results/primitives.js";
 import { isSafeNonnegativeInteger } from "./results/primitives.js";
 import type { McpClientActiveRunner } from "../contracts/runner-selection.js";
 import type { McpRequestEnv } from "./contracts.js";
-import type { McpRunnerSelectionResult } from "../contracts/runner-selection.js";
 import { registryCall } from "./transport.js";
 import { registryPostCall } from "./transport.js";
 import { runnerFailure } from "./results/envelope.js";
@@ -17,18 +16,51 @@ import { safeWorkspaceMetadata } from "./results/selection.js";
 import type { SelectionCall } from "./contracts.js";
 import { success } from "./results/envelope.js";
 
+/** Validate the complete sticky identity before using it to choose a host.
+ * A malformed snapshot must not look like an empty selection or a fallback. */
+function selectionSnapshot(value: unknown): McpClientActiveRunner | undefined {
+  if (!isRecord(value)) return undefined;
+  const runnerId = value.active_runner_id === null ? null : safeJobIdentifier(value.active_runner_id);
+  const updated = value.active_runner_updated_at_ms;
+  if (runnerId === undefined || (updated !== null && !isSafeNonnegativeInteger(updated))) return undefined;
+  if (value.runner === null) return { active_runner_id: runnerId, active_runner_updated_at_ms: updated, runner: null };
+  const context = value.runner;
+  if (runnerId === null || !isRecord(context) || context.runner_id !== runnerId || typeof context.available !== "boolean"
+    || (context.updated_at_ms !== null && !isSafeNonnegativeInteger(context.updated_at_ms))) return undefined;
+  const state = context.state;
+  if (state !== "online" && state !== "offline" && state !== "stale" && state !== "unavailable") return undefined;
+  if (context.available !== (state === "online")) return undefined;
+  return { active_runner_id: runnerId, active_runner_updated_at_ms: updated,
+    runner: { runner_id: runnerId, state, available: context.available, updated_at_ms: context.updated_at_ms } };
+}
+
+function invalidSelectionReceipt(operationState: "not_started" | "unknown"): ReturnType<typeof fail> {
+  return fail("registry_unavailable", "The Registry returned an invalid or mismatched Runner selection.", "Inspect runner_current after the control plane recovers; do not select or retry a command automatically.", operationState);
+}
+
 export async function getActiveRunnerSelection(env: McpRequestEnv, clientId: string): Promise<SelectionCall> {
   const call = await registryCall(env, `/auth/clients/${encodeURIComponent(clientId)}/active-runner`);
   if (!call.ok) return call;
-  return { ok: true, value: call.value as McpClientActiveRunner };
+  const selection = selectionSnapshot(call.value);
+  return selection === undefined ? invalidSelectionReceipt("not_started") : { ok: true, value: selection };
 }
 
 export async function selectActiveRunner(env: McpRequestEnv, clientId: string, runnerId: string, confirmSwitch: boolean): Promise<SelectionCall> {
   const call = await registryPostCall(env, `/auth/clients/${encodeURIComponent(clientId)}/active-runner`, { runner_id: runnerId, confirm_switch: confirmSwitch });
   if (call.ok) {
-    const result = call.value as McpRunnerSelectionResult;
-    if (result.ok) return { ok: true, value: result };
-    if (result.code === "runner_switch_confirmation_required") return failWithDetails(result.code, "Switching the active runner requires confirmation.", "Retry with confirm_switch=true to switch runners.", result.selection);
+    const result = call.value;
+    if (!isRecord(result) || typeof result.ok !== "boolean") return invalidSelectionReceipt("unknown");
+    const selection = selectionSnapshot(result.selection);
+    if (result.ok) {
+      if (selection === undefined || selection.active_runner_id !== runnerId || typeof result.changed !== "boolean") return invalidSelectionReceipt("unknown");
+      return { ok: true, value: { ok: true, selection, changed: result.changed } };
+    }
+    if (result.code !== "client_not_found" && result.code !== "runner_not_found" && result.code !== "runner_unavailable" && result.code !== "runner_switch_confirmation_required") return invalidSelectionReceipt("unknown");
+    if (result.selection !== undefined && selection === undefined) return invalidSelectionReceipt("unknown");
+    if (result.code === "runner_switch_confirmation_required") {
+      if (selection === undefined) return invalidSelectionReceipt("unknown");
+      return failWithDetails(result.code, "Switching the active runner requires confirmation.", "Retry with confirm_switch=true to switch runners.", selection);
+    }
     return fail(result.code, "The runner selection could not be changed.", "Call runner_list and choose an available runner.");
   }
   return call;
