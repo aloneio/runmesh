@@ -14,6 +14,14 @@ export function throttleError(retryAfterMs: number): Response {
 
 export function adminError(status: number, message: string, cookies: readonly string[] = []): Response { const response = html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card error-card"><div class="secret-brand-row">${meshMarkSvg("error-mesh-mark")}<span class="brand-name">Runmesh</span></div><p class="brand-kicker">Runmesh</p><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="lede">${escapeHtml(message)}</p><p><a class="button secondary" href="/">Return</a></p></section></main>${adminScript()}</body></html>`, cookies.length === 0 ? [] : cookies); return new Response(response.body, { status, headers: response.headers }); }
 
+/** A dependency outage is not evidence of invalid administrator input.
+ * Discard the upstream body without exposing diagnostics or replaying writes. */
+export function adminUpstreamError(upstream: Response, message: string, fallbackStatus = 400): Response {
+  void upstream.body?.cancel().catch(() => undefined);
+  const status = upstream.status === 429 || upstream.status >= 500 ? 503 : upstream.status === 404 ? 404 : fallbackStatus;
+  return adminError(status, message);
+}
+
 export function methodNotAllowed(allow: string): Response { return new Response("Method not allowed", { status: 405, headers: { allow } }); }
 
 export function notFound(): Response { return new Response("Not found", { status: 404, headers: { "cache-control": "no-store" } }); }

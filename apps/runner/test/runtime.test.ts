@@ -17,7 +17,9 @@ async function fixture(): Promise<{ root: string; outside: string; state: string
   const root = join(base, "workspace");
   const outside = join(base, "outside");
   const state = join(base, "state");
-  await mkdir(root); await mkdir(outside); await mkdir(state);
+  // Positive fixtures must not rely on the invoking user's umask. Runtime
+  // state correctly rejects group/other-writable directories.
+  await mkdir(root); await mkdir(outside); await mkdir(state, { mode: 0o700 });
   const workspace = { workspaceId: "workspace-1", rootPath: await realpath(root), readonly: false, shell: false };
   const cleanup = async (): Promise<void> => {
     // Windows can keep a just-closed child cwd handle for a short interval.

@@ -4,6 +4,8 @@ import { expect, it, vi } from "vitest";
 import worker from "../src/index.js";
 import { randomBase64Url, sha256Hex, passwordVerifier } from "../src/security.js";
 import { LOGIN_CSRF_COOKIE } from "../src/http/constants.js";
+import { adminUpstreamError } from "../src/http/responses.js";
+import { handleBrowserRunnerAction } from "../src/http/runner-actions.js";
 
 async function fixture() {
   const id = env.REGISTRY.idFromName(`audit-admin-${crypto.randomUUID()}`), stub = env.REGISTRY.get(id);
@@ -17,6 +19,34 @@ async function fixture() {
   const headers = { origin: "https://audit.test", cookie: `__Host-runmesh_admin_session=${session}; __Host-runmesh_admin_csrf=${csrf}`, "content-type": "application/x-www-form-urlencoded" };
   return { stub, localEnv, hash, csrf, headers };
 }
+
+it.each([429, 500, 502, 503, 504])("SEC04 administrator mutation preserves dependency unavailability (%s)", async status => {
+  let cancelled = false;
+  const upstream = new Response(new ReadableStream({ cancel() { cancelled = true; } }), { status });
+  const response = adminUpstreamError(upstream, "Runner permission profile could not be updated.");
+  expect(response.status).toBe(503); expect(cancelled).toBe(true);
+  expect(response.headers.get("location")).toBeNull(); expect(response.headers.get("set-cookie")).toBeNull();
+  await response.body?.cancel();
+});
+
+it.each([[400, 400, 400], [404, 400, 404], [409, 409, 409]])("SEC04 administrator mutation preserves deterministic rejection %s", async (status, fallback, expected) => {
+  const response = adminUpstreamError(new Response("PRIVATE_UPSTREAM_DIAGNOSTIC", { status }), "Runner permission profile could not be updated.", fallback);
+  expect(response.status).toBe(expected); expect(await response.text()).not.toContain("PRIVATE_UPSTREAM_DIAGNOSTIC");
+});
+
+it.each(["emergency-lock", "workspace-delete"] as const)("SEC04 %s does not misreport or replay a failed policy fence", async action => {
+  const paths: string[] = [], registryGet = vi.fn(() => { throw new Error("Registry mutation must not be dispatched after a failed fence"); });
+  const localEnv = { ...env, REGISTRY: { idFromName: env.REGISTRY.idFromName.bind(env.REGISTRY), get: registryGet }, RUNNER: {
+    idFromName: env.RUNNER.idFromName.bind(env.RUNNER), get: () => ({ fetch: async (request: Request) => {
+      paths.push(new URL(request.url).pathname); return new Response("PRIVATE_UPSTREAM_DIAGNOSTIC", { status: 503 });
+    } }),
+  } } as unknown as typeof env;
+  const form = new FormData(); form.set("workspace_id", "w"); form.set("confirmation", action === "workspace-delete" ? "w" : "r");
+  const response = await handleBrowserRunnerAction(localEnv, form, "https://audit.test", "r", action);
+  expect(response.status).toBe(503); expect(response.headers.get("location")).toBeNull();
+  expect(await response.text()).not.toContain("PRIVATE_UPSTREAM_DIAGNOSTIC");
+  expect(paths).toEqual(["/begin-policy-mutation"]); expect(registryGet).not.toHaveBeenCalled();
+});
 
 it("AUDIT-ADMIN: revoking a session while its POST body is held prevents later credential creation", async () => {
   const f = await fixture();
