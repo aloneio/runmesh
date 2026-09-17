@@ -9,3 +9,7 @@ The exact protected main tip must pass verify-all on supported Node LTS and nati
 Includes bounded fair multi-client queues, execution-time authorization, server-rendered single-locale UI and explicit history refresh without page cross-fades. See [queue/UI contract](job-queue-and-localization.md). No queue polling timer is introduced; necessary heartbeats, authorization and bounded maintenance remain metered.
 
 Production retains the current v2 DO identities, production-only legacy tombstones and D1. Never revert declarative lifecycle to old migrations. Publishing does not upgrade or restart installed Runners. GitLab main activation and runtime verification are separate from publication.
+
+## Post-release source changes
+
+The [2026-09-17 pre-release audit](release-audit-20260917.md) covers later dev changes, not the immutable v0.1.3 assets above. A new stable version and exact-candidate security evidence are required before publishing those changes. Do not interpret this historical activation record as their release or deployment approval.

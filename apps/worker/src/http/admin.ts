@@ -58,8 +58,13 @@ import { verifyAdminPost } from "./session.js";
 import type { WorkerEnv } from "../platform/env.js";
 
 export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: URL, scheduleRefresh?: DevelopmentReleaseRefreshScheduler): Promise<Response> {
-  const session = await adminSession(request, env);
-  if (session === undefined) { if (request.method !== "GET") await discardBody(request); return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]); }
+  const admission = await adminSession(request, env);
+  if (admission.state === "unavailable") { await discardBody(request); return adminError(503, "Authentication service unavailable. Try again."); }
+  if (admission.state !== "allowed") { if (request.method !== "GET") await discardBody(request); return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]); }
+  const session = admission.session;
+  // Copy, never mutate a shared deployment environment. Every later Registry
+  // mutation carries this session inside its authenticated request target.
+  env = { ...env, adminSessionHash: session.hash };
   if (request.method === "GET" && ["/admin", "/admin/runners", "/admin/clients", "/admin/settings"].includes(url.pathname)) {
     const csrf = cookieValue(request, ADMIN_CSRF_COOKIE);
     if (csrf === undefined || !constantTimeEqual(await sha256Hex(csrf), session.csrf_hash)) return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
@@ -137,6 +142,9 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
   if (request.method !== "POST") { await discardBody(request); return methodNotAllowed("GET, POST"); }
   const form = await formData(request);
   if (form === undefined || !await verifyAdminPost(request, form, session, env)) return adminError(403, "Administrative request was rejected.");
+  const finalAdmission = await adminSession(request, env);
+  if (finalAdmission.state === "unavailable") return adminError(503, "Authentication service unavailable. Try again.");
+  if (finalAdmission.state !== "allowed" || finalAdmission.session.hash !== session.hash) return adminError(403, "Administrative request was rejected.");
   // Generated enrollment/MCP URLs must use the deployment's canonical public
   // origin when configured. Local development intentionally has no config and
   // may use HTTP; copied manual commands still quote this derived origin.

@@ -61,6 +61,10 @@ export async function recordRunnerToolCall(env: McpRequestEnv, input: {
 
 export function withAuditReceipt(result: unknown, receipt: AuditReceipt): unknown {
   if (!isRecord(result) || !isRecord(result.structuredContent)) return result;
-  const structuredContent = { ...result.structuredContent, ...receipt };
+  const error = result.structuredContent.error;
+  const structuredContent = { ...result.structuredContent, ...receipt,
+    ...(result.isError === true && isRecord(error) && error.code === "tool_result_invalid"
+      ? { error: { ...error, details: { ...(isRecord(error.details) ? error.details : {}), ...receipt } } } : {}),
+  };
   return { ...result, structuredContent, content: [{ type: "text", text: boundedText(structuredContent, CONTENT_LIMIT) }] };
 }

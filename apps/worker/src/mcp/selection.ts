@@ -71,8 +71,11 @@ export async function activeWorkspaceList(env: McpRequestEnv, clientId: string):
   // turn: the workspace's permission ceiling is not the caller's permission.
   const call = await registryCall(env, `/auth/clients/${encodeURIComponent(clientId)}/effective-workspaces/${encodeURIComponent(selected.value.runnerId)}`);
   if (!call.ok) return runnerFailure(call.error, selected.value);
-  const value = isRecord(call.value) ? call.value : {};
-  const workspaces = Array.isArray(value.workspaces) ? value.workspaces : [];
+  if (!isRecord(call.value) || !Array.isArray(call.value.workspaces) || call.value.workspaces.some(workspace => safeWorkspaceMetadata(workspace) === undefined)) {
+    return runnerFailure(fail("registry_unavailable", "The Registry workspace response is invalid.", "Retry after the control plane returns a valid workspace catalog.", "not_started").error, selected.value);
+  }
+  const value = call.value;
+  const workspaces = call.value.workspaces;
   const projected: Record<string, unknown> = { workspaces: workspaces.flatMap((workspace) => { const safe = safeWorkspaceMetadata(workspace); return safe === undefined ? [] : [safe]; }) };
   const runnerId = safeJobIdentifier(value.runner_id);
   if (runnerId !== undefined) projected.runner_id = runnerId;

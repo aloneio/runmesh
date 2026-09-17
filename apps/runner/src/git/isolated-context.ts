@@ -1,3 +1,4 @@
+import { snapshotGitObjects } from "./object-snapshot.js";
 import { constants } from "node:fs";
 import { dirname } from "node:path";
 import type { IsolatedGitContext } from "./contracts.js";
@@ -25,7 +26,7 @@ import { writeFile } from "node:fs/promises";
  * the reliable way to keep read-only status/diff from executing repository
  * supplied clean/smudge/process helpers.
  */
-export async function createIsolatedGitContext(worktree: string): Promise<IsolatedGitContext> {
+export async function createIsolatedGitContext(worktree: string, deadline?: number): Promise<IsolatedGitContext> {
   let directory: string | undefined;
   try {
     const canonicalWorktree = await realpath(worktree);
@@ -88,7 +89,7 @@ export async function createIsolatedGitContext(worktree: string): Promise<Isolat
       const alternateText = await readRegularText(alternateFile, 64 * 1_024);
       if (alternateText.trim() !== "") throw new Error("Git object alternates are not supported for isolated inspection");
     }
-    await writeFile(join(directory, "objects", "info", "alternates"), `${objectDirectory}\n`, { mode: 0o600 });
+    await snapshotGitObjects(objectDirectory, join(directory, "objects"), Math.min(deadline ?? Infinity, performance.now() + 5000));
 
     const objectFormat = await gitObjectFormat(gitDirectory, commonDirectory);
     const config = `[core]\n\trepositoryformatversion = ${objectFormat === "sha256" ? 1 : 0}\n\tfilemode = ${process.platform === "win32" ? "false" : "true"}\n\tbare = false\n\tignorecase = ${process.platform === "win32" ? "true" : "false"}\n` + (objectFormat === "sha256" ? "[extensions]\n\tobjectFormat = sha256\n" : "");

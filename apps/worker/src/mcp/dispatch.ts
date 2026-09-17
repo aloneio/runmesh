@@ -1,3 +1,4 @@
+import { verifyRunnerToolResult } from "./validated-result.js";
 import { asToolResult } from "./results/envelope.js";
 import { callRunner } from "./transport.js";
 import { checkAnyReadPermission } from "./authorization.js";
@@ -26,7 +27,7 @@ export async function activeRunnerTool(env: McpRequestEnv, clientId: string, met
   if (!readiness.ok) return asToolResult(readiness.error);
   const startedAtMs = Date.now();
   const call = await callRunner(env, selected.value.runnerId, method, params, readiness.value.applied_revision, readiness.value.active_checksum);
-  const result = call.ok ? runnerSuccess(projectRunnerResult(call.value, resultMode), selected.value) : runnerFailure(call.error, selected.value);
+  const result = verifyRunnerToolResult(method, params, call.ok ? runnerSuccess(projectRunnerResult(call.value, resultMode), selected.value) : runnerFailure(call.error, selected.value));
   const audit = await recordRunnerToolCall(env, {
     runnerId: selected.value.runnerId,
     clientId,

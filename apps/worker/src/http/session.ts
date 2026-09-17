@@ -5,20 +5,25 @@ import { bearerToken } from "../security.js";
 import { configuredPublicOrigin } from "./origin.js";
 import { constantTimeEqual } from "../security.js";
 import { isConfiguredSecret } from "../security.js";
-import { json } from "../platform/control-plane.js";
+import { boundedJsonResponse } from "../platform/bounded-json.js";
 import { record } from "../values.js";
-import { registryPost } from "../platform/control-plane.js";
+import { registryRequest } from "../platform/control-plane.js";
 import { sameOrigin } from "./origin.js";
 import { sha256Hex } from "../security.js";
 import type { WorkerEnv } from "../platform/env.js";
 
-export async function adminSession(request: Request, env: WorkerEnv): Promise<{ hash: string; csrf_hash: string } | undefined> {
+export type AdminSessionDecision = { readonly state: "allowed"; readonly session: { readonly hash: string; readonly csrf_hash: string } } | { readonly state: "denied" | "unavailable" };
+
+export async function adminSession(request: Request, env: WorkerEnv): Promise<AdminSessionDecision> {
   const raw = cookieValue(request, ADMIN_SESSION_COOKIE);
-  if (raw === undefined || !/^[A-Za-z0-9_-]{43}$/.test(raw)) return undefined;
+  if (raw === undefined || !/^[A-Za-z0-9_-]{43}$/.test(raw)) return { state: "denied" };
   const hash = await sha256Hex(raw);
-  const response = await registryPost(env, "/auth/sessions/verify", { session_hash: hash });
-  const csrfHash = record(response.ok ? await json(response) : undefined)?.csrf_hash;
-  return typeof csrfHash === "string" && /^[0-9a-f]{64}$/.test(csrfHash) ? { hash, csrf_hash: csrfHash } : undefined;
+  const response = await boundedJsonResponse(signal => registryRequest(env, "/auth/sessions/verify", "POST", JSON.stringify({ session_hash: hash }), signal));
+  if (response === undefined) return { state: "unavailable" };
+  if (response.status === 401 || response.status === 403 || response.status === 404) return { state: "denied" };
+  if (response.status !== 200) return { state: "unavailable" };
+  const csrfHash = record(response.value)?.csrf_hash;
+  return typeof csrfHash === "string" && /^[0-9a-f]{64}$/.test(csrfHash) ? { state: "allowed", session: { hash, csrf_hash: csrfHash } } : { state: "unavailable" };
 }
 
 export async function verifyAdminPost(request: Request, form: FormData, session: { csrf_hash: string }, env: WorkerEnv): Promise<boolean> {
