@@ -28,6 +28,12 @@ The Runner records retryable `4000` closure as `session_conflict` and uses the e
 
 ## Regression checks and rollout boundary
 
+`git_unavailable` has availability classification and defaults to `not_started`; an explicit state from an older Runner, including `unknown`, is preserved. Its recovery remains an operator configuration action, not Job replay or automatic retry. A Worker-only rollout must not claim to have upgraded the Runner's state reporting.
+
+The complete MCP transport suite uses an independent root-only Runner and read-only client to check all five Git errors, including omitted/partial optional history arguments. Optional `git_log` limits and `git_blame` line bounds are omitted from RPC objects when absent; explicit `undefined` must not fail the strict wire JSON check. A separate SQLite Worker accepts sync sequence 2, rejects sequence 1 with `4000`, and accepts a fresh connection and echo using the same credential. This is distinct from ordinary socket replacement and from D1 packed-history semantics.
+
+For live acceptance, first verify the actual dev origin and its clean source commit, then use an already authorized dev MCP client for the root Git envelope. The reusable session probe in `test/helpers/session-conflict-probe.ts` must only use an explicitly authorized isolated test Runner identity: it replaces that identity's connection. Restore any paused test service even when a probe fails. Do not add a public test endpoint, bypass administrator authentication, or infer live acceptance from local results or a health response alone.
+
 Regression tests exercise root/ordinary/sibling/traversal path cases; root fail-closed behavior for all five Git methods; real status, diff, log, show, and blame in a dedicated read-only workspace; upstream failure categories across transport paths; withheld stale RPC results; and real WebSocket conflict/retry behavior. Existing ownership, symlink, metadata race, and handshake tests remain required.
 
 Source tests do not replace acceptance of an installed signed Runner. Changing source does not modify central workspace policy or upgrade a service. Preserve immutable published assets and the current Runner. A no-deployment delivery must not push into an automatically deployed branch; retain a local reviewed commit until deployment is authorized.

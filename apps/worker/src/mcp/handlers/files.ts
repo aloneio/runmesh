@@ -13,8 +13,6 @@ export async function inspectTool(env: McpRequestEnv, clientId: string, params: 
   const input: Record<string, unknown> = {
     workspace_id: params.workspace_id,
     ...(params.path === undefined ? {} : { path: params.path }),
-    ...(params.action === "git_show" ? { revision: params.revision } : {}),
-    ...(params.action === "git_blame" ? { start_line: params.start_line, end_line: params.end_line } : {}),
     ...(params.query === undefined ? {} : { query: params.query }),
     ...(params.cursor === undefined ? {} : { cursor: params.cursor }),
     ...(params.action !== "search" || params.mode === undefined ? {} : { mode: params.mode }),
@@ -27,9 +25,13 @@ export async function inspectTool(env: McpRequestEnv, clientId: string, params: 
     ...(params.action === "search" && params.max_results !== undefined ? { max_results: params.max_results } : {}),
     ...(params.action === "git_diff" ? { max_bytes: 32 * 1024 } : {}),
     ...(params.action === "git_status" ? { max_bytes: 32 * 1024 } : {}),
-    ...(params.action === "git_log" ? { limit: params.max_results, max_bytes: 32 * 1024 } : {}),
+    ...(params.action === "git_log" ? { ...(params.max_results === undefined ? {} : { limit: params.max_results }), max_bytes: 32 * 1024 } : {}),
     ...(params.action === "git_show" ? { revision: params.revision, max_bytes: 64 * 1024 } : {}),
-    ...(params.action === "git_blame" ? { start_line: params.start_line, end_line: params.end_line, max_bytes: 64 * 1024 } : {}),
+    ...(params.action === "git_blame" ? {
+      ...(params.start_line === undefined ? {} : { start_line: params.start_line }),
+      ...(params.end_line === undefined ? {} : { end_line: params.end_line }),
+      max_bytes: 64 * 1024,
+    } : {}),
   };
   return activeRunnerTool(env, clientId, method, input, "read", inspectResultMode(params.action));
 }

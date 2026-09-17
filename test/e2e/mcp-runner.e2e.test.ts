@@ -3,7 +3,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, parse } from "node:path";
+import { probeSessionConflict } from "../helpers/session-conflict-probe.js";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolveTrustedWindowsTool, trustedWindowsRoot } from "../../apps/runner/src/windows-tools.js";
@@ -714,6 +715,76 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(next.structuredContent?.deduplicated).toBe(true);
     expect((next.structuredContent?.context as { revision: number }).revision).toBe(1);
     expect((next.structuredContent?.context as { evidence: unknown }).evidence).toEqual((first.structuredContent?.context as { evidence: unknown }).evidence);
+  });
+
+  it("returns actionable root Git errors through the complete MCP Worker Runner path", async () => {
+    const { adminJar, csrf } = await adminCredentials();
+    // Roots must not overlap within one policy. Give this test its own Runner
+    // and read-only MCP client rather than invalidating the main fixture.
+    const rootRunnerId = "e2e-root-git-runner";
+    const workspaceId = "root-git-e2e";
+    const token = "synthetic-root-git-token-0123456789";
+    const registration = await fetch(`${workerUrl}/admin/runners`, { method: "POST",
+      headers: { Authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ runner_id: rootRunnerId, token, execution_mode: "dedicated_user" }) });
+    expect(registration.status).toBe(200);
+    const rootProfile = join(root, "root-git-profile.json");
+    await writeFile(rootProfile, JSON.stringify({ version: 1, server_url: `${workerUrl.replace("http:", "ws:")}/runner/connect`,
+      runner_id: rootRunnerId, token, workspaces: [], insecure_local: true, management_mode: "central", execution_mode: "dedicated_user" }), { mode: 0o600 });
+    const rootRunner = spawn(process.execPath, [...runnerInvocation, "start", "--profile", rootProfile, "--state-dir", join(root, "root-git-state")], {
+      cwd: projectDirectory, env: { ...process.env, RUNMESH_RUNNER_PROFILE: rootProfile }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
+    });
+    const logs = collectOutput(rootRunner);
+    try {
+      const permissions = await submitForm(`/admin/runners/${rootRunnerId}/permissions`, { csrf_token: csrf, read: "true", edit: "false", shell: "false", job_control: "false" }, adminJar);
+      expect(permissions.status).toBe(303);
+      const created = await submitForm(`/admin/runners/${rootRunnerId}/workspace-create`, { csrf_token: csrf, workspace_id: workspaceId,
+        display_name: "Read-only root Git regression", root_path: parse(root).root, confirm_full_host: "true", enabled: "true", profile: "read_only",
+        read: "true", edit: "false", shell: "false", job_control: "false" }, adminJar);
+      expect(created.status).toBe(303);
+      await waitFor(async () => {
+        const response = await fetch(`${workerUrl}/admin/runners/${rootRunnerId}`, { headers: { cookie: cookieHeader(adminJar) } });
+        return /Policy status<\/span>\s*<strong[^>]*>applied\s*·/.test(await response.text());
+      }, 10000, logs);
+      const client = await createMcpClient("Root Git E2E", ["coding:read"], adminJar, csrf);
+      expect((await mcpTool("runner_select", { runner_id: rootRunnerId }, client)).isError).not.toBe(true);
+      const cases = [{ action: "git_status" }, { action: "git_diff" }, { action: "git_log" }, { action: "git_log", max_results: 5 },
+        { action: "git_show", revision: "a".repeat(40) }, { action: "git_blame" }, { action: "git_blame", start_line: 1 },
+        { action: "git_blame", end_line: 1 }, { action: "git_blame", start_line: 1, end_line: 1 }];
+      for (const input of cases) {
+        const result = await mcpTool("inspect", { workspace_id: workspaceId, path: ".",
+          ...input,
+        }, client);
+        expect(result).toMatchObject({ isError: true, structuredContent: { error: { code: "git_unavailable", failure_class: "availability",
+          operation_state: "not_started", next_action: "contact_operator", recovery_hint: expect.stringContaining("non-filesystem-root workspace") } } });
+        expect(JSON.stringify(result)).not.toMatch(/Inspect the original Job|\/usr\/bin|\.git\/config|retry_after_ms/);
+      }
+    } finally { await stop(rootRunner); }
+  });
+
+  it("fences a genuinely stale Registry sync with 4000 and recovers using the same credential", async () => {
+    const testRunner = "e2e-session-conflict";
+    const token = "synthetic-session-conflict-token-0123456789";
+    // The main fixture exercises packed D1 history, whose batch endpoint has
+    // different sequence semantics. Match the live dev SQLite sync path in an
+    // independent real Worker instead of mocking a Registry response.
+    const port = await freePort();
+    const origin = `http://127.0.0.1:${port}`;
+    const sqliteWorker = spawn(process.execPath, [wranglerCli, "dev", "--local", "--ip", "127.0.0.1", "--config", "apps/worker/wrangler.jsonc",
+      "--port", String(port), "--persist-to", join(root, "sqlite-probe"), "--show-interactive-dev-session=false", ...workerVars(), "--var", "RUNMESH_JOB_HISTORY_BACKEND:sqlite"], {
+      cwd: projectDirectory, env: { ...process.env, ...workerEnv }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
+    });
+    const logs = collectOutput(sqliteWorker);
+    try {
+      await waitFor(async () => (await fetch(`${origin}/health`).catch(() => undefined))?.ok === true, 20000, logs);
+      const registration = await fetch(`${origin}/admin/runners`, { method: "POST",
+        headers: { Authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ runner_id: testRunner, token, execution_mode: "dedicated_user" }) });
+      expect(registration.status).toBe(200);
+      const result = await probeSessionConflict({ server: `${origin.replace("http:", "ws:")}/runner/connect`, runnerId: testRunner, token });
+      expect(result).toMatchObject({ close_code: 4000, close_reason: "stale runner session", valid_sync_acknowledged: true,
+        stale_sync_acknowledged: false, same_credential_reconnected: true, new_session: true, recovery_echo: true });
+    } finally { await stop(sqliteWorker); }
   });
 
   it("reports a runner_offline structured error after the real runner disconnects", async () => {
