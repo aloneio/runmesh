@@ -1,3 +1,4 @@
+import { developmentReleaseDependencies } from "./release-cache.js";
 import type { DevelopmentReleaseRefreshScheduler } from "../distribution/release.js";
 import type { AdminData } from "../admin/view-models.js";
 import { adminDocument } from "../admin/layout.js";
@@ -30,7 +31,7 @@ export async function runnerEnrollmentPage(env: RunnerReleaseEnvironment, baseUr
   if (code === undefined) return adminError(503, "Enrollment code could not be generated.");
   if (executionMode !== "dedicated_user" && executionMode !== "privileged_host") return adminError(400, "Runner execution mode is invalid.");
   if (executionMode === "privileged_host" && !confirmPrivilegedHost) return adminError(400, "Privileged-host enrollment requires the one-time risk acknowledgement.");
-  const release = await resolveRunnerReleaseDescriptor(env, fetch, releaseCache, scheduleRefresh);
+  const release = await resolveRunnerReleaseDescriptor(env, developmentReleaseDependencies(releaseCache), scheduleRefresh);
   const bootstrap = release.distributable;
   // Validate the origin for both the hosted and manual paths.  The manual
   // fallback still emits a server URL into a copyable command; deriving it

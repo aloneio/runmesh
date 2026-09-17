@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { checkStablePublication } from "./stable-publication.mjs";
 
 const root = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-const source = readFileSync(new URL("../apps/worker/src/installer.ts", import.meta.url), "utf8");
+const source = readFileSync(new URL("../apps/worker/src/domain/release-config.ts", import.meta.url), "utf8");
 const config = JSON.parse(readFileSync(new URL("../apps/worker/wrangler.jsonc", import.meta.url), "utf8").replace(/^\s*\/\/.*$/gm, ""));
 const fixed = /FIXED_RELEASE_VERSION = "([^"]+)"/.exec(source)?.[1];
 const state=JSON.parse(readFileSync(new URL("../release/release-state.json",import.meta.url),"utf8"));

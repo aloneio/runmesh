@@ -1,3 +1,4 @@
+import { writeReleaseValidation } from "./generate-release-validation.mjs";
 import { writeBrowserAssets } from "./generate-browser-assets.mjs";
 import { writeBuildProvenance } from "./build-provenance.mjs";
 import { reviewedReleaseSource } from "./runtime-config-tools.mjs";
@@ -23,3 +24,5 @@ if (await readFile(releaseTarget, "utf8").catch(() => undefined) !== releaseSour
 await writeBuildProvenance(repositoryRoot);
 
 await writeBrowserAssets(fileURLToPath(new URL("../", import.meta.url)));
+
+await writeReleaseValidation(repositoryRoot);

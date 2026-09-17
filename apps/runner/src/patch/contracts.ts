@@ -1,5 +1,5 @@
-import { PathPolicy } from "../path-policy.js";
-import type { PathSnapshot } from "../path-policy.js";
+import type { PathSnapshot, ResolvedPolicyPath } from "../path-contracts.js";
+export type { ResolvedPolicyPath } from "../path-contracts.js";
 
 type PatchLineKind = "add" | "delete" | "context";
 
@@ -25,8 +25,6 @@ export type ResolvedPath = {
   readonly relativePath: string;
   readonly workspaceId: string;
 };
-
-export type ResolvedPolicyPath = Awaited<ReturnType<PathPolicy["resolve"]>>;
 
 export type ParentBoundary = {
   readonly resolved: ResolvedPolicyPath;

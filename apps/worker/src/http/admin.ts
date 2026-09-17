@@ -1,3 +1,4 @@
+import { developmentReleaseDependencies } from "./release-cache.js";
 import type { DevelopmentReleaseRefreshScheduler } from "../distribution/release.js";
 import { runnerSummary, runnerDetail as projectRunnerDetail, clientDetail as projectClientDetail } from "../application/admin-projections.js";
 import { ADMIN_CSRF_COOKIE } from "./constants.js";
@@ -114,7 +115,7 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
       registryGet(env, `/runners/${encodeURIComponent(runnerId)}/policy-versions`),
       registryGet(env, `/auth/runners/${encodeURIComponent(runnerId)}/enrollments`),
       runnerEnvironment(env, runnerId),
-      resolveRunnerReleaseDescriptor(env, fetch, registryDevelopmentReleaseCache(env), scheduleRefresh),
+      resolveRunnerReleaseDescriptor(env, developmentReleaseDependencies(registryDevelopmentReleaseCache(env)), scheduleRefresh),
       loadFeatureNotices(env),
       registryGet(env, `/runners/${encodeURIComponent(runnerId)}/history-settings`),
     ]);

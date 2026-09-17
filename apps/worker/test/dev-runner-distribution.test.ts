@@ -1,10 +1,19 @@
+import type { DevelopmentReleaseCache, DevelopmentReleaseRefreshScheduler, DevelopmentReleaseVerifier, DevelopmentReleaseDependencies, RunnerReleaseEnvironment } from "../src/contracts/runner-release.js";
 import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import worker from "../src/index.js";
 import { registryDevelopmentReleaseCache } from "../src/http/release-cache.js";
 import { describe, expect, it, vi } from "vitest";
-import { discoverDevelopmentRunnerRelease, resolveRunnerReleaseDescriptor, verifyDevelopmentRunnerRelease } from "../src/distribution/release.js";
+import { discoverDevelopmentRunnerRelease as discoverRelease, resolveRunnerReleaseDescriptor as resolveRelease, createDevelopmentReleaseRuntime, verifyDevelopmentRunnerRelease } from "../src/distribution/release.js";
 import { FIXED_RELEASE_VERSION, installerReleaseTarget, renderPosixInstaller, renderPowerShellInstaller } from "../src/installer.js";
 import { runnerInstallScript, runnerRelease } from "../src/http/distribution.js";
+
+// Each call models a new isolate, with the real runtime algorithm enabled.
+function discoverDevelopmentRunnerRelease(fetchImpl: typeof fetch, verify: DevelopmentReleaseVerifier, cache?: DevelopmentReleaseCache | null, schedule?: DevelopmentReleaseRefreshScheduler) {
+  return discoverRelease({ fetch: fetchImpl, verify, cache: cache ?? undefined, now: () => Date.now(), runtime: createDevelopmentReleaseRuntime() }, schedule);
+}
+function resolveRunnerReleaseDescriptor(environment: RunnerReleaseEnvironment, fetchImpl: typeof fetch) {
+  return resolveRelease(environment, { fetch: fetchImpl, verify: verifyDevelopmentRunnerRelease, cache: undefined, now: () => Date.now(), runtime: createDevelopmentReleaseRuntime() });
+}
 
 const staticAssets = ["LICENSE", "NOTICE", "SHA256SUMS", "THIRD_PARTY_NOTICES.md", "manifest.json", "manifest.sig", "manifest.signature.json", "trust-keyring.json"];
 function release(version: string, publishedAt: string, overrides: Record<string, unknown> = {}) {
@@ -226,8 +235,8 @@ describe("development Runner distribution", () => {
     for (const script of [shell, powershell]) {
       expect(script).toContain("0.1.4-dev.0");
       expect(script).toContain("releases/download/v0.1.4-dev.0");
-      expect(script).toContain('manifest.channel !== "dev"');
-      expect(script).toContain("manifest.prerelease !== true");
+      expect(script).toContain('"channel":"dev"');
+      expect(script).toContain("releaseManifestProblem");
       expect(script).toContain("signature does not verify");
     }
     expect(() => installerReleaseTarget("0.1.4", "dev")).toThrow();
@@ -254,4 +263,107 @@ describe("development Runner distribution", () => {
     } finally { if (finish !== undefined) finish(new Response("not found", { status: 404 })); await waitOnExecutionContext(ctx); vi.stubGlobal("fetch", originalFetch); }
   });
 
+});
+
+
+describe("explicit development release runtime", () => {
+  it("uses the same runtime cache with injected fetch and verifier", async () => {
+    let now = Date.now();
+    const fetchImpl = responseFetch([release("0.1.4-dev.0", "2026-09-16T08:00:00Z")]);
+    const verify = vi.fn(async () => undefined);
+    const dependencies: DevelopmentReleaseDependencies = { fetch: fetchImpl, verify, cache: undefined, now: () => now, runtime: createDevelopmentReleaseRuntime() };
+    const first = await discoverRelease(dependencies);
+    now += 1000;
+    expect(await discoverRelease(dependencies)).toEqual(first);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(verify).toHaveBeenCalledTimes(1);
+    now += 60_000;
+    await discoverRelease(dependencies);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(verify).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not let a late persistent read overwrite a newer runtime refresh", async () => {
+    const now = Date.now();
+    const seed = await discoverDevelopmentRunnerRelease(responseFetch([release("0.1.4-dev.0", "2026-09-16T08:00:00Z")]), async () => undefined);
+    let finishRead!: (response: Response | undefined) => void;
+    const cache = { match: vi.fn().mockImplementationOnce(() => new Promise<Response | undefined>(resolve => { finishRead = resolve; })).mockResolvedValue(undefined), put: vi.fn(async () => undefined) };
+    const dependencies: DevelopmentReleaseDependencies = { fetch: responseFetch([release("0.1.4-dev.1", "2026-09-16T09:00:00Z")]), verify: async () => undefined, cache, now: () => now, runtime: createDevelopmentReleaseRuntime() };
+    const older = discoverRelease(dependencies);
+    const newer = await discoverRelease(dependencies);
+    finishRead(Response.json({ schema_version: 1, verified_at_ms: now - 1000, descriptor: seed }));
+    expect((await older).package_version).toBe(newer.package_version);
+    expect(dependencies.runtime.cached?.descriptor.package_version).toBe("0.1.4-dev.1");
+  });
+
+  it("does not let an older refresh finishing last roll back a newer committed refresh", async () => {
+    let finishOlder!: (response: Response) => void;
+    const fetchImpl = vi.fn().mockImplementationOnce(() => new Promise<Response>(resolve => { finishOlder = resolve; })).mockImplementation(async () => Response.json([release("0.1.4-dev.1", "2026-09-16T09:00:00Z")])) as typeof fetch;
+    const cache = { match: async () => undefined, put: vi.fn(async () => undefined) };
+    const dependencies: DevelopmentReleaseDependencies = { fetch: fetchImpl, verify: async () => undefined, cache, now: () => Date.now(), runtime: createDevelopmentReleaseRuntime() };
+    const older = discoverRelease(dependencies);
+    // Both calls enter the request-owned refresh before either can cache a result.
+    const newer = discoverRelease(dependencies);
+    expect((await newer).package_version).toBe("0.1.4-dev.1");
+    finishOlder(Response.json([release("0.1.4-dev.0", "2026-09-16T08:00:00Z")]));
+    expect((await older).package_version).toBe("0.1.4-dev.1");
+    expect(cache.put).toHaveBeenCalledTimes(1);
+    expect(dependencies.runtime.cached?.descriptor.package_version).toBe("0.1.4-dev.1");
+  });
+
+  it("throttles stale refresh launches without sharing I/O promises or extending hard expiry", async () => {
+    let now = Date.now();
+    const seed = await discoverDevelopmentRunnerRelease(responseFetch([release("0.1.4-dev.0", "2026-09-16T08:00:00Z")]), async () => undefined);
+    const verifiedAtMs = now - 120_000;
+    let finish!: (response: Response) => void;
+    const fetchImpl = vi.fn().mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; })).mockImplementation(async () => new Response("missing", { status: 404 })) as typeof fetch;
+    const cache = { match: async () => Response.json({ schema_version: 1, verified_at_ms: verifiedAtMs, descriptor: seed }), put: vi.fn(async () => undefined) };
+    const dependencies: DevelopmentReleaseDependencies = { fetch: fetchImpl, verify: async () => undefined, cache, now: () => now, runtime: createDevelopmentReleaseRuntime() };
+    const tasks: Promise<void>[] = [];
+    const schedule = (work: Promise<void>) => { tasks.push(work); };
+    expect((await discoverRelease(dependencies, schedule)).package_version).toBe(seed.package_version);
+    expect((await discoverRelease(dependencies, schedule)).package_version).toBe(seed.package_version);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(tasks).toHaveLength(1);
+    expect(Object.values(dependencies.runtime).some(value => value instanceof Promise)).toBe(false);
+    finish(new Response("missing", { status: 404 }));
+    await Promise.all(tasks);
+    expect(dependencies.runtime.cached?.verified_at_ms).toBe(verifiedAtMs);
+    expect(cache.put).not.toHaveBeenCalled();
+    now = verifiedAtMs + 3_600_000;
+    await expect(discoverRelease(dependencies, schedule)).rejects.toThrow();
+  });
+
+  it("rejects future-dated memory and keeps verified releases available through cache-write failures", async () => {
+    const now = Date.now();
+    const seed = await discoverDevelopmentRunnerRelease(responseFetch([release("0.1.4-dev.0", "2026-09-16T08:00:00Z")]), async () => undefined);
+    const runtime = createDevelopmentReleaseRuntime();
+    runtime.cached = { descriptor: seed, verified_at_ms: now + 1, expires_at_ms: now + 60_000 };
+    await expect(discoverRelease({ fetch: responseFetch([], 404), verify: async () => undefined, cache: undefined, now: () => now, runtime })).rejects.toThrow();
+    const cache = { match: async () => undefined, put: vi.fn(async () => { throw new Error("cache unavailable"); }) };
+    const result = await discoverRelease({ fetch: responseFetch([release("0.1.4-dev.1", "2026-09-16T09:00:00Z")]), verify: async () => undefined, cache, now: () => now, runtime: createDevelopmentReleaseRuntime() });
+    expect(result.package_version).toBe("0.1.4-dev.1");
+    expect(cache.put).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+it("a failed older refresh cannot replace a concurrent verified runtime value with its stale snapshot", async () => {
+  let now = Date.now();
+  const seed = await discoverDevelopmentRunnerRelease(responseFetch([release("0.1.4-dev.0", "2026-09-16T08:00:00Z")]), async () => undefined);
+  let finishOld!: (value: Response) => void;
+  const fetchImpl = vi.fn().mockImplementationOnce(() => new Promise<Response>(resolve => { finishOld = resolve; }))
+    .mockImplementation(async () => Response.json([release("0.1.4-dev.1", "2026-09-16T09:00:00Z")])) as typeof fetch;
+  const verifiedAtMs = now - 120_000;
+  const cache = { match: async () => Response.json({ schema_version: 1, verified_at_ms: verifiedAtMs, descriptor: seed }), put: vi.fn(async () => undefined) };
+  const dependencies: DevelopmentReleaseDependencies = { fetch: fetchImpl, verify: async () => undefined, cache, now: () => now, runtime: createDevelopmentReleaseRuntime() };
+  const older = discoverRelease(dependencies);
+  const newer = discoverRelease(dependencies);
+  expect((await newer).package_version).toBe("0.1.4-dev.1");
+  const newerVerification = dependencies.runtime.cached?.verified_at_ms;
+  now += 1_000;
+  finishOld(new Response("missing", { status: 404 }));
+  expect((await older).package_version).toBe("0.1.4-dev.1");
+  expect(dependencies.runtime.cached?.verified_at_ms).toBe(newerVerification);
+  expect(cache.put).toHaveBeenCalledTimes(1);
 });

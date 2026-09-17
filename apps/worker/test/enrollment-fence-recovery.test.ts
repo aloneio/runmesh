@@ -1,3 +1,4 @@
+import { runnerRegistryFaults } from "./helpers/runner-registry-faults.js";
 import worker from "../src/index.js";
 import { randomBase64Url, sha256Hex } from "../src/security.js";
 import { env, runInDurableObject } from "cloudflare:test";
@@ -30,18 +31,20 @@ async function fixture() {
 
 it("regenerates an offline Runner enrollment after its old session fields remain populated", async () => {
   const f = await fixture();
-  await runInDurableObject(f.runner, async (instance, state) => {
-    const target = instance as any;
+  await runInDurableObject(f.runner, async (_existing, state) => {
+    const { runner, registry } = runnerRegistryFaults(state, env, f.route);
+    const target = runner as any;
     target.admissionState = f.admission;
-    target.registryRequest = f.route;
+    registry.request = f.route;
     await state.storage.put(key, f.admission);
     const mutation = "runner-enrollment-offline-repro";
     expect(await target.beginPolicyMutation(mutation, f.runnerId)).toBe("started");
   });
   const created = await runInDurableObject(f.registry, (registry) => registry.createRunnerEnrollment(f.runnerId, "c".repeat(43), "d".repeat(64), Date.now()));
   expect(created?.runner_id).toBe(f.runnerId);
-  await runInDurableObject(f.runner, async (instance) => {
-    const target = instance as any;
+  await runInDurableObject(f.runner, async (_existing, state) => {
+    const { runner, registry } = runnerRegistryFaults(state, env, f.route);
+    const target = runner as any;
     const mutation = "runner-enrollment-offline-repro";
     const cancelled = await target.cancelPolicyMutation(mutation) as Response;
     const response = cancelled.status === 204 ? "released" : await cancelled.text();
@@ -54,9 +57,10 @@ it("regenerates an offline Runner enrollment after its old session fields remain
 
 it("hibernation preserves an owned precommit fence rather than replacing its mutation ID", async () => {
   const f = await fixture();
-  await runInDurableObject(f.runner, async (instance, state) => {
-    const target = instance as any;
-    target.admissionState = f.admission; target.registryRequest = f.route;
+  await runInDurableObject(f.runner, async (_existing, state) => {
+    const { runner, registry } = runnerRegistryFaults(state, env, f.route);
+    const target = runner as any;
+    target.admissionState = f.admission; registry.request = f.route;
     const mutation = "runner-enrollment-restart-repro";
     expect(await target.beginPolicyMutation(mutation, f.runnerId)).toBe("started");
     expect((await state.storage.get<any>(key)).mutationId).toBe(mutation);
@@ -71,10 +75,11 @@ it("hibernation preserves an owned precommit fence rather than replacing its mut
 
 it("incomplete mutation evidence cannot release any fence", async () => {
   const f = await fixture();
-  await runInDurableObject(f.runner, async (instance) => {
-    const target = instance as any;
+  await runInDurableObject(f.runner, async (_existing, state) => {
+    const { runner, registry } = runnerRegistryFaults(state, env, f.route);
+    const target = runner as any;
     target.admissionState = { ...f.admission, sessionId: null, connectionEpoch: null, credentialVersion: null };
-    target.registryRequest = async () => Response.json({ runner_exists: true });
+    registry.request = async () => Response.json({ runner_exists: true });
     expect(await target.beginPolicyMutation("incomplete-proof", f.runnerId)).toBe("started");
     const cancelled = await target.cancelPolicyMutation("incomplete-proof") as Response;
     expect(cancelled.status).toBe(503);
@@ -92,10 +97,11 @@ it.each([
 ])("keeps isolation for %s", async (_name, change, status) => {
   const f = await fixture();
   const proof = await (await f.route(f.runnerId, "/mutation-state")).json() as Record<string, unknown>;
-  await runInDurableObject(f.runner, async (instance) => {
-    const target = instance as any;
+  await runInDurableObject(f.runner, async (_existing, state) => {
+    const { runner, registry } = runnerRegistryFaults(state, env, f.route);
+    const target = runner as any;
     target.admissionState = f.admission;
-    target.registryRequest = async () => Response.json({ ...proof, ...(change as object) });
+    registry.request = async () => Response.json({ ...proof, ...(change as object) });
     expect(await target.beginPolicyMutation("negative-recovery", f.runnerId)).toBe("started");
     expect((await target.cancelPolicyMutation("negative-recovery")).status).toBe(status);
     expect(await target.admission()).toMatchObject({ fenced: true, mutationId: "negative-recovery" });
@@ -184,11 +190,12 @@ it.each(["warm", "reconstructed", "cleanup-unavailable"])("browser enrollment re
 it("a delayed cancellation cannot clear a newer mutation owner", async () => {
   const f = await fixture();
   const proof = await (await f.route(f.runnerId, "/mutation-state")).json();
-  await runInDurableObject(f.runner, async (instance, storageState) => {
-    const target = instance as any;
+  await runInDurableObject(f.runner, async (_existing, storageState) => {
+    const { runner, registry } = runnerRegistryFaults(storageState, env, f.route);
+    const target = runner as any;
     target.admissionState = f.admission;
     expect(await target.beginPolicyMutation("old-owner", f.runnerId)).toBe("started");
-    target.registryRequest = async () => {
+    registry.request = async () => {
       target.admissionState = { ...target.admissionState, mutationId: "new-owner" };
       await storageState.storage.put(key, target.admissionState);
       return Response.json(proof);

@@ -1,3 +1,4 @@
+import { createJobFileFaults } from "./helpers/job-file-faults.js";
 import { lstat, mkdir, readFile, rm, symlink, writeFile, mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -460,16 +461,17 @@ describe("persistent local jobs", () => {
     let manager: JobManager | undefined;
     let job: JobRecord | undefined;
     try {
-      manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state, onEvent: (event) => events.push(event) });
+      const snapshotFaults = createJobFileFaults();
+      manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state, onEvent: (event) => events.push(event) }, { files: snapshotFaults.files });
       const internals = manager as unknown as {
         readonly jobs: Map<string, JobRecord>;
         readonly processes: Map<string, ChildProcess>;
-        persist: (record: JobRecord) => Promise<void>;
+
       };
-      const originalPersist = internals.persist.bind(manager);
+
       let mutated = false;
-      internals.persist = async (record) => {
-        const result = await originalPersist(record);
+      snapshotFaults.write = async (record, commit) => {
+        const result = await commit();
         // Model a cancellation callback that commits between the running
         // metadata write and start()'s event publication. The post-write
         // status guard must suppress a stale `started` event.
@@ -503,24 +505,22 @@ describe("persistent local jobs", () => {
   it("releases the queued reservation when initial job persistence fails", async () => {
     const test = await fixture();
     try {
-      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state });
+      const snapshotFaults = createJobFileFaults();
+      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state }, { files: snapshotFaults.files });
       await manager.initialize();
-      const internals = manager as unknown as {
-        readonly jobs: Map<string, JobRecord>;
-        persist: (record: JobRecord) => Promise<void>;
-      };
-      const originalPersist = internals.persist.bind(manager);
+
+
       let failQueued = true;
-      internals.persist = async (record) => {
+      snapshotFaults.write = async (record, commit) => {
         if (failQueued && record.status === "queued") {
           failQueued = false;
           throw new Error("synthetic metadata write failure");
         }
-        return originalPersist(record);
+        return commit();
       };
       await expect(manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.exit(0)"] })).rejects.toThrow("synthetic metadata write failure");
-      expect(internals.jobs.size).toBe(0);
-      internals.persist = originalPersist;
+      expect(manager.list()).toHaveLength(0);
+      snapshotFaults.write = (_record, commit) => commit();
       const second = await manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.exit(0)"] });
       const settled = await waitFor(() => manager.get(second.job_id), (value) => !["queued", "running", "cancelling"].includes(value.status));
       expect(settled).toMatchObject({ status: "succeeded" });
@@ -592,23 +592,24 @@ describe("persistent local jobs", () => {
     let cancelPromise: Promise<JobRecord> | undefined;
     let manager: JobManager | undefined;
     try {
-      manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state });
+      const snapshotFaults = createJobFileFaults();
+      manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state }, { files: snapshotFaults.files });
       const internals = manager as unknown as {
-        persist: (record: JobRecord) => Promise<void>;
+
         readonly processes: Map<string, ChildProcess>;
       };
-      const originalPersist = internals.persist.bind(manager);
-      internals.persist = async (record) => {
+
+      snapshotFaults.write = async (record, commit) => {
         if (record.status === "queued" && targetJobId === undefined) {
           targetJobId = record.job_id;
-          // Register the real per-job persistence chain before holding the
-          // start caller. This models a slow await after persist() has queued
-          // its write, without allowing the synthetic gate to reorder writes.
-          const write = originalPersist(record);
+          // The real per-job chain already owns this atomic-file call. Hold
+          // its completion while cancellation uses the public Job API; the
+          // adapter must not reorder the actual writes.
+          const write = commit();
           await queuedWriteGate;
           return write;
         }
-        return originalPersist(record);
+        return commit();
       };
       await manager.initialize();
       startPromise = manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "setInterval(() => {}, 10000)"] });
@@ -648,17 +649,18 @@ describe("persistent local jobs", () => {
     let cancelPromise: Promise<JobRecord> | undefined;
     let manager: JobManager | undefined;
     try {
-      manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state });
-      const internals = manager as unknown as { persist: (record: JobRecord) => Promise<void>; readonly processes: Map<string, ChildProcess> };
-      const originalPersist = internals.persist.bind(manager);
-      internals.persist = async (record) => {
+      const snapshotFaults = createJobFileFaults();
+      manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state }, { files: snapshotFaults.files });
+      const internals = manager as unknown as {  readonly processes: Map<string, ChildProcess> };
+
+      snapshotFaults.write = async (record, commit) => {
         if (record.status === "queued" && targetJobId === undefined) {
           targetJobId = record.job_id;
-          const write = originalPersist(record);
+          const write = commit();
           await queuedWriteGate;
           return write;
         }
-        return originalPersist(record);
+        return commit();
       };
       await manager.initialize();
       startPromise = manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "setInterval(() => {}, 10000)"] });
@@ -983,21 +985,22 @@ describe("persistent local jobs", () => {
     let child: ChildProcess | undefined;
     try {
       const events: JobEvent[] = [];
-      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state, onEvent: (event) => events.push(event) });
+      const snapshotFaults = createJobFileFaults();
+      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state, onEvent: (event) => events.push(event) }, { files: snapshotFaults.files });
       await manager.initialize();
       const job = await manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "setInterval(() => {}, 10000)"] });
       const internals = manager as unknown as {
         readonly jobs: Map<string, JobRecord>;
         readonly processes: Map<string, ChildProcess>;
         finish: (jobId: string, code: number | null, signal: NodeJS.Signals | null, spawnFailed: boolean) => Promise<void>;
-        persist: (record: JobRecord) => Promise<void>;
+
       };
       child = internals.processes.get(job.job_id);
       expect(child).toBeDefined();
-      const originalPersist = internals.persist.bind(manager);
+
       let injected = false;
-      internals.persist = async (record) => {
-        await originalPersist(record);
+      snapshotFaults.write = async (record, commit) => {
+        await commit();
         if (!injected && record.job_id === job.job_id && record.status === "succeeded") {
           injected = true;
           const current = internals.jobs.get(job.job_id)!;
@@ -1031,22 +1034,23 @@ describe("persistent local jobs", () => {
     let child: ChildProcess | undefined;
     let finishClosedJob: (() => Promise<void>) | undefined;
     try {
-      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state });
+      const snapshotFaults = createJobFileFaults();
+      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state }, { files: snapshotFaults.files });
       await manager.initialize();
       const job = await manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "setInterval(() => {}, 10000)"] });
       const internals = manager as unknown as {
         readonly jobs: Map<string, JobRecord>;
         readonly processes: Map<string, ChildProcess>;
         finish: (jobId: string, code: number | null, signal: NodeJS.Signals | null, spawnFailed: boolean) => Promise<void>;
-        persist: (record: JobRecord) => Promise<void>;
+
       };
       child = internals.processes.get(job.job_id);
       finishClosedJob = () => internals.finish(job.job_id, child?.exitCode ?? null, child?.signalCode ?? null, false);
       expect(child).toBeDefined();
-      const originalPersist = internals.persist.bind(manager);
+
       let injected = false;
-      internals.persist = async (record) => {
-        await originalPersist(record);
+      snapshotFaults.write = async (record, commit) => {
+        await commit();
         if (!injected && record.job_id === job.job_id && record.status === "succeeded") {
           injected = true;
           const current = internals.jobs.get(job.job_id)!;
@@ -1088,22 +1092,23 @@ describe("persistent local jobs", () => {
     let child: ChildProcess | undefined;
     let finishClosedJob: (() => Promise<void>) | undefined;
     try {
-      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state });
+      const snapshotFaults = createJobFileFaults();
+      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state }, { files: snapshotFaults.files });
       await manager.initialize();
       const job = await manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "setInterval(() => {}, 10000)"] });
       const internals = manager as unknown as {
         readonly jobs: Map<string, JobRecord>;
         readonly processes: Map<string, ChildProcess>;
         finish: (jobId: string, code: number | null, signal: NodeJS.Signals | null, spawnFailed: boolean) => Promise<void>;
-        persist: (record: JobRecord) => Promise<void>;
+
       };
       child = internals.processes.get(job.job_id);
       finishClosedJob = async () => { await internals.finish(job.job_id, child?.exitCode ?? null, child?.signalCode ?? null, false); await manager.flushPersistence(); };
       expect(child).toBeDefined();
-      const originalPersist = internals.persist.bind(manager);
+
       let injected = false;
-      internals.persist = async (record) => {
-        await originalPersist(record);
+      snapshotFaults.write = async (record, commit) => {
+        await commit();
         if (!injected && record.job_id === job.job_id && record.status === "succeeded") {
           injected = true;
           const current = internals.jobs.get(job.job_id)!;
@@ -1134,22 +1139,23 @@ describe("persistent local jobs", () => {
     let finishClosedJob: (() => Promise<void>) | undefined;
     try {
       const events: JobEvent[] = [];
-      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state, onEvent: (event) => events.push(event) });
+      const snapshotFaults = createJobFileFaults();
+      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state, onEvent: (event) => events.push(event) }, { files: snapshotFaults.files });
       await manager.initialize();
       const job = await manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "setInterval(() => {}, 10000)"] });
       const internals = manager as unknown as {
         readonly jobs: Map<string, JobRecord>;
         readonly processes: Map<string, ChildProcess>;
         finish: (jobId: string, code: number | null, signal: NodeJS.Signals | null, spawnFailed: boolean) => Promise<void>;
-        persist: (record: JobRecord) => Promise<void>;
+
       };
       child = internals.processes.get(job.job_id);
       finishClosedJob = async () => { await internals.finish(job.job_id, child?.exitCode ?? null, child?.signalCode ?? null, false); await manager.flushPersistence(); };
       expect(child).toBeDefined();
-      const originalPersist = internals.persist.bind(manager);
+
       let injected = false;
-      internals.persist = async (record) => {
-        await originalPersist(record);
+      snapshotFaults.write = async (record, commit) => {
+        await commit();
         if (!injected && record.job_id === job.job_id && record.status === "succeeded") {
           injected = true;
           const current = internals.jobs.get(job.job_id)!;

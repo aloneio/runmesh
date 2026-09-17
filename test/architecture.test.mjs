@@ -1,3 +1,4 @@
+import { parse } from "@babel/parser";
 import { checkArchitecture } from "../scripts/architecture-graph.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -174,4 +175,75 @@ test("AR10 connection ports may reference WebSocket types but cannot load ws",as
   assert.deepEqual((await checkArchitecture(legal.root)).failures,[]);
   const illegal=await fixture(t,{"apps/runner/src/connection/ports.ts":'import WebSocket from "ws";'});
   assert.ok((await checkArchitecture(illegal.root)).failures.some(value=>value.includes("Connection ports")));
+});
+
+
+for (const [name, sources] of [
+  ["Patch parser filesystem", { "apps/runner/src/patch/parse.ts": 'import "node:fs/promises";' }],
+  ["Patch renderer bare filesystem", { "apps/runner/src/patch/preview.ts": 'import "fs/promises";' }],
+  ["renamed Patch TypeScript module", { "apps/runner/src/patch/new-planner.mts": 'export * from "node:child_process";' }],
+  ["nested Patch JSX module", { "apps/runner/src/patch/nested/view.tsx": 'import type { Stats } from "node:fs";' }],
+  ["Connection failure network", { "apps/runner/src/connection/failures.ts": 'import "node:net";' }],
+  ["Connection Job projection SDK", { "apps/runner/src/connection/job-events.ts": 'import "ws";' }],
+  ["new Connection module", { "apps/runner/src/connection/new.cjs": 'require("node:fs");' }],
+  ["Patch type through concrete resolver", { "apps/runner/src/patch/contracts.ts": 'import type { T } from "../path-policy.js";', "apps/runner/src/path-policy.ts": 'export type T = string;' }],
+  ["Patch intermediary", { "apps/runner/src/patch/parse.ts": 'export * from "./renamed.js";', "apps/runner/src/patch/renamed.ts": 'import "node:fs";' }],
+  ["Patch barrel to adapter", { "apps/runner/src/patch/parse.ts": 'export * from "./barrel.js";', "apps/runner/src/patch/barrel.ts": 'export * from "./files.js";', "apps/runner/src/patch/files.ts": 'export {};' }],
+  ["release core to installer", { "apps/worker/src/distribution/release.ts": 'import "../installer.js";', "apps/worker/src/installer.ts": 'export {};' }],
+  ["release model to network adapter", { "apps/worker/src/domain/release-selection.ts": 'import "../distribution/release-io.js";', "apps/worker/src/distribution/release-io.ts": 'export {};' }],
+]) test(`AR15/AR17 rejects ${name}`, async t => {
+  const f = await fixture(t, sources);
+  const result = await checkArchitecture(f.root);
+  assert.ok(result.failures.length > 0, `${name} incorrectly passed`);
+});
+
+test("AR17 preserves reviewed Patch adapters, pure hash/path helpers and data contracts", async t => {
+  const f = await fixture(t, {
+    "apps/runner/src/patch/files.ts": 'import "node:fs/promises"; import "./contracts.js";',
+    "apps/runner/src/patch/preview.ts": 'import "node:crypto"; import "node:path"; import type { P } from "./contracts.js";',
+    "apps/runner/src/patch/contracts.ts": 'export type { P } from "../path-contracts.js";',
+    "apps/runner/src/path-contracts.ts": 'export type P = { readonly path: string };',
+    "apps/runner/src/connection/policy-candidate.ts": 'import "node:fs/promises";',
+    "apps/runner/src/connection/ports.ts": 'import type WebSocket from "ws";',
+    "apps/runner/src/connection/failures.ts": 'export const classify = (code: number) => code === 401;',
+  });
+  assert.deepEqual((await checkArchitecture(f.root)).failures, []);
+});
+
+
+test("AR18 prevents retired private I/O mocks from returning", async () => {
+  function visit(node, callback) {
+    if (node === null || typeof node !== "object") return;
+    if (Array.isArray(node)) { for (const child of node) visit(child, callback); return; }
+    callback(node);
+    for (const [key, child] of Object.entries(node)) if (!["loc", "start", "end", "extra", "comments"].includes(key)) visit(child, callback);
+  }
+  const parseTest = source => parse(source, { sourceType: "module", plugins: ["typescript"] });
+  const property = node => node?.computed ? node.property?.value : node?.property?.name;
+  for (const name of ["concurrency", "enrollment-fence-recovery", "job-reporting-bridge"]) {
+    const source = await readFile(join(project, `apps/worker/test/${name}.test.ts`), "utf8");
+    visit(parseTest(source), node => {
+      if (node.type === "AssignmentExpression") assert.notEqual(property(node.left), "registryRequest", `${name}: use the injected RegistryRequestPort`);
+    });
+  }
+  // These exact pre-enqueue/post-coordinator races are not equivalent to a
+  // file fault. Keep them explicit rather than weakening their assertions.
+  const remaining = new Set([
+    "waits for fast-exit terminal metadata before returning from start",
+    "does not let a late running metadata write overwrite terminal state",
+    "does not overwrite a queued cancellation after a spawn setup failure races",
+    "does not signal a local PID after the child exits during cancellation persistence",
+  ]);
+  const found = new Set();
+  const runtime = parseTest(await readFile(join(project, "apps/runner/test/runtime.test.ts"), "utf8"));
+  visit(runtime, node => {
+    if (node.type !== "CallExpression" || node.callee?.name !== "it" || node.arguments[0]?.type !== "StringLiteral") return;
+    const name = node.arguments[0].value;
+    visit(node.arguments[1], child => {
+      if (child.type !== "AssignmentExpression" || property(child.left) !== "persist") return;
+      assert.ok(remaining.has(name), `${name}: inject JobFilePort rather than replacing persistence coordination`);
+      found.add(name);
+    });
+  });
+  assert.deepEqual([...found].sort(), [...remaining].sort(), "review the documented exceptions when retiring a coordinator-only race");
 });

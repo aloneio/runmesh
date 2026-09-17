@@ -1,6 +1,5 @@
 import type { Baseline } from "./contracts.js";
 import { createHash } from "node:crypto";
-import { randomUUID } from "node:crypto";
 import { relative } from "node:path";
 import type { ResolvedOperation } from "./contracts.js";
 import type { ResolvedPath } from "./contracts.js";
@@ -92,7 +91,6 @@ export function isRecord(value: unknown): value is Record<string, unknown> { ret
 
 export function message(error: unknown): string { return error instanceof Error ? error.message.slice(0, 1_024) : "filesystem operation failed"; }
 
-export function backupName(path: string): string { return `${path}.runmesh-${randomUUID()}.bak`; }
 
 /**
  * Windows path lookup is case-insensitive and trims trailing dots/spaces on

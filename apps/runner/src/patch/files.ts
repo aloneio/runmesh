@@ -1,4 +1,3 @@
-import { backupName } from "./values.js";
 import type { Baseline } from "./contracts.js";
 import { basename } from "node:path";
 import { conflict } from "./values.js";
@@ -303,3 +302,5 @@ export function anchoredPath(target: string, parentBoundary: ParentBoundary | un
   if (parentBoundary === undefined) return target;
   return join(parentBoundary.snapshot.canonicalPath, basename(target));
 }
+
+function backupName(path: string): string { return `${path}.runmesh-${randomUUID()}.bak`; }
