@@ -57,6 +57,7 @@
         "apps/runner/test/git-root-workspace.test.ts",
         "apps/runner/test/history-reporting-transport.test.ts",
         "apps/runner/test/history-upload.test.ts",
+        "apps/runner/test/job-input.test.ts",
         "apps/runner/test/job-queue.test.ts",
         "apps/runner/test/job-reporting.test.ts",
         "apps/runner/test/patch-git.test.ts",

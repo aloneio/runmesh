@@ -16,7 +16,7 @@ export function layer(path) {
 /** All parser-supported extensions receive the same architecture role. */
 const canonicalSource = path => path.replace(/\.(?:[cm]?[jt]s|[jt]sx)$/u, ".ts");
 const runnerIoModules = new Set([
-  "jobs/ports.ts", "jobs/storage.ts", "jobs/process.ts", "jobs/logs.ts",
+  "jobs/ports.ts", "jobs/storage.ts", "jobs/process.ts", "jobs/logs.ts", "jobs/input.ts",
   "context/ports.ts", "context/files.ts", "context/repository.ts", "context/retention.ts", "context/recovery.ts",
   "patch/files.ts", "connection/ports.ts", "connection/metadata.ts", "connection/policy-candidate.ts",
 ]);
@@ -34,6 +34,8 @@ export function specifierProblem(from, specifier, typeOnly) {
   const source = canonicalSource(from);
   const builtin = specifier.startsWith("node:") || isBuiltin(specifier);
   const external = !specifier.startsWith(".") && !specifier.startsWith("/");
+  if (source === "apps/runner/src/jobs/input.ts" && external && !(specifier === "node:stream" && typeOnly))
+    return "Job stdin delivery may reference stream types only, not platform implementations";
   if (isPureRunner(source) && external && !purePackages.test(specifier) && !["node:crypto", "crypto", "node:path", "path"].includes(specifier))
     return "Runner record and planning modules must not access platform I/O or unreviewed external packages";
   if (/^apps\/runner\/src\/(?:jobs|context|connection)\/ports\.ts$/u.test(source) && builtin && !typeOnly)
@@ -89,6 +91,8 @@ export const WORKER_ALLOWED_DEPENDENCIES = Object.freeze({
 export function dependencyProblem(from, to) {
   from = canonicalSource(from); to = canonicalSource(to);
   const owner = layer(from), target = layer(to);
+  if (from === "apps/runner/src/jobs/input.ts" && target === "runner" && !/^apps\/runner\/src\/(?:jobs\/ports|errors)\.ts$/u.test(to))
+    return "Job stdin delivery must not depend on concrete Job state, process or storage implementations";
   if (from.startsWith("apps/runner/src/connection/") && /^apps\/runner\/src\/(?:connection|runtime|policy-store|jobs|cli|index)\.ts$/u.test(to)) return "Connection modules must use narrow ports, not coordinator or concrete runtime classes";
 
   if (/^apps\/runner\/src\/(patch|git)\//u.test(from) && /^apps\/runner\/src\/(patch-service|git-service|cli|runtime)\.[jt]s$/u.test(to)) return "File/Git internals cannot depend on their coordinator or entrypoints";

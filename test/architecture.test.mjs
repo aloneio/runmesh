@@ -27,6 +27,10 @@ async function fixture(t, sources) {
 }
 
 const bad = [
+  ["stdin delivery to filesystem", { "apps/runner/src/jobs/input.ts": 'import { readFile } from "node:fs/promises";' }],
+  ["stdin delivery to process adapter", { "apps/runner/src/jobs/input.ts": 'import "./process.js";', "apps/runner/src/jobs/process.ts": "export {};" }],
+  ["stdin delivery to storage adapter", { "apps/runner/src/jobs/input.ts": 'import "./storage.js";', "apps/runner/src/jobs/storage.ts": "export {};" }],
+  ["stdin delivery loads stream implementation", { "apps/runner/src/jobs/input.ts": 'import { Writable } from "node:stream";' }],
   ["service adapter to service facade", { "apps/runner/src/services/systemd.ts": 'import "../service.js";', "apps/runner/src/service.ts": "export {};" }],
   ["command to CLI facade", { "apps/runner/src/cli/doctor.ts": 'import "../cli.js";', "apps/runner/src/cli.ts": "export {};" }],
   ["patch planner to file mutator", { "apps/runner/src/patch/parse.ts": 'import "./files.js";', "apps/runner/src/patch/files.ts": "export {};" }],
@@ -246,4 +250,10 @@ test("AR18 prevents retired private I/O mocks from returning", async () => {
     });
   });
   assert.deepEqual([...found].sort(), [...remaining].sort(), "review the documented exceptions when retiring a coordinator-only race");
+});
+
+test("stdin delivery accepts stream types without broadening planner permissions", async () => {
+  const { specifierProblem } = await import("../scripts/architecture-policy.mjs");
+  assert.equal(specifierProblem("apps/runner/src/jobs/input.ts", "node:stream", true), undefined);
+  assert.ok(specifierProblem("apps/runner/src/jobs/records.ts", "node:stream", true));
 });
