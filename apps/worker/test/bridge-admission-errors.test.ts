@@ -5,7 +5,7 @@ import { RunnerDO } from "../src/runner-do.js";
 import { BridgeReplies } from "../src/platform/bridge-replies.js";
 import { internalHeaders } from "../src/security.js";
 
-async function harness(access: () => Response, run: (instance: RunnerDO, replies: BridgeReplies, ws: WebSocket, send: ReturnType<typeof vi.fn>, authorize: () => void) => Promise<void>) {
+async function harness(access: () => Response, run: (instance: RunnerDO, replies: BridgeReplies, ws: WebSocket, send: ReturnType<typeof vi.fn>, authorize: () => void) => Promise<void>, authorization: () => Response = () => Response.json({ ok: true })) {
   const stub = env.RUNNER.get(env.RUNNER.idFromName(`admission-errors-${crypto.randomUUID()}`));
   await runInDurableObject(stub, async (_existing, state) => {
     const replies = new BridgeReplies();
@@ -26,7 +26,7 @@ async function harness(access: () => Response, run: (instance: RunnerDO, replies
       if (action === "/connect") return Response.json({ epoch: 1, lifecycle_id: "a".repeat(64) });
       if (action === "/session") return new Response(null, { status: 204 });
       if (action === "/access") return access();
-      if (action === "/mcp-authorization") { onAuthorize(); return Response.json({ ok: true }); }
+      if (action === "/mcp-authorization") { onAuthorize(); return authorization(); }
       throw new Error(`Unexpected test route: ${action}`);
     };
     const instance = new RunnerDO(statePort, env, { registryRequest: request, replies });
@@ -100,4 +100,38 @@ it("drops callbacks after a timeout removal and ignores duplicate replies", () =
     expect(resolve).not.toHaveBeenCalled();
     expect(replies.size).toBe(0);
   } finally { clearTimeout(timer); }
+});
+
+
+it.each([201, 202, 203, 206, 207, 403, 409])("does not admit an incomplete access decision carried by HTTP %s", async status => {
+  await harness(() => Response.json({ allowed: true }, { status }), async (instance, _replies, _ws, send) => {
+    const response = await request(instance);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: { code: "runner_access_unavailable", operation_state: "not_started" } });
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+it.each([201, 202, 203, 206, 207, 403, 409])("does not dispatch after a final authorization grant carried by HTTP %s", async status => {
+  await harness(() => Response.json({ allowed: true }), async (instance, _replies, _ws, send) => {
+    const response = await request(instance, "echo", true);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: { code: "control_plane_unavailable", operation_state: "not_started" } });
+    expect(send).not.toHaveBeenCalled();
+  }, () => Response.json({ ok: true }, { status }));
+});
+it.each([200, 403, 409])("preserves an explicit final authorization rejection at HTTP %s", async status => {
+  await harness(() => Response.json({ allowed: true }), async (instance, _replies, _ws, send) => {
+    const response = await request(instance, "echo", true);
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: { code: "permission_denied", operation_state: "not_started" } });
+    expect(send).not.toHaveBeenCalled();
+  }, () => Response.json({ ok: false }, { status }));
+});
+it("rejects an oversized final authorization receipt without dispatch", async () => {
+  await harness(() => Response.json({ allowed: true }), async (instance, _replies, _ws, send) => {
+    const response = await request(instance, "echo", true);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: { code: "control_plane_unavailable", operation_state: "not_started" } });
+    expect(send).not.toHaveBeenCalled();
+  }, () => Response.json({ ok: true, padding: "x".repeat(16_384) }));
 });

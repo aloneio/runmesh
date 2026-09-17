@@ -10,7 +10,7 @@ it("queue grants authenticate the full context and reject tampering, cross-key r
  expect(await verifyQueueGrant(secret+"other",grant)).toBeUndefined();expect(await verifyQueueGrant(secret,grant,payload.expires_at_ms)).toBeUndefined();
  expect(await launchDigest({workspace_id:"w",command:"a",shell:true})).not.toBe(await launchDigest({workspace_id:"w",command:"b",shell:true}));
 });
-it.each([true,false])("dequeue requires a fresh client permission decision, allowed=%s",async(allowed)=>{
+it.each([[true,200],[false,403],[true,201],[true,202],[true,203],[true,206],[true,207],[true,403],[true,409]] as const)("dequeue requires a completed permission decision, allowed=%s status=%s",async(allowed,status)=>{
  const stub=env.RUNNER.get(env.RUNNER.idFromName(`queue-auth-${crypto.randomUUID()}`));
  await runInDurableObject(stub,async instance=>{
   const target=instance as any,attachment={runnerId:"r",sessionId:"session-q",epoch:1,credentialVersion:1,lifecycleId:payload.lifecycle_id,protocolVersion:PROTOCOL_CURRENT_VERSION,authenticated:true,queueProtocol:1};
@@ -18,14 +18,14 @@ it.each([true,false])("dequeue requires a fresh client permission decision, allo
   target.admitOrReconcileProtectedRpc=async()=>true;target.admissionState={};target.admitsProtectedRpc=()=>true;
   target.env={...target.env,INTERNAL_CONTROL_SECRET:secret};
   const wsSpy=vi.spyOn(target.ctx,"getWebSockets").mockReturnValue([socket]);
-  const auth=vi.fn(async(_runner: string, _path: string, _init: RequestInit)=>Response.json({ok:allowed},{status:allowed?200:403}));
+  const auth=vi.fn(async(_runner: string, _path: string, _init: RequestInit)=>Response.json({ok:allowed},{status}));
   const requests=vi.fn(async(runner: string,path: string,init: RequestInit)=>path==="/session" ? new Response(null,{status:204}) : auth(runner,path,init));
   target.registryRequest=requests;
   try{
    await target.webSocketMessage(socket,encodeWireFrame({type:"runner.queue_check",protocol_version:PROTOCOL_CURRENT_VERSION,request_id:"q-check",runner_id:"r",job_id:"queued-j",grant:await signQueueGrant(secret,payload)}));
    expect(requests.mock.calls.map(call=>call[1])).toEqual(["/session","/mcp-authorization"]);
    expect(auth).toHaveBeenCalledTimes(1);expect(auth.mock.calls[0]?.[1]).toBe("/mcp-authorization");
-   expect(JSON.parse(send.mock.calls[0]![0]).result.authorized).toBe(allowed);
+   expect(JSON.parse(send.mock.calls[0]![0]).result.authorized).toBe(allowed && status===200);
   }finally{wsSpy.mockRestore();}
  });
 });
@@ -33,18 +33,18 @@ it.each([true,false])("dequeue requires a fresh client permission decision, allo
 it.each(["credential","lifecycle","expiry","policy-race"])("dequeue denies %s changes without authorizing execution",async(change)=>{
  const stub=env.RUNNER.get(env.RUNNER.idFromName(`queue-denial-${crypto.randomUUID()}`));
  await runInDurableObject(stub,async instance=>{
-  const target=instance as any,attachment={runnerId:"r",sessionId:"session-q",epoch:1,credentialVersion:change==="credential"?2:1,lifecycleId:change==="lifecycle"?"replacement-lifecycle":payload.lifecycle_id,protocolVersion:PROTOCOL_CURRENT_VERSION,authenticated:true,queueProtocol:1};
+  const target=instance as any,attachment={runnerId:"r",sessionId:"session-q",epoch:1,credentialVersion:change==="credential"?2:1,lifecycleId:change==="lifecycle"?"replacement-lifecycle":payload.lifecycle_id,protocolVersion:PROTOCOL_CURRENT_VERSION,authenticated:true,queueProtocol:1,historyProtocol:2};
   const send=vi.fn(),socket={deserializeAttachment:()=>attachment,send,close:vi.fn()} as unknown as WebSocket;
   target.admitOrReconcileProtectedRpc=async()=>true;target.admissionState={};
   target.admitsProtectedRpc=()=>change!=="policy-race";target.env={...target.env,INTERNAL_CONTROL_SECRET:secret};
   const sockets=vi.spyOn(target.ctx,"getWebSockets").mockReturnValue([socket]);
-  const auth=vi.fn(async(_runner: string, _path: string, _init: RequestInit)=>Response.json({ok:true}));
+  const auth=vi.fn(async(_runner: string, _path: string, _init: RequestInit)=>Response.json({ok:true,record_history:true}));
   const requests=vi.fn(async(runner: string,path: string,init: RequestInit)=>path==="/session" ? new Response(null,{status:204}) : auth(runner,path,init));
   target.registryRequest=requests;
   try{
    const grant=await signQueueGrant(secret,{...payload,...(change==="expiry"?{expires_at_ms:Date.now()-1}:{})});
    await target.webSocketMessage(socket,encodeWireFrame({type:"runner.queue_check",protocol_version:PROTOCOL_CURRENT_VERSION,request_id:"q-deny",runner_id:"r",job_id:"queued-j",grant}));
-   expect(JSON.parse(send.mock.calls[0]![0]).result.authorized).toBe(false);
+   expect(JSON.parse(send.mock.calls[0]![0]).result).toEqual({authorized:false,record_history:false});
    expect(requests.mock.calls[0]?.[1]).toBe("/session");
    if(change!=="policy-race")expect(auth).not.toHaveBeenCalled();
   }finally{sockets.mockRestore();}

@@ -204,6 +204,9 @@ async function activeJobGet(env: McpRequestEnv, clientId: string, jobId: string,
  * Never discover a different workspace or replay a command automatically. */
 async function jobSnapshot(env: McpRequestEnv, runnerId: string, jobId: string): Promise<ToolCall> {
   const result = await registryCall(env, `/runners/${encodeURIComponent(runnerId)}/jobs/${encodeURIComponent(jobId)}`);
+  if (result.ok && (!isRecord(result.value) || result.value.job_id !== jobId)) {
+    return fail("registry_unavailable", "The Registry Job snapshot does not match the requested identity.", "Retry the original Job lookup after the Registry recovers; do not replay the command.", "not_started");
+  }
   return !result.ok && result.error.code === "not_found"
     ? failWithDetails("job_history_unavailable", "The cloud Job record is unavailable; the original Job may still exist on this Runner.", hintFor("job_history_unavailable"), { job_id: jobId }, "not_started")
     : result;

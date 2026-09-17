@@ -210,3 +210,70 @@ describe("agent-visible recovery receipts", () => {
     expect(f.dispatch).toHaveBeenCalledTimes(1);
   });
 });
+
+
+describe("bounded control-plane observations", () => {
+  it.each(["read", "mutation", "authorization"] as const)("rejects an oversized %s receipt", async kind => {
+    const f = fixture();
+    const value = { ok: true, padding: "x".repeat(kind === "read" ? 1_048_576 : 16_384) };
+    f.registry.mockImplementation(async () => Response.json(value));
+    const result = kind === "read" ? await registryCall(f.env, "/snapshot")
+      : kind === "mutation" ? await registryPostCall(f.env, "/mutation", {}) : await invoke(f.env);
+    expect(result).toMatchObject({ ok: false, error: { code: "registry_unavailable", operation_state: kind === "mutation" ? "unknown" : "not_started" } });
+    expect(f.registry).toHaveBeenCalledTimes(1);
+    expect(f.dispatch).not.toHaveBeenCalled();
+  });
+  it.each(["read", "mutation", "authorization"] as const)("does not trust an expired %s receipt", async kind => {
+    const f = fixture(), now = vi.spyOn(performance, "now").mockReturnValue(0);
+    f.registry.mockImplementation(async () => { now.mockReturnValue(5001); return Response.json({ ok: true }); });
+    try {
+      const result = kind === "read" ? await registryCall(f.env, "/snapshot")
+        : kind === "mutation" ? await registryPostCall(f.env, "/mutation", {}) : await invoke(f.env);
+      expect(result).toMatchObject({ ok: false, error: { code: "registry_unavailable", operation_state: kind === "mutation" ? "unknown" : "not_started" } });
+      expect(f.registry).toHaveBeenCalledTimes(1);
+      expect(f.dispatch).not.toHaveBeenCalled();
+    } finally { now.mockRestore(); }
+  });
+  it("rejects malformed UTF-8 rather than authorizing a repaired body", async () => {
+    const f = fixture(), encoder = new TextEncoder();
+    const bytes = new Uint8Array([...encoder.encode('{"ok":true,"note":"'), 255, ...encoder.encode('"}')]);
+    f.registry.mockImplementation(async () => new Response(bytes));
+    expect(await invoke(f.env)).toMatchObject({ ok: false, error: { code: "registry_unavailable", operation_state: "not_started" } });
+    expect(f.dispatch).not.toHaveBeenCalled();
+  });
+  it("does not confirm an oversized Runner completion and does not replay it", async () => {
+    const f = fixture(() => Response.json({ type: "rpc.response", result: { padding: "x".repeat(1_048_576) } }));
+    expect(await invoke(f.env)).toMatchObject({ ok: false, error: { code: "runner_rpc_failed", operation_state: "unknown" } });
+    expect(f.dispatch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Registry Job identity binding", () => {
+  it.each(["online", "offline"] as const)("does not return another Job from a %s snapshot", async state => {
+    const f = fixture(), original = f.registry.getMockImplementation()!;
+    f.registry.mockImplementation(async request => {
+      const path = new URL(request.url).pathname;
+      if (path.endsWith("/active-runner")) return Response.json({ active_runner_id: "runner-test", active_runner_updated_at_ms: 1,
+        runner: { ...selection.context, state, available: state === "online" } });
+      if (path.includes("/jobs/")) return Response.json({ job_id: "job-other", workspace_id: "work", status: "running" });
+      return original(request);
+    });
+    const result = await jobTool(f.env, "client-test", { action: "get", job_id: "job-original" }, ["coding:read"]);
+    expect(result).toMatchObject({ isError: true, structuredContent: { error: { code: "registry_unavailable", operation_state: "not_started" } } });
+    expect(JSON.stringify(result)).not.toContain("job-other");
+    expect(f.dispatch).not.toHaveBeenCalled();
+  });
+  it("retains a matching offline Job snapshot without dispatch", async () => {
+    const f = fixture(), original = f.registry.getMockImplementation()!;
+    f.registry.mockImplementation(async request => {
+      const path = new URL(request.url).pathname;
+      if (path.endsWith("/active-runner")) return Response.json({ active_runner_id: "runner-test", active_runner_updated_at_ms: 1,
+        runner: { ...selection.context, state: "offline", available: false } });
+      if (path.includes("/jobs/")) return Response.json({ job_id: "job-original", workspace_id: "work", status: "running" });
+      return original(request);
+    });
+    const result = await jobTool(f.env, "client-test", { action: "get", job_id: "job-original" }, ["coding:read"]);
+    expect(result).toMatchObject({ structuredContent: { job_id: "job-original", workspace_id: "work", source: "registry_snapshot" } });
+    expect(f.dispatch).not.toHaveBeenCalled();
+  });
+});

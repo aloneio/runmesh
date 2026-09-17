@@ -261,3 +261,40 @@ it.each([401, 403, 404, 503])("SEC04 an expired status observation (%s) is unava
     expect(response).toBeUndefined(); expect(signal?.aborted).toBe(true);
   } finally { now.mockRestore(); }
 });
+
+
+it("bounds explicitly parsed denial receipts without broadening default authorization", async () => {
+  const { boundedJsonReceipt, boundedJsonResponse } = await import("../src/platform/bounded-json.js");
+  const denied = () => Response.json({ ok: false }, { status: 403 });
+  expect(await boundedJsonResponse(async () => denied())).toEqual({ status: 403 });
+  expect(await boundedJsonReceipt(async () => denied(), [200, 403])).toEqual({ status: 403, value: { ok: false } });
+});
+it("a bounded observation cancels a late response even when fetch ignores abort", async () => {
+  const { boundedJsonReceipt } = await import("../src/platform/bounded-json.js");
+  let finish: ((response: Response) => void) | undefined, signal: AbortSignal | undefined;
+  const cancel = vi.fn();
+  const response = new Response(new ReadableStream<Uint8Array>({ cancel }));
+  const result = await boundedJsonReceipt(input => { signal = input; return new Promise(resolve => { finish = resolve; }); }, [200], 10);
+  expect(result).toBeUndefined(); expect(signal?.aborted).toBe(true);
+  finish!(response);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(cancel).toHaveBeenCalledTimes(1);
+});
+it.each([200, 403, 409])("an unfinished explicitly parsed HTTP %s body cannot exhaust the observation deadline", async status => {
+  const { boundedJsonReceipt } = await import("../src/platform/bounded-json.js");
+  const cancel = vi.fn();
+  const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode("{")); }, cancel });
+  expect(await boundedJsonReceipt(async () => new Response(stream, { status }), [200, 403, 409], 10)).toBeUndefined();
+  expect(cancel).toHaveBeenCalledTimes(1);
+});
+it("bounded receipt storage copies reused stream buffers and accepts fragmented valid JSON", async () => {
+  const { boundedJsonReceipt } = await import("../src/platform/bounded-json.js");
+  const encoded = new TextEncoder().encode('{"ok":true,"text":"中文😀"}');
+  let offset = 0;
+  const reused = new Uint8Array(1);
+  const body = new ReadableStream<Uint8Array>({ pull(controller) {
+    if (offset === encoded.length) { controller.close(); return; }
+    reused[0] = encoded[offset++]!; controller.enqueue(reused);
+  } }, { highWaterMark: 0 });
+  expect(await boundedJsonReceipt(async () => new Response(body), [200], 5000, encoded.length)).toEqual({ status: 200, value: { ok: true, text: "中文😀" } });
+});
