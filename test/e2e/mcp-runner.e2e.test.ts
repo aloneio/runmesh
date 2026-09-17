@@ -9,6 +9,8 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolveTrustedWindowsTool, trustedWindowsRoot } from "../../apps/runner/src/windows-tools.js";
 import { catalogContract, MCP_CATALOG_SUMMARY } from "../../apps/worker/src/mcp/catalog-contract.js";
+import { fromJsonSchema } from "@modelcontextprotocol/server";
+import { inspectInputCases } from "../helpers/inspect-input-cases.js";
 
 type ToolResult = {
   readonly content?: { readonly type: string; readonly text: string }[];
@@ -218,6 +220,22 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       expect(advertised.outputSchema).toEqual(wanted.outputSchema);
       expect(advertised.annotations).toEqual(wanted.annotations);
       expect(advertised._meta?.["io.runmesh/catalog"]).toEqual({schema_version:1,sha256:MCP_CATALOG_SUMMARY.sha256});
+    }
+    // Independently validate the actual SDK-exported JSON Schema, not just
+    // equality with another export of the same source schema.
+    const inspectSchema = listed.result!.tools!.find(tool => tool.name === "inspect")!.inputSchema as Record<string, unknown>;
+    const validateInspect = fromJsonSchema(inspectSchema);
+    for (const { name, input, valid } of inspectInputCases) {
+      const result = await validateInspect["~standard"].validate(input);
+      expect(result.issues === undefined, `HTTP tools/list: ${name}`).toBe(valid);
+    }
+    for (const input of [
+      { action: "git_blame", workspace_id: "workspace-1", path: "note.txt", revision: "a".repeat(40) },
+      { action: "git_show", workspace_id: "workspace-1", path: "note.txt" },
+    ]) {
+      const rejected = await mcpMessage("inspect", input);
+      expect(rejected.result?.isError).toBe(true);
+      expect(rejected.result?.content?.map(item => item.text ?? "").join(" ")).toContain("revision");
     }
     const health = await (await fetch(`${workerUrl}/health`)).json() as {mcp_catalog:unknown};
     expect(health.mcp_catalog).toEqual(MCP_CATALOG_SUMMARY);
@@ -699,6 +717,13 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const blamed = await mcpTool("inspect", { action: "git_blame", workspace_id: "workspace-1", path: file, start_line: 1, end_line: 2 }, clientB);
     expect(blamed.isError, JSON.stringify(blamed)).not.toBe(true);
     expect(blamed.structuredContent?.output).toContain("\tthird");
+    const defaultBlame = await mcpTool("inspect", { action: "git_blame", workspace_id: "workspace-1", path: file }, clientB);
+    expect(defaultBlame.isError, JSON.stringify(defaultBlame)).not.toBe(true);
+    expect(defaultBlame.structuredContent?.output).toContain("\tthird");
+    const revision = (history.structuredContent?.commits as Array<{oid:string}>)[1]!.oid;
+    const shown = await mcpTool("inspect", { action: "git_show", workspace_id: "workspace-1", path: file, revision }, clientB);
+    expect(shown.isError, JSON.stringify(shown)).not.toBe(true);
+    expect(shown.structuredContent?.output).toBe("second\nunchanged\n");
   });
 
   it("R04 retains one checkpoint revision for repeated observed Job evidence across real MCP calls", async () => {

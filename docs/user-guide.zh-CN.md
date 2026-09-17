@@ -32,6 +32,12 @@ https://你的域名/一次性生成的密钥/mcp
 
 工作区名称是管理员定义的标识，不等于电脑上的真实路径。真实路径不会通过 MCP 返回。
 
+## 查看 Git 历史
+
+`inspect` 按 `action` 发布独立输入分支。`git_log` 使用 `path` 查看提交；`git_show` 使用 `path` 和必填的提交标识 `revision` 读取历史文件；`git_blame` 使用 `path` 以及可选的 `start_line`、`end_line` 查看行归属。`revision` 仅属于 `git_show`，不要与 `git_blame` 一起提交；本次契约对齐不增加指定版本的 blame 功能。搜索参数及搜索快照 cursor 仅属于 `search`。
+
+客户端若缓存工具定义，Worker 更新后需要刷新 Runmesh 工具目录。旧的宽泛 schema 不代表可以跨 action 混用参数，服务器仍会逐次校验请求。
+
 ## 修改文件
 
 需要修改时使用 `edit`。先让客户端读取目标文件，再提交带有当前内容基线的修改。若文件在你查看后被别人改动，Runmesh 会拒绝覆盖并要求重新读取，避免误覆盖。
