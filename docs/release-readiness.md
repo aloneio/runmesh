@@ -27,3 +27,5 @@ The [Runner storage boundary audit](release-storage-audit-20260917.md) records S
 The [2026-09-18 release-tool input audit](release-tools-audit-20260918.md) records nonblocking FIFO rejection in bounded release and MCP catalog readers, executable tooling regressions, and the remaining deployed-component acceptance gaps. Earlier baseline CI is not acceptance evidence for a repaired candidate.
 
 The [2026-09-18 descriptor-boundary audit](release-descriptor-audit-20260918.md) records SEC18 fixes for remaining Runner metadata readers and directory durability opens. Its six new race regressions join mandatory candidate-bound security execution; local source verification does not approve stale deployed components or a new stable release.
+
+The [2026-09-18 stdin delivery audit](release-stdin-audit-20260918.md) records SEC19 input completion, close and observer-cleanup repairs. Candidate-bound local verification remains separate from provider, installed-component and stable-release acceptance.
