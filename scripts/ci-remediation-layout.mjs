@@ -37,6 +37,9 @@ export function proposedCiFiles(input) {
   gh.concurrency = { group: "ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ (inputs.release_verification || github.event_name == 'workflow_dispatch') && github.run_id || 'ordinary' }}", "cancel-in-progress": "${{ !inputs.release_verification && github.event_name != 'workflow_dispatch' }}" };
   gh.jobs.verify["timeout-minutes"] = 30;
   const existing = gh.jobs.verify.steps;
+  const sourceCheckout = existing.find(step => step.uses?.startsWith("actions/checkout@"));
+  assert.ok(sourceCheckout, "legacy source checkout is required");
+  sourceCheckout.with = { ...sourceCheckout.with, "fetch-depth": 0 };
   // Non-critical setup stays as reviewed; each former command maps exactly
   // once to the new wrapper, rather than growing a second execution list.
   for (const [id, command] of Object.entries(CI_CHECKS)) {
@@ -60,7 +63,7 @@ export function proposedCiFiles(input) {
   gh.jobs["verify-all"].needs = [...AGGREGATE_JOBS];
   gh.jobs["verify-all"].steps = [{ name: "Require every mandatory job", env, run: Object.keys(env).map(key => `test "$${key}" = success`).join(" && ") }];
   gl.workflow.rules = rules();
-  Object.assign(gl.verify, { timeout: "30m", interruptible: true, allow_failure: false, rules: rules(),
+  Object.assign(gl.verify, { variables: { ...gl.verify.variables, GIT_DEPTH: "0" }, timeout: "30m", interruptible: true, allow_failure: false, rules: rules(),
     script: ["npm install --global npm@10.9.3", ...CHECK_IDS.map(checkCommand)], artifacts: artifacts() });
   gl.browser = { stage: "verify", timeout: "15m", interruptible: true, allow_failure: false, rules: rules(),
     script: ["npm install --global npm@10.9.3", "npm ci", "npm run typecheck", "npm run build", "npm run browser:install", "npm run test:browser"], artifacts: artifacts() };
