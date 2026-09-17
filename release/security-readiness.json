@@ -164,6 +164,16 @@
         "apps/worker/test/mcp-failure-chain.test.ts"
       ],
       "resolution": "source-fixed-and-regression-tested"
+    },
+    {
+      "id": "SEC17",
+      "state": "closed",
+      "area": "runner-special-file-open-boundary",
+      "fixed_commit": "31fdac268382992ebf5507e185ba623018c75588",
+      "regressions": [
+        "apps/runner/test/release-boundary-security.test.ts"
+      ],
+      "resolution": "source-fixed-and-regression-tested"
     }
   ]
 }

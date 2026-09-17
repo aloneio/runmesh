@@ -21,3 +21,5 @@ The [cumulative candidate audit](release-final-audit-20260917.md) records later 
 The [independent oci0 candidate review](release-review-20260917-1612.md) found a failed unit gate, corrected permission-sensitive test fixtures and browser mutation outage statuses, and records the remaining post-repair verification gap. Its pre-repair 25/26 gate results do not approve the modified candidate for release.
 
 The [final admission and bounded receipt audit](release-admission-audit-20260917.md) records further bridge/dequeue authorization, stream-budget and Job-identity repairs and confirms that the existing nonduplicating GitLab dev-mirroring policy remains intact. Its source regression results remain separate from clean-candidate, provider, installed-component and stable-release acceptance.
+
+The [Runner storage boundary audit](release-storage-audit-20260917.md) records SEC17 special-file open repairs and their mandatory candidate-bound regression coverage. Source verification remains separate from stable publication and installed-component acceptance.
