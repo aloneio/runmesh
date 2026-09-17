@@ -25,7 +25,7 @@ import { effectiveMaxConcurrentJobs, type RunnerConfig } from "./config.js";
 import { RunnerRuntime, rpcError } from "./runtime.js";
 import { RUNNER_VERSION } from "./version.js";
 
-import { RunnerAuthenticationError, RunnerServiceUnavailableError, classifyConnectionFailure } from "./connection/failures.js";
+import { RunnerAuthenticationError, RunnerServiceUnavailableError, RunnerSessionConflictError, classifyConnectionFailure } from "./connection/failures.js";
 export { RunnerAuthenticationError, RunnerServiceUnavailableError, classifyConnectionFailure } from "./connection/failures.js";
 import { candidateWorkspaces, effectivePolicyWorkspaces, validationContext } from "./connection/policy-candidate.js";
 import { discoverCapabilities, currentProcessServiceIdentity, sanitizeServiceIdentity, processPrivilegeState } from "./connection/metadata.js";
@@ -81,9 +81,8 @@ export class RunnerConnection {
    * The socket that completed the `runner.welcome` handshake. A socket is
    * installed as `this.socket` before it is authorized, so outbound frames
    * that are not part of the handshake itself must additionally prove that the
-   * current socket was welcomed. The Worker closes any frame that arrives while
-   * its Registry epoch is still 0 with `4001 "credentials revoked"`, and the
-   * reconnect loop reads that as a permanent credential decision.
+   * current socket was welcomed. Pre-welcome frames are rejected; older
+   * Workers misclassified that stale session as a permanent credential failure.
    */
   private welcomedSocket: WebSocket | undefined;
   private stopped = false;
@@ -212,7 +211,7 @@ export class RunnerConnection {
         const delayMs = error instanceof RunnerServiceUnavailableError
           ? serviceReconnectDelayMs(this.reconnectAttempt, this.random(), error.retryAfterMs)
           : reconnectDelayMs(this.reconnectAttempt, this.random());
-        console.error(`runner reconnect scheduled: class=${error instanceof RunnerServiceUnavailableError ? "service_unavailable" : "network"} delay_ms=${delayMs}`);
+        console.error(`runner reconnect scheduled: class=${error instanceof RunnerServiceUnavailableError ? "service_unavailable" : error instanceof RunnerSessionConflictError ? "session_conflict" : "network"} delay_ms=${delayMs}`);
         await this.sleep(delayMs);
         this.reconnectAttempt += 1;
       }
@@ -460,6 +459,7 @@ export class RunnerConnection {
         const closeReason = reason.toString("utf8");
         const failure = classifyConnectionFailure({ closeCode: code, reason: closeReason }) === "authentication"
           ? new RunnerAuthenticationError("runner credentials were revoked or rejected")
+          : code === 4000 ? new RunnerSessionConflictError()
           : code === 1013 || code === 1011
             ? new RunnerServiceUnavailableError(`runner service temporarily unavailable (close ${code})`)
             : new Error(welcomed ? "connection closed" : "connection closed before welcome");
@@ -676,9 +676,8 @@ export class RunnerConnection {
   private forwardJobEvent(event: import("./jobs.js").JobEvent): void {
     const socket = this.socket;
     // Job lifecycle frames are only valid on an authorized session. Emitting one
-    // before `runner.welcome`, or on a superseded socket, makes the Worker close
-    // with `4001 "credentials revoked"`; the reconnect loop then misreads that as
-    // a permanent credential rejection and stops retrying. The welcome handler
+    // before `runner.welcome`, or on a superseded socket, closes that transport.
+    // Older Workers misclassified it as a permanent credential rejection. The welcome handler
     // and the periodic sync reconcile any lifecycle event dropped here.
     if (socket === undefined || socket !== this.welcomedSocket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
     // Log reads and output bytes do not dirty metadata. A no-record Job

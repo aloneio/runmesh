@@ -62,6 +62,8 @@ The MCP client sends a selected Runner plus workspace ID and relative path. `roo
 
 Central management rejects local workspace add/remove. The host shell is not a sandbox.
 
+Filesystem-root workspaces cannot provide the separate executable trust boundary required by read-only Git inspection. Git therefore rejects these roots explicitly; dedicated workspaces retain the existing isolation checks. See [Git isolation and session recovery](git-isolation-and-session-recovery.md) for administrator remediation and regression coverage.
+
 Linux directory enumeration binds to an opened `O_DIRECTORY|O_NOFOLLOW` descriptor, verifies its device/inode against the accepted snapshot, and enumerates through `/proc/self/fd` while retaining that descriptor. Missing procfs fails closed rather than reverting to pathname traversal. Windows/macOS enumeration currently retains the pathname-revalidation implementation and its local ABA race limitation; do not claim hostile-local-mutator isolation there without an OS/native-handle boundary. Ordinary file reads have separate descriptor identity checks.
 
 Search charges actual bytes read even when binary detection or UTF-8 decoding later fails. Its bounds are 4 MiB read bytes, 256 KiB per file, 1,000 candidate files, 10,000 directory entries, 1,000 directories, depth 16, and a cooperative five-second deadline. Limits set `truncated`; the deadline cannot interrupt a single hung operating-system I/O operation. POSIX Git executable discovery additionally requires root/current-effective-user ownership and safe modes for existing ancestors and the final executable; symlinked Git executables are rejected.

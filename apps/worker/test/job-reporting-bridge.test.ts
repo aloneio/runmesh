@@ -23,13 +23,13 @@ async function bridge(recording: boolean | undefined, negotiated = true, fault?:
     } } as unknown as WebSocket;
     target.currentRunnerSocket = async () => socket;
     target.verifyInternalRequest = async () => true;
-    target.isCurrent = async () => true;
     target.admissionState = {};
     target.admitOrReconcileProtectedRpc = async () => true;
     target.admitsProtectedRpc = () => !(authorized && fault === "policy-race");
     registry.request = async (_runner: string, path: string, init: RequestInit) => {
       requests.push({ path, ...(typeof init.body === "string" ? { input: JSON.parse(init.body) } : {}) });
       if (path === "/access") return Response.json({ allowed: true });
+      if (path === "/session") return new Response(null, { status: 204 });
       if (path !== "/mcp-authorization") throw new Error("unexpected extra lookup");
       authorized = true;
       if (fault === "unavailable") return new Response("synthetic dependency failure", { status: 503 });
@@ -42,7 +42,7 @@ async function bridge(recording: boolean | undefined, negotiated = true, fault?:
       params: { workspace_id: "w", command: "synthetic", shell: true, created_by_client_id: "forged-owner",
         record_history: recording !== true, queue_grant: { forged: true } },
     }) }));
-    expect(requests.map(item => item.path)).toEqual(["/access", "/mcp-authorization"]);
+    expect(requests.map(item => item.path)).toEqual(["/access", "/mcp-authorization", ...(fault ? [] : ["/session"])]);
     if (fault) { expect(response.status).toBe(fault === "unavailable" ? 503 : fault === "denied" ? 403 : 409); expect(sent).toHaveLength(0); return; }
     expect(response.status).toBe(200); expect(sent).toHaveLength(1);
     const params = sent[0]!.params;
@@ -60,6 +60,6 @@ async function bridge(recording: boolean | undefined, negotiated = true, fault?:
   });
 }
 
-it.each([true, false, undefined])("capture decision %s uses final auth without an extra request and replaces caller claims", async record => bridge(record));
+it.each([true, false, undefined])("capture decision %s reuses final auth, replaces caller claims, and validates the reply session", async record => bridge(record));
 it("unnegotiated runners retain the legacy launch contract", async () => bridge(false, false));
 it.each(["unavailable", "denied", "policy-race"] as const)("reporting changes cannot bypass %s dispatch rejection", async fault => bridge(true, true, fault));

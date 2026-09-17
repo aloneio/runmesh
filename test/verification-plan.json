@@ -17,6 +17,7 @@
       "description": "Public pure rules in Node; no DO, disk or subprocess adapters",
       "files": [
         "test/domain/admin-projections.test.ts",
+        "test/domain/git-recovery-hint.test.ts",
         "test/domain/maintenance-planning.test.ts",
         "test/domain/messages.test.ts",
         "test/domain/public-rules.test.ts",
@@ -52,6 +53,7 @@
         "apps/runner/test/ga-regressions.test.ts",
         "apps/runner/test/git-directory-race.test.ts",
         "apps/runner/test/git-ownership.test.ts",
+        "apps/runner/test/git-root-workspace.test.ts",
         "apps/runner/test/history-reporting-transport.test.ts",
         "apps/runner/test/history-upload.test.ts",
         "apps/runner/test/job-queue.test.ts",
