@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { generateKeyPairSync, createHash, sign } from "node:crypto";
 import { build } from "esbuild";
-import { mkdtemp, mkdir, readFile, rm, truncate, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -386,6 +386,26 @@ test("AR15 Worker and both generated installer verifiers agree on signed manifes
         const result = await execFileAsync(process.execPath, [path, f.root], { timeout: 5_000, maxBuffer: 128 * 1024 }).then(() => true, () => false);
         assert.equal(result, expected, `${path}: ${name}`);
       }
+    }
+  } finally { await f.cleanup(); }
+});
+
+// A subprocess watchdog makes a blocking-open regression fail instead of
+// stranding the test worker or leaving a FIFO reader alive after cleanup.
+test("rejects FIFO release inputs without waiting for a writer", { skip: process.platform === "win32" }, async () => {
+  const f = await fixture();
+  try {
+    const fifo = join(f.root, "input.fifo"), alias = join(f.root, "input-link");
+    await execFileAsync("mkfifo", [fifo], { timeout: 3000, windowsHide: true });
+    await symlink(fifo, alias);
+    const module = new URL("../scripts/release-io.mjs", import.meta.url).href;
+    const probe = `import assert from "node:assert/strict";
+      import { readBoundedReleaseFile } from ${JSON.stringify(module)};
+      await assert.rejects(readBoundedReleaseFile(process.argv[1], "release input"), /not a regular file/u);`;
+    for (const path of [fifo, alias]) {
+      await execFileAsync(process.execPath, ["--input-type=module", "-e", probe, path], {
+        timeout: 3000, killSignal: "SIGKILL", windowsHide: true,
+      });
     }
   } finally { await f.cleanup(); }
 });

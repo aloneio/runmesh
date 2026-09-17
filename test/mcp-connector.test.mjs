@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { mkdtemp, writeFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { catalogTools, compareCatalogs, compareLayers, readCatalog } from "../scripts/check-mcp-connector.mjs";
@@ -95,5 +97,24 @@ test("bounds file reads and rejects malformed JSON without reflecting its conten
     await assert.rejects(readCatalog(path), { message: "invalid_catalog_json" });
     await writeFile(path, Buffer.alloc(2 * 1024 * 1024 + 1));
     await assert.rejects(readCatalog(path), { message: "catalog_too_large" });
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("rejects FIFO catalog inputs without waiting for a writer", { skip: process.platform === "win32" }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "runmesh-catalog-fifo-"));
+  const execute = promisify(execFile);
+  try {
+    const fifo = join(directory, "catalog.fifo"), alias = join(directory, "catalog-link");
+    await execute("mkfifo", [fifo], { timeout: 3000, windowsHide: true });
+    await symlink(fifo, alias);
+    const module = new URL("../scripts/check-mcp-connector.mjs", import.meta.url).href;
+    const probe = `import assert from "node:assert/strict";
+      import { readCatalog } from ${JSON.stringify(module)};
+      await assert.rejects(readCatalog(process.argv[1]), { message: "invalid_catalog" });`;
+    for (const path of [fifo, alias]) {
+      await execute(process.execPath, ["--input-type=module", "-e", probe, path], {
+        timeout: 3000, killSignal: "SIGKILL", windowsHide: true,
+      });
+    }
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

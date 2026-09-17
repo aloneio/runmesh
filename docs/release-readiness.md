@@ -23,3 +23,5 @@ The [independent oci0 candidate review](release-review-20260917-1612.md) found a
 The [final admission and bounded receipt audit](release-admission-audit-20260917.md) records further bridge/dequeue authorization, stream-budget and Job-identity repairs and confirms that the existing nonduplicating GitLab dev-mirroring policy remains intact. Its source regression results remain separate from clean-candidate, provider, installed-component and stable-release acceptance.
 
 The [Runner storage boundary audit](release-storage-audit-20260917.md) records SEC17 special-file open repairs and their mandatory candidate-bound regression coverage. Source verification remains separate from stable publication and installed-component acceptance.
+
+The [2026-09-18 release-tool input audit](release-tools-audit-20260918.md) records nonblocking FIFO rejection in bounded release and MCP catalog readers, executable tooling regressions, and the remaining deployed-component acceptance gaps. Earlier baseline CI is not acceptance evidence for a repaired candidate.
