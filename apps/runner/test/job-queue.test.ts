@@ -66,7 +66,7 @@ it("waiting state is persisted and a fresh Runner never blindly replays an old q
  const f=await fixture();try{
   await f.hold("a","hold");const queued=await f.launch("b","waiting");
   expect(JSON.parse(await readFile(join(f.base,"state","jobs",queued.job_id,"meta.json"),"utf8")).status).toBe("queued");
-  const recoveredRoot=join(f.base,"recovered");await mkdir(join(recoveredRoot,"jobs"),{recursive:true});
+  const recoveredRoot=join(f.base,"recovered");await mkdir(join(recoveredRoot,"jobs"),{recursive:true,mode:0o700});
   await cp(join(f.base,"state","jobs",queued.job_id),join(recoveredRoot,"jobs",queued.job_id),{recursive:true});
   const recovered=new JobManager({policy:f.policy,stateDir:recoveredRoot});await recovered.initialize();
   expect(recovered.get(queued.job_id).status).toBe("interrupted");expect(recovered.get(queued.job_id).pid).toBeNull();

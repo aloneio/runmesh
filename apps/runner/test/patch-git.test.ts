@@ -262,10 +262,10 @@ describe("git inspection", () => {
     const previousPath = process.env.PATH;
     try {
       await mkdir(workspace);
-      await mkdir(secure, { recursive: true });
-      await mkdir(writable, { recursive: true });
-      await mkdir(join(base, "target", "git", "bin"), { recursive: true });
-      await mkdir(join(base, "linked"), { recursive: true });
+      await mkdir(secure, { recursive: true, mode: 0o700 });
+      await mkdir(writable, { recursive: true, mode: 0o700 });
+      await mkdir(join(base, "target", "git", "bin"), { recursive: true, mode: 0o700 });
+      await mkdir(join(base, "linked"), { recursive: true, mode: 0o700 });
       await symlink(join(base, "target", "git"), join(base, "linked", "git"));
       await chmod(writable, 0o777);
       process.env.PATH = [secure, writable, linked].join(":");

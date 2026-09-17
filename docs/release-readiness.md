@@ -17,3 +17,5 @@ The [2026-09-17 pre-release audit](release-audit-20260917.md) covers later dev c
 The [2026-09-17 follow-up](release-followup-20260917.md) records additional source repairs whose full candidate verification is still pending. Its isolated helper checks and earlier baseline CI are not acceptance evidence for the repaired checkout.
 
 The [cumulative candidate audit](release-final-audit-20260917.md) records later repository regression runs and further authentication-boundary repairs. Clean-candidate security evidence and stable publication/deployment acceptance remain distinct requirements.
+
+The [independent oci0 candidate review](release-review-20260917-1612.md) found a failed unit gate, corrected permission-sensitive test fixtures and browser mutation outage statuses, and records the remaining post-repair verification gap. Its pre-repair 25/26 gate results do not approve the modified candidate for release.

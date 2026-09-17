@@ -28,8 +28,8 @@ async function fixture() {
     if (args.includes("--property=LoadState")) return { exitCode: 0, stdout: "not-found\n" };
     return { exitCode: 0, stdout: "LoadState=loaded\nActiveState=inactive\nExecStart={ path=/opt/runmesh/current/bin/runmesh ; }\n" };
   }) };
-  async function file(p: string, content = "synthetic") { await mkdir(dirname(path(p)), { recursive: true }); await writeFile(path(p), content); }
-  async function link(p: string, target: string) { await mkdir(dirname(path(p)), { recursive: true }); await symlink(target.startsWith("/") ? path(target) : target, path(p)); }
+  async function file(p: string, content = "synthetic") { await mkdir(dirname(path(p)), { recursive: true, mode: 0o700 }); await writeFile(path(p), content); }
+  async function link(p: string, target: string) { await mkdir(dirname(path(p)), { recursive: true, mode: 0o700 }); await symlink(target.startsWith("/") ? path(target) : target, path(p)); }
   async function installed() {
     for (const dir of purgeLayout("linux", "system").directories) await file(dir + "/leftover");
     await file("/opt/runmesh/versions/0.1.0-dev.4/bin/runmesh"); await file("/opt/runmesh/versions/dev.5.staging.1/.partial");
