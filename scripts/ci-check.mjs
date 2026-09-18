@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { readFile, lstat } from "node:fs/promises";
 import { join } from "node:path";
 import { CI_CHECKS, CHECK_IDS } from "./ci-contract.mjs";
 import { ROOT, gateEvidence, sourceObservation, writeGateReport } from "./ci-report.mjs";
 import { packageEvidence } from "./test-evidence.mjs";
 import { writeSupplement } from "./ci-supplement.mjs";
+import { readEvidenceJson } from "./evidence-io.mjs";
 import { resolveTrustedTaskkillPath } from "./windows-tools.mjs";
 
 const id = process.argv[2];
@@ -44,9 +44,7 @@ try {
 }
 try {
   if (id === "installed_transport" && code === 0 && !reason) {
-    const path = join(ROOT, ".verification/package-e2e.json"), info = await lstat(path);
-    assert.ok(info.isFile() && !info.isSymbolicLink() && info.size < 65536);
-    const input = JSON.parse(await readFile(path, "utf8"));
+    const input = await readEvidenceJson(join(ROOT, ".verification/package-e2e.json"), 65535);
     const safe = packageEvidence({ tests: input.tests, source: input.source, artifact: input.artifact, ...input.runtime, node: input.runtime.node, elapsedMs: input.elapsed_ms });
     assert.equal(safe.source.commit, source.commit, "package evidence belongs to a different source");
     // Validate/project rather than copy an arbitrary hidden directory.

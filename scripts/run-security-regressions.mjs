@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROOT, sourceObservation } from "./ci-report.mjs";
 import { securityTestFiles, projectSecurityEvidence } from "./security-regressions.mjs";
 import { assertSecurityReadiness } from "./release-readiness.mjs";
+import { readEvidenceJson } from "./evidence-io.mjs";
 
 const target = join(ROOT, "ci-results/security-regressions.json");
 let temporary, source;
@@ -21,7 +22,7 @@ try {
   await publish({ schema_version: 1, commit: source.commit, state: "not_run", findings: [] });
   assert.equal(process.platform, "linux", "this security evidence lane requires Linux; native lanes remain separate");
   assert.equal(source.state, "clean", "security evidence requires a clean candidate");
-  const manifest = JSON.parse(await readFile(join(ROOT, "release/security-readiness.json"), "utf8"));
+  const manifest = await readEvidenceJson(join(ROOT, "release/security-readiness.json"), 65536);
   const files = securityTestFiles(manifest);
   temporary = await mkdtemp(join(tmpdir(), "runmesh-security-regressions-"));
   const reports = [];
@@ -33,8 +34,7 @@ try {
       cwd: join(ROOT, prefix), env: { ...process.env, CI: "1", WRANGLER_SEND_METRICS: "false" }, stdio: "inherit", timeout: 240000,
     });
     assert.equal(processResult.status, 0, `${workspace} security regressions did not pass`);
-    const info = await lstat(report); assert.ok(info.isFile() && !info.isSymbolicLink() && info.size <= 8 * 1024 * 1024);
-    reports.push(JSON.parse(await readFile(report, "utf8")));
+    reports.push(await readEvidenceJson(report));
   }
   assert.deepEqual(sourceObservation(), source, "candidate changed during security verification");
   const evidence = projectSecurityEvidence(manifest, source.commit, reports, ROOT);
