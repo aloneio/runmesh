@@ -562,17 +562,28 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const started = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdin.setEncoding('utf8');process.stdin.on('data',d=>process.stdout.write(d))"), background: true });
     const id = started.structuredContent?.job_id as string;
     expect(typeof id).toBe("string");
+    const workspaceId = started.structuredContent?.workspace_id;
+    expect(workspaceId).toBe("workspace-1");
+    const address = { job_id: id, workspace_id: workspaceId };
+    // This is a live authorization test, not an archive timing assertion.
+    // Use the launch receipt's workspace before optional history is uploaded;
+    // the separate offline-snapshot case covers archived read sharing.
     try {
-      expect((await mcpTool("job", { action: "get", job_id: id }, clientB)).isError).not.toBe(true);
-      const denied = await mcpTool("job", { action: "input", job_id: id, data: "unauthorized-input" }, clientB);
+      const shared = await mcpTool("job", { action: "get", ...address }, clientB);
+      expect(shared.isError, JSON.stringify(shared)).not.toBe(true);
+      expect(shared.structuredContent).toMatchObject({ ...address, status: "running" });
+      const denied = await mcpTool("job", { action: "input", ...address, data: "unauthorized-input" }, clientB);
       expect(denied).toMatchObject({ isError: true, structuredContent: { error: { code: "insufficient_scope" } } });
-      expect((await mcpTool("job", { action: "input", job_id: id, data: "authorized-input\n" })).isError).not.toBe(true);
-      await waitFor(async () => String((await mcpTool("job", { action: "logs", job_id: id }, clientB)).structuredContent?.data).includes("authorized-input"), 10000);
-      const log = await mcpTool("job", { action: "logs", job_id: id }, clientB);
+      const deniedCancellation = await mcpTool("job", { action: "cancel", ...address }, clientB);
+      expect(deniedCancellation).toMatchObject({ isError: true, structuredContent: { error: { code: "insufficient_scope" } } });
+      expect((await mcpTool("job", { action: "get", ...address })).structuredContent?.status).toBe("running");
+      expect((await mcpTool("job", { action: "input", ...address, data: "authorized-input\n" })).isError).not.toBe(true);
+      await waitFor(async () => String((await mcpTool("job", { action: "logs", ...address }, clientB)).structuredContent?.data).includes("authorized-input"), 10000);
+      const log = await mcpTool("job", { action: "logs", ...address }, clientB);
       expect(String(log.structuredContent?.data)).not.toContain("unauthorized-input");
     } finally {
-      await mcpTool("job", { action: "cancel", job_id: id });
-      await waitFor(async () => ["cancelled", "succeeded", "failed"].includes(String((await mcpTool("job", { action: "get", job_id: id })).structuredContent?.status)), 12000);
+      await mcpTool("job", { action: "cancel", ...address });
+      await waitFor(async () => ["cancelled", "succeeded", "failed"].includes(String((await mcpTool("job", { action: "get", ...address })).structuredContent?.status)), 12000);
     }
   });
 
