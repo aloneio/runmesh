@@ -50,7 +50,7 @@ const MAX_CONFIGURED_LOG_BYTES = 512 * 1024 * 1024;
 
 type TerminationCheck =
   | { readonly safe: true }
-  | { readonly safe: false; readonly kind: "terminal" | "identity"; readonly message: string };
+  | { readonly safe: false; readonly kind: "terminal" | "identity" | "unverified"; readonly message: string };
 
 /**
  * Local process supervisor and durability coordinator. Child pipe data is
@@ -525,6 +525,7 @@ export class JobManager {
       const after = await this.checkLocalTerminationTarget(current, expectedChild);
       if (!after.safe) {
         if (after.kind === "terminal") return this.waitForTerminalResult(cancelling.job_id, after.message);
+        if (after.kind === "unverified") throw new Error(after.message);
         return this.markUnsafeLocalCancellation(current, after.message);
       }
       // Register the pending decision before invoking the platform-specific
@@ -545,6 +546,7 @@ export class JobManager {
         const verification = await this.checkLocalTerminationTarget(undelivered, expectedChild);
         if (!verification.safe) {
           if (verification.kind === "terminal") return this.waitForTerminalResult(cancelling.job_id, verification.message);
+          if (verification.kind === "unverified") throw new Error(verification.message);
           return this.markUnsafeLocalCancellation(undelivered, verification.message);
         }
         if (undelivered.status === "cancelling" && undelivered.cancellation_delivered_at_ms === null) {
@@ -595,7 +597,7 @@ export class JobManager {
     const current = this.jobs.get(job.job_id);
     if (current === undefined || !isActive(current) || current.pid !== job.pid) return { safe: false, kind: "terminal", message: "job is no longer active; cancellation was not sent" };
     if (expectedChild === undefined || this.processes.get(job.job_id) !== expectedChild || expectedChild.pid === undefined || expectedChild.pid !== job.pid) {
-      return { safe: false, kind: "identity", message: "job process identity could not be verified; cancellation was not sent" };
+      return { safe: false, kind: "unverified", message: "job process identity could not be verified; cancellation was not sent" };
     }
     if (expectedChild.exitCode !== null || expectedChild.signalCode !== null) return { safe: false, kind: "terminal", message: "job process has already exited; cancellation was not sent" };
     const inspection = await this.processAdapter.inspectProcess(job.pid, job.process_start_fingerprint);
@@ -603,13 +605,19 @@ export class JobManager {
     // Linux exposes a process starttime, so cancellation is fail-closed when
     // either the recorded marker or the verification read is unavailable. A
     // PID alone is not proof of identity after a fast exit/reuse.
-    if (process.platform === "linux" && (job.process_start_fingerprint === null || inspection.fingerprintMatches !== true)) return { safe: false, kind: "identity", message: "job process identity could not be verified; cancellation was not sent" };
+    if (process.platform === "linux" && (job.process_start_fingerprint === null || inspection.fingerprintMatches !== true)) {
+      // Unavailable /proc metadata is not evidence that the original process
+      // exited. Keep its handle and admission slot unless reuse is proven.
+      const kind = job.process_start_fingerprint !== null && inspection.fingerprintMatches === false ? "identity" : "unverified";
+      return { safe: false, kind, message: "job process identity could not be verified; cancellation was not sent" };
+    }
     // The fingerprint probe yields to the event loop; verify the in-memory
     // record and ChildProcess again before the signal call.
     const latest = this.jobs.get(job.job_id);
     const latestChild = this.processes.get(job.job_id);
     if (latest === undefined || !isActive(latest) || latest.pid !== job.pid) return { safe: false, kind: "terminal", message: "job is no longer active; cancellation was not sent" };
-    if (latestChild !== expectedChild || expectedChild.exitCode !== null || expectedChild.signalCode !== null) return { safe: false, kind: "identity", message: "job process identity could not be verified; cancellation was not sent" };
+    if (expectedChild.exitCode !== null || expectedChild.signalCode !== null) return { safe: false, kind: "terminal", message: "job process has already exited; cancellation was not sent" };
+    if (latestChild !== expectedChild) return { safe: false, kind: "unverified", message: "job process identity could not be verified; cancellation was not sent" };
     return { safe: true };
   }
 
@@ -620,12 +628,12 @@ export class JobManager {
     throw new Error(message);
   }
 
-  /** Convert an identity-loss observation to durable interruption evidence. */
+  /** Only a proven PID/fingerprint mismatch establishes local identity loss. */
   private async markUnsafeLocalCancellation(job: JobRecord, message: string): Promise<JobRecord> {
     const current = this.jobs.get(job.job_id);
     if (current === undefined) throw new Error("job not found");
     if (!isActive(current)) return current;
-    const terminal = { ...terminalRecoveredJob(current, "interrupted", { checked_at_ms: Date.now(), alive: false, fingerprint_matches: false }), recovery_note: message.slice(0, 512) };
+    const terminal = { ...terminalRecoveredJob(current, "interrupted", { checked_at_ms: Date.now(), alive: true, fingerprint_matches: false }), recovery_note: message.slice(0, 512) };
     this.jobs.set(terminal.job_id, terminal);
     this.processes.delete(terminal.job_id);
     await this.persist(terminal);
@@ -893,6 +901,20 @@ export class JobManager {
     if (!latestInspection.alive || latestInspection.fingerprintMatches !== true) {
       const beforeTerminal = this.jobs.get(recovered.job_id);
       if (beforeTerminal === undefined || beforeTerminal.status !== current.status || beforeTerminal.pid !== current.pid || beforeTerminal.process_start_fingerprint !== current.process_start_fingerprint) return beforeTerminal ?? current;
+      if (latestInspection.alive && latestInspection.fingerprintMatches === null) {
+        // A transient identity-read failure neither proves death nor delivers
+        // cancellation. Preserve recovery evidence and the concurrency slot.
+        const unverified: JobRecord = { ...beforeTerminal,
+          status: beforeTerminal.cancellation_delivered_at_ms === null ? "unknown" : "cancelling",
+          updated_at_ms: Date.now(),
+          recovery_liveness: { checked_at_ms: Date.now(), alive: true, fingerprint_matches: null },
+          recovery_note: "Process identity could not be verified; cancellation was not sent and the process remains retained.",
+        };
+        this.jobs.set(unverified.job_id, unverified);
+        await this.persist(unverified);
+        if (this.jobs.get(unverified.job_id) === unverified) this.onEvent({ type: "status", job: unverified });
+        throw new Error("recovered job cannot be cancelled safely because its process identity is no longer verified");
+      }
       const terminal = terminalRecoveredJob(beforeTerminal, beforeTerminal.cancellation_delivered_at_ms !== null ? "cancelled" : "interrupted", {
         checked_at_ms: Date.now(), alive: latestInspection.alive, fingerprint_matches: latestInspection.fingerprintMatches,
       });
