@@ -16,6 +16,7 @@ async function fixture(recovered: boolean) {
   const state = join(root, "state");
   const child = new ChildProcess(); child.pid = 424242;
   let observation: Observation = { alive: true, fingerprintMatches: true };
+  let inspect = async (): Promise<Observation> => observation;
   let onStatus = (_event: JobEvent): void => undefined;
   let terminate = async (): Promise<boolean> => false;
   const events: JobEvent[] = [];
@@ -23,7 +24,7 @@ async function fixture(recovered: boolean) {
     ...nativeJobProcesses,
     spawn: vi.fn(() => child) as typeof nativeJobProcesses.spawn,
     fingerprintSync: () => "100",
-    inspectProcess: async () => observation,
+    inspectProcess: async () => inspect(),
     terminateProcess: vi.fn(async () => terminate()),
   };
   const options = {
@@ -40,6 +41,7 @@ async function fixture(recovered: boolean) {
   return {
     manager, job, input, events, processes,
     setObservation(value: Observation) { observation = value; },
+    setInspector(value: () => Promise<Observation>) { inspect = value; },
     onCancelling(action: () => void) { onStatus = event => { if (event.type === "status" && event.job.status === "cancelling") action(); }; },
     setTerminator(value: () => Promise<boolean>) { terminate = value; },
     persisted: async () => JSON.parse(await readFile(join(state, "jobs", job.job_id, "meta.json"), "utf8")),
@@ -124,3 +126,40 @@ it("recovered cancellation reconciles a confirmed process exit without claiming 
     expect(f.processes.terminateProcess).not.toHaveBeenCalled();
   } finally { await f.cleanup(); }
 });
+
+for (const phase of ["before-publication", "before-signal"] as const) {
+  it(`recovered cancellation does not repeat a delivered signal after a concurrent ${phase} probe`, async () => {
+    const f = await fixture(true);
+    let release!: () => void;
+    const paused = new Promise<void>(resolve => { release = resolve; });
+    let pending: Promise<ReturnType<JobManager["get"]>> | undefined;
+    try {
+      let inspections = 0;
+      // cancel() reconciles once, then probes before publication and again
+      // before signalling. Suspend only the first caller at the chosen seam.
+      const pauseAt = phase === "before-publication" ? 2 : 3;
+      f.setInspector(async () => {
+        if (++inspections === pauseAt) await paused;
+        return { alive: true, fingerprintMatches: true };
+      });
+      // Delivery may precede process exit. Keep the recovered process alive
+      // so another request must honor the delivery marker, not terminal state.
+      f.setTerminator(async () => true);
+      pending = f.manager.cancel(f.job.job_id);
+      await vi.waitFor(() => expect(inspections).toBe(pauseAt));
+      const delivered = await f.manager.cancel(f.job.job_id);
+      expect(delivered).toMatchObject({ status: "cancelling", cancellation_delivered_at_ms: expect.any(Number) });
+      expect(f.processes.terminateProcess).toHaveBeenCalledTimes(1);
+      release();
+      expect(await pending).toBe(delivered);
+      expect(f.processes.terminateProcess).toHaveBeenCalledTimes(1);
+      expect(await f.persisted()).toMatchObject({ status: "cancelling", cancellation_delivered_at_ms: delivered.cancellation_delivered_at_ms });
+      expect(f.manager.queueStatus().running).toBe(1);
+      expect(f.events.filter(event => event.type === "completed")).toEqual([]);
+    } finally {
+      release();
+      await pending?.catch(() => undefined);
+      await f.cleanup();
+    }
+  });
+}
