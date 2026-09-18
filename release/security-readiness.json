@@ -194,6 +194,16 @@
         "apps/runner/test/job-input.test.ts"
       ],
       "resolution": "source-fixed-and-regression-tested"
+    },
+    {
+      "id": "SEC20",
+      "state": "closed",
+      "area": "runner-cancellation-observation-and-concurrency",
+      "fixed_commit": "5165befcc2235e7978b0c52323dbef27428735a9",
+      "regressions": [
+        "apps/runner/test/job-cancellation.test.ts"
+      ],
+      "resolution": "source-fixed-and-regression-tested"
     }
   ]
 }
