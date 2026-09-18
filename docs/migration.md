@@ -1,4 +1,6 @@
-# Release transitions
+# Historical release transitions
+
+> This reference applies only to the named early development and pre-v2 transitions below. It is not an upgrade procedure for an existing compatible v2 installation. For current updates, use the [upgrade guide](upgrading.md); preserve namespaces, D1, secrets, profiles and healthy enrollment.
 
 ## Compatible dev.3 to dev.4 v2 upgrade
 

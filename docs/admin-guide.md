@@ -1,5 +1,7 @@
 # Administrator guide
 
+[简体中文](admin-guide.zh-CN.md) · [Documentation](README.md) · [Upgrade guide](upgrading.md)
+
 This guide covers the product workflow for deploying and operating Runmesh on Cloudflare Workers and enrolling Runner machines on Linux, macOS, or Windows.
 
 ## Prepare
@@ -62,9 +64,9 @@ Open **MCP Clients**, enter a clear label, select the minimum scopes, create the
 
 ## Backups and upgrades
 
-Back up Cloudflare Durable Object data using the provider's supported export process. Back up each Runner's profile, job metadata, logs, verified package, and service manifest. The current preview does not provide an in-app backup or automatic rollback.
+Protect control-plane data through the recovery process supported by your deployment. Back up each Runner's profile, job metadata, retained logs, verified package and service manifest. Runmesh does not provide an in-app full backup or automatic rollback.
 
-Before an upgrade, quiet the Runners, record the current version, and rehearse restore in a test environment. Do not delete Durable Object data as a rollback method.
+Before restarting a Runner, stop new submissions, drain active/queued work and inspect uncertain recovered processes. Record the actual service executable and version, and rehearse recovery separately. Follow the [upgrade guide](upgrading.md); do not reset namespaces, rotate secrets, purge state or repeat healthy enrollment as an ordinary update.
 
 ## Production checklist
 
@@ -80,4 +82,10 @@ See [batched snapshots, manual loading and retention](batched-job-history.md). P
 
 ## Shared Runner queue and localized UI
 
-See [queue/UI contract](job-queue-and-localization.md) for capability negotiation, current authorization, bounded fair scheduling, restart interruption and server-side locale rendering. A Worker deployment does not upgrade installed Runner 0.1.2.
+Current-source Runners default to two execution slots; an explicit configured limit is preserved. The bounded queue permits up to 32 waiting Jobs and up to eight per client. Older installed packages can have different defaults. Queueing requires compatible negotiated support and authorization at execution time.
+
+See [queue/UI contract](job-queue-and-localization.md) for capability negotiation, current authorization, bounded fair scheduling, restart interruption and server-side locale rendering. A Worker deployment does not upgrade any installed Runner. Check the actual version and negotiated capabilities before relying on queue or history improvements.
+
+## Source changes and recording preferences
+
+New change-driven reporting requires a compatible Worker and Runner. Unrecorded Jobs and ordinary log reads do not enable optional uploads; re-enabling recording does not backfill originally unrecorded Jobs. Existing archived history is not deleted by disabling new recording. These development-source improvements are not retroactively added to immutable 0.1.3. See [release notes](release-notes.md) and the [reporting reference](demand-job-history.md).

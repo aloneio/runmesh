@@ -9,7 +9,8 @@
   <a href="./README.md">English</a> ·
   <a href="./docs/user-guide.zh-CN.md">用户指南</a> ·
   <a href="./docs/admin-guide.zh-CN.md">管理员指南</a> ·
-  <a href="./docs/troubleshooting.zh-CN.md">故障排查</a>
+  <a href="./docs/troubleshooting.zh-CN.md">故障排查</a> ·
+  <a href="./docs/README.zh-CN.md">文档目录</a>
 </p>
 
 > [!IMPORTANT]
@@ -28,7 +29,7 @@ Runmesh 把 ChatGPT、Claude、Cursor 等支持 MCP 的客户端连接到你自�
 - 运行测试、构建和其他可能持续数分钟甚至数小时的任务；
 - 管理多个 Runner，并限制每个客户端可以使用的机器、目录和能力。
 
-## 三分钟开始使用
+## 开始使用
 
 如果管理员已经给你一个 MCP 地址：
 
@@ -78,7 +79,7 @@ MCP 地址本身就是凭据，只会在创建或轮换时显示一次。不要�
 
 ## 当前版本边界
 
-确切版本及发布、激活状态见[发行准入说明](docs/release-readiness.md)。已支持 Runner、工作区策略、MCP 客户端、持久任务、断线恢复、服务安装和签名安装器门控。以下能力尚不属于本次发行范围：自动升级与回滚、多租户组织、计费、托管 IDE、浏览器自动化、模型服务和操作系统级沙箱。
+已发布功能与尚未发布改进见[版本说明](docs/release-notes.zh-CN.md)，经过审核的签名分发记录见[发行状态](docs/release-readiness.md)。源码更新不会自动升级已有组件。已支持 Runner、工作区策略、MCP 客户端、持久任务、断线恢复、服务安装和签名安装器门控。以下能力尚不属于本次发行范围：自动升级与回滚、多租户组织、计费、托管 IDE、浏览器自动化、模型服务和操作系统级沙箱。
 
 新实例使用自己的账号资源；更新已有 v2 实例时，保留 Worker、现用命名空间、D1 绑定、密钥和已注册 Runner，不要为了更新代码重新建库或注册。早期版本迁移是另一项操作。上线前仍须验证配额、目标系统服务生命周期、日志脱敏及实际 MCP 客户端兼容性。
 
@@ -86,13 +87,14 @@ MCP 地址本身就是凭据，只会在创建或轮换时显示一次。不要�
 
 - [用户指南](docs/user-guide.zh-CN.md)：连接 MCP 客户端、选择 Runner、读写文件和管理任务；
 - [管理员指南](docs/admin-guide.zh-CN.md)：部署、添加 Runner、配置工作区和创建客户端；
+- [升级指南](docs/upgrading.zh-CN.md)：更新兼容实例并验收 Worker、Runner 和客户端整条链路；
 - [故障排查](docs/troubleshooting.zh-CN.md)：登录、连接、安装、权限和任务问题；
 - [安全说明](docs/security.md)：详细威胁边界和凭据保护；
 - [便携式安装](docs/portable-runner-installation.md)：离线校验和手工安装；
 - [部署参考](docs/deployment.md)：Cloudflare 与高级运维配置；
-- [版本说明](docs/release-notes.md)：每个版本的变化与已知限制。
+- [版本说明](docs/release-notes.zh-CN.md)：每个版本的变化与已知限制。
 
-架构、传输协议和版本切换文件属于高级参考，供维护者在需要时查阅。法律文件、第三方声明和社区规则位于 [docs](docs/) 目录。
+完整入口见[文档目录](docs/README.zh-CN.md)。架构、协议、旧版迁移和历史审计属于单独的维护者参考，不是普通安装说明。
 
 ## 许可证与支持
 
@@ -100,10 +102,10 @@ Runmesh 由 aloneio 维护。安全漏洞请按照 [.github/SECURITY.zh-CN.md](.
 
 ## 当前安全默认值与上线状态
 
-正式安装器是否可用由经过独立验证的发布记录决定，不会仅凭版本号自动开启。候选版和开发环境默认关闭分发，旧的不可变安装包不会被 Worker 更新覆盖。托管安装命令仍固定版本并校验签名。
+正式安装器是否可用由经过独立验证的发布记录决定，不会仅凭版本号自动开启。开发环境使用单独验证的预发布渠道，不可用时不会回退到正式包。旧的不可变安装包不会被 Worker 更新覆盖。托管安装命令仍固定版本并校验签名。
 首次管理员初始化**无需额外令牌**，直接设置并确认密码，仍要求 CSRF、同源请求并保证首个有效提交原子成功。未初始化实例可能被首个访问者设置，应先完成初始化再向不可信流量开放。
 新 Runner 默认 `dedicated_user`，新 MCP 客户端默认 `coding:read`；已有权限不自动改变。
 文件和命令在 Runner 执行，请求的输出通过 Worker 转发给授权客户端，但不会作为审计正文持久化；审计仅保留有界元数据。
-托管安装复制命令自带一次性注册码，无需再次粘贴；也支持位置参数、`--code` 或 `--code=`。未传注册码时保留隐藏手动输入。整条复制命令包含凭据，请勿分享。参见[安全修复与上线说明](docs/security-remediation.md)。
+托管安装复制命令自带一次性注册码，无需再次粘贴；也支持位置参数、`--code` 或 `--code=`。未传注册码时保留隐藏手动输入。整条复制命令包含凭据，请勿分享。参见[管理员指南](docs/admin-guide.zh-CN.md)和[升级指南](docs/upgrading.zh-CN.md)。
 
 正式发行、运行时支持和升级条件见 [发行准入说明](docs/release-readiness.md)。
