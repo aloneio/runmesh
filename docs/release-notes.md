@@ -2,11 +2,11 @@
 
 [简体中文](release-notes.zh-CN.md) · [Documentation](README.md) · [Upgrade guide](upgrading.md)
 
-## Next stable release — not yet published
+## 0.1.4 — reliable task recovery and clearer operations
 
-These changes describe development source after the immutable **0.1.3** release. They are not included in the existing 0.1.3 archive. A new stable version, signed assets and completed rollout checks are still required. The release version will be assigned through the reviewed release process; a development prerelease is not a stable release.
+Version **0.1.4** brings the task-control, MCP recovery and distribution improvements below into a new release identity. Existing 0.1.3 archives remain unchanged. Install only the published, independently verified signed 0.1.4 artifact; consult [release status](release-readiness.md) for publication and installer activation. A development prerelease is not a stable release.
 
-### Changes users can expect after upgrading compatible components
+### Improvements after upgrading compatible components
 
 - **More reliable task control.** Cancellation keeps live, unverified processes under supervision instead of reporting false completion or releasing their execution slots. Concurrent recovery requests respect an existing cancellation-delivery record. Input handling reports delivery errors and closes its observers without treating an uncertain send as safe to replay.
 - **Clearer MCP calls and recovery.** Action-specific tool definitions, workspace-bound Job queries and structured error guidance make it easier to follow the original operation after an outage. File and Job output stay bounded; a missing cloud history record does not mean a command never ran.
