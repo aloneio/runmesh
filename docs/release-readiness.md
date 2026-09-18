@@ -2,17 +2,17 @@
 
 [Documentation](README.md) · [Release notes](release-notes.md) · [Upgrade guide](upgrading.md)
 
-## Reviewed stable distribution: 0.1.3
+## Prepared stable candidate: 0.1.4
 
-**State: RELEASED. Distribution: ENABLED for the reviewed fixed 0.1.3 release.** This describes the checked-in release record, not live deployment health and not approval of later development changes.
+**State: CANDIDATE. Distribution: DISABLED for 0.1.4 until signed publication and independent verification complete.** This record describes the checked-in candidate, not a claim that 0.1.4 is already published or deployed. Its lifecycle becomes RELEASED and its fixed installer becomes ENABLED only through a separately reviewed activation commit.
 
-The immutable stable release is `v0.1.3`, published on September 14, 2026. Its portable artifact is `runmesh-runner-0.1.3.tgz`. The reviewed version, main-branch release commit and manifest hash are in [release-state.json](../release/release-state.json); the independent trust source is [trust-keyring.json](../release/trust-keyring.json). Existing signed assets must not be overwritten.
+The candidate version is `0.1.4`, its future stable tag is `v0.1.4`, and its portable artifact is `runmesh-runner-0.1.4.tgz`. [release-state.json](../release/release-state.json) intentionally contains no previous release commit or manifest hash. The independent trust source remains [trust-keyring.json](../release/trust-keyring.json). Existing immutable `v0.1.3` and development prereleases are not replaced.
 
 The standard production installer is pinned by the reviewed release state. Publishing does not deploy a Worker, update a Runner, restart services or refresh an MCP client. Check your actual components using the [upgrade guide](upgrading.md). Development distribution is a separate prerelease channel; it does not replace stable distribution.
 
-## Later source changes are not a new stable release
+## Candidate contents and installation
 
-The [next-release notes](release-notes.md) describe changes after 0.1.3. A source version label, local tests or a development archive cannot certify those changes as shipped. Do not reuse the existing release commit or manifest hash for a new build.
+The [0.1.4 release notes](release-notes.md) describe the task-control, recovery, MCP, history and release-hardening changes. A source version label, local tests or a development archive cannot certify those changes as shipped. Do not reuse the 0.1.3 release commit or manifest hash for a new build.
 
 For users, wait for the appropriate verified signed release and an operator-approved upgrade. Preserve existing v2 resources, credentials and profiles; do not follow historical clean-break migrations for a compatible update.
 
