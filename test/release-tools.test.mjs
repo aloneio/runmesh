@@ -89,6 +89,20 @@ test("pins manually-dispatched releases to the triggering main commit", async ()
   }
 });
 
+test("pins the stable API tagger identity before creating its remote reference", async () => {
+  const workflow = (await readFile(join(repositoryRoot, ".github", "workflows", "release.yml"), "utf8")).replace(/\r\n/gu, "\n");
+  const start = workflow.indexOf("      - name: Create annotated release tag\n");
+  const end = workflow.indexOf("      - name: Create stable draft release\n", start);
+  assert.ok(start >= 0 && end > start);
+  const step = workflow.slice(start, end);
+  assert.ok(step.includes("--field 'tagger[name]=aloneio'"));
+  assert.ok(step.includes("--field 'tagger[email]=git@aloneio.aleeas.com'"));
+  assert.ok(step.includes("--jq '[.tagger.name, .tagger.email] | @tsv'"));
+  const identityGate = step.indexOf("test \"$tagger_identity\" = $'aloneio\\tgit@aloneio.aleeas.com'");
+  assert.ok(identityGate > step.indexOf("tagger_identity="));
+  assert.ok(step.indexOf("ref_object_sha=") > identityGate, "tagger identity must be checked before creating the tag ref");
+});
+
 test("keeps worker validation fail-closed when a false dry-run value is supplied", async () => {
   await assert.rejects(
     execFileAsync(process.execPath, [join(repositoryRoot, "scripts", "validate-worker.mjs"), "--dry-run", "false"], {
