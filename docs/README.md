@@ -30,7 +30,7 @@ The [release status](release-readiness.md) describes the reviewed stable distrib
 
 ## Advanced and maintainer references
 
-For integrations, use the [MCP call contract](mcp-agent-call-contract.md), [tool examples](tool-examples.md), [catalog refresh guide](mcp-connector-refresh.md) and [capability contracts](capability-contracts.md). For maintenance, see [architecture](architecture.md), [verification](verification.md) and [main promotion policy](main-promotion-policy.md).
+For integrations, use the [MCP call contract](mcp-agent-call-contract.md), [tool examples](tool-examples.md), [catalog refresh guide](mcp-connector-refresh.md) and [capability contracts](capability-contracts.md) and [workspace Context storage](context-storage.md). For maintenance, see [architecture](architecture.md), [verification](verification.md) and [main promotion policy](main-promotion-policy.md).
 
 [Historical release notes](maintainers/release-history.md) and [dated audit evidence](maintainers/release-evidence.md) are retained for traceability. They may describe retired previews, old deployment states or incomplete checks; they are not current user instructions. [Legacy migration](migration.md) applies only to the explicitly identified old data boundary, not an ordinary v2 update.
 
