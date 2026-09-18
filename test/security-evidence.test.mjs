@@ -134,3 +134,18 @@ test("the tracked manifest requires stdin delivery lifecycle regressions", async
   const replaced = structuredClone(manifest); replaced.findings.find(value => value.id === "SEC19").id = "SEC99";
   assert.throws(() => securityTestFiles(replaced), /SEC19/);
 });
+
+
+test("the tracked manifest requires cancellation uncertainty and concurrency regressions", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const manifest = JSON.parse(await readFile(new URL("../release/security-readiness.json", import.meta.url), "utf8"));
+  assert.ok(REQUIRED_SECURITY_FINDINGS.includes("SEC20"));
+  const finding = manifest.findings.find(value => value.id === "SEC20");
+  assert.equal(finding?.state, "closed");
+  assert.deepEqual(finding.regressions, ["apps/runner/test/job-cancellation.test.ts"]);
+  assert.ok(securityTestFiles(manifest).includes(finding.regressions[0]));
+  const missing = structuredClone(manifest); missing.findings = missing.findings.filter(value => value.id !== "SEC20");
+  assert.throws(() => securityTestFiles(missing));
+  const replaced = structuredClone(manifest); replaced.findings.find(value => value.id === "SEC20").id = "SEC99";
+  assert.throws(() => securityTestFiles(replaced), /SEC20/);
+});

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-export const REQUIRED_SECURITY_FINDINGS = Object.freeze(Array.from({ length: 19 }, (_, index) => `SEC${String(index + 1).padStart(2, "0")}`));
+export const REQUIRED_SECURITY_FINDINGS = Object.freeze(Array.from({ length: 20 }, (_, index) => `SEC${String(index + 1).padStart(2, "0")}`));
 
 /** CI configuration alone must not silently mark known security incidents as
  * fixed. Closure requires reviewed source-linked regression evidence. */
