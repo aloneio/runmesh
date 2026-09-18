@@ -31,3 +31,5 @@ The [2026-09-18 descriptor-boundary audit](release-descriptor-audit-20260918.md)
 The [2026-09-18 stdin delivery audit](release-stdin-audit-20260918.md) records SEC19 input completion, close and observer-cleanup repairs. Candidate-bound local verification remains separate from provider, installed-component and stable-release acceptance.
 
 The [2026-09-18 verification-input audit](release-evidence-audit-20260918.md) records descriptor-bound package and security-evidence reads, five reproduced failures, executable tooling regressions and the remaining platform/deployment acceptance limits. Neither previous CI nor partial local verification approves the changed candidate for a stable release.
+
+The [2026-09-18 cancellation observation audit](release-cancellation-audit-20260918.md) records live-process identity uncertainty incorrectly releasing concurrency slots, the local/recovered cancellation repair, and executable regression coverage. Baseline CI, changed-source tests and exact-candidate installed-component acceptance remain distinct evidence.
