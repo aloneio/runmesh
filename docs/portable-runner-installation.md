@@ -163,6 +163,8 @@ node -e "const fs=require('node:fs'); const m=JSON.parse(fs.readFileSync(process
 
 ## Install from the verified local tarball
 
+These are first-install examples, not an in-place updater. For an existing installation, start with the [upgrade guide](upgrading.md). Keep the existing-installation checks below; do not delete a current link, service, profile or state directory to bypass them.
+
 Supported Node 22.23.2+ (22.x) or 24.21.0+ (24.x) is required. Install only from the local verified file; do not replace it with a package name or a moving URL. The managed service must use an executable installed under the Runmesh service layout, not an unrelated npm global prefix. The examples below run npm from a private empty temporary directory and pass empty user/global config files, so a root, global, or caller-working-directory npmrc cannot alter the privileged install; keep the explicit `--offline` and `--ignore-scripts` flags.
 
 ### Linux

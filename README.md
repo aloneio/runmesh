@@ -9,7 +9,8 @@
   <a href="./README.zh-CN.md">简体中文</a> ·
   <a href="./docs/user-guide.md">User guide</a> ·
   <a href="./docs/admin-guide.md">Administrator guide</a> ·
-  <a href="./docs/troubleshooting.md">Troubleshooting</a>
+  <a href="./docs/troubleshooting.md">Troubleshooting</a> ·
+  <a href="./docs/README.md">All documentation</a>
 </p>
 
 > [!IMPORTANT]
@@ -23,7 +24,7 @@ Each execution machine runs a Runmesh Runner. The Runner opens an encrypted outb
 
 Runmesh is useful for maintaining servers, sharing a controlled development machine with a team, running builds and operational tasks, and giving each client a precise set of machines, workspaces, and capabilities.
 
-## Get started in three minutes
+## Get started
 
 If an administrator has given you an MCP URL:
 
@@ -71,7 +72,7 @@ Effective permission is the intersection of the client, Runner, and workspace po
 
 ## Current release boundary
 
-See [release readiness](docs/release-readiness.md) for the exact signed version and its current publication/activation state. Runner management, workspace policy, MCP clients, persistent jobs, reconnect handling, service provisioning, and gated signed installation are included. Automatic upgrades and rollback, multi-tenant organizations, billing, hosted IDEs, browser automation, model APIs, and operating-system sandboxing remain outside this release.
+See [release notes](docs/release-notes.md) for shipped features versus changes not yet published, and [release status](docs/release-readiness.md) for the reviewed signed distribution record. Source changes do not update already-installed components. Runner management, workspace policy, MCP clients, persistent jobs, reconnect handling, service provisioning, and gated signed installation are included. Automatic upgrades and rollback, multi-tenant organizations, billing, hosted IDEs, browser automation, model APIs, and operating-system sandboxing remain outside this release.
 
 A new deployment provisions its own resources. Updating an existing v2 installation preserves its Worker, live namespaces, D1 binding, secrets and enrolled Runners; a normal code update is not a reason to reset or re-enroll them. Earlier pre-v2 migration procedures are separate. Validate quotas, service lifecycle behavior, edge-log redaction and the MCP clients you plan to use before rollout.
 
@@ -79,13 +80,14 @@ A new deployment provisions its own resources. Updating an existing v2 installat
 
 - [User guide](docs/user-guide.md): connect an MCP client, select a Runner, use workspaces, and manage jobs.
 - [Administrator guide](docs/admin-guide.md): deploy, enroll Runners, configure workspaces, and create clients.
+- [Upgrade guide](docs/upgrading.md): update compatible installations and verify Worker, Runner and client together.
 - [Troubleshooting](docs/troubleshooting.md): login, connectivity, installation, permissions, and job issues.
 - [Security model](docs/security.md): credential handling and trust boundaries.
 - [Portable installation](docs/portable-runner-installation.md): offline verification and manual setup.
 - [Deployment reference](docs/deployment.md): Cloudflare and advanced operations.
 - [Release notes](docs/release-notes.md): changes and known limits for each release.
 
-Architecture, transport, and release-transition files are advanced references for maintainers. Legal notices, third-party credits, and community rules are in [docs](docs/).
+Use the [documentation index](docs/README.md) for task-based guides. Architecture, transport, legacy transitions and dated audits are separate maintainer references, not ordinary installation instructions.
 
 ## License and support
 
@@ -95,14 +97,15 @@ Runmesh is maintained by aloneio. Report security vulnerabilities through the pr
 
 The reviewed release-state record and generated release module decide whether
 production's fixed signed installer is available. A version label alone does
-not activate it. Development/test defaults remain disabled, and existing
-immutable packages are never overwritten by a Worker update.
+not activate it. Development uses a separately verified prerelease channel; it never falls
+back to the stable installer when unavailable. Existing immutable packages
+are never overwritten by a Worker update.
 First administrator setup needs no additional bootstrap token: use password
 confirmation, CSRF and same-origin protected atomic first-success-wins setup.
 Finish initialization before exposing a new instance to untrusted visitors.
 New Runners default to `dedicated_user` and new MCP clients to `coding:read`.
 Hosted installer commands include the single-use enrollment code, so no second
 code entry is needed. Omit the code argument to use the hidden manual prompt.
-Keep the complete copied command private. See [security rollout notes](docs/security-remediation.md).
+Keep the complete copied command private. See the [administrator guide](docs/admin-guide.md) and [upgrade guide](docs/upgrading.md).
 
 Release gates, runtime support and upgrade precautions: [release readiness](docs/release-readiness.md).
