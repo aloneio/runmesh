@@ -885,6 +885,10 @@ export class JobManager {
     }
     const beforePublish = this.jobs.get(job.job_id);
     if (beforePublish === undefined || beforePublish.pid !== initial.pid || beforePublish.process_start_fingerprint !== initial.process_start_fingerprint || !(beforePublish.status === "unknown" || (beforePublish.status === "cancelling" && beforePublish.recovery_liveness !== null))) return beforePublish ?? initial;
+    // Another caller can finish delivery while the identity probe is pending.
+    // Its durable marker is an idempotency barrier, not permission to send a
+    // second signal after the shared in-flight termination promise is gone.
+    if (beforePublish.status === "cancelling" && beforePublish.cancellation_delivered_at_ms !== null) return beforePublish;
     const recovered = { ...beforePublish, status: "cancelling" as const, recovery_liveness: beforePublish.recovery_liveness ?? { checked_at_ms: Date.now(), alive: true, fingerprint_matches: inspection.fingerprintMatches }, recovery_note: "cancellation requested after Runner restart; terminal outcome unavailable until reconciliation", updated_at_ms: Date.now() };
     this.jobs.set(recovered.job_id, recovered);
     await this.persist(recovered);
@@ -932,6 +936,9 @@ export class JobManager {
       if (beforeSignal !== undefined && !isActive(beforeSignal)) return this.waitForTerminalResult(recovered.job_id, "job is no longer active; cancellation was not sent");
       return beforeSignal ?? recovered;
     }
+    // The final probe also yields. A completed concurrent delivery no longer
+    // has an in-flight promise to share, so recheck its persisted marker here.
+    if (beforeSignal.cancellation_delivered_at_ms !== null) return beforeSignal;
     // Recovered callers can race with one another after the async identity
     // probe. Share one platform termination decision per job so concurrent
     // requests cannot send duplicate SIGTERM/taskkill commands.
