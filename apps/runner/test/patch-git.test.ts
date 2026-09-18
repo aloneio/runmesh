@@ -368,14 +368,27 @@ describe("review R03 Git history correctness", () => {
   it.each([1, 3, 100])("returns all %i commits without dropping record separators", async (count) => {
     const f = await fixture();
     try {
-      await run(f.root, ["init"]); await run(f.root, ["config", "user.name", "Fixture"]); await run(f.root, ["config", "user.email", "fixture@example.invalid"]);
-      for (let i=0;i<count;i++) {
-        await writeFile(join(f.root,"tracked.txt"), `${i}\n`);
-        await run(f.root,["add","--","tracked.txt"]); await run(f.root,["commit","--allow-empty-message","-m",i===0?"":`change ${i}`]);
+      await run(f.root, ["init", "--initial-branch=main"]);
+      // Keep real commits, changed file trees and the empty initial subject,
+      // but avoid 200+ process startups in the Windows history fixture. The
+      // test exercises GitService.log(), not porcelain commit performance.
+      const records = ["feature done\n"];
+      for (let i = 0; i < count; i++) {
+        const subject = i === 0 ? "" : `change ${i}`;
+        const content = `${i}\n`, timestamp = 1700000000 + i;
+        records.push(`commit refs/heads/main\nmark :${i + 1}\nauthor Fixture <fixture@example.invalid> ${timestamp} +0000\ncommitter Fixture <fixture@example.invalid> ${timestamp} +0000\ndata ${Buffer.byteLength(subject)}\n${subject}\n${i === 0 ? "" : `from :${i}\n`}M 100644 inline tracked.txt\ndata ${Buffer.byteLength(content)}\n${content}\n`);
       }
+      records.push("done\n");
+      const { execFileSync } = await import("node:child_process");
+      execFileSync("git", ["-c", "gc.auto=0", "-c", "maintenance.auto=false", "fast-import", "--quiet"], {
+        cwd: f.root, input: records.join(""), stdio: ["pipe", "ignore", "pipe"], timeout: 10000, windowsHide: true,
+      });
+      // fast-import writes Git objects; materialize only this private fixture.
+      await run(f.root, ["reset", "--hard", "HEAD"]);
       const result = await testGit(f.workspace).log({workspace_id:f.workspace.workspaceId,path:".",limit:100});
       expect(result.commits).toHaveLength(count); expect(result.truncated).toBe(false);
       expect((result.commits as Array<{subject:string}>).at(-1)?.subject).toBe("");
+      expect((result.commits as Array<{subject:string}>).map(commit => commit.subject)).toEqual(Array.from({ length: count }, (_, index) => count - index === 1 ? "" : `change ${count - index - 1}`));
       if (count>1) {
         const limited=await testGit(f.workspace).log({workspace_id:f.workspace.workspaceId,path:".",limit:1});
         expect(limited.commits).toHaveLength(1); expect(limited.truncated).toBe(true);
