@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, isAbsolute, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { summarizeVitest, packageEvidence } from "./test-evidence.mjs";
+import { readBoundedEvidenceFile, readEvidenceJson } from "./evidence-io.mjs";
 
 const exec = promisify(execFile);
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -46,10 +47,10 @@ try {
   const archives = (await readdir(temp)).filter(name => name.endsWith(".tgz"));
   assert.equal(archives.length, 1, "exactly one generated archive is required");
   const filename = archives[0]; assert.match(filename, /^[A-Za-z0-9._-]+\.tgz$/u);
-  const archive = join(temp, filename), stat = await lstat(archive);
-  assert.ok(stat.isFile() && !stat.isSymbolicLink() && stat.size > 0 && stat.size <= 8 * 1024 * 1024);
+  const archive = join(temp, filename);
+  const archiveBytes = await readBoundedEvidenceFile(archive);
   const digest = bytes => createHash("sha256").update(bytes).digest("hex");
-  const artifact = { sha256: digest(await readFile(archive)), bytes: stat.size };
+  const artifact = { sha256: digest(archiveBytes), bytes: archiveBytes.byteLength };
   phase = "installed_package_e2e";
   const rawReport = join(temp, "vitest.json");
   const result = await command(process.execPath, [join(root, "scripts/test-packed-runner.mjs"), archive], 420000,
@@ -57,9 +58,8 @@ try {
   // Retain existing detailed test logs in CI, but never copy their contents
   // into the shareable report. Synthetic diagnostic fixtures are not evidence.
   process.stdout.write(result.stdout); process.stderr.write(result.stderr);
-  const info = await lstat(rawReport); assert.ok(info.isFile() && !info.isSymbolicLink() && info.size <= 8 * 1024 * 1024);
-  const tests = summarizeVitest(JSON.parse(await readFile(rawReport, "utf8")), 0);
-  assert.equal(digest(await readFile(archive)), artifact.sha256, "archive changed during verification");
+  const tests = summarizeVitest(await readEvidenceJson(rawReport), 0);
+  assert.equal(digest(await readBoundedEvidenceFile(archive)), artifact.sha256, "archive changed during verification");
   assert.deepEqual(await sourceIdentity(), source, "source changed during verification");
   const report = packageEvidence({ tests, source, artifact, platform: process.platform, arch: process.arch, node: process.version, elapsedMs: Date.now() - started });
   await writeReport(report);
