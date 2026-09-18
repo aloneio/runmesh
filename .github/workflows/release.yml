@@ -239,9 +239,18 @@ jobs:
             --field "message=Runmesh ${tag} stable release" \
             --field "object=${GITHUB_SHA}" \
             --field 'type=commit' \
+            --field 'tagger[name]=aloneio' \
+            --field 'tagger[email]=git@aloneio.aleeas.com' \
             --jq '.sha')"
           test "$tag_object_sha" = "${tag_object_sha,,}" \
             && [[ "$tag_object_sha" =~ ^[0-9a-f]{40}$ ]]
+          # The API tagger is separate from local Git configuration and the
+          # workflow actor. Verify the reviewed identity before creating a ref.
+          tagger_identity="$(gh api \
+            --header 'Accept: application/vnd.github+json' \
+            "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object_sha}" \
+            --jq '[.tagger.name, .tagger.email] | @tsv')"
+          test "$tagger_identity" = $'aloneio\tgit@aloneio.aleeas.com'
           ref_object_sha="$(gh api --method POST \
             --header 'Accept: application/vnd.github+json' \
             "repos/${GITHUB_REPOSITORY}/git/refs" \
