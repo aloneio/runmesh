@@ -1,5 +1,5 @@
 import { writeReleaseValidation, releaseValidationModule } from "../scripts/generate-release-validation.mjs";
-import { validateReleaseHealth } from "../scripts/check-live-release-prereqs.mjs";
+import { MAX_RELEASE_HEALTH_BYTES, readReleaseHealth, validateReleaseHealth } from "../scripts/check-live-release-prereqs.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -101,6 +101,98 @@ test("pins the stable API tagger identity before creating its remote reference",
   const identityGate = step.indexOf("test \"$tagger_identity\" = $'aloneio\\tgit@aloneio.aleeas.com'");
   assert.ok(identityGate > step.indexOf("tagger_identity="));
   assert.ok(step.indexOf("ref_object_sha=") > identityGate, "tagger identity must be checked before creating the tag ref");
+});
+
+test("release health reads valid bounded UTF-8 without buffered response helpers", async () => {
+  let observed;
+  const response = new Response(JSON.stringify({ ok: true, label: "测试" }));
+  response.text = () => { throw new Error("unbounded body helper must not be used"); };
+  const value = await readReleaseHealth("https://preflight.invalid", async (url, options) => {
+    observed = { url: url.href, options }; return response;
+  });
+  assert.deepEqual(value, { ok: true, label: "测试" });
+  assert.equal(observed.url, "https://preflight.invalid/health");
+  assert.equal(observed.options.redirect, "error");
+  assert.equal(observed.options.credentials, "omit");
+  assert.equal(observed.options.cache, "no-store");
+  assert.equal(response.body.locked, false);
+});
+
+test("release health accepts the exact byte limit and rejects the next byte", async () => {
+  const emptyBytes = Buffer.byteLength(JSON.stringify({ padding: "" }));
+  const value = { padding: "x".repeat(MAX_RELEASE_HEALTH_BYTES - emptyBytes) };
+  assert.equal(Buffer.byteLength(JSON.stringify(value)), MAX_RELEASE_HEALTH_BYTES);
+  assert.deepEqual(await readReleaseHealth("https://preflight.invalid", async () => new Response(JSON.stringify(value))), value);
+  await assert.rejects(readReleaseHealth("https://preflight.invalid", async () => new Response(JSON.stringify({ padding: `${value.padding}x` }))), /oversized health response/u);
+});
+
+test("release health does not dispatch after an already expired deadline", async () => {
+  const controller = new AbortController();
+  controller.abort(new Error("health deadline"));
+  let fetched = false;
+  await assert.rejects(readReleaseHealth("https://preflight.invalid", async () => { fetched = true; return new Response("{}"); }, controller.signal), /health deadline/u);
+  assert.equal(fetched, false);
+});
+
+test("release health enforces encoded bytes rather than UTF-16 string length", async () => {
+  const text = JSON.stringify({ padding: "汉".repeat(30000) });
+  assert.ok(text.length < MAX_RELEASE_HEALTH_BYTES);
+  assert.ok(Buffer.byteLength(text, "utf8") > MAX_RELEASE_HEALTH_BYTES);
+  await assert.rejects(readReleaseHealth("https://preflight.invalid", async () => new Response(text)), /oversized health response/u);
+});
+
+test("release health cancels an oversized stream before draining the remote body", async () => {
+  let pulls = 0, cancelled = false;
+  const response = new Response(new ReadableStream({
+    pull(controller) {
+      if (pulls === 512) { controller.close(); return; }
+      pulls++; controller.enqueue(new Uint8Array(4096).fill(32));
+    },
+    cancel() { cancelled = true; },
+  }));
+  await assert.rejects(readReleaseHealth("https://preflight.invalid", async () => response), /oversized health response/u);
+  assert.ok(pulls <= 18, "only the bounded prefix plus stream prefetch may be pulled");
+  assert.equal(cancelled, true);
+  assert.equal(response.body.locked, false);
+});
+
+test("release health bounds tiny fragments independently of total bytes", async () => {
+  let pulls = 0, cancelled = false;
+  const response = new Response(new ReadableStream({
+    pull(controller) { pulls++; controller.enqueue(new Uint8Array(1).fill(32)); },
+    cancel() { cancelled = true; },
+  }));
+  await assert.rejects(readReleaseHealth("https://preflight.invalid", async () => response), /fragment limit/u);
+  assert.ok(pulls <= 1026);
+  assert.equal(cancelled, true);
+  assert.equal(response.body.locked, false);
+});
+
+test("release health aborts a stalled response body and releases its reader", async () => {
+  const controller = new AbortController();
+  let cancelled = false;
+  const response = new Response(new ReadableStream({ cancel() { cancelled = true; } }));
+  const pending = readReleaseHealth("https://preflight.invalid", async () => response, controller.signal);
+  const rejected = assert.rejects(pending, /health deadline/u);
+  setImmediate(() => controller.abort(new Error("health deadline")));
+  await rejected;
+  assert.equal(cancelled, true);
+  assert.equal(response.body.locked, false);
+});
+
+test("release health rejects unavailable, malformed and invalid-origin inputs", async () => {
+  let cancelled = false;
+  const unavailable = new Response(new ReadableStream({ cancel() { cancelled = true; } }), { status: 503 });
+  await assert.rejects(readReleaseHealth("https://preflight.invalid", async () => unavailable), /unavailable/u);
+  assert.equal(cancelled, true);
+  await assert.rejects(readReleaseHealth("https://preflight.invalid", async () => new Response(null)), /no health body/u);
+  await assert.rejects(readReleaseHealth("https://preflight.invalid", async () => new Response("not JSON")), SyntaxError);
+  await assert.rejects(readReleaseHealth("https://preflight.invalid", async () => new Response(Uint8Array.of(0xff))), TypeError);
+  for (const origin of ["http://preflight.invalid", "https://user:secret@preflight.invalid", "https://preflight.invalid/path"]) {
+    let fetched = false;
+    await assert.rejects(readReleaseHealth(origin, async () => { fetched = true; return new Response("{}"); }));
+    assert.equal(fetched, false);
+  }
 });
 
 test("keeps worker validation fail-closed when a false dry-run value is supplied", async () => {
