@@ -1,6 +1,6 @@
 # Deployment reference
 
-> This page is the advanced deployment reference. If you are setting up Runmesh for the first time, start with the [administrator guide](admin-guide.md). It explains the same process in product language and lists the decisions you need to make before opening access to users.
+> This is the advanced deployment reference. Start with the [administrator guide](admin-guide.md) for a new installation and the [upgrade guide](upgrading.md) for an existing compatible v2 instance. Current user guidance is collected in the [documentation index](README.md).
 
 This document describes the implemented deployment and operator paths. The dashboard-led route is the normal setup path; the `ADMIN_TOKEN` API and explicit Runner flags are advanced/manual alternatives.
 
@@ -12,8 +12,8 @@ the source of truth, and `scripts/check-toolchain.mjs` runs in every CI job and
 fails on any other pair. The root `engines.node` range (`>=22`) is only a broad
 install-time guard; it is not the supported build version.
 
-Node 22.23.2 bundles npm 10.9.8, so installing the pinned Node release is not
-enough on its own — install the exact npm afterwards:
+Check both tools independently; the npm bundled with a Node installation may
+not match the repository pin. Install the exact npm version when needed:
 
 ```sh
 node --version                  # must print v22.23.2
@@ -21,8 +21,8 @@ npm install --global npm@10.9.3
 npm --version                   # must print 10.9.3
 ```
 
-Review the [security remediation and rollout notes](security-remediation.md)
-before upgrading an existing deployment or provisioning a new administrator.
+Review the [upgrade guide](upgrading.md) before changing an existing deployment,
+and complete first administrator setup before exposing a new instance.
 
 ```sh
 npm ci
@@ -49,7 +49,7 @@ npm exec --offline -- wrangler secret put INTERNAL_CONTROL_SECRET --env producti
 
 No plaintext runtime variable is required for ordinary production. `RUNMESH_PUBLIC_ORIGIN` is an optional reverse-proxy override; otherwise Runmesh uses the current validated HTTPS URL and matching Host. It never uses Host or forwarded headers alone. An explicit override must be an HTTPS origin without a path, query, fragment, credentials or whitespace. Invalid or explicitly empty overrides stay fail-closed. A new fork can use its own workers.dev or custom domain without editing the author's domain in source.
 
-Production's release default is generated from `release/release-state.json`, not inferred from the package version. The generated module must agree with the exact published commit and independently verified manifest hash. Candidates and explicit empty release overrides remain disabled. The source-pinned installer still verifies immutable signed assets. Development reuses the independently reviewed signed stable Runner release so its enrollment page can retain one-command setup; test remains fail-closed, and an explicit empty acknowledgement disables hosted setup in any environment. Formal publication remains main-only, with the same repository immutability, signature, tag/commit and artifact checks. GitHub and GitLab CI run verification; the existing Cloudflare build connection performs deployment.
+Production's release default is generated from `release/release-state.json`, not inferred from the package version. The generated module must agree with the exact published commit and independently verified manifest hash. Candidates and explicit empty release overrides remain disabled. The source-pinned installer still verifies immutable signed assets. Development discovers and verifies its separate immutable signed prerelease channel; it never substitutes the stable Runner when discovery fails. Test remains fail-closed, and an explicit empty acknowledgement disables hosted setup in any environment. Formal publication remains main-only, with the same repository immutability, signature, tag/commit and artifact checks. GitHub and GitLab CI run verification; the existing Cloudflare build connection performs deployment.
 
 First setup requires no additional bootstrap token. The first valid submission atomically sets the administrator password; CSRF, same-origin checks and password confirmation remain. Complete setup before untrusted exposure because an uninitialized public instance is claimable by its first successful visitor. `ADMIN_TOKEN` remains only the manual/programmatic Runner administration credential, not a browser, MCP or enrollment credential.
 
@@ -63,7 +63,7 @@ The deployment wrapper checks the main/production and dev/development relationsh
 
 1. Open the deployed root URL and create the first administrator password. No separate setup authorization token is required. Later setup requests are rejected atomically; existing administrator settings are preserved.
 2. Log in and open **Admin → Runners**. Add a safe Runner ID (or let the dashboard generate one) and a human-facing `display_name`. The display name is displayed to operators and by `runner_list`; the ID is the stable protocol identifier.
-3. Copy the enrollment code. It expires in 30 minutes and is single-use. **Regenerate enrollment** replaces any unused code for that Runner with a new one.
+3. Copy the enrollment command and review the validity period displayed by the administrator page. Enrollment codes are single-use; **Regenerate enrollment** replaces any unused code for that Runner. Do not confuse code expiry with the separately configured Runner authorization period.
 4. The authenticated Admin enrollment page displays one of two routes. It labels the fixed signed release installer as available only after the exact immutable release has been published, independently verified, and explicitly enabled for this Worker. The hosted copied command includes a quoted one-time enrollment code, so no second code entry is needed. After fixed-asset verification and staging, the installer forwards it through `runmesh enroll --code-stdin` and clears its working variable without staging an input file. Positional codes, `--code CODE`, and `--code=CODE` are supported; omitting the code retains hidden terminal input. Otherwise use the manual [portable Runner verification and installation procedure](portable-runner-installation.md). Keep both the complete copied command and the separately displayed one-time code private; the manual route still reads the code at a local prompt.
 
    For the manual portable route, on Linux/macOS:
@@ -93,7 +93,7 @@ The deployment wrapper checks the main/production and dev/development relationsh
    ```
 6. In that MCP client, call `runner_list`, then `runner_select({"runner_id":"..."})`; use `runner_current` to inspect the persisted client selection. A later change requires `confirm_switch: true`.
 
-The dashboard displays safe Runner details and allows Runner rename, enrollment/re-enrollment, credential rotation, revocation, and deletion. It does not show Runner credentials or workspace roots.
+The dashboard provides Runner details, workspace-policy configuration, rename, recovery enrollment, credential rotation, revocation and deletion. Protect this administrator access. Credentials are one-time material; workspace roots are not returned to MCP clients.
 
 ### Public bootstrap and package configuration
 
@@ -139,13 +139,21 @@ runmesh start \
 
 ## Upgrade, migration, and operational limits
 
-### Failed preview-release recovery
+### Compatible updates
 
-The GitHub release workflow creates the annotated tag before creating and uploading the draft release. Those GitHub operations are not transactional: a failed or cancelled run can leave an orphan tag, a draft release, or both. Do not blindly rerun the same version or add automatic `failure()` cleanup. An authorized maintainer must inspect the failed run's `GITHUB_SHA`, verify that `refs/tags/v<version>` is an annotated tag whose tag object targets exactly that commit, and verify that `GET /releases/tags/v<version>` returns `404` before treating the tag as an orphan. If a draft release exists, it is not an orphan tag: inspect its assets and either finish/publish it or remove the draft through the normal GitHub review flow; after removal, re-check that the release endpoint still returns `404` before considering tag deletion. Never delete a tag that already backs a draft or published release, or that points at a different commit. Only after both orphan checks pass may the maintainer manually delete the tag ref, preserve the CI artifact, and rerun the release. A tag deletion is irreversible and is never performed automatically by this repository.
+An existing compatible v2 deployment retains its Worker, live Durable Object namespaces, D1 binding, secrets, Runner profiles and service layout. Do not reset them for a normal code update. Incompatible schema or profile errors require inspection of the deployed source and bindings, not improvised SQL repair or automatic recreation. Only the explicitly identified [legacy transitions](migration.md) use the older clean-break procedure.
 
-This release has a clean data boundary. RegistryDO accepts only the current complete schema; a persisted incompatible schema fails closed and requires a fresh Durable Object namespace. There is no in-place SQL repair, data-import command, profile conversion, data downgrade, or automatic application rollback. Before rollout, stop/quiesce Runners and snapshot each host's profile/token, `runner.json`, `jobs/<id>/meta.json`, logs, verified package, `current` pointer, and service manifest for independent archival; these local files are authoritative for local jobs and are not imported into the new namespace. Back up Worker configuration plus RegistryDO and RunnerDO durable state using provider-supported export/restore, rehearse a fresh deployment and actual restore, then run `doctor --json` and representative policy/workflow checks. If a rollout must be withdrawn, remove the signed-release acknowledgement and redeploy to close future hosted-bootstrap rendering, review cached/downloaded installers, and revoke/regenerate credentials or enrollment codes as needed; do not run an older Worker against this namespace. Preserve `RUNNER_TOKEN_PEPPER` and `INTERNAL_CONTROL_SECRET`, or plan complete Runner re-enrollment if either is intentionally rotated. For immediate shutdown, stop/disable each local Runner service and inspect/terminate already-running local Jobs separately: credential revocation only closes the transport and prevents reconnect, and does not kill host processes. Do not delete Durable Object data as a rollback mechanism. For a local package/service failure, retain the verified package and restore its managed `current` pointer/service state manually. Enrollment redemption is remote, single-use, and irreversible: a rollback does not restore a redeemed code or token, so revoke/rotate credentials and generate a replacement enrollment code when needed.
+Follow the [upgrade guide](upgrading.md): stop new submissions, drain or reconcile Jobs, protect configuration and data, rehearse recovery separately, verify the target signed package, update components deliberately, then test the real MCP-to-Runner path. The first-install portable examples intentionally refuse an existing installation and are not a generic updater. Preserve both required secrets; rotation and recovery enrollment are separate credential-management operations.
 
-The local short-operation maximum is 8 seconds and the Worker bridge timeout is 12 seconds; use `exec_start` for longer work. Registry retains active jobs and up to 1,000 terminal jobs per Runner. Local per-Job and aggregate logs are bounded; quota exhaustion is recorded as `output_truncated` and requires operator review.
+Closing installer availability blocks future hosted bootstrap; it does not revoke downloaded installers or stop host processes. Revoking access is not process termination. When shutdown is necessary, use the reviewed host service procedure and inspect already-running Jobs separately. Never delete durable data or purge Runner state as a rollback shortcut.
+
+### Failed publication is a maintainer task
+
+Tag creation, draft upload and publication are separate operations. A failed workflow may leave a tag or draft, so do not blindly reuse the version, delete references, overwrite assets or add automatic cleanup. An absent release-by-tag response alone is not proof that no draft exists. Preserve the run's source and artifact evidence and have an authorized maintainer reconcile the exact tag, draft and assets before recovery. Development retries must follow the [prerelease recovery contract](dev-runner-prereleases.md); stable publication keeps its independent main-only checks. Published immutable releases remain unchanged.
+
+### Jobs and retained output
+
+Use the public `shell` tool for commands and `job` to follow its returned Job ID and workspace ID. The foreground wait and transport timeouts are not process execution deadlines. Query the original operation after an uncertain response instead of starting it again. Cloud history is a bounded recent snapshot, not a permanent archive or live process authority. Local per-Job and aggregate output caps also apply; `output_truncated` may indicate discarded bytes that Runmesh cannot recover.
 
 MCP URL path credentials can be captured by infrastructure outside application code. Configure Cloudflare log redaction, retain a rotation/revocation procedure, and perform deployed acceptance testing before production use.
 
@@ -153,7 +161,7 @@ MCP URL path credentials can be captured by infrastructure outside application c
 
 See [quota isolation and cloud Job recording](quota-resilience.md). Production uses the independent `HISTORY_DB` D1 binding for optional audit. Core enrollment, credential and policy authority stays in RegistryDO. MCP client detail provides a switch for new cloud Job snapshots and related Job-tool audit; local Runner jobs/logs remain. Workspace-bound Job operations require Runner 0.1.1+. A successful GitHub `dev` push waits for every mandatory CI job, then fast-forwards the same verified commit to GitLab `dev`; that GitLab push triggers the maintained Cloudflare development deployment. The synchronizer never force-pushes and refuses divergence.
 
-The synchronization bridge is a persistent `runmesh-dev-sync.timer` on oci0. It runs as the unprivileged `xwzy` account, uses that host's existing GitHub/GitLab credential helpers, and never copies a GitLab token into GitHub Actions. Each run fetches both `dev` refs, waits until the exact GitHub SHA has a successful GitHub Actions `verify-all` check, requires the existing GitLab SHA to be its ancestor, and then pushes that exact SHA. A diverged branch is left unchanged for operator review.
+For installations using both providers, the optional host-side `scripts/sync-gitlab-dev.mjs` bridge fetches both `dev` refs, requires a successful GitHub Actions `verify-all` for the exact GitHub SHA and checks that GitLab's current SHA is its ancestor before fast-forwarding. It uses the operator's separately provisioned authentication and leaves divergence unchanged. A source checkout does not install a scheduler or configure another deployment's provider connection; those are operator tasks.
 
 ## Batched Job history
 
@@ -161,7 +169,7 @@ See [batched snapshots, manual loading and retention](batched-job-history.md). P
 
 ## Production branch cutover
 
-The serving Worker is promoted to protected GitLab main; dev is reserved for a separate development Worker. Existing v0.1.2 publication provenance above is historical and is not rewritten. Future formal publication is main-only. See [exact settings and checks](production-main-cutover.md).
+Production uses protected `main`; `dev` is reserved for a separate development Worker. A fork must configure and verify its own provider connections. Existing published provenance is historical and is not rewritten. Formal publication is main-only; see the [promotion policy](main-promotion-policy.md). The [historical cutover record](production-main-cutover.md) describes the maintained deployment, not settings automatically applied to every installation.
 
 ## Minimal-host bootstrap
 
