@@ -31,3 +31,9 @@ The baseline GitHub CI and Dev Runner Prerelease runs succeeded, but the matchin
 A fresh dev health response still identified clean source `4a3d2a461c6400603c781d6f720fa66b02fcbf35`, not the baseline or this repair. Health advertised ten MCP tools including context, while this host exposed only nine and omitted context. A live shell receipt followed by job.get also reproduced the stale Registry not_found response and an inappropriate runner-discovery recovery hint. These are deployed-component/host acceptance gaps, not evidence that this Node-only repair upgraded those components.
 
 Formal publication remains blocked until exact-candidate checks and the Worker/Runner/host acceptance chain are separately verified. The historical v0.1.3 release record does not approve later dev repairs.
+
+## Native-CI follow-up
+
+GitHub CI run `35291952894` on repair `d27433234d7af8436fb110b27121720f0eda4cc9` completed with Linux verify, Linux/macOS native checks, browser E2E and both Node LTS jobs successful. Windows native checks failed before the package wrapper could start: the new fixture passed a drive-letter path as the `--import` ESM specifier and Node rejected its `c:` scheme. The aggregate verify-all correctly failed, so that commit is not a cross-platform-approved candidate.
+
+The follow-up converts the fixture preload path using `pathToFileURL(...).href`. It does not skip Windows tests, weaken assertions, alter the production evidence reader or remove any CI gate. The repaired fixture still needs its own exact-candidate native CI result; earlier successful jobs are not substituted for that result.

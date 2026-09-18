@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readBoundedEvidenceFile, readEvidenceJson } from "../scripts/evidence-io.mjs";
 
@@ -93,7 +93,9 @@ async function fixture(t) {
   const git = (...args) => execFileSync("git", ["-c", "user.name=aloneio", "-c", "user.email=git@aloneio.aleeas.com", ...args], { cwd: directory, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   git("init", "--initial-branch=dev"); git("add", "."); git("commit", "-m", "Synthetic package verification fixture");
   return { directory, invoke(mode = "success", extra = {}) {
-    return spawnSync(process.execPath, ["--import", join(directory, "evidence-race-hook.mjs"), join(directory, "scripts/run-package-e2e.mjs")], {
+    // --import accepts an ESM specifier: drive-letter paths are not file URLs.
+    const preload = pathToFileURL(join(directory, "evidence-race-hook.mjs")).href;
+    return spawnSync(process.execPath, ["--import", preload, join(directory, "scripts/run-package-e2e.mjs")], {
       cwd: directory, env: { ...env, npm_execpath: join(directory, "npm-cli.js"), AR08_FIXTURE_MODE: mode, ...extra },
       encoding: "utf8", timeout: mode === "report_fifo_race" ? 3000 : 20000, maxBuffer: 1048576, windowsHide: true,
     });
