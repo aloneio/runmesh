@@ -1,10 +1,10 @@
-# Context storage budgets and reviewed retention
+# Context storage and retention
 
-Development slice of **R08 / original P13**, based on `036af27aaec40f0bc879578af57e5191626a87c3`. This is source implementation and isolated verification, not a production deployment or replacement for immutable v0.1.3.
+Use `context` to inspect workspace Context usage and preview removal of old revisions. These actions are implemented in the **0.1.4 candidate** and require a compatible Worker and Runner. The published v0.1.3 Runner does not support them; updating the Worker does not upgrade an installed Runner.
 
-## Storage is not the index
+## Workspace storage limits
 
-The former 256-entry index cap did not bound stored revision files: older revisions remained, and adding another context could silently hide an older context from the index. New checkpoints now refuse admission rather than evicting index entries. Rebuild also refuses to publish an incomplete index when more than 256 distinct contexts would be hidden.
+Checkpoints that would exceed a storage limit are refused. Existing Context entries are not evicted to make room, and index rebuild refuses to publish an incomplete index when the Context count exceeds its limit.
 
 Each workspace defaults to **32 MiB of logical revision-file bytes**, **4,096 revision files**, and **256 context directories**. The existing index has a separate 2 MiB bound; checkpoint intent and temporary index files add bounded overhead. These are not filesystem allocated blocks, disk-free guarantees, or a global per-host quota. Multiple workspaces and other Runner data remain separate. An embedded ContextStore may lower these limits, not raise or disable them. No new deployment variable or dependency is required.
 
@@ -14,7 +14,7 @@ Admission scans bounded metadata before recording a new intent. An unchanged ret
 
 Call `context` with `action=storage` and `workspace_id`. It requires current `coding:read` and workspace read permission. The response reports record count/bytes, context count, separate metadata bytes, effective limits, over-limit status and pending-checkpoint presence. It contains no local paths, record bodies or environment values.
 
-Inventory walks at most two context levels, with hard limits of 16,384 entries, 8,192 records, 1,024 directories and a checked four-second scan budget. These higher inspection limits allow some over-quota existing stores to be diagnosed. Exhaustion is `context_scan_budget`, not a complete-looking partial total. Only metadata is read; bootstrap/read/search retain their existing targeted reads. No read operation creates a directory or updates the index. Normal filesystem atime behavior is outside the API's no-write guarantee.
+Inventory walks at most two context levels, with limits of 16,384 entries, 8,192 records and 1,024 directories. It checks a four-second budget between scan steps; this cannot interrupt an individual operating-system I/O call. These higher inspection limits allow some over-quota existing stores to be diagnosed. Exhaustion returns `context_scan_budget` instead of partial totals. Only metadata is read; bootstrap/read/search retain their targeted reads. No read operation creates a directory or updates the index. Normal filesystem access-time updates are outside the API's no-write guarantee.
 
 ## Explicit retention
 
@@ -38,18 +38,16 @@ Retention never edits the index or the latest record. Individual old revisions a
 
 This relies on the existing single-Runner owner model and private state directories. It does not provide cross-process coordination against another independent writer or protection against a hostile administrator racing native filesystem syscalls. Removal is ordinary file unlinking, not secure media erasure; backups, snapshots and old installation copies are not purged.
 
-## Safety, audit and compatibility
+## Permissions, privacy and compatibility
 
-The two new protected RPCs (`context.storage`, `context.prune`) share the authoritative operation table. Public tool count stays 10; the protected RPC table is now 27 and the Runner-backed action map 26. Inventory rechecks the policy generation after reading. Prune checks current policy/permission before every mutation and binds that generation into the preview. Read-only users cannot perform retention even by constructing calls manually.
+Inventory rechecks the policy generation after reading. Prune checks current policy/permission before every mutation and binds that generation into the preview. Read-only users cannot perform retention even by constructing calls manually.
 
 Worker input schemas require explicit bounded settings and confirm/apply agreement. Output reports are whitelist-projected and checked for inconsistent totals, false completion and wrong workspace/operation bindings. Invalid mutation receipts remain unknown; they are not treated as success, empty storage or rollback. Secrets and local paths in underlying errors are not forwarded.
 
-Calls use the existing RPC and metadata audit path. No extra diagnostic RPC, storage binding, schedule, heartbeat or permanent timer is added. Context calls retain normal metadata auditing; disabling Job recording does not mean all Context calls become audit-free. Record text stays local.
+Context calls retain metadata auditing; disabling Job recording does not disable Context auditing. Stored records stay on the Runner, and storage/prune responses contain no record text. Reading a Context can return its text to the authorized client.
 
-Stored v1/v2 records and the v1 index remain unchanged. Old Runners do not support the new methods; a compatible Worker must report unsupported methods, not simulate an empty inventory. New limits and retention are not retroactively present in an already published v0.1.3 archive. A future separately verified release is needed for installed users.
+Stored v1/v2 records and the v1 index remain compatible. Before forwarding `context.storage` or `context.prune`, the Worker checks whether the current Runner connection advertises that exact method. Missing support returns `runner_upgrade_required` with `operation_state=not_started`; it does not send the unsupported method or disconnect an otherwise usable old Runner. Upgrade using a verified Runner release that contains these capabilities, then reconnect. A version label alone does not establish support.
 
-## Remaining R08 work
+## Limits of retention
 
-This slice does **not** delete entire contexts or the latest revision, persist automatic retention settings, impose a global disk quota, migrate unknown formats, or synchronize deletion into third-party backups. Reaching the context-count limit therefore requires a separately reviewed complete-context archival/deletion procedure; pruning older revisions only frees record-count and byte budgets. State-version evolution and deletion tombstones remain separate designs.
-
-Verification includes admission and deduplication at capacity, UTF-8 byte accounting, stale plans, permission denial, links, unrecognized files, interrupted deletion in a real subprocess, rebuild after pruning, actual MCP calls and native-platform CI. Local tests do not establish production usage or Cloudflare billing results.
+Prune does **not** delete entire Contexts or their latest revision, save automatic retention settings, impose a global disk quota, migrate unknown formats, or remove third-party backups. Pruning only frees revision-count and byte budgets. If you reach the Context-count limit, this action cannot free a Context slot; preserve the data and plan a separate operator-managed archival or removal procedure.

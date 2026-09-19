@@ -1,5 +1,7 @@
 # Cumulative release-candidate audit — 2026-09-17
 
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+
 ## Scope and acceptance boundary
 
 This audit continues from `ed2967a6157eadff8e08d3121bfe96e11a26cdd7` and retains the uncommitted repairs described in the [earlier follow-up](release-followup-20260917.md). Work takes place in a separate detached checkout; the original development checkout is not overwritten. Existing stable v0.1.3 assets, main, production services and the installed Runner are not changed by these source repairs.

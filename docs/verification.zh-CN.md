@@ -1,27 +1,35 @@
-# 测试分层与证据边界（AR08）
+# 测试与发行验证
 
-实施基线为 `93698cae7939e4034a176d151a113d700ee63615`，已包含 AR07。本文描述当前源码的验证入口，不是一份“所有测试、发行及生产均已通过”的证明。
+[English](verification.md) · [文档目录](README.zh-CN.md) · [发行状态](release-readiness.md)
 
-## 分层运行，分别解释
+验证源码修改或准备发行时，可按本文选择检查。在仓库根目录使用固定工具链执行 `npm ci` 安装依赖，再运行相应命令。本地修改选择与改动相关的检查；发行候选仍须通过全部必需 CI。验收已经部署的实例，请先阅读[升级指南](upgrading.zh-CN.md)。
+
+## 选择需要的检查
 
 | 层次 | 入口 | 成功执行能够支持的结论 |
 | --- | --- | --- |
-| 共享协议 | 既有 protocol 工作区测试 | 被测运行时中的协议、Schema 和确定性规则 |
+| 共享协议 | `npm run test --workspace=@aloneio/runmesh-protocol` | 被测运行时中的协议、Schema 和确定性规则 |
 | 纯领域规则 | `npm run test:domain` | 通过公开 API 测队列、授权结果投影及保留规划，不构造 Worker、进程管理器或磁盘适配器 |
 | 适配与文档契约 | `npm run test:contracts` | 文档参数符合真实 Schema；文件适配器在隔离临时数据上满足契约 |
-| Runner 单元与集成 | 既有 Runner 工作区测试 | 该平台的文件、进程、权限和恢复行为，不冒充全部都是纯单元测试 |
-| Cloudflare 本地集成 | 既有 Worker 工作区测试 | 本地 workerd/Miniflare 与隔离 SQLite/D1 场景，不是已部署平台验收 |
-| 构建与界面工具 | 既有 Node 测试入口 | 构建、安装、架构、UI 及验证器规则，不代表真正发布 |
+| Runner 单元与集成 | `npm run test --workspace=@aloneio/runmesh-runner` | 该平台的文件、进程、权限和恢复行为 |
+| Cloudflare 本地集成 | `npm run test --workspace=@aloneio/runmesh-worker` | 本地 workerd/Miniflare 与隔离 SQLite/D1 场景 |
+| 构建与发行工具 | `npm run test:release-tools` | 构建、安装器、发行、架构和验证工具的行为 |
 | 源码传输链路 | `npm run test:e2e` | 真实本地 MCP → Worker → 源码 Runner |
 | 安装包传输链路 | `npm run test:package:e2e` | 新打包并独立安装的 Runner 通过相同本地链路场景 |
+| 浏览器操作 | 先运行 `npm run browser:install`，再运行 `npm run test:browser` | 浏览器连接本地 Worker 时的页面行为 |
+| 已登记安全回归 | Linux 上从干净工作区运行 `npm run test:security` | 当前候选提交的安全回归结果和发行准入证据 |
 
-`test/verification-plan.json` 为每个测试文件分配唯一归属。`check:verification` 对照实际文件检查遗漏、重复、错误层级，并确认 Node 测试真正出现在执行命令中。新增测试必须同步归类，不能仅把文件写入仓库就视为已经运行。原回归保持；`test:unit` 兼容名称下仍包括原单元和集成测试，并增加领域与契约入口。
+`npm run test:unit` 包含领域、契约、工作区和部分界面测试，其中既有单元测试，也有集成测试。`npm test` 另加源码 E2E，仍不等于完整 CI。本地 Worker 和浏览器测试不检查已部署的 Cloudflare 账号。
 
-新领域测试的源码导入链不能依赖文件系统、进程、网络、Cloudflare 等适配器；确定性哈希 `node:crypto` 允许。新测试不通过 `as any` 或私有字段强转检查管理器内部状态。这是源码约束，不是运行沙箱，也不检查第三方包全部内部行为。原有集成测试的故障注入强转没有被批量删除或虚称全部清除。
+`test:security` 要求 Linux 和没有未提交源码变更的候选工作区。在 Windows/macOS 或有本地修改时，运行相关的单项回归测试；发行证据应取自干净候选提交的 Linux 验证结果。
 
-## 实际包门禁
+新增测试文件时，在 `test/verification-plan.json` 中指定唯一归属，并运行 `npm run check:verification` 检查遗漏、重复和 Node 测试的执行入口。
 
-两端 Linux verify 在源码 E2E 后执行实际包 E2E：构建当前 Runner，要求新临时目录内只有一个 tarball，计算其 SHA256，然后复用既有 `test-packed-runner.mjs`，使用空依赖缓存进行 `--offline --ignore-scripts` 安装。真实启动的是该安装目录内的 CLI，不是源码入口。
+领域测试应通过公开 API 验证规则，不依赖文件系统、进程、网络或 Cloudflare 适配器，也不通过私有字段强转检查内部状态。源码导入检查允许确定性的 `node:crypto`。这项检查约束源码依赖，不提供运行沙箱，也不审计第三方包内部实现。
+
+## 验证实际安装包
+
+GitHub 和 GitLab 的 Linux 验证任务在源码 E2E 后执行 `test:package:e2e`：打包当前 Runner，要求新临时目录内只有一个 tarball，计算其 SHA256，再调用 `test-packed-runner.mjs`，使用空依赖缓存进行 `--offline --ignore-scripts` 安装。随后启动安装目录内的 CLI。
 
 整个过程使用临时 Worker、临时状态和合成注册码，不启动或重启主机服务，也不接触生产数据库。可用的 CI 提交声明必须与检出提交一致；完成后再检查源码身份和包摘要没有变化。
 
@@ -31,16 +39,16 @@
 
 这是自报的测试证据，不是密码学证明或可复现构建认证。脏源码保持 `dirty`，不能被称为该提交的干净构建；被忽略输入、依赖与其他构建环境仍在此身份声明之外。同一工作树不要并发构建。
 
-## 当前事实与真实 Schema 示例
+## 检查文档与示例
 
 `docs/current-facts.md` 根据源码包版本、协议、实际工具目录、绑定配置及已审阅发布记录生成。`docs/tool-examples.md` 根据 `docs/tool-examples.json` 生成；每个工具及映射动作都有有效示例，反例必须被实际 Zod Schema 拒绝，包含跨字段限制。
 
 示例校验从不调用 handler，也不执行 shell、patch、注册或清理。合成 ID、命令和哈希不代表真实资源存在或权限已经获得。生成范围内的文档由 `check:docs` 校验，过期则失败，不自动重写。只有明确修改源码或示例后才运行 `npm run generate:facts` 并审阅差异；此门禁不覆盖历史文档里的所有自由文本代码块。
 
-## 不能互相替代的证据
+## 分别记录发行与部署结果
 
-GitHub 的 Linux/macOS/Windows 原生任务运行新领域/契约测试、Runner 与适用工具测试；完整安装包传输门禁目前在两端 Linux verify 中执行，不能把 Linux 结果外推为另外两个系统的安装包 E2E。
+GitHub 的 Linux/macOS/Windows 原生任务运行领域、契约、Runner 与适用工具测试。完整安装包传输检查目前在两端 Linux 验证任务中执行；Linux 结果不能证明另外两个系统的安装包 E2E 通过，平台跳过项应单独记录。
 
 签名资产验证、生产 Worker/Runner 实际观测、账户级配额/休眠验收和真实 MCP 宿主目录更新仍是独立检查。安装包测试报告把这四项标为 `not_run`；源码发布记录不是刚刚下载验证过的资产，历史 CI 不能替代新提交证据。
 
-本批增加的是有限构建测试工作，不新增运行时变量、云资源、持续轮询、生产写入或服务重启。AR08 需要随每批功能继续扩充，不能凭这些测试声称全部代码覆盖或所有架构整改结束。
+发行验收时，保留每项必需检查对应的提交、CI 运行、平台、跳过项和结果。发布要求见[发行状态](release-readiness.md)；核对线上 Worker 与源码的对应关系见[构建来源](build-provenance.zh-CN.md)。

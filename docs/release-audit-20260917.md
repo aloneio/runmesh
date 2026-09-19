@@ -1,5 +1,7 @@
 # Pre-release security audit — 2026-09-17
 
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+
 ## Source and release boundary
 
 The audit began at dev commit `4861aa5b2c2900b79d80ed4e1effb50f53d2abd7` in an isolated detached worktree. The existing v0.1.3 assets are immutable; these post-release changes are not part of those artifacts. A subsequent stable candidate needs a new version, protected dev-to-main promotion, exact-source provider checks, signing and independent artifact verification. Local checks neither deploy production nor upgrade an installed Runner.

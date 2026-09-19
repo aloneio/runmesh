@@ -6,15 +6,15 @@ Required permissions: `coding:read`
 
 ## Goal
 
-Explain why an operation is denied using the same live authorization state that protects the operation, without widening privileges as a diagnostic shortcut.
+Identify which permission the requested action needs and where it is denied. Diagnostic results describe an observation; they do not reserve permission for a later call.
 
 ## Procedure
 
-1. Read the current Runner selection and layered diagnostics. Capture the effective workspace permission intersection and policy revision evidence.
-2. Confirm which capability the requested action needs: read, edit, Host shell, or Job control. Mixed tools must be evaluated per action; tool visibility is not authorization.
-3. Check client scope, Runner permission, workspace permission, policy generation, and Runner availability independently. Preserve `unknown` when an authority source cannot be read.
-4. For queued work, remember that permission is checked again before execution. A request accepted earlier is not evidence that a later revoked request may start.
-5. Use the least-privilege preset only when an administrator intentionally changes access. Hidden UI controls or documentation are never a substitute for the server-side denial.
+1. Call `runner_current` and confirm that the selected Runner is the intended one. Use `workspace_list` to check the workspace ID. If your client exposes it, call `inspect` with `{"action":"diagnostics","workspace_id":"your-workspace-id"}` and record the effective permissions, policy revisions and observation time. An action missing from an older catalog is not itself a permission decision.
+2. Match the action to its required scope and workspace permission: reading uses `coding:read` and read; editing uses `coding:write` and edit; shell execution uses `coding:exec` and shell; Job input/cancel use `coding:exec` and Job control. For tools with several actions, visibility of the tool does not authorize every action.
+3. Ask the administrator to check the client's scopes and Runner restrictions, the Runner authorization period, workspace permissions and policy acknowledgement. If a dependency cannot be read, keep its state unknown. Operating-system directory permissions must also allow the Runner service account to access the workspace.
+4. For queued work, permission is checked again before execution. A previously accepted Job cannot rely on a permission that was later revoked.
+5. Change access only when the administrator intends to grant the requested capability, then wait for the updated policy to be acknowledged and recheck the operation. Do not enable every permission or use shell/absolute paths to bypass a denial. For an uncertain prior mutation, inspect its result before retrying.
 
 ## Exit conditions
 

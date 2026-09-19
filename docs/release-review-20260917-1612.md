@@ -1,5 +1,7 @@
 # Independent candidate review — 2026-09-17
 
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+
 **Decision: HOLD. Repairs are applied, but post-repair oci0 verification, a new commit, remote CI and deployment acceptance are not complete.**
 
 This review is not approval to replace the immutable v0.1.3 assets or to publish a new stable release. Earlier clean-candidate results below must not be reused as evidence for the modified checkout.

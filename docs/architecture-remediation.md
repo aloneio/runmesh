@@ -1,6 +1,6 @@
 # Modular architecture remediation
 
-This is a source-maintenance contract, not evidence that a Worker or installed Runner has been upgraded. It extends AR01-AR08 without adding runtime dependencies, permission scopes, services, storage migrations or automatic upgrades. See the [Chinese version](architecture-remediation.zh-CN.md).
+Use this reference when maintaining module boundaries and their regression checks. The AR identifiers identify the historical implementation stages; current deployment and installed-component checks are described in the [upgrade guide](upgrading.md). See the [Chinese version](architecture-remediation.zh-CN.md).
 
 ## Ownership
 
@@ -22,7 +22,7 @@ The role matrix in `scripts/architecture-policy.mjs` is executable. Unknown Work
 
 `apps/worker/src/application/delete-runner.ts` is the single deletion sequence for browser and administrator-token entrypoints. Request-local ports preserve confirmation, one mutation ID, fencing, state observation, cancellation and finalization order. Refusal, dependency failure and unknown effects remain distinct; no uncertain mutation is automatically retried. Authentication remains at the original entry boundaries.
 
-Other lifecycle/policy coordination is extracted from the Worker entry. Registry HMAC routing and RunnerDO session dispatch deliberately retain their consistency owners. `contracts/admin-views.ts` owns presentation shapes; `application/admin-projections.ts` explicitly selects fields. Detailed data is projected after authorization. Credential verifiers are not display data, and authorized workspace roots never enter public MCP output.
+Other lifecycle/policy coordination is separate from the Worker entry. Registry HMAC routing and RunnerDO session dispatch retain their consistency owners. `contracts/admin-views.ts` owns presentation shapes; `application/admin-projections.ts` explicitly selects fields after authorization. Credential verifiers are not display data. Ordinary MCP workspace metadata omits configured absolute roots; requested file contents or command output may still contain paths.
 
 ## Native adapters and package declarations
 
@@ -42,7 +42,7 @@ All Vitest configs declare roots and collection boundaries. `check:verification`
 
 The baseline regression covers all ten MCP tool schemas/descriptions/annotations and wire-schema bytes. Authenticated Worker, race/recovery, installed-package and actual Chromium tests remain required. Linux evidence is not native Windows/macOS or hosted-provider verification.
 
-Development targets `runmeshdev`, production `runmesh`. The oci0 `runmesh-dev-sync.timer` observes GitHub `dev`; after the exact SHA receives the mandatory `verify-all` success, it fast-forwards GitLab `dev`, whose push remains the Cloudflare Workers Builds trigger. Synchronization is fast-forward-only, runs under the existing unprivileged host account, and does not copy a cross-provider token into repository CI. Before uploading, the deployment wrapper checks the config and `WRANGLER_CI_OVERRIDE_NAME` against the branch/environment target and passes an explicit Worker name. Development exposes only an immutable signed dev prerelease for one-command enrollment and fails closed when none is discoverable; it never falls back to the stable Runner or publishes unsigned branch bytes as a Runner release. Main promotion, live acceptance and immutable signed publication remain separate actions.
+The checked-in deployment targets are `runmeshdev` for development and `runmesh` for production. If Cloudflare Builds watches GitLab, a GitHub push alone does not trigger deployment. Provision the optional host-side `scripts/sync-gitlab-dev.mjs` bridge or manually fast-forward GitLab `dev` after the exact SHA passes GitHub `verify-all`. The repository does not install that bridge automatically; see [deployment](deployment.md). Before upload, the deployment wrapper checks the branch/environment, configuration and `WRANGLER_CI_OVERRIDE_NAME`, and passes an explicit Worker name. Development installation uses a verified immutable prerelease and stays unavailable when none is discoverable; it does not fall back to stable or unsigned source packages.
 
 Compatibility facades, bounded legacy localization and stateful coordinators are intentional. Existing white-box race tests should migrate to supported failure seams gradually, not be removed to make a refactor green. File-size reduction alone is not an acceptance criterion.
 
@@ -92,4 +92,4 @@ Eight Job fault scenarios now inject the existing atomic-file port. Concurrency,
 
 Four Runtime tests intentionally retain private persistence-coordinator interception because their pre-enqueue/post-coordinator ordering is not equivalent to a file-write fault: fast-exit durability, late running snapshot, spawn-setup/cancellation and child-exit-before-signal. These names are explicitly guarded by the architecture regression. Other state-machine white-box assertions are not claimed to be eliminated. Retiring an exception requires equivalent fault timing and assertions, not deleting a failing test.
 
-JobManager and RunnerDO remain the original state owners. Neither receives a production-method change in this batch. Generated-source, contract, dependency and fault regressions must run alongside full ordinary CI, installed-package and native/browser checks. Same-SHA results, skips and unexecuted environments are recorded separately; an earlier passing commit is not acceptance evidence for this one.
+Keep JobManager and RunnerDO as the state owners when modifying these adapters. Run generated-source, contract, dependency and fault regressions alongside the required CI, installed-package and native/browser checks. Record results, skips and unexecuted environments for the exact candidate SHA.

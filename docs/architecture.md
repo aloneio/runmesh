@@ -44,7 +44,7 @@ Normal updates preserve Worker names, v2 namespaces, D1 bindings, credentials an
 
 The default service identity is dedicated_user; privileged_host needs explicit choice. New MCP clients default to coding:read. First administrator setup needs no additional bootstrap token and retains CSRF, same-origin and atomic first-success-wins checks; complete initialization before exposing an uninitialized instance. Host shell commands have the operating-system account's privileges. Workspace policy is not a sandbox for hostile code.
 
-Full command/output and Context bodies stay on the Runner. Cloud history is bounded metadata; no-record preferences do not remove authorization. Jobs/logs load explicitly. Local snapshots, cursors and cleanup have their own byte/count/time budgets. Local tests cannot prove account-wide Cloudflare cost or deployed hibernation behavior.
+Full logs and Context records are stored on the Runner; requested content is relayed through the Worker to authorized clients. Cloud history stores bounded metadata, and no-record preferences do not remove authorization. Jobs/logs load explicitly. Local snapshots, cursors and cleanup have their own byte/count/time budgets. Local tests cannot prove account-wide Cloudflare cost or deployed hibernation behavior.
 
 ## Evidence and remaining work
 

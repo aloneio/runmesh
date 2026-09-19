@@ -2,16 +2,25 @@
 
 ## One command, including old or incomplete installations
 
-The administrator enrollment page provides the current one-command uninstall.
+When its release channel is available, the administrator enrollment page provides the current one-command uninstall.
 It downloads and authenticates the maintenance package in a temporary directory,
 then runs cleanup outside the installed runtime. It needs no enrollment code,
 working old executable, valid profile or preinstalled Node/npm. Network access
-to the configured Worker and its pinned release assets is required.
+to the configured Worker and its pinned release assets is required. The current
+0.1.4 candidate does not enable stable hosted distribution by default, including
+this maintenance download. Use a verified available maintenance release when the
+hosted command is unavailable; do not bypass its release check.
 
-Linux/macOS, run locally from an administrator terminal:
+Linux/macOS, replace the example hostname with your own Worker and run locally
+from an administrator terminal:
 
 ```sh
-curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 0 --max-time 60 --max-filesize 262144 'https://runmesh.aloneio.workers.dev/runner/uninstall.sh' | sudo sh -s -- --purge --yes
+set -eu
+maintenance="$(mktemp)"
+trap 'rm -f "$maintenance"' EXIT
+curl -q --fail --silent --show-error --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 0 --max-time 60 --max-filesize 262144 --output "$maintenance" 'https://your-runmesh.example/runner/uninstall.sh'
+test -s "$maintenance"
+sudo sh "$maintenance" --purge --yes
 ```
 
 On Windows, copy the PowerShell uninstall command from the administrator page.
@@ -20,10 +29,12 @@ The temporary maintenance runtime avoids trying to delete its own Windows execut
 Do not run uninstall through the Runner connection being removed: service shutdown
 will interrupt that connection. Use a local console or SSH session outside the service.
 
-A locally verified dev.5-or-newer portable CLI can also run `uninstall --purge --yes`
-on POSIX. Older releases' same-spelled command only removed their service/profile;
-use the hosted maintenance command to clean those versions. A downloaded but
-unverified CLI is not a substitute for the authenticated maintenance package.
+A verified portable CLI that implements complete purge can also run
+`uninstall --purge --yes` on POSIX. Check that package's release notes: older
+versions may only remove their service and profile despite accepting the same
+flags. For Windows, prefer the hosted maintenance command so the executable being
+used is outside the installation being removed. A downloaded but unverified CLI
+is not a substitute for the authenticated maintenance package.
 
 ## What complete purge removes
 
@@ -63,7 +74,10 @@ Symlinks are removed as links, not followed into their targets. Unexpected symli
 ancestors, unknown same-named services and mounted data filesystems stop cleanup.
 Linux recursive cleanup uses pinned directory handles; Windows/macOS have identity
 and confinement checks, not an equivalent hostile-local-mutator guarantee.
-Run maintenance from a trusted host identity without concurrent install/uninstall.
+Run maintenance from a trusted host identity without concurrent manual changes.
+Hosted install, enrollment refresh and uninstall share a lock; a second operation
+fails while the first is active. This does not coordinate arbitrary manual CLI or
+filesystem operations. Inspect interrupted operations before removing a stale lock.
 
 A failed step returns nonzero and lists the remaining items. It is not labelled
 successful merely because the service or profile disappeared. When data removal
@@ -71,11 +85,10 @@ fails, the installed maintenance CLI is retained where possible for diagnosis.
 Control-plane Runner records and remote audit data are not deleted by local purge;
 remove the Runner record separately in the administrator console.
 
-## Installation output
+## Confirm removal
 
-Normal output shows numbered preparation/download/verification/install/connection/
-service stages and a final ready message. Raw checksum success paths and release-
-engineering terminology are hidden. HTTPS restrictions, size limits, pinned runtime
-digests and release signature verification remain mandatory. Failures retain useful
-exit-code and bounded diagnostic output. Installer rollback is deliberately separate
-from full purge: it removes only state created by that installation attempt.
+Check the command's exit status and reported remaining items, then confirm that
+the host service is gone. A disconnected Runner in the dashboard does not prove
+that local files were removed. Remove the control-plane record separately if you
+also want to retire its remote identity. Unlike complete purge, fresh-install
+failure cleanup attempts to remove only state created by that installation attempt.

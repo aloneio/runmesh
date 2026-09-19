@@ -1,53 +1,39 @@
-# Job and Context side-effect boundaries (AR07)
+# Job and Context recovery boundaries
 
-Historical AR07 baseline: `a9b9bb5ef1e7275285c4ccfa54db0c685a03c23e`. This separates existing Runner responsibilities; it adds no tool, execution capability, automatic retention, state migration or service upgrade.
+Use the original Job or Context identifiers to inspect an interrupted operation before attempting it again. A transport timeout does not prove that nothing happened on the Runner. This page describes the current candidate behavior; use the capabilities of your installed Runner when diagnosing an older release.
 
-## Ownership
+## Starting and cancelling Jobs
 
-| Module | Responsibility |
-| --- | --- |
-| `jobs.ts` | Admission, queue turns, current records/children, terminal publication, cancellation and recovery sequencing |
-| `jobs/records.ts`, `values.ts` | Existing record types, validation, bounded launch input and fingerprints |
-| `jobs/storage.ts` | Private-directory checks, bounded metadata reads, atomic JSON and log descriptors |
-| `jobs/process.ts` | Synchronous spawn, process identity observation and native termination, not admission |
-| `jobs/logs.ts` | Bounded log paging through a narrow descriptor/path-observation port |
-| `jobs/recovery.ts` | Existing interruption/cancellation record projection, not PID probing or exit-code guessing |
-| `context-store.ts` | Per-workspace serialization, checkpoint sequencing and public compatibility methods |
-| `context/model.ts`, `storage-types.ts` | Frozen formats, validation, fingerprints and observation types |
-| `context/repository.ts`, `files.ts` | Private paths, bounded record/index access and immutable/atomic writes |
-| `context/retention-plan.ts` | Deterministic sorting, batch selection, plan hash and summary of validated candidates |
-| `context/retention.ts`, `recovery.ts` | Existing verified deletion loop and explicit index recovery |
+The Runner checks current workspace policy before starting a process. Queued Jobs also need fresh control-plane authorization before launch. Cancellation while a Job is waiting prevents it from starting; cancellation of a running Job attempts to terminate the observed process identity.
 
-Ports are internal TypeScript contracts, not public RPCs, CLI settings or plugin hooks. A log reader receives only log access and scope callbacks. Context retention/recovery receive only relevant operations and serialization, not the entire store or a shared mutable service container. Constructing the new objects performs no filesystem or process operation.
+A cancellation request is not proof that the process stopped. If termination could not be delivered or the process identity is uncertain, inspect the Job again. An already committed file change or an external effect of the command is not undone by cancellation.
 
-JobManager deliberately retains state ownership. Moving its maps and durability reservations into independent services would split a single transition across owners. Per-job persistence chains, terminal-write reservations, finishing promises and termination-delivery evidence remain together. The facade is still substantial; lifecycle complexity has not disappeared.
+The Runner saves terminal Job metadata before publishing a final result. A nonzero exit retains its exit code. If terminal metadata cannot be saved, the result remains uncertain until recovery can establish and persist the outcome; it is not reported as a successful exit. A Runner restart cannot reconstruct an exit code it never observed. Recovered processes may therefore remain `unknown`, and unstarted queued Jobs are marked interrupted rather than automatically launched.
 
-## Ordering invariants
+Persisting a receipt and starting an operating-system process are separate operations. For an uncertain launch result, query the original `job_id` and `workspace_id`; do not launch a second command merely to obtain a receipt. See [MCP call recovery](mcp-agent-call-contract.md).
 
-The native spawn adapter calls Node spawn synchronously. The same-turn policy check, process birth marker, active publication and listener registration remain before the next await. Final cancellation identity checks remain next to the native terminator invocation. Existing POSIX escalation and Windows taskkill deadlines remain; they are not new polling.
+## Reading logs
 
-Terminal Job publication stays behind metadata durability. Late active snapshots cannot overwrite reserved terminal writes. Nonzero exits retain their code; failed cancellation delivery does not fabricate cancellation. Restart observations remain unknown/interrupted where no exit result is available. Persisting a receipt and spawning an OS process are not an exactly-once transaction.
+Log queries read bounded pages and do not start, cancel or modify the Job. Empty output differs from unavailable output. `log_unavailable` can mean the file was not created, was removed, or cannot be safely read; it does not prove that the Job never ran.
 
-Context checkpoint ordering remains intent → immutable record → derived index → clear owned intent. Reads do not automatically recover or write missing state. Rebuild is explicit and bounded, validating rather than rewriting immutable records. Existing in-process serialization remains shared across ContextStore instances owning one state directory.
+If inline stdout/stderr retrieval fails after a command ends, preserve its actual Job identity, status and exit code. Retry only the log query. See [byte pagination](byte-pagination.md) for incomplete UTF-8 tails and [bound cursors](bound-cursors.md) for snapshot/append consistency.
 
-The retention planner accepts already validated eligible observations. Its output is data, not an authorization grant. The executor retains index checks, inventory, bounded reads, age filtering and plan verification. Before every unlink it rechecks content, latest revision, path identity and current permission. No new await separates that last permission check from deletion. Partial deletion requires a fresh preview, never a claim of rollback or secure media erasure.
+## Context checkpoints and recovery
 
-## Verification
+A checkpoint writes an intent, an immutable revision, the derived index, and then clears its intent. An interruption can leave a pending checkpoint. Ordinary reads do not silently repair or write missing state. Use the explicit `context` rebuild action when recovery is required; it validates existing records rather than rewriting their contents.
 
-Structure comparison permits explicit adapter-receiver substitutions and the planner extraction only. It checks 45 JobManager method bodies, two log methods, 19 Context repository/facade bodies, 99 declarations, public signatures, checkpoint/rebuild logic, original constructor ordering and the three existing timer call sites. The plan hash keeps the same property order and selected-record bindings.
+Rebuild is bounded and may refuse corrupt, unsafe or oversized state. Preserve that state for operator inspection instead of deleting unknown files. Rebuild cannot restore revisions already removed by retention.
 
-Fifteen fixed native Context scenarios compare results, persisted file hashes and filesystem call order/counts against the unmodified baseline. Plan hashes include inode observations: different fixture directories legitimately differ, each executor validates its own exact preview, and that field is excluded from cross-directory receipt equality. This is not a production load or account-cost claim.
+## Removing old Context revisions
 
-New narrow-port and planner tests cover no-I/O construction, failed atomic rename preserving the previous file, temporary cleanup, bounded metadata, empty/unavailable logs, synchronous spawn, absent cancellation identity, unknown recovery, pending-checkpoint fences and deterministic planning. Existing fast-exit, cancellation races, queue fairness, restart, partial deletion and real process-crash tests remain enabled. The packaged Runner must also pass the MCP end-to-end suite after an offline install with install scripts disabled.
+Prune requires a preview followed by an explicit apply using the returned plan hash. The Runner checks the selected revisions, latest retained revisions, file identities and current permissions before deletion. A plan hash does not replace authorization.
 
-Architecture CI rejects nested Job/Context modules importing their facade or service/transport entrypoints. Model/planner modules cannot load filesystem/process/timer modules or depend on concrete adapters; ports cannot depend on implementations. Log reading cannot import process or metadata-storage implementations. These are source checks, not a sandbox or analysis of arbitrary third-party code.
+Deletion proceeds one revision at a time. If it stops partway through, already deleted revisions are not rolled back. On `context_prune_partial`, inspect storage and request a fresh preview before another apply. The latest revision and index are retained. Removal is ordinary file deletion; it does not erase backups or securely wipe storage media. See [Context storage and retention](context-storage.md).
 
-## Resource and deployment boundary
+## Host and storage assumptions
 
-No new durable files, state fields, tables, cloud requests, persistent timers, mandatory settings or dependencies. Existing limits, expiry and permission/path checks remain. Pure planning makes one bounded candidate-array copy; this is not a zero-allocation claim. Function/port calls are not remote services, and existing I/O still costs resources.
+Use one Runner owner for a state directory and keep that directory private. In-process serialization coordinates operations within that Runner; it is not a lock shared with independent processes or protection against a hostile host administrator. Workspace shell execution uses the Runner's OS identity and is not an operating-system sandbox.
 
-Public JobManager/ContextStore signatures and exported types remain compatible. Worker, wire/catalog, Wrangler, release records and published assets are unchanged. An unsigned development test package is not a replacement for immutable v0.1.3. Promotion and signed release remain separately authorized. Production restart, enrollment and credential rotation are not part of AR07.
+Job metadata and logs have count/byte limits, and optional day-based retention can remove terminal data. Cloud history is a bounded recent snapshot, not a complete backup. Keep independent backups for data you must preserve. See [Job history and retention](batched-job-history.md) and the [security model](security.md).
 
-## Subsequent composition refinement
-
-The current modular remediation adds trusted internal JobManager and ContextStore adapter injection while retaining production defaults and shared state ownership. Internal overloads are excluded from the standalone published declaration surface. `composition-ports.test.ts` verifies failure injection without private-member replacement. Native service adapters, CLI commands, Patch and Git modules are documented in [modular remediation](architecture-remediation.md); the earlier invariants above remain binding.
+For source-level module responsibilities, see [modular architecture](architecture-remediation.md).

@@ -6,19 +6,19 @@ Required permissions: `coding:read` for MCP diagnostics; administrator access on
 
 ## Goal
 
-Identify whether an unavailable Runner is failing at local service state, network transport, authentication, policy synchronization, or workspace authorization without changing credentials, switching Runners, or retrying a side-effecting operation.
+Find whether the connection problem comes from the local service, network, authentication, policy synchronization or workspace access. Keep the selected Runner and any existing Job receipts while investigating.
 
 ## Procedure
 
-1. Read the current Runner selection and keep the stable Runner ID fixed. Do not automatically select another Runner when the selected one is offline.
-2. Use the layered diagnostics result and record its observation time. Distinguish `offline`, `stale`, dependency availability failures, authentication failures, and policy revision mismatch.
-3. On the host, run `runmesh doctor --shareable --json` when a support-safe report is needed. The shareable form deliberately omits host paths, URLs, credentials, environment values, workspace IDs, and raw log text.
-4. If the service is inactive, inspect the native service manager through the documented administrator path. Do not reinstall or re-enroll merely to make a health check pass.
-5. If authentication is explicitly revoked, use the normal enrollment workflow. A temporary network or Registry failure is not evidence that credentials should be rotated.
-6. If a Job may already have started, recover it from its receipt or Job ID. Do not resubmit a write or shell operation whose state is `unknown`.
+1. Call `runner_current` and record the Runner ID. If there is no selection, identify the intended Runner before continuing. Do not select a different machine to make an offline result disappear.
+2. If available in your client catalog, call `inspect` with `{"action":"diagnostics","workspace_id":"your-workspace-id"}`. Record `observed_at_ms` and the checks for Runner selection, workspace authorization, policy alignment and live RPC. Preserve an `unknown` result when a dependency cannot be checked. If the action is unavailable, continue with administrator and host checks rather than guessing its result.
+3. On the host, use the actual service executable and profile for `runmesh doctor --json`. Pass `--profile` for a custom profile or `--user` for a user service. When the installed CLI supports it, `runmesh doctor --shareable --json` omits host paths, URLs, credentials, environment values, workspace IDs and raw logs. Review other diagnostic output before sharing.
+4. If the service is inactive, inspect the native service manager as an administrator. If it is active, check outbound HTTPS/WebSocket connectivity, system time and the configured Worker. Local diagnostics alone do not confirm a working MCP connection.
+5. For an explicit revoked or replaced credential, follow the administrator's recovery enrollment procedure. For an expired Runner authorization period, extend the period in the dashboard if access is still intended. A temporary network or Registry failure does not call for credential rotation.
+6. If a Job may already have started, query it with the original `job_id` and `workspace_id` on the same Runner. Do not resubmit a write or shell operation whose outcome is unknown. See [connection recovery](../connection-recovery.md) for retry timing and recovery checks.
 
 ## Exit conditions
 
-- Stop successfully when the failure layer is identified with a timestamped observation and the selected Runner remains unchanged.
+- The investigation is complete when the failing layer is identified with a timestamped observation and the selected Runner remains unchanged.
 - Stop and escalate when the operation state is unknown, policy state is ambiguous, or service identity cannot be verified.
 - Do not claim production recovery has been verified from a local-only probe.

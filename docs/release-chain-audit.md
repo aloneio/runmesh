@@ -1,5 +1,7 @@
 # Release-chain acceptance
 
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+
 This change closes missing final authorization mappings for diagnostics, patch preview and all Context operations. Protocol-wide mapping parity and real Worker/Runner tests prevent a catalog-only success from hiding unusable tools.
 
 The release workflow tests the exact portable tarball before signing and refuses to create its tag until the audited public Worker health contract is deployed. This health check proves the declared deployment contract and binding presence, not account-wide resource usage; a successful authenticated audit receipt additionally confirms the active audit path. Package E2E is isolated and never restarts the maintained Runner.

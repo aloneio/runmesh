@@ -1,6 +1,6 @@
 # Opt-in content snapshots and append-log cursors
 
-Development slice of R07 / P09, based on `6e1b0bb82a9ea852950b0039160159809d2ad20c`. This does not deploy production or change the immutable v0.1.3 release. The existing numeric-cursor mode and version-1 byte-page fields remain compatible.
+Choose snapshot mode when successive file pages must come from one captured buffer, or append mode when following a Job log across explicit reads. These optional modes are implemented in the **0.1.4 candidate** and require a compatible Worker and Runner. The default numeric-cursor mode remains available.
 
 ## File snapshots
 
@@ -26,7 +26,7 @@ Use `job action=logs` with `consistency: "append"`. The opaque log cursor binds 
 
 Generation checks cover file identity replacement, observed shrinking, same-size changed metadata, and SHA-256 anchors of the first 256 bytes and up to 256 bytes at the previously observed boundary. These anchors also detect common copy-truncate-and-regrow cases without hashing all prior output on every read. Concurrent reads keep a monotonic successful size observation.
 
-**This assumes normal Runner append-only log writing.** It is not tamper attestation: a privileged/external writer can alter unsampled interior bytes while preserving the checked boundaries and growing the same inode. Such arbitrary mutation requires a stronger storage design; this slice does not claim to detect it. Likewise, a truncation and regrowth that restores every checked byte before any observation cannot always be distinguished. No watcher or periodic scan is added.
+**This assumes normal Runner append-only log writing.** A privileged/external writer can alter unsampled interior bytes while preserving the checked boundaries and growing the same inode. A truncation and regrowth that restores every checked byte before any observation cannot always be distinguished either. Use host access controls to protect logs; these cursors are not tamper attestation and do not start a watcher or periodic scan.
 
 At the observed end, `next_cursor` is null. `resume_cursor` retains the generation and byte position for a later **explicit** refresh. A final incomplete UTF-8 character keeps its initial byte offset, so appending its missing bytes can complete it without dropping data. Expiry or rotation is an error, not an empty log; it never requires repeating the command that produced the Job.
 
@@ -51,8 +51,8 @@ Log cache: at most 256 entries and 256 KiB of accounted metadata (including scop
 
 Both caches expire five minutes after creation; hits do not extend the lifetime. Eviction and expiry are checked lazily on cache access, not by timers. Expired buffers may remain allocated until a later access or process exit, but cannot grow beyond the cache bounds. Runner restart discards all entries. No persistent cursor key, secret, database table, runtime variable, log upload, subscription or background refresh is added.
 
-Files and log pages retain existing transport budgets. The new metadata is included before serialized-size fitting. File-read metadata audit remains as before; Job no-record mode still records no Job/audit rows. Binding a cursor adds no separate audit or RPC. A local fixture reads a 10,000-byte file across 100 snapshot pages and measures 10,000 source bytes total, not 100 whole-file reads. That is scenario evidence, not an account-wide cost estimate.
+Files and log pages retain existing transport budgets. Cursor metadata counts toward the response size. File reads retain metadata auditing; the Job no-record preference continues to suppress that client's optional Job history and `exec.*`/`job.*` audit entries. Binding a cursor adds no separate audit entry or RPC. Authorization and transport requests still consume resources.
 
-## Remaining acceptance
+## Upgrading
 
-Validate this development code and its actual test package on each supported platform; production use requires a future signed Runner and compatible Worker rollout. The original production source-provenance issue, host tool-cache refresh, other tools' output contracts, provider-account quota measurements and Context retention are separate work. No existing service is restarted or re-enrolled by this slice.
+Deploy a compatible Worker before installing a verified Runner release containing these modes. Refresh your MCP connector if its cached input schema rejects `consistency`. Updating the Worker or refreshing a connector does not upgrade the installed Runner. See [capability diagnostics](capability-contracts.md).

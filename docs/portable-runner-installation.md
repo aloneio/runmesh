@@ -1,21 +1,23 @@
 # Portable Runner installation and hosted bootstrap
 
-Use this page when the Dashboard does not show a hosted installation command, when the target machine is offline, or when your organization's policy requires independent artifact verification. The normal product workflow is described in the [administrator guide](admin-guide.md).
+Use this page when the Dashboard does not show a hosted installation command, when you need to transfer the package from another machine, or when your organization's policy requires independent artifact verification. Asset verification and local package installation can be done offline; enrollment and normal Runner operation still require network access to the Worker. The normal product workflow is described in the [administrator guide](admin-guide.md).
 
-The current source contract pins Runmesh **0.1.4**. Check [release readiness](release-readiness.md) for publication and activation status; a candidate checkout is not a published package. Production activates only the independently verified exact stable release. Development uses its separately verified prerelease channel; test distribution stays disabled. The existing deployed installer is preserved during candidate preparation. Both execution modes retain one-command enrollment. Supported external Node runtimes are 22.23.2+ (22.x) or 24.21.0+ (24.x).
+The current source targets Runmesh **0.1.4**, which is a **candidate** with stable hosted distribution disabled by default. The previously published immutable **v0.1.3** assets remain unchanged. Check [release readiness](release-readiness.md) before choosing a package; a candidate checkout is not a published release. Development uses its separately verified prerelease channel; test distribution stays disabled. Updating a Worker does not upgrade an installed Runner. Supported external Node runtimes are 22.23.2+ (22.x) or 24.21.0+ (24.x).
 
-`RUNMESH_PUBLIC_ORIGIN` is a non-secret Worker variable. Set it in the Wrangler `vars` configuration to an externally reachable origin such as `https://mcp.example.com`, with no path, query, fragment, credentials, whitespace, wildcard, or `http://` scheme. A trailing slash is normalized. The configured public Host is accepted behind a proxy. Routed domains are also accepted when the HTTPS request URL and Host agree; mismatched authorities are rejected; an invalid or missing origin keeps the release descriptor non-distributable. Local development can omit the variable, but it cannot enable hosted signed bootstrap.
+For an ordinary HTTPS deployment, Runmesh derives its public origin from the request URL and matching Host; you do not need to set `RUNMESH_PUBLIC_ORIGIN`. Set this optional non-secret variable only when a reverse proxy requires it. Use an externally reachable origin such as `https://mcp.example.com`, with no path, query, fragment, credentials, whitespace, wildcard, or `http://` scheme. A trailing slash is accepted. An explicit empty or invalid override, or a request whose authority cannot be validated, disables hosted bootstrap. Forwarded headers alone are not accepted as the public origin.
 
-Until both prerequisites are satisfied, `/runner/releases/latest` and `/runner/releases/stable` return `distributable: false`, and `/runner/install.sh` and `/runner/install.ps1` fail closed. Do not treat a source change, an npm package, a branch artifact, or an arbitrary URL as release availability.
+Hosted installation requires both a validated public origin and an available, verified release in the Worker's selected channel. Otherwise `/runner/releases/latest` returns `distributable: false`, and `/runner/install.sh` and `/runner/install.ps1` are unavailable. `/runner/releases/stable` and `/runner/releases/dev` describe the separate channels; check the descriptor's `channel` and `distributable` fields. Do not treat a source change, an npm package, a branch artifact, or an arbitrary URL as release availability.
 
 ## Trust model
 
-The one-command path (trust model A) treats the HTTPS Worker response that serves the installer as its bootstrap trust root. The installer pins all of the following in source:
+The one-command path trusts the HTTPS Worker response that serves the installer. The stable installer pins all of the following in source:
 
 - version `0.1.4` and tag `v0.1.4`;
 - the exact GitHub release-asset URLs and `runmesh-runner-0.1.4.tgz` name;
 - signing key ID `runmesh-preview-2026-01`;
 - the reviewed Ed25519 public key from `release/trust-keyring.json`.
+
+The development installer instead pins the exact verified dev version and tag selected by that Worker, using the same embedded trust key. A version listed here does not imply that its assets have been published or that installation is enabled.
 
 Before installing, the script downloads only `manifest.json`, `manifest.sig`, `manifest.signature.json`, `SHA256SUMS`, and the fixed tarball. Every accepted local release asset must be non-empty and no larger than 8 MiB (`8,388,608` bytes): POSIX uses the HTTP/curl limit where available and then checks the completed file, while PowerShell enforces the bound while streaming. A chunked POSIX response may therefore be rejected after bytes have reached the temporary directory, but it can never proceed to verification or installation above the cap. The authenticated artifact size must also be within that cap. It verifies the detached Ed25519 signature, strict manifest project/version/tag/channel/protocol/commit/artifact fields, artifact size, SHA-256, and the additional checksum-file entry. It installs only that verified local tarball with npm scripts disabled. It never uses a downloaded `trust-keyring.json` as a trust root, consults an npm registry, accepts `latest`, or accepts a package name or caller-supplied URL.
 
@@ -33,18 +35,18 @@ Linux or macOS, from an elevated shell:
 set -eu
 installer="$(mktemp)"
 trap 'rm -f "$installer"' EXIT
-curl -q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 0 --max-time 60 --max-filesize 262144 --output "$installer" 'https://your-runmesh.example/runner/install.sh'
+curl -q --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 0 --max-time 60 --max-filesize 262144 --output "$installer" 'https://your-runmesh.example/runner/install.sh?execution_mode=dedicated_user'
 test -s "$installer"
 sudo sh "$installer"
 ```
 
-Windows, from an elevated PowerShell session:
+Windows, from an elevated **interactive** PowerShell session:
 
 ```powershell
 $ErrorActionPreference = 'Stop'
 $installer = Join-Path ([IO.Path]::GetTempPath()) ('runmesh-installer-' + [guid]::NewGuid().ToString('N') + '.ps1')
 try {
-  Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 -TimeoutSec 60 -ErrorAction Stop -OutFile $installer -Uri 'https://your-runmesh.example/runner/install.ps1'
+  Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 -TimeoutSec 60 -ErrorAction Stop -OutFile $installer -Uri 'https://your-runmesh.example/runner/install.ps1?execution_mode=dedicated_user'
   # HTTP errors terminate with ErrorAction Stop; OutFile does not return a response object.
   if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw 'Installer download did not produce a file.' }
   $length = (Get-Item -LiteralPath $installer).Length
@@ -55,7 +57,18 @@ try {
 }
 ```
 
-The installers require elevation and a clean Runmesh installation; they do not require a host-provided Node.js or npm. They select the host OS/CPU archive for the pinned Node.js `22.23.2` runtime, verify its embedded SHA-256 digest, and place only the Node executable inside the versioned Runmesh root. Fresh installation refuses conflicting paths, profiles and service manifests. A managed same-version installation may refresh enrollment; an older/different version is rejected before code input and requires a separately verified manual upgrade. They stage the package under the versioned Runmesh root, validate both `runmesh` and `runmesh-runner` entry points, and do not make an unverified `latest` update. The private runtime's npm CLI is used only inside the temporary staging directory, with empty user/global config and cache paths, `--offline`, and `--ignore-scripts`; no host npm configuration can change the install. The installed service wrapper invokes the private runtime directly, so the service continues to work even when Node.js/npm are absent from the host PATH. Local artifact installation happens before code redemption, so verification and staging failures do not consume the code. If a later local service step fails, the installer best-effort uninstalls only its newly created managed service, removes the newly created profile, current pointer, and version root, and exits nonzero. There is no automatic package update, rollback, or import of an earlier profile/service layout: retain the prior verified package and managed `current`/service state separately for manual recovery. Enrollment redemption itself is remote and single-use and cannot be restored; generate a replacement code before retrying.
+This example prompts for the enrollment code. If you remove the code from a
+dashboard-generated Windows command, also remove `-NonInteractive` from its
+PowerShell invocation and run it in an interactive administrator terminal;
+otherwise the hidden prompt cannot read input.
+
+The installers require elevation; they do not require a host-provided Node.js or npm. For a new installation, they select the host OS/CPU archive for the pinned Node.js `22.23.2` runtime, verify its embedded SHA-256 digest, and place the Node executable inside the versioned Runmesh root. Conflicting installation paths, profiles or service manifests stop a fresh install. The package is staged and both CLI entry points are checked before enrollment. Its temporary npm installation uses empty configuration/cache paths, `--offline`, and `--ignore-scripts`. The installed service uses the private runtime directly, so it does not depend on Node/npm in the host PATH.
+
+A complete, managed installation of the **same exact version** takes a different route: the installer re-enrolls it with the supplied code, refreshes the service configuration, and **restarts the service**. It does not download or replace that Runner version. A different version is rejected before code entry; follow the [upgrade guide](upgrading.md). Drain active Jobs before refreshing or upgrading a service.
+
+Hosted installation, enrollment refresh and hosted uninstall share a host lock. Wait for the active operation to finish. If an interrupted operation leaves a lock, inspect the host before removing it; do not start a second manual installation alongside it.
+
+Verification or staging failures happen before code redemption. If a new installation fails later, cleanup attempts to remove only the service and installation state created by that attempt and returns a failure status. Inspect any reported leftovers before retrying. A failed same-version refresh may already have changed credentials; it does not restore the old token or package. Enrollment codes are single-use, so check the Runner's credential state and obtain a replacement code when needed. Neither path provides automatic upgrade or rollback.
 
 ## High-assurance offline verification path
 
@@ -293,7 +306,7 @@ sudo "$RUNNER" install --executable-path "$RUNNER"
 sudo "$RUNNER" doctor --json
 ```
 
-On Windows PowerShell (use the exact shim path discovered during installation):
+On interactive Windows PowerShell (use the exact shim path discovered during installation):
 
 ```powershell
 $ErrorActionPreference = 'Stop'
@@ -332,7 +345,9 @@ including the one-time code. For dedicated-user installation it fetches
 `/runner/install.sh?execution_mode=dedicated_user` on Linux/macOS, or
 `/runner/install.ps1?execution_mode=dedicated_user` on Windows. For an explicitly
 confirmed privileged-host installation it uses the original bare script URL.
-The script downloads and verifies the runtime and signed Runner, enrolls it,
-installs the selected service identity, and starts the service automatically.
+For a new installation, the script downloads and verifies the runtime and signed
+Runner, enrolls it, installs the selected service identity, and starts the service.
+A complete managed installation of the same version instead refreshes enrollment
+and restarts the existing service.
 The longer offline-verification examples remain an optional advanced path,
 not the default dashboard installation flow.

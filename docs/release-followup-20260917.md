@@ -1,5 +1,7 @@
 # Pre-release follow-up audit — 2026-09-17
 
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+
 This document records the earlier iteration. The [cumulative candidate audit](release-final-audit-20260917.md) records subsequent repository execution and additional repairs without rewriting the evidence boundary below.
 
 ## Acceptance status

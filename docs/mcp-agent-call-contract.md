@@ -36,6 +36,7 @@ Tool execution failures carry `isError: true` and an error envelope with `code`,
 | `job_history_unavailable` | Repeat only the Job query with the original Job ID and workspace ID. Do not relaunch the shell command. |
 | `path_changed`, `baseline_changed` | Re-read the path/baseline before constructing a fresh operation. |
 | `request_too_large` | The encoded request was rejected before dispatch. Reduce its size. |
+| `runner_upgrade_required` with `not_started` | The selected Runner lacks required support. Upgrade to a verified compatible Runner release and reconnect before making a new call. |
 | `tool_result_invalid` | A dispatched reply failed its contract or Job identity check. Preserve the original receipt and treat the outcome as unknown. |
 | Unknown/future bridge code | The public boundary returns a conservative internal/unknown failure, never a fabricated safe retry. |
 
@@ -47,8 +48,6 @@ Copy opaque cursors exactly. A bound file/log cursor cannot be combined with an 
 
 `job.input` requires `data` or `close_stdin: true`. A patch preview cannot also supply `preview_id`. Context Job evidence requires a Job ID, while other evidence kinds cannot claim one. Context prune defaults to preview; only `apply: true` accepts and requires the fresh `expected_plan_hash`. Approval to preview is not approval to prune.
 
-## Maintainer regression gates
+## Check the installed versions
 
-The failure catalog owns both classification and bridge forwarding. Contract tests scan literal Runner and MCP error emissions for missing catalog entries and check replay safety across operation states. Worker regressions cover text/structured parity, missing history, post-dispatch Job identity mismatches, malformed dependency responses, callback ownership, and concurrent bridge admission. Input tests compare runtime parsing with exported JSON Schema; the HTTP connector test verifies that the SDK publishes the same schemas and fingerprint.
-
-Run the unit suite, authenticated local Worker/Runner E2E suite, architecture and formatting checks, and reviewed public-contract baseline check before publishing. A source/test pass is not proof that a deployed Worker, installed Runner, or cached client catalog has been refreshed.
+Compare the deployed Worker, selected Runner and the catalog your MCP client actually loaded. Updating the Worker does not upgrade the Runner, and neither action guarantees that the client refreshed its cached schema. Use [capability diagnostics](capability-contracts.md) to distinguish missing Runner support from missing permissions or a stale connector catalog.

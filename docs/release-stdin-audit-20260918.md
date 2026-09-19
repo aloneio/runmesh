@@ -1,5 +1,7 @@
 # Runner stdin delivery audit - 2026-09-18
 
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+
 ## Scope
 
 This continuation starts from clean candidate `85b262cbc5e544e0d4f8d461aaf2fa6497457142`, preserving the earlier FIFO/descriptor repairs. Its prior 26 local gate results and browser run were verified, not treated as approval for this repair. The independent audit repository is separate from the original dirty dev checkout. Commands and tests run as the repository owner xwzy; no installed Runner service or production deployment is changed.

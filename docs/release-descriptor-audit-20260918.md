@@ -1,5 +1,7 @@
 # Runner descriptor-boundary audit - 2026-09-18
 
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+
 ## Scope and preserved state
 
 This independent oci0 audit starts at clean candidate `5117a569794d567742df1602fc32ff8f2f0d38dc`, retaining its earlier release-tool input repair. At the initial remote observation, dev still pointed to `3c18b5e96485c1d33f0c024f4018fec65f94d074`. The original dev checkout contains existing changes and is not reset, merged, rebased or overwritten. The audit uses an independent detached repository and an isolated npm cache. Its baseline passed all 26 declared local CI gates; those results are not acceptance evidence for later modifications.

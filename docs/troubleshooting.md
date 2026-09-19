@@ -14,7 +14,7 @@ A schema mismatch needs investigation of the deployed code and bindings. Do not 
 
 ## Runner stays offline
 
-Check the actual host service, outbound HTTPS/WebSocket access to the Worker and the system clock. Run `runmesh --version` and `runmesh doctor --json` with the executable used by that service. A different local CLI or a green Worker health page does not prove the service is connected.
+Check the actual host service, outbound HTTPS/WebSocket access to the Worker and the system clock. Using that service's executable, run `runmesh --version` with no other arguments, then `runmesh doctor --json`. Add `--profile` to the `doctor` command for a custom profile or `--user` for a user service. A different local CLI or a green Worker health page does not prove the service is connected. If supported by your installed CLI, add `--shareable` to `doctor` before sharing a diagnostic report.
 
 Check Runner authorization, policy acknowledgement and any explicit credential rejection. An expired Runner authorization period can be extended by the administrator without treating a network outage as credential loss. For a confirmed revoked/replaced credential or incompatible profile, use the administrator's reviewed recovery enrollment flow. Do not re-enroll a healthy existing Runner merely because a request timed out.
 
@@ -24,13 +24,17 @@ No public inbound port is required. Do not expose the Runner or add SSH solely f
 
 Use the platform's elevated shell and the exact command from the enrollment page. Follow [installer prerequisites](installer-prerequisites.md) for `RMI_*` codes. Do not blindly retry a code that may already have been consumed.
 
-An unavailable installer can mean the signed release or required deployment checks are unavailable. Follow [portable verification](portable-runner-installation.md) only for an applicable verified artifact; do not substitute a package name from a registry, a branch build or an unverified mirror. Never disable TLS or signature/checksum checks. Existing installation or service-manifest conflicts require operator inspection, not forced overwrite or purge.
+An unavailable installer can mean the signed release or required deployment checks are unavailable. Check [release status](release-readiness.md): a candidate can intentionally keep hosted distribution disabled. Follow [portable verification](portable-runner-installation.md) only for an applicable verified artifact; do not substitute a package name from a registry, a branch build or an unverified mirror. Never disable TLS or signature/checksum checks. Existing installation or service-manifest conflicts require operator inspection, not forced overwrite or purge.
+
+If the installer reports that another install or removal is running, let that operation finish. After a crash, have the administrator verify that no such process remains before dealing with a stale lock. Do not run parallel installers or delete another operation's files. If enrollment may already have happened, inspect the dashboard and local profile before trying a new code.
 
 ## MCP connection or tool schema differs
 
 Use the complete URL ending in `/mcp`, without added quotes, spaces or a Bearer token. Confirm Streamable HTTP support and that the URL is the currently authorized one.
 
-After a Worker update, refresh the client's Runmesh connection and cached tool definitions. A missing action or rejection of `workspace_id` on Job follow-up calls can indicate a catalog/component mismatch. Compare the deployed Worker, installed Runner and authenticated tool catalog. Current-source examples do not grant an older component capabilities it lacks. See [catalog refresh](mcp-connector-refresh.md).
+After a Worker update, refresh the client's Runmesh connection and cached tool definitions. A missing action or rejection of `workspace_id` on Job follow-up calls can indicate a catalog/component mismatch. Compare the deployed Worker, installed Runner and authenticated tool catalog. See [catalog refresh](mcp-connector-refresh.md).
+
+`runner_upgrade_required` means the requested capability needs a compatible Runner. The published 0.1.3 Runner does not support Context `storage` or `prune`; a newer Worker rejects those actions before dispatch. Refreshing tools does not install them. Follow the [upgrade guide](upgrading.md), then reconnect the compatible Runner if its capabilities have not yet been recognized.
 
 ## Workspace missing or permission denied
 

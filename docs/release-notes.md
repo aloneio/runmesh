@@ -2,9 +2,9 @@
 
 [简体中文](release-notes.zh-CN.md) · [Documentation](README.md) · [Upgrade guide](upgrading.md)
 
-## 0.1.4 — reliable task recovery and clearer operations
+## 0.1.4 — candidate, not yet published
 
-Version **0.1.4** brings the task-control, MCP recovery and distribution improvements below into a new release identity. Existing 0.1.3 archives remain unchanged. Install only the published, independently verified signed 0.1.4 artifact; consult [release status](release-readiness.md) for publication and installer activation. A development prerelease is not a stable release.
+The **0.1.4 candidate** contains the task-control, MCP recovery and distribution improvements below. The stable 0.1.4 package is not yet published, and its stable installer remains disabled. For production, wait for signed publication and independent verification; consult [release status](release-readiness.md) before upgrading. Existing 0.1.3 archives remain unchanged. A development Worker deployment or prerelease does not make 0.1.4 a stable release.
 
 ### Improvements after upgrading compatible components
 
@@ -19,7 +19,7 @@ Version **0.1.4** brings the task-control, MCP recovery and distribution improve
 
 Worker deployment, Runner installation and client tool-catalog refresh are separate operations. New source features require the relevant compatible components; publishing or merging alone does not restart an installed service. Follow the [upgrade guide](upgrading.md), preserve existing v2 resources and credentials, and verify `shell` followed by queries for the same Job before restoring ordinary workloads.
 
-The new Context storage and prune methods require explicit support in the Runner's authenticated hello. An older Runner receives `runner_upgrade_required` before dispatch and keeps its connection for supported methods. After a Worker upgrade, a previously hibernated connection may need to reconnect before these capabilities are known; a version string alone does not grant support.
+The new Context storage and prune methods require explicit support in the Runner's authenticated hello. If that support is missing, the caller receives `runner_upgrade_required`; the Worker does not send the unsupported request, and the Runner connection remains usable for supported methods. After a Worker upgrade, a previously hibernated connection may need to reconnect before these capabilities are known; a version string alone does not grant support.
 
 ### Limits to understand
 

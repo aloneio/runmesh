@@ -1,6 +1,6 @@
 # 模块化架构整改约束
 
-此文描述源码维护约束，不表示 Worker 已部署或本机 Runner 已升级。它延续 AR01–AR08，不新增运行时依赖、权限范围、远程服务、存储迁移或自动升级。参见[英文版](architecture-remediation.md)。
+维护模块边界和相关回归时，可使用本文作为参考。AR 编号用于追溯历史实施阶段；当前部署和已安装组件的验收步骤见[升级指南](upgrading.zh-CN.md)。参见[英文版](architecture-remediation.md)。
 
 ## 职责与依赖方向
 
@@ -22,7 +22,7 @@
 
 `apps/worker/src/application/delete-runner.ts` 是网页和管理员 API 共用的 Runner 删除流程。请求级接口保持确认、唯一变更 ID、fence、提交状态观测、取消和收尾顺序。拒绝、依赖不可用和结果未知保持区分；不因响应不明自动重试变更。原有入口仍各自完成认证，业务用例不是缓存授权或新授权能力。
 
-其余生命周期和策略函数已移出 Worker 顶层入口。Registry 的内部 HMAC 路由及 RunnerDO 的会话派发有意保留原有一致性所有者。`contracts/admin-views.ts` 管理展示类型，`application/admin-projections.ts` 显式选择字段。详情投影发生在授权之后，不将凭据校验值交给页面，也不将管理员可见的工作区根路径送入公开 MCP 结果。
+其余生命周期和策略函数与 Worker 顶层入口分离。Registry 的内部 HMAC 路由及 RunnerDO 的会话派发保留原有一致性所有者。`contracts/admin-views.ts` 管理展示类型，`application/admin-projections.ts` 在授权后显式选择字段，不将凭据校验值交给页面。普通 MCP 工作区元数据不包含配置的绝对根路径；读取的文件内容或命令输出仍可能含有路径。
 
 ## 原生适配器与包兼容性
 
@@ -42,7 +42,7 @@ systemd、launchd、Windows Task Scheduler 分开维护；`service.ts` 保留兼
 
 基线回归覆盖十个 MCP 工具的 Schema、说明、注解和线协议文件字节。认证页面、竞态、失败恢复、真实安装包及 Chromium 测试继续保留。Linux 验证不能冒充 Windows／macOS 原生验证或托管 CI 结果。
 
-development 固定部署 `runmeshdev`，production 仍为 `runmesh`。oci0 上的 `runmesh-dev-sync.timer` 观察 GitHub `dev`；只有同一 SHA 的 `verify-all` 成功后才以 fast-forward 方式同步到 GitLab `dev`，由该 push 触发 Cloudflare Workers Builds；分叉时停止，不 force push，也不把跨平台长期令牌复制到 GitHub Actions。development 只允许一条命令安装不可变、已签名的 dev prerelease；发现不到合法开发预发布时关闭安装入口，绝不回退稳定版 Runner，也不会把未签名的 dev 分支产物冒充 Runner 发行。部署包装器仍核对分支／环境、Wrangler 配置及 `WRANGLER_CI_OVERRIDE_NAME`。进入 main、线上验收与不可变签名发版仍是独立操作。
+仓库中的 development 目标为 `runmeshdev`，production 为 `runmesh`。Cloudflare Builds 监听 GitLab 时，仅推送 GitHub 不会触发部署。需要单独配置宿主侧 `scripts/sync-gitlab-dev.mjs` 桥接，或在准确 SHA 的 GitHub `verify-all` 通过后手工 fast-forward GitLab `dev`；克隆仓库不会自动安装桥接，详见[部署参考](deployment.md)。部署包装器在上传前核对分支、环境、配置和 `WRANGLER_CI_OVERRIDE_NAME`，并显式传入 Worker 名称。开发安装使用经过验证的不可变预发布包；没有可用包时保持关闭，不回退到正式包或未签名源码产物。
 
 兼容 facade、有界旧文本适配器和有状态协调者是有意保留的边界。已有白盒竞态测试应逐步迁到受支持的故障接口，不应为通过重构而删掉。单纯文件缩短不是整改验收标准。
 
@@ -91,4 +91,4 @@ Connection 原有公开 options 与单参数构造接口保留；新增窄接口
 
 四个 Runtime 测试有意保留私有持久化协调器拦截：快速退出的耐久屏障、晚到 running 快照、spawn 设置与取消竞态、发送信号前子进程退出。其入队前或协调器返回后的故障时点不等价于文件写故障，测试名称已纳入明确门禁。其他状态机白盒断言没有被宣称全部消除；移除例外必须保留等价故障时点与断言，不能直接删除失败测试。
 
-JobManager 和 RunnerDO 继续拥有原状态，本批不修改其生产方法。生成代码、契约、依赖与故障回归仍需和全套普通 CI、安装包、原生平台及浏览器检查一起验收。相同 SHA 的通过、跳过、未执行分别记录，不借用旧提交通过结果。
+修改适配器时，应继续由 JobManager 和 RunnerDO 拥有状态。生成代码、契约、依赖与故障回归需配合必需 CI、安装包、原生平台及浏览器检查。按准确候选 SHA 分别记录通过、跳过和未执行项目。

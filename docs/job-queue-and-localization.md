@@ -1,4 +1,4 @@
-# Shared Runner queue and single-locale administrator UI
+# Share a Runner and choose the administrator UI language
 
 ## Admission and fairness
 
@@ -16,22 +16,14 @@ Cancellation while waiting or awaiting authorization prevents spawn. Duplicate r
 
 Scheduling reacts to admission, completion, cancellation and explicit recovered-state inspection. No idle queue poll, new database table or broker is added. Queued execution incurs necessary live authorization requests; existing batched/no-record history remains in force. This is not a zero-cost or unlimited queue.
 
-## UI and language
+## Choose the UI language
 
-The prior client script translated dynamically mounted pages unconditionally, including English views, and applied partial string substitutions. Some controls embedded both languages. Page opacity/position cross-fades also changed the display during navigation.
+The administrator interface supports English and Chinese. Use the language selector to change it; switching language reloads the page. An explicit `lang` choice takes precedence over the saved preference cookie, which takes precedence over the browser's language preferences.
 
-HTML now selects one locale before paint: explicit lang, exact preference cookie, then browser language preferences. Content-Language, Vary and no-store headers agree. No visible text-node translation runs afterward. Language switching reloads the full shell; ordinary admin navigation remains explicitly requested, with no background refresh. Page-container and cross-document fades are removed.
+Page text and titles use the selected language before display. Product names, technical identifiers, user labels, code, logs, input values and copied commands are preserved as data. Changing the display language does not translate or modify your commands or output.
 
-Canonical source strings and Chinese translations are separate. Static controls, history/retention settings, log actions and administrator errors have coverage gates. Product names, technical identifiers, user labels, code, logs, secrets, input values and copied commands remain data. Escaping, entity handling, CSP and prototype-safe dictionary lookup are covered by tests.
+Dashboard navigation and history refresh happen when requested. Leaving a page open does not start background history polling. Reload or use the relevant refresh control when you need a new observation.
 
-An isolated Chromium check covers English/Chinese dashboard rendering, shell navigation, panel text and geometry, idle DOM/network activity and a 390px mobile viewport. The check uses local test accounts in a new temporary browser profile, not the operator's session. The observed panels had zero idle DOM changes, zero idle admin requests, no script exceptions and no page horizontal overflow.
+## Runner compatibility
 
-## Release boundary
-
-These changes require Runner 0.1.3 for queue negotiation. Worker-only deployment cannot enable queueing on an installed 0.1.2 Runner. Preserve old immutable assets and the live service. Prepare the candidate on protected GitHub main, validate the exact portable artifact, publish and independently verify it, then activate through GitLab main. Never push a closed candidate installer gate into production. Publishing is not a service upgrade or restart.
-
-Tests include real multi-client queued execution plus concurrent file reads, fairness, limits, cancellation, idempotency, policy changes, signed-context tampering/expiry/identity mismatch, authorization races, restart non-replay, locale selection/escaping and browser navigation. Existing quota and enrollment recovery checks remain mandatory.
-
-Reference: https://developers.cloudflare.com/workers/runtime-apis/html-rewriter/
-
-Post-deployment locale verification also checks compound browser titles (login, setup, enrollment and administrator pages). Every known UI segment is translated rather than only the first segment; this Worker-only follow-up does not modify the immutable Runner package.
+Queued execution requires queue protocol 1, available from Runner 0.1.3, and a compatible Worker. Updating only the Worker cannot enable queueing on Runner 0.1.2. Install a verified compatible Runner release separately; publishing or deploying Worker code does not restart or upgrade the service. UI language changes are served by the Worker and do not require a Runner upgrade.

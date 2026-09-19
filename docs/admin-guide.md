@@ -8,13 +8,17 @@ This guide covers the product workflow for deploying and operating Runmesh on Cl
 
 Have a Cloudflare account, a public HTTPS Worker origin, a strong administrator password (at least 12 characters), the machines that will run work, and a written least-privilege workspace plan.
 
+Check [release status](release-readiness.md) before installing a Runner. A candidate version is not a published stable package, and its hosted installer may be deliberately unavailable. Use the release and installation procedure appropriate to your environment.
+
 Runmesh does not choose operating-system permissions or workspace ownership for you.
 
 For a new installation, Wrangler provisions the configured resources. An update of an existing v2 installation must preserve its Worker, live DO namespaces, history database, secret values, Runner profiles and current services. Do not reset a namespace or re-enroll healthy Runners merely to update code. Legacy pre-v2 migration instructions are not normal upgrade instructions.
 
 ## Deploy the control plane
 
-Connect the repository to Cloudflare Workers Builds. Use `main` for production, run `npm run build` from the repository root, and deploy with:
+Connect the repository to Cloudflare Workers Builds. Production requires a `main` revision whose signed release has been verified and activated. The current **0.1.4 candidate cannot use the production command below**. For candidate testing, select `dev` and use `npm run deploy:worker -- --env development` with separate resources; see [deployment](deployment.md).
+
+For an activated production release, run `npm run build` from the repository root and deploy with:
 
 ```sh
 npm run deploy:worker -- --env production
@@ -22,11 +26,11 @@ npm run deploy:worker -- --env production
 
 Ordinary deployment requires only two independent Cloudflare secrets: `INTERNAL_CONTROL_SECRET` and `RUNNER_TOKEN_PEPPER`. Generate each from at least 32 cryptographically random bytes. Preserve their existing values during updates; replacing the pepper invalidates enrolled Runner credentials. Never commit secrets or print them in CI logs.
 
-No plaintext runtime variable is required for normal production. The public origin comes from the matching HTTPS request URL and Host, history defaults to the configured D1 backend, and signed-installer activation is compiled from the independently verified release-state record. Forwarded headers cannot choose an origin. Reverse proxies with an internal URL can explicitly set `RUNMESH_PUBLIC_ORIGIN`. `ADMIN_TOKEN` is optional and enables only the advanced programmatic Runner API; browser login, enrollment and MCP do not require it.
+Normal production deployment needs no additional plaintext runtime variables. Runmesh validates the public HTTPS request address, uses the configured D1 history database by default, and makes the signed installer available only after the required release verification. Reverse proxies with an internal URL can explicitly set `RUNMESH_PUBLIC_ORIGIN`; forwarded headers do not choose the trusted public address. `ADMIN_TOKEN` is optional and enables only the advanced programmatic Runner API; browser login, enrollment and MCP do not require it.
 
 The new-install helper `npm run setup:secrets -- --env production` only checks missing secret names. Adding `--apply` creates only missing required keys after a second inventory check. It does not rotate existing values, delete other keys, print secret values or automatically retry an uncertain upload. It requires Cloudflare management authentication and an existing deployed Worker. See [minimal runtime configuration](runtime-config.md).
 
-First administrator setup has no extra bootstrap token. CSRF, same-origin checks and atomic first-success-wins remain. Complete setup before exposing an uninitialized instance to untrusted traffic. New Runners default to `dedicated_user` and new MCP clients to `coding:read`; existing permissions remain unchanged. A separate development Worker uses the `dev` branch and its own secrets/resources.
+Open the administrator page and set the password after deployment. No extra setup token is needed, and the first successful setup creates the administrator, so complete this before exposing the uninitialized instance to untrusted traffic. New Runners default to `dedicated_user` and new MCP clients to `coding:read`; existing permissions remain unchanged. A separate development Worker uses the `dev` branch and its own secrets/resources.
 
 ## Enroll a Runner
 
@@ -46,7 +50,7 @@ When the hosted installer is enabled, the dashboard command pins the release, ve
 
 On the Runner details page, add a stable workspace name, an absolute host path, and only the permissions required: read, edit, shell, and job control. Save the policy and wait for the Runner to acknowledge it. Verify from an MCP client with `workspace_list`.
 
-Workspace roots are sent only to the matching Runner. They are not returned through MCP or ordinary logs.
+Runmesh sends each configured workspace root only to its matching Runner and omits it from MCP workspace and diagnostic metadata. File contents and command output can still contain host paths; review them before sharing.
 
 ## Create MCP clients
 
@@ -57,8 +61,8 @@ Open **MCP Clients**, enter a clear label, select the minimum scopes, create the
 - Review Runner status, clients, and recent jobs from the dashboard.
 - Rotate Runner credentials or MCP client URLs when access changes.
 - Revoking a Runner blocks reconnection but does not kill processes already running on the host.
-- Deleting a Runner permanently removes its policies, workspaces, jobs, and client selections.
-- Use the one-command maintenance uninstaller shown on the enrollment page for complete local removal, including old/partial installations. Local job history is deleted; project workspaces are preserved. See [complete uninstall](runner-uninstall.md). Delete the control-plane Runner record separately.
+- Deleting a Runner removes its control-plane record, configured workspaces and policies, and client selections. It does not uninstall the host service, stop host processes or remove local files and Jobs. Separately retained audit/history data is not a guaranteed part of that deletion.
+- When the hosted release channel is available, use the enrollment page's maintenance uninstaller for complete local removal, including old/partial installations. It deletes local Job history while preserving project workspaces. When hosted distribution is unavailable, the page shows a local CLI command instead; check the installed version's purge support and the [complete uninstall guide](runner-uninstall.md) before using it. Delete the control-plane Runner record separately.
 - Emergency lock blocks new protected operations; inspect host processes separately.
 - Changing the administrator password invalidates existing admin sessions.
 
@@ -74,18 +78,22 @@ Use a canonical HTTPS origin and configure log redaction. Keep administrator cre
 
 ## Optional cloud history and quota isolation
 
-See [quota isolation and cloud Job recording](quota-resilience.md). Production uses the independent `HISTORY_DB` D1 binding for optional audit. Core enrollment, credential and policy authority stays in RegistryDO. MCP client detail provides a switch for new cloud Job snapshots and related Job-tool audit; local Runner jobs/logs remain. Workspace-bound Job operations require Runner 0.1.1+. GitLab main push, not GitHub verification alone, triggers the maintained production deployment.
+Open **MCP Clients → client details → Cloud Job history** to disable recording for new Jobs. This stops their optional cloud snapshots and related Job-tool audit; local Jobs and retained logs remain. Existing cloud records are not deleted, and enabling recording later does not backfill Jobs originally created without recording. Required authorization and replay-prevention records remain.
+
+Pass `workspace_id` when following an unrecorded Job; workspace-bound Job operations require Runner 0.1.1 or newer. Unrecorded Jobs have no offline cloud history. Production uses the independent `HISTORY_DB` D1 binding for optional history and audit, while core authorization remains separate. See [quota isolation and cloud Job recording](quota-resilience.md) for the limits of this separation.
 
 ## Batched Job history
 
-See [batched snapshots, manual loading and retention](batched-job-history.md). Production uses `RUNMESH_JOB_HISTORY_BACKEND=d1`; the default upload window is five minutes. History is loaded only on request. Source-side batching and local day-based cleanup are shipped in v0.1.2; immutable v0.1.1 and existing services are unchanged.
+On the Runner details page, choose a history type and click **Load / Refresh**. Logs are loaded only when requested and default to the last 4 KiB. Cloud history contains bounded Job metadata, not full output logs.
+
+The default upload window is five minutes and cloud retention is seven days. Local deletion by age is disabled by default and requires separate confirmation when enabled. Active and uncertain recovered Jobs are retained. Batching and local retention require compatible components; they first shipped in Runner 0.1.2. See [batched snapshots, manual loading and retention](batched-job-history.md) for available settings.
 
 ## Shared Runner queue and localized UI
 
-Current-source Runners default to two execution slots; an explicit configured limit is preserved. The bounded queue permits up to 32 waiting Jobs and up to eight per client. Older installed packages can have different defaults. Queueing requires compatible negotiated support and authorization at execution time.
+The 0.1.4 candidate defaults to two execution slots and supports an explicit limit of 1–64; an existing configured limit is preserved. Check the installed Runner's effective setting because older packages can have different defaults. Compatible queueing supports up to 32 waiting Jobs and eight per client, with authorization checked again before execution. Set `queue: false` on a shell request to return immediately when no execution slot is available.
 
 See [queue/UI contract](job-queue-and-localization.md) for capability negotiation, current authorization, bounded fair scheduling, restart interruption and server-side locale rendering. A Worker deployment does not upgrade any installed Runner. Check the actual version and negotiated capabilities before relying on queue or history improvements.
 
-## Source changes and recording preferences
+## Change-driven history reporting
 
-New change-driven reporting requires a compatible Worker and Runner. Unrecorded Jobs and ordinary log reads do not enable optional uploads; re-enabling recording does not backfill originally unrecorded Jobs. Existing archived history is not deleted by disabling new recording. These development-source improvements are not retroactively added to immutable 0.1.3. See [release notes](release-notes.md) and the [reporting reference](demand-job-history.md).
+Change-driven reporting in the 0.1.4 candidate requires a compatible Worker and Runner. Unrecorded Jobs and ordinary log reads do not enable optional uploads; unchanged acknowledged snapshots do not keep uploading while idle. This does not eliminate heartbeats, authorization or maintenance requests. The published 0.1.3 package does not include this behavior. See [release notes](release-notes.md) and [history reporting](demand-job-history.md) before relying on it.

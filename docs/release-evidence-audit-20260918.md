@@ -1,5 +1,7 @@
 # Release evidence input audit - 2026-09-18
 
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+
 ## Scope and baseline
 
 This review starts from `f9d8bfd848f35a909187fa157eb06c49e689531b` on oci0. The original dev checkout was clean and had only main/dev branches. An isolated detached worktree holds this repair. Tests and Git operations use the repository owner, not the root identity of the installed Runner. No production deployment, installed Runner restart, immutable release replacement or main promotion is part of this repair.

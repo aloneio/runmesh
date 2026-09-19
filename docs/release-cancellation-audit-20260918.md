@@ -1,5 +1,7 @@
 # Cancellation observation audit - 2026-09-18
 
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+
 ## Scope and baseline
 
 The independent oci0 audit started from clean dev `d8366941b48e060b274ebfb9416a552d5f668ecd`, synchronized to GitHub and GitLab. An isolated detached worktree and a fresh lockfile installation were used. Commands and commits use the repository owner, not the root identity of the installed Runner. The existing npm cache contains root-owned entries; this audit uses a separate owner-writable cache instead of changing unrelated host ownership.

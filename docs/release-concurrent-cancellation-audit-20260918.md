@@ -1,5 +1,7 @@
 # Concurrent cancellation audit - 2026-09-18
 
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+
 ## Decision and scope
 
 The initial review performed repository reconnaissance, focused source review and one repair; it did not complete comprehensive pre-release verification. At the end of that review, the source changes and regression tests were uncommitted in an isolated detached worktree. The follow-up validation section below records subsequent observations separately; formal publication still requires the complete acceptance chain.

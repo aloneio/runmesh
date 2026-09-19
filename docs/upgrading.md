@@ -13,11 +13,11 @@ This guide applies to an existing protocol-v2 deployment. A code update is not a
 | MCP client catalog | The client's cached tool definitions | Server code, permissions or credentials |
 | Release publication | Downloadable versioned assets | Any already-running installation |
 
-Read the [release notes](release-notes.md). Changes marked not yet published are not included in the existing stable archive, even when the source package version still matches it. Do not use a branch build as a substitute for a verified stable package. Development prereleases belong in a separate test environment.
+Read the [release notes](release-notes.md) and [release status](release-readiness.md). A version marked candidate is not a published stable package. Changes marked not yet published are not included in an existing stable archive, and a Worker deployment does not add them to an installed Runner. Use a verified stable package for production; development prereleases belong in a separate test environment.
 
 ## Before changing production
 
-Record the Worker deployment and source identity, installed Runner version, service executable path and current tool catalog. On each host, use the actual service executable for `runmesh --version` and `runmesh doctor --json`; a different CLI on `PATH` may report a different installation. Review diagnostic output before sharing it.
+Record the Worker deployment and source identity, installed Runner version, service executable path and current tool catalog. On each host, use the actual service executable to run `runmesh --version` with no other arguments, then `runmesh doctor --json`; a different CLI on `PATH` may report a different installation. Add `--profile` to the `doctor` command for a custom profile, or `--user` for a user service. Review diagnostic output before sharing it.
 
 Protect the existing deployment configuration, Worker secrets, control-plane data, Runner profile/state, service manifest, verified package and project backups. Runmesh does not provide an in-app full backup or automatic rollback. Use the recovery procedures supported by your storage and deployment, and rehearse them on a separate test instance before relying on them.
 
@@ -32,6 +32,8 @@ Coordinate a maintenance window. Stop submitting new work, drain queued/running 
 5. **Verify the complete path** before allowing ordinary workloads again.
 
 The [portable installation examples](portable-runner-installation.md) are first-install procedures and deliberately stop when an installation already exists. They are not a generic in-place updater. If a target release does not supply a procedure applicable to your existing layout, stop and request an operator-reviewed upgrade plan; do not use uninstall/purge, re-enrollment or manual link replacement as an improvised update.
+
+A mixed-version installation can keep supported operations available while newer ones remain unavailable. For example, the published 0.1.3 Runner lacks Context `storage` and `prune`. A compatible newer Worker returns `runner_upgrade_required` before sending those actions. Upgrade the Runner explicitly before using them; if a compatible Runner was already connected during the Worker update, it may need to reconnect so the Worker can learn its supported actions. Coordinate any service restart with active Jobs.
 
 ## Acceptance checks
 

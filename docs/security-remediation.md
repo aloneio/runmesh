@@ -1,6 +1,6 @@
-# Current remediation and historical record
+# Historical security remediation
 
-The current pre-release review and explicit verification limits are recorded in [the 2026-09-17 audit](release-audit-20260917.md). Reviewed source fixes do not change an already-published artifact or prove a production rollout. See [release readiness](release-readiness.md) for the immutable release activation record and [the security ledger](../release/security-readiness.json) for candidate regression requirements. All dated material below is historical, including its version and CI descriptions.
+Use the [security model](security.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md) for current operation. The [security ledger](../release/security-readiness.json) lists candidate regression requirements. The records below and the [2026-09-17 audit](release-audit-20260917.md) describe their stated review periods, including historical version, configuration and CI results; they do not report your deployment's current state.
 
 ## Historical remediation record
 

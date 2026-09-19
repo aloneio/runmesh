@@ -1,5 +1,7 @@
 # Existing production Worker: GitLab main cutover
 
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+
 ## Scope
 
 Promote the verified, published v0.1.2 production source into protected main before changing the Cloudflare source branch. Old main predates the quota fixes and uses an incompatible deployment layout. Do not deploy that old tip. Preserve the existing Worker named runmesh, its domain, D1 history binding, Durable Object namespace and secrets. The unfinished v0.1.3 worktree is not part of this promotion.

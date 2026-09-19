@@ -1,17 +1,15 @@
-# Public MCP output contracts (AR05)
+# Read and validate MCP tool results
 
-The ten existing public tool names and their input schemas remain stable. Every tool now has an explicit closed output schema instead of falling back to an arbitrary passthrough object. Existing allow-list projectors remain the owner of secret/path removal and response budgets.
+The current Worker advertises an output schema for each of its ten public MCP tools in `tools/list`. Use that schema to interpret successful results. Optional observations may be absent when an older Runner cannot supply them; absence is not a zero value or evidence that an operation completed.
 
-`mcp/output-contracts.ts` describes public metadata and aggregate tool output shapes. Legacy observations are optional rather than invented. `mcp/action-output-contracts.ts` supplies required evidence and closed variants for each action in the existing `MCP_RPC_ACTIONS` map; the map's keys are checked by TypeScript and regression tests. The stable aggregate schema is advertised in `tools/list`, while input-aware validation runs before successful results leave the tool wrapper.
+Before returning success, the Worker validates the result against the action you requested and projects only allowed fields. Private metadata and raw exception details are not forwarded. Response-size limits still apply, so a successful response may explicitly indicate truncation.
 
-`mcp/handler-registry.ts` requires exactly one own data-property callback for each public tool. Missing, extra, inherited or getter-backed handlers fail before registration. The server still owns fresh per-request scope and credential revalidation; this registry neither caches nor grants authorization.
+## When a result cannot be trusted
 
 Malformed successful output becomes `tool_result_invalid` with an unknown operation state. Safe existing Job/workspace/correlation identifiers and audit observations are retained when available, but private fields and validation exception details are not exposed. No command, input, patch or cancellation is automatically replayed. Existing error envelopes remain on their existing path. A successful command with unavailable logs still retains its actual status and exit code.
 
 ## Compatibility and limits
 
-An explicit bounded truncation envelope remains supported; an empty object is not a successful receipt. Older valid results can omit optional observations, but wrong types, undeclared fields and absent required action evidence are rejected. For example, `job.input` returns `accepted` bytes and optional `eof`, not a JobRecord; the old broad test mock is corrected and a negative regression preserves that distinction.
+An explicit bounded truncation envelope remains supported; an empty object is not a successful receipt. Older valid results can omit optional observations, but wrong types, undeclared fields and absent required action evidence are rejected. For example, `job.input` returns the accepted byte count as `accepted` and optional `eof`; it does not return a JobRecord or prove that the process consumed the input.
 
-The public aggregate JSON Schema cannot express the dependency on a separate request's action; the action validators enforce that relationship. This is not a complete shared Worker/Runner typed-RPC redesign, capability-disable implementation or automatic client-cache refresh. The advertised catalog fingerprint changes when its output schemas change. No new public tool, required runtime variable, RPC, persistent record or timer is added, but schema validation and the larger catalog have CPU/transport costs that must not be described as zero.
-
-Validation includes fixed valid/invalid result fixtures, exact handler/action coverage, current real MCP transport tests, no-record/permission regressions and packaged end-to-end checks. Source, test, published asset and production activation are separate acceptance stages.
+The aggregate JSON Schema cannot express every dependency on the request's action; the Worker performs that additional validation. A valid output schema does not grant permission or prove support on every Runner. The catalog fingerprint changes when its schemas change, but clients may retain a cached catalog. Refresh the affected connector if its schema is stale; see [capability diagnostics](capability-contracts.md) and [call recovery](mcp-agent-call-contract.md).

@@ -1,5 +1,7 @@
 # Release-tool input audit - 2026-09-18
 
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+
 ## Scope and baseline
 
 This review starts from dev `3c18b5e96485c1d33f0c024f4018fec65f94d074` in an isolated detached worktree on oci0. The original dev checkout has existing uncommitted work and is preserved, not reset, rebased or overwritten. Verification and repair run as the repository owner, not the root identity used by the installed Host shell service. The existing shared npm cache contains root-owned entries; this review uses a separate cache instead of changing shared permissions.

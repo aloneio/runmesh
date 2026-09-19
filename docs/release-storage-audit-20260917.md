@@ -1,5 +1,7 @@
 # Runner storage boundary audit - 2026-09-17
 
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+
 ## Scope and source
 
 This audit continues the [final admission review](release-admission-audit-20260917.md) from dev `4a3d2a461c6400603c781d6f720fa66b02fcbf35`, using an isolated detached worktree on oci0. The original checkout and its uncommitted changes remain untouched. Installation and verification run as the repository owner with a separate npm cache; the existing shared cache has root-owned entries. No production deployment, installed Runner restart, main promotion, stable publication or old-file deletion is part of this audit.

@@ -1,5 +1,7 @@
 # Final admission and bounded receipt audit - 2026-09-17
 
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+
 ## Scope
 
 The audit started from dev `a84ecee35737423b1ae039ead00a82c855b4cd0c` in an isolated detached worktree on oci0. The original checkout and its uncommitted changes were preserved. Dependency installation, tests and Git operations use the repository owner rather than the connected Host shell's root identity. A separate npm cache avoids the existing shared-cache ownership problem. No production deployment, installed Runner replacement, stable publication, main promotion or old-file deletion was performed.

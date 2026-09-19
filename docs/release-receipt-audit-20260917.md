@@ -1,5 +1,7 @@
 # Pre-release receipt and Runner identity audit - 2026-09-17
 
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+
 ## Scope and acceptance boundary
 
 This audit started from `31bdbcbba1e93bb9583f038aa5ad16db10038c66` in a separate detached worktree on oci0. The original checkout contained uncommitted work and was not reset, rebased or overwritten. Repository installation, tests and Git commands ran as the repository owner, not the root identity used by the connected Host shell. A separate npm cache avoided changing the shared cache. No production deployment, installed Runner replacement, main promotion, stable publication or old-file cleanup was performed.

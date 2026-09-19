@@ -8,7 +8,7 @@ selection is saved in the HTML response, without replacing session cookies.
 
 ## Authored messages and data
 
-Templates use canonical English. The server translates complete authored text
+Templates use authored messages and canonical English compatibility strings. New messages use the typed keys in `i18n/messages.ts`. The server translates complete authored text
 nodes and selected accessible attributes before the first paint. Split dynamic
 sentences at intentional markup boundaries; do not concatenate translated labels,
 untranslated sentences and user data into one translation key. The browser must
@@ -33,10 +33,7 @@ literal administrator errors. `apps/worker/test/ui-locale.test.ts` exercises rea
 Worker HTML rewriting, enrollment modes, streaming/entity boundaries, language
 selection, data preservation and critical translation meaning.
 
-Four HTML fixtures intentionally change for data-exclusion/accessibility markers;
-their original hashes remain recorded. This is not a claim that their markup is
-unchanged. The eight enrollment command variants were compared with the original
-source and retain identical preformatted command bytes.
+When updating fixtures, review data-exclusion and accessibility markers as well as visible text. Keep copied enrollment commands unchanged unless their command contract is intentionally updated.
 
 Run the existing UI/browser integration checks on a local test instance. Source
 tests and a development merge do not deploy production, update installed Runners
