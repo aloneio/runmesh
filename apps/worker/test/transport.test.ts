@@ -417,7 +417,7 @@ describe("Worker runner transport", () => {
     } finally { spy.mockRestore(); socket?.close(); }
   });
 
-  it("does not return an enrollment credential when RunnerDO revoke cleanup is uncertain", async () => {
+  it.each([200, 202, 206, 503])("does not return an enrollment credential when RunnerDO revoke cleanup is uncertain (%s)", async status => {
     const id = `enroll-revoke-${crypto.randomUUID()}`;
     const code = randomBase64Url();
     const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
@@ -428,7 +428,7 @@ describe("Worker runner transport", () => {
     });
     const original = RunnerDO.prototype.fetch;
     const spy = vi.spyOn(RunnerDO.prototype, "fetch").mockImplementation(function (this: RunnerDO, request: Request) {
-      if (new URL(request.url).pathname === "/revoke") return Promise.resolve(new Response("simulated revoke failure", { status: 503 }));
+      if (new URL(request.url).pathname === "/revoke") return Promise.resolve(new Response("simulated revoke failure", { status }));
       return original.call(this, request);
     });
     try {

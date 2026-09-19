@@ -18,7 +18,7 @@ export function adminError(status: number, message: string, cookies: readonly st
  * Discard the upstream body without exposing diagnostics or replaying writes. */
 export function adminUpstreamError(upstream: Response, message: string, fallbackStatus = 400): Response {
   void upstream.body?.cancel().catch(() => undefined);
-  const status = upstream.status === 429 || upstream.status >= 500 ? 503 : upstream.status === 404 ? 404 : fallbackStatus;
+  const status = upstream.status < 400 || upstream.status === 429 || upstream.status >= 500 ? 503 : upstream.status === 404 ? 404 : fallbackStatus;
   return adminError(status, message);
 }
 

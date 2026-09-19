@@ -1503,10 +1503,12 @@ describe("persistent local jobs", () => {
 
   it("marks jobs found alive after restart unknown and vanished processes interrupted", async () => {
     const test = await fixture();
+    const first = new JobManager({ policy: policy(test.workspace), stateDir: test.state, maxConcurrentJobs: 2, maxRetainedJobs: 100 });
+    let alive: JobRecord | undefined;
     try {
-      const first = new JobManager({ policy: policy(test.workspace), stateDir: test.state, maxConcurrentJobs: 2, maxRetainedJobs: 100 });
       await first.initialize();
-      const alive = await first.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "setTimeout(() => {}, 1500)"] });
+      alive = await first.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"] });
+      const aliveId = alive.job_id;
       const restarted = new JobManager({ policy: policy(test.workspace), stateDir: test.state });
       await restarted.initialize();
       expect(restarted.get(alive.job_id).status).toBe("unknown");
@@ -1520,8 +1522,11 @@ describe("persistent local jobs", () => {
       await afterCrash.initialize();
       await expect(waitFor(() => afterCrash.get(vanished.job_id), (value) => value.status === "interrupted", 10_000)).resolves.toMatchObject({ status: "interrupted" });
       await first.cancel(alive.job_id);
-      await waitFor(() => first.get(alive.job_id), (value) => value.status === "cancelled" || value.status === "failed");
-    } finally { await test.cleanup(); }
+      await waitFor(() => first.get(aliveId), (value) => value.status === "cancelled" || value.status === "failed");
+    } finally {
+      if (alive !== undefined) await first.cancel(alive.job_id).catch(() => undefined);
+      await test.cleanup();
+    }
   });
 
   it("ignores log data delivered after terminalization and retention pruning", async () => {

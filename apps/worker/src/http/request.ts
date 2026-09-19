@@ -14,5 +14,5 @@ export async function readAdminBody(request: Request): Promise<Record<string, un
 export async function discardBody(request: Request): Promise<void> {
   // Do not allocate an unbounded invalid request body before returning an auth
   // response. Cancelling the stream releases the Worker-side reader.
-  try { await request.body?.cancel(); } catch { /* already consumed */ }
+  try { void request.body?.cancel().catch(() => undefined); } catch { /* already consumed */ }
 }

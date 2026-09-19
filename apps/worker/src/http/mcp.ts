@@ -1,4 +1,5 @@
 import { MAX_MCP_BODY_BYTES } from "./constants.js";
+import { discardBody } from "./request.js";
 import { MCP_SECRET_RE } from "./constants.js";
 import type { McpAuth } from "../mcp/server.js";
 import { notFound } from "./responses.js";
@@ -12,9 +13,9 @@ import type { WorkerEnv } from "../platform/env.js";
 export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
   const parts = url.pathname.split("/").filter(Boolean);
   const secret = parts[0];
-  if (secret === undefined || !MCP_SECRET_RE.test(secret)) return notFound();
-  const verified = await verifyMcpClient(env, await sha256Hex(secret));
-  if (verified === undefined) return notFound();
+  if (secret === undefined || !MCP_SECRET_RE.test(secret)) { await discardBody(request); return notFound(); }
+  const verified = await verifyMcpClient(env, await sha256Hex(secret)).catch(async error => { await discardBody(request); throw error; });
+  if (verified === undefined) { await discardBody(request); return notFound(); }
   // createMcpHandler requires an exact /mcp route. Do not consume request.body
   // before cloning it: the SDK must receive the original JSON-RPC stream.
   const rewritten = new URL(request.url);

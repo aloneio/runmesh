@@ -1,8 +1,8 @@
 import { hmacHex } from "../security.js";
 import { isConfiguredSecret } from "../security.js";
-import { json } from "../platform/control-plane.js";
+import { boundedJsonResponse } from "../platform/bounded-json.js";
 import { record } from "../values.js";
-import { registryPost } from "../platform/control-plane.js";
+import { registryRequest } from "../platform/control-plane.js";
 import type { WorkerEnv } from "../platform/env.js";
 
 type PreAuthThrottle = { readonly allowed: boolean; readonly retry_after_ms: number };
@@ -17,8 +17,9 @@ async function authSourceHash(env: WorkerEnv, request: Request): Promise<string>
 }
 
 export async function authThrottleCheck(env: WorkerEnv, kind: "login" | "setup", request: Request): Promise<PreAuthThrottle | undefined> {
-  const response = await registryPost(env, "/auth/throttle/check", { kind, source_hash: await authSourceHash(env, request) });
-  const body = response.ok ? record(await json(response)) : undefined;
+  const payload = JSON.stringify({ kind, source_hash: await authSourceHash(env, request) });
+  const response = await boundedJsonResponse(signal => registryRequest(env, "/auth/throttle/check", "POST", payload, signal));
+  const body = response?.status === 200 ? record(response.value) : undefined;
   return body !== undefined && typeof body.allowed === "boolean" && typeof body.retry_after_ms === "number" && Number.isSafeInteger(body.retry_after_ms) && body.retry_after_ms >= 0
     ? { allowed: body.allowed, retry_after_ms: body.retry_after_ms }
     : undefined;
@@ -26,5 +27,8 @@ export async function authThrottleCheck(env: WorkerEnv, kind: "login" | "setup",
 
 export async function authThrottleRecord(env: WorkerEnv, kind: "login" | "setup", success: boolean, request: Request): Promise<void> {
   // The request includes only outcome metadata; passwords/verifiers never enter logs.
-  try { await registryPost(env, "/auth/throttle/record", { kind, source_hash: await authSourceHash(env, request), success }); } catch { /* authentication result remains authoritative */ }
+  try {
+    const payload = JSON.stringify({ kind, source_hash: await authSourceHash(env, request), success });
+    await boundedJsonResponse(signal => registryRequest(env, "/auth/throttle/record", "POST", payload, signal));
+  } catch { /* authentication result remains authoritative */ }
 }

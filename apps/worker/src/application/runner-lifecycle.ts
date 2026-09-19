@@ -1,5 +1,5 @@
 import { cancelRunnerPolicyMutation } from "./runner-policy.js";
-import { controlPlaneUnavailable } from "../platform/control-plane.js";
+import { beginRunnerPolicyMutation } from "./runner-policy.js";
 import { runnerMutationState } from "../platform/runner-state.js";
 import { signedInternalHeaders } from "../platform/control-plane.js";
 import type { WorkerEnv } from "../platform/env.js";
@@ -15,11 +15,7 @@ export async function releaseUncommittedRunnerFence(env: WorkerEnv, runnerId: st
 }
 
 export async function fenceRunnerTransport(env: WorkerEnv, runnerId: string, mutationId: string): Promise<Response> {
-  const body = JSON.stringify({ mutation_id: mutationId, runner_id: runnerId });
-  const headers = await signedInternalHeaders(env, "POST", "/begin-policy-mutation", body);
-  if (headers === undefined) return controlPlaneUnavailable();
-  try { return await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/begin-policy-mutation", { method: "POST", headers, body })); }
-  catch { return new Response("runner unavailable", { status: 503 }); }
+  return beginRunnerPolicyMutation(env, runnerId, mutationId);
 }
 
 export async function revokeRunnerTransport(env: WorkerEnv, runnerId: string, mutationId: string, allowLifecycleChange = false): Promise<void> {
@@ -29,7 +25,10 @@ export async function revokeRunnerTransport(env: WorkerEnv, runnerId: string, mu
   let response: Response;
   try { response = await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/revoke", { method: "POST", headers, body })); }
   catch (error) { throw error; }
-  if (!response.ok) throw new Error(`RunnerDO revoke rejected with status ${response.status}`);
+  if (response.status !== 204) {
+    void response.body?.cancel().catch(() => undefined);
+    throw new Error(`RunnerDO revoke did not confirm completion (${response.status})`);
+  }
 }
 
 export async function deleteRunnerTransport(env: WorkerEnv, runnerId: string, mutationId: string): Promise<void> {
@@ -37,7 +36,10 @@ export async function deleteRunnerTransport(env: WorkerEnv, runnerId: string, mu
   const headers = await signedInternalHeaders(env, "POST", "/delete", body);
   if (headers === undefined) throw new Error("control plane is not configured");
   const response = await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/delete", { method: "POST", headers, body }));
-  if (!response.ok) throw new Error(`RunnerDO delete rejected with status ${response.status}`);
+  if (response.status !== 204) {
+    void response.body?.cancel().catch(() => undefined);
+    throw new Error(`RunnerDO delete did not confirm completion (${response.status})`);
+  }
 }
 
 /** Resolve a fenced mutation after a Registry response that may have been

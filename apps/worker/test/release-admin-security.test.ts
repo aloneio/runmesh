@@ -6,6 +6,9 @@ import { randomBase64Url, sha256Hex, passwordVerifier } from "../src/security.js
 import { LOGIN_CSRF_COOKIE } from "../src/http/constants.js";
 import { adminUpstreamError } from "../src/http/responses.js";
 import { handleBrowserRunnerAction } from "../src/http/runner-actions.js";
+import { beginRunnerPolicyMutation, cancelRunnerPolicyMutation, mutateRunnerPolicy, pushRunnerPolicy } from "../src/application/runner-policy.js";
+import { deleteRunnerTransport, fenceRunnerTransport, revokeRunnerTransport } from "../src/application/runner-lifecycle.js";
+import { runnerMutationState } from "../src/platform/runner-state.js";
 
 async function fixture() {
   const id = env.REGISTRY.idFromName(`audit-admin-${crypto.randomUUID()}`), stub = env.REGISTRY.get(id);
@@ -19,6 +22,99 @@ async function fixture() {
   const headers = { origin: "https://audit.test", cookie: `__Host-runmesh_admin_session=${session}; __Host-runmesh_admin_csrf=${csrf}`, "content-type": "application/x-www-form-urlencoded" };
   return { stub, localEnv, hash, csrf, headers };
 }
+
+it.each(["create", "rotate"] as const)("does not display an unconfirmed MCP %s credential", async action => {
+  const f = await fixture(), original = f.localEnv.REGISTRY.get.bind(f.localEnv.REGISTRY);
+  const path = action === "create" ? "/auth/clients" : "/auth/clients/test-client/rotate";
+  const publicPath = action === "create" ? "/admin/clients" : "/admin/clients/test-client/rotate";
+  for (const failure of [202, 503, "malformed", "wrong-client", "wrong-prefix", "revoked"] as const) {
+    let attempts = 0;
+    (f.localEnv.REGISTRY as any).get = (id: DurableObjectId) => ({ fetch: async (request: Request) => {
+      if (new URL(request.url).pathname !== path) return original(id).fetch(request);
+      attempts++;
+      if (typeof failure === "number") return new Response("PRIVATE_UPSTREAM_DIAGNOSTIC", { status: failure });
+      if (failure === "malformed") return new Response("{");
+      const input = await request.json() as Record<string, unknown>;
+      return Response.json({ client_id: failure === "wrong-client" ? "other-client" : input.client_id ?? "test-client",
+        secret_prefix: failure === "wrong-prefix" ? "mismatch" : input.secret_prefix,
+        secret_version: 2, revoked_at_ms: failure === "revoked" ? Date.now() : null });
+    } });
+    const response = await worker.fetch(new Request(`https://audit.test${publicPath}`, {
+      method: "POST", headers: f.headers, body: new URLSearchParams({ csrf_token: f.csrf, label: "Test client", scopes: "coding:read" }),
+    }), f.localEnv, {} as ExecutionContext);
+    expect(response.status).toBe(503); expect(response.headers.get("location")).toBeNull();
+    const page = await response.text();
+    expect(page).not.toMatch(/\/[A-Za-z0-9_-]{43}\/mcp/u); expect(page).not.toContain("PRIVATE_UPSTREAM_DIAGNOSTIC");
+    expect(attempts).toBe(1);
+  }
+});
+
+it.each(["rename", "revoke", "scopes", "reset-runner", "override", "reset-override"] as const)("preserves unavailability and incomplete receipts for client %s", async action => {
+  const f = await fixture(), original = f.localEnv.REGISTRY.get.bind(f.localEnv.REGISTRY);
+  for (const status of [202, 503]) {
+    let mutations = 0;
+    (f.localEnv.REGISTRY as any).get = (id: DurableObjectId) => ({ fetch: (request: Request) => {
+      if (!new URL(request.url).pathname.startsWith("/auth/clients/")) return original(id).fetch(request);
+      mutations++; return new Response("PRIVATE_UPSTREAM_DIAGNOSTIC", { status });
+    } });
+    const response = await worker.fetch(new Request(`https://audit.test/admin/clients/test-client/${action}`, {
+      method: "POST", headers: f.headers, body: new URLSearchParams({ csrf_token: f.csrf, label: "Test client", scopes: "coding:read", runner_id: "r", read: "true", edit: "false", shell: "false", job_control: "false" }),
+    }), f.localEnv, {} as ExecutionContext);
+    expect(response.status).toBe(503); expect(response.headers.get("location")).toBeNull();
+    expect(await response.text()).not.toContain("PRIVATE_UPSTREAM_DIAGNOSTIC"); expect(mutations).toBe(1);
+  }
+});
+
+it.each([202, 429, 503, "malformed", "invalid-target"] as const)("does not call an enrollment code invalid when its lookup dependency returns %s", async failure => {
+  const runnerGet = vi.fn(() => { throw new Error("Must not contact Runner before a valid lookup"); });
+  const localEnv = { ...env, RUNNER: { ...env.RUNNER, get: runnerGet }, REGISTRY: {
+    idFromName: () => "registry", get: () => ({ fetch: () => typeof failure === "number"
+      ? Response.json({ runner_id: "test-runner" }, { status: failure })
+      : new Response(failure === "malformed" ? "{" : JSON.stringify({ runner_id: "../invalid" })) }),
+  } } as unknown as typeof env;
+  const response = await worker.fetch(new Request("https://audit.test/runner/enroll", { method: "POST",
+    headers: { "content-type": "application/json" }, body: JSON.stringify({ enrollment_code: randomBase64Url(), runner_public_info: { platform: "linux", architecture: "x64", hostname: "test-host", runner_version: "0.1.4", protocol_version: 2 } }),
+  }), localEnv, {} as ExecutionContext);
+  expect(response.status).toBe(503); expect(await response.text()).not.toContain("invalid enrollment");
+  expect(runnerGet).not.toHaveBeenCalled();
+});
+
+it.each([200, 202, 206])("never treats RunnerDO %s as a completed transport mutation", async status => {
+  let calls = 0, cancellations = 0;
+  const localEnv = { ...env, RUNNER: { idFromName: () => "runner", get: () => ({ fetch: () => {
+    calls++; return new Response(new ReadableStream({ cancel() { cancellations++; } }), { status });
+  } }) } } as unknown as typeof env;
+  for (const operation of [fenceRunnerTransport, beginRunnerPolicyMutation, cancelRunnerPolicyMutation, pushRunnerPolicy]) {
+    expect((await operation(localEnv, "r", "mutation")).status).toBe(503);
+  }
+  await expect(revokeRunnerTransport(localEnv, "r", "mutation")).rejects.toThrow("did not confirm completion");
+  await expect(deleteRunnerTransport(localEnv, "r", "mutation")).rejects.toThrow("did not confirm completion");
+  expect(calls).toBe(6); expect(cancellations).toBe(6);
+});
+
+it.each([202, 204])("requires a completed policy commit marker while preserving the outer accepted policy receipt (%s)", async status => {
+  const paths: string[] = [];
+  const localEnv = { ...env, RUNNER: { idFromName: () => "runner", get: () => ({ fetch: (request: Request) => {
+    const path = new URL(request.url).pathname; paths.push(path);
+    if (path === "/mark-policy-committed") return new Response(null, { status });
+    return new Response(null, { status: path === "/policy" ? 503 : 204 });
+  } }) }, REGISTRY: { idFromName: () => "registry", get: () => ({ fetch: (request: Request) =>
+    Response.json(new URL(request.url).pathname.endsWith("/mutation-state")
+      ? { mutation_committed: true, policy_status: "offline_pending", desired_revision: 1, desired_checksum: "a".repeat(64) }
+      : { permissions: { read: true, edit: false, shell: false, job_control: false } }) }) },
+  } as unknown as typeof env;
+  const response = await mutateRunnerPolicy(localEnv, "r", { path: "/runners/r/permissions", method: "POST", payload: {} });
+  expect(response.status).toBe(status === 204 ? 202 : 503);
+  expect(paths).toEqual(status === 204 ? ["/begin-policy-mutation", "/mark-policy-committed", "/policy"] : ["/begin-policy-mutation", "/mark-policy-committed"]);
+  await response.body?.cancel();
+});
+
+it.each([202, 206, "oversized"] as const)("does not infer a committed mutation from a %s state observation", async failure => {
+  const fetch = vi.fn(() => typeof failure === "number" ? Response.json({ mutation_committed: true }, { status: failure })
+    : Response.json({ mutation_committed: true, padding: "x".repeat(16_384) }));
+  const localEnv = { ...env, REGISTRY: { idFromName: () => "registry", get: () => ({ fetch }) } } as unknown as typeof env;
+  expect(await runnerMutationState(localEnv, "r", "mutation")).toBeUndefined(); expect(fetch).toHaveBeenCalledOnce();
+});
 
 it.each([429, 500, 502, 503, 504])("SEC04 administrator mutation preserves dependency unavailability (%s)", async status => {
   let cancelled = false;

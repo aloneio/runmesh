@@ -11,6 +11,11 @@ const protocolPackage = JSON.parse(
 
 export default defineConfig({
   root: fileURLToPath(new URL("./", import.meta.url)),
+  resolve: {
+    alias: {
+      [protocolPackage.name]: fileURLToPath(new URL("../../packages/protocol/src/index.ts", import.meta.url)),
+    },
+  },
   test: {
     include: ["test/**/*.test.ts"],
     exclude: ["**/node_modules/**", "**/.git/**", "**/.audit/**", "**/dist/**"],
@@ -20,8 +25,5 @@ export default defineConfig({
     // the suite deterministic without changing production timeouts.
     testTimeout: 30_000,
     hookTimeout: 30_000,
-    aliases: {
-      [protocolPackage.name]: fileURLToPath(new URL("../../packages/protocol/src/index.ts", import.meta.url)),
-    },
   },
 });

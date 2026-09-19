@@ -11,7 +11,7 @@ export function authEntryDocument(kind: "login" | "setup", csrf: string): string
   const brandHeadline = setup ? "Set up Runmesh" : "Runner &amp; MCP Control Plane";
   const brandDescription = setup
     ? "Create your administrator master password to begin managing distributed runtimes and MCP clients."
-    : "Unified orchestration for distributed secure tool sandboxes, persistent agent runtimes, and MCP client bridges.";
+    : "Coordinate distributed Runner tools, persistent jobs, and MCP client connections.";
   const title = setup ? "Runmesh · Agent Control Plane setup" : "Runmesh · Agent Control Plane login";
   const form = setup
     ? `<div class="input-group"><label for="password">${message("auth.password", "en")}</label><div class="password-input-wrap"><input id="password" type="password" name="password" autocomplete="new-password" required minlength="12">${passwordToggle()}</div></div><div class="input-group"><label for="confirm_password">${message("auth.confirmPassword", "en")}</label><div class="password-input-wrap"><input id="confirm_password" type="password" name="confirm_password" autocomplete="new-password" required minlength="12">${passwordToggle()}</div></div>`

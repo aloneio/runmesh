@@ -1,5 +1,5 @@
 import { BUILD_PROVENANCE } from "../../apps/worker/src/generated-provenance.js";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -67,10 +67,51 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
   let enrolledProfile = "";
   let enrollmentCode = "";
   let worker: ChildProcess | undefined;
+  let workerLog: (() => string) | undefined;
+  let setupComplete = false;
+  let testFailed = false;
+  let teardownStarted = false;
+  let unexpectedWorkerExit = false;
+  let workerDiagnosticsReported = false;
+  const workerEvents: { event: string; at: string; code: number | string | null; signal: string | null; duringTeardown: boolean }[] = [];
   let runner: ChildProcess | undefined;
   let runnerOutput: (() => string) | undefined;
   let clientA: McpClient | undefined;
   let clientB: McpClient | undefined;
+
+  function recordWorkerEvent(event: string, code: number | string | null, signal: string | null): void {
+    workerEvents.push({ event, at: new Date().toISOString(), code, signal, duringTeardown: teardownStarted });
+    if (!teardownStarted) unexpectedWorkerExit = true;
+  }
+
+  function workerDiagnosticState(): string {
+    // These are the Wrangler launcher's events; its wrapper can map an inner
+    // process's signal termination to exit code 0, so timing also matters.
+    return JSON.stringify({ pid: worker?.pid, exitCode: worker?.exitCode, signalCode: worker?.signalCode, teardownStarted, events: workerEvents });
+  }
+
+  function reportWorkerDiagnostics(reason: string): void {
+    if (workerDiagnosticsReported) return;
+    workerDiagnosticsReported = true;
+    let output = workerLog?.() ?? "";
+    // The ring buffer may start partway through a credential-bearing line.
+    if (output.length === 8_192) {
+      const firstNewline = output.indexOf("\n");
+      output = firstNewline < 0 ? "[unterminated log line omitted]" : output.slice(firstNewline + 1);
+    }
+    for (const secret of [...Object.values(workerEnv), adminPassword, enrollmentCode, clientA?.endpoint, clientB?.endpoint]) {
+      if (secret !== undefined && secret.length >= 8) output = output.replaceAll(secret, "[redacted]");
+    }
+    output = output.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+      .replace(/^.*(?:authorization|cookie|token|secret|password|pepper|api[_-]?key).*$/gim, "[credential-bearing log line redacted]")
+      .replace(/[A-Za-z0-9_-]{32,}/g, "[redacted]")
+      .slice(-8_192);
+    console.error(`E2E Worker diagnostic (${reason}): ${workerDiagnosticState()}\n${output || "[no Worker output]"}`);
+  }
+
+  beforeEach(({ onTestFailed }) => {
+    onTestFailed(() => { testFailed = true; });
+  });
 
   beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), "mcp-runner-e2e-"));
@@ -86,8 +127,11 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     worker = spawn(process.execPath, [wranglerCli, "dev", "--local", "--ip", "127.0.0.1", "--config", "apps/worker/wrangler.jsonc", "--port", String(workerPort), "--persist-to", workerPersist, "--show-interactive-dev-session=false", ...workerVars()], {
       cwd: projectDirectory, env: { ...process.env, ...workerEnv }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
     });
-    const workerLog = collectOutput(worker);
-    await waitForWorker(workerLog);
+    workerLog = collectOutput(worker);
+    worker.once("error", (error) => recordWorkerEvent("error", diagnosticErrorCode(error), null));
+    worker.once("exit", (code, signal) => recordWorkerEvent("exit", code, signal));
+    worker.once("close", (code, signal) => recordWorkerEvent("close", code, signal));
+    await waitForWorker(workerDiagnosticState);
     const createdClients = await setupAdminAndClients();
     enrollmentCode = await createBrowserRunnerEnrollment();
     expect(enrollmentCode).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -144,11 +188,21 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     }, 15_000, runnerLog);
     expect((await mcpTool("runner_select", { runner_id: runnerId }, clientA)).isError).not.toBe(true);
     expect((await mcpTool("runner_select", { runner_id: runnerId }, clientB)).isError).not.toBe(true);
+    setupComplete = true;
   }, 90_000);
 
   afterAll(async () => {
-    await stop(runner); await stop(worker);
-    if (root) await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    if (!setupComplete || testFailed || unexpectedWorkerExit) {
+      reportWorkerDiagnostics(!setupComplete ? "setup failed" : testFailed ? "test failed" : "unexpected process exit");
+    }
+    teardownStarted = true;
+    try {
+      await stop(runner); await stop(worker);
+      if (root) await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    } catch (error) {
+      reportWorkerDiagnostics("teardown failed");
+      throw error;
+    }
   }, 30_000);
 
   it("R01 actual local Worker exposes its compiled source without a deployment tag", async () => {
@@ -910,8 +964,31 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
   }
 
   async function adminCredentials(): Promise<{ readonly adminJar: CookieJar; readonly csrf: string }> {
-    const loginPage = await fetch(`${workerUrl}/`, { redirect: "manual" });
-    const loginCsrf = formToken(await loginPage.text());
+    let loginPage: Response;
+    try {
+      loginPage = await fetch(`${workerUrl}/`, { redirect: "manual" });
+    } catch (error) {
+      throw new Error(`E2E login page failed: ${JSON.stringify({ stage: "fetch", code: diagnosticErrorCode(error) })}`);
+    }
+    const mediaType = loginPage.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "absent";
+    const contentType = /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(mediaType) && mediaType.length <= 128 ? mediaType : "absent-or-invalid";
+    const responseMetadata = { status: loginPage.status, contentType };
+    if (loginPage.status !== 200 || mediaType !== "text/html") {
+      void loginPage.body?.cancel().catch(() => undefined);
+      throw new Error(`E2E login page failed: ${JSON.stringify({ stage: "headers", ...responseMetadata })}`);
+    }
+    let loginHtml: string;
+    try {
+      loginHtml = await loginPage.text();
+    } catch (error) {
+      throw new Error(`E2E login page failed: ${JSON.stringify({ stage: "body", ...responseMetadata, code: diagnosticErrorCode(error) })}`);
+    }
+    let loginCsrf: string;
+    try {
+      loginCsrf = formToken(loginHtml);
+    } catch {
+      throw new Error(`E2E login page failed: ${JSON.stringify({ stage: "csrf", ...responseMetadata, bodyCharacters: loginHtml.length, hasForm: /<form\b/i.test(loginHtml) })}`);
+    }
     const loginCookie = cookieFrom(loginPage, "__Host-runmesh_login_csrf");
     const login = await submitForm("/login", { csrf_token: loginCsrf, password: adminPassword }, cookieJar([["__Host-runmesh_login_csrf", loginCookie]]));
     expect(login.status).toBe(303);
@@ -1004,6 +1081,11 @@ function collectOutput(child: ChildProcess): () => string {
   const collect = (chunk: Buffer | string): void => { output = `${output}${chunk.toString()}`.slice(-8_192); };
   child.stdout?.on("data", collect); child.stderr?.on("data", collect);
   return () => output;
+}
+function diagnosticErrorCode(error: unknown): string {
+  const details = error as { readonly code?: unknown; readonly cause?: { readonly code?: unknown } } | null | undefined;
+  const code = details?.code ?? details?.cause?.code;
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : "unknown";
 }
 function delay(ms: number): Promise<void> { return new Promise((resolveDelay) => setTimeout(resolveDelay, ms)); }
 async function stop(child: ChildProcess | undefined): Promise<void> {

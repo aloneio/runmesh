@@ -132,10 +132,14 @@ export class RegistryHistory {
   }
 
   public listMcpCalls(runnerId: string, limit = 100): unknown[] {
+    const lifecycleId = this.ports.runnerRow(runnerId)?.lifecycle_id;
+    if (lifecycleId === undefined) return [];
     const boundedLimit = Math.min(Math.max(limit, 1), MAX_MCP_CALLS_PER_RUNNER);
     const rows = this.storage.sql.exec<McpCallRow>(
-      "SELECT call_json FROM mcp_calls WHERE runner_id = ? AND completed_at_ms > ? ORDER BY completed_at_ms DESC, call_id DESC LIMIT ?",
-      runnerId, Date.now() - MCP_AUDIT_RETENTION_MS, boundedLimit,
+      // Retained audit rows outlive Runner deletion. Scope before applying the
+      // limit so a replacement identity cannot see or be crowded out by them.
+      "SELECT call_json FROM mcp_calls WHERE runner_id = ? AND completed_at_ms > ? AND CASE WHEN json_valid(call_json) THEN json_extract(call_json, '$.lifecycle_id') END = ? ORDER BY completed_at_ms DESC, call_id DESC LIMIT ?",
+      runnerId, Date.now() - MCP_AUDIT_RETENTION_MS, lifecycleId, boundedLimit,
     ).toArray();
     return rows.flatMap((row) => {
       try { return [projectMcpAuditMetadata(JSON.parse(row.call_json))]; } catch { return []; }

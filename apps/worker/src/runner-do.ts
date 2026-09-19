@@ -321,6 +321,7 @@ export class RunnerDO {
       // Mark synchronously before the first await. Two frames delivered in
       // the same event turn must not both allocate Registry epochs.
       this.helloInFlight.add(ws);
+      let welcomeSent = false;
       try {
       if (message.runner.runner_id !== attachment.runnerId) {
         ws.close(1008, "runner id mismatch");
@@ -377,8 +378,8 @@ export class RunnerDO {
       // race a newer connection. Re-read the complete transport identity
       // before binding admission or sending welcome so an old socket cannot
       // become authorized after a replacement wins.
-      if (!(await this.verifySocketSession(ws, attachment, true))) return;
       const beforeHello = await this.admission();
+      if (!(await this.verifySocketSession(ws, attachment, true))) return;
       const persistedHello = await this.persistHelloAdmission(beforeHello, attachment);
       if (!persistedHello) {
         // Registry connection epochs are monotonic. A hello that completed
@@ -391,7 +392,9 @@ export class RunnerDO {
       for (const existing of this.ctx.getWebSockets("runner")) {
         if (existing !== ws) {
           const old = existing.deserializeAttachment() as ConnectionAttachment | null;
-          if (old?.runnerId === attachment.runnerId
+          // A pending hello has not allocated an epoch yet and may become the
+          // next session. Its own deadline bounds it until Registry decides.
+          if (old?.runnerId === attachment.runnerId && old.epoch > 0
             && (old.lifecycleId !== attachment.lifecycleId || old.epoch < attachment.epoch)) {
             existing.close(4000, "replaced by newer session");
           }
@@ -407,7 +410,7 @@ export class RunnerDO {
         },
         ...(isPolicy(body.desired_policy) ? { desired_policy: body.desired_policy } : {}),
       };
-      try { ws.send(encodeWireFrame(welcome)); } catch {
+      try { ws.send(encodeWireFrame(welcome)); welcomeSent = true; } catch {
         // A concurrent revoke/delete may close the socket after the Registry
         // handshake but before the welcome is published. Treat that as a
         // normal stale transport rather than leaking an uncaught DO exception.
@@ -415,6 +418,11 @@ export class RunnerDO {
       }
       } finally {
         this.helloInFlight.delete(ws);
+        // After welcome, removing an obsolete alarm is optional maintenance.
+        // A storage outage here must not close an already validated session.
+        // Earlier admission/session failures still reach the transport catch.
+        if (welcomeSent) await this.scheduleHelloDeadline().catch(() => undefined);
+        else await this.scheduleHelloDeadline();
       }
       return;
     }
@@ -538,8 +546,8 @@ export class RunnerDO {
 
   public async webSocketClose(ws: WebSocket): Promise<void> {
     this.rejectBridgeWaiters(ws, "runner connection closed");
-    await this.markSocket(ws, "offline");
-    await this.scheduleHelloDeadline();
+    try { await this.markSocket(ws, "offline"); }
+    finally { await this.scheduleHelloDeadline(); }
   }
   public webSocketError(ws: WebSocket): Promise<void> {
     this.rejectBridgeWaiters(ws, "runner connection error");
@@ -759,6 +767,10 @@ export class RunnerDO {
   private async admission(): Promise<AdmissionState> {
     if (this.admissionState !== undefined) return this.admissionState;
     const stored = await this.ctx.storage.get<AdmissionState>(ADMISSION_STATE_KEY);
+    // Concurrent events may already have initialized (and mutated) admission
+    // while this read was pending. Never replace their fence owner with an
+    // older cold-start snapshot.
+    if (this.admissionState !== undefined) return this.admissionState;
     // A restart/hibernation is an authorization boundary. Even a previously
     // reconciled value must be fenced until this session has rechecked the
     // Registry identity against its current socket epoch and credential.
@@ -787,6 +799,10 @@ export class RunnerDO {
       const currentLifecycle = current.lifecycleId;
       const incomingLifecycle = attachment.lifecycleId;
       if (currentLifecycle !== null && incomingLifecycle === null) return true;
+      // Lifecycle nonces have no ordering. A different identity acquired
+      // during the Registry probe is newer than this receipt even if its
+      // credential and epoch counters restarted at one.
+      if (currentLifecycle !== beforeHello.lifecycleId && currentLifecycle !== incomingLifecycle) return true;
       if (currentLifecycle !== null && currentLifecycle !== incomingLifecycle) return false;
       if (current.credentialVersion !== null && current.credentialVersion > attachment.credentialVersion) return true;
       if (current.credentialVersion !== attachment.credentialVersion) return false;
@@ -1138,6 +1154,9 @@ export class RunnerDO {
   private async scheduleHelloDeadline(): Promise<void> {
     let earliest: number | undefined;
     for (const socket of this.ctx.getWebSockets("runner")) {
+      // Closing sockets can remain attached until the peer acknowledges the
+      // close. They must not continually rearm an already-expired deadline.
+      if (socket.readyState === WebSocket.CLOSING || socket.readyState === WebSocket.CLOSED) continue;
       const attachment = socket.deserializeAttachment() as ConnectionAttachment | null;
       if (attachment?.epoch === 0 && (earliest === undefined || attachment.helloDeadlineMs < earliest)) earliest = attachment.helloDeadlineMs;
     }

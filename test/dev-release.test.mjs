@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFile, writeFile, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { readFile, writeFile, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -11,6 +11,7 @@ import { githubJson } from "../scripts/dev-release/github.mjs";
 import { buildManifest, buildDevelopmentManifest } from "../scripts/release-manifest.mjs";
 import { bundleRunner } from "../scripts/build-runner-bundle.mjs";
 import { publicationPreflight } from "../scripts/dev-release/preflight.mjs";
+import { readPlan } from "../scripts/dev-release/io.mjs";
 
 const plan = () => createDevPlan({ source_sha: "a".repeat(40), source_tree: "b".repeat(40), stable_sha: "c".repeat(40), stable_version: "0.1.3", stable_release: { release_id: 9, commit_sha: "c".repeat(40), manifest_sha256: "f".repeat(64) }, push_number: 5, run_id: 123, published_at: "2026-09-16T00:00:00Z" });
 const env = () => ({ GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/heads/dev", GITHUB_REPOSITORY: "aloneio/runmesh", GITHUB_SHA: "a".repeat(40), GITHUB_RUN_NUMBER: "5", GITHUB_RUN_ID: "123" });
@@ -38,6 +39,22 @@ test("plan is closed and bound to source, branch, repository and run", () => {
   const p = plan(); assert.deepEqual(validateDevPlan(JSON.parse(JSON.stringify(p))), p);
   for (const change of [{ version: "0.1.4" }, { tag: "v0.1.3" }, { channel: "stable" }, { run_id: 0 }, { source_sha: "bad" }, { secret: "not-allowed" }, { published_at: "2026-02-30T00:00:00Z" }]) assert.throws(() => validateDevPlan({ ...p, ...change }));
   for (const change of [{ GITHUB_REF: "refs/heads/main" }, { GITHUB_EVENT_NAME: "workflow_dispatch" }, { GITHUB_SHA: "d".repeat(40) }, { GITHUB_RUN_NUMBER: "10" }, { GITHUB_RUN_ID: "124" }, { GITHUB_REPOSITORY: "fork/runmesh" }]) assert.throws(() => assertPlanContext(p, { ...env(), ...change }));
+});
+
+test("development plan reads reject oversized, nonregular and redirected inputs", async t => {
+  const dir = await temp(t), path = join(dir, "plan.json"), p = plan();
+  await writeFile(path, JSON.stringify(p));
+  assert.deepEqual(await readPlan(path), p);
+  await assert.rejects(readPlan(dir));
+  await writeFile(path, JSON.stringify(p).padEnd(4097, " "));
+  await assert.rejects(readPlan(path));
+  await writeFile(path, JSON.stringify(p));
+  // Symlink creation on Windows can require a privilege unrelated to this
+  // boundary; Linux CI exercises the redirected-file rejection unconditionally.
+  const alias = join(dir, "plan-link.json");
+  try { await symlink(path, alias, "file"); }
+  catch (error) { if (process.platform === "win32" && ["EPERM", "EACCES"].includes(error.code)) { t.diagnostic("Windows symlink privilege unavailable"); return; } throw error; }
+  await assert.rejects(readPlan(alias));
 });
 test("development manifests require a validated plan; stable manifest binding is unchanged", async t => {
   const dir = await temp(t), p = plan(); await writeFile(join(dir, `runmesh-runner-${p.version}.tgz`), "synthetic archive");

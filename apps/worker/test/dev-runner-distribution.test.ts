@@ -1,7 +1,7 @@
 import type { DevelopmentReleaseCache, DevelopmentReleaseRefreshScheduler, DevelopmentReleaseVerifier, DevelopmentReleaseDependencies, RunnerReleaseEnvironment } from "../src/contracts/runner-release.js";
 import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import worker from "../src/index.js";
-import { registryDevelopmentReleaseCache } from "../src/http/release-cache.js";
+import { developmentReleaseDependencies, registryDevelopmentReleaseCache } from "../src/http/release-cache.js";
 import { describe, expect, it, vi } from "vitest";
 import { discoverDevelopmentRunnerRelease as discoverRelease, resolveRunnerReleaseDescriptor as resolveRelease, createDevelopmentReleaseRuntime, verifyDevelopmentRunnerRelease } from "../src/distribution/release.js";
 import { FIXED_RELEASE_VERSION, installerReleaseTarget, renderPosixInstaller, renderPowerShellInstaller } from "../src/installer.js";
@@ -281,6 +281,86 @@ describe("development Runner distribution", () => {
 
 
 describe("explicit development release runtime", () => {
+  it("reserves one cold refresh before cache I/O and shares only the completed descriptor", async () => {
+    let finish!: (response: Response) => void;
+    const fetchImpl = vi.fn(() => new Promise<Response>(resolve => { finish = resolve; })) as typeof fetch;
+    const cache = { match: vi.fn(async () => undefined), put: vi.fn(async () => undefined) };
+    const verify = vi.fn(async () => undefined);
+    const dependencies: DevelopmentReleaseDependencies = { fetch: fetchImpl, verify, cache, now: () => Date.now(), runtime: createDevelopmentReleaseRuntime() };
+    const first = discoverRelease(dependencies);
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    const concurrent = await Promise.allSettled(Array.from({ length: 20 }, () => discoverRelease(dependencies)));
+    expect(concurrent.every(result => result.status === "rejected")).toBe(true);
+    expect(cache.match).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(Object.values(dependencies.runtime).some(value => value instanceof Promise)).toBe(false);
+    finish(Response.json([release(devVersion(1), "2026-09-16T09:00:00Z")]));
+    const descriptor = await first;
+    expect(await Promise.all(Array.from({ length: 20 }, () => discoverRelease(dependencies)))).toEqual(Array(20).fill(descriptor));
+    expect(cache.put).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(verify).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds repeated failed cold refreshes and recovers after a short in-memory cooldown", async () => {
+    let now = Date.now();
+    const fetchImpl = vi.fn().mockResolvedValueOnce(Response.json([]))
+      .mockImplementation(async () => Response.json([release(devVersion(1), "2026-09-16T09:00:00Z")])) as typeof fetch;
+    const cache = { match: vi.fn(async () => undefined), put: vi.fn(async () => undefined) };
+    const dependencies: DevelopmentReleaseDependencies = { fetch: fetchImpl, verify: async () => undefined, cache, now: () => now, runtime: createDevelopmentReleaseRuntime() };
+    for (let round = 0; round < 2; round++) {
+      const results = await Promise.allSettled(Array.from({ length: 20 }, () => discoverRelease(dependencies)));
+      expect(results.every(result => result.status === "rejected")).toBe(true);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(cache.match).toHaveBeenCalledTimes(1);
+      expect(cache.put).not.toHaveBeenCalled();
+    }
+    now += 5_001;
+    expect((await discoverRelease(dependencies)).package_version).toBe(devVersion(1));
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(cache.put).toHaveBeenCalledTimes(1);
+  });
+
+  it("renews an owned reservation after slow cache I/O for the complete network refresh budget", async () => {
+    let now = Date.now();
+    let finishRead!: (response: Response | undefined) => void;
+    let finishRefresh!: (response: Response) => void;
+    const cache = { match: vi.fn().mockImplementationOnce(() => new Promise<Response | undefined>(resolve => { finishRead = resolve; })).mockResolvedValue(undefined), put: vi.fn(async () => undefined) };
+    const fetchImpl = vi.fn().mockImplementationOnce(() => new Promise<Response>(resolve => { finishRefresh = resolve; }))
+      .mockImplementation(async () => Response.json([release(devVersion(1), "2026-09-16T09:00:00Z")])) as typeof fetch;
+    const dependencies: DevelopmentReleaseDependencies = { fetch: fetchImpl, verify: async () => undefined, cache, now: () => now, runtime: createDevelopmentReleaseRuntime() };
+    const first = discoverRelease(dependencies);
+    expect(cache.match).toHaveBeenCalledOnce();
+    now += 20_001;
+    finishRead(undefined);
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledOnce());
+    try {
+      const concurrent = await Promise.allSettled(Array.from({ length: 20 }, () => discoverRelease(dependencies)));
+      expect(concurrent.every(result => result.status === "rejected")).toBe(true);
+      now += 19_999;
+      await expect(discoverRelease(dependencies)).rejects.toThrow("refresh temporarily unavailable");
+      expect(cache.match).toHaveBeenCalledOnce();
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      finishRefresh(Response.json([release(devVersion(1), "2026-09-16T09:00:00Z")]));
+      expect((await first).package_version).toBe(devVersion(1));
+      expect(cache.put).toHaveBeenCalledOnce();
+    } finally {
+      finishRefresh(Response.json([release(devVersion(1), "2026-09-16T09:00:00Z")]));
+      await first.catch(() => undefined);
+    }
+  });
+
+  it("isolates discovery values and cooldowns by Registry binding", async () => {
+    const firstBinding = {}, secondBinding = {};
+    const first = developmentReleaseDependencies(null, firstBinding);
+    expect(developmentReleaseDependencies(null, firstBinding).runtime).toBe(first.runtime);
+    const second = developmentReleaseDependencies(null, secondBinding);
+    expect(second.runtime).not.toBe(first.runtime);
+    await expect(discoverRelease({ ...first, fetch: responseFetch([], 404), verify: async () => undefined })).rejects.toThrow();
+    expect((await discoverRelease({ ...second, fetch: responseFetch([release(devVersion(1), "2026-09-16T09:00:00Z")]), verify: async () => undefined })).package_version).toBe(devVersion(1));
+    expect(first.runtime.cached).toBeUndefined();
+  });
+
   it("uses the same runtime cache with injected fetch and verifier", async () => {
     let now = Date.now();
     const fetchImpl = responseFetch([release(devVersion(0), "2026-09-16T08:00:00Z")]);
@@ -298,12 +378,13 @@ describe("explicit development release runtime", () => {
   });
 
   it("does not let a late persistent read overwrite a newer runtime refresh", async () => {
-    const now = Date.now();
+    let now = Date.now();
     const seed = await discoverDevelopmentRunnerRelease(responseFetch([release(devVersion(0), "2026-09-16T08:00:00Z")]), async () => undefined);
     let finishRead!: (response: Response | undefined) => void;
     const cache = { match: vi.fn().mockImplementationOnce(() => new Promise<Response | undefined>(resolve => { finishRead = resolve; })).mockResolvedValue(undefined), put: vi.fn(async () => undefined) };
     const dependencies: DevelopmentReleaseDependencies = { fetch: responseFetch([release(devVersion(1), "2026-09-16T09:00:00Z")]), verify: async () => undefined, cache, now: () => now, runtime: createDevelopmentReleaseRuntime() };
     const older = discoverRelease(dependencies);
+    now += 20_001; // Recover an abandoned request's expired reservation.
     const newer = await discoverRelease(dependencies);
     finishRead(Response.json({ schema_version: 1, verified_at_ms: now - 1000, descriptor: seed }));
     expect((await older).package_version).toBe(newer.package_version);
@@ -311,12 +392,14 @@ describe("explicit development release runtime", () => {
   });
 
   it("does not let an older refresh finishing last roll back a newer committed refresh", async () => {
+    let now = Date.now();
     let finishOlder!: (response: Response) => void;
     const fetchImpl = vi.fn().mockImplementationOnce(() => new Promise<Response>(resolve => { finishOlder = resolve; })).mockImplementation(async () => Response.json([release(devVersion(1), "2026-09-16T09:00:00Z")])) as typeof fetch;
     const cache = { match: async () => undefined, put: vi.fn(async () => undefined) };
-    const dependencies: DevelopmentReleaseDependencies = { fetch: fetchImpl, verify: async () => undefined, cache, now: () => Date.now(), runtime: createDevelopmentReleaseRuntime() };
+    const dependencies: DevelopmentReleaseDependencies = { fetch: fetchImpl, verify: async () => undefined, cache, now: () => now, runtime: createDevelopmentReleaseRuntime() };
     const older = discoverRelease(dependencies);
-    // Both calls enter the request-owned refresh before either can cache a result.
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    now += 20_001; // An ignored abort cannot hold the value-only lease forever.
     const newer = discoverRelease(dependencies);
     expect((await newer).package_version).toBe(devVersion(1));
     finishOlder(Response.json([release(devVersion(0), "2026-09-16T08:00:00Z")]));
@@ -372,6 +455,8 @@ it("a failed older refresh cannot replace a concurrent verified runtime value wi
   const cache = { match: async () => Response.json({ schema_version: 1, verified_at_ms: verifiedAtMs, descriptor: seed }), put: vi.fn(async () => undefined) };
   const dependencies: DevelopmentReleaseDependencies = { fetch: fetchImpl, verify: async () => undefined, cache, now: () => now, runtime: createDevelopmentReleaseRuntime() };
   const older = discoverRelease(dependencies);
+  await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+  now += 20_001;
   const newer = discoverRelease(dependencies);
   expect((await newer).package_version).toBe(devVersion(1));
   const newerVerification = dependencies.runtime.cached?.verified_at_ms;
