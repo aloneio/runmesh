@@ -36,7 +36,7 @@ export class ExternalAuditHistory {
     const message = error instanceof Error ? error.message : "";
     const dailyQuota = /(?:rows[_ ]?(?:read|written)|daily)/i.test(message) && /(?:exceed|quota|limit)/i.test(message);
     const until = dailyQuota ? (Math.floor(now / 86_400_000) + 1) * 86_400_000 + 30_000 : now + 15 * 60_000;
-    this.disabledUntilMs = until;
+    this.disabledUntilMs = Math.max(this.disabledUntilMs, until);
     this.failures += 1;
     this.ready = undefined;
     // No SQL or log write here: a failed history store cannot consume core

@@ -420,5 +420,13 @@ function assertBoundedJsonNesting(text: string): void {
   }
 }
 
-export { failureMetadata } from "./failure.js";
+export { failureMetadata, isKnownRpcFailureCode, RPC_FAILURE_CODES } from "./failure.js";
+export { BytePageMetadataSchema, bytePageMetadata } from "./pagination.js";
 export type { RpcFailureClass, RpcOperationState, RpcNextAction, RpcFailureMetadata } from "./failure.js";
+
+export { RPC_OPERATIONS, RPC_OPERATION_METHODS, RPC_OPERATION_CONTRACT, rpcOperation, rpcPermissionRequirement } from "./operations.js";
+export type { RpcOperationName, RpcOperationSpec, OperationScope, OperationPermission } from "./operations.js";
+export { RunnerCapabilityReportSchema } from "./capabilities.js";
+export { ContextPruneOptionsSchema, ContextStorageReportSchema, ContextPruneReportSchema, safeContextStorageReport } from "./context-storage.js";
+
+export { BoundBytePageMetadataSchema, BoundFileCursorSchema, BoundLogCursorSchema, isBoundCursor } from "./cursors.js";

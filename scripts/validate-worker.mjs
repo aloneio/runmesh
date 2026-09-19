@@ -52,23 +52,29 @@ let interrupted = false;
 let spawnFailed = false;
 let stopping = false;
 let childExited = false;
-let outputTail = "";
+let streamsClosed = false;
+let rootTerminationRequested = false;
+const outputTails = new Map();
 let stopTimer;
 let timeoutTimer;
 let forceExitTimer;
 
-function forward(stream, chunk) {
+function forward(source, stream, chunk) {
   const text = chunk.toString();
-  stream.write(text);
-  outputTail = `${outputTail}${text}`.slice(-(successMarker.length + 32));
-  if (!markerSeen && outputTail.includes(successMarker)) {
+  stream.write(chunk);
+  // Check the entire new chunk before bounding retained state. A telemetry
+  // trailer can follow the marker in the same chunk. Streams are independent:
+  // stderr must not interrupt or manufacture a partial stdout marker.
+  const combined = `${outputTails.get(source) ?? ""}${text}`;
+  if (!markerSeen && combined.includes(successMarker)) {
     markerSeen = true;
     requestStop();
   }
+  outputTails.set(source, combined.slice(-(successMarker.length - 1)));
 }
 
-child.stdout.on("data", (chunk) => forward(process.stdout, chunk));
-child.stderr.on("data", (chunk) => forward(process.stderr, chunk));
+child.stdout.on("data", (chunk) => forward("stdout", process.stdout, chunk));
+child.stderr.on("data", (chunk) => forward("stderr", process.stderr, chunk));
 child.once("error", (error) => {
   spawnFailed = true;
   clearTimeout(timeoutTimer);
@@ -90,8 +96,14 @@ timeoutTimer = setTimeout(() => {
   requestStop();
 }, timeoutMs);
 
-child.once("exit", (code, signal) => {
+child.once("exit", () => {
   childExited = true;
+});
+
+// exit does not guarantee that the child's pipes have drained. Only close
+// finalizes the result; keep the timeout active while descendants hold stdio.
+child.once("close", (code, signal) => {
+  streamsClosed = true;
   clearTimeout(timeoutTimer);
   // Keep the post-marker stop timer alive even if Wrangler's parent exits
   // quickly: its detached esbuild/service descendants can outlive the parent
@@ -100,7 +112,7 @@ child.once("exit", (code, signal) => {
   clearTimeout(forceExitTimer);
   if (timedOut || interrupted || spawnFailed) {
     process.exitCode = 1;
-  } else if (markerSeen && !interrupted && !spawnFailed) {
+  } else if (markerSeen && ((code === 0 && signal === null) || (rootTerminationRequested && (process.platform === "win32" || signal === "SIGTERM" || signal === "SIGKILL")))) {
     // Wrangler may report success and then be terminated solely to release a
     // leaked esbuild child. Preserve the successful dry-run result.
     process.exitCode = 0;
@@ -125,6 +137,7 @@ function requestStop() {
   // process-tree termination. The hard timeout remains bounded if it ignores
   // the signal or leaves descendants behind.
   stopTimer = setTimeout(() => {
+    rootTerminationRequested = !childExited;
     terminateTree(child.pid).catch((error) => {
       process.stderr.write(`failed to terminate Wrangler process tree: ${error instanceof Error ? error.message : String(error)}\n`);
     });
@@ -143,7 +156,7 @@ async function terminateTree(pid) {
     try { process.kill(-pid, "SIGKILL"); } catch { /* process already exited */ }
   }
   // Do not let an unexpectedly unkillable child hold the release gate forever.
-  if (!childExited) {
+  if (!streamsClosed) {
     forceExitTimer = setTimeout(() => {
       process.stderr.write("Wrangler process tree did not terminate cleanly.\n");
       process.exit(1);

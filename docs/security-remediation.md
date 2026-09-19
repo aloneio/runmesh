@@ -1,6 +1,6 @@
-# Current remediation and historical record
+# Historical security remediation
 
-The current source is the **published 0.1.1 stable patch**. The immutable signed assets were published from the verified `dev` commit and independently re-downloaded and verified before the checked-in production hosted-distribution gate was enabled. The prior v0.1.0 release remains immutable and must not be overwritten. See [release readiness](release-readiness.md) for the current gates and operational contract. The following dated material is historical; it is not authority to enable an older artifact for the current source.
+Use the [security model](security.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md) for current operation. The [security ledger](../release/security-readiness.json) lists candidate regression requirements. The records below and the [2026-09-17 audit](release-audit-20260917.md) describe their stated review periods, including historical version, configuration and CI results; they do not report your deployment's current state.
 
 ## Historical remediation record
 
@@ -21,9 +21,10 @@ release. Both selected execution modes now use one-command hosted enrollment. Lo
 checks do not deploy a Worker or upgrade an installed Runner. Never overwrite
 an existing immutable asset.
 
-Development requires Node 22.23.2 and npm 10.9.3. The portable Runner retains
-Node `>=20`. Default Wrangler targets `runmesh-development`; intentional
-production commands use `--env production`.
+Current tooling requires Node 22.23.2 and npm 10.9.3. The portable Runner supports
+Node `>=22.23.2 <23 || >=24.21.0 <25`. Top-level Wrangler targets production
+`runmesh`; explicit `--env development` targets `runmeshdev`. Use the branch-checked
+deployment wrapper rather than inferring an environment from the working directory.
 
 ## First setup: explicit product decision
 

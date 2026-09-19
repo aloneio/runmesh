@@ -1,3 +1,6 @@
+import { writeReleaseValidation } from "./generate-release-validation.mjs";
+import { writeBrowserAssets } from "./generate-browser-assets.mjs";
+import { writeBuildProvenance } from "./build-provenance.mjs";
 import { reviewedReleaseSource } from "./runtime-config-tools.mjs";
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -17,3 +20,9 @@ const releaseState = JSON.parse(await readFile(resolve(repositoryRoot, "release/
 const releaseSource = reviewedReleaseSource(version, releaseState);
 const releaseTarget = resolve(repositoryRoot, "apps/worker/src/generated-release.ts");
 if (await readFile(releaseTarget, "utf8").catch(() => undefined) !== releaseSource) await writeFile(releaseTarget, releaseSource, "utf8");
+
+await writeBuildProvenance(repositoryRoot);
+
+await writeBrowserAssets(fileURLToPath(new URL("../", import.meta.url)));
+
+await writeReleaseValidation(repositoryRoot);

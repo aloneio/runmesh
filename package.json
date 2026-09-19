@@ -1,6 +1,6 @@
 {
   "name": "@aloneio/runmesh-monorepo",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "engines": {
     "node": ">=22"
@@ -20,7 +20,7 @@
   "scripts": {
     "build": "npm run generate:version && tsc -b",
     "test": "npm run test:unit && npm run test:e2e",
-    "test:unit": "npm run test --workspaces && node --test ./test/admin-navigation.test.mjs ./test/ui-catalog.test.mjs",
+    "test:unit": "npm run test:domain && npm run test:contracts && npm run test --workspaces && node --test ./test/admin-navigation.test.mjs ./test/ui-catalog.test.mjs",
     "test:e2e": "node ./scripts/run-e2e.mjs",
     "typecheck": "npm run generate:version && tsc -b --pretty false",
     "validate:worker": "node ./scripts/validate-worker.mjs",
@@ -36,20 +36,36 @@
     "check:architecture": "node ./scripts/check-architecture.mjs",
     "check:ci-parity": "node ./scripts/check-ci-parity.mjs",
     "check:runbooks": "node ./scripts/check-runbooks.mjs",
-    "test:release-tools": "node --test ./test/release-tools.test.mjs ./test/security-config.test.mjs ./test/installer-arguments.test.mjs ./test/deployment-policy.test.mjs ./test/runtime-config.test.mjs ./test/installer-preflight.test.mjs",
-    "check:docs": "node ./scripts/check-docs.mjs",
+    "test:release-tools": "node --test ./test/release-tools.test.mjs ./test/security-config.test.mjs ./test/installer-arguments.test.mjs ./test/deployment-policy.test.mjs ./test/runtime-config.test.mjs ./test/installer-preflight.test.mjs ./test/worker-validation.test.mjs ./test/architecture.test.mjs ./test/verification-tools.test.mjs ./test/package-verification.test.mjs ./test/main-promotion-policy.test.mjs ./test/build-provenance.test.mjs ./test/deployment-provenance-cli.test.mjs ./test/live-provenance.test.mjs ./test/ci-remediation.test.mjs ./test/crossforge-readiness.test.mjs ./test/ci-layout.test.mjs ./test/mcp-connector.test.mjs ./test/test-collection.test.mjs ./test/browser-assets.test.mjs ./test/public-contract-baseline.test.mjs ./test/message-types.test.mjs ./test/dev-auto-deploy.test.mjs ./test/dev-release.test.mjs ./test/release-baseline.test.mjs ./test/security-evidence.test.mjs ./test/installer-download.test.mjs ./test/installer-concurrency.test.mjs",
+    "check:docs": "node ./scripts/check-docs.mjs && node scripts/check-project-facts.mjs",
     "deploy:worker": "node ./scripts/deploy-worker.mjs",
-    "setup:secrets": "node ./scripts/setup-secrets.mjs"
+    "setup:secrets": "node ./scripts/setup-secrets.mjs",
+    "test:domain": "node node_modules/vitest/vitest.mjs run --config vitest.domain.config.mjs",
+    "test:contracts": "node node_modules/vitest/vitest.mjs run --config vitest.contracts.config.mjs",
+    "check:verification": "node scripts/check-verification-plan.mjs && node scripts/check-test-collection.mjs",
+    "generate:facts": "node scripts/check-project-facts.mjs --write",
+    "test:package:e2e": "node scripts/run-package-e2e.mjs",
+    "check:promotion-policy": "node scripts/check-main-policy.mjs",
+    "generate:provenance": "node ./scripts/generate-build-provenance.mjs",
+    "check:deployment": "node ./scripts/check-live-provenance.mjs",
+    "test:browser": "node scripts/run-browser-e2e.mjs",
+    "browser:install": "node node_modules/playwright/cli.js install --with-deps chromium",
+    "check:mcp-connector": "node ./scripts/check-mcp-connector.mjs",
+    "build:dev-release": "node scripts/dev-release/build.mjs",
+    "test:security": "node scripts/run-security-regressions.mjs && node scripts/check-release-readiness.mjs"
   },
   "devDependencies": {
+    "@babel/parser": "8.0.4",
     "@cloudflare/vitest-pool-workers": "^0.22.0",
     "@cloudflare/workers-types": "^5.20260825.1",
     "@types/node": "^24.10.1",
     "@types/ws": "^8.18.1",
     "esbuild": "^0.28.2",
+    "playwright": "1.63.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11",
-    "wrangler": "^4.125.0"
+    "wrangler": "^4.135.0",
+    "yaml": "2.9.1"
   },
   "overrides": {
     "sharp": "0.35.4",

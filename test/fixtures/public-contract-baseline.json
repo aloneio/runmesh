@@ -1,0 +1,18 @@
+{
+  "source_commit": "8159b081a8d89c423add7bd492516262839e66bf",
+  "change_reason": "Reviewed agent-facing input publication, cross-field constraints, safe shell annotations and recovery descriptions; the wire schema is unchanged.",
+  "tools": [
+    "context",
+    "edit",
+    "inspect",
+    "job",
+    "read",
+    "runner_current",
+    "runner_list",
+    "runner_select",
+    "shell",
+    "workspace_list"
+  ],
+  "mcp_catalog_sha256": "98092badf8b2be0438fa17a1ea9c1f6178cf3bf97bae9f0ffca54457d520a8d9",
+  "wire_schema_sha256": "e599c561aae4435dc0b07414baa2358fdf2da44263ff288b825a44ca8b4bfd99"
+}

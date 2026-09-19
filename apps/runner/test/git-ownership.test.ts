@@ -16,7 +16,7 @@ it.skipIf(process.platform === "win32")("rejects untrusted owners, writable exec
   const workspace = join(base, "workspace"); const bin = join(base, "secure", "git", "bin");
   const executable = join(bin, "git"); const oldPath = process.env.PATH;
   try {
-    await mkdir(workspace); await mkdir(bin, { recursive: true });
+    await mkdir(workspace); await mkdir(bin, { recursive: true, mode: 0o700 });
     await writeFile(executable, "#!/bin/sh\nexit 0\n"); await chmod(executable, 0o755);
     process.env.PATH = bin;
     expect(trustedGitPathEntries(workspace)).toContain(bin);

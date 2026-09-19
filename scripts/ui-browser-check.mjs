@@ -9,10 +9,10 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 export async function checkUiWithChromium(origin,cookie,output){
  assert.equal(new URL(origin).hostname,"127.0.0.1");
  const profile=await mkdtemp(join(tmpdir(),"runmesh-ui-browser-"));
- const child=spawn("/usr/bin/chromium",["--headless","--no-sandbox","--disable-dev-shm-usage","--no-first-run","--disable-background-networking","--remote-debugging-address=127.0.0.1","--remote-debugging-port=0",`--user-data-dir=${profile}`,"about:blank"],{stdio:["ignore","ignore","pipe"]});
+ const child=spawn(process.env.RUNMESH_CHROMIUM_EXECUTABLE ?? "/usr/bin/chromium",["--headless","--no-sandbox","--disable-dev-shm-usage","--no-first-run","--disable-background-networking","--remote-debugging-address=127.0.0.1","--remote-debugging-port=0",`--user-data-dir=${profile}`,"about:blank"],{stdio:["ignore","ignore","pipe"]});
  let socket;const pending=new Map();let serial=0;
  try{
-  const endpoint=await new Promise((resolve,reject)=>{let tail="";const timeout=setTimeout(()=>reject(new Error("Browser startup timed out")),12000);child.once("error",reject);child.stderr.on("data",chunk=>{tail+=chunk;const match=/DevTools listening on (ws:\/\/127\.0\.0\.1:\d+\/[^\s]+)/.exec(tail);if(match){clearTimeout(timeout);resolve(match[1]);}});});
+  const endpoint=await new Promise((resolve,reject)=>{let tail="";const timeout=setTimeout(()=>reject(new Error("Browser startup timed out")),12000);child.once("error",reject);child.stderr.on("data",chunk=>{tail=(tail+chunk).slice(-16384);const match=/DevTools listening on (ws:\/\/127\.0\.0\.1:\d+\/[^\s]+)/.exec(tail);if(match){clearTimeout(timeout);resolve(match[1]);}});});
   socket=new WebSocket(endpoint);await new Promise((resolve,reject)=>{socket.once("open",resolve);socket.once("error",reject);});
   const exceptions=[],requests=[];
   socket.on("message",raw=>{const message=JSON.parse(raw);if(message.id){const waiter=pending.get(message.id);if(waiter){pending.delete(message.id);clearTimeout(waiter.timer);message.error?waiter.reject(new Error(JSON.stringify(message.error))):waiter.resolve(message.result);}}else if(message.method==="Runtime.exceptionThrown")exceptions.push(message.params.exceptionDetails.text);else if(message.method==="Network.requestWillBeSent")requests.push(message.params.request.url);});
@@ -48,7 +48,7 @@ export async function checkUiWithChromium(origin,cookie,output){
   // its old language with the newly fetched main-content language.
   await tab("Network.setCookie",{name:"runmesh_lang",value:"en",url:origin,path:"/"});
   await evaluate("document.querySelector('.control-nav a[href=\"/admin/clients\"]').click()");
-  for(let i=0;i<100;i++){if(await evaluate("location.pathname==='/admin/clients'&&document.documentElement.lang==='en'&&window.__runmeshDynamicNavigation===true"))break;await sleep(50);}
+  for(let i=0;i<100;i++){if(await evaluate("document.readyState==='complete'&&document.documentElement!==null&&location.pathname==='/admin/clients'&&document.documentElement.lang==='en'&&window.__runmeshDynamicNavigation===true"))break;await sleep(50);}
   assert.equal(await evaluate("document.documentElement.lang"),"en");
   await tab("Emulation.setDeviceMetricsOverride",{width:390,height:844,deviceScaleFactor:1,mobile:true});
   assert.equal(await evaluate("document.documentElement.scrollWidth<=innerWidth+1"),true);

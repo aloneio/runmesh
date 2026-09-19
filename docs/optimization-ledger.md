@@ -1,6 +1,36 @@
 # Optimization implementation ledger
 
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+
+## AR08 — layered verification and source facts (2026-09-15)
+
+This development change inventories every existing test without dropping legacy regressions, adds public-domain and native file-adapter contract lanes, validates registered examples against real tool/action schemas, and requires actual installed-package E2E in both Linux verification jobs. Machine reports bind the checkout, archive bytes and actual runtime while recording signing, production, account quotas and host catalog as not_run. See [verification layers](verification.md), [Chinese guide](verification.zh-CN.md), [generated source facts](current-facts.md) and [validated examples](tool-examples.md). This is verification infrastructure, not a production upgrade or proof of complete coverage. Native and per-SHA test outcomes must be taken from the matching execution report.
+
 This ledger tracks changes made from the 2026-09-11 optimization plan. It records behavior adopted from upstream references without copying their implementation.
+
+## R01 / R09 — build source provenance (2026-09-15)
+
+Development implementation, not production acceptance. An ignored generated Worker module records a verified clean Git commit/tree and a main/dev branch only when observed. Provider tags are checked for agreement instead of being the only source. Dirty/unavailable/conflicting builds remain explicit; strict deployment rejects them before upload. Health is no-store and exposes bounded safe version metadata without database I/O. A one-request HTTPS observer requires the exact expected source. See [build provenance](build-provenance.md) and [中文说明](build-provenance.zh-CN.md). This is self-reported source identity, not a signed artifact attestation, host-catalog refresh or account usage measurement.
+
+## R08 / P13 — Context storage and explicit superseded-revision retention (2026-09-15)
+
+Development slice only: logical on-disk revision bytes/counts now gate new checkpoints; the index no longer silently evicts an older context. Existing full-store receipts remain deduplicated. Read-only metadata inventory and reviewed, hash-bound pruning of old superseded revisions use two actions within the existing Context tool. Latest records and index remain unchanged; partial unlink batches require fresh inspection, not assumed rollback. See [storage budgets](context-storage.md) and [Chinese explanation](context-storage.zh-CN.md). Whole-context deletion, saved automatic policy, host-global quotas, unknown-state migration and production activation remain open. The current catalog contains 27 protected methods and 26 Runner-backed actions; earlier counts below are historical.
+
+## R07 / P09 — opt-in file snapshots and log generation cursors (2026-09-15)
+
+Development slice following `6e1b0bb`: opt-in process-local file content snapshots and append-log generation cursors, bounded caches and fixed expiry, per-page authorization, strict resource-aware output checks and explicit legacy-peer rejection. Numeric live pages remain compatible. Full-log tamper attestation, production acceptance and all-tool pagination are not implied. See [bound cursors](bound-cursors.md) and [Chinese explanation](bound-cursors.zh-CN.md) for limits and compatibility.
+
+## R07 / P09 — byte-page correctness and output availability (2026-09-15)
+
+Development slice only: files/logs share additive byte metadata, incomplete UTF-8 tails stop non-advancing pagination without losing a later append, unavailable logs are distinct from empty logs, and inline log failures preserve actual Job exits. File reads recheck sampled metadata; short reads and serialized response budgets are bounded. The read catalog now describes optional typed page fields. Existing numeric cursors remain non-snapshot cursors; cross-page binding, full output schemas and other tools' pagination remain open. See [byte pagination](byte-pagination.md) and [Chinese explanation](byte-pagination.zh-CN.md). No production or released Runner update is implied.
+
+## R01 / R07 — capability and operation-contract alignment (2026-09-15)
+
+Development implementation slice, not production acceptance: the 25 protected RPC operations share one immutable definition across wire method validation, Registry requirements, Runner advertisement and read-completion generation checks. Twenty-four Runner action bindings and a canonical catalog fingerprint are shared with on-demand diagnostics. The public surface remains 10 tools. Missing old-peer reports are unknown; neither implementation claims nor directory metadata authorize execution.
+
+Tests cover real tools/list schema comparison, malformed/absent reports, independent scopes, post-read revocation and no extra persistence. See [capability contracts](capability-contracts.md) and [Chinese explanation](capability-contracts.zh-CN.md). Production provenance, host-side refresh, complete output schemas, capability switches and pagination remain open. Older implemented labels below do not establish five-layer completion.
+
+> Status correction (2026-09-15): the dated entries below are historical implementation notes, not complete acceptance. The optimization review found concrete R02/R03/R04/R05 counterexamples despite earlier CI success. See [first correctness repair slice](review-correctness-20260915.md) for the regression-backed corrections, record compatibility, installed-version limits and remaining R01/R06 verification. Current source changes are not automatically present in an older signed Runner archive.
 
 ## P01 — structured failure semantics
 
@@ -179,3 +209,21 @@ Status: first read-only documentation slice implemented on 2026-09-13.
 - Added a bounded versioned catalog for connection recovery, permission-denial investigation, and release preflight. Runbooks state applicability, required permissions, procedure, and explicit exit conditions; they are documentation only and do not execute commands automatically.
 - `check:runbooks` validates catalog IDs, versions, bounded sizes, safe relative file names, and required document sections in both hosted CI systems.
 - Importable packages, remote Skills, background installation, and any execution engine remain intentionally out of scope for this slice.
+
+
+## AR06 — Registry domain extraction (development)
+
+Based on `ca511cf0fa9411b85a52ba78547aeab7e4b27dec`: Auth, Policy, Runner Lifecycle and local History now own their existing operations behind a stable Registry facade. Narrow typed ports and one native synchronous SQL/transaction adapter replace access to the whole Registry object. Existing HTTP routing, schema bootstrap, maintenance and external-D1 coordination remain in the facade. No namespace, table, wire catalog, runtime variable, Runner package or production deployment changes.
+
+Forty baseline characterization scenarios compare exact ordered SQL/argument hashes, native transaction events, rows read/written and receipts. Cross-domain policy-write failure rolls back Runner creation and its ledgers. Separate construction/adapter tests and architecture guards cover no-I/O construction and forbidden concrete dependencies. These local equivalence checks do not constitute production load or account-quota acceptance. See [Registry domains](registry-domains.md) and [中文说明](registry-domains.zh-CN.md). Remaining HTTP/schema/maintenance extraction and finer data ownership are independent future refactors, not silently included in this entry.
+
+## AR07 Job/Context side-effect boundaries
+
+Development implementation based on `a9b9bb5ef1e7275285c4ccfa54db0c685a03c23e`: native Job storage/process ports, bounded log reader, Context record/file/recovery boundaries and pure retention planning. The ordered Job state owner and checkpoint serialization remain. Public signatures, persisted formats, limits and existing timer sites are unchanged. See [Runner boundaries](runner-boundaries.md) and [中文说明](runner-boundaries.zh-CN.md). Source, packaged Runner, hosted CI and production are separate verification levels; this entry is not production activation.
+
+## Job reporting audit follow-up (development source)
+
+- Base `ab3ad6d66fc54792e3a4c77e4e1a298d16612358`: negotiated source-side capture hints, immutable opt-out across retries/recovery, one-shot dirty-history scheduling, receipt-generation fencing and cached retry payloads.
+- Empty/fully filtered batches skip D1; current cloud preference/time-window filtering remains authoritative. Read-only log calls do not start reporting. Heartbeat timing, execution authorization and local logs are preserved.
+- Verification includes native local Jobs, actual loopback frames, final Worker bridge decisions, queue-time restriction, restart/idle/immediate-mode races and source/installed-package E2E. Execution evidence lives in the corresponding CI and delivery report; this entry does not assert production activation.
+- Compatibility and residual legacy/recovered-process behavior: `docs/demand-job-history.md` and `docs/demand-job-history.zh-CN.md`.

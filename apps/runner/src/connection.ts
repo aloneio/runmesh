@@ -1,10 +1,13 @@
+import { jobEventMessage } from "./connection/job-events.js";
 import { createHash } from "node:crypto";
+import { HistoryUploadScheduler, type HistoryUploadClock } from "./history-upload.js";
 import { QueueGrantSchema } from "@aloneio/runmesh-protocol";
 import { parseRunnerJobHistory, type RunnerJobHistory } from "./job-history.js";
 import {
   decodeWireFrame,
   encodeWireFrame,
   LOCAL_RUNNER_OPERATION_TIMEOUT_MS,
+  MAX_FRAME_BYTES,
   PROTOCOL_CURRENT_VERSION,
   PROTOCOL_MIN_VERSION,
   runnerPolicyChecksum,
@@ -15,35 +18,33 @@ import {
   type RpcRequest,
   type WireMessage,
 } from "@aloneio/runmesh-protocol";
-import type { CapabilityMetadata } from "./protocol-types.js";
 import WebSocket from "ws";
-import { userInfo } from "node:os";
 import { reconnectDelayMs, serviceReconnectDelayMs, retryAfterDelayMs } from "./backoff.js";
 import { PolicyStore } from "./policy-store.js";
-import { effectiveCentralPermissions, validateCentralWorkspacePolicy, type CentralWorkspacePolicy } from "./policy-config.js";
-import type { RunnerConfig, WorkspaceConfig } from "./config.js";
-import { RunnerRuntime, rpcError } from "./runtime.js";
+import { validateCentralWorkspacePolicy, type CentralWorkspacePolicy } from "./policy-config.js";
+import { effectiveMaxConcurrentJobs, type RunnerConfig } from "./config.js";
+import { RunnerRuntime, RpcRuntimeError, rpcError } from "./runtime.js";
 import { RUNNER_VERSION } from "./version.js";
 
-export class RunnerAuthenticationError extends Error {
-  public constructor(message = "runner credentials were rejected") { super(message); this.name = "RunnerAuthenticationError"; }
-}
+import { RunnerAuthenticationError, RunnerServiceUnavailableError, RunnerSessionConflictError, classifyConnectionFailure } from "./connection/failures.js";
+export { RunnerAuthenticationError, RunnerServiceUnavailableError, classifyConnectionFailure } from "./connection/failures.js";
+import { candidateWorkspaces, effectivePolicyWorkspaces, validationContext } from "./connection/policy-candidate.js";
+import { discoverCapabilities, currentProcessServiceIdentity, sanitizeServiceIdentity, processPrivilegeState } from "./connection/metadata.js";
+export { discoverCapabilities, currentProcessServiceIdentity } from "./connection/metadata.js";
+import type { ConnectionRuntimePort, ConnectionPolicyStorePort, ConnectionTransportFactory } from "./connection/ports.js";
 
-export class RunnerServiceUnavailableError extends Error {
-  public constructor(message = "runner service temporarily unavailable", public readonly retryAfterMs = 30_000) {
-    super(message); this.name = "RunnerServiceUnavailableError";
-  }
-}
+const MAX_IN_FLIGHT_RPCS = 64;
+const MAX_IN_FLIGHT_SYNC_CAPTURES = 2;
+const RESERVED_CONTROL_RPCS = 4;
+// Stdin can remain backpressured indefinitely, so it must not occupy the
+// reserve needed to cancel the same unresponsive child.
+const CONTROL_RPC_METHODS = new Set(["echo", "runner.info", "job.get", "job.cancel"]);
 
-/** Only explicit credential/protocol rejection is fatal, not matching words in an outage message. */
-export function classifyConnectionFailure(input: { readonly statusCode?: number; readonly closeCode?: number; readonly reason?: string; readonly error?: unknown }): "authentication" | "network" {
-  if (input.error instanceof RunnerAuthenticationError) return "authentication";
-  if (input.statusCode !== undefined) return input.statusCode === 401 || input.statusCode === 403 ? "authentication" : "network";
-  if (input.closeCode === 4001 || input.closeCode === 1002) return "authentication";
-  // Older Workers used 1008 for an explicit handshake rejection. Never let
-  // legacy wording override a service-failure code or arbitrary network error.
-  if (input.closeCode === 1008 && /^(?:stale credentials|credentials revoked|unauthorized|forbidden|unsupported_protocol_version)$/i.test(input.reason ?? "")) return "authentication";
-  return "network";
+/** @internal Trusted composition only; no CLI, wire or deployment configuration. */
+export interface RunnerConnectionDependencies {
+  readonly runtime?: ConnectionRuntimePort;
+  readonly policyStore?: ConnectionPolicyStorePort;
+  readonly createSocket?: ConnectionTransportFactory;
 }
 
 export interface RunnerConnectionOptions {
@@ -54,6 +55,8 @@ export interface RunnerConnectionOptions {
   readonly heartbeatMs?: number;
   readonly rpcTimeoutMs?: number;
   readonly syncMs?: number;
+  /** Inject a finite scheduler clock for transport tests; not a deployment setting. */
+  readonly historyClock?: HistoryUploadClock;
   readonly random?: () => number;
   readonly sleep?: (delayMs: number) => Promise<void>;
   readonly onStateChange?: (state: "connecting" | "online" | "offline") => void;
@@ -63,28 +66,31 @@ export interface RunnerConnectionOptions {
 
 export class RunnerConnection {
   private queueNegotiated = false;
+  private reportingNegotiated = false;
+  private readonly historyUploads: HistoryUploadScheduler;
+  private demandSnapshot: { revision: number; socket: WebSocket; jobs: RunnerSync["jobs"]; workspaces: RunnerSync["workspaces"]; snapshot: string } | undefined;
   private readonly config: RunnerConfig;
   private readonly metadata: RunnerMetadata;
   private readonly heartbeatMs: number;
   private readonly rpcTimeoutMs: number;
   private readonly syncMs: number;
   private jobHistory: RunnerJobHistory | undefined;
-  private historyPending: {requestId:string;snapshot:string;socket:WebSocket} | undefined;
+  private historyPending: {requestId:string;snapshot:string;socket:WebSocket;revision?:number} | undefined;
   private cleanupTimer: ReturnType<typeof setInterval> | undefined;
   private cleanupBusy = false;
   private readonly random: () => number;
   private readonly sleep: (delayMs: number) => Promise<void>;
   private readonly onStateChange: (state: "connecting" | "online" | "offline") => void;
-  private readonly runtime: RunnerRuntime;
-  private readonly policyStore: PolicyStore;
+  private readonly runtime: ConnectionRuntimePort;
+  private readonly policyStore: ConnectionPolicyStorePort;
+  private readonly createSocket: ConnectionTransportFactory;
   private socket: WebSocket | undefined;
   /**
    * The socket that completed the `runner.welcome` handshake. A socket is
    * installed as `this.socket` before it is authorized, so outbound frames
    * that are not part of the handshake itself must additionally prove that the
-   * current socket was welcomed. The Worker closes any frame that arrives while
-   * its Registry epoch is still 0 with `4001 "credentials revoked"`, and the
-   * reconnect loop reads that as a permanent credential decision.
+   * current socket was welcomed. Pre-welcome frames are rejected; older
+   * Workers misclassified that stale session as a permanent credential failure.
    */
   private welcomedSocket: WebSocket | undefined;
   private stopped = false;
@@ -101,6 +107,9 @@ export class RunnerConnection {
   private desiredPolicyChecksum = "";
   private policyApplyGeneration = 0;
   private readonly pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  // Worker timeouts do not cancel already dispatched local work. Keep the
+  // budget across reconnects so repeated expired bridge requests stay bounded.
+  private inFlightRpcs = 0;
   /**
    * Policy validation/activation can perform filesystem I/O and therefore may
    * remain pending for an arbitrary amount of time. Keep FIFO ordering for a
@@ -116,8 +125,14 @@ export class RunnerConnection {
    */
   private syncQueue: Promise<void> = Promise.resolve();
   private syncQueueSocket: WebSocket | undefined;
+  private syncScheduled: { socket: WebSocket } | undefined;
+  private inFlightSyncCaptures = 0;
 
-  public constructor(options: RunnerConnectionOptions) {
+  public constructor(options: RunnerConnectionOptions);
+  /** @internal Internal ports preserve the published single-argument constructor. */
+  public constructor(options: RunnerConnectionOptions, dependencies: RunnerConnectionDependencies);
+  public constructor(options: RunnerConnectionOptions, dependencies: RunnerConnectionDependencies = {}) {
+    this.createSocket = dependencies.createSocket ?? ((url, options) => new WebSocket(url, options));
     this.config = options.config;
     // Heartbeats keep an online Runner lease alive in RegistryDO. A 30s
     // cadence stays below the 45s stale threshold while cutting steady
@@ -136,8 +151,12 @@ export class RunnerConnection {
       this.cancelReconnectSleep = finish;
     }));
     this.onStateChange = options.onStateChange ?? (() => undefined);
-    this.runtime = options.runtime ?? new RunnerRuntime({ config: this.config, ...(this.config.stateDir === undefined ? {} : { stateDir: this.config.stateDir }), onJobEvent: (event) => this.forwardJobEvent(event) });
-    this.policyStore = options.policyStore ?? new PolicyStore(this.config.stateDir);
+    this.runtime = dependencies.runtime ?? options.runtime ?? new RunnerRuntime({ config: this.config, ...(this.config.stateDir === undefined ? {} : { stateDir: this.config.stateDir }), onJobEvent: (event) => this.forwardJobEvent(event) });
+    this.policyStore = dependencies.policyStore ?? options.policyStore ?? new PolicyStore(this.config.stateDir);
+    this.historyUploads = new HistoryUploadScheduler(async revision => {
+      const socket = this.socket;
+      if (socket !== undefined) await this.sendDemandSync(socket, revision);
+    }, options.historyClock);
     const executionMode = options.executionMode;
     // Metadata is echoed through the authenticated control plane and later
     // shown in administrator diagnostics.  Treat an injected identity as
@@ -148,7 +167,7 @@ export class RunnerConnection {
     // the optional shape here for injected test/runtime callers, but never
     // synthesize or transport a second compatibility representation.
     const serviceIdentity = executionMode === undefined ? undefined : sanitizeServiceIdentity(options.serviceIdentity ?? currentProcessServiceIdentity());
-    const capabilities = discoverCapabilities(this.config.maxConcurrentJobs ?? 1);
+    const capabilities = discoverCapabilities(effectiveMaxConcurrentJobs(this.config.maxConcurrentJobs));
     this.metadata = {
       runner_id: this.config.runnerId,
       runner_version: options.version ?? RUNNER_VERSION,
@@ -157,7 +176,7 @@ export class RunnerConnection {
       ...(executionMode === undefined ? {} : { execution_mode: executionMode }),
       ...(serviceIdentity === undefined ? {} : { service_identity: serviceIdentity }),
       ...(executionMode === undefined ? {} : { privilege_state: processPrivilegeState(executionMode, serviceIdentity) }),
-      capabilities: { ...capabilities, labels: { ...capabilities.labels, job_history_protocol: "1", job_queue_protocol: "1" } },
+      capabilities: { ...capabilities, labels: { ...capabilities.labels, job_history_protocol: "1", job_queue_protocol: "1", job_reporting_protocol: "2" } },
     };
   }
 
@@ -205,7 +224,7 @@ export class RunnerConnection {
         const delayMs = error instanceof RunnerServiceUnavailableError
           ? serviceReconnectDelayMs(this.reconnectAttempt, this.random(), error.retryAfterMs)
           : reconnectDelayMs(this.reconnectAttempt, this.random());
-        console.error(`runner reconnect scheduled: class=${error instanceof RunnerServiceUnavailableError ? "service_unavailable" : "network"} delay_ms=${delayMs}`);
+        console.error(`runner reconnect scheduled: class=${error instanceof RunnerServiceUnavailableError ? "service_unavailable" : error instanceof RunnerSessionConflictError ? "session_conflict" : "network"} delay_ms=${delayMs}`);
         await this.sleep(delayMs);
         this.reconnectAttempt += 1;
       }
@@ -216,6 +235,7 @@ export class RunnerConnection {
     this.lifecycleGeneration += 1;
     this.stopped = true;
     this.queueNegotiated = false;
+    this.historyUploads.stop(); this.reportingNegotiated = false; this.demandSnapshot = undefined;
     this.cancelReconnectSleep?.();
     if (this.cleanupTimer !== undefined) clearInterval(this.cleanupTimer);
     if (this.heartbeatTimer !== undefined) clearInterval(this.heartbeatTimer);
@@ -234,7 +254,7 @@ export class RunnerConnection {
     const socket=this.socket;
     if (!this.queueNegotiated || !parsed.success || this.stopped || socket===undefined || socket!==this.welcomedSocket || socket.readyState!==WebSocket.OPEN) return false;
     const grant=parsed.data;
-    const canonical=JSON.stringify({workspace_id:input.workspace_id,command:input.command,args:input.args??null,shell:input.shell,cwd:input.cwd??".",request_id:input.request_id??null});
+    const canonical=JSON.stringify({workspace_id:input.workspace_id,command:input.command,args:input.args??null,shell:input.shell,cwd:input.cwd??".",request_id:input.request_id??null,...(typeof input.record_history === "boolean" ? {record_history:input.record_history} : {})});
     if (grant.payload.client_id!==clientId || grant.payload.runner_id!==this.config.runnerId || grant.payload.workspace_id!==input.workspace_id
       || grant.payload.policy_revision!==this.appliedPolicyRevision || grant.payload.expires_at_ms<=Date.now()
       || grant.payload.launch_digest!==createHash("sha256").update(canonical).digest("hex")) return false;
@@ -246,8 +266,10 @@ export class RunnerConnection {
         try {socket.send(encodeWireFrame({type:"runner.queue_check",protocol_version:PROTOCOL_CURRENT_VERSION,request_id:requestId,runner_id:this.config.runnerId,job_id:jobId,grant}));}
         catch(error){clearTimeout(timer);this.pending.delete(requestId);reject(error);}
       });
-      return this.socket===socket && this.welcomedSocket===socket && !this.stopped && socket.readyState===WebSocket.OPEN
+      const allowed = this.socket===socket && this.welcomedSocket===socket && !this.stopped && socket.readyState===WebSocket.OPEN
         && typeof result==="object" && result!==null && !Array.isArray(result) && "authorized" in result && result.authorized===true;
+      if (allowed && this.reportingNegotiated && (!("record_history" in result) || result.record_history !== true)) input.record_history = false;
+      return allowed;
     } catch { return false; }
   }
 
@@ -257,7 +279,7 @@ export class RunnerConnection {
   }
   public rpc(method: string, params: unknown, policyRevision?: number): Promise<unknown> {
     const socket = this.socket;
-    if (socket === undefined || socket.readyState !== WebSocket.OPEN) {
+    if (this.stopped || socket === undefined || socket !== this.welcomedSocket || socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("runner is not connected"));
     }
     const requestId = `rpc-${crypto.randomUUID()}`;
@@ -287,7 +309,10 @@ export class RunnerConnection {
         url.pathname = url.pathname.endsWith("/") ? `${url.pathname}runner/connect` : `${url.pathname}/runner/connect`;
       }
       url.searchParams.set("runner_id", this.config.runnerId);
-      const socket = new WebSocket(url, { headers: { Authorization: `Bearer ${this.config.token}` } });
+      // Enforce the protocol limit in the WebSocket receiver, before it
+      // buffers/reassembles a frame. Compression is unnecessary for bounded
+      // control messages and would add a separate decompression budget.
+      const socket = this.createSocket(url, { headers: { Authorization: `Bearer ${this.config.token}` }, maxPayload: MAX_FRAME_BYTES, perMessageDeflate: false });
       this.socket = socket;
       // A replacement socket is unauthorized until its own welcome arrives.
       this.welcomedSocket = undefined;
@@ -295,11 +320,21 @@ export class RunnerConnection {
       let welcomedAtMs = 0;
       let settled = false;
       const fail = (error: Error): void => {
+        clearTimeout(handshakeTimer);
         if (!settled) {
           settled = true;
           reject(error);
         }
       };
+      // Cover both an HTTP upgrade that never completes and a peer that opens
+      // the socket but never sends welcome. Neither produces a close/error
+      // by itself, so without this deadline the reconnect loop stalls forever.
+      const handshakeTimer = setTimeout(() => {
+        if (welcomed || settled) return;
+        fail(new Error("runner welcome handshake timed out"));
+        socket.terminate();
+      }, 30_000);
+      handshakeTimer.unref();
       socket.once("unexpected-response", (_request, response) => {
         const statusCode = response.statusCode;
         const error = classifyConnectionFailure(statusCode === undefined ? {} : { statusCode }) === "authentication"
@@ -321,12 +356,12 @@ export class RunnerConnection {
           max_protocol_version: PROTOCOL_CURRENT_VERSION,
         };
         try { socket.send(encodeWireFrame(hello)); }
-        catch (error) { fail(error instanceof Error ? error : new Error("failed to send runner hello")); }
+        catch (error) { fail(error instanceof Error ? error : new Error("failed to send runner hello")); socket.terminate(); }
       });
       socket.on("message", (value: WebSocket.RawData) => {
         let message: WireMessage;
         try {
-          message = decodeWireFrame(value.toString());
+          message = decodeWireFrame(Array.isArray(value) ? Buffer.concat(value) : value instanceof ArrayBuffer ? new Uint8Array(value) : value);
         } catch {
           socket.close(1007, "invalid protocol frame");
           return;
@@ -352,6 +387,8 @@ export class RunnerConnection {
           if (rawHistory !== undefined && history === undefined) { socket.close(1008,"invalid history settings"); return; }
           const priorHistory = this.jobHistory;
           this.jobHistory = history;
+          this.reportingNegotiated = message.extensions?.runmesh_job_reporting === 2 && history !== undefined;
+          this.historyUploads.stop(); this.demandSnapshot = undefined;
           this.historyPending = undefined;
           if (this.cleanupTimer !== undefined) { clearInterval(this.cleanupTimer); this.cleanupTimer = undefined; }
           if (history !== undefined || priorHistory !== undefined) this.runtime.configureJobRetention(history?.local_retention_days ?? 0);
@@ -364,6 +401,7 @@ export class RunnerConnection {
             this.cleanupTimer.unref();
           }
           welcomed = true;
+          clearTimeout(handshakeTimer);
           welcomedAtMs = Date.now();
           this.welcomedSocket = socket;
           this.queueNegotiated = message.extensions?.runmesh_job_queue === 1;
@@ -371,12 +409,14 @@ export class RunnerConnection {
           this.onStateChange("online");
           this.lastSyncSnapshot = undefined;
           if (message.desired_policy !== undefined) this.queueDesiredPolicy(socket, message.desired_policy);
-          void this.sendSync(socket).catch(() => undefined);
+          if (this.reportingNegotiated && history !== undefined) {
+            if (history.mode !== "off") this.historyUploads.start(history.interval_seconds * 1000, history.mode === "immediate");
+          } else void this.sendSync(socket).catch(() => undefined);
           this.heartbeatTimer = setInterval(() => {
             if (this.socket !== socket || this.stopped) return;
             try { this.sendHeartbeat(socket); } catch { /* close handler drives reconnect */ }
           }, this.heartbeatMs);
-          if (this.jobHistory?.mode !== "off") this.syncTimer = setInterval(() => {
+          if (!this.reportingNegotiated && this.jobHistory?.mode !== "off") this.syncTimer = setInterval(() => {
             if (this.socket !== socket || this.stopped) return;
             void this.sendSync(socket).catch(() => undefined);
           }, this.jobHistory === undefined ? this.syncMs : this.jobHistory.interval_seconds * 1000);
@@ -403,7 +443,13 @@ export class RunnerConnection {
         if (message.type === "rpc.response" && this.historyPending?.socket === socket && message.request_id === this.historyPending.requestId) {
           const result = message.result;
           if (typeof result === "object" && result !== null && !Array.isArray(result)
-            && ["recorded","unchanged","disabled"].includes(String(result.history_status))) this.lastSyncSnapshot = this.historyPending.snapshot;
+            && ["recorded","unchanged","disabled"].includes(String(result.history_status))) {
+            this.lastSyncSnapshot = this.historyPending.snapshot;
+            if (this.historyPending.revision !== undefined) {
+              if (result.history_status === "disabled") this.historyUploads.stop();
+              else this.historyUploads.acknowledge(this.historyPending.revision);
+            }
+          }
           this.historyPending = undefined;
           return;
         }
@@ -418,14 +464,16 @@ export class RunnerConnection {
       });
       socket.once("error", (error: Error) => {
         this.rejectPendingForSocket(socket, error);
-        if (!welcomed) fail(error);
+        if (!welcomed) { fail(error); socket.terminate(); }
       });
       socket.once("close", (code: number, reason: Buffer) => {
+        clearTimeout(handshakeTimer);
         // A socket that failed before `open` can emit `close` after the
         // reconnect loop has already installed a newer socket. Never clear
         // the newer session's heartbeat/sync timers from that stale event.
         const currentSocket = this.socket === socket;
         if (currentSocket) {
+          this.historyUploads.stop(); this.reportingNegotiated = false; this.demandSnapshot = undefined;
           if (this.heartbeatTimer !== undefined) clearInterval(this.heartbeatTimer);
           if (this.syncTimer !== undefined) clearInterval(this.syncTimer);
           this.heartbeatTimer = undefined;
@@ -439,6 +487,7 @@ export class RunnerConnection {
         const closeReason = reason.toString("utf8");
         const failure = classifyConnectionFailure({ closeCode: code, reason: closeReason }) === "authentication"
           ? new RunnerAuthenticationError("runner credentials were revoked or rejected")
+          : code === 4000 ? new RunnerSessionConflictError()
           : code === 1013 || code === 1011
             ? new RunnerServiceUnavailableError(`runner service temporarily unavailable (close ${code})`)
             : new Error(welcomed ? "connection closed" : "connection closed before welcome");
@@ -554,12 +603,16 @@ export class RunnerConnection {
         protocol_version: PROTOCOL_CURRENT_VERSION,
         runner_id: this.config.runnerId,
         sent_at_ms: Date.now(),
-        active_job_ids: this.runtime.jobs.list().filter((job) => ["queued", "running", "cancelling"].includes(job.status)).map((job) => job.job_id),
+        active_job_ids: this.runtime.jobs.list().filter((job) => job.record_history !== false && ["queued", "running", "cancelling"].includes(job.status)).map((job) => job.job_id),
       }));
     } catch { /* close handler drives reconnect */ }
   }
 
   private sendSync(socket: WebSocket): Promise<void> {
+    if (this.reportingNegotiated) {
+      if (socket === this.socket && socket === this.welcomedSocket && !this.stopped) this.historyUploads.changed();
+      return Promise.resolve();
+    }
     // Never let a stalled snapshot from a dead socket block the first sync on
     // a replacement connection. The old promise may still settle eventually,
     // but its sendSyncNow identity checks make it a no-op for the new session.
@@ -567,18 +620,64 @@ export class RunnerConnection {
       this.syncQueueSocket = socket;
       this.syncQueue = Promise.resolve();
     }
-    const next = this.syncQueue.catch(() => undefined).then(() => this.sendSyncNow(socket));
+    // A slow snapshot needs at most one follow-up to capture intervening
+    // changes. Coalesce timer/event triggers while that follow-up is queued;
+    // otherwise a stalled disk accumulates an unbounded promise/scan backlog.
+    // Do not return the same pending promise to every periodic trigger: each
+    // caller's catch/await would itself retain an unbounded reaction backlog.
+    if (this.syncScheduled?.socket === socket) return Promise.resolve();
+    const scheduled = { socket };
+    const next = this.syncQueue.catch(() => undefined).then(() => {
+      if (this.syncScheduled === scheduled) this.syncScheduled = undefined;
+      return this.sendSyncNow(socket);
+    });
+    this.syncScheduled = scheduled;
     // Keep the queue alive after an individual snapshot failure while still
     // returning the failure to the caller for its normal best-effort handling.
     this.syncQueue = next.catch(() => undefined);
     return next;
   }
 
+  private async captureSyncJobs(limit: number): Promise<RunnerSync["jobs"] | undefined> {
+    // Permit a replacement connection to proceed past one stalled old read,
+    // but repeated reconnects must not accumulate unlimited filesystem work.
+    // Existing sync/upload retry opportunities try again when capacity frees.
+    if (this.inFlightSyncCaptures >= MAX_IN_FLIGHT_SYNC_CAPTURES) return undefined;
+    this.inFlightSyncCaptures++;
+    try { return await this.runtime.syncJobs(limit); }
+    finally { this.inFlightSyncCaptures--; }
+  }
+
+  /** Reuse an unacknowledged payload rather than rescanning local records
+   * on every retry. A newer change has a different scheduler generation. */
+  private async sendDemandSync(socket: WebSocket, revision: number): Promise<void> {
+    const current = (): boolean => this.reportingNegotiated && socket === this.socket && socket === this.welcomedSocket && !this.stopped && socket.readyState === WebSocket.OPEN;
+    if (!current() || this.jobHistory?.mode === "off") return;
+    let captured = this.demandSnapshot;
+    if (captured?.socket !== socket || captured.revision !== revision) {
+      const jobs = await this.captureSyncJobs(500);
+      if (jobs === undefined || !current()) return;
+      const workspaces = this.runtime.syncWorkspaceMetadata();
+      captured = { revision, socket, jobs, workspaces, snapshot: JSON.stringify({ workspaces, jobs }) };
+      this.demandSnapshot = captured;
+      this.historyUploads.setRecoveryPending(this.runtime.needsHistoryReconciliation?.() === true);
+    }
+    if (captured.jobs.length === 0 || captured.snapshot === this.lastSyncSnapshot) {
+      this.historyUploads.acknowledge(revision); return;
+    }
+    const sync: RunnerSync = { type: "runner.sync", protocol_version: PROTOCOL_CURRENT_VERSION, runner_id: this.config.runnerId,
+      sync_sequence: this.syncSequence++, sent_at_ms: Date.now(), workspaces: captured.workspaces, jobs: captured.jobs,
+      extensions: { runmesh_history_ack: true } };
+    this.historyPending = { requestId: `history-${sync.sync_sequence}`, snapshot: captured.snapshot, socket, revision };
+    // The scheduler retains this generation until a matching receipt arrives.
+    socket.send(encodeWireFrame(sync));
+  }
+
   private async sendSyncNow(socket: WebSocket): Promise<void> {
     if (socket !== this.socket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
     if (this.jobHistory?.mode === "off") return;
-    const jobs = await this.runtime.syncJobs(this.jobHistory === undefined ? 100 : 500);
-    if (socket !== this.socket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
+    const jobs = await this.captureSyncJobs(this.jobHistory === undefined ? 100 : 500);
+    if (jobs === undefined || socket !== this.socket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
     const workspaces = this.runtime.syncWorkspaceMetadata();
     const snapshot = JSON.stringify({ workspaces, jobs });
     if (snapshot === this.lastSyncSnapshot) return;
@@ -600,10 +699,14 @@ export class RunnerConnection {
   }
 
   private async respondToRpc(socket: WebSocket, request: RpcRequest, sessionCurrent: () => boolean): Promise<void> {
+    let admitted = false;
     try {
       if (!sessionCurrent()) return;
       const expectedRevision = this.appliedPolicyRevision;
       if (request.method !== "echo" && request.method !== "runner.info" && (expectedRevision === null || request.policy_revision === undefined || request.policy_revision !== expectedRevision)) throw new Error("stale_policy");
+      const limit = CONTROL_RPC_METHODS.has(request.method) ? MAX_IN_FLIGHT_RPCS : MAX_IN_FLIGHT_RPCS - RESERVED_CONTROL_RPCS;
+      if (this.inFlightRpcs >= limit) throw new RpcRuntimeError("busy", "Runner RPC concurrency limit reached; this request was not started");
+      this.inFlightRpcs++; admitted = true;
       const result = request.method === "echo" ? request.params : request.method === "runner.info" ? this.metadata : await this.runtime.dispatch(request.method, request.params);
       if (sessionCurrent() && socket.readyState === WebSocket.OPEN) socket.send(encodeWireFrame({ type: "rpc.response", protocol_version: request.protocol_version, request_id: request.request_id, result: result as RpcRequest["params"] }));
     } catch (error) {
@@ -611,6 +714,8 @@ export class RunnerConnection {
       if (sessionCurrent() && socket.readyState === WebSocket.OPEN) {
         try { socket.send(encodeWireFrame({ type: "rpc.error", protocol_version: request.protocol_version, request_id: request.request_id, error: { code: details.code, message: details.message, failure_class: details.failure_class, operation_state: details.operation_state, ...(details.retry_after_ms === undefined ? {} : { retry_after_ms: details.retry_after_ms }), next_action: details.next_action, ...(details.details === undefined ? {} : { details: details.details as RpcRequest["params"] }) } })); } catch { /* close handler drives reconnect */ }
       }
+    } finally {
+      if (admitted) this.inFlightRpcs--;
     }
   }
 
@@ -626,23 +731,23 @@ export class RunnerConnection {
   private forwardJobEvent(event: import("./jobs.js").JobEvent): void {
     const socket = this.socket;
     // Job lifecycle frames are only valid on an authorized session. Emitting one
-    // before `runner.welcome`, or on a superseded socket, makes the Worker close
-    // with `4001 "credentials revoked"`; the reconnect loop then misreads that as
-    // a permanent credential rejection and stops retrying. The welcome handler
+    // before `runner.welcome`, or on a superseded socket, closes that transport.
+    // Older Workers misclassified it as a permanent credential rejection. The welcome handler
     // and the periodic sync reconcile any lifecycle event dropped here.
     if (socket === undefined || socket !== this.welcomedSocket || this.stopped || socket.readyState !== WebSocket.OPEN) return;
+    // Log reads and output bytes do not dirty metadata. A no-record Job
+    // never starts an upload timer and remains available to local live tools.
+    if (event.job.record_history === false) return;
+    if (this.reportingNegotiated) {
+      if (event.type !== "output") this.historyUploads.changed();
+      return;
+    }
     // Batched/off modes do not emit lifecycle frames or event-triggered full
     // snapshots. The local durable Job store is sampled by the sync timer.
     if (this.jobHistory !== undefined && this.jobHistory.mode !== "immediate") return;
-    const job = { job_id: event.job.job_id, workspace_id: event.job.workspace_id, status: event.job.status, created_at_ms: event.job.created_at_ms, updated_at_ms: event.job.updated_at_ms, ...(event.job.created_by_client_id === null ? {} : { created_by_client_id: event.job.created_by_client_id }), ...(event.job.request_id === undefined || event.job.request_id === null ? {} : { request_id: event.job.request_id }), runner_id: this.config.runnerId } as const;
     try {
-      if (event.type === "started") {
-        socket.send(encodeWireFrame({ type: "job.started", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: event.job.job_id, job, workspace: { workspace_id: event.job.workspace_id, persistence: "persistent", labels: {} }, started_at_ms: event.job.started_at_ms ?? event.job.updated_at_ms }));
-      } else if (event.type === "completed" && (event.job.status === "succeeded" || event.job.status === "failed" || event.job.status === "cancelled")) {
-        socket.send(encodeWireFrame({ type: "job.completed", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: event.job.job_id, job, completed_at_ms: event.job.completed_at_ms ?? event.job.updated_at_ms, outcome: event.job.status, exit_code: event.job.exit_code }));
-      } else if (event.type === "status") {
-        socket.send(encodeWireFrame({ type: "job.status", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: event.job.job_id, job }));
-      }
+      const message = jobEventMessage(event, this.config.runnerId);
+      if (message !== undefined) socket.send(encodeWireFrame(message));
     } catch { /* local persistence remains authoritative; transport is best effort */ }
     // Event delivery is intentionally best effort, while the periodic sync is
     // the durable reconciliation path.  Push a snapshot after lifecycle
@@ -650,69 +755,4 @@ export class RunnerConnection {
     // the event frame races the next job/list request.
     if (event.type !== "output") void this.sendSync(socket).catch(() => undefined);
   }
-}
-
-function effectivePolicyWorkspaces(policy: NonNullable<RunnerWelcome["desired_policy"]>, workspaces: readonly WorkspaceConfig[]): WorkspaceConfig[] {
-  return workspaces.map((workspace) => {
-    const source = policy.workspaces.find((item) => item.workspace_id === workspace.workspaceId);
-    if (source === undefined) throw new Error("policy validation lost a workspace");
-    const permissions = effectiveCentralPermissions(policy.runner_permissions, source.permissions);
-    return { ...workspace, permissions, readonly: !permissions.edit, shell: permissions.shell };
-  });
-}
-
-async function candidateWorkspaces(policy: NonNullable<RunnerWelcome["desired_policy"]>, executionMode?: "dedicated_user" | "privileged_host", serviceIdentity?: string): Promise<WorkspaceConfig[]> {
-  const validation = await validateCentralWorkspacePolicy(policy.workspaces as CentralWorkspacePolicy[], {
-    ...(executionMode === undefined ? {} : { executionMode }),
-    ...(serviceIdentity === undefined ? {} : { serviceIdentity }),
-  });
-  if (validation.status.some((item) => item.status !== "valid")) throw new Error("persisted active policy is not locally valid");
-  return effectivePolicyWorkspaces(policy, validation.workspaces);
-}
-export function discoverCapabilities(maxConcurrentJobs = 1): CapabilityMetadata {
-  return {
-    filesystem: true,
-    process_execution: true,
-    workspace_sync: true,
-    pty: false,
-    network_access: true,
-    max_concurrent_jobs: maxConcurrentJobs,
-    supported_rpc_methods: ["echo", "runner.info", "workspace.list", "env.info", "fs.read", "fs.stat", "fs.list", "fs.search", "fs.preview_patch", "fs.apply_patch", "git.status", "git.diff", "git.log", "git.show", "git.blame", "exec.start", "exec.run", "job.list", "job.get", "job.logs", "job.cancel", "job.input", "context.bootstrap", "context.read", "context.search", "context.checkpoint", "context.rebuild"],
-    labels: { runtime: "node" },
-  };
-}
-
-/** Return the local process identity without invoking a shell or exposing a path. */
-export function currentProcessServiceIdentity(): string | undefined {
-  try {
-    if (process.platform !== "win32" && process.getuid?.() === 0) return "root";
-    const username = userInfo().username.trim();
-    return username.length > 0 && username.length <= 512 && !/[\u0000-\u001f\u007f]/u.test(username) ? username : undefined;
-  } catch {
-    const username = process.platform === "win32" ? process.env.USERNAME : undefined;
-    return typeof username === "string" && username.length > 0 && username.length <= 512 && !/[\u0000-\u001f\u007f]/u.test(username) ? username : undefined;
-  }
-}
-
-function sanitizeServiceIdentity(value: string | undefined): string | undefined {
-  if (value === undefined) return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 && trimmed.length <= 256 && !/[\u0000-\u001f\u007f-\u009f]/u.test(trimmed) ? trimmed : undefined;
-}
-
-function validationContext(metadata: RunnerMetadata): { readonly executionMode?: "dedicated_user" | "privileged_host"; readonly serviceIdentity?: string } {
-  return {
-    ...(metadata.execution_mode === undefined ? {} : { executionMode: metadata.execution_mode }),
-    ...(metadata.service_identity === undefined ? {} : { serviceIdentity: metadata.service_identity }),
-  };
-}
-
-function processPrivilegeState(mode: "dedicated_user" | "privileged_host", identity: string | undefined): "privileged" | "restricted" | "mismatch" | "unknown" {
-  if (identity === undefined) return "unknown";
-  const normalized = identity.trim().replaceAll("/", "\\").toLowerCase();
-  const privileged = process.platform === "win32"
-    ? normalized === "system" || normalized === "nt authority\\system" || normalized === "s-1-5-18"
-    : normalized === "root";
-  if (mode === "privileged_host") return privileged ? "privileged" : "mismatch";
-  return privileged ? "mismatch" : "restricted";
 }

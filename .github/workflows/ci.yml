@@ -1,52 +1,72 @@
 name: CI
-
 on:
   push:
-    branches: [main, dev]
-  pull_request:
-  workflow_dispatch:
+    branches:
+      - main
+      - dev
+  pull_request: null
+  workflow_dispatch: null
   workflow_call:
-
+    inputs:
+      release_verification:
+        description: Keep this release's exact-source verification independent of newer pushes
+        type: boolean
+        default: false
 permissions:
   contents: read
-
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          # CI executes code from pull requests; do not leave a readable
-          # GITHUB_TOKEN credential in the checkout for build scripts.
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version-file: .node-version
           cache: npm
       - run: npm install --global npm@10.9.3
-      - run: node scripts/check-toolchain.mjs
-      - run: npm ci
-      - run: npm audit --audit-level=high
-      - run: npm audit --omit=dev --audit-level=high
-      - run: npm run check:docs
-      - run: npm run check:ci-parity
-      - run: npm run check:runbooks
-      - run: npm run check:versions
-      - run: npm run check:format
-      - run: git diff --check
-      - run: npm run typecheck
-      - run: npm run test:unit
-      - run: npm run test:release-tools
-      - run: npm run check:licenses
-      - run: npm run build
-      - run: npm run validate:worker -- --dry-run
-      - run: npm run validate:worker -- --dry-run --env development
-      - run: npm run validate:worker -- --dry-run --env production
-      - run: node scripts/check-release-contract.mjs
-      - run: npm run pack:smoke
-      - run: npm run test:e2e
-
+      - run: node scripts/ci-check.mjs toolchain
+      - run: node scripts/ci-check.mjs install
+      - run: node scripts/ci-check.mjs dependencies
+      - run: node scripts/ci-check.mjs production_dependencies
+      - run: node scripts/ci-check.mjs docs
+      - run: node scripts/ci-check.mjs ci_policy
+      - run: node scripts/ci-check.mjs runbooks
+      - run: node scripts/ci-check.mjs versions
+      - run: node scripts/ci-check.mjs format
+      - run: node scripts/ci-check.mjs architecture
+      - run: node scripts/ci-check.mjs inventory
+      - run: node scripts/ci-check.mjs promotion
+      - run: node scripts/ci-check.mjs whitespace
+      - run: node scripts/ci-check.mjs types
+      - run: node scripts/ci-check.mjs unit
+      - run: node scripts/ci-check.mjs security
+      - run: node scripts/ci-check.mjs tooling
+      - run: node scripts/ci-check.mjs licenses
+      - run: node scripts/ci-check.mjs build
+      - run: node scripts/ci-check.mjs worker_default
+      - run: node scripts/ci-check.mjs worker_dev
+      - run: node scripts/ci-check.mjs worker_prod
+      - run: node scripts/ci-check.mjs release_contract
+      - run: node scripts/ci-check.mjs package_smoke
+      - run: node scripts/ci-check.mjs transport
+      - run: node scripts/ci-check.mjs installed_transport
+      - name: Preserve sanitized gate evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ci-verify-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ci-results/*.json
+            ci-results/*.xml
+          if-no-files-found: error
+          retention-days: 14
+          include-hidden-files: false
+          overwrite: false
+          archive: true
   native-runner:
     name: Runner native checks (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -54,7 +74,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -72,13 +95,21 @@ jobs:
       - run: npm run pack:smoke
       - run: node scripts/check-installer-syntax.mjs
       - run: node --test test/installer-arguments.test.mjs test/installer-preflight.test.mjs
-
+      - run: node --test test/installer-download.test.mjs test/installer-concurrency.test.mjs
+      - run: node --test test/worker-validation.test.mjs
+      - run: npm run test:domain
+      - run: npm run test:contracts
+      - run: node --test test/verification-tools.test.mjs test/package-verification.test.mjs
+      - run: node --test test/architecture.test.mjs
+      - run: node --test test/build-provenance.test.mjs test/deployment-provenance-cli.test.mjs test/live-provenance.test.mjs
   runner-lts:
     name: Runner LTS (${{ matrix.node }})
     strategy:
       fail-fast: false
       matrix:
-        node: [22.23.2, 24.21.0]
+        node:
+          - 22.23.2
+          - 24.21.0
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -100,16 +131,53 @@ jobs:
       - run: npm install --global npm@10.9.3
       - run: npm run test --workspace=@aloneio/runmesh-runner
       - run: node apps/runner/dist/runmesh.cjs --version
-
   verify-all:
     if: always()
-    needs: [verify, native-runner, runner-lts]
+    needs:
+      - verify
+      - native-runner
+      - runner-lts
+      - browser
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require every platform and supported runtime
+      - name: Require every mandatory job
         env:
           VERIFY: ${{ needs.verify.result }}
-          NATIVE: ${{ needs.native-runner.result }}
-          LTS: ${{ needs.runner-lts.result }}
-        run: test "$VERIFY" = success && test "$NATIVE" = success && test "$LTS" = success
+          NATIVE_RUNNER: ${{ needs.native-runner.result }}
+          RUNNER_LTS: ${{ needs.runner-lts.result }}
+          BROWSER: ${{ needs.browser.result }}
+        run: test "$VERIFY" = success && test "$NATIVE_RUNNER" = success && test "$RUNNER_LTS" = success && test "$BROWSER" = success
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm install --global npm@10.9.3
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run browser:install
+      - run: npm run test:browser
+      - name: Preserve sanitized gate evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ci-browser-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ci-results/*.json
+            ci-results/*.xml
+          if-no-files-found: error
+          retention-days: 14
+          include-hidden-files: false
+          overwrite: false
+          archive: true
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ (inputs.release_verification || github.event_name == 'workflow_dispatch') && github.run_id || 'ordinary' }}
+  cancel-in-progress: ${{ !inputs.release_verification && github.event_name != 'workflow_dispatch' }}

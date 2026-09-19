@@ -74,3 +74,29 @@ it("independent audit expiry never instantiates the core DO or reads its SQLite 
   await worker.scheduled({} as ScheduledController, localEnv);
   expect(get).not.toHaveBeenCalled();
 });
+
+it("a late transient failure cannot shorten a concurrent daily quota cooldown", async () => {
+  const now = Date.UTC(2026, 8, 14, 12), clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  const pending: Array<(error: Error) => void> = [];
+  let failWrites = false;
+  const database = {
+    prepare: db.prepare.bind(db),
+    batch: (statements: D1PreparedStatement[]) => failWrites
+      ? new Promise<never>((_resolve, reject) => { pending.push(reject); }) : db.batch(statements),
+  } as D1Database;
+  try {
+    const sink = new ExternalAuditHistory(database, `concurrent-circuit-${crypto.randomUUID()}`);
+    expect(await sink.append(metadata("seed"))).toBe(true);
+    failWrites = true;
+    const quotaFailure = sink.append(metadata("quota")), transientFailure = sink.append(metadata("transient"));
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+    pending[0]!(new Error("D1_ERROR: daily rows_written limit exceeded"));
+    expect(await quotaFailure).toBe(false);
+    pending[1]!(new Error("D1 temporarily unavailable"));
+    expect(await transientFailure).toBe(false);
+    expect(sink.health()).toMatchObject({ disabled_until_ms: Date.UTC(2026, 8, 15) + 30_000, failure_count: 2 });
+    clock.mockReturnValue(now + 3_600_000);
+    expect(await sink.append(metadata("still-blocked"))).toBe(false);
+    expect(pending).toHaveLength(2);
+  } finally { clock.mockRestore(); }
+});

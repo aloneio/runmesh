@@ -337,8 +337,9 @@ async function readPrivateProfile(path: string, platform: HostPlatform, enforceO
   if (platform !== "win32" && !canReadProfileMode(before.mode & 0o777, before.gid, before.uid)) throw new Error("runner profile is not private");
   // O_NOFOLLOW closes the final-component symlink race on POSIX. Windows has
   // no portable equivalent in Node, so the lstat plus descriptor identity
-  // check remains the best available guard there.
-  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  // check remains the best available guard there. Nonblocking open prevents a
+  // concurrent FIFO replacement from waiting before that descriptor check.
+  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   try {
     const opened = await handle.stat();
     if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) throw new Error("runner profile changed while being opened");

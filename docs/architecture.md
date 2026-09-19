@@ -1,96 +1,53 @@
-# Architecture
+# Runmesh architecture
 
-```text
-MCP client with per-client secret URL and sticky active_runner_id
-        │ stateless MCP over HTTPS
-        ▼
-Cloudflare Worker
-  ├─ setup/login/admin HTML
-  ├─ RegistryDO (SQLite; core authority and optional Job snapshots)
-  ├─ D1 (optional metadata-only audit history)
-  └─ RunnerDO per runner_id (hibernatable WebSocket)
-        │ outbound-only WSS
-        ▼
-Local Runner
-  ├─ profile/credential store
-  ├─ workspace/path policy
-  ├─ filesystem and UTF-8 paging
-  ├─ transactional patch and Git
-  └─ persistent Job Manager
-```
+Use this reference to locate the owner of a behavior before changing it. It describes the current source checkout. [Current facts](current-facts.md) and [tool examples](tool-examples.md) are checked by `check:docs`; [verification layers](verification.md) explains how to validate a change.
 
-## Decisions
+## Deployment and authority
 
-- The Worker is the only public MCP server; a Runner is never an MCP/HTTP/auth server.
-- Cloudflare is a control plane. CPU, filesystem, Git, processes, and complete logs stay on the Runner.
-- MCP HTTP is stateless. Each request authenticates its path secret and creates a fresh `McpServer` through `createMcpHandler`.
-- MCP client authentication is single-user/self-hosted: first-time admin password plus independent `/<secret>/mcp` client URLs. There is no OAuth lane.
-- Each MCP client stores one sticky active Runner selection. `runner_list`, `runner_current`, and `runner_select` manage this routing state; changing a non-null selection requires explicit confirmation. Ordinary tools resolve the selection and retain `workspace_id` parameters but do not expose ordinary per-call `runner_id` inputs.
-- Selected Runner failure never triggers fallback to another Runner. Explicit selection is required after an offline, stale, revoked, or unavailable selection. Deleting a Runner clears affected client selections. The only convenience auto-selection is the unselected, exactly-one-registered-Runner case.
-- Runner authentication remains independent: enrollment codes are short-lived/single-use; the resulting token uses a verifier, credential version, connection epoch, rotation, and revocation design.
-- A Job belongs to the single-admin instance/workspace domain, not to a chat session. `created_by_client_id` is audit metadata, not an ownership restriction. Clients sharing a Runner and scopes share its workspace/job context.
-- Runner local disk is authoritative. RegistryDO stores bounded historical metadata and never treats a bounded sync omission as immediate job deletion.
-- The dashboard is a browser control plane for metadata and code/manifest rendering. It does not execute arbitrary host installers or every rendered lifecycle command.
+The Worker provides the public MCP and browser endpoints. Each Runner connects outbound over WSS and owns local processes, files, Git operations, retained logs and Context records.
 
-## Enrollment and local control plane
+RegistryDOv2 owns identities, permissions, enrollment and policy authority in one SQLite-backed Durable Object. RunnerDOv2 owns each Runner's authenticated transport, connection generations and policy checks. Production's separate `HISTORY_DB` D1 binding stores optional audit metadata and packed Job snapshots. Treat a history outage as an optional-feature failure while preserving core credentials and authorization.
 
-The dashboard adds a Runner with a stable safe ID and `display_name`, then creates a 30-minute, single-use enrollment code. Regeneration deletes any unused code for that Runner before inserting the replacement. `POST /runner/enroll` atomically redeems the code and returns a new Runner token; the packaged CLI's supported flow is `runmesh enroll --server ... --code-stdin`, followed by `runmesh install`. It stores a centrally managed local profile with zero workspaces; only the Admin Panel adds central workspace roots.
+Each MCP client has an independently revocable secret URL and a persisted Runner selection. Switching an existing selection requires confirmation. If that Runner is unavailable, report its state and let the client choose another. Authorized clients selecting the same Runner can share workspace Jobs. Capabilities identify supported operations; current policy determines which operations a client may perform.
 
-The dashboard displays a one-command installer with a quoted single-use enrollment code only when the fixed signed release has been published, independently verified, and explicitly enabled for the Worker **with a valid canonical external HTTPS `RUNMESH_PUBLIC_ORIGIN`**. The explicit `development` and `test` environments keep that path disabled; the top-level production configuration and its named `production` alias enable the fixed immutable `v0.1.3` release only after independent verification and explicit activation. Otherwise it displays the manual portable-artifact route and uses `runmesh enroll --code-stdin`. The enabled installer pins the release and embedded Ed25519 key, verifies signed immutable assets, and treats Worker HTTPS delivery as bootstrap trust model A; high-assurance operators use an independent offline keyring path. It does not provide automatic update.
+## Module ownership
 
-The local CLI has implemented profile/status/doctor/workspace/env/start commands and a service-manifest adapter. `runmesh install` invokes the Runmesh service provisioner for Runmesh-owned identities and directories (and Windows Local Service ACLs), then writes managed system service manifests with dedicated-user identity by default for direct/manual CLI use. The dashboard and direct CLI default to `dedicated_user`; `privileged_host` is an advanced choice requiring explicit confirmation. It never changes configured Workspace ownership or modes; the operator grants the service identity only the required Workspace access. Current profiles require a valid `execution_mode`, `management_mode: central`, and zero local workspace entries; an incomplete profile is rejected and must be replaced through enrollment. The local `workspace` command is inspection-only; workspace roots and permissions are configured in the Admin Panel. Doctor diagnostics report stable required/optional checks and Host shell availability. The dashboard and service-action pages render commands/manifests but do not activate a host service themselves. Hosted bootstrap scripts fail closed while either the fixed release gate or canonical public origin is absent. When the exact signed release is enabled, a new-install-only script verifies and stages the portable package, uses the supplied code after verification, or prompts locally when it was omitted, creates the canonical system profile, activates the versioned `current` path, and invokes the same local `runmesh install` provisioner. A local failure removes only the newly created version/current/service state; a remotely redeemed code cannot be rolled back and must be regenerated. When hosted bootstrap is unavailable, the operator must use a manually verified portable artifact and run `runmesh install` explicitly.
+| Area | Modules | Responsibility |
+| --- | --- | --- |
+| HTTP composition | `apps/worker/src/index.ts`, `apps/worker/src/http/` | Entry assembly, routing, request/response handling and session protection |
+| Application use cases | `apps/worker/src/application/` | Shared lifecycle/policy coordination, Runner deletion and display projections |
+| Presentation | `apps/worker/src/admin/`, `apps/worker/src/i18n/` | View/message contracts and rendering; Jobs and logs load on request |
+| MCP | `apps/worker/src/mcp/` | Catalog, handlers, output validation, bounded projection and reauthorization |
+| Foundations | `public-origin.ts`, `platform/env.ts`, `contracts/` | Origin rules, platform types and narrow application contracts |
+| Registry domains | `registry/auth.ts`, `policy.ts`, `lifecycle.ts`, `history.ts` | Business operations over shared synchronous storage |
+| Registry facade | `registry.ts` | Public compatibility API, schema startup, HTTP/HMAC, maintenance and external history |
+| Runner composition | `apps/runner/src/runtime.ts` | Policy and service assembly |
+| Job adapters | `apps/runner/src/jobs/` | File, process, log and recovery operations; JobManager coordinates lifecycle |
+| Context adapters | `apps/runner/src/context/` | Storage/recovery and retention planning; execution revalidates paths and authorization |
+| Shared protocol | `packages/protocol/src/` | Wire contracts, permissions, operation requirements, pagination and failure metadata |
 
-## State and release boundary
+Cross-table transactions remain within one Registry. The dependency gate checks application, domain and foundation imports in both CI systems, reporting runtime and type-inclusive cycles separately. See [module boundaries](architecture-remediation.md) for the role matrix and compatibility interfaces.
 
-RegistryDO SQLite tables cover Runners, immutable policy snapshots and mutations, centrally managed workspaces, jobs, admin settings/sessions, auth throttle state, MCP clients, enrollment records, and internal request nonces. On construction it accepts only this complete schema; a persisted incompatible schema is rejected and must be replaced with a fresh Durable Object namespace. It never repairs, transforms, or retains partial records from another schema. There is no data-import, downgrade, or automatic profile-conversion path; the transition procedure is documented in [migration.md](migration.md).
+## Authorization and state changes
 
-The authentication throttle reserves attempts transactionally before expensive password KDF work. Five failed attempts are admitted, then the per-kind (`setup` or `login`) block starts at 30 seconds and increases exponentially to a 15-minute maximum; success clears the state. It is not per-IP and not a full distributed rate limiter. If the optional throttle write hits a provider quota or transient storage error, the Registry keeps authentication available with an in-memory per-instance fallback and exposes a `Login protection` feature notice instead of returning a global 503.
+Authenticate each entrypoint and reauthorize protected operations against current policy. Preserve distinct outcomes for a denied request, an unavailable dependency and malformed evidence. RunnerDO's final local policy check and socket send form one synchronous section. Queued Jobs reauthorize immediately before starting.
 
-## Failure behavior
+Registry SQL and transaction callbacks are synchronous. Registration and its initial policy snapshot share a transaction and rollback together. Keep that ownership when extracting a domain or storage adapter. Optional audit writes have their own outcome alongside the operation being recorded.
 
-- MCP/browser closes after `exec_start`: local job continues.
-- Runner WebSocket disconnects: local jobs/logs continue; live tools report the selected Runner as offline. No other Runner is tried. `job_list` and last-known `job_get` metadata remain available from Registry snapshots where permitted.
-- Runner reconnects: the session is re-authenticated, heartbeat state is refreshed, and recent/active job metadata is synchronized; workspace roots remain authoritative in the central policy.
-- Runner process restarts: matching live jobs become `unknown`; reconciliation moves vanished jobs to `interrupted` without guessing the exit code. Recovered cancellation is reported as `cancelled` only with persisted delivery evidence.
-- Runner revocation: old transport credentials fail and the socket is closed; centrally managed Workspace, immutable Policy, and retained Job metadata remain available for operator review. Already-running local processes are not remotely killed.
-- Worker/DO restart: in-flight bridge calls can fail, while Runner-local jobs continue. Callers should retry only safe/idempotent requests.
+Jobs persist across MCP response closure and ordinary transport disconnection. After an uncertain result, inspect the original Job and process state before retrying. Cancellation and stdin delivery require the same care because the process may already have received them. Context cleanup uses an explicit preview followed by verification of the current plan.
 
-## Security posture and excluded runtime
+## Installation and compatibility
 
-Admin/MCP HTML uses no-store/referrer/no-sniff/frame protections and CSRF checks. The emitted dashboard uses inline style/script content, so its CSP currently requires `unsafe-inline`; replacing that with nonce/hash or external resources is deferred hardening.
+Production uses independent, stable `INTERNAL_CONTROL_SECRET` and `RUNNER_TOKEN_PEPPER` values. `ADMIN_TOKEN` supports the optional programmatic administration API. The public origin comes from a validated routed HTTPS request, with a proxy override when needed. Hosted installation uses the reviewed release record, fixed artifact URLs and signature checks. See [runtime configuration](runtime-config.md) and [portable installation](portable-runner-installation.md).
 
-The authorization and transport core uses Workers plus SQLite-backed Durable Objects. Production optionally stores MCP audit metadata in independent D1 history; see [quota isolation](quota-resilience.md). It does not include OAuth, AI/model APIs, Cloudflare Sandbox, Cloudflare Containers, GitHub Actions runtime, KV, R2, Queues, Dynamic Workers, tunnels, or inbound services. The Runner's workspace policy is not an OS sandbox; operators must provide external isolation for hostile code.
+During normal updates, preserve Worker names, v2 namespaces, D1 bindings, credentials and registered services. Investigate incompatible schemas against the target revision and use the [upgrade guide](upgrading.md). The [legacy migration](migration.md) procedure applies to its named pre-v2 boundary.
 
-## Free Plan posture
+New Runners default to `dedicated_user`; privileged host execution requires an explicit choice. New MCP clients default to `coding:read`. First administrator setup uses CSRF, same-origin and atomic first-success-wins checks; initialize the instance before opening it to untrusted visitors. Shell processes run with the service account's operating-system privileges, so workspace policy must be paired with appropriate host permissions.
 
-WebSocket Hibernation reduces idle control-plane connection cost; local Runners carry execution and disk cost. Capacity still depends on account-wide Cloudflare quotas and must be measured by the operator. Local validation does not prove deployed quotas or restart/hibernation behavior.
+Retained logs and Context records remain on the Runner and are relayed when authorized clients request them. Cloud history holds bounded metadata. Recording preferences govern optional uploads; authorization records remain required. Snapshot, cursor and cleanup operations each have byte, count and time budgets.
 
-## Current security contract (0.1.3; publication status in release readiness)
+## Validate a change
 
-First administrator setup requires no additional bootstrap token and remains
-CSRF-protected, same-origin and atomic first-success-wins. The default Runner
-is `dedicated_user`; the default new MCP client is `coding:read`. Existing
-permissions are unchanged. Requested tool content is relayed to its authorized
-client but excluded from durable MCP audit. Only metadata is stored for up to
-seven days and 1,000 calls per Runner; legacy audit rows are purged once by the
-v2-compatible migration. See [rollout notes](security-remediation.md).
+Choose the checks that cover the affected owner: pure rules, adapter/schema contracts, Runner integration, local Cloudflare integration, source transport or installed-package transport. Record native-platform, signed-release and live-environment results against the same candidate SHA. Use `not_run` for environments that have not been exercised.
 
-Hosted installer commands include the single-use enrollment code for one-copy
-setup. Scripts accept a positional code, `--code CODE`, or `--code=CODE`; omitting
-the code retains the hidden terminal prompt. The downstream Runner receives
-standard input, not a temporary credential file. The complete convenience
-command is credential material and may be recorded in command history or
-process arguments. The 0.1.3 production gate is enabled only after independent signed-asset
-verification; development retains its disabled gate.
-
-## Quota-isolation amendment
-
-The [quota-isolation contract](quota-resilience.md) adds transactional retention counters, independent optional D1 audit, and a per-client cloud Job recording preference. Core authorization stays in the existing DO namespace. Unrecorded Jobs have no offline cloud snapshot; workspace-bound live operations still require current Registry and Runner permission checks. Physical cleanup is bounded and can lag the seven-day visibility window during backlog or storage failure.
-
-## Batched Job history
-
-See [batched snapshots, manual loading and retention](batched-job-history.md). Production uses `RUNMESH_JOB_HISTORY_BACKEND=d1`; the default upload window is five minutes. History is loaded only on request. Source-side batching and local day-based cleanup are shipped in immutable v0.1.2; existing v0.1.1 assets and installed services remain unchanged.
-
-## Shared Runner queue and localized UI
-
-See [queue/UI contract](job-queue-and-localization.md) for capability negotiation, current authorization, bounded fair scheduling, restart interruption and server-side locale rendering. A Worker deployment does not upgrade installed Runner 0.1.2.
+For deployment acceptance, verify the compiled Worker commit, installed Runner version, client tool catalog and required account behavior. Measure Cloudflare cost and hibernation in the target environment. Stateful coordinators and compatibility interfaces have dedicated regression coverage; preserve it while moving operations behind narrower interfaces.

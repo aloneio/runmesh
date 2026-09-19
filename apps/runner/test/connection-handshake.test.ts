@@ -72,8 +72,8 @@ describe("runner welcome handshake fencing", () => {
     try {
       await hello;
       // The transport is open but still unauthorized. A lifecycle frame emitted
-      // here makes the Worker close with `4001 "credentials revoked"`, which the
-      // reconnect loop reads as a permanent credential decision and stops.
+      // here must still be suppressed, even though corrected Workers classify
+      // an unestablished session as retryable rather than revoked credentials.
       forward("before-welcome");
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(received).toEqual(["runner.hello"]);

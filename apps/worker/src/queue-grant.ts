@@ -1,7 +1,7 @@
 import { QueueGrantSchema, QueueGrantPayloadSchema, type QueueGrant, type QueueGrantPayload } from "@aloneio/runmesh-protocol";
 const encoder = new TextEncoder();
 export function launchInput(params: Record<string, unknown>): string {
-  return JSON.stringify({ workspace_id: params.workspace_id, command: params.command, args: params.args ?? null, shell: params.shell, cwd: params.cwd ?? ".", request_id: params.request_id ?? null });
+  return JSON.stringify({ workspace_id: params.workspace_id, command: params.command, args: params.args ?? null, shell: params.shell, cwd: params.cwd ?? ".", request_id: params.request_id ?? null, ...(typeof params.record_history === "boolean" ? {record_history: params.record_history} : {}) });
 }
 export async function launchDigest(params: Record<string, unknown>): Promise<string> {
   return hex(await crypto.subtle.digest("SHA-256", encoder.encode(launchInput(params))));

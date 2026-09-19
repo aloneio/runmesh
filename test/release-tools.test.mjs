@@ -1,10 +1,11 @@
-import { validateReleaseHealth } from "../scripts/check-live-release-prereqs.mjs";
+import { writeReleaseValidation, releaseValidationModule } from "../scripts/generate-release-validation.mjs";
+import { MAX_RELEASE_HEALTH_BYTES, readReleaseHealth, validateReleaseHealth } from "../scripts/check-live-release-prereqs.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { generateKeyPairSync } from "node:crypto";
+import { generateKeyPairSync, createHash, sign } from "node:crypto";
 import { build } from "esbuild";
-import { mkdtemp, readFile, rm, truncate, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -14,6 +15,7 @@ import { verifyReleaseAssets } from "../scripts/release-verify.mjs";
 import { signReleaseManifest, verifyReleaseManifest } from "../scripts/release-signature.mjs";
 import { resolveTrustedTaskkillPath } from "../scripts/windows-tools.mjs";
 import { MAX_RELEASE_ASSET_BYTES, readBoundedReleaseFile } from "../scripts/release-io.mjs";
+import { AGGREGATE_JOBS, checkCommand } from "../scripts/ci-contract.mjs";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const execFileAsync = promisify(execFile);
@@ -29,8 +31,9 @@ test("pins manually-dispatched releases to the triggering main commit", async ()
   assert.equal(workflow.includes('test "$GITHUB_REF" = "refs/heads/main"'), true);
   assert.equal(workflow.includes('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"'), true);
   assert.equal(workflow.includes('test "$(git rev-parse origin/main)" = "$GITHUB_SHA"'), true);
-  assert.equal(workflow.includes(`test "$RELEASE_VERSION" = "${productVersion}"`), true);
-  assert.equal(workflow.includes('test "$RELEASE_SIGNING_KEY_ID" = "runmesh-preview-2026-01"'), true);
+  assert.equal(workflow.includes('node scripts/stable-publication.mjs "$RELEASE_VERSION" "$RELEASE_SIGNING_KEY_ID"'), true);
+  assert.equal(/test "\$RELEASE_VERSION" = "\d+\.\d+\.\d+"/u.test(workflow), false);
+  assert.equal(workflow.includes('test "$RELEASE_VERSION" = "$ROOT_VERSION"'), true);
   assert.equal(workflow.lastIndexOf('git fetch --no-tags origin main') > workflow.indexOf('Verify tag and release do not already exist'), true);
   assert.equal(workflow.includes("https://api.github.com/repos/"), true);
   assert.equal(workflow.includes('test -n "$GH_TOKEN"'), true);
@@ -80,8 +83,115 @@ test("pins manually-dispatched releases to the triggering main commit", async ()
   assert.equal(gitlabWorkflow.includes("cloudflare_deploy:"), false);
   assert.equal(gitlabWorkflow.includes("wrangler deploy"), false);
   assert.equal(gitlabWorkflow.includes("CLOUDFLARE_API_TOKEN"), false);
-  for (const command of ["npm run validate:worker -- --dry-run", "npm run validate:worker -- --dry-run --env production", "npm run test:e2e"]) {
+  for (const id of ["worker_default", "worker_prod", "transport"]) {
+    const command = checkCommand(id);
     assert.equal(gitlabWorkflow.includes(command), true, `GitLab verify must include ${command}`);
+  }
+});
+
+test("pins the stable API tagger identity before creating its remote reference", async () => {
+  const workflow = (await readFile(join(repositoryRoot, ".github", "workflows", "release.yml"), "utf8")).replace(/\r\n/gu, "\n");
+  const start = workflow.indexOf("      - name: Create annotated release tag\n");
+  const end = workflow.indexOf("      - name: Create stable draft release\n", start);
+  assert.ok(start >= 0 && end > start);
+  const step = workflow.slice(start, end);
+  assert.ok(step.includes("--field 'tagger[name]=aloneio'"));
+  assert.ok(step.includes("--field 'tagger[email]=git@aloneio.aleeas.com'"));
+  assert.ok(step.includes("--jq '[.tagger.name, .tagger.email] | @tsv'"));
+  const identityGate = step.indexOf("test \"$tagger_identity\" = $'aloneio\\tgit@aloneio.aleeas.com'");
+  assert.ok(identityGate > step.indexOf("tagger_identity="));
+  assert.ok(step.indexOf("ref_object_sha=") > identityGate, "tagger identity must be checked before creating the tag ref");
+});
+
+test("release health reads valid bounded UTF-8 without buffered response helpers", async () => {
+  let observed;
+  const response = new Response(JSON.stringify({ ok: true, label: "测试" }));
+  response.text = () => { throw new Error("unbounded body helper must not be used"); };
+  const value = await readReleaseHealth("https://preflight.invalid", async (url, options) => {
+    observed = { url: url.href, options }; return response;
+  });
+  assert.deepEqual(value, { ok: true, label: "测试" });
+  assert.equal(observed.url, "https://preflight.invalid/health");
+  assert.equal(observed.options.redirect, "error");
+  assert.equal(observed.options.credentials, "omit");
+  assert.equal(observed.options.cache, "no-store");
+  assert.equal(response.body.locked, false);
+});
+
+test("release health accepts the exact byte limit and rejects the next byte", async () => {
+  const emptyBytes = Buffer.byteLength(JSON.stringify({ padding: "" }));
+  const value = { padding: "x".repeat(MAX_RELEASE_HEALTH_BYTES - emptyBytes) };
+  assert.equal(Buffer.byteLength(JSON.stringify(value)), MAX_RELEASE_HEALTH_BYTES);
+  assert.deepEqual(await readReleaseHealth("https://preflight.invalid", async () => new Response(JSON.stringify(value))), value);
+  await assert.rejects(readReleaseHealth("https://preflight.invalid", async () => new Response(JSON.stringify({ padding: `${value.padding}x` }))), /oversized health response/u);
+});
+
+test("release health does not dispatch after an already expired deadline", async () => {
+  const controller = new AbortController();
+  controller.abort(new Error("health deadline"));
+  let fetched = false;
+  await assert.rejects(readReleaseHealth("https://preflight.invalid", async () => { fetched = true; return new Response("{}"); }, controller.signal), /health deadline/u);
+  assert.equal(fetched, false);
+});
+
+test("release health enforces encoded bytes rather than UTF-16 string length", async () => {
+  const text = JSON.stringify({ padding: "汉".repeat(30000) });
+  assert.ok(text.length < MAX_RELEASE_HEALTH_BYTES);
+  assert.ok(Buffer.byteLength(text, "utf8") > MAX_RELEASE_HEALTH_BYTES);
+  await assert.rejects(readReleaseHealth("https://preflight.invalid", async () => new Response(text)), /oversized health response/u);
+});
+
+test("release health cancels an oversized stream before draining the remote body", async () => {
+  let pulls = 0, cancelled = false;
+  const response = new Response(new ReadableStream({
+    pull(controller) {
+      if (pulls === 512) { controller.close(); return; }
+      pulls++; controller.enqueue(new Uint8Array(4096).fill(32));
+    },
+    cancel() { cancelled = true; },
+  }));
+  await assert.rejects(readReleaseHealth("https://preflight.invalid", async () => response), /oversized health response/u);
+  assert.ok(pulls <= 18, "only the bounded prefix plus stream prefetch may be pulled");
+  assert.equal(cancelled, true);
+  assert.equal(response.body.locked, false);
+});
+
+test("release health bounds tiny fragments independently of total bytes", async () => {
+  let pulls = 0, cancelled = false;
+  const response = new Response(new ReadableStream({
+    pull(controller) { pulls++; controller.enqueue(new Uint8Array(1).fill(32)); },
+    cancel() { cancelled = true; },
+  }));
+  await assert.rejects(readReleaseHealth("https://preflight.invalid", async () => response), /fragment limit/u);
+  assert.ok(pulls <= 1026);
+  assert.equal(cancelled, true);
+  assert.equal(response.body.locked, false);
+});
+
+test("release health aborts a stalled response body and releases its reader", async () => {
+  const controller = new AbortController();
+  let cancelled = false;
+  const response = new Response(new ReadableStream({ cancel() { cancelled = true; } }));
+  const pending = readReleaseHealth("https://preflight.invalid", async () => response, controller.signal);
+  const rejected = assert.rejects(pending, /health deadline/u);
+  setImmediate(() => controller.abort(new Error("health deadline")));
+  await rejected;
+  assert.equal(cancelled, true);
+  assert.equal(response.body.locked, false);
+});
+
+test("release health rejects unavailable, malformed and invalid-origin inputs", async () => {
+  let cancelled = false;
+  const unavailable = new Response(new ReadableStream({ cancel() { cancelled = true; } }), { status: 503 });
+  await assert.rejects(readReleaseHealth("https://preflight.invalid", async () => unavailable), /unavailable/u);
+  assert.equal(cancelled, true);
+  await assert.rejects(readReleaseHealth("https://preflight.invalid", async () => new Response(null)), /no health body/u);
+  await assert.rejects(readReleaseHealth("https://preflight.invalid", async () => new Response("not JSON")), SyntaxError);
+  await assert.rejects(readReleaseHealth("https://preflight.invalid", async () => new Response(Uint8Array.of(0xff))), TypeError);
+  for (const origin of ["http://preflight.invalid", "https://user:secret@preflight.invalid", "https://preflight.invalid/path"]) {
+    let fetched = false;
+    await assert.rejects(readReleaseHealth(origin, async () => { fetched = true; return new Response("{}"); }));
+    assert.equal(fetched, false);
   }
 });
 
@@ -273,8 +383,9 @@ test("stable publication requires the owner and the complete same-SHA CI workflo
   assert.ok(release.includes("github.triggering_actor == github.repository_owner"));
   assert.ok(release.includes("--prerelease=false"));
   assert.ok(ci.includes("workflow_call:"));
-  assert.ok(ci.includes("needs: [verify, native-runner, runner-lts]"));
-  assert.ok(ci.includes("node: [22.23.2, 24.21.0]"));
+  const verifyAll = ci.slice(ci.indexOf("  verify-all:"), ci.indexOf("\n  browser:", ci.indexOf("  verify-all:")));
+  for (const job of AGGREGATE_JOBS) assert.ok(verifyAll.includes(`      - ${job}`), `verify-all must require ${job}`);
+  assert.match(ci, /node:\n\s+- 22\.23\.2\n\s+- 24\.21\.0/u);
   assert.ok(!ci.includes("runner-node20"));
 });
 
@@ -287,4 +398,120 @@ test("release publication rejects stale or incomplete public deployment contract
   }
   const stale=structuredClone(health);stale.release_readiness.rpc_authorization_complete=false;assert.throws(()=>validateReleaseHealth(stale));
   const unbound=structuredClone(health);unbound.audit_history.binding_configured=false;assert.throws(()=>validateReleaseHealth(unbound));
+});
+
+
+test("AR15 generates one bounded field validator without evaluating source", async () => {
+  const f = await fixture();
+  try {
+    const directory = join(f.root, "apps/worker/src/domain");
+    await mkdir(directory, { recursive: true });
+    const input = join(directory, "release-manifest.ts");
+    await writeFile(input, 'throw new Error("must not evaluate authored input"); export const marker: number = 1;\n');
+    assert.equal(await writeReleaseValidation(f.root), true);
+    assert.equal(await writeReleaseValidation(f.root), false);
+    const first = await readFile(join(f.root, "apps/worker/src/generated-release-validation.ts"), "utf8");
+    await writeFile(input, 'export const marker: number = 2;\n');
+    assert.equal(await writeReleaseValidation(f.root), true);
+    assert.notEqual(await readFile(join(f.root, "apps/worker/src/generated-release-validation.ts"), "utf8"), first);
+    await writeFile(input, 'import type { Stats } from "node:fs"; export const marker = 1;\n');
+    await assert.rejects(releaseValidationModule(f.root), /no runtime or type imports/u);
+    await writeFile(input, " ".repeat(32769));
+    await assert.rejects(releaseValidationModule(f.root), /bounded/u);
+    assert.equal(await readFile(join(repositoryRoot, "apps/worker/src/generated-release-validation.ts"), "utf8"), await releaseValidationModule(repositoryRoot));
+  } finally { await f.cleanup(); }
+});
+
+test("AR15 Worker and both generated installer verifiers agree on signed manifest fields", { timeout: 60_000 }, async () => {
+  const f = await fixture();
+  try {
+    const modules = {};
+    for (const [name, source] of Object.entries({ installer: "installer.ts", io: "distribution/release-io.ts", selection: "domain/release-selection.ts" })) {
+      const outfile = join(f.root, `${name}.mjs`);
+      await build({ entryPoints: [join(repositoryRoot, "apps/worker/src", source)], outfile, bundle: true, platform: "node", format: "esm", target: "node22" });
+      modules[name] = await import(pathToFileURL(outfile).href);
+    }
+    const version = productVersion.replace(/(\d+)$/u, value => String(Number(value) + 1)) + "-dev.0";
+    const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+    const trust = { key_id: "synthetic-parity-key", public_key_pem: String(publicKey.export({ type: "spki", format: "pem" })) };
+    const target = { ...modules.installer.installerReleaseTarget(version, "dev"), release_key_id: trust.key_id, public_key_pem: trust.public_key_pem };
+    const shell = modules.installer.renderPosixInstaller("https://worker.test", "dedicated_user", target);
+    const powershell = modules.installer.renderPowerShellInstaller("https://worker.test", "dedicated_user", target);
+    const posixCode = /<<'RUNMESH_VERIFY'\n([\s\S]+?)\nRUNMESH_VERIFY\n/u.exec(shell)?.[1];
+    const psStart = powershell.indexOf("Invoke-LoggedStep 'Verifying Runner'");
+    const powerShellCode = /@'\n([\s\S]+?)\n'@ \| & \$NodePath --input-type=module - \$TempRoot/u.exec(powershell.slice(psStart))?.[1];
+    assert.ok(posixCode && powerShellCode, "extract the actual generated verifier, not a hand-written predicate");
+    assert.equal(posixCode, powerShellCode);
+    const paths = [join(f.root, "posix-verifier.mjs"), join(f.root, "powershell-verifier.mjs")];
+    await writeFile(paths[0], posixCode); await writeFile(paths[1], powerShellCode);
+    const artifact = Buffer.from("synthetic portable artifact, never installed");
+    const digest = createHash("sha256").update(artifact).digest("hex");
+    const base = { schema_version: 1, project: "runmesh", version, tag: `v${version}`, channel: "dev", prerelease: true, commit_sha: "a".repeat(40), protocol_min: 2, protocol_max: 2, published_at: "2026-09-16T08:00:00Z", artifacts: [{ name: target.artifact_name, platform: "node", architecture: "portable", node_major_min: 22, url: target.artifact_url, size: artifact.length, sha256: digest }] };
+    const metadata = { draft: false, prerelease: true, immutable: true, tag_name: `v${version}`, published_at: base.published_at, assets: ["LICENSE", "NOTICE", "SHA256SUMS", "THIRD_PARTY_NOTICES.md", "manifest.json", "manifest.sig", "manifest.signature.json", "trust-keyring.json", target.artifact_name].map(name => ({ name })) };
+    const descriptor = modules.selection.developmentDescriptor(metadata);
+    assert.ok(descriptor);
+    const changeArtifact = value => ({ ...base, artifacts: [{ ...base.artifacts[0], ...value }] });
+    const cases = [
+      ["valid", base, true],
+      ["valid leap day", { ...base, published_at: "2028-02-29T08:00:00Z" }, true],
+      ["unknown signed fields", { ...base, optional_future_metadata: "safe" }, true],
+      ["impossible month", { ...base, published_at: "2026-99-99T99:99:99Z" }, false],
+      ["normalized invalid day", { ...base, published_at: "2026-02-30T08:00:00Z" }, false],
+      ["invalid leap day", { ...base, published_at: "2026-02-29T08:00:00Z" }, false],
+      ["offset timestamp", { ...base, published_at: "2026-09-16T08:00:00+00:00" }, false],
+      ["non-string timestamp", { ...base, published_at: [base.published_at] }, false],
+      ["coerced commit", { ...base, commit_sha: [base.commit_sha] }, false],
+      ["wrong protocol", { ...base, protocol_max: 99 }, false],
+      ["wrong channel", { ...base, channel: "stable" }, false],
+      ["wrong prerelease flag", { ...base, prerelease: false }, false],
+      ["extra artifact", { ...base, artifacts: [...base.artifacts, ...base.artifacts] }, false],
+      ["null artifact", { ...base, artifacts: [null] }, false],
+      ["non-integer size", changeArtifact({ size: 1.5 }), false],
+      ["oversized artifact", changeArtifact({ size: modules.installer.MAX_RELEASE_ASSET_BYTES + 1 }), false],
+      ["coerced size", changeArtifact({ size: String(artifact.length) }), false],
+      ["coerced digest", changeArtifact({ sha256: [digest] }), false],
+      ["untrusted artifact URL", changeArtifact({ url: "https://example.invalid/untrusted.tgz" }), false],
+      ["wrong artifact name", changeArtifact({ name: "unexpected.tgz" }), false],
+    ];
+    for (const [name, manifest, expected] of cases) {
+      // Every negative fixture has a genuine valid test signature, so these
+      // failures prove field validation rather than an unrelated crypto error.
+      const manifestBytes = Buffer.from(JSON.stringify(manifest));
+      const signature = Buffer.from(sign(null, manifestBytes, privateKey).toString("base64"));
+      const signatureDescriptor = Buffer.from(JSON.stringify({ schema_version: 1, algorithm: "ed25519", key_id: trust.key_id, encoding: "base64", signed_file: "manifest.json" }));
+      const assets = new Map([[target.manifest_url, manifestBytes], [target.signature_url, signature], [target.signature_descriptor_url, signatureDescriptor]]);
+      const fetchImpl = async input => { const bytes = assets.get(String(input)); assert.ok(bytes, "fixed release URLs only"); return new Response(bytes); };
+      const accepted = await modules.io.verifyDevelopmentRunnerRelease(descriptor, fetchImpl, trust).then(() => true, () => false);
+      assert.equal(accepted, expected, `Worker: ${name}`);
+      await writeFile(join(f.root, "manifest.json"), manifestBytes);
+      await writeFile(join(f.root, "manifest.sig"), signature);
+      await writeFile(join(f.root, "manifest.signature.json"), signatureDescriptor);
+      await writeFile(join(f.root, target.artifact_name), artifact);
+      await writeFile(join(f.root, "SHA256SUMS"), `${digest}  ${target.artifact_name}\n`);
+      for (const path of paths) {
+        const result = await execFileAsync(process.execPath, [path, f.root], { timeout: 5_000, maxBuffer: 128 * 1024 }).then(() => true, () => false);
+        assert.equal(result, expected, `${path}: ${name}`);
+      }
+    }
+  } finally { await f.cleanup(); }
+});
+
+// A subprocess watchdog makes a blocking-open regression fail instead of
+// stranding the test worker or leaving a FIFO reader alive after cleanup.
+test("rejects FIFO release inputs without waiting for a writer", { skip: process.platform === "win32" }, async () => {
+  const f = await fixture();
+  try {
+    const fifo = join(f.root, "input.fifo"), alias = join(f.root, "input-link");
+    await execFileAsync("mkfifo", [fifo], { timeout: 3000, windowsHide: true });
+    await symlink(fifo, alias);
+    const module = new URL("../scripts/release-io.mjs", import.meta.url).href;
+    const probe = `import assert from "node:assert/strict";
+      import { readBoundedReleaseFile } from ${JSON.stringify(module)};
+      await assert.rejects(readBoundedReleaseFile(process.argv[1], "release input"), /not a regular file/u);`;
+    for (const path of [fifo, alias]) {
+      await execFileAsync(process.execPath, ["--input-type=module", "-e", probe, path], {
+        timeout: 3000, killSignal: "SIGKILL", windowsHide: true,
+      });
+    }
+  } finally { await f.cleanup(); }
 });

@@ -19,7 +19,10 @@ async function fixture(readonly = false): Promise<{ readonly root: string; reado
     root,
     outside,
     workspace: { workspaceId: "workspace-1", rootPath: await realpath(root), readonly, shell: false },
-    cleanup: () => rm(base, { recursive: true, force: true }),
+    // Native filesystem cleanup may transiently report ENOTEMPTY/EBUSY.
+    // Retry only this temporary fixture within a bounded cleanup budget;
+    // persistent failures still reject rather than hiding test failures.
+    cleanup: () => rm(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }),
   };
 }
 function patch(workspace: WorkspaceConfig, options: ConstructorParameters<typeof PatchService>[1] = {}): PatchService {
@@ -29,7 +32,9 @@ function envelope(body: string): string { return `*** Begin Patch\n${body}\n*** 
 async function run(root: string, args: readonly string[]): Promise<void> {
   const { spawn } = await import("node:child_process");
   await new Promise<void>((resolve, reject) => {
-    const child = spawn("git", [...args], { cwd: root, shell: false, stdio: "ignore" });
+    // Fixture commits must not launch automatic maintenance that can outlive
+    // the command and race removal of the temporary repository.
+    const child = spawn("git", ["-c", "gc.auto=0", "-c", "maintenance.auto=false", ...args], { cwd: root, shell: false, stdio: "ignore" });
     child.once("error", reject);
     child.once("close", (code) => code === 0 ? resolve() : reject(new Error(`git ${args.join(" ")} failed`)));
   });
@@ -213,6 +218,27 @@ describe("fs.apply_patch", () => {
 });
 
 describe("git inspection", () => {
+  it("runs all five read-only Git operations in a dedicated workspace", async () => {
+    const test = await fixture(true);
+    try {
+      await run(test.root, ["init"]);
+      await run(test.root, ["config", "user.email", "git@aloneio.aleeas.com"]);
+      await run(test.root, ["config", "user.name", "aloneio"]);
+      await writeFile(join(test.root, "tracked.txt"), "original\nunchanged\n");
+      await run(test.root, ["add", "tracked.txt"]);
+      await run(test.root, ["commit", "-m", "Create isolated Git regression fixture"]);
+      const git = testGit(test.workspace);
+      const params = { workspace_id: test.workspace.workspaceId, path: "tracked.txt" };
+      const { commit } = await git.head(params);
+      await writeFile(join(test.root, "tracked.txt"), "changed\nunchanged\n");
+      expect(await git.status(params)).toMatchObject({ entries: [{ path: "tracked.txt", worktree_status: "M" }] });
+      expect(await git.diff(params)).toMatchObject({ diff: expect.stringContaining("+changed") });
+      expect(await git.log(params)).toMatchObject({ commits: [{ oid: commit }] });
+      expect(await git.show({ ...params, revision: commit })).toMatchObject({ output: "original\nunchanged\n" });
+      expect(await git.blame({ ...params, start_line: 2, end_line: 2 })).toMatchObject({ output: expect.stringContaining("\tunchanged") });
+    } finally { await test.cleanup(); }
+  });
+
   it("clips malformed UTF-8 at the first invalid byte without quadratic retries", () => {
     const malformed = Buffer.concat([
       Buffer.from("prefix😀", "utf8"),
@@ -236,10 +262,10 @@ describe("git inspection", () => {
     const previousPath = process.env.PATH;
     try {
       await mkdir(workspace);
-      await mkdir(secure, { recursive: true });
-      await mkdir(writable, { recursive: true });
-      await mkdir(join(base, "target", "git", "bin"), { recursive: true });
-      await mkdir(join(base, "linked"), { recursive: true });
+      await mkdir(secure, { recursive: true, mode: 0o700 });
+      await mkdir(writable, { recursive: true, mode: 0o700 });
+      await mkdir(join(base, "target", "git", "bin"), { recursive: true, mode: 0o700 });
+      await mkdir(join(base, "linked"), { recursive: true, mode: 0o700 });
       await symlink(join(base, "target", "git"), join(base, "linked", "git"));
       await chmod(writable, 0o777);
       process.env.PATH = [secure, writable, linked].join(":");
@@ -334,5 +360,50 @@ describe("git inspection", () => {
       expect(result).toMatchObject({ truncated: true });
       expect((result.diff as string).length).toBeLessThanOrEqual(512);
     } finally { await test.cleanup(); }
+  });
+});
+
+
+describe("review R03 Git history correctness", () => {
+  it.each([1, 3, 100])("returns all %i commits without dropping record separators", async (count) => {
+    const f = await fixture();
+    try {
+      await run(f.root, ["init", "--initial-branch=main"]);
+      // Keep real commits, changed file trees and the empty initial subject,
+      // but avoid 200+ process startups in the Windows history fixture. The
+      // test exercises GitService.log(), not porcelain commit performance.
+      const records = ["feature done\n"];
+      for (let i = 0; i < count; i++) {
+        const subject = i === 0 ? "" : `change ${i}`;
+        const content = `${i}\n`, timestamp = 1700000000 + i;
+        records.push(`commit refs/heads/main\nmark :${i + 1}\nauthor Fixture <fixture@example.invalid> ${timestamp} +0000\ncommitter Fixture <fixture@example.invalid> ${timestamp} +0000\ndata ${Buffer.byteLength(subject)}\n${subject}\n${i === 0 ? "" : `from :${i}\n`}M 100644 inline tracked.txt\ndata ${Buffer.byteLength(content)}\n${content}\n`);
+      }
+      records.push("done\n");
+      const { execFileSync } = await import("node:child_process");
+      execFileSync("git", ["-c", "gc.auto=0", "-c", "maintenance.auto=false", "fast-import", "--quiet"], {
+        cwd: f.root, input: records.join(""), stdio: ["pipe", "ignore", "pipe"], timeout: 10000, windowsHide: true,
+      });
+      // fast-import writes Git objects; materialize only this private fixture.
+      await run(f.root, ["reset", "--hard", "HEAD"]);
+      const result = await testGit(f.workspace).log({workspace_id:f.workspace.workspaceId,path:".",limit:100});
+      expect(result.commits).toHaveLength(count); expect(result.truncated).toBe(false);
+      expect((result.commits as Array<{subject:string}>).at(-1)?.subject).toBe("");
+      expect((result.commits as Array<{subject:string}>).map(commit => commit.subject)).toEqual(Array.from({ length: count }, (_, index) => count - index === 1 ? "" : `change ${count - index - 1}`));
+      if (count>1) {
+        const limited=await testGit(f.workspace).log({workspace_id:f.workspace.workspaceId,path:".",limit:1});
+        expect(limited.commits).toHaveLength(1); expect(limited.truncated).toBe(true);
+      }
+    } finally { await f.cleanup(); }
+  }, 60000);
+  it.each(["tracked.txt", "space name.txt", "brackets[1].txt", "unicode-中文.txt", "--leading.txt"])("blames a literal filename %s without pathspec expansion", async (name) => {
+    const f=await fixture();
+    try {
+      await run(f.root,["init"]); await run(f.root,["config","user.name","Fixture"]); await run(f.root,["config","user.email","fixture@example.invalid"]);
+      await writeFile(join(f.root,name),"first line\nsecond line\n"); await run(f.root,["add","--",name]); await run(f.root,["commit","-m","fixture"]);
+      const before=await readFile(join(f.root,name));
+      const result=await testGit(f.workspace).blame({workspace_id:f.workspace.workspaceId,path:name,start_line:1,end_line:2});
+      expect(result.output).toContain("\tfirst line"); expect(result.output).toContain("\tsecond line");
+      expect(result.truncated).toBe(false); expect(await readFile(join(f.root,name))).toEqual(before);
+    } finally { await f.cleanup(); }
   });
 });

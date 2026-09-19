@@ -1,8 +1,9 @@
+import { RUNNER_VERSION } from "./version.js";
 import { spawn } from "node:child_process";
 import { lstatSync, realpathSync } from "node:fs";
 import { hostname } from "node:os";
-import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS } from "@aloneio/runmesh-protocol";
-import type { RunnerConfig } from "./config.js";
+import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS, RPC_OPERATION_METHODS, RPC_OPERATION_CONTRACT, rpcOperation } from "@aloneio/runmesh-protocol";
+import { effectiveMaxConcurrentJobs, type RunnerConfig } from "./config.js";
 import { ContextStore, type ContextEvidence } from "./context-store.js";
 import { GitService } from "./git-service.js";
 import { FilesystemService } from "./filesystem.js";
@@ -220,16 +221,18 @@ export class RunnerRuntime {
   private readonly config: RunnerConfig;
   private shellRuntime: ShellRuntime | undefined;
   private readonly environment: EnvironmentInfoService;
+  private readonly maxConcurrentJobs: number;
 
   public constructor(options: RunnerRuntimeOptions) {
     this.config = options.config;
+    this.maxConcurrentJobs = effectiveMaxConcurrentJobs(options.config.maxConcurrentJobs);
     this.environment = options.environment ?? new EnvironmentInfoService();
     this.policy = new PathPolicy(options.config.workspaces);
     this.filesystem = new FilesystemService(this.policy);
     this.git = new GitService(this.policy);
     this.patcher = new PatchService(this.policy);
     this.context = new ContextStore(options.stateDir === undefined ? {} : { stateDir: options.stateDir });
-    this.jobs = new JobManager({ policy: this.policy, runnerId: options.config.runnerId, maxConcurrentJobs: options.config.maxConcurrentJobs ?? 1, ...(options.config.maxRetainedJobs === undefined ? {} : { maxRetainedJobs: options.config.maxRetainedJobs }), ...(options.config.maxLogBytesPerJob === undefined ? {} : { maxLogBytesPerJob: options.config.maxLogBytesPerJob }), ...(options.config.maxTotalLogBytes === undefined ? {} : { maxTotalLogBytes: options.config.maxTotalLogBytes }), ...(options.stateDir === undefined ? {} : { stateDir: options.stateDir }), ...(options.onJobEvent === undefined ? {} : { onEvent: options.onJobEvent }) });
+    this.jobs = new JobManager({ policy: this.policy, runnerId: options.config.runnerId, maxConcurrentJobs: this.maxConcurrentJobs, ...(options.config.maxRetainedJobs === undefined ? {} : { maxRetainedJobs: options.config.maxRetainedJobs }), ...(options.config.maxLogBytesPerJob === undefined ? {} : { maxLogBytesPerJob: options.config.maxLogBytesPerJob }), ...(options.config.maxTotalLogBytes === undefined ? {} : { maxTotalLogBytes: options.config.maxTotalLogBytes }), ...(options.stateDir === undefined ? {} : { stateDir: options.stateDir }), ...(options.onJobEvent === undefined ? {} : { onEvent: options.onJobEvent }) });
   }
   public async initialize(): Promise<void> {
     await this.jobs.initialize();
@@ -247,14 +250,18 @@ export class RunnerRuntime {
   public async envInfo(): Promise<Record<string, unknown>> {
     const info = await this.environment.get(this.policy.list().filter((workspace) => workspace.permissions?.read !== false));
     const shell = this.shellRuntime;
-    return { ...info, shell: shell === undefined ? { available: false } : { available: true, kind: shell.kind, version: shell.version } };
+    return { ...info,
+      runtime_capabilities: { schema_version: 1, runner_version: RUNNER_VERSION, operation_contract_sha256: RPC_OPERATION_CONTRACT.sha256,
+        supported_rpc_methods: [...RPC_OPERATION_METHODS], features: { job_queue: 1, job_history: 1, context_record: 2 }, max_concurrent_jobs: this.maxConcurrentJobs },
+      job_scheduler: this.jobs.queueStatus(),
+      shell: shell === undefined ? { available: false } : { available: true, kind: shell.kind, version: shell.version } };
   }
   public async dispatch(method: string, input: unknown): Promise<unknown> {
     const generation = this.policy.generation;
     const result = await this.dispatchAtCurrentPolicy(method, input);
     // Read-only operations must not return data from an obsolete authorization
     // snapshot. Already-committed edits/jobs keep their real result semantics.
-    if (["workspace.list", "env.info", "fs.stat", "fs.read", "fs.list", "fs.search", "fs.preview_patch", "git.status", "git.diff", "git.log", "git.show", "git.blame", "job.list", "job.get", "job.logs", "context.bootstrap", "context.read", "context.search"].includes(method)) this.policy.assertGeneration(generation);
+    if (rpcOperation(method)?.revalidate_after_read === true) this.policy.assertGeneration(generation);
     return result;
   }
   private async dispatchAtCurrentPolicy(method: string, input: unknown): Promise<unknown> {
@@ -286,17 +293,35 @@ export class RunnerRuntime {
       case "context.bootstrap": this.policy.assertPermission(params.workspace_id, "read"); return this.contextWithBaseline(await this.context.bootstrap(params), params.workspace_id);
       case "context.read": this.policy.assertPermission(params.workspace_id, "read"); return this.contextWithBaseline(await this.context.read(params), params.workspace_id);
       case "context.search": this.policy.assertPermission(params.workspace_id, "read"); return this.context.search(params);
-      case "context.checkpoint": this.policy.assertPermission(params.workspace_id, "edit"); return this.contextWithBaseline(await this.context.checkpoint(await this.contextCheckpointParams(params)), params.workspace_id);
-      case "context.rebuild": this.policy.assertPermission(params.workspace_id, "edit"); return this.context.rebuild(params);
+      case "context.storage": this.policy.assertPermission(params.workspace_id, "read"); return this.context.storage(params);
+      case "context.prune": {
+        this.policy.assertPermission(params.workspace_id, "edit");
+        const generation = this.policy.generation;
+        return this.context.prune({ ...params, policy_generation: generation }, () => { this.policy.assertGeneration(generation); this.policy.assertPermission(params.workspace_id, "edit"); });
+      }
+      case "context.checkpoint": {
+        this.policy.assertPermission(params.workspace_id, "edit");
+        const generation = this.policy.generation;
+        const authorized = () => { this.policy.assertGeneration(generation); this.policy.assertPermission(params.workspace_id, "edit"); };
+        const checkpoint = await this.contextCheckpointParams(params);
+        authorized();
+        return this.contextWithBaseline(await this.context.checkpoint(checkpoint, authorized), params.workspace_id);
+      }
+      case "context.rebuild": {
+        this.policy.assertPermission(params.workspace_id, "edit");
+        const generation = this.policy.generation;
+        return this.context.rebuild(params, () => { this.policy.assertGeneration(generation); this.policy.assertPermission(params.workspace_id, "edit"); });
+      }
       default: throw new RpcRuntimeError("method_not_found", `Unsupported method: ${method}`);
     }
   }
   public configureJobRetention(days: number): void { this.jobs.setRetentionDays(days); }
   public async cleanupJobs(): Promise<void> { await this.jobs.cleanupExpired(); }
+  public needsHistoryReconciliation(): boolean { return this.jobs.hasPendingHistoryRecovery(); }
   public async syncJobs(limit = 100): Promise<JobMetadata[]> {
     const jobs = limit > 100 ? await this.jobs.snapshotForSync(limit) : await this.jobs.listReconciled({ limit });
     await this.jobs.flushPersistence();
-    return jobs.map((job) => ({ job_id: job.job_id, workspace_id: job.workspace_id, status: job.status, created_at_ms: job.created_at_ms, updated_at_ms: job.updated_at_ms, ...(job.created_by_client_id === null ? {} : { created_by_client_id: job.created_by_client_id }), ...(job.request_id === undefined || job.request_id === null ? {} : { request_id: job.request_id }), runner_id: this.config.runnerId }));
+    return jobs.filter(job => job.record_history !== false).map((job) => ({ job_id: job.job_id, workspace_id: job.workspace_id, status: job.status, created_at_ms: job.created_at_ms, updated_at_ms: job.updated_at_ms, ...(job.created_by_client_id === null ? {} : { created_by_client_id: job.created_by_client_id }), ...(job.request_id === undefined || job.request_id === null ? {} : { request_id: job.request_id }), runner_id: this.config.runnerId }));
   }
   private assertJobsReadable(workspaceId: unknown): void {
     if (workspaceId === undefined) {
@@ -326,12 +351,14 @@ export class RunnerRuntime {
       if (entry.kind !== "test" && entry.kind !== "commit" && entry.kind !== "note") throw new RpcRuntimeError("invalid_params", "context evidence kind is invalid");
       evidence.push({ kind: entry.kind, status: "claimed", ...(typeof entry.ref === "string" ? { ref: entry.ref } : {}), ...(typeof entry.summary === "string" ? { summary: entry.summary } : {}) });
     }
-    let observedCommit: string | undefined;
-    try { observedCommit = (await this.git.head({ workspace_id: workspaceId })).commit; }
-    catch { /* Non-Git workspaces retain an explicit caller claim or null baseline. */ }
+    const baseline = await this.git.observeBaseline({ workspace_id: workspaceId });
     return {
       ...params,
-      ...(observedCommit === undefined ? {} : { base_commit: observedCommit, base_commit_status: "observed" }),
+      // Client claims cannot label themselves as observations. The bounded
+      // Git probe controls both source status and working-tree cleanliness.
+      base_commit: baseline.commit ?? params.base_commit ?? null,
+      base_commit_status: baseline.commit === null ? "claimed" : "observed",
+      base_worktree_state: baseline.working_tree_state,
       evidence,
       policy_generation: this.policy.generation,
     };
@@ -342,14 +369,21 @@ export class RunnerRuntime {
     const record = context as Record<string, unknown>;
     let currentCommit: string | null = null;
     let baselineState: "current" | "stale" | "unknown" = "unknown";
+    let commitState: "current" | "stale" | "unknown" = "unknown";
+    let workingTreeState: "clean" | "dirty" | "unknown" = "unknown";
     if (record.base_commit_status === "observed" && typeof record.base_commit === "string") {
-      try {
-        currentCommit = (await this.git.head({ workspace_id: workspaceId })).commit;
-        baselineState = currentCommit === record.base_commit ? "current" : "stale";
-      } catch { /* Baseline age is unknown when Git cannot be inspected safely. */ }
+      const observed = await this.git.observeBaseline({ workspace_id: workspaceId });
+      currentCommit = observed.commit;
+      workingTreeState = observed.working_tree_state;
+      if (currentCommit !== null) {
+        commitState = currentCommit === record.base_commit ? "current" : "stale";
+        if (commitState === "stale") baselineState = "stale";
+        else if (record.base_worktree_state === "clean" && workingTreeState !== "unknown") baselineState = workingTreeState === "clean" ? "current" : "stale";
+      }
     }
-    return { ...result, context: { ...record, baseline_state: baselineState, current_commit: currentCommit } };
+    return { ...result, context: { ...record, baseline_state: baselineState, commit_state: commitState, working_tree_state: workingTreeState, baseline_scope: "git-tracked-and-untracked-status", current_commit: currentCommit } };
   }
+
   private async startJob(input: unknown): Promise<import("./jobs.js").JobRecord> {
     const params = object(input); const workspace = this.policy.getWorkspace(params.workspace_id);
     this.policy.assertPermission(workspace.workspaceId, "read");
@@ -369,14 +403,23 @@ export class RunnerRuntime {
     const job = await this.startJob(startParams);
     if (job.status === "queued") return { job, completed: false, queue: this.jobs.queueStatus(), wait_cap_ms: LOCAL_RUNNER_OPERATION_TIMEOUT_MS };
     const deadline = Date.now() + requested;
-    while (Date.now() < deadline) { const current = this.jobs.get(job.job_id); if (!isActive(current)) return { job: current, completed: true, stdout: await this.jobs.logs(job.job_id, { stream: "stdout", limit: 16 * 1024, tail: true }), stderr: await this.jobs.logs(job.job_id, { stream: "stderr", limit: 16 * 1024, tail: true }) }; await delay(Math.min(50, deadline - Date.now())); }
+    while (Date.now() < deadline) { const current = this.jobs.get(job.job_id); if (!isActive(current)) return { job: current, completed: true, stdout: await this.executionLogs(job.job_id, "stdout"), stderr: await this.executionLogs(job.job_id, "stderr") }; await delay(Math.min(50, deadline - Date.now())); }
     return { job: this.jobs.get(job.job_id), completed: false, wait_cap_ms: LOCAL_RUNNER_OPERATION_TIMEOUT_MS };
+  }
+
+  /** A completed execution is not undone by optional inline log retrieval.
+   * Keep its real exit code and report unavailable output separately; never
+   * surface filesystem exception text or invite another command execution.
+   */
+  private async executionLogs(jobId: string, stream: "stdout" | "stderr"): Promise<Record<string, unknown>> {
+    try { return await this.jobs.logs(jobId, { stream, limit: 16 * 1024, tail: true }); }
+    catch { return { job_id: jobId, stream, available: false, error: { code: "log_unavailable" } }; }
   }
 }
 
 export { RpcRuntimeError } from "./errors.js";
 export function rpcError(error: unknown): { code: string; message: string; failure_class: RpcFailureClass; operation_state: RpcOperationState; retry_after_ms?: number; next_action: RpcNextAction; details?: Record<string, unknown> | undefined } {
-  const code = error instanceof Error && error.message === "stale_policy" ? "stale_policy" : error instanceof PathPolicyError || error instanceof RpcRuntimeError ? error.code : "invalid_request";
+  const code = error instanceof Error && error.message === "stale_policy" ? "stale_policy" : error instanceof PathPolicyError || error instanceof RpcRuntimeError ? error.code : "internal_error";
   const metadata = failureMetadata(code);
   const message = error instanceof Error ? (error.message === "stale_policy" ? "RPC policy revision is stale" : error.message) : "request failed";
   return { code, message: message.slice(0, 4_096) || "request failed", ...metadata, ...(error instanceof RpcRuntimeError && error.details !== undefined ? { details: error.details } : {}) };

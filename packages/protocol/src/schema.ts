@@ -1,3 +1,5 @@
+import { PermissionBitsSchema } from "./permission-schema.js";
+import { RPC_OPERATION_METHODS } from "./operations.js";
 import { z } from "zod";
 
 /**
@@ -218,12 +220,7 @@ import { isCanonicalPermissionSet } from "./permissions.js";
  * when their prerequisites are enabled. Invalid combinations are rejected at
  * every wire boundary rather than silently expanded.
  */
-export const PermissionSetSchema = z.object({
-  read: z.boolean(),
-  edit: z.boolean(),
-  shell: z.boolean(),
-  job_control: z.boolean(),
-}).strict().superRefine((value, context) => {
+export const PermissionSetSchema = PermissionBitsSchema.superRefine((value, context) => {
   if (!isCanonicalPermissionSet(value)) context.addIssue({ code: "custom", message: "permission dependencies are invalid" });
 });
 
@@ -275,11 +272,7 @@ const CorrelatedEnvelopeSchema = EnvelopeSchema.extend({
   request_id: IdentifierSchema,
 }).strict();
 
-export const ProtectedRpcMethodSchema = z.enum([
-  "env.info", "workspace.list", "fs.stat", "fs.read", "fs.list", "fs.search", "fs.preview_patch", "fs.apply_patch",
-  "git.status", "git.diff", "git.log", "git.show", "git.blame", "exec.start", "exec.run", "job.list", "job.get", "job.logs", "job.cancel", "job.input",
-  "context.bootstrap", "context.read", "context.search", "context.checkpoint", "context.rebuild",
-]);
+export const ProtectedRpcMethodSchema = z.enum(RPC_OPERATION_METHODS);
 export type ProtectedRpcMethod = z.infer<typeof ProtectedRpcMethodSchema>;
 /** Unknown methods are protected by default; only echo and runner.info are unprotected. */
 export function isProtectedRpcMethod(method: string): boolean {

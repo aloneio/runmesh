@@ -1,39 +1,62 @@
-export async function readCappedBytes(request: Request, maxBytes: number): Promise<Uint8Array | undefined> {
+// This covers upload consumption only, before dispatch. Foreground operations
+// keep their own execution budget; a slow client cannot hold an upload forever.
+const BODY_READ_TIMEOUT_MS = 30_000;
+
+export async function readCappedBytes(request: Request, maxBytes: number, timeoutMs = BODY_READ_TIMEOUT_MS): Promise<Uint8Array | undefined> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > BODY_READ_TIMEOUT_MS) {
+    cancelBody(request);
+    return undefined;
+  }
   const length = request.headers.get("content-length");
-  if (length !== null && (!/^\d+$/.test(length) || Number(length) > maxBytes)) {
-    await cancelBody(request);
+  if (request.signal.aborted || (length !== null && (!/^\d+$/.test(length) || Number(length) > maxBytes))) {
+    cancelBody(request);
     return undefined;
   }
   if (request.body === null) return new Uint8Array(0);
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  try {
-    for (;;) {
-      const next = await reader.read();
-      if (next.done) break;
-      size += next.value.byteLength;
-      if (size > maxBytes) {
-        await cancelReader(reader);
-        return undefined;
+  let reader: ReadableStreamDefaultReader<Uint8Array>;
+  try { reader = request.body.getReader(); } catch { return undefined; }
+  const deadline = performance.now() + timeoutMs;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let stopped = false;
+  const expired = (): boolean => stopped || request.signal.aborted || performance.now() >= deadline;
+  const cancel = (): void => { stopped = true; cancelReader(reader); };
+  let abort: () => void = cancel;
+  const observe = async (): Promise<Uint8Array | undefined> => {
+    // Grow one buffer instead of retaining arbitrarily many tiny chunk objects.
+    let bytes = new Uint8Array(0), size = 0, emptyChunks = 0;
+    try {
+      for (;;) {
+        if (expired()) return undefined;
+        const next = await reader.read();
+        if (expired()) return undefined;
+        if (next.done) return bytes.slice(0, size);
+        if (!(next.value instanceof Uint8Array) || next.value.byteLength > maxBytes - size) return undefined;
+        if (next.value.byteLength === 0) {
+          if (++emptyChunks > 1024) return undefined;
+          continue;
+        }
+        const needed = size + next.value.byteLength;
+        if (needed > bytes.byteLength) {
+          const grown = new Uint8Array(Math.min(maxBytes, Math.max(16_384, needed, bytes.byteLength * 2)));
+          grown.set(bytes.subarray(0, size)); bytes = grown;
+        }
+        bytes.set(next.value, size); size = needed;
       }
-      chunks.push(next.value);
-    }
-  } catch {
-    // A failed stream may still hold an underlying source. Best-effort
-    // cancellation keeps malformed/disconnected requests from lingering.
-    await cancelReader(reader);
-    return undefined;
+    } catch { return undefined; }
+  };
+  try {
+    return await Promise.race([observe(), new Promise<undefined>(resolve => {
+      abort = () => { cancel(); resolve(undefined); };
+      request.signal.addEventListener("abort", abort, { once: true });
+      if (request.signal.aborted) abort();
+      else timer = setTimeout(abort, timeoutMs);
+    })]);
   } finally {
-    try { reader.releaseLock(); } catch { /* already released */ }
+    if (timer !== undefined) clearTimeout(timer);
+    request.signal.removeEventListener("abort", abort);
+    cancel();
+    try { reader.releaseLock(); } catch { /* pending read settles after cancellation */ }
   }
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
 }
 
 export async function readCappedText(request: Request, maxBytes: number): Promise<string | undefined> {
@@ -76,13 +99,13 @@ export async function readCappedFormData(request: Request, maxBytes: number): Pr
   }
 }
 
-async function cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
-  try { await reader.cancel(); } catch { /* cancellation is best effort */ }
+function cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): void {
+  try { void reader.cancel().catch(() => undefined); } catch { /* cancellation is best effort */ }
 }
 
-async function cancelBody(request: Request): Promise<void> {
+function cancelBody(request: Request): void {
   try {
-    await request.body?.cancel();
+    void request.body?.cancel().catch(() => undefined);
   } catch {
     // The body may already be consumed or cancelled.
   }

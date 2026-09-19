@@ -1,15 +1,27 @@
 import { mkdtemp, mkdir, writeFile, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, delimiter } from "node:path";
+import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { expect, it, vi } from "vitest";
 import { RunnerRuntime } from "../src/runtime.js";
+import { GitService } from "../src/git-service.js";
 const full = { read: true, edit: true, shell: true, job_control: true };
 const ro = { read: true, edit: false, shell: false, job_control: false };
 async function fixture() {
   const root = await realpath(await mkdtemp(join(tmpdir(), "auth-runner-"))); await mkdir(join(root, "workspace"));
   const workspace = { workspaceId: "w", rootPath: join(root, "workspace"), readonly: false, shell: true, permissions: full };
   const runtime = new RunnerRuntime({ config: { runnerId: "r", server: "wss://unused.invalid", token: "synthetic", workspaces: [workspace] }, stateDir: join(root, "state") });
+  // Developer hosts can have only portable Git. Native fixtures explicitly
+  // select that binary through the existing test seam; production inspection
+  // still refuses to execute an untrusted PATH entry.
+  if (process.platform === "win32") {
+    const executable = (process.env.Path ?? process.env.PATH ?? "").split(delimiter).map(dir => join(dir, "git.exe")).find(path => existsSync(path));
+    if (executable !== undefined) {
+      const inspector = new GitService(runtime.policy, { executable });
+      vi.spyOn(runtime.git, "observeBaseline").mockImplementation(input => inspector.observeBaseline(input));
+    }
+  }
   await runtime.jobs.initialize();
   return { root, workspace, runtime, cleanup: async () => { for (const j of runtime.jobs.list()) { if (["queued", "running", "cancelling"].includes(j.status)) await runtime.jobs.cancel(j.job_id); } await runtime.jobs.flushPersistence(); await new Promise((resolve) => setTimeout(resolve, 60)); await runtime.jobs.flushPersistence(); await rm(root, { recursive: true, force: true }); } };
 }
@@ -65,4 +77,40 @@ it("RUN-CONTEXT-01 observes the Git baseline and marks old handoff evidence stal
     const read = await f.runtime.dispatch("context.read", { workspace_id: "w", context_id: checkpoint.context.context_id }) as { context: { base_commit: string; base_commit_status: string; baseline_state: string; current_commit: string } };
     expect(read.context).toMatchObject({ base_commit: firstCommit, base_commit_status: "observed", baseline_state: "stale", current_commit: secondCommit });
   } finally { await f.cleanup(); }
+});
+
+
+it.each(["tracked", "untracked"])("R05 does not claim evidence is current after an uncommitted %s change", async (kind) => {
+  const f=await fixture();
+  try {
+    git(f.workspace.rootPath,["init"]);git(f.workspace.rootPath,["config","user.name","Fixture"]);git(f.workspace.rootPath,["config","user.email","fixture@example.invalid"]);
+    await writeFile(join(f.workspace.rootPath,"tracked.txt"),"one\n");git(f.workspace.rootPath,["add","tracked.txt"]);git(f.workspace.rootPath,["commit","-m","baseline"]);
+    const first=await f.runtime.dispatch("context.checkpoint",{workspace_id:"w",turn_id:"dirty",goal:"verify baseline"}) as any;
+    expect(first.context.baseline_state).toBe("current");
+    await writeFile(join(f.workspace.rootPath,kind==="tracked"?"tracked.txt":"new.txt"),"changed\n");
+    const next=await f.runtime.dispatch("context.read",{workspace_id:"w",context_id:first.context.context_id}) as any;
+    expect(next.context.current_commit).toBe(first.context.base_commit);
+    expect(next.context.baseline_state).toBe("stale");
+  } finally {await f.cleanup();}
+});
+
+
+it("R04 never commits context after permission changed during evidence collection", async () => {
+  const f=await fixture();
+  vi.spyOn(f.runtime.git,"observeBaseline").mockImplementation(async()=>{
+    f.runtime.applyPolicy([{...f.workspace,permissions:ro,readonly:true,shell:false}]);
+    return {commit:"a".repeat(40),working_tree_state:"clean"};
+  });
+  try {
+    await expect(f.runtime.dispatch("context.checkpoint",{workspace_id:"w",turn_id:"revoke",goal:"denied"})).rejects.toMatchObject({code:"stale_policy"});
+    expect(await f.runtime.context.bootstrap({workspace_id:"w"})).toMatchObject({state:"missing"});
+  } finally {await f.cleanup();}
+});
+it("R05 unavailable or truncated worktree evidence stays unknown and cannot be forged", async () => {
+  const f=await fixture();
+  vi.spyOn(f.runtime.git,"observeBaseline").mockResolvedValue({commit:"a".repeat(40),working_tree_state:"unknown"});
+  try {
+    const result=await f.runtime.dispatch("context.checkpoint",{workspace_id:"w",turn_id:"unknown",goal:"unknown",base_worktree_state:"clean",base_commit_status:"observed"}) as any;
+    expect(result.context).toMatchObject({baseline_state:"unknown",base_worktree_state:"unknown",working_tree_state:"unknown"});
+  } finally {await f.cleanup();}
 });
