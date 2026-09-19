@@ -10,8 +10,11 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
-      "bytes": 86099
+      "sha256": "fa50e8e91a72151f9e0e1d85023484851e5d2dd10ef516408d50f743510c93db",
+      "bytes": 86069,
+      "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
+      "original_bytes": 86099,
+      "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged."
     },
     {
       "name": "setup",
