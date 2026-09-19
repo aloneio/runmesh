@@ -204,6 +204,26 @@
         "apps/runner/test/job-cancellation.test.ts"
       ],
       "resolution": "source-fixed-and-regression-tested"
+    },
+    {
+      "id": "SEC21",
+      "state": "closed",
+      "area": "sticky-runner-selection-credential-generation",
+      "fixed_commit": "41e29157445ef84a7506ff3e9931eee2775adfdb",
+      "regressions": [
+        "apps/worker/test/reauthorization.test.ts"
+      ],
+      "resolution": "source-fixed-and-regression-tested"
+    },
+    {
+      "id": "SEC22",
+      "state": "closed",
+      "area": "job-metadata-observation-consistency",
+      "fixed_commit": "41e29157445ef84a7506ff3e9931eee2775adfdb",
+      "regressions": [
+        "apps/runner/test/runner-boundaries.test.ts"
+      ],
+      "resolution": "source-fixed-and-regression-tested"
     }
   ]
 }
