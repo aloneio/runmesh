@@ -12,8 +12,10 @@ async function fixture() {
     instance.createMcpClient({ client_id: "c", label: "reauth", secret_verifier: verifier, secret_prefix: "test", scopes: ["coding:read", "coding:write", "coding:exec"] }, Date.now());
   });
   let fault: (() => Response | Promise<Response>) | undefined;
+  let beforeSelection: ((request: Request) => Promise<void>) | undefined;
   let revalidations = 0, forwarded = 0;
   const input = { ...env, REGISTRY: { idFromName: () => id, get: () => ({ fetch: async (request: Request) => {
+    if (request.method === "POST" && new URL(request.url).pathname === "/auth/clients/c/active-runner") await beforeSelection?.(request);
     if (new URL(request.url).pathname === "/auth/mcp/revalidate") {
       revalidations++; if (fault) return fault();
     }
@@ -25,7 +27,7 @@ async function fixture() {
     const text = await response.text(), data = text.split("\n").find(line => line.startsWith("data:"))?.slice(5).trim();
     return JSON.parse(data ?? text).result;
   }
-  return { stub, call, setFault(value: typeof fault) { fault = value; }, counts: () => ({ revalidations, forwarded }) };
+  return { stub, call, setFault(value: typeof fault) { fault = value; }, beforeSelection(value: typeof beforeSelection) { beforeSelection = value; }, counts: () => ({ revalidations, forwarded }) };
 }
 
 it.each([429, 500, 502, 503, 504])("AR02 revalidation HTTP %s is unavailable, never credential revocation", async status => {
@@ -81,4 +83,29 @@ it("AR02 current read-only scopes still prohibit shell after successful revalida
   const f = await fixture(); f.setFault(() => Response.json({ client_id: "c", secret_version: 1, scopes: ["coding:read"] }));
   expect(await f.call()).toMatchObject({ structuredContent: { error: { code: "insufficient_scope" } } });
   expect(f.counts().forwarded).toBe(0);
+});
+
+it.each(["rotate", "revoke", "remove-read-scope"])("does not let a late %s credential change the active Runner after tool revalidation", async action => {
+  const f = await fixture();
+  await runInDurableObject(f.stub, instance => {
+    const now = Date.now();
+    expect(instance.registerRunner("original", "a".repeat(64), now, undefined, "dedicated_user")).toBe(true);
+    expect(instance.registerRunner("other", "b".repeat(64), now, undefined, "dedicated_user")).toBe(true);
+    expect(instance.selectMcpClientRunner("c", "original", false, now).ok).toBe(true);
+  });
+  let mutations = 0;
+  f.beforeSelection(async request => {
+    mutations++;
+    expect((await request.clone().json() as Record<string, unknown>).mcp_authorization).toEqual({ client_id: "c", secret_version: 1 });
+    await runInDurableObject(f.stub, instance => {
+      if (action === "rotate") expect(instance.rotateMcpClient("c", "d".repeat(64), "next", Date.now())?.secret_version).toBe(2);
+      else if (action === "revoke") expect(instance.revokeMcpClient("c", Date.now())?.revoked_at_ms).not.toBeNull();
+      else expect(instance.updateMcpClientScopes("c", ["coding:exec"], Date.now())?.scopes).toEqual(["coding:exec"]);
+    });
+  });
+  const result = await f.call("runner_select", { runner_id: "other", confirm_switch: true });
+  expect(result).toMatchObject({ isError: true, structuredContent: { error: { code: action === "remove-read-scope" ? "insufficient_scope" : "permission_denied", operation_state: "not_started" } } });
+  expect(mutations).toBe(1);
+  expect(f.counts()).toEqual({ revalidations: 1, forwarded: 0 });
+  expect(await runInDurableObject(f.stub, instance => instance.getMcpClientActiveRunner("c")?.active_runner_id)).toBe("original");
 });

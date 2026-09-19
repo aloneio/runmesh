@@ -14,7 +14,7 @@ import type { ContextFilePort } from "../src/context/ports.js";
 
 vi.mock("node:fs/promises", async original => {
   const actual = await original<typeof import("node:fs/promises")>();
-  return { ...actual, rename: vi.fn(actual.rename) };
+  return { ...actual, rename: vi.fn(actual.rename), open: vi.fn(actual.open) };
 });
 const roots: string[] = [];
 afterEach(async () => {
@@ -63,6 +63,47 @@ it("AR07 the native Job reader rejects oversized metadata rather than allocating
   const root = await fixture(), path = join(root, "meta.json"), handle = await fs.open(path, "wx", 0o600);
   try { await handle.truncate(8 * 1024 * 1024 + 1); } finally { await handle.close(); }
   await expect(nativeJobFiles.readJson(path)).rejects.toMatchObject({ code: "EFBIG" });
+});
+
+it("AR07 the native Job reader rejects a file replaced between inspection and open", async () => {
+  const root = await fixture(), path = join(root, "meta.json");
+  await fs.writeFile(path, JSON.stringify({ revision: 1 }));
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  vi.mocked(fs.open).mockImplementationOnce(async (...args) => {
+    await fs.rename(path, join(root, "prior.json"));
+    await fs.writeFile(path, JSON.stringify({ revision: 2 }));
+    return actual.open(...args);
+  });
+  await expect(nativeJobFiles.readJson(path)).rejects.toThrow("job metadata changed");
+});
+
+it("AR07 the native Job reader rejects equal-size writes that would splice distinct records", async () => {
+  const root = await fixture(), path = join(root, "meta.json");
+  const prior = { first: "old", padding: "x".repeat(100_000), last: "old" };
+  const next = { ...prior, first: "new", last: "new" };
+  await fs.writeFile(path, JSON.stringify(prior));
+  // Use a distinct timestamp to make the filesystem observation deterministic
+  // even on hosts whose timestamp granularity exceeds this test's duration.
+  await fs.utimes(path, new Date(1000), new Date(1000));
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  let replaced = false;
+  vi.mocked(fs.open).mockImplementationOnce(async (...args) => {
+    const handle = await actual.open(...args), read = handle.read.bind(handle);
+    handle.read = (async (buffer: Buffer, offset: number, length: number, position: number | null) => {
+      const result = await read(buffer, offset, length, position);
+      if (!replaced && result.bytesRead > 0) {
+        replaced = true;
+        await fs.writeFile(path, JSON.stringify(next));
+        await fs.utimes(path, new Date(2000), new Date(2000));
+      }
+      return result;
+    }) as typeof handle.read;
+    return handle;
+  });
+  const readAttempt = nativeJobFiles.readJson<typeof prior>(path).then(({ first, last }) => ({ first, last }));
+  await expect(readAttempt).rejects.toThrow("job metadata changed");
+  expect(replaced).toBe(true);
+  expect(JSON.parse(await fs.readFile(path, "utf8"))).toEqual(next);
 });
 
 it("AR07 the log reader needs only a log descriptor and path observation, not Job storage", async () => {

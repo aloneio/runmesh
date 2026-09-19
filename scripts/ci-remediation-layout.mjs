@@ -67,6 +67,9 @@ export function proposedCiFiles(input) {
     script: ["npm install --global npm@10.9.3", ...CHECK_IDS.map(checkCommand)], artifacts: artifacts() });
   gl.browser = { stage: "verify", timeout: "15m", interruptible: true, allow_failure: false, rules: rules(),
     script: ["npm install --global npm@10.9.3", "npm ci", "npm run typecheck", "npm run build", "npm run browser:install", "npm run test:browser"], artifacts: artifacts() };
+  // This native installer gate was added after the historical input was frozen.
+  const installerGate = "node --test test/installer-download.test.mjs test/installer-concurrency.test.mjs";
+  if (!gh.jobs["native-runner"].steps.some(step => step.run === installerGate)) gh.jobs["native-runner"].steps.push({ run: installerGate });
   const github = yaml(gh), gitlab = yaml(gl) + "\n" + policy;
   validateCiWiring(pkg, github, gitlab);
   const cli = `import { readFile } from "node:fs/promises";\nimport { validateCiWiring } from "./ci-policy.mjs";\nconst root = new URL("../", import.meta.url);\nconst read = path => readFile(new URL(path, root), "utf8");\ntry { console.log(JSON.stringify(validateCiWiring(JSON.parse(await read("package.json")), await read(".github/workflows/ci.yml"), await read(".gitlab-ci.yml")))); }\ncatch (error) { console.error("CI execution contract failed:", error.message); process.exitCode = 1; }\n`;

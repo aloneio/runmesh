@@ -95,6 +95,7 @@ jobs:
       - run: npm run pack:smoke
       - run: node scripts/check-installer-syntax.mjs
       - run: node --test test/installer-arguments.test.mjs test/installer-preflight.test.mjs
+      - run: node --test test/installer-download.test.mjs test/installer-concurrency.test.mjs
       - run: node --test test/worker-validation.test.mjs
       - run: npm run test:domain
       - run: npm run test:contracts

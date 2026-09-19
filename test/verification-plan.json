@@ -71,6 +71,7 @@
         "apps/runner/test/release-boundary-security.test.ts",
         "apps/runner/test/runner-boundaries.test.ts",
         "apps/runner/test/runtime.test.ts",
+        "apps/runner/test/service-provisioning.test.ts",
         "apps/runner/test/service-restart-backoff.test.ts",
         "apps/runner/test/snapshot-cursors.test.ts"
       ]
@@ -128,6 +129,7 @@
         "apps/worker/test/request-body.test.ts",
         "apps/worker/test/rpc-contract.test.ts",
         "apps/worker/test/runner-admission-initialization.test.ts",
+        "apps/worker/test/runner-capability-admission.test.ts",
         "apps/worker/test/runner-hello-maintenance.test.ts",
         "apps/worker/test/runtime-config.test.ts",
         "apps/worker/test/session-generation.test.ts",
@@ -157,6 +159,8 @@
         "test/dev-auto-deploy.test.mjs",
         "test/dev-release.test.mjs",
         "test/installer-arguments.test.mjs",
+        "test/installer-concurrency.test.mjs",
+        "test/installer-download.test.mjs",
         "test/installer-preflight.test.mjs",
         "test/live-provenance.test.mjs",
         "test/main-promotion-policy.test.mjs",

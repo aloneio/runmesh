@@ -43,6 +43,8 @@ interface ConnectionAttachment {
   readonly helloDeadlineMs: number;
   queueProtocol?: 1;
   historyProtocol?: 2;
+  /** Bounded extension capabilities; absent on attachments from older Workers. */
+  contextMethods?: Array<"context.storage" | "context.prune">;
 }
 
 const HELLO_DEADLINE_MS = 10_000;
@@ -371,6 +373,8 @@ export class RunnerDO {
       }
       attachment.lifecycleId = body.lifecycle_id;
       attachment.protocolVersion = negotiation.protocol_version;
+      attachment.contextMethods = (["context.storage", "context.prune"] as const)
+        .filter(method => message.runner.capabilities.supported_rpc_methods.includes(method));
       if (message.runner.capabilities.labels.job_queue_protocol === "1") attachment.queueProtocol = 1;
       if (message.runner.capabilities.labels.job_reporting_protocol === "2" && body.job_reporting === 2 && isRecord(body.job_history)) attachment.historyProtocol = 2;
       ws.serializeAttachment(attachment);
@@ -649,6 +653,12 @@ export class RunnerDO {
     const requestId = `bridge-${crypto.randomUUID()}`;
     const parsed = RpcRequestSchema.safeParse({ type: "rpc.request", protocol_version: attachment.protocolVersion, request_id: requestId, method: input.method, params: dispatchParams, ...(requestPolicyRevision === undefined ? {} : { policy_revision: requestPolicyRevision }) });
     if (!parsed.success) return preDispatchError("invalid_request", "invalid RPC request", 400);
+    // Stable protocol-v2 Runners reject unknown method enum values. Use the
+    // current authenticated hello, including after hibernation, before sending
+    // newer extensions; a version string cannot establish method support.
+    if ((method === "context.storage" || method === "context.prune") && !attachment.contextMethods?.includes(method)) {
+      return preDispatchError("runner_upgrade_required", "Runner does not advertise this Context method; upgrade the Runner and reconnect", 409);
+    }
     // Authorization above awaits I/O. Recheck capacity at the synchronous
     // reservation point so concurrent admissions cannot all pass the first gate.
     if (this.replies.size >= MAX_BRIDGE_IN_FLIGHT) return preDispatchError("busy", "bridge concurrency limit reached", 429);
