@@ -57,7 +57,7 @@ it.each([{}, { client_id: "c", secret_version: "1", scopes: ["coding:read"] }, {
   expect(f.counts().forwarded).toBe(0);
 });
 
-it.each(["not-json", "x".repeat(17000)])("AR02 non-JSON or oversized revalidation is bounded", async text => {
+it.each([{ kind: "non-JSON", text: "not-json" }, { kind: "oversized", text: "x".repeat(17000) }])("AR02 $kind revalidation is bounded", async ({ text }) => {
   const f = await fixture(); f.setFault(() => new Response(text));
   expect(await f.call()).toMatchObject({ structuredContent: { error: { code: "authorization_response_invalid", operation_state: "not_started" } } });
   expect(f.counts().forwarded).toBe(0);
