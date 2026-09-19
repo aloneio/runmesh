@@ -10,8 +10,8 @@ import { adminDocument } from "../src/admin/layout.js";
 import { html, htmlHeaders, redirect } from "../src/http/html-response.js";
 
 // Hashes were captured by evaluating the pre-refactor renderers at the fixed
-// baseline. Explicit i18n annotation changes retain their original hashes in
-// the fixture; the update was checked to change only data/aria boundaries.
+// baseline. Reviewed i18n annotations and login copy changes retain their
+// original hashes in the fixture; all unrelated markup remains unchanged.
 // No production state.
 const views = { authEntryDocument, secretCreatedPage, overviewPage, settingsPage, clientsPage, clientDetailPage, runnersPage, runnerDetailPage, adminDocument };
 describe("AR04 rendering compatibility", () => {
