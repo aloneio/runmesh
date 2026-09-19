@@ -1,5 +1,7 @@
 # Production-only legacy Durable Object retirement
 
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+
 The owner authorized permanent deletion of the RegistryDO and RunnerDO namespaces owned by production Worker runmesh. No backup is claimed. V2 namespaces, D1, credentials, local Runner state and other Workers are not deletion targets.
 
 Production now uses declarative exports: RegistryDOv2 and RunnerDOv2 retain their existing SQLite classes/bindings, while only RegistryDO and RunnerDO become deleted tombstones. The production entrypoint exports the same v2 class objects and unchanged handlers. Internal base implementations remain because v2 depends on them. Development/test explicitly retain their old entrypoint and migration history, so their similarly named namespaces are not removed.

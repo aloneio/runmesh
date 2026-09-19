@@ -6,7 +6,7 @@
 
 路径包含关系与可执行文件信任是两个不同判断。`/.git`、`/usr/bin` 都位于 `/` 内；边界函数应规范化点路径、保留根目录分隔符，并拒绝名称前缀相似的同级目录。Windows 原生测试同时覆盖盘符根目录、大小写和 UNC 共享边界。
 
-正确的包含关系不代表 workspace 内的 Git 可执行文件可信。只读 Git 检查不能成为命令执行入口。POSIX 和 Windows 的可信可执行文件列表均排除 workspace 的字面路径和规范路径，包括常见的系统级 Git 安装目录。可信 PATH 为空时拒绝执行，不回退到继承环境或系统隐式搜索。
+正确的包含关系不代表 workspace 内的 Git 可执行文件可信。只读 Git 检查不能成为命令执行入口。POSIX 和 Windows 的可执行文件信任检查，都会按字面路径和规范路径排除 workspace 内的目录；常见的系统级 Git 安装目录落在该 workspace 内时，也同样排除。可信 PATH 为空时拒绝执行，不回退到继承环境或系统隐式搜索。
 
 在这一信任模型下，明确不支持文件系统根目录的隔离 Git 检查。Runner 会在读取 Git 元数据、创建临时隔离仓库之前拒绝规范化后的文件系统根目录或盘符根目录。五个 Git 方法统一返回 `git_unavailable`，本地诊断明确要求配置独立 workspace 目录。这项 Git 专属限制不会禁用其他文件系统、执行、Job 或 Context 权限。
 
@@ -18,7 +18,7 @@ MCP 继续过滤 Runner 原始错误和主机路径。`git_unavailable` 的安�
 
 | Registry 结果 | WebSocket 关闭方式 | 含义与恢复 |
 | --- | --- | --- |
-| `401` 或 `403` | `4001`，`runner credentials rejected` | 明确拒绝凭据；Runner 停止，不无限重试。 |
+| `401` 或 `403` | `4001`，`runner credentials rejected` | 当前 Runner 连接循环停止。请检查凭据；主机服务管理器仍可能重启进程。 |
 | `409` | `4000`，`stale runner session` | 会话或同步 fencing 冲突；保留现有凭据，重新连接并完成握手。 |
 | 可用性失败，包括 `429` 和 `5xx` | `1013`，`control plane temporarily unavailable` | 保留服务不可用时较慢的退避重连。 |
 

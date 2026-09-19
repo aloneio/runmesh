@@ -1,18 +1,18 @@
 # MCP → Worker → Runner authorization and diagnosis
 
-This document describes permission hardening developed after release commit `b735c4e0f333dde1c44948d31baffd9a24703a50`. These changes are not part of the already signed v0.1.0 artifact and are included in the published, independently verified v0.1.1 patch release. Never overwrite v0.1.0 or use a local build as proof that a deployed Runner was upgraded.
+Use this page to understand why an MCP operation is allowed or denied and to diagnose access problems without granting more permissions than necessary. Check the deployed Worker and installed Runner versions when comparing their behavior with current documentation.
 
 ## Independent boundaries
 
 A permitted public operation needs both its explicit MCP scope and the intersection of the client scope ceiling, client-to-Runner override, active Runner permissions and enabled workspace permissions. `coding:read` authorizes read tools, `coding:write` authorizes edit, and `coding:exec` authorizes execution and job control. The ceiling helper includes execution dependencies but does not let the exec scope replace the separately required scope for public read/edit tools. Explicit dependencies for stored policy remain read before edit/job-control, and read+edit+job-control before Host shell.
 
-`workspace_list` now returns the requesting client's intersected policy permissions, not the workspace's unrestricted ceiling. A client override or read-only scope therefore cannot misleadingly appear fully writable. Public tool scopes are still independent: for mixed scopes (for example read+exec without write), the policy ceiling alone does not promise that the separate edit tool is available. Tools must continue checking their exact scope.
+`workspace_list` returns the requesting client's effective policy permissions after applying these limits. Public tool scopes remain independent: with read+exec but no write scope, the policy ceiling alone does not make the edit tool available. Each tool checks its exact scope.
 
 An absent override inherits the scope/Runner/workspace ceilings. A stored override that is present but invalid is locked, not treated as absent. Revoked clients have no effective authorization. Never repair an invalid permission record by granting implied rights.
 
 ## Request identity and policy consistency
 
-The Worker validates the secret URL with the Registry, then captures only client ID and secret generation. Every tool callback revalidates that exact generation and reloads scopes. No raw secret is forwarded to the Runner or recorded in the audit body.
+The Worker validates the secret URL with the Registry, then captures only client ID and secret generation. Every tool callback revalidates that exact generation and reloads scopes. Changing the selected Runner also checks this generation at the selection update, so an old in-flight request cannot change the selection after its credential has been rotated or revoked. No raw secret is forwarded to the Runner or recorded in the audit body.
 
 Before forwarding a live operation, a single synchronous Registry decision binds current client state and generation, explicit scope, sticky Runner selection, method, workspace or job identity, current policy revision/checksum, and the effective permission bit. Authorization failure or an unavailable decision prevents forwarding.
 
@@ -38,6 +38,6 @@ Host shell uses the Runner's operating-system identity. The workspace controls i
 
 Compare actual deployed Worker and Runner versions with source; a repository version is not deployment evidence. Compare desired, active and reported policy revision/checksum, and the Runner connection/session/credential lifecycle. Reconnect or policy-ack transitions may temporarily fail closed. Distinguish `policy_pending`/`stale_policy`, `insufficient_scope`, `readonly_workspace`, `permission_denied`, `busy`, `runner_offline` and operating-system access failures. A last-known online state can coexist with an unsuccessful live RPC; that is not proof that all layers are reachable.
 
-Check the specific client's scopes and Runner override, the Runner policy, enabled workspace and OS filesystem identity. Do not print the client's URL secret or Runner token. Preserve a timestamped report with actual proof and limitations. Tests should use disposable local Workers/Runners and synthetic credentials; destructive production policy or credential changes are not needed to validate failure cases.
+Check the specific client's scopes and Runner override, the Runner policy, enabled workspace and OS filesystem identity. Do not print the client's URL secret or Runner token. Keep the timestamp, stable error code and non-secret Runner/workspace identifiers when asking an operator for help.
 
-For rollout, review and publish a new immutable version, validate existing deployment secrets privately, deploy compatible Worker/Registry/RunnerDO code, and upgrade the Runner using an independent console with a recovery plan. Never restart or purge the only host connection that is performing the repair. A successful source regression test is not a completed production rollout.
+For an upgrade, deploy compatible Worker code and install a verified Runner release using an independent console with a recovery plan. Preserve a way to reach the host while its Runner service restarts. Updating the Worker does not update the installed Runner; see [upgrading](upgrading.md).

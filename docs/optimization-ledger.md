@@ -1,5 +1,7 @@
 # Optimization implementation ledger
 
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+
 ## AR08 — layered verification and source facts (2026-09-15)
 
 This development change inventories every existing test without dropping legacy regressions, adds public-domain and native file-adapter contract lanes, validates registered examples against real tool/action schemas, and requires actual installed-package E2E in both Linux verification jobs. Machine reports bind the checkout, archive bytes and actual runtime while recording signing, production, account quotas and host catalog as not_run. See [verification layers](verification.md), [Chinese guide](verification.zh-CN.md), [generated source facts](current-facts.md) and [validated examples](tool-examples.md). This is verification infrastructure, not a production upgrade or proof of complete coverage. Native and per-SHA test outcomes must be taken from the matching execution report.

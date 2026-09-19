@@ -14,7 +14,7 @@ Registry 故障或依赖响应无效时，应检查部署并等待服务恢复�
 
 ## Runner 一直离线
 
-检查真实主机服务、到 Worker 的 HTTPS/WebSocket 出站连接和系统时间。使用服务实际调用的程序运行 `runmesh --version` 与 `runmesh doctor --json`。另一份本地 CLI 或正常的 Worker 健康页面，都不能证明该服务已连通。
+检查真实主机服务、到 Worker 的 HTTPS/WebSocket 出站连接和系统时间。使用服务实际调用的程序，先单独运行 `runmesh --version`，不要附加其他参数，再运行 `runmesh doctor --json`。`doctor` 使用自定义配置时加 `--profile`，用户级服务加 `--user`。另一份本地 CLI 或正常的 Worker 健康页面，都不能证明该服务已连通。已安装 CLI 支持时，分享诊断报告前给 `doctor` 加上 `--shareable`。
 
 检查 Runner 授权、策略确认和明确的凭据拒绝原因。Runner 授权期限到期可由管理员延长，不能把网络故障当作凭据丢失。只有确认凭据已撤销、替换或配置不兼容时，才使用管理员审核的恢复注册流程。不要仅因调用超时就重新注册健康 Runner。
 
@@ -24,13 +24,17 @@ Runmesh 连接不需要公网入站端口，不要为了恢复该连接而开放
 
 使用对应系统的管理员终端，完整复制注册页面命令。`RMI_*` 错误参阅[安装依赖](installer-prerequisites.zh-CN.md)。注册码可能已被消耗时，不要盲目重试。
 
-安装器不可用可能是签名发行物或部署检查尚不满足要求。只有存在适用且可验证的包时，才按[便携包校验流程](portable-runner-installation.md)操作；不要改用软件包注册表中的包名、源码分支构建或未验证镜像。不能关闭 TLS、签名或哈希校验。已有安装或服务清单冲突应由管理员检查，不要强制覆盖或清空状态。
+安装器不可用可能是签名发行物或部署检查尚不满足要求。先查看[发布状态](release-readiness.md)：候选版本可以有意保持托管分发关闭。只有存在适用且可验证的包时，才按[便携包校验流程](portable-runner-installation.md)操作；不要改用软件包注册表中的包名、源码分支构建或未验证镜像。不能关闭 TLS、签名或哈希校验。已有安装或服务清单冲突应由管理员检查，不要强制覆盖或清空状态。
+
+安装器提示另一个安装或卸载正在运行时，先等待该操作结束。异常退出后，应由管理员确认没有相关进程，再处理残留锁。不要并行运行安装器，也不要删除另一操作的文件。注册可能已经完成时，先核对控制台和本地配置，再决定是否使用新注册码。
 
 ## MCP 无法连接或工具参数不一致
 
 使用以 `/mcp` 结尾的完整地址，不附加引号、空格或 Bearer token。确认客户端支持 Streamable HTTP，且地址仍被授权。
 
-Worker 更新后刷新 Runmesh 连接与缓存的工具定义。缺少动作或任务后续查询拒绝 `workspace_id`，可能是工具目录或组件版本不匹配。核对已部署 Worker、已安装 Runner 和鉴权后返回的工具目录。当前源码示例不能让旧组件获得尚未实现的能力。详见[目录刷新说明](mcp-connector-refresh.md)。
+Worker 更新后刷新 Runmesh 连接与缓存的工具定义。缺少动作或任务后续查询拒绝 `workspace_id`，可能是工具目录或组件版本不匹配。核对已部署 Worker、已安装 Runner 和鉴权后返回的工具目录。详见[目录刷新说明](mcp-connector-refresh.md)。
+
+`runner_upgrade_required` 表示该能力需要兼容的 Runner。已发布的 0.1.3 Runner 不支持 Context `storage` 或 `prune`，新 Worker 会在发送前拒绝这两个动作；刷新工具目录不会安装它们。请按[升级指南](upgrading.zh-CN.md)处理，兼容 Runner 的能力仍未被识别时再重新连接。
 
 ## 没有工作区或权限不足
 

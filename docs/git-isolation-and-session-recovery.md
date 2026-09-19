@@ -6,7 +6,7 @@
 
 Path containment and executable trust are different decisions. A child such as `/.git` or `/usr/bin` is inside `/`; the boundary helper normalizes dot segments, preserves root separators, and rejects sibling prefixes. Native Windows coverage includes drive roots, case folding, and UNC share boundaries.
 
-Correct containment does not make a Git executable inside an untrusted workspace safe. Read-only Git inspection must not become a shell execution route. The trusted executable allow-list excludes both lexical and canonical workspace paths on POSIX and Windows, including conventional machine-wide Git directories. An empty trusted PATH fails closed instead of falling back to ambient executable discovery.
+Correct containment does not make a Git executable inside an untrusted workspace safe. Read-only Git inspection must not become a shell execution route. On POSIX and Windows, executable trust checks exclude directories inside the workspace by both their lexical and canonical paths. This also applies to a conventional machine-wide Git directory when it falls inside that workspace. An empty trusted PATH fails closed instead of falling back to ambient executable discovery.
 
 Filesystem-root Git inspection is explicitly unsupported under this trust model. The Runner rejects a canonical filesystem/drive root before reading Git metadata or creating a temporary isolated repository. All five public Git operations return `git_unavailable`, with a local diagnostic requesting a dedicated workspace directory. Other filesystem, execution, job, and context permissions are not disabled by this Git-specific decision.
 
@@ -18,7 +18,7 @@ For a centrally managed Runner, an authorized administrator must update the work
 
 | Registry result | WebSocket close | Meaning and recovery |
 | --- | --- | --- |
-| `401` or `403` | `4001`, `runner credentials rejected` | Explicit credential rejection; the Runner stops instead of retrying indefinitely. |
+| `401` or `403` | `4001`, `runner credentials rejected` | The current Runner connection loop stops. Check the credential; the host service manager may still restart the process. |
 | `409` | `4000`, `stale runner session` | Session/sync fencing conflict; reconnect with the existing credential and perform a fresh handshake. |
 | Availability failure, including `429` and `5xx` | `1013`, `control plane temporarily unavailable` | Retain the slower service-unavailable reconnect backoff. |
 

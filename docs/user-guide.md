@@ -16,13 +16,13 @@ The URL is a secret credential, shown only when created or rotated. Do not rewri
 
 ## Choose the machine and workspace
 
-1. Call `runner_list`, then `runner_select` when selection is needed. Switching an existing selection requires `confirm_switch: true`.
-2. Confirm with `runner_current`, then call `workspace_list` to see your permitted workspace IDs.
-3. Start with `read` or `inspect` before changing files or starting commands.
+1. Call `runner_current` to check your current selection, and `runner_list` to find the intended machine.
+2. If no Runner is selected, call `runner_select` even when the list shows only one machine. Switching an existing selection requires `confirm_switch: true`. Confirm the result with `runner_current`.
+3. Call `workspace_list` to see your permitted workspace IDs. Start with `read` or `inspect` before changing files or starting commands.
 
 A workspace ID is not a host path. Paths supplied to file tools are relative to that workspace. Runmesh does not silently switch machines when the selected Runner is offline. Keep the original Runner selected when following up a Job.
 
-Examples below describe the current source contract. Use your authenticated tool catalog and the actual IDs returned by your instance. A published older Runner or cached client definition may not expose every feature; see [release notes](release-notes.md) and [troubleshooting](troubleshooting.md) rather than inventing unsupported arguments.
+Use the tool catalog and actual IDs returned by your instance with the examples below. Available actions depend on the deployed Worker, installed Runner and client catalog. If an action is missing or returns `runner_upgrade_required`, check [release notes](release-notes.md) and [troubleshooting](troubleshooting.md); refreshing a client cannot add a capability to an older Runner.
 
 ## Read, inspect and edit
 
@@ -77,13 +77,19 @@ After a Runner restart, queued work is not blindly replayed and recovered work m
 
 ## Logs, input and cancellation
 
-Foreground output may contain only a tail. A positive `offset` means earlier bytes were omitted from that response; use paginated `job.logs` to request retained bytes. Copy returned cursors unchanged and do not combine a cursor with a new offset or tail mode when the catalog forbids it.
+Foreground output may contain only a tail. A positive `offset` means earlier bytes were omitted from that response; use the `job` tool's `logs` action to request retained bytes in pages. Copy returned cursors unchanged and do not combine a cursor with a new offset or tail mode when the catalog forbids it.
 
 Stored logs also have limits. `output_truncated` can mean bytes were discarded and are no longer recoverable through Runmesh. Ask the administrator to inspect separately configured application logs; Runmesh does not guarantee a complete second copy on the host.
 
 `input` requires `data` or `close_stdin: true`; closing stdin sends end-of-input. `cancel` requests cancellation and needs Job-control permission. Neither a delivery error nor a timeout proves nothing happened: inspect state before repeating input or cancellation. If process identity cannot be verified, cancellation may be refused while the process and its concurrency slot remain retained. An administrator should inspect the host rather than signal a guessed PID.
 
 Cloud history is an optional recent snapshot, not a full output archive. Turning recording off does not stop local jobs; reading logs does not turn it back on. Live input, cancellation and local output need an online, authorized Runner. Previously recorded metadata may remain visible while it is offline.
+
+## Keep workspace handoff notes
+
+The `context` tool stores explicit handoff notes on the selected Runner. Use `bootstrap` to find available context, `read` or `search` to retrieve it, and `checkpoint` to save a goal, decisions, evidence and next actions. A checkpoint requires write permission. Runmesh does not automatically record your conversation or hidden reasoning.
+
+On a compatible Worker and Runner, `storage` reports local Context usage and `prune` previews removal of older revisions. Applying a preview requires its plan hash and an explicit `apply: true`; the latest revision is retained. See [Context storage](context-storage.md) before deleting anything. These storage-management actions are not present in the published 0.1.3 Runner; a newer tool catalog alone does not make them available.
 
 ## Get help safely
 

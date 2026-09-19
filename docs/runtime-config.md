@@ -1,6 +1,6 @@
 # Minimal runtime variables and secrets
 
-Ordinary production setup needs **two secrets and no manually supplied plaintext variables**. Deployment defaults are code, not a growing checklist in the Cloudflare dashboard. Existing resource bindings and credential values are preserved.
+Ordinary production setup needs **two secrets and no manually supplied plaintext variables**. Use the source defaults unless your deployment needs an override. Preserve existing resource bindings and credential values during updates.
 
 ## Required secrets
 
@@ -13,15 +13,15 @@ Use independent cryptographically random values, at least 32 random bytes encode
 
 `ADMIN_TOKEN` is optional, for the advanced programmatic Runner administration API only. Do not set it for dashboard-only use. An already configured ADMIN_TOKEN is not automatically deleted because another operator may use the API.
 
-## Values no longer required in production vars
+## Defaults and optional overrides
 
-| Former variable | Normal source | Optional compatibility behavior |
+| Variable | Default | Optional override |
 | --- | --- | --- |
 | `WORKER_ID` | Production/development mode | An existing explicit ID still works |
 | `RUNMESH_PUBLIC_ORIGIN` | Validated HTTPS URL plus matching Host | Keep only for reverse-proxy overrides; an explicit empty/invalid value stays fail-closed |
 | `RUNMESH_AUDIT_BACKEND` | Production defaults to D1 | Explicit backend overrides are still supported |
 | `RUNMESH_JOB_HISTORY_BACKEND` | Production defaults to packed D1 | Missing production D1 does not fall back to DO history writes |
-| `RUNMESH_SIGNED_RELEASE_AVAILABLE` | Production: reviewed stable version; development: `dev` discovery sentinel | An explicit empty value disables hosted installation. Development accepts only a current-series immutable signed dev prerelease and never falls back to stable. |
+| `RUNMESH_SIGNED_RELEASE_AVAILABLE` | Production: reviewed released version, or disabled for a candidate; development: `dev` discovery sentinel | An explicit empty value disables hosted installation. Development accepts only a current-series immutable signed dev prerelease and never falls back to stable. |
 | `RUNMESH_DEPLOYMENT_BRANCH` / `RUNMESH_DEPLOYMENT_COMMIT` | Verified build-time Git source, compared with provider metadata | Old variables are not treated as proof of compiled source |
 
 The development environment has one non-secret mode marker, `RUNMESH_ENVIRONMENT=development`. Test-only vars remain confined to the local test environment. A fork's public domain does not have to replace an owner's hard-coded URL. Request authority is never taken from X-Forwarded-Host. A reverse proxy using an internal request URL must supply an explicit validated public-origin override.
@@ -30,9 +30,9 @@ Bindings are not redundant runtime variables: keep the live Registry/Runner DO n
 
 ## Publication safety
 
-The generated-release module is checked against `release/release-state.json`, including the exact version, publication commit and independently verified manifest hash. A candidate compiles a disabled installer default. A package version number alone never activates distribution. Explicit old or invalid version overrides are not normalized into a successful gate. Existing signature validation and immutable assets are unchanged.
+The current **0.1.4** source is a candidate and defaults to disabled stable distribution. Availability follows `release/release-state.json`, including the exact version, publication commit and independently verified manifest hash. A package version alone does not activate distribution. Do not set an availability override to make an unpublished candidate appear ready. The previously published immutable v0.1.3 assets remain unchanged.
 
-Main-only release and deployment checks remain. The build records its actual clean Git commit/tree without adding runtime variables. A provider version tag corroborates it when present; absent tags no longer erase a known compiled source. Dirty, missing or conflicting source stays explicitly unconfirmed. See [Worker build provenance](build-provenance.md) and its one-request post-deployment checker.
+Production release and deployment require `main`; the production deployment wrapper also refuses an unactivated candidate. Development deploys separately from `dev`. The build records its clean Git commit/tree, with provider version metadata used for comparison when available. Dirty, missing or conflicting source remains unconfirmed. See [Worker build provenance](build-provenance.md) to check the actual deployed commit.
 
 ## New-install helper
 

@@ -1,4 +1,4 @@
-# Source dependency gates (AR01)
+# Source dependency checks
 
 `npm run check:architecture` parses application/protocol source using the pinned development-only Babel parser. It does not import the scanned modules or execute their embedded installer text. Both GitHub and GitLab verification run this command, and CI parity checks require its presence. The checker fixtures also run in the existing native platform jobs.
 
@@ -16,7 +16,7 @@ This is a source dependency gate, not a security sandbox or a certification of a
 
 The former protocol type cycle has been removed by separating primitive permission shapes and generic hashing from full policy schemas. Both cycle kinds now fail. Browser, presentation, HTTP, use-case, native-adapter and result-projection boundaries are covered by the role matrix and negative fixtures. This gate does not introduce an arbitrary maximum line count or claim that a smaller file is automatically more maintainable. Later architectural boundaries must be added with both allowed and forbidden fixtures.
 
-The parser is now an explicit exact-version development dependency already present in the lockfile, not a new runtime component. No Worker/Runner settings, storage, privileges, timers, requests or public tool schemas change in AR01.
+The parser is a pinned development dependency. Running the check does not change Worker/Runner settings or write application data.
 
 Reference for parser options and supported syntax: https://babeljs.io/docs/babel-parser
 

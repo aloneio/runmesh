@@ -1,26 +1,44 @@
-# Worker build provenance
+# Check which Worker source is deployed
 
-R01 / R09 development slice based on `88b119782d26316d68eeaa98a47d71dbe4382193`. This identifies Worker source; it does not upgrade an installed Runner, activate production or replace immutable release signatures.
+Use `/health` to identify the Worker's compiled Git commit and compare it with the commit you intended to deploy. The package version alone is not enough: several commits can share a version. Updating a Worker does not upgrade an installed Runner or publish a signed Runner package.
 
-## Why version alone was insufficient
+## Configure the build
 
-Several development changes shared product version 0.1.3. The previous health implementation could identify source only when a `main:<commit>` or `dev:<commit>` provider tag was present. A successful untagged deployment returned null source fields, even when its build checkout was known. Health also lacked an explicit no-store response header.
+In Cloudflare Workers Builds, use the repository root and set the build command to:
 
-The build now generates `apps/worker/src/generated-provenance.ts` from the actual local Git checkout. This file is deliberately ignored: committing a file containing its own commit hash would make the statement stale immediately. Generated values are deterministic and contain no author email, hostname, absolute path, build secrets or arbitrary branch labels. The module is replaced with an unavailable statement before a strict failed generation can leave an earlier identity behind.
+```sh
+npm run build
+```
 
-## Supported build paths
+For production, connect the protected `main` branch and use:
 
-The root `npm run build`, typecheck/version generation, Worker workspace build/test/typecheck, explicit deployment wrapper and local Wrangler custom build all prepare the module. Do not use `--no-bundle` or `--no-build` as a supported release shortcut.
+```sh
+npm run deploy:worker -- --env production
+```
 
-For Workers Builds configure repository-root build `npm run build` and deploy `npm run deploy:worker -- --env production` from main, or `--env development` from dev in the separate development Worker. Workers Builds documentation states that it does not honor Wrangler Custom Builds as its build configuration; the root build command therefore remains explicit rather than relying on the local Wrangler hook alone.
+For the separate development Worker, connect `dev` and use:
 
-No new runtime variable or secret is required. Workers Builds already supplies its source commit and branch to the build process; they are not automatically runtime bindings. The generator checks those values against Git. GitHub and GitLab commit declarations are also cross-checked. Conflicting, malformed or wrong SHA values cannot replace the checkout's identity. Pull-request, merge-request and tag contexts never inherit a target main/dev branch label.
+```sh
+npm run deploy:worker -- --env development
+```
 
-The local generator reads bounded Git output, disables optional index writes, replace refs, external diff and fsmonitor, and performs no network requests. Untracked application files and tracked/staged edits are dirty. Assume-unchanged, skip-worktree, source symlinks and unverified submodules prevent a clean statement. Source archives without Git remain buildable with unavailable provenance outside strict deployment mode; an environment string alone cannot manufacture a commit. The existing deployment wrapper refuses these states before invoking Wrangler, while preserving main/dev branch and reviewed-release checks.
+The current **0.1.4 candidate** is not activated for production. The production wrapper refuses a candidate and preserves the existing deployment. Complete the reviewed release activation before using the production command.
 
-## Public health
+Keep the build command explicit: Cloudflare Workers Builds does not use Wrangler Custom Builds as a replacement for its configured build step. Use the repository's pinned Node/npm versions and avoid `--no-build` or `--no-bundle` shortcuts.
 
-`/health` now returns `Cache-Control: no-store`. Its existing `deployment.branch` and `deployment.commit` fields are retained, with additive provenance fields:
+The build records the actual Git commit and source tree. No additional runtime variable or secret is needed. Cloudflare, GitHub and GitLab source declarations must agree with the checkout. Build from a clean checkout; tracked edits, untracked application files, source symlinks, hidden index flags or unverified submodules prevent a clean source declaration. Source archives without Git can be built locally, but cannot provide verified Git provenance for the deployment wrapper.
+
+## Verify a deployment
+
+From the repository, run:
+
+```sh
+npm run check:deployment -- https://your-worker.example <expected-full-commit> main
+```
+
+Use the actual 40-character commit and replace `main` with `dev` for the development Worker. The checker makes one HTTPS request to `/health` and requires a clean, identified source with the expected commit and branch. It does not change the deployment or retry automatically. The request has a 10-second deadline, including the response body, and a 16 KiB response limit.
+
+A successful response can include:
 
 ```json
 {
@@ -38,28 +56,28 @@ The local generator reads bounded Git output, disables optional index writes, re
 }
 ```
 
-The example placeholders are explanatory, not valid deployed hashes. A clean compiled source is sufficient when a provider tag is absent or unrecognized. Recognized matching provider metadata gives `agreement=matched`; a different commit or incompatible branch gives `state=conflict` and null top-level source fields. Provider version ID and creation time are projected separately, with only validated values. Raw unrecognized tags are not returned. A plausible provider tag cannot turn a dirty, invalid or missing build into clean source. Legacy manually injected source variables are not treated as proof of compiled source.
+The hash placeholders above are examples, not valid values. `/health` returns `Cache-Control: no-store`.
 
-The projection is pure and does not access Registry, Runner DO, D1, Git, a filesystem, a network endpoint or a timer at request time. Its report remains under a tested 1 KiB bound. Metadata disagreement affects diagnostic truthfulness; it does not revoke credentials or interrupt unrelated authorized work. `ok=true` still means the health handler responded, not that every downstream dependency or all provenance checks passed.
+| Result | Meaning and next step |
+| --- | --- |
+| `state=identified`, expected commit and branch | The Worker reports the intended compiled source |
+| `agreement=matched` | Recognized Cloudflare version metadata agrees with the compiled source |
+| `agreement=not_comparable` | No recognized provider tag is available for comparison; the compiled source can still be identified |
+| `state=conflict` | Provider metadata disagrees; inspect the build and deployment before accepting the result |
+| Missing or unconfirmed source | Check the build command, Git checkout and logs; do not substitute a manually entered commit |
 
-## Explicit post-deployment observation
+A version-only response from an older Worker fails this provenance check, but does not by itself prove the Worker is unavailable. Likewise, `ok=true` means the health handler responded; verify login, Runner connectivity and the required MCP operations separately.
 
-```sh
-npm run check:deployment -- https://your-worker.example <expected-full-commit> main
-```
+## When a build fails
 
-Use the actual expected 40-character commit. The observer performs one HTTPS health read, rejects redirects and secret-bearing URLs, explicitly omits browser credentials, and requires identified clean source with the expected commit and branch. Response handling has a 16 KiB byte limit, at most 256 stream reads, and a 10-second deadline covering the response body. Failed, oversized, excessively fragmented or aborted responses are cancelled; invalid UTF-8 is rejected rather than silently replaced. It does not redeploy, retry, poll, read account tokens or print a raw failure response. An old version-only health response is a failed provenance check, not proof of a failed Worker.
+If Cloudflare fails while installing tools or dependencies, the Worker upload has not started. Check the full build log, the configured toolchain and cache settings before retrying. That error alone does not identify a bad Node release, corrupted cache or application defect. After a successful retry, compare the live commit with the intended commit using the command above.
 
-Deployment preflight failures print a fixed error and recovery categories, not an assertion stack, local path or raw branch metadata. This pre-upload failure is distinct from an uploader failure with an uncertain provider outcome. Neither path automatically retries a deployment.
+A deployment preflight failure occurs before Wrangler uploads anything. An uploader failure may leave the provider outcome uncertain; check the deployed source before retrying.
 
-## Trust and rollout boundary
+## Deployment and trust boundaries
 
-This is a self-reported build-source statement, not a cryptographic attestation or a reproducible binary proof. The trusted build host and Git metadata can be modified by their operator. Dependencies, ignored generated inputs, build tool versions and environment-dependent transforms are outside the tracked source tree identity. A malicious or concurrently modified build host is not made trustworthy by this feature. Do not mutate source while bundling.
+For the maintained development setup, a separately configured host bridge can fast-forward GitLab `dev` only after GitHub `verify-all` succeeds for the exact current SHA. The connected Cloudflare Worker then builds that GitLab push. The repository does not install this bridge, a scheduler or a provider connection for you. See [deployment](deployment.md).
 
-For `dev`, GitHub CI completion is also the synchronization gate: only the current successful `dev` SHA is eligible to fast-forward GitLab `dev`, and a divergent GitLab branch is left unchanged. Cloudflare remains triggered by the resulting GitLab push. The signed Runner version, actual Worker source, provider version ID and actual client's tool catalog remain separate facts. These changes must still pass same-SHA CI and be explicitly promoted to main before production deployment can be observed. There is no account-level Cloudflare log access or new account telemetry collector in this slice.
+The source statement is `self_reported`, not a digital signature or a reproducible-build proof. It depends on the build host and its Git metadata. Dependencies, ignored generated inputs and environment-dependent transforms are outside the tracked source-tree identity. Do not change source while it is bundling. Signed Runner releases, Worker source commits, Cloudflare version IDs and installed Runner versions must be checked separately.
 
-Primary references: [Workers Builds configuration](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/), [default Git metadata variables](https://developers.cloudflare.com/changelog/post/2025-06-10-default-env-vars/), [version metadata binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/version-metadata/).
-
-## Filesystem aliases
-
-The checkout root and Git-reported worktree root are compared by their actual directory device and file identity using BigInt, not by spelling or case-folding paths. This handles equivalent Windows short/long paths without accepting another directory. Missing, zero or unavailable identities remain fail-closed. The root identity is checked again before returning a clean observation; index flags, source cleanliness, exact commit and CI metadata checks remain required.
+References: [Workers Builds configuration](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/), [default Git metadata variables](https://developers.cloudflare.com/changelog/post/2025-06-10-default-env-vars/), [version metadata](https://developers.cloudflare.com/workers/runtime-apis/bindings/version-metadata/).

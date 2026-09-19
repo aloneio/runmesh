@@ -1,6 +1,6 @@
-# Registry domain boundaries (AR06)
+# Registry domain boundaries
 
-Development refactor based on `ca511cf0fa9411b85a52ba78547aeab7e4b27dec`. This is an internal Worker change, not a new Durable Object, database migration, Runner upgrade or production activation.
+Use this reference when changing Registry logic. The domain modules share one Registry Durable Object and synchronous storage owner; they are not separate databases or network services.
 
 ## Ownership
 
@@ -17,17 +17,17 @@ Development refactor based on `ca511cf0fa9411b85a52ba78547aeab7e4b27dec`. This i
 
 The facade wires typed closures for only the collaborators each service needs. A service is not given the full Registry, Worker environment, DO context or a peer service. Each constructor is inert: no SQL, network request, schema creation, alarm or credential discovery. The lifecycle service receives only the existing verifier pepper value it needs; the policy service receives only the existing history-backend selector.
 
-The four extraction commits retain the original method bodies, parameters, result types and async markers. The facade keeps its existing public signatures and exports, so callers and platform bindings do not have to migrate together. Methods used by other internal domains are accessible on service classes but are not new HTTP routes or RPC methods.
+The facade provides the public signatures and compatibility exports. Methods used by other internal domains are accessible on service classes but are not HTTP routes or RPC methods.
 
 ## Transaction and authorization invariants
 
 There is one Registry DO and one storage owner. `RegistryStorage.transactionSync` calls that owner's native synchronous transaction directly and returns its exact result or exception. Cross-domain calls through the typed ports remain synchronous. A lifecycle registration can create its policy snapshot inside the very same transaction: failure rolls back both the Runner and its mutation/policy rows.
 
-No remote call, timer, retry or `await` is added to the final authorization chain. A port is an operation, not a cached permission snapshot. Authentication failures, unavailable dependencies, stale policy, invalid records and optional-history degradation retain their pre-refactor behavior. No stored value is repaired or migrated as part of construction.
+A port is an operation, not a cached permission snapshot. Preserve the synchronous authorization boundary and distinguish authentication failures, unavailable dependencies, stale policy, invalid records and optional-history degradation. Domain service constructors do not repair or migrate stored values.
 
 SQL is grouped by business responsibility, not placed behind a generic asynchronous repository abstraction. Some original atomic operations necessarily touch tables also read by another domain, for example deletion, credential replacement and recording preferences. Those transaction boundaries are intentionally retained. This is not a claim of disjoint table ownership or a completed rewrite of every SQL use into a pure domain model.
 
-The facade still owns the existing HMAC/HTTP route ordering, DO bootstrap, maintenance queue, feature circuit state and D1 boundary handling. Moving those independently can be reviewed later; this change does not disguise them inside another giant service or split them into remotely called microservices.
+The facade owns HMAC/HTTP route ordering, DO bootstrap, maintenance scheduling, feature-health coordination and D1 boundary handling. Keep cross-domain transactions with that storage owner when changing module boundaries.
 
 ## Regression evidence
 
@@ -35,14 +35,14 @@ The facade still owns the existing HMAC/HTTP route ordering, DO bootstrap, maint
 
 The same test injects a policy-storage exception during registration and verifies that Runner, credential-ledger and policy rows all roll back. Domain-boundary tests separately construct all four services with inaccessible collaborators, verify the synchronous storage adapter and exercise narrow SQL-only operations without a full DO fixture.
 
-Existing credential, enrollment, scope, policy-generation, revocation, quota, hibernation, history ordering and MCP integration tests remain in place. Local structural comparison verifies all 98 moved method bodies after only the declared receiver rewrites, the 82 public method names (including the constructor), all 152 SQL call sites, and the 22 relocated transaction callbacks. It does not claim those methods are now behaviorally correct for every possible input; it establishes that this refactor did not silently change their existing logic.
+Run the credential, enrollment, scope, policy-generation, revocation, quota, hibernation, history and MCP integration regressions for relevant changes. The original AR06 extraction was compared against `ca511cf0fa9411b85a52ba78547aeab7e4b27dec`; that historical comparison does not verify subsequent code changes.
 
 Architecture checks reject domain imports of the Registry facade, concrete peer services, MCP/UI handlers or external history adapters. Foundations cannot import domain implementations. These checks use the already-required GitHub and GitLab architecture gate; no new runtime dependency is added.
 
-## Cost, compatibility and rollout
+## Compatibility and resource use
 
-The fixed comparison scenarios must keep their query sequence and measured row counts, not merely return matching JSON. There are no new runtime variables, DO namespaces, database tables/indexes, durable writes, recurring timers, RPCs or cloud services. Ordinary native SQL and existing authentication still consume resources; this is not an account-level zero-cost claim or a production load measurement.
+For compatibility changes, check query sequences and measured row counts as well as returned JSON. Ordinary SQL and authentication consume resources; local fixtures do not establish account-wide costs or production capacity.
 
-The wire catalog, production Wrangler bindings, signed release assets and Runner source are unchanged. Development CI success is not production activation. Promote only through the existing reviewed main/deployment process. Because this refactor changes no stored format, reverting its Worker source does not require a data rollback; unrelated subsequent changes must still be assessed separately.
+Before deployment or rollback, assess the storage compatibility of the complete target revision. Follow the [upgrade guide](upgrading.md) and preserve existing resources; a module reorganization alone is not a reason to reset storage.
 
 Reference: Cloudflare's [SQLite-backed Durable Object storage API](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/) documents the synchronous transaction callback and rollback behavior retained by this adapter.

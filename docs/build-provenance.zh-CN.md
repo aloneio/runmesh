@@ -1,47 +1,63 @@
-# Worker 构建来源核验
+# 核对 Worker 实际部署的源码
 
-这是 R01／R09 的开发实现，基于 `88b119782d26316d68eeaa98a47d71dbe4382193`。只解决 Worker 来源可追溯性，不代表生产已升级或 Runner 已安装新版本。
+使用 `/health` 查看 Worker 编译时的 Git 提交，并与计划部署的提交比较。多个提交可能共用一个产品版本号，所以不能只检查版本。更新 Worker 不会升级已安装 Runner，也不会发布带签名的 Runner 安装包。
 
-## 不再只靠版本号或部署标签
+## 配置构建
 
-多个开发提交可能共用 0.1.3 版本号。原实现只解析提供商的 `main:<commit>`／`dev:<commit>` 标签；标签缺失时，健康接口就没有源码来源。原健康响应也没有明确禁止缓存。
-
-现在构建时从实际 Git 工作区生成来源模块，记录干净源码的提交、文件树及可确认的 main/dev 分支。生成文件不提交到仓库，避免“记录自身提交号”形成自引用；重复生成不改写相同内容。文件不包含作者邮箱、主机绝对路径、任意分支文字或密钥。
-
-## 部署配置不增加变量
-
-Cloudflare 构建页面继续使用根目录 `npm run build`，正式部署使用 `npm run deploy:worker -- --env production`，独立开发 Worker 使用 `--env development`。Cloudflare 官方说明 Workers Builds 不以 Wrangler 的 Custom Builds 配置代替构建页面配置，所以不能省略根目录构建命令并只依赖本地钩子。
-
-根目录构建、类型检查、Worker 独立构建／测试／类型检查、显式部署脚本和本地 Wrangler 构建钩子都会准备来源模块。无需新增运行变量、Token 或云服务。不要把绕过构建的 `--no-build`／`--no-bundle` 当作正式交付流程。
-
-Cloudflare、GitHub、GitLab 提供的提交信息必须与本地 HEAD 一致。脏工作区、未跟踪源文件、隐藏索引标记、未经验证的子模块／符号链接及矛盾声明不能冒充干净源码。PR、MR 和标签构建不冒充目标 main/dev 分支。没有 Git 的源码压缩包只能报告来源不可确认，不能用环境变量硬填一个提交号。
-
-生成失败会清除旧来源声明；严格部署入口在调用 Wrangler 前拒绝不可确认的源码。原 main/dev 规则及独立验证后的发布门控继续保留。
-
-## 健康接口的新含义
-
-响应保留 `deployment.branch`、`deployment.commit`，新增源码树、来源状态以及经过白名单过滤的提供商版本 ID／创建时间。健康响应添加 `Cache-Control: no-store`。
-
-没有部署标签时，可使用已经核对的编译来源；双方提交相同表示信息一致，提交冲突则明确返回 `state=conflict`，顶层分支／提交不再给出一个貌似确定的值。旧手填变量和格式正确的提供商标签都不能“洗白”脏构建。
-
-这些都是诊断信息，不改变登录、凭据、权限或任务状态。`ok=true` 只表示健康处理器可响应，并不表示所有依赖正常或来源完全一致。请求时不读取数据库、文件、Git 或远端 API，也没有新增计时器。
-
-部署后可显式执行一次核验：
+在 Cloudflare Workers Builds 中选择仓库根目录，构建命令使用：
 
 ```sh
-npm run check:deployment -- https://你的Worker域名 <实际40位提交> main
+npm run build
 ```
 
-核验器只发出一次 HTTPS 请求，禁止重定向和带凭据／路径／查询参数的根地址，显式不携带浏览器凭据。响应上限为 16 KiB、最多 256 次流读取，10 秒期限覆盖响应正文；失败、超额、过度碎片化或超时的响应会主动取消，非法 UTF-8 不会被悄悄替换。来源缺失、冲突或不符合预期时失败，不自动重试或重新部署，也不直接打印远端错误正文。老版本只返回版本号时，属于来源核验失败，不等于服务不可用。
+生产 Worker 连接受保护的 `main` 分支，部署命令为：
 
-部署预检失败只显示固定错误码及检查方向，不回显异常堆栈、主机路径或原始分支信息。尚未调用上传器，与上传器失败后提供商结果可能不确定，是两种不同状态；均不会自动重试部署。
+```sh
+npm run deploy:worker -- --env production
+```
 
-## 信任边界
+独立开发 Worker 连接 `dev` 分支，部署命令为：
 
-结果明确标为 `attestation=self_reported`。它不是数字签名，不能证明构建机器可信，也不是可复现构建证明。依赖包、忽略的生成输入和环境相关变换不属于 Git 文件树本身；构建期间不要并发修改源码。
+```sh
+npm run deploy:worker -- --env development
+```
 
-正式 Runner 签名版本、Worker 源码提交、Cloudflare 版本 ID 和客户端实际工具目录仍是不同事实。代码进入 dev、CI 通过都不能代替未来的 main 提升、正式部署和线上观测。本批不增加账号级用量采集，也不声称宿主工具缓存已经刷新。
+当前 **0.1.4 仍为候选版本**，未激活生产发行。生产部署脚本会拒绝候选状态并保留现有部署；完成正式发行审核与激活后才能使用生产命令。
 
-## 文件系统路径别名
+保留明确的构建命令：Cloudflare Workers Builds 不会用 Wrangler Custom Builds 替代构建页面配置。使用仓库固定的 Node/npm 版本，不要通过 `--no-build` 或 `--no-bundle` 绕过构建。
 
-检出根目录与 Git 报告的工作树根目录按实际目录的设备和文件身份进行 BigInt 比较，不依赖路径拼写，也不把所有路径转为小写。这样可识别 Windows 短／长路径别名，而不接受另一目录。缺失、零值或不可读取的身份继续拒绝；返回干净来源前再次检查根身份。隐藏索引标志、工作区干净状态、提交及 CI 元数据一致性检查均保留。
+构建会记录实际 Git 提交和文件树，无需新增运行时变量或密钥。Cloudflare、GitHub、GitLab 的提交声明必须与检出源码一致。使用干净的工作区；已修改文件、未跟踪的应用文件、隐藏索引标记、源码符号链接或未核实的子模块都会阻止确认来源。没有 Git 的源码压缩包可以本地构建，但不能为部署脚本提供已确认的 Git 来源。
+
+## 部署后核验
+
+在仓库中运行：
+
+```sh
+npm run check:deployment -- https://your-worker.example <实际40位提交> main
+```
+
+开发 Worker 将最后一个参数改成 `dev`。核验器只发出一次 HTTPS 健康请求，要求来源已确认、源码干净，且提交和分支与预期一致；不会重新部署或自动重试。请求期限为 10 秒，包含响应正文，响应大小上限为 16 KiB。
+
+| 返回结果 | 含义与处理 |
+| --- | --- |
+| `state=identified`，提交和分支符合预期 | Worker 报告了预期的编译来源 |
+| `agreement=matched` | 可识别的 Cloudflare 版本元数据与编译来源一致 |
+| `agreement=not_comparable` | 没有可用于比较的提供商标签，编译来源仍可能已确认 |
+| `state=conflict` | 来源与提供商元数据冲突，验收前检查构建和部署 |
+| 来源缺失或不可确认 | 检查构建命令、Git 工作区和日志，不要手填提交号代替核验 |
+
+健康响应使用 `Cache-Control: no-store`。旧 Worker 只返回版本号时，会无法通过来源核验，但不等于服务不可用。 `ok=true` 只表示健康处理器能响应；登录、Runner 连接和所需 MCP 操作还需单独检查。
+
+## 构建失败时
+
+若 Cloudflare 在安装工具或依赖阶段失败，Worker 尚未开始上传。先检查完整日志、工具链版本和缓存设置，再重试。仅凭这条错误不能断定是 Node 版本错误、缓存损坏或应用缺陷。重试成功后，仍应使用上述命令确认线上实际提交。
+
+部署预检失败发生在 Wrangler 上传之前。上传器失败时，提供商可能已经接收了部分操作；重试前先检查实际部署来源。
+
+## 部署与信任边界
+
+维护中的开发环境可通过单独配置的宿主同步程序，在精确提交的 GitHub `verify-all` 成功后快进 GitLab `dev`，再由已连接的 Cloudflare Worker 构建该次推送。仓库不会替你安装同步程序、定时任务或提供商连接，详见[部署说明](deployment.md)。
+
+来源记录标为 `attestation=self_reported`，依赖可信构建主机和 Git 元数据，不是数字签名或可复现构建证明。依赖包、忽略的生成文件和环境相关变换不属于 Git 文件树本身；构建期间不要修改源码。Runner 签名发行、Worker 源码提交、Cloudflare 版本 ID 和已安装 Runner 版本应分别核对。
+
+参考：[Workers Builds 配置](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/)、[Git 元数据变量](https://developers.cloudflare.com/changelog/post/2025-06-10-default-env-vars/)、[版本元数据](https://developers.cloudflare.com/workers/runtime-apis/bindings/version-metadata/)。

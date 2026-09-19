@@ -19,13 +19,16 @@ A Runner sends `runner.hello` with a supported min/max range. The Worker respond
 ## Runner connection messages
 
 ```text
-runner.hello       Runner → Worker; metadata, supported range, correlation
-runner.welcome     Worker → Runner; session and negotiated version
-runner.heartbeat   Runner → Worker; liveness and active job IDs
-runner.sync        Runner → Worker; monotonic snapshot sequence, workspace/job metadata
+runner.hello          Runner → Worker; metadata, supported range, correlation
+runner.welcome        Worker → Runner; session, negotiated version and desired policy
+runner.policy_update  Worker → Runner; authenticated workspace policy
+runner.policy_ack     Runner → Worker; applied revision/checksum or failure
+runner.heartbeat      Runner → Worker; liveness and active job IDs
+runner.sync           Runner → Worker; monotonic snapshot sequence, workspace/job metadata
+runner.queue_check    Runner → Worker; current authorization before a queued launch
 ```
 
-Workspace metadata contains only `workspace_id`, persistence, revision, and labels. The private `root_path` is delivered only in authenticated Runner-only policy frames; it is never returned in MCP output, workspace metadata, ordinary logs, or public APIs. A Runner has a stable `runner_id`; dashboard/MCP display names are control-plane metadata rather than a transport routing parameter.
+Workspace metadata contains only `workspace_id`, persistence, revision, and labels. The private `root_path` travels from the control plane to the Runner in authenticated policy frames and is omitted from public workspace/protocol metadata. User files, command output and requested log bodies can still contain paths; their contents are not automatically redacted. A Runner has a stable `runner_id`; dashboard/MCP display names are control-plane metadata rather than a transport routing parameter.
 
 ## RPC and timeout contract
 
@@ -45,7 +48,7 @@ Workspace metadata contains only `workspace_id`, persistence, revision, and labe
 }
 ```
 
-The Worker separates **offline Snapshot Authorization** from **Live Runner Admission**. Snapshot Authorization uses only a validated immutable Active Policy and can safely serve retained Registry metadata while the Runner is offline. Live Admission is a separate proof for filesystem, execution, inspection, complete logs, input, and cancellation: it requires the current online Runner session, matching epoch/credential generation, an unfenced RunnerDO, and one matching desired/applied/reported revision-and-checksum triad. A policy mutation fences Live Admission before Registry state changes; it is unfenced only when the same session proves the pre-mutation active triad remains applied.
+The Worker separates **offline Snapshot Authorization** from **Live Runner Admission**. Snapshot Authorization uses a validated immutable Active Policy to authorize retained metadata reads while the Runner is offline. Live Admission additionally requires the current online session, matching epoch/credential generation, and agreement on the desired, applied and reported policy revision/checksum. Policy changes can temporarily block live operations until the control plane and current Runner session agree. An offline snapshot never authorizes host access.
 
 The forwarding payload contains the requested revision and both expected identity fields:
 
@@ -66,7 +69,7 @@ LOCAL_RUNNER_OPERATION_TIMEOUT_MS = 8000
 WORKER_BRIDGE_TIMEOUT_MS          = 12000
 ```
 
-The local limit applies to `exec_run` and Git. The larger bridge limit reserves time for the response to cross the RunnerDO/WebSocket path. Long work uses `exec_start` and the persistent Job API.
+For `exec.run`, the local limit bounds foreground waiting, not the command's execution lifetime. Git subprocesses use it as their execution timeout. The larger bridge limit allows time for transport and scheduling. Use `shell` with `background:true` for long work, then follow the original Job through the `job` tool. A bridge timeout does not prove that an operation never started.
 
 ## MCP routing boundary
 
@@ -78,18 +81,19 @@ Selection is sticky per MCP client. The first selection is immediate, a switch r
 
 ## Jobs
 
-`job_list` reads bounded Registry snapshots, so historical metadata remains available while that selected Runner is offline. `job_get` returns an existing Registry record with `source: "registry_snapshot"` and `runner_state: "offline"` during that gap; unknown IDs return `not_found`. Complete logs remain on the Runner and therefore require live admission.
+Use the public `job` tool; `job.list`, `job.get`, `job.logs`, `job.cancel` and `job.input` are private RPC method names, not separate public tools. The selected Runner is implicit.
 
-```text
-exec_start(workspace_id, ...)
-job_list(workspace_id?, status?, limit?)
-job_get(job_id)
-job_logs(job_id, cursor/offset/limit/tail)
-job_cancel(job_id)
-job_input(job_id, data/close_stdin)
-```
+| Request | Data source and availability |
+| --- | --- |
+| `job` with `action=list` and `workspace_id`, Runner online | Live local Job metadata with `source=runner_live` |
+| `job` with `action=list`, no workspace or Runner offline | Retained cloud metadata, filtered by current workspace permissions |
+| `job` with `action=get`, `job_id` and `workspace_id` | Live Runner lookup, independent of optional cloud history |
+| `job` with `action=get` and no workspace | Uses the cloud record to authorize its workspace, then queries the online Runner; an offline Runner can return that retained snapshot |
+| `job` with `action=logs/cancel/input` | Requires live admission; supplying `workspace_id` avoids dependence on a cloud Job record |
 
-The selected Runner is implicit in those ordinary MCP tools. `job_list` reads bounded Registry snapshots, so historical metadata remains available while that selected Runner is offline. It never exposes local cwd, command, PID, or host root.
+Offline results carry `source: "registry_snapshot"` and `runner_state: "offline"`; that source label also covers the D1 history backend. Missing optional cloud history returns `job_history_unavailable`, not proof that the local Job is absent. Preserve the original Job and workspace IDs and retry the live query when the Runner is available. No-record Jobs have no offline cloud history.
+
+Job metadata excludes local cwd, command, PID and host root. Full logs stay on the Runner; requested pages are relayed to the authorized client. Production D1 history retains at most 500 recent metadata records in a 768 KiB packed row per Runner lifecycle. See [history and retention](batched-job-history.md) for limits and compatibility.
 
 MCP Tasks (`io.modelcontextprotocol/tasks`) is not claimed by this runtime. A future adapter can map an MCP Task handle to the same local Job Manager without changing the Runner job lifecycle.
 
@@ -97,10 +101,10 @@ MCP Tasks (`io.modelcontextprotocol/tasks`) is not claimed by this runtime. A fu
 
 Enrollment happens before the WebSocket protocol:
 
-1. The dashboard or Registry creates a 30-minute, single-use code for a Runner ID.
+1. The dashboard or Registry creates a single-use code for a Runner ID. Use the validity window shown on the enrollment page; administrators can configure it. The underlying default is 30 minutes when no validity override is supplied.
 2. `runmesh enroll --server <https endpoint> --code-stdin` reads the one-time code from standard input and sends it with bounded public platform/version data to `POST /runner/enroll`. For controlled manual use, the CLI also accepts `--code`; the hosted installer accepts a quoted code argument (positional, `--code CODE`, or `--code=CODE`) and forwards it through `--code-stdin` only after validation and installation checks. Without an argument it prompts locally.
 3. On one successful redemption, the Worker returns the Runner ID, WebSocket URL, and long-lived token; Registry stores only a peppered token verifier.
-4. `runner.hello` then authenticates the outbound Runner socket under that credential/version/epoch.
+4. The Runner opens an authenticated outbound WebSocket and sends `runner.hello`, binding its metadata to the current credential and connection epoch.
 
 The enrollment code itself is not a wire frame and is never sent over the subsequent WebSocket. Credential rotation/revocation invalidates the socket generation. It does not imply that the Worker can terminate a pre-existing local child process.
 
@@ -118,7 +122,9 @@ A new Go/Rust implementation should consume the JSON Schema and implement the sa
 
 ## Scope boundary
 
-This protocol does not add OAuth, AI/model calls, Cloudflare Sandbox, Cloudflare Containers, or GitHub Actions runtime. Public bootstrap scripts are Worker application endpoints outside the wire protocol. Production bootstrap remains fail-closed until the exact signed `v0.1.4` assets are published, independently verified, and recorded in the reviewed release lifecycle. A candidate does not enable distribution. The public HTTPS origin is validated from the request by default; `RUNMESH_PUBLIC_ORIGIN` is only an explicit reverse-proxy override, not a required ordinary production variable. Development uses its separately verified prerelease channel and never falls back to stable assets. When enabled, the installer command carrying the one-time code retrieves only fixed GitHub release assets, verifies the embedded-key Ed25519 contract, installs the verified local tarball, then uses the provided code through `--code-stdin`, or prompts locally when the code argument was omitted. The Worker-delivered script is the one-command bootstrap trust root; high-assurance operators use the independent portable-artifact verification path. Automatic update, data downgrade, and upgrade rollback are outside this release.
+This protocol does not provide OAuth, AI/model calls, Cloudflare Sandbox, Cloudflare Containers, or a GitHub Actions runtime. Hosted installation is outside the wire protocol and requires a verified release in the selected channel. The current **0.1.4 candidate** does not enable stable distribution. Development uses separately verified signed prereleases without falling back to stable. The public HTTPS origin is validated from the request by default; `RUNMESH_PUBLIC_ORIGIN` is an optional override. See [deployment](deployment.md) for release gating and the [portable installation guide](portable-runner-installation.md) for independent artifact verification.
+
+Hosted commands contain a single-use enrollment code and pass it to enrollment through standard input. Omitting the code can use an interactive prompt; on Windows, remove `-NonInteractive` from the copied command and use an interactive administrator terminal. Keep commands containing a code private. Updating the Worker does not automatically upgrade an installed Runner.
 
 ## Structured RPC failure semantics
 
@@ -133,4 +139,4 @@ Clients should branch on these fields instead of matching error text. An unknown
 
 ## Shared Runner queue and localized UI
 
-See [queue/UI contract](job-queue-and-localization.md) for capability negotiation, current authorization, bounded fair scheduling, restart interruption and server-side locale rendering. A Worker deployment does not upgrade installed Runner 0.1.2.
+See [queue/UI contract](job-queue-and-localization.md) for capability negotiation, current authorization, bounded fair scheduling, restart interruption and server-side locale rendering. Queue protocol 1 is available from Runner 0.1.3 and requires a compatible Worker.

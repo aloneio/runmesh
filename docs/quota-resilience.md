@@ -1,16 +1,16 @@
 # Quota isolation and optional cloud Job history
 
-## Implemented boundary
+## Authentication and optional history
 
-RegistryDO remains the strongly consistent authority for sessions, MCP credentials, enrollment, policy generations, replay fences and final dispatch authorization. Optional MCP audit history can use an independent D1 binding. This is not an authentication fallback or stale-permission cache. No paid-plan change is performed.
+RegistryDO checks sessions, MCP credentials, enrollment, current policy and final dispatch authorization. Optional MCP audit history can use an independent D1 database. A history outage does not authorize calls from cached permissions; operations still require current authorization.
 
-Cloudflare documents the same free storage allowance for both products: 5 million rows read and 100,000 rows written per day. D1 provides an independent history budget, not a larger or unlimited core-authentication allowance. Moving optional history away from Registry reduces competition with critical operations. Hard exhaustion of the remaining DO budget still prevents operations requiring current DO authority. Public health and fixed signed distribution remain independent.
+D1 and Durable Objects have independently metered storage usage. Keeping optional history in D1 reduces its competition with core authorization operations, but it does not increase the Durable Objects allowance. If that core allowance is exhausted, operations requiring current Registry authority can still fail. Public health and fixed stable-release distribution do not require a Registry read; development prerelease discovery has a separate cache path. Consult Cloudflare's current plan limits rather than treating history isolation as a zero-cost guarantee.
 
 References: [DO pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/), [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/), [Wrangler provisioning](https://developers.cloudflare.com/workers/wrangler/configuration/#automatic-provisioning).
 
 ## Storage paths
 
-Core credentials, enrollment and policy stay in RegistryDO SQLite. New audit metadata uses D1 when `RUNMESH_AUDIT_BACKEND=d1` and `HISTORY_DB` is bound. A missing/failing D1 binding reports degraded history and never silently falls back to DO writes. Production Job snapshots use bounded packed D1 rows when `RUNMESH_JOB_HISTORY_BACKEND=d1`; the SQLite path remains for compatibility. Per-client recording preferences still apply. See [batched Job history](batched-job-history.md). Full commands, output, file bodies, diffs and credentials remain excluded from cloud audit.
+Core credentials, enrollment and policy stay in RegistryDO SQLite. Production defaults to D1 for audit metadata and Job history using `HISTORY_DB`. Development/test defaults to SQLite when no D1 binding is present. Explicit backend overrides remain available. If D1 is selected and its binding is missing or unavailable, history reports degraded/unavailable rather than silently falling back to core DO writes. Per-client recording preferences still apply. See [batched Job history](batched-job-history.md). Full commands, output, file bodies, diffs and credentials remain excluded from cloud audit.
 
 D1 partitions by Registry namespace, Runner lifecycle and Runner ID. Delayed writes cannot become history for a deleted/recreated Runner. Reads recheck lifecycle after awaiting D1. Receipts distinguish `audit_status=recorded`, `degraded`, `disabled`, and `unknown` from the execution outcome.
 
@@ -32,11 +32,7 @@ A workspace-scoped `job list` queries the online Runner directly. Calls without 
 
 ## Cost and retention
 
-Previously, terminal-Job retention read every retained Job after events/syncs, while audit retention scanned an OFFSET prefix. Additive SQLite triggers now maintain transactional counters with indexes for bounded oldest-record deletion. Overwrites do not increment counts, and rollback/deletion update counts atomically. Active jobs are never pruned by terminal retention.
-
-The local Cloudflare SQLite regression with 1,000 terminal jobs and one active job measured **2,002 rows read on the prior terminal-retention query versus 1 row on the new no-overflow check**. This is a microbenchmark, not a measured reduction in production total daily usage. Triggers/indexes add writes; both metrics still need monitoring.
-
-An attempted `PRAGMA schema_version` cache was rejected by the supported SQLite runtime and removed. Structural validation still rejects incompatible schemas; credential and permission checks are never cached.
+Terminal-Job retention deletes a bounded number of old records when limits are exceeded. It does not prune active Jobs. Indexes and retention bookkeeping also consume storage operations; monitor actual D1 and Durable Objects usage for your account.
 
 Each store has a 1,000-entry audit cap per Runner (D1 also partitions by lifecycle). Seven-day-old entries are excluded on read. Old DO history is not copied or deleted during transition; the read path merges it with D1, so both stores can temporarily retain their individual windows. D1 removes at most 100 expired rows per append or cron turn. A 15-minute cron does not instantiate core DOs. Cleanup backlog or quota failure can extend physical retention beyond the visibility window; this is not a strict seven-day physical-deletion guarantee.
 
@@ -46,22 +42,16 @@ D1 failures open a per-instance circuit without storing failure records in D1 or
 
 Failed history reads return unavailable, not a fake empty list. Audit failure never replays the user command. Skipping an optional Job write no longer clears the circuit accidentally. MCP infrastructure failures return 503, not a revoked-secret 404; genuine invalid credentials still return 404. Enrollment/client/policy SQL failures reach a sanitized availability response rather than masquerading as conflicts.
 
-## Deployment and rollback
+## Check a deployment or change the backend
 
-Production uses `HISTORY_DB`, database name `runmesh-audit-history`, and `RUNMESH_AUDIT_BACKEND=d1`. Development/test use the compatible SQLite mode; test D1 stays local. Wrangler auto-provisioning resolves/creates resources through the existing Cloudflare build connection. Missing build authorization must block deployment, not reset Registry or introduce a token in source.
+The repository's production configuration binds `HISTORY_DB` to `runmesh-audit-history`. Wrangler provisioning uses the Cloudflare build connection; missing authorization must be resolved through that connection. Do not reset Registry or put deployment tokens in source to repair a history binding.
 
-Verify and merge into GitHub `dev`. After the mandatory GitHub CI aggregate succeeds, the repository automation fast-forwards that exact commit to GitLab `dev`, which triggers Cloudflare Workers Builds. Ordinary GitLab CI is intentionally skipped for mirrored `dev` pushes because the exact SHA has already passed the GitHub aggregate; merge requests, main pushes and explicit web/scheduled GitLab verification remain available. Divergence fails closed instead of being force-pushed. Check `/health` backend/binding indicators, then an authenticated audit canary. Binding presence alone does not prove D1 writes or establish the deployed SHA.
+Check `/health` for the reported backend and binding, then make an authenticated history query or verify an audit receipt. A binding indicator alone does not prove that writes work. Check the deployment commit separately. See [deployment](deployment.md) for the GitHub/GitLab build flow.
 
-Rollback preserves the existing DO namespace and additive data. Returning to `sqlite` is explicit operator action, never automatic D1-failure fallback, and restores consumption of core quota. Do not delete databases, rotate credentials, purge Jobs or replace immutable Runner releases for this Worker-only rollout.
+Changing back to `sqlite` is an explicit operator action and moves history consumption back to core storage. Preserve existing namespaces and data when changing the backend. There is no automatic D1-failure fallback.
 
-## Tests
+## Runner compatibility
 
-Coverage includes actual local D1 writes, allow-listed metadata, retention/counts, namespace/lifecycle isolation, expiry, quota recovery, 1,000 suppressed retries, and cron independence. Worker tests exercise successful execution with degraded D1 audit, live Job operations without cloud rows, old-peer rejection, workspace isolation, no-backfill/idempotent settings, genuine credential rejection versus infrastructure errors, public distribution under DO failure, mutation failures and transactional retention rollback.
+[Batched history](batched-job-history.md) provides manual recent-history reads and cloud/local retention settings. Source-side batching and optional day-based local cleanup require history protocol 1, available from Runner v0.1.2.
 
-## Batched history amendment
-
-The [batched Job contract](batched-job-history.md) adds packed D1 Job snapshots, manual newest-only reads and configurable cloud/local retention. Full stdout/stderr remains local. Source-side batching and local retention are shipped in the new immutable v0.1.2 release, not retroactively added to v0.1.1.
-
-## Source-reporting amendment (development)
-
-[Reporting protocol 2](demand-job-history.md) excludes newly admitted no-record Jobs at the Runner, binds that observation to the existing final authorization and queue digest, and replaces acknowledged-idle history polling with change-driven scheduling. Empty eligible updates return before opening D1. A log read never changes recording. Old peers and records without the new local hint retain cloud-filtered compatibility; the currently installed signed Runner is not changed by this source amendment. Existing heartbeat and authorization costs remain separate.
+The **0.1.4 candidate** implements [reporting protocol 2](demand-job-history.md): compatible Runner/Worker pairs filter newly admitted no-record Jobs before upload and use change-driven scheduling. Empty eligible updates avoid D1. A log read never changes the recording preference. Older peers and records without the capture marker keep their documented cloud-filtered behavior. Updating Worker code does not upgrade the installed Runner, and connection heartbeat and authorization costs remain separate.

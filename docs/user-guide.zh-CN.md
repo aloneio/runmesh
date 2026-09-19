@@ -16,13 +16,13 @@ https://your-host.example/<generated-secret>/mcp
 
 ## 确认机器与工作区
 
-1. 调用 `runner_list`；需要选择时调用 `runner_select`。切换已有选择须提供 `confirm_switch: true`。
-2. 用 `runner_current` 确认机器，再用 `workspace_list` 查看获准的工作区 ID。
-3. 先用 `read` 或 `inspect` 查看内容，再修改文件或执行命令。
+1. 用 `runner_current` 查看当前选择，再用 `runner_list` 查找目标机器。
+2. 尚未选择 Runner 时，调用 `runner_select`，即使列表中只有一台机器也应明确选择。切换已有选择须提供 `confirm_switch: true`；完成后用 `runner_current` 确认。
+3. 用 `workspace_list` 查看获准的工作区 ID。先用 `read` 或 `inspect` 查看内容，再修改文件或执行命令。
 
 工作区 ID 不是主机路径，文件工具的路径相对于工作区。已选 Runner 离线时，Runmesh 不会自动换到另一台机器。跟踪已有任务时应保持原 Runner 选择。
 
-以下示例说明当前源码的调用约定。实际操作以实例返回的工具目录和真实 ID 为准。较旧的正式 Runner 或客户端缓存可能尚不支持部分功能；请参阅[版本说明](release-notes.zh-CN.md)和[故障排查](troubleshooting.zh-CN.md)，不要自行拼凑工具不接受的参数。
+请结合实例返回的工具目录和真实 ID 使用以下示例。可用动作取决于已部署的 Worker、已安装的 Runner 和客户端工具目录。缺少动作或返回 `runner_upgrade_required` 时，请查看[版本说明](release-notes.zh-CN.md)和[故障排查](troubleshooting.zh-CN.md)；刷新客户端不能让旧 Runner 获得尚未实现的能力。
 
 ## 读取、检查与修改
 
@@ -77,13 +77,19 @@ Runner 重启后不会盲目重放排队任务，恢复中的任务可能暂时�
 
 ## 日志、输入与取消
 
-前台回执可能只含末尾输出。正数 `offset` 表示该响应省略了前面的字节，可用 `job.logs` 分页读取仍保留的内容。原样使用返回的游标；工具目录禁止时，不要把游标与新的偏移或末尾模式混用。
+前台回执可能只含末尾输出。正数 `offset` 表示该响应省略了前面的字节，可用 `job` 工具的 `logs` 动作分页读取仍保留的内容。原样使用返回的游标；工具目录禁止时，不要把游标与新的偏移或末尾模式混用。
 
 本地日志同样有上限。`output_truncated` 可能表示部分内容已丢弃，不能再通过 Runmesh 恢复。管理员可检查另行配置的应用日志，但 Runmesh 不保证主机上还有一份完整副本。
 
 `input` 必须提供 `data` 或 `close_stdin: true`；关闭标准输入表示发送输入结束信号。`cancel` 是取消请求，需要任务控制权限。输入或取消的送达错误、超时均不能证明操作没有发生，应先检查状态再决定是否重试。无法确认进程身份时，取消可能被拒绝，进程记录和并发槽位仍会保留；应由管理员检查主机，不要猜测 PID 后发送信号。
 
 云端历史是可选的近期快照，不是完整输出归档。关闭记录不会停止本地任务，读取日志也不会重新开启记录。实时输入、取消和本地日志读取需要 Runner 在线且授权有效；此前记录的云端元数据可能在离线期间仍可查看。
+
+## 保存工作区交接记录
+
+`context` 工具将你明确提交的交接记录保存在所选 Runner 上。用 `bootstrap` 查找已有记录，`read` 或 `search` 读取记录，再用 `checkpoint` 保存目标、决策、证据和后续步骤。创建检查点需要写入权限。Runmesh 不会自动记录对话或隐藏推理。
+
+Worker 和 Runner 均兼容时，`storage` 可查看本地 Context 用量，`prune` 可预览要删除的旧版本。执行删除必须提供预览返回的计划哈希和明确的 `apply: true`，每条记录的最新版本会保留。删除前请阅读 [Context 存储说明](context-storage.zh-CN.md)。已发布的 0.1.3 Runner 不支持这两个存储管理动作，仅刷新工具目录无法启用它们。
 
 ## 安全求助
 

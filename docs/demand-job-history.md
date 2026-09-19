@@ -1,6 +1,6 @@
 # Change-driven Job history
 
-Implementation baseline: `ab3ad6d66fc54792e3a4c77e4e1a298d16612358`. This describes development source, not a deployed Worker or a replacement for the immutable v0.1.3 Runner.
+Change-driven reporting uploads recent Job metadata when recorded Jobs change, then stops the history timer once those changes are acknowledged. It is implemented in the **0.1.4 candidate** and requires a compatible Worker, Runner and D1 history configuration. Updating a Worker does not add it to an installed v0.1.3 Runner.
 
 ## Separate execution, local logs and optional cloud history
 
@@ -8,13 +8,13 @@ Implementation baseline: `ab3ad6d66fc54792e3a4c77e4e1a298d16612358`. This descri
 
 With `capabilities.labels.job_reporting_protocol="2"` and the authenticated `runmesh_job_reporting:2` welcome extension, the existing D1 history path supports source filtering and change-driven uploads. The existing `job_history_protocol="1"` settings remain unchanged. No public MCP parameter grants control over recording, and no new deployment variable is required.
 
-## Trusted capture decision
+## Choose which Jobs are recorded
 
-The existing final Registry authorization can return an internal `record_history` observation for an execution request. It reuses the client record already read for that authorization; it is not a second remote lookup or an authorization cache. RunnerDO discards supplied capture/queue-grant fields, inserts the verified decision only for a negotiated peer, and binds it into the existing queue launch digest. The final local policy fence remains directly before dispatch with no new asynchronous boundary.
+In **Admin > MCP Clients > client detail > Cloud Job history**, select whether to record new Jobs. The authenticated control plane supplies this choice to a compatible Runner when it authorizes a launch. An MCP caller cannot override the recording preference by adding launch parameters.
 
-The Runner persists this optional local-only boolean with a new Job. Explicit false excludes that Job **before** sorting and limiting upload candidates, suppresses lifecycle-triggered history scheduling, and excludes its ID from the independent heartbeat's active-job list. Heartbeat timing and lease checks do not change. The flag is not sent in cloud Job metadata or added to public tool output.
+Jobs created with recording disabled are excluded from history upload candidates and the heartbeat's active-Job ID list. Their state changes do not start a history upload timer. Normal connection heartbeat timing and local Job access remain unchanged.
 
-An idempotent retry returns the original Job without enabling an originally unrecorded task. A fresh dequeue authorization may further restrict capture, never enable a false Job. Malformed explicit persisted markers are treated as false while keeping an otherwise recoverable process record. No existing record is rewritten merely for upgrading.
+A retry with the same valid request identity returns the original Job without enabling recording for it. Authorization is checked again before a queued command starts; that check may disable recording but cannot enable it for a Job created with recording disabled.
 
 The cloud remains authoritative for current preferences and the recording start window. A preference changed after launch is not synchronously pushed to every running Job: an already-recorded launch may still be sent and filtered by the cloud, and an already-admitted archive operation may complete. Re-enabling does not backfill an originally unrecorded Job. Existing archived history is not deleted by this setting.
 
@@ -37,7 +37,7 @@ Recovered recordable `unknown` processes have no live child exit callback. They 
 
 Existing limits apply: at most 500 metadata records per capture, current wire limits, bounded local retention and one captured payload per connection. This is a recent snapshot, not an exactly-once or lossless event archive. No command, stdout/stderr body, host path or queue credential is added to cloud history.
 
-## Cloud empty-update fast path
+## Empty updates and cost
 
 Registry still validates transport identity and applies current capture preferences. If every incoming Job is excluded, or the batch is empty, it returns `unchanged` before opening D1. Empty updates are not deletion requests. Cloud retention and its separately scheduled cleanup remain responsible for existing history. Core authentication reads, heartbeat handling, normal history updates and cleanup retain their costs; this is not an account-wide zero-usage claim.
 
@@ -52,10 +52,4 @@ Registry still validates transport identity and applies current capture preferen
 | Local records without the new marker | Legacy/unknown capture decision; eligible bounded metadata may still be sent, with current cloud filtering preserved |
 | Binary downgrade after new local records | Older code may ignore/drop the optional marker; preserve state backups and do not claim source suppression after an unverified downgrade |
 
-Deploy a compatible Worker only through the separately authorized production process, then explicitly upgrade using a new verified signed Runner artifact. Merely merging development source does not change the installed v0.1.3, overwrite its assets, restart the maintenance connection or alter recording settings.
-
-## Verification
-
-Tests cover source exclusion before the cap, native local execution/log access, persistence/recovery, no-backfill retries, mixed clients, queue-time restrictions, signed input binding, actual final bridge denial and policy races, capability negotiation, zero D1 access for empty eligible batches, generation-aware ACKs, capped retry timing, cached retries, reconnect cancellation, and the recovered-process exception.
-
-Loopback tests use a real Runner, subprocesses and WebSocket frames with an injected upload clock. The simulated 288 idle opportunities are not an observed production day. Source and independently installed package E2E additionally verify the administrator recording preference through the actual MCP/Worker/Runner path. Tests leave production data, service state and release assets unchanged.
+Deploy a compatible Worker, then explicitly upgrade using a verified signed Runner artifact that contains this feature. Check the negotiated behavior before relying on source-side suppression. Merging source does not upgrade the installed Runner or change recording preferences. See [Job history settings](batched-job-history.md) for intervals, retention and manual reads.

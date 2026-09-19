@@ -1,5 +1,7 @@
 # Review correctness repairs — first implementation slice
 
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+
 Baseline: `b330f1dcb4334c1d36cf7c5858adf0de692e5b97`, corresponding to the 2026-09-15 optimization review. This document records source behavior and compatibility, not a claim that every installed Runner contains it.
 
 ## R02: one error definition, explicit execution stage

@@ -1,6 +1,6 @@
 # Security model
 
-Runmesh is designed to keep execution on machines you control while limiting what each MCP client can do. For an operator-friendly explanation, read the [administrator guide](admin-guide.md) and [user guide](user-guide.md) first. This page records the detailed boundaries for security review and production acceptance.
+Runmesh executes commands on machines you control and limits access through client scopes, Runner policy and workspace permissions. Read this page when choosing permissions, protecting credentials or assessing what the host and cloud store. Setup instructions are in the [administrator guide](admin-guide.md) and [user guide](user-guide.md).
 
 ## Trust boundaries
 
@@ -20,7 +20,9 @@ Runmesh is designed to keep execution on machines you control while limiting wha
 - **Runner enrollment:** a code is single-use and expires after 30 minutes. Creating a new code for a Runner removes any still-unused prior code. It is not written into the Runner profile.
 - **Runner token:** the enrollment response returns the plaintext token once; the profile stores it locally, and RegistryDO stores a peppered HMAC verifier.
 
-Credential rotation/revocation increments credential/connection generations and closes the prior Runner socket. A revoked Runner cannot reconnect with its prior credential. Revoke retains central Runner, managed Workspace, immutable Policy, and retained Job metadata for operator review; Delete is the permanent cleanup operation and clears the Runner's policy versions, jobs, workspaces, overrides, and client selections. Neither operation kills a process already running on the local machine.
+Runner credential rotation/revocation changes its credential/connection generations and closes the prior Runner socket. A revoked Runner cannot reconnect with its prior credential. Revoke retains central Runner, managed Workspace, immutable Policy, and retained Job metadata for operator review; Delete is the permanent cleanup operation and clears the Runner's policy versions, jobs, workspaces, overrides, and client selections. Neither operation kills a process already running on the local machine.
+
+MCP credential rotation/revocation invalidates that client's old credential. Tool calls and Runner-selection updates recheck the captured credential generation. A later revocation does not roll back a mutation already admitted or terminate a running Job; cancel the Job explicitly if required.
 
 ## Browser protections and throttle
 
@@ -38,7 +40,7 @@ style-src 'unsafe-inline'; script-src 'nonce-<fresh-random-value>';
 form-action 'self'; base-uri 'none'; frame-ancestors 'none'
 ```
 
-A generic injected script tag is not assigned a nonce. Escaping remains mandatory in every HTML/attribute/script context; a nonce is defense in depth, not an XSS-proofing substitute. Moving inline styles to static assets and browser-level CSP acceptance testing remain hardening tasks.
+A generic injected script tag is not assigned a nonce. A nonce supplements output escaping; it does not make arbitrary HTML or script safe to inject. Inline styles remain allowed by this policy.
 
 ## Sticky Runner routing and shared context
 
@@ -52,13 +54,21 @@ The Worker separates offline Snapshot Authorization from live Runner Admission. 
 
 The local Runner profile contains the long-lived Runner token and current connection metadata, so it must be treated as credential material. Current central profiles contain no authoritative workspace paths; roots are delivered only in authenticated policy frames. Ordinary/user POSIX profiles use a `0700` directory and `0600` file; a dedicated system service intentionally uses the exact `0750`/`0640` shape within its root/service-group boundary so the service account can read the credential, with no group/other write bits. Windows ACLs are not inspected by the implemented `doctor` command. `status` redacts the token, and any locally retained administrative data should not be exposed.
 
-The service adapter writes only marked, content-hashed manifests and refuses to overwrite/remove an unmarked or changed file. `runmesh install` invokes the Runmesh service provisioner, which creates the dedicated Runmesh service identity and Runmesh-owned directories on Linux and macOS, and applies the implemented Local Service ACLs to Runmesh-owned install/config/state/log/profile paths on Windows. It never changes a configured Workspace's owner or mode. Operators remain responsible for granting the service identity the minimum access needed for each configured Workspace. Current profiles record an explicit execution mode and central management; incomplete profiles are rejected and must be replaced through enrollment. Linux renders `User=runmesh` and `Group=runmesh`, macOS LaunchDaemon renders `UserName=runmesh`, and Windows uses `NT AUTHORITY\LOCAL SERVICE` at least privilege for `dedicated_user`. The authenticated dashboard defaults new machines to `dedicated_user`. Choosing the advanced `privileged_host` mode explicitly presents the warning/confirmation; that mode runs as root/SYSTEM and requires `--confirm-privileged-host`. `doctor --json` marks profile permission and installed/active service failures required, marks missing Python/Docker optional warnings, and does not inspect Windows ACLs after provisioning. Hosted bootstrap is a fixed signed-release contract and remains disabled by default unless the exact release is published, independently verified, a valid canonical external HTTPS origin is configured, and the exact release acknowledgement is enabled in the Worker deployment. Its one-command path treats the Worker HTTPS script as bootstrap root and its embedded Ed25519 key, not a downloaded keyring, as the release trust root; high-assurance operators use the independent offline portable-artifact route. When the gate is unavailable, use the manually verified portable artifact and CLI enrollment/install flow.
+The service adapter writes marked, content-hashed manifests and refuses to overwrite/remove an unmarked or changed file. `runmesh install` creates the dedicated Runmesh service identity and Runmesh-owned directories on Linux and macOS, and applies Local Service ACLs to Runmesh-owned install/config/state/log/profile paths on Windows. It does not change a configured Workspace's owner or mode. Grant the service identity only the host access needed for each configured Workspace.
 
-Hosted bootstrap has a conjunctive deployment gate: a valid canonical external HTTPS `RUNMESH_PUBLIC_ORIGIN` and the exact release acknowledgement are both required after independent release verification. Removing the acknowledgement closes future hosted-bootstrap rendering only; already downloaded scripts and outstanding codes may still be usable, and existing Runner credentials are not revoked. Review cached scripts, regenerate/revoke enrollment codes, and explicitly rotate/revoke Runner credentials when an immediate shutdown is required.
+Current profiles record an explicit execution mode and central management; incomplete profiles require enrollment. In `dedicated_user` mode, Linux uses `User=runmesh` and `Group=runmesh`, macOS uses `UserName=runmesh`, and Windows uses `NT AUTHORITY\LOCAL SERVICE`. The dashboard defaults new machines to this mode. The advanced `privileged_host` mode runs as root/SYSTEM and requires explicit confirmation, including `--confirm-privileged-host` in the CLI.
+
+Use `doctor --json` to check required profile-permission and installed/active-service conditions. Missing Python/Docker are optional warnings. The command does not inspect Windows ACLs after provisioning; inspect them separately when diagnosing access problems.
+
+Hosted installation requires an available signed release and a valid canonical external HTTPS origin. Production uses the reviewed source release state; **0.1.4 is currently a candidate, so its stable distribution gate is closed**. Development can discover verified signed dev prereleases and does not fall back to stable. The HTTPS origin can be derived from a validated matching request URL and Host; `RUNMESH_PUBLIC_ORIGIN` is an optional override, not a required variable for ordinary Cloudflare routing. See [deployment](deployment.md) for configuration and release-state details.
+
+The one-command installer trusts the Worker-served HTTPS script and its embedded Ed25519 verification key. If you require an independent verification route, use the [portable artifact installation procedure](portable-runner-installation.md) with a published artifact that you have verified separately. A closed gate does not justify installing an unsigned candidate as a stable release.
+
+An explicit empty `RUNMESH_SIGNED_RELEASE_AVAILABLE` override closes future hosted-bootstrap rendering. Already downloaded scripts and outstanding enrollment codes may still be usable, and existing Runner credentials are not revoked. For an immediate credential shutdown, review downloaded scripts, invalidate enrollment codes, and explicitly rotate or revoke the affected Runner credential.
 
 ## Workspace and execution boundary
 
-The MCP client sends a selected Runner plus workspace ID and relative path. `root_path` is private policy data delivered only through an authenticated Runner-only Policy frame; it is not returned to MCP, Workspace metadata, ordinary logs, or public APIs. The Runner rejects absolute/UNC/device paths, NULs, traversal, symlink/junction ancestry/escapes, write-through symlinks, and readonly writes. Patch installation uses bounded baseline validation, staging, atomic per-file replacement, and protected rollback.
+The MCP client first selects a Runner, then supplies a workspace ID and relative paths to workspace operations. `root_path` is private policy data delivered through an authenticated Runner-only Policy frame and is omitted from public workspace and protocol metadata. This does not redact absolute paths that occur inside user files, command output or logs requested by an authorized client. The Runner rejects absolute/UNC/device paths, NULs, traversal, symlink/junction ancestry/escapes, write-through symlinks, and readonly writes in its file tools. Patch installation uses bounded baseline validation, staging, atomic per-file replacement, and checked rollback; partial or uncertain failures must be inspected before retrying.
 
 Central management rejects local workspace add/remove. The host shell is not a sandbox.
 
@@ -70,11 +80,11 @@ Search charges actual bytes read even when binary detection or UTF-8 decoding la
 
 The new-client form defaults to `coding:read` only. The new-Runner form defaults to `dedicated_user`; `privileged_host` remains an explicit advanced choice with confirmation. These defaults do not rewrite existing clients, Runner profiles, or installed service identities.
 
-See [security remediation and rollout notes](security-remediation.md) for compatibility requirements and remaining production acceptance work.
+See [permission diagnosis](permission-model.md) for current access checks and [upgrading](upgrading.md) for rollout requirements.
 
 ## Data minimization
 
-Workspace roots are absent from protocol metadata. MCP errors expose allowlisted stable codes and recovery hints, not Runner absolute paths. Files, Git output, and logs are bounded/paginated. Complete filesystem data and logs remain on the Runner. RegistryDO stores bounded job metadata to support offline listing, not a complete copy of Runner state.
+Workspace roots are absent from public protocol metadata. MCP errors expose allowlisted stable codes and recovery hints rather than raw Runner exception details. Requested file content, Git output and log pages pass through the Worker to the authorized client; Runmesh does not archive their bodies in cloud history. Local files and complete logs remain on the Runner. Optional cloud Job history stores bounded metadata in D1 by default in production, or RegistryDO SQLite in compatibility mode. It is not a complete copy of Runner state.
 
 ## Durable MCP audit contract
 
@@ -82,11 +92,12 @@ Only call, method, workspace/job identifiers, status/error code, timing and
 connection generations are persisted. Requested tool output passes through the
 Worker to its authenticated client, not into audit storage. File paths, file
 contents, commands, search text, logs, patches, diffs and job input are excluded.
-Metadata is limited to 1,000 records per Runner and seven days. The dev.4
-upgrade purges legacy MCP audit rows once while preserving administrator,
-session, Runner, policy and Job data. Read-side projection also strips legacy
-payloads. See [rollout notes](security-remediation.md) for quota failures,
-backup/PITR copies and confirming cleanup after deployment.
+Each audit store has a 1,000-record cap per Runner and excludes entries older
+than seven days on reads. Cleanup is bounded, so physical removal can lag;
+backups and point-in-time recovery copies have separate lifetimes. During a
+backend transition, legacy SQLite and D1 history can retain their own windows.
+Read-side projection strips legacy payload fields. See [history isolation](quota-resilience.md)
+for quota failures, retention and backend changes.
 
 Registry settings outages return 503 before reserving a source password attempt;
 they do not count as wrong passwords. Actual KDF work retains the shared CPU

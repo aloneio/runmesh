@@ -44,9 +44,9 @@ Treat this boundary as a new installation, not a rolling schema upgrade. Keep th
 
 If access must be withdrawn, revoke or rotate Runner credentials and MCP client URLs, regenerate enrollment codes, stop host services, and inspect already-running local jobs separately. Removing a hosted-bootstrap acknowledgement only prevents future installer rendering; it does not revoke credentials or terminate host processes.
 
-## Release gates
+## Release gates for current installations
 
-Hosted bootstrap is available only when the immutable release has been independently verified, the Worker has the exact release acknowledgement, and `RUNMESH_PUBLIC_ORIGIN` is a canonical external HTTPS origin. Otherwise use the portable artifact, verify its signature and checksums from an independent trust path, then run `runmesh enroll --server ... --code-stdin` followed by `runmesh install`.
+For current installation and release requirements, use [portable installation](portable-runner-installation.md) and [release status](release-readiness.md). A normal HTTPS deployment derives its origin from the request URL and matching Host; `RUNMESH_PUBLIC_ORIGIN` is an optional reverse-proxy override. Stable distribution requires an activated verified release record, and development uses a separate prerelease channel. The historical transition steps above do not enable either channel.
 
 Before rollout, run the repository's version, format, license, architecture, typecheck, unit-test, package, and Worker dry-run checks. Local checks do not prove provider quotas, edge-log redaction, native service lifecycle behavior, or external MCP-client acceptance; perform those as separate deployment acceptance tests.
 

@@ -24,13 +24,13 @@
 
 ## 版本与功能
 
-当前分支的文档可能描述尚未进入正式安装包的变化；版本说明会明确标注“尚未发布”。发布安装包、部署 Worker、升级 Runner 和刷新客户端缓存的工具定义，是四个独立步骤。使用新功能前，应核对整条链路。
+当前源码文档描述 **0.1.4 候选版，尚未发布**为正式安装包；最新已发布正式版为 **0.1.3**。发布安装包、部署 Worker、升级 Runner 和刷新客户端缓存的工具定义，是四个独立步骤。使用新功能前，应核对整条链路。
 
 [发行状态](release-readiness.md)说明经过审核的正式分发记录，不代表你的实例当前健康。[开发预发布](dev-runner-prereleases.zh-CN.md)属于单独的测试渠道，不会自动升级生产环境。
 
 ## 高级参考与维护者资料
 
-集成开发可查看 [MCP 调用约定](mcp-agent-call-contract.md)、[工具示例](tool-examples.md)、[工具目录刷新](mcp-connector-refresh.md)和[能力契约](capability-contracts.zh-CN.md)及[工作区 Context 存储](context-storage.zh-CN.md)。维护者可查看[架构](architecture.md)、[验证流程](verification.zh-CN.md)和 [main 晋级策略](main-promotion-policy.zh-CN.md)。
+集成开发可查看 [MCP 调用约定](mcp-agent-call-contract.md)、[工具示例](tool-examples.md)、[工具目录刷新](mcp-connector-refresh.md)、[能力契约](capability-contracts.zh-CN.md)和[工作区 Context 存储](context-storage.zh-CN.md)。维护者可查看[架构](architecture.md)、[验证流程](verification.zh-CN.md)和 [main 晋级策略](main-promotion-policy.zh-CN.md)。
 
 [历史版本说明](maintainers/release-history.md)和[历史审计证据](maintainers/release-evidence.md)仅用于追溯，可能记录已退役的预览版、旧部署状态或未完成验证，不是当前操作指南。[旧版本迁移](migration.md)只适用于其中明确指出的数据边界，不能套用到普通 v2 升级。
 
