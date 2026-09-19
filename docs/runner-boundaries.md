@@ -1,39 +1,39 @@
-# Job and Context recovery boundaries
+# Recover Job and Context operations
 
-Use the original Job or Context identifiers to inspect an interrupted operation before attempting it again. A transport timeout does not prove that nothing happened on the Runner. This page describes the current candidate behavior; use the capabilities of your installed Runner when diagnosing an older release.
+After an interruption, use the original Job or Context identifiers to inspect what happened. A transport timeout can occur after execution has started. This page describes the current candidate behavior; use the installed Runner's capabilities when diagnosing an older release.
 
-## Starting and cancelling Jobs
+## Check a Job outcome
 
-The Runner checks current workspace policy before starting a process. Queued Jobs also need fresh control-plane authorization before launch. Cancellation while a Job is waiting prevents it from starting; cancellation of a running Job attempts to terminate the observed process identity.
+The Runner checks current workspace policy before creating a process. Queued Jobs also need fresh control-plane authorization. Cancelling a waiting Job prevents its launch; cancelling a running Job attempts to terminate the verified process identity.
 
-A cancellation request is not proof that the process stopped. If termination could not be delivered or the process identity is uncertain, inspect the Job again. An already committed file change or an external effect of the command is not undone by cancellation.
+Check the returned Job state to confirm cancellation. When identity or signal delivery is uncertain, query the Job again. File changes and external effects produced before cancellation remain in place and may need separate recovery.
 
-The Runner saves terminal Job metadata before publishing a final result. A nonzero exit retains its exit code. If terminal metadata cannot be saved, the result remains uncertain until recovery can establish and persist the outcome; it is not reported as a successful exit. A Runner restart cannot reconstruct an exit code it never observed. Recovered processes may therefore remain `unknown`, and unstarted queued Jobs are marked interrupted rather than automatically launched.
+Final publication follows durable terminal metadata. A nonzero exit retains its exit code. A persistence failure leaves the result uncertain until recovery can establish and save the outcome. After a Runner restart, live recovered processes may be `unknown`, and unstarted queued Jobs are marked interrupted. Unobserved exit codes remain unavailable.
 
-Persisting a receipt and starting an operating-system process are separate operations. For an uncertain launch result, query the original `job_id` and `workspace_id`; do not launch a second command merely to obtain a receipt. See [MCP call recovery](mcp-agent-call-contract.md).
+An uncertain launch should be followed with the original `job_id` and `workspace_id`. **Do not launch another command simply to obtain a receipt.** See [MCP call recovery](mcp-agent-call-contract.md).
 
-## Reading logs
+## Retrieve logs
 
-Log queries read bounded pages and do not start, cancel or modify the Job. Empty output differs from unavailable output. `log_unavailable` can mean the file was not created, was removed, or cannot be safely read; it does not prove that the Job never ran.
+Log queries read bounded pages from an existing Job. `log_unavailable` can mean its log is awaiting creation, has been removed or cannot be safely read. An empty regular file produces a successful empty page.
 
-If inline stdout/stderr retrieval fails after a command ends, preserve its actual Job identity, status and exit code. Retry only the log query. See [byte pagination](byte-pagination.md) for incomplete UTF-8 tails and [bound cursors](bound-cursors.md) for snapshot/append consistency.
+If inline log retrieval fails after a command ends, keep its actual identity, status and exit code, then retry only the log query. See [byte pagination](byte-pagination.md) and [snapshot/append cursors](bound-cursors.md).
 
-## Context checkpoints and recovery
+## Recover a Context checkpoint
 
-A checkpoint writes an intent, an immutable revision, the derived index, and then clears its intent. An interruption can leave a pending checkpoint. Ordinary reads do not silently repair or write missing state. Use the explicit `context` rebuild action when recovery is required; it validates existing records rather than rewriting their contents.
+A checkpoint saves an intent, an immutable revision and a derived index, then clears the intent. An interruption can leave a pending checkpoint. Use the explicit `context` rebuild action to validate existing records and reconstruct the index; ordinary reads leave this recovery decision to you.
 
-Rebuild is bounded and may refuse corrupt, unsafe or oversized state. Preserve that state for operator inspection instead of deleting unknown files. Rebuild cannot restore revisions already removed by retention.
+Rebuild can reject corrupt, unsafe or oversized state. Preserve that state for operator inspection. Recovering deleted revisions requires a separate backup; index rebuild works only with revisions still present.
 
-## Removing old Context revisions
+## Resume retention after partial deletion
 
-Prune requires a preview followed by an explicit apply using the returned plan hash. The Runner checks the selected revisions, latest retained revisions, file identities and current permissions before deletion. A plan hash does not replace authorization.
+Prune requires a preview followed by explicit apply with the returned plan hash. Before each deletion, the Runner checks authorization, file identities, selected revisions and the protected latest revision.
 
-Deletion proceeds one revision at a time. If it stops partway through, already deleted revisions are not rolled back. On `context_prune_partial`, inspect storage and request a fresh preview before another apply. The latest revision and index are retained. Removal is ordinary file deletion; it does not erase backups or securely wipe storage media. See [Context storage and retention](context-storage.md).
+Deletion proceeds one revision at a time. On `context_prune_partial`, inspect storage and create a fresh preview; earlier deletions remain effective. The latest revision and index are retained. Manage backups and secure-erasure requirements separately from ordinary file deletion. See [Context storage and retention](context-storage.md).
 
-## Host and storage assumptions
+## Prepare the host and backups
 
-Use one Runner owner for a state directory and keep that directory private. In-process serialization coordinates operations within that Runner; it is not a lock shared with independent processes or protection against a hostile host administrator. Workspace shell execution uses the Runner's OS identity and is not an operating-system sandbox.
+Keep each private state directory under one Runner owner. In-process coordination assumes independent programs and host administrators leave that state untouched. Shell commands use the Runner's OS identity; choose host permissions and VM/container isolation appropriate to those commands.
 
-Job metadata and logs have count/byte limits, and optional day-based retention can remove terminal data. Cloud history is a bounded recent snapshot, not a complete backup. Keep independent backups for data you must preserve. See [Job history and retention](batched-job-history.md) and the [security model](security.md).
+Job metadata/logs have count and byte limits, and optional day-based retention can remove terminal data. Cloud history is a bounded recent snapshot. Keep independent backups for anything you must preserve. See [history settings](batched-job-history.md) and the [security model](security.md).
 
-For source-level module responsibilities, see [modular architecture](architecture-remediation.md).
+Source-level module responsibilities are described in [modular architecture](architecture-remediation.md).

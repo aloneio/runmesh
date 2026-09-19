@@ -4,7 +4,7 @@ This baseline defines the measurements used before enabling a hosted Worker depl
 
 ## Measurements
 
-Record a UTC window and collect the following counters from Cloudflare analytics and your host monitoring where available. Runmesh does not provide a single built-in report for all of these measurements:
+Record a UTC window and combine available counters from Cloudflare analytics and host monitoring:
 
 - Worker requests, Durable Object requests, and WebSocket connection minutes.
 - Durable Object storage reads/writes and SQLite row counts.
@@ -27,4 +27,4 @@ Use p50, p95, and maximum values. A retry is counted separately from the origina
 
 ## Operator acceptance policy
 
-Before a hosted rollout, collect a seven-day development window and set a quota threshold for each provider resource you rely on. Record unavailable counters as unknown. Compare subsequent windows using the same measurement definitions and record each deployment's SHA. This is an operator review: source CI and the deployment wrapper do not automatically collect or enforce this seven-day usage assessment.
+Before a hosted rollout, collect a seven-day development window and set a quota threshold for each provider resource you rely on. Record unavailable counters as unknown. Compare subsequent windows using the same measurement definitions and record each deployment's SHA. Assign an operator to collect the exports and review the thresholds alongside the CI and deployment results.

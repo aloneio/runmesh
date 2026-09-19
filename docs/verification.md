@@ -9,7 +9,7 @@ Use this guide when validating a source change or preparing an installation for 
 | Layer | Command / ownership | What it proves when executed successfully |
 | --- | --- | --- |
 | Shared protocol | `npm run test --workspace=@aloneio/runmesh-protocol` | Schema and deterministic protocol behavior in the tested runtime |
-| Pure-domain rules | `npm run test:domain` | Public queue, authorization projection and retention rules without constructing a Worker, process manager or disk adapter |
+| Pure-domain rules | `npm run test:domain` | Isolated queue, authorization projection and retention rules through public APIs |
 | Adapter / documentation contracts | `npm run test:contracts` | Schema examples and actual local file-adapter behavior using isolated temporary data |
 | Runner unit and integration | `npm run test --workspace=@aloneio/runmesh-runner` | Local permissions, filesystem, processes and recovery on the actual test platform |
 | Cloudflare integration | `npm run test --workspace=@aloneio/runmesh-worker` | Local workerd/Miniflare behavior and SQLite/D1 fixtures |
@@ -19,34 +19,34 @@ Use this guide when validating a source change or preparing an installation for 
 | Browser flows | `npm run browser:install`, then `npm run test:browser` | Browser behavior against a local Worker |
 | Tracked security regressions | `npm run test:security` on Linux with a clean checkout | Regression results and release-readiness evidence for the checked-out candidate |
 
-`npm run test:unit` combines domain, contract, workspace and selected presentation tests; it includes both unit and integration tests. `npm test` adds source E2E, but does not replace the full CI workflow. Local Worker and browser tests do not check a deployed Cloudflare account.
+`npm run test:unit` combines domain, contract, workspace and selected presentation tests. `npm test` adds source E2E. The complete release CI also runs the package, browser, platform, tooling and security checks. Worker and browser test commands use local test environments; deployed-instance checks follow the [upgrade guide](upgrading.md).
 
-The candidate-bound `test:security` command rejects non-Linux hosts and uncommitted source changes. While developing on Windows/macOS or with local edits, run the relevant individual regression suites; obtain release evidence from the clean Linux candidate run.
+Run candidate-bound `test:security` on Linux from a clean checkout. For development on Windows/macOS or with local edits, use the relevant individual regression suites, then collect release evidence from the clean Linux candidate run.
 
 When adding a test file, assign it one owner in `test/verification-plan.json`. Run `npm run check:verification` to detect missing or duplicate ownership and confirm that root Node tests appear in executable commands.
 
-Keep domain tests independent of filesystem, process, Cloudflare and networking adapters, and use public APIs instead of private-state casts. The source import check permits deterministic `node:crypto`. It checks source dependencies; it does not sandbox code or audit third-party package internals.
+Exercise domain rules through public APIs and keep adapter integration in its dedicated suites. The [source dependency checks](architecture-gates.md) define the allowed imports, including deterministic `node:crypto`.
 
 ## Verify the installed package
 
-The Linux verification jobs on GitHub and GitLab execute `test:package:e2e` after source E2E. The command packs the current Runner into a new private directory, requires exactly one tarball, hashes it and invokes `test-packed-runner.mjs`. Installation uses `--offline --ignore-scripts` and an empty dependency cache. The installed CLI runs against a temporary local Worker using synthetic enrollment data; it does not install a host service or use a production database.
+The Linux verification jobs on GitHub and GitLab execute `test:package:e2e` after source E2E. The command packs the current Runner into a new private directory, requires exactly one tarball, hashes it and invokes `test-packed-runner.mjs`. Installation uses `--offline --ignore-scripts` and an empty dependency cache. The installed CLI runs against a temporary local Worker with isolated state and synthetic enrollment data.
 
-The wrapper cross-checks available CI SHA declarations with the checkout, confirms source identity and archive digest after execution, and requires both successful process termination and a consistent machine test report with at least one passed test. A fake exit zero, empty report, failed suite, unfinished test or inconsistent counter cannot become passing evidence. `pending`/skipped and todo counts remain separate. A failed rerun replaces a previous successful report.
+A passing run requires matching CI/checkout source identity, an unchanged archive digest, successful process completion and a consistent report with at least one passed test. Reports distinguish passed, failed, skipped and todo results. Each run replaces the previous report, including when it fails.
 
-The bounded shareable result is `.verification/package-e2e.json` and a JSON line in the CI log. It includes source commit/tree and clean/dirty state, artifact SHA256 and bytes, actual platform/architecture/Node, elapsed time and test counters. It excludes test names, assertion bodies, stack traces, email addresses and absolute paths. Ordinary detailed test logs remain separate. Reports are ignored by Git; they are not uploaded to a Worker or written per production request.
+The shareable summary is written to `.verification/package-e2e.json` and a JSON line in the CI log. It contains the commit/tree, clean/dirty state, artifact SHA256 and size, platform/architecture/Node, elapsed time and test counters. Detailed test logs are separate; review those for private data before sharing. Generated reports are Git-ignored local artifacts.
 
-A local package is explicitly `signed: false`, `published: false`. Its evidence is self-reported, not a cryptographic or reproducible-build attestation. A dirty checkout is labelled dirty, never advertised as that commit's clean source. Source identity does not cover ignored inputs or dependency integrity. Do not run concurrent builds in the same worktree.
+The local report describes a test build with `signed: false`, `published: false` and its observed clean/dirty state. Release preparation adds independent signature and asset verification. Track dependencies and generated inputs with their build records, and run one build at a time in each checkout.
 
 ## Check documentation and examples
 
-`docs/current-facts.md` is generated from the current package, protocol, actual MCP catalog, resource-binding configuration and reviewed release-state record. `docs/tool-examples.md` comes from `docs/tool-examples.json`; every input is checked against its real Zod schema, including cross-field constraints. Every tool and mapped action needs a valid example; negative examples must remain rejected. Validation never invokes the tool handler. Synthetic commands, IDs and hashes must not be treated as permission or deployment instructions.
+`docs/current-facts.md` is generated from the package, protocol, MCP catalog, resource bindings and reviewed release state. `docs/tool-examples.md` comes from `docs/tool-examples.json`. The documentation check validates each example against its real Zod schema, including cross-field constraints, and checks expected rejection cases. Examples use synthetic commands, IDs and hashes; substitute values for your authorized environment when following a guide.
 
-Run `npm run generate:facts` only after an intentional source/example change, then review the generated diff. `npm run check:docs` checks rather than rewrites those documents. Stale generated examples and facts fail the ordinary CI gate. This registry covers its documented examples, not every free-form JSON block in every historical document.
+After changing a source contract or example, run `npm run generate:facts` and review the diff. Run `npm run check:docs` to validate the generated documents and registered examples. Review prose and any examples outside that registry against the relevant implementation as part of the change.
 
 ## Record release and deployment results separately
 
-GitHub native jobs execute the domain/contract lanes, Runner tests and applicable tooling on Linux, macOS and Windows. Full installed-package transport is required in the Linux verification jobs on both hosts; a successful Linux result does not prove native package E2E on other systems. Existing platform skips are reported, not relabelled as passes.
+GitHub native jobs run domain/contract tests, Runner tests and applicable tooling on Linux, macOS and Windows. The full installed-package transport suite runs in the Linux verification jobs on GitHub and GitLab. Record platform-specific results and skips with their actual execution environment.
 
-Signed-release verification, deployed Worker/Runner observation, account-wide quota/hibernation acceptance and actual host-catalog refresh are separate checks. The local package report records all four as `not_run`. A release-state file is a reviewed source record, not a fresh network verification of the assets. Production observations need their own time, exact version/commit and external evidence. Historical CI or a different platform must never fill those gaps.
+Collect separate records for signed release assets, deployed Worker/Runner behavior, account usage and MCP client catalog refresh. The local package report leaves these external checks as `not_run`. Attach each completed observation with its timestamp, exact version or commit, environment and result.
 
 For release decisions, retain the exact commit, CI run, platform, skips and result for each required check. Use [release status](release-readiness.md) for publication requirements and [build provenance](build-provenance.md) to compare a deployed Worker with its source.

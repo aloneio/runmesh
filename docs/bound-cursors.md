@@ -1,58 +1,60 @@
-# Opt-in content snapshots and append-log cursors
+# Use file snapshots and append-log cursors
 
-Choose snapshot mode when successive file pages must come from one captured buffer, or append mode when following a Job log across explicit reads. These optional modes are implemented in the **0.1.4 candidate** and require a compatible Worker and Runner. The default numeric-cursor mode remains available.
+Choose `consistency:"snapshot"` to read file pages from one captured buffer, or `consistency:"append"` to follow a Job log across explicit reads. These modes are implemented in the **0.1.4 candidate** and require a compatible Worker and Runner. Ordinary numeric-cursor reads remain the default.
 
-## File snapshots
-
-Start an authorized file read with `consistency: "snapshot"`. Files up to 1 MiB are read once into a bounded, process-local immutable buffer. Its SHA-256 is returned as `snapshot_id`. Every continuation uses the same bytes, not a new page read from a potentially different version. Pass the returned opaque `next_cursor` to continue; do not replace it with a numeric offset.
+## Read a file snapshot
 
 ```json
 {"workspace_id":"workspace","path":"src/example.ts","consistency":"snapshot","limit":4096}
 ```
 
-The cursor binds the local reader instance, workspace, resolved path, workspace-root identity, policy generation and snapshot entry. Each continuation still resolves and opens the current path, checks OS access and path policy, and compares file identity, size and change metadata. Observable replacement or modification fails with `file_changed`. The cached buffer is not an authorization grant. Revocation still blocks reads.
+The Runner captures a file of up to **1 MiB** into an immutable process-local buffer and returns its SHA-256 as `snapshot_id`. Continue with the opaque `next_cursor` exactly as returned. Successful pages use that same buffer.
 
-Capture is not an operating-system atomic snapshot: an external writer can race a capture, and metadata cannot attest to every action of a privileged host process. The content hash identifies exactly the captured bytes; successfully continued pages remain from that one buffer. It is not a signed build or a guarantee about the current live file after the response.
+Every continuation checks current permission, workspace/root identity, the resolved path, OS access and the file's identity, size and change metadata. A detected modification or replacement returns `file_changed`. The cursor also binds the reader instance and policy generation.
 
-Files larger than 1 MiB fail with `snapshot_too_large` before content capture. The caller can deliberately start fresh in `live` mode, which retains the existing bounded page reads but does not promise cross-page consistency. There is no automatic downgrade.
+`snapshot_id` identifies the captured bytes. An external writer can race the initial capture because filesystem reads are not an atomic OS snapshot. Protect the host and source file when stronger guarantees are required. Files larger than 1 MiB return `snapshot_too_large`; deliberately start a new `live` read if ordinary page consistency is sufficient.
 
-## Append-only logs
-
-Use `job action=logs` with `consistency: "append"`. The opaque log cursor binds the Runner-local Job manager, Job, workspace, stream, current policy generation and a file-generation observation. Normal append does not invalidate it. The returned `snapshot_id` is an opaque generation identifier, **not a full-log content hash**.
+## Follow an append-only log
 
 ```json
 {"action":"logs","workspace_id":"workspace","job_id":"job-example","stream":"stdout","consistency":"append","limit":4096}
 ```
 
-Generation checks cover file identity replacement, observed shrinking, same-size changed metadata, and SHA-256 anchors of the first 256 bytes and up to 256 bytes at the previously observed boundary. These anchors also detect common copy-truncate-and-regrow cases without hashing all prior output on every read. Concurrent reads keep a monotonic successful size observation.
+The cursor binds the Runner-local Job manager, Job, workspace, stream, policy generation and observed file generation. Normal append remains valid. Here `snapshot_id` is a generation identifier, rather than a hash of the entire log.
 
-**This assumes normal Runner append-only log writing.** A privileged/external writer can alter unsampled interior bytes while preserving the checked boundaries and growing the same inode. A truncation and regrowth that restores every checked byte before any observation cannot always be distinguished either. Use host access controls to protect logs; these cursors are not tamper attestation and do not start a watcher or periodic scan.
+Checks cover file replacement, observed shrinking, same-size metadata changes, and SHA-256 anchors of the first 256 bytes and up to 256 bytes at the previous observed boundary. This detects ordinary rotation and common copy-truncate-and-regrow behavior with bounded reads.
 
-At the observed end, `next_cursor` is null. `resume_cursor` retains the generation and byte position for a later **explicit** refresh. A final incomplete UTF-8 character keeps its initial byte offset, so appending its missing bytes can complete it without dropping data. Expiry or rotation is an error, not an empty log; it never requires repeating the command that produced the Job.
+Use this mode with Runner-managed append-only logs. External writers can modify unsampled interior bytes or restore checked bytes between observations; host access controls are required to protect against such tampering.
 
-## Version-2 page contract and compatibility
+At the observed end, `next_cursor` is null and `resume_cursor` preserves the generation and position for a later explicit refresh. An incomplete UTF-8 character retains its starting offset so later appended bytes can complete it.
 
-Bound results use `page_protocol: 2`, `consistency`, non-null `snapshot_id`, `resume_cursor` and `cursor_expires_at_ms`, alongside the existing page state and byte counts. The shared schema validates syntax; the Worker also checks cross-field consistency, resource echoes and continuation identity. It projects only known fields.
+## Continue or recover a read
 
-| Combination | Behavior |
+Bound results use `page_protocol:2`, `consistency`, `snapshot_id`, `resume_cursor` and `cursor_expires_at_ms`, alongside byte counts and page state. The Worker validates these fields and their resource bindings.
+
+Use each cursor for its original resource and consistency mode. Bound continuations exclude explicit `offset`, `tail:true` and `consistency:live`. Start a new snapshot/append read with no cursor, then use its returned opaque cursor.
+
+| Result | Next step |
 | --- | --- |
-| Ordinary read, no new options | Legacy numeric cursors and protocol 1 remain unchanged |
-| New Worker, old Runner, explicit bound request | Reject missing bound-page evidence with `runner_upgrade_required`; never accept live output as a snapshot |
-| Old Worker, new bound input | Old strict input schema may reject it; upgrade the compatible Worker first |
-| New Worker and new Runner | Opt-in snapshot/append modes, without an extra negotiation RPC |
+| `cursor_expired` | Start a fresh read; the entry expired, was evicted or belonged to a previous Runner process |
+| `cursor_mismatch` | Check the resource, stream, workspace and policy; create a new read with matching parameters |
+| `file_changed` or log rotation | Start a fresh read of the current source |
+| `runner_upgrade_required` | Install a compatible verified Runner release; the reply lacked the requested bound-page evidence |
 
-Bound file and log cursors cannot be interchanged. A bound cursor cannot be combined with `offset`, `tail=true` or `consistency=live`; new bound reads cannot start from a legacy numeric cursor. A valid-looking but expired, evicted or prior-process cursor returns `cursor_expired`. Wrong resource/policy or inconsistent peer output returns `cursor_mismatch`. Neither is an authentication failure.
+These failures concern reading an existing resource. For Job logs, retain the original Job ID; recovering a cursor does not require re-executing its command.
 
-## Resource and privacy budgets
+## Resource limits
 
-File cache: at most 16 entries and 8 MiB of retained content per process. Initial capture has at most four concurrent buffers of at most 1 MiB, 64 read attempts, and a two-second deadline checked between local I/O completions. This is not a hard timeout of an individual OS syscall. Objects, page serialization and in-flight buffers use additional bounded memory; 8 MiB is not the entire process RSS.
+| Resource | Limit |
+| --- | --- |
+| File cache | 16 entries and 8 MiB retained content per process |
+| Initial captures | Four concurrent buffers, each at most 1 MiB; 64 reads and a two-second deadline checked between I/O completions |
+| Log cache | 256 entries and 256 KiB accounted metadata, with no additional stored log bodies |
+| Extra log checks | At most 2 KiB anchor reads per continuation, plus the existing page and UTF-8 probe |
+| Cursor lifetime | Five minutes from creation; access keeps the original expiry |
 
-Log cache: at most 256 entries and 256 KiB of accounted metadata (including scope strings), without stored log bodies. A bound continuation adds at most 2 KiB of anchor reads to its requested page plus the existing UTF-8 boundary probe. No whole-log scan is introduced.
+The capture deadline is cooperative: an individual OS call may take longer. In-flight buffers, objects and serialization use memory in addition to the retained-content budget. Caches clean up lazily on access and are discarded on Runner exit; expired entries can remain allocated until cleanup while staying within the cache bounds.
 
-Both caches expire five minutes after creation; hits do not extend the lifetime. Eviction and expiry are checked lazily on cache access, not by timers. Expired buffers may remain allocated until a later access or process exit, but cannot grow beyond the cache bounds. Runner restart discards all entries. No persistent cursor key, secret, database table, runtime variable, log upload, subscription or background refresh is added.
+Page metadata counts toward the response budget. File reads retain metadata auditing; Job recording preferences apply to their optional history and `exec.*`/`job.*` audit entries. See [history settings](batched-job-history.md).
 
-Files and log pages retain existing transport budgets. Cursor metadata counts toward the response size. File reads retain metadata auditing; the Job no-record preference continues to suppress that client's optional Job history and `exec.*`/`job.*` audit entries. Binding a cursor adds no separate audit entry or RPC. Authorization and transport requests still consume resources.
-
-## Upgrading
-
-Deploy a compatible Worker before installing a verified Runner release containing these modes. Refresh your MCP connector if its cached input schema rejects `consistency`. Updating the Worker or refreshing a connector does not upgrade the installed Runner. See [capability diagnostics](capability-contracts.md).
+Deploy a compatible Worker, install the verified Runner release, then refresh the affected MCP connector if its input schema is stale. See [capability diagnostics](capability-contracts.md).

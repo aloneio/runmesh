@@ -1,22 +1,24 @@
 # Handle MCP authorization errors
 
-Runmesh checks the current MCP credential and scopes before each tool invocation. A URL that worked earlier can stop authorizing an operation after rotation, revocation or a permission change. Read the returned error code and `operation_state` before deciding whether to retry.
+Runmesh checks the current MCP credential and scopes before every tool invocation. Rotation, revocation or a permission change can alter what an existing connection is allowed to do. Use the returned `code` together with `operation_state` to choose the recovery step.
 
-The first three rows below describe the check **before tool invocation**. The same error code elsewhere in the request path may have an unknown outcome. Always use the actual returned `operation_state`; the code alone is not permission to replay an operation.
+## Choose the next action
 
-| Result | Meaning | What to do |
+The first three rows describe checks before tool invocation. The same code at another point in the request can carry a different operation state.
+
+| Result | Meaning | Next action |
 | --- | --- | --- |
-| `registry_unavailable`, `operation_state=not_started` | The current authorization check could not complete | Check control-plane availability. When it recovers, use the existing valid credential; this error alone does not require re-enrollment. |
-| `authorization_response_invalid`, `operation_state=not_started` | The authorization service returned an invalid result | Ask the administrator to investigate the control plane. No tool was dispatched by this failed check. |
-| `permission_denied` | The credential or its current authority no longer permits this request | Check the active credential and intended permissions with the administrator. |
-| `internal_error`, unknown operation state | The tool was invoked but its outcome could not be confirmed | Inspect the existing Job or change receipt before taking further action. |
+| `registry_unavailable`, `operation_state=not_started` | Current authorization could not complete | Check control-plane availability; resume with the existing valid credential after recovery. |
+| `authorization_response_invalid`, `operation_state=not_started` | Authorization returned an invalid result before dispatch | Ask the administrator to investigate the control plane. |
+| `permission_denied` | The credential or its current authority rejects this request | Check the active credential and intended permissions with the administrator. |
+| `internal_error`, unknown operation state | A tool was invoked but its outcome remains unconfirmed | Inspect the original Job or change receipt before proceeding. |
 
-Read-only scopes cannot invoke writes, shell, input or cancellation. Changing the client cache or reconnecting cannot grant these permissions. See the [permission model](permission-model.md) for the client, Runner and workspace checks.
+Writes require `coding:write`; shell, input and cancellation require `coding:exec`, together with the appropriate Runner and workspace permissions. Ask an administrator for the specific access needed. See the [permission model](permission-model.md).
 
-Do not blindly repeat a command, patch or input after an unknown outcome. Authorization failures before dispatch and failures after tool invocation have different recovery requirements. Completed operating-system effects cannot be assumed to roll back; follow the [call recovery guide](mcp-agent-call-contract.md).
+For an unknown outcome, inspect existing state first. **Do not automatically repeat a command, patch or input:** an already completed host effect may still be present. Follow the [call recovery guide](mcp-agent-call-contract.md).
 
-## Integration details
+## Adapter behavior
 
-The internal revalidation adapter distinguishes validated allowance, denial, unavailable service and malformed success. Internal 401/403/404 responses or a valid principal-generation mismatch are denial; timeout, transport errors, 429, 5xx and unexpected statuses indicate unavailability. An invalid successful response is malformed. These are internal endpoint statuses, separate from the public MCP URL's initial authentication response.
+Internal 401/403/404 responses and a valid principal-generation mismatch are denial. Timeout, transport errors, 429, 5xx and unexpected statuses indicate unavailability. An invalid successful response is malformed. These internal statuses are distinct from initial public MCP URL authentication.
 
-Revalidation has a five-second request deadline, a 16 KiB response-body budget and at most 256 reads. It does not retry or cache authorization. Only allowed identity/scope fields are used; raw error bodies, secret URLs and exception details are not forwarded. A successful revalidation still does not bypass the RunnerDO's final authorization and send checks.
+Each revalidation makes a fresh bounded check: five-second request deadline, 16 KiB response-body budget and at most 256 reads. It uses allowed identity/scope fields and sanitizes errors. A successful result proceeds to RunnerDO's final authorization and send checks. Authorization is neither cached nor automatically retried.

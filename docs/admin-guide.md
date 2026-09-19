@@ -2,98 +2,83 @@
 
 [简体中文](admin-guide.zh-CN.md) · [Documentation](README.md) · [Upgrade guide](upgrading.md)
 
-This guide covers the product workflow for deploying and operating Runmesh on Cloudflare Workers and enrolling Runner machines on Linux, macOS, or Windows.
+Deploy the Runmesh control plane on Cloudflare Workers, then enroll the Linux, macOS or Windows machines that will execute work.
 
-## Prepare
+## Prepare the deployment
 
-Have a Cloudflare account, a public HTTPS Worker origin, a strong administrator password (at least 12 characters), the machines that will run work, and a written least-privilege workspace plan.
+Prepare a Cloudflare account, a public HTTPS Worker origin, an administrator password of at least 12 characters, and a least-privilege plan for each machine and workspace.
 
-Check [release status](release-readiness.md) before installing a Runner. A candidate version is not a published stable package, and its hosted installer may be deliberately unavailable. Use the release and installation procedure appropriate to your environment.
+Current source is the **0.1.4 candidate**. Production deployment requires a signed release that has completed verification and activation on `main`. Use [release status](release-readiness.md) to choose a version; candidate testing uses a separate `dev` Worker and resources.
 
-Runmesh does not choose operating-system permissions or workspace ownership for you.
-
-For a new installation, Wrangler provisions the configured resources. An update of an existing v2 installation must preserve its Worker, live DO namespaces, history database, secret values, Runner profiles and current services. Do not reset a namespace or re-enroll healthy Runners merely to update code. Legacy pre-v2 migration instructions are not normal upgrade instructions.
-
-## Deploy the control plane
-
-Connect the repository to Cloudflare Workers Builds. Production requires a `main` revision whose signed release has been verified and activated. The current **0.1.4 candidate cannot use the production command below**. For candidate testing, select `dev` and use `npm run deploy:worker -- --env development` with separate resources; see [deployment](deployment.md).
-
-For an activated production release, run `npm run build` from the repository root and deploy with:
+For an activated production release, connect the repository to Cloudflare Workers Builds, choose `main`, and set the repository-root build command to `npm run build`. Deploy with:
 
 ```sh
 npm run deploy:worker -- --env production
 ```
 
-Ordinary deployment requires only two independent Cloudflare secrets: `INTERNAL_CONTROL_SECRET` and `RUNNER_TOKEN_PEPPER`. Generate each from at least 32 cryptographically random bytes. Preserve their existing values during updates; replacing the pepper invalidates enrolled Runner credentials. Never commit secrets or print them in CI logs.
+For development, choose `dev` and use `npm run deploy:worker -- --env development`. See [deployment](deployment.md) for the complete configuration.
 
-Normal production deployment needs no additional plaintext runtime variables. Runmesh validates the public HTTPS request address, uses the configured D1 history database by default, and makes the signed installer available only after the required release verification. Reverse proxies with an internal URL can explicitly set `RUNMESH_PUBLIC_ORIGIN`; forwarded headers do not choose the trusted public address. `ADMIN_TOKEN` is optional and enables only the advanced programmatic Runner API; browser login, enrollment and MCP do not require it.
+Create two independent Cloudflare secrets, `INTERNAL_CONTROL_SECRET` and `RUNNER_TOKEN_PEPPER`, using at least 32 cryptographically random bytes for each. Keep their values during upgrades: replacing the pepper invalidates enrolled Runner credentials. The [runtime configuration guide](runtime-config.md) covers initialization and optional proxy/API settings.
 
-The new-install helper `npm run setup:secrets -- --env production` only checks missing secret names. Adding `--apply` creates only missing required keys after a second inventory check. It does not rotate existing values, delete other keys, print secret values or automatically retry an uncertain upload. It requires Cloudflare management authentication and an existing deployed Worker. See [minimal runtime configuration](runtime-config.md).
+Open the administrator page and set the password before exposing an uninitialized instance to untrusted visitors. The first successful setup creates the administrator. New Runners use `dedicated_user`; new MCP clients start with `coding:read`.
 
-Open the administrator page and set the password after deployment. No extra setup token is needed, and the first successful setup creates the administrator, so complete this before exposing the uninitialized instance to untrusted traffic. New Runners default to `dedicated_user` and new MCP clients to `coding:read`; existing permissions remain unchanged. A separate development Worker uses the `dev` branch and its own secrets/resources.
+## Enroll a machine
 
-## Enroll a Runner
+1. Open **Runner → Add Runner** and enter a recognizable display name.
+2. Choose the restricted service account. Use high-privilege mode only for a trusted dedicated machine that requires it, and confirm the displayed warning.
+3. Set the Runner authorization period and enrollment-code validity.
+4. Generate the one-time enrollment command and run it in an administrator terminal on the target machine.
+5. Return to the dashboard and confirm that the Runner is online.
 
-1. Open **Runner** and choose **Add Runner**.
-2. Enter a clear display name.
-3. Choose a restricted service account unless high privilege is required.
-4. Read and confirm the high-privilege warning when applicable.
-5. Generate and copy the one-time enrollment command.
-6. Run it on the target machine with administrator privileges.
-7. Return to the dashboard and confirm that the Runner is online.
+Runner authorization starts when saved; `0` means no expiry. Enrollment codes start immediately and can be redeemed once. Generating a replacement invalidates the previous unused code. Keep the code and complete copied command private.
 
-The console lets you set the valid days for Runner authorization and for each one-time enrollment code. Runner authorization starts when it is saved; `0` means no expiry. A code starts immediately and can be used once; generating a new code invalidates the previous unused code. When Runner authorization expires, its connection and heartbeat remain available for recovery, while new protected operations are denied until the window is extended.
+When hosted distribution is available, the installer verifies a fixed signed release, supplies its runtime and installs the service. Otherwise, follow [portable installation](portable-runner-installation.md), verify the artifact, and enroll through `runmesh enroll --code-stdin`.
 
-When the hosted installer is enabled, the dashboard command pins the release, verifies its signature, supplies the runtime, enrolls the Runner, and installs its service. Otherwise follow the [portable installation procedure](portable-runner-installation.md) and use `runmesh enroll --code-stdin` after independently verifying the artifact.
+A restricted service account needs OS access to the workspaces you approve. Commands run with that account's permissions; put untrusted code in a separate container or VM.
 
-## Configure workspaces
+## Configure workspaces and clients
 
-On the Runner details page, add a stable workspace name, an absolute host path, and only the permissions required: read, edit, shell, and job control. Save the policy and wait for the Runner to acknowledge it. Verify from an MCP client with `workspace_list`.
+On the Runner details page, add a stable workspace name, an absolute host path and the required read, edit, shell and Job-control permissions. Save and wait for policy acknowledgement, then verify with `workspace_list` from the intended MCP client.
 
-Runmesh sends each configured workspace root only to its matching Runner and omits it from MCP workspace and diagnostic metadata. File contents and command output can still contain host paths; review them before sharing.
+MCP workspace and diagnostic metadata omit configured host roots. Review file contents and command output before sharing them, as those can contain paths or other private data.
 
-## Create MCP clients
+Open **MCP Clients**, choose a clear label and the minimum scopes, optionally restrict the client to selected Runners, then copy its one-time URL to the intended user. Rotate or revoke a URL if it is exposed.
 
-Open **MCP Clients**, enter a clear label, select the minimum scopes, create the client, and copy the one-time URL to its intended user. Rotate or revoke the client immediately if the URL may have been exposed. You can restrict a client to selected Runners.
+## Manage access and retire machines
 
-## Daily operations
+| Action | Effect and follow-up |
+| --- | --- |
+| Extend Runner authorization | Restores access after expiry; the connection and heartbeat remain available for recovery |
+| Rotate a Runner credential | Invalidates the old credential and closes its old connection; use the recovery enrollment procedure on the host |
+| Rotate or revoke an MCP client | Replaces or withdraws that client's access |
+| Emergency lock or revoke a Runner | Blocks new protected work; inspect already-running host processes separately |
+| Delete a Runner | Removes the control-plane record, workspace/policy settings and client selections; handle host removal and retained audit/history separately |
+| Change the administrator password | Invalidates existing administrator sessions |
 
-- Review Runner status, clients, and recent jobs from the dashboard.
-- Rotate Runner credentials or MCP client URLs when access changes.
-- Revoking a Runner blocks reconnection but does not kill processes already running on the host.
-- Deleting a Runner removes its control-plane record, configured workspaces and policies, and client selections. It does not uninstall the host service, stop host processes or remove local files and Jobs. Separately retained audit/history data is not a guaranteed part of that deletion.
-- When the hosted release channel is available, use the enrollment page's maintenance uninstaller for complete local removal, including old/partial installations. It deletes local Job history while preserving project workspaces. When hosted distribution is unavailable, the page shows a local CLI command instead; check the installed version's purge support and the [complete uninstall guide](runner-uninstall.md) before using it. Delete the control-plane Runner record separately.
-- Emergency lock blocks new protected operations; inspect host processes separately.
-- Changing the administrator password invalidates existing admin sessions.
+To retire the host installation, use the enrollment page's maintenance uninstaller when its release channel is available. It handles old or partial installations, deletes local Job history and preserves project workspaces. With hosted distribution unavailable, the page provides a local CLI command; check its version's purge support in [complete uninstall](runner-uninstall.md). Perform removal from a local console or SSH session, then delete the control-plane record.
 
-## Backups and upgrades
+## Set Job recording and retention
 
-Protect control-plane data through the recovery process supported by your deployment. Back up each Runner's profile, job metadata, retained logs, verified package and service manifest. Runmesh does not provide an in-app full backup or automatic rollback.
+In **MCP Clients → client details → Cloud Job history**, choose whether new Jobs should record cloud snapshots and related Job-tool audit. Local Jobs and retained output remain available. Existing cloud records keep their retention policy; enabling recording later applies to future recorded work. Required authorization and replay-prevention data is retained.
 
-Before restarting a Runner, stop new submissions, drain active/queued work and inspect uncertain recovered processes. Record the actual service executable and version, and rehearse recovery separately. Follow the [upgrade guide](upgrading.md); do not reset namespaces, rotate secrets, purge state or repeat healthy enrollment as an ordinary update.
+For an unrecorded Job, pass its `workspace_id` when following it on the online Runner. This requires Runner 0.1.1 or newer. See [quota isolation](quota-resilience.md) for history settings and storage behavior.
 
-## Production checklist
+On the Runner details page, choose a history type and click **Load / Refresh**. Logs default to the last 4 KiB. Cloud history stores bounded Job metadata; output is fetched from the Runner.
 
-Use a canonical HTTPS origin and configure log redaction. Keep administrator credentials and Worker secrets separate. Never put MCP URLs or enrollment codes in logs or tickets. Prefer restricted service accounts and minimum workspace access. Reserve high-privilege mode for dedicated trusted hosts. Review Runner, client, and job activity regularly and maintain a credential-rotation and shutdown procedure.
+Default history upload is every five minutes and cloud retention is seven days. Local age-based deletion starts disabled and requires separate confirmation when enabled. Active and uncertain recovered Jobs are retained. Batching and local retention require compatible components, available from Runner 0.1.2. See [history and retention settings](batched-job-history.md).
 
-## Optional cloud history and quota isolation
+## Configure shared execution
 
-Open **MCP Clients → client details → Cloud Job history** to disable recording for new Jobs. This stops their optional cloud snapshots and related Job-tool audit; local Jobs and retained logs remain. Existing cloud records are not deleted, and enabling recording later does not backfill Jobs originally created without recording. Required authorization and replay-prevention records remain.
+The 0.1.4 candidate defaults to two execution slots, with an explicit configurable limit of 1–64. Check each installed Runner's effective setting; existing explicit limits are preserved.
 
-Pass `workspace_id` when following an unrecorded Job; workspace-bound Job operations require Runner 0.1.1 or newer. Unrecorded Jobs have no offline cloud history. Production uses the independent `HISTORY_DB` D1 binding for optional history and audit, while core authorization remains separate. See [quota isolation and cloud Job recording](quota-resilience.md) for the limits of this separation.
+Compatible queues hold up to 32 waiting Jobs and eight per client, schedule clients in turn, and check authorization again before starting. A shell request with `queue: false` returns immediately when no slot is available. See [queue behavior](job-queue-and-localization.md).
 
-## Batched Job history
+Change-driven history reporting in the 0.1.4 candidate uploads changed snapshots while retaining ordinary heartbeats, authorization and maintenance. It requires a compatible Worker and Runner. See [release notes](release-notes.md) and [history reporting](demand-job-history.md) when upgrading from 0.1.3.
 
-On the Runner details page, choose a history type and click **Load / Refresh**. Logs are loaded only when requested and default to the last 4 KiB. Cloud history contains bounded Job metadata, not full output logs.
+## Back up and upgrade
 
-The default upload window is five minutes and cloud retention is seven days. Local deletion by age is disabled by default and requires separate confirmation when enabled. Active and uncertain recovered Jobs are retained. Batching and local retention require compatible components; they first shipped in Runner 0.1.2. See [batched snapshots, manual loading and retention](batched-job-history.md) for available settings.
+Back up control-plane data through your storage provider's recovery process. Protect Runner profiles, Job state, retained logs, service manifests, verified packages and project data, and rehearse restoration separately.
 
-## Shared Runner queue and localized UI
+An upgrade keeps the existing Worker, v2 namespaces, D1 binding and secrets. Plan Worker deployment and Runner installation as separate steps. Before restarting a Runner, stop new submissions, drain active/queued work and inspect uncertain recovered processes. Record its actual service executable and version, then follow the [upgrade guide](upgrading.md).
 
-The 0.1.4 candidate defaults to two execution slots and supports an explicit limit of 1–64; an existing configured limit is preserved. Check the installed Runner's effective setting because older packages can have different defaults. Compatible queueing supports up to 32 waiting Jobs and eight per client, with authorization checked again before execution. Set `queue: false` on a shell request to return immediately when no execution slot is available.
-
-See [queue/UI contract](job-queue-and-localization.md) for capability negotiation, current authorization, bounded fair scheduling, restart interruption and server-side locale rendering. A Worker deployment does not upgrade any installed Runner. Check the actual version and negotiated capabilities before relying on queue or history improvements.
-
-## Change-driven history reporting
-
-Change-driven reporting in the 0.1.4 candidate requires a compatible Worker and Runner. Unrecorded Jobs and ordinary log reads do not enable optional uploads; unchanged acknowledged snapshots do not keep uploading while idle. This does not eliminate heartbeats, authorization or maintenance requests. The published 0.1.3 package does not include this behavior. See [release notes](release-notes.md) and [history reporting](demand-job-history.md) before relying on it.
+For daily operation, review Runner/client access and recent Jobs, configure edge-log redaction, and keep a credential-rotation and host-shutdown procedure available.

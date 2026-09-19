@@ -1,29 +1,29 @@
 # Source dependency checks
 
-`npm run check:architecture` parses application/protocol source using the pinned development-only Babel parser. It does not import the scanned modules or execute their embedded installer text. Both GitHub and GitLab verification run this command, and CI parity checks require its presence. The checker fixtures also run in the existing native platform jobs.
+Run `npm run check:architecture` when adding or moving modules. The command parses application and protocol source with the pinned development-only Babel parser. GitHub and GitLab verification both run it; the native platform jobs also exercise its fixtures.
 
-## Enforced boundaries
+## Dependency rules
 
-Worker and Runner may depend on the shared protocol, not one another. The protocol may not depend on either application. Node built-ins belong to Runner; Cloudflare/Worker platform packages belong to Worker. These rules include type dependencies: type-only imports avoid runtime cycles but do not make reverse architectural dependencies desirable.
+Worker and Runner depend on the shared protocol. Keep application-specific dependencies out of that protocol, Node built-ins in Runner adapters, and Cloudflare platform packages in Worker adapters. Type imports follow the same direction as runtime imports.
 
-The graph includes import declarations, re-exports, literal dynamic imports, literal CommonJS `require`, TypeScript import types and external-module references. Unresolved relative modules, unknown project package subpaths, aliases without mappings and computed module loads fail closed. Source symlinks are not silently skipped. Type-only strongly connected components are reported separately; type-inclusive cycles are rejected without being mislabeled as runtime initialization cycles.
+The graph covers import declarations, re-exports, literal dynamic imports, literal CommonJS `require`, TypeScript import types and external-module references. Resolve relative imports and project aliases explicitly. Computed module loads, unresolved modules, unsupported package subpaths and source symlinks fail the check. Runtime and type-inclusive cycles are classified separately, and both fail.
 
-The policy lives in `scripts/architecture-policy.mjs`; graph discovery and cycle detection live in `scripts/architecture-graph.mjs`. Runtime cycles fail the gate. Existing retired-name/configuration checks remain. The ignored generated Worker provenance and browser-source modules are explicitly permitted missing inputs before builds run; TypeScript and the build still must generate and validate it.
+`scripts/architecture-policy.mjs` defines roles and allowed edges. `scripts/architecture-graph.mjs` discovers imports and detects cycles. The generated Worker provenance and browser modules are permitted to be absent before a build; build and typecheck prepare and validate them.
 
-## Limits and non-goals
+## Maintain the gate
 
-This is a source dependency gate, not a security sandbox or a certification of all code semantics. It does not analyze dependency internals, embedded script strings, reflection/eval or runtime network loading. It conservatively treats bare `require()` as module loading. No application source is rewritten by the check. Parsing is bounded to 5,000 files, 1 MiB per file, 16 MiB total source and 20,000 directory entries. Tooling failures fail the check rather than reporting a clean graph.
+Add both allowed and forbidden fixtures for a new boundary. Keep examples for type imports, supported file extensions, re-exports and intermediary modules so a rename preserves the same dependency rules.
 
-The former protocol type cycle has been removed by separating primitive permission shapes and generic hashing from full policy schemas. Both cycle kinds now fail. Browser, presentation, HTTP, use-case, native-adapter and result-projection boundaries are covered by the role matrix and negative fixtures. This gate does not introduce an arbitrary maximum line count or claim that a smaller file is automatically more maintainable. Later architectural boundaries must be added with both allowed and forbidden fixtures.
+External SDK imports are checked against Worker roles. HTTP/MCP adapters can load their reviewed server SDKs; domain, contract, presentation and browser modules use their own narrower dependencies. Node classification uses the runtime `isBuiltin` predicate. New Job, Context, Patch and Connection files default to the pure role; register platform adapters explicitly.
 
-The parser is a pinned development dependency. Running the check does not change Worker/Runner settings or write application data.
+Connection submodules depend on narrow ports, while the connection coordinator owns runtime, policy and Job integration. Release models and selection stay separate from release I/O and installer rendering. Patch data contracts use `path-contracts.ts`. See [the ownership reference](architecture-remediation.md#ar09ar14-platform-boundaries-and-failure-seams) for the corresponding roles.
 
-Reference for parser options and supported syntax: https://babeljs.io/docs/babel-parser
+Fixtures cover `.mts`, `.cts`, JSX, bare built-ins such as `dgram` and `dns/promises`, type-only Cloudflare imports, renamed barrels, nested modules and reverse coordinator dependencies. Positive fixtures cover native adapters, pure hashing and type-only platform ports. Four named Runtime persistence-coordinator test exceptions retain timing that a file-write fault cannot reproduce; replacing one requires equivalent fault timing and assertions.
 
-## External imports (AR09)
+## Scope and limits
 
-External Cloudflare and server SDK packages are checked against internal Worker roles, including type imports. Reviewed HTTP/MCP adapters may load their server SDK; pure domain, contracts, presentation and browser modules may not. Node platform classification uses the complete runtime `isBuiltin` predicate rather than a partial bare-module list. Pure Job/Context modules only allow reviewed pure packages and hashing; new names default to pure instead of silently escaping a filename regular expression.
+The checker reads source without importing it or executing embedded installer text. It conservatively treats bare `require()` as module loading. Parsing is bounded to 5,000 files, 1 MiB per file, 16 MiB total source and 20,000 directory entries; parser or tooling failures produce a failed check.
 
-All supported source extensions are normalized before role assignment, and resolved import targets are checked again. Negative fixtures include `.mts`, `.cts`, JSX, bare `dgram`/`dns/promises`, type-only Cloudflare imports, renamed barrels and coordinator reverse dependencies. Positive fixtures preserve native adapters, pure hashing and type-only platform ports. Connection submodules cannot import the connection, runtime, policy-store or Job facade. See [the implementation contract](architecture-remediation.md#ar09ar14-platform-boundaries-and-failure-seams).
+Use runtime and security tests for dependency internals, embedded scripts, reflection/eval and runtime network loading. Evaluate a refactor by its ownership, dependency direction and preserved behavior; line count is only a navigation aid.
 
-AR15-AR18 also reject release discovery depending on installer rendering, release models depending on I/O adapters, and new/unreviewed Patch or Connection modules loading platform I/O. Patch data types no longer depend on the concrete path-policy resolver. Fixture coverage includes renamed and nested modules, supported extensions, type imports and intermediary re-exports. Reviewed adapters, hash/path calculations and type-only ports remain supported. The no-new-private-I/O-mocks regression preserves four named coordinator-specific Runtime exceptions until equivalent fault timing can be demonstrated.
+Parser reference: [Babel parser options and syntax](https://babeljs.io/docs/babel-parser).

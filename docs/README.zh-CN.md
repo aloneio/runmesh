@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-按需要完成的任务选择指南。连接客户端或管理 Runner，不需要先阅读架构设计或审计报告。
+按需要完成的任务选择指南。连接 MCP 客户端从用户指南开始，搭建实例从管理员指南开始。
 
 ## 开始使用
 
@@ -16,22 +16,22 @@
 
 ## 安装与安全运维
 
-新 Runner 从管理员的注册页面开始安装。存在可用的已验证发行物时，页面会提供固定版本的安装命令。已有实例请先阅读升级指南，不要把重新注册或清空状态当作普通升级步骤。
+新 Runner 从管理员的注册页面开始安装。存在可用的已验证发行物时，页面会提供固定版本的安装命令。更新已有实例请按升级指南操作，保留现有凭据、配置和数据。
 
 高级安装参考：[便携包校验与安装](portable-runner-installation.md)、[安装依赖](installer-prerequisites.zh-CN.md)、[运行时配置](runtime-config.zh-CN.md)、[部署参考](deployment.md)和[彻底卸载](runner-uninstall.md)。部分高级参考目前使用英文。
 
-开放命令执行前，请了解[安全模型](security.md)和[权限模型](permission-model.md)。工作区不是操作系统沙箱。MCP 地址、注册命令和 Runner 配置文件均应保密。
+授予访问权限前，请了解[安全模型](security.md)和[权限模型](permission-model.md)。命令使用 Runner 服务账号的系统权限；运行不受信任的代码时，使用容器或虚拟机。MCP 地址、注册命令和 Runner 配置文件均应妥善保管。
 
 ## 版本与功能
 
-当前源码文档描述 **0.1.4 候选版，尚未发布**为正式安装包；最新已发布正式版为 **0.1.3**。发布安装包、部署 Worker、升级 Runner 和刷新客户端缓存的工具定义，是四个独立步骤。使用新功能前，应核对整条链路。
+最新已发布正式版为 **0.1.3**，当前源码文档描述 **0.1.4 候选版**。使用新功能时，需要部署兼容 Worker、安装对应 Runner 包，并刷新客户端工具目录。
 
-[发行状态](release-readiness.md)说明经过审核的正式分发记录，不代表你的实例当前健康。[开发预发布](dev-runner-prereleases.zh-CN.md)属于单独的测试渠道，不会自动升级生产环境。
+安装包的可用状态见[发行状态](release-readiness.md)，已部署 Worker 的核对方法见[构建来源](build-provenance.zh-CN.md)。[开发预发布](dev-runner-prereleases.zh-CN.md)提供单独的测试渠道。
 
 ## 高级参考与维护者资料
 
 集成开发可查看 [MCP 调用约定](mcp-agent-call-contract.md)、[工具示例](tool-examples.md)、[工具目录刷新](mcp-connector-refresh.md)、[能力契约](capability-contracts.zh-CN.md)和[工作区 Context 存储](context-storage.zh-CN.md)。维护者可查看[架构](architecture.md)、[验证流程](verification.zh-CN.md)和 [main 晋级策略](main-promotion-policy.zh-CN.md)。
 
-[历史版本说明](maintainers/release-history.md)和[历史审计证据](maintainers/release-evidence.md)仅用于追溯，可能记录已退役的预览版、旧部署状态或未完成验证，不是当前操作指南。[旧版本迁移](migration.md)只适用于其中明确指出的数据边界，不能套用到普通 v2 升级。
+[历史版本说明](maintainers/release-history.md)和[历史审计证据](maintainers/release-evidence.md)用于追溯各文档注明的版本和审查时段。[旧版本迁移](migration.md)介绍早期开发版与进入 v2 时的转换；当前 v2 实例请使用升级指南。
 
-安全问题按 [SECURITY.zh-CN.md](../.github/SECURITY.zh-CN.md) 私密报告。普通问题提供版本、操作、时间和脱敏错误代码，不附带凭据或私有输出。
+安全问题按 [SECURITY.zh-CN.md](../.github/SECURITY.zh-CN.md) 私密报告。普通问题提供版本、操作、时间和脱敏错误代码；分享前检查附件中的凭据和私有输出。

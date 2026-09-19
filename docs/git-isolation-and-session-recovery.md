@@ -1,39 +1,33 @@
-# Git isolation and session recovery
+# Configure Git access and recover Runner sessions
 
 [简体中文](git-isolation-and-session-recovery.zh-CN.md)
 
-## Filesystem-root workspaces
+Runmesh's read-only Git operations use a trusted Git installation outside the selected workspace. If Git inspection returns `git_unavailable`, check the workspace root and the host's Git installation before trying the operation again.
 
-Path containment and executable trust are different decisions. A child such as `/.git` or `/usr/bin` is inside `/`; the boundary helper normalizes dot segments, preserves root separators, and rejects sibling prefixes. Native Windows coverage includes drive roots, case folding, and UNC share boundaries.
+## Configure a dedicated workspace
 
-Correct containment does not make a Git executable inside an untrusted workspace safe. Read-only Git inspection must not become a shell execution route. On POSIX and Windows, executable trust checks exclude directories inside the workspace by both their lexical and canonical paths. This also applies to a conventional machine-wide Git directory when it falls inside that workspace. An empty trusted PATH fails closed instead of falling back to ambient executable discovery.
+Use a repository directory such as `/workspace/project` as the workspace root. Filesystem roots, drive roots and equivalent canonical roots are rejected by Git inspection: they leave no separate location for a trusted Git executable. This applies to status, diff, log, show and blame. Other tools continue to follow their own workspace permissions.
 
-Filesystem-root Git inspection is explicitly unsupported under this trust model. The Runner rejects a canonical filesystem/drive root before reading Git metadata or creating a temporary isolated repository. All five public Git operations return `git_unavailable`, with a local diagnostic requesting a dedicated workspace directory. Other filesystem, execution, job, and context permissions are not disabled by this Git-specific decision.
+An authorized administrator changes centrally managed workspace paths in the control plane. After saving, wait for desired, applied and reported policy revision/checksum to agree, then repeat the Git request.
 
-MCP continues to redact raw Runner error messages and host paths. Its safe `git_unavailable` recovery hint asks an administrator to check the Git installation and configure a dedicated, non-filesystem-root workspace whose trusted Git executable is outside it. It does not expose private paths or recommend bypassing Git isolation.
+The trusted Git path must lie outside the workspace both as written and after resolving its canonical path. This applies even to a machine-wide installation that falls inside an overly broad workspace. POSIX also checks executable ownership and safe ancestor/file modes; Windows uses trusted system installation locations. If trusted executable discovery fails, install or select a suitable Git installation and retain the workspace isolation boundary.
 
-For a centrally managed Runner, an authorized administrator must update the workspace in the control plane, for example to a dedicated repository at `/workspace`. Do not edit the local central profile, reuse a bootstrap bearer token as an administrator session, or recreate a repository at the filesystem root. Confirm desired/applied/reported policy agreement before repeating Git acceptance.
+MCP returns a bounded `git_unavailable` hint. Use local diagnostics for host-specific installation details and keep those private paths out of shared reports.
 
-## Registry failures and reconnect behavior
+## Interpret a connection close
 
-| Registry result | WebSocket close | Meaning and recovery |
+| Registry result | WebSocket close | Recovery |
 | --- | --- | --- |
-| `401` or `403` | `4001`, `runner credentials rejected` | The current Runner connection loop stops. Check the credential; the host service manager may still restart the process. |
-| `409` | `4000`, `stale runner session` | Session/sync fencing conflict; reconnect with the existing credential and perform a fresh handshake. |
-| Availability failure, including `429` and `5xx` | `1013`, `control plane temporarily unavailable` | Retain the slower service-unavailable reconnect backoff. |
+| `401` or `403` | `4001`, `runner credentials rejected` | Check the Runner credential; its current connection loop stops. The service manager may subsequently restart the process. |
+| `409` | `4000`, `stale runner session` | Reconnect with the existing credential and complete a fresh handshake. |
+| Availability failure, including `429` and `5xx` | `1013`, `control plane temporarily unavailable` | Allow the slower service-unavailable reconnect backoff while checking the control plane. |
 
-The mapping covers hello, the post-connect fence before welcome, heartbeat, sync, job events, policy acknowledgements, and session probes before RPC replies. A conflict still rejects pending bridge replies and never authorizes stale output. Local pre-welcome frames and protocol mismatches are rejected separately, without claiming that credentials were revoked. Explicit revoke/rotate operations retain their existing credential-generation fences.
+These categories cover connection setup, heartbeat, sync, Job events, policy acknowledgements and session checks before replies. A stale session's pending replies are rejected. Pre-welcome frames and protocol mismatches have their own transport errors; diagnose them separately from credential rejection.
 
-The Runner records retryable `4000` closure as `session_conflict` and uses the existing jittered network reconnect backoff. The same credential is retained. Close codes, not arbitrary peer-provided reason text, determine whether a failure is fatal. This does not prove that any earlier untraced disconnect was caused by a Registry `409`.
+For retryable `4000`, the Runner records `session_conflict` and uses jittered reconnect backoff while retaining the credential. The close code determines handling. Use the timestamp and actual close code when investigating an earlier disconnect.
 
-## Regression checks and rollout boundary
+## Retry the appropriate operation
 
-`git_unavailable` has availability classification and defaults to `not_started`; an explicit state from an older Runner, including `unknown`, is preserved. Its recovery remains an operator configuration action, not Job replay or automatic retry. A Worker-only rollout must not claim to have upgraded the Runner's state reporting.
+`git_unavailable` is an availability error with a default `operation_state=not_started`; an explicit state reported by the Runner takes precedence. Correct the installation/workspace configuration, then repeat the read-only Git request. If the outcome is `unknown`, follow [call recovery](mcp-agent-call-contract.md) for the operation that produced it.
 
-The complete MCP transport suite uses an independent root-only Runner and read-only client to check all five Git errors, including omitted/partial optional history arguments. Optional `git_log` limits and `git_blame` line bounds are omitted from RPC objects when absent; explicit `undefined` must not fail the strict wire JSON check. A separate SQLite Worker accepts sync sequence 2, rejects sequence 1 with `4000`, and accepts a fresh connection and echo using the same credential. This is distinct from ordinary socket replacement and from D1 packed-history semantics.
-
-For live acceptance, first verify the actual dev origin and its clean source commit, then use an already authorized dev MCP client for the root Git envelope. The reusable session probe in `test/helpers/session-conflict-probe.ts` must only use an explicitly authorized isolated test Runner identity: it replaces that identity's connection. Restore any paused test service even when a probe fails. Do not add a public test endpoint, bypass administrator authentication, or infer live acceptance from local results or a health response alone.
-
-Regression tests exercise root/ordinary/sibling/traversal path cases; root fail-closed behavior for all five Git methods; real status, diff, log, show, and blame in a dedicated read-only workspace; upstream failure categories across transport paths; withheld stale RPC results; and real WebSocket conflict/retry behavior. Existing ownership, symlink, metadata race, and handshake tests remain required.
-
-Source tests do not replace acceptance of an installed signed Runner. Changing source does not modify central workspace policy or upgrade a service. Preserve immutable published assets and the current Runner. A no-deployment delivery must not push into an automatically deployed branch; retain a local reviewed commit until deployment is authorized.
+Check the deployed Worker and installed Runner versions while diagnosing compatibility. Install a verified Runner release when its local behavior needs an upgrade, and retain independent host access during the service restart. See [upgrading](upgrading.md).

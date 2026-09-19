@@ -2,37 +2,37 @@
 
 [简体中文](release-notes.zh-CN.md) · [Documentation](README.md) · [Upgrade guide](upgrading.md)
 
-## 0.1.4 — candidate, not yet published
+## 0.1.4 — candidate
 
-The **0.1.4 candidate** contains the task-control, MCP recovery and distribution improvements below. The stable 0.1.4 package is not yet published, and its stable installer remains disabled. For production, wait for signed publication and independent verification; consult [release status](release-readiness.md) before upgrading. Existing 0.1.3 archives remain unchanged. A development Worker deployment or prerelease does not make 0.1.4 a stable release.
+The **0.1.4 candidate** improves task control, MCP recovery and installation. Use the development prerelease channel to test these changes. The current production release is **0.1.3**; package availability and activation are listed in [release status](release-readiness.md).
 
 ### Improvements after upgrading compatible components
 
-- **More reliable task control.** Cancellation keeps live, unverified processes under supervision instead of reporting false completion or releasing their execution slots. Concurrent recovery requests respect an existing cancellation-delivery record. Input handling reports delivery errors and closes its observers without treating an uncertain send as safe to replay.
-- **Clearer MCP calls and recovery.** Action-specific tool definitions, workspace-bound Job queries and structured error guidance make it easier to follow the original operation after an outage. File and Job output stay bounded; a missing cloud history record does not mean a command never ran.
-- **Less unnecessary history work.** Compatible Worker/Runner pairs use change-driven optional history reporting. Unrecorded tasks and ordinary log reads do not enable history uploads; unchanged acknowledged snapshots do not keep an idle upload loop alive. Heartbeats, authorization and necessary maintenance remain, so this is not a zero-cost guarantee.
+- **More reliable task control.** Cancellation keeps uncertain live processes under supervision until their state is resolved. Concurrent recovery respects the recorded cancellation delivery. Input errors include guidance for checking the original process before sending more input.
+- **Clearer MCP calls and recovery.** Action-specific tool definitions, workspace-bound Job queries and structured errors help you follow the original operation after an outage. Query the online Runner with the original Job and workspace IDs when cloud history is unavailable.
+- **Fewer idle history uploads.** Compatible Worker/Runner pairs upload recorded Job metadata when it changes, then stop the history timer after acknowledgement. Ordinary log reads stay on demand. Heartbeats, authorization and maintenance continue to use account resources.
 - **Stronger local and distribution boundaries.** Additional checks reject unsafe special-file replacements in metadata and release inputs. Release health checks reject oversized or stalled responses before completing preflight. Published packages keep their original identity; the stable tag publisher now explicitly verifies the project tagger identity.
 - **Safer installation and mixed-version operation.** Hosted installers serialize installation, credential refresh and removal, and roll back only paths they created. Windows release downloads keep a deadline through the response body; dedicated service provisioning fixes macOS group selection and Windows directory creation. MCP Runner selection rechecks the original credential at commit, and Job metadata rejects concurrent replacement or rewriting.
 - **Updated user documentation.** English and Chinese guides distinguish first installation, compatible upgrades, task recovery, stable releases and development testing. Older migration and audit records are separated from the everyday instructions.
 
 ### Upgrade notes
 
-Worker deployment, Runner installation and client tool-catalog refresh are separate operations. New source features require the relevant compatible components; publishing or merging alone does not restart an installed service. Follow the [upgrade guide](upgrading.md), preserve existing v2 resources and credentials, and verify `shell` followed by queries for the same Job before restoring ordinary workloads.
+Follow the [upgrade guide](upgrading.md): deploy the compatible Worker, install the target Runner package, then refresh the client tool catalog. Preserve existing v2 resources and credentials, and verify `shell` followed by queries for the same Job before restoring ordinary workloads.
 
-The new Context storage and prune methods require explicit support in the Runner's authenticated hello. If that support is missing, the caller receives `runner_upgrade_required`; the Worker does not send the unsupported request, and the Runner connection remains usable for supported methods. After a Worker upgrade, a previously hibernated connection may need to reconnect before these capabilities are known; a version string alone does not grant support.
+Context storage and prune require support advertised by the Runner during its authenticated handshake. On `runner_upgrade_required`, check the installed version and reconnect after upgrading. The existing connection remains available for supported methods. A connection hibernated before the Worker upgrade may also need a fresh handshake.
 
-### Limits to understand
+### Operating guidance
 
-Command execution is not an operating-system sandbox. Logs and recent cloud snapshots are bounded, and discarded output cannot be recovered through Runmesh. Recovered Jobs may remain `unknown`; a cancellation request is not immediate proof of exit. No automatic upgrade or rollback, multi-tenant organization/billing system, hosted IDE, browser automation or model API is included.
+Commands run with the Runner service account's OS privileges; use a container or virtual machine for untrusted code. Export output you need to retain beyond the configured log limits. Inspect recovered Jobs marked `unknown`, and confirm the final Job state after cancellation before starting replacement work.
 
 ## 0.1.3 — published stable release
 
-Published on **September 14, 2026** as an immutable stable release. It introduced bounded, fair multi-client Job queues with authorization checked again before queued work starts, and server-rendered single-language administrator pages without translating user commands or logs. History remains explicitly loaded and bounded.
+Published on **September 14, 2026** as an immutable stable release. It introduced bounded, fair multi-client Job queues with authorization checked again before queued work starts, and server-rendered single-language administrator pages. User commands and logs retain their original content. History loads on request within its configured limits.
 
-That package remains unchanged. See [release status](release-readiness.md) for the reviewed distribution record; it is not proof that any particular Worker or Runner has been upgraded.
+The original signed package remains available under its fixed release identity. Follow the [upgrade guide](upgrading.md) to check your installed components.
 
 ## Earlier releases
 
 0.1.2 introduced batched recent Job metadata, manual history loading and independently controlled retention. 0.1.1 added maintenance and inspection improvements over the signed portable Runner and protocol-v2 foundation in 0.1.0.
 
-[Archived release notes](maintainers/release-history.md) retain the original historical details. Instructions for old development previews and pre-v2 clean-break transitions must not be reused as ordinary upgrade steps.
+[Archived release notes](maintainers/release-history.md) retain details of earlier releases and their specific migration procedures.

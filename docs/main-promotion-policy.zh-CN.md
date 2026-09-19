@@ -1,42 +1,63 @@
-# main 只接受本仓库 dev 的发布请求
+# main 发布晋级规则
 
-开发修改先进入 `dev`，只有本仓库 `dev -> main` 的 PR/MR 才允许发布晋级。
-`fix/*`、`feature/*` 和 fork 中同名的 `dev` 都不是合法来源。
-本次增加门禁不代表批准将全部开发代码部署到生产。
+开发修改先进入 `dev`。经过明确批准后，通过**本仓库的 `dev -> main` PR/MR**
+晋级生产版本。来源检查同时核对仓库身份和分支名称。
 
-## 服务端保护与 CI 分工
+## 配置提供商保护
 
-禁止直推由仓库服务端执行，不使用推送后才运行的 Action 冒充拦截。
-GitHub 保留必须 PR、管理员同样遵守、禁止强推和删除，除 `verify-all` 外
-还要求 GitHub Actions 提供唯一的 `main-source-policy` 检查。
-GitLab 的 Allowed to push and merge 必须显式为 No one，保留维护者通过
-MR 合并，并要求流水线成功、不能用 skipped 流水线放行。
+GitHub 要求通过 PR 合并，管理员同样遵守。必需检查包括 `verify-all` 和
+GitHub Actions 提供的唯一 `main-source-policy`；关闭强推和分支删除权限，
+保留讨论解决及现有验证要求。
 
-来源检查只读取平台事件元数据，同时校验分支名与仓库/项目身份，不检出
-PR 代码、不安装依赖、不访问签名密钥、不执行部署。错误来源必须失败，
-不能靠 job 的 `if` 跳过后被平台当作成功。GitHub 还处理修改目标分支事件。
+GitLab 将 **Allowed to push and merge** 设置为 **No one**，保留维护者通过
+MR 合并的角色权限，并要求成功且非 skipped 的流水线。服务端分支保护负责
+限制引用变更，来源检查负责验证 PR/MR 是否来自获准分支。
 
-GitLab 项目 CI 配置入口设置为
-`.gitlab/main-policy.yml@aloneio/runmesh:dev`：从受保护的开发主线读取门禁，
-再包含待测提交自己的普通 CI 配置。这样旧分支即使没有新门禁文件，也不能
-仅凭旧测试通过直接进入 main。其他仓库部署时替换设置中的项目路径即可，
-不增加运行时配置或秘密。修改 MR 目标后须重新执行当前目标的 MR 流水线。
+来源检查读取平台事件元数据。GitHub 覆盖创建、重新打开、同步提交、修改目标
+和转为待评审等事件；错误来源返回失败，缺少必需检查会阻止合并。
+`main-source-policy` 名称只用于该工作流，因为检查结果属于提交 SHA，
+普通 `dev` CI 应使用自己的检查名称。
+
+## 配置 GitLab 可信入口
+
+将项目的 **CI/CD configuration file** 设为：
+
+```text
+.gitlab/main-policy.yml@aloneio/runmesh:dev
+```
+
+入口从经过审阅的 `dev` 读取，再包含实际流水线提交的 `.gitlab-ci.yml`，
+最后应用必需的元数据 `.pre` 任务和流水线创建规则。早于门禁的旧分支也使用
+同一策略。分叉仓库应在该管理设置中替换为自己的项目路径。
+
+将可信入口的修改作为安全配置审阅，并保留平台预定义的 CI 来源变量。
+修改 MR 目标后，先针对当前目标运行新的 MR 流水线，再合并。
 
 ## 维护与验收
 
-`scripts/main-promotion-policy.mjs` 是检查规则来源，生成后的两端配置由
-`npm run check:promotion-policy` 校验，变更规则后显式运行
-`node scripts/check-main-policy.mjs --write` 并审阅差异。
-正常 `dev` 推送不生成 GitHub 的 main 来源检查，避免把其他场景的成功用于晋级。
+`scripts/main-promotion-policy.mjs` 定义来源判定。生成器将同一组独立函数嵌入
+GitHub 和 GitLab 任务。修改规则后，生成配置、审阅差异并执行检查：
 
-新保护上线时分别核对远端设置、合法 dev 来源、非法来源和同名 fork 反例。
-测试用草稿 PR/MR 只用于检查，不能合并；main 的代码、正式安装包和生产服务
-保持不变。`git push --dry-run` 不等于服务端已经拒绝了一次真实推送。
+```sh
+node scripts/check-main-policy.mjs --write
+npm run check:promotion-policy
+node --test test/main-promotion-policy.test.mjs
+```
 
-正式发布要通过两端各自的 `dev -> main` 合并流程，不再直接同步推送 main，
-不临时解除保护，不使用强推解决两端合并提交差异。
+两端 CI 使用 `check:promotion-policy` 验证生成文件；新测试登记到验证清单。
 
-GitHub 当前使用只读 `pull_request` 工作流，使门禁可从 dev 引入而不擅自升级
-生产 main。这不是独立管理的不可篡改组织策略；拥有仓库写入/管理权限并故意
-篡改 CI 文件或撤销保护的人仍在信任边界内。门禁代码、可信 CI 入口及保护设置
-必须作为安全配置审阅，不能声称管理员永远无法绕过。
+通过提供商 API 核对实际分支保护，再用草稿 PR/MR 验证合法 dev、非法来源及
+同名 fork 分支。检查完成后关闭这些草稿。引用更新保护使用一次性的受保护
+测试分支验证；`git push --dry-run` 不会执行远端 pre-receive 检查。
+
+## 晋级正式版本
+
+获准晋级后创建 `dev -> main`，等待来源策略与所有必需检查通过，再通过
+提供商 PR/MR 接口或界面合并。GitLab 镜像晋级使用对应的 `dev -> main` MR。
+处理两端合并策略与提交身份差异时，持续保留禁止强推和直推的保护。
+
+正式发行从受保护的 `main` 进入发布检查。分别核对两端最终提交和实际部署的 Worker。
+
+GitHub 当前采用只读 `pull_request` 工作流，其信任范围包含能够修改工作流
+或仓库规则的维护者。这些修改应作为安全配置审阅；需要独立执行权限的组织
+可采用由另一管理边界维护的必需工作流。

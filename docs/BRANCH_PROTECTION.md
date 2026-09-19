@@ -1,7 +1,18 @@
 # Branch and release protection
 
-The repository's development branch is `dev`. Publication requires the owner and runs the complete CI workflow at the triggering SHA before signing/publishing can start. The reusable workflow requires `verify`, native Runner checks, the supported Node LTS matrix and browser checks; `verify-all` fails for failed, cancelled or skipped dependencies.
+Repository administrators configure branch rules and release environments; CI checks the source that passes through them. Normal development uses `dev`, and stable publication uses protected `main`.
 
-Repository administrators must configure `verify-all` as a required status check, protect version tags and enable immutable releases, and protect the `release` environment. Owner-only publication also checks both original and rerun actors. Source configuration is not evidence of the live repository's rules, environment approvals, GitLab mirror or Cloudflare deployment state. Verify these independently with administration-read permission and save the results before release. A denied API request is not a successful check.
+## Required controls
 
-Keep published assets immutable, resolve failed platform jobs and require checks for the exact candidate SHA. Cloudflare Workers Builds must deploy the approved SHA; verify its provider-side settings and completion record separately.
+- Require `verify-all` for the exact candidate SHA. It aggregates `verify`, native Runner checks, the supported Node LTS matrix and browser checks; failed, cancelled or skipped dependencies fail the aggregate.
+- Apply the [main promotion policy](main-promotion-policy.md), including its required source check and provider-specific PR/MR protections.
+- Protect version tags, enable immutable releases, and protect the stable `release` environment.
+- Retain owner-only publication checks for both the original actor and any rerun actor.
+
+## Verify the live configuration
+
+Use administration-read access to inspect the actual branch rules, required checks, tag protection and environment approvals on each provider. Save the responses alongside the candidate's CI results. Resolve denied or incomplete reads before marking a control verified.
+
+Check the GitLab synchronization setup and Cloudflare build connection separately. Confirm which repository, branch and commit the Worker build uses, then verify the deployed source. See [build provenance](build-provenance.md).
+
+Before publication, resolve failed platform checks and verify the candidate's signed assets. Keep previously published assets immutable throughout recovery.

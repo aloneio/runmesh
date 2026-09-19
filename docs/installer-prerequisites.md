@@ -1,24 +1,24 @@
 # Installer prerequisites and recovery
 
-Use the installation command from your administrator enrollment page. The hosted installer downloads its own verified Node.js runtime; you do not need to install Node or npm first. Hosted installation must be enabled for that Worker's release channel. See [portable installation](portable-runner-installation.md) when it is unavailable.
+Use the installation command from your administrator enrollment page when that Worker's release channel is available. The hosted installer includes a verified Node.js runtime. For manual setup, follow [portable installation](portable-runner-installation.md).
 
 ## Before installation
 
 Run the command from an elevated administrator terminal on a supported x64 or ARM64 host. Keep enough free space for the runtime download, extracted files and Runner package, and allow outbound HTTPS to your Worker, nodejs.org and the fixed GitHub release assets.
 
-Linux/macOS need trusted standard shell utilities, Bash, curl, tar, gzip, and one checksum tool: `sha256sum`, `shasum` or OpenSSL. You do not need xz or awk. The installer checks a pinned official gzip archive against its embedded SHA-256 before extraction. Windows needs Windows PowerShell 5.1 or PowerShell 7, `Invoke-WebRequest`, `Get-FileHash` and the system .NET ZIP library; it does not require the optional `Expand-Archive` module.
+Linux/macOS need trusted standard shell utilities, Bash, curl, tar, gzip, and one checksum tool: `sha256sum`, `shasum` or OpenSSL. The installer verifies the pinned gzip archive's SHA-256 before extraction. Windows needs Windows PowerShell 5.1 or PowerShell 7, `Invoke-WebRequest`, `Get-FileHash` and the system .NET ZIP library.
 
-Linux system-service installation requires a reachable systemd manager; containers without systemd need manual supervision. macOS requires launchctl. Missing tools are listed with package-manager suggestions, but the script does not run those commands. `--auto-deps` enables the private runtime bootstrap, not installation of system packages.
+Linux system-service installation requires a reachable systemd manager; containers without systemd need manual supervision. macOS requires launchctl. Install any missing system tools using the package-manager suggestions in the error. `--auto-deps` controls the installer's private runtime download.
 
-The Linux runtime requires a compatible glibc system. When `getconf` is available, glibc older than 2.28 is rejected before download. A startup check then verifies that the runtime can execute on the host. Alpine/musl and arbitrary older systems are not supported by these official runtime archives. Do not replace system libc to force installation.
+Use a glibc-compatible Linux host for the official runtime; Alpine/musl needs a different supported deployment plan. When `getconf` is available, the installer requires glibc 2.28 or newer before download, then checks that the runtime actually starts. For an incompatible host, select a compatible system or container image.
 
-Hidden interactive enrollment-code input requires `stty` and a terminal on POSIX. A command that already includes the code does not need them. On Windows, prompting requires an interactive elevated PowerShell session: if you remove the code from the copied command, also remove `-NonInteractive`. Treat a complete command containing the code as a credential because it may remain in shell history or process arguments.
+Hidden interactive enrollment-code input requires `stty` and a terminal on POSIX. A supplied code uses the non-interactive path. On Windows, prompting requires an interactive elevated PowerShell session: if you remove the code from the copied command, also remove `-NonInteractive`. Treat a complete command containing the code as a credential because it may remain in shell history or process arguments.
 
 ## Existing installations
 
-A complete managed installation can refresh enrollment only when its Runner version exactly matches the selected installer. This refresh uses the installed runtime, updates enrollment and service configuration, and restarts the service. It does not download or upgrade the package, and does not need download-only curl/gzip/checksum tools. Drain Jobs first. For a different version, follow the [upgrade guide](upgrading.md).
+A complete managed installation can refresh enrollment only when its Runner version exactly matches the selected installer. This refresh uses the installed runtime, updates enrollment and service configuration, and restarts the service. The package remains at its installed version, and download-only tools are unnecessary for this path. Drain Jobs first. For a different version, follow the [upgrade guide](upgrading.md).
 
-Hosted installation, refresh and uninstall share a lock. Wait for an active operation to finish. After an interrupted operation, check that no installer is still running before removing a stale lock; do not bypass it with a concurrent manual installation.
+Hosted installation, refresh and uninstall share a lock. Wait for an active operation to finish. After interruption, inspect running processes before handling a stale lock, and keep manual filesystem changes outside the maintenance window.
 
 ## Resolve an installation error
 
@@ -38,12 +38,12 @@ Bootstrap diagnostics include an `RMI_*` code, a phase and a recovery hint:
 
 If `/tmp` is mounted with `noexec`, use the standard `TMPDIR` variable to choose a trusted writable location that permits execution. The installer creates a private subdirectory there. The gzip archive and intermediate tar need additional free space. Keep TLS, hash and signature verification enabled.
 
-Download requests have time and size limits. A stalled response is a failed download, not a reason to bypass verification. Before enrollment begins, the diagnostic states that registration was not attempted; the code can still expire under its normal validity period. After enrollment is attempted, the code may already be consumed. Check the Runner and obtain a replacement code if needed instead of repeatedly submitting it. At that stage, potentially secret-bearing subprocess output is withheld.
+Download requests have time and size limits; troubleshoot a stalled response using its error code above. A failure before enrollment leaves the code available until its normal expiry. After an enrollment attempt, check the Runner and obtain a replacement code if needed, because the previous code may already be consumed. Subprocess output that could contain credentials is withheld at that stage.
 
-Failed fresh-install cleanup removes only state created by that attempt, on a best-effort basis. A failed credential refresh does not restore the previous credential. Inspect service status and any remaining files before retrying.
+Failed fresh-install cleanup attempts to remove the state created by that attempt. Inspect service status and remaining files before retrying. A failed credential refresh may already have replaced the old credential; reconcile the profile and dashboard before recovery.
 
 ## Verify the result
 
-Run `doctor --json` using the installed Runner's absolute path and check the Runner's connection and policy state in the administrator page. A successful Worker build or `/health` response alone does not prove that the host installation succeeded. Updating a Worker or its installer does not replace an existing Runner package or restart that Runner.
+Run `doctor --json` using the installed Runner's absolute path, then check its connection and policy state in the administrator page. Finally, use the intended MCP client to list workspaces and read a harmless file. Plan a later package upgrade through the [upgrade guide](upgrading.md).
 
 Runtime references: [official Node checksums](https://nodejs.org/dist/v22.23.2/SHASUMS256.txt) and [Node platform requirements](https://github.com/nodejs/node/blob/v22.23.2/BUILDING.md).
