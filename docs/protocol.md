@@ -1,22 +1,16 @@
 # Protocol contract
 
-The authoritative TypeScript Runner↔Worker contract is `packages/protocol/src/schema.ts`; the generated language-neutral artifact is `packages/protocol/schema/wire-message.schema.json`. MCP active-Runner routing is Worker/Registry control-plane behavior layered above this wire contract.
+Runner/Worker implementations use `packages/protocol/src/schema.ts` and the generated `packages/protocol/schema/wire-message.schema.json`. MCP Runner selection is control-plane routing layered above this connection protocol.
 
-## Frame rules
+## Encode and negotiate frames
 
-- JSON text or UTF-8 bytes only.
-- Maximum encoded frame: 1 MiB, enforced before parsing and again when encoding.
-- Every frame has `protocol_version`.
-- Correlated requests/replies/events have a bounded `request_id`.
-- RPC request parameters/results are JSON values with bounded depth/node validation.
-- Unsupported or malformed frames are rejected; unknown request IDs are ignored.
-- Same-major optional behavior belongs under the explicit `extensions` field rather than silently adding top-level fields.
+- Frames contain JSON text or UTF-8 bytes, capped at **1 MiB** before parsing and when encoding.
+- Every frame carries `protocol_version`; correlated requests, replies and events carry a bounded `request_id`.
+- RPC parameters/results are JSON values subject to depth and node limits.
+- Malformed or unsupported frames are rejected; unknown response IDs are ignored.
+- Same-major optional behavior uses the explicit `extensions` field.
 
-## Negotiation
-
-A Runner sends `runner.hello` with a supported min/max range. The Worker responds with `runner.welcome` and the highest overlapping version. All later frames must use the negotiated version. If no overlap exists, the connection closes with an unsupported-protocol error.
-
-## Runner connection messages
+The Runner sends its supported min/max range in `runner.hello`. The Worker selects the highest overlapping version in `runner.welcome`; subsequent frames use that version. A disjoint range closes the connection with an unsupported-protocol error.
 
 ```text
 runner.hello          Runner → Worker; metadata, supported range, correlation
@@ -24,13 +18,13 @@ runner.welcome        Worker → Runner; session, negotiated version and desired
 runner.policy_update  Worker → Runner; authenticated workspace policy
 runner.policy_ack     Runner → Worker; applied revision/checksum or failure
 runner.heartbeat      Runner → Worker; liveness and active job IDs
-runner.sync           Runner → Worker; monotonic snapshot sequence, workspace/job metadata
+runner.sync           Runner → Worker; monotonic sequence, workspace/Job metadata
 runner.queue_check    Runner → Worker; current authorization before a queued launch
 ```
 
-Workspace metadata contains only `workspace_id`, persistence, revision, and labels. The private `root_path` travels from the control plane to the Runner in authenticated policy frames and is omitted from public workspace/protocol metadata. User files, command output and requested log bodies can still contain paths; their contents are not automatically redacted. A Runner has a stable `runner_id`; dashboard/MCP display names are control-plane metadata rather than a transport routing parameter.
+Workspace metadata contains `workspace_id`, persistence, optional revision and labels. Private `root_path` values travel to the Runner in authenticated policy frames. Requested user content can contain paths of its own. The stable `runner_id` identifies the connection; display names are control-plane metadata.
 
-## RPC and timeout contract
+## Authorize and dispatch an RPC
 
 ```json
 {
@@ -48,9 +42,9 @@ Workspace metadata contains only `workspace_id`, persistence, revision, and labe
 }
 ```
 
-The Worker separates **offline Snapshot Authorization** from **Live Runner Admission**. Snapshot Authorization uses a validated immutable Active Policy to authorize retained metadata reads while the Runner is offline. Live Admission additionally requires the current online session, matching epoch/credential generation, and agreement on the desired, applied and reported policy revision/checksum. Policy changes can temporarily block live operations until the control plane and current Runner session agree. An offline snapshot never authorizes host access.
+Offline snapshot reads require current authorization against a validated immutable Active Policy. Live operations additionally require an online session, matching epoch/credential generation and agreement on desired, applied and reported policy revision/checksum. Policy reconciliation can temporarily block live operations.
 
-The forwarding payload contains the requested revision and both expected identity fields:
+The Worker's forwarding payload binds the expected policy identity:
 
 ```json
 {
@@ -62,81 +56,67 @@ The forwarding payload contains the requested revision and both expected identit
 }
 ```
 
-The shared deadline constants are:
-
 ```text
 LOCAL_RUNNER_OPERATION_TIMEOUT_MS = 8000
 WORKER_BRIDGE_TIMEOUT_MS          = 12000
 ```
 
-For `exec.run`, the local limit bounds foreground waiting, not the command's execution lifetime. Git subprocesses use it as their execution timeout. The larger bridge limit allows time for transport and scheduling. Use `shell` with `background:true` for long work, then follow the original Job through the `job` tool. A bridge timeout does not prove that an operation never started.
+`exec.run` uses the local limit for foreground waiting while its process can continue. Git subprocesses use it as an execution timeout. The larger bridge budget allows transport and scheduling time. Follow long-running work through the original Job; a bridge timeout requires checking whether dispatch occurred before retrying a mutation.
 
-## MCP routing boundary
+## Route MCP operations
 
-MCP clients authenticate to `/<secret>/mcp`, then the Worker resolves their Registry-stored active Runner. `runner_list`, `runner_current`, and `runner_select` are MCP control tools; their `runner_id` argument/result is not added to the Runner coding RPC parameter schemas.
+MCP clients authenticate at `/<secret>/mcp`. `runner_list`, `runner_current` and `runner_select` manage the client's sticky selection; workspace operations then use that Runner and their required `workspace_id`.
 
-For all ordinary MCP filesystem, execution, Git, workspace, and job tools, the Worker selects the Runner before forwarding and schemas retain `workspace_id` where needed. `runner_id` has been removed from ordinary MCP tool inputs. This means a protocol implementation receives RPC parameters for its already-established connection, not client-directed arbitrary Runner routing.
+The first selection is immediate, switching requires `confirm_switch:true`, and a selected unavailable Runner returns its own error. Automatic initial selection is available only when exactly one registered Runner exists. Clients with the appropriate scopes and permissions share workspace and Job visibility on the selected Runner.
 
-Selection is sticky per MCP client. The first selection is immediate, a switch requires `confirm_switch: true`, and unavailable/offline selected Runners produce errors without fallback. An unselected client can be automatically persisted only when exactly one registered Runner exists. This routing is not multi-tenant authorization: MCP clients in the one-admin instance that select the same Runner and have compatible scopes share workspace IDs and job metadata visibility.
+## Select the Job data source
 
-## Jobs
+Use the public `job` tool. Its actions map to private `job.*` RPCs when live access is required.
 
-Use the public `job` tool; `job.list`, `job.get`, `job.logs`, `job.cancel` and `job.input` are private RPC method names, not separate public tools. The selected Runner is implicit.
-
-| Request | Data source and availability |
+| Request | Source |
 | --- | --- |
-| `job` with `action=list` and `workspace_id`, Runner online | Live local Job metadata with `source=runner_live` |
-| `job` with `action=list`, no workspace or Runner offline | Retained cloud metadata, filtered by current workspace permissions |
-| `job` with `action=get`, `job_id` and `workspace_id` | Live Runner lookup, independent of optional cloud history |
-| `job` with `action=get` and no workspace | Uses the cloud record to authorize its workspace, then queries the online Runner; an offline Runner can return that retained snapshot |
-| `job` with `action=logs/cancel/input` | Requires live admission; supplying `workspace_id` avoids dependence on a cloud Job record |
+| `action=list` with `workspace_id`, Runner online | Local metadata, `source=runner_live` |
+| `action=list` without a workspace or while offline | Retained cloud metadata filtered by current workspace permissions |
+| `action=get` with `job_id` and `workspace_id` | Live lookup independent of cloud history |
+| `action=get` without a workspace | Cloud record identifies/authorizes the workspace, then the Worker queries an online Runner or returns the offline snapshot |
+| `action=logs/cancel/input` | Live admission; supplying `workspace_id` avoids dependence on a cloud record |
 
-Offline results carry `source: "registry_snapshot"` and `runner_state: "offline"`; that source label also covers the D1 history backend. Missing optional cloud history returns `job_history_unavailable`, not proof that the local Job is absent. Preserve the original Job and workspace IDs and retry the live query when the Runner is available. No-record Jobs have no offline cloud history.
+Offline results use `source:"registry_snapshot"` and `runner_state:"offline"`, including with D1 storage. Missing cloud history returns `job_history_unavailable`; preserve the original Job/workspace IDs and use a live query when the Runner is available. Unrecorded Jobs require live access.
 
-Job metadata excludes local cwd, command, PID and host root. Full logs stay on the Runner; requested pages are relayed to the authorized client. Production D1 history retains at most 500 recent metadata records in a 768 KiB packed row per Runner lifecycle. See [history and retention](batched-job-history.md) for limits and compatibility.
+Job metadata excludes cwd, command, PID and host root. Requested log pages pass from the Runner through the Worker to the authorized client. Production D1 retains at most **500 recent metadata records** in a **768 KiB row** per Runner lifecycle. See [history settings](batched-job-history.md). Long-running work uses this Job API; MCP Tasks (`io.modelcontextprotocol/tasks`) is not advertised.
 
-MCP Tasks (`io.modelcontextprotocol/tasks`) is not claimed by this runtime. A future adapter can map an MCP Task handle to the same local Job Manager without changing the Runner job lifecycle.
+## Enroll before connecting
 
-## Enrollment and credential lifecycle outside the frame schema
+1. Create a single-use Runner enrollment code in the administrator interface. Use its displayed validity window; the underlying default is 30 minutes when no override is supplied.
+2. Run `runmesh enroll --server <https endpoint> --code-stdin`. The CLI sends the code and bounded platform/version metadata to `POST /runner/enroll`. Controlled manual use also accepts `--code`.
+3. Successful redemption returns the Runner ID, WebSocket URL and long-lived token. Registry stores a peppered token verifier.
+4. Open the authenticated outbound WebSocket and send `runner.hello` to bind metadata to the current credential and connection epoch.
 
-Enrollment happens before the WebSocket protocol:
+The enrollment code is used only for redemption. Credential rotation/revocation invalidates the connection generation; stop an already running local process through explicit Job cancellation or host control.
 
-1. The dashboard or Registry creates a single-use code for a Runner ID. Use the validity window shown on the enrollment page; administrators can configure it. The underlying default is 30 minutes when no validity override is supplied.
-2. `runmesh enroll --server <https endpoint> --code-stdin` reads the one-time code from standard input and sends it with bounded public platform/version data to `POST /runner/enroll`. For controlled manual use, the CLI also accepts `--code`; the hosted installer accepts a quoted code argument (positional, `--code CODE`, or `--code=CODE`) and forwards it through `--code-stdin` only after validation and installation checks. Without an argument it prompts locally.
-3. On one successful redemption, the Worker returns the Runner ID, WebSocket URL, and long-lived token; Registry stores only a peppered token verifier.
-4. The Runner opens an authenticated outbound WebSocket and sends `runner.hello`, binding its metadata to the current credential and connection epoch.
+Hosted installation additionally requires a verified release in its channel. The current **0.1.4 candidate** has a closed stable gate; development uses verified signed prereleases. See [deployment](deployment.md) and [portable installation](portable-runner-installation.md).
 
-The enrollment code itself is not a wire frame and is never sent over the subsequent WebSocket. Credential rotation/revocation invalidates the socket generation. It does not imply that the Worker can terminate a pre-existing local child process.
+Hosted commands contain the one-time code. To use the omitted-code prompt on Windows, remove `-NonInteractive` and use an interactive administrator terminal. Treat any copied command containing the code as a credential.
 
-## Versioning guidance
+## Implement semantic checks
 
-A new Go/Rust implementation should consume the JSON Schema and implement the same semantic checks. The generated schema cannot represent every cross-field invariant, so also implement:
+Alongside the generated schema, validate:
 
 - `min_protocol_version <= max_protocol_version`;
-- `runner.welcome.negotiated_protocol_version` equals the frame version and is in the hello overlap;
+- welcome's negotiated version equals its frame version and belongs to the hello overlap;
 - terminal `job.completed` status/outcome consistency;
 - unique IDs in a complete `runner.sync` snapshot;
-- monotonic `sync_sequence` per Runner session;
-- monotonic job `updated_at_ms` when applying sync/events;
-- `created_by_client_id`, when present, is metadata only and does not change job ownership semantics.
+- monotonic `sync_sequence` within a session;
+- monotonic Job `updated_at_ms` while applying updates;
+- `created_by_client_id` as creator metadata; authorization remains workspace-based.
 
-## Scope boundary
+## Handle structured failures
 
-This protocol does not provide OAuth, AI/model calls, Cloudflare Sandbox, Cloudflare Containers, or a GitHub Actions runtime. Hosted installation is outside the wire protocol and requires a verified release in the selected channel. The current **0.1.4 candidate** does not enable stable distribution. Development uses separately verified signed prereleases without falling back to stable. The public HTTPS origin is validated from the request by default; `RUNMESH_PUBLIC_ORIGIN` is an optional override. See [deployment](deployment.md) for release gating and the [portable installation guide](portable-runner-installation.md) for independent artifact verification.
+`rpc.error.error` contains a code and bounded message, with optional:
 
-Hosted commands contain a single-use enrollment code and pass it to enrollment through standard input. Omitting the code can use an interactive prompt; on Windows, remove `-NonInteractive` from the copied command and use an interactive administrator terminal. Keep commands containing a code private. Updating the Worker does not automatically upgrade an installed Runner.
+- `failure_class`: validation, authorization, availability, conflict, resource, execution, internal or unknown;
+- `operation_state`: not_started, running, committed or unknown;
+- `retry_after_ms`: a bounded safe-retry delay;
+- `next_action`: a stable action such as refresh_permissions, re_read_and_retry or inspect_job.
 
-## Structured RPC failure semantics
-
-The rpc.error.error object keeps the original code and bounded message, and may also include:
-
-- failure_class: validation, authorization, availability, conflict, resource, execution, internal, or unknown;
-- operation_state: not_started, running, committed, or unknown;
-- retry_after_ms: a bounded delay only when retrying is safe;
-- next_action: a stable client action such as refresh_permissions, re_read_and_retry, or inspect_job.
-
-Clients should branch on these fields instead of matching error text. An unknown operation state must never be automatically replayed when the request could have produced a side effect.
-
-## Shared Runner queue and localized UI
-
-See [queue/UI contract](job-queue-and-localization.md) for capability negotiation, current authorization, bounded fair scheduling, restart interruption and server-side locale rendering. Queue protocol 1 is available from Runner 0.1.3 and requires a compatible Worker.
+Use these fields to choose recovery. **Do not automatically replay a possible side effect when its outcome is unknown.** See [call recovery](mcp-agent-call-contract.md). [Queue protocol 1](job-queue-and-localization.md) is available from Runner 0.1.3 with a compatible Worker.

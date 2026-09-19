@@ -1,32 +1,34 @@
 # Check which Worker source is deployed
 
-Use `/health` to identify the Worker's compiled Git commit and compare it with the commit you intended to deploy. The package version alone is not enough: several commits can share a version. Updating a Worker does not upgrade an installed Runner or publish a signed Runner package.
+[简体中文](build-provenance.zh-CN.md)
+
+Compare the Git commit reported by `/health` with the commit you intended to deploy. This identifies the source even when several commits share one package version. Check the installed Runner version separately during an upgrade.
 
 ## Configure the build
 
-In Cloudflare Workers Builds, use the repository root and set the build command to:
+In Cloudflare Workers Builds, select the repository root and set:
 
 ```sh
 npm run build
 ```
 
-For production, connect the protected `main` branch and use:
+Use the repository's pinned Node/npm versions and keep both the build and bundling steps enabled. Workers Builds needs this explicit build command in its settings.
 
-```sh
-npm run deploy:worker -- --env production
-```
-
-For the separate development Worker, connect `dev` and use:
+Connect `dev` to the separate development Worker:
 
 ```sh
 npm run deploy:worker -- --env development
 ```
 
-The current **0.1.4 candidate** is not activated for production. The production wrapper refuses a candidate and preserves the existing deployment. Complete the reviewed release activation before using the production command.
+For production, use protected `main` after its signed release has been verified and activated:
 
-Keep the build command explicit: Cloudflare Workers Builds does not use Wrangler Custom Builds as a replacement for its configured build step. Use the repository's pinned Node/npm versions and avoid `--no-build` or `--no-bundle` shortcuts.
+```sh
+npm run deploy:worker -- --env production
+```
 
-The build records the actual Git commit and source tree. No additional runtime variable or secret is needed. Cloudflare, GitHub and GitLab source declarations must agree with the checkout. Build from a clean checkout; tracked edits, untracked application files, source symlinks, hidden index flags or unverified submodules prevent a clean source declaration. Source archives without Git can be built locally, but cannot provide verified Git provenance for the deployment wrapper.
+Current source is the **0.1.4 candidate**. Complete release activation before using the production command; candidate testing uses development.
+
+Build from a clean Git checkout and keep it unchanged until bundling finishes. The build checks the actual commit and tree against Cloudflare, GitHub and GitLab declarations. Tracked edits, untracked application files, source symlinks, hidden index flags or unverified submodules prevent a clean source declaration. Use a Git checkout, rather than a source-only archive, for a deployment that needs verified source identity.
 
 ## Verify a deployment
 
@@ -36,48 +38,34 @@ From the repository, run:
 npm run check:deployment -- https://your-worker.example <expected-full-commit> main
 ```
 
-Use the actual 40-character commit and replace `main` with `dev` for the development Worker. The checker makes one HTTPS request to `/health` and requires a clean, identified source with the expected commit and branch. It does not change the deployment or retry automatically. The request has a 10-second deadline, including the response body, and a 16 KiB response limit.
-
-A successful response can include:
-
-```json
-{
-  "deployment": {
-    "schema_version": 1,
-    "state": "identified",
-    "source": "git_build",
-    "build_state": "clean",
-    "branch": "main",
-    "commit": "<actual-40-character-commit>",
-    "tree": "<actual-40-character-tree>",
-    "agreement": "not_comparable",
-    "attestation": "self_reported"
-  }
-}
-```
-
-The hash placeholders above are examples, not valid values. `/health` returns `Cache-Control: no-store`.
+Supply the actual 40-character commit; use `dev` as the last argument for development. The checker sends one HTTPS request to `/health` and requires clean, identified source with the expected commit and branch. It is read-only, with a 10-second deadline covering headers and body and a 16 KiB response limit.
 
 | Result | Meaning and next step |
 | --- | --- |
 | `state=identified`, expected commit and branch | The Worker reports the intended compiled source |
-| `agreement=matched` | Recognized Cloudflare version metadata agrees with the compiled source |
-| `agreement=not_comparable` | No recognized provider tag is available for comparison; the compiled source can still be identified |
-| `state=conflict` | Provider metadata disagrees; inspect the build and deployment before accepting the result |
-| Missing or unconfirmed source | Check the build command, Git checkout and logs; do not substitute a manually entered commit |
+| `agreement=matched` | Recognized Cloudflare version metadata agrees with that source |
+| `agreement=not_comparable` | No recognized provider tag is available; check the compiled `state`, commit and branch |
+| `state=conflict` | Inspect the build and deployment to resolve conflicting source declarations |
+| Missing or unconfirmed source | Check the build command, Git checkout and logs |
 
-A version-only response from an older Worker fails this provenance check, but does not by itself prove the Worker is unavailable. Likewise, `ok=true` means the health handler responded; verify login, Runner connectivity and the required MCP operations separately.
+Health responses use `Cache-Control: no-store`. Older Workers may provide only a product version; update through the reviewed deployment path to obtain commit-level identification.
 
-## When a build fails
+After the source check, verify administrator login, Runner connection and policy acknowledgement, then the MCP operations needed for your workload. Follow the [upgrade guide](upgrading.md) for that sequence.
 
-If Cloudflare fails while installing tools or dependencies, the Worker upload has not started. Check the full build log, the configured toolchain and cache settings before retrying. That error alone does not identify a bad Node release, corrupted cache or application defect. After a successful retry, compare the live commit with the intended commit using the command above.
+## Resolve a failed build or upload
 
-A deployment preflight failure occurs before Wrangler uploads anything. An uploader failure may leave the provider outcome uncertain; check the deployed source before retrying.
+| Failure stage | Next step |
+| --- | --- |
+| Cloudflare tool or dependency installation | Inspect the full log, configured toolchain and cache settings, then retry after correcting the reported problem |
+| Deployment preflight | Correct the branch, source or release-state issue before starting an upload |
+| Wrangler upload | Inspect the live source first; the provider may have accepted the deployment despite a failed response |
 
-## Deployment and trust boundaries
+After any successful retry, run the source comparison above.
 
-For the maintained development setup, a separately configured host bridge can fast-forward GitLab `dev` only after GitHub `verify-all` succeeds for the exact current SHA. The connected Cloudflare Worker then builds that GitLab push. The repository does not install this bridge, a scheduler or a provider connection for you. See [deployment](deployment.md).
+## Provider setup and source records
 
-The source statement is `self_reported`, not a digital signature or a reproducible-build proof. It depends on the build host and its Git metadata. Dependencies, ignored generated inputs and environment-dependent transforms are outside the tracked source-tree identity. Do not change source while it is bundling. Signed Runner releases, Worker source commits, Cloudflare version IDs and installed Runner versions must be checked separately.
+In the maintained development setup, a separately configured host bridge fast-forwards GitLab `dev` after GitHub `verify-all` passes for the exact SHA. The connected Cloudflare Worker builds that GitLab push. Configure these connections for your own deployment as described in [deployment](deployment.md).
 
-References: [Workers Builds configuration](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/), [default Git metadata variables](https://developers.cloudflare.com/changelog/post/2025-06-10-default-env-vars/), [version metadata](https://developers.cloudflare.com/workers/runtime-apis/bindings/version-metadata/).
+The health record uses `attestation=self_reported`: it reports tracked Git source from the build host. Keep that host and its Git metadata trusted. Record dependency and build-environment verification with CI, and Runner signature verification with the release evidence. Retain the Worker commit, Cloudflare version ID and installed Runner version together when recording an upgrade.
+
+References: [Workers Builds configuration](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/), [Git metadata variables](https://developers.cloudflare.com/changelog/post/2025-06-10-default-env-vars/), [version metadata](https://developers.cloudflare.com/workers/runtime-apis/bindings/version-metadata/).

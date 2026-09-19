@@ -1,55 +1,53 @@
-# Architecture of the current checkout
+# Runmesh architecture
 
-This describes checked-out source, not whichever version is installed on a Runner or deployed to Cloudflare. Generated [current facts](current-facts.md) and [schema-checked examples](tool-examples.md) are checked by `check:docs`. Execution and rollout follow [verification layers](verification.md). Historical ADRs are not instructions to reset a healthy deployment.
+Use this reference to locate the owner of a behavior before changing it. It describes the current source checkout. [Current facts](current-facts.md) and [tool examples](tool-examples.md) are checked by `check:docs`; [verification layers](verification.md) explains how to validate a change.
 
-## Deployment and authority boundaries
+## Deployment and authority
 
-The public MCP/browser entrypoint is the Worker. The local Runner connects outbound over WSS and owns processes, files, Git, full logs and Context records. No inbound Runner HTTP/SSH gateway, model API, cross-Runner fanout or implicit failover is introduced.
+The Worker provides the public MCP and browser endpoints. Each Runner connects outbound over WSS and owns local processes, files, Git operations, retained logs and Context records.
 
-RegistryDOv2 owns core identities, permissions, enrollment and policy authority in one SQLite-backed DO. RunnerDOv2 owns live authenticated transport and session/policy fences. Production's independent HISTORY_DB D1 binding serves optional metadata-only audit and packed Job snapshots. Its failure must not become credential loss or fallback history writes into core authority. Current authorization must still succeed before protected work is dispatched.
+RegistryDOv2 owns identities, permissions, enrollment and policy authority in one SQLite-backed Durable Object. RunnerDOv2 owns each Runner's authenticated transport, connection generations and policy checks. Production's separate `HISTORY_DB` D1 binding stores optional audit metadata and packed Job snapshots. Treat a history outage as an optional-feature failure while preserving core credentials and authorization.
 
-Each MCP client has an independently revocable secret URL and sticky Runner selection. Switching a non-null selection needs confirmation; an unavailable selected Runner is not silently replaced. Shared authorized workspace Jobs are not private chat sessions. Capabilities and catalog fingerprints describe implementation, not a permission grant or proof of the host client's cached catalog.
+Each MCP client has an independently revocable secret URL and a persisted Runner selection. Switching an existing selection requires confirmation. If that Runner is unavailable, report its state and let the client choose another. Authorized clients selecting the same Runner can share workspace Jobs. Capabilities identify supported operations; current policy determines which operations a client may perform.
 
-## Internal ownership
+## Module ownership
 
-| Area | Modules | Boundary |
+| Area | Modules | Responsibility |
 | --- | --- | --- |
-| HTTP composition | `apps/worker/src/index.ts`, `apps/worker/src/http/` | Entry assembly, routing, request/response and session protection |
+| HTTP composition | `apps/worker/src/index.ts`, `apps/worker/src/http/` | Entry assembly, routing, request/response handling and session protection |
 | Application use cases | `apps/worker/src/application/` | Shared lifecycle/policy coordination, Runner deletion and display projections |
-| Presentation | `apps/worker/src/admin/`, `apps/worker/src/i18n/` | View/message contracts, opaque data and rendering, no automatic Jobs/log polling |
-| MCP | `apps/worker/src/mcp/` | Catalog, handler binding, output validation, bounded projection, reauthorization |
-| Foundations | `public-origin.ts`, `platform/env.ts`, `contracts/` | Origin rules, platform types, narrow application contracts |
-| Registry domains | `registry/auth.ts`, `policy.ts`, `lifecycle.ts`, `history.ts` | Business groups, narrow ports, original synchronous storage owner |
-| Registry facade | `registry.ts` | Compatibility API, schema startup, HTTP/HMAC, maintenance, external history orchestration |
-| Runner composition | `apps/runner/src/runtime.ts` | Current policy and service assembly |
-| Job adapters | `apps/runner/src/jobs/` | File, process, log and recovery boundaries; JobManager retains lifecycle coordination |
-| Context adapters | `apps/runner/src/context/` | Storage/recovery and pure retention planning; executor revalidates paths and authorization |
+| Presentation | `apps/worker/src/admin/`, `apps/worker/src/i18n/` | View/message contracts and rendering; Jobs and logs load on request |
+| MCP | `apps/worker/src/mcp/` | Catalog, handlers, output validation, bounded projection and reauthorization |
+| Foundations | `public-origin.ts`, `platform/env.ts`, `contracts/` | Origin rules, platform types and narrow application contracts |
+| Registry domains | `registry/auth.ts`, `policy.ts`, `lifecycle.ts`, `history.ts` | Business operations over shared synchronous storage |
+| Registry facade | `registry.ts` | Public compatibility API, schema startup, HTTP/HMAC, maintenance and external history |
+| Runner composition | `apps/runner/src/runtime.ts` | Policy and service assembly |
+| Job adapters | `apps/runner/src/jobs/` | File, process, log and recovery operations; JobManager coordinates lifecycle |
+| Context adapters | `apps/runner/src/context/` | Storage/recovery and retention planning; execution revalidates paths and authorization |
 | Shared protocol | `packages/protocol/src/` | Wire contracts, permissions, operation requirements, pagination and failure metadata |
 
-These are incremental boundaries, not a claim of independent tables or elimination of every large module. Cross-table transactions deliberately stay within one Registry. Domain, foundation and application dependencies are checked in both CI systems; runtime and type-inclusive cycles are classified separately and both are rejected.
+Cross-table transactions remain within one Registry. The dependency gate checks application, domain and foundation imports in both CI systems, reporting runtime and type-inclusive cycles separately. See [module boundaries](architecture-remediation.md) for the role matrix and compatibility interfaces.
 
-## Authorization, transactions and failures
+## Authorization and state changes
 
-Tool visibility never replaces authorization. Reauthorization distinguishes unavailable dependencies, actual denial and malformed evidence. RunnerDO keeps its final local policy fence immediately before socket dispatch: no new asynchronous boundary or cached grant may bypass it. Queued Jobs need current authorization before starting.
+Authenticate each entrypoint and reauthorize protected operations against current policy. Preserve distinct outcomes for a denied request, an unavailable dependency and malformed evidence. RunnerDO's final local policy check and socket send form one synchronous section. Queued Jobs reauthorize immediately before starting.
 
-Registry SQL and transaction callbacks remain synchronous. Registration and initial policy creation share rollback behavior. A storage abstraction must not turn these into remote calls or Promise repositories. Optional audit failure remains separate from execution outcome.
+Registry SQL and transaction callbacks are synchronous. Registration and its initial policy snapshot share a transaction and rollback together. Keep that ownership when extracting a domain or storage adapter. Optional audit writes have their own outcome alongside the operation being recorded.
 
-Local Jobs survive MCP response closure and ordinary transport disconnection. Recovery cannot invent exit codes or promise exactly-once process creation. Unknown results require observation rather than blind resubmission; cancellation/stdin are not automatically replayed. Context retention uses explicit preview and current-plan verification, not hidden deletion triggered by a read.
+Jobs persist across MCP response closure and ordinary transport disconnection. After an uncertain result, inspect the original Job and process state before retrying. Cancellation and stdin delivery require the same care because the process may already have received them. Context cleanup uses an explicit preview followed by verification of the current plan.
 
-## Resources, installation and compatibility
+## Installation and compatibility
 
-Ordinary production requires INTERNAL_CONTROL_SECRET and RUNNER_TOKEN_PEPPER as independent stable secrets. ADMIN_TOKEN is optional for the advanced API. Public origin is validated from the routed HTTPS request, with an explicit proxy override when needed. Hosted installation retains the reviewed release record, fixed artifact URLs and signature checks. See [runtime configuration](runtime-config.md) and [portable installation](portable-runner-installation.md).
+Production uses independent, stable `INTERNAL_CONTROL_SECRET` and `RUNNER_TOKEN_PEPPER` values. `ADMIN_TOKEN` supports the optional programmatic administration API. The public origin comes from a validated routed HTTPS request, with a proxy override when needed. Hosted installation uses the reviewed release record, fixed artifact URLs and signature checks. See [runtime configuration](runtime-config.md) and [portable installation](portable-runner-installation.md).
 
-Normal updates preserve Worker names, v2 namespaces, D1 bindings, credentials and registered services. Unknown incompatible schemas remain an error, not permission to reset a database or widen authorization. Only explicitly supported state changes are allowed; no general import or automatic downgrade guarantee exists. Legacy pre-v2 migration is separate from ordinary upgrades.
+During normal updates, preserve Worker names, v2 namespaces, D1 bindings, credentials and registered services. Investigate incompatible schemas against the target revision and use the [upgrade guide](upgrading.md). The [legacy migration](migration.md) procedure applies to its named pre-v2 boundary.
 
-The default service identity is dedicated_user; privileged_host needs explicit choice. New MCP clients default to coding:read. First administrator setup needs no additional bootstrap token and retains CSRF, same-origin and atomic first-success-wins checks; complete initialization before exposing an uninitialized instance. Host shell commands have the operating-system account's privileges. Workspace policy is not a sandbox for hostile code.
+New Runners default to `dedicated_user`; privileged host execution requires an explicit choice. New MCP clients default to `coding:read`. First administrator setup uses CSRF, same-origin and atomic first-success-wins checks; initialize the instance before opening it to untrusted visitors. Shell processes run with the service account's operating-system privileges, so workspace policy must be paired with appropriate host permissions.
 
-Full logs and Context records are stored on the Runner; requested content is relayed through the Worker to authorized clients. Cloud history stores bounded metadata, and no-record preferences do not remove authorization. Jobs/logs load explicitly. Local snapshots, cursors and cleanup have their own byte/count/time budgets. Local tests cannot prove account-wide Cloudflare cost or deployed hibernation behavior.
+Retained logs and Context records remain on the Runner and are relayed when authorized clients request them. Cloud history holds bounded metadata. Recording preferences govern optional uploads; authorization records remain required. Snapshot, cursor and cleanup operations each have byte, count and time budgets.
 
-## Evidence and remaining work
+## Validate a change
 
-Pure rules, adapter/schema contracts, Runner integration, local Cloudflare integration, source transport and installed-package transport are distinct layers. Native runs, signed-release verification and production/account observations are separate evidence. Generated facts mark unobserved runtime checks as not_run instead of copying old success forward.
+Choose the checks that cover the affected owner: pure rules, adapter/schema contracts, Runner integration, local Cloudflare integration, source transport or installed-package transport. Record native-platform, signed-release and live-environment results against the same candidate SHA. Use `not_run` for environments that have not been exercised.
 
-Compatibility facades and broad lifecycle coordinators remain. Extraction does not establish complete correctness or remove all legacy private-state fault injection. Build provenance, host catalog refresh and account acceptance need independent verified delivery. Do not infer them from a product version, this document, or a green unit-test command.
-
-The current [modular remediation contract](architecture-remediation.md) documents the role matrix, display DTOs, shared deletion use case, native adapters, test collection and compatibility boundaries.
+For deployment acceptance, verify the compiled Worker commit, installed Runner version, client tool catalog and required account behavior. Measure Cloudflare cost and hibernation in the target environment. Stateful coordinators and compatibility interfaces have dedicated regression coverage; preserve it while moving operations behind narrower interfaces.

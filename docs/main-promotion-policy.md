@@ -1,54 +1,50 @@
 # Main promotion policy
 
-Normal development enters `dev`. Production changes enter `main` only through
-an explicit pull/merge request whose source is **the same repository's `dev`**.
-A fork branch named `dev`, `feature/*`, `fix/*`, tags and direct pushes are not
-alternative production paths. This policy does not authorize a production
-deployment or merge the current development backlog automatically.
+Develop on `dev` and promote production changes through an explicitly approved
+PR/MR from **the same repository's `dev` to `main`**. The source check validates
+both repository identity and branch names.
 
-## Two independent controls
+## Configure provider protection
 
-Server-side branch protection rejects direct changes: GitHub requires a PR,
-applies the rule to administrators, requires `verify-all` plus the unique
-`main-source-policy` check from GitHub Actions, and forbids force pushes and
-deletion. GitLab sets **Allowed to push and merge: No one**, preserves the
-existing maintainer merge role, and requires successful, non-skipped pipelines.
-Keep conversation resolution and existing verification requirements enabled.
-An Action on `push` runs after the ref changed; it is not a push prohibition.
+On GitHub, require a PR and apply the rule to administrators. Require
+`verify-all` and the unique `main-source-policy` check from GitHub Actions,
+with force pushes and deletion disabled. Retain conversation resolution and
+the existing verification requirements.
 
-The source check is metadata-only, has no checkout/install/deployment step,
-and never receives a signing key. It compares project/repository identities
-as well as exact `main`/`dev` names. GitHub listens to opening, reopening,
-synchronization, target edits and ready-for-review events; its job is not
-conditionally skipped for a wrong source. A missing required check blocks
-merging rather than silently succeeding. Ordinary `dev` CI must never produce
-the `main-source-policy` GitHub check, because checks belong to commit SHAs.
+On GitLab, set **Allowed to push and merge: No one**, retain the maintainer merge
+role, and require a successful, non-skipped pipeline. Provider branch rules
+control ref updates; the source-policy job checks whether a proposed PR/MR has
+the approved origin.
+
+The source-policy job reads platform event metadata. GitHub runs it for opening,
+reopening, synchronization, target edits and ready-for-review events. A wrong
+source produces failure, and a missing required check blocks merging. Keep
+`main-source-policy` exclusive to this workflow: checks belong to commit SHAs,
+so ordinary `dev` CI must use its own names.
 
 ## GitLab trusted entrypoint
 
-In this repository's project setting **CI/CD configuration file**, select:
+Set the project's **CI/CD configuration file** to:
 
 ```text
 .gitlab/main-policy.yml@aloneio/runmesh:dev
 ```
 
-The root entrypoint is read from reviewed `dev`, including for source branches
-which predate the gate. It includes the ordinary `.gitlab-ci.yml` at the actual
-pipeline commit and then overlays the mandatory metadata-only `.pre` job and
-pipeline creation rules. Thus an old branch with otherwise passing tests cannot
-omit the source gate. No new secret, Runner variable or cloud resource is needed.
-Other repository owners substitute their own project path in this administrative
-setting. Review changes to the trusted entrypoint as security configuration.
+This loads the entrypoint from reviewed `dev`, includes ordinary
+`.gitlab-ci.yml` at the actual pipeline commit, then applies the mandatory
+metadata-only `.pre` job and pipeline creation rules. Source branches that
+predate the gate receive the same policy. For a fork, substitute its project path
+in this administrative setting.
 
-Do not override predefined CI provenance variables. After retargeting a GitLab
-MR, run a new MR pipeline for its current target before merging; historical
-pipeline success is not evidence about a different target. The repository
-administrator remains responsible for configuration and merge permissions.
+Review changes to the trusted entrypoint as security configuration and preserve
+predefined CI provenance variables. After retargeting an MR, run a new MR
+pipeline against its current target before merging.
 
-## Generated and tested configuration
+## Maintain the policy
 
 `scripts/main-promotion-policy.mjs` owns the metadata predicates. The generator
-embeds the same dependency-free function bodies in GitHub and GitLab jobs:
+embeds the same dependency-free functions in GitHub and GitLab jobs. After
+changing a rule, generate and review the configuration, then check it:
 
 ```sh
 node scripts/check-main-policy.mjs --write
@@ -56,29 +52,27 @@ npm run check:promotion-policy
 node --test test/main-promotion-policy.test.mjs
 ```
 
-`check:promotion-policy` verifies rather than rewrites workflow files in CI.
-Keep it in both CI systems and classify new tests in the verification manifest.
-Neither generated files nor local hooks prove remote settings are enabled;
-verify the actual provider APIs and positive/negative draft PR/MR checks.
+CI uses `check:promotion-policy` to verify the generated files. Keep that check
+in both systems and register new tests in the verification manifest.
 
-## Release and enforcement boundaries
+Verify live branch rules through the provider APIs. Exercise valid dev sources,
+invalid sources and same-named fork branches with draft PR/MR probes; close the
+probes after checking their results. Test ref-update protection with disposable
+protected branches. `git push --dry-run` does not execute remote pre-receive
+checks.
 
-Create `dev -> main` only for an explicitly approved promotion, wait for source
-policy and all normal checks, then merge using the provider PR/MR endpoint or UI.
-Do not use `git push ...:main`, even to fast-forward an approved commit, and do
-not temporarily weaken protection to publish. Mirror promotion through the
-corresponding `dev -> main` MR; reconcile merge strategy/commit identity without
-force pushes. Existing stable release gates still require protected `main`.
+## Promote a release
 
-The GitHub job is deliberately a read-only `pull_request` workflow: it can
-bootstrap from `dev` without modifying/deploying the current `main`. Repository
-editors who deliberately replace the workflow can falsify source-controlled CI;
-this is not an immutable organization-level policy or a defense against an
-administrator changing repository settings. A future trusted-default-branch
-workflow or separately administered required workflow can harden that threat
-model, but must not be silently installed by releasing unapproved code.
+For an approved promotion, open `dev -> main`, wait for the source policy and
+all required checks, and merge through the provider PR/MR endpoint or UI. Use the
+corresponding GitLab `dev -> main` MR for mirror promotion. Reconcile differences
+in merge strategy and commit identity while keeping force-push and direct-push
+protection enabled.
 
-Do not claim a `git push --dry-run` exercised remote pre-receive checks. Testing
-the main ref itself could accidentally deploy if protection were misconfigured;
-prefer API verification and disposable protected test branches. Draft promotion
-probes must be closed, never merged, and must leave `main` unchanged.
+Stable publication continues from protected `main` through its release gates.
+Verify the final commit on both providers and the deployed Worker separately.
+
+The current GitHub policy uses a read-only `pull_request` workflow. Its trust
+boundary includes maintainers who can change workflow files or repository rules.
+Review those changes as security-sensitive configuration; organizations that need
+independent enforcement can use a separately administered required workflow.

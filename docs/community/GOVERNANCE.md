@@ -13,9 +13,7 @@ code contributions from individuals and organizations.
 - **Community participants** help with issues, reproductions, documentation,
   and design feedback.
 
-The maintainer list is represented by the repository owner and may grow as
-responsibility is delegated. A contribution or review does not itself confer
-maintainer authority.
+The repository owner appoints maintainers and delegates their responsibilities.
 
 ## Decision process
 
@@ -32,8 +30,7 @@ matters should use the private process in [.github/SECURITY.md](../../.github/SE
 ## Contributions and rights
 
 The [CONTRIBUTING.md](../../.github/CONTRIBUTING.md) document contains the complete
-contribution terms and process. Contribution activity does not itself grant
-commercial-use rights. Commercial permissions are described in
+contribution terms and process. Commercial use requires separate authorization under
 [COMMERCIAL_LICENSE.md](../legal/COMMERCIAL_LICENSE.md).
 
 ## Changes to this governance
@@ -42,6 +39,3 @@ Governance changes are proposed through a pull request and should include a
 plain-language explanation of their impact on contributors and maintainers.
 The current repository owner or delegated maintainers approve governance
 changes.
-
-This document is community guidance, not legal advice. Obtain qualified advice
-for questions about your rights, obligations, or planned commercial use.

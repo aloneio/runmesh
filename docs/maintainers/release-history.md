@@ -1,6 +1,6 @@
 # Archived release notes
 
-Historical record retained from the documentation before the user-guide refresh. These dated statements are not current installation, upgrade, deployment or release approval instructions. Use the [documentation index](../README.md) for current guidance.
+This archive records the releases and migration procedures named below. For current installation, upgrade and deployment guides, use the [documentation index](../README.md).
 
 ---
 

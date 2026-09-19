@@ -6,19 +6,19 @@ Required permissions: none for source review; release activation requires the ex
 
 ## Goal
 
-Decide whether a candidate is ready to be considered for manual activation while preserving signed immutable assets, compatibility gates, and an independent recovery path.
+Determine whether a candidate is ready for an activation decision using evidence tied to its source SHA, signed assets, compatible components and recovery procedure.
 
 ## Procedure
 
-1. Record the source commit SHA and confirm the working tree used to build the candidate is intentional.
-2. Require the hosted CI gate for that SHA. GitHub and GitLab must retain the shared release-relevant checks; native platform evidence remains separately identified.
-3. Verify package/version consistency, release-contract checks, license checks, Worker dry-runs, package smoke tests, and the signed asset manifest using the repository release tooling.
-4. Record the intended Worker/Runner compatibility combination. Do not assume adding optional protocol fields is compatible with a strict older peer.
-5. Confirm the upgrade target has enough disk space, no unaccounted active Jobs, the expected service identity, and an independent recovery/control channel before any service restart.
-6. Keep activation separate from preflight. A successful preflight does not enable distribution, overwrite an older immutable asset, deploy the Worker, or restart the Runner.
+1. Record the candidate's source SHA and inspect the working tree used to build it.
+2. Require hosted CI evidence for that SHA. Check the shared release-relevant jobs on GitHub and GitLab, and identify each required native-platform result.
+3. Run package/version, release-contract, license, Worker dry-run and package smoke checks. Verify the signed asset manifest with the repository's release tooling.
+4. Record the intended Worker/Runner versions and test their protocol combination. Include strict older peers when adding optional fields or methods.
+5. Before a host restart, check disk space, account for active Jobs, confirm the service identity, and verify an independent recovery/control channel.
+6. Present the evidence for the activation decision. After approval, follow the release procedure for publication and distribution activation, the deployment procedure for the Worker, and the host upgrade procedure for each Runner. Preserve existing immutable release assets.
 
 ## Exit conditions
 
-- Ready for an explicit activation decision only when required evidence is `passed` and linked to the candidate SHA.
-- Stop on signature/version mismatch, missing native evidence required by the release, incompatible protocol combinations, unknown service identity, or unavailable recovery channel.
-- Record `not_run` or `unsupported` rather than converting absent evidence into success.
+- Ready for an activation decision when every required result is `passed` and linked to the candidate SHA.
+- Resolve signature/version mismatches, missing required native evidence, incompatible protocol combinations, unknown service identity or an unavailable recovery channel before proceeding.
+- Record unexecuted or unsupported checks as `not_run` or `unsupported`, with their reason.

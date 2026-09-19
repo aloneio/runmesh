@@ -1,63 +1,65 @@
-# Minimal runtime variables and secrets
+# Runtime configuration and secrets
 
-Ordinary production setup needs **two secrets and no manually supplied plaintext variables**. Use the source defaults unless your deployment needs an override. Preserve existing resource bindings and credential values during updates.
+[简体中文](runtime-config.zh-CN.md) · [Administrator guide](admin-guide.md)
+
+Start with the source defaults and two independent Worker secrets. Add an override only when your deployment needs one.
 
 ## Required secrets
 
-| Secret | Purpose | Update rule |
+| Secret | Purpose | During upgrades |
 | --- | --- | --- |
-| `INTERNAL_CONTROL_SECRET` | Authenticates internal control-plane messages | Keep the current value when updating |
-| `RUNNER_TOKEN_PEPPER` | Protects stored Runner token verifiers | Keep the current value; replacement invalidates current tokens |
+| `INTERNAL_CONTROL_SECRET` | Authenticates internal control-plane messages | Preserve the current value |
+| `RUNNER_TOKEN_PEPPER` | Protects stored Runner token verifiers | Preserve the current value; replacement invalidates current tokens |
 
-Use independent cryptographically random values, at least 32 random bytes encoded as text. Never put them in Wrangler `vars`, source, a build log or an MCP conversation. Browser administrator passwords remain in the administrator setup flow; they are not environment variables.
+Generate each value from at least 32 cryptographically random bytes encoded as text. Store them as Cloudflare secrets and keep them out of source, logs and conversations. Set the administrator password through the first-setup page.
 
-`ADMIN_TOKEN` is optional, for the advanced programmatic Runner administration API only. Do not set it for dashboard-only use. An already configured ADMIN_TOKEN is not automatically deleted because another operator may use the API.
+For programmatic Runner administration, also configure `ADMIN_TOKEN`. Dashboard-only installations can use the two required secrets.
 
-## Defaults and optional overrides
+## Defaults and overrides
 
-| Variable | Default | Optional override |
-| --- | --- | --- |
-| `WORKER_ID` | Production/development mode | An existing explicit ID still works |
-| `RUNMESH_PUBLIC_ORIGIN` | Validated HTTPS URL plus matching Host | Keep only for reverse-proxy overrides; an explicit empty/invalid value stays fail-closed |
-| `RUNMESH_AUDIT_BACKEND` | Production defaults to D1 | Explicit backend overrides are still supported |
-| `RUNMESH_JOB_HISTORY_BACKEND` | Production defaults to packed D1 | Missing production D1 does not fall back to DO history writes |
-| `RUNMESH_SIGNED_RELEASE_AVAILABLE` | Production: reviewed released version, or disabled for a candidate; development: `dev` discovery sentinel | An explicit empty value disables hosted installation. Development accepts only a current-series immutable signed dev prerelease and never falls back to stable. |
-| `RUNMESH_DEPLOYMENT_BRANCH` / `RUNMESH_DEPLOYMENT_COMMIT` | Verified build-time Git source, compared with provider metadata | Old variables are not treated as proof of compiled source |
+| Setting | Default and when to change it |
+| --- | --- |
+| `WORKER_ID` | Derived from production/development mode; an existing explicit ID remains supported |
+| `RUNMESH_PUBLIC_ORIGIN` | Validated HTTPS request URL and matching Host. Set an explicit public HTTPS origin when a reverse proxy supplies an internal request URL |
+| `RUNMESH_AUDIT_BACKEND` | D1 in production; preserve an intentional backend override |
+| `RUNMESH_JOB_HISTORY_BACKEND` | Packed D1 in production; keep the `HISTORY_DB` binding available |
+| `RUNMESH_SIGNED_RELEASE_AVAILABLE` | The reviewed stable release in production, or disabled for a candidate; `dev` discovery in development. An explicit empty value disables hosted installation |
+| `RUNMESH_DEPLOYMENT_BRANCH` / `RUNMESH_DEPLOYMENT_COMMIT` | Deployment identity comes from verified build-time Git source and is compared with provider metadata; use [provenance checks](build-provenance.md) to inspect it |
 
-The development environment has one non-secret mode marker, `RUNMESH_ENVIRONMENT=development`. Test-only vars remain confined to the local test environment. A fork's public domain does not have to replace an owner's hard-coded URL. Request authority is never taken from X-Forwarded-Host. A reverse proxy using an internal request URL must supply an explicit validated public-origin override.
+A public-origin override must be a complete HTTPS origin, without a path, query, fragment, credentials or whitespace. An empty or invalid override rejects requests that require a public origin. Runmesh validates the request itself rather than using forwarded host headers.
 
-Bindings are not redundant runtime variables: keep the live Registry/Runner DO namespaces, HISTORY_DB, static assets and CF_VERSION_METADATA. The maintained production D1 name and v2 class identities are unchanged. Wrangler resource provisioning does not require copying an account-specific D1 UUID into the source template.
+Development uses `RUNMESH_ENVIRONMENT=development`. Keep test variables in the local test environment. Preserve the Registry/Runner Durable Object namespaces, `HISTORY_DB`, static assets and `CF_VERSION_METADATA` bindings when updating an existing instance.
 
-## Publication safety
+## Release and environment selection
 
-The current **0.1.4** source is a candidate and defaults to disabled stable distribution. Availability follows `release/release-state.json`, including the exact version, publication commit and independently verified manifest hash. A package version alone does not activate distribution. Do not set an availability override to make an unpublished candidate appear ready. The previously published immutable v0.1.3 assets remain unchanged.
+Current source is the **0.1.4 candidate**, with stable distribution disabled. Production becomes available after signed publication, independent verification and reviewed activation in `release/release-state.json`. Keep this recorded state as the source of installation availability.
 
-Production release and deployment require `main`; the production deployment wrapper also refuses an unactivated candidate. Development deploys separately from `dev`. The build records its clean Git commit/tree, with provider version metadata used for comparison when available. Dirty, missing or conflicting source remains unconfirmed. See [Worker build provenance](build-provenance.md) to check the actual deployed commit.
+Production uses protected `main`; candidate testing uses the separate `dev` Worker. Development selects a verified signed prerelease from its own channel and closes hosted installation when that selection is unavailable. See [development prereleases](dev-runner-prereleases.md).
 
-## New-install helper
+## Initialize missing secrets
 
-After authenticating Cloudflare management and creating the Worker, inspect required secrets without changing anything:
+After authenticating your Cloudflare CLI and creating the Worker, inspect the required secret names:
 
 ```sh
 npm run setup:secrets -- --env production
 ```
 
-Create only missing required secrets:
+Create missing required values:
 
 ```sh
 npm run setup:secrets -- --env production --apply
 ```
 
-The helper lists names, rechecks them before mutation, generates independent random values in memory and sends only missing keys through Wrangler stdin. It never prints those values or writes a secret file. A repeat run with both keys present performs no secret write. Failed inventory is not an empty inventory. An uncertain upload is not retried automatically. Do not run secret initialization concurrently on multiple machines.
+The helper rechecks the inventory, generates independent values in memory and uploads missing keys through Wrangler stdin. Existing values remain intact. Keep initialization to one operator at a time. If inventory fails, resolve the Cloudflare access problem; if an upload result is uncertain, check the secret inventory before another attempt.
 
-This is a deliberate setup action, not a Worker cold-start hook or recurring deployment step. The helper needs management authorization; the deployed Worker must not contain a Cloudflare API token. Generated keys are retained by Cloudflare, not recoverable from this helper afterward. Operators needing independent secret backups should provision and retain values through their secure secret-management process instead.
+Cloudflare retains the generated keys. If you require an independently recoverable backup, generate and retain values through your secret-management process before uploading them.
 
-## Upgrade and portability
+## Update or move an installation
 
-Deploy the updated source while preserving existing secrets. Ordinary removed plaintext defaults are replaced by deterministic code behavior. Do not remove an intentional proxy override or emergency disable during upgrade; retain such exceptions explicitly in the deployment configuration. Existing optional secrets are not pruned blindly. Configuration changes must not rename the production Worker or its data bindings.
+Preserve the Worker name, live data bindings, both required secrets and intentional overrides such as a proxy origin or emergency installer disable. Deploy the updated Worker, then follow the [upgrade guide](upgrading.md) for each Runner.
 
-For a new account, the source can provision its own resources and use its own routed HTTPS domain. This is deployment portability, not an automatic data migration: restoring an existing Registry on another account still requires the original credential-protection keys and a separately reviewed data-transfer process.
+A new account can provision its own resources and use its routed HTTPS domain. Moving existing data requires a separate transfer plan that includes the original credential-protection keys.
 
-Release signing keys belong only in the GitHub release environment. Cloudflare API credentials belong only in an authorized local CLI or build connection. Neither belongs in the production Worker's runtime secret list.
+Keep release signing keys in the GitHub release environment and Cloudflare API credentials in the authorized CLI or build connection. The Worker runtime receives only its application secrets.
 
-Reference: [Cloudflare secrets](https://developers.cloudflare.com/workers/configuration/secrets/), [version metadata](https://developers.cloudflare.com/workers/runtime-apis/bindings/version-metadata/), [automatic resource provisioning](https://developers.cloudflare.com/workers/wrangler/configuration/#automatic-provisioning).
+References: [Cloudflare secrets](https://developers.cloudflare.com/workers/configuration/secrets/), [version metadata](https://developers.cloudflare.com/workers/runtime-apis/bindings/version-metadata/), [resource provisioning](https://developers.cloudflare.com/workers/wrangler/configuration/#automatic-provisioning).

@@ -1,57 +1,56 @@
-# Quota isolation and optional cloud Job history
+# Operate optional history through quota or service failures
 
-## Authentication and optional history
+Runmesh separates current authorization in RegistryDO from optional D1 audit and Job history. This reduces competition for core storage operations while keeping every host operation subject to current permissions.
 
-RegistryDO checks sessions, MCP credentials, enrollment, current policy and final dispatch authorization. Optional MCP audit history can use an independent D1 database. A history outage does not authorize calls from cached permissions; operations still require current authorization.
+## Check the configured storage
 
-D1 and Durable Objects have independently metered storage usage. Keeping optional history in D1 reduces its competition with core authorization operations, but it does not increase the Durable Objects allowance. If that core allowance is exhausted, operations requiring current Registry authority can still fail. Public health and fixed stable-release distribution do not require a Registry read; development prerelease discovery has a separate cache path. Consult Cloudflare's current plan limits rather than treating history isolation as a zero-cost guarantee.
+Production defaults to D1 history using `HISTORY_DB`. Development/test uses SQLite when no D1 binding is present; explicit backend overrides take precedence. When D1 is selected but unavailable, history reports degraded/unavailable and stays on the selected backend.
 
-References: [DO pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/), [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/), [Wrangler provisioning](https://developers.cloudflare.com/workers/wrangler/configuration/#automatic-provisioning).
+D1 data is partitioned by Registry namespace, Runner ID and lifecycle. Reads and writes check that lifecycle so an old Runner instance's delayed history stays separate from a recreated Runner. Audit receipts expose `audit_status=recorded`, `degraded`, `disabled` or `unknown` alongside the operation result.
 
-## Storage paths
+Both D1 and Durable Objects have metered limits. Exhausting Registry's allowance can still block operations requiring current authorization. Public health and fixed stable-release distribution use independent paths; development prerelease discovery uses its own cache. Consult [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/) and [Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/).
 
-Core credentials, enrollment and policy stay in RegistryDO SQLite. Production defaults to D1 for audit metadata and Job history using `HISTORY_DB`. Development/test defaults to SQLite when no D1 binding is present. Explicit backend overrides remain available. If D1 is selected and its binding is missing or unavailable, history reports degraded/unavailable rather than silently falling back to core DO writes. Per-client recording preferences still apply. See [batched Job history](batched-job-history.md). Full commands, output, file bodies, diffs and credentials remain excluded from cloud audit.
+## Disable new cloud Job recording
 
-D1 partitions by Registry namespace, Runner lifecycle and Runner ID. Delayed writes cannot become history for a deleted/recreated Runner. Reads recheck lifecycle after awaiting D1. Receipts distinguish `audit_status=recorded`, `degraded`, `disabled`, and `unknown` from the execution outcome.
+In **Admin > MCP Clients > client detail > Cloud Job history**, select **Do not record new jobs** and save. Existing clients retain their chosen preference across deployment.
 
-## Cloud Job no-record mode
+The preference suppresses new cloud Job snapshots and that client's `exec.*`/`job.*` audit entries. Existing cloud records, local metadata/logs, workspace files, client transcripts and provider logs retain their own lifetimes. Security and replay state remains available for authorization. Re-enabling begins a new capture window; already unrecorded Jobs stay excluded, while previously recorded Jobs can continue state updates.
 
-In **Admin > MCP Clients > client detail > Cloud Job history**, select **Do not record new jobs** and save. Existing administrator session, same-origin and CSRF checks protect this setting. Existing clients default to recording; deployment does not silently change preferences.
-
-The setting suppresses new cloud Job snapshots and that client's `exec.*` / `job.*` tool-audit entries. It does not delete existing cloud history, local Runner metadata/logs, user-created files, client transcripts, provider access logs, or necessary security/replay state. It is not anonymous or zero-disk execution.
-
-Re-enabling starts a new capture window and does not backfill previously unrecorded jobs. Re-saving the same preference is idempotent. Existing recorded jobs may continue lifecycle updates so retained history does not remain falsely running.
-
-For live `job get/logs/cancel/input`, supply the workspace:
+For current Job access, use its original workspace:
 
 ```json
 {"action":"get","workspace_id":"workspace","job_id":"job-..."}
 ```
 
-A workspace-scoped `job list` queries the online Runner directly. Calls without a workspace retain their compatible cloud-snapshot path. Unrecorded jobs have no offline cloud history. History-independent operations require Runner 0.1.1+: Registry rechecks current scope, selected Runner, policy and workspace permission, and Runner verifies the actual Job workspace before acting. The supplied workspace is an expectation, not an authorization grant. Older peers fail closed with `runner_upgrade_required`. This Worker rollout does not upgrade or restart installed Runners.
+Workspace-bound `get/logs/cancel/input` can operate independently of cloud Job history on Runner **0.1.1+**. The Registry checks current scope, selection and policy; the Runner verifies the actual Job workspace. Older peers return `runner_upgrade_required`.
 
-## Cost and retention
+A workspace-scoped list queries an online Runner directly. Without a workspace, or while offline, it uses retained cloud metadata. Jobs that were never recorded require live access. See [Job history](batched-job-history.md).
 
-Terminal-Job retention deletes a bounded number of old records when limits are exceeded. It does not prune active Jobs. Indexes and retention bookkeeping also consume storage operations; monitor actual D1 and Durable Objects usage for your account.
+## Retention
 
-Each store has a 1,000-entry audit cap per Runner (D1 also partitions by lifecycle). Seven-day-old entries are excluded on read. Old DO history is not copied or deleted during transition; the read path merges it with D1, so both stores can temporarily retain their individual windows. D1 removes at most 100 expired rows per append or cron turn. A 15-minute cron does not instantiate core DOs. Cleanup backlog or quota failure can extend physical retention beyond the visibility window; this is not a strict seven-day physical-deletion guarantee.
+Terminal-Job cleanup removes bounded batches while preserving active Jobs. Audit stores each cap metadata at **1,000 records per Runner**, with D1 also partitioned by lifecycle; reads exclude entries older than seven days.
 
-## Failure handling
+During a backend transition, the read path can merge retained SQLite and D1 audit windows. D1 deletes at most **100 expired audit rows** per append or cron turn. The fifteen-minute D1 cleanup runs independently of core DO instantiation. Backlog or quota failures can extend physical retention; backups and point-in-time recovery have separate lifetimes.
 
-D1 failures open a per-instance circuit without storing failure records in D1 or core DO. Explicit daily-row-quota errors delay retries until the next UTC day plus a recovery interval; other errors use a bounded cooldown. Cold construction can probe again: this is not a global persistent quota meter. During a hot-instance cooldown, repeated calls make no further D1 requests. Cron probes have their own bounded cadence.
+## Respond to failures
 
-Failed history reads return unavailable, not a fake empty list. Audit failure never replays the user command. Skipping an optional Job write no longer clears the circuit accidentally. MCP infrastructure failures return 503, not a revoked-secret 404; genuine invalid credentials still return 404. Enrollment/client/policy SQL failures reach a sanitized availability response rather than masquerading as conflicts.
+D1 failures start a cooldown for the affected running instance. Daily row-quota errors delay retries until the next UTC day plus a recovery interval; other errors use a bounded cooldown. New instances may probe again, and cron has its own cadence. The cooldown avoids repeated calls to the failing backend in that instance.
 
-## Check a deployment or change the backend
+| Observation | Next step |
+| --- | --- |
+| History unavailable or degraded audit receipt | Keep the execution receipt and retry the history query after recovery. Audit failure does not replay the command. |
+| MCP `503` infrastructure failure | Check current control-plane/provider availability. |
+| Initial MCP URL `404` | Check the credential; invalid, rotated and revoked URL credentials use this response. |
+| Core authorization unavailable | Wait for recovery before host operations; current permission is required. |
 
-The repository's production configuration binds `HISTORY_DB` to `runmesh-audit-history`. Wrangler provisioning uses the Cloudflare build connection; missing authorization must be resolved through that connection. Do not reset Registry or put deployment tokens in source to repair a history binding.
+Enrollment, client and policy storage failures return sanitized availability errors. Preserve existing credentials and data while diagnosing provider failures.
 
-Check `/health` for the reported backend and binding, then make an authenticated history query or verify an audit receipt. A binding indicator alone does not prove that writes work. Check the deployment commit separately. See [deployment](deployment.md) for the GitHub/GitLab build flow.
+## Verify or change a deployment
 
-Changing back to `sqlite` is an explicit operator action and moves history consumption back to core storage. Preserve existing namespaces and data when changing the backend. There is no automatic D1-failure fallback.
+The repository binds production `HISTORY_DB` to `runmesh-audit-history`. Resolve provisioning authorization through the Cloudflare build connection. See [Wrangler provisioning](https://developers.cloudflare.com/workers/wrangler/configuration/#automatic-provisioning).
 
-## Runner compatibility
+Check `/health` for the backend/binding and deployed commit, then verify an authenticated history query or audit receipt to confirm actual access. The [deployment guide](deployment.md) describes the GitHub/GitLab build flow.
 
-[Batched history](batched-job-history.md) provides manual recent-history reads and cloud/local retention settings. Source-side batching and optional day-based local cleanup require history protocol 1, available from Runner v0.1.2.
+Switching to `sqlite` is an explicit operator change and moves history usage back to core storage. Preserve namespaces and existing data during that change.
 
-The **0.1.4 candidate** implements [reporting protocol 2](demand-job-history.md): compatible Runner/Worker pairs filter newly admitted no-record Jobs before upload and use change-driven scheduling. Empty eligible updates avoid D1. A log read never changes the recording preference. Older peers and records without the capture marker keep their documented cloud-filtered behavior. Updating Worker code does not upgrade the installed Runner, and connection heartbeat and authorization costs remain separate.
+The **0.1.4 candidate** implements [reporting protocol 2](demand-job-history.md), which filters new no-record Jobs at a compatible Runner and uses change-driven uploads. Deploy the compatible Worker and install the verified Runner as separate steps. Authorization and heartbeat remain part of normal connection resource use.

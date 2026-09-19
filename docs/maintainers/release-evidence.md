@@ -1,6 +1,6 @@
 # Historical release evidence and audit references
 
-Historical record retained from the documentation before the user-guide refresh. These dated statements are not current installation, upgrade, deployment or release approval instructions. Use the [documentation index](../README.md) for current guidance.
+This archive records release checks and observations for the versions and review periods named below. Current installation, upgrade and deployment guides are in the [documentation index](../README.md).
 
 ---
 

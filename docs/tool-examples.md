@@ -1,8 +1,8 @@
 # Schema-checked tool examples / Schema 校验示例
 
-Generated from `tool-examples.json`. Synthetic inputs only; validation never invokes a handler or performs an edit, shell command, registration or deletion.
+Generated from `tool-examples.json` and checked locally against the tool input schemas. Adapt the synthetic IDs, hashes and commands to your authorized workspace, and review write operations before running them. Each actual call checks current permissions.
 
-示例只校验参数，不执行操作。有效参数不等于已授权或资源存在；实际权限每次重验。Job、Context 和摘要均为合成值，不要盲目执行示例中的写操作。
+示例来自 `tool-examples.json`，通过工具参数 Schema 的本地校验。使用时请替换为自己有权访问的工作区、任务和内容，并在执行前核对写入操作。实际调用会检查当前权限。
 
 ## runner-list — schema accepts / 参数有效
 

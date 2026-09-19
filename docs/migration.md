@@ -1,6 +1,6 @@
 # Historical release transitions
 
-> This reference applies only to the named early development and pre-v2 transitions below. It is not an upgrade procedure for an existing compatible v2 installation. For current updates, use the [upgrade guide](upgrading.md); preserve namespaces, D1, secrets, profiles and healthy enrollment.
+> This historical reference covers the named early development and pre-v2 transitions. For a current v2 installation, use the [upgrade guide](upgrading.md) to preserve namespaces, D1, secrets, profiles and enrollment.
 
 ## Compatible dev.3 to dev.4 v2 upgrade
 
@@ -46,9 +46,9 @@ If access must be withdrawn, revoke or rotate Runner credentials and MCP client 
 
 ## Release gates for current installations
 
-For current installation and release requirements, use [portable installation](portable-runner-installation.md) and [release status](release-readiness.md). A normal HTTPS deployment derives its origin from the request URL and matching Host; `RUNMESH_PUBLIC_ORIGIN` is an optional reverse-proxy override. Stable distribution requires an activated verified release record, and development uses a separate prerelease channel. The historical transition steps above do not enable either channel.
+For current installation and release requirements, use [portable installation](portable-runner-installation.md) and [release status](release-readiness.md). A normal HTTPS deployment derives its origin from the request URL and matching Host; `RUNMESH_PUBLIC_ORIGIN` is an optional reverse-proxy override. Stable distribution requires an activated verified release record, and development uses a separate prerelease channel.
 
-Before rollout, run the repository's version, format, license, architecture, typecheck, unit-test, package, and Worker dry-run checks. Local checks do not prove provider quotas, edge-log redaction, native service lifecycle behavior, or external MCP-client acceptance; perform those as separate deployment acceptance tests.
+Before rollout, run the repository's version, format, license, architecture, typecheck, unit-test, package and Worker dry-run checks. Then verify account quotas, edge-log redaction, host service lifecycle and the intended MCP clients in the deployment environment.
 
 ## Security boundary
 
