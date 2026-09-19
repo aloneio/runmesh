@@ -4,7 +4,7 @@ This baseline defines the measurements used before enabling a hosted Worker depl
 
 ## Measurements
 
-Record a UTC window and collect the following counters from the deployment dashboard and Runner supervisor:
+Record a UTC window and combine available counters from Cloudflare analytics and host monitoring:
 
 - Worker requests, Durable Object requests, and WebSocket connection minutes.
 - Durable Object storage reads/writes and SQLite row counts.
@@ -15,7 +15,7 @@ For each counter, record `window_start`, `window_end`, `environment`, `git_sha`,
 
 ## Derived rates
 
-Compute per active MCP call:
+Compute request/storage rates per active MCP call and CPU/log rates per Job:
 
 - `bridge_calls_per_mcp_call`
 - `worker_requests_per_mcp_call`
@@ -25,6 +25,6 @@ Compute per active MCP call:
 
 Use p50, p95, and maximum values. A retry is counted separately from the original call so retry storms remain visible.
 
-## Release gate
+## Operator acceptance policy
 
-Do not enable a hosted rollout until a seven day development window has a complete export, no unbounded counter, and an operator supplied quota threshold for every provider resource. Compare the next window against the same fields and SHA. A missing provider export is an unknown measurement, not a zero.
+Before a hosted rollout, collect a seven-day development window and set a quota threshold for each provider resource you rely on. Record unavailable counters as unknown. Compare subsequent windows using the same measurement definitions and record each deployment's SHA. Assign an operator to collect the exports and review the thresholds alongside the CI and deployment results.

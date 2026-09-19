@@ -1,9 +1,11 @@
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import { reviewedReleaseSource } from "./runtime-config-tools.mjs";
+import { fileURLToPath } from "node:url";
+import { checkStablePublication } from "./stable-publication.mjs";
 
 const root = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-const source = readFileSync(new URL("../apps/worker/src/installer.ts", import.meta.url), "utf8");
+const source = readFileSync(new URL("../apps/worker/src/domain/release-config.ts", import.meta.url), "utf8");
 const config = JSON.parse(readFileSync(new URL("../apps/worker/wrangler.jsonc", import.meta.url), "utf8").replace(/^\s*\/\/.*$/gm, ""));
 const fixed = /FIXED_RELEASE_VERSION = "([^"]+)"/.exec(source)?.[1];
 const state=JSON.parse(readFileSync(new URL("../release/release-state.json",import.meta.url),"utf8"));
@@ -16,13 +18,14 @@ if(state.state === "released") {
 }
 
 assert.equal(fixed, root.version, "installer must match source version");
+await checkStablePublication(fileURLToPath(new URL("../", import.meta.url)), root.version, undefined, false);
 assert.notEqual(root.version, "0.1.0-dev.3", "security fixes cannot reuse the immutable dev.3 identity");
 assert.equal(config.name, "runmesh", "top-level Wrangler config is the canonical production Worker");
 assert.deepEqual(config.vars, {}, "ordinary production deployment must not require plaintext runtime settings");
 assert.equal(readFileSync(new URL("../apps/worker/src/generated-release.ts", import.meta.url), "utf8"), reviewedReleaseSource(root.version, state), "compiled activation must match reviewed publication evidence");
 assert.equal(config.env.production.name, config.name, "named production alias must target the same Worker");
 assert.deepEqual(config.env.production.vars, config.vars, "named production alias must mirror top-level production vars");
-assert.equal(config.env.development.name, "runmesh-development");
+assert.equal(config.env.development.name, "runmeshdev");
 assert.deepEqual(config.env.development.vars, { RUNMESH_ENVIRONMENT: "development" });
 for (const environment of [config, config.env.production, config.env.development]) {
   assert.deepEqual(environment.durable_objects.bindings.map((binding) => binding.class_name).sort(), ["RegistryDOv2", "RunnerDOv2"]);

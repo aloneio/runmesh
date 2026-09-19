@@ -1,0 +1,386 @@
+{
+  "baseline": "88b119782d26316d68eeaa98a47d71dbe4382193",
+  "clock_ms": 1900000000000,
+  "baseline_file_sha256": "a9f2a3653c0de403a83fb7fe1fc1da92501ddd7dd11b697e57fd551c71673ed2",
+  "cases": [
+    {
+      "name": "login",
+      "fn": "authEntryDocument",
+      "args": [
+        "login",
+        "fixture-csrf-<>&\""
+      ],
+      "sha256": "fa50e8e91a72151f9e0e1d85023484851e5d2dd10ef516408d50f743510c93db",
+      "bytes": 86069,
+      "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
+      "original_bytes": 86099,
+      "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged."
+    },
+    {
+      "name": "setup",
+      "fn": "authEntryDocument",
+      "args": [
+        "setup",
+        "fixture-csrf-<>&\""
+      ],
+      "sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
+      "bytes": 86657
+    },
+    {
+      "name": "secret",
+      "fn": "secretCreatedPage",
+      "args": [
+        "Fixture <title>",
+        "https://example.test/fixture-no-credential"
+      ],
+      "sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
+      "bytes": 87739
+    },
+    {
+      "name": "overview-empty",
+      "fn": "overviewPage",
+      "args": [
+        {
+          "clients": [],
+          "runners": [],
+          "jobs": [],
+          "snapshot": {},
+          "notices": []
+        },
+        "fixture-csrf-<>&\""
+      ],
+      "sha256": "d9ac6fca648916eb548f51ac4625f5143ec5a12b47bb0be56130b998df111d3e",
+      "bytes": 2124
+    },
+    {
+      "name": "overview-populated",
+      "fn": "overviewPage",
+      "args": [
+        {
+          "clients": [
+            {
+              "client_id": "client-fixture",
+              "label": "<img src=x onerror=alert(1)> 客户端",
+              "active_runner_id": "runner-fixture",
+              "active_runner_updated_at_ms": 2,
+              "scopes": [
+                "coding:read"
+              ],
+              "created_at_ms": 1,
+              "updated_at_ms": 2,
+              "last_used_at_ms": null,
+              "revoked_at_ms": null
+            }
+          ],
+          "runners": [
+            {
+              "runner_id": "runner-fixture",
+              "display_name": "<b>Runner 中文 & \"name\"</b>",
+              "state": "offline",
+              "public_info": {
+                "platform": "linux",
+                "architecture": "arm64",
+                "version": "0.1.3",
+                "execution_mode": "dedicated_user"
+              },
+              "execution_mode": "dedicated_user",
+              "created_at_ms": 1,
+              "updated_at_ms": 2,
+              "last_seen_at_ms": 2,
+              "last_heartbeat_ms": 2,
+              "enabled": true,
+              "policy_revision": 1,
+              "valid_from_ms": null,
+              "expires_at_ms": null
+            }
+          ],
+          "jobs": [],
+          "snapshot": {},
+          "notices": []
+        },
+        "fixture-csrf-<>&\""
+      ],
+      "sha256": "04d006936232ee5cc13cdb1566b5e898bb484bd49c58608e87c68c3ed8d63a18",
+      "bytes": 3245,
+      "original_sha256": "b94fb8d802373820755732a807fc8cdc9d4f579a0d40b21cafdcac121ff7a957",
+      "original_bytes": 3219,
+      "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label"
+    },
+    {
+      "name": "settings",
+      "fn": "settingsPage",
+      "args": [
+        "fixture-csrf-<>&\""
+      ],
+      "sha256": "fb56582e029a8b5b407982002db570f92288e23aeceeb6b2cee885f5e9e391af",
+      "bytes": 1389
+    },
+    {
+      "name": "clients-empty",
+      "fn": "clientsPage",
+      "args": [
+        {
+          "clients": [],
+          "runners": [],
+          "jobs": [],
+          "snapshot": {},
+          "notices": []
+        },
+        "fixture-csrf-<>&\""
+      ],
+      "sha256": "e74169b7613eb2646689d68bc42760c399f092ad60d9c6200c65b2b561342266",
+      "bytes": 1658
+    },
+    {
+      "name": "clients-populated",
+      "fn": "clientsPage",
+      "args": [
+        {
+          "clients": [
+            {
+              "client_id": "client-fixture",
+              "label": "<img src=x onerror=alert(1)> 客户端",
+              "active_runner_id": "runner-fixture",
+              "active_runner_updated_at_ms": 2,
+              "scopes": [
+                "coding:read"
+              ],
+              "created_at_ms": 1,
+              "updated_at_ms": 2,
+              "last_used_at_ms": null,
+              "revoked_at_ms": null
+            }
+          ],
+          "runners": [
+            {
+              "runner_id": "runner-fixture",
+              "display_name": "<b>Runner 中文 & \"name\"</b>",
+              "state": "offline",
+              "public_info": {
+                "platform": "linux",
+                "architecture": "arm64",
+                "version": "0.1.3",
+                "execution_mode": "dedicated_user"
+              },
+              "execution_mode": "dedicated_user",
+              "created_at_ms": 1,
+              "updated_at_ms": 2,
+              "last_seen_at_ms": 2,
+              "last_heartbeat_ms": 2,
+              "enabled": true,
+              "policy_revision": 1,
+              "valid_from_ms": null,
+              "expires_at_ms": null
+            }
+          ],
+          "jobs": [],
+          "snapshot": {},
+          "notices": []
+        },
+        "fixture-csrf-<>&\""
+      ],
+      "sha256": "1041ebda357b2c49560e9a894a8de702e622a2c7d67d2eb8e366c0bd4a4c4bb5",
+      "bytes": 4096,
+      "original_sha256": "57a9afa644d0576c73376174bad5c663efe58c9490697670a4c5925b21280795",
+      "original_bytes": 4110,
+      "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label"
+    },
+    {
+      "name": "client-detail",
+      "fn": "clientDetailPage",
+      "args": [
+        {
+          "client_id": "client-fixture",
+          "label": "<img src=x onerror=alert(1)> 客户端",
+          "active_runner_id": "runner-fixture",
+          "active_runner_updated_at_ms": 2,
+          "scopes": [
+            "coding:read"
+          ],
+          "created_at_ms": 1,
+          "updated_at_ms": 2,
+          "last_used_at_ms": null,
+          "revoked_at_ms": null
+        },
+        [
+          {
+            "runner_id": "runner-fixture",
+            "display_name": "<b>Runner 中文 & \"name\"</b>",
+            "state": "offline",
+            "public_info": {
+              "platform": "linux",
+              "architecture": "arm64",
+              "version": "0.1.3",
+              "execution_mode": "dedicated_user"
+            },
+            "execution_mode": "dedicated_user",
+            "created_at_ms": 1,
+            "updated_at_ms": 2,
+            "last_seen_at_ms": 2,
+            "last_heartbeat_ms": 2,
+            "enabled": true,
+            "policy_revision": 1,
+            "valid_from_ms": null,
+            "expires_at_ms": null
+          }
+        ],
+        [],
+        "fixture-csrf-<>&\""
+      ],
+      "sha256": "a1f10c2ac6f89b96980b6d734c045edac5fc9c472451921343c517ec50fb7219",
+      "bytes": 6677,
+      "original_sha256": "e8468030bfaefe12378b3a9a7541e59679236f3888f7b6b0e69ef759cc5f8d66",
+      "original_bytes": 6638,
+      "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label"
+    },
+    {
+      "name": "runners-empty",
+      "fn": "runnersPage",
+      "args": [
+        {
+          "clients": [],
+          "runners": [],
+          "jobs": [],
+          "snapshot": {},
+          "notices": []
+        },
+        "fixture-csrf-<>&\""
+      ],
+      "sha256": "ad42baf8b35e827a1ccd89a0f8e4f3e9bf4bdd1c6c67787b3505779f6eaf1229",
+      "bytes": 3284,
+      "presentation": {
+        "configuredModes": {},
+        "maxValidityDays": 3650
+      }
+    },
+    {
+      "name": "runners-populated",
+      "fn": "runnersPage",
+      "args": [
+        {
+          "clients": [
+            {
+              "client_id": "client-fixture",
+              "label": "<img src=x onerror=alert(1)> 客户端",
+              "active_runner_id": "runner-fixture",
+              "active_runner_updated_at_ms": 2,
+              "scopes": [
+                "coding:read"
+              ],
+              "created_at_ms": 1,
+              "updated_at_ms": 2,
+              "last_used_at_ms": null,
+              "revoked_at_ms": null
+            }
+          ],
+          "runners": [
+            {
+              "runner_id": "runner-fixture",
+              "display_name": "<b>Runner 中文 & \"name\"</b>",
+              "state": "offline",
+              "public_info": {
+                "platform": "linux",
+                "architecture": "arm64",
+                "version": "0.1.3",
+                "execution_mode": "dedicated_user"
+              },
+              "execution_mode": "dedicated_user",
+              "created_at_ms": 1,
+              "updated_at_ms": 2,
+              "last_seen_at_ms": 2,
+              "last_heartbeat_ms": 2,
+              "enabled": true,
+              "policy_revision": 1,
+              "valid_from_ms": null,
+              "expires_at_ms": null
+            }
+          ],
+          "jobs": [],
+          "snapshot": {},
+          "notices": []
+        },
+        "fixture-csrf-<>&\""
+      ],
+      "sha256": "994101b4e4b938762f863a888bb6dc126f0eccf675d0ed024dd730aaa8c5490e",
+      "bytes": 6877,
+      "presentation": {
+        "configuredModes": {
+          "runner-fixture": null
+        },
+        "maxValidityDays": 3650
+      },
+      "original_sha256": "f2fa21e5b826c1aef0f866540ddf4a52a314932387772960f5c7849037cc0436",
+      "original_bytes": 6864,
+      "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label"
+    },
+    {
+      "name": "runner-detail",
+      "fn": "runnerDetailPage",
+      "args": [
+        {
+          "runner_id": "runner-fixture",
+          "display_name": "<b>Runner 中文 & \"name\"</b>",
+          "state": "offline",
+          "public_info": {
+            "platform": "linux",
+            "architecture": "arm64",
+            "version": "0.1.3",
+            "execution_mode": "dedicated_user"
+          },
+          "execution_mode": "dedicated_user",
+          "created_at_ms": 1,
+          "updated_at_ms": 2,
+          "last_seen_at_ms": 2,
+          "last_heartbeat_ms": 2,
+          "enabled": true,
+          "policy_revision": 1,
+          "valid_from_ms": null,
+          "expires_at_ms": null
+        },
+        [],
+        null,
+        null,
+        "fixture-csrf-<>&\"",
+        {
+          "latest_version": "0.1.3",
+          "distributable": true
+        }
+      ],
+      "sha256": "544a10f04c4921d4aa501454401eaf929c2fc74fb674e217e7c2f731d34fbba9",
+      "bytes": 13988,
+      "presentation": {
+        "configuredMode": null,
+        "reportedMode": "dedicated_user",
+        "maxValidityDays": 3650,
+        "dayMs": 86400000
+      }
+    },
+    {
+      "name": "admin-document",
+      "fn": "adminDocument",
+      "args": [
+        "Dashboard",
+        "<section>fixture</section>",
+        "dashboard",
+        [
+          {
+            "title": "<title>",
+            "message": "message & data",
+            "code": "fixture_code"
+          }
+        ]
+      ],
+      "sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
+      "bytes": 88098
+    }
+  ],
+  "i18n_review": {
+    "source_base": "a07087baddce88417a4ee3d08b2c214c9f7f24a1",
+    "changed_cases": 4,
+    "allowed_changes": [
+      "no-translation markers",
+      "accessible rename label"
+    ],
+    "command_variants_unchanged": 8
+  }
+}

@@ -1,0 +1,415 @@
+[
+  {
+    "id": "runner-list",
+    "tool": "runner_list",
+    "action": "list",
+    "accepts": true,
+    "arguments": {}
+  },
+  {
+    "id": "runner-current",
+    "tool": "runner_current",
+    "action": "current",
+    "accepts": true,
+    "arguments": {}
+  },
+  {
+    "id": "runner-select",
+    "tool": "runner_select",
+    "action": "select",
+    "accepts": true,
+    "arguments": {
+      "runner_id": "example-runner",
+      "confirm_switch": true
+    }
+  },
+  {
+    "id": "workspace-list",
+    "tool": "workspace_list",
+    "action": "list",
+    "accepts": true,
+    "arguments": {}
+  },
+  {
+    "id": "inspect-list",
+    "tool": "inspect",
+    "action": "list",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "action": "list",
+      "path": "."
+    }
+  },
+  {
+    "id": "inspect-search",
+    "tool": "inspect",
+    "action": "search",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "action": "search",
+      "query": "example",
+      "mode": "literal",
+      "max_results": 20
+    }
+  },
+  {
+    "id": "inspect-stat",
+    "tool": "inspect",
+    "action": "stat",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "action": "stat",
+      "path": "src/example.ts"
+    }
+  },
+  {
+    "id": "inspect-git-status",
+    "tool": "inspect",
+    "action": "git_status",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "action": "git_status",
+      "path": "."
+    }
+  },
+  {
+    "id": "inspect-git-diff",
+    "tool": "inspect",
+    "action": "git_diff",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "action": "git_diff",
+      "path": "."
+    }
+  },
+  {
+    "id": "inspect-git-log",
+    "tool": "inspect",
+    "action": "git_log",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "action": "git_log",
+      "path": "."
+    }
+  },
+  {
+    "id": "inspect-git-show",
+    "tool": "inspect",
+    "action": "git_show",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "action": "git_show",
+      "path": ".",
+      "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  {
+    "id": "inspect-git-blame",
+    "tool": "inspect",
+    "action": "git_blame",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "action": "git_blame",
+      "path": "src/example.ts",
+      "start_line": 1,
+      "end_line": 20
+    }
+  },
+  {
+    "id": "inspect-diagnostics",
+    "tool": "inspect",
+    "action": "diagnostics",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "action": "diagnostics"
+    }
+  },
+  {
+    "id": "read-live",
+    "tool": "read",
+    "action": "read",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "path": "src/example.ts",
+      "limit": 1024
+    }
+  },
+  {
+    "id": "read-snapshot",
+    "tool": "read",
+    "action": "read",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "path": "src/example.ts",
+      "consistency": "snapshot",
+      "limit": 1024
+    }
+  },
+  {
+    "id": "edit-preview",
+    "tool": "edit",
+    "action": "preview",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "patch": "*** Begin Patch\n*** Add File: example.txt\n+example\n*** End Patch",
+      "preview": true
+    }
+  },
+  {
+    "id": "edit-apply",
+    "tool": "edit",
+    "action": "apply",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "patch": "*** Begin Patch\n*** Add File: example.txt\n+example\n*** End Patch",
+      "expected_hashes": {
+        "example.txt": null
+      }
+    }
+  },
+  {
+    "id": "shell-start",
+    "tool": "shell",
+    "action": "start",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "command": "printf 'synthetic example\\n'",
+      "background": true,
+      "queue": true
+    }
+  },
+  {
+    "id": "shell-run",
+    "tool": "shell",
+    "action": "run",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "command": "printf 'synthetic example\\n'",
+      "background": false,
+      "queue": true
+    }
+  },
+  {
+    "id": "job-list",
+    "tool": "job",
+    "action": "list",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "action": "list",
+      "limit": 10
+    }
+  },
+  {
+    "id": "job-get",
+    "tool": "job",
+    "action": "get",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "action": "get",
+      "job_id": "example-job"
+    }
+  },
+  {
+    "id": "job-logs",
+    "tool": "job",
+    "action": "logs",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "action": "logs",
+      "job_id": "example-job",
+      "stream": "stdout",
+      "limit": 1024,
+      "consistency": "append"
+    }
+  },
+  {
+    "id": "job-cancel",
+    "tool": "job",
+    "action": "cancel",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "action": "cancel",
+      "job_id": "example-job"
+    }
+  },
+  {
+    "id": "job-input",
+    "tool": "job",
+    "action": "input",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "action": "input",
+      "job_id": "example-job",
+      "close_stdin": true
+    }
+  },
+  {
+    "id": "context-bootstrap",
+    "tool": "context",
+    "action": "bootstrap",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "action": "bootstrap"
+    }
+  },
+  {
+    "id": "context-read",
+    "tool": "context",
+    "action": "read",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "action": "read",
+      "context_id": "example-context"
+    }
+  },
+  {
+    "id": "context-search",
+    "tool": "context",
+    "action": "search",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "action": "search",
+      "query": "example",
+      "limit": 10
+    }
+  },
+  {
+    "id": "context-checkpoint",
+    "tool": "context",
+    "action": "checkpoint",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "action": "checkpoint",
+      "turn_id": "example-turn",
+      "expected_revision": 0,
+      "goal": "Synthetic schema example; no execution is implied",
+      "missing_checks": [
+        "production not verified"
+      ]
+    }
+  },
+  {
+    "id": "context-rebuild",
+    "tool": "context",
+    "action": "rebuild",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "action": "rebuild"
+    }
+  },
+  {
+    "id": "context-storage",
+    "tool": "context",
+    "action": "storage",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "action": "storage"
+    }
+  },
+  {
+    "id": "context-prune",
+    "tool": "context",
+    "action": "prune",
+    "accepts": true,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "action": "prune",
+      "keep_days": 30,
+      "keep_revisions": 2,
+      "max_delete": 5
+    }
+  },
+  {
+    "id": "reject-traversal",
+    "tool": "read",
+    "action": "read",
+    "accepts": false,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "path": "../private"
+    }
+  },
+  {
+    "id": "reject-search-without-query",
+    "tool": "inspect",
+    "action": "search",
+    "accepts": false,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "action": "search"
+    }
+  },
+  {
+    "id": "reject-prune-without-preview-hash",
+    "tool": "context",
+    "action": "prune",
+    "accepts": false,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "action": "prune",
+      "keep_days": 30,
+      "keep_revisions": 2,
+      "apply": true
+    }
+  },
+  {
+    "id": "reject-input-without-data",
+    "tool": "job",
+    "action": "input",
+    "accepts": false,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "action": "input",
+      "job_id": "example-job"
+    }
+  },
+  {
+    "id": "reject-implicit-runner-override",
+    "tool": "shell",
+    "action": "run",
+    "accepts": false,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "command": "true",
+      "runner_id": "another-runner"
+    }
+  },
+  {
+    "id": "reject-snapshot-numeric-cursor",
+    "tool": "read",
+    "action": "read",
+    "accepts": false,
+    "arguments": {
+      "workspace_id": "example-workspace",
+      "path": "example.txt",
+      "consistency": "snapshot",
+      "cursor": "1"
+    }
+  }
+]

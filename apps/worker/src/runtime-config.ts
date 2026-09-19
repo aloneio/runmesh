@@ -1,4 +1,4 @@
-import { resolvePublicOrigin } from "./installer.js";
+import { resolvePublicOrigin } from "./public-origin.js";
 import { REVIEWED_RELEASE_VERSION } from "./generated-release.js";
 
 /** Pure resolution: no database access, credential generation, or timers. */
@@ -19,7 +19,8 @@ export interface RuntimeConfiguration {
 export function resolveRuntimeConfiguration<T extends RuntimeConfiguration>(env: T, request?: Request): T {
   const environment = env.RUNMESH_ENVIRONMENT ??
     (env.WORKER_ID === "worker-development" ? "development" : env.WORKER_ID === "worker-test" || env.RUNMESH_TEST_MODE === "1" ? "test" : "production");
-  const production = environment === "production" && env.RUNMESH_TEST_MODE !== "1";
+  const reviewedRunnerAvailable = env.RUNMESH_TEST_MODE !== "1" && environment === "production";
+  const developmentRunnerDiscovery = env.RUNMESH_TEST_MODE !== "1" && environment === "development";
   const backend = (environment !== "development" && environment !== "test") || env.HISTORY_DB !== undefined ? "d1" : "sqlite";
   let origin = env.RUNMESH_PUBLIC_ORIGIN;
   if (origin === undefined && request !== undefined && request.headers.has("host")) {
@@ -30,7 +31,10 @@ export function resolveRuntimeConfiguration<T extends RuntimeConfiguration>(env:
     ...env,
     WORKER_ID: env.WORKER_ID ?? (environment === "production" ? "worker-production" : environment === "development" ? "worker-development" : "worker-test"),
     // An explicit empty override remains the emergency disable switch.
-    RUNMESH_SIGNED_RELEASE_AVAILABLE: env.RUNMESH_SIGNED_RELEASE_AVAILABLE ?? (production ? REVIEWED_RELEASE_VERSION : ""),
+    // Production stays pinned to the reviewed stable release. Development
+    // selects the signed dev-prerelease discovery lane; discovery itself is
+    // fail-closed and never falls back to stable. Test/unknown stay closed.
+    RUNMESH_SIGNED_RELEASE_AVAILABLE: env.RUNMESH_SIGNED_RELEASE_AVAILABLE ?? (reviewedRunnerAvailable ? REVIEWED_RELEASE_VERSION : developmentRunnerDiscovery ? "dev" : ""),
     ...(origin === undefined ? {} : { RUNMESH_PUBLIC_ORIGIN: origin }),
     // Explicit d1 without its binding must report unavailable, never fall back.
     RUNMESH_AUDIT_BACKEND: env.RUNMESH_AUDIT_BACKEND ?? backend,

@@ -1,15 +1,14 @@
-/** Scope and policy ceilings are different boundaries: exec must not silently
- * substitute for the independently required read/write tool scope. */
-export function rpcPermissionRequirement(method: string): { scope: "coding:read" | "coding:write" | "coding:exec"; permission: "read" | "edit" | "shell" | "job_control"; job: boolean } | undefined {
-  switch (method) {
-    case "env.info": case "workspace.list": case "context.bootstrap": case "context.read": case "context.search":
-    case "fs.stat": case "fs.read": case "fs.list": case "fs.search": case "git.status": case "git.diff": case "git.log": case "git.show": case "git.blame": return { scope: "coding:read", permission: "read", job: false };
-    case "fs.preview_patch": case "context.checkpoint": case "context.rebuild":
-    case "fs.apply_patch": return { scope: "coding:write", permission: "edit", job: false };
-    case "exec.start": case "exec.run": return { scope: "coding:exec", permission: "shell", job: false };
-    case "job.list": return { scope: "coding:read", permission: "read", job: false };
-    case "job.get": case "job.logs": return { scope: "coding:read", permission: "read", job: true };
-    case "job.cancel": case "job.input": return { scope: "coding:exec", permission: "job_control", job: true };
-    default: return undefined;
-  }
+// Compatibility import path; the protected operation requirements have one source.
+export { rpcPermissionRequirement } from "@aloneio/runmesh-protocol";
+
+/** Legacy version floor for peers predating negotiated Job workspace checks.
+ * Stable 0.1.1 is the minimum. A dev prerelease must have a strictly newer
+ * core version: 0.1.1-dev.0 is older than 0.1.1, while 0.1.4-dev.0 is newer.
+ * This is a compatibility prerequisite, never an authorization grant. */
+export function supportsHistoryIndependentJobs(version: unknown): boolean {
+  if (typeof version !== "string" || version.length > 128) return false;
+  const parts = /^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})(?:-dev\.(0|[1-9][0-9]{0,12}))?$/u.exec(version);
+  if (parts === null) return false;
+  const newer = Number(parts[1]) > 0 || Number(parts[2]) > 1 || (Number(parts[2]) === 1 && Number(parts[3]) > 1);
+  return newer || (parts[4] === undefined && parts[1] === "0" && parts[2] === "1" && parts[3] === "1");
 }

@@ -1,11 +1,30 @@
-# Release readiness — 0.1.3
+# Release status and readiness
 
-**State: RELEASED. Distribution: ENABLED in this activation commit.** Immutable v0.1.3 was published from protected main `90395a1a37e608ed40fe3646c1a06f5d4d4f4d83` at `2026-09-14T14:03:29Z` by successful Release run `34852575044`. All nine public assets were independently fetched without GitHub authentication and verified using the source trust keyring. Manifest SHA256: `ba84fce036385127eb69f7c677ba8cc89757c038797414c66e8e2861286cbbbe`. Runner tarball: `6bf9c34bf22ddbba4f86d08767ae817ebe68b7dd5b8a88621e9bfb872aa02ddf` (691084 bytes). Production activation still requires the merged commit to reach GitLab main and Cloudflare; this record alone is not deployment evidence.
+[Documentation](README.md) · [Release notes](release-notes.md) · [Upgrade guide](upgrading.md)
 
-Version 0.1.3, tag v0.1.3, stable channel, protocol v2 with negotiated queue frames, and runmesh-runner-0.1.3.tgz are fixed inputs. The reviewed Ed25519 key remains runmesh-preview-2026-01. Existing immutable releases retain their original bytes and provenance.
+## Current status: 0.1.4 candidate
 
-The exact protected main tip must pass verify-all on supported Node LTS and native platforms. The final portable archive is installed offline with scripts disabled and runs real Worker/Runner E2E before signing. Manifest, signature, checksums and annotated tag must agree, including independently downloaded draft and public assets. Only then may the lifecycle be RELEASED and distribution ENABLED with `RUNMESH_SIGNED_RELEASE_AVAILABLE=0.1.3`.
+| Version | Status | Use |
+| --- | --- | --- |
+| `0.1.3` | Published stable release | Production installation |
+| `0.1.4` | CANDIDATE; stable distribution DISABLED | Development testing through the verified prerelease channel |
 
-Includes bounded fair multi-client queues, execution-time authorization, server-rendered single-locale UI and explicit history refresh without page cross-fades. See [queue/UI contract](job-queue-and-localization.md). No queue polling timer is introduced; necessary heartbeats, authorization and bounded maintenance remain metered.
+The planned stable tag is `v0.1.4`, and its portable artifact name is `runmesh-runner-0.1.4.tgz`. Signed publication, independent verification and a reviewed activation commit advance the lifecycle to RELEASED and distribution to ENABLED. The source record is [release-state.json](../release/release-state.json), and the independent signature trust source is [trust-keyring.json](../release/trust-keyring.json).
 
-Production retains the current v2 DO identities, production-only legacy tombstones and D1. Never revert declarative lifecycle to old migrations. Publishing does not upgrade or restart installed Runners. GitLab main activation and runtime verification are separate from publication.
+See the [release notes](release-notes.md) for candidate improvements and [development prereleases](dev-runner-prereleases.md) for testing packages. Use [build provenance](build-provenance.md) to identify your deployed Worker and the [upgrade guide](upgrading.md) to check the installed Runner.
+
+## Choosing an installation or upgrade
+
+Choose a verified signed release containing the changes you need. During a compatible v2 upgrade, preserve existing resources, credentials and profiles.
+
+Deploy the Worker, install the target Runner package on each host, and refresh the MCP client's tool catalog. Before restoring workloads, verify permissions and follow a test `shell` receipt with queries for that same Job.
+
+## Maintainer publication checklist
+
+For this candidate, keep package and lockfile versions, installer identity and release notes aligned at `0.1.4`. Promote reviewed changes from `dev` to protected `main` through the [main promotion policy](main-promotion-policy.md).
+
+The exact main candidate must pass GitHub `verify-all`, native-platform/Node LTS/browser verification and the required cross-provider checks. Execute candidate-bound security regressions, verify the exact portable archive end to end, and bind the signed manifest and annotated tag to that candidate. Independently verify draft and public assets before recording the new RELEASED/ENABLED state. Keep existing immutable releases intact.
+
+After deployment, verify the Worker version, installed Runner service lifecycle, permissions and intended client catalog. Record each observation with its time, exact version or commit, and result.
+
+Maintainer references: [main promotion policy](main-promotion-policy.md), [verification](verification.md) and [historical release evidence](maintainers/release-evidence.md).

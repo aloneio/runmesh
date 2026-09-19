@@ -1,10 +1,20 @@
-import { resolveRuntimeConfiguration, type RuntimeConfiguration } from "./runtime-config.js";
+import { boundedJsonReceipt, boundedJsonResponse } from "./platform/bounded-json.js";
+import type { BridgeReply, BridgeReplyPort, RegistryRequestPort } from "./contracts/runner-transport.js";
+import { BridgeReplies } from "./platform/bridge-replies.js";
+import { requestRunnerRegistry } from "./platform/runner-registry.js";
+
+/** @internal Trusted composition, never an HTTP or deployment option. */
+export interface RunnerDoDependencies { readonly registryRequest?: RegistryRequestPort; readonly replies?: BridgeReplyPort }
+import type { WorkerEnv } from "./platform/env.js";
+export type { WorkerEnv } from "./platform/env.js";
+import { resolveRuntimeConfiguration } from "./runtime-config.js";
 import { signQueueGrant, verifyQueueGrant, launchDigest } from "./queue-grant.js";
-import { ControlPlaneUnavailableError, controlPlaneUnavailableResponse, registryRejectedSession } from "./control-plane-errors.js";
+import { ControlPlaneUnavailableError, controlPlaneUnavailableResponse, registryRejectedSession, registrySessionClose } from "./control-plane-errors.js";
 import {
   ProtocolFrameError,
   decodeWireFrame,
   encodeWireFrame,
+  failureMetadata,
   negotiateProtocolVersion,
   PROTOCOL_CURRENT_VERSION,
   PROTOCOL_MIN_VERSION,
@@ -19,28 +29,6 @@ import { bearerToken, internalHeaders, isConfiguredSecret, isSafeIdentifier, ver
 import { PRODUCT_VERSION } from "./generated-version.js";
 import { readCappedText } from "./body.js";
 
-export interface WorkerEnv extends RuntimeConfiguration {
-  /** Optional independent metadata-only audit store; never an auth fallback. */
-  HISTORY_DB?: D1Database;
-  RUNMESH_AUDIT_BACKEND?: string;
-  RUNMESH_JOB_HISTORY_BACKEND?: string;
-  REGISTRY: DurableObjectNamespace;
-  RUNNER: DurableObjectNamespace;
-  WORKER_ID?: string;
-  RUNMESH_DEPLOYMENT_BRANCH?: string;
-  RUNMESH_DEPLOYMENT_COMMIT?: string;
-  ADMIN_TOKEN?: string;
-  /** Long-lived Runner token verifier pepper; at least 32 random characters. */
-  RUNNER_TOKEN_PEPPER?: string;
-  INTERNAL_CONTROL_SECRET?: string;
-  RUNMESH_SIGNED_RELEASE_AVAILABLE?: string;
-  /** Canonical external HTTPS origin used in hosted installer commands. */
-  RUNMESH_PUBLIC_ORIGIN?: string;
-  /** Test-harness-only switch; never configured by a deployment. */
-  RUNMESH_TEST_MODE?: string;
-  /** Static assets served by the Worker asset binding. */
-  ASSETS?: Fetcher;
-}
 
 interface ConnectionAttachment {
   runnerId: string;
@@ -54,15 +42,20 @@ interface ConnectionAttachment {
   authenticated: boolean;
   readonly helloDeadlineMs: number;
   queueProtocol?: 1;
+  historyProtocol?: 2;
+  /** Bounded extension capabilities; absent on attachments from older Workers. */
+  contextMethods?: Array<"context.storage" | "context.prune">;
 }
 
 const HELLO_DEADLINE_MS = 10_000;
 const BRIDGE_TIMEOUT_MS = WORKER_BRIDGE_TIMEOUT_MS;
 const MAX_BRIDGE_IN_FLIGHT = 32;
 const MAX_BRIDGE_BODY_BYTES = 2 * 1024 * 1024;
-type BridgeReply = Extract<WireMessage, { type: "rpc.response" | "rpc.error" }>;
-type BridgeWaiter = { readonly resolve: (value: BridgeReply) => void; readonly timer: ReturnType<typeof setTimeout>; readonly socket: WebSocket };
 
+/** Only use before socket dispatch. A missing reply uses unknown instead. */
+function preDispatchError(code: string, message: string, status: number, headers?: Headers): Response {
+  return Response.json({ error: { code, message, ...failureMetadata(code, "not_started") } }, { status, ...(headers === undefined ? {} : { headers }) });
+}
 
 type MutationPhase = "idle" | "precommit" | "committed_pending" | "offline_pending" | "invalid" | "restart_reconcile";
 
@@ -113,7 +106,8 @@ function conservativeAdmission(next: AdmissionState): AdmissionState {
 }
 
 export class RunnerDO {
-  private readonly bridgeWaiters = new Map<string, BridgeWaiter>();
+  private readonly replies: BridgeReplyPort;
+  private readonly requestRegistry: RegistryRequestPort;
   /** Guards duplicate/concurrent hello frames on one hibernating socket. */
   private readonly helloInFlight = new WeakSet<WebSocket>();
   private admissionState: AdmissionState | undefined;
@@ -122,8 +116,11 @@ export class RunnerDO {
   public constructor(
     private readonly ctx: DurableObjectState<unknown>,
     private readonly env: WorkerEnv,
+    dependencies: RunnerDoDependencies = {},
   ) {
     this.env = resolveRuntimeConfiguration(env);
+    this.replies = dependencies.replies ?? new BridgeReplies();
+    this.requestRegistry = dependencies.registryRequest ?? ((runnerId, action, init) => requestRunnerRegistry(this.env, runnerId, action, init));
     this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     this.ctx.setHibernatableWebSocketEventTimeout(30_000);
   }
@@ -292,17 +289,16 @@ export class RunnerDO {
     try { await this.handleWebSocketMessage(ws, raw); }
     catch {
       // No frame (including an RPC result) may cross a failed session check.
-      // 1013 is retryable; 4001 is reserved for a confirmed identity rejection.
+      // 1013 is retryable; only explicit credential rejection uses 4001.
       this.rejectBridgeWaiters(ws, "control plane temporarily unavailable");
       try { ws.close(1013, "control plane temporarily unavailable"); } catch { /* already closed */ }
     }
   }
 
   private closeForRegistryFailure(ws: WebSocket, response: Response): void {
-    const rejected = registryRejectedSession(response);
-    const reason = rejected ? "credentials revoked" : "control plane temporarily unavailable";
+    const { code, reason } = registrySessionClose(response);
     this.rejectBridgeWaiters(ws, reason);
-    ws.close(rejected ? 4001 : 1013, reason);
+    ws.close(code, reason);
   }
 
   private async handleWebSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
@@ -327,6 +323,7 @@ export class RunnerDO {
       // Mark synchronously before the first await. Two frames delivered in
       // the same event turn must not both allocate Registry epochs.
       this.helloInFlight.add(ws);
+      let welcomeSent = false;
       try {
       if (message.runner.runner_id !== attachment.runnerId) {
         ws.close(1008, "runner id mismatch");
@@ -351,7 +348,7 @@ export class RunnerDO {
         this.closeForRegistryFailure(ws, epochResponse);
         return;
       }
-      let body: { epoch?: unknown; lifecycle_id?: unknown; desired_policy?: unknown; job_history?: unknown };
+      let body: { epoch?: unknown; lifecycle_id?: unknown; desired_policy?: unknown; job_history?: unknown; job_reporting?: unknown };
       try {
         const parsed = await epochResponse.json();
         if (!isRecord(parsed)) {
@@ -376,17 +373,17 @@ export class RunnerDO {
       }
       attachment.lifecycleId = body.lifecycle_id;
       attachment.protocolVersion = negotiation.protocol_version;
+      attachment.contextMethods = (["context.storage", "context.prune"] as const)
+        .filter(method => message.runner.capabilities.supported_rpc_methods.includes(method));
       if (message.runner.capabilities.labels.job_queue_protocol === "1") attachment.queueProtocol = 1;
+      if (message.runner.capabilities.labels.job_reporting_protocol === "2" && body.job_reporting === 2 && isRecord(body.job_history)) attachment.historyProtocol = 2;
       ws.serializeAttachment(attachment);
       // `/connect` allocates/publishes the epoch, but a delayed response can
       // race a newer connection. Re-read the complete transport identity
       // before binding admission or sending welcome so an old socket cannot
       // become authorized after a replacement wins.
-      if (!(await this.isCurrent(attachment, true))) {
-        ws.close(4000, "replaced by newer session");
-        return;
-      }
       const beforeHello = await this.admission();
+      if (!(await this.verifySocketSession(ws, attachment, true))) return;
       const persistedHello = await this.persistHelloAdmission(beforeHello, attachment);
       if (!persistedHello) {
         // Registry connection epochs are monotonic. A hello that completed
@@ -399,7 +396,9 @@ export class RunnerDO {
       for (const existing of this.ctx.getWebSockets("runner")) {
         if (existing !== ws) {
           const old = existing.deserializeAttachment() as ConnectionAttachment | null;
-          if (old?.runnerId === attachment.runnerId
+          // A pending hello has not allocated an epoch yet and may become the
+          // next session. Its own deadline bounds it until Registry decides.
+          if (old?.runnerId === attachment.runnerId && old.epoch > 0
             && (old.lifecycleId !== attachment.lifecycleId || old.epoch < attachment.epoch)) {
             existing.close(4000, "replaced by newer session");
           }
@@ -408,14 +407,14 @@ export class RunnerDO {
       const welcome: WireMessage = {
         type: "runner.welcome", protocol_version: negotiation.protocol_version, request_id: message.request_id,
         session_id: attachment.sessionId, negotiated_protocol_version: negotiation.protocol_version,
-        extensions: { ...(isRecord(body.job_history) ? {runmesh_job_history:body.job_history as never} : {}), ...(attachment.queueProtocol === 1 ? {runmesh_job_queue:1} : {}) },
+        extensions: { ...(isRecord(body.job_history) ? {runmesh_job_history:body.job_history as never} : {}), ...(attachment.queueProtocol === 1 ? {runmesh_job_queue:1} : {}), ...(attachment.historyProtocol === 2 ? {runmesh_job_reporting:2} : {}) },
         worker: {
           worker_id: this.env.WORKER_ID ?? "runmesh", worker_version: PRODUCT_VERSION,
           capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: ["echo", "runner.info"], labels: { runtime: "cloudflare" } },
         },
         ...(isPolicy(body.desired_policy) ? { desired_policy: body.desired_policy } : {}),
       };
-      try { ws.send(encodeWireFrame(welcome)); } catch {
+      try { ws.send(encodeWireFrame(welcome)); welcomeSent = true; } catch {
         // A concurrent revoke/delete may close the socket after the Registry
         // handshake but before the welcome is published. Treat that as a
         // normal stale transport rather than leaking an uncaught DO exception.
@@ -423,6 +422,11 @@ export class RunnerDO {
       }
       } finally {
         this.helloInFlight.delete(ws);
+        // After welcome, removing an obsolete alarm is optional maintenance.
+        // A storage outage here must not close an already validated session.
+        // Earlier admission/session failures still reach the transport catch.
+        if (welcomeSent) await this.scheduleHelloDeadline().catch(() => undefined);
+        else await this.scheduleHelloDeadline();
       }
       return;
     }
@@ -437,40 +441,40 @@ export class RunnerDO {
       && message.type !== "job.started"
       && message.type !== "job.status"
       && message.type !== "job.completed";
-    if (attachment.epoch === 0 || attachment.protocolVersion !== message.protocol_version || (requiresSessionProbe && !(await this.isCurrent(attachment)))) {
-      this.rejectBridgeWaiters(ws, "credentials revoked");
-      ws.close(4001, "credentials revoked");
+    if (attachment.epoch === 0 || attachment.protocolVersion !== message.protocol_version) {
+      const reason = attachment.epoch === 0 ? "runner session not established" : "protocol version mismatch";
+      this.rejectBridgeWaiters(ws, reason);
+      ws.close(attachment.epoch === 0 ? 4000 : 1002, reason);
       return;
     }
+    if (requiresSessionProbe && !(await this.verifySocketSession(ws, attachment))) return;
     if (message.type === "rpc.response" || message.type === "rpc.error") {
-      const waiter = this.bridgeWaiters.get(message.request_id);
-      if (waiter !== undefined && waiter.socket === ws) {
-        clearTimeout(waiter.timer);
-        this.bridgeWaiters.delete(message.request_id);
-        waiter.resolve(message);
-      }
+      this.replies.deliver(ws, message);
       return;
     }
     if (message.type === "runner.queue_check") {
       const grant = await verifyQueueGrant(this.env.INTERNAL_CONTROL_SECRET ?? "", message.grant);
       let allowed = false;
+      let recordHistory = false;
       if (attachment.queueProtocol === 1 && grant !== undefined && message.runner_id === attachment.runnerId
         && grant.runner_id === attachment.runnerId && grant.lifecycle_id === attachment.lifecycleId
         && grant.credential_version === attachment.credentialVersion
         && await this.admitOrReconcileProtectedRpc(attachment,grant.policy_revision,grant.policy_checksum)) {
-        const response = await this.registryRequest(attachment.runnerId,"/mcp-authorization",{method:"POST",body:JSON.stringify({
+        const response = await boundedJsonResponse(signal => this.registryRequest(attachment.runnerId,"/mcp-authorization",{method:"POST",signal,body:JSON.stringify({
           client_id:grant.client_id,secret_version:grant.secret_version,method:"exec.start",workspace_id:grant.workspace_id,
           policy_revision:grant.policy_revision,policy_checksum:grant.policy_checksum,
-        })});
-        let decision: unknown; try { decision=await response.json(); } catch { decision=undefined; }
-        allowed=response.ok && isRecord(decision) && decision.ok===true;
+          ...(attachment.historyProtocol === 2 ? {include_job_recording:true} : {}),
+        })}));
+        const decision = response?.value;
+        allowed=response?.status===200 && isRecord(decision) && decision.ok===true;
+        recordHistory = allowed && isRecord(decision) && decision.record_history === true;
       }
       // No await after the final local session/policy fence. A grant never
       // authorizes by itself, and this decision never executes a command.
       allowed = allowed && grant !== undefined && this.admissionState !== undefined
         && this.admitsProtectedRpc(this.admissionState,attachment,grant.policy_revision,grant.policy_checksum)
         && this.ctx.getWebSockets("runner").includes(ws);
-      ws.send(encodeWireFrame({type:"rpc.response",protocol_version:attachment.protocolVersion,request_id:message.request_id,result:{authorized:allowed}}));
+      ws.send(encodeWireFrame({type:"rpc.response",protocol_version:attachment.protocolVersion,request_id:message.request_id,result:{authorized:allowed,...(attachment.historyProtocol === 2 ? {record_history:allowed && recordHistory} : {})}}));
       return;
     }
     if (message.type === "job.output") {
@@ -493,7 +497,8 @@ export class RunnerDO {
       if (message.runner_id !== attachment.runnerId) return ws.close(1008, "runner identity mismatch");
       const expectedAdmission = { ...(await this.admission()) };
       const response = await this.registryRequest(attachment.runnerId, "/policy-ack", { method: "POST", body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, ...transportIdentityFields(attachment), desired_revision: message.desired_revision, desired_checksum: message.desired_checksum, applied_revision: message.applied_revision, applied_checksum: message.applied_checksum, runner_reported_policy_revision: message.runner_reported_policy_revision, runner_reported_policy_checksum: message.runner_reported_policy_checksum, status: message.status, workspace_status: message.workspace_status }) });
-      if (!response.ok && !registryRejectedSession(response)) {
+      if (!response.ok) {
+        if (registryRejectedSession(response) && expectedAdmission.mutationPhase === "precommit") await this.markInvalidAdmission(attachment, expectedAdmission);
         this.closeForRegistryFailure(ws, response);
         return;
       }
@@ -545,8 +550,8 @@ export class RunnerDO {
 
   public async webSocketClose(ws: WebSocket): Promise<void> {
     this.rejectBridgeWaiters(ws, "runner connection closed");
-    await this.markSocket(ws, "offline");
-    await this.scheduleHelloDeadline();
+    try { await this.markSocket(ws, "offline"); }
+    finally { await this.scheduleHelloDeadline(); }
   }
   public webSocketError(ws: WebSocket): Promise<void> {
     this.rejectBridgeWaiters(ws, "runner connection error");
@@ -558,59 +563,75 @@ export class RunnerDO {
     const body = await readCappedText(request, MAX_BRIDGE_BODY_BYTES);
     if (body === undefined || !await this.verifyInternalRequest(body, request)) return new Response("not found", { status: 404 });
     let input: { method?: unknown; params?: unknown; policy_revision?: unknown; expected_policy_revision?: unknown; expected_policy_checksum?: unknown; mcp_authorization?: unknown };
-    try { input = JSON.parse(body) as { method?: unknown; params?: unknown; policy_revision?: unknown; expected_policy_revision?: unknown; expected_policy_checksum?: unknown; mcp_authorization?: unknown }; } catch { return Response.json({ error: { code: "invalid_request", message: "invalid JSON object" } }, { status: 400 }); }
-    if (typeof input !== "object" || input === null || Array.isArray(input)) return Response.json({ error: { code: "invalid_request", message: "invalid JSON object" } }, { status: 400 });
+    try { input = JSON.parse(body) as { method?: unknown; params?: unknown; policy_revision?: unknown; expected_policy_revision?: unknown; expected_policy_checksum?: unknown; mcp_authorization?: unknown }; } catch { return preDispatchError("invalid_request", "invalid JSON object", 400); }
+    if (typeof input !== "object" || input === null || Array.isArray(input)) return preDispatchError("invalid_request", "invalid JSON object", 400);
     const socket = await this.currentRunnerSocket();
     const attachment = socket?.deserializeAttachment() as ConnectionAttachment | null;
-    if (socket === undefined || attachment === null || attachment.epoch === 0 || attachment.protocolVersion === 0) return Response.json({ error: { code: "runner_offline", message: "runner is not connected" } }, { status: 503 });
-    if (this.bridgeWaiters.size >= MAX_BRIDGE_IN_FLIGHT) return Response.json({ error: { code: "busy", message: "bridge concurrency limit reached" } }, { status: 429 });
+    if (socket === undefined || attachment === null || attachment.epoch === 0 || attachment.protocolVersion === 0) return preDispatchError("runner_offline", "runner is not connected", 503);
+    if (this.replies.size >= MAX_BRIDGE_IN_FLIGHT) return preDispatchError("busy", "bridge concurrency limit reached", 429);
     const requestPolicyRevision = typeof input.policy_revision === "number" && Number.isSafeInteger(input.policy_revision) && input.policy_revision > 0 ? input.policy_revision : undefined;
     const expectedPolicyRevision = typeof input.expected_policy_revision === "number" && Number.isSafeInteger(input.expected_policy_revision) && input.expected_policy_revision > 0 ? input.expected_policy_revision : undefined;
     const expectedPolicyChecksum = typeof input.expected_policy_checksum === "string" && /^[a-f0-9]{64}$/.test(input.expected_policy_checksum) ? input.expected_policy_checksum : undefined;
     const method = typeof input.method === "string" ? input.method : "";
     if (method !== "echo" && method !== "runner.info") {
       let access: Record<string, unknown>;
-      try { access = await (await this.registryRequest(attachment.runnerId, "/access", { method: "GET" })).json() as Record<string, unknown>; } catch { return Response.json({ error: { code: "runner_access_unavailable", message: "Runner authorization status could not be verified" } }, { status: 503 }); }
+      try {
+        const response = await boundedJsonResponse(signal => this.registryRequest(attachment.runnerId, "/access", { method: "GET", signal }));
+        const value = response?.value;
+        if (!isRecord(value) || typeof value.allowed !== "boolean") return preDispatchError("runner_access_unavailable", "Runner authorization status could not be verified", 503);
+        access = value;
+      } catch { return preDispatchError("runner_access_unavailable", "Runner authorization status could not be verified", 503); }
       if (access.allowed !== true) {
         const status = access.status === "scheduled" ? "runner_not_active" : access.status === "expired" ? "runner_expired" : "runner_not_authorized";
-        return Response.json({ error: { code: status, message: status === "runner_expired" ? "Runner authorization has expired; renew it in the administrator console" : status === "runner_not_active" ? "Runner authorization has not started; update it in the administrator console" : "Runner authorization is unavailable" } }, { status: 403 });
+        return preDispatchError(status, status === "runner_expired" ? "Runner authorization has expired; renew it in the administrator console" : status === "runner_not_active" ? "Runner authorization has not started; update it in the administrator console" : "Runner authorization is unavailable", 403);
       }
     }
     if (requestPolicyRevision === undefined && method !== "echo" && method !== "runner.info") {
-      return Response.json({ error: { code: "stale_policy", message: "Protected RPC requires a policy revision" } }, { status: 409 });
+      return preDispatchError("stale_policy", "Protected RPC requires a policy revision", 409);
     }
     if (requestPolicyRevision !== undefined && (expectedPolicyRevision !== requestPolicyRevision || expectedPolicyChecksum === undefined)) {
-      return Response.json({ error: { code: "stale_policy", message: "Protected RPC requires a verified policy identity" } }, { status: 409 });
+      return preDispatchError("stale_policy", "Protected RPC requires a verified policy identity", 409);
     }
     if (requestPolicyRevision !== undefined && expectedPolicyChecksum !== undefined) {
       const admission = await this.admitOrReconcileProtectedRpc(attachment, requestPolicyRevision, expectedPolicyChecksum);
-      if (!admission) return Response.json({ error: { code: "stale_policy", message: "Runner policy admission is fenced or stale" } }, { status: 409 });
+      if (!admission) return preDispatchError("stale_policy", "Runner policy admission is fenced or stale", 409);
     }
     // A public MCP request carries a non-secret principal fence, protected by
     // the Worker HMAC. Do not trust its earlier permission preflight: async
     // policy reconciliation can overlap client revocation or override edits.
+    const reportingLaunch = attachment.historyProtocol === 2 && (method === "exec.start" || method === "exec.run");
+    let recordHistory = !Object.prototype.hasOwnProperty.call(input, "mcp_authorization");
     if (Object.prototype.hasOwnProperty.call(input, "mcp_authorization")) {
       const principal = input.mcp_authorization;
       const params = input.params;
-      if (!isRecord(principal) || !isRecord(params)) return Response.json({ error: { code: "permission_denied", message: "invalid MCP authorization identity" } }, { status: 403 });
-      const authorized = await this.registryRequest(attachment.runnerId, "/mcp-authorization", { method: "POST", body: JSON.stringify({
-        client_id: principal.client_id, secret_version: principal.secret_version, method, workspace_bound: principal.workspace_bound === true,
-        workspace_id: params.expected_workspace_id ?? params.workspace_id,
-        ...(typeof params.job_id === "string" ? { job_id: params.job_id } : {}),
-        policy_revision: requestPolicyRevision, policy_checksum: expectedPolicyChecksum,
-      }) });
-      let decision: unknown;
-      try { decision = await authorized.json(); } catch { decision = undefined; }
-      if (authorized.status === 429 || authorized.status >= 500 || !isRecord(decision) || typeof decision.ok !== "boolean") return controlPlaneUnavailableResponse(authorized);
-      if (!authorized.ok || decision.ok !== true) return Response.json({ error: { code: "permission_denied", message: "MCP authorization is no longer valid" } }, { status: 403 });
+      if (!isRecord(principal) || !isRecord(params)) return preDispatchError("permission_denied", "invalid MCP authorization identity", 403);
+      let authorized: Response | undefined;
+      const receipt = await boundedJsonReceipt(async signal => {
+        authorized = await this.registryRequest(attachment.runnerId, "/mcp-authorization", { method: "POST", signal, body: JSON.stringify({
+          client_id: principal.client_id, secret_version: principal.secret_version, method, workspace_bound: principal.workspace_bound === true,
+          workspace_id: params.expected_workspace_id ?? params.workspace_id,
+          ...(typeof params.job_id === "string" ? { job_id: params.job_id } : {}),
+          policy_revision: requestPolicyRevision, policy_checksum: expectedPolicyChecksum,
+          ...(reportingLaunch ? { include_job_recording: true } : {}),
+        }) });
+        return authorized;
+      }, [200, 403, 409]);
+      const decision = receipt?.value;
+      if (receipt === undefined || !isRecord(decision) || typeof decision.ok !== "boolean"
+        || (receipt.status !== 200 && !((receipt.status === 403 || receipt.status === 409) && decision.ok === false))) return preDispatchError("control_plane_unavailable", "MCP authorization could not be verified", 503, controlPlaneUnavailableResponse(authorized).headers);
+      if (receipt.status !== 200 || decision.ok !== true) return preDispatchError("permission_denied", "MCP authorization is no longer valid", 403);
+      // Reuse this exact final decision; no extra lookup or cached permission.
+      // Missing optional capture evidence suppresses history, not execution.
+      recordHistory = decision.record_history === true;
     }
     // Only the final authenticated principal may be embedded in a queue grant.
     // Never accept a caller-supplied grant or creator identity at this boundary.
     let dispatchParams = input.params;
-    if (attachment.queueProtocol === 1 && (method === "exec.start" || method === "exec.run") && isRecord(input.params)) {
-      const clean = { ...input.params }; delete clean.queue_grant;
+    if ((method === "exec.start" || method === "exec.run") && isRecord(input.params)) {
+      const clean = { ...input.params }; delete clean.queue_grant; delete clean.record_history;
+      if (reportingLaunch) clean.record_history = recordHistory;
       const principal = input.mcp_authorization;
-      if (isRecord(principal) && typeof principal.client_id === "string" && isSafePositiveInteger(principal.secret_version)
+      if (attachment.queueProtocol === 1 && isRecord(principal) && typeof principal.client_id === "string" && isSafePositiveInteger(principal.secret_version)
         && typeof clean.workspace_id === "string" && validLifecycleId(attachment.lifecycleId)
         && requestPolicyRevision !== undefined && expectedPolicyChecksum !== undefined) {
         clean.created_by_client_id = principal.client_id;
@@ -627,19 +648,28 @@ export class RunnerDO {
     // Otherwise a policy mutation can win while Registry authorization awaits.
     if (requestPolicyRevision !== undefined && expectedPolicyChecksum !== undefined
       && (this.admissionState === undefined || !this.admitsProtectedRpc(this.admissionState, attachment, requestPolicyRevision, expectedPolicyChecksum))) {
-      return Response.json({ error: { code: "stale_policy", message: "Runner policy changed before dispatch" } }, { status: 409 });
+      return preDispatchError("stale_policy", "Runner policy changed before dispatch", 409);
     }
     const requestId = `bridge-${crypto.randomUUID()}`;
     const parsed = RpcRequestSchema.safeParse({ type: "rpc.request", protocol_version: attachment.protocolVersion, request_id: requestId, method: input.method, params: dispatchParams, ...(requestPolicyRevision === undefined ? {} : { policy_revision: requestPolicyRevision }) });
-    if (!parsed.success) return Response.json({ error: { code: "invalid_request", message: "invalid RPC request" } }, { status: 400 });
+    if (!parsed.success) return preDispatchError("invalid_request", "invalid RPC request", 400);
+    // Stable protocol-v2 Runners reject unknown method enum values. Use the
+    // current authenticated hello, including after hibernation, before sending
+    // newer extensions; a version string cannot establish method support.
+    if ((method === "context.storage" || method === "context.prune") && !attachment.contextMethods?.includes(method)) {
+      return preDispatchError("runner_upgrade_required", "Runner does not advertise this Context method; upgrade the Runner and reconnect", 409);
+    }
+    // Authorization above awaits I/O. Recheck capacity at the synchronous
+    // reservation point so concurrent admissions cannot all pass the first gate.
+    if (this.replies.size >= MAX_BRIDGE_IN_FLIGHT) return preDispatchError("busy", "bridge concurrency limit reached", 429);
     const reply = await new Promise<BridgeReply>((resolve) => {
       const timer = setTimeout(() => {
-        this.bridgeWaiters.delete(requestId);
-        resolve({ type: "rpc.error", protocol_version: attachment.protocolVersion, request_id: requestId, error: { code: "timeout", message: "runner RPC timed out" } });
+        this.replies.forget(requestId);
+        resolve({ type: "rpc.error", protocol_version: attachment.protocolVersion, request_id: requestId, error: { code: "timeout", message: "runner RPC timed out", ...failureMetadata("timeout", "unknown") } });
       }, BRIDGE_TIMEOUT_MS);
-      this.bridgeWaiters.set(requestId, { resolve, timer, socket });
+      this.replies.register(requestId, { resolve, timer, socket });
       try { socket.send(encodeWireFrame(parsed.data)); } catch (error) {
-        clearTimeout(timer); this.bridgeWaiters.delete(requestId);
+        clearTimeout(timer); this.replies.forget(requestId);
         // Keep the error-code check resilient when the protocol package is
         // loaded through more than one module graph and `instanceof` does not
         // recognize an otherwise valid ProtocolFrameError.
@@ -649,23 +679,20 @@ export class RunnerDO {
             ? "frame_too_large"
             : undefined;
         if (protocolCode === "frame_too_large") {
-          resolve({ type: "rpc.error", protocol_version: attachment.protocolVersion, request_id: requestId, error: { code: "request_too_large", message: "runner RPC exceeds the wire-frame limit" } });
+          resolve({ type: "rpc.error", protocol_version: attachment.protocolVersion, request_id: requestId, error: { code: "request_too_large", message: "runner RPC exceeds the wire-frame limit", ...failureMetadata("request_too_large", "not_started") } });
           return;
         }
-        resolve({ type: "rpc.error", protocol_version: attachment.protocolVersion, request_id: requestId, error: { code: "runner_offline", message: "runner is not connected" } });
+        resolve({ type: "rpc.error", protocol_version: attachment.protocolVersion, request_id: requestId, error: { code: "runner_offline", message: "runner is not connected", ...failureMetadata("runner_offline", "unknown") } });
       }
     });
     return reply.type === "rpc.response" ? Response.json(reply) : Response.json(reply, { status: reply.error.code === "timeout" ? 504 : reply.error.code === "request_too_large" ? 413 : 502 });
   }
 
   private rejectBridgeWaiters(socket: WebSocket, message: string): void {
-    for (const [requestId, waiter] of this.bridgeWaiters) {
-      if (waiter.socket !== socket) continue;
-      clearTimeout(waiter.timer);
-      this.bridgeWaiters.delete(requestId);
-      const attachment = waiter.socket.deserializeAttachment() as ConnectionAttachment | null;
-      waiter.resolve({ type: "rpc.error", protocol_version: attachment?.protocolVersion ?? PROTOCOL_CURRENT_VERSION, request_id: requestId, error: { code: "runner_offline", message } });
-    }
+    this.replies.reject(socket, (requestId, currentSocket) => {
+      const attachment = currentSocket.deserializeAttachment() as ConnectionAttachment | null;
+      return { type: "rpc.error", protocol_version: attachment?.protocolVersion ?? PROTOCOL_CURRENT_VERSION, request_id: requestId, error: { code: "runner_offline", message, ...failureMetadata("runner_offline", "unknown") } };
+    });
   }
 
   private async admitOrReconcileProtectedRpc(attachment: ConnectionAttachment, revision: number, checksum: string): Promise<boolean> {
@@ -750,6 +777,10 @@ export class RunnerDO {
   private async admission(): Promise<AdmissionState> {
     if (this.admissionState !== undefined) return this.admissionState;
     const stored = await this.ctx.storage.get<AdmissionState>(ADMISSION_STATE_KEY);
+    // Concurrent events may already have initialized (and mutated) admission
+    // while this read was pending. Never replace their fence owner with an
+    // older cold-start snapshot.
+    if (this.admissionState !== undefined) return this.admissionState;
     // A restart/hibernation is an authorization boundary. Even a previously
     // reconciled value must be fenced until this session has rechecked the
     // Registry identity against its current socket epoch and credential.
@@ -778,6 +809,10 @@ export class RunnerDO {
       const currentLifecycle = current.lifecycleId;
       const incomingLifecycle = attachment.lifecycleId;
       if (currentLifecycle !== null && incomingLifecycle === null) return true;
+      // Lifecycle nonces have no ordering. A different identity acquired
+      // during the Registry probe is newer than this receipt even if its
+      // credential and epoch counters restarted at one.
+      if (currentLifecycle !== beforeHello.lifecycleId && currentLifecycle !== incomingLifecycle) return true;
       if (currentLifecycle !== null && currentLifecycle !== incomingLifecycle) return false;
       if (current.credentialVersion !== null && current.credentialVersion > attachment.credentialVersion) return true;
       if (current.credentialVersion !== attachment.credentialVersion) return false;
@@ -1129,6 +1164,9 @@ export class RunnerDO {
   private async scheduleHelloDeadline(): Promise<void> {
     let earliest: number | undefined;
     for (const socket of this.ctx.getWebSockets("runner")) {
+      // Closing sockets can remain attached until the peer acknowledges the
+      // close. They must not continually rearm an already-expired deadline.
+      if (socket.readyState === WebSocket.CLOSING || socket.readyState === WebSocket.CLOSED) continue;
       const attachment = socket.deserializeAttachment() as ConnectionAttachment | null;
       if (attachment?.epoch === 0 && (earliest === undefined || attachment.helloDeadlineMs < earliest)) earliest = attachment.helloDeadlineMs;
     }
@@ -1142,11 +1180,22 @@ export class RunnerDO {
     await this.ctx.storage.setAlarm(earliest);
   }
 
-  private async isCurrent(attachment: ConnectionAttachment, requireOnline = false): Promise<boolean> {
-    const response = await this.registryRequest(attachment.runnerId, "/session", {
+  private sessionResponse(attachment: ConnectionAttachment, requireOnline = false): Promise<Response> {
+    return this.registryRequest(attachment.runnerId, "/session", {
       method: "POST",
       body: JSON.stringify({ epoch: attachment.epoch, credential_version: attachment.credentialVersion, ...transportIdentityFields(attachment), require_online: requireOnline }),
     });
+  }
+
+  private async verifySocketSession(ws: WebSocket, attachment: ConnectionAttachment, requireOnline = false): Promise<boolean> {
+    const response = await this.sessionResponse(attachment, requireOnline);
+    if (response.status === 204) return true;
+    this.closeForRegistryFailure(ws, response);
+    return false;
+  }
+
+  private async isCurrent(attachment: ConnectionAttachment, requireOnline = false): Promise<boolean> {
+    const response = await this.sessionResponse(attachment, requireOnline);
     if (response.status === 204) return true;
     if (registryRejectedSession(response)) return false;
     throw new ControlPlaneUnavailableError();
@@ -1171,15 +1220,9 @@ export class RunnerDO {
   }
 
   private registryRequest(runnerId: string, action: string, init: RequestInit): Promise<Response> {
-    if (!isConfiguredSecret(this.env.INTERNAL_CONTROL_SECRET)) return Promise.resolve(new Response("control plane is not configured", { status: 503 }));
-    const id = this.env.REGISTRY.idFromName("registry");
-    const path = `/runners/${encodeURIComponent(runnerId)}${action}`;
-    const body = typeof init.body === "string" ? init.body : "";
-    const headersPromise = internalHeaders(this.env.INTERNAL_CONTROL_SECRET, init.method ?? "GET", path, body);
-    return headersPromise
-      .then((headers) => this.env.REGISTRY.get(id).fetch(new Request(`https://registry.internal${path}`, { ...init, headers })))
-      .catch(() => new Response("registry unavailable", { status: 503 }));
+    return this.requestRegistry(runnerId, action, init);
   }
+
 }
 
 function parseJsonObject(body: string): Record<string, unknown> | undefined {

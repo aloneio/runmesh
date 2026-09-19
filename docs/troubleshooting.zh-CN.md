@@ -1,72 +1,68 @@
 # 故障排查
 
-先确认问题发生在管理后台、Runner 连接还是 MCP 客户端。不要把密码、MCP 地址、注册码或 Runner token 粘贴到问题描述中。
+[English](troubleshooting.md) · [文档目录](README.zh-CN.md)
 
-## 无法打开管理页面
+先确定出错组件：管理页面、Worker、Runner 服务或 MCP 客户端，并保留原操作回执。
 
-- 检查 Worker 域名和 HTTPS 是否正确；
-- 确认 Cloudflare 部署成功，且 `RUNMESH_PUBLIC_ORIGIN` 与访问域名一致；
-- 如果页面显示“未初始化”，直接设置管理员密码；首个完成设置的用户会成为管理员；
-- 如果 Registry 报告数据结构不兼容，请创建全新的 Durable Object 命名空间；本版本不会修复或导入旧表；
-- 如果登录失败多次，请等待节流时间结束后再试；
-- 清除旧站点 Cookie 后重新登录。修改管理员密码会使旧会话失效。
+## 管理页面或登录异常
+
+检查公网 HTTPS 地址与部署状态。为反向代理配置了 `RUNMESH_PUBLIC_ORIGIN` 时，也应核对该覆盖值。
+
+| 现象 | 处理 |
+| --- | --- |
+| Registry 或鉴权依赖不可用 | 检查部署，等待恢复后用当前凭据重试登录 |
+| 多次失败后登录被节流 | 等待节流窗口结束 |
+| 修改密码后会话过期 | 使用当前密码重新登录 |
+| 数据或 schema 不匹配 | 保护数据，比较所部署代码与资源绑定，按[升级指南](upgrading.zh-CN.md)处理 |
+
+新实例应在向不可信访问者开放前完成管理员设置。涉及旧数据边界时，使用对应的[迁移流程](migration.md)。
 
 ## Runner 一直离线
 
-1. 在 Runner 详情页确认注册码没有过期，必要时重新生成；
-2. 检查目标机器上的服务是否正在运行；
-3. 确认机器可以访问 Worker 的 `wss://` 出站连接；
-4. 检查系统时间是否准确；
-5. 使用 Runner 本机的 `runmesh doctor --json` 查看配置、服务和运行环境；
-6. 如果刚刚轮换或撤销过凭据，重新注册并不要复用旧注册码。
+检查主机服务、到 Worker 的 HTTPS/WebSocket 出站连接和系统时间。使用服务实际程序单独运行 `runmesh --version`，再运行 `runmesh doctor --json`。给 `doctor` 加 `--profile` 检查自定义配置，加 `--user` 检查用户级服务；已安装版本支持时，可用 `--shareable` 生成适合支持反馈的报告。
 
-如果 `doctor --json` 报告 profile 不完整或不兼容，请通过当前注册流程重新生成 profile；Runner 不会转换其他版本的配置。
+在控制台检查 Runner 授权期限和凭据状态。仍需访问的过期授权可以延期；已撤销或替换的凭据按管理员提供的恢复注册流程处理；网络和依赖故障则恢复相应连接或服务。
 
-Runmesh 不需要公网入站端口。不要为了“修复”连接而开放 SSH 或把 Runner 暴露到公网。
+Runner 在线但策略被拒绝时，检查工作区是否存在、服务账号是否具有操作系统访问权限。重连时间和分层诊断见[连接恢复](connection-recovery.md)。
 
-## 安装命令失败
+## 安装失败或不可用
 
-- Linux/macOS：用管理员 Shell 重试，确认 `curl` 或 `wget` 可用；
-- Windows：用“以管理员身份运行”的 PowerShell，并确保脚本完整复制；
-- 如果托管安装器显示不可用，请按[便携式安装流程](portable-runner-installation.md)先校验发布包；
-- 不要从 npm、源码分支或第三方镜像替换安装包；
-- 安装完成后运行 `runmesh --version` 和 `runmesh doctor --json`；
-- 若服务清单已存在但内容不一致，先停用旧服务并由管理员检查，不要强制覆盖。
+在相应系统的管理员终端使用注册页面的命令，按[安装依赖](installer-prerequisites.zh-CN.md)处理 `RMI_*` 错误。
 
-## MCP 客户端无法连接
+托管分发不可用时，查看[发行状态](release-readiness.md)。0.1.4 候选版保持正式分发关闭；有适用且已验证的发行物时，可按[便携安装流程](portable-runner-installation.md)操作，并保留 TLS、签名和哈希校验。
 
-- 粘贴完整 URL，确认末尾是 `/mcp`；
-- 删除换行、引号和多余空格；
-- 不要附加 Bearer token 或自行改写路径；
-- 确认客户端支持 Streamable HTTP；
-- 在后台确认客户端没有被撤销，并且使用最新轮换后的 URL；
-- 检查客户端与 Worker 的系统时间和 TLS 证书是否正常。
+已有安装或卸载正在运行时，等待它结束。异常退出后，请管理员先检查进程与残留文件，再处理残留锁。注册可能已完成时，先核对控制台和本地配置，再决定是否生成替代码。
 
-## 没有工作区或权限不足
+## MCP 连接或工具参数异常
 
-客户端权限、Runner 权限和工作区权限必须同时允许操作。请管理员：
+在支持 Streamable HTTP 的客户端使用以 `/mcp` 结尾的完整授权地址，去掉意外引号、空格和换行。使用地址鉴权即可，无需附加 Bearer token。
 
-1. 在 Runner 详情页确认工作区策略已保存并被 Runner 确认；
-2. 检查 MCP 客户端是否拥有对应 scope；
-3. 检查客户端是否被限制到正确的 Runner；
-4. 让客户端重新调用 `runner_current` 和 `workspace_list`。
+Worker 更新后刷新 Runmesh 工具目录。任务后续查询拒绝 `workspace_id` 时，按[目录刷新说明](mcp-connector-refresh.md)核对 Worker、Runner 和客户端定义。
 
-不要尝试通过绝对路径、符号链接或 `shell` 绕过工作区限制。
+`runner_upgrade_required` 表示需要兼容的已安装 Runner。Context `storage` 和 `prune` 需要从 0.1.3 升级到包含这些动作的已验证版本，再重新连接以识别能力。具体操作见[升级指南](upgrading.zh-CN.md)。
 
-## 任务失败、卡住或看不到日志
+## 工作区缺失或权限不足
 
-- 使用 `job({"action":"list"})` 查看任务是否仍在运行；
-- 使用 `job({"action":"get","job_id":"..."})` 获取状态；
-- 用 `job` 的 `logs` 分页读取输出；
-- 任务启动后浏览器关闭不会停止它；
-- Runner 离线时可以看到保留的元数据，但实时输出和输入需要 Runner 恢复在线；
-- 出现 `output_truncated` 时，到 Runner 主机检查完整日志；
-- 取消请求只影响已记录的任务，不代表已经启动的外部子进程一定立即结束。
+用 `runner_current` 确认机器，用 `workspace_list` 核对工作区 ID。请管理员检查客户端 scope、Runner 限制、授权期限、工作区权限和策略确认；Runner 服务账号还需要对应的操作系统权限。
 
-## 仍然无法解决
+按[权限排查流程](runbooks/permission-denial.md)确定拒绝发生在哪一层，再调整访问设置。依赖不可用时，该部分诊断保留为未确认。
 
-记录时间、页面或工具名称、脱敏后的错误代码、Runner 显示名称和 `doctor --json` 中的非敏感检查结果。不要提供密码、完整 URL、注册码、token、工作区真实路径、文件内容或命令输出。安全问题请走 [.github/SECURITY.zh-CN.md](../.github/SECURITY.zh-CN.md) 的私密流程。
+## 任务仍运行或云端历史为空
 
-## 精简系统安装失败
+保留原 `job_id`、`workspace_id` 和 Runner 选择。前台调用可以在命令结束前返回，应继续使用带工作区 ID 的在线查询。云端历史被关闭、延迟、过期或暂不可用时，Runner 仍可能保留任务。
 
-新版引导不再依赖 xz。按 RMI_* 错误码和[安装依赖说明](installer-prerequisites.zh-CN.md)处理，不要关闭 TLS/哈希或反复使用可能已消耗的注册码。
+遇到 `job_history_unavailable` 或旧版 `not_found`，请管理员恢复原任务查询链路。发起另一条命令前，先核实原任务状态。
+
+## 取消、恢复或输入结果不确定
+
+发出取消后，等待任务进入最终状态。恢复为 `unknown` 的进程由管理员在主机上核实身份，状态核对完成前会继续占用执行槽。
+
+输入送达错误或超时后，先检查原进程，再发送数据或输入结束信号。结合 `operation_state`、`next_action` 和 `recovery_hint` 判断后续操作。完整状态说明见[用户指南](user-guide.zh-CN.md)。
+
+## 输出不完整
+
+前台输出的正数偏移表示返回的是靠后片段，可用 `job` 工具的 `logs` 动作分页读取保留字节。`output_truncated` 可能表示输出已永久丢弃；应用另有日志采集时，也请一并检查。
+
+## 报告剩余问题
+
+提供时间、工具及动作、组件版本、脱敏错误代码和相关诊断结果，分享前去掉凭据、真实工作区路径和私有内容。安全问题通过 [SECURITY.zh-CN.md](../.github/SECURITY.zh-CN.md) 私密反馈。

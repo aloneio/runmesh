@@ -1,50 +1,65 @@
-# 最小运行时配置
+# 运行时配置与密钥
 
-普通生产部署只需 **两个长期密钥，不需要手工填写普通运行时变量**。现有数据绑定和密钥值保持不变。
+[English](runtime-config.md) · [管理员指南](admin-guide.zh-CN.md)
+
+使用源码默认值和两个独立的 Worker 密钥开始部署；有特殊需要时再增加覆盖配置。
 
 ## 必要密钥
 
-| 名称 | 用途 | 更新要求 |
+| 名称 | 用途 | 升级时 |
 | --- | --- | --- |
-| `INTERNAL_CONTROL_SECRET` | 验证控制面内部请求 | 更新时保留原值 |
-| `RUNNER_TOKEN_PEPPER` | 保护 Runner 凭据校验值 | 更新时保留原值，替换会使已有凭据失效 |
+| `INTERNAL_CONTROL_SECRET` | 验证控制面内部请求 | 保留现有值 |
+| `RUNNER_TOKEN_PEPPER` | 保护 Runner 凭据校验值 | 保留现有值；替换会使已有凭据失效 |
 
-分别使用至少 32 字节的密码学安全随机数，编码为文本；不要复用两个值，不要提交到仓库、CI 日志或聊天。管理员登录密码仍通过网页初始化设置。
+每个值分别使用至少 32 字节的密码学安全随机数，编码为文本，保存在 Cloudflare secrets 中。密钥应避开源码、日志和对话。管理员密码通过首次设置页面填写。
 
-`ADMIN_TOKEN` 只用于高级自动化管理 API，普通网页管理、注册码和 MCP 不需要它。已有 Token 不会自动删除，以免影响其他管理程序。
+需要通过 API 管理 Runner 时，再配置 `ADMIN_TOKEN`；只使用管理页面的实例保留两个必要密钥即可。
 
-## 不再要求重复填写的配置
+## 默认值与覆盖项
 
-生产身份由环境确定；公网地址取自校验后的 HTTPS 请求 URL 和匹配的 Host，不使用转发头推测；历史记录默认使用生产 D1 绑定；安装器可分发状态从经过独立验证的发布记录生成。只有反向代理等特殊部署才需要显式配置 `RUNMESH_PUBLIC_ORIGIN`。
+| 配置 | 默认行为与适用场景 |
+| --- | --- |
+| `WORKER_ID` | 由生产或开发模式确定，也支持现有的显式 ID |
+| `RUNMESH_PUBLIC_ORIGIN` | 校验后的 HTTPS 请求地址与匹配的 Host；反向代理传入内部地址时，显式设置公网 HTTPS origin |
+| `RUNMESH_AUDIT_BACKEND` | 生产默认 D1；保留有意设置的后端覆盖项 |
+| `RUNMESH_JOB_HISTORY_BACKEND` | 生产默认使用打包的 D1 历史；保持 `HISTORY_DB` 绑定可用 |
+| `RUNMESH_SIGNED_RELEASE_AVAILABLE` | 生产使用经过审核的正式版本，候选版关闭；开发使用 `dev` 发现。显式空值会关闭托管安装 |
+| `RUNMESH_DEPLOYMENT_BRANCH` / `RUNMESH_DEPLOYMENT_COMMIT` | 部署身份由构建时核实的 Git 来源生成，并与提供商元数据比较；通过[来源核验](build-provenance.zh-CN.md)查看 |
 
-旧的身份、域名、后端和发布门控变量仍作为兼容覆盖项。显式空值或错误值不会被自动改成允许状态。删除生产 D1 绑定不会使历史写入自动回退到核心 DO。
+公网地址覆盖项必须是完整的 HTTPS origin，省略路径、查询、片段、凭据和空白。空值或无效值会使需要公网地址的请求被拒绝。Runmesh 校验请求本身，转发主机头不参与地址选择。
 
-部署分支和提交通过 Cloudflare 版本元数据标签报告，不再额外注入两个普通变量。没有可信标签时继续报告未知，不按软件版本猜提交。
+开发环境使用 `RUNMESH_ENVIRONMENT=development`，测试变量保留在本地测试环境。更新已有实例时，保留 Registry/Runner Durable Object 命名空间、`HISTORY_DB`、静态资源和 `CF_VERSION_METADATA` 绑定。
 
-开发环境仅保留一个非敏感标记 `RUNMESH_ENVIRONMENT=development`；测试变量只用于本地测试。DO、D1、静态资源和版本元数据是资源绑定，不应当当作多余变量删除。
+## 选择发行物与环境
 
-## 初始化工具
+当前源码为 **0.1.4 候选版**，正式分发关闭。完成签名发布、独立验证和经过审核的 `release/release-state.json` 激活后，才可用于生产安装。安装可用性以这份发布记录为准。
 
-先完成 Cloudflare 管理授权和 Worker 创建，然后只检查必要密钥：
+生产使用受保护的 `main`，候选版测试使用独立的 `dev` Worker。开发环境从自己的通道选择已验签预发布；选择不可用时会关闭托管安装。详见[开发预发布](dev-runner-prereleases.zh-CN.md)。
+
+## 初始化缺失密钥
+
+完成 Cloudflare CLI 管理授权并创建 Worker 后，先检查必要密钥名称：
 
 ```sh
 npm run setup:secrets -- --env production
 ```
 
-明确创建缺失项：
+创建缺失项：
 
 ```sh
 npm run setup:secrets -- --env production --apply
 ```
 
-工具只读取名称、再次确认清单、在内存中生成独立随机值，通过标准输入上传缺失项。不会打印密钥值、写入密钥文件、删除其他密钥或重新生成已有密钥。重复运行且密钥齐全时不执行写入。读取权限错误不会当成“没有密钥”；上传结果不确定时不自动重试。不要在多台机器上同时初始化。
+工具再次检查清单，在内存中生成独立随机值，并通过 Wrangler 标准输入上传缺失项；已有值保持原样。每次由一位管理员执行初始化。清单读取失败时先解决 Cloudflare 访问问题；上传结果不确定时，先核对密钥清单再决定是否重试。
 
-这是一次性显式管理操作，不会加入普通部署或 Worker 冷启动。生成值不会通过工具保留可导出的副本；需要独立备份密钥的部署者，应先通过自己的安全密钥管理流程生成并保存。
+生成的密钥由 Cloudflare 保存。需要独立恢复备份时，应先通过自己的密钥管理流程生成并保留，再上传。
 
-## 更新与部署边界
+## 更新或迁移实例
 
-更新现有实例时保留 Worker 名称、现用 v2 命名空间、历史数据库和两个密钥。不要重新注册健康 Runner，也不要删除有意设置的反向代理覆盖项或紧急关闭项。现存可选密钥不会被盲目清理。
+保留 Worker 名称、现有数据绑定、两个必要密钥，以及反向代理地址或紧急关闭安装等有意设置的覆盖项。部署更新后的 Worker，再按[升级指南](upgrading.zh-CN.md)逐台处理 Runner。
 
-新的部署可使用自己的账号资源和路由域名，不必修改作者域名。跨账号迁移既有数据仍需要原来的密钥和单独的数据迁移方案；减少部署步骤不等于自动迁移数据库。
+新账号可以创建自己的资源并使用自己的 HTTPS 域名。迁移已有数据需要单独的转移方案，并包含原来的凭据保护密钥。
 
-发布签名密钥仅属于 GitHub 发布环境；Cloudflare API 凭据仅属于部署连接或授权 CLI，均不应放在 Worker 运行时。正式发版仍只允许从受保护的 main 进行。
+发行签名密钥保存在 GitHub 发布环境，Cloudflare API 凭据保存在授权 CLI 或构建连接；Worker 运行时只接收应用所需密钥。
+
+参考：[Cloudflare secrets](https://developers.cloudflare.com/workers/configuration/secrets/)、[版本元数据](https://developers.cloudflare.com/workers/runtime-apis/bindings/version-metadata/)、[资源创建](https://developers.cloudflare.com/workers/wrangler/configuration/#automatic-provisioning)。

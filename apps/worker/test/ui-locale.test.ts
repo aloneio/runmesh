@@ -3,6 +3,9 @@ import {expect,it} from "vitest";
 import worker from "../src/index.js";
 import {requestLocale,localizeHtmlResponse,localizeUiText} from "../src/ui-locale.js";
 import {randomBase64Url,sha256Hex} from "../src/security.js";
+import {enrollmentDocument} from "../src/admin/enrollment-view.js";
+import {clientDetailPage} from "../src/admin/client-views.js";
+import {jobTable,mcpCallTable} from "../src/admin/tables.js";
 const request=(lang="en",headers:Record<string,string>={})=>new Request(`https://worker.test/admin?lang=${lang}`,{headers});
 it("locale priority is explicit query, exact cookie, then quality-ranked browser preferences",()=>{
  expect(requestLocale(request("zh-CN"))).toBe("zh-CN");
@@ -58,4 +61,85 @@ it("the public login response has a fully localized browser title",async()=>{
  const html=await response.text(),title=/<title>([^<]+)<\/title>/.exec(html)?.[1];
  expect(title).toBe("Runmesh · 智能体控制平面登录");
  expect(response.headers.get("content-language")).toBe("zh-CN");
+});
+
+it("I18N01 translations preserve restricted defaults and destructive cleanup scope",()=>{
+ for(const value of ["The default is dedicated_user; privileged_host is an advanced, explicitly confirmed option.","The default is dedicated_user; privileged_host is an advanced, explicitly confirmed option. The install step runs only after enrollment succeeds."]){
+  const translated=localizeUiText(value,"zh-CN");
+  expect(translated).toContain("默认");expect(translated).toContain("dedicated_user");expect(translated).toContain("明确确认");
+  expect(translated).not.toContain("推荐使用 privileged_host");
+ }
+ expect(localizeUiText("Disabled","zh-CN")).toBe("禁用");
+ expect(localizeUiText("stale","zh-CN")).toBe("状态陈旧");
+ const removal="Run the command for the local OS to stop the managed service and remove the Runmesh installation, configuration, local job history, logs and supported legacy remnants. Project workspaces are preserved. Delete the Runner record separately from the administrator console when you no longer need its history.";
+ for(const term of ["任务历史","日志","工作区","保留"])expect(localizeUiText(removal,"zh-CN")).toContain(term);
+});
+
+for(const executionMode of ["dedicated_user","privileged_host"] as const)for(const bootstrap of [false,true]){
+ it(`I18N02 enrollment stays single-locale: ${executionMode}, hosted=${bootstrap}`,async()=>{
+  const original=enrollmentDocument({publicBase:"https://example.test",runnerId:"runner-i18n",code:"synthetic-code-DO-NOT-USE",csrf:"synthetic-csrf",reEnroll:false,bootstrap,executionMode,maxValidityDays:3650,enrollment:{expires_at_ms:1900000000000}});
+  for(const locale of ["en","zh-CN"]){
+   const output=await localizeHtmlResponse(request(locale),new Response(original,{headers:{"content-type":"text/html"}})).text();
+   const text=visible(output.replace(/<pre\b[^>]*>[\s\S]*?<\/pre>/gu,""));
+   if(locale==="en")expect(text).not.toMatch(/[\u4e00-\u9fff]/u);
+   else for(const phrase of ["Manual Runner enrollment","The installer verifies","Selected execution mode:","The default is dedicated_user","This code is valid until","You must keep","Run the command for the local OS"])expect(text).not.toContain(phrase);
+   expect([...output.matchAll(/<pre\b[^>]*>[\s\S]*?<\/pre>/gu)].map(x=>x[0])).toEqual([...original.matchAll(/<pre\b[^>]*>[\s\S]*?<\/pre>/gu)].map(x=>x[0]));
+  }
+ });
+}
+
+it("I18N03 regional query overrides cookie; malformed language ranges are ignored",()=>{
+ expect(requestLocale(request("en-US",{cookie:"runmesh_lang=zh-CN"}))).toBe("en");
+ expect(requestLocale(request("zh-Hans",{cookie:"runmesh_lang=en"}))).toBe("zh-CN");
+ expect(requestLocale(new Request("https://worker.test/admin",{headers:{"accept-language":"zh;q=2,en;q=1"}}))).toBe("en");
+ expect(requestLocale(new Request("https://worker.test/admin",{headers:{"accept-language":"zhongwen,en;q=0.9"}}))).toBe("en");
+});
+
+it("I18N04 no-translation attributes cover void elements and translate=no subtrees",async()=>{
+ const original='<html><body><input data-no-i18n title="Dashboard" placeholder="Display name" value="Login"><div translate="no" title="Dashboard">Recent jobs <span>Settings</span></div><h1>Recent jobs</h1></body></html>';
+ const output=await localizeHtmlResponse(request("zh-CN"),new Response(original,{headers:{"content-type":"text/html"}})).text();
+ expect(output).toContain('<input data-no-i18n title="Dashboard" placeholder="Display name" value="Login">');
+ expect(output).toContain('<div translate="no" title="Dashboard">Recent jobs <span>Settings</span></div>');
+ expect(output).toContain('<h1>最近任务</h1>');
+});
+
+it("I18N05 terminal Job and audit states plus durations have translations",()=>{
+ for(const [source,expected] of [["cancelled","已取消"],["interrupted","已中断"],["ok","成功"],["error","错误"],["17 ms","17 毫秒"]])expect(localizeUiText(source!,"zh-CN")).toBe(expected);
+});
+
+it("I18N06 explicit locale persists before browser scripts without replacing session cookies",async()=>{
+ const response=localizeHtmlResponse(request("zh-Hans"),new Response('<html lang="en"><body>Dashboard</body></html>',{headers:{"content-type":"text/html","set-cookie":"existing=preserved; Secure"}}));
+ expect(response.headers.get("set-cookie")).toContain("runmesh_lang=zh-CN");
+ expect(response.headers.get("set-cookie")).toContain("existing=preserved");
+ await response.text();
+});
+
+it("I18N07 numeric entities and streaming chunks translate without corrupting protected text",async()=>{
+ const source='<html><body><h1>&#68;ashboard</h1><h2>Recent jobs</h2><span data-no-i18n>&#68;ashboard &lt;b&gt;</span></body></html>';
+ const bytes=new TextEncoder().encode(source);
+ const stream=new ReadableStream<Uint8Array>({start(controller){for(let i=0;i<bytes.length;i+=3)controller.enqueue(bytes.slice(i,i+3));controller.close();}});
+ const output=await localizeHtmlResponse(request("zh-CN"),new Response(stream,{headers:{"content-type":"text/html"}})).text();
+ expect(output).toContain('<h1>仪表盘</h1>');expect(output).toContain('<h2>最近任务</h2>');
+ expect(output).toContain('&#68;ashboard &lt;b&gt;');
+});
+
+it("I18N08 UI-like user labels and identifiers are never translated as interface copy",async()=>{
+ const detail=clientDetailPage({client_id:"Settings",label:"Dashboard",revoked_at_ms:null,scopes:["coding:read","coding:exec"],active_runner_id:null},[],[],"synthetic-csrf");
+ const jobs=jobTable([{job_id:"running",workspace_id:"Settings",created_by_client_id:"failed",status:"cancelled"}]);
+ const calls=mcpCallTable([{client_id:"Read",method:"shell",workspace_id:"Settings",job_id:"running",status:"error",error_code:"permission_denied",duration_ms:17}]);
+ const translated=await localizeHtmlResponse(request("zh-CN"),new Response(`<html><body>${detail}${jobs}${calls}</body></html>`,{headers:{"content-type":"text/html"}})).text();
+ expect(translated).toContain('<h1 class="detail-title" data-no-i18n>Dashboard</h1>');
+ expect(translated).toContain('<span class="workspace-pill" data-no-i18n>Settings</span>');
+ expect(translated).toContain('<td class="mono job-id-cell" data-no-i18n>running</td>');
+ expect(translated).toContain('<td class="mono font-12" data-no-i18n>Read</td>');
+ expect(translated).toContain('<span data-no-i18n> · permission_denied</span>');
+ expect(translated).toContain('已取消');expect(translated).toContain('错误');expect(translated).toContain('17 毫秒');
+ expect(translated).toContain('读取、执行');
+});
+
+it("I18N09 long untranslated text and non-HTML responses remain intact",async()=>{
+ const long='x'.repeat(70000),source=`<html><body><div>${long}</div><p>Settings</p><code>Dashboard</code><p>Recent jobs</p></body></html>`;
+ const result=await localizeHtmlResponse(request("zh-CN"),new Response(source,{headers:{"content-type":"text/html"}})).text();
+ expect(result).toContain(`<div>${long}</div><p>设置</p><code>Dashboard</code><p>最近任务</p>`);
+ const json=Response.json({message:"Recent jobs"});expect(localizeHtmlResponse(request("zh-CN"),json)).toBe(json);
 });

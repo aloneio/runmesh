@@ -1,5 +1,7 @@
 # Existing production Worker: GitLab main cutover
 
+> Historical reference: the results, settings and actions below apply to the stated version or review period. For current use, follow the [documentation index](README.md), [upgrade guide](upgrading.md) and [release status](release-readiness.md).
+
 ## Scope
 
 Promote the verified, published v0.1.2 production source into protected main before changing the Cloudflare source branch. Old main predates the quota fixes and uses an incompatible deployment layout. Do not deploy that old tip. Preserve the existing Worker named runmesh, its domain, D1 history binding, Durable Object namespace and secrets. The unfinished v0.1.3 worktree is not part of this promotion.
@@ -18,7 +20,7 @@ After saving, trigger a build for main and confirm its commit matches GitLab mai
 
 ## Separate development Worker
 
-The owner will create a separate Worker for dev. The development environment's existing name is runmesh-development and deploy command is `npm run deploy:worker -- --env development`. Its production branch field should be dev: this means the primary branch of that separate Worker, not the real production service. Its credentials and state must be isolated. This promotion does not create the development Worker or copy production credentials.
+The separate development Worker now targets `runmeshdev` with `npm run deploy:worker -- --env development`. Its Workers Builds production branch should be `dev` (the primary branch of this development Worker, not the production service). The wrapper rejects a conflicting `WRANGLER_CI_OVERRIDE_NAME`. Keep the account, credentials and state isolated; source validation does not prove the dashboard trigger has been updated.
 
 ## Verification
 

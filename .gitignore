@@ -14,3 +14,19 @@ release/download/
 # Local project audit reports
 /docs/runmesh-project-audit-*.md
 /.audit/
+
+# Local verification evidence and CI package cache are never source.
+/.verification/
+/.dev-release/
+# Machine-generated source identity, never a tracked self-reference.
+/apps/worker/src/generated-provenance.ts*
+
+# GitLab dependency cache, never application source.
+/.npm/
+
+# Sanitized CI observations are output, never build input.
+/ci-results/
+
+# Deterministic browser source generated before builds and typechecking.
+/apps/worker/src/generated-admin-client.ts*
+apps/worker/src/generated-release-validation.ts

@@ -1,3 +1,4 @@
+import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 
 // Keep every release input and distributable bounded before JSON parsing,
@@ -16,7 +17,9 @@ export async function readBoundedReleaseFile(path, label = path) {
   try {
     // Keep the descriptor open across stat/read so a path replacement cannot
     // make the post-stat read target a different inode.
-    handle = await open(path, "r");
+    // A FIFO must not wait for a peer before the descriptor type check.
+    // Regular-file and network-filesystem I/O still has no hard deadline.
+    handle = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
     const metadata = await handle.stat();
     if (!metadata.isFile()) throw new Error(`${label} is not a regular file`);
     if (!Number.isSafeInteger(metadata.size) || metadata.size <= 0) throw new Error(`${label} is empty or has an invalid size`);

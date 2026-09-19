@@ -130,3 +130,34 @@ it("authorization-only request replays recheck live credentials without allocati
     expect(instance.consumeInternalNonce(nonce, now + 60000, now)).toBe(false);
   });
 });
+
+it("persists the verified development release descriptor behind the authenticated Registry boundary", async () => {
+  const stub = env.REGISTRY.get(env.REGISTRY.idFromName(`dev-release-cache-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, async (instance) => {
+    const path = "/distribution/dev-runner-release";
+    const descriptor = { channel: "dev", distributable: true, package_version: "0.1.4-dev.0" };
+    const newer = { schema_version: 1, verified_at_ms: Date.now(), descriptor };
+    const newerBody = JSON.stringify(newer);
+    const write = new Request(`https://registry.internal${path}`, { method: "POST", body: newerBody, headers: await internalHeaders(secret, "POST", path, newerBody) });
+    expect((await instance.fetch(write)).status).toBe(204);
+
+    const readHeaders = await internalHeaders(secret, "GET", path, "");
+    const read = await instance.fetch(new Request(`https://registry.internal${path}`, { headers: readHeaders }));
+    expect(read.status).toBe(200);
+    expect(read.headers.get("cache-control")).toBe("no-store");
+    expect(await read.json()).toEqual(newer);
+
+    const older = { ...newer, verified_at_ms: newer.verified_at_ms - 1_000, descriptor: { ...descriptor, package_version: "0.1.4-dev.99" } };
+    const olderBody = JSON.stringify(older);
+    expect((await instance.fetch(new Request(`https://registry.internal${path}`, { method: "POST", body: olderBody, headers: await internalHeaders(secret, "POST", path, olderBody) }))).status).toBe(204);
+    const equalTimestamp = { ...newer, descriptor: { ...descriptor, package_version: "0.1.4-dev.98" } };
+    const equalBody = JSON.stringify(equalTimestamp);
+    expect((await instance.fetch(new Request(`https://registry.internal${path}`, { method: "POST", body: equalBody, headers: await internalHeaders(secret, "POST", path, equalBody) }))).status).toBe(204);
+    const afterOlder = await instance.fetch(new Request(`https://registry.internal${path}`, { headers: await internalHeaders(secret, "GET", path, "") }));
+    expect(await afterOlder.json()).toEqual(newer);
+
+    const invalidBody = JSON.stringify({ schema_version: 1, verified_at_ms: Date.now(), descriptor: null });
+    expect((await instance.fetch(new Request(`https://registry.internal${path}`, { method: "POST", body: invalidBody, headers: await internalHeaders(secret, "POST", path, invalidBody) }))).status).toBe(400);
+    expect((await instance.fetch(new Request(`https://registry.internal${path}`))).status).toBe(404);
+  });
+});

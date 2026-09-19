@@ -3,21 +3,25 @@ import { WebSocketServer } from "ws";
 import { describe, expect, it, vi } from "vitest";
 import { RunnerConnection, RunnerAuthenticationError, RunnerServiceUnavailableError, classifyConnectionFailure } from "../src/connection.js";
 import { serviceReconnectDelayMs, retryAfterDelayMs } from "../src/backoff.js";
-import type { RunnerRuntime } from "../src/runtime.js";
-import type { PolicyStore } from "../src/policy-store.js";
+import type { ConnectionRuntimePort, ConnectionPolicyStorePort, ConnectionTransportFactory } from "../src/connection/ports.js";
 
-function runner(sleep: (ms: number) => Promise<void>, server = "ws://127.0.0.1:1") {
-  return new RunnerConnection({ config: { runnerId: "outage-runner", server, token: "synthetic-token", workspaces: [] },
-    runtime: { initialize: async () => {} } as unknown as RunnerRuntime,
-    policyStore: { load: async () => undefined } as unknown as PolicyStore, sleep, random: () => 0 });
+function dependencies(createSocket?: ConnectionTransportFactory) {
+  const runtime: ConnectionRuntimePort = { initialize: async () => {}, applyPolicy: () => {}, dispatch: async () => undefined,
+    configureJobRetention: () => {}, cleanupJobs: async () => {}, needsHistoryReconciliation: () => false,
+    syncJobs: async () => [], syncWorkspaceMetadata: () => [], jobs: { list: () => [] } };
+  const policyStore: ConnectionPolicyStorePort = { load: async () => undefined, activate: async () => {} };
+  return {runtime, policyStore, ...(createSocket === undefined ? {} : {createSocket})};
 }
-function mockConnect(connection: RunnerConnection) { return vi.spyOn(connection as unknown as { connectOnce(): Promise<void> }, "connectOnce"); }
+function runner(sleep: (ms: number) => Promise<void>, server = "ws://127.0.0.1:1", createSocket?: ConnectionTransportFactory) {
+  return new RunnerConnection({ config: { runnerId: "outage-runner", server, token: "synthetic-token", workspaces: [] },
+    sleep, random: () => 0 }, dependencies(createSocket));
+}
 
 describe("availability-aware connection recovery", () => {
   it.each([429, 500, 502, 503, 504])("keeps HTTP %s retryable even when an error mentions authentication", (statusCode) => {
     expect(classifyConnectionFailure({ statusCode, reason: "authentication storage unavailable" })).toBe("network");
   });
-  it.each([1011, 1012, 1013, 1006, 4002])("does not reclassify close %s by untrusted reason text", (closeCode) => {
+  it.each([1011, 1012, 1013, 1006, 4000, 4002])("does not reclassify close %s by untrusted reason text", (closeCode) => {
     expect(classifyConnectionFailure({ closeCode, reason: "credentials revoked: service unavailable" })).toBe("network");
   });
   it("does not treat a generic storage/auth-service error message as a credential decision", () => {
@@ -44,8 +48,8 @@ describe("availability-aware connection recovery", () => {
   });
   it("keeps the reconnect loop alive across repeated service outages without a busy retry", async () => {
     const waits: number[] = [];
-    const connection = runner(async (ms) => { waits.push(ms); if (waits.length === 6) connection.stop(); });
-    const connect = mockConnect(connection).mockRejectedValue(new RunnerServiceUnavailableError());
+    const connect = vi.fn(() => { throw new RunnerServiceUnavailableError(); });
+    const connection = runner(async (ms) => { waits.push(ms); if (waits.length === 6) connection.stop(); }, undefined, connect);
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       await connection.start();
@@ -53,8 +57,8 @@ describe("availability-aware connection recovery", () => {
     } finally { connection.stop(); connect.mockRestore(); log.mockRestore(); }
   });
   it("stops rather than retrying a real credential rejection", async () => {
-    const sleep = vi.fn(async () => {}), connection = runner(sleep);
-    const connect = mockConnect(connection).mockRejectedValue(new RunnerAuthenticationError());
+    const connect = vi.fn(() => { throw new RunnerAuthenticationError(); });
+    const sleep = vi.fn(async () => {}), connection = runner(sleep, undefined, connect);
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     try { await expect(connection.start()).rejects.toBeInstanceOf(RunnerAuthenticationError); expect(sleep).not.toHaveBeenCalled(); expect(connect).toHaveBeenCalledTimes(1); }
     finally { connection.stop(); connect.mockRestore(); log.mockRestore(); }
@@ -69,14 +73,21 @@ describe("availability-aware connection recovery", () => {
     try { await connection.start(); expect(waits).toEqual([120000]); }
     finally { connection.stop(); server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); log.mockRestore(); }
   });
-  it("exercises a real WebSocket 1013 close without leaving the reconnect loop", async () => {
+  it.each([4000, 1013])("exercises a real WebSocket %s close without leaving the reconnect loop", async (closeCode) => {
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     await new Promise<void>((resolve) => server.once("listening", resolve));
-    server.on("connection", (socket) => socket.once("message", () => socket.close(1013, "authentication dependency unavailable")));
+    server.on("connection", (socket) => socket.once("message", () => socket.close(closeCode, closeCode === 4000 ? "stale runner session" : "authentication dependency unavailable")));
     const address = server.address(); if (typeof address === "string") throw new Error("missing test port");
     const waits: number[] = [], connection = runner(async (ms) => { waits.push(ms); connection.stop(); }, `ws://127.0.0.1:${address.port}`);
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
-    try { await connection.start(); expect(waits).toEqual([30000]); }
+    try {
+      await connection.start();
+      expect(waits).toEqual([closeCode === 4000 ? 750 : 30000]);
+      if (closeCode === 4000) {
+        expect(log.mock.calls.flat().join(" ")).toContain("session_conflict");
+        expect(log.mock.calls.flat().join(" ")).not.toContain("credentials were revoked");
+      }
+    }
     finally { connection.stop(); for (const socket of server.clients) socket.terminate(); await new Promise<void>((resolve) => server.close(() => resolve())); log.mockRestore(); }
   });
 });
@@ -84,10 +95,9 @@ describe("availability-aware connection recovery", () => {
 it("stop interrupts a long service cooldown instead of waiting for its timer", async () => {
   vi.useFakeTimers();
   const log = vi.spyOn(console, "error").mockImplementation(() => {});
+  const connect = vi.fn(() => { throw new RunnerServiceUnavailableError("service unavailable", 900000); });
   const connection = new RunnerConnection({ config: { runnerId: "stop-runner", server: "ws://127.0.0.1:1", token: "synthetic", workspaces: [] },
-    runtime: { initialize: async () => {} } as unknown as RunnerRuntime,
-    policyStore: { load: async () => undefined } as unknown as PolicyStore, random: () => 0 });
-  const connect = mockConnect(connection).mockRejectedValue(new RunnerServiceUnavailableError("service unavailable", 900000));
+    random: () => 0 }, dependencies(connect));
   try {
     const running = connection.start(); await vi.advanceTimersByTimeAsync(0);
     expect(vi.getTimerCount()).toBe(1); connection.stop(); await running;

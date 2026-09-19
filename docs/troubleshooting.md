@@ -1,49 +1,68 @@
 # Troubleshooting
 
-First identify whether the issue is the admin UI, a Runner connection, or an MCP client. Never paste passwords, MCP URLs, enrollment codes, or Runner tokens into a report.
+[简体中文](troubleshooting.zh-CN.md) · [Documentation](README.md)
 
-## Admin page is unavailable
+Identify the affected component—administrator page, Worker, Runner service or MCP client—and keep the original operation's receipt.
 
-- Verify the Worker HTTPS origin and that `RUNMESH_PUBLIC_ORIGIN` matches it.
-- Complete first setup when the page reports an uninitialized deployment.
-- If the Registry reports an incompatible schema, provision a fresh Durable Object namespace; this release does not repair or import earlier tables.
-- After repeated failed logins, wait for the throttle window to end.
-- Clear the site's old cookies and sign in again; changing the administrator password invalidates old sessions.
+## Administrator page or login
+
+Check the public HTTPS origin and deployment status. If you configured `RUNMESH_PUBLIC_ORIGIN` for a reverse proxy, verify that override as well.
+
+| Symptom | Action |
+| --- | --- |
+| Registry or authorization dependency unavailable | Inspect the deployment and wait for recovery, then retry login with the current credential |
+| Login throttled after repeated failures | Wait for the throttle window to expire |
+| Session expired after a password change | Sign in with the current password |
+| Data/schema mismatch | Preserve data, compare deployed code and resource bindings, and follow the [upgrade guide](upgrading.md) |
+
+Complete first administrator setup before exposing a new instance to untrusted visitors. Older data-boundary changes have their own [migration procedure](migration.md).
 
 ## Runner stays offline
 
-1. Check that the enrollment code is still valid and generate a new one if needed.
-2. Check the service on the target machine.
-3. Confirm outbound `wss://` access to the Worker and accurate system time.
-4. Run `runmesh doctor --json` on the Runner host.
-5. After rotation or revocation, enroll again; old credentials cannot be reused.
+Check the host service, outbound HTTPS/WebSocket access to the Worker, and system time. Use the service's actual executable to run `runmesh --version` alone, then `runmesh doctor --json`. Add `--profile` to `doctor` for a custom profile or `--user` for a user service. Where supported, `--shareable` provides a report suitable for support.
 
-If `doctor --json` reports an incomplete or incompatible profile, replace it through the current enrollment flow. The Runner does not convert profiles from another release.
+Check the dashboard's Runner authorization period and credential status. Extend an expired authorization period if access is still intended. A revoked or replaced credential needs the administrator's recovery enrollment procedure; network and dependency failures need connectivity or service recovery.
 
-Runmesh does not require a public inbound port. Do not expose the Runner or add SSH solely to troubleshoot it.
+For an online Runner with rejected policy, check workspace existence and the service account's OS permissions. See [connection recovery](connection-recovery.md) for timing and layered diagnostics.
 
-## Installer fails
+## Installation fails or is unavailable
 
-Use an elevated shell. On Windows use an elevated PowerShell. If the hosted installer is unavailable, independently verify the artifact and follow the [portable installation procedure](portable-runner-installation.md). Do not substitute an npm package, branch build, or third-party mirror. After installation run `runmesh --version` and `runmesh doctor --json`.
+Use the administrator enrollment page's command in the appropriate elevated terminal. Resolve `RMI_*` errors with [installer prerequisites](installer-prerequisites.md).
 
-## MCP client cannot connect
+Check [release status](release-readiness.md) when hosted distribution is unavailable. The 0.1.4 candidate keeps stable distribution disabled. An applicable verified package can be installed through the [portable procedure](portable-runner-installation.md), keeping TLS, signature and hash checks enabled.
 
-Paste the complete URL ending in `/mcp` with no line breaks, quotes, or extra spaces. Do not add a Bearer token or rewrite the path. Confirm the client supports Streamable HTTP, the client has not been revoked, and you are using the newest URL after rotation.
+If another install or removal is active, wait for it to finish. After a crash, have the administrator inspect processes and remaining files before handling a stale lock. If enrollment may have completed, check the dashboard and local profile before obtaining a replacement code.
 
-## Missing workspace or permission denied
+## MCP connection or tool parameters
 
-Client, Runner, and workspace policies must all allow the operation. Ask the administrator to verify that the workspace policy was acknowledged, the client scopes are sufficient, and the client is restricted to the intended Runner. Refresh with `runner_current` and `workspace_list`.
+Use the complete authorized URL ending in `/mcp` with a Streamable HTTP client. Remove accidental quotes, spaces or line breaks and use URL authentication without an added Bearer token.
 
-Do not bypass policy with absolute paths, symlinks, or `shell`.
+After a Worker update, refresh the client's Runmesh tool catalog. If a Job follow-up rejects `workspace_id`, compare the Worker, Runner and client definitions using [catalog refresh](mcp-connector-refresh.md).
 
-## Job failed, hangs, or has no logs
+`runner_upgrade_required` calls for a compatible installed Runner. For Context `storage` and `prune`, upgrade from 0.1.3 to a verified release containing those actions, then reconnect so the Worker can recognize support. Follow the [upgrade guide](upgrading.md).
 
-Use `job` `list`, `get`, and paginated `logs`. Browser or MCP disconnects do not stop persistent jobs. Offline Runners expose retained metadata, while live output and input require reconnection. Investigate the host when `output_truncated` is reported. A cancellation request does not guarantee that every external child process exits immediately.
+## Workspace missing or permission denied
 
-## If the issue remains
+Confirm `runner_current` and the workspace ID from `workspace_list`. Ask the administrator to check client scopes and Runner restrictions, the authorization period, workspace permissions and policy acknowledgement. The Runner's service account also needs OS access.
 
-Record the time, page or tool, a redacted error code, the Runner display name, and non-sensitive `doctor --json` checks. Do not share passwords, complete URLs, codes, tokens, real workspace paths, file contents, or command output. Use the private process in [SECURITY.md](../.github/SECURITY.md) for security issues.
+Use the [permission runbook](runbooks/permission-denial.md) to identify the denying layer before changing access. An unavailable dependency leaves that part of the diagnosis unresolved.
 
-## Minimal-host installer failures
+## Job still running or absent from cloud history
 
-The POSIX bootstrap no longer requires xz. See [installer prerequisites and recovery](installer-prerequisites.md) for RMI_* error codes. Do not disable TLS/checksums or blindly retry a consumed enrollment code.
+Keep the original `job_id`, `workspace_id` and Runner selection. A foreground call can return while the command continues. Follow it with workspace-bound live queries; the Runner can retain a Job whose cloud history is disabled, delayed, expired or unavailable.
+
+For `job_history_unavailable` or an older `not_found`, ask the administrator to recover the original follow-up chain. Check that Job's state before launching another command.
+
+## Cancellation, recovery or input is uncertain
+
+Wait for a final Job status after cancellation. For recovered `unknown` processes, have an administrator verify process identity on the host; the execution slot remains reserved until reconciliation.
+
+After an input delivery error or timeout, inspect the process before sending the data or end-of-input again. Read `operation_state`, `next_action` and `recovery_hint` together. See the [user guide](user-guide.md) for the full state list.
+
+## Output is incomplete
+
+A positive foreground output offset means the response contains a later fragment; use the `job` tool's `logs` action to page through retained bytes. `output_truncated` may indicate permanently discarded output. Check application logs too if your application collects them separately.
+
+## Report a remaining problem
+
+Provide the time, tool/action, component versions, redacted error code and relevant diagnostic checks. Remove credentials, real workspace paths and private content before sharing. Send security issues privately through [SECURITY.md](../.github/SECURITY.md).

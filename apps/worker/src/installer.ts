@@ -1,166 +1,12 @@
+import { canonicalPublicOrigin } from "./public-origin.js";
+export { canonicalPublicOrigin, resolvePublicOrigin } from "./public-origin.js";
 import { POSIX_INSTALLER_PREFLIGHT } from "./installer-preflight.js";
-/**
- * Fixed, source-reviewed hosted-bootstrap contract. The Worker HTTPS endpoint
- * that serves an installer is the one-command bootstrap trust root. Release
- * assets are authenticated with this embedded key; a downloaded keyring is
- * never fetched or used by an installer.
- */
-export const FIXED_RELEASE_VERSION = "0.1.3";
-export const FIXED_NODE_VERSION = "22.23.2";
-export const FIXED_NODE_BASE_URL = `https://nodejs.org/dist/v${FIXED_NODE_VERSION}`;
-export const FIXED_RELEASE_KEY_ID = "runmesh-preview-2026-01";
-export const FIXED_RELEASE_PUBLIC_KEY_PEM = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEASXdEYS7UorlzNJ8ij2gftFIX2rrTvhNlZm3MqE/BWXI=\n-----END PUBLIC KEY-----\n";
-export const FIXED_RELEASE_CHANNEL = "stable" as const;
-export const FIXED_RELEASE_TAG = `v${FIXED_RELEASE_VERSION}`;
-export const FIXED_ARTIFACT_NAME = `runmesh-runner-${FIXED_RELEASE_VERSION}.tgz`;
-export const FIXED_RELEASE_BASE_URL = `https://github.com/aloneio/runmesh/releases/download/${FIXED_RELEASE_TAG}`;
-export const FIXED_ARTIFACT_URL = `${FIXED_RELEASE_BASE_URL}/${FIXED_ARTIFACT_NAME}`;
-export const FIXED_MANIFEST_URL = `${FIXED_RELEASE_BASE_URL}/manifest.json`;
-export const FIXED_SIGNATURE_URL = `${FIXED_RELEASE_BASE_URL}/manifest.sig`;
-export const FIXED_SIGNATURE_DESCRIPTOR_URL = `${FIXED_RELEASE_BASE_URL}/manifest.signature.json`;
-export const FIXED_CHECKSUMS_URL = `${FIXED_RELEASE_BASE_URL}/SHA256SUMS`;
-
-// Bound every fixed release asset before signature verification. The current
-// Runner package is about 0.5 MiB; leave room for ordinary growth while still
-// preventing an over-sized allowed-origin response from filling a host's
-// temporary filesystem.
-export const MAX_RELEASE_ASSET_BYTES = 8 * 1024 * 1024;
-export const MAX_NODE_RUNTIME_BYTES = 64 * 1024 * 1024;
-// Node is shipped inside the Runmesh installation so the service does not
-// depend on a host-provided Node/npm installation.  These are the official
-// Node distribution archive digests for the supported desktop/server targets.
-export const FIXED_NODE_RUNTIME_ASSETS = {
-  "linux-x64": { archive: `node-v${FIXED_NODE_VERSION}-linux-x64.tar.gz`, sha256: "b294a556e639d64338823920e5866c21c02741742d2e1529ee1a225c1ec9252a" },
-  "linux-arm64": { archive: `node-v${FIXED_NODE_VERSION}-linux-arm64.tar.gz`, sha256: "013b59cfd2819703a6f4a14ab891fc46fc2a4e3f5bcd92de3fb4929b43e35b30" },
-  "darwin-x64": { archive: `node-v${FIXED_NODE_VERSION}-darwin-x64.tar.gz`, sha256: "58e99022c2ff89395576cc7fd4d98cea24bb68081475d5f88b801ee8729fb026" },
-  "darwin-arm64": { archive: `node-v${FIXED_NODE_VERSION}-darwin-arm64.tar.gz`, sha256: "61130f394c1630d211dd50aecc4353d379480f36d3ac913cd85dbba1aed585c6" },
-  "win-x64": { archive: `node-v${FIXED_NODE_VERSION}-win-x64.zip`, sha256: "1177b4137ba5adaa56354ae40f1080c7450e8ae09cecb47da459d1c52ac99f97" },
-  "win-arm64": { archive: `node-v${FIXED_NODE_VERSION}-win-arm64.zip`, sha256: "fec025a6da31757e3b6af84c5a1628e9d38442ca99a2161091d78f2fcfa35ef3" },
-} as const;
-
-export interface FixedReleaseDescriptor {
-  readonly channel: "dev" | "stable";
-  readonly distributable: boolean;
-  readonly current_version: string;
-  readonly latest_version: string;
-  readonly package_name: string;
-  readonly package_version: string;
-  /** A fixed tarball URL only. The signed manifest remains authoritative. */
-  readonly package_spec: string;
-  readonly artifact: { readonly source: string } | null;
-  readonly artifacts: null;
-  readonly manifest_url: string | null;
-  readonly signature_url: string | null;
-  readonly signature_descriptor_url: string | null;
-  readonly checksums_url: string | null;
-  readonly release_key_id: string | null;
-  readonly published_at: null;
-}
-
-/** Only this exact acknowledgement enables the immutable source-pinned release. */
-export function signedReleaseIsAvailable(value: string | undefined): boolean {
-  return value === FIXED_RELEASE_VERSION;
-}
-
-export function fixedReleaseDescriptor(available: boolean): FixedReleaseDescriptor {
-  if (!available) return {
-    channel: FIXED_RELEASE_CHANNEL, distributable: false, current_version: "", latest_version: "", package_name: "", package_version: "", package_spec: "", artifact: null, artifacts: null,
-    manifest_url: null, signature_url: null, signature_descriptor_url: null, checksums_url: null, release_key_id: null, published_at: null,
-  };
-  return {
-    channel: FIXED_RELEASE_CHANNEL, distributable: true, current_version: FIXED_RELEASE_VERSION, latest_version: FIXED_RELEASE_VERSION,
-    package_name: "@aloneio/runmesh-runner", package_version: FIXED_RELEASE_VERSION, package_spec: FIXED_ARTIFACT_URL,
-    artifact: { source: FIXED_ARTIFACT_URL }, artifacts: null, manifest_url: FIXED_MANIFEST_URL,
-    signature_url: FIXED_SIGNATURE_URL, signature_descriptor_url: FIXED_SIGNATURE_DESCRIPTOR_URL,
-    checksums_url: FIXED_CHECKSUMS_URL, release_key_id: FIXED_RELEASE_KEY_ID, published_at: null,
-  };
-}
-
-/**
- * GitHub currently serves release assets from one of these HTTPS origins after
- * the fixed release URL redirects.  Keep this list deliberately finite: a
- * redirect to an arbitrary HTTPS endpoint must not turn the installer into an
- * SSRF/download oracle, even though the detached signature would eventually
- * reject a tampered artifact.
- */
-export const FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS = [
-  "https://github.com",
-  "https://objects.githubusercontent.com",
-  "https://release-assets.githubusercontent.com",
-  "https://github-releases.githubusercontent.com",
-  "https://github-cloud.s3.amazonaws.com",
-] as const;
-
-const ORIGIN_MAX_LENGTH = 2_048;
-const DNS_LABEL = /^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)$/;
-const IPV4 = /^(?:\d{1,3}\.){3}\d{1,3}$/;
-const IPV6 = /^\[[0-9A-Fa-f:.]+\]$/;
-
-function safeHostname(hostname: string): boolean {
-  if (hostname.length === 0 || hostname.length > 253 || hostname.endsWith(".")) return false;
-  if (IPV6.test(hostname)) return hostname.includes(":") && hostname.length <= 127;
-  if (IPV4.test(hostname)) return hostname.split(".").every((part) => Number(part) <= 255);
-  return hostname.split(".").every((label) => DNS_LABEL.test(label));
-}
-
-/**
- * Parse and canonicalize a public HTTPS origin supplied by deployment config
- * or a request.  WHATWG URL parsing intentionally accepts several characters
- * in host strings (for example `https://x.test';id;#`); those characters are
- * not valid in a deployment authority and would be dangerous when copied into
- * shell/PowerShell templates, so validate the normalized hostname as well as
- * the URL components.
- */
-export function canonicalPublicOrigin(value: string): string {
-  if (typeof value !== "string" || value.length === 0 || value.length > ORIGIN_MAX_LENGTH || /[\u0000-\u0020\u007f\\%?#]/.test(value)) {
-    throw new Error("installer origin is malformed");
-  }
-  // An origin is not a path.  Permit the conventional trailing slash, but do
-  // not silently discard a path supplied by a proxy or environment variable.
-  if (!/^https:\/\/[^/]+\/?$/i.test(value)) throw new Error("installer origin must be an HTTPS origin");
-  let url: URL;
-  try { url = new URL(value); } catch { throw new Error("installer origin is malformed"); }
-  if (url.protocol !== "https:" || url.username !== "" || url.password !== "" || url.pathname !== "/" || url.search !== "" || url.hash !== "" || !safeHostname(url.hostname)) {
-    throw new Error("installer origin must be HTTPS without credentials, path, query, or fragment");
-  }
-  if (url.port !== "" && (!/^\d+$/.test(url.port) || Number(url.port) < 1 || Number(url.port) > 65_535)) throw new Error("installer origin has an invalid port");
-  return url.origin;
-}
-
-/**
- * Resolve the origin that may be embedded in a hosted installer. A configured
- * RUNMESH_PUBLIC_ORIGIN remains the canonical fallback, while a valid HTTPS
- * request whose URL and Host agree is also accepted as the active custom
- * Worker domain. This lets Cloudflare custom domains work without adding each
- * hostname to a deployment variable. Throwing is intentional so callers can
- * return a generic 400/421 response rather than rendering a script from
- * attacker-controlled authority data.
- */
-export function resolvePublicOrigin(request: Request, configuredOrigin?: string): string {
-  let requestUrl: URL;
-  try { requestUrl = new URL(request.url); } catch { throw new Error("request URL is malformed"); }
-  // A configured public origin may be used behind an internal HTTP reverse
-  // proxy. The request authority is still checked via Host when available,
-  // but its scheme is never copied into a generated public URL.
-  if (requestUrl.username !== "" || requestUrl.password !== "") throw new Error("request URL must not contain credentials");
-  const configured = configuredOrigin === undefined ? undefined : canonicalPublicOrigin(configuredOrigin);
-  const hostHeader = request.headers.get("host");
-  const hostOrigin = hostHeader === null ? undefined : canonicalPublicOrigin(`https://${hostHeader}`);
-  let requestOrigin: string | undefined;
-  try { requestOrigin = requestUrl.protocol === "https:" ? canonicalPublicOrigin(requestUrl.origin) : undefined; } catch { requestOrigin = undefined; }
-  if (configured !== undefined) {
-    // A reverse proxy may expose an internal request URL while preserving the
-    // configured public Host. Keep that supported.
-    if (hostOrigin === configured) return configured;
-    // Cloudflare supplies the routed hostname in both the request URL and
-    // Host. Treat that matching HTTPS authority as the active custom domain.
-    if (requestOrigin !== undefined && hostOrigin === requestOrigin) return requestOrigin;
-    throw new Error("request Host does not match a configured or routed public origin");
-  }
-  if (requestOrigin === undefined) throw new Error("request origin is not a valid public HTTPS origin");
-  if (hostOrigin !== undefined && hostOrigin !== requestOrigin) throw new Error("request Host does not match the request origin");
-  return requestOrigin;
-}
+import { FIXED_NODE_VERSION, FIXED_NODE_BASE_URL, FIXED_INSTALLER_RELEASE, MAX_RELEASE_ASSET_BYTES, MAX_NODE_RUNTIME_BYTES, FIXED_NODE_RUNTIME_ASSETS, FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS } from "./domain/release-config.js";
+export * from "./domain/release-config.js";
+import type { InstallerReleaseTarget } from "./contracts/runner-release.js";
+export type { InstallerReleaseTarget, FixedReleaseDescriptor } from "./contracts/runner-release.js";
+import { PROTOCOL_MIN_VERSION, PROTOCOL_CURRENT_VERSION } from "@aloneio/runmesh-protocol";
+import { RELEASE_VALIDATION_SOURCE } from "./generated-release-validation.js";
 
 function shellLiteral(value: string): string {
   if (value.includes("\u0000")) throw new Error("cannot quote NUL in a shell literal");
@@ -234,8 +80,10 @@ const signature = Buffer.from(encodedSignature, "base64");
 if (signature.length !== 64 || signature.toString("base64") !== encodedSignature || !verify(null, manifestBytes, createPublicKey(publicKeyPem), signature)) fail("signature does not verify");
 const manifest = parseBytes("manifest.json", manifestBytes);
 const artifact = Array.isArray(manifest?.artifacts) && manifest.artifacts.length === 1 ? manifest.artifacts[0] : undefined;
-if (manifest?.schema_version !== 1 || manifest.project !== "runmesh" || manifest.version !== version || manifest.tag !== "v" + version || manifest.channel !== "__CHANNEL__" || manifest.prerelease !== __PRERELEASE__ || !/^[0-9a-f]{40}$/.test(manifest.commit_sha) || manifest.protocol_min !== 2 || manifest.protocol_max !== 2 || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(manifest.published_at)) fail("manifest fields are not the fixed preview contract");
-if (artifact?.name !== artifactName || artifact.platform !== "node" || artifact.architecture !== "portable" || artifact.node_major_min !== 22 || artifact.url !== artifactUrl || !Number.isSafeInteger(artifact.size) || artifact.size <= 0 || artifact.size > maxReleaseAssetBytes || !/^[0-9a-f]{64}$/.test(artifact.sha256)) fail("manifest artifact is invalid");
+const expectedRelease = __VALIDATION_TARGET__;
+const manifestProblem = RunmeshReleaseContract.releaseManifestProblem(manifest, expectedRelease);
+if (manifestProblem === "manifest") fail("manifest fields are not the fixed preview contract");
+if (manifestProblem === "artifact") fail("manifest artifact is invalid");
 const artifactBytes = await boundedRead(artifactName);
 const digest = createHash("sha256").update(artifactBytes).digest("hex");
 if (artifactBytes.byteLength !== artifact.size || digest !== artifact.sha256) fail("artifact size or SHA-256 mismatch");
@@ -243,16 +91,19 @@ const sums = await boundedRead("SHA256SUMS", "utf8");
 if (!sums.split(/\r?\n/).some((line) => line === digest + "  " + artifactName || line === digest + " *" + artifactName)) fail("SHA256SUMS does not match authenticated artifact");
 `;
 
-function verifierSource(): string {
-  return VERIFY_RELEASE
-    .replaceAll("__VERSION__", FIXED_RELEASE_VERSION)
-    .replaceAll("__CHANNEL__", FIXED_RELEASE_CHANNEL)
-    .replaceAll("__PRERELEASE__", String(FIXED_RELEASE_CHANNEL !== "stable"))
-    .replaceAll("__KEY_ID__", FIXED_RELEASE_KEY_ID)
-    .replaceAll("__ARTIFACT_NAME__", FIXED_ARTIFACT_NAME)
-    .replaceAll("__ARTIFACT_URL__", FIXED_ARTIFACT_URL)
+function verifierSource(release: InstallerReleaseTarget = FIXED_INSTALLER_RELEASE): string {
+  return RELEASE_VALIDATION_SOURCE + "\n" + VERIFY_RELEASE
+    .replace("__VALIDATION_TARGET__", JSON.stringify({ version: release.version, channel: release.channel,
+      artifact_name: release.artifact_name, artifact_url: release.artifact_url,
+      protocol_min: PROTOCOL_MIN_VERSION, protocol_max: PROTOCOL_CURRENT_VERSION, max_asset_bytes: MAX_RELEASE_ASSET_BYTES }))
+    .replaceAll("__VERSION__", release.version)
+    .replaceAll("__CHANNEL__", release.channel)
+    .replaceAll("__PRERELEASE__", String(release.channel !== "stable"))
+    .replaceAll("__KEY_ID__", release.release_key_id)
+    .replaceAll("__ARTIFACT_NAME__", release.artifact_name)
+    .replaceAll("__ARTIFACT_URL__", release.artifact_url)
     .replaceAll("__MAX_RELEASE_ASSET_BYTES__", String(MAX_RELEASE_ASSET_BYTES))
-    .replace("__PUBLIC_KEY_PEM__", JSON.stringify(FIXED_RELEASE_PUBLIC_KEY_PEM));
+    .replace("__PUBLIC_KEY_PEM__", JSON.stringify(release.public_key_pem));
 }
 
 const POSIX_TEMPLATE = String.raw`#!/usr/bin/env sh
@@ -347,6 +198,13 @@ case "$(uname -s):$(uname -m)" in
 esac
 NODE_BASE='__NODE_BASE_URL__'
 
+# Serialize every hosted installation, refresh and uninstall before inspecting
+# shared paths. Keep the lock outside the installation tree that purge removes.
+INSTALL_LOCK='/var/run/runmesh-installer.lock'
+if ! mkdir "$INSTALL_LOCK" 2>/dev/null; then printf '%s\n' 'error: another Runmesh installer or uninstaller is running; inspect a stale lock before removing it' >&2; exit 1; fi
+release_install_lock() { rmdir "$INSTALL_LOCK" 2>/dev/null || true; }
+trap release_install_lock EXIT
+trap 'exit 1' HUP INT TERM
 has_path() { [ -e "$1" ] || [ -L "$1" ]; }
 refresh_existing() {
   if ! has_path "$INSTALL_ROOT/current"; then return 1; fi
@@ -363,7 +221,7 @@ refresh_existing() {
   grep -F 'runmesh-runner-managed:' "$SERVICE_MANIFEST" >/dev/null 2>&1 || { printf '%s\n' 'error: existing service is not managed by Runmesh; refusing to modify it' >&2; exit 1; }
   REFRESH_LOCK="$INSTALL_ROOT/.refresh.lock"
   if ! mkdir "$REFRESH_LOCK" 2>/dev/null; then printf '%s\n' 'error: another Runmesh enrollment refresh is already running' >&2; exit 1; fi
-  trap 'stty echo < /dev/tty 2>/dev/null || true; rmdir "$REFRESH_LOCK" 2>/dev/null || true' EXIT HUP INT TERM
+  trap 'stty echo < /dev/tty 2>/dev/null || true; rmdir "$REFRESH_LOCK" 2>/dev/null || true; release_install_lock' EXIT
   step 'Refreshing credentials for the existing Runmesh Runner.'
   if [ "$CODE_ARG_SET" -eq 1 ]; then
     ENROLLMENT_CODE="$ENROLLMENT_CODE_ARG"
@@ -390,14 +248,15 @@ refresh_existing() {
   ok 'Runmesh Runner credentials refreshed and service restarted in place.'
   trap - EXIT HUP INT TERM
   rmdir "$REFRESH_LOCK" 2>/dev/null || true
+  release_install_lock
   return 0
 }
 if [ "$RUNMESH_ACTION" != uninstall ] && has_path "$INSTALL_ROOT/current" && has_path "$PROFILE" && has_path "$SERVICE_MANIFEST"; then refresh_existing; exit $?; fi
-if [ "$RUNMESH_ACTION" != uninstall ] && { has_path "$INSTALL_ROOT/current" || has_path "$INSTALL_ROOT/versions/$VERSION" || has_path "$INSTALL_ROOT/versions/$VERSION.staging.$$" || has_path "$PROFILE" || has_path "$SERVICE_MANIFEST"; }; then printf '%s\n' 'error: existing Runmesh installation or service state found; refusing to overwrite it' >&2; exit 1; fi
+if [ "$RUNMESH_ACTION" != uninstall ] && { has_path "$INSTALL_ROOT/current" || has_path "$INSTALL_ROOT/current.new" || has_path "$INSTALL_ROOT/versions/$VERSION" || has_path "$INSTALL_ROOT/versions/$VERSION.staging.$$" || has_path "$PROFILE" || has_path "$SERVICE_MANIFEST"; }; then printf '%s\n' 'error: existing Runmesh installation or service state found; refusing to overwrite it' >&2; exit 1; fi
 check_bootstrap_tools
 [ "$AUTO_INSTALL_DEPS" -eq 1 ] || bootstrap_error RMI_RUNTIME_DISABLED 'Private runtime bootstrap was disabled.' 'Remove --no-auto-deps for a new installation; an existing verified installation can be refreshed without downloading a runtime.'
 TMP="$(mktemp -d "__TEMP_PARENT__/runmesh-installer.XXXXXX")" || bootstrap_error RMI_TEMP_DIRECTORY 'Cannot create a private temporary directory.' 'Check /tmp free space and permissions.'
-trap 'rm -rf "$TMP"' EXIT
+trap 'rm -rf "$TMP"; release_install_lock' EXIT
 trap 'exit 1' HUP INT TERM
 step 'Preparing runtime'
 STAGE="$INSTALL_ROOT/versions/$VERSION.staging.$$"
@@ -422,11 +281,14 @@ export npm_config_userconfig="$NPM_CONFIG_USERCONFIG" npm_config_globalconfig="$
 TTY_ECHO_DISABLED=0
 FINAL_CREATED=0
 CURRENT_CREATED=0
+CURRENT_NEW_CREATED=0
+STAGE_CREATED=0
+PROFILE_CREATED=0
 ENROLLMENT_ATTEMPTED=0
-# The preflight above rejects an existing profile, so a profile present after
-# enrollment belongs to this new attempt and is safe to remove on rollback.
+# A failed enrollment does not prove ownership of a profile another operation
+# may have created. Only successful enrollment authorizes profile rollback.
 cleanup_tty() { if [ "$TTY_ECHO_DISABLED" -eq 1 ]; then stty echo < /dev/tty 2>/dev/null || true; TTY_ECHO_DISABLED=0; fi; }
-cleanup() { cleanup_tty; rm -rf "$TMP"; }
+cleanup() { cleanup_tty; rm -rf "$TMP"; release_install_lock; }
 rollback() {
   rc="$1"
   printf 'error [RMI_INSTALL_FAILED] stage=%s: installation did not complete.\n' "$INSTALL_PHASE" >&2
@@ -437,13 +299,13 @@ rollback() {
   fi
   if [ "$RUNMESH_ACTION" = uninstall ]; then cleanup; trap - EXIT HUP INT TERM; exit "$rc"; fi
   cleanup_tty
-  if [ "$CURRENT_CREATED" -eq 1 ] && [ -L "$CURRENT_NEW" ]; then rm -f "$CURRENT_NEW"; fi
+  if [ "$CURRENT_NEW_CREATED" -eq 1 ] && [ -L "$CURRENT_NEW" ]; then rm -f "$CURRENT_NEW"; fi
   if [ "$CURRENT_CREATED" -eq 1 ] && [ -L "$INSTALL_ROOT/current" ] && [ "$(readlink "$INSTALL_ROOT/current")" = "$FINAL" ]; then "$INSTALL_ROOT/current/bin/runmesh" uninstall --profile "$PROFILE" --json >/dev/null 2>&1 || true; rm -f "$INSTALL_ROOT/current"; fi
-  if [ "$ENROLLMENT_ATTEMPTED" -eq 1 ] && [ -f "$PROFILE" ]; then rm -f "$PROFILE"; fi
-  if [ -L "$INSTALL_ROOT/current" ] && [ "$(readlink "$INSTALL_ROOT/current")" = "$FINAL" ]; then rm -f "$INSTALL_ROOT/current"; fi
-  if [ -L "$CURRENT_NEW" ]; then rm -f "$CURRENT_NEW"; fi
+  if [ "$PROFILE_CREATED" -eq 1 ] && [ -f "$PROFILE" ]; then rm -f "$PROFILE"; fi
   if [ "$FINAL_CREATED" -eq 1 ]; then rm -rf "$FINAL"; fi
-  rm -rf "$STAGE" "$TMP"
+  if [ "$STAGE_CREATED" -eq 1 ]; then rm -rf "$STAGE"; fi
+  rm -rf "$TMP"
+  release_install_lock
   trap - EXIT HUP INT TERM
   exit "$rc"
 }
@@ -536,6 +398,7 @@ if [ "$RUNMESH_ACTION" = uninstall ]; then
 fi
 mkdir -p "$INSTALL_ROOT/versions"
 if ! mkdir "$STAGE"; then printf '%s\n' 'error: installer staging path is already in use' >&2; exit 1; fi
+STAGE_CREATED=1
 INSTALL_PHASE=package_install
 step 'Installing Runner'
 export NPM_CONFIG_UPDATE_NOTIFIER=false
@@ -590,11 +453,15 @@ ENROLLMENT_ATTEMPTED=1
 step 'Connecting to control plane'
 ENROLL_LOG="$TMP/enroll.log"
 if printf '%s\n' "$ENROLLMENT_CODE" | "$RUNNER" enroll --profile "$PROFILE" --server "$ENROLLMENT_URL" --code-stdin __EXECUTION_MODE_FLAGS__ >"$ENROLL_LOG" 2>&1; then :; else rc=$?; report_failure 'Connecting to control plane' "$ENROLL_LOG" "$rc"; exit "$rc"; fi
+PROFILE_CREATED=1
 unset ENROLLMENT_CODE
 mv "$STAGE" "$FINAL"
+STAGE_CREATED=0
 FINAL_CREATED=1
 ln -s "$FINAL" "$INSTALL_ROOT/current.new"
+CURRENT_NEW_CREATED=1
 mv "$INSTALL_ROOT/current.new" "$INSTALL_ROOT/current"
+CURRENT_NEW_CREATED=0
 CURRENT_CREATED=1
 INSTALL_PHASE=service_install
 step 'Starting service'
@@ -694,6 +561,12 @@ $CurrentRoot = Join-Path $InstallRoot 'current'
 $CurrentNew = Join-Path $InstallRoot 'current.new'
 $Profile = Join-Path $env:ProgramData 'Runmesh\profile.json'
 $ServiceManifest = Join-Path $env:ProgramData 'Runmesh\RunmeshRunner.xml'
+$InstallerMutex = [Threading.Mutex]::new($false, 'Global\RunmeshInstaller-v1')
+$InstallerLockHeld = $false
+try {
+  try { $InstallerLockHeld = $InstallerMutex.WaitOne(0) }
+  catch [Threading.AbandonedMutexException] { $InstallerLockHeld = $true }
+  if (-not $InstallerLockHeld) { throw 'Another Runmesh installer or uninstaller is running.' }
 $script:StepIndex = 0
 function Write-Step([string]$Message) { $script:StepIndex += 1; Write-Host ("  [{0}] {1}" -f $script:StepIndex, $Message) -ForegroundColor Cyan }
 function Write-Ok([string]$Message) { Write-Host ("[OK] {0}" -f $Message) -ForegroundColor Green }
@@ -763,8 +636,11 @@ foreach ($RequiredCommand in @('Invoke-WebRequest', 'Get-FileHash')) { if (-not 
 $TempRoot = Join-Path ([IO.Path]::GetTempPath()) ('runmesh-installer-' + [guid]::NewGuid().ToString('N'))
 $ServiceAttempted = $false
 $EnrollmentAttempted = $false
-# Preflight rejects an existing profile; any profile after enrollment is ours
-# and can be removed if a later install step fails.
+$ProfileCreated = $false
+$StageCreated = $false
+$VersionCreated = $false
+$CurrentNewCreated = $false
+$CurrentCreated = $false
 $Succeeded = $false
 $CurrentRunner = $null
 $HttpHandler = $null
@@ -816,9 +692,24 @@ try {
   $HttpHandler.AutomaticDecompression = [Net.DecompressionMethods]::GZip -bor [Net.DecompressionMethods]::Deflate
   $HttpClient = [Net.Http.HttpClient]::new($HttpHandler)
   $HttpClient.Timeout = [TimeSpan]::FromSeconds(60)
+  # ResponseHeadersRead ends HttpClient.Timeout at the headers. Keep one
+  # deadline across redirects and body reads, including streams whose
+  # ReadAsync implementation does not promptly honor cancellation.
+  function Wait-ReleaseDownloadTask([Threading.Tasks.Task]$Task, [Threading.CancellationTokenSource]$Cancellation, [Diagnostics.Stopwatch]$Clock) {
+    $remaining = [int][Math]::Max(0, 60000 - $Clock.ElapsedMilliseconds)
+    if ($remaining -eq 0 -or -not $Task.Wait($remaining)) {
+      $Cancellation.Cancel()
+      throw 'Release download timed out.'
+    }
+    return $Task.GetAwaiter().GetResult()
+  }
   $RuntimePhase = 'release_download'
   Write-Step 'Downloading Runner'
   foreach ($Name in @('manifest.json', 'manifest.sig', 'manifest.signature.json', 'SHA256SUMS', $ArtifactName)) {
+    $DownloadCancellation = [Threading.CancellationTokenSource]::new()
+    $DownloadCancellation.CancelAfter(60000)
+    $DownloadClock = [Diagnostics.Stopwatch]::StartNew()
+    try {
     $current = [Uri]::new($ReleaseBase + '/' + $Name)
     $downloaded = $false
     for ($attempt = 0; $attempt -lt 6; $attempt++) {
@@ -826,7 +717,7 @@ try {
       if ($current.Scheme -ne 'https' -or -not [string]::IsNullOrEmpty($current.UserInfo) -or $AllowedReleaseOrigins -notcontains $currentOrigin) { throw 'Release redirect escaped pinned origins.' }
       $response = $null
       try {
-        $response = $HttpClient.GetAsync($current, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+        $response = Wait-ReleaseDownloadTask ($HttpClient.GetAsync($current, [Net.Http.HttpCompletionOption]::ResponseHeadersRead, $DownloadCancellation.Token)) $DownloadCancellation $DownloadClock
         $status = [int]$response.StatusCode
         if ($status -ge 300 -and $status -lt 400) {
           if ($attempt -ge 5 -or $null -eq $response.Headers.Location) { throw 'Release redirect limit or Location header exceeded.' }
@@ -842,11 +733,11 @@ try {
         $stream = $null
         $file = $null
         try {
-          $stream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+          $stream = Wait-ReleaseDownloadTask ($response.Content.ReadAsStreamAsync()) $DownloadCancellation $DownloadClock
           $file = [IO.File]::Create((Join-Path $TempRoot $Name))
           $buffer = New-Object byte[] 65536
           [long]$total = 0
-          while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+          while (($read = Wait-ReleaseDownloadTask ($stream.ReadAsync($buffer, 0, $buffer.Length, $DownloadCancellation.Token)) $DownloadCancellation $DownloadClock) -gt 0) {
             $total += $read
             if ($total -gt __MAX_RELEASE_ASSET_BYTES__) { throw 'Release asset exceeds the fixed size limit.' }
             $file.Write($buffer, 0, $read)
@@ -862,6 +753,11 @@ try {
       if ($downloaded) { break }
     }
     if (-not $downloaded) { throw 'Release download did not complete.' }
+    } finally {
+      $DownloadCancellation.Cancel()
+      $DownloadCancellation.Dispose()
+      $DownloadClock.Stop()
+    }
   }
   $VerifyLog = Join-Path $TempRoot 'release-verify.log'
   $RuntimePhase = 'release_verification'
@@ -886,6 +782,8 @@ __VERIFIER__
     exit 0
   }
   New-Item -ItemType Directory -Path $VersionsRoot -Force | Out-Null
+  New-Item -ItemType Directory -Path $Stage -ErrorAction Stop | Out-Null
+  $StageCreated = $true
   Push-Location -LiteralPath $TempRoot
   try {
     $InstallLog = Join-Path $TempRoot 'npm-install.log'
@@ -919,10 +817,16 @@ __VERIFIER__
   Invoke-LoggedStep 'Connecting to control plane' $EnrollLog {
     $EnrollmentCode | & $Runner enroll --profile $Profile --server $EnrollmentUrl --code-stdin __EXECUTION_MODE_FLAGS__
   }
+  $ProfileCreated = $true
   $EnrollmentCode = $null
   Move-Item -LiteralPath $Stage -Destination $VersionRoot
+  $StageCreated = $false
+  $VersionCreated = $true
   New-Item -ItemType Junction -Path $CurrentNew -Target $VersionRoot | Out-Null
+  $CurrentNewCreated = $true
   Move-Item -LiteralPath $CurrentNew -Destination $CurrentRoot
+  $CurrentNewCreated = $false
+  $CurrentCreated = $true
   $CurrentRunner = Join-Path $CurrentRoot 'runmesh.cmd'
   $ServiceAttempted = $true
   $ServiceLog = Join-Path $TempRoot 'service-install.log'
@@ -945,16 +849,23 @@ __VERIFIER__
   if ($null -ne $HttpHandler) { $HttpHandler.Dispose() }
   if (-not $Succeeded -and $MaintenanceAction -ne 'uninstall') {
     if ($ServiceAttempted -and $null -ne $CurrentRunner -and (Test-Path -LiteralPath $CurrentRunner)) { try { & $CurrentRunner uninstall --profile $Profile --json *> $null } catch {} }
-    if ($EnrollmentAttempted -and (Test-Path -LiteralPath $Profile)) { try { Remove-Item -LiteralPath $Profile -Force } catch {} }
-    foreach ($Path in @($CurrentNew, $CurrentRoot, $Stage, $VersionRoot)) { if (Test-Path -LiteralPath $Path) { try { Remove-Item -LiteralPath $Path -Recurse -Force } catch {} } }
+    if ($ProfileCreated -and (Test-Path -LiteralPath $Profile)) { try { Remove-Item -LiteralPath $Profile -Force } catch {} }
+    if ($CurrentNewCreated -and (Test-Path -LiteralPath $CurrentNew)) { try { [IO.Directory]::Delete($CurrentNew) } catch {} }
+    if ($CurrentCreated -and (Test-Path -LiteralPath $CurrentRoot)) { try { [IO.Directory]::Delete($CurrentRoot) } catch {} }
+    if ($StageCreated -and (Test-Path -LiteralPath $Stage)) { try { Remove-Item -LiteralPath $Stage -Recurse -Force } catch {} }
+    if ($VersionCreated -and (Test-Path -LiteralPath $VersionRoot)) { try { Remove-Item -LiteralPath $VersionRoot -Recurse -Force } catch {} }
   }
   if (Test-Path -LiteralPath $TempRoot) { try { Remove-Item -LiteralPath $TempRoot -Recurse -Force } catch {} }
+}
+} finally {
+  if ($InstallerLockHeld) { $InstallerMutex.ReleaseMutex() }
+  $InstallerMutex.Dispose()
 }
 `;
 
 export type InstallerExecutionMode = "dedicated_user" | "privileged_host";
 
-function replaceInstallerTemplate(template: string, enrollmentUrl: string, literal: (value: string) => string, executionMode: InstallerExecutionMode, action: "install" | "uninstall" = "install"): string {
+function replaceInstallerTemplate(template: string, enrollmentUrl: string, literal: (value: string) => string, executionMode: InstallerExecutionMode, action: "install" | "uninstall" = "install", release: InstallerReleaseTarget = FIXED_INSTALLER_RELEASE): string {
   if (executionMode !== "dedicated_user" && executionMode !== "privileged_host") throw new Error("invalid installer execution mode");
   const modeFlags = executionMode === "privileged_host"
     ? "--execution-mode privileged_host --confirm-privileged-host"
@@ -966,7 +877,7 @@ function replaceInstallerTemplate(template: string, enrollmentUrl: string, liter
     .replace("__TEMP_PARENT__", "${TMPDIR:-/tmp}")
     .replaceAll("__ACTION__", action)
     .replaceAll("__NO_COLOR__", "${NO_COLOR:-}")    .replaceAll("__EXECUTION_MODE_FLAGS__", modeFlags)
-    .replaceAll("__VERSION__", literal(FIXED_RELEASE_VERSION))
+    .replaceAll("__VERSION__", literal(release.version))
     .replaceAll("__NODE_VERSION__", literal(FIXED_NODE_VERSION))
     .replaceAll("__MAX_NODE_RUNTIME_BYTES__", String(MAX_NODE_RUNTIME_BYTES))
     .replaceAll("__NODE_BASE_URL__", literal(FIXED_NODE_BASE_URL))
@@ -982,29 +893,29 @@ function replaceInstallerTemplate(template: string, enrollmentUrl: string, liter
     .replaceAll("__NODE_WIN_X64_SHA256__", node["win-x64"].sha256)
     .replaceAll("__NODE_WIN_ARM64__", literal(node["win-arm64"].archive))
     .replaceAll("__NODE_WIN_ARM64_SHA256__", node["win-arm64"].sha256)
-    .replaceAll("__RELEASE_BASE__", literal(FIXED_RELEASE_BASE_URL))
-    .replaceAll("__ARTIFACT_NAME__", literal(FIXED_ARTIFACT_NAME))
+    .replaceAll("__RELEASE_BASE__", literal(release.release_base_url))
+    .replaceAll("__ARTIFACT_NAME__", literal(release.artifact_name))
     .replaceAll("__ENROLLMENT_URL__", literal(enrollmentUrl))
     .replaceAll("__MAX_RELEASE_ASSET_BYTES__", String(MAX_RELEASE_ASSET_BYTES))
     .replace("__RELEASE_REDIRECT_ORIGINS_JSON__", JSON.stringify(FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS))
     .replace("__RELEASE_REDIRECT_ORIGINS_PS__", FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS.map((value) => powershellQuote(value)).join(", "))
-    .replace("__VERIFIER__", verifierSource());
+    .replace("__VERIFIER__", verifierSource(release));
 }
 
-export function renderPosixInstaller(requestOrigin: string, executionMode: InstallerExecutionMode = "privileged_host"): string {
+export function renderPosixInstaller(requestOrigin: string, executionMode: InstallerExecutionMode = "privileged_host", release: InstallerReleaseTarget = FIXED_INSTALLER_RELEASE): string {
   const publicOrigin = canonicalPublicOrigin(requestOrigin);
-  return replaceInstallerTemplate(POSIX_TEMPLATE, `${publicOrigin}/runner/enroll`, shellLiteral, executionMode);
+  return replaceInstallerTemplate(POSIX_TEMPLATE, `${publicOrigin}/runner/enroll`, shellLiteral, executionMode, "install", release);
 }
 
-export function renderPowerShellInstaller(requestOrigin: string, executionMode: InstallerExecutionMode = "privileged_host"): string {
+export function renderPowerShellInstaller(requestOrigin: string, executionMode: InstallerExecutionMode = "privileged_host", release: InstallerReleaseTarget = FIXED_INSTALLER_RELEASE): string {
   const publicOrigin = canonicalPublicOrigin(requestOrigin);
-  return replaceInstallerTemplate(POWERSHELL_TEMPLATE, `${publicOrigin}/runner/enroll`, powershellLiteral, executionMode);
+  return replaceInstallerTemplate(POWERSHELL_TEMPLATE, `${publicOrigin}/runner/enroll`, powershellLiteral, executionMode, "install", release);
 }
 
-export function renderPosixUninstaller(requestOrigin: string): string {
-  return replaceInstallerTemplate(POSIX_TEMPLATE, `${canonicalPublicOrigin(requestOrigin)}/runner/enroll`, shellLiteral, "dedicated_user", "uninstall");
+export function renderPosixUninstaller(requestOrigin: string, release: InstallerReleaseTarget = FIXED_INSTALLER_RELEASE): string {
+  return replaceInstallerTemplate(POSIX_TEMPLATE, `${canonicalPublicOrigin(requestOrigin)}/runner/enroll`, shellLiteral, "dedicated_user", "uninstall", release);
 }
 
-export function renderPowerShellUninstaller(requestOrigin: string): string {
-  return replaceInstallerTemplate(POWERSHELL_TEMPLATE, `${canonicalPublicOrigin(requestOrigin)}/runner/enroll`, powershellLiteral, "dedicated_user", "uninstall");
+export function renderPowerShellUninstaller(requestOrigin: string, release: InstallerReleaseTarget = FIXED_INSTALLER_RELEASE): string {
+  return replaceInstallerTemplate(POWERSHELL_TEMPLATE, `${canonicalPublicOrigin(requestOrigin)}/runner/enroll`, powershellLiteral, "dedicated_user", "uninstall", release);
 }

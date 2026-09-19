@@ -1,4 +1,4 @@
-import type { PermissionSet } from "./schema.js";
+import type { PermissionSet } from "./permission-schema.js";
 
 export const PERMISSION_BITS = ["read", "edit", "shell", "job_control"] as const;
 export type PermissionBit = (typeof PERMISSION_BITS)[number];

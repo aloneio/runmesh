@@ -1,81 +1,56 @@
-# Runner maintenance and complete uninstall
+# Uninstall a Runner
 
-## One command, including old or incomplete installations
+Export any local Job history and logs you need before complete removal. **`--purge --yes` deletes that data immediately, without another confirmation.** Project workspaces are preserved.
 
-The administrator enrollment page provides the current one-command uninstall.
-It downloads and authenticates the maintenance package in a temporary directory,
-then runs cleanup outside the installed runtime. It needs no enrollment code,
-working old executable, valid profile or preinstalled Node/npm. Network access
-to the configured Worker and its pinned release assets is required.
+Use a local console or SSH session outside the Runner being removed, as stopping the service interrupts its connection.
 
-Linux/macOS, run locally from an administrator terminal:
+## Choose the removal method
+
+When its release channel is available, the enrollment page offers a hosted maintenance command. It downloads and authenticates a temporary runtime and maintenance package, then cleans up the installed layout. This works with old or incomplete installations and needs outbound HTTPS to the Worker and its pinned assets.
+
+The current 0.1.4 candidate keeps stable hosted distribution disabled. If the hosted command is unavailable, use an independently verified available maintenance release. A verified portable CLI with complete purge support can run `uninstall --purge --yes` on POSIX. Check its release notes, because older versions accept the same flags while removing fewer files.
+
+On Windows, prefer the hosted maintenance command: it runs outside the installation being removed.
+
+## Run complete removal
+
+For Linux/macOS, replace the hostname with your Worker and run in an administrator terminal:
 
 ```sh
-curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 0 --max-time 60 --max-filesize 262144 'https://runmesh.aloneio.workers.dev/runner/uninstall.sh' | sudo sh -s -- --purge --yes
+set -eu
+maintenance="$(mktemp)"
+trap 'rm -f "$maintenance"' EXIT
+curl -q --fail --silent --show-error --proto '=https' --proto-redir '=https' --tlsv1.2 --max-redirs 0 --max-time 60 --max-filesize 262144 --output "$maintenance" 'https://your-runmesh.example/runner/uninstall.sh'
+test -s "$maintenance"
+sudo sh "$maintenance" --purge --yes
 ```
 
-On Windows, copy the PowerShell uninstall command from the administrator page.
-The matching endpoint is `/runner/uninstall.ps1`; it also requires `--purge --yes`.
-The temporary maintenance runtime avoids trying to delete its own Windows executable.
-Do not run uninstall through the Runner connection being removed: service shutdown
-will interrupt that connection. Use a local console or SSH session outside the service.
+On Windows, copy the PowerShell removal command from the administrator page. The hosted endpoint is `/runner/uninstall.ps1`, also using `--purge --yes`.
 
-A locally verified dev.5-or-newer portable CLI can also run `uninstall --purge --yes`
-on POSIX. Older releases' same-spelled command only removed their service/profile;
-use the hosted maintenance command to clean those versions. A downloaded but
-unverified CLI is not a substitute for the authenticated maintenance package.
+For a local CLI, `--user` selects the current user's service layout. Omitting `--purge` selects ordinary service removal.
 
-## What complete purge removes
+## What is removed
 
-**This intentionally deletes local Runner job history and log files.** Export
-anything needed first. Without `--purge`, the CLI retains its service-only behavior.
-No interactive confirmation is added when `--purge --yes` is already supplied.
+| Platform | Managed installation data and service |
+| --- | --- |
+| Linux | `/opt/runmesh` versions and staging, `/etc/runmesh`, `/var/lib/runmesh`, `/var/log/runmesh`, supported `runmesh-runner` config/state/log paths, and Runmesh runtime directories under `/run` or `/var/run` |
+| macOS | Managed LaunchDaemon/LaunchAgent and Runmesh application-support layout |
+| Windows | Managed RunmeshRunner task, Program Files installation and ProgramData layout |
 
-On Linux, cleanup covers `/opt/runmesh` (all versions, current/current.new,
-staging directories and refresh locks), `/etc/runmesh`, `/var/lib/runmesh`,
-`/var/log/runmesh`, the corresponding supported `runmesh-runner` config/state/log
-locations, and `/run/runmesh`, `/run/runmesh-runner` plus their `/var/run` aliases.
-Only symlink command shims which point into the managed installation are removed.
+On Linux, cleanup handles the exact `runmesh-runner.service` unit in the standard systemd locations, its drop-ins and exact-name links under `.wants`/`.requires`. It stops and disables the unit before cleanup, reloads systemd afterward and clears the failed state. Managed command symlinks pointing into the installation are removed.
 
-The exact `runmesh-runner.service` unit is handled in `/etc/systemd/system`,
-`/run/systemd/system`, `/usr/local/lib/systemd/system`, `/usr/lib/systemd/system`
-and `/lib/systemd/system`. Its drop-in directory and exact-name links in
-`.wants`/`.requires` are removed, without deleting those shared directories.
-Systemd is stopped/disabled before file cleanup, reloaded after it, and the
-Runner's failed state is reset. Provider/permission failures are not silently
-reported as success. Missing files are acceptable and repeated cleanup is safe.
+Project workspaces, other services and installations, system accounts/groups and the shared system journal remain. Keep project data outside Runmesh runtime directories. If a cached policy identifies a workspace inside a purge directory, move that workspace before continuing. Use the appropriate package manager for custom or npm-managed layouts.
 
-macOS uses the managed LaunchDaemon/LaunchAgent and Runmesh application-support
-layout. Windows uses the managed RunmeshRunner task, Program Files installation
-and ProgramData layout. `--user` selects only the current user's layout when
-using a local CLI, never every user's home directory.
+## Handle an interrupted cleanup
 
-## Safety boundaries and intentional retention
+Hosted install, enrollment refresh and uninstall share one lock. Let the current operation finish and keep manual filesystem changes outside that window. After interruption, verify the remaining processes before handling a stale lock.
 
-Project workspaces, application databases, other services, other users' installs,
-existing system accounts/groups, and the shared system journal are retained.
-Do not place unique project data inside application runtime directories. A cached
-policy identifying a workspace nested inside a purge root blocks cleanup so that
-workspace can be moved first. Custom profile paths do not authorize deleting their
-parent directories; custom/npm-managed installations need their own package manager.
+Cleanup stops for unexpected symlink ancestors, unknown same-named services or mounted data filesystems. Inspect the reported path or service and resolve its ownership/layout before retrying. Symlinks selected for removal are removed as links, preserving their targets.
 
-Symlinks are removed as links, not followed into their targets. Unexpected symlink
-ancestors, unknown same-named services and mounted data filesystems stop cleanup.
-Linux recursive cleanup uses pinned directory handles; Windows/macOS have identity
-and confinement checks, not an equivalent hostile-local-mutator guarantee.
-Run maintenance from a trusted host identity without concurrent install/uninstall.
+A failed step returns a nonzero status and lists remaining items. Inspect that list; the maintenance CLI is retained where possible for diagnosis. Retry with the same verified maintenance release after correcting the cause.
 
-A failed step returns nonzero and lists the remaining items. It is not labelled
-successful merely because the service or profile disappeared. When data removal
-fails, the installed maintenance CLI is retained where possible for diagnosis.
-Control-plane Runner records and remote audit data are not deleted by local purge;
-remove the Runner record separately in the administrator console.
+## Confirm removal
 
-## Installation output
+Check the exit status, any remaining-item report and the host service manager. Confirm the expected local directories have been removed.
 
-Normal output shows numbered preparation/download/verification/install/connection/
-service stages and a final ready message. Raw checksum success paths and release-
-engineering terminology are hidden. HTTPS restrictions, size limits, pinned runtime
-digests and release signature verification remain mandatory. Failures retain useful
-exit-code and bounded diagnostic output. Installer rollback is deliberately separate
-from full purge: it removes only state created by that installation attempt.
+Then delete the Runner record in the administrator console if you also want to retire its remote identity. Remote audit/history follows its own retention rules.

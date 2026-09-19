@@ -1,11 +1,16 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { BUILD_PROVENANCE } from "../../apps/worker/src/generated-provenance.js";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
+import { join, resolve, parse } from "node:path";
+import { probeSessionConflict } from "../helpers/session-conflict-probe.js";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolveTrustedWindowsTool, trustedWindowsRoot } from "../../apps/runner/src/windows-tools.js";
+import { catalogContract, MCP_CATALOG_SUMMARY } from "../../apps/worker/src/mcp/catalog-contract.js";
+import { fromJsonSchema } from "@modelcontextprotocol/server";
+import { inspectInputCases } from "../helpers/inspect-input-cases.js";
 
 type ToolResult = {
   readonly content?: { readonly type: string; readonly text: string }[];
@@ -62,10 +67,51 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
   let enrolledProfile = "";
   let enrollmentCode = "";
   let worker: ChildProcess | undefined;
+  let workerLog: (() => string) | undefined;
+  let setupComplete = false;
+  let testFailed = false;
+  let teardownStarted = false;
+  let unexpectedWorkerExit = false;
+  let workerDiagnosticsReported = false;
+  const workerEvents: { event: string; at: string; code: number | string | null; signal: string | null; duringTeardown: boolean }[] = [];
   let runner: ChildProcess | undefined;
   let runnerOutput: (() => string) | undefined;
   let clientA: McpClient | undefined;
   let clientB: McpClient | undefined;
+
+  function recordWorkerEvent(event: string, code: number | string | null, signal: string | null): void {
+    workerEvents.push({ event, at: new Date().toISOString(), code, signal, duringTeardown: teardownStarted });
+    if (!teardownStarted) unexpectedWorkerExit = true;
+  }
+
+  function workerDiagnosticState(): string {
+    // These are the Wrangler launcher's events; its wrapper can map an inner
+    // process's signal termination to exit code 0, so timing also matters.
+    return JSON.stringify({ pid: worker?.pid, exitCode: worker?.exitCode, signalCode: worker?.signalCode, teardownStarted, events: workerEvents });
+  }
+
+  function reportWorkerDiagnostics(reason: string): void {
+    if (workerDiagnosticsReported) return;
+    workerDiagnosticsReported = true;
+    let output = workerLog?.() ?? "";
+    // The ring buffer may start partway through a credential-bearing line.
+    if (output.length === 8_192) {
+      const firstNewline = output.indexOf("\n");
+      output = firstNewline < 0 ? "[unterminated log line omitted]" : output.slice(firstNewline + 1);
+    }
+    for (const secret of [...Object.values(workerEnv), adminPassword, enrollmentCode, clientA?.endpoint, clientB?.endpoint]) {
+      if (secret !== undefined && secret.length >= 8) output = output.replaceAll(secret, "[redacted]");
+    }
+    output = output.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+      .replace(/^.*(?:authorization|cookie|token|secret|password|pepper|api[_-]?key).*$/gim, "[credential-bearing log line redacted]")
+      .replace(/[A-Za-z0-9_-]{32,}/g, "[redacted]")
+      .slice(-8_192);
+    console.error(`E2E Worker diagnostic (${reason}): ${workerDiagnosticState()}\n${output || "[no Worker output]"}`);
+  }
+
+  beforeEach(({ onTestFailed }) => {
+    onTestFailed(() => { testFailed = true; });
+  });
 
   beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), "mcp-runner-e2e-"));
@@ -81,8 +127,11 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     worker = spawn(process.execPath, [wranglerCli, "dev", "--local", "--ip", "127.0.0.1", "--config", "apps/worker/wrangler.jsonc", "--port", String(workerPort), "--persist-to", workerPersist, "--show-interactive-dev-session=false", ...workerVars()], {
       cwd: projectDirectory, env: { ...process.env, ...workerEnv }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
     });
-    const workerLog = collectOutput(worker);
-    await waitForWorker(workerLog);
+    workerLog = collectOutput(worker);
+    worker.once("error", (error) => recordWorkerEvent("error", diagnosticErrorCode(error), null));
+    worker.once("exit", (code, signal) => recordWorkerEvent("exit", code, signal));
+    worker.once("close", (code, signal) => recordWorkerEvent("close", code, signal));
+    await waitForWorker(workerDiagnosticState);
     const createdClients = await setupAdminAndClients();
     enrollmentCode = await createBrowserRunnerEnrollment();
     expect(enrollmentCode).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -139,12 +188,35 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     }, 15_000, runnerLog);
     expect((await mcpTool("runner_select", { runner_id: runnerId }, clientA)).isError).not.toBe(true);
     expect((await mcpTool("runner_select", { runner_id: runnerId }, clientB)).isError).not.toBe(true);
+    setupComplete = true;
   }, 90_000);
 
   afterAll(async () => {
-    await stop(runner); await stop(worker);
-    if (root) await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    if (!setupComplete || testFailed || unexpectedWorkerExit) {
+      reportWorkerDiagnostics(!setupComplete ? "setup failed" : testFailed ? "test failed" : "unexpected process exit");
+    }
+    teardownStarted = true;
+    try {
+      await stop(runner); await stop(worker);
+      if (root) await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    } catch (error) {
+      reportWorkerDiagnostics("teardown failed");
+      throw error;
+    }
   }, 30_000);
+
+  it("R01 actual local Worker exposes its compiled source without a deployment tag", async () => {
+    const response = await fetch(`${workerUrl}/health`, { cache: "no-store" });
+    expect(response.headers.get("cache-control")).toContain("no-store");
+    const health = await response.json() as any;
+    const compiled: { state: string; commit: string | null; tree: string | null; branch: string | null } = BUILD_PROVENANCE;
+    if (compiled.state === "clean") {
+      expect(health.deployment).toMatchObject({ state: "identified", source: "git_build", commit: compiled.commit, tree: compiled.tree, branch: compiled.branch });
+    } else {
+      expect(health.deployment).toMatchObject({ state: compiled.state === "conflict" ? "conflict" : "unavailable", commit: null, branch: null });
+    }
+    console.log(JSON.stringify({ scenario: "actual_worker_build_provenance", state: health.deployment.state, commit: health.deployment.commit, tree: health.deployment.tree }));
+  });
 
   it("enrolls from the browser-issued one-time code, saves an isolated profile, starts, and performs a real read", async () => {
     expect(enrollmentCode).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -157,8 +229,10 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
     const direct = await fetch(`${workerUrl}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body });
     expect(direct.status).toBe(404);
+    expect(await direct.text()).toBe("Not found");
     const invalid = await fetch(`${workerUrl}/${"x".repeat(43)}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body });
     expect(invalid.status).toBe(404);
+    expect(await invalid.text()).toBe("Not found");
     await expect(mcpMessage("runner_list", {})).resolves.toBeDefined();
   });
 
@@ -192,8 +266,35 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
       body: JSON.stringify({ jsonrpc: "2.0", id: requestId++, method: "tools/list", params: {} }),
     });
-    const listed = await readMcp(response) as { result?: { tools?: Array<{ name?: string }> } };
+    const listed = await readMcp(response) as { result?: { tools?: Array<{ name?: string; description?: string; inputSchema?: unknown; outputSchema?: unknown; annotations?: unknown; _meta?: Record<string,unknown> }> } };
     expect(listed.result?.tools?.map((tool) => tool.name).sort()).toEqual(["context", "edit", "inspect", "job", "read", "runner_current", "runner_list", "runner_select", "shell", "workspace_list"].sort());
+    const expected = catalogContract();
+    for (const advertised of listed.result!.tools!) {
+      const wanted = expected.tools.find(tool => tool.name === advertised.name)!;
+      expect(advertised.description).toBe(wanted.description);
+      expect(advertised.inputSchema).toEqual(wanted.inputSchema);
+      expect(advertised.outputSchema).toEqual(wanted.outputSchema);
+      expect(advertised.annotations).toEqual(wanted.annotations);
+      expect(advertised._meta?.["io.runmesh/catalog"]).toEqual({schema_version:1,sha256:MCP_CATALOG_SUMMARY.sha256});
+    }
+    // Independently validate the actual SDK-exported JSON Schema, not just
+    // equality with another export of the same source schema.
+    const inspectSchema = listed.result!.tools!.find(tool => tool.name === "inspect")!.inputSchema as Record<string, unknown>;
+    const validateInspect = fromJsonSchema(inspectSchema);
+    for (const { name, input, valid } of inspectInputCases) {
+      const result = await validateInspect["~standard"].validate(input);
+      expect(result.issues === undefined, `HTTP tools/list: ${name}`).toBe(valid);
+    }
+    for (const input of [
+      { action: "git_blame", workspace_id: "workspace-1", path: "note.txt", revision: "a".repeat(40) },
+      { action: "git_show", workspace_id: "workspace-1", path: "note.txt" },
+    ]) {
+      const rejected = await mcpMessage("inspect", input);
+      expect(rejected.result?.isError).toBe(true);
+      expect(rejected.result?.content?.map(item => item.text ?? "").join(" ")).toContain("revision");
+    }
+    const health = await (await fetch(`${workerUrl}/health`)).json() as {mcp_catalog:unknown};
+    expect(health.mcp_catalog).toEqual(MCP_CATALOG_SUMMARY);
     const legacy = await mcpMessage("fs_read", { workspace_id: "workspace-1", path: "note.txt" });
     expect(legacy.error?.code).toBe(-32602);
   });
@@ -205,6 +306,40 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(JSON.stringify(result)).not.toContain(workspace);
   });
 
+  it("R07 real MCP snapshot cursors preserve content and reject an inter-page file replacement", async () => {
+    const path="bound-page.txt",text="中😀\r\nabcé";await writeFile(join(workspace,path),text);
+    let page=await mcpTool("read",{workspace_id:"workspace-1",path,limit:3,consistency:"snapshot"});
+    expect(page.isError).not.toBe(true);const snapshot=page.structuredContent?.snapshot_id;
+    expect(snapshot).toMatch(/^[a-f0-9]{64}$/);
+    let output="",iterations=0;
+    while(true) {
+      expect(page.structuredContent).toMatchObject({page_protocol:2,consistency:"snapshot",snapshot_id:snapshot});
+      output+=page.structuredContent?.data;expect(++iterations).toBeLessThan(12);
+      if(page.structuredContent?.next_cursor===null)break;
+      page=await mcpTool("read",{workspace_id:"workspace-1",path,limit:3,cursor:page.structuredContent?.next_cursor});
+      expect(page.isError).not.toBe(true);
+    }
+    expect(output).toBe(text);
+    const cursor=page.structuredContent?.resume_cursor;await writeFile(join(workspace,path),"a different source");
+    expect(await mcpTool("read",{workspace_id:"workspace-1",path,cursor})).toMatchObject({isError:true,structuredContent:{error:{code:"file_changed"}}});
+  });
+
+  it("R07 real append cursors resume an incomplete character without treating growth as rotation", async () => {
+    const marker="bound-log-finish";
+    const started=await mcpTool("shell",{workspace_id:"workspace-1",background:true,command:nodeCommand("const fs=require('node:fs');process.stdout.write(Buffer.from([0xe4,0xb8]));const t=setInterval(()=>{if(fs.existsSync('bound-log-finish')){clearInterval(t);process.stdout.write(Buffer.from([0xad]));}},25);")});
+    const jobId=started.structuredContent?.job_id as string;expect(typeof jobId).toBe("string");
+    try {
+      let partial:ToolResult={};
+      await waitFor(async()=>{partial=await mcpTool("job",{action:"logs",workspace_id:"workspace-1",job_id:jobId,consistency:"append"});return partial.structuredContent?.page_state==="incomplete";},10000);
+      expect(partial.structuredContent).toMatchObject({page_protocol:2,data:"",pending_bytes:2,resume_offset:0});
+      const cursor=partial.structuredContent?.resume_cursor,snapshot=partial.structuredContent?.snapshot_id;
+      await writeFile(join(workspace,marker),"finish");
+      await waitFor(async()=>(await mcpTool("job",{action:"get",workspace_id:"workspace-1",job_id:jobId})).structuredContent?.status==="succeeded",10000);
+      const done=await mcpTool("job",{action:"logs",workspace_id:"workspace-1",job_id:jobId,cursor});
+      expect(done).toMatchObject({structuredContent:{data:"中",page_protocol:2,page_state:"end",snapshot_id:snapshot}});
+    } finally { await writeFile(join(workspace,marker),"finish"); }
+  });
+
   it("paginates live filesystem UTF-8 reads without replacement characters", async () => {
     let cursor: string | undefined;
     let output = "";
@@ -212,6 +347,9 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       const page = await mcpTool("read", {
         workspace_id: "workspace-1", path: "utf8.txt", ...(cursor === undefined ? {} : { cursor }), limit: 4,
       });
+      expect(page.structuredContent?.page_protocol).toBe(1);
+      expect(page.structuredContent?.returned_bytes).toBe(Buffer.byteLength(String(page.structuredContent?.data)));
+      expect(page.structuredContent?.snapshot_id).toBeNull();
       output += page.structuredContent?.data as string;
       const next = page.structuredContent?.next_cursor;
       cursor = typeof next === "string" ? next : undefined;
@@ -247,7 +385,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const duringGap = await mcpTool("job", { action: "get", job_id: jobId as string }, clientB);
     expect(duringGap).toMatchObject({ structuredContent: { runner_state: "offline", source: "registry_snapshot" } });
     const missingDuringGap = await mcpTool("job", { action: "get", job_id: "job-00000000-0000-0000-0000-000000000000" }, clientB);
-    expect(missingDuringGap).toMatchObject({ isError: true, structuredContent: { error: { code: "not_found" } } });
+    expect(missingDuringGap).toMatchObject({ isError: true, structuredContent: { error: { code: "job_history_unavailable", operation_state: "not_started", next_action: "correct_request", recovery_hint: expect.stringContaining("workspace_id") } } });
 
     // Restart the Runner process after the deliberate transport-only gap; its
     // detached persistent job and registry snapshot remain available.
@@ -293,6 +431,35 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(readonlyPatch).toMatchObject({ isError: true, structuredContent: { error: { code: "readonly_workspace" } } });
   });
 
+  it("R07 incomplete file tails terminate across real MCP with an explicit resume offset", async () => {
+    await writeFile(join(workspace, "partial-page.txt"), Buffer.from([0x6f, 0x6b, 0xe4, 0xb8]));
+    const first = await mcpTool("read", { workspace_id: "workspace-1", path: "partial-page.txt", limit: 1024 });
+    expect(first.structuredContent).toMatchObject({ data: "ok", next_cursor: "2", page_protocol: 1 });
+    const last = await mcpTool("read", { workspace_id: "workspace-1", path: "partial-page.txt", cursor: "2", limit: 1024 });
+    expect(last.isError, JSON.stringify(last)).not.toBe(true);
+    expect(last.structuredContent).toMatchObject({ data: "", next_cursor: null, page_state: "incomplete", pending_bytes: 2, resume_offset: 2, truncated: true });
+  });
+
+  it("R07 escaped Job output keeps real byte cursors after the MCP context envelope is added", async () => {
+    const started = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write(String.fromCharCode(0).repeat(25000))"), background: true });
+    const jobId = started.structuredContent?.job_id as string;
+    await waitFor(async () => (await mcpTool("job", { action: "get", job_id: jobId })).structuredContent?.status === "succeeded", 10000);
+    let cursor: string | undefined, bytes = 0, pages = 0;
+    do {
+      const result = await mcpTool("job", { action: "logs", workspace_id: "workspace-1", job_id: jobId, stream: "stdout", limit: 65536, ...(cursor === undefined ? {} : { cursor }) });
+      expect(result.isError, JSON.stringify(result)).not.toBe(true);
+      const page = result.structuredContent!;
+      expect(page.page_protocol).toBe(1);
+      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(64 * 1024);
+      expect(page.returned_bytes).toBe(Buffer.byteLength(String(page.data)));
+      expect(Number(page.returned_bytes)).toBeLessThanOrEqual(16 * 1024);
+      bytes += Number(page.returned_bytes); pages += 1; expect(pages).toBeLessThan(10);
+      if (page.next_cursor !== null) expect(Number(page.next_cursor)).toBeGreaterThan(Number(cursor ?? 0));
+      cursor = typeof page.next_cursor === "string" ? page.next_cursor : undefined;
+    } while (cursor !== undefined);
+    expect(bytes).toBe(25000);
+  });
+
   it("paginates multibyte stdout to EOF and returns stderr", async () => {
     const job = await mcpTool("shell", {
       workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('😀é😀'); process.stderr.write('stderr-page\\n')"), background: true,
@@ -304,6 +471,8 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     let output = "";
     do {
       const page = await mcpTool("job", { action: "logs", job_id: jobId, stream: "stdout", ...(cursor === undefined ? {} : { cursor }), limit: 4 });
+      expect(page.structuredContent?.returned_bytes).toBe(Buffer.byteLength(String(page.structuredContent?.data)));
+      expect(page.structuredContent?.page_protocol).toBe(1);
       output += page.structuredContent?.data as string;
       const next = page.structuredContent?.next_cursor;
       cursor = typeof next === "string" ? next : undefined;
@@ -376,28 +545,34 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const {adminJar,csrf}=await adminCredentials();
     const other=await createMcpClient("Queue Client B",["coding:read","coding:write","coding:exec"],adminJar,csrf);
     expect((await mcpTool("runner_select",{runner_id:runnerId},other)).isError).not.toBe(true);
-    const first=await mcpTool("shell",{workspace_id:"workspace-1",command:nodeCommand("const fs=require('node:fs');const t=setInterval(()=>{if(fs.existsSync('.queue-e2e-release'))clearInterval(t)},15)"),background:true,request_id:"queue-first"});
+    const holdCommand=(path:string)=>nodeCommand(`const fs=require('node:fs');const t=setInterval(()=>{if(fs.existsSync(${JSON.stringify(path)}))clearInterval(t)},15)`);
+    const first=await mcpTool("shell",{workspace_id:"workspace-1",command:holdCommand('.queue-e2e-release-1'),background:true,request_id:"queue-first"});
     const firstId=first.structuredContent?.job_id as string;expect(typeof firstId).toBe("string");
-    let secondId:string|undefined;
+    const second=await mcpTool("shell",{workspace_id:"workspace-1",command:holdCommand('.queue-e2e-release-2'),background:true,request_id:"queue-second-slot"});
+    const secondSlotId=second.structuredContent?.job_id as string;expect(typeof secondSlotId).toBe("string");
+    let queuedId:string|undefined;
     try {
       const start=Date.now();
-      const second=await mcpTool("shell",{workspace_id:"workspace-1",command:nodeCommand("process.stdout.write('second-client')"),request_id:"queue-second",wait_ms:8000},other);
-      secondId=second.structuredContent?.job_id as string;
-      expect(second.isError,JSON.stringify(second)).not.toBe(true);
-      expect(second.structuredContent?.status).toBe("queued");expect(Date.now()-start).toBeLessThan(5000);
+      const queued=await mcpTool("shell",{workspace_id:"workspace-1",command:nodeCommand("process.stdout.write('second-client')"),request_id:"queue-third",wait_ms:8000},other);
+      queuedId=queued.structuredContent?.job_id as string;
+      expect(queued.isError,JSON.stringify(queued)).not.toBe(true);
+      expect(queued.structuredContent?.status).toBe("queued");expect(Date.now()-start).toBeLessThan(5000);
       const read=await mcpTool("read",{workspace_id:"workspace-1",path:"note.txt"},other);expect(read.isError).not.toBe(true);
-      await writeFile(join(workspace,".queue-e2e-release"),"release");
-      await waitFor(async()=>["succeeded","failed"].includes(String((await mcpTool("job",{action:"get",workspace_id:"workspace-1",job_id:secondId},other)).structuredContent?.status)),8000);
-      const result=await mcpTool("job",{action:"get",workspace_id:"workspace-1",job_id:secondId},other);
+      await writeFile(join(workspace,".queue-e2e-release-1"),"release");
+      await writeFile(join(workspace,".queue-e2e-release-2"),"release");
+      await waitFor(async()=>["succeeded","failed"].includes(String((await mcpTool("job",{action:"get",workspace_id:"workspace-1",job_id:queuedId},other)).structuredContent?.status)),8000);
+      const result=await mcpTool("job",{action:"get",workspace_id:"workspace-1",job_id:queuedId},other);
       expect(result.structuredContent?.status,JSON.stringify(result)).toBe("succeeded");
-      const logs=await mcpTool("job",{action:"logs",workspace_id:"workspace-1",job_id:secondId,stream:"stdout",limit:1024},other);
+      const logs=await mcpTool("job",{action:"logs",workspace_id:"workspace-1",job_id:queuedId,stream:"stdout",limit:1024},other);
       expect(logs.structuredContent?.data).toBe("second-client");
-      const replay=await mcpTool("shell",{workspace_id:"workspace-1",command:nodeCommand("process.stdout.write('second-client')"),request_id:"queue-second",background:true},other);
-      expect(replay.structuredContent?.job_id).toBe(secondId);
+      const replay=await mcpTool("shell",{workspace_id:"workspace-1",command:nodeCommand("process.stdout.write('second-client')"),request_id:"queue-third",background:true},other);
+      expect(replay.structuredContent?.job_id).toBe(queuedId);
     } finally {
-      await writeFile(join(workspace,".queue-e2e-release"),"release");
-      if(secondId)await mcpTool("job",{action:"cancel",workspace_id:"workspace-1",job_id:secondId},other);
+      await writeFile(join(workspace,".queue-e2e-release-1"),"release");
+      await writeFile(join(workspace,".queue-e2e-release-2"),"release");
+      if(queuedId)await mcpTool("job",{action:"cancel",workspace_id:"workspace-1",job_id:queuedId},other);
       await mcpTool("job",{action:"cancel",workspace_id:"workspace-1",job_id:firstId});
+      await mcpTool("job",{action:"cancel",workspace_id:"workspace-1",job_id:secondSlotId});
       await waitFor(async()=>!['running','cancelling','queued'].includes(String((await mcpTool("job",{action:"get",workspace_id:"workspace-1",job_id:firstId})).structuredContent?.status)),8000);
     }
   });
@@ -410,14 +585,17 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
 
   it("GA-007 busy Runner returns a retryable busy error, not invalid parameters", async () => {
     const first = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("setTimeout(()=>{},10000)"), background: true });
-    const id = first.structuredContent?.job_id as string;
-    expect(typeof id).toBe("string");
+    const firstId = first.structuredContent?.job_id as string;
+    expect(typeof firstId).toBe("string");
+    const second = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("setTimeout(()=>{},10000)"), background: true });
+    const secondId = second.structuredContent?.job_id as string;
+    expect(typeof secondId).toBe("string");
     try {
-      const second = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('never')"), background: true, queue: false });
-      expect(second).toMatchObject({ isError: true, structuredContent: { error: { code: "busy" } } });
+      const third = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('never')"), background: true, queue: false });
+      expect(third).toMatchObject({ isError: true, structuredContent: { error: { code: "busy" } } });
     } finally {
-      await mcpTool("job", { action: "cancel", job_id: id });
-      await waitFor(async () => ["cancelled", "succeeded", "failed"].includes(String((await mcpTool("job", { action: "get", job_id: id })).structuredContent?.status)), 12000);
+      for (const id of [firstId, secondId]) await mcpTool("job", { action: "cancel", job_id: id });
+      for (const id of [firstId, secondId]) await waitFor(async () => ["cancelled", "succeeded", "failed"].includes(String((await mcpTool("job", { action: "get", job_id: id })).structuredContent?.status)), 12000);
     }
   });
 
@@ -440,18 +618,65 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const started = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdin.setEncoding('utf8');process.stdin.on('data',d=>process.stdout.write(d))"), background: true });
     const id = started.structuredContent?.job_id as string;
     expect(typeof id).toBe("string");
+    const workspaceId = started.structuredContent?.workspace_id;
+    expect(workspaceId).toBe("workspace-1");
+    const address = { job_id: id, workspace_id: workspaceId };
+    // This is a live authorization test, not an archive timing assertion.
+    // Use the launch receipt's workspace before optional history is uploaded;
+    // the separate offline-snapshot case covers archived read sharing.
     try {
-      expect((await mcpTool("job", { action: "get", job_id: id }, clientB)).isError).not.toBe(true);
-      const denied = await mcpTool("job", { action: "input", job_id: id, data: "unauthorized-input" }, clientB);
+      const shared = await mcpTool("job", { action: "get", ...address }, clientB);
+      expect(shared.isError, JSON.stringify(shared)).not.toBe(true);
+      expect(shared.structuredContent).toMatchObject({ ...address, status: "running" });
+      const denied = await mcpTool("job", { action: "input", ...address, data: "unauthorized-input" }, clientB);
       expect(denied).toMatchObject({ isError: true, structuredContent: { error: { code: "insufficient_scope" } } });
-      expect((await mcpTool("job", { action: "input", job_id: id, data: "authorized-input\n" })).isError).not.toBe(true);
-      await waitFor(async () => String((await mcpTool("job", { action: "logs", job_id: id }, clientB)).structuredContent?.data).includes("authorized-input"), 10000);
-      const log = await mcpTool("job", { action: "logs", job_id: id }, clientB);
+      const deniedCancellation = await mcpTool("job", { action: "cancel", ...address }, clientB);
+      expect(deniedCancellation).toMatchObject({ isError: true, structuredContent: { error: { code: "insufficient_scope" } } });
+      expect((await mcpTool("job", { action: "get", ...address })).structuredContent?.status).toBe("running");
+      expect((await mcpTool("job", { action: "input", ...address, data: "authorized-input\n" })).isError).not.toBe(true);
+      await waitFor(async () => String((await mcpTool("job", { action: "logs", ...address }, clientB)).structuredContent?.data).includes("authorized-input"), 10000);
+      const log = await mcpTool("job", { action: "logs", ...address }, clientB);
       expect(String(log.structuredContent?.data)).not.toContain("unauthorized-input");
     } finally {
-      await mcpTool("job", { action: "cancel", job_id: id });
-      await waitFor(async () => ["cancelled", "succeeded", "failed"].includes(String((await mcpTool("job", { action: "get", job_id: id })).structuredContent?.status)), 12000);
+      await mcpTool("job", { action: "cancel", ...address });
+      await waitFor(async () => ["cancelled", "succeeded", "failed"].includes(String((await mcpTool("job", { action: "get", ...address })).structuredContent?.status)), 12000);
     }
+  });
+
+  it("R08 real MCP inventories Context and prunes only reviewed superseded records", async () => {
+    const files = await import("node:fs/promises");
+    let contextId = "";
+    for (let revision = 1; revision <= 3; revision++) {
+      const created = await mcpTool("context", { action: "checkpoint", workspace_id: "workspace-1", turn_id: "retention-e2e", goal: `Retention version ${revision}`,
+        ...(contextId ? { context_id: contextId, expected_revision: revision - 1 } : {}) });
+      expect(created.isError, JSON.stringify(created)).not.toBe(true);
+      contextId = (created.structuredContent?.context as { context_id: string }).context_id;
+    }
+    const directory = join(runnerState, "contexts", "workspace-1", contextId);
+    // Only this test's private fixture is aged; immutable content fingerprints
+    // do not include these retention timestamps. No production state is used.
+    for (const revision of [1, 2]) {
+      const path = join(directory, `${revision}.json`), record = JSON.parse(await files.readFile(path, "utf8"));
+      record.created_at_ms = record.updated_at_ms = Date.now() - 90 * 86400000;
+      await files.writeFile(path, `${JSON.stringify(record)}\n`);
+    }
+    const latest = await files.readFile(join(directory, "3.json"));
+    const usage = await mcpTool("context", { action: "storage", workspace_id: "workspace-1" }, clientB);
+    expect(usage.isError, JSON.stringify(usage)).not.toBe(true);
+    expect(usage.structuredContent).toMatchObject({ storage_schema: 1, accounting: "logical_revision_bytes" });
+    expect(JSON.stringify(usage)).not.toContain(runnerState);
+    const input = { action: "prune", workspace_id: "workspace-1", keep_days: 30, keep_revisions: 1 };
+    expect((await mcpTool("context", input, clientB)).structuredContent?.error).toMatchObject({ code: "insufficient_scope" });
+    const preview = await mcpTool("context", input);
+    expect(preview.isError, JSON.stringify(preview)).not.toBe(true);
+    expect(preview.structuredContent).toMatchObject({ applied: false, candidate_records: 2, deleted_records: 0 });
+    expect(await files.readdir(directory)).toHaveLength(3);
+    const applied = await mcpTool("context", { ...input, apply: true, expected_plan_hash: preview.structuredContent?.plan_hash });
+    expect(applied.isError, JSON.stringify(applied)).not.toBe(true);
+    expect(applied.structuredContent).toMatchObject({ applied: true, deleted_records: 2, complete: true });
+    expect(await files.readdir(directory)).toEqual(["3.json"]);
+    expect(await files.readFile(join(directory, "3.json"))).toEqual(latest);
+    expect((await mcpTool("context", { action: "read", workspace_id: "workspace-1", context_id: contextId })).structuredContent?.context).toMatchObject({ revision: 3 });
   });
 
   it("exercises diagnostics, patch preview and all Context methods through final authorization", async () => {
@@ -459,13 +684,24 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(diagnostic.isError, JSON.stringify(diagnostic)).not.toBe(true);
     const checks = diagnostic.structuredContent?.checks as Array<{name:string;state:string}>;
     expect(checks.find((c) => c.name === "runner_rpc")?.state).toBe("pass");
+    expect(diagnostic.structuredContent?.capabilities).toMatchObject({report_state:"reported",contract_match:true,host_catalog_state:"not_observed",worker_catalog:MCP_CATALOG_SUMMARY,runner:{features:{job_queue:1,context_record:2}}});
+    const readonlyDiagnostic = await mcpTool("inspect",{action:"diagnostics",workspace_id:"workspace-1"},clientB);
+    const capability = readonlyDiagnostic.structuredContent?.capabilities as {actions:Array<{method:string;permission_snapshot:string;runner_support:string}>};
+    expect(capability.actions.find(action=>action.method==="context.checkpoint")).toMatchObject({runner_support:"supported",permission_snapshot:"denied"});
+    expect(JSON.stringify(readonlyDiagnostic)).not.toContain(workspace);
     const preview = await mcpTool("edit", {workspace_id:"workspace-1",preview:true,patch:"*** Begin Patch\n*** Add File: preview-only.txt\n+preview\n*** End Patch"});
     expect(preview.isError, JSON.stringify(preview)).not.toBe(true);
     expect(existsSync(join(workspace,"preview-only.txt"))).toBe(false);
+    const checkpointInput = {action:"checkpoint",turn_id:"e2e-release-audit",goal:"Validate release context chain",expected_revision:0};
+    const created = await mcpTool("context",{workspace_id:"workspace-1",...checkpointInput});
+    expect(created.isError, JSON.stringify(created)).not.toBe(true);
+    const contextId = (created.structuredContent?.context as {context_id:string}).context_id;
+    expect(contextId).toMatch(/^ctx-/);
+    const duplicate = await mcpTool("context",{workspace_id:"workspace-1",...checkpointInput});
+    expect(duplicate.structuredContent?.deduplicated).toBe(true);
     const operations = [
       {action:"bootstrap"},
-      {action:"checkpoint",context_id:"e2e-handoff",turn_id:"e2e-release-audit",goal:"Validate release context chain"},
-      {action:"read",context_id:"e2e-handoff"},
+      {action:"read",context_id:contextId},
       {action:"search",query:"release"},
       {action:"rebuild"},
     ];
@@ -473,9 +709,43 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       const result = await mcpTool("context",{workspace_id:"workspace-1",...operation});
       expect(result.isError, JSON.stringify({operation,result})).not.toBe(true);
     }
+    const nonexistent = await mcpTool("context",{workspace_id:"workspace-1",...checkpointInput,context_id:"invented-context"});
+    expect(nonexistent.structuredContent?.error).toMatchObject({code:"context_revision_conflict"});
     const rejected = await mcpTool("context",{action:"checkpoint",workspace_id:"workspace-1",turn_id:"not-authorized",goal:"must not write"},clientB);
     expect(rejected.isError).toBe(true);
     expect(rejected.structuredContent?.error).toMatchObject({code:"insufficient_scope"});
+  });
+
+  it("trusted no-record Jobs stay out of source snapshots after log reads, retries and re-enabling", async () => {
+    const { adminJar, csrf } = await adminCredentials();
+    const client = await createMcpClient("No-record source E2E", ["coding:read", "coding:write", "coding:exec"], adminJar, csrf);
+    expect((await mcpTool("runner_select", { runner_id: runnerId }, client)).isError).not.toBe(true);
+    const launch = (request: string) => mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('private-local-log')"), request_id: request, wait_ms: 4000 }, client);
+    const original = await launch("recording-owner"); expect(original.isError).not.toBe(true);
+    const owner = original.structuredContent?.created_by_client_id;
+    expect(typeof owner).toBe("string");
+    const setRecording = async (enabled: boolean) => {
+      expect((await submitForm(`/admin/clients/${owner}/recording`, { csrf_token: csrf, record_jobs: String(enabled) }, adminJar)).status).toBe(303);
+    };
+    const readRecord = async (jobId: string) => JSON.parse(await readFile(join(runnerState, "jobs", jobId, "meta.json"), "utf8"));
+    expect((await readRecord(original.structuredContent?.job_id as string)).record_history).toBe(true);
+    await setRecording(false);
+    const hidden = await launch("private-retry"); expect(hidden.isError).not.toBe(true);
+    const hiddenId = hidden.structuredContent?.job_id as string;
+    expect((await readRecord(hiddenId)).record_history).toBe(false);
+    const logs = await mcpTool("job", { action: "logs", workspace_id: "workspace-1", job_id: hiddenId, stream: "stdout" }, client);
+    expect(logs.structuredContent?.data).toContain("private-local-log");
+    await setRecording(true);
+    const retried = await launch("private-retry"); expect(retried.structuredContent?.job_id).toBe(hiddenId);
+    expect((await readRecord(hiddenId)).record_history).toBe(false);
+    const recorded = await launch("recording-resumed"); expect(recorded.isError).not.toBe(true);
+    expect((await readRecord(recorded.structuredContent?.job_id as string)).record_history).toBe(true);
+    await waitFor(async () => {
+      const history = await mcpTool("job", { action: "list", limit: 100 }, client);
+      const ids = (history.structuredContent?.jobs as Array<{job_id:string}>).map(job => job.job_id);
+      expect(ids).not.toContain(hiddenId);
+      return ids.includes(recorded.structuredContent?.job_id as string);
+    }, 10000);
   });
 
   it("queries a batched Job live without waiting for the next cloud snapshot", async () => {
@@ -497,6 +767,116 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       const logs = await mcpTool("job", { action: "logs", workspace_id: "workspace-1", job_id: jobId, stream: "stdout", limit: 1024 });
       expect(logs.structuredContent?.data).toContain("batched-live-log");
     } finally { expect((await save("immediate")).status).toBe(303); }
+  });
+
+  it("R03 reads three real commits and literal blame through MCP without shell permission", async () => {
+    const git = (args: string[]) => execFileSync("git", args, { cwd: workspace, stdio: "ignore" });
+    git(["init"]); git(["config", "user.name", "Fixture"]); git(["config", "user.email", "fixture@example.invalid"]);
+    const file = "review-history.txt";
+    for (const value of ["first", "second", "third"]) {
+      await writeFile(join(workspace, file), `${value}\nunchanged\n`);
+      git(["add", "-f", "--", file]); git(["commit", "-m", value, "--", file]);
+    }
+    const history = await mcpTool("inspect", { action: "git_log", workspace_id: "workspace-1", path: file, max_results: 10 }, clientB);
+    expect(history.isError, JSON.stringify(history)).not.toBe(true);
+    expect((history.structuredContent?.commits as Array<{subject:string}>).map(row => row.subject)).toEqual(["third", "second", "first"]);
+    expect(history.structuredContent?.truncated).toBe(false);
+    const blamed = await mcpTool("inspect", { action: "git_blame", workspace_id: "workspace-1", path: file, start_line: 1, end_line: 2 }, clientB);
+    expect(blamed.isError, JSON.stringify(blamed)).not.toBe(true);
+    expect(blamed.structuredContent?.output).toContain("\tthird");
+    const defaultBlame = await mcpTool("inspect", { action: "git_blame", workspace_id: "workspace-1", path: file }, clientB);
+    expect(defaultBlame.isError, JSON.stringify(defaultBlame)).not.toBe(true);
+    expect(defaultBlame.structuredContent?.output).toContain("\tthird");
+    const revision = (history.structuredContent?.commits as Array<{oid:string}>)[1]!.oid;
+    const shown = await mcpTool("inspect", { action: "git_show", workspace_id: "workspace-1", path: file, revision }, clientB);
+    expect(shown.isError, JSON.stringify(shown)).not.toBe(true);
+    expect(shown.structuredContent?.output).toBe("second\nunchanged\n");
+  });
+
+  it("R04 retains one checkpoint revision for repeated observed Job evidence across real MCP calls", async () => {
+    const started = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('observed-evidence')") });
+    expect(started.isError, JSON.stringify(started)).not.toBe(true);
+    const id = started.structuredContent?.job_id;
+    expect(typeof id).toBe("string");
+    const input = { action: "checkpoint", workspace_id: "workspace-1", turn_id: "e2e-observed-retry", goal: "retain one observed checkpoint", expected_revision: 0, evidence: [{ kind: "job", job_id: id }] };
+    const first = await mcpTool("context", input);
+    expect(first.isError, JSON.stringify(first)).not.toBe(true);
+    await delay(25);
+    const next = await mcpTool("context", input);
+    expect(next.isError, JSON.stringify(next)).not.toBe(true);
+    expect(next.structuredContent?.deduplicated).toBe(true);
+    expect((next.structuredContent?.context as { revision: number }).revision).toBe(1);
+    expect((next.structuredContent?.context as { evidence: unknown }).evidence).toEqual((first.structuredContent?.context as { evidence: unknown }).evidence);
+  });
+
+  it("returns actionable root Git errors through the complete MCP Worker Runner path", async () => {
+    const { adminJar, csrf } = await adminCredentials();
+    // Roots must not overlap within one policy. Give this test its own Runner
+    // and read-only MCP client rather than invalidating the main fixture.
+    const rootRunnerId = "e2e-root-git-runner";
+    const workspaceId = "root-git-e2e";
+    const token = "synthetic-root-git-token-0123456789";
+    const registration = await fetch(`${workerUrl}/admin/runners`, { method: "POST",
+      headers: { Authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ runner_id: rootRunnerId, token, execution_mode: "dedicated_user" }) });
+    expect(registration.status).toBe(200);
+    const rootProfile = join(root, "root-git-profile.json");
+    await writeFile(rootProfile, JSON.stringify({ version: 1, server_url: `${workerUrl.replace("http:", "ws:")}/runner/connect`,
+      runner_id: rootRunnerId, token, workspaces: [], insecure_local: true, management_mode: "central", execution_mode: "dedicated_user" }), { mode: 0o600 });
+    const rootRunner = spawn(process.execPath, [...runnerInvocation, "start", "--profile", rootProfile, "--state-dir", join(root, "root-git-state")], {
+      cwd: projectDirectory, env: { ...process.env, RUNMESH_RUNNER_PROFILE: rootProfile }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
+    });
+    const logs = collectOutput(rootRunner);
+    try {
+      const permissions = await submitForm(`/admin/runners/${rootRunnerId}/permissions`, { csrf_token: csrf, read: "true", edit: "false", shell: "false", job_control: "false" }, adminJar);
+      expect(permissions.status).toBe(303);
+      const created = await submitForm(`/admin/runners/${rootRunnerId}/workspace-create`, { csrf_token: csrf, workspace_id: workspaceId,
+        display_name: "Read-only root Git regression", root_path: parse(root).root, confirm_full_host: "true", enabled: "true", profile: "read_only",
+        read: "true", edit: "false", shell: "false", job_control: "false" }, adminJar);
+      expect(created.status).toBe(303);
+      await waitFor(async () => {
+        const response = await fetch(`${workerUrl}/admin/runners/${rootRunnerId}`, { headers: { cookie: cookieHeader(adminJar) } });
+        return /Policy status<\/span>\s*<strong[^>]*>applied\s*·/.test(await response.text());
+      }, 10000, logs);
+      const client = await createMcpClient("Root Git E2E", ["coding:read"], adminJar, csrf);
+      expect((await mcpTool("runner_select", { runner_id: rootRunnerId }, client)).isError).not.toBe(true);
+      const cases = [{ action: "git_status" }, { action: "git_diff" }, { action: "git_log" }, { action: "git_log", max_results: 5 },
+        { action: "git_show", revision: "a".repeat(40) }, { action: "git_blame" }, { action: "git_blame", start_line: 1 },
+        { action: "git_blame", end_line: 1 }, { action: "git_blame", start_line: 1, end_line: 1 }];
+      for (const input of cases) {
+        const result = await mcpTool("inspect", { workspace_id: workspaceId, path: ".",
+          ...input,
+        }, client);
+        expect(result).toMatchObject({ isError: true, structuredContent: { error: { code: "git_unavailable", failure_class: "availability",
+          operation_state: "not_started", next_action: "contact_operator", recovery_hint: expect.stringContaining("non-filesystem-root workspace") } } });
+        expect(JSON.stringify(result)).not.toMatch(/Inspect the original Job|\/usr\/bin|\.git\/config|retry_after_ms/);
+      }
+    } finally { await stop(rootRunner); }
+  });
+
+  it("fences a genuinely stale Registry sync with 4000 and recovers using the same credential", async () => {
+    const testRunner = "e2e-session-conflict";
+    const token = "synthetic-session-conflict-token-0123456789";
+    // The main fixture exercises packed D1 history, whose batch endpoint has
+    // different sequence semantics. Match the live dev SQLite sync path in an
+    // independent real Worker instead of mocking a Registry response.
+    const port = await freePort();
+    const origin = `http://127.0.0.1:${port}`;
+    const sqliteWorker = spawn(process.execPath, [wranglerCli, "dev", "--local", "--ip", "127.0.0.1", "--config", "apps/worker/wrangler.jsonc",
+      "--port", String(port), "--persist-to", join(root, "sqlite-probe"), "--show-interactive-dev-session=false", ...workerVars(), "--var", "RUNMESH_JOB_HISTORY_BACKEND:sqlite"], {
+      cwd: projectDirectory, env: { ...process.env, ...workerEnv }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
+    });
+    const logs = collectOutput(sqliteWorker);
+    try {
+      await waitFor(async () => (await fetch(`${origin}/health`).catch(() => undefined))?.ok === true, 20000, logs);
+      const registration = await fetch(`${origin}/admin/runners`, { method: "POST",
+        headers: { Authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ runner_id: testRunner, token, execution_mode: "dedicated_user" }) });
+      expect(registration.status).toBe(200);
+      const result = await probeSessionConflict({ server: `${origin.replace("http:", "ws:")}/runner/connect`, runnerId: testRunner, token });
+      expect(result).toMatchObject({ close_code: 4000, close_reason: "stale runner session", valid_sync_acknowledged: true,
+        stale_sync_acknowledged: false, same_credential_reconnected: true, new_session: true, recovery_echo: true });
+    } finally { await stop(sqliteWorker); }
   });
 
   it("reports a runner_offline structured error after the real runner disconnects", async () => {
@@ -586,8 +966,31 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
   }
 
   async function adminCredentials(): Promise<{ readonly adminJar: CookieJar; readonly csrf: string }> {
-    const loginPage = await fetch(`${workerUrl}/`, { redirect: "manual" });
-    const loginCsrf = formToken(await loginPage.text());
+    let loginPage: Response;
+    try {
+      loginPage = await fetch(`${workerUrl}/`, { redirect: "manual" });
+    } catch (error) {
+      throw new Error(`E2E login page failed: ${JSON.stringify({ stage: "fetch", code: diagnosticErrorCode(error) })}`);
+    }
+    const mediaType = loginPage.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "absent";
+    const contentType = /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(mediaType) && mediaType.length <= 128 ? mediaType : "absent-or-invalid";
+    const responseMetadata = { status: loginPage.status, contentType };
+    if (loginPage.status !== 200 || mediaType !== "text/html") {
+      void loginPage.body?.cancel().catch(() => undefined);
+      throw new Error(`E2E login page failed: ${JSON.stringify({ stage: "headers", ...responseMetadata })}`);
+    }
+    let loginHtml: string;
+    try {
+      loginHtml = await loginPage.text();
+    } catch (error) {
+      throw new Error(`E2E login page failed: ${JSON.stringify({ stage: "body", ...responseMetadata, code: diagnosticErrorCode(error) })}`);
+    }
+    let loginCsrf: string;
+    try {
+      loginCsrf = formToken(loginHtml);
+    } catch {
+      throw new Error(`E2E login page failed: ${JSON.stringify({ stage: "csrf", ...responseMetadata, bodyCharacters: loginHtml.length, hasForm: /<form\b/i.test(loginHtml) })}`);
+    }
     const loginCookie = cookieFrom(loginPage, "__Host-runmesh_login_csrf");
     const login = await submitForm("/login", { csrf_token: loginCsrf, password: adminPassword }, cookieJar([["__Host-runmesh_login_csrf", loginCookie]]));
     expect(login.status).toBe(303);
@@ -634,12 +1037,15 @@ async function readMcp(response: Response): Promise<JsonRpc> {
   return JSON.parse(data) as JsonRpc;
 }
 function nodeCommand(script: string): string {
-  // The shell RPC intentionally exercises the host shell. JSON.stringify is
-  // valid command-line quoting for POSIX shells, but PowerShell treats the
-  // resulting backslash-escaped Windows path as a literal (invalid) path and
-  // parses `-e` as a separate expression. Use PowerShell's single-quote
-  // escaping on Windows so the same fixture invokes Node on both platforms.
-  if (process.platform === "win32") return `& ${powerShellQuote(process.execPath)} -e ${powerShellQuote(script)}`;
+  // Windows PowerShell's native argument parser strips embedded double
+  // quotes even inside a PowerShell single-quoted argument. Transport the
+  // fixture's exact script bytes so a holding process cannot silently fail
+  // and leave a supposedly occupied queue slot free.
+  if (process.platform === "win32") {
+    const encoded = Buffer.from(script, "utf8").toString("base64");
+    const invocation = `eval(Buffer.from('${encoded}','base64').toString('utf8'))`;
+    return `& ${powerShellQuote(process.execPath)} -e ${powerShellQuote(invocation)}`;
+  }
   return `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`;
 }
 function powerShellQuote(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
@@ -680,6 +1086,11 @@ function collectOutput(child: ChildProcess): () => string {
   const collect = (chunk: Buffer | string): void => { output = `${output}${chunk.toString()}`.slice(-8_192); };
   child.stdout?.on("data", collect); child.stderr?.on("data", collect);
   return () => output;
+}
+function diagnosticErrorCode(error: unknown): string {
+  const details = error as { readonly code?: unknown; readonly cause?: { readonly code?: unknown } } | null | undefined;
+  const code = details?.code ?? details?.cause?.code;
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : "unknown";
 }
 function delay(ms: number): Promise<void> { return new Promise((resolveDelay) => setTimeout(resolveDelay, ms)); }
 async function stop(child: ChildProcess | undefined): Promise<void> {

@@ -5,6 +5,17 @@ import { fileURLToPath } from "node:url";
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const distRoot = join(repositoryRoot, "apps", "runner", "dist");
 
+// Runtime code bundles the shared error registry. Its public declarations
+// must remain standalone as well: generate them from that same source rather
+// than maintaining another handwritten set of types or adding a dependency
+// on an unpublished workspace package.
+const failureDeclarations = (await readFile(join(repositoryRoot, "packages", "protocol", "dist", "failure.d.ts"), "utf8"))
+  .replace(/^\/\/# sourceMappingURL=.*(?:\r?\n|$)/gmu, "");
+await writeFile(join(distRoot, "_protocol-failure.d.ts"), failureDeclarations, "utf8");
+const errorDeclarationPath = join(distRoot, "errors.d.ts");
+const errorDeclarations = await readFile(errorDeclarationPath, "utf8");
+await writeFile(errorDeclarationPath, errorDeclarations.replaceAll('"@aloneio/runmesh-protocol"', '"./_protocol-failure.js"'), "utf8");
+
 async function declarationFiles(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = [];
