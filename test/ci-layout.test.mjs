@@ -21,7 +21,9 @@ test("CI integration proposal is deterministic and does not mutate its input", a
 test("CI integration preserves native, LTS and generated main-admission jobs", async () => {
   const input = await baseline(), result = proposedCiFiles(input);
   const old = parseCi(input.github), next = parseCi(result.files[".github/workflows/ci.yml"]);
-  assert.deepEqual(old.jobs["native-runner"], next.jobs["native-runner"]);
+  const expectedNative = structuredClone(old.jobs["native-runner"]);
+  expectedNative.steps.push({ run: "node --test test/installer-download.test.mjs test/installer-concurrency.test.mjs" });
+  assert.deepEqual(expectedNative, next.jobs["native-runner"]);
   assert.deepEqual(old.jobs["runner-lts"], next.jobs["runner-lts"]);
   assert.equal(result.files[".gitlab-ci.yml"].split("# BEGIN GENERATED MAIN SOURCE POLICY")[1], input.gitlab.split("# BEGIN GENERATED MAIN SOURCE POLICY")[1]);
 });

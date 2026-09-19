@@ -46,10 +46,15 @@ export async function getActiveRunnerSelection(env: McpRequestEnv, clientId: str
 }
 
 export async function selectActiveRunner(env: McpRequestEnv, clientId: string, runnerId: string, confirmSwitch: boolean): Promise<SelectionCall> {
-  const call = await registryPostCall(env, `/auth/clients/${encodeURIComponent(clientId)}/active-runner`, { runner_id: runnerId, confirm_switch: confirmSwitch });
+  const call = await registryPostCall(env, `/auth/clients/${encodeURIComponent(clientId)}/active-runner`, {
+    runner_id: runnerId, confirm_switch: confirmSwitch, mcp_authorization: env.mcpPrincipal,
+  });
   if (call.ok) {
     const result = call.value;
     if (!isRecord(result) || typeof result.ok !== "boolean") return invalidSelectionReceipt("unknown");
+    if (!result.ok && (result.code === "permission_denied" || result.code === "insufficient_scope")) {
+      return fail(result.code, "The MCP credential no longer authorizes changing the active runner.", "Use the currently authorized MCP connection and read scope before selecting a runner.", "not_started");
+    }
     const selection = selectionSnapshot(result.selection);
     if (result.ok) {
       if (selection === undefined || selection.active_runner_id !== runnerId || typeof result.changed !== "boolean") return invalidSelectionReceipt("unknown");

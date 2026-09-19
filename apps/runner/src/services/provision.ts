@@ -102,7 +102,7 @@ export function createServiceProvisioner(options: ServiceProvisionerOptions = {}
         await provisionMacIdentity(execute, required, identity.user, identity.group);
         await required("mkdir", ["-p", layout.installRoot, layout.configRoot, layout.stateRoot, layout.logRoot]);
         await required("chown", ["root:wheel", layout.installRoot]); await required("chmod", ["0755", layout.installRoot]);
-        await securePosixInstallTree(required, layout.installRoot, "root:root", platform);
+        await securePosixInstallTree(required, layout.installRoot, "root:wheel", platform);
         await required("chown", [`root:${identity.group}`, layout.configRoot]); await required("chmod", ["0750", layout.configRoot]);
         await required("chown", [`${identity.user}:${identity.group}`, layout.stateRoot, layout.logRoot]); await required("chmod", ["0750", layout.stateRoot, layout.logRoot]);
         await securePosixTree(required, layout.configRoot, `root:${identity.group}`, "0750", "0640", platform);
@@ -126,21 +126,22 @@ export function createServiceProvisioner(options: ServiceProvisionerOptions = {}
  * filesystem mounts. Workspace roots are never passed to this helper.
  */
 async function securePosixTree(required: (file: string, args: readonly string[]) => Promise<void>, root: string, owner: string, directoryMode: string, fileMode: string, platform: ServicePlatform = currentServicePlatform()): Promise<void> {
-  const noCrossDevice = platform === "darwin" ? "-x" : "-xdev";
-  await required("find", ["-P", root, noCrossDevice, "-type", "d", "-exec", "chown", owner, "{}", "+"]);
-  await required("find", ["-P", root, noCrossDevice, "-type", "f", "-exec", "chown", owner, "{}", "+"]);
-  await required("find", ["-P", root, noCrossDevice, "-type", "d", "-exec", "chmod", directoryMode, "{}", "+"]);
-  await required("find", ["-P", root, noCrossDevice, "-type", "f", "-exec", "chmod", fileMode, "{}", "+"]);
+  // BSD -x is a global option, so it must precede every search path.
+  const traversal = platform === "darwin" ? ["-P", "-x", root] : ["-P", root, "-xdev"];
+  await required("find", [...traversal, "-type", "d", "-exec", "chown", owner, "{}", "+"]);
+  await required("find", [...traversal, "-type", "f", "-exec", "chown", owner, "{}", "+"]);
+  await required("find", [...traversal, "-type", "d", "-exec", "chmod", directoryMode, "{}", "+"]);
+  await required("find", [...traversal, "-type", "f", "-exec", "chmod", fileMode, "{}", "+"]);
 }
 
 /** Remove group/other write access from the package tree while preserving
  * the executable/read bits selected by the verified package itself. */
 async function securePosixInstallTree(required: (file: string, args: readonly string[]) => Promise<void>, root: string, owner: string, platform: ServicePlatform = currentServicePlatform()): Promise<void> {
-  const noCrossDevice = platform === "darwin" ? "-x" : "-xdev";
-  await required("find", ["-P", root, noCrossDevice, "-type", "d", "-exec", "chown", owner, "{}", "+"]);
-  await required("find", ["-P", root, noCrossDevice, "-type", "f", "-exec", "chown", owner, "{}", "+"]);
-  await required("find", ["-P", root, noCrossDevice, "-type", "d", "-exec", "chmod", "a-w", "{}", "+"]);
-  await required("find", ["-P", root, noCrossDevice, "-type", "f", "-exec", "chmod", "a-w", "{}", "+"]);
+  const traversal = platform === "darwin" ? ["-P", "-x", root] : ["-P", root, "-xdev"];
+  await required("find", [...traversal, "-type", "d", "-exec", "chown", owner, "{}", "+"]);
+  await required("find", [...traversal, "-type", "f", "-exec", "chown", owner, "{}", "+"]);
+  await required("find", [...traversal, "-type", "d", "-exec", "chmod", "a-w", "{}", "+"]);
+  await required("find", [...traversal, "-type", "f", "-exec", "chmod", "a-w", "{}", "+"]);
 }
 
 async function provisionMacIdentity(execute: (file: string, args: readonly string[]) => Promise<ServiceCommandResult>, required: (file: string, args: readonly string[]) => Promise<void>, user: string, group: string): Promise<void> {
@@ -192,7 +193,9 @@ function windowsProvisionScript(layout: ServiceLayout, profilePath: string, exec
   const profileGrants = privileged
     ? ["BUILTIN\\Administrators:F", "NT AUTHORITY\\SYSTEM:F"]
     : ["BUILTIN\\Administrators:F", "NT AUTHORITY\\SYSTEM:F", "NT AUTHORITY\\LOCAL SERVICE:R"];
-  return `$ErrorActionPreference = 'Stop'; Set-StrictMode -Version Latest; $paths = @(${roots}); foreach ($path in $paths) { New-Item -ItemType Directory -Force -LiteralPath $path | Out-Null }; `
+  // New-Item has no -LiteralPath parameter in Windows PowerShell. Use the
+  // literal .NET API, which also keeps repeated provisioning idempotent.
+  return `$ErrorActionPreference = 'Stop'; Set-StrictMode -Version Latest; $paths = @(${roots}); foreach ($path in $paths) { [System.IO.Directory]::CreateDirectory($path) | Out-Null }; `
     + acl(layout.installRoot, readGrants)
     + acl(layout.configRoot, readGrants)
     + acl(layout.stateRoot, modifyGrants)

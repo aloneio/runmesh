@@ -12,11 +12,14 @@ Version **0.1.4** brings the task-control, MCP recovery and distribution improve
 - **Clearer MCP calls and recovery.** Action-specific tool definitions, workspace-bound Job queries and structured error guidance make it easier to follow the original operation after an outage. File and Job output stay bounded; a missing cloud history record does not mean a command never ran.
 - **Less unnecessary history work.** Compatible Worker/Runner pairs use change-driven optional history reporting. Unrecorded tasks and ordinary log reads do not enable history uploads; unchanged acknowledged snapshots do not keep an idle upload loop alive. Heartbeats, authorization and necessary maintenance remain, so this is not a zero-cost guarantee.
 - **Stronger local and distribution boundaries.** Additional checks reject unsafe special-file replacements in metadata and release inputs. Release health checks reject oversized or stalled responses before completing preflight. Published packages keep their original identity; the stable tag publisher now explicitly verifies the project tagger identity.
+- **Safer installation and mixed-version operation.** Hosted installers serialize installation, credential refresh and removal, and roll back only paths they created. Windows release downloads keep a deadline through the response body; dedicated service provisioning fixes macOS group selection and Windows directory creation. MCP Runner selection rechecks the original credential at commit, and Job metadata rejects concurrent replacement or rewriting.
 - **Updated user documentation.** English and Chinese guides distinguish first installation, compatible upgrades, task recovery, stable releases and development testing. Older migration and audit records are separated from the everyday instructions.
 
 ### Upgrade notes
 
 Worker deployment, Runner installation and client tool-catalog refresh are separate operations. New source features require the relevant compatible components; publishing or merging alone does not restart an installed service. Follow the [upgrade guide](upgrading.md), preserve existing v2 resources and credentials, and verify `shell` followed by queries for the same Job before restoring ordinary workloads.
+
+The new Context storage and prune methods require explicit support in the Runner's authenticated hello. An older Runner receives `runner_upgrade_required` before dispatch and keeps its connection for supported methods. After a Worker upgrade, a previously hibernated connection may need to reconnect before these capabilities are known; a version string alone does not grant support.
 
 ### Limits to understand
 

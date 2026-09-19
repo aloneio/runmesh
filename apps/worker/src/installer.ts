@@ -198,6 +198,13 @@ case "$(uname -s):$(uname -m)" in
 esac
 NODE_BASE='__NODE_BASE_URL__'
 
+# Serialize every hosted installation, refresh and uninstall before inspecting
+# shared paths. Keep the lock outside the installation tree that purge removes.
+INSTALL_LOCK='/var/run/runmesh-installer.lock'
+if ! mkdir "$INSTALL_LOCK" 2>/dev/null; then printf '%s\n' 'error: another Runmesh installer or uninstaller is running; inspect a stale lock before removing it' >&2; exit 1; fi
+release_install_lock() { rmdir "$INSTALL_LOCK" 2>/dev/null || true; }
+trap release_install_lock EXIT
+trap 'exit 1' HUP INT TERM
 has_path() { [ -e "$1" ] || [ -L "$1" ]; }
 refresh_existing() {
   if ! has_path "$INSTALL_ROOT/current"; then return 1; fi
@@ -214,7 +221,7 @@ refresh_existing() {
   grep -F 'runmesh-runner-managed:' "$SERVICE_MANIFEST" >/dev/null 2>&1 || { printf '%s\n' 'error: existing service is not managed by Runmesh; refusing to modify it' >&2; exit 1; }
   REFRESH_LOCK="$INSTALL_ROOT/.refresh.lock"
   if ! mkdir "$REFRESH_LOCK" 2>/dev/null; then printf '%s\n' 'error: another Runmesh enrollment refresh is already running' >&2; exit 1; fi
-  trap 'stty echo < /dev/tty 2>/dev/null || true; rmdir "$REFRESH_LOCK" 2>/dev/null || true' EXIT HUP INT TERM
+  trap 'stty echo < /dev/tty 2>/dev/null || true; rmdir "$REFRESH_LOCK" 2>/dev/null || true; release_install_lock' EXIT
   step 'Refreshing credentials for the existing Runmesh Runner.'
   if [ "$CODE_ARG_SET" -eq 1 ]; then
     ENROLLMENT_CODE="$ENROLLMENT_CODE_ARG"
@@ -241,14 +248,15 @@ refresh_existing() {
   ok 'Runmesh Runner credentials refreshed and service restarted in place.'
   trap - EXIT HUP INT TERM
   rmdir "$REFRESH_LOCK" 2>/dev/null || true
+  release_install_lock
   return 0
 }
 if [ "$RUNMESH_ACTION" != uninstall ] && has_path "$INSTALL_ROOT/current" && has_path "$PROFILE" && has_path "$SERVICE_MANIFEST"; then refresh_existing; exit $?; fi
-if [ "$RUNMESH_ACTION" != uninstall ] && { has_path "$INSTALL_ROOT/current" || has_path "$INSTALL_ROOT/versions/$VERSION" || has_path "$INSTALL_ROOT/versions/$VERSION.staging.$$" || has_path "$PROFILE" || has_path "$SERVICE_MANIFEST"; }; then printf '%s\n' 'error: existing Runmesh installation or service state found; refusing to overwrite it' >&2; exit 1; fi
+if [ "$RUNMESH_ACTION" != uninstall ] && { has_path "$INSTALL_ROOT/current" || has_path "$INSTALL_ROOT/current.new" || has_path "$INSTALL_ROOT/versions/$VERSION" || has_path "$INSTALL_ROOT/versions/$VERSION.staging.$$" || has_path "$PROFILE" || has_path "$SERVICE_MANIFEST"; }; then printf '%s\n' 'error: existing Runmesh installation or service state found; refusing to overwrite it' >&2; exit 1; fi
 check_bootstrap_tools
 [ "$AUTO_INSTALL_DEPS" -eq 1 ] || bootstrap_error RMI_RUNTIME_DISABLED 'Private runtime bootstrap was disabled.' 'Remove --no-auto-deps for a new installation; an existing verified installation can be refreshed without downloading a runtime.'
 TMP="$(mktemp -d "__TEMP_PARENT__/runmesh-installer.XXXXXX")" || bootstrap_error RMI_TEMP_DIRECTORY 'Cannot create a private temporary directory.' 'Check /tmp free space and permissions.'
-trap 'rm -rf "$TMP"' EXIT
+trap 'rm -rf "$TMP"; release_install_lock' EXIT
 trap 'exit 1' HUP INT TERM
 step 'Preparing runtime'
 STAGE="$INSTALL_ROOT/versions/$VERSION.staging.$$"
@@ -273,11 +281,14 @@ export npm_config_userconfig="$NPM_CONFIG_USERCONFIG" npm_config_globalconfig="$
 TTY_ECHO_DISABLED=0
 FINAL_CREATED=0
 CURRENT_CREATED=0
+CURRENT_NEW_CREATED=0
+STAGE_CREATED=0
+PROFILE_CREATED=0
 ENROLLMENT_ATTEMPTED=0
-# The preflight above rejects an existing profile, so a profile present after
-# enrollment belongs to this new attempt and is safe to remove on rollback.
+# A failed enrollment does not prove ownership of a profile another operation
+# may have created. Only successful enrollment authorizes profile rollback.
 cleanup_tty() { if [ "$TTY_ECHO_DISABLED" -eq 1 ]; then stty echo < /dev/tty 2>/dev/null || true; TTY_ECHO_DISABLED=0; fi; }
-cleanup() { cleanup_tty; rm -rf "$TMP"; }
+cleanup() { cleanup_tty; rm -rf "$TMP"; release_install_lock; }
 rollback() {
   rc="$1"
   printf 'error [RMI_INSTALL_FAILED] stage=%s: installation did not complete.\n' "$INSTALL_PHASE" >&2
@@ -288,13 +299,13 @@ rollback() {
   fi
   if [ "$RUNMESH_ACTION" = uninstall ]; then cleanup; trap - EXIT HUP INT TERM; exit "$rc"; fi
   cleanup_tty
-  if [ "$CURRENT_CREATED" -eq 1 ] && [ -L "$CURRENT_NEW" ]; then rm -f "$CURRENT_NEW"; fi
+  if [ "$CURRENT_NEW_CREATED" -eq 1 ] && [ -L "$CURRENT_NEW" ]; then rm -f "$CURRENT_NEW"; fi
   if [ "$CURRENT_CREATED" -eq 1 ] && [ -L "$INSTALL_ROOT/current" ] && [ "$(readlink "$INSTALL_ROOT/current")" = "$FINAL" ]; then "$INSTALL_ROOT/current/bin/runmesh" uninstall --profile "$PROFILE" --json >/dev/null 2>&1 || true; rm -f "$INSTALL_ROOT/current"; fi
-  if [ "$ENROLLMENT_ATTEMPTED" -eq 1 ] && [ -f "$PROFILE" ]; then rm -f "$PROFILE"; fi
-  if [ -L "$INSTALL_ROOT/current" ] && [ "$(readlink "$INSTALL_ROOT/current")" = "$FINAL" ]; then rm -f "$INSTALL_ROOT/current"; fi
-  if [ -L "$CURRENT_NEW" ]; then rm -f "$CURRENT_NEW"; fi
+  if [ "$PROFILE_CREATED" -eq 1 ] && [ -f "$PROFILE" ]; then rm -f "$PROFILE"; fi
   if [ "$FINAL_CREATED" -eq 1 ]; then rm -rf "$FINAL"; fi
-  rm -rf "$STAGE" "$TMP"
+  if [ "$STAGE_CREATED" -eq 1 ]; then rm -rf "$STAGE"; fi
+  rm -rf "$TMP"
+  release_install_lock
   trap - EXIT HUP INT TERM
   exit "$rc"
 }
@@ -387,6 +398,7 @@ if [ "$RUNMESH_ACTION" = uninstall ]; then
 fi
 mkdir -p "$INSTALL_ROOT/versions"
 if ! mkdir "$STAGE"; then printf '%s\n' 'error: installer staging path is already in use' >&2; exit 1; fi
+STAGE_CREATED=1
 INSTALL_PHASE=package_install
 step 'Installing Runner'
 export NPM_CONFIG_UPDATE_NOTIFIER=false
@@ -441,11 +453,15 @@ ENROLLMENT_ATTEMPTED=1
 step 'Connecting to control plane'
 ENROLL_LOG="$TMP/enroll.log"
 if printf '%s\n' "$ENROLLMENT_CODE" | "$RUNNER" enroll --profile "$PROFILE" --server "$ENROLLMENT_URL" --code-stdin __EXECUTION_MODE_FLAGS__ >"$ENROLL_LOG" 2>&1; then :; else rc=$?; report_failure 'Connecting to control plane' "$ENROLL_LOG" "$rc"; exit "$rc"; fi
+PROFILE_CREATED=1
 unset ENROLLMENT_CODE
 mv "$STAGE" "$FINAL"
+STAGE_CREATED=0
 FINAL_CREATED=1
 ln -s "$FINAL" "$INSTALL_ROOT/current.new"
+CURRENT_NEW_CREATED=1
 mv "$INSTALL_ROOT/current.new" "$INSTALL_ROOT/current"
+CURRENT_NEW_CREATED=0
 CURRENT_CREATED=1
 INSTALL_PHASE=service_install
 step 'Starting service'
@@ -545,6 +561,12 @@ $CurrentRoot = Join-Path $InstallRoot 'current'
 $CurrentNew = Join-Path $InstallRoot 'current.new'
 $Profile = Join-Path $env:ProgramData 'Runmesh\profile.json'
 $ServiceManifest = Join-Path $env:ProgramData 'Runmesh\RunmeshRunner.xml'
+$InstallerMutex = [Threading.Mutex]::new($false, 'Global\RunmeshInstaller-v1')
+$InstallerLockHeld = $false
+try {
+  try { $InstallerLockHeld = $InstallerMutex.WaitOne(0) }
+  catch [Threading.AbandonedMutexException] { $InstallerLockHeld = $true }
+  if (-not $InstallerLockHeld) { throw 'Another Runmesh installer or uninstaller is running.' }
 $script:StepIndex = 0
 function Write-Step([string]$Message) { $script:StepIndex += 1; Write-Host ("  [{0}] {1}" -f $script:StepIndex, $Message) -ForegroundColor Cyan }
 function Write-Ok([string]$Message) { Write-Host ("[OK] {0}" -f $Message) -ForegroundColor Green }
@@ -614,8 +636,11 @@ foreach ($RequiredCommand in @('Invoke-WebRequest', 'Get-FileHash')) { if (-not 
 $TempRoot = Join-Path ([IO.Path]::GetTempPath()) ('runmesh-installer-' + [guid]::NewGuid().ToString('N'))
 $ServiceAttempted = $false
 $EnrollmentAttempted = $false
-# Preflight rejects an existing profile; any profile after enrollment is ours
-# and can be removed if a later install step fails.
+$ProfileCreated = $false
+$StageCreated = $false
+$VersionCreated = $false
+$CurrentNewCreated = $false
+$CurrentCreated = $false
 $Succeeded = $false
 $CurrentRunner = $null
 $HttpHandler = $null
@@ -667,9 +692,24 @@ try {
   $HttpHandler.AutomaticDecompression = [Net.DecompressionMethods]::GZip -bor [Net.DecompressionMethods]::Deflate
   $HttpClient = [Net.Http.HttpClient]::new($HttpHandler)
   $HttpClient.Timeout = [TimeSpan]::FromSeconds(60)
+  # ResponseHeadersRead ends HttpClient.Timeout at the headers. Keep one
+  # deadline across redirects and body reads, including streams whose
+  # ReadAsync implementation does not promptly honor cancellation.
+  function Wait-ReleaseDownloadTask([Threading.Tasks.Task]$Task, [Threading.CancellationTokenSource]$Cancellation, [Diagnostics.Stopwatch]$Clock) {
+    $remaining = [int][Math]::Max(0, 60000 - $Clock.ElapsedMilliseconds)
+    if ($remaining -eq 0 -or -not $Task.Wait($remaining)) {
+      $Cancellation.Cancel()
+      throw 'Release download timed out.'
+    }
+    return $Task.GetAwaiter().GetResult()
+  }
   $RuntimePhase = 'release_download'
   Write-Step 'Downloading Runner'
   foreach ($Name in @('manifest.json', 'manifest.sig', 'manifest.signature.json', 'SHA256SUMS', $ArtifactName)) {
+    $DownloadCancellation = [Threading.CancellationTokenSource]::new()
+    $DownloadCancellation.CancelAfter(60000)
+    $DownloadClock = [Diagnostics.Stopwatch]::StartNew()
+    try {
     $current = [Uri]::new($ReleaseBase + '/' + $Name)
     $downloaded = $false
     for ($attempt = 0; $attempt -lt 6; $attempt++) {
@@ -677,7 +717,7 @@ try {
       if ($current.Scheme -ne 'https' -or -not [string]::IsNullOrEmpty($current.UserInfo) -or $AllowedReleaseOrigins -notcontains $currentOrigin) { throw 'Release redirect escaped pinned origins.' }
       $response = $null
       try {
-        $response = $HttpClient.GetAsync($current, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+        $response = Wait-ReleaseDownloadTask ($HttpClient.GetAsync($current, [Net.Http.HttpCompletionOption]::ResponseHeadersRead, $DownloadCancellation.Token)) $DownloadCancellation $DownloadClock
         $status = [int]$response.StatusCode
         if ($status -ge 300 -and $status -lt 400) {
           if ($attempt -ge 5 -or $null -eq $response.Headers.Location) { throw 'Release redirect limit or Location header exceeded.' }
@@ -693,11 +733,11 @@ try {
         $stream = $null
         $file = $null
         try {
-          $stream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+          $stream = Wait-ReleaseDownloadTask ($response.Content.ReadAsStreamAsync()) $DownloadCancellation $DownloadClock
           $file = [IO.File]::Create((Join-Path $TempRoot $Name))
           $buffer = New-Object byte[] 65536
           [long]$total = 0
-          while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+          while (($read = Wait-ReleaseDownloadTask ($stream.ReadAsync($buffer, 0, $buffer.Length, $DownloadCancellation.Token)) $DownloadCancellation $DownloadClock) -gt 0) {
             $total += $read
             if ($total -gt __MAX_RELEASE_ASSET_BYTES__) { throw 'Release asset exceeds the fixed size limit.' }
             $file.Write($buffer, 0, $read)
@@ -713,6 +753,11 @@ try {
       if ($downloaded) { break }
     }
     if (-not $downloaded) { throw 'Release download did not complete.' }
+    } finally {
+      $DownloadCancellation.Cancel()
+      $DownloadCancellation.Dispose()
+      $DownloadClock.Stop()
+    }
   }
   $VerifyLog = Join-Path $TempRoot 'release-verify.log'
   $RuntimePhase = 'release_verification'
@@ -737,6 +782,8 @@ __VERIFIER__
     exit 0
   }
   New-Item -ItemType Directory -Path $VersionsRoot -Force | Out-Null
+  New-Item -ItemType Directory -Path $Stage -ErrorAction Stop | Out-Null
+  $StageCreated = $true
   Push-Location -LiteralPath $TempRoot
   try {
     $InstallLog = Join-Path $TempRoot 'npm-install.log'
@@ -770,10 +817,16 @@ __VERIFIER__
   Invoke-LoggedStep 'Connecting to control plane' $EnrollLog {
     $EnrollmentCode | & $Runner enroll --profile $Profile --server $EnrollmentUrl --code-stdin __EXECUTION_MODE_FLAGS__
   }
+  $ProfileCreated = $true
   $EnrollmentCode = $null
   Move-Item -LiteralPath $Stage -Destination $VersionRoot
+  $StageCreated = $false
+  $VersionCreated = $true
   New-Item -ItemType Junction -Path $CurrentNew -Target $VersionRoot | Out-Null
+  $CurrentNewCreated = $true
   Move-Item -LiteralPath $CurrentNew -Destination $CurrentRoot
+  $CurrentNewCreated = $false
+  $CurrentCreated = $true
   $CurrentRunner = Join-Path $CurrentRoot 'runmesh.cmd'
   $ServiceAttempted = $true
   $ServiceLog = Join-Path $TempRoot 'service-install.log'
@@ -796,10 +849,17 @@ __VERIFIER__
   if ($null -ne $HttpHandler) { $HttpHandler.Dispose() }
   if (-not $Succeeded -and $MaintenanceAction -ne 'uninstall') {
     if ($ServiceAttempted -and $null -ne $CurrentRunner -and (Test-Path -LiteralPath $CurrentRunner)) { try { & $CurrentRunner uninstall --profile $Profile --json *> $null } catch {} }
-    if ($EnrollmentAttempted -and (Test-Path -LiteralPath $Profile)) { try { Remove-Item -LiteralPath $Profile -Force } catch {} }
-    foreach ($Path in @($CurrentNew, $CurrentRoot, $Stage, $VersionRoot)) { if (Test-Path -LiteralPath $Path) { try { Remove-Item -LiteralPath $Path -Recurse -Force } catch {} } }
+    if ($ProfileCreated -and (Test-Path -LiteralPath $Profile)) { try { Remove-Item -LiteralPath $Profile -Force } catch {} }
+    if ($CurrentNewCreated -and (Test-Path -LiteralPath $CurrentNew)) { try { [IO.Directory]::Delete($CurrentNew) } catch {} }
+    if ($CurrentCreated -and (Test-Path -LiteralPath $CurrentRoot)) { try { [IO.Directory]::Delete($CurrentRoot) } catch {} }
+    if ($StageCreated -and (Test-Path -LiteralPath $Stage)) { try { Remove-Item -LiteralPath $Stage -Recurse -Force } catch {} }
+    if ($VersionCreated -and (Test-Path -LiteralPath $VersionRoot)) { try { Remove-Item -LiteralPath $VersionRoot -Recurse -Force } catch {} }
   }
   if (Test-Path -LiteralPath $TempRoot) { try { Remove-Item -LiteralPath $TempRoot -Recurse -Force } catch {} }
+}
+} finally {
+  if ($InstallerLockHeld) { $InstallerMutex.ReleaseMutex() }
+  $InstallerMutex.Dispose()
 }
 `;
 

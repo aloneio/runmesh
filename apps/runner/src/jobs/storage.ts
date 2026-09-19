@@ -1,5 +1,5 @@
 import { isErrno } from "./values.js";
-import { constants } from "node:fs";
+import { constants, type Stats } from "node:fs";
 import { chmod, lstat, open, mkdir, rename, rm, readdir } from "node:fs/promises";
 import { dirname, join, parse, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -136,11 +136,13 @@ export async function atomicJson(path: string, value: unknown): Promise<void> {
 
 export async function readJson<T>(path: string): Promise<T> {
   await assertRegularDirectory(dirname(path));
-  await assertRegularFile(path, false);
+  const before = await lstat(path);
+  if (!before.isFile() || before.isSymbolicLink()) throw pathError("state file is not a regular file", "ENOTDIR");
   const handle = await open(path, constants.O_RDONLY | NOFOLLOW | (constants.O_NONBLOCK ?? 0));
   try {
     const info = await handle.stat();
     if (!info.isFile() || info.size > MAX_METADATA_BYTES) throw metadataTooLarge(path);
+    if (!sameMetadataStamp(before, info)) throw new Error("job metadata changed before reading");
     const chunks: Buffer[] = [];
     let total = 0;
     // Read in bounded chunks rather than FileHandle.readFile(), which allocates
@@ -155,16 +157,23 @@ export async function readJson<T>(path: string): Promise<T> {
       if (total > MAX_METADATA_BYTES) throw metadataTooLarge(path);
       chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
     }
-    // Verify the descriptor size after reading. A concurrent truncation or
-    // append can otherwise produce a syntactically valid but mixed metadata
-    // snapshot (the one-byte growth allowance only detects large growth).
+    // Equal-size in-place writes can splice distinct JSON records just as a
+    // truncate/append can. Bind the full observation and the final pathname,
+    // so recovery rejects a snapshot when these observations detect a change.
     const final = await handle.stat();
-    if (!final.isFile() || final.dev !== info.dev || final.ino !== info.ino || final.size !== info.size || total !== info.size) {
+    const current = await lstat(path);
+    if (!final.isFile() || !current.isFile() || current.isSymbolicLink()
+      || !sameMetadataStamp(info, final) || !sameMetadataStamp(info, current) || total !== info.size) {
       throw new Error("job metadata changed while being read");
     }
     return JSON.parse(Buffer.concat(chunks, total).toString("utf8")) as T;
   }
   finally { await handle.close(); }
+}
+
+function sameMetadataStamp(left: Stats, right: Stats): boolean {
+  return left.dev === right.dev && left.ino === right.ino && left.size === right.size
+    && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
 }
 
 export function metadataTooLarge(path: string): Error {

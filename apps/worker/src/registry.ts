@@ -853,6 +853,16 @@ export class RegistryDO {
       return selection === undefined ? new Response("not found", { status: 404 }) : Response.json(selection);
     }
     if (method === "POST" && action === "clients" && clientId !== undefined && segments[2] === "active-runner") {
+      // Browser mutations were checked against their signed session above.
+      // MCP selection must instead commit under the original credential's
+      // generation, with no await between this check and the synchronous write.
+      if (!url.searchParams.has("admin_session")) {
+        const value = input.mcp_authorization;
+        const principal = typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+        const client = principal === undefined ? undefined : this.revalidateMcpClient(principal.client_id, principal.secret_version);
+        if (client === undefined || client.client_id !== clientId) return Response.json({ ok: false, code: "permission_denied" }, { status: 403 });
+        if (!client.scopes.includes("coding:read")) return Response.json({ ok: false, code: "insufficient_scope" }, { status: 403 });
+      }
       const runnerId = stringField(input, "runner_id", 128);
       const confirmSwitch = input.confirm_switch === true;
       if (runnerId === undefined) return Response.json({ error: "invalid runner" }, { status: 400 });
