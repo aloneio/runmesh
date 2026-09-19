@@ -24,4 +24,8 @@ export interface ConnectionPolicyStorePort {
   activate(policy: RunnerPolicy): Promise<void>;
 }
 /** The session owner alone opens/closes sockets and installs their handlers. */
-export type ConnectionTransportFactory = (url: URL, options: { readonly headers: { readonly Authorization: string } }) => WebSocket;
+export type ConnectionTransportFactory = (url: URL, options: {
+  readonly headers: { readonly Authorization: string };
+  readonly maxPayload: number;
+  readonly perMessageDeflate: false;
+}) => WebSocket;

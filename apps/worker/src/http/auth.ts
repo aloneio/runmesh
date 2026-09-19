@@ -5,13 +5,13 @@ import { adminError } from "./responses.js";
 import { authEntryDocument } from "../admin/auth-views.js";
 import { authThrottleCheck } from "../application/auth-source.js";
 import { authThrottleRecord } from "../application/auth-source.js";
+import { boundedJsonResponse } from "../platform/bounded-json.js";
 import { clearCookie } from "./session.js";
 import { csrfCookie } from "./session.js";
 import { discardBody } from "./request.js";
 import { formData } from "./request.js";
 import { html } from "./html-response.js";
 import { htmlHeaders } from "./html-response.js";
-import { json } from "../platform/control-plane.js";
 import { loadLoginSettings } from "../auth-settings.js";
 import { LOGIN_CSRF_COOKIE } from "./constants.js";
 import { methodNotAllowed } from "./responses.js";
@@ -20,7 +20,6 @@ import { passwordVerifier } from "../security.js";
 import { randomBase64Url } from "../security.js";
 import { record } from "../values.js";
 import { redirect } from "./html-response.js";
-import { registryGet } from "../platform/control-plane.js";
 import { registryPost } from "../platform/control-plane.js";
 import { registryRequest } from "../platform/control-plane.js";
 import { sessionCookie } from "./session.js";
@@ -36,12 +35,12 @@ import type { WorkerEnv } from "../platform/env.js";
 export async function handleLanding(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
   // A Registry outage or malformed status cannot be interpreted as
   // "not initialized"; doing so would expose setup UI during an outage.
-  const statusResponse = await registryGet(env, "/auth/status");
-  if (!statusResponse.ok) {
+  const statusResponse = await boundedJsonResponse(signal => registryRequest(env, "/auth/status", "GET", "", signal));
+  if (statusResponse?.status !== 200) {
     await discardBody(request);
     return registryStatusUnavailable();
   }
-  const initialized = record(await json(statusResponse));
+  const initialized = record(statusResponse.value);
   if (initialized === undefined || typeof initialized.initialized !== "boolean") {
     await discardBody(request);
     return registryStatusUnavailable();

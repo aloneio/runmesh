@@ -6,8 +6,52 @@ import { expect, it, vi } from "vitest";
 import { JobManager, type JobEvent } from "../src/jobs.js";
 import { PathPolicy } from "../src/path-policy.js";
 import { nativeJobProcesses } from "../src/jobs/process.js";
+import { nativeJobFiles } from "../src/jobs/storage.js";
 
 type Observation = { alive: boolean; fingerprintMatches: boolean | null };
+
+it.each(["lookup", "cancel", "list", "deduplicated-launch", "revoked-deduplicated-launch"])("retries a failed terminal write on %s without losing the witnessed process exit", async trigger => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "runmesh-terminal-write-")));
+  const state = join(root, "state"), child = new ChildProcess(), events: JobEvent[] = [];
+  let failTerminal = true, writes = 0;
+  const policy = new PathPolicy([{ workspaceId: "w", rootPath: root, readonly: false, shell: false }]);
+  const manager = new JobManager({ stateDir: state, maxConcurrentJobs: 1, maxQueuedJobs: 0,
+    policy, onEvent: event => events.push(event),
+  }, {
+    files: { ...nativeJobFiles, async atomicJson(path, value) {
+      if (typeof value === "object" && value !== null && "status" in value && value.status === "failed") {
+        writes++; if (failTerminal) throw Object.assign(new Error("synthetic terminal disk failure"), { code: "ENOSPC" });
+      }
+      await nativeJobFiles.atomicJson(path, value);
+      if (!failTerminal && trigger === "revoked-deduplicated-launch") policy.replace([]);
+    } },
+    processes: { ...nativeJobProcesses, spawn: (() => child) as typeof nativeJobProcesses.spawn, fingerprintSync: () => null },
+  });
+  try {
+    await manager.initialize();
+    const input = { workspace_id: "w", command: [process.execPath, "-e", ""], request_id: "same-launch" };
+    const job = await manager.start(input);
+    child.exitCode = 7; child.emit("close", 7, null);
+    await vi.waitFor(() => expect(writes).toBe(1));
+    await new Promise(resolve => setImmediate(resolve));
+    expect(manager.get(job.job_id).status).toBe("running");
+    expect(events.filter(event => event.type === "completed")).toHaveLength(0);
+    expect(manager.hasPendingHistoryRecovery()).toBe(true);
+    await expect(manager.getReconciled(job.job_id)).rejects.toMatchObject({ code: "ENOSPC" });
+    expect(writes).toBe(2);
+    expect(events.filter(event => event.type === "status")).toHaveLength(1);
+    failTerminal = false;
+    if (trigger === "revoked-deduplicated-launch") await expect(manager.start(input)).rejects.toMatchObject({ code: "stale_policy" });
+    const reconciled = trigger === "cancel" ? await manager.cancel(job.job_id)
+      : trigger === "list" ? (await manager.listReconciled())[0]
+      : trigger === "deduplicated-launch" ? await manager.start(input) : await manager.getReconciled(job.job_id);
+    expect(reconciled).toMatchObject({ status: "failed", exit_code: 7 });
+    expect(manager.queueStatus().running).toBe(0);
+    expect(manager.hasPendingHistoryRecovery()).toBe(false);
+    expect(JSON.parse(await readFile(join(state, "jobs", job.job_id, "meta.json"), "utf8"))).toMatchObject({ status: "failed", exit_code: 7 });
+    expect(events.filter(event => event.type === "completed")).toHaveLength(1);
+  } finally { await manager.flushPersistence(); await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
+});
 
 // Public adapter ports and synthetic ChildProcess objects only: these tests
 // never launch an OS child, signal a PID, or replace private manager fields.

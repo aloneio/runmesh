@@ -120,3 +120,23 @@ it("job input cleans up all observers when a backpressured write fails", async (
     expect(listeners(stdin)).toEqual([0, 0, 0, 0]);
   });
 });
+
+it("bounds stdin buffering to one in-flight delivery per job and permits the next delivery after completion", async () => {
+  let release: (() => void) | undefined;
+  const chunks: string[] = [];
+  const stdin = new Writable({ highWaterMark: 1, write(chunk, _encoding, done) { chunks.push(chunk.toString()); release = done; } });
+  await withInput(stdin, async (manager, id) => {
+    const first = manager.input(id, "first");
+    void first.catch(() => undefined);
+    const rejected = manager.input(id, "second").catch(error => error);
+    expect(await outcome(rejected)).toBe("accepted");
+    await expect(rejected).resolves.toMatchObject({ code: "busy" });
+    expect(stdin.writableLength).toBe(Buffer.byteLength("first"));
+    expect(listeners(stdin)).toEqual([1, 1, 0, 0]);
+    release?.(); await expect(first).resolves.toEqual({ accepted: 5, eof: false });
+    const next = manager.input(id, "next"); release?.();
+    await expect(next).resolves.toEqual({ accepted: 4, eof: false });
+    expect(chunks).toEqual(["first", "next"]);
+    expect(listeners(stdin)).toEqual([0, 0, 0, 0]);
+  });
+});

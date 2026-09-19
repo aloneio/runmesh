@@ -1,15 +1,27 @@
 import { mkdtemp, mkdir, writeFile, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, delimiter } from "node:path";
+import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { expect, it, vi } from "vitest";
 import { RunnerRuntime } from "../src/runtime.js";
+import { GitService } from "../src/git-service.js";
 const full = { read: true, edit: true, shell: true, job_control: true };
 const ro = { read: true, edit: false, shell: false, job_control: false };
 async function fixture() {
   const root = await realpath(await mkdtemp(join(tmpdir(), "auth-runner-"))); await mkdir(join(root, "workspace"));
   const workspace = { workspaceId: "w", rootPath: join(root, "workspace"), readonly: false, shell: true, permissions: full };
   const runtime = new RunnerRuntime({ config: { runnerId: "r", server: "wss://unused.invalid", token: "synthetic", workspaces: [workspace] }, stateDir: join(root, "state") });
+  // Developer hosts can have only portable Git. Native fixtures explicitly
+  // select that binary through the existing test seam; production inspection
+  // still refuses to execute an untrusted PATH entry.
+  if (process.platform === "win32") {
+    const executable = (process.env.Path ?? process.env.PATH ?? "").split(delimiter).map(dir => join(dir, "git.exe")).find(path => existsSync(path));
+    if (executable !== undefined) {
+      const inspector = new GitService(runtime.policy, { executable });
+      vi.spyOn(runtime.git, "observeBaseline").mockImplementation(input => inspector.observeBaseline(input));
+    }
+  }
   await runtime.jobs.initialize();
   return { root, workspace, runtime, cleanup: async () => { for (const j of runtime.jobs.list()) { if (["queued", "running", "cancelling"].includes(j.status)) await runtime.jobs.cancel(j.job_id); } await runtime.jobs.flushPersistence(); await new Promise((resolve) => setTimeout(resolve, 60)); await runtime.jobs.flushPersistence(); await rm(root, { recursive: true, force: true }); } };
 }

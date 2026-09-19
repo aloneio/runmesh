@@ -8,7 +8,7 @@ export async function pushRunnerPolicy(env: WorkerEnv, runnerId: string, mutatio
   const body = JSON.stringify(mutationId === undefined ? {} : { mutation_id: mutationId });
   const headers = await signedInternalHeaders(env, "POST", "/policy", body);
   if (headers === undefined) return controlPlaneUnavailable();
-  try { return await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/policy", { method: "POST", headers, body })); }
+  try { return completedMutationResponse(await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/policy", { method: "POST", headers, body }))); }
   catch { return new Response("runner unavailable", { status: 503 }); }
 }
 
@@ -16,7 +16,7 @@ export async function beginRunnerPolicyMutation(env: WorkerEnv, runnerId: string
   const body = JSON.stringify({ mutation_id: mutationId, runner_id: runnerId });
   const headers = await signedInternalHeaders(env, "POST", "/begin-policy-mutation", body);
   if (headers === undefined) return controlPlaneUnavailable();
-  try { return await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/begin-policy-mutation", { method: "POST", headers, body })); }
+  try { return completedMutationResponse(await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/begin-policy-mutation", { method: "POST", headers, body }))); }
   catch { return new Response("runner unavailable", { status: 503 }); }
 }
 
@@ -24,7 +24,7 @@ async function markRunnerPolicyCommitted(env: WorkerEnv, runnerId: string, mutat
   const body = JSON.stringify({ mutation_id: mutationId, phase, desired_revision: desiredRevision, desired_checksum: desiredChecksum });
   const headers = await signedInternalHeaders(env, "POST", "/mark-policy-committed", body);
   if (headers === undefined) return controlPlaneUnavailable();
-  try { return await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/mark-policy-committed", { method: "POST", headers, body })); }
+  try { return completedMutationResponse(await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/mark-policy-committed", { method: "POST", headers, body }))); }
   catch { return new Response("runner unavailable", { status: 503 }); }
 }
 
@@ -32,8 +32,17 @@ export async function cancelRunnerPolicyMutation(env: WorkerEnv, runnerId: strin
   const body = JSON.stringify({ mutation_id: mutationId });
   const headers = await signedInternalHeaders(env, "POST", "/cancel-policy-mutation", body);
   if (headers === undefined) return controlPlaneUnavailable();
-  try { return await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/cancel-policy-mutation", { method: "POST", headers, body })); }
+  try { return completedMutationResponse(await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/cancel-policy-mutation", { method: "POST", headers, body }))); }
   catch { return new Response("runner unavailable", { status: 503 }); }
+}
+
+/** RunnerDO commits these transport mutations synchronously with 204. The
+ * policy orchestrator's later 202 describes a committed desired policy; it
+ * cannot serve as evidence that a fence or transport transition completed. */
+function completedMutationResponse(response: Response): Response {
+  if (response.status === 204 || !response.ok) return response;
+  void response.body?.cancel().catch(() => undefined);
+  return new Response("runner mutation outcome is uncertain", { status: 503 });
 }
 
 export async function mutateRunnerPolicy(env: WorkerEnv, runnerId: string, mutation: { readonly path: string; readonly method: "POST" | "PUT" | "DELETE"; readonly payload: Record<string, unknown> }): Promise<Response> {

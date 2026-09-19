@@ -51,3 +51,29 @@ it("purges legacy audit bodies once without deleting administrator or Runner sta
 it("rejects nested payloads even when placed under an allowlisted metadata key", () => {
   expect(projectMcpAuditMetadata({ method: "fs.read", params: { data: "BODY" }, job_id: { text: "BODY" }, status: "ok" })).toEqual({ method: "fs.read", status: "ok" });
 });
+
+it("isolates retained DO audit rows when a Runner identifier is deleted and recreated", async () => {
+  const stub = env.REGISTRY.get(env.REGISTRY.idFromName(`audit-lifecycle-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, (instance, state) => {
+    const now = Date.now(), runnerId = "reused-runner";
+    const record = (callId: string, completed: number) => {
+      const current = instance.getRunnerExecutionState(runnerId)!;
+      state.storage.sql.exec("UPDATE runners SET state='online',session_id='audit-session' WHERE runner_id=?", runnerId);
+      expect(instance.recordMcpCall(runnerId, current.runner.connection_epoch, current.runner.credential_version,
+        { call_id: callId, client_id: "audit-client", method: "fs.read", status: "ok", started_at_ms: completed,
+          completed_at_ms: completed, duration_ms: 0 }, now, true, current.lifecycle_id, "audit-session")).toBe(true);
+    };
+    expect(instance.registerRunner(runnerId, "old-verifier", now, undefined, "dedicated_user")).toBe(true);
+    record("old-call", now);
+    expect(instance.listMcpCalls(runnerId)).toHaveLength(1);
+    expect(instance.deleteRunner(runnerId, runnerId, now + 1)).toBe(true);
+    expect(instance.listMcpCalls(runnerId)).toEqual([]);
+    expect(instance.registerRunner(runnerId, "new-verifier", now + 2, undefined, "dedicated_user")).toBe(true);
+    expect(instance.listMcpCalls(runnerId)).toEqual([]);
+    record("new-call", now - 1);
+    state.storage.sql.exec("INSERT INTO mcp_calls VALUES (?, 'malformed', '{', ?)", runnerId, now + 3);
+    expect(instance.listMcpCalls(runnerId, 1)).toEqual([expect.objectContaining({ call_id: "new-call" })]);
+    // Visibility fencing does not change the configured physical retention.
+    expect(state.storage.sql.exec("SELECT 1 FROM mcp_calls WHERE call_id='old-call'").toArray()).toHaveLength(1);
+  });
+});

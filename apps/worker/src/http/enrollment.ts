@@ -1,4 +1,5 @@
 import { cancelRunnerPolicyMutation } from "../application/runner-policy.js";
+import { boundedJsonResponse } from "../platform/bounded-json.js";
 import { configuredPublicOrigin } from "./origin.js";
 import { credentialHeaders } from "./html-response.js";
 import { discardBody } from "./request.js";
@@ -12,6 +13,7 @@ import { methodNotAllowed } from "./responses.js";
 import { readCappedText as readBodyText } from "../body.js";
 import { record } from "../values.js";
 import { registryPost } from "../platform/control-plane.js";
+import { registryRequest } from "../platform/control-plane.js";
 import { resolveConnectionOrigin } from "./origin.js";
 import { revokeRunnerTransport } from "../application/runner-lifecycle.js";
 import { runnerMutationState } from "../application/runner-lifecycle.js";
@@ -25,7 +27,8 @@ export async function handleRunnerEnrollment(request: Request, env: WorkerEnv): 
   const input = await readEnrollmentBody(request);
   const code = typeof input?.enrollment_code === "string" && /^[A-Za-z0-9_-]{43}$/.test(input.enrollment_code) ? input.enrollment_code : undefined;
   const publicInfo = runnerPublicInfo(input?.runner_public_info);
-  if (code === undefined || publicInfo === undefined || !isConfiguredSecret(env.RUNNER_TOKEN_PEPPER) || !isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) return enrollmentError();
+  if (code === undefined || publicInfo === undefined) return enrollmentError();
+  if (!isConfiguredSecret(env.RUNNER_TOKEN_PEPPER) || !isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) return enrollmentUnavailable();
   // Resolve the endpoint that will be persisted before consuming the one-time
   // code. This prevents a successful enrollment from returning an attacker-
   // controlled or unusable reconnect URL when the request arrived through a
@@ -36,12 +39,11 @@ export async function handleRunnerEnrollment(request: Request, env: WorkerEnv): 
   // Resolve the target before redeeming so the RunnerDO can acquire its
   // mutation fence. A direct redeem fallback would let an old socket remain
   // authorized while Registry advances the credential/epoch.
-  let targetResponse: Response;
-  try { targetResponse = await registryPost(env, "/enrollments/lookup", { verifier }); } catch { return enrollmentUnavailable(); }
-  if (!targetResponse.ok) return targetResponse.status >= 500 ? enrollmentUnavailable() : enrollmentError();
-  const target = record(await json(targetResponse));
+  const targetResponse = await boundedJsonResponse(signal => registryRequest(env, "/enrollments/lookup", "POST", JSON.stringify({ verifier }), signal));
+  if (targetResponse?.status !== 200) return targetResponse !== undefined && [401, 403, 404].includes(targetResponse.status) ? enrollmentError() : enrollmentUnavailable();
+  const target = record(targetResponse.value);
   const runnerId = typeof target?.runner_id === "string" && isSafeIdentifier(target.runner_id) ? target.runner_id : undefined;
-  if (runnerId === undefined) return enrollmentError();
+  if (runnerId === undefined) return enrollmentUnavailable();
 
   const mutationId = `credential-enrolled-${crypto.randomUUID()}`;
   let fenced: Response;
@@ -64,7 +66,8 @@ export async function handleRunnerEnrollment(request: Request, env: WorkerEnv): 
     if (state?.mutation_committed === true) { try { await revokeRunnerTransport(env, runnerId, mutationId, true); } catch { /* fail closed */ } }
     return enrollmentUnavailable();
   }
-  if (!response.ok) {
+  if (response.status !== 200) {
+    void response.body?.cancel().catch(() => undefined);
     const state = await runnerMutationState(env, runnerId, mutationId).catch(() => undefined);
     if (state?.mutation_committed === true) {
       try { await revokeRunnerTransport(env, runnerId, mutationId, true); } catch { /* Registry credential is authoritative */ }
@@ -74,7 +77,7 @@ export async function handleRunnerEnrollment(request: Request, env: WorkerEnv): 
       const cancelled = await cancelRunnerPolicyMutation(env, runnerId, mutationId);
       if (!cancelled.ok) return enrollmentUnavailable();
     } catch { return enrollmentUnavailable(); }
-    return response.status >= 500 ? enrollmentUnavailable() : enrollmentError();
+    return [400, 401, 403, 404, 409].includes(response.status) ? enrollmentError() : enrollmentUnavailable();
   }
   const body = record(await json(response));
   if (body?.runner_id !== runnerId) return enrollmentUnavailable();

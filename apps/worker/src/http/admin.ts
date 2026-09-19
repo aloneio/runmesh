@@ -5,6 +5,8 @@ import { ADMIN_CSRF_COOKIE } from "./constants.js";
 import { ADMIN_SESSION_COOKIE } from "./constants.js";
 import { adminDocument } from "../admin/layout.js";
 import { adminError } from "./responses.js";
+import { adminUpstreamError } from "./responses.js";
+import { boundedJsonResponse } from "../platform/bounded-json.js";
 import { adminPage } from "./admin-presentation.js";
 import { adminSession } from "./session.js";
 import { arrayField } from "../values.js";
@@ -13,7 +15,6 @@ import { clearCookie } from "./session.js";
 import { clientDetailPage } from "../admin/client-views.js";
 import { configuredPublicOrigin } from "./origin.js";
 import { constantTimeEqual } from "../security.js";
-import { controlPlaneUnavailableResponse } from "../control-plane-errors.js";
 import { cookieValue } from "./session.js";
 import { createBrowserRunner } from "./runner-actions.js";
 import { DAY_MS } from "../domain/execution-mode.js";
@@ -179,18 +180,17 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
     const value = form.get("record_jobs");
     if (value !== "true" && value !== "false") return adminError(400, "Recording preference is invalid.");
     const response = await registryPost(env, `/auth/clients/${encodeURIComponent(clientId)}/recording`, { record_jobs: value === "true" });
-    if (response.status >= 500 || response.status === 429) return controlPlaneUnavailableResponse(response);
-    return response.ok ? redirect(`/admin/clients/${encodeURIComponent(clientId)}`) : adminError(response.status === 404 ? 404 : 400, "Recording preference could not be updated.");
+    return adminMutationResponse(response, `/admin/clients/${encodeURIComponent(clientId)}`, "Recording preference could not be updated.");
   }
   if (action === "scopes") {
     const scopes = selectedScopes(form);
     if (scopes === undefined) return adminError(400, "Client scopes are invalid.");
     const response = await registryPost(env, `/auth/clients/${encodeURIComponent(clientId)}/scopes`, { scopes });
-    return response.ok ? redirect(`/admin/clients/${encodeURIComponent(clientId)}`) : adminError(response.status === 404 ? 404 : 400, "Client scopes could not be updated.");
+    return adminMutationResponse(response, `/admin/clients/${encodeURIComponent(clientId)}`, "Client scopes could not be updated.");
   }
   if (action === "reset-runner") {
     const response = await registryPost(env, `/auth/clients/${encodeURIComponent(clientId)}/active-runner/reset`, {});
-    return response.ok ? redirect("/admin/clients") : adminError(response.status === 404 ? 404 : 400, "Runner selection could not be reset.");
+    return adminMutationResponse(response, "/admin/clients", "Runner selection could not be reset.");
   }
   if (action === "select-runner" || action === "active-runner") {
     const runnerId = form.get("runner_id");
@@ -198,13 +198,13 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
     const confirmValue = form.get("confirm_switch");
     const confirmSwitch = confirmValue === "true" || confirmValue === "on" || confirmValue === "1";
     const response = await registryPost(env, `/auth/clients/${encodeURIComponent(clientId)}/active-runner`, { runner_id: runnerId, confirm_switch: confirmSwitch });
-    if (response.ok) return redirect(`/admin/clients/${encodeURIComponent(clientId)}`);
+    if (response.status === 200) { void response.body?.cancel().catch(() => undefined); return redirect(`/admin/clients/${encodeURIComponent(clientId)}`); }
     if (response.status === 409) {
       let code: unknown;
       try { code = record(await response.json())?.code; } catch { code = undefined; }
       return adminError(409, code === "runner_unavailable" ? "The selected Runner is unavailable or has not completed enrollment." : "A different Runner is already selected. Check Confirm switch and try again.");
     }
-    return adminError(response.status === 404 ? 404 : 400, "Runner selection could not be updated.");
+    return adminUpstreamError(response, "Runner selection could not be updated.");
   }
   if (action === "override" || action === "reset-override") {
     const runnerId = form.get("runner_id");
@@ -212,26 +212,26 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
     const path = `/auth/clients/${encodeURIComponent(clientId)}/runner-overrides/${encodeURIComponent(runnerId)}`;
     if (action === "reset-override") {
       const response = await registryRequest(env, path, "DELETE", "");
-      return response.ok ? redirect(`/admin/clients/${encodeURIComponent(clientId)}`) : adminError(response.status === 404 ? 404 : 400, "Runner restriction could not be reset.");
+      return adminMutationResponse(response, `/admin/clients/${encodeURIComponent(clientId)}`, "Runner restriction could not be reset.", 204);
     }
     const permissions = permissionsFromForm(form);
     if (permissions === undefined) return adminError(400, "Runner restriction is invalid.");
     const response = await registryPost(env, path, { permissions });
-    return response.ok ? redirect(`/admin/clients/${encodeURIComponent(clientId)}`) : adminError(response.status === 404 ? 404 : 400, "Runner restriction could not be saved.");
+    return adminMutationResponse(response, `/admin/clients/${encodeURIComponent(clientId)}`, "Runner restriction could not be saved.", 204);
   }
   if (action === "rename") {
     const label = form.get("label");
     if (typeof label !== "string" || !validLabel(label)) return adminError(400, "Client name is invalid.");
     const response = await registryPost(env, `/auth/clients/${encodeURIComponent(clientId)}/rename`, { label });
-    return response.ok ? redirect("/admin") : adminError(response.status === 404 ? 404 : 400, "Client update failed.");
+    return adminMutationResponse(response, "/admin", "Client update failed.");
   }
   if (action === "revoke") {
     const response = await registryPost(env, `/auth/clients/${encodeURIComponent(clientId)}/revoke`, {});
-    return response.ok ? redirect("/admin") : adminError(response.status === 404 ? 404 : 400, "Client revoke failed.");
+    return adminMutationResponse(response, "/admin", "Client revoke failed.");
   }
   const secret = randomBase64Url();
-  const response = await registryPost(env, `/auth/clients/${encodeURIComponent(clientId)}/rotate`, { secret_verifier: await sha256Hex(secret), secret_prefix: secret.slice(0, 8) });
-  if (!response.ok) return adminError(response.status === 404 ? 404 : 400, "Client rotation failed.");
+  const failure = await persistClientCredential(env, `/auth/clients/${encodeURIComponent(clientId)}/rotate`, clientId, secret);
+  if (failure !== undefined) return failure;
   return html(secretCreatedPage("MCP client rotated", secretUrl(publicOrigin, secret)));
 }
 
@@ -240,11 +240,27 @@ async function createClient(env: WorkerEnv, form: FormData, baseUrl: string): Pr
   if (typeof label !== "string" || !validLabel(label) || scopes === undefined) return adminError(400, "Client name or scopes are invalid.");
   const secret = randomBase64Url();
   const clientId = `client-${crypto.randomUUID().replaceAll("-", "")}`;
-  const response = await registryPost(env, "/auth/clients", {
-    client_id: clientId, label, scopes, secret_verifier: await sha256Hex(secret), secret_prefix: secret.slice(0, 8),
-  });
-  if (!response.ok) return adminError(response.status === 409 ? 409 : 503, "Client could not be created.");
+  const failure = await persistClientCredential(env, "/auth/clients", clientId, secret, { client_id: clientId, label, scopes });
+  if (failure !== undefined) return failure;
   return html(secretCreatedPage("MCP client created", secretUrl(baseUrl, secret)));
 }
 
 function secretUrl(base: string, secret: string): string { const url = new URL(base); url.pathname = `/${secret}/mcp`; url.search = ""; return url.toString(); }
+
+function adminMutationResponse(response: Response, location: string, message: string, completedStatus = 200): Response {
+  if (response.status !== completedStatus) return adminUpstreamError(response, message);
+  void response.body?.cancel().catch(() => undefined);
+  return redirect(location);
+}
+
+async function persistClientCredential(env: WorkerEnv, path: string, clientId: string, secret: string, fields: Record<string, unknown> = {}): Promise<Response | undefined> {
+  const prefix = secret.slice(0, 8);
+  const payload = JSON.stringify({ ...fields, secret_verifier: await sha256Hex(secret), secret_prefix: prefix });
+  const response = await boundedJsonResponse(signal => registryRequest(env, path, "POST", payload, signal));
+  const receipt = record(response?.value);
+  // Display a credential only after its synchronous write returned a matching
+  // committed record. An accepted, truncated or unrelated receipt is uncertain.
+  if (response?.status === 200 && receipt?.client_id === clientId && receipt.secret_prefix === prefix
+    && Number.isSafeInteger(receipt.secret_version) && (receipt.secret_version as number) >= 1 && receipt.revoked_at_ms === null) return undefined;
+  return adminError(response?.status === 404 ? 404 : response?.status === 409 ? 409 : 503, "MCP credential could not be confirmed. Refresh the client state before trying again.");
+}

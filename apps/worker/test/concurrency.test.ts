@@ -108,6 +108,35 @@ describe("RunnerDO concurrency finalization", () => {
     });
   });
 
+  it("does not let a delayed session receipt replace a newly bound Runner lifecycle", async () => {
+    await withRunner("hello-lifecycle-race", async (target, registry) => {
+      target.admissionState = readyState();
+      const replacement = { ...readyState(), lifecycleId: "replacement-lifecycle", credentialVersion: 1,
+        connectionEpoch: 1, sessionId: "replacement-session" };
+      registry.request = async (_id, action) => {
+        if (action === "/connect") return Response.json({ epoch: 8, lifecycle_id: attachment.lifecycleId });
+        if (action === "/session") {
+          // The old receipt was produced before deletion/recreation, then
+          // delivered after the replacement hello bound its fresh identity.
+          target.admissionState = replacement;
+          return new Response(null, { status: 204 });
+        }
+        throw new Error(`unexpected ${action}`);
+      };
+      const old = socket(vi.fn(), { ...attachment, epoch: 0 });
+      await target.webSocketMessage(old, encodeWireFrame({
+        type: "runner.hello", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "old-life-hello",
+        min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION,
+        runner: { runner_id: runnerId, runner_version: "test", platform: "test", architecture: "test", capabilities: {
+          filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false,
+          max_concurrent_jobs: 1, supported_rpc_methods: [], labels: {} } },
+      }));
+      expect(old.send).not.toHaveBeenCalled();
+      expect(old.close).toHaveBeenCalledWith(4000, "replaced by newer session");
+      expect(await target.admission()).toEqual(replacement);
+    });
+  });
+
   for (const result of ["applied", "invalid"] as const) {
     it(`preserves a newer precommit while an older ${result} ACK awaits Registry`, async () => {
       await withRunner(`ack-${result}`, async (target, registry) => {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -18,10 +18,10 @@ const names = devAssetNames(plan.version); const digest = bytes => createHash("s
 const local = new Map();
 for (const name of names) local.set(name, digest(await readBoundedReleaseFile(join(directory, name), name)));
 async function verify(directory) {
-  const manifest = JSON.parse(await readFile(join(directory, "manifest.json"), "utf8"));
+  const manifest = JSON.parse((await readBoundedReleaseFile(join(directory, "manifest.json"))).toString("utf8"));
   assert.equal(manifest.commit_sha, plan.source_sha); assert.equal(manifest.channel, "dev"); assert.equal(manifest.prerelease, true);
   assert.equal(manifest.published_at, plan.published_at);
-  assert.equal(digest(await readFile(join(directory, "trust-keyring.json"))), digest(await readFile(keyring)));
+  assert.equal(digest(await readBoundedReleaseFile(join(directory, "trust-keyring.json"))), digest(await readBoundedReleaseFile(keyring)));
   await command(process.execPath, ["scripts/release-verify.mjs", join(directory, "manifest.json"), join(directory, "manifest.sig"), join(directory, "manifest.signature.json"), keyring, process.env.RELEASE_SIGNING_KEY_ID, plan.version]);
 }
 const result = await publishDevelopmentRelease(plan, {

@@ -6,10 +6,11 @@ export type { RunnerReleaseDescriptor, RunnerReleaseEnvironment, ReleaseGateDiag
 export { releaseGateDiagnostics, runnerReleaseDescriptor, createDevelopmentReleaseRuntime } from "../domain/release-selection.js";
 export { verifyDevelopmentRunnerRelease } from "./release-io.js";
 
+const FAILED_REFRESH_COOLDOWN_MS = 5_000;
+
 /** One invocation owns its refresh I/O. The injected runtime owns values only. */
-async function refreshDevelopmentRunnerRelease(dependencies: DevelopmentReleaseDependencies): Promise<RunnerReleaseDescriptor> {
+async function fetchDevelopmentRunnerRelease(dependencies: DevelopmentReleaseDependencies, sequence: number): Promise<RunnerReleaseDescriptor> {
   const { runtime, cache, now, verify } = dependencies;
-  const sequence = ++runtime.refresh_sequence;
   const deadline = AbortSignal.timeout(DEV_RELEASE_REFRESH_BUDGET_MS);
   const boundedFetch: typeof fetch = (input, init) => {
     deadline.throwIfAborted();
@@ -38,11 +39,24 @@ async function refreshDevelopmentRunnerRelease(dependencies: DevelopmentReleaseD
       }
       runtime.committed_sequence = sequence;
       runtime.cached = { expires_at_ms: verifiedAtMs + DEV_RELEASE_CACHE_MS, verified_at_ms: verifiedAtMs, descriptor };
+      runtime.next_refresh_at_ms = verifiedAtMs + DEV_RELEASE_CACHE_MS;
       await writeDevelopmentReleaseCache(cache, descriptor, verifiedAtMs);
       return descriptor;
     } catch { /* A malformed or unverifiable prerelease is never advertised. */ }
   }
   throw new Error("no immutable signed development Runner release is available");
+}
+
+function refreshDevelopmentRunnerRelease(dependencies: DevelopmentReleaseDependencies, sequence: number): Promise<RunnerReleaseDescriptor> {
+  if (sequence !== dependencies.runtime.refresh_sequence) return Promise.reject(new Error("development release refresh temporarily unavailable"));
+  // Cache I/O may have consumed the original reservation. Renew only while
+  // still owning it, immediately before the request-owned network budget starts.
+  dependencies.runtime.next_refresh_at_ms = dependencies.now() + DEV_RELEASE_REFRESH_BUDGET_MS;
+  return fetchDevelopmentRunnerRelease(dependencies, sequence).catch(error => {
+    // A delayed failure must not shorten a newer request's reservation.
+    if (sequence === dependencies.runtime.refresh_sequence) dependencies.runtime.next_refresh_at_ms = dependencies.now() + FAILED_REFRESH_COOLDOWN_MS;
+    throw error;
+  });
 }
 
 /** Production and tests execute this same path with explicit state and ports. */
@@ -51,27 +65,38 @@ export async function discoverDevelopmentRunnerRelease(dependencies: Development
   let now = clock();
   const memory = runtime.cached;
   if (memory !== undefined && memory.expires_at_ms > now && usableCacheAge(memory.verified_at_ms, now, DEV_RELEASE_STALE_MS)) return memory.descriptor;
+  if (now < runtime.next_refresh_at_ms) {
+    if (memory !== undefined && usableCacheAge(memory.verified_at_ms, now, DEV_RELEASE_STALE_MS)) return memory.descriptor;
+    throw new Error("development release refresh temporarily unavailable");
+  }
+  // Reserve before cache I/O so concurrent cold requests cannot each read the
+  // Registry and launch a complete public GitHub discovery/verification chain.
+  // The lease expires if its request disappears; no I/O promise crosses requests.
+  const sequence = ++runtime.refresh_sequence;
+  runtime.next_refresh_at_ms = now + DEV_RELEASE_REFRESH_BUDGET_MS;
   const cached = await readDevelopmentReleaseCache(cache);
   now = clock(); // Storage latency cannot extend the original verification deadline.
   // Another request may have committed a refresh while this read was pending.
   const afterRead = runtime.cached;
   if (afterRead !== undefined && afterRead.expires_at_ms > now && usableCacheAge(afterRead.verified_at_ms, now, DEV_RELEASE_STALE_MS)) return afterRead.descriptor;
+  if (sequence !== runtime.refresh_sequence) {
+    if (afterRead !== undefined && usableCacheAge(afterRead.verified_at_ms, now, DEV_RELEASE_STALE_MS)) return afterRead.descriptor;
+    if (cached !== undefined && usableCacheAge(cached.verified_at_ms, now, DEV_RELEASE_STALE_MS)) return cached.descriptor;
+    throw new Error("development release refresh temporarily unavailable");
+  }
   const cacheAgeMs = cached === undefined || cached.verified_at_ms > now ? Number.POSITIVE_INFINITY : now - cached.verified_at_ms;
   if (cached !== undefined && cacheAgeMs <= DEV_RELEASE_CACHE_MS) {
     runtime.cached = { expires_at_ms: cached.verified_at_ms + DEV_RELEASE_CACHE_MS, verified_at_ms: cached.verified_at_ms, descriptor: cached.descriptor };
+    if (sequence === runtime.refresh_sequence) runtime.next_refresh_at_ms = cached.verified_at_ms + DEV_RELEASE_CACHE_MS;
     return cached.descriptor;
   }
   if (cached !== undefined && cacheAgeMs < DEV_RELEASE_STALE_MS && scheduleRefresh !== undefined) {
     runtime.cached = { expires_at_ms: Math.min(now + DEV_RELEASE_CACHE_MS, cached.verified_at_ms + DEV_RELEASE_STALE_MS), verified_at_ms: cached.verified_at_ms, descriptor: cached.descriptor };
-    // No cross-request I/O promise: this counter only throttles new launches.
-    if (now >= runtime.next_refresh_at_ms) {
-      runtime.next_refresh_at_ms = now + DEV_RELEASE_CACHE_MS;
-      const refresh = refreshDevelopmentRunnerRelease(dependencies).then(() => undefined).catch(() => undefined);
-      try { scheduleRefresh(refresh); } catch { /* Original hard expiry still applies. */ }
-    }
+    const refresh = refreshDevelopmentRunnerRelease(dependencies, sequence).then(() => undefined).catch(() => undefined);
+    try { scheduleRefresh(refresh); } catch { /* Original hard expiry still applies. */ }
     return cached.descriptor;
   }
-  try { return await refreshDevelopmentRunnerRelease(dependencies); }
+  try { return await refreshDevelopmentRunnerRelease(dependencies, sequence); }
   catch (error) {
     const completedAtMs = clock();
     const current = runtime.cached;

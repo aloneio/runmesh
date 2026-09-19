@@ -79,6 +79,9 @@ export class JobManager {
   private logWriteChain: Promise<void> = Promise.resolve();
   private readonly jobs = new Map<string, JobRecord>();
   private readonly processes = new Map<string, ChildProcess>();
+  /** One bounded delivery owns stdin until its write/end callback settles.
+   * A child that stops reading must not accumulate one buffer per RPC. */
+  private readonly inputDeliveries = new Set<string>();
   private readonly persistChains = new Map<string, Promise<void>>();
   /**
    * Terminal metadata is queued before finishOnce publishes the terminal
@@ -89,6 +92,12 @@ export class JobManager {
    */
   private readonly terminalPersisting = new Set<string>();
   private readonly finishing = new Map<string, Promise<void>>();
+  /** Native close/error evidence retained only while terminal durability has
+   * failed. Active-slot accounting bounds this map; no polling timer is added. */
+  private readonly failedCompletions = new Map<string, {
+    readonly job: JobRecord; readonly child: ChildProcess | undefined;
+    readonly code: number | null; readonly signal: NodeJS.Signals | null; readonly spawnFailed: boolean;
+  }>();
   /** A termination decision is published before signalling a child so a
    * close event cannot classify a cancellation as an ordinary failure. */
   private readonly terminationAttempts = new Map<string, Promise<boolean>>();
@@ -259,11 +268,14 @@ export class JobManager {
 
   public hasPendingHistoryRecovery(): boolean {
     return [...this.jobs.values()].some(job => job.record_history !== false
-      && (job.status === "unknown" || (job.status === "cancelling" && job.recovery_liveness !== null)));
+      && (this.failedCompletions.has(job.job_id) || job.status === "unknown" || (job.status === "cancelling" && job.recovery_liveness !== null)));
   }
 
   public async reconcileRecoveredJobs(): Promise<void> {
-    for (const job of [...this.jobs.values()]) await this.reconcileRecoveredJob(job.job_id);
+    for (const job of [...this.jobs.values()]) {
+      await this.reconcileFailedCompletion(job.job_id);
+      await this.reconcileRecoveredJob(job.job_id);
+    }
   }
 
   public get(jobId: unknown): JobRecord {
@@ -275,6 +287,8 @@ export class JobManager {
 
   public async getReconciled(jobId: unknown): Promise<JobRecord> {
     let job = this.get(jobId);
+    await this.reconcileFailedCompletion(job.job_id);
+    job = this.get(jobId);
     if (job.status === "unknown" || job.status === "cancelling") {
       await this.reconcileRecoveredJob(job.job_id);
       job = this.get(jobId);
@@ -313,9 +327,16 @@ export class JobManager {
       const existing = [...this.jobs.values()].find((job) => job.workspace_id === workspace.workspaceId && job.created_by_client_id === createdByClientId && job.request_id === requestId);
       if (existing !== undefined) {
         if (existing.request_fingerprint !== requestFingerprint) throw new RpcRuntimeError("request_id_conflict", "request_id is already bound to a different launch request");
-        return existing;
+        const reconciled = await this.getReconciled(existing.job_id);
+        this.policy.assertGeneration(generation);
+        return reconciled;
       }
     }
+    // Admission and queued authorization can yield for filesystem/network
+    // work. Bind the cwd object now, then verify it again immediately before
+    // native spawn so a renamed/replaced directory cannot redirect execution.
+    const cwdSnapshot = await this.policy.snapshot(cwd);
+    if (cwdSnapshot.type !== "directory") throw new RpcRuntimeError("invalid_path", "cwd must be a directory");
     // A recovered live process has no ChildProcess handle in this Runner, so
     // reconciliation is the only way to release its admission slot after it
     // exits. Perform it before pruning/counting; otherwise an `unknown` record
@@ -379,6 +400,7 @@ export class JobManager {
       // after cancellation; the synchronous status check closes the only
       // remaining window before spawn.
       if (reservedJob !== undefined && (this.queueAuthorizer === undefined || !await this.queueAuthorizer(params, job))) throw new RpcRuntimeError("permission_denied", "Queued launch authorization was denied or unavailable");
+      await this.policy.verifySnapshot(cwd, cwdSnapshot);
       const beforeSpawn = this.jobs.get(job.job_id);
       if (beforeSpawn === undefined || beforeSpawn.status !== "queued") {
         await this.closeLogHandlesSafely(stdout, stderr);
@@ -480,6 +502,10 @@ export class JobManager {
     // leaving this method with a stale running snapshot that could target a
     // reused PID.
     let job = this.get(jobId);
+    if (this.failedCompletions.has(job.job_id)) {
+      await this.reconcileFailedCompletion(job.job_id);
+      job = this.get(jobId);
+    }
     if (job.status === "unknown" || (job.status === "cancelling" && job.recovery_liveness !== null)) {
       job = await this.getReconciled(jobId);
     }
@@ -652,6 +678,10 @@ export class JobManager {
         await finishing;
         continue;
       }
+      if (this.failedCompletions.has(jobId)) {
+        await this.reconcileFailedCompletion(jobId);
+        continue;
+      }
       const current = this.jobs.get(jobId);
       if (current === undefined || !isActive(current)) return;
       const child = this.processes.get(jobId);
@@ -674,8 +704,11 @@ export class JobManager {
     if (child === undefined || job.status !== "running") throw new Error("job does not accept input");
     const stdin = child.stdin;
     if (stdin === null || stdin.destroyed || stdin.writableEnded) throw new Error("job does not accept input");
+    if (this.inputDeliveries.has(job.job_id)) throw new RpcRuntimeError("busy", "A previous stdin delivery is still pending; this input was not sent");
     const accepted = data === undefined ? 0 : Buffer.byteLength(data, "utf8");
-    await deliverJobInput(stdin, data, closeStdin);
+    this.inputDeliveries.add(job.job_id);
+    try { await deliverJobInput(stdin, data, closeStdin); }
+    finally { this.inputDeliveries.delete(job.job_id); }
     return { accepted, eof: closeStdin };
   }
 
@@ -973,9 +1006,37 @@ export class JobManager {
   private async finish(jobId: string, code: number | null, signal: NodeJS.Signals | null, spawnFailed: boolean): Promise<void> {
     const existing = this.finishing.get(jobId);
     if (existing !== undefined) return existing;
-    const task = this.finishOnce(jobId, code, signal, spawnFailed).finally(() => { this.finishing.delete(jobId); this.resumeQueue(); });
+    const job = this.jobs.get(jobId);
+    if (job === undefined) return;
+    const child = this.processes.get(jobId);
+    const task = this.finishOnce(jobId, code, signal, spawnFailed).then(() => {
+      this.failedCompletions.delete(jobId);
+    }, error => {
+      const current = this.jobs.get(jobId);
+      if (current !== undefined && isActive(current) && sameJobProcessIdentity(current, job) && this.processes.get(jobId) === child) {
+        const alreadyPending = this.failedCompletions.has(jobId);
+        this.failedCompletions.set(jobId, { job, child, code, signal, spawnFailed });
+        // Wake the existing history retry mechanism without claiming a
+        // terminal outcome before its metadata is durable. No-record jobs
+        // remain excluded by the connection's normal event filter.
+        if (!alreadyPending) { try { this.onEvent({ type: "status", job: current }); } catch { /* observations remain local */ } }
+      }
+      throw error;
+    }).finally(() => { this.finishing.delete(jobId); this.resumeQueue(); });
     this.finishing.set(jobId, task);
     return task;
+  }
+
+  private async reconcileFailedCompletion(jobId: string): Promise<void> {
+    const observed = this.failedCompletions.get(jobId);
+    if (observed === undefined) return;
+    const current = this.jobs.get(jobId);
+    if (current === undefined || !isActive(current) || !sameJobProcessIdentity(current, observed.job) || this.processes.get(jobId) !== observed.child) {
+      this.failedCompletions.delete(jobId); return;
+    }
+    // Reuse the witnessed close/error arguments, including nonzero exit
+    // codes. A liveness probe cannot reconstruct an OS process's result.
+    await this.finish(jobId, observed.code, observed.signal, observed.spawnFailed);
   }
 
   private async finishOnce(jobId: string, code: number | null, signal: NodeJS.Signals | null, spawnFailed: boolean): Promise<void> {

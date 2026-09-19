@@ -1,4 +1,4 @@
-import type { DevelopmentReleaseDependencies } from "../contracts/runner-release.js";
+import type { DevelopmentReleaseDependencies, DevelopmentReleaseRuntime } from "../contracts/runner-release.js";
 import { createDevelopmentReleaseRuntime } from "../domain/release-selection.js";
 import { defaultDevelopmentReleaseCache, verifyDevelopmentRunnerRelease } from "../distribution/release-io.js";
 import type { DevelopmentReleaseCache } from "../distribution/release.js";
@@ -34,6 +34,9 @@ export function registryDevelopmentReleaseCache(env: WorkerEnv): DevelopmentRele
 
 // One value cache per Worker isolate. Requests never share an unfinished I/O promise.
 const releaseRuntime = createDevelopmentReleaseRuntime();
-export function developmentReleaseDependencies(cache?: DevelopmentReleaseCache | null): DevelopmentReleaseDependencies {
-  return { fetch, verify: verifyDevelopmentRunnerRelease, cache: cache === null ? undefined : cache ?? defaultDevelopmentReleaseCache(), now: () => Date.now(), runtime: releaseRuntime };
+const scopedRuntimes = new WeakMap<object, DevelopmentReleaseRuntime>();
+export function developmentReleaseDependencies(cache?: DevelopmentReleaseCache | null, scope?: object): DevelopmentReleaseDependencies {
+  let runtime = scope === undefined ? releaseRuntime : scopedRuntimes.get(scope);
+  if (runtime === undefined) { runtime = createDevelopmentReleaseRuntime(); scopedRuntimes.set(scope!, runtime); }
+  return { fetch, verify: verifyDevelopmentRunnerRelease, cache: cache === null ? undefined : cache ?? defaultDevelopmentReleaseCache(), now: () => Date.now(), runtime };
 }
