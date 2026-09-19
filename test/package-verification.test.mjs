@@ -33,6 +33,26 @@ async function fixture(t) {
       numPassedTests: 1, numFailedTests: 0, numPendingTests: 1, numTodoTests: 0,
       testResults: [{ status: 'passed', name: '/private/path', assertionResults: [
         { status: 'passed', fullName: 'synthetic', failureMessages: ['private-text'] }, { status: 'pending' } ] }] };
+    console.log('private-stdout-credential'); console.error('private-stderr-credential');
+    if (['test_failure', 'many_test_failures', 'suite_failure'].includes(mode)) {
+      result.success = false; result.numFailedTestSuites = 1;
+      const file = result.testResults[0];
+      file.status = 'failed'; file.name = '/private-credential/test/e2e/mcp-runner.e2e.test.ts';
+      file.message = 'Error: Hook timed out in 30000ms. private-suite-credential';
+      if (mode !== 'suite_failure') {
+        const count = mode === 'many_test_failures' ? 40 : 1;
+        result.numTotalTests = count; result.numPassedTests = 0; result.numFailedTests = count; result.numPendingTests = 0;
+        file.assertionResults = Array.from({ length: count }, () => ({
+          status: 'failed', fullName: 'private-title-credential',
+          failureMessages: ['AssertionError: private-assertion-credential /private/path'],
+        }));
+      }
+      process.exitCode = 4;
+    }
+    if (mode === 'invalid_json_failure') {
+      writeFileSync(process.env.RUNMESH_TEST_RESULT_PATH, '{private-json-credential');
+      process.exit(4);
+    }
     if (mode === 'bad_counts') result.numTotalTests++;
     const json = JSON.stringify(result);
     const start = json.indexOf('synthetic');
@@ -112,13 +132,42 @@ test("AR08 actual wrapper tolerates lifecycle text and emits only verified count
 test("AR08 failed rerun replaces previous success instead of leaving stale evidence", async t => {
   const f = await fixture(t); assert.equal(f.invoke().status, 0);
   assert.notEqual(f.invoke("exit_failure").status, 0);
-  assert.deepEqual(await f.report(), { schema_version: 1, evidence: "local_packaged_runner_e2e", state: "failed", phase: "installed_package_e2e" });
+  assert.deepEqual(await f.report(), { schema_version: 1, evidence: "local_packaged_runner_e2e", state: "failed", phase: "installed_package_e2e",
+    diagnostics: { step: "test_process", kind: "process_exit", exit_code: 4, test_report: { state: "missing" } } });
+});
+test("AR08 failed package tests retain bounded locations and classes without copying credential-bearing reporter fields or logs", async t => {
+  const f = await fixture(t), result = f.invoke("test_failure"), report = await f.report();
+  assert.equal(result.status, 1);
+  assert.deepEqual(report.diagnostics, { step: "test_process", kind: "process_exit", exit_code: 4,
+    test_report: { state: "parsed", failed_files: 1, failed_tests: 1, truncated: false,
+      failures: [{ file_index: 1, file: "test/e2e/mcp-runner.e2e.test.ts", scope: "test", test_index: 1, kind: "assertion_failed" }] } });
+  assert.equal(report.state, "failed");
+  assert.ok(result.stderr.includes('"kind":"assertion_failed"'));
+  assert.ok(!`${result.stdout}${result.stderr}${JSON.stringify(report)}`.includes("private"));
+});
+test("AR08 suite setup failures survive raw report cleanup as a fixed error class", async t => {
+  const f = await fixture(t), result = f.invoke("suite_failure"), report = await f.report();
+  assert.equal(result.status, 1);
+  assert.deepEqual(report.diagnostics.test_report.failures, [
+    { file_index: 1, file: "test/e2e/mcp-runner.e2e.test.ts", scope: "suite", kind: "hook_timeout" },
+  ]);
+  assert.ok(!`${result.stdout}${result.stderr}${JSON.stringify(report)}`.includes("private"));
+});
+test("AR08 failure diagnostics cap retained failures and reject malformed failure reports", async t => {
+  const f = await fixture(t), result = f.invoke("many_test_failures"), report = await f.report();
+  assert.equal(result.status, 1); assert.equal(report.diagnostics.test_report.failed_tests, 40);
+  assert.equal(report.diagnostics.test_report.failures.length, 16); assert.equal(report.diagnostics.test_report.truncated, true);
+  assert.ok(JSON.stringify(report).length < 4096);
+  const invalid = f.invoke("invalid_json_failure"), invalidReport = await f.report();
+  assert.equal(invalid.status, 1); assert.deepEqual(invalidReport.diagnostics.test_report, { state: "invalid" });
+  assert.ok(!`${invalid.stdout}${invalid.stderr}${JSON.stringify(invalidReport)}`.includes("private"));
 });
 for (const mode of ["missing_report", "bad_counts", "artifact_changed", "source_changed"]) {
   test(`AR08 actual wrapper rejects ${mode}`, async t => {
     const f = await fixture(t), result = f.invoke(mode);
     assert.notEqual(result.status, 0); assert.equal((await f.report()).state, "failed");
     assert.ok(!result.stderr.includes(f.directory));
+    assert.ok(!`${result.stdout}${result.stderr}${JSON.stringify(await f.report())}`.includes("private"));
   });
 }
 test("AR08 actual wrapper rejects an unrelated CI source before packing", async t => {
