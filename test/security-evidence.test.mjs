@@ -149,3 +149,23 @@ test("the tracked manifest requires cancellation uncertainty and concurrency reg
   const replaced = structuredClone(manifest); replaced.findings.find(value => value.id === "SEC20").id = "SEC99";
   assert.throws(() => securityTestFiles(replaced), /SEC20/);
 });
+
+test("candidate gates retain credential-generation and metadata-consistency regressions", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const manifest = JSON.parse(await readFile(new URL("../release/security-readiness.json", import.meta.url), "utf8"));
+  const expected = {
+    SEC21: ["apps/worker/test/reauthorization.test.ts"],
+    SEC22: ["apps/runner/test/runner-boundaries.test.ts"],
+  };
+  for (const [id, files] of Object.entries(expected)) {
+    assert.ok(REQUIRED_SECURITY_FINDINGS.includes(id));
+    const finding = manifest.findings.find(value => value.id === id);
+    assert.equal(finding?.state, "closed");
+    assert.deepEqual(finding.regressions, files);
+    for (const file of files) assert.ok(securityTestFiles(manifest).includes(file));
+    const missing = structuredClone(manifest); missing.findings = missing.findings.filter(value => value.id !== id);
+    assert.throws(() => securityTestFiles(missing));
+    const replaced = structuredClone(manifest); replaced.findings.find(value => value.id === id).id = "SEC99";
+    assert.throws(() => securityTestFiles(replaced), new RegExp(id));
+  }
+});
