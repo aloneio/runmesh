@@ -1,15 +1,16 @@
 # Release notes
 
-[简体中文](release-notes.zh-CN.md) · [Documentation](README.md) · [Upgrade guide](upgrading.md)
+[Chinese](release-notes.zh-CN.md) · [Documentation](README.md) · [Upgrade guide](upgrading.md)
 
-## 0.1.4 — candidate
+## 0.1.4
 
-The **0.1.4 candidate** improves task control, MCP recovery and installation. Use the development prerelease channel to test these changes. The current production release is **0.1.3**; package availability and activation are listed in [release status](release-readiness.md).
+**0.1.4** improves task control, MCP recovery, workspace context management and installation. See [release status](release-readiness.md) for verified package availability and hosted installation status, and the [upgrade guide](upgrading.md) to update your Worker, Runner and client.
 
 ### Improvements after upgrading compatible components
 
 - **More reliable task control.** Cancellation keeps uncertain live processes under supervision until their state is resolved. Concurrent recovery respects the recorded cancellation delivery. Input errors include guidance for checking the original process before sending more input.
 - **Clearer MCP calls and recovery.** Action-specific tool definitions, workspace-bound Job queries and structured errors help you follow the original operation after an outage. Query the online Runner with the original Job and workspace IDs when cloud history is unavailable.
+- **More control over saved context and paged reads.** Inspect Context storage usage and prune selected old revisions. Optional snapshot reads keep file pages tied to captured content, while append reads follow one Job-log generation. Runner diagnostics help you check support before using these features.
 - **Fewer idle history uploads.** Compatible Worker/Runner pairs upload recorded Job metadata when it changes, then stop the history timer after acknowledgement. Ordinary log reads stay on demand. Heartbeats, authorization and maintenance continue to use account resources.
 - **Stronger local and distribution boundaries.** Additional checks reject unsafe special-file replacements in metadata and release inputs. Release health checks reject oversized or stalled responses before completing preflight. Published packages keep their original identity; the stable tag publisher now explicitly verifies the project tagger identity.
 - **Safer installation and mixed-version operation.** Hosted installers serialize installation, credential refresh and removal, and roll back only paths they created. Windows release downloads keep a deadline through the response body; dedicated service provisioning fixes macOS group selection and Windows directory creation. MCP Runner selection rechecks the original credential at commit, and Job metadata rejects concurrent replacement or rewriting.

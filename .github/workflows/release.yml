@@ -36,6 +36,7 @@ jobs:
     if: github.actor == github.repository_owner && github.triggering_actor == github.repository_owner
     permissions:
       contents: write
+      actions: read
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment:
