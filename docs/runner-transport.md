@@ -4,7 +4,7 @@ A Runner connects outbound to the Worker and executes authorized operations on i
 
 ## Authenticate and select a Runner
 
-MCP clients use a per-client endpoint:
+New MCP clients start with `coding:read`. Grant additional scopes and workspace permissions as needed for editing or execution. Each client uses its own endpoint:
 
 ```text
 https://mcp.example.com/<256-bit-base64url-secret>/mcp
