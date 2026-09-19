@@ -17,6 +17,10 @@ export default defineConfig({
     },
   },
   test: {
+    // These native fixtures spawn real Git/Node processes. Concurrent files
+    // on Windows can exhaust the deliberately short production observation
+    // budget; serialize the fixtures without changing that budget or assertions.
+    fileParallelism: process.platform !== "win32",
     include: ["test/**/*.test.ts"],
     exclude: ["**/node_modules/**", "**/.git/**", "**/.audit/**", "**/dist/**"],
     setupFiles: [fileURLToPath(new URL("./test/setup.ts", import.meta.url))],

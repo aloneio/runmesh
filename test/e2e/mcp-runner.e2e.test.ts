@@ -229,8 +229,10 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
     const direct = await fetch(`${workerUrl}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body });
     expect(direct.status).toBe(404);
+    expect(await direct.text()).toBe("Not found");
     const invalid = await fetch(`${workerUrl}/${"x".repeat(43)}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body });
     expect(invalid.status).toBe(404);
+    expect(await invalid.text()).toBe("Not found");
     await expect(mcpMessage("runner_list", {})).resolves.toBeDefined();
   });
 
@@ -1035,12 +1037,15 @@ async function readMcp(response: Response): Promise<JsonRpc> {
   return JSON.parse(data) as JsonRpc;
 }
 function nodeCommand(script: string): string {
-  // The shell RPC intentionally exercises the host shell. JSON.stringify is
-  // valid command-line quoting for POSIX shells, but PowerShell treats the
-  // resulting backslash-escaped Windows path as a literal (invalid) path and
-  // parses `-e` as a separate expression. Use PowerShell's single-quote
-  // escaping on Windows so the same fixture invokes Node on both platforms.
-  if (process.platform === "win32") return `& ${powerShellQuote(process.execPath)} -e ${powerShellQuote(script)}`;
+  // Windows PowerShell's native argument parser strips embedded double
+  // quotes even inside a PowerShell single-quoted argument. Transport the
+  // fixture's exact script bytes so a holding process cannot silently fail
+  // and leave a supposedly occupied queue slot free.
+  if (process.platform === "win32") {
+    const encoded = Buffer.from(script, "utf8").toString("base64");
+    const invocation = `eval(Buffer.from('${encoded}','base64').toString('utf8'))`;
+    return `& ${powerShellQuote(process.execPath)} -e ${powerShellQuote(invocation)}`;
+  }
   return `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`;
 }
 function powerShellQuote(value: string): string { return `'${value.replaceAll("'", "''")}'`; }
