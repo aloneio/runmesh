@@ -35,11 +35,13 @@ In Cloudflare Workers Builds, select the repository root and set the build comma
 # Development
 npm run deploy:worker -- --env development
 
-# Production, after stable release activation
+# Production
 npm run deploy:worker -- --env production
 ```
 
 Cloudflare manages build-connection authentication. The deployment wrapper checks the branch, release state and clean Git source against the CI declarations, then records the source commit/tree. After deployment, compare the live commit through [build provenance](build-provenance.md).
+
+For candidate commits on `main`, Workers Builds completes these checks and keeps the active production Worker in place. Its log records `production_preserved` and `uploaded: false` while the signed release is prepared and verified. Pushing the reviewed release activation then deploys that source automatically with its commit tag. A manual production deployment requires the activated release record.
 
 For the maintained GitLab deployment path, configure the host-side `scripts/sync-gitlab-dev.mjs` bridge separately. It waits for GitHub `verify-all` on the exact dev SHA, checks ancestry and fast-forwards GitLab dev. A connected Cloudflare Worker then builds that push. Supply the bridge's authentication and schedule as part of your deployment configuration; divergence requires operator reconciliation.
 

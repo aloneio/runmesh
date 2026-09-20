@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { deploymentPlan, assertReleased, assertDeploymentTarget } from "../scripts/deployment-policy.mjs";
+import { deploymentPlan, assertReleased, productionReleaseDecision, assertDeploymentTarget } from "../scripts/deployment-policy.mjs";
 import { reviewedReleaseSource } from "../scripts/runtime-config-tools.mjs";
 
 test("production accepts only main and development only dev",()=>{
@@ -18,6 +18,32 @@ test("unactivated versions cannot displace the current installer and legacy prov
   const state={version:"0.1.2",state:"released",release_commit:"a".repeat(40),manifest_sha256:"b".repeat(64)};
   assert.doesNotThrow(()=>assertReleased(state,"0.1.2"));
   for(const v of [{...state,state:"candidate"},{...state,version:"0.1.3"},{...state,release_commit:""},{...state,manifest_sha256:""}]) assert.throws(()=>assertReleased(v,"0.1.2"));
+});
+
+test("Workers Builds preserves production for a source-bound candidate while released records deploy", () => {
+  const state = { version: "0.1.4", state: "candidate", release_branch: "main" };
+  const source = { state: "clean", branch: "main", commit: "a".repeat(40) };
+  const environment = { WORKERS_CI: "1", WORKERS_CI_BRANCH: "main", WORKERS_CI_COMMIT_SHA: source.commit,
+    WORKERS_CI_BUILD_UUID: "12345678-1234-4234-8234-123456789abc" };
+  assert.deepEqual(productionReleaseDecision(state, "0.1.4", environment, source), {
+    action: "production_preserved", uploaded: false, reason: "awaiting_verified_release",
+  });
+  const activated = { ...state, state: "released", release_commit: "b".repeat(40), manifest_sha256: "c".repeat(64) };
+  assert.deepEqual(productionReleaseDecision(activated, "0.1.4", {}, source), { action: "deploy" });
+  assert.deepEqual(productionReleaseDecision(activated, "0.1.4", environment, source), { action: "deploy" });
+  for (const invalid of [{}, { ...environment, WORKERS_CI: "" }, { ...environment, WORKERS_CI: "true" },
+    { ...environment, WORKERS_CI_BRANCH: "" }, { ...environment, WORKERS_CI_BRANCH: "dev" },
+    { ...environment, WORKERS_CI_COMMIT_SHA: "" }, { ...environment, WORKERS_CI_COMMIT_SHA: "b".repeat(40) },
+    { ...environment, WORKERS_CI_BUILD_UUID: "" }, { ...environment, WORKERS_CI_BUILD_UUID: "not-a-build-uuid" }]) {
+    assert.throws(() => productionReleaseDecision(state, "0.1.4", invalid, source));
+  }
+  for (const invalid of [{ ...source, state: "dirty" }, { ...source, branch: "dev" }, { ...source, commit: "" }])
+    assert.throws(() => productionReleaseDecision(state, "0.1.4", environment, invalid));
+  for (const invalid of [{ ...state, state: "unknown" }, { ...state, version: "0.1.3" },
+    { ...state, release_branch: "dev" }, { ...state, release_branch: undefined },
+    { ...state, release_commit: "b".repeat(40) }, { ...state, manifest_sha256: "c".repeat(64) }]) {
+    assert.throws(() => productionReleaseDecision(invalid, "0.1.4", environment, source));
+  }
 });
 test("formal publication rejects dev before verification and uses a main target",async()=>{
   const workflow=await readFile(new URL("../.github/workflows/release.yml",import.meta.url),"utf8");

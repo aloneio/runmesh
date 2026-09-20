@@ -7,7 +7,7 @@ import { generateKeyPairSync, createHash, sign } from "node:crypto";
 import { build } from "esbuild";
 import { mkdtemp, mkdir, readFile, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { buildManifest, releaseArtifactName, releaseTag, validateManifest } from "../scripts/release-manifest.mjs";
@@ -16,6 +16,8 @@ import { signReleaseManifest, verifyReleaseManifest } from "../scripts/release-s
 import { resolveTrustedTaskkillPath } from "../scripts/windows-tools.mjs";
 import { MAX_RELEASE_ASSET_BYTES, readBoundedReleaseFile } from "../scripts/release-io.mjs";
 import { AGGREGATE_JOBS, checkCommand } from "../scripts/ci-contract.mjs";
+import { parseCi } from "../scripts/ci-policy.mjs";
+import { reviewedReleaseSource } from "../scripts/runtime-config-tools.mjs";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const execFileAsync = promisify(execFile);
@@ -87,6 +89,61 @@ test("pins manually-dispatched releases to the triggering main commit", async ()
     const command = checkCommand(id);
     assert.equal(gitlabWorkflow.includes(command), true, `GitLab verify must include ${command}`);
   }
+});
+
+test("release validates source identity before installation and generates tracked inputs afterward", async () => {
+  const workflow = parseCi(await readFile(join(repositoryRoot, ".github/workflows/release.yml"), "utf8"));
+  const steps = workflow.jobs.release.steps;
+  const install = steps.findIndex(step => step.run === "npm ci");
+  const identity = steps.findIndex(step => step.name === "Validate triggering commit, release identity, and secrets");
+  const generation = steps.findIndex(step => step.run?.includes("npm run generate:version"));
+  const signing = steps.findIndex(step => step.name === "Sign and verify manifest and local release assets");
+  assert.ok(identity >= 0 && identity < install && install < generation && generation < signing);
+  for (const command of [
+    'test "$GITHUB_REF" = "refs/heads/main"', 'test "$GITHUB_REPOSITORY" = "aloneio/runmesh"',
+    'test "$GITHUB_ACTOR" = "$GITHUB_REPOSITORY_OWNER"', 'test "$GITHUB_TRIGGERING_ACTOR" = "$GITHUB_REPOSITORY_OWNER"',
+    'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"', 'test "$(git rev-parse origin/main)" = "$GITHUB_SHA"',
+    "npm run check:versions", 'test "$RELEASE_VERSION" = "$ROOT_VERSION"',
+    'node scripts/stable-publication.mjs "$RELEASE_VERSION" "$RELEASE_SIGNING_KEY_ID"',
+    'node scripts/release-signature.mjs validate-key release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"',
+  ]) assert.ok(steps[identity].run.includes(command), `missing pre-install identity check: ${command}`);
+  assert.ok(!steps.slice(0, install).some(step => step.run?.includes("npm run generate:version")));
+  const mutationGate = "git diff --exit-code -- apps/worker/src/generated-version.ts apps/worker/src/generated-release.ts";
+  assert.ok(steps[generation].run.indexOf(mutationGate) > steps[generation].run.indexOf("npm run generate:version"));
+  for (const index of [identity, install, generation]) {
+    assert.equal(steps[index].if, undefined);
+    assert.equal(steps[index]["continue-on-error"], undefined);
+    assert.ok(!JSON.stringify(steps[index]).includes("secrets.RELEASE_SIGNING_KEY }}"));
+  }
+});
+
+test("pre-install release version, publication, and public-key checks run without installed packages", async () => {
+  const f = await fixture();
+  try {
+    const inputs = [
+      "package.json", "package-lock.json", "apps/runner/package.json", "apps/worker/package.json", "packages/protocol/package.json",
+      "apps/worker/src/generated-version.ts", "apps/worker/src/domain/release-config.ts", "release/trust-keyring.json",
+      "scripts/check-versions.mjs", "scripts/runtime-config-tools.mjs", "scripts/product-version.mjs",
+      "scripts/stable-publication.mjs", "scripts/release-signature.mjs", "scripts/release-io.mjs",
+    ];
+    await Promise.all(inputs.map(async path => {
+      const target = join(f.root, path);
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, await readFile(join(repositoryRoot, path)));
+    }));
+    // Publication always starts with a candidate; keep this fixture valid
+    // after the same source version is activated as the released product.
+    const candidate = { version: productVersion, state: "candidate", release_branch: "main" };
+    await writeFile(join(f.root, "release/release-state.json"), JSON.stringify(candidate));
+    await writeFile(join(f.root, "apps/worker/src/generated-release.ts"), reviewedReleaseSource(productVersion, candidate));
+    const installer = await readFile(join(f.root, "apps/worker/src/domain/release-config.ts"), "utf8");
+    const keyId = JSON.parse(/^export const FIXED_RELEASE_KEY_ID = ("[^"]+");$/mu.exec(installer)[1]);
+    for (const args of [
+      ["scripts/check-versions.mjs"],
+      ["scripts/stable-publication.mjs", productVersion, keyId],
+      ["scripts/release-signature.mjs", "validate-key", "release/trust-keyring.json", keyId],
+    ]) await execFileAsync(process.execPath, args, { cwd: f.root, timeout: 10_000 });
+  } finally { await f.cleanup(); }
 });
 
 test("pins the stable API tagger identity before creating its remote reference", async () => {

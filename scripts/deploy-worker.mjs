@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { deploymentPlan, assertReleased, assertDeploymentTarget } from "./deployment-policy.mjs";
+import { deploymentPlan, productionReleaseDecision, assertDeploymentTarget } from "./deployment-policy.mjs";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const git = (...args) => execFileSync("git", args, {cwd:root,encoding:"utf8",stdio:["ignore","pipe","pipe"]}).trim();
 let prepared;
@@ -18,17 +18,20 @@ try {
   const build = await writeBuildProvenance(root, process.env, { strict: true });
   assert.equal(build.commit, sha, "Source moved during deployment preflight");
   assert.equal(build.branch, plan.branch, "Build and requested deployment branch differ");
-  if (plan.environment === "production") assertReleased(
+  const decision = plan.environment === "production" ? productionReleaseDecision(
     JSON.parse(readFileSync(new URL("../release/release-state.json",import.meta.url),"utf8")),
-    JSON.parse(readFileSync(new URL("../package.json",import.meta.url),"utf8")).version);
-  prepared = { plan, sha, build };
+    JSON.parse(readFileSync(new URL("../package.json",import.meta.url),"utf8")).version,
+    process.env, build) : { action: "deploy" };
+  prepared = { plan, sha, build, decision };
 } catch {
   // Assertion errors can include raw branch values and host paths. Never
   // emit them from a deployment preflight that has not contacted Cloudflare.
   console.error("deployment_preflight_failed: verify environment, clean source, Git/CI metadata and reviewed release; nothing was uploaded");
   process.exitCode = 1;
 }
-if (prepared !== undefined) {
+if (prepared?.decision.action === "production_preserved") {
+  console.log(JSON.stringify({ ...prepared.decision, deployment: prepared.plan, source_commit: prepared.sha, source_tree: prepared.build.tree }));
+} else if (prepared !== undefined) {
   const { plan, sha, build } = prepared;
   console.log(JSON.stringify({deployment:plan,source_commit:sha,source_tree:build.tree}));
   const result = spawnSync(process.execPath, [fileURLToPath(new URL("../node_modules/wrangler/bin/wrangler.js",import.meta.url)),
