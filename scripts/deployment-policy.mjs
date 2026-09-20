@@ -26,6 +26,31 @@ export function assertReleased(state, version) {
   // of the serving Worker to main must not rewrite that published history.
 }
 
+/** A candidate build can complete while preserving the active production
+ * Worker. Provider metadata selects this no-upload behavior, not permission
+ * to deploy; uploads still require the independently reviewed release record.
+ */
+export function productionReleaseDecision(state, version, environment, source) {
+  if (state?.state !== "candidate" || environment.WORKERS_CI !== "1") {
+    assertReleased(state, version);
+    return { action: "deploy" };
+  }
+  assert.match(version, /^(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/u);
+  assert.equal(state.version, version, "Candidate identity differs from source version");
+  assert.equal(state.release_branch, "main");
+  assert.ok(state.release_commit === undefined || state.release_commit === null, "Candidate cannot reuse prior publication evidence");
+  assert.ok(state.manifest_sha256 === undefined || state.manifest_sha256 === null, "Candidate cannot reuse prior publication evidence");
+  assert.equal(source?.state, "clean");
+  assert.equal(source.branch, "main");
+  assert.match(source.commit, /^[a-f0-9]{40}$/u);
+  assert.equal(environment.WORKERS_CI_BRANCH, "main");
+  assert.equal(environment.WORKERS_CI_COMMIT_SHA, source.commit);
+  // Workers Builds documents these four injected variables together:
+  // https://developers.cloudflare.com/workers/ci-cd/builds/configuration/
+  assert.match(environment.WORKERS_CI_BUILD_UUID ?? "", /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu);
+  return { action: "production_preserved", uploaded: false, reason: "awaiting_verified_release" };
+}
+
 /** Resolve the provider override explicitly rather than silently publishing to
  * a different connected Worker. This validates names, not account ownership. */
 export function assertDeploymentTarget(plan, configuration, environment = {}) {

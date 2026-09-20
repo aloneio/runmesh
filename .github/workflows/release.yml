@@ -71,12 +71,6 @@ jobs:
           # not allow a manually dispatched run to publish an older ancestor
           # after newer code has landed on the branch.
           test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
-          npm run generate:version
-          # The generated version module is committed release input, not a
-          # workflow-local mutation. Refuse to publish if the triggering commit
-          # left it stale; otherwise this step could silently release bytes that
-          # are not represented by GITHUB_SHA.
-          git diff --exit-code -- apps/worker/src/generated-version.ts apps/worker/src/generated-release.ts
           npm run check:versions
           ROOT_VERSION="$(node -p 'require("./package.json").version')"
           test "$RELEASE_VERSION" = "$ROOT_VERSION"
@@ -90,6 +84,15 @@ jobs:
           test "$(node -p 'require("./packages/protocol/package.json").version')" = "$RELEASE_VERSION"
           node scripts/release-signature.mjs validate-key release/trust-keyring.json "$RELEASE_SIGNING_KEY_ID"
       - run: npm ci
+      - name: Verify generated release inputs after installing dependencies
+        run: |
+          set -euo pipefail
+          # Generation compiles the release validator with installed build
+          # dependencies. Source, version, and key checks above use only Node.
+          npm run generate:version
+          # The generated modules are committed release inputs. Refuse to
+          # publish bytes that are not represented by the triggering commit.
+          git diff --exit-code -- apps/worker/src/generated-version.ts apps/worker/src/generated-release.ts
       - run: npm audit --audit-level=high
       - run: npm audit --omit=dev --audit-level=high
       - run: npm run check:docs

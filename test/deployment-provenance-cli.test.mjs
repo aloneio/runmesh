@@ -5,11 +5,13 @@ import { mkdtemp, mkdir, writeFile, readFile, copyFile, rm } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:GIT_|WORKERS_CI|CI_|GITHUB_)/u.test(key)));
+const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:GIT_|WORKERS_CI|WRANGLER_CI_|CI_|GITHUB_)/u.test(key)));
+const buildUuid = "12345678-1234-4234-8234-123456789abc";
+const candidate = { version: "0.1.3", state: "candidate", release_branch: "main" };
 function git(root, ...args) {
   return execFileSync("git", ["-c", "user.name=aloneio", "-c", "user.email=git@aloneio.aleeas.com", ...args], { cwd: root, env: environment, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
-async function fixture(t) {
+async function fixture(t, state = { version: "0.1.3", state: "released", release_commit: "a".repeat(40), manifest_sha256: "b".repeat(64) }) {
   const root = await mkdtemp(join(tmpdir(), "runmesh-deploy-proof-"));
   t.after(() => rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 }));
   git(root, "init", "--initial-branch=main");
@@ -19,13 +21,13 @@ async function fixture(t) {
   await writeFile(join(root, "apps/worker/wrangler.jsonc"), JSON.stringify({ name: "runmesh", env: { production: { name: "runmesh" }, development: { name: "runmeshdev" } } }));
   await writeFile(join(root, "apps/worker/browser/admin-client.js"), "(function () {})();\n");
   await writeFile(join(root, "package.json"), JSON.stringify({ version: "0.1.3" }));
-  await writeFile(join(root, "release/release-state.json"), JSON.stringify({ version: "0.1.3", state: "released", release_commit: "a".repeat(40), manifest_sha256: "b".repeat(64) }));
+  await writeFile(join(root, "release/release-state.json"), JSON.stringify(state));
   await writeFile(join(root, "node_modules/wrangler/bin/wrangler.js"), 'console.log("FAKE_UPLOADER_REACHED", JSON.stringify(process.argv.slice(2)));\n');
   git(root, "add", "."); git(root, "commit", "-m", "Synthetic deployment fixture");
   const commit = git(root, "rev-parse", "HEAD");
   const invoke = (extra = {}) => spawnSync(process.execPath, [join(root, "scripts/deploy-worker.mjs"), "--env", "production"], {
     cwd: root, encoding: "utf8", timeout: 15000, windowsHide: true,
-    env: { ...environment, WORKERS_CI: "1", WORKERS_CI_BRANCH: "main", WORKERS_CI_COMMIT_SHA: commit, ...extra },
+    env: { ...environment, WORKERS_CI: "1", WORKERS_CI_BRANCH: "main", WORKERS_CI_COMMIT_SHA: commit, WORKERS_CI_BUILD_UUID: buildUuid, ...extra },
   });
   return { root, commit, invoke };
 }
@@ -36,6 +38,49 @@ test("R01 actual deployment wrapper tags clean source without runtime variables"
   assert.ok(result.stdout.includes(`main:${f.commit}`)); assert.ok(!result.stdout.includes("--var"));
   assert.ok(result.stdout.includes('"--name","runmesh"'));
   assert.equal(git(f.root, "status", "--porcelain"), "");
+});
+
+test("candidate Workers Builds completes source checks while preserving the active production Worker", async t => {
+  const f = await fixture(t, candidate);
+  // Cloudflare can check out a detached commit; its complete metadata still
+  // binds the intentional no-upload result to main and the exact source.
+  git(f.root, "checkout", "--detach");
+  const result = f.invoke({ WRANGLER_CI_OVERRIDE_NAME: "runmesh" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(!result.stdout.includes("FAKE_UPLOADER_REACHED"));
+  assert.deepEqual(JSON.parse(result.stdout), {
+    action: "production_preserved", uploaded: false, reason: "awaiting_verified_release",
+    deployment: { environment: "production", branch: "main", worker: "runmesh" },
+    source_commit: f.commit, source_tree: git(f.root, "rev-parse", "HEAD^{tree}"),
+  });
+  assert.equal(git(f.root, "status", "--porcelain"), "");
+});
+
+test("candidate preservation cannot turn manual, incomplete or conflicting deployment preflight into success", async t => {
+  const f = await fixture(t, candidate);
+  const reject = result => {
+    assert.notEqual(result.status, 0);
+    assert.ok(!result.stdout.includes("FAKE_UPLOADER_REACHED"));
+    assert.ok(!result.stdout.includes("production_preserved"));
+  };
+  for (const extra of [
+    { WORKERS_CI: "", WORKERS_CI_BRANCH: "", WORKERS_CI_COMMIT_SHA: "", WORKERS_CI_BUILD_UUID: "" },
+    { WORKERS_CI_BUILD_UUID: "" }, { WORKERS_CI_BRANCH: "" }, { WORKERS_CI_COMMIT_SHA: "" },
+    { WORKERS_CI_BUILD_UUID: "not-a-build-uuid" }, { WORKERS_CI_COMMIT_SHA: "a".repeat(40) },
+    { CI_COMMIT_SHA: "b".repeat(40) }, { WORKERS_CI_BRANCH: "dev" },
+    { CI_MERGE_REQUEST_IID: "42" }, { WRANGLER_CI_OVERRIDE_NAME: "runmeshdev" },
+  ]) reject(f.invoke(extra));
+  await writeFile(join(f.root, "untracked-source.ts"), "unreviewed content\n");
+  reject(f.invoke());
+});
+
+test("candidate Workers Builds rejects malformed release records before reaching the uploader", async t => {
+  for (const state of [{ ...candidate, version: "0.1.2" }, { ...candidate, release_commit: "a".repeat(40) }]) {
+    const f = await fixture(t, state), result = f.invoke();
+    assert.notEqual(result.status, 0);
+    assert.ok(!result.stdout.includes("FAKE_UPLOADER_REACHED"));
+    assert.ok(!result.stdout.includes("production_preserved"));
+  }
 });
 
 test("R01 actual deployment wrapper rejects inconsistent or untracked source before upload", async t => {
