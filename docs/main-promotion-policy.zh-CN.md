@@ -52,9 +52,17 @@ node --test test/main-promotion-policy.test.mjs
 
 ## 晋级正式版本
 
-获准晋级后创建 `dev -> main`，等待来源策略与所有必需检查通过，再通过
-提供商 PR/MR 接口或界面合并。GitLab 镜像晋级使用对应的 `dev -> main` MR。
-处理两端合并策略与提交身份差异时，持续保留禁止强推和直推的保护。
+获准晋级后创建 `dev -> main`，等待来源策略与所有必需检查通过，再完成受保护的 PR/MR 晋级。
+
+在 GitHub 上，确认通过检查的 PR 可合并，且其 head 和 base 与当前远端分支一致。
+核对 `main` 是已审核 `dev` 提交的祖先，再将该确切提交正常快进推送到受保护的 `main`。
+分支保护持续启用并执行 PR 检查。随后确认 GitHub 已将 PR 标记为合并，且 `main`
+指向已审核的 head。这采用 GitHub 支持的
+[本地合并流程](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks)，
+保留已有作者和提交者身份 `aloneio <git@aloneio.aleeas.com>`。
+
+GitLab 镜像晋级使用对应的受保护 `dev -> main` MR，采用快进合并并等待流水线成功。
+保留 `dev`，并核对两端 `main` 指向同一个已审核提交。
 
 正式发行从受保护的 `main` 进入发布检查。分别核对两端最终提交和实际部署的 Worker。
 

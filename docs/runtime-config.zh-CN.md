@@ -32,7 +32,7 @@
 
 ## 选择发行物与环境
 
-当前源码为 **0.1.4 候选版**，正式分发关闭。完成签名发布、独立验证和经过审核的 `release/release-state.json` 激活后，才可用于生产安装。安装可用性以这份发布记录为准。
+**0.1.4** 签名正式包已完成独立验证，`release/release-state.json` 中经过审核的激活记录已启用源码中的正式托管分发。部署包含激活记录的 `main` 源码后，检查该 Worker 的发行描述以确认安装可用情况。显式空值 `RUNMESH_SIGNED_RELEASE_AVAILABLE` 仍会关闭托管安装。
 
 生产使用受保护的 `main`，候选版测试使用独立的 `dev` Worker。开发环境从自己的通道选择已验签预发布；选择不可用时会关闭托管安装。详见[开发预发布](dev-runner-prereleases.zh-CN.md)。
 

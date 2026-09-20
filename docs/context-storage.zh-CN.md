@@ -1,6 +1,6 @@
 # Context 容量与清理
 
-使用 `context` 查看工作区 Context 用量并清理选定的旧版本。`storage` 和 `prune` 属于 **0.1.4 候选版**功能，需要兼容的 Worker 和 Runner。已安装 v0.1.3 Runner 时，请先升级到包含这些动作的已验证发行包。
+使用 `context` 查看工作区 Context 用量并清理选定的旧版本。**0.1.4** 支持 `storage` 和 `prune`，需要兼容的 Worker 和 Runner。已安装 v0.1.3 Runner 时，请先升级到包含这些动作的已验证发行包。
 
 ## 查看用量
 

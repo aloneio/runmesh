@@ -1,6 +1,6 @@
 # Read file and log pages
 
-File and Job-log reads return bounded pages. The **0.1.4 candidate** adds page-state and output-availability metadata; older Runners may return only the legacy fields. For pages tied to one captured file or log generation, use the optional [snapshot and append modes](bound-cursors.md).
+File and Job-log reads return bounded pages. Version **0.1.4** adds page-state and output-availability metadata; older Runners may return only the legacy fields. For pages tied to one captured file or log generation, use the optional [snapshot and append modes](bound-cursors.md).
 
 ## Continue a read
 

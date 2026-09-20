@@ -2,7 +2,9 @@
 
 [Chinese](release-notes.zh-CN.md) · [Documentation](README.md) · [Upgrade guide](upgrading.md)
 
-## 0.1.4
+## 0.1.4 — published stable release
+
+Published on **September 20, 2026** as an [immutable stable release](https://github.com/aloneio/runmesh/releases/tag/v0.1.4) with a signed portable Runner package.
 
 **0.1.4** improves task control, MCP recovery, workspace context management and installation. See [release status](release-readiness.md) for verified package availability and hosted installation status, and the [upgrade guide](upgrading.md) to update your Worker, Runner and client.
 

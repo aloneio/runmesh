@@ -29,7 +29,7 @@ For an online Runner with rejected policy, check workspace existence and the ser
 
 Use the administrator enrollment page's command in the appropriate elevated terminal. Resolve `RMI_*` errors with [installer prerequisites](installer-prerequisites.md).
 
-Check [release status](release-readiness.md) when hosted distribution is unavailable. The 0.1.4 candidate keeps stable distribution disabled. An applicable verified package can be installed through the [portable procedure](portable-runner-installation.md), keeping TLS, signature and hash checks enabled.
+Check [release status](release-readiness.md) when hosted distribution is unavailable. The reviewed 0.1.4 source enables stable hosted distribution. Check the deployed Worker commit, its release descriptor and any explicit installer-disable override. An applicable verified package can be installed through the [portable procedure](portable-runner-installation.md), keeping TLS, signature and hash checks enabled.
 
 If another install or removal is active, wait for it to finish. After a crash, have the administrator inspect processes and remaining files before handling a stale lock. If enrollment may have completed, check the dashboard and local profile before obtaining a replacement code.
 

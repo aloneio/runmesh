@@ -43,7 +43,7 @@ MCP 地址本身就是凭据，在创建或轮换时显示。请妥善保存，�
 
 ## 管理员快速配置
 
-生产环境请选用 `main` 上经过验证并启用的正式发行版本。测试 **0.1.4 候选版**时，按[部署参考](docs/deployment.md)使用独立的 `dev` 环境。
+生产环境使用 **0.1.4** 签名正式包，并从 `main` 上包含对应发行激活记录的源码部署 Worker。测试后续改动时，按[部署参考](docs/deployment.md)使用独立的 `dev` 环境。
 
 1. 从 `main` 的已发布版本部署正式 Worker，配置 `INTERNAL_CONTROL_SECRET`、`RUNNER_TOKEN_PEPPER` 两个独立密钥，并在向不可信访问者开放前完成首次管理员密码设置；
 2. 在「Runner」页面添加一台机器。保留默认的 `dedicated_user` 模式，只有确实需要并接受主机高权限时才改选；
@@ -81,7 +81,7 @@ MCP 地址本身就是凭据，在创建或轮换时显示。请妥善保存，�
 
 ## 版本与升级
 
-最新已发布正式版为 **0.1.3**，当前源码为 **0.1.4 候选版**。请根据[版本说明](docs/release-notes.zh-CN.md)和[发行状态](docs/release-readiness.md)选择合适的版本。开发环境使用单独验证的预发布渠道。
+最新已发布正式版为 **0.1.4**。功能改进见[版本说明](docs/release-notes.zh-CN.md)，安装可用情况见[发行状态](docs/release-readiness.md)。开发环境使用单独验证的预发布渠道。
 
 升级分为三步：部署 Worker、安装目标 Runner 包、刷新 MCP 客户端工具目录。完成后按[升级指南](docs/upgrading.zh-CN.md)验证一个代表性任务。
 

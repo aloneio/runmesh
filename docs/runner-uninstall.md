@@ -8,7 +8,7 @@ Use a local console or SSH session outside the Runner being removed, as stopping
 
 When its release channel is available, the enrollment page offers a hosted maintenance command. It downloads and authenticates a temporary runtime and maintenance package, then cleans up the installed layout. This works with old or incomplete installations and needs outbound HTTPS to the Worker and its pinned assets.
 
-The current 0.1.4 candidate keeps stable hosted distribution disabled. If the hosted command is unavailable, use an independently verified available maintenance release. A verified portable CLI with complete purge support can run `uninstall --purge --yes` on POSIX. Check its release notes, because older versions accept the same flags while removing fewer files.
+The 0.1.4 stable release provides the maintenance package. Check your Worker's release channel before using its hosted command. If the hosted command is unavailable, use an independently verified available maintenance release. A verified portable CLI with complete purge support can run `uninstall --purge --yes` on POSIX. Check its release notes, because older versions accept the same flags while removing fewer files.
 
 On Windows, prefer the hosted maintenance command: it runs outside the installation being removed.
 

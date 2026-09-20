@@ -33,7 +33,7 @@ Use workspace-bound live Job queries for current host state. Saved history can l
 
 Source-side batching, archive receipts and local day-based cleanup require history protocol 1, available from Runner **v0.1.2**. In batched mode, such Runners sample periodically and suppress lifecycle-driven uploads. Off mode disables ordinary history uploads.
 
-The **0.1.4 candidate** adds reporting protocol 2. A compatible Worker/Runner pair filters newly created no-record Jobs before upload and coalesces state changes into scheduled uploads. An acknowledged idle snapshot leaves the history timer stopped, with bounded recovery/retry exceptions. See [change-driven history](demand-job-history.md) / [中文](demand-job-history.zh-CN.md).
+**0.1.4** adds reporting protocol 2. A compatible Worker/Runner pair filters newly created no-record Jobs before upload and coalesces state changes into scheduled uploads. An acknowledged idle snapshot leaves the history timer stopped, with bounded recovery/retry exceptions. See [change-driven history](demand-job-history.md) / [中文](demand-job-history.zh-CN.md).
 
 `recorded` and `unchanged` receipts acknowledge a snapshot. For reporting protocol 2, `disabled` stops scheduling on that connection. Deferred, failed or missing receipts retain work for a later upload opportunity. Older peers without receipt support can keep an idle snapshot stale until activity or reconnection. Install a compatible verified Runner separately from Worker deployment.
 

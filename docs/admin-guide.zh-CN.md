@@ -8,7 +8,7 @@
 
 准备 Cloudflare 账号、公网 HTTPS Worker 地址、至少 12 个字符的管理员密码，以及每台主机和工作区的最小权限方案。
 
-当前源码为 **0.1.4 候选版**。生产部署要求 `main` 上的签名发行物已完成验证和激活；通过[发行状态](release-readiness.md)选择版本。候选版测试使用独立的 `dev` Worker 和资源。
+**0.1.4** 是当前已签名发布的正式版。生产环境从 `main` 上包含对应发行激活记录的已审核源码部署。安装包的可用情况见[发行状态](release-readiness.md)；测试后续改动时，使用独立的 `dev` Worker 和资源。
 
 已激活的正式版本在 Cloudflare Workers Builds 中连接仓库并选择 `main`，仓库根目录构建命令设为 `npm run build`，部署命令为：
 
@@ -69,11 +69,11 @@ Runner 详情页按所选历史类型点击「加载 / 刷新」，日志默认�
 
 ## 配置共享执行
 
-0.1.4 候选版默认两个执行槽，支持显式配置 1–64 个。请检查各 Runner 实际生效的设置；已有明确配置会保留。
+Runner 0.1.4 默认两个执行槽，支持显式配置 1–64 个。请检查各 Runner 实际生效的设置；已有明确配置会保留。
 
 兼容队列最多容纳 32 个等待任务，每个客户端最多八个。客户端轮流调度，启动前再次检查授权。shell 请求使用 `queue: false` 时，执行槽满载立即返回。详见[队列行为](job-queue-and-localization.md)。
 
-0.1.4 候选版可按变化上报历史快照，同时保留正常心跳、鉴权和维护，需要兼容的 Worker 与 Runner。从 0.1.3 升级时请阅读[版本说明](release-notes.zh-CN.md)和[历史上报](demand-job-history.zh-CN.md)。
+0.1.4 可按变化上报历史快照，同时保留正常心跳、鉴权和维护，需要兼容的 Worker 与 Runner。从 0.1.3 升级时请阅读[版本说明](release-notes.zh-CN.md)和[历史上报](demand-job-history.zh-CN.md)。
 
 ## 备份与升级
 

@@ -1,6 +1,6 @@
 # Check Runner capabilities and tool catalogs
 
-Use `inspect` with `action=diagnostics` and a readable `workspace_id` to check Runner support, current permissions and the server's tool catalog. The extended capability report is part of the **0.1.4 candidate**; v0.1.3 Runners report these capabilities as unknown until upgraded.
+Use `inspect` with `action=diagnostics` and a readable `workspace_id` to check Runner support, current permissions and the server's tool catalog. The extended capability report is available in **0.1.4**; v0.1.3 Runners report these capabilities as unknown until upgraded.
 
 ## Interpret the report
 

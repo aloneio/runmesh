@@ -1,6 +1,6 @@
 # Change-driven Job history
 
-Change-driven reporting uploads recent Job metadata when recorded Jobs change, then stops its history timer once those changes are acknowledged. It is part of the **0.1.4 candidate** and requires a compatible Worker/Runner pair with D1 history.
+Change-driven reporting uploads recent Job metadata when recorded Jobs change, then stops its history timer once those changes are acknowledged. It is available in **0.1.4** and requires a compatible Worker/Runner pair with D1 history.
 
 ## Enable and configure reporting
 

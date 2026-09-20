@@ -1,6 +1,6 @@
 # Context storage and retention
 
-Use `context` to inspect a workspace's Context usage and remove selected old revisions. The `storage` and `prune` actions are part of the **0.1.4 candidate** and require a compatible Worker and Runner. For an installed v0.1.3 Runner, upgrade to a verified release containing these actions before using them.
+Use `context` to inspect a workspace's Context usage and remove selected old revisions. The `storage` and `prune` actions are available in **0.1.4** and require a compatible Worker and Runner. For an installed v0.1.3 Runner, upgrade to a verified release containing these actions before using them.
 
 ## Check usage
 
