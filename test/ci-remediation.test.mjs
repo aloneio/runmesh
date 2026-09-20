@@ -3,12 +3,14 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
 import { stringify } from "yaml";
 import { parseCi, validateCiWiring } from "../scripts/ci-policy.mjs";
 import { CHECK_IDS, CI_CHECKS, AGGREGATE_JOBS, NATIVE_COMMANDS, LTS_COMMANDS, GITLAB_EVENTS, UPLOAD_ACTION, checkCommand } from "../scripts/ci-contract.mjs";
 import { gateEvidence, gateJUnit, writeGateReport } from "../scripts/ci-report.mjs";
 import { writeSupplement } from "../scripts/ci-supplement.mjs";
 import { browserEvidence, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
+import { waitForUiNavigation } from "../scripts/ui-browser-check.mjs";
 
 function fixture() {
   const pkg = { scripts: { "test:unit": "npm run test:domain && npm run test:contracts && npm run test --workspaces", "test:release-tools": "node --test test/x.test.mjs", "test:e2e": "node ./scripts/run-e2e.mjs", "test:package:e2e": "node scripts/run-package-e2e.mjs", "test:browser": "node scripts/run-browser-e2e.mjs" } };
@@ -132,4 +134,70 @@ test("CI04 missing, skipped, duplicate or TODO browser evidence cannot pass", ()
   }
   const duplicate = rawBrowser(); duplicate.testResults[0].assertionResults.push({ status: "passed", title: REQUIRED_BROWSER_TEST });
   assert.throws(() => browserEvidence(duplicate, 0));
+});
+
+function navigationFixture() {
+  const state = { url: "http://127.0.0.1:1234/admin?lang=zh-CN", locale: "zh-CN", loaderId: "new-document",
+    readyState: "complete", initialized: true, loading: false };
+  const fixture = { state, elapsed: 0, polls: 0, evaluatedLoaders: [], budgets: [], onPause() {}, evaluateError: undefined };
+  fixture.clock = { now: () => fixture.elapsed, pause: async milliseconds => {
+    fixture.elapsed += milliseconds; fixture.polls++; await fixture.onPause();
+  } };
+  fixture.tab = async (method, params, budget) => {
+    fixture.budgets.push(budget);
+    if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main-frame", loaderId: state.loaderId, url: state.url } } };
+    assert.equal(method, "Runtime.evaluate");
+    if (fixture.evaluateError) { const error = fixture.evaluateError; fixture.evaluateError = undefined; throw error; }
+    fixture.evaluatedLoaders.push(state.loaderId);
+    return { result: { value: runInNewContext(params.expression, {
+      location: new URL(state.url), document: { readyState: state.readyState, documentElement: { lang: state.locale } },
+      window: { __runmeshDynamicNavigation: state.initialized, __runmeshLoading: state.loading },
+    }) } };
+  };
+  return fixture;
+}
+
+test("CI04 full navigation waits beyond a ready old document for the requested loader and locale", async () => {
+  const h = navigationFixture(), expected = { url: h.state.url, locale: h.state.locale, frameId: "main-frame", loaderId: "new-document" };
+  Object.assign(h.state, { url: "http://127.0.0.1:1234/admin", locale: "en", loaderId: "old-document" });
+  h.onPause = () => {
+    if (h.polls === 1) Object.assign(h.state, { url: expected.url, locale: expected.locale });
+    if (h.polls === 2) Object.assign(h.state, { loaderId: expected.loaderId, readyState: "loading" });
+    if (h.polls === 3) h.state.readyState = "complete";
+  };
+  await waitForUiNavigation(h.tab, expected, h.clock);
+  assert.equal(h.polls, 3);
+  assert.deepEqual(h.evaluatedLoaders, ["new-document", "new-document"]);
+  assert.ok(h.budgets.every(budget => budget > 0 && budget <= 5000));
+});
+
+test("CI04 SPA and cookie reload readiness require the target locale and completed mounted navigation", async () => {
+  const h = navigationFixture(), expected = { url: "http://127.0.0.1:1234/admin/clients", locale: "en" };
+  h.state.url = expected.url;
+  h.onPause = () => {
+    if (h.polls === 1) Object.assign(h.state, { locale: "en", loaderId: "reloaded-document", initialized: false });
+    if (h.polls === 2) Object.assign(h.state, { initialized: true, loading: true });
+    if (h.polls === 3) h.state.loading = false;
+  };
+  await waitForUiNavigation(h.tab, expected, h.clock);
+  assert.equal(h.polls, 3);
+});
+
+test("CI04 an unmet browser navigation deadline fails instead of inspecting the old page", async () => {
+  const h = navigationFixture();
+  await assert.rejects(waitForUiNavigation(h.tab, { url: h.state.url, locale: "en" }, h.clock), /navigation readiness timed out after 5000 ms/u);
+  assert.equal(h.elapsed, 5000);
+});
+
+test("CI04 only recognized destroyed-context CDP errors are retried during navigation", async () => {
+  const h = navigationFixture(), expected = { url: h.state.url, locale: h.state.locale };
+  h.evaluateError = Object.assign(new Error("Execution context was destroyed."), { code: -32000 });
+  await waitForUiNavigation(h.tab, expected, h.clock);
+  assert.equal(h.polls, 1);
+  for (const error of [Object.assign(new Error("Permission denied"), { code: -32000 }),
+    Object.assign(new Error("Execution context was destroyed."), { code: -32602 }), new Error("socket closed")]) {
+    const failed = navigationFixture(); failed.evaluateError = error;
+    await assert.rejects(waitForUiNavigation(failed.tab, expected, failed.clock), value => value === error);
+    assert.equal(failed.polls, 0);
+  }
 });
