@@ -100,6 +100,10 @@ MCP 地址本身就是凭据，在创建或轮换时显示。请妥善保存，�
 
 完整入口见[文档目录](docs/README.zh-CN.md)，其中也提供架构、协议与维护者参考，以及用于追溯的历史记录。
 
+## 支持名单
+
+- [linux.do](https://linux.do/) 社区支持
+
 ## 许可证与支持
 
 Runmesh 由 aloneio 维护。安全漏洞请按照 [.github/SECURITY.zh-CN.md](.github/SECURITY.zh-CN.md) 的私密流程报告；普通问题和改进建议请提交 Issue。名称与徽标使用规则见 [商标说明](docs/legal/TRADEMARKS.zh-CN.md)。
