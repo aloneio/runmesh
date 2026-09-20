@@ -1,10 +1,12 @@
 import * as fs from "node:fs/promises";
+import * as syncFs from "node:fs";
+import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, expect, it, vi } from "vitest";
 import { JobLogReader } from "../src/jobs/logs.js";
 import { nativeJobFiles } from "../src/jobs/storage.js";
-import { nativeJobProcesses } from "../src/jobs/process.js";
+import { nativeJobProcesses, isTerminationTargetValid, linuxProcessStartFingerprintSync } from "../src/jobs/process.js";
 import { normalizeJobRecord, occupiesProcessSlot, type JobRecord } from "../src/jobs/records.js";
 import { terminalRecoveredJob } from "../src/jobs/recovery.js";
 import type { JobLogFilePort, JobLogScope } from "../src/jobs/ports.js";
@@ -14,11 +16,17 @@ import type { ContextFilePort } from "../src/context/ports.js";
 
 vi.mock("node:fs/promises", async original => {
   const actual = await original<typeof import("node:fs/promises")>();
-  return { ...actual, rename: vi.fn(actual.rename), open: vi.fn(actual.open) };
+  return { ...actual, rename: vi.fn(actual.rename), open: vi.fn(actual.open), readFile: vi.fn(actual.readFile) };
 });
+vi.mock("node:fs", async original => {
+  const actual = await original<typeof import("node:fs")>();
+  return { ...actual, readFileSync: vi.fn(actual.readFileSync) };
+});
+const nativePlatform = process.platform;
 const roots: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
+  Object.defineProperty(process, "platform", { value: nativePlatform });
   await Promise.all(roots.splice(0).map(root => fs.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 })));
 });
 async function fixture() {
@@ -140,6 +148,101 @@ it("AR07 absent process identity cannot produce a cancellation delivery", async 
   expect(await nativeJobProcesses.terminateProcess(null)).toBe(false);
   expect(await nativeJobProcesses.terminateProcess(-1)).toBe(false);
   expect(kill).not.toHaveBeenCalled();
+});
+
+function processStat(state: string, starttime = "123456"): string {
+  // Linux permits spaces and parentheses inside comm. The parser must bind
+  // state and starttime after its final closing parenthesis.
+  return `424242 (synthetic (child) name) ${[state, ...Array<string>(18).fill("0"), starttime, "0"].join(" ")}\n`;
+}
+
+it.each(["Z", "X", "x"])("AR07 Linux %s process records are exited even while their PID exists", async state => {
+  Object.defineProperty(process, "platform", { value: "linux" });
+  const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+  vi.mocked(fs.readFile).mockResolvedValueOnce(processStat(state));
+  expect(await nativeJobProcesses.inspectProcess(424242, "123456")).toEqual({ alive: false, fingerprintMatches: true });
+  // An unreaped leader still reserves its original PID and starttime. That
+  // identity remains usable by an already-started process-group cancellation.
+  vi.mocked(syncFs.readFileSync).mockReturnValueOnce(processStat(state));
+  expect(isTerminationTargetValid(424242, "123456")).toBe(true);
+  vi.mocked(syncFs.readFileSync).mockReturnValueOnce(processStat(state, "654321"));
+  expect(isTerminationTargetValid(424242, "123456")).toBe(false);
+  expect(kill.mock.calls.every(([, signal]) => signal === 0)).toBe(true);
+});
+
+it.each(["R", "S", "D", "T", "t", "I"])("AR07 Linux %s process records retain their recovery slot", async state => {
+  Object.defineProperty(process, "platform", { value: "linux" });
+  vi.spyOn(process, "kill").mockReturnValue(true);
+  vi.mocked(fs.readFile).mockResolvedValueOnce(processStat(state));
+  expect(await nativeJobProcesses.inspectProcess(424242, "123456")).toEqual({ alive: true, fingerprintMatches: true });
+  vi.mocked(syncFs.readFileSync).mockReturnValueOnce(processStat(state));
+  expect(isTerminationTargetValid(424242, "123456")).toBe(true);
+});
+
+it("AR07 Linux recovery preserves PID-reuse evidence and unknown process observations", async () => {
+  Object.defineProperty(process, "platform", { value: "linux" });
+  vi.spyOn(process, "kill").mockReturnValue(true);
+  vi.mocked(fs.readFile).mockResolvedValueOnce(processStat("S", "654321"));
+  expect(await nativeJobProcesses.inspectProcess(424242, "123456")).toEqual({ alive: true, fingerprintMatches: false });
+  vi.mocked(fs.readFile).mockRejectedValueOnce(Object.assign(new Error("unavailable proc"), { code: "EACCES" }));
+  expect(await nativeJobProcesses.inspectProcess(424242, "123456")).toEqual({ alive: true, fingerprintMatches: null });
+  vi.mocked(fs.readFile).mockResolvedValueOnce("malformed process stat");
+  expect(await nativeJobProcesses.inspectProcess(424242, "123456")).toEqual({ alive: true, fingerprintMatches: null });
+  vi.mocked(syncFs.readFileSync).mockReturnValueOnce(processStat("S", "654321"));
+  expect(isTerminationTargetValid(424242, "123456")).toBe(false);
+});
+
+it.each([
+  { fingerprint: "123456", escalates: true },
+  { fingerprint: "654321", escalates: false },
+])("AR07 recovered cancellation escalates=$escalates after the leader becomes a zombie with fingerprint $fingerprint", async ({ fingerprint, escalates }) => {
+  Object.defineProperty(process, "platform", { value: "linux" });
+  const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+  vi.useFakeTimers();
+  try {
+    vi.mocked(syncFs.readFileSync).mockReturnValueOnce(processStat("S"));
+    expect(await nativeJobProcesses.terminateProcess(424242, "123456")).toBe(true);
+    expect(kill).toHaveBeenCalledWith(-424242, "SIGTERM");
+    expect(kill).not.toHaveBeenCalledWith(-424242, "SIGKILL");
+    vi.mocked(syncFs.readFileSync).mockReturnValueOnce(processStat("Z", fingerprint));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(kill.mock.calls.filter(([, signal]) => signal === "SIGKILL")).toEqual(escalates ? [[-424242, "SIGKILL"]] : []);
+  } finally {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  }
+});
+
+it.skipIf(nativePlatform !== "linux")("AR07 native recovery recognizes an exited child before its parent reaps it", async () => {
+  const root = await fixture(), release = join(root, "release-parent");
+  // Block only this synthetic parent's event loop so libuv cannot waitpid the
+  // exited child yet. Releasing the parent lets it reap the child normally;
+  // the test creates no orphan and needs no external interpreter or compiler.
+  const script = `const {spawn}=require('node:child_process');const fs=require('node:fs');
+    const child=spawn(process.execPath,['-e',''],{stdio:'ignore'});
+    fs.writeSync(1,String(child.pid)+'\\n');
+    const gate=new Int32Array(new SharedArrayBuffer(4)),deadline=Date.now()+10000;
+    while(!fs.existsSync(process.argv[1])&&Date.now()<deadline)Atomics.wait(gate,0,0,10);`;
+  const parent = spawn(process.execPath, ["-e", script, release], { stdio: ["ignore", "pipe", "pipe"] });
+  const closed = new Promise<number | null>((resolve, reject) => { parent.once("error", reject); parent.once("close", resolve); });
+  let output = "";
+  parent.stdout.on("data", (data: Buffer) => { output += data.toString(); });
+  try {
+    await vi.waitFor(() => expect(output).toMatch(/^\d+\n$/), { timeout: 5_000 });
+    const pid = Number(output.trim());
+    await vi.waitFor(async () => {
+      const stat = await fs.readFile(`/proc/${pid}/stat`, "utf8");
+      expect(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0]).toBe("Z");
+    }, { timeout: 5_000 });
+    expect(process.kill(pid, 0)).toBe(true);
+    const fingerprint = linuxProcessStartFingerprintSync(pid);
+    expect(fingerprint).toMatch(/^\d+$/);
+    expect(await nativeJobProcesses.inspectProcess(pid, fingerprint)).toEqual({ alive: false, fingerprintMatches: true });
+    expect(isTerminationTargetValid(pid, fingerprint)).toBe(true);
+  } finally {
+    await fs.writeFile(release, "release\n");
+    expect(await closed).toBe(0);
+  }
 });
 
 it("AR07 recovered unknown Jobs keep admission occupancy and never invent exit codes", () => {

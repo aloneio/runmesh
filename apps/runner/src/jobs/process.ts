@@ -10,33 +10,44 @@ export type ProcessTerminator = (pid: number | null, expectedFingerprint?: strin
 export async function inspectProcess(pid: number | null, expectedFingerprint: string | null): Promise<{ alive: boolean; fingerprintMatches: boolean | null }> {
   if (pid === null || pid <= 0) return { alive: false, fingerprintMatches: null };
   try { process.kill(pid, 0); } catch (error) { return { alive: (error as NodeJS.ErrnoException).code === "EPERM", fingerprintMatches: null }; }
-  const fingerprint = await linuxProcessStartFingerprint(pid);
-  return { alive: true, fingerprintMatches: expectedFingerprint === null || fingerprint === null ? null : fingerprint === expectedFingerprint };
+  const observation = await linuxProcessObservation(pid);
+  const fingerprint = observation?.starttime ?? null;
+  // kill(pid, 0) also succeeds for an exited child that its parent has not
+  // reaped. Container init processes may retain that zombie indefinitely;
+  // recovery must release its slot while preserving the unknown exit outcome.
+  return { alive: observation === null || !isDeadProcessState(observation.state),
+    fingerprintMatches: expectedFingerprint === null || fingerprint === null ? null : fingerprint === expectedFingerprint };
 }
 
 /** Read Linux /proc/<pid>/stat field 22 (starttime); unavailable hosts return null. */
 export function linuxProcessStartFingerprintSync(pid: number | null): string | null {
+  return linuxProcessObservationSync(pid)?.starttime ?? null;
+}
+
+type LinuxProcessObservation = { readonly state: string; readonly starttime: string };
+
+function parseLinuxProcessStat(value: string): LinuxProcessObservation | null {
+  const close = value.lastIndexOf(")");
+  if (close < 0) return null;
+  const fields = value.slice(close + 2).trim().split(/\s+/);
+  const state = fields[0], starttime = fields[19]; // fields after comm start at field 3; field 22 is index 19.
+  return state === undefined || state.length !== 1 || starttime === undefined || !/^\d+$/.test(starttime) ? null : { state, starttime };
+}
+
+function isDeadProcessState(state: string): boolean { return state === "Z" || state === "X" || state === "x"; }
+
+function linuxProcessObservationSync(pid: number | null): LinuxProcessObservation | null {
   if (process.platform !== "linux" || pid === null || pid <= 0) return null;
-  try {
-    const value = readFileSync(`/proc/${pid}/stat`, "utf8");
-    const close = value.lastIndexOf(")");
-    if (close < 0) return null;
-    const fields = value.slice(close + 2).trim().split(/\s+/);
-    const starttime = fields[19]; // stat fields after comm start at field 3; field 22 is index 19.
-    return starttime === undefined || !/^\d+$/.test(starttime) ? null : starttime;
-  } catch { return null; }
+  try { return parseLinuxProcessStat(readFileSync(`/proc/${pid}/stat`, "utf8")); } catch { return null; }
 }
 
 export async function linuxProcessStartFingerprint(pid: number | null): Promise<string | null> {
+  return (await linuxProcessObservation(pid))?.starttime ?? null;
+}
+
+async function linuxProcessObservation(pid: number | null): Promise<LinuxProcessObservation | null> {
   if (process.platform !== "linux" || pid === null || pid <= 0) return null;
-  try {
-    const value = await readFile(`/proc/${pid}/stat`, "utf8");
-    const close = value.lastIndexOf(")");
-    if (close < 0) return null;
-    const fields = value.slice(close + 2).trim().split(/\s+/);
-    const starttime = fields[19]; // stat fields after comm start at field 3; field 22 is index 19.
-    return starttime === undefined || !/^\d+$/.test(starttime) ? null : starttime;
-  } catch { return null; }
+  try { return parseLinuxProcessStat(await readFile(`/proc/${pid}/stat`, "utf8")); } catch { return null; }
 }
 
 export async function terminateProcess(pid: number | null, expectedFingerprint: string | null = null, expectedChild?: ChildProcess): Promise<boolean> {
