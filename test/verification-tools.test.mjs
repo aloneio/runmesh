@@ -7,11 +7,24 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkDomainImports, inventoryTests, validateTestPlan, validateTestWiring } from "../scripts/verification-plan.mjs";
 import { summarizeVitest, packageEvidence } from "../scripts/test-evidence.mjs";
+import { browserFailureEvidence, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
 import { renderExamples, renderFacts, validateExampleCoverage, verifyDocReferences } from "../scripts/project-facts.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const plan = JSON.parse(await readFile(join(root, "test/verification-plan.json"), "utf8"));
 const files = plan.groups.flatMap(g => g.files);
+
+test("failed browser diagnostics retain only status counts and the required check state", () => {
+  const summary = browserFailureEvidence({ testResults: [{ name: "/private/source", assertionResults: [
+    { title: REQUIRED_BROWSER_TEST, status: "failed", failureMessages: ["cookie=private-token"] },
+    { title: "private fixture", status: "passed", failureMessages: ["private stdout"] },
+    { status: "pending" },
+  ] }] });
+  assert.deepEqual(summary, { report_available: true, required_browser_checks: 1, required_browser_status: "failed", failed_tests: 1, skipped_tests: 1 });
+  assert.ok(!JSON.stringify(summary).includes("private"));
+  assert.deepEqual(browserFailureEvidence(undefined), { report_available: false });
+  assert.equal(browserFailureEvidence({ testResults: [{ assertionResults: [{ title: REQUIRED_BROWSER_TEST, status: "private-token" }] }] }).required_browser_status, "unknown");
+});
 
 test("AR08 architecture references cannot name missing source paths", async () => {
   assert.equal(await verifyDocReferences(root, "See `apps/runner/src/jobs/` and `packages/protocol/src/`."), 2);
