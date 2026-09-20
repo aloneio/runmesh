@@ -1,6 +1,6 @@
 # Use file snapshots and append-log cursors
 
-Choose `consistency:"snapshot"` to read file pages from one captured buffer, or `consistency:"append"` to follow a Job log across explicit reads. These modes are implemented in the **0.1.4 candidate** and require a compatible Worker and Runner. Ordinary numeric-cursor reads remain the default.
+Choose `consistency:"snapshot"` to read file pages from one captured buffer, or `consistency:"append"` to follow a Job log across explicit reads. These modes are available in **0.1.4** and require a compatible Worker and Runner. Ordinary numeric-cursor reads remain the default.
 
 ## Read a file snapshot
 

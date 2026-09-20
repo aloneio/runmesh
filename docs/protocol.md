@@ -94,7 +94,7 @@ Job metadata excludes cwd, command, PID and host root. Requested log pages pass 
 
 The enrollment code is used only for redemption. Credential rotation/revocation invalidates the connection generation; stop an already running local process through explicit Job cancellation or host control.
 
-Hosted installation additionally requires a verified release in its channel. The current **0.1.4 candidate** has a closed stable gate; development uses verified signed prereleases. See [deployment](deployment.md) and [portable installation](portable-runner-installation.md).
+Hosted installation additionally requires a verified release in its channel. The reviewed **0.1.4** activation enables stable hosted distribution in source; check the deployed Worker's release descriptor before installation. Development uses verified signed prereleases. See [deployment](deployment.md) and [portable installation](portable-runner-installation.md).
 
 Hosted commands contain the one-time code. To use the omitted-code prompt on Windows, remove `-NonInteractive` and use an interactive administrator terminal. Treat any copied command containing the code as a credential.
 

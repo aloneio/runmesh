@@ -53,4 +53,4 @@ Check `/health` for the backend/binding and deployed commit, then verify an auth
 
 Switching to `sqlite` is an explicit operator change and moves history usage back to core storage. Preserve namespaces and existing data during that change.
 
-The **0.1.4 candidate** implements [reporting protocol 2](demand-job-history.md), which filters new no-record Jobs at a compatible Runner and uses change-driven uploads. Deploy the compatible Worker and install the verified Runner as separate steps. Authorization and heartbeat remain part of normal connection resource use.
+**0.1.4** implements [reporting protocol 2](demand-job-history.md), which filters new no-record Jobs at a compatible Runner and uses change-driven uploads. Deploy the compatible Worker and install the verified Runner as separate steps. Authorization and heartbeat remain part of normal connection resource use.

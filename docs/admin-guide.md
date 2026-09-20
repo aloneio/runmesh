@@ -8,7 +8,7 @@ Deploy the Runmesh control plane on Cloudflare Workers, then enroll the Linux, m
 
 Prepare a Cloudflare account, a public HTTPS Worker origin, an administrator password of at least 12 characters, and a least-privilege plan for each machine and workspace.
 
-Current source is the **0.1.4 candidate**. Production deployment requires a signed release that has completed verification and activation on `main`. Use [release status](release-readiness.md) to choose a version; candidate testing uses a separate `dev` Worker and resources.
+**0.1.4** is the current signed stable release. For production, deploy the reviewed `main` source containing its release activation. Check [release status](release-readiness.md) for package availability; test upcoming changes with a separate `dev` Worker and resources.
 
 For an activated production release, connect the repository to Cloudflare Workers Builds, choose `main`, and set the repository-root build command to `npm run build`. Deploy with:
 
@@ -69,11 +69,11 @@ Default history upload is every five minutes and cloud retention is seven days. 
 
 ## Configure shared execution
 
-The 0.1.4 candidate defaults to two execution slots, with an explicit configurable limit of 1–64. Check each installed Runner's effective setting; existing explicit limits are preserved.
+Runner 0.1.4 defaults to two execution slots, with an explicit configurable limit of 1–64. Check each installed Runner's effective setting; existing explicit limits are preserved.
 
 Compatible queues hold up to 32 waiting Jobs and eight per client, schedule clients in turn, and check authorization again before starting. A shell request with `queue: false` returns immediately when no slot is available. See [queue behavior](job-queue-and-localization.md).
 
-Change-driven history reporting in the 0.1.4 candidate uploads changed snapshots while retaining ordinary heartbeats, authorization and maintenance. It requires a compatible Worker and Runner. See [release notes](release-notes.md) and [history reporting](demand-job-history.md) when upgrading from 0.1.3.
+Change-driven history reporting in 0.1.4 uploads changed snapshots while retaining ordinary heartbeats, authorization and maintenance. It requires a compatible Worker and Runner. See [release notes](release-notes.md) and [history reporting](demand-job-history.md) when upgrading from 0.1.3.
 
 ## Back up and upgrade
 

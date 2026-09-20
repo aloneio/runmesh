@@ -73,7 +73,7 @@ Production uses `wss://`; loopback `ws://` requires `--insecure-local`. Each ses
 
 ## Install or update the service
 
-Hosted installation requires a verified release in the selected channel and a valid public HTTPS origin. Ordinary HTTPS deployments derive the origin from a matching URL and Host; `RUNMESH_PUBLIC_ORIGIN` is an optional override. The **0.1.4 candidate** keeps stable distribution closed; development selects verified signed prereleases and test distribution stays disabled.
+Hosted installation requires a verified release in the selected channel and a valid public HTTPS origin. Ordinary HTTPS deployments derive the origin from a matching URL and Host; `RUNMESH_PUBLIC_ORIGIN` is an optional override. The reviewed **0.1.4** activation enables stable hosted distribution in source. Check the deployed Worker's release descriptor before installation. Development selects verified signed prereleases and test distribution stays disabled.
 
 An available dashboard command carries a one-time code. Fresh installation verifies and stages the package, then enrolls through standard input. A complete managed installation of the same version instead re-enrolls and restarts its service. Keep the copied command private because its code can enter shell history and process arguments. For the hidden Windows prompt, remove `-NonInteractive` and run in an interactive administrator terminal.
 

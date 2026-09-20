@@ -2,7 +2,9 @@
 
 [English](release-notes.md) · [文档目录](README.zh-CN.md) · [升级指南](upgrading.zh-CN.md)
 
-## 0.1.4
+## 0.1.4 — 已发布正式版
+
+于 **2026 年 9 月 20 日**发布为[不可变正式版](https://github.com/aloneio/runmesh/releases/tag/v0.1.4)，提供已签名的便携 Runner 安装包。
 
 **0.1.4** 改进了任务控制、MCP 恢复、工作区 Context 管理和安装流程。已验证安装包的可用情况及托管安装状态见[发行状态](release-readiness.md)；更新 Worker、Runner 和客户端时，请按[升级指南](upgrading.zh-CN.md)操作。
 

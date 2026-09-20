@@ -1,6 +1,6 @@
 # 检查 Runner 能力与工具目录
 
-调用 `inspect`，传入 `action=diagnostics` 和可读的 `workspace_id`，查看 Runner 支持情况、当前权限及服务端工具目录。扩展能力报告属于 **0.1.4 候选版**功能；v0.1.3 Runner 升级前会将这些能力报告为未知。
+调用 `inspect`，传入 `action=diagnostics` 和可读的 `workspace_id`，查看 Runner 支持情况、当前权限及服务端工具目录。**0.1.4** 支持扩展能力报告；v0.1.3 Runner 升级前会将这些能力报告为未知。
 
 ## 解释诊断结果
 

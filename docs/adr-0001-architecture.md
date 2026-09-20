@@ -38,8 +38,8 @@ setup. Scripts accept a positional code, `--code CODE`, or `--code=CODE`; omitti
 the code allows a hidden prompt in an interactive terminal. On Windows, also remove `-NonInteractive` from the copied command. The downstream Runner receives
 standard input. The complete convenience
 command is credential material and may be recorded in command history or
-process arguments. The 0.1.4 production gate is enabled only after independent signed-asset
-verification. Development selects only its separately verified dev prereleases. See [release status](release-readiness.md) for the current candidate state.
+process arguments. The reviewed 0.1.4 activation enables stable hosted distribution in source after independent signed-asset
+verification. Development selects only its separately verified dev prereleases. See [release status](release-readiness.md) for the current distribution state.
 
 ## Amendment — 2026-09-14: optional history isolation
 

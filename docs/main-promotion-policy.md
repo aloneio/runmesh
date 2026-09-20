@@ -64,10 +64,21 @@ checks.
 ## Promote a release
 
 For an approved promotion, open `dev -> main`, wait for the source policy and
-all required checks, and merge through the provider PR/MR endpoint or UI. Use the
-corresponding GitLab `dev -> main` MR for mirror promotion. Reconcile differences
-in merge strategy and commit identity while keeping force-push and direct-push
-protection enabled.
+all required checks, then complete the protected PR/MR promotion.
+
+On GitHub, verify that the passing `dev -> main` PR is mergeable and its head
+and base match the current remote branches. Confirm that `main` is an ancestor
+of the reviewed `dev` commit, then push that exact commit normally to protected
+`main` as a fast-forward. The branch rules remain enabled and enforce the PR
+checks. Verify that GitHub marks the PR as merged and that `main` points to the
+reviewed head. This uses GitHub's supported
+[local merge workflow](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks)
+and preserves the existing author and committer identity,
+`aloneio <git@aloneio.aleeas.com>`.
+
+Use the corresponding protected GitLab `dev -> main` MR with the fast-forward
+merge method and a successful pipeline. Preserve `dev` and verify that both
+providers' `main` branches point to the same reviewed commit.
 
 Stable publication continues from protected `main` through its release gates.
 Verify the final commit on both providers and the deployed Worker separately.

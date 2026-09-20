@@ -32,7 +32,7 @@ Development uses `RUNMESH_ENVIRONMENT=development`. Keep test variables in the l
 
 ## Release and environment selection
 
-Current source is the **0.1.4 candidate**, with stable distribution disabled. Production becomes available after signed publication, independent verification and reviewed activation in `release/release-state.json`. Keep this recorded state as the source of installation availability.
+The signed **0.1.4** stable release has been independently verified. Its reviewed activation in `release/release-state.json` enables stable hosted distribution in source. Deploy the activated `main` source, then check your Worker's release descriptor for installation availability. An explicit empty `RUNMESH_SIGNED_RELEASE_AVAILABLE` override still disables hosted installation.
 
 Production uses protected `main`; candidate testing uses the separate `dev` Worker. Development selects a verified signed prerelease from its own channel and closes hosted installation when that selection is unavailable. See [development prereleases](dev-runner-prereleases.md).
 

@@ -27,7 +27,7 @@ npm run pack:runner
 | Production | `main` | `runmesh` | Signed stable release verified and activated |
 | Development | `dev` | `runmeshdev` | Candidate source; hosted installation uses its verified dev prerelease channel |
 
-Current source is the **0.1.4 candidate**. Use development for testing until [release activation](release-readiness.md) is complete.
+The signed **0.1.4** stable release has completed independent asset verification and reviewed activation. Deploy the activated `main` source for production, then verify the live commit through [build provenance](build-provenance.md). See [release status](release-readiness.md) for package availability.
 
 In Cloudflare Workers Builds, select the repository root and set the build command to `npm run build`. Use the matching deploy command:
 

@@ -47,7 +47,7 @@ Keep the Runner profile private because it contains its long-lived token. Ordina
 
 Centrally managed workspace roots are configured in the administrator interface and delivered in authenticated policy frames. Public metadata omits them. File content and command/log output can still contain paths that an authorized client requests.
 
-Hosted installation requires a verified release in the selected channel and a validated HTTPS origin. Production follows reviewed release state; **0.1.4 is a candidate and its stable gate is closed**. Development uses verified signed prereleases. Ordinary Cloudflare routing derives the origin from a matching request URL and Host; `RUNMESH_PUBLIC_ORIGIN` is an optional override.
+Hosted installation requires a verified release in the selected channel and a validated HTTPS origin. Production follows reviewed release state; the **0.1.4** activation enables stable hosted distribution in source. Development uses verified signed prereleases. Ordinary Cloudflare routing derives the origin from a matching request URL and Host; `RUNMESH_PUBLIC_ORIGIN` is an optional override.
 
 The hosted script and embedded Ed25519 key form the one-command installer trust path. Use [portable artifact verification](portable-runner-installation.md) when you need an independently trusted artifact/keyring. Hosted commands contain a single-use code that can enter shell history or process arguments. To use a hidden prompt on Windows, remove `-NonInteractive` and run in an interactive administrator terminal.
 

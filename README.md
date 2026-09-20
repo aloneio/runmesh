@@ -38,7 +38,7 @@ The MCP URL is a credential, shown when a client is created or rotated. Store it
 
 ## Administrator quick setup
 
-Choose a verified, activated `main` release for production. Test the **0.1.4 candidate** using the separate `dev` environment described in the [deployment reference](docs/deployment.md).
+Use the signed **0.1.4** stable release for production, with the corresponding activated `main` source for Worker deployment. Test upcoming changes in the separate `dev` environment described in the [deployment reference](docs/deployment.md).
 
 1. Deploy a released production Worker from `main`, configure `INTERNAL_CONTROL_SECRET` and `RUNNER_TOKEN_PEPPER`, and set the first administrator password before exposing the instance to untrusted visitors.
 2. Add a machine on the **Runner** page. Keep the default `dedicated_user` execution mode unless you need and accept host-level privileges.
@@ -76,7 +76,7 @@ Effective permission is the intersection of the client, Runner, and workspace po
 
 ## Versions and upgrades
 
-The latest published stable version is **0.1.3**. This checkout describes the **0.1.4 candidate**; see [release notes](docs/release-notes.md) and [release status](docs/release-readiness.md) to choose the appropriate version. Development uses a separate verified prerelease channel.
+The latest published stable version is **0.1.4**. See [release notes](docs/release-notes.md) for its improvements and [release status](docs/release-readiness.md) for installation availability. Development uses a separate verified prerelease channel.
 
 An upgrade has three steps: deploy the Worker, install the target Runner package, and refresh the MCP client's tool catalog. Verify a representative task afterward using the [upgrade guide](docs/upgrading.md).
 

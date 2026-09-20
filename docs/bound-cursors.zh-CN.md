@@ -1,6 +1,6 @@
 # 使用文件快照与追加日志游标
 
-需要从同一份已捕获内容读取文件各页时，选择 `consistency:"snapshot"`；需要通过多次显式读取跟进 Job 日志时，选择 `consistency:"append"`。这些模式已在 **0.1.4 候选版**中实现，需要兼容的 Worker 和 Runner。普通数字游标仍是默认模式。
+需要从同一份已捕获内容读取文件各页时，选择 `consistency:"snapshot"`；需要通过多次显式读取跟进 Job 日志时，选择 `consistency:"append"`。**0.1.4** 支持这些模式，需要兼容的 Worker 和 Runner。普通数字游标仍是默认模式。
 
 ## 读取文件快照
 

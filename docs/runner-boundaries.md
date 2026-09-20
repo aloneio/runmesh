@@ -1,6 +1,6 @@
 # Recover Job and Context operations
 
-After an interruption, use the original Job or Context identifiers to inspect what happened. A transport timeout can occur after execution has started. This page describes the current candidate behavior; use the installed Runner's capabilities when diagnosing an older release.
+After an interruption, use the original Job or Context identifiers to inspect what happened. A transport timeout can occur after execution has started. This page describes 0.1.4 behavior; use the installed Runner's capabilities when diagnosing an older release.
 
 ## Check a Job outcome
 
