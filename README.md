@@ -95,6 +95,10 @@ A new deployment provisions its own resources. For an existing v2 installation, 
 
 The [documentation index](docs/README.md) also links to architecture, protocol and maintainer references, with dated records available for historical context.
 
+## Supporters
+
+- Community support from [linux.do](https://linux.do/).
+
 ## License and support
 
 Runmesh is maintained by aloneio. Report security vulnerabilities through the private process in [.github/SECURITY.md](.github/SECURITY.md); use Issues for ordinary bugs and product feedback. See [trademarks](docs/legal/TRADEMARKS.md) for name and logo usage.
