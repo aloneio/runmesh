@@ -409,7 +409,7 @@ test("embeds the independently reviewed fixed release key and immutable installe
     assert.match(powershell, /& \$NpmPath --userconfig[\s\S]*?--no-fund[\s\S]*?2>&1/u);
     assert.match(powershell, /TryAddWithoutValidation\('User-Agent', "RunmeshInstaller\/\$Version"\)/u);
     assert.match(powershell, /TryAddWithoutValidation\('Cache-Control', 'no-cache'\)/u);
-    assert.match(powershell, /\$status -eq 403[\s\S]*?\$current = \$releaseUrl/u);
+    assert.match(powershell, /\$status -eq 403[\s\S]*?runmesh_retry[\s\S]*?NewGuid/u);
     assert.match(powershell, /Push-Location -LiteralPath \$TempRoot/u);
     assert.match(powershell, /& \$NpmPath --userconfig \$EmptyUserConfig --globalconfig \$EmptyGlobalConfig install/u);
     assert.match(powershell, /& \$NpmPath --userconfig[\s\S]*?install[\s\S]*?--ignore-scripts[\s\S]*?--offline/u);
