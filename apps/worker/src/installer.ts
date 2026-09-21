@@ -744,9 +744,10 @@ try {
         if (-not $response.IsSuccessStatusCode) {
           # A stale or transient CDN response can reject the signed asset URL
           # even though a fresh GitHub redirect is valid. Re-fetch the pinned
-          # release URL for bounded retries; never retry an arbitrary origin.
+          # release URL with a local cache-buster for bounded retries; never
+          # retry an arbitrary origin or reuse a signed CDN URL.
           if ($status -eq 403 -and $attempt -lt 5) {
-            $current = $releaseUrl
+            $current = [Uri]::new($releaseUrl.AbsoluteUri + '?runmesh_retry=' + [guid]::NewGuid().ToString('N'))
             continue
           }
           throw "Release download returned HTTP $status."
