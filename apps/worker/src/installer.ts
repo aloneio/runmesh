@@ -699,6 +699,12 @@ try {
   $HttpHandler.AutomaticDecompression = [Net.DecompressionMethods]::GZip -bor [Net.DecompressionMethods]::Deflate
   $HttpClient = [Net.Http.HttpClient]::new($HttpHandler)
   $HttpClient.Timeout = [TimeSpan]::FromSeconds(60)
+  # GitHub's release redirect and asset CDN can treat an empty .NET user agent
+  # differently from curl.exe. Disable intermediary caching as well so a
+  # previously cached signed Location cannot be replayed after expiry.
+  [void]$HttpClient.DefaultRequestHeaders.TryAddWithoutValidation('User-Agent', "RunmeshInstaller/$Version")
+  [void]$HttpClient.DefaultRequestHeaders.TryAddWithoutValidation('Cache-Control', 'no-cache')
+  [void]$HttpClient.DefaultRequestHeaders.TryAddWithoutValidation('Accept', '*/*')
   # ResponseHeadersRead ends HttpClient.Timeout at the headers. Keep one
   # deadline across redirects and body reads, including streams whose
   # ReadAsync implementation does not promptly honor cancellation.
@@ -717,7 +723,8 @@ try {
     $DownloadCancellation.CancelAfter(60000)
     $DownloadClock = [Diagnostics.Stopwatch]::StartNew()
     try {
-    $current = [Uri]::new($ReleaseBase + '/' + $Name)
+    $releaseUrl = [Uri]::new($ReleaseBase + '/' + $Name)
+    $current = $releaseUrl
     $downloaded = $false
     for ($attempt = 0; $attempt -lt 6; $attempt++) {
       $currentOrigin = $current.GetLeftPart([UriPartial]::Authority).TrimEnd('/')
@@ -734,7 +741,17 @@ try {
           $current = $next
           continue
         }
-        if (-not $response.IsSuccessStatusCode) { throw "Release download returned HTTP $status." }
+        if (-not $response.IsSuccessStatusCode) {
+          # A stale or transient CDN response can reject the signed asset URL
+          # even though a fresh GitHub redirect is valid. Re-fetch the pinned
+          # release URL with a local cache-buster for bounded retries; never
+          # retry an arbitrary origin or reuse a signed CDN URL.
+          if ($status -eq 403 -and $attempt -lt 5) {
+            $current = [Uri]::new($releaseUrl.AbsoluteUri + '?runmesh_retry=' + [guid]::NewGuid().ToString('N'))
+            continue
+          }
+          throw "Release download returned HTTP $status."
+        }
         $contentLength = $response.Content.Headers.ContentLength
         if ($null -ne $contentLength -and $contentLength -gt __MAX_RELEASE_ASSET_BYTES__) { throw 'Release asset exceeds the fixed size limit.' }
         $stream = $null
