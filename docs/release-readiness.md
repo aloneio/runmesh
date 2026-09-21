@@ -21,4 +21,4 @@ For each new release, keep package and lockfile versions, installer identity and
 
 The exact main candidate must pass GitHub `verify-all`, native-platform/Node LTS/browser verification and the required cross-provider checks. Execute candidate-bound security regressions, verify the exact portable archive end to end, and bind the signed manifest and annotated tag to that candidate. Independently verify draft and public assets before recording the new RELEASED/ENABLED state. Keep existing immutable releases intact.
 
-After activation, deploy the Worker, verify its build provenance and release descriptor, then verify the installed Runner service lifecycle and permissions.
+After activation, deploy the Worker, verify its build provenance and release descriptor, then verify the installed Runner service lifecycle and permissions. The protected GitHub and GitLab main branches must point to the same reviewed source commit before signing.
