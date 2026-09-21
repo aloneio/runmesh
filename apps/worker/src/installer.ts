@@ -486,6 +486,13 @@ $env:NPM_CONFIG_CACHE = $null
 $env:npm_config_userconfig = $null
 $env:npm_config_globalconfig = $null
 $env:npm_config_cache = $null
+# npm's update notifier writes informational "npm notice" lines to stderr.
+# PowerShell treats native stderr as an error record while
+# $ErrorActionPreference = 'Stop', even when npm exits successfully. Disable
+# the notifier for the private, offline install so informational output cannot
+# make a successful package install fail.
+$env:NPM_CONFIG_UPDATE_NOTIFIER = 'false'
+$env:npm_config_update_notifier = 'false'
 # Windows PowerShell 5.1 does not eagerly load System.Net.Http. Load it
 # explicitly before constructing HttpClientHandler so the fixed installer has
 # the same pre-follow redirect guarantees on PowerShell 5.1 and 7+.
@@ -772,7 +779,7 @@ __VERIFIER__
     Push-Location -LiteralPath $TempRoot
     try {
       Invoke-LoggedStep 'Preparing cleanup tools' $MaintenanceLog {
-        & $NpmPath --userconfig $EmptyUserConfig --globalconfig $EmptyGlobalConfig install --global --ignore-scripts --offline --no-audit --no-fund --prefix $Maintenance (Join-Path $TempRoot $ArtifactName)
+        & $NpmPath --userconfig $EmptyUserConfig --globalconfig $EmptyGlobalConfig install --global --ignore-scripts --offline --no-audit --no-fund --prefix $Maintenance (Join-Path $TempRoot $ArtifactName) 2>&1
       }
     } finally { Pop-Location }
     $MaintenanceRunner = Join-Path $Maintenance 'node_modules\@aloneio\runmesh-runner\dist\runmesh.cjs'
@@ -789,7 +796,7 @@ __VERIFIER__
     $InstallLog = Join-Path $TempRoot 'npm-install.log'
     $RuntimePhase = 'package_install'
     Invoke-LoggedStep 'Installing Runner' $InstallLog {
-      & $NpmPath --userconfig $EmptyUserConfig --globalconfig $EmptyGlobalConfig install --global --ignore-scripts --offline --no-audit --no-fund --prefix $Stage (Join-Path $TempRoot $ArtifactName)
+      & $NpmPath --userconfig $EmptyUserConfig --globalconfig $EmptyGlobalConfig install --global --ignore-scripts --offline --no-audit --no-fund --prefix $Stage (Join-Path $TempRoot $ArtifactName) 2>&1
     }
   } finally {
     Pop-Location
