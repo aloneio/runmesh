@@ -31,17 +31,24 @@ return {
         // reported inactive rather than guessed active.
         let invariant: ServiceCommandResult | undefined;
         try {
-          invariant = await executor.execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "$service=New-Object -ComObject 'Schedule.Service'; $service.Connect(); $task=$service.GetFolder('\\').GetTask('RunmeshRunner'); [pscustomobject]@{ state=[int]$task.State; identity=[string]$task.Definition.Principal.UserId } | ConvertTo-Json -Compress"]);
+          invariant = await executor.execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference='Stop'; $service=New-Object -ComObject 'Schedule.Service'; $service.Connect(); try { $task=$service.GetFolder('\\').GetTask('RunmeshRunner'); [pscustomobject]@{ found=$true; state=[int]$task.State; identity=[string]$task.Definition.Principal.UserId } | ConvertTo-Json -Compress } catch { if ($_.Exception.HResult -eq -2147024894) { [pscustomobject]@{ found=$false; absent=$true } | ConvertTo-Json -Compress; exit 0 }; throw }"]);
         } catch {
           // Injected/older executors may not expose PowerShell. Fall through
           // to the conservative schtasks text probe below.
           invariant = undefined;
         }
-        let invariantState: { readonly state?: unknown; readonly identity?: unknown } | undefined;
+        let invariantState: { readonly found?: unknown; readonly absent?: unknown; readonly state?: unknown; readonly identity?: unknown } | undefined;
         try {
           const parsed = JSON.parse((invariant?.stdout ?? "").trim()) as unknown;
-          if (typeof parsed === "object" && parsed !== null) invariantState = parsed as { readonly state?: unknown; readonly identity?: unknown };
+          if (typeof parsed === "object" && parsed !== null) invariantState = parsed as { readonly found?: unknown; readonly absent?: unknown; readonly state?: unknown; readonly identity?: unknown };
         } catch { /* use the text fallback below */ }
+        // The COM API exposes a locale-independent HRESULT for a missing task
+        // (ERROR_FILE_NOT_FOUND). Treat that explicit result as a reliable
+        // absence even when `schtasks` translated its diagnostic into a
+        // language we do not recognize.
+        if (invariant?.exitCode === 0 && invariantState?.found === false && invariantState.absent === true) {
+          return { installed: false, active: false, registered: false, reliable: true };
+        }
         if (invariant?.exitCode === 0 && invariantState !== undefined && (typeof invariantState.state === "number" || typeof invariantState.state === "string")) {
           const state = typeof invariantState.state === "number" ? invariantState.state : Number(invariantState.state);
           const identity = typeof invariantState.identity === "string" ? safeServiceReportedIdentity(invariantState.identity) ?? "" : "";
