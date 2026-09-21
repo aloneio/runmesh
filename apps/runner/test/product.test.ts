@@ -597,6 +597,20 @@ describe("runner product CLI and service safety", () => {
     await expect(managerFor("Ready").status?.(manifest)).resolves.toMatchObject({ installed: true, active: false });
     await expect(managerFor("Running").status?.(manifest)).resolves.toMatchObject({ installed: true, active: true, identity: "NT AUTHORITY\\LOCAL SERVICE" });
   });
+  it("recognizes a localized missing Windows task through the COM probe", async () => {
+    const manager = createServiceManager({
+      platform: "win32",
+      mode: "system",
+      executor: {
+        execute: async (file, args) => {
+          if (file === "powershell.exe") return { exitCode: 0, stdout: '{"found":false,"absent":true}' };
+          return { exitCode: 1, stderr: "错误: 系统找不到指定的文件。" };
+        },
+      },
+    });
+    const manifest = renderService({ platform: "win32", mode: "system" });
+    await expect(manager.status?.(manifest)).resolves.toMatchObject({ installed: false, active: false, registered: false, reliable: true });
+  });
   it("marks native service status probes unreliable on permission/tool failures", async () => {
     const manifest = renderService({ platform: "linux", mode: "system" });
     const manager = createServiceManager({
