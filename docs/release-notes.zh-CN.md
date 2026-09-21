@@ -2,6 +2,12 @@
 
 [English](release-notes.md) · [文档目录](README.zh-CN.md) · [升级指南](upgrading.zh-CN.md)
 
+## 0.1.5 — 候选版本
+
+此候选版本修复 Windows 安装：在本地化 Windows 主机上，缺失的 `RunmeshRunner` 任务现在通过与语言无关的 COM 接口识别。权限错误和任务计划程序故障仍会安全拒绝。
+
+发行包和签名正式发布仍需通过受保护的发行流程。
+
 ## 0.1.4 — 已发布正式版
 
 于 **2026 年 9 月 20 日**发布为[不可变正式版](https://github.com/aloneio/runmesh/releases/tag/v0.1.4)，提供已签名的便携 Runner 安装包。
