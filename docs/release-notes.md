@@ -2,11 +2,13 @@
 
 [Chinese](release-notes.zh-CN.md) · [Documentation](README.md) · [Upgrade guide](upgrading.md)
 
-## 0.1.5 — candidate
+## 0.1.5 — published stable release
 
-This candidate includes a Windows installation fix: on localized Windows hosts, a missing `RunmeshRunner` Task Scheduler task is now recognized through the locale-independent COM API. Permission and Task Scheduler failures remain fail-closed.
+Published on **September 23, 2026** as an [immutable stable release](https://github.com/aloneio/runmesh/releases/tag/v0.1.5) with a signed portable Runner package. The release was built from protected main commit `77e82a1b59737a42cc090064651d1b0531890f21`; the independently verified manifest SHA256 is `34da9baefabddd882aeef79151b132b1de4086fce54de7a46fe853a7e8dac18a`.
 
-The release package and signed publication are pending the protected release workflow.
+This release includes a Windows installation fix: on localized Windows hosts, a missing `RunmeshRunner` Task Scheduler task is now recognized through the locale-independent COM API. Permission and Task Scheduler failures remain fail-closed.
+
+Follow the [upgrade guide](upgrading.md) to update an existing installation while preserving its credentials and configuration.
 
 ## 0.1.4 — published stable release
 

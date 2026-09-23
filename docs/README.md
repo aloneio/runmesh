@@ -24,7 +24,7 @@ Read the [security model](security.md) and [permission model](permission-model.m
 
 ## Versions and features
 
-The latest published stable release is **0.1.4**, and these guides describe its features. To use a new feature, deploy the compatible Worker, install the appropriate Runner package and refresh the client's tool catalog.
+The latest published stable release is **0.1.5**, and these guides describe its features. To use a new feature, deploy the compatible Worker, install the appropriate Runner package and refresh the client's tool catalog.
 
 Check [release status](release-readiness.md) for package availability and [build provenance](build-provenance.md) for your deployed Worker. [Development prereleases](dev-runner-prereleases.md) provide a separate testing channel.
 
