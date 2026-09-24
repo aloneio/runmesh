@@ -112,6 +112,15 @@ test("W05 central outbound transport retains public-only routing and remains dis
   }
 });
 
+test("OAuth activation is never implicit in deployed Worker settings", async () => {
+  const config = JSON.parse(await readFile(new URL("../apps/worker/wrangler.jsonc", import.meta.url), "utf8"));
+  for (const section of [config, config.env.development, config.env.production]) {
+    assert.equal(section.vars?.CENTRAL_OAUTH_POLICIES, undefined);
+    assert.equal(section.vars?.CENTRAL_VAULT_KEYRING, undefined);
+    assert.equal(section.durable_objects.bindings.some(binding => binding.name === "CAPABILITIES"), false);
+  }
+});
+
 test("retirement cannot target v2, other environments, or a replacement production namespace", async () => {
   const config=JSON.parse(await readFile(new URL("../apps/worker/wrangler.jsonc",import.meta.url),"utf8"));
   const expected={RegistryDOv2:{type:"durable-object",storage:"sqlite"},RunnerDOv2:{type:"durable-object",storage:"sqlite"},RegistryDO:{type:"durable-object",state:"deleted"},RunnerDO:{type:"durable-object",state:"deleted"}};

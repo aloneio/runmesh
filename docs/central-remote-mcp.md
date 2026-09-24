@@ -1,5 +1,9 @@
 # Controlled central HTTP MCP (development)
 
+This page describes the W05 stateless baseline. The optional W06 OAuth and
+ephemeral-session extensions and their narrower support limits are documented in
+[Central OAuth](central-oauth.md). All deployment activation remains explicit.
+
 [简体中文](central-remote-mcp.zh-CN.md)
 
 **W05 implementation on dev; no production activation.** Central HTTP discovery

@@ -1,6 +1,7 @@
 import { Client, StreamableHTTPClientTransport, type FetchLike } from "@modelcontextprotocol/client";
 import { CATALOG_LIMITS, type RemoteToolDefinition } from "../../contracts/catalog.js";
 import type { ConnectionProfile, CredentialInput } from "../../contracts/connectors.js";
+import type { CredentialLease } from "../../contracts/oauth.js";
 import { parseCredential, parseProfile } from "../../contracts/connector-values.js";
 import { catalogJson, catalogObject } from "../../contracts/catalog-json.js";
 import { parseRemoteTool } from "../../contracts/catalog-values.js";
@@ -8,10 +9,11 @@ import { REMOTE_LIMITS, RemoteFault, type RemoteConnector } from "../../contract
 import { parseRemoteEgress, parseRemoteResult, publicMcpEndpoint } from "../../contracts/remote-values.js";
 import { guardedRemoteResponse, boundedWireJson } from "./remote-response.js";
 import { BoundedRemoteValidator } from "./remote-validation.js";
+import { createRemoteSessionState } from "./remote-session.js";
 
 export interface HttpRemotePorts {
   readonly policy: () => unknown;
-  readonly credential: (profile: ConnectionProfile) => Promise<CredentialInput>;
+  readonly credential: (profile: ConnectionProfile, signal: AbortSignal, authorize: () => Promise<void>) => Promise<CredentialInput | CredentialLease>;
   readonly fetch?: FetchLike;
   readonly selfOrigin?: string;
 }
@@ -28,12 +30,26 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
       if (profile === undefined || rule === undefined || !profile.enabled || publicMcpEndpoint(profile.endpoint) === undefined
         || (ports.selfOrigin !== undefined && new URL(profile.endpoint).origin === ports.selfOrigin)) throw new RemoteFault("egress_denied");
       if (parent.aborted) throw new RemoteFault("operation_timed_out");
-      await authorize();
-      const credential = parseCredential(await ports.credential(profile));
+      const egressCurrent = (): boolean => {
+        const live = parseRemoteEgress(ports.policy())?.find(value => value.endpoint === profile.endpoint);
+        return live?.protocol === rule.protocol && live.session === rule.session;
+      };
+      const admitCredential = async () => {
+        await authorize();
+        if (parent.aborted) throw new RemoteFault("operation_timed_out");
+        if (!egressCurrent()) throw new RemoteFault("egress_denied");
+      };
+      await admitCredential();
+      const supplied = await ports.credential(profile, parent, admitCredential);
+      const leased = "credential" in supplied;
+      const credential = parseCredential(leased ? supplied.credential : supplied);
+      const credentialCurrent = (): boolean => !leased || supplied.current();
       if (parent.aborted) throw new RemoteFault("operation_timed_out");
       if (credential === undefined) throw new RemoteFault("dependency_unavailable");
       const controller = new AbortController(), signal = controller.signal;
       const abort = () => controller.abort(); parent.addEventListener("abort", abort, { once: true });
+      const sessionState = createRemoteSessionState(rule, { policy: ports.policy, authorize, current: credentialCurrent,
+        token: credential.token, signal, send: (url, init) => (ports.fetch ?? fetch)(url, init) });
       let requests = 0, totalBytes = 0, totalTools = 0, callSent = false, lastFault: RemoteFault | undefined;
       let beforeCall: (() => Promise<void>) | undefined;
       const ids = new Set<string | number>(), cursors = new Set<string>();
@@ -59,6 +75,7 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
           const params = catalogObject(message.params), headers = new Headers({ "content-type": "application/json",
             accept: "application/json, text/event-stream", "mcp-protocol-version": rule.protocol,
             "mcp-method": method, "x-runmesh-mcp-hop": "1", authorization: `Bearer ${credential.token}` });
+          sessionState.headers(headers);
           if (method === "tools/list") {
             const cursor = params?.cursor ?? "";
             if (typeof cursor !== "string" || cursor.length > 2048 || cursors.has(cursor) || cursors.size >= REMOTE_LIMITS.pages)
@@ -72,18 +89,23 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
             // Final authorization after DNS-independent connect/list/schema waits.
             await beforeCall();
             if (signal.aborted) throw new RemoteFault("operation_timed_out");
+            if (!credentialCurrent()) throw new RemoteFault("authorization_required");
+            if (!egressCurrent()) throw new RemoteFault("egress_denied");
             callSent = true; dispatched();
           } else {
             await authorize();
             if (signal.aborted) throw new RemoteFault("operation_timed_out");
           }
+          if (!credentialCurrent()) throw new RemoteFault("authorization_required");
+          if (!egressCurrent()) throw new RemoteFault("egress_denied");
           // No caller headers/cookies, custom DNS overrides, redirects or auth provider.
-          const response = await (ports.fetch ?? fetch)(profile.endpoint, { method: "POST", body: init.body,
+          let response = await (ports.fetch ?? fetch)(profile.endpoint, { method: "POST", body: init.body,
             headers, redirect: "manual", credentials: "omit", cache: "no-store", signal });
           if (signal.aborted) { void response.body?.cancel().catch(() => undefined); throw new RemoteFault("operation_timed_out"); }
           if (response.status === 429 || response.status >= 500 || response.status === 401 || response.status === 403) {
             void response.body?.cancel().catch(() => undefined); throw new RemoteFault("upstream_unavailable");
           }
+          response = sessionState.response(response, method);
           if (method === "notifications/initialized") {
             void response.body?.cancel().catch(() => undefined);
             if (response.status !== 202) throw new RemoteFault("upstream_protocol_error");
@@ -91,8 +113,10 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
           }
           const guarded = await guardedRemoteResponse(response, message.id as string | number, signal, account);
           const text = await guarded.text();
+          if (!credentialCurrent() || !egressCurrent()) throw new RemoteFault("result_withheld");
           // Detect direct reflection of our bearer; this is not a general DLP promise.
           if (credential.token.length >= 12 && text.includes(credential.token)) throw new RemoteFault("result_invalid");
+          if (sessionState.reflected(text)) throw new RemoteFault("result_invalid");
           if (method === "tools/list") {
             const reply = boundedWireJson(text), result = catalogObject(reply.result);
             if (result !== undefined) {
@@ -115,7 +139,9 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
       const transport = new StreamableHTTPClientTransport(new URL(profile.endpoint), { fetch: guardedFetch, protocolVersion: rule.protocol,
         reconnectionOptions: { maxRetries: 0, initialReconnectionDelay: 0, maxReconnectionDelay: 0, reconnectionDelayGrowFactor: 1 } });
       client.onerror = () => undefined;
-      const close = async () => { parent.removeEventListener("abort", abort); controller.abort(); await client.close().catch(() => undefined); };
+      const close = async () => {
+        await sessionState.close(); parent.removeEventListener("abort", abort); controller.abort(); await client.close().catch(() => undefined);
+      };
       try {
         await client.connect(transport, { signal, timeout: REMOTE_LIMITS.operation_ms });
         if (signal.aborted || client.getServerCapabilities()?.tools === undefined) throw new RemoteFault("upstream_protocol_error");

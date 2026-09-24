@@ -1,6 +1,6 @@
 import { CONNECTOR_LIMITS, type ProfileRecord, type ProfileRepository, type ProfileResult } from "../../contracts/connectors.js";
 import { isCapabilityIdentifier } from "../../contracts/capabilities.js";
-import { parseEnvelope, parseProfile } from "../../contracts/connector-values.js";
+import { parseEnvelope, parseProfile, validProfileEnvelope } from "../../contracts/connector-values.js";
 
 type Storage = Pick<DurableObjectStorage, "sql" | "transactionSync">;
 type Row = { profile_id: string; revision: number; profile_json: string; envelope_json: string };
@@ -35,28 +35,29 @@ export class ConnectionState implements ProfileRepository {
     if (row === undefined) return undefined;
     try {
       if (row.profile_json.length > CONNECTOR_LIMITS.envelope_bytes || row.envelope_json.length > CONNECTOR_LIMITS.envelope_bytes) throw new Error();
-      const profile = parseProfile(JSON.parse(row.profile_json)), envelope = parseEnvelope(JSON.parse(row.envelope_json));
-      if (profile === undefined || envelope === undefined || profile.profile_id !== profileId || row.profile_id !== profileId || profile.revision !== row.revision) throw new Error();
+      const profile = parseProfile(JSON.parse(row.profile_json)), rawEnvelope: unknown = JSON.parse(row.envelope_json);
+      const envelope = rawEnvelope === null ? null : parseEnvelope(rawEnvelope);
+      if (profile === undefined || envelope === undefined || !validProfileEnvelope(profile, envelope) || profile.profile_id !== profileId || row.profile_id !== profileId || profile.revision !== row.revision) throw new Error();
       return { profile, envelope };
     } catch { throw new Error("connector_record_invalid"); }
   }
 
   public replace(record: ProfileRecord, expectedRevision: number): ProfileResult {
-    const profile = parseProfile(record?.profile), envelope = parseEnvelope(record?.envelope);
+    const profile = parseProfile(record?.profile), envelope = record?.envelope === null ? null : parseEnvelope(record?.envelope);
     if (profile === undefined || envelope === undefined || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0
-      || profile.revision !== expectedRevision + 1 || profile.credential === null) return { state: "invalid" };
+      || profile.revision !== expectedRevision + 1 || !validProfileEnvelope(profile, envelope)) return { state: "invalid" };
     this.initialize();
     return this.storage.transactionSync(() => {
       const current = this.read(profile.profile_id), revision = current?.profile.revision ?? 0;
       if (revision !== expectedRevision) return { state: "conflict", current_revision: revision };
       if (current === undefined) {
-        if (profile.enabled || profile.credential!.secret_version !== 1) return { state: "invalid" };
+        if (profile.enabled || (profile.credential !== null && profile.credential.secret_version !== 1)) return { state: "invalid" };
         const count = this.storage.sql.exec<{ total: number }>("SELECT COUNT(*) AS total FROM connection_profiles_v1").toArray()[0]?.total;
         if (count === undefined || count >= CONNECTOR_LIMITS.profiles) return { state: "capacity" };
       } else {
-        const old = current.profile, generation = old.credential?.secret_version, next = profile.credential!.secret_version;
-        if (old.connector_id !== profile.connector_id || old.endpoint !== profile.endpoint || generation === undefined) return { state: "invalid" };
-        if (next !== generation && next !== generation + 1) return { state: "invalid" };
+        const old = current.profile, generation = old.credential?.secret_version, next = profile.credential?.secret_version;
+        if (old.connector_id !== profile.connector_id || old.endpoint !== profile.endpoint || (old.credential === null) !== (profile.credential === null)) return { state: "invalid" };
+        if (generation !== undefined && next !== generation && next !== generation + 1) return { state: "invalid" };
         if (next === generation && JSON.stringify(current.envelope) !== JSON.stringify(envelope)) return { state: "invalid" };
       }
       this.storage.sql.exec("INSERT INTO connection_profiles_v1 VALUES (?,?,?,?) ON CONFLICT(profile_id) DO UPDATE SET revision=excluded.revision,profile_json=excluded.profile_json,envelope_json=excluded.envelope_json",

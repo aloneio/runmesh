@@ -3,6 +3,7 @@ import { REMOTE_CODES, REMOTE_LIMITS, type CentralRemote } from "../contracts/re
 import { parseRemoteEgress } from "../contracts/remote-values.js";
 import { catalogKeys, catalogRevision } from "../contracts/catalog-json.js";
 import { parseCatalogHead } from "../contracts/catalog-values.js";
+import { parseOAuthSelection } from "../contracts/oauth-values.js";
 import { admitCentralAdmin, cancelCentralBody, centralHeaders, centralFailure } from "./central-boundary.js";
 
 export async function handleCentralDiscovery(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
@@ -13,12 +14,14 @@ export async function handleCentralDiscovery(request: Request, env: WorkerEnv, u
   if (request.method !== "POST") { cancelCentralBody(request); return centralFailure("central_method_not_allowed", 405); }
   const admission = await admitCentralAdmin(request, env, 1024);
   if (admission instanceof Response) return admission;
-  if (!catalogKeys(admission.body, ["expected_revision"]) || !catalogRevision(admission.body.expected_revision, true)) return centralFailure("central_invalid_request", 400);
+  if (!catalogKeys(admission.body, ["expected_revision", "principal"]) || !catalogRevision(admission.body.expected_revision, true)) return centralFailure("central_invalid_request", 400);
   const profileId = match[1]!, revision = admission.body.expected_revision;
+  const selected = admission.body.principal === undefined ? undefined : parseOAuthSelection({ profile_id: profileId, principal: admission.body.principal, expected_revision: revision });
+  if (admission.body.principal !== undefined && selected === undefined) return centralFailure("central_invalid_request", 400);
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const owner = env.CAPABILITIES.get(env.CAPABILITIES.idFromName("central")) as unknown as CentralRemote;
-    const result = await Promise.race([owner.discoverRemote(admission.session_hash, profileId, revision),
+    const result = await Promise.race([owner.discoverRemote(admission.session_hash, profileId, revision, selected?.principal),
       new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), REMOTE_LIMITS.operation_ms + 2000); })]);
     if (result?.state === "written") {
       const head = parseCatalogHead(result.head);

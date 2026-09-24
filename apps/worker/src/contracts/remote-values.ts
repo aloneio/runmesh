@@ -34,9 +34,10 @@ export function parseRemoteEgress(raw: unknown): readonly RemoteEgressRule[] | u
     const rules: RemoteEgressRule[] = [], seen = new Set<string>();
     for (const value of item.endpoints) {
       const rule = catalogObject(value), endpoint = publicMcpEndpoint(rule?.endpoint);
-      if (rule === undefined || !catalogKeys(rule, ["endpoint", "protocol"]) || endpoint === undefined || endpoint !== rule.endpoint
+      if (rule === undefined || !catalogKeys(rule, ["endpoint", "protocol", "session"]) || endpoint === undefined || endpoint !== rule.endpoint
+        || (rule.session !== undefined && (rule.session !== "ephemeral" || rule.protocol !== "2025-11-25"))
         || (rule.protocol !== "2026-07-28" && rule.protocol !== "2025-11-25") || seen.has(endpoint)) return undefined;
-      seen.add(endpoint); rules.push({ endpoint, protocol: rule.protocol });
+      seen.add(endpoint); rules.push({ endpoint, protocol: rule.protocol, ...(rule.session === undefined ? {} : { session: "ephemeral" as const }) });
     }
     return rules;
   } catch { return undefined; }

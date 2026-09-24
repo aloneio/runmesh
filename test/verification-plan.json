@@ -28,6 +28,8 @@
         "test/domain/public-rules.test.ts",
         "test/domain/remote-admission.test.ts",
         "test/domain/remote-policy.test.ts",
+        "test/domain/oauth-policy.test.ts",
+        "test/domain/oauth-lifecycle.test.ts",
         "test/domain/runner-deletion.test.ts"
       ]
     },
@@ -143,6 +145,10 @@
         "apps/worker/test/request-body.test.ts",
         "apps/worker/test/remote-integration.test.ts",
         "apps/worker/test/remote-transport.test.ts",
+        "apps/worker/test/remote-sessions.test.ts",
+        "apps/worker/test/oauth-http.test.ts",
+        "apps/worker/test/oauth-integration.test.ts",
+        "apps/worker/test/oauth-state.test.ts",
         "apps/worker/test/rpc-contract.test.ts",
         "apps/worker/test/runner-admission-initialization.test.ts",
         "apps/worker/test/runner-capability-admission.test.ts",

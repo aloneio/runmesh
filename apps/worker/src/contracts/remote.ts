@@ -7,7 +7,7 @@ export const REMOTE_LIMITS = Object.freeze({ operation_ms: 20_000, request_bytes
   aggregate_bytes: 2_097_152, fragments: 4096, events: 256, requests: 12, pages: 8, content_items: 32,
   active: 2, per_client: 1, policies: 64, policy_bytes: 16_384, validation_cost: 1_000_000 });
 export type RemoteProtocol = "2026-07-28" | "2025-11-25";
-export interface RemoteEgressRule { readonly endpoint: string; readonly protocol: RemoteProtocol }
+export interface RemoteEgressRule { readonly endpoint: string; readonly protocol: RemoteProtocol; readonly session?: "ephemeral" }
 export interface RemoteCall {
   readonly profile_id: string;
   readonly tool_id: string;
@@ -19,12 +19,12 @@ export interface RemoteResult {
   readonly structuredContent?: { [key: string]: CatalogJson };
   readonly isError: boolean;
 }
-export const REMOTE_CODES = Object.freeze(["invalid_request", "invalid_arguments", "permission_denied", "stale_catalog",
+export const REMOTE_CODES = Object.freeze(["invalid_request", "invalid_arguments", "permission_denied", "authorization_required", "stale_catalog",
   "dependency_unavailable", "egress_denied", "upstream_unavailable", "upstream_protocol_error",
   "unsupported_interaction", "result_invalid", "result_withheld", "result_unconfirmed", "operation_timed_out", "busy"] as const);
 export type RemoteCode = (typeof REMOTE_CODES)[number];
 const remoteClasses: Readonly<Record<RemoteCode, string>> = Object.freeze({ invalid_request: "validation", invalid_arguments: "validation",
-  permission_denied: "authorization", stale_catalog: "conflict", dependency_unavailable: "availability", egress_denied: "authorization",
+  permission_denied: "authorization", authorization_required: "authorization", stale_catalog: "conflict", dependency_unavailable: "availability", egress_denied: "authorization",
   upstream_unavailable: "availability", upstream_protocol_error: "protocol", unsupported_interaction: "unsupported",
   result_invalid: "protocol", result_withheld: "authorization", result_unconfirmed: "unknown", operation_timed_out: "availability", busy: "capacity" });
 
@@ -58,7 +58,7 @@ export type RemoteCallPorts = Omit<CatalogReadPorts, "cursor" | "now"> & { reado
 export interface CentralRemote {
   listCatalog(principal: CapturedIdentity, query: unknown): Promise<CatalogPage>;
   callRemote(principal: CapturedIdentity, command: unknown): Promise<RemoteOutcome>;
-  discoverRemote(sessionHash: string, profileId: string, expectedRevision: number): Promise<CatalogMutation | RemoteFailure>;
+  discoverRemote(sessionHash: string, profileId: string, expectedRevision: number, principal?: CapturedIdentity): Promise<CatalogMutation | RemoteFailure>;
 }
 
 /** Fixed codes only. Untrusted exception messages are never carried across ports. */
