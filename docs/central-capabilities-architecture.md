@@ -86,7 +86,9 @@ reusable dispatch ticket. Future invocation code must revalidate the relevant
 identity and grant revision after queue/connection waits; cross-owner or
 in-flight cancellation is not an atomic transaction.
 
-`CapabilitiesDOv1` is a thin internal state adapter with no public HTTP API.
+`CapabilitiesDOv1` is the reviewed central composition root in `capabilities-do.ts`,
+with no public Durable Object fetch API. The Worker has a separately protected
+browser-admin JSON route; the repositories do not import one another.
 Its grant repository owns lazy, atomic schema initialization and revision-checked
 writes. Unknown, partial or foreign state is rejected without clearing data.
 Concurrent writes require the observed revision. Disabling retains the record
@@ -94,13 +96,43 @@ and advances its revision instead of deleting history.
 
 Only the **test** Wrangler environment binds this class in this batch.
 Production and development deployment bindings, migrations and required secrets
-are unchanged. Native HTTP composition does not load or invoke central state.
+are unchanged. Native requests do not resolve central state or read vault keys.
 The disabled access factory does not resolve ports or create timers.
 
-`SecretVault` and `ConnectionProfile` are contracts only. No plaintext vault,
-temporary credentials, OAuth implementation or production secret backend is
-provided. W03 is incomplete until protected composition, encrypted secret
-storage, credential generations and activation/migration acceptance are ready.
+W03 now includes a bearer-credential backend: versioned connection profiles,
+AES-256-GCM envelopes, a bounded deployment keyring, a ciphertext-only repository,
+and protected profile management. WebCrypto is confined to the connector adapter;
+application rules receive narrow authorization, cipher and storage ports.
+`SecretVault.withCredential` remains a contract for the later invocation adapter.
+There is no plaintext-read API, OAuth implementation or automatic key provisioning.
+
+The protected route is `/admin/central/profiles/{profile_id}`. GET returns safe
+metadata. POST accepts only create, rotate, enable, disable and rekey commands.
+It requires an administrator session, same origin and the matching CSRF header
+and cookie. It has no ADMIN_TOKEN fallback. Session checks occur after body reads
+and again in the owner after crypto waits, immediately before the synchronous
+revision-checked write. Unknown/malformed receipts never become success or a
+reflected error string. A post-dispatch timeout remains an unknown outcome.
+
+New profiles are disabled. Connector identity and destination cannot be changed
+by rotation. Ciphertext authenticates the owner namespace, profile, connector,
+endpoint, secret generation and key ID. A fresh random IV is used per encryption.
+Only ciphertext and metadata enter SQLite. Keys are non-extractable after import;
+temporary byte arrays are cleared, but JavaScript strings cannot be reliably
+zeroized. This protects stored values, not a compromised Worker runtime.
+
+To rotate a vault key, add a new independent random key to CENTRAL_VAULT_KEYRING,
+select its ID, explicitly rekey profiles, and retain old keys until all referenced
+envelopes have been verified. Rekey advances the secret generation; enable/disable
+does not decrypt and still works with unavailable keys. Removing an old key early
+makes remaining envelopes unreadable; it does not authorize fallback to control
+secrets, fake values or automatic rewriting. No deployment secret was changed by
+this implementation. See Cloudflare's WebCrypto and Worker secrets documentation.
+
+Profile URL checks currently validate credential-free HTTPS syntax and bounded
+canonical URLs; they do not establish outbound DNS/SSRF safety. No upstream
+request is made in W03. The reviewed egress adapter and capability admission are
+still mandatory before a profile can be used to invoke an upstream service.
 
 ## Initial enforced budgets
 
@@ -111,6 +143,11 @@ storage, credential generations and activation/migration acceptance are ready.
 | Encoded grant | 65,536 bytes | Grant parsing and stored-read bounds |
 | Grant records per state owner | 1,000 | Create admission; existing disable remains available |
 | One access observation | 5,000 ms | Abortable request-local deadline, no recurring timer |
+| Profile records per owner | 1,000 | Create admission; existing profiles can still be disabled |
+| Bearer credential | 4,096 ASCII bytes | Closed bearer-token grammar; no header injection |
+| Admin command body | 16,384 bytes | Streaming body cap before parsing |
+| Keyring | 4 keys / 4,096 characters | Independent versioned keys, no control-secret reuse |
+| Profile operation | 5,000 ms | Recheck deadline after each awaited dependency |
 
 These are initial safety ceilings, not measured production capacity. Upstream
 discovery, schema complexity, result bytes, connection concurrency and Skill
@@ -130,7 +167,10 @@ chat host refreshed its tool list. They block enabling the corresponding live
 feature, not isolated development of the foundations.
 
 W01 feature gates and W02 identity foundations are implemented here. W03 provides
-grant evaluation/state and credential ports, not a completed central service.
+grant state, encrypted credential profiles and protected administration, not an
+enabled upstream integration. Its local tests include HTTP session/CSRF checks,
+rekey/tamper scenarios, rollback of failed storage writes, and unknown-schema
+preservation. Live activation and real-host acceptance remain separate gates.
 W04–W11 remain pending: approved upstream catalogs, remote invocation, OAuth,
 Skill content, UI, complete fault/cost acceptance, client validation and rollout.
 Do not present the current native `tools/list` as already containing these

@@ -27,6 +27,9 @@ async function fixture(t, sources) {
 }
 
 const bad = [
+  ["central owner to native application", { "apps/worker/src/capabilities-do.ts": 'import "./application/delete-runner.js";', "apps/worker/src/application/delete-runner.ts": "export {};" }],
+  ["central application direct network", { "apps/worker/src/application/connectors/profiles.ts": 'export const request = () => fetch("https://example.invalid");' }],
+  ["central contract helper platform global", { "apps/worker/src/contracts/connector-values.ts": 'export const request = globalThis.fetch;' }],
   ["central pure global fetch", { "apps/worker/src/domain/skills/import.ts": 'export const load = () => fetch("https://example.invalid");' }],
   ["central pure global alias", { "apps/worker/src/domain/connectors/check.ts": 'const root = globalThis; export const load = root["fetch"];' }],
   ["central contract to Runner wire", { "apps/worker/src/contracts/capabilities.ts": 'import type { Wire } from "@aloneio/runmesh-protocol";', "packages/protocol/src/index.ts": "export type Wire = {};" }],
