@@ -1,0 +1,76 @@
+import { expect, it, vi } from "vitest";
+import { createCatalogReader } from "../../apps/worker/src/application/capabilities/catalog-read.js";
+import type { CatalogCursor, CatalogHead, CatalogReadPorts } from "../../apps/worker/src/contracts/catalog.js";
+import type { CapabilityGrant } from "../../apps/worker/src/contracts/capabilities.js";
+import type { IdentityDecision } from "../../apps/worker/src/contracts/identity.js";
+import { catalogDefinition, catalogProfile, catalogSnapshot, fixtureDigest } from "./catalog-fixtures.js";
+
+const principal = { client_id: "client-catalog", secret_version: 1 };
+const identity = { schema_version: 2 as const, ...principal, label: "Test", native_scopes: [] };
+async function fixture() {
+  const snapshot = await catalogSnapshot("docs", [catalogDefinition("a"), catalogDefinition("b"), catalogDefinition("c")]);
+  const head: CatalogHead = { schema_version: 1, profile_id: "docs", revision: 2, observed_digest: snapshot.digest, approved_digest: snapshot.digest, approved_names: ["a", "b", "c"] };
+  const grant: CapabilityGrant = { schema_version: 1, client_id: principal.client_id, revision: 1, enabled: true,
+    rules: snapshot.tools.filter(tool => tool.definition.name !== "b").map(tool => ({ kind: "remote_tool", resource_id: tool.tool_id, version: tool.version, connection_profile_id: "docs" })) };
+  let saved: CatalogCursor | undefined;
+  const ports = {
+    repository: { readHead: vi.fn(() => head), readSnapshot: vi.fn(() => snapshot), stage: vi.fn(), approve: vi.fn(), disable: vi.fn() },
+    profile: vi.fn(() => catalogProfile()), grant: vi.fn((): CapabilityGrant | undefined => grant),
+    identity: vi.fn(async (): Promise<IdentityDecision> => ({ state: "allowed", identity })), digest: vi.fn(fixtureDigest), now: vi.fn(() => 1000),
+    cursor: { seal: vi.fn(async (cursor: CatalogCursor) => { saved = cursor; return "fixture-cursor"; }), open: vi.fn(async () => saved) },
+  } satisfies CatalogReadPorts;
+  return { ports, head, snapshot, grant, run: (input: unknown = { profile_id: "docs" }, expired = () => false) => createCatalogReader(ports)(principal, input, new AbortController().signal, expired) };
+}
+
+it("W04 filters before pagination without disclosing unauthorized tools or counts", async () => {
+  const f = await fixture();
+  const first = await f.run({ profile_id: "docs", limit: 1 });
+  expect(first.state === "listed" && first.tools.map(tool => tool.definition.name)).toEqual(["a"]);
+  expect(first.state === "listed" && first.next_cursor).toBe("fixture-cursor");
+  const second = await f.run({ profile_id: "docs", cursor: "fixture-cursor" });
+  expect(second.state === "listed" && second.tools.map(tool => tool.definition.name)).toEqual(["c"]);
+  expect(second.state === "listed" && second.next_cursor).toBeNull();
+});
+
+it("W04 ungranted profiles are not probed and directory I/O does not fan out", async () => {
+  const f = await fixture(); f.ports.grant.mockReturnValue(undefined);
+  expect(await f.run()).toEqual({ state: "denied" });
+  expect(f.ports.profile).not.toHaveBeenCalled(); expect(f.ports.repository.readSnapshot).not.toHaveBeenCalled();
+  f.ports.grant.mockReturnValue(f.grant);
+  expect((await f.run()).state).toBe("listed");
+  expect(f.ports.repository.readSnapshot).toHaveBeenCalledOnce();
+  expect(f.ports.cursor.open).not.toHaveBeenCalled(); expect(f.ports.cursor.seal).not.toHaveBeenCalled();
+});
+
+it("W04 identity revoked while catalog data is hashed prevents disclosure", async () => {
+  const f = await fixture();
+  f.ports.identity.mockResolvedValueOnce({ state: "allowed", identity }).mockResolvedValueOnce({ state: "denied" });
+  expect(await f.run()).toEqual({ state: "denied" });
+});
+
+it("W04 grants changed during signing invalidate the pending page", async () => {
+  const f = await fixture();
+  f.ports.cursor.seal.mockImplementation(async () => { f.ports.grant.mockReturnValue({ ...f.grant, revision: 2 }); return "fixture-cursor"; });
+  expect(await f.run({ profile_id: "docs", limit: 1 })).toEqual({ state: "stale_cursor" });
+});
+
+it("W04 expiry is bound to the first page and is not extended on subsequent reads", async () => {
+  const f = await fixture(); await f.run({ profile_id: "docs", limit: 1 });
+  f.ports.now.mockReturnValue(301001);
+  expect(await f.run({ profile_id: "docs", cursor: "fixture-cursor" })).toEqual({ state: "stale_cursor" });
+});
+
+it("W04 schema/hash/deadline failures cannot turn into successful empty catalogs", async () => {
+  const f = await fixture(); f.ports.digest.mockResolvedValue("a".repeat(64));
+  expect(await f.run()).toEqual({ state: "unavailable" });
+  f.ports.digest.mockImplementation(fixtureDigest);
+  expect(await f.run({ profile_id: "docs" }, () => true)).toEqual({ state: "unavailable" });
+  f.ports.repository.readHead.mockImplementation(() => { throw new Error("synthetic read failure"); });
+  expect(await f.run()).toEqual({ state: "unavailable" });
+});
+
+it("W04 malformed final grant observations are not permissions", async () => {
+  const f = await fixture();
+  f.ports.grant.mockReturnValueOnce(f.grant).mockReturnValueOnce({ ...f.grant, revision: 0 });
+  expect(await f.run()).toEqual({ state: "unavailable" });
+});
