@@ -1,5 +1,9 @@
 # Central catalog review (development)
 
+For the optional W05 live discovery/call adapter and its explicit limits, see
+[Controlled central HTTP MCP](central-remote-mcp.md). This guide covers the
+independently usable review/snapshot path.
+
 [简体中文](central-catalog.zh-CN.md)
 
 **Status: W04 directory foundations on dev; central storage remains test-bound.**

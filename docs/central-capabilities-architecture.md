@@ -1,8 +1,9 @@
 # Central MCP and Skill foundations
 
 W04 directory implementation and its explicit support limits are documented in
-[Central catalog review](central-catalog.md). Remote discovery/invocation and
-Skill loading remain separate later milestones.
+[Central catalog review](central-catalog.md). W05 adds the separately gated
+[controlled HTTP discovery and invocation](central-remote-mcp.md). Skill loading
+and production activation remain later milestones.
 
 [简体中文](central-capabilities-architecture.zh-CN.md)
 
@@ -175,9 +176,10 @@ grant state, encrypted credential profiles and protected administration, not an
 enabled upstream integration. Its local tests include HTTP session/CSRF checks,
 rekey/tamper scenarios, rollback of failed storage writes, and unknown-schema
 preservation. Live activation and real-host acceptance remain separate gates.
-W04 now supplies imported catalog snapshots, reviewed per-profile selections and
-an ACL-filtered internal reader; live discovery and cross-profile named toolsets
-are not enabled. W05–W11 remain pending: remote invocation, OAuth,
-Skill content, UI, complete fault/cost acceptance, client validation and rollout.
-Do not present the current native `tools/list` as already containing these
-future tools. No deployment or automatic upgrade is part of this decision.
+W04 supplies imported catalog snapshots, reviewed per-profile selections and an
+ACL-filtered reader. W05 adds controlled stateless HTTP discovery and invocation,
+with optional remote_tools/remote_call provider registration. It remains disabled
+in deployed environments. Cross-profile named toolsets, OAuth, Skill content,
+UI, full cost/receipt acceptance, real-client validation and rollout remain.
+The default native tools/list is unchanged. No deployment or automatic upgrade
+is part of this decision.

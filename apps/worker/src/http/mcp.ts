@@ -8,9 +8,12 @@ import { readCappedBytes } from "../body.js";
 import { sha256Hex } from "../security.js";
 import { verifyMcpClient } from "../application/mcp-identity.js";
 import type { WorkerEnv } from "../platform/env.js";
+import type { CentralRemote } from "../contracts/remote.js";
+import { parseRemoteEgress } from "../contracts/remote-values.js";
 
 /** The URL segment is the only MCP credential. Authorization headers are ignored. */
 export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
+  if (request.headers.has("x-runmesh-mcp-hop")) { await discardBody(request); return new Response("MCP relay recursion rejected", { status: 508 }); }
   const parts = url.pathname.split("/").filter(Boolean);
   const secret = parts[0];
   if (secret === undefined || !MCP_SECRET_RE.test(secret)) { await discardBody(request); return notFound(); }
@@ -40,8 +43,20 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
     import("agents/mcp/server"),
     import("../mcp/server.js"),
   ]);
+  const remote = env.CAPABILITIES === undefined || parseRemoteEgress(env.CENTRAL_MCP_EGRESS) === undefined
+    ? undefined : await import("../mcp/providers/remote.js");
   const handler = createMcpHandler(
-    () => createCodingMcpServer(env, auth),
+    () => {
+      const server = createCodingMcpServer(env, auth);
+      if (remote !== undefined && env.CAPABILITIES !== undefined) {
+        const principal = { client_id: verified.client_id, secret_version: verified.secret_version };
+        // Resolving the DO is lazy; server construction and native-only calls
+        // do not touch central state or initialize any upstream connection.
+        const owner = () => env.CAPABILITIES!.get(env.CAPABILITIES!.idFromName("central")) as unknown as CentralRemote;
+        remote.registerRemoteTools(server, { list: query => owner().listCatalog(principal, query), call: command => owner().callRemote(principal, command) });
+      }
+      return server;
+    },
     {
       route: "/mcp",
       // Safe identity only. The raw secret is intentionally absent.
