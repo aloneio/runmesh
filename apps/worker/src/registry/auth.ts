@@ -1,4 +1,5 @@
 import type { ActiveRunnerContext } from "../contracts/runner-selection.js";
+import { parseClientIdentity, parseNativeScopes, parseStoredNativeScopes, type ClientIdentity } from "../contracts/identity.js";
 import type { McpClientActiveRunner } from "../contracts/runner-selection.js";
 import type { McpRunnerSelectionResult } from "../contracts/runner-selection.js";
 import { isSafeIdentifier } from "../security.js";
@@ -8,7 +9,7 @@ import { reserveSourceAuthAttempt } from "../auth-throttle.js";
 import type { AuthThrottleState } from "../auth-throttle.js";
 import type { CodingScope, McpClientRecord, VerifiedMcpClient, AdminSettingsRow, AuthThrottleRow, AuthThrottleKind, SessionRow, McpClientRow } from './records.js';
 import { CLIENT_LAST_USED_WRITE_INTERVAL_MS, AUTH_THROTTLE_FAILURE_THRESHOLD, AUTH_THROTTLE_INITIAL_BLOCK_MS, AUTH_THROTTLE_MAX_BLOCK_MS } from './records.js';
-import { decodeRunner, decodeMcpClient, safeRunnerContext, safeNonnegativeInteger, validVerifier, validLabel, validScopes, parseScopes, expectedRegistryConflict } from './values.js';
+import { decodeRunner, decodeMcpClient, safeRunnerContext, safeNonnegativeInteger, validVerifier, validLabel, validScopes, expectedRegistryConflict } from './values.js';
 import type { RegistryStorage } from './storage.js';
 import type { AuthPorts } from './ports.js';
 
@@ -231,11 +232,23 @@ export class RegistryAuth {
   }
 
   public createMcpClient(input: { client_id: string; label: string; secret_verifier: string; secret_prefix: string; scopes: readonly CodingScope[] }, nowMs: number): McpClientRecord | undefined {
-    if (!isSafeIdentifier(input.client_id) || !validLabel(input.label) || !validScopes(input.scopes) || !validVerifier(input.secret_verifier) || !/^[A-Za-z0-9_-]{4,16}$/.test(input.secret_prefix)) return undefined;
+    if (!validScopes(input.scopes)) return undefined;
+    return this.insertMcpClient(input, JSON.stringify(input.scopes), nowMs);
+  }
+
+  public createMcpIdentity(input: { client_id: string; label: string; secret_verifier: string; secret_prefix: string; native_scopes: readonly CodingScope[] }, nowMs: number): ClientIdentity | undefined {
+    const scopes = parseNativeScopes(input.native_scopes, true);
+    if (scopes === undefined) return undefined;
+    const client = this.insertMcpClient(input, JSON.stringify({ schema_version: 2, native_scopes: scopes }), nowMs);
+    return client === undefined ? undefined : this.revalidateMcpIdentity(client.client_id, client.secret_version);
+  }
+
+  private insertMcpClient(input: { client_id: string; label: string; secret_verifier: string; secret_prefix: string }, scopesJson: string, nowMs: number): McpClientRecord | undefined {
+    if (!isSafeIdentifier(input.client_id) || !validLabel(input.label) || !validVerifier(input.secret_verifier) || !/^[A-Za-z0-9_-]{4,16}$/.test(input.secret_prefix)) return undefined;
     try {
       this.storage.sql.exec(
         `INSERT INTO mcp_clients (client_id, label, secret_verifier, secret_prefix, scopes_json, secret_version, created_at_ms, updated_at_ms)
-         VALUES (?, ?, ?, ?, ?, 1, ?, ?)`, input.client_id, input.label, input.secret_verifier, input.secret_prefix, JSON.stringify(input.scopes), nowMs, nowMs,
+         VALUES (?, ?, ?, ?, ?, 1, ?, ?)`, input.client_id, input.label, input.secret_verifier, input.secret_prefix, scopesJson, nowMs, nowMs,
       );
     } catch (error) { if (expectedRegistryConflict(error, [])) return undefined; throw error; }
     return this.getMcpClient(input.client_id);
@@ -283,24 +296,49 @@ export class RegistryAuth {
   }
 
   public verifyMcpClient(secretVerifier: string, nowMs: number): VerifiedMcpClient | undefined {
+    const identity = this.verifyMcpIdentity(secretVerifier, nowMs);
+    return identity === undefined || identity.native_scopes.length === 0 ? undefined : {
+      client_id: identity.client_id, label: identity.label, scopes: identity.native_scopes, secret_version: identity.secret_version,
+    };
+  }
+
+  public verifyMcpIdentity(secretVerifier: string, nowMs: number): ClientIdentity | undefined {
     if (!validVerifier(secretVerifier)) return undefined;
     const row = this.storage.sql.exec<McpClientRow>("SELECT * FROM mcp_clients WHERE secret_verifier = ?", secretVerifier).toArray()[0];
     if (row === undefined || row.revoked_at_ms !== null) return undefined;
-    const scopes = parseScopes(row.scopes_json);
-    if (scopes === undefined) return undefined;
+    const identity = this.identityFromRow(row);
+    if (identity === undefined) return undefined;
     if (!this.ports.featureHealthDisabled("mcp_usage_tracking", nowMs) && (row.last_used_at_ms === null || row.last_used_at_ms <= nowMs - CLIENT_LAST_USED_WRITE_INTERVAL_MS)) {
       try { this.storage.sql.exec("UPDATE mcp_clients SET last_used_at_ms = ? WHERE client_id = ?", nowMs, row.client_id); }
       catch (error) { this.ports.disableFeatureHealth("mcp_usage_tracking", error, nowMs); }
     }
-    return { client_id: row.client_id, label: row.label, scopes, secret_version: row.secret_version };
+    return identity;
   }
 
   public revalidateMcpClient(clientId: unknown, secretVersion: unknown, includeJobRecording = false): VerifiedMcpClient | undefined {
+    const observed = this.currentIdentity(clientId, secretVersion);
+    if (observed === undefined || observed.identity.native_scopes.length === 0) return undefined;
+    const { identity, row } = observed;
+    return { client_id: identity.client_id, label: identity.label, scopes: identity.native_scopes, secret_version: identity.secret_version,
+      ...(includeJobRecording ? { record_history: row.record_jobs !== 0 } : {}) };
+  }
+
+  public revalidateMcpIdentity(clientId: unknown, secretVersion: unknown): ClientIdentity | undefined {
+    return this.currentIdentity(clientId, secretVersion)?.identity;
+  }
+
+  private currentIdentity(clientId: unknown, secretVersion: unknown): { identity: ClientIdentity; row: McpClientRow } | undefined {
     if (typeof clientId !== "string" || !isSafeIdentifier(clientId) || !Number.isSafeInteger(secretVersion) || (secretVersion as number) < 1) return undefined;
-    const client = this.getMcpClient(clientId);
-    if (client === undefined || client.revoked_at_ms !== null || client.secret_version !== secretVersion || !validScopes(client.scopes)) return undefined;
-    return { client_id: client.client_id, label: client.label, scopes: client.scopes, secret_version: client.secret_version,
-      ...(includeJobRecording ? { record_history: client.record_jobs !== false } : {}) };
+    const row = this.storage.sql.exec<McpClientRow>("SELECT * FROM mcp_clients WHERE client_id = ?", clientId).toArray()[0];
+    if (row === undefined || row.revoked_at_ms !== null || row.secret_version !== secretVersion) return undefined;
+    const identity = this.identityFromRow(row);
+    return identity === undefined ? undefined : { identity, row };
+  }
+
+  private identityFromRow(row: McpClientRow): ClientIdentity | undefined {
+    const scopes = parseStoredNativeScopes(row.scopes_json);
+    return scopes === undefined ? undefined : parseClientIdentity({ schema_version: 2, client_id: row.client_id,
+      label: row.label, secret_version: row.secret_version, native_scopes: scopes });
   }
 
   public getMcpClientActiveRunner(clientId: string): McpClientActiveRunner | undefined {

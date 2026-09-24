@@ -81,7 +81,7 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth): McpServ
       // awaited. Re-read the exact generation and scopes before every tool.
       const live = await reauthorizePrincipal(async signal => {
         if (!isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) throw new Error("internal service unavailable");
-        const path = "/auth/mcp/revalidate", body = JSON.stringify(env.mcpPrincipal);
+        const path = "/auth/mcp/revalidate", body = JSON.stringify({ ...env.mcpPrincipal, identity_version: 2 });
         const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET, "POST", path, body);
         return env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(new Request(`https://registry.internal${path}`, { method: "POST", headers, body, signal }));
       }, env.mcpPrincipal);

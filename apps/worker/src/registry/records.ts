@@ -1,4 +1,5 @@
 import type { CodingScope } from "../contracts/administration.js";
+import { NATIVE_SCOPES } from "../contracts/identity.js";
 import type { RegistryFeatureKey } from "../contracts/feature-health.js";
 import type { RunnerConnectionState } from "../contracts/runner-selection.js";
 import type { RunnerExecutionMode } from "../contracts/administration.js";
@@ -37,7 +38,7 @@ export interface RunnerMutationState {
   readonly session_id: string | null;
 }
 
-export const VALID_SCOPES = new Set<CodingScope>(["coding:read", "coding:write", "coding:exec"]);
+export const VALID_SCOPES = new Set<CodingScope>(NATIVE_SCOPES);
 
 export type PermissionBit = "read" | "edit" | "shell" | "job_control";
 

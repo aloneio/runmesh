@@ -816,6 +816,15 @@ export class RegistryDO {
     if (method === "POST" && action === "sessions" && clientId === "logout") { const sessionHash = stringField(input, "session_hash", 64); if (sessionHash !== undefined && validVerifier(sessionHash)) this.logoutAdminSession(sessionHash); return new Response(null, { status: 204 }); }
     if (method === "POST" && action === "password" && clientId === undefined) { const verifier = stringField(input, "password_verifier", 4_096); return verifier === undefined ? Response.json({ error: "invalid verifier" }, { status: 400 }) : this.changeAdminPassword(verifier, nowMs) ? new Response(null, { status: 204 }) : new Response("not initialized", { status: 409 }); }
     if (method === "GET" && action === "clients" && clientId === undefined) return Response.json({ clients: this.listMcpClients() });
+    if (method === "POST" && action === "clients" && clientId === undefined && input.identity_version !== undefined) {
+      if (input.identity_version !== 2 || input.scopes !== undefined) return Response.json({ error: "invalid identity version or mixed scope fields" }, { status: 400 });
+      const id = stringField(input, "client_id", 128), label = stringField(input, "label", 256);
+      const verifier = stringField(input, "secret_verifier", 64), prefix = stringField(input, "secret_prefix", 16);
+      const scopes = Array.isArray(input.native_scopes) && input.native_scopes.length === 0 ? [] : scopesField(input.native_scopes);
+      if (id === undefined || label === undefined || verifier === undefined || prefix === undefined || scopes === undefined) return Response.json({ error: "invalid identity" }, { status: 400 });
+      const identity = this.auth.createMcpIdentity({ client_id: id, label, secret_verifier: verifier, secret_prefix: prefix, native_scopes: scopes }, nowMs);
+      return identity === undefined ? new Response("conflict", { status: 409 }) : Response.json(identity);
+    }
     if (method === "POST" && action === "clients" && clientId === undefined) { const id = stringField(input, "client_id", 128); const label = stringField(input, "label", 256); const verifier = stringField(input, "secret_verifier", 64); const prefix = stringField(input, "secret_prefix", 16); const scopes = scopesField(input.scopes); if (id === undefined || label === undefined || verifier === undefined || prefix === undefined || scopes === undefined) return Response.json({ error: "invalid client" }, { status: 400 }); const client = this.createMcpClient({ client_id: id, label, secret_verifier: verifier, secret_prefix: prefix, scopes }, nowMs); return client === undefined ? new Response("conflict", { status: 409 }) : Response.json(client); }
     if (action === "clients" && clientId !== undefined && isSafeIdentifier(clientId)) {
       const subaction = segments[2];
@@ -937,7 +946,9 @@ export class RegistryDO {
       return Response.json({ ack_result: ack });
     }
     if (method === "POST" && action === "mcp" && clientId === "revalidate") {
-      const client = this.revalidateMcpClient(input.client_id, input.secret_version);
+      if (input.identity_version !== undefined && input.identity_version !== 2) return new Response("unsupported identity version", { status: 400 });
+      const client = input.identity_version === 2 ? this.auth.revalidateMcpIdentity(input.client_id, input.secret_version)
+        : this.revalidateMcpClient(input.client_id, input.secret_version);
       return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client);
     }
     if (method === "POST" && action === "mcp" && clientId === "authorize-rpc") {
@@ -949,8 +960,9 @@ export class RegistryDO {
       return value === undefined ? new Response("not found", { status: 404 }) : Response.json(value);
     }
     if (method === "POST" && action === "mcp" && clientId === "verify") {
+      if (input.identity_version !== undefined && input.identity_version !== 2) return new Response("unsupported identity version", { status: 400 });
       const verifier = stringField(input, "secret_verifier", 64);
-      const client = verifier === undefined ? undefined : this.verifyMcpClient(verifier, nowMs);
+      const client = verifier === undefined ? undefined : input.identity_version === 2 ? this.auth.verifyMcpIdentity(verifier, nowMs) : this.verifyMcpClient(verifier, nowMs);
       return client === undefined ? Response.json({ error: { code: "invalid_mcp_credential" } }, { status: 404 }) : Response.json(client);
     }
     return new Response("not found", { status: 404 });

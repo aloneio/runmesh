@@ -107,8 +107,12 @@ test("retirement cannot target v2, other environments, or a replacement producti
     assert.deepEqual(c.durable_objects.bindings,[{name:"REGISTRY",class_name:"RegistryDOv2"},{name:"RUNNER",class_name:"RunnerDOv2"}]);
     assert.deepEqual(c.d1_databases,[{binding:"HISTORY_DB",database_name:"runmesh-audit-history"}]);
   }
-  for(const c of [config.env.development,config.env.test]) {
+  const originalMigrations=[{tag:"v1",new_sqlite_classes:["RegistryDO","RunnerDO"]},{tag:"v2",new_sqlite_classes:["RegistryDOv2","RunnerDOv2"]}];
+  const originalBindings=[{name:"REGISTRY",class_name:"RegistryDOv2"},{name:"RUNNER",class_name:"RunnerDOv2"}];
+  for(const [name,c] of [["development",config.env.development],["test",config.env.test]]) {
     assert.equal(c.main,"src/index.ts");assert.deepEqual(c.exports,{});
-    assert.deepEqual(c.migrations,[{tag:"v1",new_sqlite_classes:["RegistryDO","RunnerDO"]},{tag:"v2",new_sqlite_classes:["RegistryDOv2","RunnerDOv2"]}]);
+    // A specifically named test-only owner must not leak into deployed environments.
+    assert.deepEqual(c.migrations,name==="test"?[...originalMigrations,{tag:"central-test-v1",new_sqlite_classes:["CapabilitiesDOv1"]}]:originalMigrations);
+    assert.deepEqual(c.durable_objects.bindings,name==="test"?[...originalBindings,{name:"CAPABILITIES",class_name:"CapabilitiesDOv1"}]:originalBindings);
   }
 });

@@ -1,5 +1,5 @@
 import { isSafeIdentifier } from "../security.js";
-import { SUPPORTED_SCOPES, type CodingScope } from "./catalog.js";
+import { parseClientIdentity, parseNativeScopes, type CodingScope } from "../contracts/identity.js";
 
 export type ReauthorizationDecision =
   | { readonly state: "allowed"; readonly scopes: readonly CodingScope[] }
@@ -12,11 +12,15 @@ export interface CapturedPrincipal { readonly client_id: string; readonly secret
 export function projectReauthorization(value: unknown, expected: CapturedPrincipal): ReauthorizationDecision {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return { state: "malformed" };
   const record = value as Record<string, unknown>;
+  if (Object.hasOwn(record, "schema_version")) {
+    const identity = parseClientIdentity(record);
+    if (identity === undefined) return { state: "malformed" };
+    if (identity.client_id !== expected.client_id || identity.secret_version !== expected.secret_version) return { state: "denied" };
+    return { state: "allowed", scopes: identity.native_scopes };
+  }
   if (typeof record.client_id !== "string" || !isSafeIdentifier(record.client_id)
     || !Number.isSafeInteger(record.secret_version) || (record.secret_version as number) < 1
-    || !Array.isArray(record.scopes) || record.scopes.length > SUPPORTED_SCOPES.length
-    || new Set(record.scopes).size !== record.scopes.length
-    || record.scopes.some(scope => !SUPPORTED_SCOPES.includes(scope as CodingScope))) return { state: "malformed" };
+    || parseNativeScopes(record.scopes) === undefined) return { state: "malformed" };
   if (record.client_id !== expected.client_id || record.secret_version !== expected.secret_version) return { state: "denied" };
   return { state: "allowed", scopes: record.scopes as CodingScope[] };
 }

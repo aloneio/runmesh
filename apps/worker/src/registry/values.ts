@@ -1,4 +1,5 @@
 import type { ActiveRunnerContext } from "../contracts/runner-selection.js";
+import { parseNativeScopes, parseStoredNativeScopes } from "../contracts/identity.js";
 import { JobCompletedSchema } from "@aloneio/runmesh-protocol";
 import { JobStartedSchema } from "@aloneio/runmesh-protocol";
 import { JobStatusMessageSchema } from "@aloneio/runmesh-protocol";
@@ -118,7 +119,7 @@ export function decodeWorkspace(row: ManagedWorkspaceRow): WorkspaceRecord[] {
   return permissions === undefined ? [] : [{ runner_id: row.runner_id, workspace_id: row.workspace_id, display_name: row.display_name, root_path: row.root_path, enabled: row.enabled === 1, permissions, created_at_ms: row.created_at_ms, updated_at_ms: row.updated_at_ms, revision: row.revision, validation_status: row.validation_status }];
 }
 
-export function decodeMcpClient(row: McpClientRow): McpClientRecord { const scopes = parseScopes(row.scopes_json) ?? []; return { record_jobs: row.record_jobs !== 0, record_jobs_since_ms: row.record_jobs_since_ms ?? 0, client_id: row.client_id, label: row.label, secret_prefix: row.secret_prefix, scopes, secret_version: row.secret_version, created_at_ms: row.created_at_ms, updated_at_ms: row.updated_at_ms, last_used_at_ms: row.last_used_at_ms, revoked_at_ms: row.revoked_at_ms, active_runner_id: row.active_runner_id, active_runner_updated_at_ms: row.active_runner_updated_at_ms }; }
+export function decodeMcpClient(row: McpClientRow): McpClientRecord { const scopes = parseStoredNativeScopes(row.scopes_json) ?? []; return { record_jobs: row.record_jobs !== 0, record_jobs_since_ms: row.record_jobs_since_ms ?? 0, client_id: row.client_id, label: row.label, secret_prefix: row.secret_prefix, scopes, secret_version: row.secret_version, created_at_ms: row.created_at_ms, updated_at_ms: row.updated_at_ms, last_used_at_ms: row.last_used_at_ms, revoked_at_ms: row.revoked_at_ms, active_runner_id: row.active_runner_id, active_runner_updated_at_ms: row.active_runner_updated_at_ms }; }
 
 export function safeRunnerContext(runner: RunnerRecord, updatedAtMs: number | null): ActiveRunnerContext {
   return { runner_id: runner.runner_id, state: runner.state, available: runner.state === "online", updated_at_ms: updatedAtMs };
@@ -245,7 +246,7 @@ export function validRunnerPublicInfo(value: RunnerPublicInfo): boolean {
     && (value.privilege_state === undefined || value.privilege_state === "privileged" || value.privilege_state === "restricted" || value.privilege_state === "mismatch" || value.privilege_state === "unknown");
 }
 
-export function validScopes(value: readonly CodingScope[]): boolean { return value.length > 0 && value.length <= 3 && new Set(value).size === value.length && value.every((scope) => VALID_SCOPES.has(scope)); }
+export function validScopes(value: readonly CodingScope[]): boolean { return parseNativeScopes(value) !== undefined; }
 
 export function scopesField(value: unknown): CodingScope[] | undefined { if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !VALID_SCOPES.has(item as CodingScope))) return undefined; const scopes = value as CodingScope[]; return validScopes(scopes) ? scopes : undefined; }
 

@@ -79,6 +79,10 @@
           {
             "name": "RUNNER",
             "class_name": "RunnerDOv2"
+          },
+          {
+            "name": "CAPABILITIES",
+            "class_name": "CapabilitiesDOv1"
           }
         ]
       },
@@ -96,6 +100,10 @@
             "RegistryDOv2",
             "RunnerDOv2"
           ]
+        },
+        {
+          "tag": "central-test-v1",
+          "new_sqlite_classes": ["CapabilitiesDOv1"]
         }
       ],
       "vars": {

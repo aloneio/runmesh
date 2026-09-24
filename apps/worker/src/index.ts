@@ -36,6 +36,7 @@ import type { WorkerEnv } from "./platform/env.js";
 
 // must never be opened or migrated in place.
 export { RegistryDO, RegistryDOv2, RunnerDO };
+export { CapabilitiesDOv1 } from "./platform/capabilities/owner.js";
 
 export class RunnerDOv2 extends RunnerDO {}
 

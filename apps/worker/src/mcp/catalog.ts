@@ -4,7 +4,8 @@ import { ContextPruneOptionsSchema } from "@aloneio/runmesh-protocol";
 import { LOCAL_RUNNER_OPERATION_TIMEOUT_MS, BoundFileCursorSchema, BoundLogCursorSchema, isBoundCursor } from "@aloneio/runmesh-protocol";
 import { z } from "zod";
 
-export const SUPPORTED_SCOPES = ["coding:read", "coding:write", "coding:exec"] as const;
+import { NATIVE_SCOPES } from "../contracts/identity.js";
+export const SUPPORTED_SCOPES = NATIVE_SCOPES;
 export type CodingScope = (typeof SUPPORTED_SCOPES)[number];
 
 export type ToolSpec<Input extends z.ZodType = z.ZodType> = {
