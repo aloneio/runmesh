@@ -4,9 +4,11 @@ import { admitCentralAdmin, centralFailure as fail, centralHeaders as headers } 
 import { handleCentralCatalogAdmin } from "./central-catalog.js";
 import { handleCentralDiscovery } from "./central-discovery.js";
 import type { WorkerEnv } from "../platform/env.js";
+import { handleCentralOAuth } from "./central-oauth.js";
 
 /** Optional browser-admin JSON entry. No bearer-token fallback, plaintext read or MCP tool. */
 export async function handleCentralAdmin(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
+  if (url.pathname.startsWith("/admin/central/oauth/")) return handleCentralOAuth(request, env, url);
   if (url.pathname.startsWith("/admin/central/discovery/")) return handleCentralDiscovery(request, env, url);
   if (url.pathname.startsWith("/admin/central/catalogs/")) return handleCentralCatalogAdmin(request, env, url);
   if (env.CAPABILITIES === undefined) { void request.body?.cancel().catch(() => undefined); return fail("central_disabled", 404); }
@@ -34,10 +36,12 @@ export async function handleCentralAdmin(request: Request, env: WorkerEnv, url: 
       const profile = parseProfile(result.profile);
       if (profile === undefined || profile.profile_id !== profileId) return fail("central_result_unconfirmed", 503, "unknown");
       if (result.state === "written") {
-        if (command === undefined || profile.revision !== (command.action === "create" ? 1 : command.expected_revision + 1))
+        if (command === undefined || profile.revision !== (command.action === "create" || command.action === "create_oauth" ? 1 : command.expected_revision + 1))
           return fail("central_result_unconfirmed", 503, "unknown");
         if (command.action === "create" && (profile.connector_id !== command.connector_id || profile.endpoint !== command.endpoint
           || profile.enabled || profile.credential?.secret_version !== 1)) return fail("central_result_unconfirmed", 503, "unknown");
+        if (command.action === "create_oauth" && (profile.connector_id !== command.connector_id || profile.endpoint !== command.endpoint
+          || profile.enabled || profile.credential !== null)) return fail("central_result_unconfirmed", 503, "unknown");
         if ((command.action === "enable" || command.action === "disable") && profile.enabled !== (command.action === "enable"))
           return fail("central_result_unconfirmed", 503, "unknown");
       }

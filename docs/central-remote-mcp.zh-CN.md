@@ -1,5 +1,8 @@
 # 受控中央 HTTP MCP（开发版）
 
+本页说明 W05 的无状态基线。可选 W06 OAuth 和临时会话扩展及其支持边界见
+[中央 OAuth](central-oauth.zh-CN.md)。所有部署启用仍须显式执行。
+
 [English](central-remote-mcp.md)
 
 **状态：dev 上的 W05 实现，未在生产环境启用。** 中央 HTTP 发现和调用已接入

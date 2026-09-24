@@ -33,8 +33,9 @@ export interface CredentialEnvelope {
   readonly iv: string;
   readonly ciphertext: string;
 }
-export interface ProfileRecord { readonly profile: ConnectionProfile; readonly envelope: CredentialEnvelope }
+export interface ProfileRecord { readonly profile: ConnectionProfile; readonly envelope: CredentialEnvelope | null }
 export type ProfileCommand =
+  | { readonly action: "create_oauth"; readonly profile_id: string; readonly connector_id: string; readonly endpoint: string }
   | { readonly action: "create"; readonly profile_id: string; readonly connector_id: string; readonly endpoint: string; readonly credential: CredentialInput }
   | { readonly action: "rotate"; readonly profile_id: string; readonly expected_revision: number; readonly credential: CredentialInput }
   | { readonly action: "enable" | "disable" | "rekey"; readonly profile_id: string; readonly expected_revision: number };

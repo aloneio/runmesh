@@ -179,7 +179,9 @@ preservation. Live activation and real-host acceptance remain separate gates.
 W04 supplies imported catalog snapshots, reviewed per-profile selections and an
 ACL-filtered reader. W05 adds controlled stateless HTTP discovery and invocation,
 with optional remote_tools/remote_call provider registration. It remains disabled
-in deployed environments. Cross-profile named toolsets, OAuth, Skill content,
-UI, full cost/receipt acceptance, real-client validation and rollout remain.
+in deployed environments. W06 adds [client-bound OAuth and ephemeral legacy sessions](central-oauth.md),
+with explicit provider pins and no persistent shared session. Cross-profile named
+toolsets, Skill content, UI, full cost/receipt acceptance, real-client validation
+and rollout remain.
 The default native tools/list is unchanged. No deployment or automatic upgrade
 is part of this decision.

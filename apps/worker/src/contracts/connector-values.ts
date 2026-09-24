@@ -27,12 +27,12 @@ export function parseProfile(value: unknown): ConnectionProfile | undefined {
   if (item === undefined || !exact(item, ["schema_version", "profile_id", "connector_id", "endpoint", "owner", "revision", "enabled", "credential"])
     || item.schema_version !== 1 || !isCapabilityIdentifier(item.profile_id) || !isCapabilityIdentifier(item.connector_id)
     || !revision(item.revision) || typeof item.enabled !== "boolean" || owner === undefined || !exact(owner, ["kind"]) || owner.kind !== "instance_admin"
-    || credential === undefined || !exact(credential, ["secret_id", "secret_version"]) || credential.secret_id !== item.profile_id || !revision(credential.secret_version)) return undefined;
+    || (item.credential !== null && (credential === undefined || !exact(credential, ["secret_id", "secret_version"]) || credential.secret_id !== item.profile_id || !revision(credential.secret_version)))) return undefined;
   const endpoint = profileEndpoint(item.endpoint);
   if (endpoint === undefined || endpoint !== item.endpoint) return undefined;
   return { schema_version: 1, profile_id: item.profile_id, connector_id: item.connector_id, endpoint,
     owner: { kind: "instance_admin" }, revision: item.revision, enabled: item.enabled,
-    credential: { secret_id: item.profile_id, secret_version: credential.secret_version } };
+    credential: item.credential === null ? null : { secret_id: item.profile_id, secret_version: credential!.secret_version as number } };
 }
 
 export function parseEnvelope(value: unknown): CredentialEnvelope | undefined {
@@ -44,9 +44,18 @@ export function parseEnvelope(value: unknown): CredentialEnvelope | undefined {
   return { schema_version: 1, key_id: item.key_id, iv: item.iv, ciphertext: item.ciphertext };
 }
 
+export function validProfileEnvelope(profile: ConnectionProfile, envelope: unknown): boolean {
+  return profile.credential === null ? envelope === null : parseEnvelope(envelope) !== undefined;
+}
+
 export function parseProfileCommand(value: unknown): ProfileCommand | undefined {
   const item = object(value);
   if (item === undefined || !isCapabilityIdentifier(item.profile_id)) return undefined;
+  if (item.action === "create_oauth") {
+    if (!exact(item, ["action", "profile_id", "connector_id", "endpoint"]) || !isCapabilityIdentifier(item.connector_id)) return undefined;
+    const endpoint = profileEndpoint(item.endpoint);
+    return endpoint === undefined ? undefined : { action: "create_oauth", profile_id: item.profile_id, connector_id: item.connector_id, endpoint };
+  }
   if (item.action === "create") {
     if (!exact(item, ["action", "profile_id", "connector_id", "endpoint", "credential"]) || !isCapabilityIdentifier(item.connector_id)) return undefined;
     const endpoint = profileEndpoint(item.endpoint), credential = parseCredential(item.credential);

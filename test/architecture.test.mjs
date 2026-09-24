@@ -27,6 +27,9 @@ async function fixture(t, sources) {
 }
 
 const bad = [
+  ["OAuth contracts to SDK", { "apps/worker/src/contracts/oauth.ts": 'import { Client } from "@modelcontextprotocol/client";' }],
+  ["OAuth rules to native Runner state", { "apps/worker/src/application/connectors/oauth.ts": 'import "../../runner-do.js";', "apps/worker/src/runner-do.ts": "export {};" }],
+  ["remote capability to OAuth persistence", { "apps/worker/src/application/capabilities/remote-call.ts": 'import "../../platform/connectors/oauth-store.js";', "apps/worker/src/platform/connectors/oauth-store.ts": "export {};" }],
   ["remote contract to client SDK", { "apps/worker/src/contracts/remote.ts": 'import type { Client } from "@modelcontextprotocol/client";' }],
   ["remote invocation to concrete credential adapter", { "apps/worker/src/application/capabilities/remote-call.ts": 'import "../../platform/connectors/cipher.js";', "apps/worker/src/platform/connectors/cipher.ts": "export {};" }],
   ["remote provider to state owner", { "apps/worker/src/mcp/providers/remote.ts": 'import "../../capabilities-do.js";', "apps/worker/src/capabilities-do.ts": "export {};" }],
