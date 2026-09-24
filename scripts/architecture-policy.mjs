@@ -1,4 +1,5 @@
 import { isBuiltin } from "node:module";
+import { centralDependencyProblem, centralFeature, centralSpecifierProblem } from "./central-architecture-policy.mjs";
 
 /** Source-only dependency policy; tooling/test dependencies are not runtime layers. */
 export const SOURCE_ROOTS = ["apps/worker/src", "apps/runner/src", "packages/protocol/src", "apps/worker/browser"];
@@ -32,6 +33,8 @@ const cloudRoles = new Set(["entry", "platform", "transport_owner", "registry_fa
 const pureWorkerRoles = new Set(["contracts", "domain", "presentation", "browser", "registry_foundation", "registry_domain"]);
 export function specifierProblem(from, specifier, typeOnly) {
   const source = canonicalSource(from);
+  const centralProblem = centralSpecifierProblem(source, specifier);
+  if (centralProblem) return centralProblem;
   const builtin = specifier.startsWith("node:") || isBuiltin(specifier);
   const external = !specifier.startsWith(".") && !specifier.startsWith("/");
   if (source === "apps/runner/src/jobs/input.ts" && external && !(specifier === "node:stream" && typeOnly))
@@ -45,7 +48,8 @@ export function specifierProblem(from, specifier, typeOnly) {
   if (layer(from) === "worker") {
     const role = workerRole(from);
     if (cloudPlatform.test(specifier) && !cloudRoles.has(role)) return `Worker layer ${role} must not depend on Cloudflare platform packages, including types`;
-    if (serverSdk.test(specifier) && !["entry", "http", "mcp"].includes(role)) return `Worker layer ${role} must not depend on server SDK packages, including types`;
+    if (serverSdk.test(specifier) && !["entry", "http", "mcp"].includes(role)
+      && !(role === "platform" && centralFeature(source) === "connectors")) return `Worker layer ${role} must not depend on server SDK packages, including types`;
     if (pureWorkerRoles.has(role) && external && !purePackages.test(specifier)) return `Worker layer ${role} must not depend on unreviewed external packages`;
   }
   return undefined;
@@ -90,6 +94,8 @@ export const WORKER_ALLOWED_DEPENDENCIES = Object.freeze({
 });
 export function dependencyProblem(from, to) {
   from = canonicalSource(from); to = canonicalSource(to);
+  const centralProblem = centralDependencyProblem(from, to);
+  if (centralProblem) return centralProblem;
   const owner = layer(from), target = layer(to);
   if (from === "apps/runner/src/jobs/input.ts" && target === "runner" && !/^apps\/runner\/src\/(?:jobs\/ports|errors)\.ts$/u.test(to))
     return "Job stdin delivery must not depend on concrete Job state, process or storage implementations";

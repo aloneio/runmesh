@@ -15,7 +15,7 @@ async function fixture(t, sources) {
   t.after(() => rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 }));
   for (const folder of ["apps/worker/src", "apps/worker/browser", "apps/runner/src", "packages/protocol/src", "scripts"])
     await mkdir(join(root, folder), { recursive: true });
-  for (const file of ["check-architecture.mjs", "architecture-graph.mjs", "architecture-policy.mjs"]) {
+  for (const file of ["check-architecture.mjs", "architecture-graph.mjs", "architecture-policy.mjs", "central-architecture-policy.mjs"]) {
     try { await cp(join(project, "scripts", file), join(root, "scripts", file)); }
     catch (error) { if (error.code !== "ENOENT") throw error; }
   }
@@ -27,6 +27,22 @@ async function fixture(t, sources) {
 }
 
 const bad = [
+  ["central pure global fetch", { "apps/worker/src/domain/skills/import.ts": 'export const load = () => fetch("https://example.invalid");' }],
+  ["central pure global alias", { "apps/worker/src/domain/connectors/check.ts": 'const root = globalThis; export const load = root["fetch"];' }],
+  ["central contract to Runner wire", { "apps/worker/src/contracts/capabilities.ts": 'import type { Wire } from "@aloneio/runmesh-protocol";', "packages/protocol/src/index.ts": "export type Wire = {};" }],
+  ["native code to central internals", { "apps/worker/src/mcp/server.ts": 'import "../platform/capabilities/owner.js";', "apps/worker/src/platform/capabilities/owner.ts": "export {};" }],
+  ["unreviewed central directory without imports", { "apps/worker/src/skills/read.ts": 'export const read = () => "unchecked";' }],
+  ["central dynamic code evaluation", { "apps/worker/src/platform/skills/load.ts": 'export const load = (source: string) => new Function(source);' }],
+  ["central Skill to Runner shell", { "apps/worker/src/application/skills/read.ts": 'import "../../../../runner/src/jobs.js";', "apps/runner/src/jobs.ts": "export {};" }],
+  ["central connector to RunnerDO", { "apps/worker/src/platform/connectors/client.ts": 'import "../../runner-do.js";', "apps/worker/src/runner-do.ts": "export {};" }],
+  ["central feature peer internals", { "apps/worker/src/application/connectors/invoke.ts": 'import "../skills/read.js";', "apps/worker/src/application/skills/read.ts": "export {};" }],
+  ["unreviewed central directories", { "apps/worker/src/connectors/client.ts": 'import "../skills/read.js";', "apps/worker/src/skills/read.ts": "export {};" }],
+  ["central pure rule to SDK type", { "apps/worker/src/domain/connectors/validate.ts": 'import type { Client } from "@modelcontextprotocol/client";' }],
+  ["central rule to environment type", { "apps/worker/src/domain/capabilities/grants.ts": 'import type { WorkerEnv } from "../../platform/env.js";', "apps/worker/src/platform/env.ts": "export type WorkerEnv = {};" }],
+  ["central use case to concrete storage", { "apps/worker/src/application/skills/read.ts": 'import "../../platform/skills/store.js";', "apps/worker/src/platform/skills/store.ts": "export {};" }],
+  ["central Skill process execution", { "apps/worker/src/platform/skills/import.ts": 'import { spawn } from "node:child_process";' }],
+  ["central MCP provider to application", { "apps/worker/src/mcp/providers/remote.ts": 'import "../../application/connectors/invoke.js";', "apps/worker/src/application/connectors/invoke.ts": "export {};" }],
+  ["central connector to Runner wire contract", { "apps/worker/src/domain/connectors/state.ts": 'import type { Wire } from "@aloneio/runmesh-protocol";', "packages/protocol/src/index.ts": "export type Wire = {};" }],
   ["stdin delivery to filesystem", { "apps/runner/src/jobs/input.ts": 'import { readFile } from "node:fs/promises";' }],
   ["stdin delivery to process adapter", { "apps/runner/src/jobs/input.ts": 'import "./process.js";', "apps/runner/src/jobs/process.ts": "export {};" }],
   ["stdin delivery to storage adapter", { "apps/runner/src/jobs/input.ts": 'import "./storage.js";', "apps/runner/src/jobs/storage.ts": "export {};" }],
@@ -95,6 +111,18 @@ test("architecture rejects type-only cycles without confusing them with runtime 
   assert.equal(report.runtimeCycles.length, 0); assert.equal(report.typeCycles.length, 1);
   assert.ok(report.failures.some(value => value.includes("type-inclusive dependency cycle")));
   assert.notEqual(f.run().status, 0);
+});
+
+test("W01 composition injects central public ports without widening native dependencies", async t => {
+  const f = await fixture(t, {
+    "apps/worker/src/contracts/capabilities.ts": 'export type Port = { read(id: string): Promise<string> };',
+    "apps/worker/src/domain/capabilities/grants.ts": 'export const enabled = (value: boolean) => value;',
+    "apps/worker/src/application/capabilities/access.ts": 'import type { Port } from "../../contracts/capabilities.js"; import { enabled } from "../../domain/capabilities/grants.js"; export const create = (port: Port) => port;',
+    "apps/worker/src/platform/capabilities/owner.ts": 'import "cloudflare:workers"; import type { Port } from "../../contracts/capabilities.js"; export type Adapter = Port;',
+    "apps/worker/src/http/central.ts": 'import { create } from "../application/capabilities/access.js"; import "../platform/capabilities/owner.js";',
+    "apps/worker/src/mcp/providers/remote.ts": 'import type { Port } from "../../contracts/capabilities.js"; export const bind = (port: Port) => port;',
+  });
+  assert.deepEqual((await checkArchitecture(f.root)).failures, []);
 });
 
 test("AR01 side-effect imports are runtime edges, not type-only edges", async t => {

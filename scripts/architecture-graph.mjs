@@ -1,4 +1,5 @@
 import { parse } from "@babel/parser";
+import { centralNodeProblem } from "./central-architecture-policy.mjs";
 import { builtinModules } from "node:module";
 import { readdir, readFile, lstat } from "node:fs/promises";
 import { join, posix } from "node:path";
@@ -14,7 +15,7 @@ const sourceVariants = path => [...new Set([
 ])];
 
 /** Syntax inspection only: never import or evaluate scanned source. */
-export function dependencies(text, filename) {
+export function dependencies(text, filename, inspectNode = () => undefined) {
   const ast = parse(text, { sourceType: "unambiguous", plugins: ["typescript", ...(filename.endsWith("x") ? ["jsx"] : [])], createImportExpressions: true, attachComment: false });
   const found = [];
   const add = (node, source, typeOnly = false) => {
@@ -25,6 +26,7 @@ export function dependencies(text, filename) {
   const walk = node => {
     if (!node || typeof node !== "object") return;
     if (Array.isArray(node)) { node.forEach(walk); return; }
+    inspectNode(node);
     switch (node.type) {
       case "ImportDeclaration":
         add(node, node.source, node.importKind === "type" || node.specifiers.length > 0 && node.specifiers.every(item => item.importKind === "type")); break;
@@ -108,7 +110,10 @@ export async function checkArchitecture(root) {
   for (const [file, text] of sources) {
     for (const [pattern, reason] of RETIRED_PATTERNS) if (pattern.test(text)) failures.push(`${file}: contains ${reason}`);
     let imports;
-    try { imports = dependencies(text, file); }
+    try { imports = dependencies(text, file, node => {
+      const reason = centralNodeProblem(file, node);
+      if (reason) failures.push(`${file}:${node.loc?.start.line ?? 1}: ${reason}`);
+    }); }
     catch { failures.push(`${file}: source parsing failed`); continue; }
     for (const edge of imports) {
       if (typeof edge.specifier !== "string") { failures.push(`${file}:${edge.line}: computed module loading is not statically reviewable`); continue; }
