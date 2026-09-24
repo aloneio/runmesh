@@ -18,6 +18,8 @@
       "files": [
         "test/domain/admin-projections.test.ts",
         "test/domain/capability-access.test.ts",
+        "test/domain/catalog-reader.test.ts",
+        "test/domain/central-catalog.test.ts",
         "test/domain/client-identity.test.ts",
         "test/domain/connector-profiles.test.ts",
         "test/domain/git-recovery-hint.test.ts",
@@ -90,6 +92,8 @@
         "apps/worker/test/byte-pagination.test.ts",
         "apps/worker/test/capability-contracts.test.ts",
         "apps/worker/test/capability-state.test.ts",
+        "apps/worker/test/catalog-state.test.ts",
+        "apps/worker/test/central-catalog.test.ts",
         "apps/worker/test/central-identity.test.ts",
         "apps/worker/test/central-admin.test.ts",
         "apps/worker/test/connector-credentials.test.ts",

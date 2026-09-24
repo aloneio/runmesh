@@ -27,6 +27,10 @@ async function fixture(t, sources) {
 }
 
 const bad = [
+  ["catalog schema contract to SDK", { "apps/worker/src/contracts/catalog-schema.ts": 'import "@modelcontextprotocol/client";' }],
+  ["catalog reader to credential implementation", { "apps/worker/src/application/capabilities/catalog-read.ts": 'import "../../platform/connectors/cipher.js";', "apps/worker/src/platform/connectors/cipher.ts": "export {};" }],
+  ["catalog rules to live HTTP", { "apps/worker/src/domain/capabilities/catalog.ts": 'export const discover = () => fetch("https://example.invalid");' }],
+  ["catalog storage to native Runner state", { "apps/worker/src/platform/capabilities/catalog-store.ts": 'import "../../runner-do.js";', "apps/worker/src/runner-do.ts": "export {};" }],
   ["central owner to native application", { "apps/worker/src/capabilities-do.ts": 'import "./application/delete-runner.js";', "apps/worker/src/application/delete-runner.ts": "export {};" }],
   ["central application direct network", { "apps/worker/src/application/connectors/profiles.ts": 'export const request = () => fetch("https://example.invalid");' }],
   ["central contract helper platform global", { "apps/worker/src/contracts/connector-values.ts": 'export const request = globalThis.fetch;' }],
