@@ -11,8 +11,9 @@
     "dev": "wrangler dev --env development"
   },
   "dependencies": {
-    "@modelcontextprotocol/server": "2.0.0",
     "@aloneio/runmesh-protocol": "0.1.5",
+    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
     "agents": "0.21.0",
     "zod": "4.4.3"
   },

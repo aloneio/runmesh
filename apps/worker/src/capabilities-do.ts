@@ -17,14 +17,20 @@ import { catalogSha256, createCatalogCursor } from "./platform/capabilities/cata
 import { createCatalogManager } from "./application/capabilities/catalog-admin.js";
 import { createCatalogReader } from "./application/capabilities/catalog-read.js";
 import { withinDeadline } from "./application/connectors/deadline.js";
+import { createRemoteCaller } from "./application/capabilities/remote-call.js";
+import { createRemoteDiscovery } from "./application/capabilities/remote-discovery.js";
+import { createHttpRemoteConnector } from "./platform/connectors/remote-client.js";
+import { REMOTE_LIMITS, RemoteFault, type CentralRemote, type RemoteOutcome, type RemoteFailure } from "./contracts/remote.js";
+import { parseRemoteEgress } from "./contracts/remote-values.js";
 
 /** Reviewed composition root. Feature repositories never import each other.
  * Binding-only APIs return metadata, never decrypted credentials. No public fetch API. */
-export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements CentralAdministration, CatalogAdministration {
+export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements CentralAdministration, CatalogAdministration, CentralRemote {
   readonly #grants: CapabilityState;
   readonly #profiles: ConnectionState;
   readonly #namespace: string;
   readonly #catalog: CatalogState;
+  readonly #remoteClients = new Set<string>();
   public constructor(ctx: DurableObjectState, env: WorkerEnv) {
     super(ctx, env);
     this.#namespace = ctx.id.toString();
@@ -104,6 +110,52 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
       cursor: createCatalogCursor(this.#namespace, () => this.#catalog.cursorKey()), now: Date.now });
     return withinDeadline<CatalogPage>(new AbortController().signal, () => ({ state: "unavailable" }),
       (signal, expired) => read(principal, query, signal, expired));
+  }
+
+  #remoteConnector() {
+    const cipher = createCredentialCipher(this.#namespace, () => this.env.CENTRAL_VAULT_KEYRING,
+      () => [this.env.INTERNAL_CONTROL_SECRET, this.env.RUNNER_TOKEN_PEPPER]);
+    return createHttpRemoteConnector({ policy: () => this.env.CENTRAL_MCP_EGRESS,
+      ...(this.env.RUNMESH_PUBLIC_ORIGIN === undefined ? {} : { selfOrigin: this.env.RUNMESH_PUBLIC_ORIGIN }),
+      credential: async profile => {
+        const record = this.#profiles.read(profile.profile_id);
+        if (record?.profile.revision !== profile.revision || !record.profile.enabled || record.profile.endpoint !== profile.endpoint)
+          throw new RemoteFault("permission_denied");
+        const credential = await cipher.open(record.profile, record.envelope);
+        const latest = this.#profiles.read(profile.profile_id)?.profile;
+        if (latest?.revision !== profile.revision || !latest.enabled || latest.credential?.secret_version !== profile.credential?.secret_version)
+          throw new RemoteFault("permission_denied");
+        return credential;
+      } });
+  }
+
+  /** In-memory admission bounds active work on this owner; no persistent queues,
+   * restart replay or exactly-once remote execution is implied. */
+  public async callRemote(principal: CapturedIdentity, command: unknown): Promise<RemoteOutcome> {
+    if (!isCapabilityIdentifier(principal?.client_id) || !Number.isSafeInteger(principal.secret_version) || principal.secret_version < 1)
+      return { state: "failed", code: "invalid_request", operation_state: "not_started" };
+    if (parseRemoteEgress(this.env.CENTRAL_MCP_EGRESS) === undefined) return { state: "failed", code: "egress_denied", operation_state: "not_started" };
+    const key = "client:" + principal.client_id;
+    if (this.#remoteClients.has(key) || this.#remoteClients.size >= REMOTE_LIMITS.active) return { state: "failed", code: "busy", operation_state: "not_started" };
+    this.#remoteClients.add(key);
+    try {
+      return await createRemoteCaller({ repository: this.#catalog, profile: id => this.#profiles.read(id)?.profile,
+        grant: id => this.#grants.readGrant(id), identity: (value, signal) => this.#identity(value, signal),
+        digest: catalogSha256, connector: this.#remoteConnector() })(principal, command, new AbortController().signal);
+    } finally { this.#remoteClients.delete(key); }
+  }
+
+  public async discoverRemote(sessionHash: string, profileId: string, expectedRevision: number): Promise<CatalogMutation | RemoteFailure> {
+    if (typeof sessionHash !== "string" || !/^[a-f0-9]{64}$/u.test(sessionHash)) return { state: "denied" };
+    if (parseRemoteEgress(this.env.CENTRAL_MCP_EGRESS) === undefined) return { state: "failed", code: "egress_denied", operation_state: "not_started" };
+    const key = "admin:" + sessionHash;
+    if (this.#remoteClients.has(key) || this.#remoteClients.size >= REMOTE_LIMITS.active) return { state: "failed", code: "busy", operation_state: "not_started" };
+    this.#remoteClients.add(key);
+    try {
+      return await createRemoteDiscovery({ repository: this.#catalog, profile: id => this.#profiles.read(id)?.profile,
+        authorize: signal => this.#authorize(sessionHash, signal), digest: catalogSha256,
+        connector: this.#remoteConnector() })(profileId, expectedRevision, new AbortController().signal);
+    } finally { this.#remoteClients.delete(key); }
   }
 
   public override async fetch(): Promise<Response> {

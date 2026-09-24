@@ -26,6 +26,8 @@
         "test/domain/maintenance-planning.test.ts",
         "test/domain/messages.test.ts",
         "test/domain/public-rules.test.ts",
+        "test/domain/remote-admission.test.ts",
+        "test/domain/remote-policy.test.ts",
         "test/domain/runner-deletion.test.ts"
       ]
     },
@@ -139,6 +141,8 @@
         "apps/worker/test/release-admin-security.test.ts",
         "apps/worker/test/release-mcp-security.test.ts",
         "apps/worker/test/request-body.test.ts",
+        "apps/worker/test/remote-integration.test.ts",
+        "apps/worker/test/remote-transport.test.ts",
         "apps/worker/test/rpc-contract.test.ts",
         "apps/worker/test/runner-admission-initialization.test.ts",
         "apps/worker/test/runner-capability-admission.test.ts",

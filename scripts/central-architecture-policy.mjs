@@ -1,5 +1,6 @@
 /** Additional feature boundaries; native layer and cycle gates still apply. */
 export function centralFeature(path) {
+  if (/^apps\/worker\/src\/contracts\/remote(?:-values)?\.[cm]?[jt]sx?$/u.test(path)) return "capabilities";
   if (/^apps\/worker\/src\/contracts\/catalog(?:-(?:json|schema|values))?\.[cm]?[jt]sx?$/u.test(path)) return "capabilities";
   if (/^apps\/worker\/src\/contracts\/connector-values\.[cm]?[jt]sx?$/u.test(path)) return "connectors";
   const contract = /^apps\/worker\/src\/contracts\/(identity|capabilities|connectors|skills)\.[cm]?[jt]sx?$/u.exec(path);

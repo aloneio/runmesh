@@ -12,6 +12,8 @@ export interface WorkerEnv extends RuntimeConfiguration {
   CAPABILITIES?: DurableObjectNamespace;
   /** Independent versioned encryption keyring; never stored in SQLite or returned. */
   CENTRAL_VAULT_KEYRING?: string;
+  /** Optional exact HTTPS endpoint/protocol allowlist; absent disables remote MCP. */
+  CENTRAL_MCP_EGRESS?: string;
   RUNNER: DurableObjectNamespace;
   WORKER_ID?: string;
   RUNMESH_DEPLOYMENT_BRANCH?: string;

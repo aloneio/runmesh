@@ -27,6 +27,10 @@ async function fixture(t, sources) {
 }
 
 const bad = [
+  ["remote contract to client SDK", { "apps/worker/src/contracts/remote.ts": 'import type { Client } from "@modelcontextprotocol/client";' }],
+  ["remote invocation to concrete credential adapter", { "apps/worker/src/application/capabilities/remote-call.ts": 'import "../../platform/connectors/cipher.js";', "apps/worker/src/platform/connectors/cipher.ts": "export {};" }],
+  ["remote provider to state owner", { "apps/worker/src/mcp/providers/remote.ts": 'import "../../capabilities-do.js";', "apps/worker/src/capabilities-do.ts": "export {};" }],
+  ["remote request parser to network", { "apps/worker/src/contracts/remote-values.ts": 'export const connect = globalThis.fetch;' }],
   ["catalog schema contract to SDK", { "apps/worker/src/contracts/catalog-schema.ts": 'import "@modelcontextprotocol/client";' }],
   ["catalog reader to credential implementation", { "apps/worker/src/application/capabilities/catalog-read.ts": 'import "../../platform/connectors/cipher.js";', "apps/worker/src/platform/connectors/cipher.ts": "export {};" }],
   ["catalog rules to live HTTP", { "apps/worker/src/domain/capabilities/catalog.ts": 'export const discover = () => fetch("https://example.invalid");' }],

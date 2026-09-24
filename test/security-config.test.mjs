@@ -98,6 +98,20 @@ test("hosted installer commands retain the convenience credential handoff", asyn
 });
 
 
+test("W05 central outbound transport retains public-only routing and remains disabled in deployed environments", async () => {
+  const config=JSON.parse(await readFile(new URL("../apps/worker/wrangler.jsonc",import.meta.url),"utf8"));
+  for (const environment of [config, ...Object.values(config.env)]) {
+    const flags=environment.compatibility_flags ?? config.compatibility_flags;
+    assert.ok(flags.includes("global_fetch_strictly_public"));
+    assert.ok(!flags.includes("global_fetch_private_origin"));
+  }
+  for (const environment of [config, config.env.production, config.env.development]) {
+    assert.ok(!environment.durable_objects.bindings.some(binding=>binding.name==="CAPABILITIES"));
+    assert.equal(environment.vars.CENTRAL_MCP_EGRESS,undefined);
+    assert.equal(environment.vars.CENTRAL_VAULT_KEYRING,undefined);
+  }
+});
+
 test("retirement cannot target v2, other environments, or a replacement production namespace", async () => {
   const config=JSON.parse(await readFile(new URL("../apps/worker/wrangler.jsonc",import.meta.url),"utf8"));
   const expected={RegistryDOv2:{type:"durable-object",storage:"sqlite"},RunnerDOv2:{type:"durable-object",storage:"sqlite"},RegistryDO:{type:"durable-object",state:"deleted"},RunnerDO:{type:"durable-object",state:"deleted"}};

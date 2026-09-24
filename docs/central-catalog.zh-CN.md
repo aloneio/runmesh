@@ -1,5 +1,8 @@
 # 中央工具目录审核（开发版）
 
+W05 可选实时发现／调用适配器及其明确限制见[受控中央 HTTP MCP](central-remote-mcp.zh-CN.md)。
+本文介绍可独立使用的目录审核与快照流程。
+
 [English](central-catalog.md)
 
 **状态：dev 上的 W04 目录基础，中央存储仍仅绑定 test 环境。**

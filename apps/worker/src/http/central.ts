@@ -2,10 +2,12 @@ import { CONNECTOR_LIMITS, type CentralAdministration, type ProfileCommand } fro
 import { parseProfile, parseProfileCommand } from "../contracts/connector-values.js";
 import { admitCentralAdmin, centralFailure as fail, centralHeaders as headers } from "./central-boundary.js";
 import { handleCentralCatalogAdmin } from "./central-catalog.js";
+import { handleCentralDiscovery } from "./central-discovery.js";
 import type { WorkerEnv } from "../platform/env.js";
 
 /** Optional browser-admin JSON entry. No bearer-token fallback, plaintext read or MCP tool. */
 export async function handleCentralAdmin(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
+  if (url.pathname.startsWith("/admin/central/discovery/")) return handleCentralDiscovery(request, env, url);
   if (url.pathname.startsWith("/admin/central/catalogs/")) return handleCentralCatalogAdmin(request, env, url);
   if (env.CAPABILITIES === undefined) { void request.body?.cancel().catch(() => undefined); return fail("central_disabled", 404); }
   const match = /^\/admin\/central\/profiles\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})$/u.exec(url.pathname);
