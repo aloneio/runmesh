@@ -1,6 +1,6 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { expect, it } from "vitest";
-import type { CapabilitiesDOv1 } from "../src/platform/capabilities/owner.js";
+import type { CapabilitiesDOv1 } from "../src/capabilities-do.js";
 import { CapabilityState } from "../src/platform/capabilities/store.js";
 import { CAPABILITY_LIMITS, type GrantReplacement } from "../src/contracts/capabilities.js";
 

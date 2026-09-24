@@ -1,5 +1,6 @@
 /** Additional feature boundaries; native layer and cycle gates still apply. */
 export function centralFeature(path) {
+  if (/^apps\/worker\/src\/contracts\/connector-values\.[cm]?[jt]sx?$/u.test(path)) return "connectors";
   const contract = /^apps\/worker\/src\/contracts\/(identity|capabilities|connectors|skills)\.[cm]?[jt]sx?$/u.exec(path);
   if (contract) return contract[1];
   const nested = /^apps\/worker\/src\/(?:domain|application|platform)\/(capabilities|connectors|skills)\//u.exec(path);
@@ -11,11 +12,15 @@ export function centralFeature(path) {
 const unreviewed = path => /^apps\/worker\/src\/(?:capabilities|connectors|skills)\//u.test(path);
 
 export function centralDependencyProblem(from, to) {
+  if (from === "apps/worker/src/capabilities-do.ts" && !to.startsWith("apps/worker/src/contracts/")
+    && centralFeature(to) === undefined
+    && !["apps/worker/src/platform/bounded-json.ts", "apps/worker/src/platform/control-plane.ts", "apps/worker/src/platform/env.ts"].includes(to))
+    return "Central state composition may use central features and reviewed identity ports, not native use cases";
   if (unreviewed(from) || unreviewed(to)) return "Central modules require a reviewed domain, application, platform or provider role";
   const feature = centralFeature(from);
   if (feature === undefined) {
     if (centralFeature(to) !== undefined && !to.startsWith("apps/worker/src/contracts/")
-      && !/^apps\/worker\/src\/(?:http\/|index\.[jt]s$|production\.[jt]s$)/u.test(from))
+      && !/^apps\/worker\/src\/(?:http\/|index\.[jt]s$|production\.[jt]s$|capabilities-do\.[jt]s$)/u.test(from))
       return "Only composition may introduce central feature implementations into native code";
     return undefined;
   }
@@ -46,7 +51,7 @@ export function centralNodeProblem(from, node) {
   if (unreviewed(from)) return node.type === "Program" ? "Central modules require a reviewed feature role" : undefined;
   if (centralFeature(from) === undefined || node.type !== "Identifier") return undefined;
   if (node.name === "eval" || node.name === "Function") return "Central features must not evaluate imported Skill or tool code";
-  if (/^apps\/worker\/src\/(?:contracts|domain)\//u.test(from) && ioGlobals.has(node.name))
+  if (/^apps\/worker\/src\/(?:contracts|domain|application)\//u.test(from) && ioGlobals.has(node.name))
     return "Central pure contracts and rules must not reference platform I/O globals";
   return undefined;
 }

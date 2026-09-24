@@ -29,7 +29,7 @@ function isPureRunner(path) {
 const cloudPlatform = /^(?:cloudflare:|cloudflare(?:\/|$)|workerd(?:\/|$)|@cloudflare\/)/u;
 const serverSdk = /^(?:@modelcontextprotocol\/|agents(?:\/|$))/u;
 const purePackages = /^(?:zod(?:\/|$)|@aloneio\/runmesh-protocol$)/u;
-const cloudRoles = new Set(["entry", "platform", "transport_owner", "registry_facade", "persistence"]);
+const cloudRoles = new Set(["entry", "platform", "transport_owner", "registry_facade", "persistence", "central_owner"]);
 const pureWorkerRoles = new Set(["contracts", "domain", "presentation", "browser", "registry_foundation", "registry_domain"]);
 export function specifierProblem(from, specifier, typeOnly) {
   const source = canonicalSource(from);
@@ -61,6 +61,7 @@ const workerRootRoles = {
   "admin-jobs.ts": "http", "installer.ts": "distribution", "installer-preflight.ts": "distribution",
   "job-history-store.ts": "persistence", "external-audit.ts": "persistence", "history-retention.ts": "persistence", "audit-metadata.ts": "persistence", "auth-throttle.ts": "persistence",
   "auth-settings.ts": "application",
+  "capabilities-do.ts": "central_owner",
 };
 const foundations = new Set(["public-origin.ts", "mcp-authorization.ts", "job-history-settings.ts", "validity.ts", "body.ts", "security.ts", "runtime-config.ts", "queue-grant.ts", "values.ts", "generated-release.ts", "generated-provenance.ts", "generated-admin-client.ts", "generated-release-validation.ts", "generated-version.ts", "deployment-provenance.ts", "control-plane-errors.ts"]);
 export function workerRole(path) {
@@ -75,6 +76,7 @@ export function workerRole(path) {
   return "extension";
 }
 export const WORKER_ALLOWED_DEPENDENCIES = Object.freeze({
+  central_owner: ["application", "platform", "contracts", "foundation"],
   browser: ["browser"],
   contracts: ["contracts", "protocol"],
   domain: ["domain", "contracts", "foundation", "protocol"],

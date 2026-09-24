@@ -6,6 +6,7 @@ import { discardBody } from "./http/request.js";
 import { ExternalAuditHistory } from "./external-audit.js";
 import { forwardRunnerRpc } from "./http/runner-api.js";
 import { handleBrowserAdmin } from "./http/admin.js";
+import { handleCentralAdmin } from "./http/central.js";
 import { handleLanding } from "./http/auth.js";
 import { handleMcpSecret } from "./http/mcp.js";
 import { handleRunnerAdmin } from "./http/runner-api.js";
@@ -36,7 +37,7 @@ import type { WorkerEnv } from "./platform/env.js";
 
 // must never be opened or migrated in place.
 export { RegistryDO, RegistryDOv2, RunnerDO };
-export { CapabilitiesDOv1 } from "./platform/capabilities/owner.js";
+export { CapabilitiesDOv1 } from "./capabilities-do.js";
 
 export class RunnerDOv2 extends RunnerDO {}
 
@@ -105,6 +106,7 @@ async function handleRequest(request: Request, env: WorkerEnv, _ctx: ExecutionCo
     return isRunnerAdminRequest(request, env) ? handleRunnerAdmin(request, env, url) : handleBrowserAdmin(request, env, url, scheduleReleaseRefresh);
   }
   if (url.pathname === "/" || url.pathname === "/setup" || url.pathname === "/login") return handleLanding(request, env, url);
+  if (url.pathname.startsWith("/admin/central/")) return handleCentralAdmin(request, env, url);
   if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) return handleBrowserAdmin(request, env, url, scheduleReleaseRefresh);
   if (url.pathname === "/runner/connect") {
     if (request.method !== "GET" || request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return new Response("WebSocket upgrade required", { status: 426 });

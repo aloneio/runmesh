@@ -8,6 +8,10 @@ export interface WorkerEnv extends RuntimeConfiguration {
   RUNMESH_AUDIT_BACKEND?: string;
   RUNMESH_JOB_HISTORY_BACKEND?: string;
   REGISTRY: DurableObjectNamespace;
+  /** Optional central feature owner; absent means no central runtime access. */
+  CAPABILITIES?: DurableObjectNamespace;
+  /** Independent versioned encryption keyring; never stored in SQLite or returned. */
+  CENTRAL_VAULT_KEYRING?: string;
   RUNNER: DurableObjectNamespace;
   WORKER_ID?: string;
   RUNMESH_DEPLOYMENT_BRANCH?: string;

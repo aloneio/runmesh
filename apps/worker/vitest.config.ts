@@ -13,6 +13,8 @@ export default defineConfig({
       RUNNER_TOKEN_PEPPER: "test-runner-token-pepper-not-for-production",
       INTERNAL_CONTROL_SECRET: "test-internal-control-secret-not-for-production",
       RUNMESH_TEST_MODE: "1",
+      CENTRAL_VAULT_KEYRING: JSON.stringify({ schema_version: 1, active_key_id: "test-key",
+        keys: { "test-key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE" } }),
     } },
   })],
   test: {

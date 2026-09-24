@@ -9,6 +9,9 @@ export class CapabilityState {
   private initialized = false;
   public constructor(private readonly storage: Storage) {}
 
+  /** Explicit owner composition; construction itself still performs no I/O. */
+  public initialize(): void { this.ensureSchema(); }
+
   private ensureSchema(): void {
     if (this.initialized) return;
     this.storage.transactionSync(() => {
