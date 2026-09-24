@@ -17,6 +17,8 @@
       "description": "Public pure rules in Node; no DO, disk or subprocess adapters",
       "files": [
         "test/domain/admin-projections.test.ts",
+        "test/domain/capability-access.test.ts",
+        "test/domain/client-identity.test.ts",
         "test/domain/git-recovery-hint.test.ts",
         "test/domain/maintenance-planning.test.ts",
         "test/domain/messages.test.ts",
@@ -86,6 +88,8 @@
         "apps/worker/test/bridge-admission-errors.test.ts",
         "apps/worker/test/byte-pagination.test.ts",
         "apps/worker/test/capability-contracts.test.ts",
+        "apps/worker/test/capability-state.test.ts",
+        "apps/worker/test/central-identity.test.ts",
         "apps/worker/test/concurrency.test.ts",
         "apps/worker/test/deployment-provenance.test.ts",
         "apps/worker/test/dev-runner-distribution.test.ts",

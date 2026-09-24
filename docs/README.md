@@ -30,6 +30,10 @@ Check [release status](release-readiness.md) for package availability and [build
 
 ## Advanced and maintainer references
 
+Development-only work: [central MCP and Skill foundations](central-capabilities-architecture.md)
+describes the new identity, grant and module boundaries. It is not an enabled
+upstream integration or Skill installation guide.
+
 For integrations, use the [MCP call contract](mcp-agent-call-contract.md), [tool examples](tool-examples.md), [catalog refresh guide](mcp-connector-refresh.md), [capability contracts](capability-contracts.md) and [workspace Context storage](context-storage.md). For maintenance, see [architecture](architecture.md), [verification](verification.md) and [main promotion policy](main-promotion-policy.md).
 
 [Historical release notes](maintainers/release-history.md) and [dated audit evidence](maintainers/release-evidence.md) record the versions and review periods named in each document. [Legacy migration](migration.md) covers early development and pre-v2 transitions; use the upgrade guide for a current v2 installation.
