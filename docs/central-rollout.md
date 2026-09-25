@@ -1,7 +1,8 @@
 # Central capability rollout and acceptance ledger
 
 Baseline fetched on 2026-09-25: GitHub dev ab95550 (W06), GitHub/GitLab main
-77e82a1. GitLab dev remains f25486b. Work continues in an isolated checkout; the
+77e82a1. GitLab dev was f25486b at the initial fetch and subsequently synchronized
+to the W07-W09 candidate 47a8eeb. Work continues in an isolated checkout; the
 original main working tree's eight staged release/document changes are preserved.
 Development continues directly on dev in the isolated working tree, as requested.
 This ledger distinguishes implementation, local verification and external
@@ -18,6 +19,16 @@ acceptance. It is not a production release sign-off.
 | W11 | Independent opt-ins, retained tables/versions, rollout and disable instructions | Canary deployment, dev-to-main promotion, published CI/release evidence |
 
 ## Required canary sequence
+
+The development follow-up adds CAPABILITIES / CapabilitiesDOv1 with the independent
+central-dev-v1 SQLite migration and enables Skills, direct tools and governance
+in the development environment only. Existing Registry/Runner identities and
+production configuration remain unchanged. Remote endpoints, OAuth policies and
+vault keys are not provisioned by this change. The existing GitLab dev connection
+triggers Cloudflare Workers Builds; local Cloudflare account access is not needed
+to trigger that path. Verify the exact candidate on GitHub, fast-forward GitLab
+dev, then compare the live health commit/tag and authenticated central page. A
+successful push alone is not evidence that the build or deployment succeeded.
 
 1. Review the fixed candidate commit and CI results. Keep the native catalog and
    Worker-Runner wire baseline unchanged. Do not force-push main or disable checks.

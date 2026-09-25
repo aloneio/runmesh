@@ -7,7 +7,7 @@ import { createOAuthCipher, oauthRandom, oauthChallenge } from "./platform/conne
 import { createOAuthTransport } from "./platform/connectors/oauth-http.js";
 import { createOAuthManager } from "./application/connectors/oauth.js";
 import type { AdminDecision, CentralAdministration, ProfileResult } from "./contracts/connectors.js";
-import type { CapabilityGrant, GrantReplacement, GrantWriteResult } from "./contracts/capabilities.js";
+import type { CapabilityGrant, GrantReplacement, GrantWriteResult, CentralToolVisibility } from "./contracts/capabilities.js";
 import { isCapabilityIdentifier, parseCapabilityGrant } from "./contracts/capabilities.js";
 import type { CentralManagement } from "./contracts/central-management.js";
 import { CapabilityState } from "./platform/capabilities/store.js";
@@ -68,6 +68,18 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
 
   public async readGrant(clientId: string): Promise<CapabilityGrant | undefined> {
     return this.#grants.readGrant(clientId);
+  }
+  public async toolVisibility(principal: CapturedIdentity): Promise<CentralToolVisibility> {
+    return withinDeadline<CentralToolVisibility>(new AbortController().signal, () => ({ state: "unavailable" }), async (signal, expired) => {
+      try {
+        const identity = await this.#identity(principal, signal);
+        if (expired()) return { state: "unavailable" };
+        if (identity.state !== "allowed") return { state: identity.state === "denied" ? "denied" : "unavailable" };
+        const grant = parseCapabilityGrant(this.#grants.readGrant(principal.client_id));
+        if (!grant?.enabled || grant.client_id !== principal.client_id) return { state: "denied" };
+        return { state: "visible", skill: grant.rules.some(rule => rule.kind === "skill"), remote: grant.rules.some(rule => rule.kind === "remote_tool") };
+      } catch { return { state: "unavailable" }; }
+    });
   }
   public async getToolset(hash: string, id: string): ReturnType<ToolsetAdministration['getToolset']> {
     try {

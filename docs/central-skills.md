@@ -11,8 +11,17 @@ grant occurs when importing or reading content.
 
 Both the optional CAPABILITIES binding and CENTRAL_SKILLS_ENABLED=1 are required
 to expose the Skill HTTP/MCP surfaces. Absent flags leave the ten native tools
-and native calls independent of central storage. The shipped production and
-development Wrangler environments remain unchanged.
+and native calls independent of central storage. The development Wrangler
+environment now adds an independent CapabilitiesDOv1 SQLite namespace and enables
+Skills explicitly. Production remains disabled. GitLab dev pushes trigger the
+connected development build after the candidate passes the existing checks.
+
+Discovery revalidates the client identity and current grant. Only clients with
+an enabled Skill rule see skill_list, skill_read and the resource template; empty,
+disabled or absent grants hide them. A failed visibility lookup preserves the
+native catalog. Cached calls still reach the live authorization checks, so hiding
+an entry never substitutes for access control. Native calls do not perform this
+central discovery lookup.
 
 Open /admin/central with the existing administrator session. Skill mutations
 require same-origin requests and the current CSRF token. The JSON API is

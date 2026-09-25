@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { reviewedReleaseSource } from "../scripts/runtime-config-tools.mjs";
 import { checkCommand } from "../scripts/ci-contract.mjs";
 
-test("top-level Worker config is reviewed production while explicit development stays fail-closed", async () => {
+test("top-level Worker config is reviewed production while development enables only reviewed central flags", async () => {
   const source = await readFile(new URL("../apps/worker/wrangler.jsonc", import.meta.url), "utf8");
   const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
   const root = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
@@ -17,7 +17,8 @@ test("top-level Worker config is reviewed production while explicit development 
   assert.equal(config.env.production.name, config.name);
   assert.deepEqual(config.env.production.vars, config.vars);
   assert.equal(config.env.development.name, "runmeshdev");
-  assert.deepEqual(config.env.development.vars, { RUNMESH_ENVIRONMENT: "development" });
+  assert.deepEqual(config.env.development.vars, { RUNMESH_ENVIRONMENT: "development",
+    CENTRAL_SKILLS_ENABLED: "1", CENTRAL_DIRECT_TOOLS_ENABLED: "1", CENTRAL_GOVERNANCE_ENABLED: "1" });
   assert.equal(config.env.test.vars.RUNMESH_SIGNED_RELEASE_AVAILABLE, "");
 });
 
@@ -98,7 +99,7 @@ test("hosted installer commands retain the convenience credential handoff", asyn
 });
 
 
-test("W05 central outbound transport retains public-only routing and remains disabled in deployed environments", async () => {
+test("central outbound transport retains public-only routing and requires explicit endpoint and key provisioning", async () => {
   const config=JSON.parse(await readFile(new URL("../apps/worker/wrangler.jsonc",import.meta.url),"utf8"));
   for (const environment of [config, ...Object.values(config.env)]) {
     const flags=environment.compatibility_flags ?? config.compatibility_flags;
@@ -106,10 +107,13 @@ test("W05 central outbound transport retains public-only routing and remains dis
     assert.ok(!flags.includes("global_fetch_private_origin"));
   }
   for (const environment of [config, config.env.production, config.env.development]) {
-    assert.ok(!environment.durable_objects.bindings.some(binding=>binding.name==="CAPABILITIES"));
     assert.equal(environment.vars.CENTRAL_MCP_EGRESS,undefined);
     assert.equal(environment.vars.CENTRAL_VAULT_KEYRING,undefined);
   }
+  for (const environment of [config, config.env.production])
+    assert.ok(!environment.durable_objects.bindings.some(binding=>binding.name==="CAPABILITIES"));
+  assert.deepEqual(config.env.development.durable_objects.bindings.filter(binding=>binding.name==="CAPABILITIES"),
+    [{name:"CAPABILITIES",class_name:"CapabilitiesDOv1"}]);
 });
 
 test("OAuth activation is never implicit in deployed Worker settings", async () => {
@@ -117,7 +121,7 @@ test("OAuth activation is never implicit in deployed Worker settings", async () 
   for (const section of [config, config.env.development, config.env.production]) {
     assert.equal(section.vars?.CENTRAL_OAUTH_POLICIES, undefined);
     assert.equal(section.vars?.CENTRAL_VAULT_KEYRING, undefined);
-    assert.equal(section.durable_objects.bindings.some(binding => binding.name === "CAPABILITIES"), false);
+    assert.equal(section.durable_objects.bindings.some(binding => binding.name === "CAPABILITIES"), section === config.env.development);
   }
 });
 
@@ -134,8 +138,9 @@ test("retirement cannot target v2, other environments, or a replacement producti
   const originalBindings=[{name:"REGISTRY",class_name:"RegistryDOv2"},{name:"RUNNER",class_name:"RunnerDOv2"}];
   for(const [name,c] of [["development",config.env.development],["test",config.env.test]]) {
     assert.equal(c.main,"src/index.ts");assert.deepEqual(c.exports,{});
-    // A specifically named test-only owner must not leak into deployed environments.
-    assert.deepEqual(c.migrations,name==="test"?[...originalMigrations,{tag:"central-test-v1",new_sqlite_classes:["CapabilitiesDOv1"]}]:originalMigrations);
-    assert.deepEqual(c.durable_objects.bindings,name==="test"?[...originalBindings,{name:"CAPABILITIES",class_name:"CapabilitiesDOv1"}]:originalBindings);
+    // Append the environment-specific owner without retiring or renaming any native state.
+    const centralTag = name === "test" ? "central-test-v1" : "central-dev-v1";
+    assert.deepEqual(c.migrations,[...originalMigrations,{tag:centralTag,new_sqlite_classes:["CapabilitiesDOv1"]}]);
+    assert.deepEqual(c.durable_objects.bindings,[...originalBindings,{name:"CAPABILITIES",class_name:"CapabilitiesDOv1"}]);
   }
 });

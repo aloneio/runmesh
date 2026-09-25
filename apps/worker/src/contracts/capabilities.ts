@@ -29,6 +29,10 @@ export type GrantWriteResult =
   | { readonly state: "invalid" | "capacity" };
 
 export interface CapabilityGrantReader { readGrant(clientId: string, signal: AbortSignal): Promise<CapabilityGrant | undefined> }
+/** Discovery metadata only; invocation must still check the exact live grant. */
+export type CentralToolVisibility = { readonly state: "visible"; readonly skill: boolean; readonly remote: boolean }
+  | { readonly state: "denied" | "unavailable" };
+export interface CentralToolVisibilityReader { toolVisibility(principal: CapturedIdentity): Promise<CentralToolVisibility> }
 export interface CapabilityGrantStore extends CapabilityGrantReader { replaceGrant(input: GrantReplacement): Promise<GrantWriteResult> }
 export interface CapabilityAccessPorts { readonly identity: IdentityReader; readonly grants: CapabilityGrantReader }
 export type CapabilityAccessDecision =

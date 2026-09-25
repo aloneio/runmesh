@@ -62,6 +62,30 @@ test("cutover preserves the current production namespace, storage and fixed rele
   assert.notEqual(c.env.development.name,c.name);
 });
 
+test("dev central activation adds an independent namespace while remote egress and production remain opt-in", async () => {
+  const config = JSON.parse(await readFile(new URL("../apps/worker/wrangler.jsonc", import.meta.url), "utf8"));
+  const dev = config.env.development;
+  assert.deepEqual(dev.durable_objects.bindings, [
+    { name: "REGISTRY", class_name: "RegistryDOv2" },
+    { name: "RUNNER", class_name: "RunnerDOv2" },
+    { name: "CAPABILITIES", class_name: "CapabilitiesDOv1" },
+  ]);
+  assert.deepEqual(dev.migrations, [
+    { tag: "v1", new_sqlite_classes: ["RegistryDO", "RunnerDO"] },
+    { tag: "v2", new_sqlite_classes: ["RegistryDOv2", "RunnerDOv2"] },
+    { tag: "central-dev-v1", new_sqlite_classes: ["CapabilitiesDOv1"] },
+  ]);
+  for (const name of ["CENTRAL_SKILLS_ENABLED", "CENTRAL_DIRECT_TOOLS_ENABLED", "CENTRAL_GOVERNANCE_ENABLED"]) assert.equal(dev.vars[name], "1");
+  for (const target of [config, config.env.production]) {
+    assert.ok(target.durable_objects.bindings.every(binding => binding.name !== "CAPABILITIES"));
+    assert.ok(Object.keys(target.vars).every(name => !name.startsWith("CENTRAL_")));
+  }
+  assert.equal(dev.vars.CENTRAL_MCP_EGRESS, undefined);
+  assert.equal(dev.vars.CENTRAL_VAULT_KEYRING, undefined);
+  assert.deepEqual(dev.triggers.crons, []);
+  assert.ok(config.compatibility_flags.includes("global_fetch_strictly_public"));
+});
+
 test("deployment targets, configured environments and provider overrides must agree", async () => {
   const config = JSON.parse(await readFile(new URL("../apps/worker/wrangler.jsonc", import.meta.url), "utf8"));
   for (const [environment, branch, worker] of [["development", "dev", "runmeshdev"], ["production", "main", "runmesh"]]) {

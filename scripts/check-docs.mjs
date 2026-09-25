@@ -21,6 +21,7 @@ assert.equal(releaseState.version,pkg.version);
 assert.ok(["candidate","released"].includes(releaseState.state));
 assert.deepEqual(config.vars, {}, "source defaults replace redundant production runtime variables");
 assert.deepEqual(config.env.production.vars, config.vars);
-assert.deepEqual(config.env.development.vars, { RUNMESH_ENVIRONMENT: "development" });
+assert.deepEqual(config.env.development.vars, { RUNMESH_ENVIRONMENT: "development",
+  CENTRAL_SKILLS_ENABLED: "1", CENTRAL_DIRECT_TOOLS_ENABLED: "1", CENTRAL_GOVERNANCE_ENABLED: "1" });
 assert.equal(await readFile(new URL("apps/worker/src/generated-release.ts", root), "utf8"), reviewedReleaseSource(pkg.version, releaseState));
 console.log(`operative documentation and enabled published-release contract verified: ${pkg.version}`);
