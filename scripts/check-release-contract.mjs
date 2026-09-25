@@ -26,10 +26,11 @@ assert.equal(readFileSync(new URL("../apps/worker/src/generated-release.ts", imp
 assert.equal(config.env.production.name, config.name, "named production alias must target the same Worker");
 assert.deepEqual(config.env.production.vars, config.vars, "named production alias must mirror top-level production vars");
 assert.equal(config.env.development.name, "runmeshdev");
-assert.deepEqual(config.env.development.vars, { RUNMESH_ENVIRONMENT: "development" });
+assert.deepEqual(config.env.development.vars, { RUNMESH_ENVIRONMENT: "development",
+  CENTRAL_SKILLS_ENABLED: "1", CENTRAL_DIRECT_TOOLS_ENABLED: "1", CENTRAL_GOVERNANCE_ENABLED: "1" });
 for (const environment of [config, config.env.production, config.env.development]) {
-  assert.deepEqual(environment.durable_objects.bindings.map((binding) => binding.class_name).sort(), ["RegistryDOv2", "RunnerDOv2"]);
   if (environment.name === "runmesh") {
+    assert.deepEqual(environment.durable_objects.bindings.map((binding) => binding.class_name).sort(), ["RegistryDOv2", "RunnerDOv2"]);
     assert.equal(environment.main,"src/production.ts");
     assert.equal(environment.migrations,undefined,"production must retain declarative lifecycle after cutover");
     assert.deepEqual(environment.exports,{
@@ -38,8 +39,17 @@ for (const environment of [config, config.env.production, config.env.development
     },"retirement is limited to the two approved old production classes");
   } else {
     assert.equal(environment.main,"src/index.ts");assert.deepEqual(environment.exports,{});
-    assert.ok(environment.migrations.some((migration) => migration.new_sqlite_classes?.includes("RegistryDOv2")));
+    assert.deepEqual(environment.durable_objects.bindings, [
+      { name: "REGISTRY", class_name: "RegistryDOv2" },
+      { name: "RUNNER", class_name: "RunnerDOv2" },
+      { name: "CAPABILITIES", class_name: "CapabilitiesDOv1" },
+    ]);
+    assert.deepEqual(environment.migrations, [
+      { tag: "v1", new_sqlite_classes: ["RegistryDO", "RunnerDO"] },
+      { tag: "v2", new_sqlite_classes: ["RegistryDOv2", "RunnerDOv2"] },
+      { tag: "central-dev-v1", new_sqlite_classes: ["CapabilitiesDOv1"] },
+    ]);
   }
 }
 if (process.argv.includes("--require-distributable")) assert.equal(expectedGate, root.version, "activation requires separate signed-asset verification");
-console.log(`release contract verified: ${root.version}; state=${state.state}; distribution=${expectedGate ? "enabled" : "disabled"}; development disabled`);
+console.log(`release contract verified: ${root.version}; state=${state.state}; distribution=${expectedGate ? "enabled" : "disabled"}; development central opt-ins verified`);
