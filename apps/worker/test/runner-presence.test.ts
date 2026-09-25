@@ -91,7 +91,7 @@ it.each(["offline", "stale"] as const)("keeps runner_current and runner_list val
   // Concealed credential rejection is an HTTP error, before MCP dispatch.
   // It must not be confused with a successfully authenticated offline Runner.
   expect(denied.status).toBe(404);
-  expect(denied.headers.get("content-type")).not.toContain("application/json");
-  expect(await denied.text()).toBe("Not found");
+  expect(denied.headers.get("content-type")).toContain("application/json");
+  expect(await denied.json()).toMatchObject({ jsonrpc: "2.0", id: null, error: { code: -32000 } });
   expect(dispatch).not.toHaveBeenCalled();
 });

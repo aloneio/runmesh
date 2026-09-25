@@ -4,6 +4,12 @@
 
 Refresh the Runmesh connection when a Worker update adds an action or changes fields while your client still shows an older definition. Update the Worker, installed Runner and client catalog as separate parts of an [upgrade](upgrading.md).
 
+## Distinguish connection failures from Runner state
+
+The MCP route returns the same HTTP 404 for missing, malformed, unknown, rotated or revoked credentials. Its rejection body is a JSON-RPC error with `id: null`; it does not identify the rejected client or explain which credential check failed. The pre-SDK body-limit, relay-recursion and missing-configuration guards also return JSON error bodies while retaining HTTP 413, 508 and 503 respectively. Clients must inspect the HTTP status as well as the body. A JSON response does not make a rejected credential valid.
+
+An authenticated `runner_current` or `runner_list` call can succeed while reporting an offline or stale Runner. A client's **Credential active** status only means its stored credential has not been revoked; it does not prove that the URL configured in a caller still matches that credential or that a Runner is connected. Confirm the intended instance and client before rotating a credential. Rotation preserves that client's identity, permissions and selected Runner, but callers using the previous URL must update their connection. Record status, content type, time and deployment identity when diagnosing a rejection, without saving the secret-bearing path.
+
 ## Refresh the affected connection
 
 1. Confirm that the connection uses the administrator-supplied MCP URL for the intended instance. Check the configured origin, as a display name such as `runmesh--dev` can be chosen freely. Keep the secret URL private.
