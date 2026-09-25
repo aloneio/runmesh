@@ -1,5 +1,5 @@
 import { MAX_MCP_BODY_BYTES } from "./constants.js";
-import { discardBody } from "./request.js";
+import { discardMcpBody as discardBody } from "./mcp-errors.js";
 import { MCP_SECRET_RE } from "./constants.js";
 import type { McpAuth } from "../mcp/server.js";
 import { mcpHttpError } from "./mcp-errors.js";

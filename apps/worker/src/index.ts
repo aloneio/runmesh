@@ -17,7 +17,7 @@ import { isRunnerAdminRequest } from "./http/session.js";
 import { isSafeIdentifier } from "./security.js";
 import { localizeHtmlResponse } from "./ui-locale.js";
 import { MCP_CATALOG_SUMMARY } from "./mcp/catalog-contract.js";
-import { mcpHttpError } from "./http/mcp-errors.js";
+import { discardMcpBody, mcpHttpError } from "./http/mcp-errors.js";
 import { methodNotAllowed } from "./http/responses.js";
 import { notFound } from "./http/responses.js";
 import { PackedJobHistory } from "./job-history-store.js";
@@ -96,12 +96,12 @@ async function handleRequest(request: Request, env: WorkerEnv, _ctx: ExecutionCo
   // but every control-plane route fails closed before attempting HMAC/WebCrypto
   // when the Worker↔Durable-Object secret is absent or empty.
   if (requiresInternalControl(url.pathname) && !isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) {
+    if (isMcpPath(url.pathname)) { await discardMcpBody(request); return mcpHttpError(503, "control plane is not configured"); }
     await discardBody(request);
-    if (isMcpPath(url.pathname)) return mcpHttpError(503, "control plane is not configured");
     return new Response("control plane is not configured", { status: 503, headers: { "cache-control": "no-store" } });
   }
   if (isMcpPath(url.pathname)) return handleMcpSecret(request, env, url);
-  if (url.pathname === "/mcp") { await discardBody(request); return mcpHttpError(404, "Not found"); }
+  if (url.pathname === "/mcp") { await discardMcpBody(request); return mcpHttpError(404, "Not found"); }
   if (url.pathname.startsWith("/internal/runners/")) return forwardRunnerRpc(request, env, url);
   if (url.pathname === "/runner/enroll") return handleRunnerEnrollment(request, env);
   if (url.pathname.startsWith("/admin/runners")) {

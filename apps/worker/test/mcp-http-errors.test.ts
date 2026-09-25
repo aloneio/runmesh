@@ -46,6 +46,29 @@ it("does not alter ordinary non-MCP not-found responses", async () => {
   expect(await response.text()).toBe("Not found");
 });
 
+it("bounds rejected body consumption without changing the concealed rejection", async () => {
+  const cancel = vi.fn();
+  const body = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new Uint8Array(16_385)); }, cancel });
+  const response = await worker.fetch(new Request("https://worker.test/short/mcp", { method: "POST", body }), env, {} as ExecutionContext);
+  expect(response.status).toBe(404);
+  expect(await response.json()).toMatchObject({ jsonrpc: "2.0", id: null, error: { code: -32000 } });
+  expect(cancel).toHaveBeenCalled();
+});
+
+it("does not wait indefinitely for a stalled rejected upload", async () => {
+  vi.useFakeTimers();
+  const cancel = vi.fn();
+  try {
+    const body = new ReadableStream<Uint8Array>({ cancel });
+    const pending = worker.fetch(new Request("https://worker.test/short/mcp", { method: "POST", body }), env, {} as ExecutionContext);
+    await vi.advanceTimersByTimeAsync(1_001);
+    const response = await pending;
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ jsonrpc: "2.0", id: null, error: { code: -32000 } });
+    expect(cancel).toHaveBeenCalled();
+  } finally { vi.useRealTimers(); }
+});
+
 it("preserves client routing and permissions while refusing old and revoked credentials as the same JSON error", async () => {
   const id = env.REGISTRY.idFromName(crypto.randomUUID()), stub = env.REGISTRY.get(id);
   const original = randomBase64Url(), replacement = randomBase64Url();
