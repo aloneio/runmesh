@@ -1,6 +1,7 @@
 import type { CatalogJson, CatalogMutation, CatalogPage, CatalogReadPorts, RemoteToolDefinition } from "./catalog.js";
 import type { CapturedIdentity } from "./identity.js";
 import type { ConnectionProfile } from "./connectors.js";
+import type { CentralObservation, CentralReceipt } from "./central-audit.js";
 
 /** Per-operation safety bounds, not advertised production capacity. */
 export const REMOTE_LIMITS = Object.freeze({ operation_ms: 20_000, request_bytes: 65_536, response_bytes: 1_048_576,
@@ -42,7 +43,7 @@ export function remoteFailureMetadata(value: unknown, observed: unknown) {
 }
 export type RemoteFailure = { readonly state: "failed"; readonly code: RemoteCode;
   readonly operation_state: "not_started" | "completed" | "unknown" };
-export type RemoteOutcome = { readonly state: "completed"; readonly operation_state: "completed"; readonly result: RemoteResult } | RemoteFailure;
+export type RemoteOutcome = ({ readonly state: "completed"; readonly operation_state: "completed"; readonly result: RemoteResult } | RemoteFailure) & { readonly receipt?: CentralReceipt };
 
 /** No URLs, headers, tokens, sessions, Runner selection or SDK types in the call port. */
 export interface RemoteSession {
@@ -54,7 +55,7 @@ export interface RemoteConnector {
   open(profile: ConnectionProfile, signal: AbortSignal, dispatched: () => void, authorize: () => Promise<void>): Promise<RemoteSession>;
   validate(schema: { [key: string]: CatalogJson }, value: unknown): boolean;
 }
-export type RemoteCallPorts = Omit<CatalogReadPorts, "cursor" | "now"> & { readonly connector: RemoteConnector };
+export type RemoteCallPorts = Omit<CatalogReadPorts, "cursor" | "now"> & { readonly connector: RemoteConnector; readonly observation?: CentralObservation };
 export interface CentralRemote {
   listCatalog(principal: CapturedIdentity, query: unknown): Promise<CatalogPage>;
   callRemote(principal: CapturedIdentity, command: unknown): Promise<RemoteOutcome>;

@@ -16,9 +16,9 @@ export function createRemoteCaller(ports: RemoteCallPorts) {
   return async (principal: CapturedIdentity, input: unknown, parent: AbortSignal): Promise<RemoteOutcome> => {
     const command = parseRemoteCall(input);
     if (command === undefined) return { state: "failed", code: "invalid_request", operation_state: "not_started" };
-    let sent = false, received = false;
+    let sent = false, received = false, admitted = false;
     const operationState = () => received ? "completed" as const : sent ? "unknown" as const : "not_started" as const;
-    return remoteDeadline<RemoteOutcome>(parent, () => ({ state: "failed", code: "operation_timed_out", operation_state: operationState() }), async (signal, expired) => {
+    const outcome = await remoteDeadline<RemoteOutcome>(parent, () => ({ state: "failed", code: "operation_timed_out", operation_state: operationState() }), async (signal, expired) => {
       let session: RemoteSession | undefined;
       const liveIdentity = async () => {
         const state = await ports.identity(principal, signal);
@@ -57,6 +57,8 @@ export function createRemoteCaller(ports: RemoteCallPorts) {
           if (expired()) throw new RemoteFault("operation_timed_out");
         };
         await fence();
+        if (ports.observation && !ports.observation.admit(principal, command)) throw new RemoteFault("busy");
+        admitted = true;
         session = await ports.connector.open(profile, signal, () => { sent = true; }, fence);
         if (expired()) throw new RemoteFault("operation_timed_out");
         const definitions = await session.listTools();
@@ -76,5 +78,9 @@ export function createRemoteCaller(ports: RemoteCallPorts) {
         return { state: "failed", code: error instanceof RemoteFault ? error.code : "dependency_unavailable", operation_state: operationState() };
       } finally { await session?.close().catch(() => undefined); }
     });
+    if (!admitted || !ports.observation) return outcome;
+    // History is optional. Never reinterpret a known result or replay an effect.
+    try { return { ...outcome, receipt: ports.observation.record(principal, command, outcome) }; }
+    catch { return outcome; }
   };
 }

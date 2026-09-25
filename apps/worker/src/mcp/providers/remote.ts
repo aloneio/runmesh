@@ -52,13 +52,19 @@ export function registerRemoteTools(server: McpServer, port: RemoteToolPort): vo
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     _meta: { "runmesh/central_contract": 1 },
   }, async command => {
+    return invokeRemote(port, command);
+  });
+}
+
+export async function invokeRemote(port: RemoteToolPort, command: unknown) {
     const raw = await bounded(() => port.call(command), REMOTE_LIMITS.operation_ms + 2000);
+    const receipt = raw?.receipt && /^[a-f0-9-]{36}$/u.test(raw.receipt.request_id) && ["recorded", "unavailable"].includes(raw.receipt.audit_status)
+      ? { "runmesh/receipt": { request_id: raw.receipt.request_id, audit_status: raw.receipt.audit_status } } : {};
     if (raw?.state === "completed" && raw.operation_state === "completed") {
       const result = parseRemoteResult(raw.result);
-      if (result !== undefined) return { ...result, _meta: { "runmesh/operation_state": "completed" } } as unknown as { content: Array<{ type: "text"; text: string }>; isError: boolean };
+      if (result !== undefined) return { ...result, _meta: { "runmesh/operation_state": "completed", ...receipt } } as unknown as { content: Array<{ type: "text"; text: string }>; isError: boolean };
     }
     if (raw?.state === "failed" && REMOTE_CODES.includes(raw.code as RemoteCode) && ["not_started", "completed", "unknown"].includes(raw.operation_state))
-      return remoteFailure(raw.code, raw.operation_state);
+      return { ...remoteFailure(raw.code, raw.operation_state), ...(raw.receipt ? { _meta: receipt } : {}) };
     return remoteFailure("result_unconfirmed", "unknown");
-  });
 }

@@ -42,6 +42,14 @@ export class ConnectionState implements ProfileRepository {
     } catch { throw new Error("connector_record_invalid"); }
   }
 
+  /** Bounded metadata-only page. Credential envelopes are never projected. */
+  public list(after = ""): { profiles: ProfileRecord["profile"][]; next_after: string | null } {
+    this.initialize();
+    const rows = this.storage.sql.exec<{ profile_id: string }>("SELECT profile_id FROM connection_profiles_v1 WHERE profile_id>? ORDER BY profile_id LIMIT 51", after).toArray();
+    const profiles = rows.slice(0, 50).map(row => this.read(row.profile_id)!.profile);
+    return { profiles, next_after: rows.length > 50 ? profiles.at(-1)!.profile_id : null };
+  }
+
   public replace(record: ProfileRecord, expectedRevision: number): ProfileResult {
     const profile = parseProfile(record?.profile), envelope = record?.envelope === null ? null : parseEnvelope(record?.envelope);
     if (profile === undefined || envelope === undefined || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0

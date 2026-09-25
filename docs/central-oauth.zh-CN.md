@@ -46,8 +46,8 @@ oauth_client_id 和 scopes；完整示例见英文页。所有地址必须是固
 也不要记录授权 URL。
 
 关联并启用后，`/admin/central/discovery/{profile_id}` 可在 expected_revision 之外
-指定 principal，OAuth 发现必须提供它。完整目录仍须审核并独立授权；本批不新增后续
-管理界面或工具集界面。
+指定 principal，OAuth 发现必须提供它。完整目录仍须审核并独立授权；W08 已加入
+[管理和可复用工具集界面](central-administration.zh-CN.md)，仍须上述显式提供方策略。
 
 ## 刷新、撤销与恢复
 

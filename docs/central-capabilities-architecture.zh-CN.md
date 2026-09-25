@@ -1,8 +1,9 @@
 # 中央 MCP 与 Skill 基础架构
 
 W04 的目录实现和明确支持边界见[中央工具目录审核](central-catalog.zh-CN.md)。
-W05 新增独立受控的 [HTTP 发现与调用](central-remote-mcp.zh-CN.md)；Skill 加载及
-生产启用仍属于后续里程碑。
+W05 新增独立受控的 [HTTP 发现与调用](central-remote-mcp.zh-CN.md)；W07-W09 加入
+[Skill 内容](central-skills.zh-CN.md)与[中央管理和治理](central-administration.zh-CN.md)。
+生产启用仍须完成[灰度验收](central-rollout.md)。
 
 [English](central-capabilities-architecture.md)
 
@@ -26,9 +27,9 @@ Context，也不让原生 Runner 审计包装丢失上游结果类型。
 | 身份与机器权限 | 现有 Registry 认证 | 将中央存储变成原生认证的前提 |
 | 中央授权规则 | `domain/capabilities`、`application/capabilities` | Runner 选择、具体 SQL、SDK |
 | 中央授权持久化 | `platform/capabilities` | Registry 表、Runner 状态、审计回退库 |
-| 远程 MCP 适配 | 后续 `platform/connectors` | Skill 内部实现、宿主进程执行 |
-| Skill 内容 | 后续 Skill 领域、应用与平台模块 | 自动执行、权限授予、Runner Context |
-| 对外 provider | 后续 `mcp/providers` 薄适配器 | 应用实现类、存储、凭据池 |
+| 远程 MCP 适配 | `platform/connectors` | Skill 内部实现、宿主进程执行 |
+| Skill 内容 | Skill 领域、应用与平台模块 | 自动执行、权限授予、Runner Context |
+| 对外 provider | `mcp/providers` 薄适配器 | 应用实现类、存储、凭据池 |
 | 装配 | HTTP 与入口层 | 复制第二套授权规则 |
 
 接口放在 `contracts/`，由装配层注入小接口；不引入通用依赖注入框架，
@@ -57,7 +58,7 @@ scope 列保存 `{schema_version: 2, native_scopes: [...]}`，格式损坏、未
 内部创建与验证接口显式接受 `identity_version: 2`；旧创建接口仍拒绝空权限。
 v2 验证投影供既有 MCP 入口使用，不改变原生工具 schema。轮换、撤销、凭据代次
 约束适用于两种格式。原生 RPC 授权链保持不变，空机器权限不能执行机器操作。
-中央客户端的管理界面属于后续 W08，不在本批次。
+W08 新增独立的[中央管理界面](central-administration.zh-CN.md)。
 
 **回退边界：**旧 Worker 不理解 v2 持久化主体对象，会拒绝这些新主体；旧客户端
 仍可继续使用。不能宣称新 v2 主体兼容旧代码回退，也不能通过清库或静默赋予
@@ -84,8 +85,9 @@ v2 验证投影供既有 MCP 入口使用，不改变原生工具 schema。轮�
 
 W03 已加入 bearer 凭据后端：版本化连接档案、AES-256-GCM 加密封装、有界密钥环、
 仅存密文的仓储，以及受保护的档案管理。WebCrypto 限定在 Connector 适配器内，
-应用逻辑通过窄接口使用授权、加密与存储。`SecretVault.withCredential` 仍是后续
-调用适配器的接口，没有明文读取 API、OAuth 实现或自动配置密钥的功能。
+应用逻辑通过窄接口使用授权、加密与存储。调用适配器通过专用端口使用凭据，
+没有明文读取 API 或自动配置密钥的功能。W06 的独立 OAuth 适配见
+[OAuth 指南](central-oauth.zh-CN.md)。
 
 管理路径为 `/admin/central/profiles/{profile_id}`。GET 返回安全元数据；POST 只接受
 创建、轮换、启用、停用和重新加密命令。必须具有管理员会话、同源请求和相匹配的
@@ -124,7 +126,7 @@ SQLite 只保存密文和元数据。导入后的密钥不可导出，临时字�
 | 档案操作 | 5,000 毫秒 | 每次异步等待后重新检查截止时间 |
 
 这些是初始安全上限，不是经过实测的生产容量承诺。上游发现、schema 复杂度、
-返回字节、连接并发和 Skill bundle 预算，必须在启用 W04/W05/W07 前落实。
+返回字节、连接并发和 Skill bundle 预算由对应 W04/W05/W07 模块执行。
 审计失败不能成为自动重放写操作或保存秘密的理由。
 
 ## 验证与剩余工作
@@ -142,5 +144,6 @@ W00 的原脏工作树完整保留，开发使用独立的 dev 工作树。真�
 W04 已加入导入目录快照、按档案共享的审核选择和 ACL 过滤读取。W05 加入受控
 无状态 HTTP 发现和调用，以及可选 remote_tools／remote_call provider；现有部署
 仍保持关闭。W06 加入[客户端绑定 OAuth 与临时旧版会话](central-oauth.zh-CN.md)，
-提供方显式固定，不共享持久化会话。跨档案工具集、Skill、界面、完整费用及回执验收、
-真实客户端测试和发布仍待完成。默认原生工具列表不变，本决策不执行部署或自动升级。
+提供方显式固定，不共享持久化会话。W07-W09 加入版本化文本 Skill、可复用授权模板、
+管理界面、直接工具目录和可选元数据回执与调用预算。完整费用、真实客户端测试和
+发布验收仍待完成。默认原生工具列表不变，本决策不执行部署或自动升级。

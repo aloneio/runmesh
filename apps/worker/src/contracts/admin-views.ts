@@ -31,4 +31,4 @@ export type AdminData = {
   readonly snapshot: DashboardViewModel;
   readonly notices: readonly AdminNotice[];
 };
-export type ControlNavSection = "dashboard" | "runners" | "clients" | "settings";
+export type ControlNavSection = "dashboard" | "runners" | "clients" | "settings" | "central";

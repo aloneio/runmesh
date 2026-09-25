@@ -10,11 +10,13 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "fa50e8e91a72151f9e0e1d85023484851e5d2dd10ef516408d50f743510c93db",
-      "bytes": 86069,
+      "sha256": "a9bfcaa7468d7ea6836f9169d56ef09907e1559cf4f044f4b5f97a12f424c7f9",
+      "bytes": 88591,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
-      "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged."
+      "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
+      "pre_central_sha256": "fa50e8e91a72151f9e0e1d85023484851e5d2dd10ef516408d50f743510c93db",
+      "pre_central_bytes": 86069
     },
     {
       "name": "setup",
@@ -23,8 +25,10 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
-      "bytes": 86657
+      "sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
+      "bytes": 89179,
+      "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
+      "pre_central_bytes": 86657
     },
     {
       "name": "secret",
@@ -33,8 +37,10 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
-      "bytes": 87739
+      "sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
+      "bytes": 90306,
+      "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
+      "pre_central_bytes": 87739
     },
     {
       "name": "overview-empty",
@@ -370,8 +376,10 @@
           }
         ]
       ],
-      "sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
-      "bytes": 88098
+      "sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
+      "bytes": 90665,
+      "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
+      "pre_central_bytes": 88098
     }
   ],
   "i18n_review": {
@@ -382,5 +390,19 @@
       "accessible rename label"
     ],
     "command_variants_unchanged": 8
+  },
+  "central_review": {
+    "source_base": "ab95550dba862f78fa00b8aac99c1310412205f0",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "allowed_changes": [
+      "Explicit central administration submit handler in the shared browser asset",
+      "Central navigation entry on authenticated pages"
+    ],
+    "native_view_bodies_unchanged": true
   }
 }

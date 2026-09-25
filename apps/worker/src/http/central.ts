@@ -5,9 +5,17 @@ import { handleCentralCatalogAdmin } from "./central-catalog.js";
 import { handleCentralDiscovery } from "./central-discovery.js";
 import type { WorkerEnv } from "../platform/env.js";
 import { handleCentralOAuth } from "./central-oauth.js";
+import { handleCentralSkills } from "./central-skills.js";
+import { handleCentralManagement } from "./central-management.js";
+import { handleCentralReceipts } from "./central-receipts.js";
+import { handleCentralToolsets } from "./central-toolsets.js";
 
 /** Optional browser-admin JSON entry. No bearer-token fallback, plaintext read or MCP tool. */
 export async function handleCentralAdmin(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
+  if (url.pathname.startsWith('/admin/central/toolsets/')) return handleCentralToolsets(request, env, url);
+  if (url.pathname === "/admin/central/receipts") return handleCentralReceipts(request, env, url);
+  if (url.pathname === "/admin/central/profiles" || url.pathname.startsWith("/admin/central/grants/")) return handleCentralManagement(request, env, url);
+  if (url.pathname.startsWith("/admin/central/skills/")) return handleCentralSkills(request, env, url);
   if (url.pathname.startsWith("/admin/central/oauth/")) return handleCentralOAuth(request, env, url);
   if (url.pathname.startsWith("/admin/central/discovery/")) return handleCentralDiscovery(request, env, url);
   if (url.pathname.startsWith("/admin/central/catalogs/")) return handleCentralCatalogAdmin(request, env, url);

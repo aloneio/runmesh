@@ -4,6 +4,7 @@ import { runnerSummary, runnerDetail as projectRunnerDetail, clientDetail as pro
 import { ADMIN_CSRF_COOKIE } from "./constants.js";
 import { ADMIN_SESSION_COOKIE } from "./constants.js";
 import { adminDocument } from "../admin/layout.js";
+import { centralPage } from "../admin/central-view.js";
 import { adminError } from "./responses.js";
 import { adminUpstreamError } from "./responses.js";
 import { boundedJsonResponse } from "../platform/bounded-json.js";
@@ -66,6 +67,11 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
   // Copy, never mutate a shared deployment environment. Every later Registry
   // mutation carries this session inside its authenticated request target.
   env = { ...env, adminSessionHash: session.hash };
+  if (request.method === "GET" && url.pathname === "/admin/central") {
+    const csrf = cookieValue(request, ADMIN_CSRF_COOKIE);
+    if (csrf === undefined || !constantTimeEqual(await sha256Hex(csrf), session.csrf_hash)) return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
+    return html(adminDocument("Central capabilities", centralPage(csrf, env.CAPABILITIES !== undefined, env.CENTRAL_SKILLS_ENABLED === "1", env.CENTRAL_GOVERNANCE_ENABLED === "1"), "central"));
+  }
   if (request.method === "GET" && ["/admin", "/admin/runners", "/admin/clients", "/admin/settings"].includes(url.pathname)) {
     const csrf = cookieValue(request, ADMIN_CSRF_COOKIE);
     if (csrf === undefined || !constantTimeEqual(await sha256Hex(csrf), session.csrf_hash)) return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);

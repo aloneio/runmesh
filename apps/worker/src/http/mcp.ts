@@ -10,6 +10,8 @@ import { verifyMcpClient } from "../application/mcp-identity.js";
 import type { WorkerEnv } from "../platform/env.js";
 import type { CentralRemote } from "../contracts/remote.js";
 import { parseRemoteEgress } from "../contracts/remote-values.js";
+import type { CentralSkills } from "../contracts/skills.js";
+import type { CentralDirectory, CentralDirectoryReader } from "../contracts/catalog.js";
 
 /** The URL segment is the only MCP credential. Authorization headers are ignored. */
 export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
@@ -25,9 +27,16 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
   rewritten.pathname = "/mcp";
   rewritten.search = "";
   let forwarded: Request;
+  let needsDirectory = false;
   if (request.method === "POST") {
     const body = await readCappedBytes(request, MAX_MCP_BODY_BYTES);
     if (body === undefined) return new Response("request body too large", { status: 413, headers: publicInstallerHeaders("text/plain; charset=utf-8") });
+    if (env.CENTRAL_DIRECT_TOOLS_ENABLED === "1") {
+      try {
+        const rpc = JSON.parse(new TextDecoder().decode(body)) as { method?: string; params?: { name?: string } };
+        needsDirectory = rpc?.method === "tools/list" || (rpc?.method === "tools/call" && typeof rpc.params?.name === "string" && (rpc.params.name.startsWith("rm_") || rpc.params.name === "remote_status"));
+      } catch { /* The SDK owns malformed JSON-RPC responses. */ }
+    }
     forwarded = new Request(rewritten, { method: request.method, headers: request.headers, body: body.buffer as ArrayBuffer });
   } else {
     forwarded = new Request(rewritten, request);
@@ -45,15 +54,34 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
   ]);
   const remote = env.CAPABILITIES === undefined || parseRemoteEgress(env.CENTRAL_MCP_EGRESS) === undefined
     ? undefined : await import("../mcp/providers/remote.js");
+  const skills = env.CAPABILITIES !== undefined && env.CENTRAL_SKILLS_ENABLED === "1"
+    ? await import("../mcp/providers/skills.js") : undefined;
+  const direct = remote !== undefined && env.CENTRAL_DIRECT_TOOLS_ENABLED === "1" ? await import("../mcp/providers/remote/direct.js") : undefined;
+  let directory: CentralDirectory | undefined;
+  if (direct && needsDirectory) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const owner = env.CAPABILITIES!.get(env.CAPABILITIES!.idFromName("central")) as unknown as CentralDirectoryReader;
+      directory = await Promise.race([owner.listDirectory({ client_id: verified.client_id, secret_version: verified.secret_version }),
+        new Promise<CentralDirectory>(resolve => { timer = setTimeout(() => resolve({ state: "unavailable" }), 6000); })]);
+    } catch { directory = { state: "unavailable" }; }
+    finally { if (timer !== undefined) clearTimeout(timer); }
+  }
   const handler = createMcpHandler(
     () => {
       const server = createCodingMcpServer(env, auth);
+      if (skills !== undefined) {
+        const principal = { client_id: verified.client_id, secret_version: verified.secret_version };
+        const owner = () => env.CAPABILITIES!.get(env.CAPABILITIES!.idFromName("central")) as unknown as CentralSkills;
+        skills.registerSkillTools(server, { list: query => owner().listSkills(principal, query), read: input => owner().readSkill(principal, input) });
+      }
       if (remote !== undefined && env.CAPABILITIES !== undefined) {
         const principal = { client_id: verified.client_id, secret_version: verified.secret_version };
         // Resolving the DO is lazy; server construction and native-only calls
         // do not touch central state or initialize any upstream connection.
         const owner = () => env.CAPABILITIES!.get(env.CAPABILITIES!.idFromName("central")) as unknown as CentralRemote;
         remote.registerRemoteTools(server, { list: query => owner().listCatalog(principal, query), call: command => owner().callRemote(principal, command) });
+        direct?.registerDirectRemoteTools(server, { list: query => owner().listCatalog(principal, query), call: command => owner().callRemote(principal, command) }, directory);
       }
       return server;
     },

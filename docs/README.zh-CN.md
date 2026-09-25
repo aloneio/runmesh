@@ -32,6 +32,8 @@
 
 仅用于开发：[中央 MCP 与 Skill 基础架构](central-capabilities-architecture.zh-CN.md)
 说明新增身份、授权和模块边界，不代表已经启用上游集成，也不是 Skill 安装指南。
+开发使用说明见[版本化 Skill 内容](central-skills.zh-CN.md)、
+[中央管理与治理](central-administration.zh-CN.md)和[灰度与待验收项](central-rollout.md)。
 
 集成开发可查看 [MCP 调用约定](mcp-agent-call-contract.md)、[工具示例](tool-examples.md)、[工具目录刷新](mcp-connector-refresh.md)、[能力契约](capability-contracts.zh-CN.md)和[工作区 Context 存储](context-storage.zh-CN.md)。维护者可查看[架构](architecture.md)、[验证流程](verification.zh-CN.md)和 [main 晋级策略](main-promotion-policy.zh-CN.md)。
 

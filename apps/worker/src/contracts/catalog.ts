@@ -93,3 +93,6 @@ export interface CatalogAdministration {
   mutateCatalog(sessionHash: string, command: unknown): Promise<CatalogMutation>;
   getCatalog(sessionHash: string, profileId: string, digest?: string): Promise<CatalogInspection>;
 }
+export type CentralDirectory = { readonly state: "listed"; readonly view_version: string; readonly tools: readonly (CatalogTool & { readonly profile_id: string })[] }
+  | { readonly state: "denied" | "unavailable" | "capacity" };
+export interface CentralDirectoryReader { listDirectory(principal: CapturedIdentity): Promise<CentralDirectory> }
