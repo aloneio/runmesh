@@ -229,10 +229,15 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
     const direct = await fetch(`${workerUrl}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body });
     expect(direct.status).toBe(404);
-    expect(await direct.text()).toBe("Not found");
+    expect(direct.headers.get("content-type")).toContain("application/json");
+    const rejection = await direct.json();
+    expect(rejection).toEqual({ jsonrpc: "2.0", id: null, error: { code: -32000, message: "Not found" } });
     const invalid = await fetch(`${workerUrl}/${"x".repeat(43)}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body });
-    expect(invalid.status).toBe(404);
-    expect(await invalid.text()).toBe("Not found");
+    const invalidBody = await invalid.text();
+    expect(invalid.status, invalidBody).toBe(404);
+    expect(invalid.headers.get("content-type")).toContain("application/json");
+    expect(invalid.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(JSON.parse(invalidBody)).toEqual(rejection);
     await expect(mcpMessage("runner_list", {})).resolves.toBeDefined();
   });
 
