@@ -2,8 +2,7 @@ import { MAX_MCP_BODY_BYTES } from "./constants.js";
 import { discardBody } from "./request.js";
 import { MCP_SECRET_RE } from "./constants.js";
 import type { McpAuth } from "../mcp/server.js";
-import { notFound } from "./responses.js";
-import { publicInstallerHeaders } from "./distribution.js";
+import { mcpHttpError } from "./mcp-errors.js";
 import { readCappedBytes } from "../body.js";
 import { sha256Hex } from "../security.js";
 import { verifyMcpClient } from "../application/mcp-identity.js";
@@ -16,12 +15,12 @@ import type { CentralToolVisibility, CentralToolVisibilityReader } from "../cont
 
 /** The URL segment is the only MCP credential. Authorization headers are ignored. */
 export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
-  if (request.headers.has("x-runmesh-mcp-hop")) { await discardBody(request); return new Response("MCP relay recursion rejected", { status: 508 }); }
+  if (request.headers.has("x-runmesh-mcp-hop")) { await discardBody(request); return mcpHttpError(508, "MCP relay recursion rejected"); }
   const parts = url.pathname.split("/").filter(Boolean);
   const secret = parts[0];
-  if (secret === undefined || !MCP_SECRET_RE.test(secret)) { await discardBody(request); return notFound(); }
+  if (secret === undefined || !MCP_SECRET_RE.test(secret)) { await discardBody(request); return mcpHttpError(404, "Not found"); }
   const verified = await verifyMcpClient(env, await sha256Hex(secret)).catch(async error => { await discardBody(request); throw error; });
-  if (verified === undefined) { await discardBody(request); return notFound(); }
+  if (verified === undefined) { await discardBody(request); return mcpHttpError(404, "Not found"); }
   // createMcpHandler requires an exact /mcp route. Do not consume request.body
   // before cloning it: the SDK must receive the original JSON-RPC stream.
   const rewritten = new URL(request.url);
@@ -32,7 +31,7 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
   let discoversProviders = false;
   if (request.method === "POST") {
     const body = await readCappedBytes(request, MAX_MCP_BODY_BYTES);
-    if (body === undefined) return new Response("request body too large", { status: 413, headers: publicInstallerHeaders("text/plain; charset=utf-8") });
+    if (body === undefined) return mcpHttpError(413, "request body too large");
     try {
       const rpc = JSON.parse(new TextDecoder().decode(body)) as { method?: string; params?: { name?: string } };
       discoversProviders = rpc?.method === "tools/list" || rpc?.method === "resources/list" || rpc?.method === "resources/templates/list";

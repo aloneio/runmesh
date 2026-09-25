@@ -127,6 +127,7 @@
         "apps/worker/test/mcp-catalog.test.ts",
         "apps/worker/test/mcp-connector-contract.test.ts",
         "apps/worker/test/mcp-failure-chain.test.ts",
+        "apps/worker/test/mcp-http-errors.test.ts",
         "apps/worker/test/mcp-identity.test.ts",
         "apps/worker/test/mcp-job-redaction.test.ts",
         "apps/worker/test/mcp-output-contracts.test.ts",
