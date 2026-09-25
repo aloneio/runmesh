@@ -97,9 +97,13 @@ export function emptyMutationState(): RunnerMutationState {
 }
 
 export function decodeRunner(row: RunnerRow): RunnerRecord {
+  // Maintenance may be delayed. Every public snapshot must independently
+  // expire online presence, including list/dashboard and missing heartbeats.
+  const state = row.state === "online" && (row.last_heartbeat_ms === null || row.last_heartbeat_ms < Date.now() - 45_000)
+    ? "stale" : row.state;
   return {
     valid_from_ms: row.valid_from_ms, valid_until_ms: row.valid_until_ms, validity_status: validityStatus(row),
-    runner_id: row.runner_id, display_name: row.display_name || row.runner_id, state: row.state, connection_epoch: row.connection_epoch,
+    runner_id: row.runner_id, display_name: row.display_name || row.runner_id, state, connection_epoch: row.connection_epoch,
     configured_execution_mode: validExecutionMode(row.configured_execution_mode) ? row.configured_execution_mode : null,
     credential_version: row.credential_version, session_id: row.session_id, metadata: row.metadata_json === null ? null : JSON.parse(row.metadata_json) as RunnerMetadata,
     public_info: row.public_info_json === null ? null : JSON.parse(row.public_info_json) as RunnerPublicInfo, last_heartbeat_ms: row.last_heartbeat_ms,

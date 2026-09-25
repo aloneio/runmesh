@@ -2,6 +2,10 @@ import type { UiLocale } from "../contracts/locale.js";
 
 /** Stable identifiers are source-owned. Do not derive or rename keys when editing copy. */
 const definitions = {
+  "client.credential.active": { en: "Credential valid", "zh-CN": "凭据有效" },
+  "client.credential.revoked": { en: "Credential revoked", "zh-CN": "凭据已撤销" },
+  "client.credential.status": { en: "Credential status", "zh-CN": "凭据状态" },
+  "client.credential.explanation": { en: "Credential validity does not indicate a connected client or an online Runner.", "zh-CN": "凭据有效不代表客户端已连接，也不代表 Runner 在线。" },
   "central.oauth.begin": { en: "Begin upstream authorization", "zh-CN": "开始上游授权" },
   "central.oauth.inspect": { en: "Inspect upstream authorization", "zh-CN": "查看上游授权" },
   "central.oauth.revoke": { en: "Revoke upstream authorization", "zh-CN": "撤销上游授权" },

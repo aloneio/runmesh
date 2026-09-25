@@ -106,11 +106,14 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "04d006936232ee5cc13cdb1566b5e898bb484bd49c58608e87c68c3ed8d63a18",
-      "bytes": 3245,
+      "sha256": "41753b3ad40be0ffbbdc099d65a84879960df7d1dfd3d5b3c954533e68198eb2",
+      "bytes": 3255,
       "original_sha256": "b94fb8d802373820755732a807fc8cdc9d4f579a0d40b21cafdcac121ff7a957",
       "original_bytes": 3219,
-      "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label"
+      "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label",
+      "pre_presence_bytes": 3245,
+      "pre_presence_sha256": "04d006936232ee5cc13cdb1566b5e898bb484bd49c58608e87c68c3ed8d63a18",
+      "reviewed_presence_change": "Replace client online/offline with credential validity, identify credential status, and explain it does not prove a live connection. Reversing only these reviewed changes matches pre_presence_sha256."
     },
     {
       "name": "settings",
@@ -134,8 +137,11 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "e74169b7613eb2646689d68bc42760c399f092ad60d9c6200c65b2b561342266",
-      "bytes": 1658
+      "sha256": "a1dfbb8e9e6c76e1b83b95e79c6f47cb2a9aae8d00b004b85898ea6c89bffe45",
+      "bytes": 1767,
+      "pre_presence_bytes": 1658,
+      "pre_presence_sha256": "e74169b7613eb2646689d68bc42760c399f092ad60d9c6200c65b2b561342266",
+      "reviewed_presence_change": "Replace client online/offline with credential validity, identify credential status, and explain it does not prove a live connection. Reversing only these reviewed changes matches pre_presence_sha256."
     },
     {
       "name": "clients-populated",
@@ -185,11 +191,14 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "1041ebda357b2c49560e9a894a8de702e622a2c7d67d2eb8e366c0bd4a4c4bb5",
-      "bytes": 4096,
+      "sha256": "c3a3be6562e9e2f58e9cbfcdbf961bdbf638bd345fb9a718b486df51005456fa",
+      "bytes": 4215,
       "original_sha256": "57a9afa644d0576c73376174bad5c663efe58c9490697670a4c5925b21280795",
       "original_bytes": 4110,
-      "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label"
+      "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label",
+      "pre_presence_bytes": 4096,
+      "pre_presence_sha256": "1041ebda357b2c49560e9a894a8de702e622a2c7d67d2eb8e366c0bd4a4c4bb5",
+      "reviewed_presence_change": "Replace client online/offline with credential validity, identify credential status, and explain it does not prove a live connection. Reversing only these reviewed changes matches pre_presence_sha256."
     },
     {
       "name": "client-detail",
@@ -233,11 +242,14 @@
         [],
         "fixture-csrf-<>&\""
       ],
-      "sha256": "a1f10c2ac6f89b96980b6d734c045edac5fc9c472451921343c517ec50fb7219",
-      "bytes": 6677,
+      "sha256": "335f2ba7fa5cd0372fe1001e05a178a035fbc269764fa5d591332bdf83e4c3d6",
+      "bytes": 6806,
       "original_sha256": "e8468030bfaefe12378b3a9a7541e59679236f3888f7b6b0e69ef759cc5f8d66",
       "original_bytes": 6638,
-      "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label"
+      "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label",
+      "pre_presence_bytes": 6677,
+      "pre_presence_sha256": "a1f10c2ac6f89b96980b6d734c045edac5fc9c472451921343c517ec50fb7219",
+      "reviewed_presence_change": "Replace client online/offline with credential validity, identify credential status, and explain it does not prove a live connection. Reversing only these reviewed changes matches pre_presence_sha256."
     },
     {
       "name": "runners-empty",

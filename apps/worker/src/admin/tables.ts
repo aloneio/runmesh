@@ -4,6 +4,12 @@ import type { HistoryView } from "../history-ui.js";
 import { adminJobUrl } from "./job-views.js";
 import { escapeHtml, time, statusClass } from "./format.js";
 
+export function clientCredentialBadge(revoked: boolean): string {
+  const style = revoked ? "offline" : "online";
+  const label = message(revoked ? "client.credential.revoked" : "client.credential.active", "en");
+  return '<span class="badge ' + style + '"><span class="status-dot ' + style + '"></span>' + label + '</span>';
+}
+
 export function jobTable(jobs: readonly Record<string, unknown>[], runnerId?: string): string {
   if (jobs.length === 0) return '<p class="empty">No recent jobs.</p>';
   return `<div class="table-wrap"><table class="data-table"><thead><tr><th>${message("text.job", "en")}</th><th>${message("text.workspace", "en")}</th><th>${message("text.mcp.client.2", "en")}</th><th>${message("text.status", "en")}</th><th>${message("text.updated", "en")}</th></tr></thead><tbody>${jobs.map((job) => {
@@ -25,7 +31,7 @@ export function safePlatform(runner: RunnerSummaryViewModel): string { return ru
 
 export function runnerList(runners: readonly RunnerSummaryViewModel[]): string { return runners.length === 0 ? `<p class="empty">${message("text.no.runners.yet", "en")}</p>` : `<ul class="item-list">${runners.map((runner) => `<li><a href="/admin/runners/${encodeURIComponent(runner.runner_id)}" class="card-row"><div class="card-row-main"><span class="strong"><span data-no-i18n>${escapeHtml(runner.display_name)}</span></span><span class="card-row-sub">${statusBadge(runner.state)}<span class="meta-separator">·</span><span class="platform-meta">${escapeHtml(safePlatform(runner))}</span></span></div><div class="card-row-aside"><span class="row-arrow">→</span></div></a></li>`).join("")}</ul>`; }
 
-export function clientList(clients: readonly ClientViewModel[]): string { return clients.length === 0 ? `<p class="empty">${message("text.no.mcp.clients.yet", "en")}</p>` : `<ul class="item-list">${clients.map((client) => `<li><a href="/admin/clients/${encodeURIComponent(client.client_id)}" class="card-row"><div class="card-row-main"><span class="strong"><span data-no-i18n>${escapeHtml(client.label)}</span></span><span class="card-row-sub"><span class="client-runner-meta">${client.active_runner_id === null ? "Not selected" : `<span data-no-i18n>${escapeHtml(client.active_runner_id)}</span>`}</span><span class="meta-separator">·</span>${client.revoked_at_ms === null ? statusBadge("online") : statusBadge("offline")}</span></div><div class="card-row-aside"><span class="row-arrow">→</span></div></a><form class="hidden" method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rename"><input name="label" value="${escapeHtml(client.label)}"></form></li>`).join("")}</ul>`; }
+export function clientList(clients: readonly ClientViewModel[]): string { return clients.length === 0 ? `<p class="empty">${message("text.no.mcp.clients.yet", "en")}</p>` : `<ul class="item-list">${clients.map((client) => `<li><a href="/admin/clients/${encodeURIComponent(client.client_id)}" class="card-row"><div class="card-row-main"><span class="strong"><span data-no-i18n>${escapeHtml(client.label)}</span></span><span class="card-row-sub"><span class="client-runner-meta">${client.active_runner_id === null ? "Not selected" : `<span data-no-i18n>${escapeHtml(client.active_runner_id)}</span>`}</span><span class="meta-separator">·</span>${clientCredentialBadge(client.revoked_at_ms !== null)}</span></div><div class="card-row-aside"><span class="row-arrow">→</span></div></a><form class="hidden" method="post" action="/admin/clients/${encodeURIComponent(client.client_id)}/rename"><input name="label" value="${escapeHtml(client.label)}"></form></li>`).join("")}</ul>`; }
 
 export function historyJobTable(jobs: Record<string,unknown>[], runnerId: string, view: HistoryView): string {
   const table = jobTable(jobs,runnerId);
