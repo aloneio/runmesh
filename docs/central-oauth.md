@@ -62,7 +62,8 @@ query-string logging there and do not log authorization URLs.
 After linking and enabling, discovery accepts `principal` alongside
 `expected_revision` at `/admin/central/discovery/{profile_id}`. OAuth discovery
 requires it. The resulting catalog still needs approval and independent grants.
-This batch does not implement the later administrator/toolset UI.
+W08 now provides the [administrator and reusable toolset console](central-administration.md);
+OAuth still requires the explicit provider policies and independent grants above.
 
 ## Tokens, recovery and sessions
 

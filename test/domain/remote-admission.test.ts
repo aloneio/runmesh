@@ -36,6 +36,22 @@ async function fixture() {
     revoke: () => { allowed = false; }, after: (action: () => void) => { afterCall = action; } };
 }
 
+it("W09 governance denies before connecting and is not consulted for unauthorized calls", async () => {
+  const f = await fixture(), admit = vi.fn(() => false), record = vi.fn();
+  const call = createRemoteCaller({ ...f.ports, observation: { admit, record } });
+  expect(await call({ client_id: 'client-test', secret_version: 1 }, f.command, new AbortController().signal)).toMatchObject({ code: 'busy', operation_state: 'not_started' });
+  expect(f.ports.connector.open).not.toHaveBeenCalled(); expect(record).not.toHaveBeenCalled();
+  admit.mockClear(); f.revoke();
+  expect(await call({ client_id: 'client-test', secret_version: 1 }, f.command, new AbortController().signal)).toMatchObject({ code: 'permission_denied' });
+  expect(admit).not.toHaveBeenCalled();
+});
+it("W09 failed optional audit never converts a completed result into an error or replay", async () => {
+  const f = await fixture(), record = vi.fn(() => { throw new Error('history unavailable'); });
+  const call = createRemoteCaller({ ...f.ports, observation: { admit: () => true, record } });
+  expect(await call({ client_id: 'client-test', secret_version: 1 }, f.command, new AbortController().signal)).toMatchObject({ state: 'completed', operation_state: 'completed' });
+  expect(f.invoked).toHaveBeenCalledOnce(); expect(record).toHaveBeenCalledOnce();
+});
+
 it("W05 a central-only identity completes one reviewed call without a Runner", async () => {
   const f = await fixture();
   expect(await f.call()).toMatchObject({ state: "completed", operation_state: "completed", result: { content: [{ text: "fixture" }] } });

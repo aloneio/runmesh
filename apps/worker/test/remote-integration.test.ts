@@ -10,6 +10,7 @@ import { ADMIN_CSRF_COOKIE, ADMIN_SESSION_COOKIE } from "../src/http/constants.j
 import { internalHeaders, passwordVerifier, randomBase64Url, sha256Hex } from "../src/security.js";
 import type { WorkerEnv } from "../src/platform/env.js";
 import type { CentralRemote } from "../src/contracts/remote.js";
+import type { CentralDirectoryReader } from "../src/contracts/catalog.js";
 
 const endpoint = "https://remote.example.com/mcp", token = "synthetic-central-private-bearer";
 const registry = () => env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
@@ -53,7 +54,8 @@ async function fixture() {
   let instance: CapabilitiesDOv1;
   await runInDurableObject(stub, (_original, state) => { instance = new CapabilitiesDOv1(state, configured); });
   const call = <T>(action: (owner: CapabilitiesDOv1) => Promise<T>) => runInDurableObject(stub, () => action(instance));
-  const port: CentralRemote = { callRemote: (principal, input) => call(owner => owner.callRemote(principal, input)),
+  const port: CentralRemote & CentralDirectoryReader = { listDirectory: principal => call(owner => owner.listDirectory(principal)),
+    callRemote: (principal, input) => call(owner => owner.callRemote(principal, input)),
     listCatalog: (principal, input) => call(owner => owner.listCatalog(principal, input)),
     discoverRemote: (hash, id, revision) => call(owner => owner.discoverRemote(hash, id, revision)) };
   const config = { ...configured, CAPABILITIES: { idFromName: () => "central", get: () => port } } as unknown as WorkerEnv;
@@ -199,4 +201,22 @@ it("W05 absent remote configuration retains the ten native tools without resolvi
 it("W05 a relay hop cannot recursively enter another Runmesh MCP endpoint", async () => {
   const request = new Request("https://worker.test/unused/mcp", { headers: { "x-runmesh-mcp-hop": "1" } });
   expect((await handleMcpSecret(request, env, new URL(request.url))).status).toBe(508);
+});
+
+it('W08 direct tools preserve reviewed schemas and stale names cannot bypass revoked grants', async () => {
+  const f = await fixture(); try {
+    expect((await f.discover()).status).toBe(200); await f.approve(); const config = { ...f.config, CENTRAL_DIRECT_TOOLS_ENABLED: '1' };
+    const listed = await rpc(config, f.current.secret, 'tools/list', {}); const direct = listed.result.tools.find((t: { name: string }) => t.name.startsWith('rm_'));
+    expect(direct.inputSchema.properties.value.type).toBe('integer'); const called = await rpc(config, f.current.secret, 'tools/call', { name: direct.name, arguments: { value: 9 } });
+    expect(called.result.structuredContent).toEqual({ value: 9 }); expect(f.execute).toHaveBeenCalledOnce();
+    await f.call(o => o.replaceGrant({ client_id: f.current.principal.client_id, expected_revision: 1, enabled: false, rules: [] }));
+    const denied = await rpc(config, f.current.secret, 'tools/call', { name: direct.name, arguments: { value: 10 } }); expect(denied.result?.isError ?? !!denied.error).toBe(true); expect(f.execute).toHaveBeenCalledOnce();
+    f.port.listDirectory = async () => { throw new Error('central failure'); }; const degraded = await rpc(config, f.current.secret, 'tools/list', {}); expect(degraded.result.tools.some((t: { name: string }) => t.name === 'shell')).toBe(true);
+    const status = await rpc(config, f.current.secret, 'tools/call', { name: 'remote_status', arguments: {} }); expect(JSON.parse(status.result.content[0].text).state).toBe('unavailable');
+    // A malformed state-owner result must not take down the native provider.
+    f.port.listDirectory = async () => JSON.parse('{"state":"listed","view_version":"' + 'a'.repeat(64) + '","tools":[null]}');
+    const malformed = await rpc(config, f.current.secret, 'tools/list', {});
+    expect(malformed.result.tools.some((t: { name: string }) => t.name === 'shell')).toBe(true);
+    expect(malformed.result.tools.some((t: { name: string }) => t.name.startsWith('rm_'))).toBe(false);
+  } finally { f.network.mockRestore(); }
 });

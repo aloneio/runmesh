@@ -3,11 +3,14 @@
   "cases": [
     {
       "nonce": null,
-      "sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20"
+      "sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
+      "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20"
     },
     {
       "nonce": "test-nonce",
-      "sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1"
+      "sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
+      "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1"
     }
-  ]
+  ],
+  "reviewed_change": "Add bounded, no-retry central administration requests; preserve existing handlers and nonce binding."
 }

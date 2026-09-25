@@ -2,8 +2,9 @@
 
 W04 directory implementation and its explicit support limits are documented in
 [Central catalog review](central-catalog.md). W05 adds the separately gated
-[controlled HTTP discovery and invocation](central-remote-mcp.md). Skill loading
-and production activation remain later milestones.
+[controlled HTTP discovery and invocation](central-remote-mcp.md). W07-W09 add
+[Skill content](central-skills.md) and [administration and governance](central-administration.md).
+Production activation remains subject to the [rollout gates](central-rollout.md).
 
 [简体中文](central-capabilities-architecture.zh-CN.md)
 
@@ -30,9 +31,9 @@ copy remote content into the original Runner-only audit envelope.
 | Identity and native permissions | Existing Registry authentication | Central storage as a prerequisite to native authentication |
 | Central grant evaluation | `domain/capabilities` and `application/capabilities` | Runner selection, concrete SQL or SDKs |
 | Central grant persistence | `platform/capabilities` | Registry tables, Runner state or audit fallback |
-| Remote MCP adaptation | Future `platform/connectors` | Skill implementation and host process execution |
-| Skill content | Future Skill domain/application/platform modules | Automatic execution, permission grants or Runner Context |
-| Public providers | Future thin `mcp/providers` adapters | Application implementations, storage and credential pools |
+| Remote MCP adaptation | `platform/connectors` | Skill implementation and host process execution |
+| Skill content | Skill domain/application/platform modules | Automatic execution, permission grants or Runner Context |
+| Public providers | Thin `mcp/providers` adapters | Application implementations, storage and credential pools |
 | Composition | HTTP/entry layer | Duplicated permission rules |
 
 Interfaces live in `contracts/`. The composition layer supplies small ports;
@@ -71,7 +72,7 @@ The internal client-creation and verification routes accept an explicit
 verification is projected into the existing MCP adapter without changing its
 tool schemas. Rotation, revocation and generation checks apply to both forms.
 The native RPC admission chain remains unchanged and denies empty native scopes.
-Central UI provisioning is a later W08 deliverable, not part of this batch.
+W08 adds the separate [central administration console](central-administration.md).
 
 **Rollback boundary:** old Worker code does not understand v2 stored identity
 objects and rejects those new identities. Existing legacy clients continue to
@@ -87,7 +88,7 @@ permissions derived from Skill text or tool annotations.
 
 `createCapabilityAccess` performs bounded identity/grant observations and checks
 identity again after reading the independent grant owner. Its result is not a
-reusable dispatch ticket. Future invocation code must revalidate the relevant
+reusable dispatch ticket. Invocation code revalidates the relevant
 identity and grant revision after queue/connection waits; cross-owner or
 in-flight cancellation is not an atomic transaction.
 
@@ -108,8 +109,9 @@ W03 now includes a bearer-credential backend: versioned connection profiles,
 AES-256-GCM envelopes, a bounded deployment keyring, a ciphertext-only repository,
 and protected profile management. WebCrypto is confined to the connector adapter;
 application rules receive narrow authorization, cipher and storage ports.
-`SecretVault.withCredential` remains a contract for the later invocation adapter.
-There is no plaintext-read API, OAuth implementation or automatic key provisioning.
+Invocation adapters consume narrowly scoped credential ports. There is no
+plaintext-read API or automatic key provisioning. W06 adds the separately
+configured OAuth adapter described in [the OAuth guide](central-oauth.md).
 
 The protected route is `/admin/central/profiles/{profile_id}`. GET returns safe
 metadata. POST accepts only create, rotate, enable, disable and rekey commands.
@@ -156,7 +158,7 @@ still mandatory before a profile can be used to invoke an upstream service.
 
 These are initial safety ceilings, not measured production capacity. Upstream
 discovery, schema complexity, result bytes, connection concurrency and Skill
-bundle budgets must be implemented before W04/W05/W07 are enabled. An audit
+bundle budgets are enforced by the corresponding W04/W05/W07 modules. An audit
 failure must not become permission to replay a mutation or store secrets.
 
 ## Evidence and remaining work
@@ -180,8 +182,9 @@ W04 supplies imported catalog snapshots, reviewed per-profile selections and an
 ACL-filtered reader. W05 adds controlled stateless HTTP discovery and invocation,
 with optional remote_tools/remote_call provider registration. It remains disabled
 in deployed environments. W06 adds [client-bound OAuth and ephemeral legacy sessions](central-oauth.md),
-with explicit provider pins and no persistent shared session. Cross-profile named
-toolsets, Skill content, UI, full cost/receipt acceptance, real-client validation
-and rollout remain.
+with explicit provider pins and no persistent shared session. W07-W09 add
+versioned text Skills, reusable grant templates, central administration, direct
+tool catalogs and optional metadata receipts/call budgets. Full cost acceptance,
+real-client validation and rollout remain separate gates.
 The default native tools/list is unchanged. No deployment or automatic upgrade
 is part of this decision.

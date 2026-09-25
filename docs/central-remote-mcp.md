@@ -76,9 +76,9 @@ POST `/admin/central/discovery/{profile_id}` with `{"expected_revision":0}` and
 the administrator's existing session, same origin and matching CSRF token. The
 complete bounded tools/list result is staged into the W04 catalog, never approved.
 Then inspect and approve selected tools through the catalog review API. Finally
-grant each client the exact tool IDs, versions and connection profile. Grant
-provisioning and a friendly administration UI remain separate W08 work; identity
-creation, profile enablement and catalog approval alone are not a client grant.
+grant each client the exact tool IDs, versions and connection profile through the
+[W08 administration console](central-administration.md). Identity creation,
+profile enablement and catalog approval alone are not a client grant.
 
 The discovery endpoint permits no caller URL, token, HTTP headers or command.
 Partial pages, duplicate tools, unsupported schemas, timeouts and failed upstream
@@ -138,8 +138,10 @@ These are admission ceilings, not throughput or cost guarantees. They include
 connect, list, validation and execution work. Transient concurrency state is not
 a distributed rate limiter. Restart does not replay work. Calls do not create
 Runner Jobs, write argument/result payloads to audit tables or install timers
-outside their request lifetime. Metadata-only durable call receipts, rate limits
-and broader cost measurements remain later acceptance work.
+outside their request lifetime. W09 adds optional metadata-only durable call
+receipts, owner-local rate limits and cooldown via CENTRAL_GOVERNANCE_ENABLED=1;
+see [administration and governance](central-administration.md). Broader cost
+measurements and live acceptance remain external gates.
 
 ## Verification scope and references
 

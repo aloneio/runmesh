@@ -10,6 +10,12 @@ export interface WorkerEnv extends RuntimeConfiguration {
   REGISTRY: DurableObjectNamespace;
   /** Optional central feature owner; absent means no central runtime access. */
   CAPABILITIES?: DurableObjectNamespace;
+  /** Explicit opt-in; a central binding alone does not publish Skill content. */
+  CENTRAL_SKILLS_ENABLED?: string;
+  /** Optional durable rate budgets, cooldown and metadata-only receipts. */
+  CENTRAL_GOVERNANCE_ENABLED?: string;
+  /** Small approved direct catalogs; large views retain discovery/call tools. */
+  CENTRAL_DIRECT_TOOLS_ENABLED?: string;
   /** Independent versioned encryption keyring; never stored in SQLite or returned. */
   CENTRAL_VAULT_KEYRING?: string;
   /** Optional pinned OAuth providers; absent does not affect bearer connections. */

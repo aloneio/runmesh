@@ -8,7 +8,8 @@ import { createOAuthTransport } from "./platform/connectors/oauth-http.js";
 import { createOAuthManager } from "./application/connectors/oauth.js";
 import type { AdminDecision, CentralAdministration, ProfileResult } from "./contracts/connectors.js";
 import type { CapabilityGrant, GrantReplacement, GrantWriteResult } from "./contracts/capabilities.js";
-import { isCapabilityIdentifier } from "./contracts/capabilities.js";
+import { isCapabilityIdentifier, parseCapabilityGrant } from "./contracts/capabilities.js";
+import type { CentralManagement } from "./contracts/central-management.js";
 import { CapabilityState } from "./platform/capabilities/store.js";
 import { ConnectionState } from "./platform/connectors/store.js";
 import { createCredentialCipher } from "./platform/connectors/cipher.js";
@@ -23,12 +24,22 @@ import { CatalogState } from "./platform/capabilities/catalog-store.js";
 import { catalogSha256, createCatalogCursor } from "./platform/capabilities/catalog-crypto.js";
 import { createCatalogManager } from "./application/capabilities/catalog-admin.js";
 import { createCatalogReader } from "./application/capabilities/catalog-read.js";
+import { createDirectoryReader } from "./application/capabilities/directory.js";
+import { createDependencyReader } from "./application/capabilities/dependencies.js";
+import type { CentralDirectory } from "./contracts/catalog.js";
 import { withinDeadline } from "./application/connectors/deadline.js";
 import { createRemoteCaller } from "./application/capabilities/remote-call.js";
 import { createRemoteDiscovery } from "./application/capabilities/remote-discovery.js";
 import { createHttpRemoteConnector } from "./platform/connectors/remote-client.js";
 import { REMOTE_LIMITS, RemoteFault, type CentralRemote, type RemoteOutcome, type RemoteFailure } from "./contracts/remote.js";
 import { parseRemoteEgress } from "./contracts/remote-values.js";
+import { SkillState } from "./platform/skills/store.js";
+import { createSkillService } from "./application/skills/service.js";
+import type { CentralSkills } from "./contracts/skills.js";
+import { CentralGovernance } from "./platform/capabilities/central-audit.js";
+import type { CentralAuditRow } from "./contracts/central-audit.js";
+import type { ToolsetAdministration } from "./contracts/toolsets.js";
+import { ToolsetState } from "./platform/capabilities/toolsets.js";
 
 /** Reviewed composition root. Feature repositories never import each other.
  * Binding-only APIs return metadata, never decrypted credentials. No public fetch API. */
@@ -38,6 +49,9 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
   readonly #namespace: string;
   readonly #catalog: CatalogState;
   readonly #oauthState: OAuthState;
+  readonly #skills: SkillState;
+  readonly #governance: CentralGovernance;
+  readonly #toolsets: ToolsetState;
   #oauthService: ReturnType<typeof createOAuthManager> | undefined;
   readonly #remoteClients = new Set<string>();
   public constructor(ctx: DurableObjectState, env: WorkerEnv) {
@@ -47,13 +61,103 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
     this.#profiles = new ConnectionState(ctx.storage, () => this.#grants.initialize());
     this.#catalog = new CatalogState(ctx.storage, () => this.#grants.initialize());
     this.#oauthState = new OAuthState(ctx.storage, () => this.#grants.initialize());
+    this.#skills = new SkillState(ctx.storage, () => this.#grants.initialize());
+    this.#governance = new CentralGovernance(ctx.storage, () => this.#grants.initialize());
+    this.#toolsets = new ToolsetState(ctx.storage, () => this.#grants.initialize());
   }
 
   public async readGrant(clientId: string): Promise<CapabilityGrant | undefined> {
     return this.#grants.readGrant(clientId);
   }
+  public async getToolset(hash: string, id: string): ReturnType<ToolsetAdministration['getToolset']> {
+    try {
+      if (!isCapabilityIdentifier(id)) return { state: 'invalid' };
+      const decision = await this.#authorize(hash, new AbortController().signal);
+      if (decision !== 'allowed') return { state: decision };
+      const toolset = this.#toolsets.read(id); return toolset ? { state: 'found', toolset } : { state: 'missing' };
+    } catch { return { state: 'unavailable' }; }
+  }
+  public async mutateToolset(hash: string, input: unknown): ReturnType<ToolsetAdministration['mutateToolset']> {
+    try {
+      const decision = await this.#authorize(hash, new AbortController().signal);
+      if (decision !== 'allowed') return { state: decision };
+      if (typeof input !== 'object' || input === null || Array.isArray(input)) return { state: 'invalid' };
+      const value = input as Record<string, unknown>;
+      if (value.action !== 'apply') return this.#toolsets.replace(input);
+      if (!isCapabilityIdentifier(value.toolset_id) || !isCapabilityIdentifier(value.client_id)
+        || Object.keys(value).some(k => !['action', 'toolset_id', 'client_id', 'toolset_revision', 'expected_revision'].includes(k))
+        || !Number.isSafeInteger(value.toolset_revision) || (value.toolset_revision as number) < 1) return { state: 'invalid' };
+      const toolset = this.#toolsets.read(value.toolset_id);
+      if (!toolset?.enabled) return { state: 'missing' };
+      if (toolset.revision !== value.toolset_revision) return { state: 'conflict', current_revision: toolset.revision };
+      return this.#grants.replaceGrant({ client_id: value.client_id, enabled: true, expected_revision: value.expected_revision as number, rules: toolset.rules });
+    } catch { return { state: 'unavailable' }; }
+  }
+  public async listCentralReceipts(hash: string): Promise<{ state: "listed"; receipts: CentralAuditRow[] } | { state: "denied" | "unavailable" }> {
+    if (this.env.CENTRAL_GOVERNANCE_ENABLED !== "1") return { state: "unavailable" };
+    try {
+      const decision = await this.#authorize(hash, new AbortController().signal);
+      return decision === "allowed" ? { state: "listed", receipts: this.#governance.list() } : { state: decision };
+    } catch { return { state: "unavailable" }; }
+  }
+
+  #skillService() {
+    return createSkillService({ repository: this.#skills, digest: catalogSha256, grant: id => this.#grants.readGrant(id),
+      remoteDependency: (target, signal) => parseRemoteEgress(this.env.CENTRAL_MCP_EGRESS) === undefined ? Promise.resolve("disabled")
+        : createDependencyReader({ repository: this.#catalog, profile: id => this.#profiles.read(id)?.profile, digest: catalogSha256 })(target, signal),
+      identity: (principal, signal) => this.#identity(principal, signal), admin: (hash, signal) => this.#authorize(hash, signal) });
+  }
+  public async mutateSkill(hash: string, input: unknown): ReturnType<CentralSkills["mutateSkill"]> {
+    return withinDeadline(new AbortController().signal, () => ({ state: "unknown" } as const),
+      signal => this.#skillService().mutate(hash, input, signal));
+  }
+  public async inspectSkill(hash: string, id: string, digest?: string): ReturnType<CentralSkills["inspectSkill"]> {
+    return withinDeadline(new AbortController().signal, () => ({ state: "unavailable" } as const),
+      signal => this.#skillService().inspect(hash, id, digest, signal));
+  }
+  public async listSkills(principal: CapturedIdentity, query: unknown): ReturnType<CentralSkills["listSkills"]> {
+    return withinDeadline(new AbortController().signal, () => ({ state: "unavailable" } as const),
+      signal => this.#skillService().list(principal, query, signal));
+  }
+  public async readSkill(principal: CapturedIdentity, input: unknown): ReturnType<CentralSkills["readSkill"]> {
+    return withinDeadline(new AbortController().signal, () => ({ state: "unavailable" } as const),
+      signal => this.#skillService().read(principal, input, signal));
+  }
   public async replaceGrant(input: GrantReplacement): Promise<GrantWriteResult> {
     return this.#grants.replaceGrant(input);
+  }
+
+  public async getClientGrant(hash: string, id: string): ReturnType<CentralManagement["getClientGrant"]> {
+    try {
+      if (!isCapabilityIdentifier(id)) return { state: "invalid" };
+      const decision = await this.#authorize(hash, new AbortController().signal);
+      if (decision !== "allowed") return { state: decision };
+      const grant = this.#grants.readGrant(id);
+      return grant ? { state: "found", grant } : { state: "missing" };
+    } catch { return { state: "unavailable" }; }
+  }
+  public async setClientGrant(hash: string, input: unknown): ReturnType<CentralManagement["setClientGrant"]> {
+    try {
+      if (typeof input !== "object" || input === null || Array.isArray(input)) return { state: "invalid" };
+      const value = input as Record<string, unknown>;
+      if (Object.keys(value).some(k => !["client_id", "expected_revision", "enabled", "rules"].includes(k))
+        || !Number.isSafeInteger(value.expected_revision) || (value.expected_revision as number) < 0 || (value.expected_revision as number) >= Number.MAX_SAFE_INTEGER) return { state: "invalid" };
+      const grant = parseCapabilityGrant({ ...value, schema_version: 1, revision: (value.expected_revision as number) + 1 });
+      if (!grant) return { state: "invalid" };
+      const decision = await this.#authorize(hash, new AbortController().signal);
+      if (decision !== "allowed") return { state: decision };
+      // Grants remain exact immutable capability references. Approval and actual
+      // execution checks are independent; granting cannot approve content.
+      return this.#grants.replaceGrant({ client_id: grant.client_id, expected_revision: value.expected_revision as number, enabled: grant.enabled, rules: grant.rules });
+    } catch { return { state: "unavailable" }; }
+  }
+  public async listProfiles(hash: string, after?: string): ReturnType<CentralManagement["listProfiles"]> {
+    try {
+      if (after !== undefined && !isCapabilityIdentifier(after)) return { state: "invalid" };
+      const decision = await this.#authorize(hash, new AbortController().signal);
+      if (decision !== "allowed") return { state: decision };
+      return { state: "listed", ...this.#profiles.list(after) };
+    } catch { return { state: "unavailable" }; }
   }
 
   async #authorize(sessionHash: string, signal: AbortSignal): Promise<AdminDecision> {
@@ -114,6 +218,14 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
   }
 
   /** Internal reader for the later remote MCP provider; never selects a Runner. */
+  public async listDirectory(principal: CapturedIdentity): Promise<CentralDirectory> {
+    const read = createDirectoryReader({ repository: this.#catalog, profile: id => this.#profiles.read(id)?.profile,
+      grant: id => this.#grants.readGrant(id), identity: (value, signal) => this.#identity(value, signal), digest: catalogSha256,
+      cursor: createCatalogCursor(this.#namespace, () => this.#catalog.cursorKey()), now: Date.now });
+    return withinDeadline<CentralDirectory>(new AbortController().signal, () => ({ state: "unavailable" }), (signal, expired) => read(principal, signal, expired));
+  }
+
+  /** Per-profile discovery remains available for larger direct directories. */
   public async listCatalog(principal: CapturedIdentity, query: unknown): Promise<CatalogPage> {
     const read = createCatalogReader({ repository: this.#catalog, profile: id => this.#profiles.read(id)?.profile,
       grant: id => this.#grants.readGrant(id), identity: (value, signal) => this.#identity(value, signal), digest: catalogSha256,
@@ -205,7 +317,8 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
     try {
       return await createRemoteCaller({ repository: this.#catalog, profile: id => this.#profiles.read(id)?.profile,
         grant: id => this.#grants.readGrant(id), identity: (value, signal) => this.#identity(value, signal),
-        digest: catalogSha256, connector: this.#remoteConnector(principal) })(principal, command, new AbortController().signal);
+        digest: catalogSha256, connector: this.#remoteConnector(principal),
+        ...(this.env.CENTRAL_GOVERNANCE_ENABLED === "1" ? { observation: this.#governance } : {}) })(principal, command, new AbortController().signal);
     } finally { this.#remoteClients.delete(key); }
   }
 

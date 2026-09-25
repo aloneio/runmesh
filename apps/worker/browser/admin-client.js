@@ -1,5 +1,26 @@
 
   (function(){
+document.addEventListener('submit',function(event){
+  var form=event.target;if(!form||!form.matches||!form.matches('[data-central-admin]'))return;event.preventDefault();
+  var output=form.parentNode.querySelector('[data-central-result]'),button=form.querySelector('button[type=submit]');
+  var routes={profiles:['GET','profiles'],'profile-read':['GET','profiles/'],'profile-write':['POST','profiles/'],
+    'oauth-begin':['POST','oauth/begin'],'oauth-inspect':['POST','oauth/inspect'],'oauth-revoke':['POST','oauth/revoke'],
+    'catalog-read':['GET','catalogs/'],'catalog-discover':['POST','discovery/'],'catalog-write':['POST','catalogs/'],
+    'grant-read':['GET','grants/'],'grant-write':['POST','grants/'],'toolset-read':['GET','toolsets/'],'toolset-write':['POST','toolsets/'],
+    'skill-read':['GET','skills/'],'skill-write':['POST','skills/'],receipts:['GET','receipts']};
+  if(button.disabled)return;
+  var selection=form.elements.operation.value,route=routes[selection],target=form.elements.target.value.trim(),payload;
+  try{if(!route)throw new Error('Unknown operation');if(route[1].endsWith('/')&&!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(target))throw new Error('Enter a valid target ID');
+    payload=JSON.parse(form.elements.payload.value);if(!payload||typeof payload!=='object'||Array.isArray(payload))throw new Error('Request must be an object');
+  }catch(error){output.textContent=error.message;return;}
+  var controller=new AbortController(),timer=setTimeout(function(){controller.abort();},25000);button.disabled=true;output.textContent=document.documentElement.lang==='zh-CN'?'正在处理':'Working';
+  var options={method:route[0],credentials:'same-origin',cache:'no-store',redirect:'error',signal:controller.signal,headers:{'content-type':'application/json','x-csrf-token':form.getAttribute('data-csrf')}};
+  if(route[0]==='POST'){options.body=JSON.stringify(payload);if(payload.credential)form.elements.payload.value='{}';}
+  fetch('/admin/central/'+route[1]+(route[1].endsWith('/')?encodeURIComponent(target):''),options).then(function(response){
+    return response.json().then(function(value){output.textContent='HTTP '+response.status+String.fromCharCode(10)+JSON.stringify(value,null,2);});
+  }).catch(function(){output.textContent=document.documentElement.lang==='zh-CN'?'结果未确认，请先读取当前状态，勿自动重复修改。':'Outcome unconfirmed. Read current state before another mutation.';})
+    .finally(function(){clearTimeout(timer);button.disabled=false;});
+});
 function applyLocale(locale){document.documentElement.lang=locale;document.querySelectorAll('[data-lang-toggle]').forEach(function(link){link.setAttribute('aria-current',link.getAttribute('data-lang-toggle')===locale?'true':'false')})}
 function requestedLocale(){return document.documentElement.lang==='zh-CN'?'zh-CN':'en'}
 function rememberLocale(locale){document.cookie='runmesh_lang='+locale+'; Max-Age=31536000; Path=/; SameSite=Lax'}
