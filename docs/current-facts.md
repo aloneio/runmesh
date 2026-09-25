@@ -219,7 +219,10 @@ Generated from the checked-out source by `npm run generate:facts` and validated 
   ],
   "production_plaintext_vars": {},
   "development_plaintext_vars": {
-    "RUNMESH_ENVIRONMENT": "development"
+    "RUNMESH_ENVIRONMENT": "development",
+    "CENTRAL_SKILLS_ENABLED": "1",
+    "CENTRAL_DIRECT_TOOLS_ENABLED": "1",
+    "CENTRAL_GOVERNANCE_ENABLED": "1"
   },
   "durable_objects": [
     {

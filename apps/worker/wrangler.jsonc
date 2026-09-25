@@ -37,6 +37,10 @@
           {
             "name": "RUNNER",
             "class_name": "RunnerDOv2"
+          },
+          {
+            "name": "CAPABILITIES",
+            "class_name": "CapabilitiesDOv1"
           }
         ]
       },
@@ -54,10 +58,19 @@
             "RegistryDOv2",
             "RunnerDOv2"
           ]
+        },
+        {
+          "tag": "central-dev-v1",
+          "new_sqlite_classes": [
+            "CapabilitiesDOv1"
+          ]
         }
       ],
       "vars": {
-        "RUNMESH_ENVIRONMENT": "development"
+        "RUNMESH_ENVIRONMENT": "development",
+        "CENTRAL_SKILLS_ENABLED": "1",
+        "CENTRAL_DIRECT_TOOLS_ENABLED": "1",
+        "CENTRAL_GOVERNANCE_ENABLED": "1"
       },
       "triggers": {
         "crons": []

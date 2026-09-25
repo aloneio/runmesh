@@ -11,6 +11,7 @@ import { internalHeaders, passwordVerifier, randomBase64Url, sha256Hex } from ".
 import type { WorkerEnv } from "../src/platform/env.js";
 import type { CentralRemote } from "../src/contracts/remote.js";
 import type { CentralDirectoryReader } from "../src/contracts/catalog.js";
+import type { CentralToolVisibilityReader } from "../src/contracts/capabilities.js";
 
 const endpoint = "https://remote.example.com/mcp", token = "synthetic-central-private-bearer";
 const registry = () => env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
@@ -54,7 +55,8 @@ async function fixture() {
   let instance: CapabilitiesDOv1;
   await runInDurableObject(stub, (_original, state) => { instance = new CapabilitiesDOv1(state, configured); });
   const call = <T>(action: (owner: CapabilitiesDOv1) => Promise<T>) => runInDurableObject(stub, () => action(instance));
-  const port: CentralRemote & CentralDirectoryReader = { listDirectory: principal => call(owner => owner.listDirectory(principal)),
+  const port: CentralRemote & CentralDirectoryReader & CentralToolVisibilityReader = { toolVisibility: principal => call(owner => owner.toolVisibility(principal)),
+    listDirectory: principal => call(owner => owner.listDirectory(principal)),
     callRemote: (principal, input) => call(owner => owner.callRemote(principal, input)),
     listCatalog: (principal, input) => call(owner => owner.listCatalog(principal, input)),
     discoverRemote: (hash, id, revision) => call(owner => owner.discoverRemote(hash, id, revision)) };
@@ -121,6 +123,11 @@ it("W05 unapproved callers cannot use a cached tool definition and argument vali
   const f = await fixture();
   try {
     expect((await f.discover()).status).toBe(200); const command = await f.approve(), other = await client(), before = f.methods.length;
+    const config = { ...f.config, CENTRAL_SKILLS_ENABLED: '1', CENTRAL_DIRECT_TOOLS_ENABLED: '1' };
+    expect((await rpc(config, other.secret, 'tools/list', {})).result.tools).toHaveLength(10);
+    const tools = (await rpc(config, f.current.secret, 'tools/list', {})).result.tools;
+    expect(tools.map((tool: { name: string }) => tool.name)).toEqual(expect.arrayContaining(['remote_tools', 'remote_call', 'remote_status']));
+    expect(tools.some((tool: { name: string }) => tool.name.startsWith('skill_'))).toBe(false);
     expect(await f.port.callRemote(other.principal, command)).toMatchObject({ state: "failed", code: "permission_denied", operation_state: "not_started" });
     expect(await f.port.callRemote(f.current.principal, { ...command, arguments: { value: "7" } })).toMatchObject({ code: "invalid_arguments", operation_state: "not_started" });
     expect(f.methods).toHaveLength(before); expect(f.execute).not.toHaveBeenCalled();

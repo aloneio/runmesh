@@ -27,6 +27,9 @@ client_id、toolset_revision、expected_revision，只需为第二个客户端�
 CENTRAL_DIRECT_TOOLS_ENABLED=1 在远端绑定/出站策略有效时发布审核后的直接工具，
 使用稳定 rm_ 别名和原始 JSON schema。tools/list 只读保存且经 ACL 筛选的快照，
 不向上游实时发现。直接调用和 remote_call 共用参数校验、代次检查与执行实现。
+当前客户端没有已启用的远程工具授权时，发现结果隐藏远程通用入口及直接别名；
+Skill 入口独立按 Skill 授权筛选。重新查询目录会反映撤权，旧缓存名称的调用仍须
+通过实时授权检查。
 
 直接视图限制 8 个档案、32 工具、512 KiB；更大目录使用 remote_tools/remote_call。
 remote_status 区分容量、拒绝、故障和正常空目录。中央故障保留原生工具注册，原生

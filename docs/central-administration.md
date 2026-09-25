@@ -35,6 +35,10 @@ the remote binding/egress configuration is valid. The stable rm_ aliases and
 exact JSON schemas come from saved, ACL-filtered snapshots. No live upstream
 discovery is performed by tools/list. Direct calls and remote_call share the
 same runtime validation, generation checks and invocation implementation.
+Discovery hides the generic remote entries and direct aliases when the current
+client has no enabled remote-tool grant. Skill entry points are independently
+filtered by Skill grants. A new directory request reflects revoked grants; a
+cached name still requires live authorization when called.
 
 Direct views are bounded to 8 profiles, 32 tools and 512 KiB. Larger views use
 remote_tools/remote_call. remote_status distinguishes capacity, denied and

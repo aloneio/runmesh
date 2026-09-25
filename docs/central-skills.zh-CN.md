@@ -9,8 +9,14 @@ W07 在可选 Capabilities 状态所有者内提供有界、经审核的文本 b
 ## 启用与导入
 
 同时具备 CAPABILITIES 绑定和 CENTRAL_SKILLS_ENABLED=1 才暴露 Skill HTTP/MCP
-入口。关闭时，原生十工具及原生调用不访问中央存储。仓库内生产、development
-Wrangler 配置未改变。
+入口。关闭时，原生十工具及原生调用不访问中央存储。development Wrangler 配置
+现已增加独立的 CapabilitiesDOv1 SQLite 命名空间并显式启用 Skills，生产仍关闭。
+候选通过既有检查后推送 GitLab dev，由已连接的开发构建触发部署。
+
+发现请求重新检查客户端身份和当前授权。只有具备已启用 Skill 规则的客户端才会
+看到 skill_list、skill_read 和资源模板；空规则、停用或缺失的 grant 均隐藏入口。
+可见性查询失败时保留原生目录；缓存调用仍执行实时授权，隐藏入口不能替代访问
+控制。原生工具调用不执行这次中央发现查询。
 
 管理员使用原有会话打开 /admin/central。写请求必须同源并提供当前 CSRF token。
 JSON API 为 GET/POST /admin/central/skills/{skill_id}，ID 来自路径而非请求正文。

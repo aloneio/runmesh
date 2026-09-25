@@ -69,5 +69,6 @@ test("normal production has no required plaintext vars; production namespace and
     assert.equal(env.d1_databases[0].database_name, "runmesh-audit-history");
     assert.equal(env.version_metadata.binding, "CF_VERSION_METADATA");
   }
-  assert.deepEqual(config.env.development.vars, { RUNMESH_ENVIRONMENT: "development" });
+  assert.deepEqual(config.env.development.vars, { RUNMESH_ENVIRONMENT: "development",
+    CENTRAL_SKILLS_ENABLED: "1", CENTRAL_DIRECT_TOOLS_ENABLED: "1", CENTRAL_GOVERNANCE_ENABLED: "1" });
 });

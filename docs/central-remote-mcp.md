@@ -8,9 +8,11 @@ ephemeral-session extensions and their narrower support limits are documented in
 
 **W05 implementation on dev; no production activation.** Central HTTP discovery
 and invocation now connect the W03 credential profiles and W04 reviewed catalog.
-The shipped deployment configuration still has no central binding or outbound
-policy in production/development. Do not interpret this document as an enabled
-service, a published release, or a successful public-network acceptance test.
+The development configuration now has an independent central binding and explicit
+Skills, direct-directory and governance opt-ins. It does not supply remote egress
+endpoints or vault keys; remote MCP stays disabled until those are configured.
+Production remains unchanged. This is not a published release or evidence of
+successful public-network acceptance.
 
 ## What is implemented
 
@@ -22,10 +24,12 @@ the existing Runner tools; Runmesh does not execute upstream text as shell code.
 The optional `remote_tools` tool reads reviewed definitions for one profile;
 `remote_call` accepts that profile, exact tool ID, approved version and arguments.
 The native ten-tool factory and its reviewed contracts remain unchanged. The two
-central tools are registered only when CAPABILITIES and a valid outbound policy
-exist. Construction and native-only calls do not resolve central storage, read
-vault keys or create an upstream connection. A central error therefore does not
-remove the native tools. This is a discovery/call interface, not dynamic injection
+central tools require CAPABILITIES and a valid outbound policy. Discovery also
+requires a current, enabled remote-tool grant; clients without one do not see
+remote_tools, remote_call, remote_status or direct aliases. Native-only calls do
+not resolve central storage, read vault keys or create an upstream connection.
+A central discovery error hides its entries while preserving the native tools.
+This is a discovery/call interface, not dynamic injection
 of thousands of tools into every host's catalog.
 
 ## Supported protocol subset

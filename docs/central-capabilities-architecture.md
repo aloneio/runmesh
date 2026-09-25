@@ -100,9 +100,11 @@ writes. Unknown, partial or foreign state is rejected without clearing data.
 Concurrent writes require the observed revision. Disabling retains the record
 and advances its revision instead of deleting history.
 
-Only the **test** Wrangler environment binds this class in this batch.
-Production and development deployment bindings, migrations and required secrets
-are unchanged. Native requests do not resolve central state or read vault keys.
+The **test** and **development** Wrangler environments bind this class. Development
+adds its own central-dev-v1 SQLite migration without changing existing Registry
+or Runner identities. Production bindings and required secrets remain unchanged.
+Native tool calls do not resolve central state or read vault keys. Enabled central
+discovery checks live identity and grants; failures retain the native catalog.
 The disabled access factory does not resolve ports or create timers.
 
 W03 now includes a bearer-credential backend: versioned connection profiles,
