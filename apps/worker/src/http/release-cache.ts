@@ -38,5 +38,6 @@ const scopedRuntimes = new WeakMap<object, DevelopmentReleaseRuntime>();
 export function developmentReleaseDependencies(cache?: DevelopmentReleaseCache | null, scope?: object): DevelopmentReleaseDependencies {
   let runtime = scope === undefined ? releaseRuntime : scopedRuntimes.get(scope);
   if (runtime === undefined) { runtime = createDevelopmentReleaseRuntime(); scopedRuntimes.set(scope!, runtime); }
-  return { fetch, verify: verifyDevelopmentRunnerRelease, cache: cache === null ? undefined : cache ?? defaultDevelopmentReleaseCache(), now: () => Date.now(), runtime };
+  // Native workerd fetch must not receive the dependency object as its receiver.
+  return { fetch: (input, init) => fetch(input, init), verify: verifyDevelopmentRunnerRelease, cache: cache === null ? undefined : cache ?? defaultDevelopmentReleaseCache(), now: () => Date.now(), runtime };
 }
