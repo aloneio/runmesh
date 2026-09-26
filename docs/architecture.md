@@ -28,6 +28,18 @@ Each MCP client has an independently revocable secret URL and a persisted Runner
 
 Cross-table transactions remain within one Registry. The dependency gate checks application, domain and foundation imports in both CI systems, reporting runtime and type-inclusive cycles separately. See [module boundaries](architecture-remediation.md) for the role matrix and compatibility interfaces.
 
+Managed MCP account connections follow the same boundaries.
+`application/connectors/managed-oauth.ts` owns session authorization, state claims,
+refresh ordering and credential leases. Its repository, cipher and protocol ports
+live in `contracts/managed-oauth.ts` and contain no SDK or SQLite types.
+`platform/connectors/managed-oauth.ts` adapts discovery, registration and tokens
+to the MCP SDK; `managed-oauth-http.ts` bounds public network requests;
+`managed-store.ts` owns synchronous SQLite persistence. Only `capabilities-do.ts`
+assembles them. Architecture fixtures reject SDK imports in these contracts,
+concrete adapter imports in use cases and storage/cipher ownership in the SDK adapter.
+The control-panel renderer receives explicit display inputs and does not load
+vault keys or compute unused endpoint-allowlist readiness.
+
 ## Authorization and state changes
 
 Authenticate each entrypoint and reauthorize protected operations against current policy. Preserve distinct outcomes for a denied request, an unavailable dependency and malformed evidence. RunnerDO's final local policy check and socket send form one synchronous section. Queued Jobs reauthorize immediately before starting.

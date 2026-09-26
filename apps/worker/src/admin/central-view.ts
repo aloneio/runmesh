@@ -1,7 +1,7 @@
-import { centralProductView, type CentralProductSetup } from "./central-product-view.js";
+import { centralProductView } from "./central-product-view.js";
 
 /** All content is local presentation. Responses are rendered with textContent. */
-export function centralPage(csrf: string, enabled: boolean, skills: boolean, _governance: boolean, clients: readonly { id: string; label: string }[] = [], setup: CentralProductSetup = { endpoints: [], credentialsReady: false }): string {
+export function centralPage(csrf: string, enabled: boolean, skills: boolean, clients: readonly { id: string; label: string }[] = []): string {
   if (!enabled) return '<section class="page-heading"><h1>Central capabilities</h1><p>Central capabilities are disabled.</p></section>';
-  return centralProductView(csrf, skills, clients, setup);
+  return centralProductView(csrf, skills, clients);
 }

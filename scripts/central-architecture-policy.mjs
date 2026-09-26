@@ -1,5 +1,6 @@
 /** Additional feature boundaries; native layer and cycle gates still apply. */
 export function centralFeature(path) {
+  if (path.startsWith('apps/worker/src/contracts/') && /managed-(oauth|connections)[.][cm]?[jt]sx?$/u.test(path)) return 'connectors';
   if (/^apps\/worker\/src\/contracts\/oauth(?:-values)?\.[cm]?[jt]sx?$/u.test(path)) return "connectors";
   if (/^apps\/worker\/src\/contracts\/remote(?:-values)?\.[cm]?[jt]sx?$/u.test(path)) return "capabilities";
   if (/^apps\/worker\/src\/contracts\/catalog(?:-(?:json|schema|values))?\.[cm]?[jt]sx?$/u.test(path)) return "capabilities";
@@ -15,6 +16,11 @@ export function centralFeature(path) {
 const unreviewed = path => /^apps\/worker\/src\/(?:capabilities|connectors|skills)\//u.test(path);
 
 export function centralDependencyProblem(from, to) {
+  if (from === 'apps/worker/src/platform/connectors/managed-store.ts' && !to.startsWith('apps/worker/src/contracts/'))
+    return 'Managed OAuth persistence must not import protocol or lifecycle implementations';
+  if (from === 'apps/worker/src/platform/connectors/managed-oauth.ts' && !to.startsWith('apps/worker/src/contracts/')
+    && to !== 'apps/worker/src/platform/connectors/managed-oauth-http.ts')
+    return 'Managed OAuth protocol adaptation must not own lifecycle state, persistence or encryption';
   if (from === "apps/worker/src/capabilities-do.ts" && !to.startsWith("apps/worker/src/contracts/")
     && centralFeature(to) === undefined
     && !["apps/worker/src/platform/bounded-json.ts", "apps/worker/src/platform/control-plane.ts", "apps/worker/src/platform/env.ts"].includes(to))
@@ -39,6 +45,8 @@ export function centralDependencyProblem(from, to) {
 export function centralSpecifierProblem(from, specifier) {
   if (unreviewed(from)) return "Central modules require a reviewed feature role";
   if (centralFeature(from) === undefined || specifier.startsWith(".")) return undefined;
+  if (from === 'apps/worker/src/platform/connectors/managed-store.ts')
+    return 'Managed OAuth persistence must use SDK-independent record contracts';
   if (/^(?:node:)?(?:child_process|cluster|worker_threads)(?:\/|$)/u.test(specifier))
     return "Central features must not start host processes or become a Skill executor";
   if (/^apps\/worker\/src\/(?:contracts|domain|application)\//u.test(from) && !/^zod(?:\/|$)/u.test(specifier))

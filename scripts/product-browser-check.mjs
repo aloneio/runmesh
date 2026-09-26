@@ -22,7 +22,7 @@ export async function checkGuidedProduct(executable) {
    if(url.pathname==='/oauth-fixture'){res.statusCode=302;res.setHeader('location','/admin/central/connections/callback?state=fixture-state&code=fixture-code&iss=https://login.provider.com');res.end();return;}
    if(url.pathname==='/admin/central/connections/callback'){const page=oauthLanding(true);for(const [k,v] of page.headers)res.setHeader(k,v);res.end(await page.text());return;}
    if(url.pathname==='/admin') {res.setHeader('content-type','text/html');res.end(adminDocument('Dashboard',productOverviewPage({clients:[],runners:[]}),'dashboard'));return;}
-   if(url.pathname==='/admin/central') {res.setHeader('set-cookie',ADMIN_CSRF_COOKIE+'=fixture-csrf; Path=/; SameSite=Strict; Secure');res.setHeader('content-type','text/html');res.end(adminDocument('Services & Skills',centralPage('fixture-csrf',true,true,false,[{id:'client-fixture',label:'Team AI'}],url.searchParams.get('setup')==='missing'?{endpoints:[],credentialsReady:false}:{endpoints:['https://docs.example/mcp'],credentialsReady:true}),'central'));return;}
+   if(url.pathname==='/admin/central') {res.setHeader('set-cookie',ADMIN_CSRF_COOKIE+'=fixture-csrf; Path=/; SameSite=Strict; Secure');res.setHeader('content-type','text/html');res.end(adminDocument('Services & Skills',centralPage('fixture-csrf',true,true,[{id:'client-fixture',label:'Team AI'}]),'central'));return;}
    const raw=[];for await(const part of req)raw.push(part);
    const body=raw.length?JSON.parse(Buffer.concat(raw).toString()):undefined;
    requests.push({path:url.pathname,method:req.method,body});

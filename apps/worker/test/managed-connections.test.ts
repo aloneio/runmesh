@@ -6,9 +6,11 @@ import { z } from "zod";
 import type { ConnectionProfile } from "../src/contracts/connectors.js";
 import { createHttpRemoteConnector } from "../src/platform/connectors/remote-client.js";
 import { connectionPolicy } from "../src/platform/connectors/connection-policy.js";
-import { createManagedOAuth } from "../src/platform/connectors/managed-oauth.js";
+import { createManagedOAuthProtocol } from "../src/platform/connectors/managed-oauth.js";
+import { createManagedOAuth } from '../src/application/connectors/managed-oauth.js';
+import type { ManagedOAuthRecord, ManagedOAuthProtocol } from '../src/contracts/managed-oauth.js';
 import { createOAuthCipher, oauthRandom } from "../src/platform/connectors/oauth-crypto.js";
-import { ManagedOAuthState, type ManagedOAuthRecord } from "../src/platform/connectors/managed-store.js";
+import { ManagedOAuthState } from "../src/platform/connectors/managed-store.js";
 import { catalogSha256 } from "../src/platform/capabilities/catalog-crypto.js";
 
 const endpoint = "https://mcp.provider.com/mcp", origin = "https://runmesh.company.com", issuer = "https://login.provider.com";
@@ -39,7 +41,7 @@ it("legacy null credentials do not acquire anonymous egress permission", () => {
   expect(connectionPolicy({ ...base, endpoint: "https://127.0.0.1/mcp" }, undefined)).toBeUndefined();
 });
 
-function oauthFixture(cimd = false, configuredOrigin: string | null = origin) {
+function oauthFixture(cimd = false, configuredOrigin: string | null = origin, protocol?: ManagedOAuthProtocol) {
   let record: ManagedOAuthRecord | undefined, now = 1_800_000_000_000, allowed = true, live = { ...base, authentication: "oauth" as const };
   let failToken = false, revokeOnToken = false, privateToken = false;
   const posts: string[] = [], state = { registration: 0, exchanges: 0, refreshes: 0 };
@@ -61,7 +63,7 @@ function oauthFixture(cimd = false, configuredOrigin: string | null = origin) {
     if (failToken) return Response.json({ error: "invalid_grant" }, { status: 400 });
     return Response.json({ access_token: "synthetic-managed-access-" + state.refreshes, refresh_token: "synthetic-managed-refresh", token_type: "Bearer", expires_in: 60 });
   });
-  const service = () => createManagedOAuth({ repository, cipher, profile: () => live, admin: async () => allowed ? "allowed" : "denied", origin: () => configuredOrigin ?? undefined, hash: catalogSha256, random: oauthRandom, now: () => now, send });
+  const service = () => createManagedOAuth({ repository, cipher, profile: () => live, admin: async () => allowed ? "allowed" : "denied", origin: () => configuredOrigin ?? undefined, hash: catalogSha256, random: oauthRandom, now: () => now, protocol: protocol ?? createManagedOAuthProtocol(send) });
   const hash = "a".repeat(64), selection = { profile_id: base.profile_id, expected_revision: base.revision };
   const begin = async () => { const result = await service().run(hash, "begin", selection); expect(result.state).toBe("started"); if (result.state !== "started") throw new Error(JSON.stringify(result)); return new URL(result.authorization_url).searchParams.get("state")!; };
   return { service, begin, hash, selection, state, posts, send, repository, record: () => record, now: () => { now += 40_000; },
@@ -91,6 +93,29 @@ it("OAuth does not persist tokens after browser authorization is revoked during 
 });
 it("OAuth rejects a private discovered token endpoint before registration or token exchange", async () => {
   const f = oauthFixture(); f.privateToken(); expect(await f.service().run(f.hash, "begin", f.selection)).toMatchObject({ state: "failed", code: "provider_unsupported" }); expect(f.posts).toHaveLength(0);
+});
+it("managed account lifecycle uses protocol ports without network or SDK-owned state", async () => {
+  const protocol: ManagedOAuthProtocol = {
+    begin: vi.fn(async input => {
+      expect(f.record()?.state).toBe("starting"); await input.authorize();
+      return { authorization_url: issuer + '/authorize?state=' + input.state, discovery: { provider_version: 1 }, client: { registration: 'opaque' }, verifier: 'opaque-verifier' };
+    }),
+    complete: vi.fn(async input => {
+      expect(f.record()?.state).toBe("exchanging"); await input.authorize();
+      expect(input.client).toEqual({ registration: 'opaque' }); expect(input.verifier).toBe('opaque-verifier');
+      return { access_token: 'synthetic-port-access', token_type: 'Bearer', refresh_token: 'synthetic-port-refresh', expires_in: 60 };
+    }),
+    refresh: vi.fn(async input => {
+      expect(f.record()?.state).toBe("refreshing"); await input.authorize();
+      expect(input.refresh_token).toBe('synthetic-port-refresh');
+      return { access_token: 'synthetic-port-refreshed', token_type: 'Bearer', expires_in: 60 };
+    }),
+  };
+  const f = oauthFixture(false, origin, protocol), state = await f.begin();
+  expect(await f.service().run(f.hash, 'complete', f.callback(state))).toMatchObject({ state: 'linked' });
+  f.now(); const lease = await f.service().credential({ ...base, authentication: 'oauth' }, new AbortController().signal, async () => undefined);
+  expect(lease.current()).toBe(true); expect(protocol.refresh).toHaveBeenCalledTimes(1); expect(f.send).not.toHaveBeenCalled();
+  expect(await f.service().run(f.hash, 'revoke', f.selection)).toMatchObject({ state: 'revoked' }); expect(lease.current()).toBe(false);
 });
 it("OAuth claims a rotating refresh token before concurrent callers can reuse it", async () => {
   const f = oauthFixture(), state = await f.begin();

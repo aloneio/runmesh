@@ -27,6 +27,13 @@ async function fixture(t, sources) {
 }
 
 const bad = [
+  ["managed OAuth contracts to SDK", { "apps/worker/src/contracts/managed-oauth.ts": 'import type { OAuthDiscoveryState } from "@modelcontextprotocol/client";' }],
+  ["managed connection contracts to platform globals", { "apps/worker/src/contracts/managed-connections.ts": 'export const request = globalThis.fetch;' }],
+  ["managed OAuth use case to protocol adapter", { "apps/worker/src/application/connectors/managed-oauth.ts": 'import "../../platform/connectors/managed-oauth.js";', "apps/worker/src/platform/connectors/managed-oauth.ts": 'export {};' }],
+  ["managed OAuth protocol to storage", { "apps/worker/src/platform/connectors/managed-oauth.ts": 'import type { State } from "./managed-store.js";', "apps/worker/src/platform/connectors/managed-store.ts": 'export type State = {};' }],
+  ["managed OAuth protocol to cipher", { "apps/worker/src/platform/connectors/managed-oauth.ts": 'import "./oauth-crypto.js";', "apps/worker/src/platform/connectors/oauth-crypto.ts": 'export {};' }],
+  ["managed OAuth storage to SDK", { "apps/worker/src/platform/connectors/managed-store.ts": 'import type { OAuthDiscoveryState } from "@modelcontextprotocol/client";' }],
+  ["managed OAuth storage to SDK intermediary", { "apps/worker/src/platform/connectors/managed-store.ts": 'import type { Metadata } from "./provider-types.js";', "apps/worker/src/platform/connectors/provider-types.ts": 'export type Metadata = {};' }],
   ["OAuth contracts to SDK", { "apps/worker/src/contracts/oauth.ts": 'import { Client } from "@modelcontextprotocol/client";' }],
   ["OAuth rules to native Runner state", { "apps/worker/src/application/connectors/oauth.ts": 'import "../../runner-do.js";', "apps/worker/src/runner-do.ts": "export {};" }],
   ["remote capability to OAuth persistence", { "apps/worker/src/application/capabilities/remote-call.ts": 'import "../../platform/connectors/oauth-store.js";', "apps/worker/src/platform/connectors/oauth-store.ts": "export {};" }],
