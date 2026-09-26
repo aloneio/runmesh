@@ -13,7 +13,7 @@ import type { CentralRemote } from "../src/contracts/remote.js";
 import type { CentralDirectoryReader } from "../src/contracts/catalog.js";
 import type { CentralToolVisibilityReader } from "../src/contracts/capabilities.js";
 
-const endpoint = "https://remote.example.com/mcp", token = "synthetic-central-private-bearer";
+const endpoint = "https://remote.example.com/mcp";
 const registry = () => env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
 async function administrator() {
   const raw = randomBase64Url(), csrf = randomBase64Url(), hash = await sha256Hex(raw), csrfHash = await sha256Hex(csrf);
@@ -50,8 +50,7 @@ async function fixture(native = false) {
   const admin = await administrator(), current = await client(native);
   const ns = (env as unknown as { CAPABILITIES: DurableObjectNamespace<CapabilitiesDOv1> }).CAPABILITIES;
   const stub = ns.get(ns.idFromName("remote-fixture-" + crypto.randomUUID()));
-  const configured = { ...env, RUNMESH_PUBLIC_ORIGIN: "https://worker.test",
-    CENTRAL_MCP_EGRESS: JSON.stringify({ schema_version: 1, endpoints: [{ endpoint, protocol: "2026-07-28" }] }) } as WorkerEnv;
+  const configured = { ...env, RUNMESH_PUBLIC_ORIGIN: "https://worker.test" } as WorkerEnv;
   let instance: CapabilitiesDOv1;
   await runInDurableObject(stub, (_original, state) => { instance = new CapabilitiesDOv1(state, configured); });
   const call = <T>(action: (owner: CapabilitiesDOv1) => Promise<T>) => runInDurableObject(stub, () => action(instance));
@@ -63,8 +62,8 @@ async function fixture(native = false) {
     discoverRemote: (hash, id, revision) => call(owner => owner.discoverRemote(hash, id, revision)) };
   const config = { ...configured, CAPABILITIES: { idFromName: () => "central", get: () => port } } as unknown as WorkerEnv;
   const id = "docs";
-  expect(await call(owner => owner.mutateProfile(admin.hash, { action: "create", profile_id: id, connector_id: "example", endpoint,
-    credential: { kind: "bearer", token } }))).toMatchObject({ state: "written" });
+  expect(await call(owner => owner.mutateProfile(admin.hash, { action: "connect", profile_id: id, connector_id: "example", endpoint,
+    authentication: "none" }))).toMatchObject({ state: "written" });
   expect(await call(owner => owner.mutateProfile(admin.hash, { action: "enable", profile_id: id, expected_revision: 1 }))).toMatchObject({ state: "written" });
   let description = "Return a fixture value";
   const execute = vi.fn(async ({ value }: { value: number }) => ({ content: [{ type: "text" as const, text: String(value) },
@@ -77,7 +76,7 @@ async function fixture(native = false) {
   const methods: string[] = [];
   const network = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     expect(String(input)).toBe(endpoint); expect(init?.redirect).toBe("manual"); expect(init?.credentials).toBe("omit");
-    const headers = new Headers(init?.headers); expect(headers.get("authorization")).toBe(`Bearer ${token}`);
+    const headers = new Headers(init?.headers); expect(headers.get("authorization")).toBeNull();
     expect(headers.has("cookie")).toBe(false); expect(JSON.stringify(init)).not.toContain(current.secret);
     const body = JSON.parse(String(init?.body)); methods.push(body.method);
     return upstream.fetch(new Request(input, init));

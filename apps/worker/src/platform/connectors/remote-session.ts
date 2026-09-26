@@ -1,11 +1,10 @@
 import { RemoteFault, type RemoteEgressRule } from "../../contracts/remote.js";
-import { parseRemoteEgress } from "../../contracts/remote-values.js";
 
 /** A legacy session belongs to exactly one operation/credential. No persistence,
  * session recovery, heartbeat or server-driven replacement is supported. */
 export function createRemoteSessionState(rule: RemoteEgressRule, ports: {
-  policy: () => unknown; authorize: () => Promise<void>; current: () => boolean; token: string | undefined;
-  protocol?: () => string; egressCurrent?: () => boolean;
+  authorize: () => Promise<void>; current: () => boolean; token: string | undefined;
+  protocol?: () => string; egressCurrent: () => boolean;
   signal: AbortSignal; send: (url: string, init: RequestInit) => Promise<Response>;
 }) {
   let id: string | undefined, closed = false;
@@ -32,8 +31,7 @@ export function createRemoteSessionState(rule: RemoteEgressRule, ports: {
           (async () => {
             await ports.authorize();
             if (cleanup.signal.aborted || ports.signal.aborted || !ports.current()) return;
-            const current = parseRemoteEgress(ports.policy())?.find(r => r.endpoint === rule.endpoint);
-            if (ports.egressCurrent ? !ports.egressCurrent() : current?.session !== "ephemeral" || current.protocol !== rule.protocol) return;
+            if (!ports.egressCurrent()) return;
             const response = await ports.send(rule.endpoint, { method: "DELETE", redirect: "manual", credentials: "omit",
               cache: "no-store", signal: cleanup.signal, headers: { ...(ports.token === undefined ? {} : { authorization: `Bearer ${ports.token}` }),
                 "mcp-session-id": id!, "mcp-protocol-version": ports.protocol?.() ?? rule.protocol, "x-runmesh-mcp-hop": "1" } });

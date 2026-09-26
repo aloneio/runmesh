@@ -1,7 +1,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { expect, it } from "vitest";
 import type { CapabilitiesDOv1 } from "../src/capabilities-do.js";
-import { CapabilityState } from "../src/platform/capabilities/store.js";
+import { CentralSchema } from "../src/platform/capabilities/schema.js";
 import { CatalogState } from "../src/platform/capabilities/catalog-store.js";
 import { createCatalogCursor, newCatalogCursorKey } from "../src/platform/capabilities/catalog-crypto.js";
 import { CATALOG_LIMITS, type CatalogCursor } from "../src/contracts/catalog.js";
@@ -12,8 +12,8 @@ function owner() {
   return namespace.get(namespace.idFromName(`catalog-state-${crypto.randomUUID()}`));
 }
 function repository(storage: DurableObjectStorage) {
-  const grants = new CapabilityState(storage);
-  return new CatalogState(storage, () => grants.initialize());
+  const schema = new CentralSchema(storage);
+  return new CatalogState(storage, () => schema.initialize());
 }
 
 it("W04 catalog construction creates no tables and no credentials", async () => {

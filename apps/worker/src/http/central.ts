@@ -4,7 +4,6 @@ import { admitCentralAdmin, centralFailure as fail, centralHeaders as headers } 
 import { handleCentralCatalogAdmin } from "./central-catalog.js";
 import { handleCentralDiscovery } from "./central-discovery.js";
 import type { WorkerEnv } from "../platform/env.js";
-import { handleCentralOAuth } from "./central-oauth.js";
 import { handleCentralSkills } from "./central-skills.js";
 import { handleCentralManagement } from "./central-management.js";
 import { handleCentralReceipts } from "./central-receipts.js";
@@ -15,14 +14,9 @@ import { handleConnections } from "./central-connections.js";
 export async function handleCentralAdmin(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
   if (url.pathname.startsWith("/admin/central/connections/")) return handleConnections(request, env, url);
   if (url.pathname === "/admin/central/skill-installations") return handleSkillInstallation(request, env, url);
-  if (/^\/admin\/central\/(grants|toolsets)(?:\/|$)/u.test(url.pathname)) {
-    void request.body?.cancel().catch(() => undefined);
-    return fail("central_client_access_retired", 410);
-  }
   if (url.pathname === "/admin/central/receipts") return handleCentralReceipts(request, env, url);
   if (url.pathname === "/admin/central/profiles") return handleCentralManagement(request, env, url);
   if (url.pathname === "/admin/central/skills" || url.pathname.startsWith("/admin/central/skills/")) return handleCentralSkills(request, env, url);
-  if (url.pathname.startsWith("/admin/central/oauth/")) return handleCentralOAuth(request, env, url);
   if (url.pathname.startsWith("/admin/central/discovery/")) return handleCentralDiscovery(request, env, url);
   if (url.pathname.startsWith("/admin/central/catalogs/")) return handleCentralCatalogAdmin(request, env, url);
   if (env.CAPABILITIES === undefined) { void request.body?.cancel().catch(() => undefined); return fail("central_disabled", 404); }
@@ -51,13 +45,9 @@ export async function handleCentralAdmin(request: Request, env: WorkerEnv, url: 
       const profile = parseProfile(result.profile);
       if (profile === undefined || profile.profile_id !== profileId) return fail("central_result_unconfirmed", 503, "unknown");
       if (result.state === "written") {
-        if (command === undefined || profile.revision !== (command.action === "create" || command.action === "create_oauth" || command.action === "connect" ? 1 : command.expected_revision + 1))
+        if (command === undefined || profile.revision !== (command.action === "connect" ? 1 : command.expected_revision + 1))
           return fail("central_result_unconfirmed", 503, "unknown");
-        if (command.action === "create" && (profile.connector_id !== command.connector_id || profile.endpoint !== command.endpoint
-          || profile.enabled || profile.credential?.secret_version !== 1)) return fail("central_result_unconfirmed", 503, "unknown");
         if (command.action === "connect" && (profile.authentication !== command.authentication || profile.connector_id !== command.connector_id || profile.endpoint !== command.endpoint || profile.enabled || profile.credential !== null)) return fail("central_result_unconfirmed", 503, "unknown");
-        if (command.action === "create_oauth" && (profile.connector_id !== command.connector_id || profile.endpoint !== command.endpoint
-          || profile.enabled || profile.credential !== null)) return fail("central_result_unconfirmed", 503, "unknown");
         if ((command.action === "enable" || command.action === "disable") && profile.enabled !== (command.action === "enable"))
           return fail("central_result_unconfirmed", 503, "unknown");
       }

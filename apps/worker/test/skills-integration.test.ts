@@ -50,7 +50,7 @@ it('W07/W08 two independent central-only clients read the same approved bundle t
   expect((await f.admin('skills/research', { ...stage, action: 'stage', expected_revision: 0 })).status).toBe(200);
   expect((await f.admin('skills/research', { action: 'activate', expected_revision: 1, digest })).status).toBe(200);
   await runInDurableObject(f.stub, (_owner, state) => {
-    for (const client of f.clients) state.storage.sql.exec("INSERT INTO capability_grants_v1 VALUES (?,1,0,?)", client.id, "not-json");
+    expect(state.storage.sql.exec("SELECT name FROM sqlite_master WHERE name='capability_grants_v1'").toArray()).toEqual([]);
   });
   for (const client of f.clients) {
       const tools = await f.rpc(client.secret, 'tools/list', {});
@@ -81,8 +81,7 @@ it('W07/W08 two independent central-only clients read the same approved bundle t
 });
 it('Acceptance T05 publishes shared discovery without grants and denies unpublished content', async () => {
   const f = await fixture(['coding:read']), client = f.clients[0]!;
-  const config = { ...f.config, CENTRAL_DIRECT_TOOLS_ENABLED: '1',
-    CENTRAL_MCP_EGRESS: JSON.stringify({ schema_version: 1, endpoints: [{ endpoint: 'https://remote.example.com/mcp', protocol: '2026-07-28' }] }) };
+  const config = { ...f.config, CENTRAL_DIRECT_TOOLS_ENABLED: '1' };
   expect((await f.rpc(client.secret, 'tools/list', {}, config)).result.tools).toHaveLength(16);
   const templates = await f.rpc(client.secret, 'resources/templates/list', {}, config);
   expect(templates.result.resourceTemplates).toHaveLength(1);
@@ -118,13 +117,12 @@ it('W08/W09 administration strips unexpected owner fields and rejects malformed 
   const f = await fixture(), secret = 'OWNER_SECRET_MUST_NOT_ESCAPE';
   const receipt = { request_id: crypto.randomUUID(), client_id: 'client', profile_id: 'docs', tool_id: 'tool', version: 'a'.repeat(64),
     operation_state: 'completed', code: 'completed', created_at_ms: Date.now(), token: secret };
-  const owner = { getToolset: async () => ({ state: 'found', toolset: { schema_version: 1, toolset_id: 'team', revision: 1, enabled: true, rules: [], token: secret }, token: secret }),
-    getClientGrant: async () => ({ state: 'denied', token: secret }), listCentralReceipts: async () => ({ state: 'listed', receipts: [receipt], token: secret }) };
+  const owner = { listCentralReceipts: async () => ({ state: 'listed', receipts: [receipt], token: secret }) };
   const config = { ...f.config, CENTRAL_GOVERNANCE_ENABLED: '1', CAPABILITIES: { idFromName: () => 'central', get: () => owner } } as unknown as WorkerEnv;
-  for (const path of ['toolsets/team', 'grants/client', 'receipts']) {
+  for (const path of ['receipts']) {
     const request = new Request('https://worker.test/admin/central/' + path, { headers: f.headers });
     const response = await handleCentralAdmin(request, config, new URL(request.url));
-    expect(response.status).toBe(path === 'receipts' ? 200 : 410);
+    expect(response.status).toBe(200);
     expect(await response.text()).not.toContain(secret);
   }
   receipt.code = secret;
@@ -194,14 +192,14 @@ it('shared Skills paginate beyond 128 including empty disabled pages through too
   }
 });
 
-it('retired grants and toolsets never reach owner methods or mutate legacy data', async () => {
-  const f = await fixture(), get = vi.fn(() => { throw new Error('retired owner must not resolve'); });
+it('removed authorization routes follow ordinary not-found handling without resolving an owner', async () => {
+  const f = await fixture(), get = vi.fn(() => { throw new Error('unknown routes must not resolve an owner'); });
   const config = { ...f.config, CAPABILITIES: { idFromName: get, get } } as unknown as WorkerEnv;
-  for (const path of ['grants/client', 'toolsets/team']) for (const method of ['GET', 'POST']) {
+  for (const path of ['grants/client', 'toolsets/team', 'oauth/begin', 'oauth/complete', 'oauth/revoke', 'oauth/callback']) for (const method of ['GET', 'POST']) {
     const request = new Request('https://worker.test/admin/central/' + path, { method, headers: f.headers, ...(method === 'POST' ? { body: '{}' } : {}) });
     const response = await handleCentralAdmin(request, config, new URL(request.url));
-    expect(response.status).toBe(410);
-    expect(await response.json()).toMatchObject({ error: { code: 'central_client_access_retired' } });
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ error: { code: 'central_not_found' } });
   }
   expect(get).not.toHaveBeenCalled();
 });

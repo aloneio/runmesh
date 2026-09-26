@@ -10,9 +10,9 @@ import type { ConnectionProfile } from "../src/contracts/connectors.js";
 
 const endpoint = "https://remote.example.com/mcp";
 const profile: ConnectionProfile = { schema_version: 1, profile_id: "docs", connector_id: "fixture", endpoint,
-  owner: { kind: "instance_admin" }, enabled: true, revision: 2, credential: { secret_id: "docs", secret_version: 1 } };
+  owner: { kind: "instance_admin" }, enabled: true, revision: 2, authentication: "oauth", credential: null };
 const token = "synthetic-upstream-secret";
-const policy = (protocol: RemoteProtocol) => JSON.stringify({ schema_version: 1, endpoints: [{ endpoint, protocol }] });
+const policy = (protocol: RemoteProtocol) => [{ endpoint, protocol }];
 function upstream() {
   const invoked = vi.fn(async ({ value }: { value: number }) => ({ content: [{ type: "text" as const, text: String(value + 1) }], structuredContent: { value: value + 1 } }));
   const handler = createMcpHandler(() => {
@@ -33,7 +33,7 @@ function upstream() {
 
 it.each(["2025-11-25", "2026-07-28"] as const)("W05 official SDK exchanges real HTTP request objects in %s without Runner state", async protocol => {
   const remote = upstream(), dispatched = vi.fn(), authorize = vi.fn(async () => undefined);
-  const connector = createHttpRemoteConnector({ policy: () => policy(protocol), credential: async () => ({ kind: "bearer", token }), fetch: remote.http });
+  const connector = createHttpRemoteConnector({ rules: () => policy(protocol), credential: async () => ({ kind: "bearer", token }), fetch: remote.http });
   const session = await connector.open(profile, new AbortController().signal, dispatched, authorize);
   try {
     const tools = await session.listTools(); expect(tools.map(tool => tool.name)).toEqual(["increment"]);
@@ -68,7 +68,7 @@ it.each([
 
 it.each([401, 403, 429, 500, 302, 307])("W05 HTTP %s after a tool dispatch preserves the recovery category without retrying", async status => {
   const remote = upstream(), attempts = vi.fn(), sent = vi.fn();
-  const connector = createHttpRemoteConnector({ policy: () => policy("2026-07-28"), credential: async () => ({ kind: "bearer", token }),
+  const connector = createHttpRemoteConnector({ rules: () => policy("2026-07-28"), credential: async () => ({ kind: "bearer", token }),
     fetch: async (input, init) => {
       if (JSON.parse(String(init?.body)).method === "tools/call") { attempts(); return new Response("untrusted-error", { status, headers: { location: "https://other.example.com/private", "www-authenticate": "Bearer resource_metadata=\"https://other.example.com/oauth\"" } }); }
       return remote.http(input, init);
@@ -87,7 +87,7 @@ it.each([401, 403])("W05 HTTP %s during connection and discovery requests requir
   for (const protocol of ["2025-11-25", "2026-07-28"] as const) {
     for (const method of [protocol === "2025-11-25" ? "initialize" : "server/discover", "tools/list"]) {
       const remote = upstream(), attempts = vi.fn(), sent = vi.fn(), cancelled = vi.fn();
-      const connector = createHttpRemoteConnector({ policy: () => policy(protocol), credential: async () => ({ kind: "bearer", token }),
+      const connector = createHttpRemoteConnector({ rules: () => policy(protocol), credential: async () => ({ kind: "bearer", token }),
         fetch: async (input, init) => {
           if (JSON.parse(String(init?.body)).method === method) {
             attempts(); return new Response(new ReadableStream({ cancel: cancelled }), { status,
@@ -110,7 +110,7 @@ it.each([401, 403])("W05 HTTP %s during connection and discovery requests requir
 
 it("W05 final authorization refusal does not release a tool request to fetch", async () => {
   const remote = upstream(), sent = vi.fn();
-  const connector = createHttpRemoteConnector({ policy: () => policy("2026-07-28"), credential: async () => ({ kind: "bearer", token }), fetch: remote.http });
+  const connector = createHttpRemoteConnector({ rules: () => policy("2026-07-28"), credential: async () => ({ kind: "bearer", token }), fetch: remote.http });
   const session = await connector.open(profile, new AbortController().signal, sent, async () => undefined);
   try {
     const tools = await session.listTools();
@@ -124,7 +124,7 @@ it("W05 a session-bearing server is explicitly unsupported instead of sharing it
     const response = await remote.http(input, init), headers = new Headers(response.headers); headers.set("mcp-session-id", "private-session");
     return new Response(response.body, { status: response.status, headers });
   });
-  const connector = createHttpRemoteConnector({ policy: () => policy("2026-07-28"), credential: async () => ({ kind: "bearer", token }), fetch: http });
+  const connector = createHttpRemoteConnector({ rules: () => policy("2026-07-28"), credential: async () => ({ kind: "bearer", token }), fetch: http });
   await expect(connector.open(profile, new AbortController().signal, () => undefined, async () => undefined)).rejects.toMatchObject({ code: "upstream_protocol_error" });
   expect(http).toHaveBeenCalledOnce();
 });
@@ -149,7 +149,7 @@ it("W05 cancellation ends a stalled stream without waiting for its cancel promis
 
 it("W05 disallowed destinations never load credentials or make network requests", async () => {
   const secret = vi.fn(async () => ({ kind: "bearer" as const, token })), http = vi.fn();
-  const connector = createHttpRemoteConnector({ policy: () => policy("2026-07-28"), credential: secret, fetch: http });
+  const connector = createHttpRemoteConnector({ rules: () => policy("2026-07-28"), credential: secret, fetch: http });
   await expect(connector.open({ ...profile, endpoint: "https://other.example.com/mcp" }, new AbortController().signal, () => undefined, async () => undefined)).rejects.toMatchObject({ code: "egress_denied" });
   expect(secret).not.toHaveBeenCalled(); expect(http).not.toHaveBeenCalled();
 });

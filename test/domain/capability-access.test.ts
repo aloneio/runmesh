@@ -2,9 +2,36 @@ import { expect, it } from "vitest";
 import { createDirectoryReader } from "../../apps/worker/src/application/capabilities/directory.js";
 import { createSharedProfileReader } from "../../apps/worker/src/application/capabilities/profile-read.js";
 import { catalogProfile, catalogSnapshot, fixtureDigest } from "./catalog-fixtures.js";
-import { parseCapabilityGrant, type CapabilityGrant } from "../../apps/worker/src/contracts/capabilities.js";
-const target = { kind: "skill" as const, resource_id: "legacy", version: "a".repeat(64) };
-const grant: CapabilityGrant = { schema_version: 1, client_id: "legacy", revision: 1, enabled: true, rules: [target] };
+import { publishedProfiles } from "../../apps/worker/src/application/capabilities/published-profiles.js";
+
+it.each(["added", "disabled", "revision"])("shared profile discovery withholds a %s publication during identity revalidation", async change => {
+  const profiles = [catalogProfile("a")], snapshot = await catalogSnapshot("a");
+  let admissions = 0;
+  const ports = {
+    profiles: () => ({ profiles, next_after: null }),
+    repository: { readHead: (profile_id: string) => ({ schema_version: 1 as const, profile_id, revision: 1, observed_digest: snapshot.digest, approved_digest: snapshot.digest, approved_names: ["search"] }) },
+    identity: async (principal: { client_id: string; secret_version: number }) => {
+      if (++admissions === 2) {
+        if (change === "added") profiles.push(catalogProfile("b"));
+        if (change === "disabled") profiles[0]!.enabled = false;
+        if (change === "revision") profiles[0]!.revision++;
+      }
+      return { state: "allowed" as const, identity: { ...principal, schema_version: 2 as const, label: "Fixture", native_scopes: [] } };
+    },
+  };
+  expect(await createSharedProfileReader(ports)({ client_id: "first", secret_version: 1 }, new AbortController().signal)).toEqual({ state: "unavailable" });
+});
+
+it("shared publication scanning rejects malformed profile and mismatched catalog owners", async () => {
+  const profile = catalogProfile(), snapshot = await catalogSnapshot();
+  const head = { schema_version: 1 as const, profile_id: profile.profile_id, revision: 1, observed_digest: snapshot.digest, approved_digest: snapshot.digest, approved_names: ["search"] };
+  const ports = { profiles: () => ({ profiles: [profile], next_after: null }), repository: { readHead: () => head } };
+  expect(publishedProfiles(ports)).toHaveLength(1);
+  head.profile_id = "wrong-owner"; expect(() => publishedProfiles(ports)).toThrow("invalid_catalog_head");
+  head.profile_id = profile.profile_id;
+  const malformed = JSON.parse(JSON.stringify({ ...profile, authentication: undefined }));
+  expect(() => publishedProfiles({ ...ports, profiles: () => ({ profiles: [malformed], next_after: null }) })).toThrow("invalid_profile_page");
+});
 
 it("shared profile discovery crosses storage pages and exceeds direct catalog limits without grants", async () => {
   const profiles = Array.from({ length: 51 }, (_, n) => catalogProfile("service-" + String(n).padStart(3, "0")));
@@ -42,10 +69,4 @@ it("shared profile discovery rejects looping pages and in-flight identity revoca
   expect(await createSharedProfileReader(ports)(principal, signal)).toEqual({ state: "unavailable" });
   reads = 0;
   expect(await createSharedProfileReader({ ...ports, profiles: () => ({ profiles: [profile], next_after: null }) })(principal, signal)).toEqual({ state: "denied" });
-});
-
-it("W03 grant decoding is bounded, rejects duplicates and strips unrelated content", () => {
-  expect(parseCapabilityGrant({ ...grant, rules: [target, target] })).toBeUndefined();
-  expect(parseCapabilityGrant({ ...grant, rules: Array.from({ length: 129 }, (_, i) => ({ ...target, resource_id: `tool-${i}` })) })).toBeUndefined();
-  expect(parseCapabilityGrant({ ...grant, credential: "private", rules: [{ ...target, script: "not executable" }] })).toEqual(grant);
 });

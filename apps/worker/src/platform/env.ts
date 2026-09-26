@@ -18,10 +18,6 @@ export interface WorkerEnv extends RuntimeConfiguration {
   CENTRAL_DIRECT_TOOLS_ENABLED?: string;
   /** Independent versioned encryption keyring; never stored in SQLite or returned. */
   CENTRAL_VAULT_KEYRING?: string;
-  /** Optional pinned providers for legacy per-client OAuth; managed OAuth discovers providers. */
-  CENTRAL_OAUTH_POLICIES?: string;
-  /** Optional legacy endpoint allowlist; managed profiles authorize their own exact public endpoint. */
-  CENTRAL_MCP_EGRESS?: string;
   RUNNER: DurableObjectNamespace;
   WORKER_ID?: string;
   RUNMESH_DEPLOYMENT_BRANCH?: string;

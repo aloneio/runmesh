@@ -6,14 +6,13 @@ import { parseCredential, parseProfile } from "../../contracts/connector-values.
 import { catalogJson, catalogObject } from "../../contracts/catalog-json.js";
 import { parseRemoteTool } from "../../contracts/catalog-values.js";
 import { REMOTE_LIMITS, RemoteFault, type RemoteConnector, type RemoteEgressRule } from "../../contracts/remote.js";
-import { parseRemoteEgress, parseRemoteResult, publicMcpEndpoint } from "../../contracts/remote-values.js";
+import { parseRemoteResult, publicMcpEndpoint } from "../../contracts/remote-values.js";
 import { guardedRemoteResponse, boundedWireJson } from "./remote-response.js";
 import { BoundedRemoteValidator } from "./remote-validation.js";
 import { createRemoteSessionState } from "./remote-session.js";
 
 export interface HttpRemotePorts {
-  readonly policy: () => unknown;
-  readonly rules?: (profile: ConnectionProfile) => readonly RemoteEgressRule[] | undefined;
+  readonly rules: (profile: ConnectionProfile) => readonly RemoteEgressRule[] | undefined;
   readonly credential: (profile: ConnectionProfile, signal: AbortSignal, authorize: () => Promise<void>) => Promise<CredentialInput | CredentialLease | null>;
   readonly fetch?: FetchLike;
   readonly selfOrigin?: string;
@@ -27,13 +26,13 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
     validate: (schema, value) => validator.validate(schema, value),
     async open(rawProfile, parent, dispatched, authorize) {
       const profile = parseProfile(rawProfile);
-      const rules = profile === undefined ? undefined : ports.rules ? ports.rules(profile) : parseRemoteEgress(ports.policy());
+      const rules = profile === undefined ? undefined : ports.rules(profile);
       const rule = profile === undefined ? undefined : rules?.find(rule => rule.endpoint === profile.endpoint);
       if (profile === undefined || rule === undefined || !profile.enabled || publicMcpEndpoint(profile.endpoint) === undefined
         || (ports.selfOrigin !== undefined && new URL(profile.endpoint).origin === ports.selfOrigin)) throw new RemoteFault("egress_denied");
       if (parent.aborted) throw new RemoteFault("operation_timed_out");
       const egressCurrent = (): boolean => {
-        const live = (ports.rules ? ports.rules(profile) : parseRemoteEgress(ports.policy()))?.find(value => value.endpoint === profile.endpoint);
+        const live = ports.rules(profile)?.find(value => value.endpoint === profile.endpoint);
         return live?.protocol === rule.protocol && live.session === rule.session && live.negotiate === rule.negotiate;
       };
       const admitCredential = async () => {
@@ -51,7 +50,7 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
       let protocol: string = rule.protocol;
       const controller = new AbortController(), signal = controller.signal;
       const abort = () => controller.abort(); parent.addEventListener("abort", abort, { once: true });
-      const sessionState = createRemoteSessionState(rule, { policy: ports.policy, authorize, current: credentialCurrent,
+      const sessionState = createRemoteSessionState(rule, { authorize, current: credentialCurrent,
         token: credential?.token, protocol: () => protocol, egressCurrent, signal, send: (url, init) => (ports.fetch ?? fetch)(url, init) });
       let requests = 0, totalBytes = 0, totalTools = 0, callSent = false, lastFault: RemoteFault | undefined;
       let beforeCall: (() => Promise<void>) | undefined;

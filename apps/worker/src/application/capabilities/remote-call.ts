@@ -46,7 +46,6 @@ export function createRemoteCaller(ports: RemoteCallPorts) {
           if (latestProfile === undefined || !latestProfile.enabled) throw new RemoteFault("permission_denied");
           if (latestProfile.revision !== profile.revision
             || latestProfile.endpoint !== profile.endpoint || latestProfile.connector_id !== profile.connector_id
-            || latestProfile.credential?.secret_version !== profile.credential?.secret_version
             || ports.repository.readHead(profile.profile_id)?.revision !== head.revision) throw new RemoteFault("stale_catalog");
           if (expired()) throw new RemoteFault("operation_timed_out");
         };

@@ -52,13 +52,12 @@ connection_profile_id）。这是 Runmesh 扩展，不是标准 Skill 元数据�
 拒绝重复、额外字段及不支持种类。
 
 skill_list 返回声明，skill_read 根据共享发布状态报告 configured、not_configured、
-disabled、incompatible、unavailable。not_authorized 仅保留为兼容枚举值，不代表
-逐客户端 ACL 决策；resources/read 返回同样的 runmesh/dependencies 元数据。
+disabled、incompatible、unavailable。resources/read 返回同样的 runmesh/dependencies 元数据。
 Skill 依赖的当前摘要须与声明精确一致。检查不证明上游在线或 OAuth 有效，不自动
 安装、启用、调用或递归加载依赖，不授予任何权限；实际调用独立检查当前准入条件。
 
 ## 验证边界
 
 本地领域、SQLite、Worker/Registry/MCP 和浏览器测试覆盖发布、revision 冲突、旧摘要
-拒绝、两个无授权行客户端、旧限制无效、凭据撤销、超过 128 条及空页、资源一致性、
+拒绝、两个无授权行客户端、不创建旧授权存储、凭据撤销、超过 128 条及空页、资源一致性、
 路径拒绝、不读取正文和原生权限不变；不替代[真实宿主验收](central-rollout.md)。

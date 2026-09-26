@@ -73,8 +73,6 @@ duplicates, extra fields and unsupported kinds are rejected.
 
 skill_list exposes declarations; skill_read reports configured, not_configured,
 disabled, incompatible or unavailable using shared publication metadata.
-not_authorized remains a reserved compatibility value and is not a per-client
-ACL decision. resources/read includes the same runmesh/dependencies metadata.
 An active Skill dependency must match its exact declared digest. These advisory
 checks do not establish upstream reachability or OAuth validity, install or
 enable dependencies, execute tools, recursively load content or add permissions.
@@ -83,7 +81,6 @@ Actual calls independently perform their current admission checks.
 ## Verification boundary
 
 Local domain, SQLite, Worker/Registry/MCP and browser tests cover publication,
-revision conflicts, old digest rejection, two clients without grants, ignored
-legacy restrictions, credential revocation, >128 heads, empty pages, resources
+revision conflicts, old digest rejection, two clients without grants, no grant storage, credential revocation, >128 heads, empty pages, resources
 parity, path rejection, no-body listing and unchanged native scope boundaries.
 These fixtures do not replace [real-host rollout evidence](central-rollout.md).
