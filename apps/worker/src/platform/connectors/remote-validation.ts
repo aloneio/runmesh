@@ -26,7 +26,9 @@ function work(schema: unknown): number {
       } else if (key === "$ref" && typeof child === "string") {
         const parts = decodeURIComponent(child).slice(2).split("/").map(p => p.replaceAll("~1", "/").replaceAll("~0", "~"));
         let ref: unknown = root;
-        for (const part of parts) ref = catalogObject(ref)?.[part];
+        // Schema admission already verifies exact pointer targets, including
+        // indexed children of allOf/anyOf/oneOf/prefixItems under local defs.
+        for (const part of parts) ref = Array.isArray(ref) ? ref[Number(part)] : catalogObject(ref)?.[part];
         add(ref);
       }
     }
