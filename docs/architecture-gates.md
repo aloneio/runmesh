@@ -20,6 +20,8 @@ Connection submodules depend on narrow ports, while the connection coordinator o
 
 Fixtures cover `.mts`, `.cts`, JSX, bare built-ins such as `dgram` and `dns/promises`, type-only Cloudflare imports, renamed barrels, nested modules and reverse coordinator dependencies. Positive fixtures cover native adapters, pure hashing and type-only platform ports. Four named Runtime persistence-coordinator test exceptions retain timing that a file-write fault cannot reproduce; replacing one requires equivalent fault timing and assertions.
 
+Central MCP providers consume public contracts, helpers within their own provider and reviewed server/schema SDKs. They cannot import application or platform implementations, unreviewed external packages, client SDKs, or platform I/O globals. Fixtures include direct imports, types, re-exports, nested helpers and dynamic imports. Protocol execution and persistence are injected through ports by composition.
+
 ## Scope and limits
 
 The checker reads source without importing it or executing embedded installer text. It conservatively treats bare `require()` as module loading. Parsing is bounded to 5,000 files, 1 MiB per file, 16 MiB total source and 20,000 directory entries; parser or tooling failures produce a failed check.

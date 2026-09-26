@@ -15,10 +15,12 @@ const names = (value: unknown): value is string[] => Array.isArray(value) && val
 /** Reviewed 2020-12 metadata subset, not an argument validator. The caller bounds
  * the complete JSON first. No regex compilation, remote lookup or ref expansion.
  * Unknown keywords/dialects, patterns, formats, dynamic headers and recursive refs
- * are unsupported rather than silently discarded. W05 still needs an evaluator. */
-export function validCatalogSchema(value: unknown, input: boolean): boolean {
+ * are unsupported rather than silently discarded. The graph retains each child
+ * and resolved ref edge once; consumers can bound expanded work without walking
+ * keywords or decoding pointers again. Argument validation still needs an evaluator. */
+export function catalogSchemaGraph(value: unknown, input: boolean): ReadonlyMap<string, readonly string[]> | undefined {
   const root = catalogObject(value);
-  if (root === undefined || (input && root.type !== "object")) return false;
+  if (root === undefined || (input && root.type !== "object")) return undefined;
   const graph = new Map<string, string[]>(), refs: Array<[string, string]> = [];
   let nodes = 0;
   const walk = (schema: unknown, path: string, depth: number): boolean => {
@@ -69,9 +71,9 @@ export function validCatalogSchema(value: unknown, input: boolean): boolean {
     }
     return true;
   };
-  if (!walk(root, "", 0)) return false;
+  if (!walk(root, "", 0)) return undefined;
   for (const [from, to] of refs) {
-    if (!graph.has(to)) return false;
+    if (!graph.has(to)) return undefined;
     graph.get(from)!.push(to);
   }
   const visiting = new Set<string>(), done = new Set<string>();
@@ -82,5 +84,9 @@ export function validCatalogSchema(value: unknown, input: boolean): boolean {
     for (const child of graph.get(path)!) if (!acyclic(child)) return false;
     visiting.delete(path); done.add(path); return true;
   };
-  return acyclic("");
+  return acyclic("") ? graph : undefined;
+}
+
+export function validCatalogSchema(value: unknown, input: boolean): boolean {
+  return catalogSchemaGraph(value, input) !== undefined;
 }

@@ -40,6 +40,14 @@ const bad = [
   ["remote contract to client SDK", { "apps/worker/src/contracts/remote.ts": 'import type { Client } from "@modelcontextprotocol/client";' }],
   ["remote invocation to concrete credential adapter", { "apps/worker/src/application/capabilities/remote-call.ts": 'import "../../platform/connectors/cipher.js";', "apps/worker/src/platform/connectors/cipher.ts": "export {};" }],
   ["remote provider to state owner", { "apps/worker/src/mcp/providers/remote.ts": 'import "../../capabilities-do.js";', "apps/worker/src/capabilities-do.ts": "export {};" }],
+  ["central provider to concrete connector", { "apps/worker/src/mcp/providers/remote.ts": 'import "../../platform/connectors/remote-client.js";', "apps/worker/src/platform/connectors/remote-client.ts": "export {};" }],
+  ["central provider to concrete Skill store type", { "apps/worker/src/mcp/providers/skills.mts": 'import type { State } from "../../platform/skills/store.mjs";', "apps/worker/src/platform/skills/store.mts": "export type State = {};" }],
+  ["central provider helper reexports concrete cipher", { "apps/worker/src/mcp/providers/remote/helper.ts": 'export * from "../../../platform/connectors/oauth-crypto.js";', "apps/worker/src/platform/connectors/oauth-crypto.ts": "export {};" }],
+  ["central provider helper dynamically loads concrete Skill store", { "apps/worker/src/mcp/providers/skills/helper.cts": 'void import("../../../platform/skills/store.cjs");', "apps/worker/src/platform/skills/store.cts": "export {};" }],
+  ["central provider to client SDK types", { "apps/worker/src/mcp/providers/remote.ts": 'import type { Client } from "@modelcontextprotocol/client";' }],
+  ["central provider to unreviewed HTTP package", { "apps/worker/src/mcp/providers/remote.ts": 'import { request } from "undici";' }],
+  ["central provider helper direct network", { "apps/worker/src/mcp/providers/remote/request.ts": 'export const load = () => fetch("https://example.invalid");' }],
+  ["central provider helper platform alias", { "apps/worker/src/mcp/providers/skills/request.mts": 'const platform = globalThis; export const load = platform["fetch"];' }],
   ["remote request parser to network", { "apps/worker/src/contracts/remote-values.ts": 'export const connect = globalThis.fetch;' }],
   ["catalog schema contract to SDK", { "apps/worker/src/contracts/catalog-schema.ts": 'import "@modelcontextprotocol/client";' }],
   ["catalog reader to credential implementation", { "apps/worker/src/application/capabilities/catalog-read.ts": 'import "../../platform/connectors/cipher.js";', "apps/worker/src/platform/connectors/cipher.ts": "export {};" }],
@@ -141,7 +149,10 @@ test("W01 composition injects central public ports without widening native depen
     "apps/worker/src/application/capabilities/access.ts": 'import type { Port } from "../../contracts/capabilities.js"; import { enabled } from "../../domain/capabilities/grants.js"; export const create = (port: Port) => port;',
     "apps/worker/src/platform/capabilities/owner.ts": 'import "cloudflare:workers"; import type { Port } from "../../contracts/capabilities.js"; export type Adapter = Port;',
     "apps/worker/src/http/central.ts": 'import { create } from "../application/capabilities/access.js"; import "../platform/capabilities/owner.js";',
-    "apps/worker/src/mcp/providers/remote.ts": 'import type { Port } from "../../contracts/capabilities.js"; export const bind = (port: Port) => port;',
+    "apps/worker/src/mcp/providers/remote.ts": 'import type { Port } from "../../contracts/capabilities.js"; import "./remote/helper.js"; export const bind = (port: Port) => port;',
+    "apps/worker/src/mcp/providers/remote/helper.ts": 'import type { McpServer } from "@modelcontextprotocol/server"; import type { ZodType } from "zod"; export type { Port } from "../../../contracts/capabilities.js";',
+    "apps/worker/src/mcp/providers/skills.mts": 'export * from "./skills/helper.mjs";',
+    "apps/worker/src/mcp/providers/skills/helper.mts": 'import type { Port } from "../../../contracts/capabilities.js"; export type Input = Port;',
   });
   assert.deepEqual((await checkArchitecture(f.root)).failures, []);
 });

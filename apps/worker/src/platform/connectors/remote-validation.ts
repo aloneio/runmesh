@@ -1,6 +1,6 @@
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/client/validators/cf-worker";
-import { catalogJson, catalogObject } from "../../contracts/catalog-json.js";
-import { validCatalogSchema } from "../../contracts/catalog-schema.js";
+import { catalogJson } from "../../contracts/catalog-json.js";
+import { catalogSchemaGraph } from "../../contracts/catalog-schema.js";
 import { REMOTE_LIMITS } from "../../contracts/remote.js";
 import type { JsonSchemaType, jsonSchemaValidator } from "@modelcontextprotocol/client";
 
@@ -8,33 +8,16 @@ import type { JsonSchemaType, jsonSchemaValidator } from "@modelcontextprotocol/
  * interpreter. This rejects expensive-but-legal schemas instead of timing out
  * synchronous evaluation or enabling eval/new Function in a Worker. */
 function work(schema: unknown): number {
-  if (!validCatalogSchema(schema, false)) return Infinity;
-  const root = catalogObject(schema)!, active = new Set<unknown>(), memo = new Map<unknown, number>();
-  const visit = (value: unknown): number => {
-    if (typeof value === "boolean") return 1;
-    const item = catalogObject(value);
-    if (item === undefined || active.has(value)) return Infinity;
-    if (memo.has(value)) return memo.get(value)!;
-    active.add(value); let cost = 1;
-    const add = (child: unknown) => { cost = Math.min(REMOTE_LIMITS.validation_cost + 1, cost + visit(child)); };
-    for (const [key, child] of Object.entries(item)) {
-      if (["additionalProperties", "unevaluatedProperties", "items", "contains", "not", "if", "then", "else"].includes(key)) add(child);
-      else if (["properties", "$defs", "definitions", "dependentSchemas"].includes(key)) {
-        for (const next of Object.values(catalogObject(child) ?? {})) add(next);
-      } else if (["allOf", "anyOf", "oneOf", "prefixItems"].includes(key) && Array.isArray(child)) {
-        for (const next of child) add(next);
-      } else if (key === "$ref" && typeof child === "string") {
-        const parts = decodeURIComponent(child).slice(2).split("/").map(p => p.replaceAll("~1", "/").replaceAll("~0", "~"));
-        let ref: unknown = root;
-        // Schema admission already verifies exact pointer targets, including
-        // indexed children of allOf/anyOf/oneOf/prefixItems under local defs.
-        for (const part of parts) ref = Array.isArray(ref) ? ref[Number(part)] : catalogObject(ref)?.[part];
-        add(ref);
-      }
-    }
-    active.delete(value); memo.set(value, cost); return cost;
+  const graph = catalogSchemaGraph(schema, false);
+  if (graph === undefined) return Infinity;
+  const memo = new Map<string, number>();
+  const visit = (path: string): number => {
+    if (memo.has(path)) return memo.get(path)!;
+    let cost = 1;
+    for (const child of graph.get(path)!) cost = Math.min(REMOTE_LIMITS.validation_cost + 1, cost + visit(child));
+    memo.set(path, cost); return cost;
   };
-  return visit(root);
+  return visit("");
 }
 
 function nodes(value: unknown): number {
