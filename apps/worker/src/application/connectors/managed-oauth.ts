@@ -125,7 +125,8 @@ export function createManagedOAuth(ports: ManagedOAuthPorts) {
       }
       await authorize();
       const credential = parseCredential({ kind: "bearer", token: tokens.access_token }); if (!credential) return fault("unavailable");
-      const lease = record; return { credential, current: () => current(lease) && ports.repository.read(lease.profile_id)?.state === "ready" };
+      const lease = record; return { credential, current: () => lease.token_expires_at > ports.now()
+        && current(lease) && ports.repository.read(lease.profile_id)?.state === "ready" };
     },
   };
 }

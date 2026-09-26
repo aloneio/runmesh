@@ -75,7 +75,7 @@ function oauthFixture(cimd = false, configuredOrigin: string | null = origin, pr
   const service = () => createManagedOAuth({ repository, cipher, profile: () => live, admin: async () => allowed ? "allowed" : "denied", origin: () => configuredOrigin ?? undefined, hash: catalogSha256, random: oauthRandom, now: () => now, protocol: protocol ?? createManagedOAuthProtocol(send) });
   const hash = "a".repeat(64), selection = { profile_id: base.profile_id, expected_revision: base.revision };
   const begin = async () => { const result = await service().run(hash, "begin", selection); expect(result.state).toBe("started"); if (result.state !== "started") throw new Error(JSON.stringify(result)); return new URL(result.authorization_url).searchParams.get("state")!; };
-  return { service, begin, hash, selection, state, posts, send, repository, record: () => record, now: () => { now += 40_000; },
+  return { service, begin, hash, selection, state, posts, send, repository, record: () => record, now: (elapsed = 40_000) => { now += elapsed; },
     callback: (value: string) => ({ state: value, code: "synthetic-one-use-code", iss: issuer }), fail: () => { failToken = true; }, revokeOnToken: () => { revokeOnToken = true; }, privateToken: () => { privateToken = true; }, pause: () => { live = { ...live, revision: 3, enabled: false }; },
     challenge: (url: string) => { challengeMetadata = url; } };
 }
@@ -156,6 +156,43 @@ it("managed account lifecycle uses protocol ports without network or SDK-owned s
   expect(lease.current()).toBe(true); expect(protocol.refresh).toHaveBeenCalledTimes(1); expect(f.send).not.toHaveBeenCalled();
   expect(await f.service().run(f.hash, 'revoke', f.selection)).toMatchObject({ state: 'revoked' }); expect(lease.current()).toBe(false);
 });
+it.each(['before-dispatch', 'during-response'] as const)("managed OAuth expires a short-lived refreshed lease %s", async phase => {
+  const protocol: ManagedOAuthProtocol = {
+    begin: async input => ({ authorization_url: issuer + '/authorize?state=' + input.state, discovery: {}, client: {}, verifier: 'fixture-verifier' }),
+    complete: async () => ({ access_token: 'synthetic-initial-token', refresh_token: 'synthetic-refresh-token', token_type: 'Bearer', expires_in: 1 }),
+    refresh: vi.fn(async () => ({ access_token: 'synthetic-short-lived-token', token_type: 'Bearer', expires_in: 2 })),
+  };
+  const f = oauthFixture(false, origin, protocol), state = await f.begin();
+  expect(await f.service().run(f.hash, 'complete', f.callback(state))).toMatchObject({ state: 'linked' });
+  const selected = { ...base, authentication: 'oauth' as const };
+  const lease = await f.service().credential(selected, new AbortController().signal, async () => undefined);
+  const execute = vi.fn(async () => {
+    if (phase === 'during-response') f.now(1);
+    return { content: [{ type: 'text' as const, text: 'expired private result' }] };
+  });
+  const upstream = createMcpHandler(() => {
+    const server = new McpServer({ name: 'expiry-fixture', version: '1' });
+    server.registerTool('read', { inputSchema: z.object({}).strict() }, execute); return server;
+  }, { route: '/mcp', legacy: 'stateless' });
+  const send = vi.fn(async (url: string | URL, init?: RequestInit) => upstream.fetch(new Request(url, init)));
+  const dispatched = vi.fn();
+  const connector = createHttpRemoteConnector({ policy: () => undefined, rules: profile => connectionPolicy(profile, undefined), credential: async () => lease, fetch: send });
+  const session = await connector.open(selected, new AbortController().signal, dispatched, async () => undefined);
+  try {
+    const tools = await session.listTools();
+    f.now(1999); expect(lease.current()).toBe(true);
+    if (phase === 'before-dispatch') f.now(1);
+    const requests = send.mock.calls.length;
+    await expect(session.callTool(tools[0]!, {}, async () => undefined)).rejects.toMatchObject({ code: phase === 'before-dispatch' ? 'authorization_required' : 'result_withheld' });
+    const calls = phase === 'before-dispatch' ? 0 : 1;
+    expect(lease.current()).toBe(false); expect(send).toHaveBeenCalledTimes(requests + calls);
+    expect(execute).toHaveBeenCalledTimes(calls); expect(dispatched).toHaveBeenCalledTimes(calls);
+    expect(protocol.refresh).toHaveBeenCalledOnce();
+    const renewed = await f.service().credential(selected, new AbortController().signal, async () => undefined);
+    expect(renewed.current()).toBe(true); expect(lease.current()).toBe(false); expect(protocol.refresh).toHaveBeenCalledTimes(2);
+  } finally { await session.close(); }
+});
+
 it("OAuth claims a rotating refresh token before concurrent callers can reuse it", async () => {
   const f = oauthFixture(), state = await f.begin();
   await f.service().run(f.hash, "complete", f.callback(state)); f.now();
