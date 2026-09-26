@@ -66,7 +66,7 @@ it.each([
   await expect(guardedRemoteResponse(new Response(text, { headers: { "content-type": "application/json" } }), 1, new AbortController().signal, () => undefined)).rejects.toBeInstanceOf(RemoteFault);
 });
 
-it.each([401, 403, 429, 500, 302, 307])("W05 HTTP %s after a tool dispatch never retries or follows authentication redirects", async status => {
+it.each([401, 403, 429, 500, 302, 307])("W05 HTTP %s after a tool dispatch preserves the recovery category without retrying", async status => {
   const remote = upstream(), attempts = vi.fn(), sent = vi.fn();
   const connector = createHttpRemoteConnector({ policy: () => policy("2026-07-28"), credential: async () => ({ kind: "bearer", token }),
     fetch: async (input, init) => {
@@ -76,9 +76,36 @@ it.each([401, 403, 429, 500, 302, 307])("W05 HTTP %s after a tool dispatch never
   const session = await connector.open(profile, new AbortController().signal, sent, async () => undefined);
   try {
     const tools = await session.listTools();
-    await expect(session.callTool(tools[0]!, { value: 1 }, async () => undefined)).rejects.toBeInstanceOf(RemoteFault);
+    await expect(session.callTool(tools[0]!, { value: 1 }, async () => undefined)).rejects.toMatchObject({
+      code: status === 401 || status === 403 ? "authorization_required" : status === 429 || status >= 500 ? "upstream_unavailable" : "upstream_protocol_error",
+    });
     expect(attempts).toHaveBeenCalledOnce(); expect(sent).toHaveBeenCalledOnce();
   } finally { await session.close(); }
+});
+
+it.each([401, 403])("W05 HTTP %s during connection and discovery requests requires authorization without dispatch", async status => {
+  for (const protocol of ["2025-11-25", "2026-07-28"] as const) {
+    for (const method of [protocol === "2025-11-25" ? "initialize" : "server/discover", "tools/list"]) {
+      const remote = upstream(), attempts = vi.fn(), sent = vi.fn(), cancelled = vi.fn();
+      const connector = createHttpRemoteConnector({ policy: () => policy(protocol), credential: async () => ({ kind: "bearer", token }),
+        fetch: async (input, init) => {
+          if (JSON.parse(String(init?.body)).method === method) {
+            attempts(); return new Response(new ReadableStream({ cancel: cancelled }), { status,
+              headers: { "www-authenticate": 'Bearer resource_metadata="https://unvisited.example.com/oauth"' } });
+          }
+          return remote.http(input, init);
+        } });
+      if (method === "tools/list") {
+        const session = await connector.open(profile, new AbortController().signal, sent, async () => undefined);
+        try { await expect(session.listTools()).rejects.toMatchObject({ code: "authorization_required" }); }
+        finally { await session.close(); }
+      } else {
+        await expect(connector.open(profile, new AbortController().signal, sent, async () => undefined)).rejects.toMatchObject({ code: "authorization_required" });
+      }
+      expect(attempts).toHaveBeenCalledOnce(); expect(cancelled).toHaveBeenCalledOnce();
+      expect(sent).not.toHaveBeenCalled(); expect(remote.invoked).not.toHaveBeenCalled();
+    }
+  }
 });
 
 it("W05 final authorization refusal does not release a tool request to fetch", async () => {
