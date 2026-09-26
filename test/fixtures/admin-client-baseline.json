@@ -3,18 +3,18 @@
   "cases": [
     {
       "nonce": null,
-      "sha256": "5c05e92c4bfa42a1d1d0f4a87916d159cb78e20144d520ff8f103d589c239adf",
+      "sha256": "6ba659ae1a2465818afc4c19bf9003ddb5239ffbae0fd2229a7bf047334c9d1f",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e"
     },
     {
       "nonce": "test-nonce",
-      "sha256": "b8d568a1246459a860152da24122d5fad311eab12fa8b4d0d88c4bf0484847ab",
+      "sha256": "6de936d2ba8370bf9ef126831b144b49eddf9b7767cbbf5ca5ffd14230bbe222",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224"
     }
   ],
-  "reviewed_change": "Removed obsolete manual service-token controls and guarded connection discovery and OAuth reconnect while a service is paused. Browser regressions cover both authentication modes, enable-first explanations, retained review/disconnect access, and restored connection actions after enabling the service without screenshots."
+  "reviewed_change": "Enabled explicit publication of reviewed updates when a Skill is already enabled and its staged bundle differs from the active version. Browser regressions verify review performs no write, publishing uses the reviewed digest and revision, current versions have no redundant publication action, and paused Skills can resume without screenshots."
 }

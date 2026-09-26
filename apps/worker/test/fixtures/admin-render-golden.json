@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "a36acc58d505ac4f7b98666912b270e193ae73b1cb048ed96a9b4098c7ac56fa",
-      "bytes": 105750,
+      "sha256": "d852bc83ac434183fd9251448185c2263fe9e44d65d38414bd1ae66fa3ed183c",
+      "bytes": 105834,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -21,7 +21,7 @@
       "pre_product_bytes": 88591,
       "pre_product_recovery_sha256": "907d8c8bc932b5a61596a99ee9d381364b2c0df6626d238e91dccbe4ae85c7a4",
       "pre_product_recovery_bytes": 108669,
-      "product_recovery_change": "Reviewed removal of obsolete manual service-token controls and disabled connection discovery and OAuth reconnect for paused services with an enable-first explanation. Product browser regressions verify pause/enable behavior and retained review/disconnect access without screenshots."
+      "product_recovery_change": "Reviewed explicit publication of staged updates for already enabled Skills. Product browser regressions confirm separate active/staged digests, publication only after review, no redundant action for the current version, and pause/resume behavior without screenshots."
     },
     {
       "name": "setup",
@@ -30,15 +30,15 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "61f4449f87f807d783de6d9ea703837a792cf2d0b05f222b05d845f403f99e00",
-      "bytes": 106338,
+      "sha256": "331f8a8ae298e01e381b5a080dcd662f2e2deb54e2af58726709aa50cb33bcd8",
+      "bytes": 106422,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
       "pre_product_bytes": 89179,
       "pre_product_recovery_sha256": "a355bbea6b0a6de46d476bf1d992125a1443995b4de8b670d6b0626bad820887",
       "pre_product_recovery_bytes": 109257,
-      "product_recovery_change": "Reviewed removal of obsolete manual service-token controls and disabled connection discovery and OAuth reconnect for paused services with an enable-first explanation. Product browser regressions verify pause/enable behavior and retained review/disconnect access without screenshots."
+      "product_recovery_change": "Reviewed explicit publication of staged updates for already enabled Skills. Product browser regressions confirm separate active/staged digests, publication only after review, no redundant action for the current version, and pause/resume behavior without screenshots."
     },
     {
       "name": "secret",
@@ -47,15 +47,15 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "064bcacf77238d285e3ffa42ee132307bd13c0133eff7adb32f937ace0cfa8fc",
-      "bytes": 107492,
+      "sha256": "75ffdf5060fc45a0372b5b9b08d3db76719a23e2d332fa56ef7dffe90615314e",
+      "bytes": 107576,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
       "pre_product_bytes": 90306,
       "pre_product_recovery_sha256": "110d36e91fe8b8fa1b9a6520175942a5c58bde7365804947ec53f15558918b04",
       "pre_product_recovery_bytes": 110384,
-      "product_recovery_change": "Reviewed removal of obsolete manual service-token controls and disabled connection discovery and OAuth reconnect for paused services with an enable-first explanation. Product browser regressions verify pause/enable behavior and retained review/disconnect access without screenshots."
+      "product_recovery_change": "Reviewed explicit publication of staged updates for already enabled Skills. Product browser regressions confirm separate active/staged digests, publication only after review, no redundant action for the current version, and pause/resume behavior without screenshots."
     },
     {
       "name": "overview-empty",
@@ -413,15 +413,15 @@
           }
         ]
       ],
-      "sha256": "a7aecdb49d8bd5ffd8669f63e941547d95f4140ad12af597e3a28f290bb0e67f",
-      "bytes": 107841,
+      "sha256": "657e59898eabe56937a0aecdeb3f5e5290582ba4dc4ae5d0059fd820bc2526fb",
+      "bytes": 107925,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
       "pre_product_bytes": 90665,
       "pre_product_recovery_sha256": "35235a669d34c99a0fd1b737d0f58f38a5ac76ca5ba21e8137da291c119846b7",
       "pre_product_recovery_bytes": 110743,
-      "product_recovery_change": "Reviewed removal of obsolete manual service-token controls and disabled connection discovery and OAuth reconnect for paused services with an enable-first explanation. Product browser regressions verify pause/enable behavior and retained review/disconnect access without screenshots."
+      "product_recovery_change": "Reviewed explicit publication of staged updates for already enabled Skills. Product browser regressions confirm separate active/staged digests, publication only after review, no redundant action for the current version, and pause/resume behavior without screenshots."
     }
   ],
   "i18n_review": {

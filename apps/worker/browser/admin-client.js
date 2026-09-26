@@ -78,7 +78,7 @@ function bindCentralProduct(root){
  function showSkill(bundle,head){var panel=app.querySelector('[data-skill-review]');clear(panel);panel.hidden=false;panel.append(el('h2',bundle.name),el('p',bundle.description));
   bundle.files.forEach(function(file){details(panel,file.path,file.text);});
   if(bundle.required_capabilities&&bundle.required_capabilities.length)details(panel,t('Required capabilities (must be published and enabled)','依赖能力（须已发布并启用）'),JSON.stringify(bundle.required_capabilities,null,2));
-  if(!head.enabled)button(panel,t('Enable Skill','启用 Skill'),async function(){await api('skills/'+encodeURIComponent(head.skill_id),{action:'activate',expected_revision:head.revision,digest:bundle.digest});await refresh();});
+  if(!head.enabled||head.active_digest!==bundle.digest)button(panel,head.enabled?t('Publish update','发布更新'):t('Enable Skill','启用 Skill'),async function(){await api('skills/'+encodeURIComponent(head.skill_id),{action:'activate',expected_revision:head.revision,digest:bundle.digest});await refresh();});
   panel.scrollIntoView({block:'nearest'});say(t('Skill files are ready to review.','可查看 Skill 文件内容。'));
  }
  var importer=app.querySelector('[data-skill-import]');

@@ -59,7 +59,12 @@ export async function checkGuidedProduct(executable) {
     if(!body){if(item)value={state:'found',head:item.head,bundle:url.searchParams.get('digest')===item.published?.digest?item.published:item.bundle};else{code=404;value={state:'missing'};}}
     else if(body.action==='preview')value={state:'previewed',bundle:{skill_id:id,name:'research',description:'Research fixture',source:body.source,license:body.license,files:body.files,digest}};
     else if(body.action==='stage'){assert.equal(body.expected_revision,0);const entry={head:{skill_id:id,revision:1,enabled:false,staged_digest:digest,active_digest:null},bundle:{skill_id:id,name:'research',description:'Research fixture',source:body.source,license:body.license,files:body.files,digest}};library.push(entry);value={state:'written',head:entry.head};}
-    else{assert.equal(body.expected_revision,item.head.revision);assert.equal(body.digest,digest);item.head={...item.head,revision:item.head.revision+1,enabled:true,active_digest:digest};value={state:'written',head:item.head};}
+    else{
+     assert.equal(body.expected_revision,item.head.revision);assert.ok(['activate','disable'].includes(body.action));
+     if(body.action==='activate'){assert.equal(body.digest,item.bundle.digest);item.published=structuredClone(item.bundle);}
+     item.head={...item.head,revision:item.head.revision+1,enabled:body.action==='activate',active_digest:body.action==='activate'?body.digest:item.head.active_digest};
+     value={state:'written',head:item.head};
+    }
    }else if(kind==='grants'||kind==='toolsets'){throw new Error('Retired client access API must not be called');
    }else{code=404;value={state:'missing'};}
    res.statusCode=code;res.setHeader('content-type','application/json');res.setHeader('cache-control','no-store');res.end(JSON.stringify(value));
@@ -160,6 +165,28 @@ export async function checkGuidedProduct(executable) {
   await importer.locator('[name=folder]').setInputFiles(skillFolder);
   await importer.getByRole('button',{name:'Install Skill',exact:true}).click();await status.filter({hasText:'This Skill is already installed.'}).waitFor();
   await skillReview.getByRole('button',{name:'Update Skill',exact:true}).click();await status.filter({hasText:'installed. Ready to use'}).waitFor();assert.equal(library[0].head.revision,2);assert.equal(library[0].bundle.files[0].text,folderText);
+  // A staged update must remain separate from the active bundle until reviewed and published.
+  const installedSkill=library[0], stagedDigest='b'.repeat(64), stagedText=folderText.replace('Selected folder version','Reviewed staged version');
+  const skillWrites=()=>requests.filter(r=>r.path==='/admin/central/skills/research'&&r.method==='POST').length;
+  const beforeReview=skillWrites();installedSkill.published=structuredClone(installedSkill.bundle);
+  installedSkill.bundle={...installedSkill.bundle,digest:stagedDigest,files:[{path:'SKILL.md',text:stagedText}]};
+  installedSkill.head={...installedSkill.head,revision:3,staged_digest:stagedDigest};
+  await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+  const skillCard=page.locator('[data-skill-list] .central-card');
+  assert.equal(await skillCard.getByText('An update is awaiting review.',{exact:true}).isVisible(),true);
+  await skillCard.getByRole('button',{name:'View files',exact:true}).click();await status.filter({hasText:'Skill files are ready to review.'}).waitFor();
+  assert.equal(await skillReview.locator('pre').textContent(),stagedText);assert.equal(installedSkill.head.active_digest,digest);assert.equal(skillWrites(),beforeReview);
+  assert.equal(await skillReview.getByRole('button',{name:'Publish update',exact:true}).count(),1,'An enabled Skill with a staged update needs an explicit publication action');
+  await skillReview.getByRole('button',{name:'Publish update',exact:true}).click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+  assert.equal(installedSkill.head.active_digest,stagedDigest);assert.equal(installedSkill.head.revision,4);assert.equal(skillWrites(),beforeReview+1);
+  assert.equal(await skillCard.getByText('An update is awaiting review.',{exact:true}).count(),0);
+  await skillCard.getByRole('button',{name:'View files',exact:true}).click();await status.filter({hasText:'Skill files are ready to review.'}).waitFor();
+  assert.equal(await skillReview.getByRole('button',{name:'Publish update',exact:true}).count(),0);assert.equal(await skillReview.getByRole('button',{name:'Enable Skill',exact:true}).count(),0);
+  await skillCard.getByRole('button',{name:'Pause',exact:true}).click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+  assert.equal(installedSkill.head.enabled,false);assert.equal(installedSkill.head.active_digest,stagedDigest);
+  await skillCard.getByRole('button',{name:'View files',exact:true}).click();await status.filter({hasText:'Skill files are ready to review.'}).waitFor();
+  await skillReview.getByRole('button',{name:'Enable Skill',exact:true}).click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+  assert.equal(installedSkill.head.enabled,true);assert.equal(installedSkill.head.active_digest,stagedDigest);assert.equal(installedSkill.head.revision,6);
   // Publication conflict cannot trigger automatic replay, even after repeated clicks.
   await page.locator('[data-central-tab=services]').click();
   await page.locator('[data-service-list]').getByRole('button',{name:'Review tools',exact:true}).first().click();await status.filter({hasText:'Review the tools before approving.'}).waitFor();
@@ -186,7 +213,7 @@ export async function checkGuidedProduct(executable) {
   }
   await callback.close();
   assert.deepEqual(exceptions,[]);
-  return {state:'passed',guided_homepage:true,direct_url_without_deployment_setup:true,service_explicit_review:true,oauth_return_to_tool_review:true,paused_oauth_reconnect_guard:true,paused_service_discovery_guard:true,no_legacy_service_credentials:true,oauth_extra_parameters_ignored:true,oauth_duplicate_parameters_rejected:true,oauth_provider_errors_not_reflected:true,direct_skill_install_and_confirmed_update:true,skill_file_folder_selection_switch:true,skill_selection_invalidates_confirmation:true,shared_library_without_client_assignment:true,retired_access_api_not_called:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,mobile_no_overflow:true,screenshots:0};
+  return {state:'passed',guided_homepage:true,direct_url_without_deployment_setup:true,service_explicit_review:true,oauth_return_to_tool_review:true,paused_oauth_reconnect_guard:true,paused_service_discovery_guard:true,no_legacy_service_credentials:true,oauth_extra_parameters_ignored:true,oauth_duplicate_parameters_rejected:true,oauth_provider_errors_not_reflected:true,direct_skill_install_and_confirmed_update:true,skill_file_folder_selection_switch:true,skill_selection_invalidates_confirmation:true,skill_pending_update_publication:true,skill_pause_and_resume:true,shared_library_without_client_assignment:true,retired_access_api_not_called:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,mobile_no_overflow:true,screenshots:0};
  }finally{await browser?.close();await new Promise(r=>server.close(r));await rm(join(skillFolder,'SKILL.md'),{force:true});await rmdir(skillFolder);}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
