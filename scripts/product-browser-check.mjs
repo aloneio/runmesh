@@ -112,7 +112,21 @@ export async function checkGuidedProduct(executable) {
   await importer.locator('[name=files]').setInputFiles({name:'SKILL.md',mimeType:'text/markdown',buffer:Buffer.from(['---','name: research','description: Research fixture','---','Updated text'].join(String.fromCharCode(10)))});await importer.getByRole('button',{name:'Install Skill',exact:true}).click();
   await status.filter({hasText:'This Skill is already installed.'}).waitFor();assert.equal(library[0].head.revision,1);
   const skillReview=page.locator('[data-skill-review]');await skillReview.getByRole('button',{name:'Cancel',exact:true}).click();
-  await importer.locator('[name=folder]').setInputFiles(skillFolder);assert.equal(await importer.locator('[name=files]').evaluate(input=>input.files.length),0);
+  await importer.getByRole('button',{name:'Install Skill',exact:true}).click();await status.filter({hasText:'This Skill is already installed.'}).waitFor();
+  // Replacing the selection invalidates the old confirmation and its captured files.
+  async function checkSelectionChange(select){
+   const before=requests.filter(r=>r.path==='/admin/central/skill-installations').length;await select();
+   const staleConfirmation=skillReview.getByRole('button',{name:'Update Skill',exact:true});
+   if(await staleConfirmation.isVisible()){await staleConfirmation.click();await status.filter({hasText:'installed. Choose Client access'}).waitFor();}
+   assert.equal(library[0].head.revision,1,'Changing the selection must not allow the previous files to be installed');
+   assert.equal(requests.filter(r=>r.path==='/admin/central/skill-installations').length,before);assert.equal(await skillReview.isHidden(),true);
+  }
+  await checkSelectionChange(()=>importer.locator('[name=folder]').setInputFiles(skillFolder));assert.equal(await importer.locator('[name=files]').evaluate(input=>input.files.length),0);
+  await importer.getByRole('button',{name:'Install Skill',exact:true}).click();await status.filter({hasText:'This Skill is already installed.'}).waitFor();
+  await checkSelectionChange(()=>importer.locator('[name=files]').setInputFiles({name:'SKILL.md',mimeType:'text/markdown',buffer:Buffer.from(folderText.replace('Selected folder version','Selected file version'))}));
+  await importer.getByRole('button',{name:'Install Skill',exact:true}).click();await status.filter({hasText:'This Skill is already installed.'}).waitFor();
+  await checkSelectionChange(()=>importer.locator('[name=files]').setInputFiles([]));
+  await importer.locator('[name=folder]').setInputFiles(skillFolder);
   await importer.getByRole('button',{name:'Install Skill',exact:true}).click();await status.filter({hasText:'This Skill is already installed.'}).waitFor();
   await skillReview.getByRole('button',{name:'Update Skill',exact:true}).click();await status.filter({hasText:'installed. Choose Client access'}).waitFor();assert.equal(library[0].head.revision,2);assert.equal(library[0].bundle.files[0].text,folderText);
   // A staged draft must never describe the older version being granted.
@@ -163,7 +177,7 @@ export async function checkGuidedProduct(executable) {
   }
   await callback.close();
   assert.deepEqual(exceptions,[]);
-  return {state:'passed',guided_homepage:true,direct_url_without_deployment_setup:true,service_explicit_review:true,oauth_return_to_tool_review:true,oauth_extra_parameters_ignored:true,oauth_duplicate_parameters_rejected:true,oauth_provider_errors_not_reflected:true,direct_skill_install_and_confirmed_update:true,skill_file_folder_selection_switch:true,published_skill_metadata:true,changed_and_removed_tools_excluded:true,retained_pinned_access:true,client_handoff:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,mobile_no_overflow:true,screenshots:0};
+  return {state:'passed',guided_homepage:true,direct_url_without_deployment_setup:true,service_explicit_review:true,oauth_return_to_tool_review:true,oauth_extra_parameters_ignored:true,oauth_duplicate_parameters_rejected:true,oauth_provider_errors_not_reflected:true,direct_skill_install_and_confirmed_update:true,skill_file_folder_selection_switch:true,skill_selection_invalidates_confirmation:true,published_skill_metadata:true,changed_and_removed_tools_excluded:true,retained_pinned_access:true,client_handoff:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,mobile_no_overflow:true,screenshots:0};
  }finally{await browser?.close();await new Promise(r=>server.close(r));await rm(join(skillFolder,'SKILL.md'),{force:true});await rmdir(skillFolder);}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){

@@ -79,7 +79,10 @@ function bindCentralProduct(root){
   panel.scrollIntoView({block:'nearest'});say(t('Skill files are ready to review.','可查看 Skill 文件内容。'));
  }
  var importer=app.querySelector('[data-skill-import]');
- if(importer)['files','folder'].forEach(function(name){importer.elements[name].addEventListener('change',function(){if(this.files.length)importer.elements[name==='files'?'folder':'files'].value='';});});
+ if(importer)['files','folder'].forEach(function(name){importer.elements[name].addEventListener('change',function(){
+  if(this.files.length)importer.elements[name==='files'?'folder':'files'].value='';
+  var panel=app.querySelector('[data-skill-review]');if(!panel.hidden){clear(panel);panel.hidden=true;say(t('Selection changed. Check the files and select Install Skill again.','所选内容已变化，请确认文件后重新点击“安装 Skill”。'));}
+ });});
  if(importer)importer.addEventListener('submit',function(event){event.preventDefault();run(async function(){var picked=Array.from(importer.elements.folder.files.length?importer.elements.folder.files:importer.elements.files.files);if(!picked.length||picked.length>32||picked.some(function(f){return f.size>65536;})||picked.reduce(function(n,f){return n+f.size;},0)>262144)throw new Error(t('Select 1–32 text files, up to 64 KiB each and 256 KiB total.','请选择 1–32 个文本文件，单个不超过 64 KiB，总计不超过 256 KiB。'));
   var files=[];for(var f of picked){var path=f.webkitRelativePath?f.webkitRelativePath.split('/').slice(1).join('/'):f.name;var text=new TextDecoder('utf-8',{fatal:true}).decode(await f.arrayBuffer());files.push({path:path,text:text});}
   var main=files.find(function(f){return f.path==='SKILL.md';});if(!main)throw new Error(t('The selected folder must contain SKILL.md at its root.','所选文件夹根目录必须包含 SKILL.md。'));
