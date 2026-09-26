@@ -1,6 +1,6 @@
 # Dev product readiness audit — 2026-09-25
 
-> Historical review. The 2026-09-26 direct connection and installation workflow supersedes the approved-endpoint selector and advanced diagnostics described below. See [current administration](central-administration.md).
+> Historical review. The 2026-09-26 direct connection and installation workflow supersedes the approved-endpoint selector and advanced diagnostics described below. The shared library also supersedes this audit's per-client selection and pinned-grant behavior; those results describe the earlier implementation. See [current administration](central-administration.md).
 
 Status: local product iteration and regression review complete, including the successful Linux transport follow-up on 2026-09-26. Baseline: `6d9b169`; development stays on `dev` in the existing `runmesh-central-completion` worktree. The separate `main` worktree and its staged release edits are untouched.
 

@@ -1,5 +1,5 @@
 import type { CapturedIdentity, IdentityDecision } from "./identity.js";
-import type { CapabilityGrant, CapabilityTarget } from "./capabilities.js";
+import type { CapabilityTarget } from "./capabilities.js";
 import type { AdminDecision } from "./connectors.js";
 
 export const SKILL_LIMITS = Object.freeze({ files: 32, file_bytes: 65_536, bundle_bytes: 262_144, request_bytes: 524_288,
@@ -17,7 +17,7 @@ export type SkillMutation = { readonly state: "written"; readonly head: SkillHea
 export type SkillInspection = { readonly state: "found"; readonly head: SkillHead; readonly bundle: SkillBundle } | SkillFailure;
 export interface SkillSummary { readonly skill_id: string; readonly digest: string; readonly name: string; readonly description: string;
   readonly source: string; readonly license: string; readonly revision: number; readonly required_capabilities?: readonly CapabilityTarget[] }
-export type SkillPage = { readonly state: "listed"; readonly skills: readonly SkillSummary[] } | SkillFailure;
+export type SkillPage = { readonly state: "listed"; readonly skills: readonly SkillSummary[]; readonly next_after: string | null } | SkillFailure;
 export type SkillLibraryPage = { readonly state: "listed"; readonly skills: readonly { readonly head: SkillHead; readonly summary: Omit<SkillSummary, "revision"> }[]; readonly next_after: string | null } | SkillFailure;
 export type SkillContent = { readonly state: "read"; readonly skill_id: string; readonly digest: string; readonly path: string; readonly text: string; readonly dependencies: readonly SkillDependency[] } | SkillFailure;
 export interface SkillRepository {
@@ -33,7 +33,6 @@ export interface SkillRepository {
 }
 export interface SkillPorts { readonly repository: SkillRepository; readonly digest: (text: string) => Promise<string>;
   readonly remoteDependency?: (target: Extract<CapabilityTarget, { kind: "remote_tool" }>, signal: AbortSignal) => Promise<SkillDependencyState>;
-  readonly grant: (clientId: string) => CapabilityGrant | undefined;
   readonly identity: (principal: CapturedIdentity, signal: AbortSignal) => Promise<IdentityDecision>;
   readonly admin: (sessionHash: string, signal: AbortSignal) => Promise<AdminDecision> }
 export interface CentralSkills {

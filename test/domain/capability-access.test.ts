@@ -1,97 +1,47 @@
-import { expect, it, vi } from "vitest";
-import { createCapabilityAccess } from "../../apps/worker/src/application/capabilities/access.js";
-import { CAPABILITY_LIMITS, parseCapabilityGrant, type CapabilityGrant, type CapabilityTarget } from "../../apps/worker/src/contracts/capabilities.js";
+import { expect, it } from "vitest";
+import { createDirectoryReader } from "../../apps/worker/src/application/capabilities/directory.js";
+import { createSharedProfileReader } from "../../apps/worker/src/application/capabilities/profile-read.js";
+import { catalogProfile, catalogSnapshot, fixtureDigest } from "./catalog-fixtures.js";
+import { parseCapabilityGrant, type CapabilityGrant } from "../../apps/worker/src/contracts/capabilities.js";
+const target = { kind: "skill" as const, resource_id: "legacy", version: "a".repeat(64) };
+const grant: CapabilityGrant = { schema_version: 1, client_id: "legacy", revision: 1, enabled: true, rules: [target] };
 
-const principal = { client_id: "client-test", secret_version: 1 };
-const identity = { ...principal, schema_version: 2 as const, label: "Central", native_scopes: [] };
-const target: CapabilityTarget = { kind: "remote_tool", resource_id: "docs.search", version: "a".repeat(64), connection_profile_id: "shared-docs" };
-const grant: CapabilityGrant = { schema_version: 1, client_id: principal.client_id, revision: 1, enabled: true, rules: [target] };
-const signal = () => new AbortController().signal;
-function fixture(value: CapabilityGrant | undefined = grant) {
-  const ports = { identity: { revalidate: vi.fn(async () => ({ state: "allowed" as const, identity })) },
-    grants: { readGrant: vi.fn(async () => value) } };
-  return { ports, access: createCapabilityAccess(true, () => ports) };
-}
-
-it("W03 disabled central access does not resolve ports, bindings or credentials", async () => {
-  const load = vi.fn(() => { throw new Error("must not resolve"); });
-  const access = createCapabilityAccess(false, load);
-  expect(load).not.toHaveBeenCalled();
-  expect(await access.check(principal, target, signal())).toEqual({ state: "disabled" });
-  expect(load).not.toHaveBeenCalled();
+it("shared profile discovery crosses storage pages and exceeds direct catalog limits without grants", async () => {
+  const profiles = Array.from({ length: 51 }, (_, n) => catalogProfile("service-" + String(n).padStart(3, "0")));
+  const snapshot = await catalogSnapshot();
+  const ports = {
+    profiles: (after: string) => { const rest = profiles.filter(p => p.profile_id > after); return { profiles: rest.slice(0, 50), next_after: rest.length > 50 ? rest[49]!.profile_id : null }; },
+    profile: (id: string) => profiles.find(p => p.profile_id === id),
+    repository: { readHead: (profile_id: string) => ({ schema_version: 1 as const, profile_id, revision: 1, observed_digest: snapshot.digest, approved_digest: snapshot.digest, approved_names: ["search"] }),
+      readSnapshot: () => snapshot, stage: () => ({ state: "invalid" as const }), approve: () => ({ state: "invalid" as const }), disable: () => ({ state: "invalid" as const }) },
+    identity: async (p: { client_id: string; secret_version: number }) => ({ state: "allowed" as const, identity: { ...p, schema_version: 2 as const, label: "Fixture", native_scopes: [] } }),
+    cursor: { seal: async () => "unused", open: async () => undefined }, now: Date.now, digest: fixtureDigest,
+  };
+  for (const client_id of ["first", "second"]) {
+    const principal = { client_id, secret_version: 1 }, signal = new AbortController().signal;
+    const result = await createSharedProfileReader(ports)(principal, signal);
+    expect(result.state === "listed" && result.profiles).toHaveLength(51);
+    expect(await createDirectoryReader(ports)(principal, signal, () => false)).toEqual({ state: "capacity" });
+  }
+  profiles[0]!.enabled = false;
+  const result = await createSharedProfileReader(ports)({ client_id: "first", secret_version: 1 }, new AbortController().signal);
+  expect(result.state === "listed" && result.profiles).toHaveLength(50);
+  const revoked = { ...ports, identity: async () => ({ state: "denied" as const }) };
+  expect(await createSharedProfileReader(revoked)({ client_id: "first", secret_version: 1 }, new AbortController().signal)).toEqual({ state: "denied" });
 });
 
-it("W02 central grants work without native scopes or any Runner dependency", async () => {
-  const { access, ports } = fixture();
-  expect(await access.check(principal, target, signal())).toEqual({ state: "allowed", identity, grant_revision: 1 });
-  expect(ports.identity.revalidate).toHaveBeenCalledTimes(2);
-  expect(ports.grants.readGrant).toHaveBeenCalledOnce();
-});
-
-it.each([undefined, { ...grant, enabled: false }, { ...grant, client_id: "other" }, { ...grant, rules: [] }])(
-  "W03 absent, disabled or foreign grants deny rather than using coding scopes", async value => {
-    const { access, ports } = fixture();
-    ports.grants.readGrant.mockResolvedValue(value);
-    expect(await access.check(principal, target, signal())).toEqual({ state: "denied" });
-  });
-
-it.each([{ ...target, version: "b".repeat(64) }, { ...target, connection_profile_id: "other-profile" },
-  { kind: "skill", resource_id: target.resource_id, version: target.version }])("W03 requires exact resource version and connection ownership", async value => {
-  expect(await fixture().access.check(principal, value as CapabilityTarget, signal())).toEqual({ state: "denied" });
-});
-
-it("W03 identity revoked during independent grant reads is rejected", async () => {
-  let calls = 0;
-  const access = createCapabilityAccess(true, () => ({
-    identity: { revalidate: async () => ++calls === 1 ? { state: "allowed", identity } : { state: "denied" } },
-    grants: { readGrant: async () => grant },
-  }));
-  expect(await access.check(principal, target, signal())).toEqual({ state: "denied" });
-});
-
-it("W03 a failed grant owner is unavailable, not an empty successful result", async () => {
-  const { access, ports } = fixture();
-  ports.grants.readGrant.mockRejectedValue(new Error("synthetic storage outage"));
-  expect(await access.check(principal, target, signal())).toEqual({ state: "unavailable" });
-});
-
-it("W03 malformed grant records do not become authorization", async () => {
-  const { access, ports } = fixture();
-  ports.grants.readGrant.mockResolvedValue({ ...grant, revision: 0 });
-  expect(await access.check(principal, target, signal())).toEqual({ state: "malformed" });
-});
-
-it("W03 a stalled dependency has a bounded deadline and no persistent timer", async () => {
-  vi.useFakeTimers();
-  try {
-    const { access, ports } = fixture();
-    ports.grants.readGrant.mockImplementation(() => new Promise(() => undefined));
-    const pending = access.check(principal, target, signal());
-    await vi.advanceTimersByTimeAsync(CAPABILITY_LIMITS.access_timeout_ms + 1);
-    expect(await pending).toEqual({ state: "unavailable" });
-    expect(vi.getTimerCount()).toBe(0);
-  } finally { vi.useRealTimers(); }
-});
-
-it("W03 an expired observation cannot beat a delayed timer callback", async () => {
-  let clock = 100;
-  const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
-  try {
-    const { access, ports } = fixture();
-    ports.grants.readGrant.mockImplementation(async () => { clock += CAPABILITY_LIMITS.access_timeout_ms + 1; return grant; });
-    expect(await access.check(principal, target, signal())).toEqual({ state: "unavailable" });
-    expect(ports.identity.revalidate).toHaveBeenCalledOnce();
-  } finally { now.mockRestore(); }
-});
-
-it("W03 cancellation stops waiting without a retry", async () => {
-  const controller = new AbortController();
-  const { access, ports } = fixture();
-  ports.grants.readGrant.mockImplementation(() => new Promise(() => undefined));
-  const pending = access.check(principal, target, controller.signal);
-  controller.abort();
-  expect(await pending).toEqual({ state: "unavailable" });
-  expect(ports.identity.revalidate).toHaveBeenCalledOnce();
+it("shared profile discovery rejects looping pages and in-flight identity revocation", async () => {
+  const profile = catalogProfile(), snapshot = await catalogSnapshot();
+  let reads = 0;
+  const ports = { profiles: () => ({ profiles: [profile], next_after: profile.profile_id }), profile: () => profile,
+    repository: { readHead: () => ({ schema_version: 1 as const, profile_id: profile.profile_id, revision: 1, observed_digest: snapshot.digest, approved_digest: snapshot.digest, approved_names: ["search"] }),
+      readSnapshot: () => snapshot, stage: () => ({ state: "invalid" as const }), approve: () => ({ state: "invalid" as const }), disable: () => ({ state: "invalid" as const }) },
+    identity: async (p: { client_id: string; secret_version: number }) => ++reads > 1 ? { state: "denied" as const } : { state: "allowed" as const, identity: { ...p, schema_version: 2 as const, label: "Fixture", native_scopes: [] } },
+  };
+  const principal = { client_id: "first", secret_version: 1 }, signal = new AbortController().signal;
+  expect(await createSharedProfileReader(ports)(principal, signal)).toEqual({ state: "unavailable" });
+  reads = 0;
+  expect(await createSharedProfileReader({ ...ports, profiles: () => ({ profiles: [profile], next_after: null }) })(principal, signal)).toEqual({ state: "denied" });
 });
 
 it("W03 grant decoding is bounded, rejects duplicates and strips unrelated content", () => {

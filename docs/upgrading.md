@@ -6,6 +6,8 @@ For a compatible protocol-v2 upgrade, keep the current Worker, Durable Object na
 
 ## Choose the target version
 
+Current development central-library upgrade: all existing valid clients share enabled, reviewed MCP tools and active Skills. Old per-client grants no longer restrict access and their management endpoints return HTTP 410. Refresh cached catalogs and Skill digests after deployment. To withdraw one client, revoke its credential; to withdraw a capability, disable it globally. Native Runner permissions remain separate. Review [central migration details](central-administration.md) before deploying this behavior change to an instance that previously used per-client capability assignments.
+
 Read the [release notes](release-notes.md) and [release status](release-readiness.md). Production upgrades use published, independently verified signed packages; candidate and development prereleases belong in a separate test environment.
 
 Plan these updates separately:

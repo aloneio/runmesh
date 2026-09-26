@@ -13,10 +13,9 @@ import { productOverviewPage } from '../apps/worker/dist/admin/dashboard-views.j
 
 /** Isolated browser fixtures exercise the shipped UI, never a user browser or external service. */
 export async function checkGuidedProduct(executable) {
- const digest='a'.repeat(64), oldDigest='b'.repeat(64), toolVersion='c'.repeat(64);
+ const digest='a'.repeat(64), toolVersion='c'.repeat(64);
  const profiles=[], library=[], requests=[], exceptions=[];
- const pinned={kind:'skill',resource_id:'legacy-skill',version:oldDigest};
- let grant={client_id:'client-fixture',revision:1,enabled:true,rules:[pinned]}, conflict=false, failLibrary=false, catalogRace=false, rejectDiscovery=false;
+ let conflict=false, failLibrary=false, rejectDiscovery=false;
  const catalogs=new Map();
  const server=createServer(async(req,res)=>{
   try {
@@ -24,7 +23,7 @@ export async function checkGuidedProduct(executable) {
    if(url.pathname==='/oauth-fixture'){res.statusCode=302;res.setHeader('location','/admin/central/connections/callback?state=fixture-state&code=fixture-code&iss=https://login.provider.com&scope=read&authuser=0');res.end();return;}
    if(['/admin/central/connections/callback','/admin/central/oauth/callback'].includes(url.pathname)){const page=oauthLanding(url.pathname.includes('/connections/'));for(const [k,v] of page.headers)res.setHeader(k,v);res.end(await page.text());return;}
    if(url.pathname==='/admin') {res.setHeader('content-type','text/html');res.end(adminDocument('Dashboard',productOverviewPage({clients:[],runners:[]}),'dashboard'));return;}
-   if(url.pathname==='/admin/central') {res.setHeader('set-cookie',ADMIN_CSRF_COOKIE+'=fixture-csrf; Path=/; SameSite=Strict; Secure');res.setHeader('content-type','text/html');res.end(adminDocument('Services & Skills',centralPage('fixture-csrf',true,true,[{id:'client-fixture',label:'Team AI'}]),'central'));return;}
+   if(url.pathname==='/admin/central') {res.setHeader('set-cookie',ADMIN_CSRF_COOKIE+'=fixture-csrf; Path=/; SameSite=Strict; Secure');res.setHeader('content-type','text/html');res.end(adminDocument('Services & Skills',centralPage('fixture-csrf',true,true),'central'));return;}
    const raw=[];for await(const part of req)raw.push(part);
    const body=raw.length?JSON.parse(Buffer.concat(raw).toString()):undefined;
    requests.push({path:url.pathname,method:req.method,body});
@@ -51,8 +50,9 @@ export async function checkGuidedProduct(executable) {
     catalogs.set(id,{state:'found',head,snapshot,changes:[{name:'search',state:'added'}]});value={state:'written',head};}
    }else if(kind==='catalogs'){
     value=catalogs.get(id);if(!value){code=404;value={state:'missing'};}
+    else if(body&&conflict){code=409;value={state:'conflict',current_revision:value.head.revision+1};}
     else if(body){assert.equal(body.expected_revision,value.head.revision);assert.equal(body.digest,digest);value.head={...value.head,revision:value.head.revision+1,approved_digest:digest,approved_names:body.tool_names};value.approved=structuredClone(value.snapshot);value={state:'written',head:value.head};}
-    else if(url.searchParams.get('snapshot')===value.approved?.digest){if(catalogRace){value.head.revision++;catalogRace=false;}value={...value,snapshot:value.approved};}
+    else if(url.searchParams.get('snapshot')===value.approved?.digest){value={...value,snapshot:value.approved};}
    }else if(kind==='skills'&&!id)value={state:'listed',skills:library.map(s=>({head:s.head,summary:{name:s.bundle.name,description:s.bundle.description}})),next_after:null};
    else if(kind==='skills'){
     const item=library.find(s=>s.head.skill_id===id);
@@ -60,9 +60,7 @@ export async function checkGuidedProduct(executable) {
     else if(body.action==='preview')value={state:'previewed',bundle:{skill_id:id,name:'research',description:'Research fixture',source:body.source,license:body.license,files:body.files,digest}};
     else if(body.action==='stage'){assert.equal(body.expected_revision,0);const entry={head:{skill_id:id,revision:1,enabled:false,staged_digest:digest,active_digest:null},bundle:{skill_id:id,name:'research',description:'Research fixture',source:body.source,license:body.license,files:body.files,digest}};library.push(entry);value={state:'written',head:entry.head};}
     else{assert.equal(body.expected_revision,item.head.revision);assert.equal(body.digest,digest);item.head={...item.head,revision:item.head.revision+1,enabled:true,active_digest:digest};value={state:'written',head:item.head};}
-   }else if(kind==='grants'){
-    if(body&&conflict){code=409;value={state:'conflict',current_revision:grant.revision+1};}
-    else{if(body){assert.equal(body.expected_revision,grant.revision);grant={...grant,...body,revision:grant.revision+1};}value={state:body?'written':'found',grant};}
+   }else if(kind==='grants'||kind==='toolsets'){throw new Error('Retired client access API must not be called');
    }else{code=404;value={state:'missing'};}
    res.statusCode=code;res.setHeader('content-type','application/json');res.setHeader('cache-control','no-store');res.end(JSON.stringify(value));
   }catch(error){res.statusCode=500;res.end(JSON.stringify({error:{code:'fixture_failed'}}));exceptions.push(String(error));}
@@ -115,7 +113,7 @@ export async function checkGuidedProduct(executable) {
   await importer.locator('[name=folder]').setInputFiles(skillFolder);
   await importer.locator('[name=files]').setInputFiles({name:'SKILL.md',mimeType:'text/markdown',buffer:Buffer.from('---\nname: research\ndescription: Research fixture\n---\nReview this text.\n')});
   assert.equal(await importer.locator('[name=source],[name=license]').count(),0);await importer.getByRole('button',{name:'Install Skill',exact:true}).click();
-  await status.filter({hasText:'installed. Choose Client access'}).waitFor();assert.equal(library[0].head.enabled,true);
+  await status.filter({hasText:'installed. Ready to use'}).waitFor();assert.equal(library[0].head.enabled,true);
   assert.ok(library[0].bundle.files[0].text.includes('Review this text.'));assert.equal(await importer.locator('[name=folder]').evaluate(input=>input.files.length),0);
   await importer.locator('[name=files]').setInputFiles({name:'SKILL.md',mimeType:'text/markdown',buffer:Buffer.from(['---','name: research','description: Research fixture','---','Updated text'].join(String.fromCharCode(10)))});await importer.getByRole('button',{name:'Install Skill',exact:true}).click();
   await status.filter({hasText:'This Skill is already installed.'}).waitFor();assert.equal(library[0].head.revision,1);
@@ -125,7 +123,7 @@ export async function checkGuidedProduct(executable) {
   async function checkSelectionChange(select){
    const before=requests.filter(r=>r.path==='/admin/central/skill-installations').length;await select();
    const staleConfirmation=skillReview.getByRole('button',{name:'Update Skill',exact:true});
-   if(await staleConfirmation.isVisible()){await staleConfirmation.click();await status.filter({hasText:'installed. Choose Client access'}).waitFor();}
+   if(await staleConfirmation.isVisible()){await staleConfirmation.click();await status.filter({hasText:'installed. Ready to use'}).waitFor();}
    assert.equal(library[0].head.revision,1,'Changing the selection must not allow the previous files to be installed');
    assert.equal(requests.filter(r=>r.path==='/admin/central/skill-installations').length,before);assert.equal(await skillReview.isHidden(),true);
   }
@@ -136,36 +134,16 @@ export async function checkGuidedProduct(executable) {
   await checkSelectionChange(()=>importer.locator('[name=files]').setInputFiles([]));
   await importer.locator('[name=folder]').setInputFiles(skillFolder);
   await importer.getByRole('button',{name:'Install Skill',exact:true}).click();await status.filter({hasText:'This Skill is already installed.'}).waitFor();
-  await skillReview.getByRole('button',{name:'Update Skill',exact:true}).click();await status.filter({hasText:'installed. Choose Client access'}).waitFor();assert.equal(library[0].head.revision,2);assert.equal(library[0].bundle.files[0].text,folderText);
-  // A staged draft must never describe the older version being granted.
-  library[0].published=library[0].bundle;library[0].bundle={...library[0].bundle,name:'unreviewed-draft',description:'Unapproved description',digest:oldDigest};library[0].head.staged_digest=oldDigest;library[0].head.revision++;
-  await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
-  await page.locator('[data-central-tab=access]').click();await page.locator('[data-client-select]').selectOption('client-fixture');await status.filter({hasText:'Review the selected client'}).waitFor();
-  const access=page.locator('[data-client-access]');await access.getByText('research (Skill)',{exact:true}).click();await access.getByText('团队文档 / search',{exact:true}).click();await access.getByRole('button').click();await status.filter({hasText:'Access saved.'}).waitFor();
-  assert.equal(await access.getByText('unreviewed-draft (Skill)',{exact:true}).count(),0);
-  assert.equal(grant.rules.length,3);assert.ok(grant.rules.some(r=>r.resource_id==='legacy-skill'&&r.version===oldDigest));
-  // Changed/removed upstream tools cannot be offered as current reviewed tools.
-  // Existing grants retain their old pin, visibly separated from current tools.
-  const serviceId=profiles[0].profile_id, reviewedCatalog=structuredClone(catalogs.get(serviceId));
-  for(const tools of [[{...reviewedCatalog.snapshot.tools[0],version:'d'.repeat(64)}],[]]){
-   catalogs.set(serviceId,{...structuredClone(reviewedCatalog),head:{...reviewedCatalog.head,revision:reviewedCatalog.head.revision+1,observed_digest:oldDigest},snapshot:{digest:oldDigest,tools}});
-   await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
-   assert.equal(await access.getByText('团队文档 / search',{exact:true}).count(),0);
-   const pin=access.locator('label').filter({hasText:'Existing pinned permission: tool-search'}).locator('input');assert.equal(await pin.isChecked(),true);
-   await access.getByRole('button').click();await status.filter({hasText:'Access saved.'}).waitFor();
-   assert.ok(grant.rules.some(r=>r.resource_id==='tool-search'&&r.version===toolVersion));
-  }
-  catalogRace=true;const savedBeforeRace=requests.filter(r=>r.path.includes('/grants/')&&r.method==='POST').length;
-  await page.locator('[data-product-refresh]').click();await status.filter({hasText:'This item changed.'}).waitFor();
-  assert.equal(await access.getByRole('button').count(),0);assert.equal(requests.filter(r=>r.path.includes('/grants/')&&r.method==='POST').length,savedBeforeRace);
-  catalogs.set(serviceId,reviewedCatalog);await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
-  conflict=true;await access.getByRole('button').click();await status.filter({hasText:'This item changed.'}).waitFor();const writes=requests.filter(r=>r.path.includes('/grants/')&&r.method==='POST').length;
-  await access.getByRole('button').click();await status.filter({hasText:'Refresh the library before'}).waitFor();assert.equal(requests.filter(r=>r.path.includes('/grants/')&&r.method==='POST').length,writes);
-  conflict=false;await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
-  assert.equal(await page.locator('[data-client-select]').inputValue(),'client-fixture');
-  await page.goto(origin+'/admin/central?client=client-fixture');await status.filter({hasText:'Review the selected client'}).waitFor();
-  assert.equal(await access.isVisible(),true);assert.equal(await page.locator('[data-client-select]').inputValue(),'client-fixture');
+  await skillReview.getByRole('button',{name:'Update Skill',exact:true}).click();await status.filter({hasText:'installed. Ready to use'}).waitFor();assert.equal(library[0].head.revision,2);assert.equal(library[0].bundle.files[0].text,folderText);
+  // Publication conflict cannot trigger automatic replay, even after repeated clicks.
   await page.locator('[data-central-tab=services]').click();
+  await page.locator('[data-service-list]').getByRole('button',{name:'Review tools',exact:true}).first().click();await status.filter({hasText:'Review the tools before approving.'}).waitFor();
+  conflict=true;await review.getByRole('button',{name:'Approve selected tools'}).click();await status.filter({hasText:'This item changed.'}).waitFor();
+  const writes=requests.filter(r=>r.method==='POST').length;await review.getByRole('button',{name:'Approve selected tools'}).click();await status.filter({hasText:'Refresh the library before'}).waitFor();assert.equal(requests.filter(r=>r.method==='POST').length,writes);
+  conflict=false;await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();assert.equal(await review.isHidden(),true);
+  await page.goto(origin+'/admin/central?client=client-fixture');await status.filter({hasText:'Library is up to date.'}).waitFor();
+  assert.equal(await page.locator('[data-central-tab=access],[data-client-select],[data-client-access]').count(),0);
+  assert.equal(requests.filter(r=>/\/(grants|toolsets)\//.test(r.path)).length,0);
   failLibrary=true;await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Operation could not be confirmed.'}).waitFor();
   const mutations=requests.filter(r=>r.method==='POST').length;await page.locator('[data-service-list]').getByRole('button',{name:'Pause',exact:true}).first().click();await status.filter({hasText:'Refresh the library before'}).waitFor();assert.equal(requests.filter(r=>r.method==='POST').length,mutations);
   failLibrary=false;await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
@@ -185,7 +163,7 @@ export async function checkGuidedProduct(executable) {
   }
   await callback.close();
   assert.deepEqual(exceptions,[]);
-  return {state:'passed',guided_homepage:true,direct_url_without_deployment_setup:true,service_explicit_review:true,oauth_return_to_tool_review:true,oauth_extra_parameters_ignored:true,oauth_duplicate_parameters_rejected:true,oauth_provider_errors_not_reflected:true,direct_skill_install_and_confirmed_update:true,skill_file_folder_selection_switch:true,skill_selection_invalidates_confirmation:true,published_skill_metadata:true,changed_and_removed_tools_excluded:true,retained_pinned_access:true,client_handoff:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,mobile_no_overflow:true,screenshots:0};
+  return {state:'passed',guided_homepage:true,direct_url_without_deployment_setup:true,service_explicit_review:true,oauth_return_to_tool_review:true,oauth_extra_parameters_ignored:true,oauth_duplicate_parameters_rejected:true,oauth_provider_errors_not_reflected:true,direct_skill_install_and_confirmed_update:true,skill_file_folder_selection_switch:true,skill_selection_invalidates_confirmation:true,shared_library_without_client_assignment:true,retired_access_api_not_called:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,mobile_no_overflow:true,screenshots:0};
  }finally{await browser?.close();await new Promise(r=>server.close(r));await rm(join(skillFolder,'SKILL.md'),{force:true});await rmdir(skillFolder);}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){

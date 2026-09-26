@@ -31,7 +31,7 @@
 ## 高级参考与维护者资料
 
 仅用于开发：[中央 MCP 与 Skill 基础架构](central-capabilities-architecture.zh-CN.md)
-说明新增身份、授权和模块边界，不代表已经启用上游集成，也不是 Skill 安装指南。
+说明共享发布、客户端身份和模块边界。开发环境支持 MCP 直连和 Skill 安装，生产启用另行验收。
 开发使用说明见[版本化 Skill 内容](central-skills.zh-CN.md)、
 [中央管理与治理](central-administration.zh-CN.md)和[灰度与待验收项](central-rollout.md)。
 

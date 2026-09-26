@@ -35,10 +35,10 @@ it("direct public connections and Skill installation are available without deplo
   expect(markup).not.toContain('CENTRAL_VAULT_KEYRING');
 });
 
-it("client handoff opens the exact client without putting its credential in the link", () => {
+it("client handoff opens the shared library without putting its credential in the link", () => {
   const page = secretCreatedPage('MCP client created', 'https://worker.test/synthetic-secret/mcp', 'client-product');
-  expect(page).toContain('href="/admin/central?client=client-product"');
-  expect(page).toContain('Copy your connection URL first.');
+  expect(page).toContain('href="/admin/central"');
+  expect(page).toContain('Copy this connection URL into your AI client.');
   expect(page).not.toContain('client=synthetic-secret');
   expect(secretCreatedPage('MCP client created', 'https://worker.test/synthetic-secret/mcp')).not.toContain('<section class="central-next-step">');
 });

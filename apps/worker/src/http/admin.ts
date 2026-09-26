@@ -70,13 +70,7 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
   if (request.method === "GET" && url.pathname === "/admin/central") {
     const csrf = cookieValue(request, ADMIN_CSRF_COOKIE);
     if (csrf === undefined || !constantTimeEqual(await sha256Hex(csrf), session.csrf_hash)) return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
-    const listed = await boundedJsonResponse(signal => registryRequest(env, "/auth/clients", "GET", "", signal));
-    const rawClients = record(listed?.value)?.clients;
-    if (listed?.status !== 200 || !Array.isArray(rawClients)) return adminError(503, "Client directory is unavailable. Refresh to try again.");
-    const clients = rawClients.flatMap(value => { const client = record(value);
-      return client && typeof client.client_id === "string" && isSafeIdentifier(client.client_id) && typeof client.label === "string" && client.revoked_at_ms === null
-        ? [{ id: client.client_id, label: client.label }] : []; });
-    return html(adminDocument("Services & Skills", centralPage(csrf, env.CAPABILITIES !== undefined, env.CENTRAL_SKILLS_ENABLED === "1", clients), "central"));
+    return html(adminDocument("Services & Skills", centralPage(csrf, env.CAPABILITIES !== undefined, env.CENTRAL_SKILLS_ENABLED === "1"), "central"));
   }
   if (request.method === "GET" && ["/admin", "/admin/runners", "/admin/clients", "/admin/settings"].includes(url.pathname)) {
     const csrf = cookieValue(request, ADMIN_CSRF_COOKIE);

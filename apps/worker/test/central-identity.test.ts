@@ -38,7 +38,7 @@ it("W02 accepts central-only identity at the real HTTP boundary without any Runn
   expect(await verifyMcpClient(env, client.secret_verifier)).toMatchObject({ client_id: client.client_id, scopes: [] });
   const listed = await rpc(client.secret, "tools/list", {});
   expect(listed.error).toBeUndefined();
-  expect(listed.result.tools).toHaveLength(0);
+  expect(listed.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(["remote_call", "remote_profiles", "remote_tools"]);
   for (const [name, args] of [
     ["read", { workspace_id: "not-configured", path: "README.md" }],
     ["shell", { workspace_id: "not-configured", command: "echo never-dispatched" }],
@@ -63,7 +63,7 @@ it("W02 keeps legacy admission nonempty and offers explicit versioned revalidati
   expect((await request("/auth/mcp/revalidate", { client_id: client.client_id, secret_version: 1, identity_version: 3 })).status).toBe(400);
 });
 
-it("W02 mixed identities preserve native scopes without granting central capabilities", async () => {
+it("W02 mixed identities preserve native scopes without granting computer execution", async () => {
   const client = await create(["coding:read"]);
   expect(await verifyMcpClient(env, client.secret_verifier)).toEqual({ client_id: client.client_id,
     label: "Central identity regression", secret_version: 1, scopes: ["coding:read"] });

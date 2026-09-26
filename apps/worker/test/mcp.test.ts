@@ -423,7 +423,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     const list = await mcp(secretUrl, toolsList());
     expect(list.status).toBe(200);
     const listBody = await readMcp(list) as { result?: { tools?: { name: string }[] } };
-    expect(listBody.result?.tools?.map((tool) => tool.name).sort()).toEqual(["context", "edit", "inspect", "job", "read", "runner_current", "runner_list", "runner_select", "shell", "workspace_list"].sort());
+    expect(listBody.result?.tools?.map((tool) => tool.name).sort()).toEqual(["context", "edit", "inspect", "job", "read", "runner_current", "runner_list", "runner_select", "shell", "workspace_list", "remote_profiles", "remote_tools", "remote_call"].sort());
     const readOnlyShell = await mcp(secretUrl, { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "shell", arguments: { workspace_id: "workspace", command: "echo ignored" } } });
     const readOnlyBody = await readMcp(readOnlyShell) as { result?: { isError?: boolean; structuredContent?: { error?: { code?: string } } } };
     expect(readOnlyBody.result).toMatchObject({ isError: true, structuredContent: { error: { code: "insufficient_scope" } } });

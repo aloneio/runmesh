@@ -1,4 +1,4 @@
-/** Versioned identity vocabulary. Identity is not a central capability grant. */
+/** Versioned identity vocabulary. Authenticated instance clients share published central capabilities; native scopes remain separate. */
 export const NATIVE_SCOPES = ["coding:read", "coding:write", "coding:exec"] as const;
 export type CodingScope = (typeof NATIVE_SCOPES)[number];
 

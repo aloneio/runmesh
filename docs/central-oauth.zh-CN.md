@@ -9,7 +9,7 @@ test 和 development 环境启用，不代表生产激活。**
 
 日常页面输入 MCP 地址并选择 OAuth，程序自动发现元数据，优先使用客户端元数据
 文档，其次动态注册公共客户端。保留 PKCE、会话绑定的一次性状态、issuer 校验、
-加密持久凭据和刷新占用，不需要逐个供应商配置环境策略。AI 客户端授权独立分配。
+加密持久凭据和刷新占用，不需要逐个供应商配置环境策略。已发布工具向所有有效客户端共享，上游同意仍须完成。
 程序先发送一次不携带凭据的服务发现请求，读取 `WWW-Authenticate` 中指定的资源
 元数据地址和 scope；没有挑战时再使用 well-known 发现。该探测不初始化旧版会话、
 不调用工具，所有目标仍须为受限公网 HTTPS，且不跟随重定向。参见
@@ -21,7 +21,7 @@ test 和 development 环境启用，不代表生产激活。**
 
 管理员显式把一份上游授权关联到一个 Runmesh MCP 客户端凭据代次。客户端 ID 不等于
 自然人身份。关联绑定档案、客户端、凭据代次、资源端点和 OAuth 配置摘要；不同
-客户端不能复用对方关联。上游授权、工具审核和客户端能力授权仍独立，完成 OAuth
+客户端不能复用对方关联。上游授权与共享工具发布仍独立，完成 OAuth
 不授予机器权限，也不需要在 Runner 安装软件。
 
 本批支持预注册的**公共 OAuth 客户端**、授权码、PKCE S256、Bearer、显式 resource
@@ -58,8 +58,8 @@ oauth_client_id 和 scopes；完整示例见英文页。所有地址必须是固
 也不要记录授权 URL。
 
 关联并启用后，`/admin/central/discovery/{profile_id}` 可在 expected_revision 之外
-指定 principal，OAuth 发现必须提供它。完整目录仍须审核并独立授权；W08 已加入
-[管理和可复用工具集界面](central-administration.zh-CN.md)，仍须上述显式提供方策略。
+指定 principal，OAuth 发现必须提供它。完整目录仍须审核后共享发布；参见
+[控制端管理界面](central-administration.zh-CN.md)，仍须上述显式提供方策略。
 
 ## 刷新、撤销与恢复
 

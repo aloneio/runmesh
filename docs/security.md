@@ -2,6 +2,10 @@
 
 Runmesh combines MCP client scopes, Runner policy, workspace permissions and the host's OS identity. Use these controls to grant each client the access its work requires. Setup steps are in the [administrator guide](admin-guide.md) and [user guide](user-guide.md).
 
+## Shared central library
+
+In the current development configuration, every authenticated client shares enabled, reviewed MCP tools and active Skills. Per-client central capability assignments are retired. Client credentials, upstream OAuth, publication checks and global capability disabling remain enforced; native Runner scopes and workspace policies remain separate. Revoke a client credential to withdraw that client, disable a capability to withdraw it instance-wide, or use separate instances for separate capability libraries. See [central administration](central-administration.md) for upgrade behavior.
+
 ## Protect each credential
 
 | Credential | Purpose and storage |

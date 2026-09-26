@@ -6,11 +6,10 @@ independently usable review/snapshot path.
 
 [简体中文](central-catalog.zh-CN.md)
 
-**Status: W04 directory foundations on dev; central storage remains test-bound.**
-This is not an enabled MCP proxy or an upstream connection guide. W04 adds
-manual catalog capture, immutable snapshots, reviewed tool selections and a
-permission-filtered internal reader. It does not discover or invoke an upstream
-server, install a Skill, or change the native MCP tool catalog.
+**Status: enabled shared catalogs in development; production activation remains separate.**
+All authenticated instance clients share the enabled published selection. The
+control panel connects MCP URLs with no authentication or OAuth, then discovers
+and reviews tools. This page describes the underlying snapshot contract.
 
 ## Review workflow
 
@@ -37,8 +36,7 @@ reuses its body, but still advances the observation revision. No directory read
 polls an upstream server or creates a native Job.
 
 The imported capture is administrator-supplied evidence, **not proof of a live
-upstream response**. W05 must connect the reviewed HTTP discovery/egress adapter
-to the same lifecycle. Failure to contact an upstream must never stage an empty
+upstream response**. The controlled HTTP discovery/egress adapter uses the same lifecycle. Failure to contact an upstream must never stage an empty
 capture. An explicitly imported empty array represents a genuinely empty catalog
 and quarantines previously available tools.
 
@@ -58,13 +56,11 @@ reordered. Unsupported descriptor fields are rejected, not silently stripped.
 The approved selection and latest imported capture are separate. Changed or
 removed tools are immediately excluded from the old approved view; unchanged,
 previously selected tools can remain visible. New/changed tools require explicit
-review and a grant for their new content version. Approval never writes client
-grants. Restoring an old snapshot requires explicitly importing and reviewing it;
+review before the new content version is published to all authenticated clients. Restoring an old snapshot requires explicitly importing and reviewing it;
 this does not assert that the live upstream has rolled back.
 
-The shared selection is currently **per connection profile**. A standalone named
-ToolsetProfile spanning several connections is not implemented in this batch.
-Keep that later grouping separate from directory integrity and execution policy.
+The shared selection is per connection profile. Legacy client grants and toolset
+assignment are retired; neither participates in live reads or calls.
 
 ## Bounded schema contract
 
@@ -79,26 +75,24 @@ Patterns, patternProperties, formats, remote references, recursive references,
 dynamic references, IDs/anchors, custom headers and unknown keywords/dialects are
 not supported. Tool icons and arbitrary `_meta` are also not yet imported. These
 limits intentionally reject some valid broader MCP definitions. Nothing is
-silently converted into a weaker schema. W04 checks metadata structure and
-budgets; it does **not** implement a runtime argument validator. W05 must supply
-and test an evaluator for the declared subset before invocation is enabled.
+silently converted into a weaker schema. Catalog ingestion checks structure and budgets. The remote invocation adapter
+validates arguments against the reviewed subset before dispatch.
 
-## Per-client directory views
+## Shared directory views
 
-The internal `listCatalog(principal, query)` reader authenticates the current
-credential generation and checks live central grants. It requires no Runner and
-does not use coding scopes as central permission. Only the intersection of the
-approved selection, unchanged observed tools and exact client grants is visible.
+listCatalog authenticates the current client credential generation and returns
+the intersection of the approved selection and unchanged observed definitions.
+It requires no Runner, native scope or per-client grant.
 
-Queries select one profile and return at most 20 tools. Filtering precedes
-pagination, so hidden tools and their counts are not disclosed. HMAC cursors bind
-the owner namespace, client/generation, profile/revision, grant revision, catalog
-revision, page limit and a five-minute expiry. Each page rechecks identity and
-state after asynchronous work; a cursor is not an authorization token.
+Queries select one profile and return at most 20 tools after publication
+filtering. Version-2 HMAC cursors bind the owner namespace, client/generation,
+profile/revision, catalog revision, page limit and five-minute expiry. Old v1
+cursors are rejected; clients must refresh. Each page rechecks identity and
+publication after asynchronous work. A cursor is not an authorization token.
 
-No MCP `tools/list` registration is added here. The later thin remote provider
-will consume the same directory reader, not duplicate its policy. Ordinary
-Runmesh clients still receive the original native directory.
+remote_profiles lists published shared services; remote_tools pages their tools.
+Small direct directories also expose reviewed rm_ aliases. Larger libraries use
+the bounded discovery surface without requiring manually supplied profile IDs.
 
 ## Storage, budgets and recovery
 
@@ -125,8 +119,8 @@ catalogs can still be disabled. These are safety ceilings, not measured
 production throughput. The 100-profile/2,000-tool test is a synthetic local
 inventory test, not 100 real connected MCPs or a production load benchmark.
 
-Production/development bindings, Runner code, Worker–Runner wire contracts and
-native tool definitions are unchanged. The optional feature's absence does not
+Production activation remains separate. Runner code, Worker–Runner wire
+contracts and native tool definitions are unchanged. The optional feature's absence does not
 resolve its storage or credential ports. The old catalog/host mismatch acceptance
 items are not closed by local tests.
 

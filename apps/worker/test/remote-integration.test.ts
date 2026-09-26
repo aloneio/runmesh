@@ -56,6 +56,7 @@ async function fixture(native = false) {
   await runInDurableObject(stub, (_original, state) => { instance = new CapabilitiesDOv1(state, configured); });
   const call = <T>(action: (owner: CapabilitiesDOv1) => Promise<T>) => runInDurableObject(stub, () => action(instance));
   const port: CentralRemote & CentralDirectoryReader & CentralToolVisibilityReader = { toolVisibility: principal => call(owner => owner.toolVisibility(principal)),
+    listRemoteProfiles: principal => call(owner => owner.listRemoteProfiles(principal)),
     listDirectory: principal => call(owner => owner.listDirectory(principal)),
     callRemote: (principal, input) => call(owner => owner.callRemote(principal, input)),
     listCatalog: (principal, input) => call(owner => owner.listCatalog(principal, input)),
@@ -91,8 +92,6 @@ async function fixture(native = false) {
     expect(await call(owner => owner.mutateCatalog(admin.hash, { action: "approve", profile_id: id, expected_revision: 1,
       digest: observed.snapshot.digest, tool_names: ["lookup"] }))).toMatchObject({ state: "written" });
     const tool = observed.snapshot.tools[0]!;
-    expect(await call(owner => owner.replaceGrant({ client_id: current.principal.client_id, enabled: true, expected_revision: 0,
-      rules: [{ kind: "remote_tool", resource_id: tool.tool_id, version: tool.version, connection_profile_id: id }] }))).toMatchObject({ state: "written" });
     return { profile_id: id, tool_id: tool.tool_id, version: tool.version, arguments: { value: 7 } };
   };
   return { admin, current, config, call, port, discover, approve, execute, network, methods, drift: () => { description = "Unreviewed change"; } };
@@ -106,7 +105,7 @@ it("W05 admin discovery to approval to client invocation crosses the real HTTP/D
     const command = await f.approve();
     const list = await rpc(f.config, f.current.secret, "tools/list", {});
     expect(list.result.tools.map((tool: { name: string }) => tool.name)).toContain("remote_call");
-    expect(list.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(['remote_call', 'remote_tools']);
+    expect(list.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(['remote_call', 'remote_profiles', 'remote_tools']);
     const count = f.methods.length;
     const page = await rpc(f.config, f.current.secret, "tools/call", { name: "remote_tools", arguments: { profile_id: "docs" } });
     expect(JSON.parse(page.result.content[0].text).tools[0].tool_id).toBe(command.tool_id);
@@ -114,23 +113,26 @@ it("W05 admin discovery to approval to client invocation crosses the real HTTP/D
     const response = await rpc(f.config, f.current.secret, "tools/call", { name: "remote_call", arguments: command });
     expect(response.result).toMatchObject({ isError: false, structuredContent: { value: 7 }, content: [{ type: "text", text: "7" }, { type: "image", data: "AA==" }] });
     expect(f.execute).toHaveBeenCalledOnce();
-    expect(await f.call(owner => owner.readGrant(f.current.principal.client_id))).toMatchObject({ enabled: true });
     await runInDurableObject(registry(), instance => { expect(instance.listRunners()).toEqual([]); });
   } finally { f.network.mockRestore(); }
 });
 
-it("W05 unapproved callers cannot use a cached tool definition and argument validation precedes network", async () => {
+it("W05 shared clients discover publications without grants and invalid arguments precede network", async () => {
   const f = await fixture();
   try {
     expect((await f.discover()).status).toBe(200); const command = await f.approve(), other = await client(), before = f.methods.length;
     const config = { ...f.config, CENTRAL_SKILLS_ENABLED: '1', CENTRAL_DIRECT_TOOLS_ENABLED: '1' };
-    expect((await rpc(config, other.secret, 'tools/list', {})).result.tools).toEqual([]);
+    const shared = (await rpc(config, other.secret, 'tools/list', {})).result.tools;
+    const profiles = await rpc(config, other.secret, 'tools/call', { name: 'remote_profiles', arguments: {} });
+    expect(JSON.parse(profiles.result.content[0].text)).toMatchObject({ state: 'listed', profiles: [{ profile_id: 'docs' }] });
     const tools = (await rpc(config, f.current.secret, 'tools/list', {})).result.tools;
-    expect(tools.map((tool: { name: string }) => tool.name)).toEqual(expect.arrayContaining(['remote_tools', 'remote_call', 'remote_status']));
+    expect(tools.map((tool: { name: string }) => tool.name)).toEqual(shared.map((tool: { name: string }) => tool.name));
+    expect(tools.map((tool: { name: string }) => tool.name)).toEqual(expect.arrayContaining(['remote_profiles', 'remote_tools', 'remote_call', 'remote_status']));
     expect(tools.some((tool: { name: string }) => tool.name.startsWith('skill_'))).toBe(false);
-    expect(await f.port.callRemote(other.principal, command)).toMatchObject({ state: "failed", code: "permission_denied", operation_state: "not_started" });
     expect(await f.port.callRemote(f.current.principal, { ...command, arguments: { value: "7" } })).toMatchObject({ code: "invalid_arguments", operation_state: "not_started" });
     expect(f.methods).toHaveLength(before); expect(f.execute).not.toHaveBeenCalled();
+    expect(await f.port.callRemote(other.principal, command)).toMatchObject({ state: "completed" });
+    expect(f.execute).toHaveBeenCalledOnce();
   } finally { f.network.mockRestore(); }
 });
 
@@ -239,13 +241,13 @@ it("W05 a relay hop cannot recursively enter another Runmesh MCP endpoint", asyn
   expect((await handleMcpSecret(request, env, new URL(request.url))).status).toBe(508);
 });
 
-it('W08 direct tools preserve reviewed schemas and stale names cannot bypass revoked grants', async () => {
+it('W08 direct tools preserve reviewed schemas and stale names cannot bypass a disabled service', async () => {
   const f = await fixture(true); try {
     expect((await f.discover()).status).toBe(200); await f.approve(); const config = { ...f.config, CENTRAL_DIRECT_TOOLS_ENABLED: '1' };
     const listed = await rpc(config, f.current.secret, 'tools/list', {}); const direct = listed.result.tools.find((t: { name: string }) => t.name.startsWith('rm_'));
     expect(direct.inputSchema.properties.value.type).toBe('integer'); const called = await rpc(config, f.current.secret, 'tools/call', { name: direct.name, arguments: { value: 9 } });
     expect(called.result.structuredContent).toEqual({ value: 9 }); expect(f.execute).toHaveBeenCalledOnce();
-    await f.call(o => o.replaceGrant({ client_id: f.current.principal.client_id, expected_revision: 1, enabled: false, rules: [] }));
+    await f.call(o => o.mutateProfile(f.admin.hash, { action: 'disable', profile_id: 'docs', expected_revision: 2 }));
     const denied = await rpc(config, f.current.secret, 'tools/call', { name: direct.name, arguments: { value: 10 } }); expect(denied.result?.isError ?? !!denied.error).toBe(true); expect(f.execute).toHaveBeenCalledOnce();
     f.port.listDirectory = async () => { throw new Error('central failure'); }; const degraded = await rpc(config, f.current.secret, 'tools/list', {}); expect(degraded.result.tools.some((t: { name: string }) => t.name === 'shell')).toBe(true);
     const status = await rpc(config, f.current.secret, 'tools/call', { name: 'remote_status', arguments: {} }); expect(JSON.parse(status.result.content[0].text).state).toBe('unavailable');

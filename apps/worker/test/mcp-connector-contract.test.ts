@@ -46,10 +46,10 @@ function withoutDialect(schema: unknown): unknown {
   return value;
 }
 
-it("emits the complete source catalog through the authenticated HTTP MCP adapter", async () => {
+it("emits the unchanged native source catalog alongside shared discovery through authenticated HTTP", async () => {
   const actual = await emittedTools();
   const expected = catalogContract().tools;
-  expect(actual.map(tool => tool.name).sort()).toEqual(expected.map(tool => tool.name).sort());
+  expect(actual.map(tool => tool.name).sort()).toEqual([...expected.map(tool => tool.name), "remote_profiles", "remote_tools", "remote_call"].sort());
   for (const tool of expected) {
     const emitted = actual.find(candidate => candidate.name === tool.name)!;
     expect(emitted.description, tool.name).toBe(tool.description);

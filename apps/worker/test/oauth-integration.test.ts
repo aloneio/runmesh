@@ -22,10 +22,6 @@ it("W06 HTTP PKCE consent, encrypted storage and two-account MCP calls require n
   expect(await f.call(o => o.mutateCatalog(f.admin.hash, { action: "approve", profile_id: "docs", expected_revision: 1,
     digest: catalog.snapshot.digest, tool_names: ["account"] }))).toMatchObject({ state: "written" });
   const tool = catalog.snapshot.tools[0]!;
-  for (const client of [f.client, b]) {
-    expect(await f.call(o => o.replaceGrant({ client_id: client.principal.client_id, expected_revision: 0, enabled: true,
-      rules: [{ kind: "remote_tool", resource_id: tool.tool_id, version: tool.version, connection_profile_id: "docs" }] }))).toMatchObject({ state: "written" });
-  }
   const command = { profile_id: "docs", tool_id: tool.tool_id, version: tool.version, arguments: {} };
   expect(await f.call(o => o.callRemote(f.client.principal, command))).toMatchObject({ state: "completed", result: { structuredContent: { account: "account-A" } } });
   expect(await f.call(o => o.callRemote(b.principal, command))).toMatchObject({ state: "completed", result: { structuredContent: { account: "account-B" } } });

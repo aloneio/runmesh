@@ -12,8 +12,8 @@ acceptance. It is not a production release sign-off.
 | --- | --- | --- |
 | W00 | Current remote baseline isolated; old edits retained | Original real-host Job/workspace catalog and host Git diagnosis |
 | W01-W06 | Inherited architecture, identity, profiles, reviewed catalog, HTTP MCP and OAuth/session baseline | Real supplier OAuth and deployment network boundary |
-| W07 | Text Skill lifecycle, exact grants, immutable versions, tools/resources | Real host resource behavior; general YAML/archive import remains unsupported |
-| W08 | Admin console/APIs, reusable grant templates, small direct catalogs | Two actual AI host versions, cache refresh and Job recovery evidence |
+| W07 | Shared active Skill lifecycle, immutable versions, paginated tools/resources | Real host resource behavior; general YAML/archive import remains unsupported |
+| W08 | Guided shared library, retired assignment APIs, direct and bounded discovery catalogs | Two actual AI host versions, cache refresh and Job recovery evidence |
 | W09 | Optional durable call budgets, cooldown, metadata receipts | Account-level quota and cost measurements; distributed rate limiting is not promised |
 | W10 | Local domain/SQLite/HTTP/SDK/compatibility regression fixtures | Public DNS/SSRF, actual host matrix, measured CPU/peak memory/p50/p95 under production-like load |
 | W11 | Independent opt-ins, retained tables/versions, rollout and disable instructions | Canary deployment, dev-to-main promotion, published CI/release evidence |
@@ -39,12 +39,13 @@ successful push alone is not evidence that the build or deployment succeeded.
    CENTRAL_DIRECT_TOOLS_ENABLED and CENTRAL_GOVERNANCE_ENABLED with value 1.
    Legacy remote profiles require CENTRAL_MCP_EGRESS; control-panel connections persist exact endpoint authorization directly.
 4. With no Runner, configure two approved public MCP suppliers and one text Skill;
-   give two independently credentialed real clients the same reviewed template.
+   connect two independently credentialed real clients to the shared publications,
+   without creating grant rows.
    Record product/version/date, tools/resources support, schemas and cache refresh.
 5. Add a Runner without reconfiguring those central capabilities. Verify native
    read/write policy, offline selected Runner behavior, original Job ID plus
    workspace_id recovery, and no unknown-operation replay.
-6. Revoke a grant after caching the directory. Disable a connector. Simulate
+6. Revoke a client credential after caching the directory. Disable a connector. Simulate
    central storage and receipt failures. Verify denied new calls and unaffected
    native calls. Measure bytes, CPU, memory and p50/p95, including a slow supplier.
 7. Turn off all new flags and the remote configuration before rolling Worker
