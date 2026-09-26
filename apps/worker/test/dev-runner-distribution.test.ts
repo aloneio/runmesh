@@ -35,6 +35,16 @@ function responseFetch(body: unknown, status = 200) {
 const devEnv = { RUNMESH_ENVIRONMENT: "development", WORKER_ID: "worker-development", RUNMESH_PUBLIC_ORIGIN: "https://runmeshdev.example", RUNMESH_SIGNED_RELEASE_AVAILABLE: "dev" };
 
 describe("development Runner distribution", () => {
+  it("HTTP composition invokes native workerd fetch with its correct receiver", async () => {
+    const dependencies = developmentReleaseDependencies(null, {});
+    const controller = new AbortController();
+    const reason = new Error("release request cancelled before network dispatch");
+    controller.abort(reason);
+    // Keep the actual runtime fetch: an injected mock would hide its receiver
+    // requirement. An already aborted request performs no external I/O.
+    await expect(dependencies.fetch("https://example.invalid/release", { signal: controller.signal })).rejects.toBe(reason);
+  });
+
   it("selects the newest complete immutable dev prerelease and ignores unsafe candidates", async () => {
     const fetchImpl = responseFetch([
       release(devVersion(0), "2026-09-16T08:00:00Z"),
