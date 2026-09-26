@@ -192,10 +192,14 @@ export class RunnerConnection {
     if (persisted !== undefined) {
       try {
         const restored = await candidateWorkspaces(persisted, this.metadata.execution_mode, this.metadata.service_identity);
+        // Validation may finish after stop() or a replacement start(). Neither
+        // its success nor failure may change the replacement runtime policy.
+        if (this.stopped || generation !== this.lifecycleGeneration) return;
         this.runtime.applyPolicy(restored);
         this.appliedPolicyRevision = persisted.revision;
         this.appliedPolicyChecksum = persisted.checksum;
       } catch {
+        if (this.stopped || generation !== this.lifecycleGeneration) return;
         // Keep the live policy fail-closed but continue to the authenticated
         // transport.  The Worker can then receive an explicit `invalid` ACK
         // (including os_access_denied diagnostics) and deliver a corrected
@@ -210,8 +214,10 @@ export class RunnerConnection {
       this.onStateChange("connecting");
       try {
         await this.connectOnce();
+        if (this.stopped || generation !== this.lifecycleGeneration) return;
         this.reconnectAttempt = 0;
       } catch (error) {
+        if (this.stopped || generation !== this.lifecycleGeneration) return;
         const detail = error instanceof Error ? error.message : String(error);
         if (detail.length > 0) console.error(`runner connection error: ${detail}`);
         this.onStateChange("offline");
@@ -226,6 +232,7 @@ export class RunnerConnection {
           : reconnectDelayMs(this.reconnectAttempt, this.random());
         console.error(`runner reconnect scheduled: class=${error instanceof RunnerServiceUnavailableError ? "service_unavailable" : error instanceof RunnerSessionConflictError ? "session_conflict" : "network"} delay_ms=${delayMs}`);
         await this.sleep(delayMs);
+        if (this.stopped || generation !== this.lifecycleGeneration) return;
         this.reconnectAttempt += 1;
       }
     }
@@ -240,8 +247,12 @@ export class RunnerConnection {
     if (this.cleanupTimer !== undefined) clearInterval(this.cleanupTimer);
     if (this.heartbeatTimer !== undefined) clearInterval(this.heartbeatTimer);
     if (this.syncTimer !== undefined) clearInterval(this.syncTimer);
+    // Retire ownership before close callbacks can arrive, including while a
+    // replacement start is still initializing and has no new socket yet.
+    const socket = this.socket;
+    this.socket = undefined;
     this.welcomedSocket = undefined;
-    this.socket?.close(1000, "runner stopped");
+    socket?.close(1000, "runner stopped");
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(new Error("runner stopped"));
@@ -492,7 +503,7 @@ export class RunnerConnection {
             ? new RunnerServiceUnavailableError(`runner service temporarily unavailable (close ${code})`)
             : new Error(welcomed ? "connection closed" : "connection closed before welcome");
         // A brief welcome during an outage must not reset the retry budget.
-        if (welcomed && Date.now() - welcomedAtMs >= 60_000) this.reconnectAttempt = 0;
+        if (currentSocket && welcomed && Date.now() - welcomedAtMs >= 60_000) this.reconnectAttempt = 0;
         if (!this.stopped) fail(failure);
         else if (!settled) {
           settled = true;
