@@ -7,6 +7,15 @@ is development code, not a production activation or evidence of real-host
 acceptance. No Runner installation, model loop, shell execution or permission
 grant occurs when importing or reading content.
 
+## Direct installation
+
+The control panel installs SKILL.md plus supporting text files or a folder through
+POST /admin/central/skill-installations. The server derives the Skill ID and
+metadata from validated frontmatter and commits content, approval and active
+version atomically. Updates require the observed revision and explicit UI
+confirmation. Existing grants stay pinned. Source/license fields, preview, staging
+and activation commands below are legacy API options, not required product steps.
+
 ## Enable and import
 
 Both the optional CAPABILITIES binding and CENTRAL_SKILLS_ENABLED=1 are required

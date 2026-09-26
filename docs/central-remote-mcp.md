@@ -70,7 +70,7 @@ no usable credentials and is not installed by this change:
 }
 ```
 
-The variable is `CENTRAL_MCP_EGRESS`. Absent or malformed configuration disables
+The variable is `CENTRAL_MCP_EGRESS`. For legacy profiles only, absent or malformed configuration disables
 the remote entry points. Ports other than canonical HTTPS 443, IP literals,
 private/ambiguous host forms, wildcards, user information, query strings and
 fragments are rejected. A profile must be enabled and match a policy entry.

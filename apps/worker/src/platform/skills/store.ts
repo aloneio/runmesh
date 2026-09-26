@@ -48,7 +48,8 @@ export class SkillState implements SkillRepository {
     this.initialize();
     return this.storage.sql.exec<{ approved: number }>("SELECT approved FROM skill_bundles_v1 WHERE skill_id=? AND digest=?", id, digest).toArray()[0]?.approved === 1;
   }
-  public stage(bundle: SkillBundle, revision: number): SkillMutation {
+  public install(bundle: SkillBundle, revision: number): SkillMutation { return this.stage(bundle, revision, true); }
+  public stage(bundle: SkillBundle, revision: number, install = false): SkillMutation {
     this.initialize();
     return this.storage.transactionSync(() => {
       const current = this.head(bundle.skill_id);
@@ -60,10 +61,11 @@ export class SkillState implements SkillRepository {
         const totals = this.storage.sql.exec<{ bytes: number; versions: number; skills: number }>("SELECT COALESCE(SUM(bytes),0) AS bytes, SUM(CASE WHEN skill_id=? THEN 1 ELSE 0 END) AS versions, COUNT(DISTINCT skill_id) AS skills FROM skill_bundles_v1", bundle.skill_id).toArray()[0]!;
         if (totals.bytes + bytes > SKILL_LIMITS.storage_bytes || totals.versions >= SKILL_LIMITS.versions || (!current && totals.skills >= SKILL_LIMITS.skills)) return { state: "capacity" };
         const { files: _files, schema_version: _schema, ...summary } = bundle;
-        this.storage.sql.exec("INSERT INTO skill_bundles_v1 VALUES (?,?,?,?,?,0)", bundle.skill_id, bundle.digest, JSON.stringify(summary), content, bytes);
+        this.storage.sql.exec("INSERT INTO skill_bundles_v1 VALUES (?,?,?,?,?,?)", bundle.skill_id, bundle.digest, JSON.stringify(summary), content, bytes, install ? 1 : 0);
       }
-      const head: SkillHead = { skill_id: bundle.skill_id, revision: revision + 1, staged_digest: bundle.digest, active_digest: current?.active_digest ?? null, enabled: current?.enabled ?? false };
-      this.storage.sql.exec("INSERT INTO skill_heads_v1 VALUES (?,?,?,?,?) ON CONFLICT(skill_id) DO UPDATE SET revision=excluded.revision,staged_digest=excluded.staged_digest", head.skill_id, head.revision, head.staged_digest, head.active_digest, head.enabled ? 1 : 0);
+      if (install && previous) this.storage.sql.exec("UPDATE skill_bundles_v1 SET approved=1 WHERE skill_id=? AND digest=?", bundle.skill_id, bundle.digest);
+      const head: SkillHead = { skill_id: bundle.skill_id, revision: revision + 1, staged_digest: bundle.digest, active_digest: install ? bundle.digest : current?.active_digest ?? null, enabled: install || (current?.enabled ?? false) };
+      this.storage.sql.exec("INSERT INTO skill_heads_v1 VALUES (?,?,?,?,?) ON CONFLICT(skill_id) DO UPDATE SET revision=excluded.revision,staged_digest=excluded.staged_digest,active_digest=excluded.active_digest,enabled=excluded.enabled", head.skill_id, head.revision, head.staged_digest, head.active_digest, head.enabled ? 1 : 0);
       return { state: "written", head };
     });
   }

@@ -3,6 +3,7 @@ import { parseClientIdentity } from "../../contracts/identity.js";
 import { isCapabilityIdentifier, parseCapabilityGrant } from "../../contracts/capabilities.js";
 import { SKILL_LIMITS, type SkillPorts, type SkillMutation, type SkillInspection, type SkillPage, type SkillContent, type SkillSummary, type SkillDependency, type SkillLibraryPage } from "../../contracts/skills.js";
 import { makeSkillBundle, skillDigest, skillObject, skillPath } from "../../domain/skills/bundle.js";
+import { skillInstallation } from "../../domain/skills/install.js";
 
 export function createSkillService(ports: SkillPorts) {
   async function authorization(principal: CapturedIdentity, signal: AbortSignal) {
@@ -20,6 +21,21 @@ export function createSkillService(ports: SkillPorts) {
     return grant.enabled && grant.client_id === principal.client_id ? grant : undefined;
   }
   return {
+    async install(hash: string, input: unknown, signal: AbortSignal): Promise<SkillMutation> {
+      try {
+        const installation = skillInstallation(input);
+        if (!installation) return { state: "invalid" };
+        const initial = await ports.admin(hash, signal);
+        if (signal.aborted) return { state: "unavailable" };
+        if (initial !== "allowed") return { state: initial };
+        const bundle = await makeSkillBundle(installation.bundle, ports.digest);
+        if (!bundle) return { state: "invalid" };
+        const final = await ports.admin(hash, signal);
+        if (signal.aborted) return { state: "unavailable" };
+        if (final !== "allowed") return { state: final };
+        return ports.repository.install(bundle, installation.revision);
+      } catch { return { state: "unavailable" }; }
+    },
     async library(hash: string, after: string | undefined, signal: AbortSignal): Promise<SkillLibraryPage> {
       try {
         if (after !== undefined && !isCapabilityIdentifier(after)) return { state: "invalid" };

@@ -26,7 +26,7 @@ async function fixture(nativeScopes: ["coding:read"] | [] = []) {
   let instance: CapabilitiesDOv1;
   await runInDurableObject(stub, (_old, state) => { instance = new CapabilitiesDOv1(state, configured); });
   const invoke = <T>(action: (owner: CapabilitiesDOv1) => Promise<T>) => runInDurableObject(stub, () => action(instance));
-  const port = { listSkillLibrary: (h: string, after?: string) => invoke(o => o.listSkillLibrary(h, after)), toolVisibility: (p: { client_id: string; secret_version: number }) => invoke(o => o.toolVisibility(p)),
+  const port = { installSkill: (h: string, q: unknown) => invoke(o => o.installSkill(h, q)), listSkillLibrary: (h: string, after?: string) => invoke(o => o.listSkillLibrary(h, after)), toolVisibility: (p: { client_id: string; secret_version: number }) => invoke(o => o.toolVisibility(p)),
     getToolset: (h: string, id: string) => invoke(o => o.getToolset(h, id)), mutateToolset: (h: string, q: unknown) => invoke(o => o.mutateToolset(h, q)),
     mutateSkill: (h: string, q: unknown) => invoke(o => o.mutateSkill(h, q)), inspectSkill: (h: string, id: string, d?: string) => invoke(o => o.inspectSkill(h, id, d)),
     listSkills: (p: { client_id: string; secret_version: number }, q: unknown) => invoke(o => o.listSkills(p, q)), readSkill: (p: { client_id: string; secret_version: number }, q: unknown) => invoke(o => o.readSkill(p, q)),
@@ -80,7 +80,7 @@ it('W07/W08 two independent central-only clients read the same approved bundle t
   expect(denied.result.isError).toBe(true);
   const request = new Request('https://worker.test/admin/central', { headers: f.headers });
   const page = await handleBrowserAdmin(request, f.config, new URL(request.url));
-  expect(page.status).toBe(200); expect(await page.text()).toContain('data-central-admin');
+  expect(page.status).toBe(200); expect(await page.text()).toContain('data-central-product');
 });
 it('Acceptance T05 hides ungranted central tools and resource templates while cached calls remain denied', async () => {
   const f = await fixture(['coding:read']), client = f.clients[0]!;
@@ -177,4 +177,22 @@ it('product Skill library includes drafts, paginates exactly, and never includes
   expect((await f.admin('skills?digest=wrong')).status).toBe(400);
   expect((await f.admin('skills', undefined, { ...f.headers, cookie: '' })).status).toBe(403);
   expect(await f.invoke(o => o.listSkillLibrary('invalid-session'))).toEqual({ state: 'denied' });
+});
+
+it('direct Skill installation derives metadata, installs atomically and preserves pinned permissions on update', async () => {
+  const f = await fixture(), client = f.clients[0]!;
+  const files = [{ path: 'SKILL.md', text: ['---', 'name: direct-install', 'description: Installed from control panel', '---', 'First version'].join(String.fromCharCode(10)) }];
+  const installed = await f.admin('skill-installations', { files }); expect(installed.status).toBe(200);
+  const result = await installed.json() as { skill_id: string; digest: string }; expect(result.skill_id).toBe('direct-install');
+  const item = await (await f.admin('skills/direct-install')).json() as { head: { enabled: boolean; revision: number }; bundle: { name: string } };
+  expect(item.head).toMatchObject({ enabled: true, revision: 1 }); expect(item.bundle.name).toBe('direct-install');
+  expect((await f.rpc(client.secret, 'tools/list', {})).result.tools).toHaveLength(0);
+  expect((await f.admin('grants/' + client.id, { expected_revision: 0, enabled: true, rules: [{ kind: 'skill', resource_id: result.skill_id, version: result.digest }] })).status).toBe(200);
+  files[0]!.text += ' updated';
+  expect((await f.admin('skill-installations', { files })).status).toBe(409);
+  expect((await f.admin('skill-installations', { files, expected_revision: 1 })).status).toBe(200);
+  const read = await f.rpc(client.secret, 'tools/call', { name: 'skill_read', arguments: { skill_id: result.skill_id, digest: result.digest } });
+  expect(JSON.parse(read.result.content[0].text).text).not.toContain('updated');
+  expect((await f.admin('skill-installations', { files }, { ...f.headers, 'x-csrf-token': 'invalid' })).status).toBe(403);
+  expect((await f.admin('skill-installations', { files: [{ path: '../SKILL.md', text: files[0]!.text }] })).status).toBe(400);
 });

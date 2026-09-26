@@ -9,9 +9,13 @@ import { handleCentralSkills } from "./central-skills.js";
 import { handleCentralManagement } from "./central-management.js";
 import { handleCentralReceipts } from "./central-receipts.js";
 import { handleCentralToolsets } from "./central-toolsets.js";
+import { handleSkillInstallation } from "./central-skill-install.js";
+import { handleConnections } from "./central-connections.js";
 
 /** Optional browser-admin JSON entry. No bearer-token fallback, plaintext read or MCP tool. */
 export async function handleCentralAdmin(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
+  if (url.pathname.startsWith("/admin/central/connections/")) return handleConnections(request, env, url);
+  if (url.pathname === "/admin/central/skill-installations") return handleSkillInstallation(request, env, url);
   if (url.pathname.startsWith('/admin/central/toolsets/')) return handleCentralToolsets(request, env, url);
   if (url.pathname === "/admin/central/receipts") return handleCentralReceipts(request, env, url);
   if (url.pathname === "/admin/central/profiles" || url.pathname.startsWith("/admin/central/grants/")) return handleCentralManagement(request, env, url);
@@ -30,6 +34,7 @@ export async function handleCentralAdmin(request: Request, env: WorkerEnv, url: 
     if (Object.hasOwn(admission.body, "profile_id")) return fail("central_invalid_request", 400);
     command = parseProfileCommand({ ...admission.body, profile_id: profileId });
     if (command === undefined) return fail("central_invalid_request", 400);
+    if (command.action === "connect" && [url.origin, env.RUNMESH_PUBLIC_ORIGIN].includes(new URL(command.endpoint).origin)) return fail("central_invalid_request", 400);
   }
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -44,10 +49,11 @@ export async function handleCentralAdmin(request: Request, env: WorkerEnv, url: 
       const profile = parseProfile(result.profile);
       if (profile === undefined || profile.profile_id !== profileId) return fail("central_result_unconfirmed", 503, "unknown");
       if (result.state === "written") {
-        if (command === undefined || profile.revision !== (command.action === "create" || command.action === "create_oauth" ? 1 : command.expected_revision + 1))
+        if (command === undefined || profile.revision !== (command.action === "create" || command.action === "create_oauth" || command.action === "connect" ? 1 : command.expected_revision + 1))
           return fail("central_result_unconfirmed", 503, "unknown");
         if (command.action === "create" && (profile.connector_id !== command.connector_id || profile.endpoint !== command.endpoint
           || profile.enabled || profile.credential?.secret_version !== 1)) return fail("central_result_unconfirmed", 503, "unknown");
+        if (command.action === "connect" && (profile.authentication !== command.authentication || profile.connector_id !== command.connector_id || profile.endpoint !== command.endpoint || profile.enabled || profile.credential !== null)) return fail("central_result_unconfirmed", 503, "unknown");
         if (command.action === "create_oauth" && (profile.connector_id !== command.connector_id || profile.endpoint !== command.endpoint
           || profile.enabled || profile.credential !== null)) return fail("central_result_unconfirmed", 503, "unknown");
         if ((command.action === "enable" || command.action === "disable") && profile.enabled !== (command.action === "enable"))

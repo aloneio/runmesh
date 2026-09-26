@@ -1,21 +1,22 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { missingSecretNames, generateMissingSecrets, REQUIRED_SECRET_NAMES } from "./runtime-config-tools.mjs";
+import { missingSecretNames, generateMissingSecrets, REQUIRED_SECRET_NAMES, CENTRAL_VAULT_SECRET } from "./runtime-config-tools.mjs";
 
 /** Explicit setup action, never part of a Worker request or recurring build. */
 export function setupMissingSecrets({ environment, apply = false, invoke }) {
   assert.ok(environment === "production" || environment === "development", "Select --env production|development");
   const target = ["--config", "apps/worker/wrangler.jsonc", "--env", environment];
+  const required = environment === "development" ? [...REQUIRED_SECRET_NAMES, CENTRAL_VAULT_SECRET] : REQUIRED_SECRET_NAMES;
   const inventory = () => {
     const result = invoke(["secret", "list", ...target, "--format", "json"]);
     assert.equal(result.status, 0, "Cannot read Cloudflare secret names. Authenticate and deploy the Worker first; no secrets changed.");
     let parsed;
     try { parsed = JSON.parse(result.stdout); } catch { throw new Error("Secret inventory is not valid JSON; no secrets changed."); }
-    return missingSecretNames(parsed);
+    return missingSecretNames(parsed, required);
   };
   const missing = inventory();
-  if (!apply || missing.length === 0) return { environment, required: REQUIRED_SECRET_NAMES, missing, created: [] };
+  if (!apply || missing.length === 0) return { environment, required, missing, created: [] };
   // A concurrent administrative update must not be overwritten based on an
   // earlier inventory. Do not run initialization concurrently in two hosts.
   assert.deepEqual(inventory(), missing, "Secret inventory changed; review before retrying.");
@@ -25,7 +26,7 @@ export function setupMissingSecrets({ environment, apply = false, invoke }) {
   for (const key of Object.keys(values)) delete values[key];
   assert.equal(result.status, 0, "Secret upload outcome is uncertain. Inspect Cloudflare before retrying; no automatic retry was performed.");
   assert.deepEqual(inventory(), [], "Required secrets could not be confirmed; review Cloudflare setup.");
-  return { environment, required: REQUIRED_SECRET_NAMES, missing: [], created: missing };
+  return { environment, required, missing: [], created: missing };
 }
 
 function main() {

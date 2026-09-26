@@ -1,6 +1,5 @@
 import type { WorkerEnv } from "../platform/env.js";
 import { REMOTE_CODES, REMOTE_LIMITS, type CentralRemote } from "../contracts/remote.js";
-import { parseRemoteEgress } from "../contracts/remote-values.js";
 import { catalogKeys, catalogRevision } from "../contracts/catalog-json.js";
 import { parseCatalogHead } from "../contracts/catalog-values.js";
 import { parseOAuthSelection } from "../contracts/oauth-values.js";
@@ -8,7 +7,7 @@ import { admitCentralAdmin, cancelCentralBody, centralHeaders, centralFailure } 
 
 export async function handleCentralDiscovery(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
   const match = /^\/admin\/central\/discovery\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})$/u.exec(url.pathname);
-  if (match === null || url.search || env.CAPABILITIES === undefined || parseRemoteEgress(env.CENTRAL_MCP_EGRESS) === undefined) {
+  if (match === null || url.search || env.CAPABILITIES === undefined) {
     cancelCentralBody(request); return centralFailure("central_disabled", 404);
   }
   if (request.method !== "POST") { cancelCentralBody(request); return centralFailure("central_method_not_allowed", 405); }

@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "de350f57f9c9d02d77cf9bbb559b1d96a068b1d8eaae9a14aeb87bb2668f77bc",
-      "bytes": 111047,
+      "sha256": "2d7ae4b3b820151f4e226a8297fc9259b839faa8def36b2081f212eac703d092",
+      "bytes": 110093,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -21,7 +21,7 @@
       "pre_product_bytes": 88591,
       "pre_product_recovery_sha256": "907d8c8bc932b5a61596a99ee9d381364b2c0df6626d238e91dccbe4ae85c7a4",
       "pre_product_recovery_bytes": 108669,
-      "product_recovery_change": "Reviewed setup readiness, AI connection handoff, published Skill selection, credential rotation and product navigation; behavior covered by product browser and central admin tests."
+      "product_recovery_change": "Reviewed direct MCP URL with no authentication or OAuth, automatic account authorization, direct Skill installation and confirmed updates; advanced operation forms removed. Covered by central admin and browser regressions."
     },
     {
       "name": "setup",
@@ -30,15 +30,15 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "f75d47618feeae9dc456442fdd9f3eae0fa5e3571193eeda363328610f6b5245",
-      "bytes": 111635,
+      "sha256": "2f060dca8130e3d0ce86a09a29e82429fef9895fbca8188bbd89334e219583be",
+      "bytes": 110681,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
       "pre_product_bytes": 89179,
       "pre_product_recovery_sha256": "a355bbea6b0a6de46d476bf1d992125a1443995b4de8b670d6b0626bad820887",
       "pre_product_recovery_bytes": 109257,
-      "product_recovery_change": "Reviewed setup readiness, AI connection handoff, published Skill selection, credential rotation and product navigation; behavior covered by product browser and central admin tests."
+      "product_recovery_change": "Reviewed direct MCP URL with no authentication or OAuth, automatic account authorization, direct Skill installation and confirmed updates; advanced operation forms removed. Covered by central admin and browser regressions."
     },
     {
       "name": "secret",
@@ -47,15 +47,15 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "c02bf7cabc9d28129a093a9a1aeca7d3e605d5b0066e9d74cdb817a7fe55533b",
-      "bytes": 112789,
+      "sha256": "19987de650a6aae4efd32005d78ba859b9427ac358b84f7cc4d5bd264bd27d65",
+      "bytes": 111835,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
       "pre_product_bytes": 90306,
       "pre_product_recovery_sha256": "110d36e91fe8b8fa1b9a6520175942a5c58bde7365804947ec53f15558918b04",
       "pre_product_recovery_bytes": 110384,
-      "product_recovery_change": "Reviewed setup readiness, AI connection handoff, published Skill selection, credential rotation and product navigation; behavior covered by product browser and central admin tests."
+      "product_recovery_change": "Reviewed direct MCP URL with no authentication or OAuth, automatic account authorization, direct Skill installation and confirmed updates; advanced operation forms removed. Covered by central admin and browser regressions."
     },
     {
       "name": "overview-empty",
@@ -407,15 +407,15 @@
           }
         ]
       ],
-      "sha256": "53d7b9f25fccbd0658018c0dd2015d519f741cbf6ad02147bc68bbf53c210ff2",
-      "bytes": 113138,
+      "sha256": "c08dfe45e110120a6d242fc62ef5a555d12dad0184a512a69af2adde8617d467",
+      "bytes": 112184,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
       "pre_product_bytes": 90665,
       "pre_product_recovery_sha256": "35235a669d34c99a0fd1b737d0f58f38a5ac76ca5ba21e8137da291c119846b7",
       "pre_product_recovery_bytes": 110743,
-      "product_recovery_change": "Reviewed setup readiness, AI connection handoff, published Skill selection, credential rotation and product navigation; behavior covered by product browser and central admin tests."
+      "product_recovery_change": "Reviewed direct MCP URL with no authentication or OAuth, automatic account authorization, direct Skill installation and confirmed updates; advanced operation forms removed. Covered by central admin and browser regressions."
     }
   ],
   "i18n_review": {

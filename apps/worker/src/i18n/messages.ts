@@ -693,6 +693,17 @@ const definitions = {
   "text.windows.powershell.administrator": { en: "Windows PowerShell (Administrator)", "zh-CN": "Windows PowerShell（管理员）" },
   "text.enrollment.code.cleanup.is.uncertain.runner.remains.safely.fenced": { en: "Enrollment code cleanup is uncertain; Runner remains safely fenced.", "zh-CN": "无法确认注册码清理结果；Runner 继续保持安全隔离。" },
   "text.client.name": { en: "Client name", "zh-CN": "客户端名称" },
+  "text.direct.connection.0": { en: "Connect an MCP service or install a Skill.", "zh-CN": "连接 MCP 服务或安装 Skill。" },
+  "text.direct.connection.1": { en: "Enter the service URL, choose how to sign in, and connect.", "zh-CN": "填写服务地址，选择验证方式，即可连接。" },
+  "text.direct.connection.2": { en: "MCP URL", "zh-CN": "MCP 地址" },
+  "text.direct.connection.3": { en: "Authentication", "zh-CN": "验证方式" },
+  "text.direct.connection.4": { en: "No authentication", "zh-CN": "无身份验证" },
+  "text.direct.connection.5": { en: "Service name (optional)", "zh-CN": "服务名称（可选）" },
+  "text.direct.connection.6": { en: "OAuth opens the service sign-in page. Runmesh discovers its settings automatically.", "zh-CN": "选择 OAuth 后将打开服务授权页面，Runmesh 会自动发现连接设置。" },
+  "text.direct.connection.7": { en: "Install a Skill", "zh-CN": "安装 Skill" },
+  "text.direct.connection.8": { en: "The name and description are read from SKILL.md.", "zh-CN": "名称与说明将自动从 SKILL.md 读取。" },
+  "text.direct.connection.9": { en: "Install Skill", "zh-CN": "安装 Skill" },
+  "text.direct.connection.10": { en: "Installing a Skill saves its files. Scripts are never run during installation.", "zh-CN": "安装将保存 Skill 文件，不会执行其中的脚本。" },
 } as const;
 for (const value of Object.values(definitions)) Object.freeze(value);
 export const MESSAGES = Object.freeze(definitions);

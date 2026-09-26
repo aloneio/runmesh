@@ -37,7 +37,7 @@ successful push alone is not evidence that the build or deployment succeeded.
    egress and exact HTTPS endpoint policies. Do not modify the old namespaces.
 3. Explicitly enable the desired flags: CENTRAL_SKILLS_ENABLED,
    CENTRAL_DIRECT_TOOLS_ENABLED and CENTRAL_GOVERNANCE_ENABLED with value 1.
-   Remote MCP still independently requires CENTRAL_MCP_EGRESS.
+   Legacy remote profiles require CENTRAL_MCP_EGRESS; control-panel connections persist exact endpoint authorization directly.
 4. With no Runner, configure two approved public MCP suppliers and one text Skill;
    give two independently credentialed real clients the same reviewed template.
    Record product/version/date, tools/resources support, schemas and cache refresh.
