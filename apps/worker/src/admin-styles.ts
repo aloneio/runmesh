@@ -5,6 +5,23 @@
 // nothing from its former scope.
 
 export function adminStyles(): string { return `<style>
+.central-start,.central-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px;margin:24px 0}
+.central-start>div{padding:20px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+.central-start p{margin:8px 0 0;color:var(--muted)}
+.central-grid{grid-template-columns:1.2fr 1fr;align-items:start}
+.central-tabs{display:flex;gap:10px;flex-wrap:wrap;margin:24px 0}
+[data-central-product] form{display:grid;gap:16px}
+[data-central-product] label{display:grid;gap:8px;margin:12px 0}
+[data-central-product] .central-choice{display:flex;align-items:flex-start;gap:12px;padding:14px;border:1px solid var(--line);border-radius:10px}
+[data-central-product] input[type=checkbox]{width:auto;flex:none;margin-top:4px}
+.central-card{border-bottom:1px solid var(--line);padding:18px 0;overflow-wrap:anywhere}
+.central-card:first-child{padding-top:4px}.central-card h3{margin:0 0 8px}
+.central-card .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+[data-product-status]:not(:empty){padding:14px 18px;border:1px solid var(--line);border-radius:10px;background:var(--panel);white-space:pre-wrap}
+[data-product-status][data-error=true]{border-color:#b91c1c;color:#b91c1c}
+[data-central-product] pre{max-height:340px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
+[data-central-product] [hidden]{display:none!important}.central-advanced{margin-top:32px}.central-advanced>summary{cursor:pointer}
+@media(max-width:760px){.central-start,.central-grid{grid-template-columns:1fr}.central-tabs .button{flex:1}.central-start{gap:8px}}
 /* Explicit admin navigation is rendered without cross-document fades. */
 ::view-transition-old(app-header),::view-transition-new(app-header){animation:none}
 :root{
@@ -1768,4 +1785,9 @@ html[lang="zh-CN"] legend,html[lang="zh-CN"] h3,html[lang="zh-CN"] .eyebrow,html
   .enrollment-dialog .dialog-actions form .button,.enrollment-dialog .dialog-actions>a{width:100%}
   .secret-card{padding:24px 20px}
 }
+.central-next-step{margin-top:24px;padding-top:24px;border-top:1px solid var(--line)}
+.central-setup-notice{padding:16px;border:1px solid var(--line);border-radius:12px;margin-bottom:16px;background:var(--panel)}
+[data-service-create] fieldset{min-width:0;border:0;padding:0;margin:0;display:grid;gap:14px}
+[data-service-create] fieldset:disabled{opacity:.6}
+.central-card details form{display:grid;gap:12px;margin-top:12px}
 </style>`; }

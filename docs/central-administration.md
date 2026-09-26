@@ -2,11 +2,40 @@
 
 [简体中文](central-administration.zh-CN.md)
 
-The /admin/central console reuses the existing browser session, CSRF, strict
-cookies and CSP. It provides explicit JSON operations for profile configuration,
-catalog discovery/review, OAuth linking, client grants, reusable toolsets, Skill
-preview/activation and metadata receipts. Read a record first; mutations require
-the observed revision. Failed or unknown mutations are never automatically retried.
+The /admin/central page opens the Services & Skills library using the existing
+browser session, CSRF, strict cookies and CSP. Forms and explicit checkboxes guide
+service connections, tool review, Skill import/publication and client access. The
+interface carries the reviewed revisions and content versions. Failed or unknown
+mutations are never automatically retried. OAuth, reusable toolsets and raw API
+operations remain in the collapsed Advanced diagnostics section.
+
+## Getting started
+
+The homepage leads with capabilities and AI connections. Computer access is an
+optional section, so a service-only user does not start with Runner setup.
+
+1. The instance administrator configures approved service addresses and secure
+   credential storage once. Until ready, service creation stays disabled and the
+   page explains why. When enabled, the Skill library remains independently usable.
+2. Select an approved MCP service, name it and enter its upstream access token.
+   Review and explicitly approve the discovered tools. Update credentials from
+   the service card; submitted token fields are cleared.
+3. Import SKILL.md with its supporting text files or its folder, and record the
+   source and license. Preview makes no writes. Publication requires review and
+   confirmation; uploaded scripts remain text and never execute on the server.
+4. Create an AI connection. Services and Skills are the default, with no Runner
+   required. Save the one-time URL, then follow Choose services and Skills to
+   manage that exact connection's permissions.
+5. Add the URL as a remote MCP connection in your AI client. Refresh its tools
+   after access changes. Routine users need no environment variables or JSON.
+
+Access choices use published Skill metadata, even when a newer draft exists.
+Older pinned grants remain visible and are removed only when explicitly unchecked.
+Conflicts and failed library refreshes require a fresh read before further writes.
+
+This is a development administrator library. Guided supplier OAuth onboarding,
+visual reusable-toolset management, a public marketplace and real AI-host
+acceptance remain unfinished. It is not universal zero-configuration MCP access.
 
 ## Shared configuration and grants
 

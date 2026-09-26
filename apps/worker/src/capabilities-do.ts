@@ -123,6 +123,10 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
     return withinDeadline(new AbortController().signal, () => ({ state: "unknown" } as const),
       signal => this.#skillService().mutate(hash, input, signal));
   }
+  public async listSkillLibrary(hash: string, after?: string): ReturnType<CentralSkills["listSkillLibrary"]> {
+    return withinDeadline(new AbortController().signal, () => ({ state: "unavailable" } as const),
+      signal => this.#skillService().library(hash, after, signal));
+  }
   public async inspectSkill(hash: string, id: string, digest?: string): ReturnType<CentralSkills["inspectSkill"]> {
     return withinDeadline(new AbortController().signal, () => ({ state: "unavailable" } as const),
       signal => this.#skillService().inspect(hash, id, digest, signal));

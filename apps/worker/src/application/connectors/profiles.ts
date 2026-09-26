@@ -23,7 +23,7 @@ export function createProfileManager(ports: ProfileServicePorts) {
           let profile: ConnectionProfile, envelope: CredentialEnvelope | null;
           if (command.action === "create" || command.action === "create_oauth") {
             profile = { schema_version: 1, profile_id: command.profile_id, connector_id: command.connector_id,
-              endpoint: command.endpoint, revision: 1, enabled: false, owner: { kind: "instance_admin" },
+              ...(command.display_name === undefined ? {} : { display_name: command.display_name }), endpoint: command.endpoint, revision: 1, enabled: false, owner: { kind: "instance_admin" },
               credential: command.action === "create_oauth" ? null : { secret_id: command.profile_id, secret_version: 1 } };
             envelope = command.action === "create_oauth" ? null : await ports.cipher.seal(profile, command.credential);
           } else {

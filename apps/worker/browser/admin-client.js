@@ -21,11 +21,118 @@ document.addEventListener('submit',function(event){
   }).catch(function(){output.textContent=document.documentElement.lang==='zh-CN'?'结果未确认，请先读取当前状态，勿自动重复修改。':'Outcome unconfirmed. Read current state before another mutation.';})
     .finally(function(){clearTimeout(timer);button.disabled=false;});
 });
+
+function bindCentralProduct(root){
+ var app=root.querySelector('[data-central-product]');if(!app||app.__productBound)return;app.__productBound=true;
+ var zh=document.documentElement.lang==='zh-CN',t=function(en,cn){return zh?cn:en;};
+ var status=app.querySelector('[data-product-status]'),profiles=[],skills=[],busy=false,accessEpoch=0,mustRefresh=false;
+ function el(tag,text,className){var n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(className)n.className=className;return n;}
+ function say(text,error){status.textContent=text;status.setAttribute('data-error',String(!!error));}
+ function button(parent,label,action){var b=el('button',label,'button small secondary');b.type='button';b.addEventListener('click',function(){run(action);});parent.appendChild(b);return b;}
+ function clear(node){node.replaceChildren();}
+ function details(parent,title,text){var d=el('details'),s=el('summary',title),p=el('pre',text);d.append(s,p);parent.appendChild(d);}
+ function choice(parent,title,description,checked){var label=el('label',undefined,'central-choice'),box=el('input'),span=el('span');box.type='checkbox';box.checked=checked;span.append(el('strong',title),el('p',description,'muted'));label.append(box,span);parent.appendChild(label);return box;}
+ async function api(path,body,missing){
+  if(body&&body.action!=='preview'&&mustRefresh)throw new Error(t('Refresh the library before making another change.','请刷新目录后再修改。'));
+  var ctl=new AbortController(),timer=setTimeout(function(){ctl.abort();},25000);
+  try{var response=await fetch('/admin/central/'+path,{method:body===undefined?'GET':'POST',credentials:'same-origin',cache:'no-store',redirect:'error',signal:ctl.signal,headers:{'content-type':'application/json','x-csrf-token':app.getAttribute('data-csrf')},body:body===undefined?undefined:JSON.stringify(body)});
+   var value=await response.json();
+   if(missing&&response.status===404&&(value.state==='missing'||value.error&&value.error.code==='central_missing'))return null;
+   if(!response.ok){if(body&&body.action!=='preview')mustRefresh=true;var code=value.error&&value.error.code;
+    if(response.status===409)throw new Error(t('This item changed. Refresh and review it again before saving.','内容已变化，请刷新并重新审阅后保存。'));
+    if(response.status===403)throw new Error(t('Access was denied. Sign in again or check the upstream authorization.','访问被拒绝，请重新登录或检查上游授权。'));
+    if(response.status===400)throw new Error(t('Check the fields and Skill file format. SKILL.md requires name and description frontmatter.','请检查填写内容及 Skill 文件格式。SKILL.md 需要 name 和 description 元数据。'));
+    if(code==='remote_egress_denied'||code==='remote_endpoint_denied'||code==='central_disabled')throw new Error(t('This service is not allowed by the instance outbound policy. Ask the instance administrator to allow its exact endpoint.','实例尚未放行该服务，请让实例管理员配置对应地址的出站策略。'));
+    throw new Error(t('Operation could not be confirmed. Refresh the current state before trying again.','操作结果未确认，请先刷新当前状态，再决定是否重试。'));
+   }
+   var expected=body===undefined?'found':body.action==='preview'?'previewed':'written';
+   if(value.state!=='listed'&&value.state!==expected)throw new Error(t('Unexpected response. Refresh before making another change.','返回结果异常，请刷新后再操作。'));
+   return value;
+  }catch(error){if(body&&body.action!=='preview')mustRefresh=true;throw error;}finally{clearTimeout(timer);}
+ }
+ async function run(action){if(busy)return;busy=true;var controls=Array.from(app.querySelectorAll('button,input,select'));var disabled=controls.map(function(c){return c.disabled;});controls.forEach(function(c){c.disabled=true;});say(t('Working…','正在处理…'));
+  try{await action();}catch(error){say(error instanceof Error&&error.name!=='AbortError'?error.message:t('Connection interrupted. Refresh to check whether the operation completed.','连接中断，请刷新确认操作是否完成。'),true);}
+  finally{busy=false;controls.forEach(function(c,i){if(c.isConnected)c.disabled=disabled[i];});}
+ }
+ async function pages(path,key){var all=[],after=null,seen=new Set();do{var value=await api(path+(after?'?after='+encodeURIComponent(after):''));all=all.concat(value[key]);after=value.next_after;if(after&&seen.has(after))throw new Error(t('Could not load the complete library. Refresh before changing access.','无法加载完整目录，请刷新后再修改权限。'));seen.add(after);if(all.length>1000)throw new Error(t('Library is too large to display.','目录超过显示上限。'));}while(after);return all;}
+ function invalidate(){accessEpoch++;clear(app.querySelector('[data-client-access]'));app.querySelector('[data-client-select]').value='';app.querySelectorAll('[data-service-review],[data-skill-review]').forEach(function(n){clear(n);n.hidden=true;});}
+ async function refresh(){var selected=app.querySelector('[data-client-select]').value;mustRefresh=true;invalidate();profiles=await pages('profiles','profiles');skills=app.getAttribute('data-skills')==='true'?await pages('skills','skills'):[];renderProfiles();renderSkills();mustRefresh=false;if(selected){app.querySelector('[data-client-select]').value=selected;await loadAccess();}say(t('Library is up to date.','目录已更新。'));}
+ function renderProfiles(){var list=app.querySelector('[data-service-list]');clear(list);if(!profiles.length)list.append(el('p',t('No services yet. Connect your first service to get started.','还没有服务，添加第一个 MCP 服务即可开始。'),'muted'));
+  profiles.forEach(function(profile){var card=el('article',undefined,'central-card');card.append(el('h3',profile.display_name||profile.connector_id),el('p',profile.endpoint,'muted'),el('p',profile.enabled?t('Enabled · tool review required before sharing','已启用 · 分享前仍需审核工具'):t('Paused','已暂停')));var actions=el('div',undefined,'actions');
+   button(actions,t('Review tools','审阅工具'),function(){return reviewService(profile,false);});
+   button(actions,t('Check connection & discover','检查连接并发现工具'),function(){return reviewService(profile,true);});
+   button(actions,profile.enabled?t('Pause','暂停'):t('Enable','启用'),async function(){await api('profiles/'+encodeURIComponent(profile.profile_id),{action:profile.enabled?'disable':'enable',expected_revision:profile.revision});await refresh();});card.append(actions);
+   if(profile.credential!==null){var credentials=el('details'),form=el('form'),label=el('label',t('New service access token','新的服务访问令牌')),input=el('input'),submit=el('button',t('Update access token','更新访问令牌'),'button small secondary');input.type='password';input.required=true;input.autocomplete='new-password';submit.type='submit';label.append(input);form.append(label,submit);credentials.append(el('summary',t('Update service credentials','更新服务凭据')),form);card.append(credentials);form.addEventListener('submit',function(event){event.preventDefault();run(async function(){var token=input.value;input.value='';await api('profiles/'+encodeURIComponent(profile.profile_id),{action:'rotate',expected_revision:profile.revision,credential:{kind:'bearer',token:token}});token='';await refresh();say(t('Access token updated. Check the connection before sharing tools.','访问令牌已更新，请检查连接后再分享工具。'));});});}
+   list.append(card);
+  });
+ }
+ async function reviewService(profile,discover){var id=encodeURIComponent(profile.profile_id),catalog=await api('catalogs/'+id,undefined,true);
+  if(discover){await api('discovery/'+id,{expected_revision:catalog?catalog.head.revision:0});catalog=await api('catalogs/'+id);}
+  var panel=app.querySelector('[data-service-review]');clear(panel);panel.hidden=false;panel.append(el('h2',t('Review tools: ','审阅工具：')+(profile.display_name||profile.connector_id)));
+  if(!catalog){panel.append(el('p',t('No tools discovered yet. Enable the service, then check its connection.','尚未发现工具，请启用服务后检查连接。')));say(t('No catalog yet.','尚无工具目录。'));return;}
+  panel.append(el('p',t('Only checked tools will be approved. Client access is configured separately. Descriptions and schemas come from the upstream service.','仅批准勾选的工具，客户端权限需另行分配。描述和参数来自上游服务。')));
+  var selected=catalog.snapshot.tools.map(function(tool){var delta=catalog.changes.find(function(c){return c.name===tool.definition.name;});var changed=delta&&delta.state!=='unchanged';
+   var box=choice(panel,tool.definition.title||tool.definition.name,(changed?t('New or changed · ','新增或变化 · '):'')+(tool.definition.description||''),catalog.head.approved_digest===catalog.snapshot.digest&&catalog.head.approved_names.includes(tool.definition.name));
+   details(panel,t('Parameters & safety hints','参数与安全提示'),JSON.stringify({input:tool.definition.inputSchema,output:tool.definition.outputSchema,hints:tool.definition.annotations},null,2));return {box:box,name:tool.definition.name};});
+  catalog.changes.filter(function(c){return c.state==='removed';}).forEach(function(c){panel.append(el('p',t('Removed: ','已移除：')+c.name));});
+  button(panel,t('Approve selected tools','批准勾选的工具'),async function(){await api('catalogs/'+id,{action:'approve',expected_revision:catalog.head.revision,digest:catalog.snapshot.digest,tool_names:selected.filter(function(s){return s.box.checked;}).map(function(s){return s.name;}).sort()});await refresh();say(t('Tools approved. Choose Client access to share them.','工具已批准，请在“客户端授权”中分配。'));});
+  panel.scrollIntoView({block:'nearest'});say(t('Review the tools before approving.','请审阅工具后再批准。'));
+ }
+ app.querySelector('[data-service-create]').addEventListener('submit',function(event){event.preventDefault();var form=event.currentTarget;run(async function(){var name=form.elements.name.value.trim(),endpoint=form.elements.endpoint.value.trim(),token=form.elements.token.value;var id='service-'+crypto.randomUUID();var connector=name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,64)||'service';form.elements.token.value='';
+  if(!endpoint||!form.elements.endpoint.selectedOptions[0]||form.elements.endpoint.selectedOptions[0].disabled)throw new Error(t('Choose an approved service first.','请先选择已批准的服务。'));
+  var result=await api('profiles/'+id,{action:'create',connector_id:connector,display_name:name,endpoint:endpoint,credential:{kind:'bearer',token:token}});token='';
+  form.reset();
+  await api('profiles/'+id,{action:'enable',expected_revision:result.profile.revision});await refresh();var current=profiles.find(function(p){return p.profile_id===id;});await reviewService(current,true);
+ });});
+ function renderSkills(){var list=app.querySelector('[data-skill-list]');if(!list)return;clear(list);if(!skills.length)list.append(el('p',t('No Skills yet. Import a Skill to review and share it.','尚无 Skill，导入后即可审阅和分享。'),'muted'));
+  skills.forEach(function(item){var card=el('article',undefined,'central-card'),head=item.head;card.append(el('h3',item.summary.name),el('p',item.summary.description),el('p',head.enabled?t('Published','已发布'):t('Draft / paused','草稿 / 已暂停')));if(head.enabled&&head.staged_digest!==head.active_digest)card.append(el('p',t('An update is awaiting review.','有新版本待审阅。')));var actions=el('div',undefined,'actions');button(actions,t('Review & publish','审阅与发布'),async function(){var data=await api('skills/'+encodeURIComponent(head.skill_id));showSkill(data.bundle,data.head);});
+   if(head.enabled)button(actions,t('Pause','暂停'),async function(){await api('skills/'+encodeURIComponent(head.skill_id),{action:'disable',expected_revision:head.revision});await refresh();});card.append(actions);list.append(card);
+  });
+ }
+ function showSkill(bundle,head,imported){var panel=app.querySelector('[data-skill-review]');clear(panel);panel.hidden=false;panel.append(el('h2',bundle.name),el('p',bundle.description),el('p',t('Source: ','来源：')+bundle.source+' · '+t('License: ','许可证：')+bundle.license));
+  bundle.files.forEach(function(file){details(panel,file.path,file.text);});
+  if(bundle.required_capabilities&&bundle.required_capabilities.length)details(panel,t('Required capabilities (not granted automatically)','依赖能力（不会自动授权）'),JSON.stringify(bundle.required_capabilities,null,2));
+  var approved=choice(panel,t('I reviewed these files and approve publishing this version.','我已审阅这些文件，同意发布此版本。'),t('Publishing makes this version available for explicit client assignment.','发布后可将此版本分配给指定客户端。'),false);
+  button(panel,t('Publish reviewed Skill','发布已审阅的 Skill'),async function(){if(!approved.checked){say(t('Review the files and check the approval box first.','请先审阅文件并勾选确认。'),true);return;}var current=head;
+   if(imported){var staged=await api('skills/'+encodeURIComponent(bundle.skill_id),Object.assign({},imported,{action:'stage',expected_revision:head?head.revision:0}));current=staged.head;if(current.staged_digest!==bundle.digest){mustRefresh=true;throw new Error(t('Content changed. Refresh and review again.','内容已变化，请刷新后重新审阅。'));}}
+   await api('skills/'+encodeURIComponent(bundle.skill_id),{action:'activate',expected_revision:current.revision,digest:bundle.digest});await refresh();say(t('Skill published. Assign it under Client access.','Skill 已发布，请在“客户端授权”中分配。'));
+  });panel.scrollIntoView({block:'nearest'});say(t('Preview ready. Read the files before publishing.','预览已就绪，请在发布前审阅文件。'));
+ }
+ var importer=app.querySelector('[data-skill-import]');if(importer)importer.addEventListener('submit',function(event){event.preventDefault();run(async function(){var picked=Array.from(importer.elements.folder.files.length?importer.elements.folder.files:importer.elements.files.files);if(!picked.length||picked.length>32||picked.some(function(f){return f.size>65536;})||picked.reduce(function(n,f){return n+f.size;},0)>262144)throw new Error(t('Select 1–32 text files, up to 64 KiB each and 256 KiB total.','请选择 1–32 个文本文件，单个不超过 64 KiB，总计不超过 256 KiB。'));
+  var files=[];for(var f of picked){var path=f.webkitRelativePath?f.webkitRelativePath.split('/').slice(1).join('/'):f.name;var text=new TextDecoder('utf-8',{fatal:true}).decode(await f.arrayBuffer());files.push({path:path,text:text});}
+  var main=files.find(function(f){return f.path==='SKILL.md';});if(!main)throw new Error(t('The selected folder must contain SKILL.md at its root.','所选文件夹根目录必须包含 SKILL.md。'));
+  var name=/^name:\s*["']?([a-z0-9]+(?:-[a-z0-9]+)*)["']?\s*$/m.exec(main.text);if(!name)throw new Error(t('SKILL.md needs a lowercase name in its frontmatter.','SKILL.md 元数据需要小写 name 字段。'));
+  var id=name[1],head=await api('skills/'+encodeURIComponent(id),undefined,true),input={action:'preview',source:importer.elements.source.value.trim(),license:importer.elements.license.value.trim(),files:files};var preview=await api('skills/'+encodeURIComponent(id),input);showSkill(preview.bundle,head&&head.head,input);
+ });});
+ async function loadAccess(){var select=app.querySelector('[data-client-select]'),id=select.value,panel=app.querySelector('[data-client-access]'),epoch=++accessEpoch;clear(panel);if(!id){say(t('Choose a client to manage its access.','请选择客户端以管理权限。'));return;}
+  var grant=await api('grants/'+encodeURIComponent(id),undefined,true),available=[];
+  for(var profile of profiles){if(!profile.enabled)continue;var encoded=encodeURIComponent(profile.profile_id),catalog=await api('catalogs/'+encoded,undefined,true);if(!catalog||!catalog.head.approved_digest)continue;
+   if(catalog.snapshot.digest!==catalog.head.approved_digest)catalog=await api('catalogs/'+encoded+'?snapshot='+catalog.head.approved_digest);
+   catalog.snapshot.tools.forEach(function(tool){if(catalog.head.approved_names.includes(tool.definition.name))available.push({title:(profile.display_name||profile.connector_id)+' / '+(tool.definition.title||tool.definition.name),description:tool.definition.description||'',rule:{kind:'remote_tool',resource_id:tool.tool_id,version:tool.version,connection_profile_id:profile.profile_id}});});
+  }
+  for(var s of skills){if(s.head.enabled&&s.head.active_digest){var summary=s.summary;if(s.head.staged_digest!==s.head.active_digest){var published=await api('skills/'+encodeURIComponent(s.head.skill_id)+'?digest='+encodeURIComponent(s.head.active_digest));if(published.head.revision!==s.head.revision)throw new Error(t('This item changed. Refresh and review it again before saving.','内容已变化，请刷新并重新审阅后保存。'));summary=published.bundle;}available.push({title:summary.name+' (Skill)',description:summary.description,rule:{kind:'skill',resource_id:s.head.skill_id,version:s.head.active_digest}});}}
+  if(epoch!==accessEpoch||id!==select.value)return;
+  function key(r){return [r.kind,r.resource_id,r.version,r.connection_profile_id||''].join('|');}
+  var previous=grant?grant.grant.rules:[],known=new Set(available.map(function(a){return key(a.rule);}));
+  previous.filter(function(rule){return !known.has(key(rule));}).forEach(function(rule){available.push({title:t('Existing pinned permission: ','现有固定版本权限：')+rule.resource_id,description:t('Not in the current published library. Kept unless you uncheck it.','当前发布目录中没有此版本；保留勾选即可保留该权限。'),rule:rule});});
+  var enabled=choice(panel,t('Allow these capabilities','允许使用以下能力'),t('Turning this off pauses all central capabilities for this client.','关闭后暂停此客户端的全部中继与 Skill 能力。'),grant?grant.grant.enabled:true);
+  var boxes=available.map(function(a){return {rule:a.rule,box:choice(panel,a.title,a.description,previous.some(function(r){return key(r)===key(a.rule);}))};});
+  if(!available.length)panel.append(el('p',t('Connect and approve a service or publish a Skill first.','请先连接并批准服务工具，或发布一个 Skill。')));
+  button(panel,t('Save client access','保存客户端权限'),async function(){if(epoch!==accessEpoch||select.value!==id)throw new Error(t('Client selection changed. Select it again.','客户端选择已变化，请重新选择。'));var rules=boxes.filter(function(b){return b.box.checked;}).map(function(b){return b.rule;});await api('grants/'+encodeURIComponent(id),{expected_revision:grant?grant.grant.revision:0,enabled:enabled.checked,rules:rules});await loadAccess();say(t('Access saved. Reconnect or refresh the tool list in your AI client.','权限已保存，请在 AI 客户端重新连接或刷新工具列表。'));});
+  say(t('Review the selected client’s permissions, then save.','请审阅所选客户端权限后保存。'));
+ }
+ app.querySelector('[data-client-select]').addEventListener('change',function(){run(loadAccess);});
+ app.querySelector('[data-product-refresh]').addEventListener('click',function(){run(refresh);});
+ function showTab(name){app.querySelectorAll('[data-central-tab]').forEach(function(b){var active=b.getAttribute('data-central-tab')===name;b.setAttribute('aria-pressed',String(active));b.classList.toggle('secondary',!active);});app.querySelectorAll('[data-central-panel]').forEach(function(p){p.hidden=p.getAttribute('data-central-panel')!==name;});}
+ app.querySelectorAll('[data-central-tab]').forEach(function(tab){tab.addEventListener('click',function(){showTab(tab.getAttribute('data-central-tab'));});});
+ run(async function(){await refresh();var selected=new URL(location.href).searchParams.get('client'),select=app.querySelector('[data-client-select]');if(selected&&Array.from(select.options).some(function(o){return o.value===selected;})){select.value=selected;showTab('access');await loadAccess();}});
+}
+
 function applyLocale(locale){document.documentElement.lang=locale;document.querySelectorAll('[data-lang-toggle]').forEach(function(link){link.setAttribute('aria-current',link.getAttribute('data-lang-toggle')===locale?'true':'false')})}
 function requestedLocale(){return document.documentElement.lang==='zh-CN'?'zh-CN':'en'}
 function rememberLocale(locale){document.cookie='runmesh_lang='+locale+'; Max-Age=31536000; Path=/; SameSite=Lax'}
  document.querySelectorAll('[data-lang-toggle]').forEach(function(link){link.addEventListener('click',function(event){var locale=link.getAttribute('data-lang-toggle')||'en';rememberLocale(locale);var url=new URL(location.href);url.searchParams.set('lang',locale);event.preventDefault();location.href=url.toString()})});
-var locale=requestedLocale();if(new URLSearchParams(location.search).has('lang'))rememberLocale(locale);applyLocale(locale);
+var locale=requestedLocale();if(new URLSearchParams(location.search).has('lang'))rememberLocale(locale);applyLocale(locale);bindCentralProduct(document);
 function copyText(text){if(navigator.clipboard&&navigator.clipboard.writeText)return navigator.clipboard.writeText(text);var area=document.createElement('textarea');area.value=text;area.setAttribute('readonly','');area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.select();try{document.execCommand('copy')}catch(_){}area.remove();return Promise.resolve()}
 function copyValue(button){var panel=button.hasAttribute('data-copy-source')&&button.closest('[role=tabpanel]');if(panel){var code=panel.querySelector('pre code');return code?(code.textContent||''):''}var value=button.getAttribute('data-copy');return value===null?'':value}
 document.querySelectorAll('[data-copy],[data-copy-source]').forEach(function(button){button.addEventListener('click',function(){var result=copyText(copyValue(button));var mark=function(){button.textContent=document.documentElement.lang==='zh-CN'?'已复制':'Copied';button.classList.add('copied')};if(result&&typeof result.then==='function')result.then(mark,function(){});else mark()})});
@@ -44,6 +151,7 @@ function ensurePageViewport(){var viewport=document.querySelector('[data-admin-v
 function setActivePage(container,focus){var viewport=ensurePageViewport();if(!viewport||!container)return;var containers=Array.prototype.slice.call(viewport.querySelectorAll('[data-page-container]'));var previous=viewport.querySelector('[data-page-container].is-active');containers.forEach(function(item){var active=item===container;var wasPrevious=item===previous&&item!==container;item.classList.toggle('is-active',active);if(wasPrevious){item.classList.remove('is-leaving')}else if(active)item.classList.remove('is-leaving');else item.classList.remove('is-leaving');item.setAttribute('aria-hidden',active?'false':'true');item.inert=!active;var main=item.id==='main-content'?item:item.querySelector('#main-content');if(active){if(!main)main=item.tagName==='MAIN'?item:item.querySelector('main');if(main)main.id='main-content'}else if(main)main.removeAttribute('id')});viewport.style.minHeight=Math.max.apply(Math,[0].concat(containers.map(function(item){return item.offsetHeight||0})))+'px';if(focus){var main=container.id==='main-content'?container:container.querySelector('#main-content')||container.querySelector('main');if(main&&typeof main.focus==='function')main.focus({preventScroll:true})}}
 function bindDynamicContent(root){
   if(!root)return;
+  bindCentralProduct(root);
   root.querySelectorAll('[data-copy],[data-copy-source]').forEach(function(button){if(button.__runmeshBound)return;button.__runmeshBound=true;button.addEventListener('click',function(){var result=copyText(copyValue(button));var mark=function(){button.textContent=document.documentElement.lang==='zh-CN'?'已复制':'Copied';button.classList.add('copied')};if(result&&typeof result.then==='function')result.then(mark,function(){});else mark()})});
   root.querySelectorAll('[data-tab]').forEach(function(tab){if(tab.__runmeshBound)return;tab.__runmeshBound=true;tab.addEventListener('click',function(){var target=tab.getAttribute('data-tab');var top=tab.getBoundingClientRect().top;root.querySelectorAll('[data-tab]').forEach(function(item){item.setAttribute('aria-selected',String(item===tab));item.tabIndex=item===tab?0:-1});root.querySelectorAll('[data-panel]').forEach(function(panel){panel.hidden=panel.getAttribute('data-panel')!==target});var delta=tab.getBoundingClientRect().top-top;if(delta)window.scrollBy(0,delta)});tab.addEventListener('keydown',function(event){if(event.key==='ArrowLeft'||event.key==='ArrowRight'){var tabs=Array.prototype.slice.call(root.querySelectorAll('[data-tab]'));var next=tabs[(tabs.indexOf(tab)+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length];next.focus();next.click()}})});
   root.querySelectorAll('.pwd-toggle-btn').forEach(function(btn){if(btn.__runmeshBound)return;btn.__runmeshBound=true;btn.addEventListener('click',function(){var wrap=btn.closest('.password-input-wrap');if(!wrap)return;var input=wrap.querySelector('input');if(!input)return;var isPwd=input.type==='password';input.type=isPwd?'text':'password';var label=isPwd?(document.documentElement.lang==='zh-CN'?'隐藏密码':'Hide password'):(document.documentElement.lang==='zh-CN'?'显示密码':'Show password');btn.setAttribute('aria-label',label);btn.setAttribute('title',label)})});

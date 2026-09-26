@@ -82,7 +82,7 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
   }
   const handler = createMcpHandler(
     () => {
-      const server = createCodingMcpServer(env, auth);
+      const server = createCodingMcpServer(env, auth, discoversProviders && verified.scopes.length === 0);
       if (skills !== undefined && publishSkills) {
         const principal = { client_id: verified.client_id, secret_version: verified.secret_version };
         const owner = () => env.CAPABILITIES!.get(env.CAPABILITIES!.idFromName("central")) as unknown as CentralSkills;

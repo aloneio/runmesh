@@ -26,6 +26,10 @@ export class SkillState implements SkillRepository {
     if (![0, 1].includes(row.enabled) || !Number.isSafeInteger(row.revision) || row.revision < 1) throw new Error("skill_record_invalid");
     return { ...row, enabled: row.enabled === 1 };
   }
+  public heads(after: string, limit: number): readonly SkillHead[] {
+    this.initialize();
+    return this.storage.sql.exec<{ skill_id: string }>("SELECT skill_id FROM skill_heads_v1 WHERE skill_id>? ORDER BY skill_id LIMIT ?", after, limit).toArray().map(row => this.head(row.skill_id)!);
+  }
   public bundle(id: string, digest: string): SkillBundle | undefined {
     this.initialize();
     const row = this.storage.sql.exec<{ content_json: string }>("SELECT content_json FROM skill_bundles_v1 WHERE skill_id=? AND digest=?", id, digest).toArray()[0];

@@ -39,7 +39,7 @@ import { z } from "zod";
  * Fresh server factory target for createMcpHandler. Every HTTP request receives
  * an isolated McpServer and the default stateless 2025 compatibility lane.
  */
-export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth): McpServer {
+export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth, hideNative = false): McpServer {
   const env: McpRequestEnv = { ...rawEnv, mcpPrincipal: { client_id: auth.clientId, secret_version: auth.extra?.secret_version } };
   const server = new McpServer({ name: "runmesh", version: PRODUCT_VERSION });
 
@@ -76,7 +76,7 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth): McpServ
   function register<Name extends ToolName>(target: McpServer, name: Name, action: ToolHandlers[Name]): void {
     const spec = TOOL_SPECS[name];
     type Input = z.output<(typeof TOOL_SPECS)[Name]["inputSchema"]>;
-    (target.registerTool as unknown as (toolName: string, config: Record<string, unknown>, callback: (input: Input, context: ServerContext) => Promise<unknown>) => unknown)(name, { description: spec.description, inputSchema: spec.inputSchema, outputSchema: spec.outputSchema, annotations: spec.annotations, _meta: MCP_CATALOG_METADATA }, async (input, _context) => {
+    const tool = (target.registerTool as unknown as (toolName: string, config: Record<string, unknown>, callback: (input: Input, context: ServerContext) => Promise<unknown>) => { disable(): void })(name, { description: spec.description, inputSchema: spec.inputSchema, outputSchema: spec.outputSchema, annotations: spec.annotations, _meta: MCP_CATALOG_METADATA }, async (input, _context) => {
       // The URL credential can be rotated while a body or SDK import is
       // awaited. Re-read the exact generation and scopes before every tool.
       const live = await reauthorizePrincipal(async signal => {
@@ -106,6 +106,7 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth): McpServ
         return failure("internal_error", "The MCP tool could not confirm the operation outcome.", "Inspect the existing Job or change receipt before deciding what to do next; do not blindly repeat a write or command. Contact the operator if the outcome cannot be established.");
       }
     });
+    if (hideNative) tool.disable();
   }
 }
 

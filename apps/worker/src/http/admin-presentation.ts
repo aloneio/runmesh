@@ -12,7 +12,7 @@ import { enrollmentDocument } from "../admin/enrollment-view.js";
 import { html } from "./html-response.js";
 import { installerOriginUnavailable } from "./distribution.js";
 import { MAX_VALIDITY_DAYS } from "../domain/execution-mode.js";
-import { overviewPage } from "../admin/dashboard-views.js";
+import { overviewPage, productOverviewPage } from "../admin/dashboard-views.js";
 import { resolveConnectionOrigin } from "./origin.js";
 import { runnerConfiguredExecutionMode } from "../domain/execution-mode.js";
 import { resolveRunnerReleaseDescriptor } from "../distribution/release.js";
@@ -21,9 +21,9 @@ import type { RunnerReleaseEnvironment } from "../distribution/release.js";
 import { runnersPage } from "../admin/runner-list-view.js";
 import { settingsPage } from "../admin/dashboard-views.js";
 
-export function adminPage(pathname: string, data: AdminData, csrf: string): string {
+export function adminPage(pathname: string, data: AdminData, csrf: string, centralEnabled = true, showActivity = false): string {
   const active = pathname === "/admin" ? "dashboard" : pathname.slice("/admin/".length) as "runners" | "clients" | "settings";
-  const body = active === "runners" ? runnersPage({ configuredModes: new Map(data.runners.map(runner => [runner.runner_id, runnerConfiguredExecutionMode(runner)])), maxValidityDays: MAX_VALIDITY_DAYS }, data, csrf) : active === "clients" ? clientsPage(data, csrf) : active === "settings" ? settingsPage(csrf) : overviewPage(data, csrf);
+  const body = active === "runners" ? runnersPage({ configuredModes: new Map(data.runners.map(runner => [runner.runner_id, runnerConfiguredExecutionMode(runner)])), maxValidityDays: MAX_VALIDITY_DAYS }, data, csrf) : active === "clients" ? clientsPage(data, csrf, centralEnabled) : active === "settings" ? settingsPage(csrf) : centralEnabled && !showActivity ? productOverviewPage(data) : overviewPage(data, csrf);
   return adminDocument(active[0]?.toUpperCase() + active.slice(1), body, active, data.notices);
 }
 

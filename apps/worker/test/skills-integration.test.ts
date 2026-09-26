@@ -26,7 +26,7 @@ async function fixture(nativeScopes: ["coding:read"] | [] = []) {
   let instance: CapabilitiesDOv1;
   await runInDurableObject(stub, (_old, state) => { instance = new CapabilitiesDOv1(state, configured); });
   const invoke = <T>(action: (owner: CapabilitiesDOv1) => Promise<T>) => runInDurableObject(stub, () => action(instance));
-  const port = { toolVisibility: (p: { client_id: string; secret_version: number }) => invoke(o => o.toolVisibility(p)),
+  const port = { listSkillLibrary: (h: string, after?: string) => invoke(o => o.listSkillLibrary(h, after)), toolVisibility: (p: { client_id: string; secret_version: number }) => invoke(o => o.toolVisibility(p)),
     getToolset: (h: string, id: string) => invoke(o => o.getToolset(h, id)), mutateToolset: (h: string, q: unknown) => invoke(o => o.mutateToolset(h, q)),
     mutateSkill: (h: string, q: unknown) => invoke(o => o.mutateSkill(h, q)), inspectSkill: (h: string, id: string, d?: string) => invoke(o => o.inspectSkill(h, id, d)),
     listSkills: (p: { client_id: string; secret_version: number }, q: unknown) => invoke(o => o.listSkills(p, q)), readSkill: (p: { client_id: string; secret_version: number }, q: unknown) => invoke(o => o.readSkill(p, q)),
@@ -56,7 +56,7 @@ it('W07/W08 two independent central-only clients read the same approved bundle t
     expect((await f.admin('toolsets/research-team', { action: 'apply', expected_revision: 0, toolset_revision: 1, client_id: client.id })).status).toBe(200);
     const tools = await f.rpc(client.secret, 'tools/list', {});
     expect(tools.result.tools.map((tool: { name: string }) => tool.name)).toEqual(expect.arrayContaining(['skill_list', 'skill_read']));
-    expect(tools.result.tools).toHaveLength(12);
+    expect(tools.result.tools).toHaveLength(2);
     const templates = await f.rpc(client.secret, 'resources/templates/list', {});
     expect(templates.result.resourceTemplates).toHaveLength(1);
     const listed = await f.rpc(client.secret, 'tools/call', { name: 'skill_list', arguments: {} });
@@ -75,7 +75,7 @@ it('W07/W08 two independent central-only clients read the same approved bundle t
   expect(existingGrant.grant.rules).toHaveLength(1);
   expect((await f.admin('toolsets/research-team', { action: 'apply', expected_revision: 1, toolset_revision: 1, client_id: client.id })).status).toBe(404);
   expect((await f.admin('grants/' + client.id, { expected_revision: 1, enabled: false, rules: [] })).status).toBe(200);
-  expect((await f.rpc(client.secret, 'tools/list', {})).result.tools).toHaveLength(10);
+  expect((await f.rpc(client.secret, 'tools/list', {})).result.tools).toHaveLength(0);
   const denied = await f.rpc(client.secret, 'tools/call', { name: 'skill_read', arguments: { skill_id: 'research', digest } });
   expect(denied.result.isError).toBe(true);
   const request = new Request('https://worker.test/admin/central', { headers: f.headers });
@@ -113,7 +113,7 @@ it('central visibility failure or malformed metadata hides central discovery wit
   expect(get).not.toHaveBeenCalled();
 });
 it('W07/W08 admin mutations require CSRF and feature-off retains the ten native tools without central I/O', async () => {
-  const f = await fixture();
+  const f = await fixture(['coding:read']);
   expect((await f.admin('grants/' + f.clients[0]!.id, { expected_revision: 0, enabled: true, rules: [] }, { ...f.headers, 'x-csrf-token': 'wrong' })).status).toBe(403);
   const off = { ...f.config, CENTRAL_SKILLS_ENABLED: '0', CAPABILITIES: { idFromName: () => { throw new Error('central I/O forbidden'); } } } as unknown as WorkerEnv;
   const result = await f.rpc(f.clients[0]!.secret, 'tools/list', {}, off);
@@ -136,4 +136,45 @@ it('W08/W09 administration strips unexpected owner fields and rejects malformed 
   const request = new Request('https://worker.test/admin/central/receipts', { headers: f.headers });
   const response = await handleCentralAdmin(request, config, new URL(request.url));
   expect(response.status).toBe(503); expect(await response.text()).not.toContain(secret);
+});
+
+
+it('product browser creates a central-only client with confirmed secret and no computer scopes', async () => {
+  const f = await fixture(), data = new FormData();
+  data.set('csrf_token', f.headers['x-csrf-token']); data.set('label', 'Central product client'); data.set('access_mode', 'central');
+  // Stale native checkboxes must not add machine privileges in central-only mode.
+  data.append('scopes', 'coding:exec');
+  const headers = new Headers(f.headers); headers.delete('content-type');
+  const request = new Request('https://worker.test/admin/clients', { method: 'POST', headers, body: data });
+  const response = await handleBrowserAdmin(request, f.config, new URL(request.url));
+  expect(response.status).toBe(200);
+  const markup = await response.text();
+  const secret = /https:\/\/worker\.test\/([A-Za-z0-9_-]+)\/mcp/u.exec(markup)?.[1];
+  expect(secret !== undefined).toBe(true);
+  const tools = await f.rpc(secret!, 'tools/list', {});
+  expect(tools.result.tools.some((tool: { name: string }) => ['shell', 'edit', 'job'].includes(tool.name))).toBe(false);
+  await runInDurableObject(registry(), instance => {
+    const client = instance.listMcpClients().find(c => c.label === 'Central product client');
+    expect(client?.scopes).toEqual([]); expect(client?.revoked_at_ms).toBeNull();
+  });
+});
+
+it('product Skill library includes drafts, paginates exactly, and never includes file bodies', async () => {
+  const f = await fixture();
+  for (let n = 0; n < 51; n++) {
+    const id = 'library-' + String(n).padStart(2, '0');
+    const result = await f.invoke(o => o.mutateSkill(f.hash, { action: 'stage', skill_id: id, expected_revision: 0,
+      source: 'local fixture', license: 'MIT', files: [{ path: 'SKILL.md', text: '---\nname: library\ndescription: Library fixture\n---\nPRIVATE FILE BODY' }] }));
+    expect(result.state).toBe('written');
+  }
+  const response = await f.admin('skills'), text = await response.text(), first = JSON.parse(text);
+  expect(response.status).toBe(200); expect(response.headers.get('cache-control')).toBe('no-store');
+  expect(first.skills).toHaveLength(50); expect(first.next_after).toBe('library-49');
+  expect(first.skills[0]).toMatchObject({ head: { enabled: false }, summary: { name: 'library' } });
+  expect(text).not.toContain('PRIVATE FILE BODY'); expect(text).not.toContain('files');
+  const second = await (await f.admin('skills?after=' + first.next_after)).json();
+  expect(second).toMatchObject({ state: 'listed', next_after: null, skills: [{ head: { skill_id: 'library-50' } }] });
+  expect((await f.admin('skills?digest=wrong')).status).toBe(400);
+  expect((await f.admin('skills', undefined, { ...f.headers, cookie: '' })).status).toBe(403);
+  expect(await f.invoke(o => o.listSkillLibrary('invalid-session'))).toEqual({ state: 'denied' });
 });

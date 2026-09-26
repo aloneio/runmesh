@@ -2,6 +2,8 @@ import type { WorkerEnv } from "../platform/env.js";
 import { SKILL_LIMITS, type CentralSkills } from "../contracts/skills.js";
 import { admitCentralAdmin, centralFailure, centralHeaders, cancelCentralBody } from "./central-boundary.js";
 import { parseSkillBundle, skillDigest, skillObject } from "../domain/skills/bundle.js";
+import { isCapabilityIdentifier } from "../contracts/capabilities.js";
+import { listSkillLibraryResponse } from "./central-skill-library.js";
 
 function safeSkillResponse(raw: unknown, id: string): Record<string, unknown> | undefined {
   const value = skillObject(raw); if (!value) return undefined;
@@ -25,6 +27,15 @@ function safeSkillResponse(raw: unknown, id: string): Record<string, unknown> | 
 
 export async function handleCentralSkills(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
   if (env.CENTRAL_SKILLS_ENABLED !== "1") { cancelCentralBody(request); return centralFailure("central_skills_disabled", 404); }
+  if (url.pathname === "/admin/central/skills") {
+    if (request.method !== "GET" || [...url.searchParams.keys()].some(k => k !== "after")
+      || url.searchParams.getAll("after").length > 1 || (url.searchParams.has("after") && !isCapabilityIdentifier(url.searchParams.get("after")))) {
+      cancelCentralBody(request); return centralFailure("central_invalid_request", 400);
+    }
+    const admission = await admitCentralAdmin(request, env, SKILL_LIMITS.request_bytes);
+    if (admission instanceof Response) return admission;
+    return listSkillLibraryResponse(env, admission.session_hash, url.searchParams.get("after") ?? undefined);
+  }
   const id = url.pathname.slice("/admin/central/skills/".length);
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(id) || [...url.searchParams.keys()].some(k => k !== "digest")
     || url.searchParams.getAll("digest").length > 1 || (request.method !== "GET" && url.search)) {

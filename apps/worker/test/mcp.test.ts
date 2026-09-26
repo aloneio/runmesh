@@ -434,7 +434,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     const dashboardText = await dashboard.text();
     expect(dashboardText).toContain("Read only ChatGPT");
     expect(dashboardText).not.toContain(new URL(secretUrl).pathname);
-    const clientId = /\/admin\/clients\/(client-[a-f0-9]+)\/rename/.exec(dashboardText)?.[1];
+    const clientId = /href="\/admin\/clients\/(client-[a-f0-9]+)"/.exec(dashboardText)?.[1];
     expect(clientId).toBeDefined();
     const scopeUpdate = new URLSearchParams([['csrf_token', csrf], ['scopes', 'coding:read'], ['scopes', 'coding:write']]);
     const scopesResponse = await SELF.fetch(`https://worker.test/admin/clients/${clientId as string}/scopes`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded', cookie: cookies(adminJar), origin: 'https://worker.test' }, body: scopeUpdate });
@@ -652,12 +652,14 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(dashboard.headers.get("content-security-policy")).toContain("script-src 'nonce-");
     expect(dashboard.headers.get("content-security-policy")).not.toContain("script-src 'unsafe-inline'");
     const dashboardHtml = await dashboard.text();
-    for (const section of ["Dashboard", "MCP Clients", "Runners", "Settings", "Active MCP clients", "Online / total runners", "Active shell jobs", "Recent jobs", "Recent runners", "Recent MCP clients"]) expect(dashboardHtml).toContain(section);
+    for (const section of ["Dashboard", "AI connections", "Services &amp; Skills", "Runners", "Settings", "Make your AI client more useful", "Your AI connections", "Optional computer access"]) expect(dashboardHtml).toContain(section);
+    expect(dashboardHtml).not.toContain('Active shell jobs');
     const chineseDashboard = await SELF.fetch("https://worker.test/admin?lang=zh-CN", { headers: { cookie: cookies(adminJar) } });
     expect(chineseDashboard.headers.get("content-language")).toBe("zh-CN");
     const chineseDashboardHtml = await chineseDashboard.text();
     expect(chineseDashboardHtml).toContain("仪表盘");
-    expect(chineseDashboardHtml).toContain("最近任务");
+    expect(chineseDashboardHtml).toContain("你的 AI 连接");
+    expect(chineseDashboardHtml).toContain("按需访问计算机");
     expect(chineseDashboardHtml).not.toContain("<h1>Dashboard</h1>");
     expect(dashboardHtml).toMatch(headerLogoSvgTag);
     expect(dashboardHtml).not.toMatch(/<header\b[^>]*\bapp-header\b[^>]*>[\s\S]*?<img\b/i);
@@ -710,7 +712,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
       if (typeof translated === "string") expect(translated).not.toMatch(englishWords);
     }
     for (const mixed of ["Inspect workspaces and 读取 files.", "Apply approved 编辑s.", "Use Host shell and control 任务s.", "Use Host shell and 控制 Jobs."]) expect(dashboardHtml).not.toContain(mixed);
-    const clientId = /\/admin\/clients\/(client-[a-f0-9]+)\/rename/.exec(dashboardHtml)?.[1];
+    const clientId = /href="\/admin\/clients\/(client-[a-f0-9]+)"/.exec(dashboardHtml)?.[1];
     expect(clientId).toBeDefined();
     const clientsPage = await SELF.fetch("https://worker.test/admin/clients", { headers: { cookie: cookies(adminJar) } });
     const routingClientsHtml = await clientsPage.text();
