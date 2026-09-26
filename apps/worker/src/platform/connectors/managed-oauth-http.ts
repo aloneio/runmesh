@@ -14,6 +14,23 @@ export function validDiscovery(value: OAuthDiscoveryState, selfOrigin: string) {
     && [value.authorizationServerUrl, metadata.issuer, metadata.authorization_endpoint, metadata.token_endpoint].every(v => publicOAuthUrl(v, selfOrigin) !== undefined)
     && (metadata.registration_endpoint === undefined || publicOAuthUrl(metadata.registration_endpoint, selfOrigin) !== undefined);
 }
+/** One uncredentialed discovery probe obtains the service challenge. It never
+ * initializes a legacy session, invokes tools, follows redirects or reads content. */
+export async function managedOAuthChallenge(endpoint: string, ports: { signal: AbortSignal; authorize: () => Promise<void>; origin: string; send?: FetchLike }): Promise<Response> {
+  if (publicMcpEndpoint(endpoint) === undefined || new URL(endpoint).origin === ports.origin) throw new TypeError("oauth_destination_denied");
+  await ports.authorize(); ports.signal.throwIfAborted();
+  const response = await (ports.send ?? fetch)(endpoint, { method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": "2026-07-28", "mcp-method": "server/discover", "x-runmesh-mcp-hop": "1" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: "oauth-discovery", method: "server/discover", params: {} }),
+    signal: ports.signal, credentials: "omit", redirect: "manual", cache: "no-store" });
+  void response.body?.cancel().catch(() => undefined);
+  await ports.authorize(); ports.signal.throwIfAborted();
+  if (response.status >= 300 && response.status < 400) throw new TypeError("oauth_redirect_denied");
+  if (response.status === 429 || response.status >= 500) throw new TypeError("oauth_probe_unavailable");
+  const challenge = response.status === 401 ? response.headers.get("www-authenticate") : null;
+  if (challenge !== null && challenge.length > 8192) throw new TypeError("oauth_challenge_too_large");
+  return new Response(null, { status: response.status, headers: challenge === null ? {} : { "www-authenticate": challenge } });
+}
 /** Public HTTPS only, no redirects/cookies, bounded bodies and no token replay.
  * Token and registration writes are pinned to the discovered metadata. */
 export function managedOAuthFetch(ports: { signal: AbortSignal; authorize: () => Promise<void>; discovery: () => OAuthDiscoveryState | undefined;

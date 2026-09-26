@@ -12,6 +12,12 @@ metadata, prefers OAuth client metadata documents, and otherwise registers a
 public client dynamically. PKCE, session-bound one-use state, issuer checks,
 encrypted durable credentials and claimed refresh operations are enforced. No
 per-provider environment policy is needed. Client grants remain separate.
+One credential-free server discovery probe reads the service's `WWW-Authenticate`
+challenge. Its resource metadata URL and requested scopes take precedence over
+well-known metadata locations. The probe never initializes a legacy session or
+invokes a tool; all destinations remain bounded public HTTPS without redirects.
+Missing challenges retain well-known discovery. See the
+[MCP authorization discovery requirements](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization).
 See [the product workflow](central-administration.md). The remaining W06 sections
 describe the retained legacy, per-client, preregistered-provider API.
 

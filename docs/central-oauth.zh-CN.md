@@ -2,14 +2,18 @@
 
 [English](central-oauth.md)
 
-**W06 实现管理员代为授权的 OAuth，以及单次操作内的旧版 MCP 会话。中央绑定仍仅在
-test 环境启用，不代表生产激活。**
+**W06 实现管理员代为授权的 OAuth，以及单次操作内的旧版 MCP 会话。中央绑定已在
+test 和 development 环境启用，不代表生产激活。**
 
 ## 控制端直接 OAuth 连接
 
 日常页面输入 MCP 地址并选择 OAuth，程序自动发现元数据，优先使用客户端元数据
 文档，其次动态注册公共客户端。保留 PKCE、会话绑定的一次性状态、issuer 校验、
 加密持久凭据和刷新占用，不需要逐个供应商配置环境策略。AI 客户端授权独立分配。
+程序先发送一次不携带凭据的服务发现请求，读取 `WWW-Authenticate` 中指定的资源
+元数据地址和 scope；没有挑战时再使用 well-known 发现。该探测不初始化旧版会话、
+不调用工具，所有目标仍须为受限公网 HTTPS，且不跟随重定向。参见
+[MCP 授权发现要求](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)。
 参见[产品使用流程](central-administration.zh-CN.md)。下方 W06 内容是保留兼容的
 按客户端、预注册供应商旧接口。
 
