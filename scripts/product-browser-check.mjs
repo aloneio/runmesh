@@ -21,7 +21,7 @@ export async function checkGuidedProduct(executable) {
   try {
    const url=new URL(req.url,'http://127.0.0.1');
    if(url.pathname==='/oauth-fixture'){res.statusCode=302;res.setHeader('location','/admin/central/connections/callback?state=fixture-state&code=fixture-code&iss=https://login.provider.com&scope=read&authuser=0');res.end();return;}
-   if(['/admin/central/connections/callback','/admin/central/oauth/callback'].includes(url.pathname)){const page=oauthLanding(url.pathname.includes('/connections/'));for(const [k,v] of page.headers)res.setHeader(k,v);res.end(await page.text());return;}
+   if(url.pathname==='/admin/central/connections/callback'){const page=oauthLanding();for(const [k,v] of page.headers)res.setHeader(k,v);res.end(await page.text());return;}
    if(url.pathname==='/admin') {res.setHeader('content-type','text/html');res.end(adminDocument('Dashboard',productOverviewPage({clients:[],runners:[]}),'dashboard'));return;}
    if(url.pathname==='/admin/central') {res.setHeader('set-cookie',ADMIN_CSRF_COOKIE+'=fixture-csrf; Path=/; SameSite=Strict; Secure');res.setHeader('content-type','text/html');res.end(adminDocument('Services & Skills',centralPage('fixture-csrf',true,true),'central'));return;}
    const raw=[];for await(const part of req)raw.push(part);
@@ -32,7 +32,7 @@ export async function checkGuidedProduct(executable) {
    else if(kind==='profiles'){
     if(body.action==='connect'){const p={profile_id:id,connector_id:body.connector_id,display_name:body.display_name,endpoint:body.endpoint,revision:1,enabled:false,credential:null,authentication:body.authentication};profiles.push(p);value={state:'written',profile:p};}
     else{const p=profiles.find(p=>p.profile_id===id);assert.equal(body.expected_revision,p.revision);p.revision++;if(body.action==='enable'||body.action==='disable')p.enabled=body.action==='enable';value={state:'written',profile:p};}
-   }else if(kind==='connections'||kind==='oauth'){
+   }else if(kind==='connections'){
     assert.equal(req.headers['x-csrf-token'],'fixture-csrf');
     if(id==='begin')value={state:'started',profile_id:body.profile_id,authorization_url:'/oauth-fixture'};
     else if(id==='complete'){if(body.error){assert.deepEqual(body,{state:'cancel-state',error:'access_denied'});code=503;value={error:{code:'oauth_reauthorization_required'}};}else{assert.deepEqual(body,{state:'fixture-state',iss:'https://login.provider.com',code:'fixture-code'});value={state:'linked',profile_id:profiles.at(-1).profile_id};}}
@@ -149,9 +149,7 @@ export async function checkGuidedProduct(executable) {
   failLibrary=false;await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
   await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
   const callback=await page.context().newPage();callback.on('pageerror',e=>exceptions.push(e.message));
-  await callback.goto(origin+'/admin/central/oauth/callback?state=fixture-state&code=fixture-code&iss=https://login.provider.com&scope=read');
-  await callback.getByText('Authorization completed.',{exact:false}).waitFor();assert.equal(new URL(callback.url()).search,'');
-  for(const route of ['connections','oauth']){
+  for(const route of ['connections']){
    const path='/admin/central/'+route;
    await callback.goto(origin+path+'/callback?state=cancel-state&error=access_denied&error_description=PRIVATE_PROVIDER_DETAIL&error_uri=https://provider.com/error');
    await callback.getByText('Authorization was not confirmed.',{exact:false}).waitFor();assert.equal(new URL(callback.url()).search,'');assert.equal((await callback.content()).includes('PRIVATE_PROVIDER_DETAIL'),false);

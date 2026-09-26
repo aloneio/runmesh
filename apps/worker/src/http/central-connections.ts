@@ -11,7 +11,7 @@ export async function handleConnections(request: Request, env: WorkerEnv, url: U
     if (!origin || publicMcpEndpoint(origin) === undefined || new URL(origin).origin !== origin) return centralFailure("oauth_unavailable", 503);
     return Response.json({ client_id: origin + "/admin/central/connections/client-metadata", ...connectionClientMetadata(origin) }, { headers: centralHeaders });
   }
-  if (action === "callback" && request.method === "GET" && url.href.length <= 8192) return oauthLanding(true);
+  if (action === "callback" && request.method === "GET" && url.href.length <= 8192) return oauthLanding();
   if (!["begin", "complete", "revoke"].includes(action) || request.method !== "POST" || url.search) { cancelCentralBody(request); return centralFailure("central_not_found", 404); }
   const admission = await admitCentralAdmin(request, env, 16_384); if (admission instanceof Response) return admission;
   let timer: ReturnType<typeof setTimeout> | undefined;

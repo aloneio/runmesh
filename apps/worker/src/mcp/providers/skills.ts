@@ -9,7 +9,7 @@ const target = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("skill"), resource_id: identifier, version: digest }).strict(),
   z.object({ kind: z.literal("remote_tool"), resource_id: identifier, version: digest, connection_profile_id: identifier }).strict(),
 ]);
-const dependencies = z.array(z.object({ target, state: z.enum(["configured", "not_configured", "not_authorized", "disabled", "incompatible", "unavailable"]) }).strict()).max(SKILL_LIMITS.dependencies);
+const dependencies = z.array(z.object({ target, state: z.enum(["configured", "not_configured", "disabled", "incompatible", "unavailable"]) }).strict()).max(SKILL_LIMITS.dependencies);
 const summary = z.object({ skill_id: identifier, digest, name: z.string().min(1).max(64), description: z.string().min(1).max(1024),
   source: z.string().max(2048), license: z.string().max(256), revision: z.number().int().positive(), required_capabilities: z.array(target).max(SKILL_LIMITS.dependencies).optional() }).strict();
 const page = z.object({ state: z.literal("listed"), skills: z.array(summary).max(SKILL_LIMITS.page), next_after: identifier.nullable() }).strict();

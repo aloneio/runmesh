@@ -32,17 +32,15 @@ remote_profiles 从本地元数据发现已发布服务的 ID 和名称；remote
 
 Skill 列表返回每个已启用 Skill 当前生效的 digest。读取要求该摘要仍为当前版本，返回前再次检查身份和 head revision。发布新版本会同步影响所有客户端；缓存旧摘要的请求被拒绝，客户端需刷新 skill_list。历史内容保留，供管理员检查或显式回滚。依赖状态只供提示，不会执行、启用或授权能力。
 
-## 存储与升级
+## 存储与当前模型
 
-CapabilitiesDOv1 继续拥有中央状态，不重写 Registry 或 Runner 的表、身份、凭证和命名空间。中央 schema 初始化保留旧 v1 grant 行，但实时目录、调用和 Skill 读取不再访问它们，也不创建默认通配 grant 或备用 ACL。
+CapabilitiesDOv1 拥有中央状态。CentralSchema 只初始化命名空间标记，各仓库负责自己的 schema。grant 类型、解析器、存储、分配 RPC 和兼容 HTTP 处理器均已删除。旧路径返回普通 HTTP 404，不解析 owner，不读写存档 ACL。
 
-客户端访问分配界面、grant RPC 和 toolset 分配实现已退役。/admin/central/grants 与 /admin/central/toolsets 路径返回 HTTP 410 和 central_client_access_retired，不修改状态，也不解析中央 owner。因此旧的限制性或已禁用 grant 不再限制有效客户端。
+只接受明确标注 none 或 oauth 的控制台连接。托管 OAuth 负责服务凭据及 revision；逐客户端 OAuth、手工 bearer 档案命令和环境变量回退均已删除。当前托管连接沿用已有存储表示。未知状态明确失败，不自动清空。
 
-目录游标使用版本 2 和版本 2 MAC 命名空间，继续绑定客户端身份、凭证代次、服务和目录 revision、页大小及有效期。旧游标被拒绝，客户端需刷新目录。本次变化无需替换已存储的客户端密钥。
+直接工具目录和共享服务元数据共用有界发布扫描器，统一校验分页顺序、目录所有者，并在异步身份检查后再次扫描发布成员与 revision，避免两个发现入口规则漂移。
 
-停用某个客户端时撤销其凭证；从所有客户端撤回能力时禁用服务、发布内容或 Skill。需要不同能力库的信任边界应使用独立实例。上游 OAuth 授权与客户端能力分配不同：托管连接保留服务授权，既有按客户端绑定的 OAuth 账户仍保留自身凭证边界。
-
-旧 Worker 可能恢复历史 grant 行为，也可能拒绝版本 2 身份；回滚并不保证保留新的共享访问语义。切换版本前请阅读[管理与迁移说明](central-administration.zh-CN.md)。
+目录游标使用版本 2，经过 MAC 认证，绑定身份、凭据代次、服务／目录 revision、页大小和有效期，不保留旧游标解码。停用客户端时撤销凭据；全局撤回能力时禁用服务或 Skill。不同信任边界使用不同实例，Registry 和 Runner 契约保持独立。
 
 ## 有界操作
 
@@ -64,6 +62,6 @@ CapabilitiesDOv1 继续拥有中央状态，不重写 Registry 或 Runner 的表
 
 普通连接流程只需服务名、MCP URL，以及无身份验证或 OAuth。工具发布仍需明确审核；安装或更新 Skill 后，当前版本进入共享库。管理操作保留同源、会话和 CSRF 检查；过期预览、刷新失败或 revision 冲突不能静默成为成功写入。
 
-回归覆盖两个独立客户端无 grant 行使用共享库、忽略历史 grant、Skill 当前版本切换、超过 128 个 head、较大远程目录、凭证撤销和轮换、禁用服务、schema 变化、OAuth 边界、退役接口，以及不变的 Runner 准入。浏览器检查覆盖产品流程且不截图。完整验证计划、架构门禁和精确提交 CI 仍是发布要求。
+回归覆盖两个独立客户端无 grant 行使用共享库、不创建旧授权存储、Skill 当前版本切换、超过 128 个 head、较大远程目录、凭证撤销和轮换、禁用服务、schema 变化、OAuth 边界、退役接口，以及不变的 Runner 准入。浏览器检查覆盖产品流程且不截图。完整验证计划、架构门禁和精确提交 CI 仍是发布要求。
 
 细节参见[控制台管理](central-administration.zh-CN.md)、[目录审核](central-catalog.zh-CN.md)、[远程 MCP](central-remote-mcp.zh-CN.md)、[Skill](central-skills.zh-CN.md) 和 [OAuth](central-oauth.zh-CN.md)。

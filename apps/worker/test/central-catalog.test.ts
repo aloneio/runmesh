@@ -34,8 +34,8 @@ async function client() {
 }
 async function fixture(tools: readonly RemoteToolDefinition[] = [catalogDefinition("a"), catalogDefinition("b"), catalogDefinition("c")]) {
   const admin = await session(), id = `catalog-${crypto.randomUUID()}`, profile = catalogProfile(id);
-  expect(await owner().mutateProfile(admin.hash, { action: "create", profile_id: id, connector_id: profile.connector_id, endpoint: profile.endpoint,
-    credential: { kind: "bearer", token: "synthetic-private-catalog-token" } })).toMatchObject({ state: "written" });
+  expect(await owner().mutateProfile(admin.hash, { action: "connect", profile_id: id, connector_id: profile.connector_id, endpoint: profile.endpoint,
+    authentication: "none" })).toMatchObject({ state: "written" });
   expect(await owner().mutateProfile(admin.hash, { action: "enable", profile_id: id, expected_revision: 1 })).toMatchObject({ state: "written" });
   const post = (body: unknown) => SELF.fetch(url(id), { method: "POST", headers: admin.headers, body: JSON.stringify(body) });
   expect((await post({ action: "stage", expected_revision: 0, tools })).status).toBe(200);
@@ -98,7 +98,7 @@ it.each(["profile", "catalog", "identity"])("W04 stale pages are fenced after %s
   const f = await fixture(), principal = await client(); await f.approve();
   const first = await owner().listCatalog(principal, { profile_id: f.id, limit: 1 });
   if (first.state !== "listed" || first.next_cursor === null) throw new Error("missing page");
-  if (changed === "profile") await owner().mutateProfile(f.admin.hash, { action: "rotate", profile_id: f.id, expected_revision: 2, credential: { kind: "bearer", token: "synthetic-rotated" } });
+  if (changed === "profile") await owner().mutateProfile(f.admin.hash, { action: "enable", profile_id: f.id, expected_revision: 2 });
   if (changed === "catalog") await f.post({ action: "stage", expected_revision: 2, tools: f.snapshot.tools.map(tool => tool.definition) });
   if (changed === "identity") await runInDurableObject(registry(), instance => { instance.revokeMcpClient(principal.client_id, Date.now()); });
   expect(await owner().listCatalog(principal, { profile_id: f.id, cursor: first.next_cursor })).toEqual({ state: changed === "identity" ? "denied" : "stale_cursor" });

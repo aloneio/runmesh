@@ -3,7 +3,7 @@ import { catalogJson } from "../../contracts/catalog-json.js";
 import { parseEnvelope } from "../../contracts/connector-values.js";
 import { decodeBytes, encodeBytes, loadCipherKey } from "./keyring.js";
 
-/** Separate AAD namespace from bearer profiles. No reusable raw-key cache. */
+/** OAuth state uses authenticated context binding and no reusable raw-key cache. */
 export function createOAuthCipher(namespace: string, keyring: () => unknown, reserved: () => readonly (string | undefined)[]): OAuthCipher {
   const aad = (context: string, keyId: string) => {
     if (!namespace || namespace.length > 256 || !context || context.length > 4096) throw new OAuthFault("unavailable");
@@ -38,4 +38,3 @@ export function createOAuthCipher(namespace: string, keyring: () => unknown, res
   };
 }
 export const oauthRandom = (): string => encodeBytes(crypto.getRandomValues(new Uint8Array(32)));
-export const oauthChallenge = async (verifier: string): Promise<string> => encodeBytes(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));

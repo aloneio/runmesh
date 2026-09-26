@@ -1,130 +1,33 @@
-# Central OAuth and ephemeral sessions (development)
+# Central OAuth and operation-local sessions (development)
 
 [简体中文](central-oauth.zh-CN.md)
 
-**W06 implements administrator-mediated OAuth and operation-local legacy MCP
-sessions. The development environment enables central bindings; production remains separate.**
+## Connect from the control panel
 
-## Control-panel OAuth connections
+Enter a public HTTPS MCP URL and select OAuth in /admin/central. Runmesh discovers resource and provider metadata, prefers OAuth client metadata documents, and otherwise dynamically registers a public client. Unsupported providers fail explicitly. There is no manual client secret, per-provider environment policy or per-client OAuth assignment.
 
-The normal UI accepts an MCP URL and OAuth. It discovers resource/provider
-metadata, prefers OAuth client metadata documents, and otherwise registers a
-public client dynamically. PKCE, session-bound one-use state, issuer checks,
-encrypted durable credentials and claimed refresh operations are enforced. No
-per-provider environment policy is needed. Published tools are shared by all authenticated clients; upstream consent remains required.
-One credential-free server discovery probe reads the service's `WWW-Authenticate`
-challenge. Its resource metadata URL and requested scopes take precedence over
-well-known metadata locations. The probe never initializes a legacy session or
-invokes a tool; all destinations remain bounded public HTTPS without redirects.
-Missing challenges retain well-known discovery. See the
-[MCP authorization discovery requirements](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization).
-See [the product workflow](central-administration.md). The remaining W06 sections
-describe the retained legacy, per-client, preregistered-provider API.
+A credential-free discovery probe reads WWW-Authenticate; its resource metadata URL and scopes take precedence over well-known locations. Missing challenges use well-known discovery. The probe never initializes a session or invokes a tool. All destinations are bounded public HTTPS without redirects, private destinations or forwarding inbound credentials.
 
-## Identity and supported providers
+Authorization belongs to the saved connection. After administrator review and tool publication, every authenticated instance client can use the service. Each caller is revalidated; publication does not grant native Runner or workspace permissions.
 
-An administrator explicitly delegates an upstream authorization to one Runmesh
-MCP client credential generation. Client IDs are not natural-person accounts.
-The binding includes the profile, client, secret generation, resource endpoint
-and approved OAuth configuration digest. Provider authorization, tool approval
-and shared tool publication remain separate. OAuth grants no machine permission
-and requires no software installation on a Runner.
+## Authorization and credential lifecycle
 
-This batch supports pre-registered **public** OAuth clients, authorization code,
-PKCE S256, bearer access tokens, explicit resource indicators and RFC 9207 `iss`.
-Provider metadata must affirm the pinned issuer/endpoints, S256, response type
-`code`, grant `authorization_code`, client authentication `none`, and issuer
-response support. No dynamic registration, confidential client secret, automatic
-scope upgrade, sender-constrained token or arbitrary authentication redirect is
-implemented.
+The protected /admin/central/connections/begin, complete and revoke endpoints require the administrator session, same origin and CSRF checks. The browser callback is /admin/central/connections/callback. PKCE, session-bound one-use state, issuer verification, exact profile revision and origin checks fence the exchange. The callback page removes query parameters before its protected POST and never inserts callback text into HTML. Deployment logs must exclude callback queries and authorization URLs.
 
-The optional `CENTRAL_OAUTH_POLICIES` is a JSON array, without tokens or secrets:
+OAuth client data, verifier and tokens are encrypted with the independent CENTRAL_VAULT_KEYRING. Authenticated encryption binds ciphertext to namespace and operation context. Profile metadata contains no upstream secret; OAuth storage owns credential state. Read APIs expose metadata only. Temporary byte buffers are cleared, but JavaScript strings cannot be reliably zeroized and encryption does not protect a compromised runtime.
 
-```json
-[{"profile_id":"docs","resource":"https://remote.example.com/mcp","issuer":"https://login.example.com","metadata_endpoint":"https://login.example.com/.well-known/oauth-authorization-server","authorization_endpoint":"https://login.example.com/authorize","token_endpoint":"https://login.example.com/token","oauth_client_id":"registered-public-client","scopes":["read"]}]
-```
+A durable claim precedes exchange or refresh to prevent concurrent reuse. Refresh is demand-driven; waiting requests recheck their own admission and use leases that validate the current OAuth revision. Unknown outcomes require reconnection and are not replayed. Retain keys needed by current records until replacement or reauthorization; there is no automatic bulk rekey task.
 
-Endpoints must be pinned public HTTPS URLs; authorization/token endpoints share
-the issuer origin. Metadata follows the RFC 8414 well-known location and cannot
-add destinations. Public-only Worker fetch routing remains a deployment
-requirement. Requests never follow redirects or forward incoming tokens/cookies.
+Disconnecting an account revokes local state and fences leases. It does not revoke tokens at the provider or roll back dispatched effects. Client revocation independently blocks that client without disconnecting the shared service. A 401 or credential change never automatically replays tools/call.
 
-## Administration
+## Sessions and module boundaries
 
-Use the existing profile API with `action: "create_oauth"`, `connector_id` and
-`endpoint`; the profile ID comes from the path. New profiles are disabled with
-`credential: null`, not a fake bearer. Existing profiles cannot silently change
-authentication mode. Enable/disable does not require decryption keys.
+The adapter negotiates supported MCP protocol versions. An upstream session created during initialization is bound to one operation and credential. Unexpected replacement fails closed. There is no persistent session pool, automatic reconnect, GET subscription or resume. Normal closure sends at most one bounded DELETE while admission remains valid; cancellation or revocation may prevent cleanup, and local state is discarded.
 
-The following POST paths under `/admin/central/oauth/` require the existing
-administrator session, same-origin request and matching CSRF header/cookie:
+Managed OAuth application code owns lifecycle ordering through SDK-free ports. Protocol adapters own discovery and bounded HTTP; storage owns atomic state. Only the composition root wires implementations together. The former client-bound OAuth, manual bearer profile and environment-policy implementations are removed. Their HTTP paths have no handlers and return ordinary unknown-route responses.
 
-| Action | Body | Result |
-| --- | --- | --- |
-| `begin` | profile_id, principal: {client_id, secret_version}, expected_revision | Pending link and approved authorization URL |
-| `complete` | state, iss, exactly one of code/error | Single-use callback and safe link metadata |
-| `inspect` | Same selection shape; expected_revision may be 0 for reads | Metadata, never tokens/verifier |
-| `revoke` | Selection plus observed revision | Local revocation and removal of token ciphertext |
+## Verification boundary
 
-There is no ADMIN_TOKEN or MCP-token fallback. Register exactly
-`RUNMESH_PUBLIC_ORIGIN + /admin/central/oauth/callback` with the provider. Open the
-returned URL in the administrator's browser. The fixed landing page removes
-query parameters from history before a same-origin protected POST; Strict cookie
-settings remain unchanged. Different sessions, issuer/configuration changes,
-expired state and callback reuse are rejected. Callback text is never inserted
-into HTML. Infrastructure logs may still see the initial callback URL: disable
-query-string logging there and do not log authorization URLs.
+Tests cover encryption binding, key rotation, callback identity/origin, refresh claims, revocation, session cleanup and no replay. Local protocol fixtures do not prove consent with every real provider. Deployment activation and external consent evidence remain in [the rollout ledger](central-rollout.md).
 
-After linking and enabling, discovery accepts `principal` alongside
-`expected_revision` at `/admin/central/discovery/{profile_id}`. OAuth discovery
-requires it. The resulting catalog still needs approval before shared publication.
-W08 now provides the [shared library control panel](central-administration.md);
-OAuth still requires the explicit provider policies above; the retired client capability ACL does not apply.
-
-## Tokens, recovery and sessions
-
-PKCE verifiers and tokens use independent-keyring AES-GCM encryption with
-owner/link/generation-bound contexts. SQLite stores only ciphertext and metadata.
-Temporary byte buffers are cleared; JavaScript strings cannot be reliably
-zeroized. This does not protect a compromised runtime. Retain old vault keys
-until links have refreshed or been replaced; no bulk OAuth rekey task is added.
-
-Refresh is demand-driven near expiry. Concurrent requests share one refresh but
-each waiter rechecks its own authorization. A persisted claim precedes using a
-rotating refresh token. An unknown result or restarted in-flight claim requires
-reauthorization, never token replay. Scope expansion and reuse of the same refresh
-token are rejected. If the response omits a replacement refresh token, the new
-access token is usable but the old refresh token is discarded.
-
-Revocation is local: it fences future use and removes local token ciphertext.
-It does not revoke provider tokens, stop a dispatched effect or roll it back.
-Client credential revocation/generation changes block old links. Refresh, 401,
-and lost responses never automatically replay tool calls.
-
-Stateless MCP remains the default. A 2025-11-25 egress rule may explicitly add
-`"session":"ephemeral"`. The session ID is captured only during initialization,
-pinned to one operation/credential, and never exposed to the inbound client.
-Unexpected replacements fail closed. Each operation creates a fresh session:
-there is no persistence, pool, automatic reconnect, GET subscription or resume.
-Normal closure makes at most one bounded DELETE when still authorized. Failure,
-cancellation or revocation may prevent remote cleanup; local state is discarded.
-A session expiry does not replay the call; a new explicit operation starts fresh.
-
-## Budgets and verification boundary
-
-Limits: 64 provider policies, 64 pending flows, 1,000 links per owner, 4 active
-authorization operations, 16 KiB command bodies, 32 KiB provider responses,
-2 KiB tokens, five-minute callback TTL and five-second individual operations.
-Flow expiry cleanup is bounded and demand-driven, without alarms or polling.
-Session cleanup is bounded to one second. These are ceilings, not performance
-guarantees. Existing bearer/native paths do not acquire OAuth dependencies.
-
-No deployment binding or secret is installed automatically. Old Worker code does
-not understand OAuth-only profiles; do not reset state or grant machine access
-to disguise rollback incompatibility. Fixture tests do not prove real browser
-consent, public-provider interoperability, or production quotas.
-
-References: [RFC 9700](https://www.rfc-editor.org/rfc/rfc9700.html),
-[RFC 9207](https://www.rfc-editor.org/rfc/rfc9207.html),
-[MCP authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization),
-[MCP sessions](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports).
+See [the product workflow](central-administration.md), [MCP authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization) and [MCP transports](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports).

@@ -1,7 +1,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { expect, it } from "vitest";
 import { SkillState } from "../src/platform/skills/store.js";
-import { CapabilityState } from "../src/platform/capabilities/store.js";
+import { CentralSchema } from "../src/platform/capabilities/schema.js";
 import { makeSkillBundle } from "../src/domain/skills/bundle.js";
 import { catalogSha256 } from "../src/platform/capabilities/catalog-crypto.js";
 import { createSkillService } from "../src/application/skills/service.js";
@@ -18,7 +18,7 @@ it("Skill dependencies report shared publication status and never hide revoked r
   const base = (await bundle())!, a = (await makeSkillBundle({ ...base, files: [...base.files,
     { path: 'runmesh.json', text: JSON.stringify({ schema_version: 1, requiredCapabilities: [target] }) }] }, catalogSha256))!;
   await runInDurableObject(owner(), async (_instance, state) => {
-    const grants = new CapabilityState(state.storage), store = new SkillState(state.storage, () => grants.initialize());
+    const schema = new CentralSchema(state.storage), store = new SkillState(state.storage, () => schema.initialize());
     store.stage(a, 0); store.activate(a.skill_id, a.digest, 1);
     let probes = 0, revokeDuringRead = false, revoked = false;
     const service = createSkillService({ repository: store, digest: catalogSha256, admin: async () => 'allowed',
@@ -33,7 +33,7 @@ it("Skill dependencies report shared publication status and never hide revoked r
 it("Skill repository is lazy and preserves approved old bodies across updates, rollback and disable", async () => {
   const a = (await bundle())!, b = (await bundle('second'))!;
   await runInDurableObject(owner(), (_instance, state) => {
-    const grants = new CapabilityState(state.storage), store = new SkillState(state.storage, () => grants.initialize());
+    const schema = new CentralSchema(state.storage), store = new SkillState(state.storage, () => schema.initialize());
     expect(state.storage.sql.exec("SELECT name FROM sqlite_master WHERE name='skill_meta'").toArray()).toEqual([]);
     expect(store.stage(a, 0)).toMatchObject({ state: "written", head: { revision: 1, enabled: false } });
     expect(store.approved(a.skill_id, a.digest)).toBe(false);
@@ -50,18 +50,18 @@ it("Skill repository is lazy and preserves approved old bodies across updates, r
 it("Skill stage rolls back content if head publication fails and rejects unknown schema versions", async () => {
   const a = (await bundle())!, b = (await bundle('second'))!;
   await runInDurableObject(owner(), (_instance, state) => {
-    const grants = new CapabilityState(state.storage), store = new SkillState(state.storage, () => grants.initialize()); store.stage(a, 0);
+    const schema = new CentralSchema(state.storage), store = new SkillState(state.storage, () => schema.initialize()); store.stage(a, 0);
     state.storage.sql.exec("CREATE TRIGGER reject_skill_head BEFORE UPDATE ON skill_heads_v1 BEGIN SELECT RAISE(ABORT,'synthetic'); END");
     expect(() => store.stage(b, 1)).toThrow(); expect(store.bundle(b.skill_id, b.digest)).toBeUndefined();
     state.storage.sql.exec("UPDATE skill_meta SET schema_version=2");
-    expect(() => new SkillState(state.storage, () => grants.initialize()).head(a.skill_id)).toThrow("skill_schema_unsupported");
+    expect(() => new SkillState(state.storage, () => schema.initialize()).head(a.skill_id)).toThrow("skill_schema_unsupported");
     expect(store.bundle(a.skill_id, a.digest)).toEqual(a);
   });
 });
 it("Skill reads follow active publications, do not load bodies during listing, and reject revoked or mismatched clients", async () => {
   const a = (await bundle())!, b = (await bundle('second'))!;
   await runInDurableObject(owner(), async (_instance, state) => {
-    const grants = new CapabilityState(state.storage), store = new SkillState(state.storage, () => grants.initialize());
+    const schema = new CentralSchema(state.storage), store = new SkillState(state.storage, () => schema.initialize());
     store.stage(a, 0); store.activate(a.skill_id, a.digest, 1); store.stage(b, 2); store.activate(b.skill_id, b.digest, 3);
     let revoked = false, onIdentity = () => undefined;
     const ports: SkillPorts = { repository: store, digest: catalogSha256, admin: async () => 'allowed',

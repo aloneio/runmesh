@@ -8,7 +8,7 @@ import { RemoteFault } from "../src/contracts/remote.js";
 
 const endpoint = "https://sessions.example.com/mcp", token = "synthetic-session-bearer";
 const profile: ConnectionProfile = { schema_version: 1, profile_id: "docs", connector_id: "docs", endpoint, revision: 1,
-  enabled: true, credential: { secret_id: "docs", secret_version: 1 }, owner: { kind: "instance_admin" } };
+  enabled: true, authentication: "oauth", credential: null, owner: { kind: "instance_admin" } };
 function fixture() {
   const sessions = new Set<string>(), seen: Array<{ method: string; session: string | null }> = [];
   const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "done" }] }));
@@ -30,8 +30,8 @@ function fixture() {
     else if (changed) headers.set("mcp-session-id", "unexpected-new-session");
     return new Response(response.body, { status: response.status, headers });
   });
-  const policy = () => JSON.stringify({ schema_version: 1, endpoints: [{ endpoint, protocol: "2025-11-25", ...(allowSession ? { session: "ephemeral" } : {}) }] });
-  const connector = createHttpRemoteConnector({ policy, fetch: send,
+  const rules = () => [{ endpoint, protocol: "2025-11-25" as const, ...(allowSession ? { session: "ephemeral" as const } : {}) }];
+  const connector = createHttpRemoteConnector({ rules, fetch: send,
     credential: async () => ({ credential: { kind: "bearer", token }, current: () => current }) });
   const open = () => connector.open(profile, new AbortController().signal, () => undefined, async () => undefined);
   return { open, seen, execute, send, sessions, change: () => { changed = true; }, expire: () => { expired = true; }, revoke: () => { current = false; },

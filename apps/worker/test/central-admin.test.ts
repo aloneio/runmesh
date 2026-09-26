@@ -5,7 +5,6 @@ import { handleCentralAdmin } from "../src/http/central.js";
 import { passwordVerifier, randomBase64Url, sha256Hex } from "../src/security.js";
 import type { WorkerEnv } from "../src/platform/env.js";
 import type { CapabilitiesDOv1 } from "../src/capabilities-do.js";
-import { createCredentialCipher } from "../src/platform/connectors/cipher.js";
 import { handleBrowserAdmin } from "../src/http/admin.js";
 import { localizeHtmlResponse } from "../src/i18n/html.js";
 import { secretCreatedPage } from "../src/admin/auth-views.js";
@@ -14,13 +13,12 @@ const registry = () => env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
 const namespace = () => (env as unknown as { CAPABILITIES: DurableObjectNamespace<CapabilitiesDOv1> }).CAPABILITIES;
 const central = () => namespace().get(namespace().idFromName("central"));
 const configured = () => ({ ...env, RUNMESH_PUBLIC_ORIGIN: "https://worker.test" }) as WorkerEnv;
-const creation = { action: "create", connector_id: "test-docs", endpoint: "https://docs.example/mcp",
-  credential: { kind: "bearer", token: "synthetic-private-upstream-token" } };
+const creation = { action: "connect", connector_id: "test-docs", endpoint: "https://docs.example.com/mcp", authentication: "none" };
 
 it("direct public connections and Skill installation are available without deployment endpoint configuration", async () => {
   const admin = await session();
   const request = new Request('https://worker.test/admin/central?lang=zh-CN', { headers: admin.headers });
-  const config = { ...configured(), CENTRAL_SKILLS_ENABLED: '1', CENTRAL_MCP_EGRESS: undefined, CENTRAL_VAULT_KEYRING: undefined };
+  const config = { ...configured(), CENTRAL_SKILLS_ENABLED: '1', CENTRAL_VAULT_KEYRING: undefined };
   const response = localizeHtmlResponse(request, await handleBrowserAdmin(request, config, new URL(request.url)));
   expect(response.status).toBe(200);
   const markup = await response.text();
@@ -55,41 +53,33 @@ async function session() {
     origin: "https://worker.test", "content-type": "application/json", "x-csrf-token": csrf } };
 }
 
-it("W03 admin HTTP stores ciphertext, defaults disabled and checks revisions", async () => {
-  const admin = await session(), id = `profile-${crypto.randomUUID()}`;
+it("W03 admin HTTP stores connection metadata, defaults disabled and checks revisions", async () => {
+  const admin = await session(), id = "profile-" + crypto.randomUUID();
   const call = (value: unknown) => SELF.fetch(url(id), { method: "POST", headers: admin.headers, body: JSON.stringify(value) });
-  const created = await call(creation), body = await created.text();
-  expect(created.status).toBe(200); expect(body).not.toContain(creation.credential.token);
-  expect(JSON.parse(body)).toMatchObject({ state: "written", profile: { enabled: false, revision: 1 } });
-  expect(created.headers.get("cache-control")).toBe("no-store");
-  expect(await (await call({ action: "enable", expected_revision: 1 })).json())
-    .toMatchObject({ profile: { enabled: true, revision: 2, credential: { secret_version: 1 } } });
-  const rotated = { kind: "bearer", token: "synthetic-rotated-upstream-token" };
-  expect(await (await call({ action: "rotate", expected_revision: 2, credential: rotated })).json())
-    .toMatchObject({ profile: { revision: 3, credential: { secret_version: 2 } } });
-  const stale = await call({ action: "disable", expected_revision: 2 });
-  expect(stale.status).toBe(409); expect(await stale.json()).toMatchObject({ error: { current_revision: 3, operation_state: "not_started" } });
-  expect(await (await call({ action: "rekey", expected_revision: 3 })).json())
-    .toMatchObject({ profile: { revision: 4, credential: { secret_version: 3 } } });
-  expect(await (await call({ action: "disable", expected_revision: 4 })).json())
-    .toMatchObject({ profile: { enabled: false, revision: 5 } });
-  const read = await SELF.fetch(url(id), { headers: admin.headers });
-  expect(read.status).toBe(200);
-  expect(await read.json()).toMatchObject({ state: "found", profile: { profile_id: id, revision: 5 } });
-  await runInDurableObject(central(), async (_instance, state) => {
-    const row = state.storage.sql.exec<{ profile_json: string; envelope_json: string }>(
-      "SELECT profile_json,envelope_json FROM connection_profiles_v1 WHERE profile_id=?", id).one();
-    expect(JSON.stringify(row)).not.toContain(rotated.token);
-    expect(JSON.stringify(row)).not.toContain(creation.credential.token);
-    const cipher = createCredentialCipher(state.id.toString(), () => configured().CENTRAL_VAULT_KEYRING);
-    expect(await cipher.open(JSON.parse(row.profile_json), JSON.parse(row.envelope_json))).toEqual(rotated);
+  const created = await call(creation);
+  expect(created.status).toBe(200); expect(created.headers.get("cache-control")).toBe("no-store");
+  expect(await created.json()).toMatchObject({ state: "written", profile: { enabled: false, revision: 1, authentication: "none", credential: null } });
+  expect(await (await call({ action: "enable", expected_revision: 1 })).json()).toMatchObject({ profile: { enabled: true, revision: 2 } });
+  const stale = await call({ action: "disable", expected_revision: 1 });
+  expect(stale.status).toBe(409); expect(await stale.json()).toMatchObject({ error: { current_revision: 2, operation_state: "not_started" } });
+  expect(await (await call({ action: "disable", expected_revision: 2 })).json()).toMatchObject({ profile: { enabled: false, revision: 3 } });
+  expect(await (await SELF.fetch(url(id), { headers: admin.headers })).json()).toMatchObject({ state: "found", profile: { profile_id: id, revision: 3 } });
+  await runInDurableObject(central(), (_instance, state) => {
+    expect(state.storage.sql.exec<{ envelope_json: string }>("SELECT envelope_json FROM connection_profiles_v1 WHERE profile_id=?", id).one().envelope_json).toBe("null");
     expect(state.storage.sql.exec("SELECT name FROM sqlite_master WHERE name IN ('runners','mcp_clients','jobs')").toArray()).toEqual([]);
   });
 });
 
+it.each(["create", "create_oauth", "rotate", "rekey"])("removed profile action %s cannot resolve the owner", async action => {
+  const admin = await session(), get = vi.fn(() => { throw new Error("must not resolve"); });
+  const config = { ...configured(), CAPABILITIES: { idFromName: () => "central", get } } as unknown as WorkerEnv;
+  const request = new Request(url("removed-action"), { method: "POST", headers: admin.headers, body: JSON.stringify({ ...creation, action }) });
+  expect((await handleCentralAdmin(request, config, new URL(request.url))).status).toBe(400); expect(get).not.toHaveBeenCalled();
+});
+
 it.each(["none", "oauth"])("control panel creates an explicit %s connection without a deployment endpoint allowlist", async authentication => {
   const admin = await session(), id = `direct-${crypto.randomUUID()}`;
-  const config = { ...configured(), CENTRAL_MCP_EGRESS: undefined, CENTRAL_VAULT_KEYRING: undefined };
+  const config = { ...configured(), CENTRAL_VAULT_KEYRING: undefined };
   const request = new Request(url(id), { method: "POST", headers: admin.headers, body: JSON.stringify({ action: "connect",
     connector_id: id, endpoint: "https://mcp.provider.com/mcp", authentication }) });
   const response = await handleCentralAdmin(request, config, new URL(request.url));
@@ -136,7 +126,7 @@ it("W03 session revoked during a pending request body cannot commit later", asyn
   expect(await central().getProfile(fresh.hash, id)).toEqual({ state: "missing" });
 });
 
-it("W03 concurrent creates commit once without overwriting a competing credential", async () => {
+it("W03 concurrent creates commit once without overwriting a competing connection", async () => {
   const admin = await session(), id = `competing-${crypto.randomUUID()}`;
   const responses = await Promise.all([0, 1].map(() => SELF.fetch(url(id), { method: "POST", headers: admin.headers, body: JSON.stringify(creation) })));
   expect(responses.map(response => response.status).sort()).toEqual([200, 409]);
@@ -157,7 +147,7 @@ it.each([null, {}, { state: "private-status-do-not-reflect" }, { state: "conflic
 it("W03 wrong profile identity and write/read receipts cannot masquerade as success", async () => {
   const admin = await session();
   const profile = { schema_version: 1, profile_id: "other-profile", connector_id: "docs", endpoint: "https://docs.example/mcp",
-    owner: { kind: "instance_admin" }, enabled: false, revision: 1, credential: { secret_id: "other-profile", secret_version: 1 } };
+    owner: { kind: "instance_admin" }, enabled: false, revision: 1, authentication: "oauth", credential: null };
   for (const state of ["found", "written"]) {
     const local = { ...configured(), CAPABILITIES: { idFromName: () => "central", get: () => ({ getProfile: async () => ({ state, profile }) }) } } as unknown as WorkerEnv;
     const request = new Request(url("expected-profile"), { headers: admin.headers });

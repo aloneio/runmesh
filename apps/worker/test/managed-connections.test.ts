@@ -29,16 +29,16 @@ it.each(["modern", "legacy", "session"])("direct no-auth MCP negotiates %s and n
     if (mode === "session" && method !== "initialize") expect(headers.get("mcp-session-id")).toBe(sessionId);
     return response;
   });
-  const connector = createHttpRemoteConnector({ policy: () => undefined, rules: p => connectionPolicy(p, undefined), credential: async () => null, fetch: send });
+  const connector = createHttpRemoteConnector({ rules: p => connectionPolicy(p), credential: async () => null, fetch: send });
   const session = await connector.open(base, new AbortController().signal, () => undefined, async () => undefined);
   const tools = await session.listTools(); expect(tools[0]?.name).toBe("read");
   expect(await session.callTool(tools[0]!, {}, async () => undefined)).toMatchObject({ isError: false }); await session.close();
   expect(execute).toHaveBeenCalledTimes(1); expect(seen.filter(m => m === "tools/call")).toHaveLength(1);
   expect(seen.includes("DELETE")).toBe(mode === "session");
 });
-it("legacy null credentials do not acquire anonymous egress permission", () => {
-  const { authentication: _, ...legacy } = base; expect(connectionPolicy(legacy, undefined)).toBeUndefined();
-  expect(connectionPolicy({ ...base, endpoint: "https://127.0.0.1/mcp" }, undefined)).toBeUndefined();
+it("connections require an explicit supported authentication mode", () => {
+  const { authentication: _, ...legacy } = base; expect(connectionPolicy(legacy as ConnectionProfile)).toBeUndefined();
+  expect(connectionPolicy({ ...base, endpoint: "https://127.0.0.1/mcp" })).toBeUndefined();
 });
 
 function oauthFixture(cimd = false, configuredOrigin: string | null = origin, protocol?: ManagedOAuthProtocol) {
@@ -176,7 +176,7 @@ it.each(['before-dispatch', 'during-response'] as const)("managed OAuth expires 
   }, { route: '/mcp', legacy: 'stateless' });
   const send = vi.fn(async (url: string | URL, init?: RequestInit) => upstream.fetch(new Request(url, init)));
   const dispatched = vi.fn();
-  const connector = createHttpRemoteConnector({ policy: () => undefined, rules: profile => connectionPolicy(profile, undefined), credential: async () => lease, fetch: send });
+  const connector = createHttpRemoteConnector({ rules: profile => connectionPolicy(profile), credential: async () => lease, fetch: send });
   const session = await connector.open(selected, new AbortController().signal, dispatched, async () => undefined);
   try {
     const tools = await session.listTools();

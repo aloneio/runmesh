@@ -25,18 +25,15 @@ export function parseCredential(value: unknown): CredentialInput | undefined {
 }
 
 export function parseProfile(value: unknown): ConnectionProfile | undefined {
-  const item = object(value), owner = object(item?.owner), credential = object(item?.credential);
-  if (item?.authentication !== undefined && (!["none", "oauth"].includes(item.authentication as string) || item.credential !== null)) return undefined;
-  if (item === undefined || !displayName(item) || !exact(item, namedKeys(item, ["schema_version", "profile_id", "connector_id", "endpoint", "owner", "revision", "enabled", "credential"]))
+  const item = object(value), owner = object(item?.owner);
+  if (item === undefined || !displayName(item) || !exact(item, namedKeys(item, ["schema_version", "profile_id", "connector_id", "endpoint", "owner", "revision", "enabled", "credential", "authentication"]))
     || item.schema_version !== 1 || !isCapabilityIdentifier(item.profile_id) || !isCapabilityIdentifier(item.connector_id)
     || !revision(item.revision) || typeof item.enabled !== "boolean" || owner === undefined || !exact(owner, ["kind"]) || owner.kind !== "instance_admin"
-    || (item.credential !== null && (credential === undefined || !exact(credential, ["secret_id", "secret_version"]) || credential.secret_id !== item.profile_id || !revision(credential.secret_version)))) return undefined;
+    || item.credential !== null || (item.authentication !== "none" && item.authentication !== "oauth")) return undefined;
   const endpoint = profileEndpoint(item.endpoint);
   if (endpoint === undefined || endpoint !== item.endpoint) return undefined;
   return { schema_version: 1, profile_id: item.profile_id, connector_id: item.connector_id, ...(item.display_name === undefined ? {} : { display_name: item.display_name as string }), endpoint,
-    owner: { kind: "instance_admin" }, revision: item.revision, enabled: item.enabled,
-    ...(item.authentication === undefined ? {} : { authentication: item.authentication as "none" | "oauth" }),
-    credential: item.credential === null ? null : { secret_id: item.profile_id, secret_version: credential!.secret_version as number } };
+    owner: { kind: "instance_admin" }, revision: item.revision, enabled: item.enabled, authentication: item.authentication, credential: null };
 }
 
 export function parseEnvelope(value: unknown): CredentialEnvelope | undefined {
@@ -49,7 +46,7 @@ export function parseEnvelope(value: unknown): CredentialEnvelope | undefined {
 }
 
 export function validProfileEnvelope(profile: ConnectionProfile, envelope: unknown): boolean {
-  return profile.credential === null ? envelope === null : parseEnvelope(envelope) !== undefined;
+  return profile.credential === null && envelope === null;
 }
 
 export function parseProfileCommand(value: unknown): ProfileCommand | undefined {
@@ -62,23 +59,7 @@ export function parseProfileCommand(value: unknown): ProfileCommand | undefined 
     return endpoint === undefined ? undefined : { action: "connect", profile_id: item.profile_id, connector_id: item.connector_id, endpoint,
       authentication: item.authentication as "none" | "oauth", ...(item.display_name === undefined ? {} : { display_name: item.display_name as string }) };
   }
-  if (Object.hasOwn(item, "authentication")) return undefined;
-  if (item.action === "create_oauth") {
-    if (!displayName(item) || !exact(item, namedKeys(item, ["action", "profile_id", "connector_id", "endpoint"])) || !isCapabilityIdentifier(item.connector_id)) return undefined;
-    const endpoint = profileEndpoint(item.endpoint);
-    return endpoint === undefined ? undefined : { action: "create_oauth", profile_id: item.profile_id, connector_id: item.connector_id, ...(item.display_name === undefined ? {} : { display_name: item.display_name as string }), endpoint };
-  }
-  if (item.action === "create") {
-    if (!displayName(item) || !exact(item, namedKeys(item, ["action", "profile_id", "connector_id", "endpoint", "credential"])) || !isCapabilityIdentifier(item.connector_id)) return undefined;
-    const endpoint = profileEndpoint(item.endpoint), credential = parseCredential(item.credential);
-    return endpoint === undefined || credential === undefined ? undefined : { action: "create", profile_id: item.profile_id, connector_id: item.connector_id, ...(item.display_name === undefined ? {} : { display_name: item.display_name as string }), endpoint, credential };
-  }
   if (!revision(item.expected_revision)) return undefined;
-  if (item.action === "rotate") {
-    if (!exact(item, ["action", "profile_id", "expected_revision", "credential"])) return undefined;
-    const credential = parseCredential(item.credential);
-    return credential === undefined ? undefined : { action: "rotate", profile_id: item.profile_id, expected_revision: item.expected_revision, credential };
-  }
-  if (!["enable", "disable", "rekey"].includes(item.action as string) || !exact(item, ["action", "profile_id", "expected_revision"])) return undefined;
-  return { action: item.action as "enable" | "disable" | "rekey", profile_id: item.profile_id, expected_revision: item.expected_revision };
+  if (!["enable", "disable"].includes(item.action as string) || !exact(item, ["action", "profile_id", "expected_revision"])) return undefined;
+  return { action: item.action as "enable" | "disable", profile_id: item.profile_id, expected_revision: item.expected_revision };
 }

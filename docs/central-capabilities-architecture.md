@@ -32,17 +32,15 @@ remote_profiles discovers published service IDs and names from local metadata. r
 
 Skill listing returns each enabled Skill’s current active digest. Reads require that exact active digest and recheck identity and head revision before returning content. Publishing a new version updates every client; an old cached digest is denied and the client refreshes skill_list. Historical bundles remain stored for administrator review or explicit rollback. Dependency status is advisory and never executes, enables or authorizes a capability.
 
-## Storage and upgrade behavior
+## Storage and supported model
 
-CapabilitiesDOv1 remains the central state owner. Registry and Runner tables, identities, credentials and namespaces are not rewritten. The central schema bootstrap preserves archived v1 grant rows, but live listing, invocation and Skill reads never consult them. No default wildcard grant or fallback ACL is created.
+CapabilitiesDOv1 owns central state. CentralSchema initializes only the namespace marker; each repository owns its schema. Grant contracts, decoders, storage, assignment RPCs and compatibility HTTP handlers are removed. Unknown old paths return HTTP 404 without resolving the owner. No archival ACL is read or written.
 
-The Client access UI, grant RPCs and toolset assignment implementation are retired. Requests below /admin/central/grants and /admin/central/toolsets return HTTP 410 with central_client_access_retired and cannot mutate state. These routes do not resolve the central owner. Existing restrictive or disabled grant records therefore no longer limit valid clients.
+Only explicit control-panel connections with authentication none or oauth are accepted. Managed OAuth owns service credentials and revision checks; per-client OAuth, manual bearer commands and environment fallback are removed. Current managed connections retain their stored representation. Unknown state fails closed and is never automatically cleared.
 
-Catalog cursors use version 2 and a version-2 MAC namespace. They remain bound to client identity, credential generation, profile/catalog revisions, page size and expiry. Old cursors are rejected; clients must refresh the catalog. No stored client secret needs to be replaced for this change.
+Direct tool discovery and shared service metadata use the same bounded publication scanner. It validates ordered pages and catalog ownership, and is re-read after asynchronous admission to detect membership and revision changes.
 
-To withdraw one client, revoke its credential. To withdraw a capability from all clients, disable the service, publication or Skill. Use separate instances when clients must have separate capability libraries. Upstream OAuth authorization remains distinct from client capability assignment: managed connections retain their service authorization, and existing configured client-bound OAuth accounts retain their own credential boundaries.
-
-Older Worker code can reinstate legacy grant behavior and may reject version-2 identities; rollback is not equivalent to preserving the new shared access model. Review the [administration migration guidance](central-administration.md) before changing deployed versions.
+Catalog cursors are version 2, MAC authenticated and bound to client identity, credential generation, profile/catalog revisions, page size and expiry. There is no old cursor decoder. Revoke a client credential to withdraw that client; disable a service or Skill to withdraw it globally. Different trust boundaries use separate instances. Registry and Runner contracts remain independent.
 
 ## Bounded operations
 
@@ -64,6 +62,6 @@ Limits are explicit safety ceilings, not latency promises. Contracts remain auth
 
 The normal connection flow asks for a service name, MCP URL and no-authentication or OAuth. Tool publication remains an explicit review step; installing or updating a Skill publishes the current version to the shared library. Admin changes retain same-origin, session and CSRF checks. Stale previews, failed refreshes and revision conflicts cannot silently become successful writes.
 
-Regression coverage includes two independently authenticated clients without grant records, ignored legacy grants, active Skill version changes, more than 128 Skill heads, larger remote directories, credential revocation/rotation, disabled profiles, schema drift, OAuth boundaries, retired routes and unchanged native Runner admission. Browser checks cover the product workflow without screenshots. The full verification plan, architecture gate and exact-commit CI remain release requirements.
+Regression coverage includes two independently authenticated clients without grant records, absent grant storage, active Skill version changes, more than 128 Skill heads, larger remote directories, credential revocation/rotation, disabled profiles, schema drift, OAuth boundaries, retired routes and unchanged native Runner admission. Browser checks cover the product workflow without screenshots. The full verification plan, architecture gate and exact-commit CI remain release requirements.
 
 See [administration](central-administration.md), [catalog review](central-catalog.md), [remote MCP](central-remote-mcp.md), [Skills](central-skills.md) and [OAuth](central-oauth.md) for feature-specific contracts.

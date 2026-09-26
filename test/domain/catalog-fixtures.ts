@@ -5,8 +5,8 @@ import { buildCatalogSnapshot } from "../../apps/worker/src/domain/capabilities/
 import { parseCatalogCommand } from "../../apps/worker/src/contracts/catalog-values.js";
 
 export const catalogProfile = (id = "docs"): ConnectionProfile => ({ schema_version: 1, profile_id: id, connector_id: "docs-service",
-  endpoint: "https://catalog-test.invalid/mcp", owner: { kind: "instance_admin" }, revision: 2, enabled: true,
-  credential: { secret_id: id, secret_version: 1 } });
+  endpoint: "https://catalog.example.com/mcp", owner: { kind: "instance_admin" }, revision: 2, enabled: true,
+  authentication: "none", credential: null });
 export const catalogDefinition = (name = "search", description = "Search fixture documents"): RemoteToolDefinition => ({ name, description,
   inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"], additionalProperties: false } });
 export async function fixtureDigest(value: string): Promise<string> {

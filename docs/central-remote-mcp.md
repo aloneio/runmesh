@@ -1,18 +1,17 @@
 # Controlled central HTTP MCP (development)
 
-This page describes the W05 stateless baseline. The optional W06 OAuth and
-ephemeral-session extensions and their narrower support limits are documented in
-[Central OAuth](central-oauth.md). All deployment activation remains explicit.
+This page describes the current controlled remote transport. Managed OAuth and
+operation-local sessions are documented in [Central OAuth](central-oauth.md).
+All deployment activation remains explicit.
 
 [简体中文](central-remote-mcp.zh-CN.md)
 
-**W05 implementation on dev; no production activation.** Central HTTP discovery
-and invocation now connect the W03 credential profiles and W04 reviewed catalog.
+**Development implementation; no production activation.** Central HTTP discovery
+and invocation connect control-panel profiles to the reviewed catalog.
 The development configuration now has an independent central binding and explicit
 Skills, direct-directory and governance opt-ins. It does not supply remote egress
 endpoints or vault keys. Managed connections store their endpoint policy through
-the control panel; only OAuth requires a vault. Legacy profiles require explicit
-egress configuration.
+the control panel; only OAuth requires a vault.
 Production remains unchanged. This is not a published release or evidence of
 successful public-network acceptance.
 
@@ -31,11 +30,11 @@ upstream OAuth and exact live schemas are still checked. Native-only calls do
 not resolve central storage, vaults or upstream connections. Discovery failures
 preserve native tools. Large libraries use bounded service/tool discovery.
 
-## W05 protocol baseline and later extensions
+## Protocol support
 
-Use an explicitly configured protocol per exact endpoint: `2026-07-28`, or the
-stateless Streamable HTTP compatibility lane `2025-11-25`. The official MCP client
-SDK is pinned to 2.0.0 and isolated in a platform adapter. Its Cloudflare JSON
+Control-panel connections negotiate a supported MCP version with the saved endpoint;
+users do not configure protocol versions. The official MCP client SDK is pinned
+to 2.0.0 and isolated in a platform adapter. Its Cloudflare JSON
 Schema interpreter validates the already restricted catalog schema dialect
 without dynamic code generation. Arguments are not coerced and defaults are not
 silently inserted. A conservative expanded-schema/data work ceiling rejects
@@ -47,32 +46,17 @@ are retained. Links are data and are never fetched by the relay. Progress/log
 notifications are bounded and discarded; root transport metadata is not forwarded
 into a client's authentication UI. There is no continuous progress relay.
 
-In the original W05 baseline, OAuth refresh/step-up, arbitrary headers, query-string credentials, stdio hosting,
-long-lived sessions, standalone GET SSE, resumption, tasks, sampling, elicitation,
-and multi-round input are not implemented. Session-bearing responses and unsupported
-interactive results fail explicitly. There is no protocol fallback after a failed
-call. W06 and later work must add these capabilities as independently tested
-adapters rather than weaken this subset's assumptions.
+Managed OAuth and operation-local sessions are supported; see [OAuth](central-oauth.md).
+Arbitrary headers, query credentials, stdio hosting, persistent sessions, GET subscriptions,
+resumption, tasks, sampling, elicitation and multi-round interactions are unsupported.
+Failed calls are not replayed.
 
 ## Configuration and review flow
 
-For a separately reviewed test deployment, use an independent vault keyring and
-the exact, canonical, credential-free HTTPS policy below. This example contains
-no usable credentials and is not installed by this change:
-
-```json
-{
-  "schema_version": 1,
-  "endpoints": [
-    { "endpoint": "https://api.example.com/mcp", "protocol": "2026-07-28" }
-  ]
-}
-```
-
-The variable is `CENTRAL_MCP_EGRESS`. For legacy profiles only, absent or malformed configuration disables
-the remote entry points. Ports other than canonical HTTPS 443, IP literals,
-private/ambiguous host forms, wildcards, user information, query strings and
-fragments are rejected. A profile must be enabled and match a policy entry.
+Enter a public HTTPS MCP URL and select No authentication or OAuth in the control panel.
+The saved enabled connection is exact outbound admission; no environment allowlist or
+manual bearer configuration is supported. OAuth uses an independent vault. Nonstandard
+HTTPS ports, IP literals, private hosts, wildcards, URL credentials, queries and fragments are rejected.
 
 Create and enable a profile using the existing protected administration API.
 POST `/admin/central/discovery/{profile_id}` with `{"expected_revision":0}` and
@@ -92,11 +76,10 @@ or create a new catalog revision for every request.
 
 ## Trust and execution boundaries
 
-Outbound requests use a newly constructed header set and only that profile's
-decrypted bearer. Client URL secrets, inbound Authorization, browser cookies,
+Outbound requests use a newly constructed header set and the service access token only for OAuth connections. Client URL secrets, inbound Authorization, browser cookies,
 Runner tokens and control-plane secrets are not forwarded. Headers needed by the
-pinned protocol are set by the adapter. Redirects and authentication discovery
-are not followed. No automatic auth provider, reconnect or replay is configured.
+pinned protocol are set by the adapter. Redirects are not followed. Authentication belongs to the managed OAuth adapter;
+no automatic reconnect or tool replay is configured.
 `x-runmesh-mcp-hop` rejects relay recursion on incoming Runmesh MCP endpoints.
 
 Preserve `global_fetch_strictly_public`, already enabled in the repository's

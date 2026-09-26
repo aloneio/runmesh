@@ -21,13 +21,12 @@ active Skills. There is no Client access tab, individual assignment, reusable
 grant template or advanced JSON console. No Runner is needed for these features.
 Clients may need to refresh their tool or Skill list after publication changes.
 
-## Shared access and migration
+## Shared access
 
-Existing valid clients also use the shared library. Stored legacy grant rows,
-including disabled or restrictive rows, no longer affect listing or invocation.
-GET/POST /admin/central/grants/{client_id} and /admin/central/toolsets/{toolset_id}
-return HTTP 410 with central_client_access_retired and perform no owner mutation.
-Old rows are retained as archival data; they are not a hidden default ACL.
+All valid clients use the shared library. Per-client grants, toolset assignment,
+client-bound OAuth and manual bearer profile APIs are removed. Their routes return
+the ordinary HTTP 404 unknown-route response without resolving the state owner.
+This development feature has no legacy compatibility layer.
 
 Revoke or rotate a client's connection credential to stop that credential from
 being used. Pause a service or Skill to stop sharing that capability with every
@@ -55,7 +54,7 @@ disconnect the upstream account from its service card. OAuth credentials remain
 encrypted and absent from read APIs. Managed connections accept only their saved
 public HTTPS destination, without private-network routing or redirects. OAuth
 vault setup is an instance deployment concern; no-auth services and Skills do
-not require it. Legacy bearer profiles retain write-only credential rotation.
+not require it. Upstream credentials are managed through the OAuth connection lifecycle.
 
 GET /admin/central/profiles returns up to 50 credential-free profiles; use
 next_after as after to continue. Each page checks the administrator session.
