@@ -3,6 +3,8 @@ import WebSocket from "ws";
 import { MAX_FRAME_BYTES, PROTOCOL_CURRENT_VERSION, decodeWireFrame, encodeWireFrame, runnerPolicyChecksum, type WireMessage } from "@aloneio/runmesh-protocol";
 import { afterEach, expect, it, vi } from "vitest";
 import { RunnerConnection } from "../src/connection.js";
+import * as policyCandidate from "../src/connection/policy-candidate.js";
+import type { WorkspaceConfig } from "../src/config.js";
 import type { ConnectionRuntimePort, ConnectionTransportFactory } from "../src/connection/ports.js";
 
 class Socket extends EventEmitter {
@@ -41,12 +43,87 @@ function setup(overrides: Partial<ConnectionRuntimePort> = {}, restorePolicy = f
     runner_permissions: { read: true, edit: true, shell: true, job_control: true }, workspaces: [] };
   const policy = { ...policyFields, checksum: runnerPolicyChecksum(policyFields) };
   const sleep = vi.fn(async () => { if (!reconnect) connection.stop(); });
-  const connection = new RunnerConnection({ config: { runnerId: "runner", server: "ws://127.0.0.1:1", token: "synthetic", workspaces: [] }, sleep }, {
+  const onStateChange = vi.fn();
+  const connection = new RunnerConnection({ config: { runnerId: "runner", server: "ws://127.0.0.1:1", token: "synthetic", workspaces: [] }, sleep, onStateChange }, {
     runtime, policyStore: { load: async () => restorePolicy ? policy : undefined, activate: async () => {} }, createSocket,
   });
-  return { connection, socket, sockets, createSocket, sleep };
+  return { connection, socket, sockets, createSocket, sleep, onStateChange };
 }
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+it("does not accept an old welcome while a replacement startup initializes", async () => {
+  let release!: () => void;
+  const delayed = new Promise<void>(resolve => { release = resolve; });
+  const initialize = vi.fn().mockResolvedValueOnce(undefined).mockImplementationOnce(() => delayed);
+  const { connection, socket, createSocket, onStateChange } = setup({ initialize });
+  const original = connection.start();
+  let restarted: Promise<void> | undefined;
+  try {
+    await vi.waitFor(() => expect(createSocket).toHaveBeenCalledOnce());
+    socket.open();
+    vi.spyOn(socket, "close").mockImplementationOnce(() => { socket.readyState = WebSocket.CLOSING; });
+    connection.stop(); restarted = connection.start();
+    socket.emit("message", Buffer.from(encodeWireFrame(welcome)));
+    expect(onStateChange).not.toHaveBeenCalledWith("online");
+  } finally { connection.stop(); socket.close(); release(); await original; await restarted; }
+});
+
+it.each([1006, 4001])("ignores a superseded connection close after restart (%s)", async code => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const { connection, socket, sockets, createSocket, sleep, onStateChange } = setup({}, false, true);
+  const original = connection.start().then(() => undefined, error => error);
+  let restarted: Promise<void> | undefined;
+  try {
+    await vi.waitFor(() => expect(createSocket).toHaveBeenCalledOnce());
+    socket.open(); socket.emit("message", Buffer.from(encodeWireFrame(welcome)));
+    vi.spyOn(socket, "close").mockImplementationOnce(() => { socket.readyState = WebSocket.CLOSING; });
+    connection.stop(); restarted = connection.start();
+    await vi.waitFor(() => expect(createSocket).toHaveBeenCalledTimes(2));
+    const replacement = sockets[1]!;
+    replacement.open(); replacement.emit("message", Buffer.from(encodeWireFrame(welcome)));
+    socket.close(code);
+    expect(await original).toBeUndefined();
+    expect(sleep).not.toHaveBeenCalled();
+    expect(onStateChange).toHaveBeenLastCalledWith("online");
+  } finally { connection.stop(); socket.close(); await original; await restarted; }
+});
+
+it.each(["resolved", "rejected"])("does not publish delayed startup policy after stop (%s)", async outcome => {
+  let release!: (value: WorkspaceConfig[]) => void, reject!: (error: Error) => void;
+  const delayed = new Promise<WorkspaceConfig[]>((resolve, fail) => { release = resolve; reject = fail; });
+  const validation = vi.spyOn(policyCandidate, "candidateWorkspaces").mockImplementationOnce(() => delayed);
+  const applyPolicy = vi.fn();
+  const { connection, createSocket } = setup({ applyPolicy }, true);
+  const started = connection.start();
+  try {
+    await vi.waitFor(() => expect(validation).toHaveBeenCalledOnce());
+    connection.stop();
+    if (outcome === "resolved") release([]); else reject(new Error("delayed validation failure"));
+    await started;
+    expect(applyPolicy).not.toHaveBeenCalled();
+    expect(createSocket).not.toHaveBeenCalled();
+  } finally { release([]); connection.stop(); await started; }
+});
+
+it.each(["resolved", "rejected"])("does not overwrite a replacement startup with old validation (%s)", async outcome => {
+  let release!: (value: WorkspaceConfig[]) => void, reject!: (error: Error) => void;
+  const delayed = new Promise<WorkspaceConfig[]>((resolve, fail) => { release = resolve; reject = fail; });
+  const validation = vi.spyOn(policyCandidate, "candidateWorkspaces").mockImplementationOnce(() => delayed);
+  const applyPolicy = vi.fn();
+  const { connection, createSocket } = setup({ applyPolicy }, true);
+  const original = connection.start();
+  let replacement: Promise<void> | undefined;
+  try {
+    await vi.waitFor(() => expect(validation).toHaveBeenCalledOnce());
+    connection.stop(); replacement = connection.start();
+    await vi.waitFor(() => expect(createSocket).toHaveBeenCalledOnce());
+    expect(applyPolicy).toHaveBeenCalledOnce();
+    if (outcome === "resolved") release([]); else reject(new Error("obsolete validation failure"));
+    await original;
+    expect(applyPolicy).toHaveBeenCalledOnce();
+    expect(createSocket).toHaveBeenCalledOnce();
+  } finally { release([]); connection.stop(); await original; await replacement; }
+});
 
 it.each([false, true])("bounds a stalled %s welcome/upgrade handshake and resumes recovery", async open => {
   vi.useFakeTimers(); vi.spyOn(console, "error").mockImplementation(() => {});
