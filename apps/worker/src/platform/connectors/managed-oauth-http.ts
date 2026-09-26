@@ -45,7 +45,7 @@ export function managedOAuthFetch(ports: { signal: AbortSignal; authorize: () =>
     if (body !== undefined && body !== null && (!(typeof body === "string" || body instanceof URLSearchParams) || new TextEncoder().encode(String(body)).length > 16_384)) throw new TypeError("oauth_request_invalid");
     await ports.authorize(); ports.signal.throwIfAborted();
     const response = await (ports.send ?? fetch)(url, { method, headers, ...(body === undefined ? {} : { body }), signal: ports.signal, credentials: "omit", redirect: "manual", cache: "no-store" });
-    if (response.status >= 300 && response.status < 400) { void response.body?.cancel(); throw new TypeError("oauth_redirect_denied"); }
+    if (response.status >= 300 && response.status < 400) { void response.body?.cancel().catch(() => undefined); throw new TypeError("oauth_redirect_denied"); }
     const reader = response.body?.getReader(), chunks: Uint8Array[] = []; let size = 0, count = 0;
     const abort = () => { void reader?.cancel().catch(() => undefined); }; ports.signal.addEventListener("abort", abort, { once: true });
     try {

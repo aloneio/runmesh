@@ -7,6 +7,7 @@ import type { ConnectionProfile } from "../src/contracts/connectors.js";
 import { createHttpRemoteConnector } from "../src/platform/connectors/remote-client.js";
 import { connectionPolicy } from "../src/platform/connectors/connection-policy.js";
 import { createManagedOAuthProtocol } from "../src/platform/connectors/managed-oauth.js";
+import { managedOAuthFetch } from "../src/platform/connectors/managed-oauth-http.js";
 import { createManagedOAuth } from '../src/application/connectors/managed-oauth.js';
 import type { ManagedOAuthRecord, ManagedOAuthProtocol } from '../src/contracts/managed-oauth.js';
 import { createOAuthCipher, oauthRandom } from "../src/platform/connectors/oauth-crypto.js";
@@ -100,6 +101,20 @@ it.each([302, 307, 429, 503])("OAuth challenge HTTP %s cancels its body without 
   const protocol = createManagedOAuthProtocol(send);
   await expect(protocol.begin({ endpoint, origin, state: oauthRandom(), signal: new AbortController().signal, authorize: async () => undefined })).rejects.toThrow();
   expect(send).toHaveBeenCalledTimes(1); expect(cancelled).toHaveBeenCalledTimes(1);
+});
+it.each(["errored", "rejected", "stalled"] as const)("OAuth redirect denial handles %s response cleanup without following it", async mode => {
+  const failure = new Error("upstream response cleanup failed");
+  const cancel = vi.fn(() => mode === "rejected" ? Promise.reject(failure) : new Promise<void>(() => undefined));
+  const send = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) { if (mode === "errored") controller.error(failure); }, cancel,
+  }), { status: 302, headers: { location: issuer + "/redirect" } }));
+  const request = managedOAuthFetch({ signal: new AbortController().signal, authorize: async () => undefined,
+    discovery: () => undefined, origin, phase: "begin", send });
+  await expect(request(issuer + "/metadata")).rejects.toThrow("oauth_redirect_denied");
+  expect(send).toHaveBeenCalledTimes(1);
+  expect(cancel).toHaveBeenCalledTimes(mode === "errored" ? 0 : 1);
+  // Let a rejected cleanup reach the runtime's unhandled-rejection check.
+  await new Promise(resolve => setTimeout(resolve, 0));
 });
 it("OAuth revalidates admission after the service challenge before discovery or registration", async () => {
   let allowed = true; const send = vi.fn(async () => { allowed = false; return new Response(null, { status: 401 }); });
