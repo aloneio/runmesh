@@ -22,6 +22,10 @@ Managed OAuth application code owns authorization state, durable claims, refresh
 
 The architecture gate enforces module ownership, reverse-dependency restrictions, runtime/type cycle checks and SDK-free contracts. Pure central modules cannot perform platform-global I/O or dynamic code evaluation. These are maintenance checks, not an operating-system sandbox.
 
+Central MCP providers may use public contracts, their own provider helpers and reviewed server/schema SDKs. They cannot import concrete application/storage/connector implementations, load client SDKs or unreviewed external packages, or perform platform-global I/O. Composition injects their operations through ports; type imports and nested helpers follow the same rule.
+
+Catalog schema admission owns the supported keyword traversal, exact local-reference targets and acyclic graph in contracts/catalog-schema.ts. Connector validation reuses that graph to bound expanded work before invoking its SDK evaluator. Keep byte, graph and execution budgets distinct, and do not add a second keyword or pointer walker in an adapter.
+
 ## Shared admission and publication
 
 Client authentication remains mandatory. Invalid, rotated or revoked credentials cannot discover or invoke central capabilities. Version-2 identities may have empty native scopes and still use the shared library; this does not grant Runner filesystem or execution access. Existing legacy identities keep their native scope behavior.

@@ -14,8 +14,12 @@ export function centralFeature(path) {
 }
 
 const unreviewed = path => /^apps\/worker\/src\/(?:capabilities|connectors|skills)\//u.test(path);
+const provider = path => /^apps\/worker\/src\/mcp\/providers\/(?:remote|skills)(?:[/.])/u.test(path);
 
 export function centralDependencyProblem(from, to) {
+  if (provider(from) && !to.startsWith('apps/worker/src/contracts/')
+    && !(provider(to) && centralFeature(from) === centralFeature(to)))
+    return 'Central MCP providers receive public ports and provider helpers, not application or platform implementations';
   if (from === 'apps/worker/src/platform/connectors/managed-store.ts' && !to.startsWith('apps/worker/src/contracts/'))
     return 'Managed OAuth persistence must not import protocol or lifecycle implementations';
   if (from === 'apps/worker/src/platform/connectors/managed-oauth.ts' && !to.startsWith('apps/worker/src/contracts/')
@@ -45,6 +49,8 @@ export function centralDependencyProblem(from, to) {
 export function centralSpecifierProblem(from, specifier) {
   if (unreviewed(from)) return "Central modules require a reviewed feature role";
   if (centralFeature(from) === undefined || specifier.startsWith(".")) return undefined;
+  if (provider(from) && !/^(?:zod(?:\/|$)|@modelcontextprotocol\/server(?:\/|$))/u.test(specifier))
+    return 'Central MCP providers use reviewed server/schema SDKs; external implementations belong behind ports';
   if (from === 'apps/worker/src/platform/connectors/managed-store.ts')
     return 'Managed OAuth persistence must use SDK-independent record contracts';
   if (/^(?:node:)?(?:child_process|cluster|worker_threads)(?:\/|$)/u.test(specifier))
@@ -62,7 +68,7 @@ export function centralNodeProblem(from, node) {
   if (unreviewed(from)) return node.type === "Program" ? "Central modules require a reviewed feature role" : undefined;
   if (centralFeature(from) === undefined || node.type !== "Identifier") return undefined;
   if (node.name === "eval" || node.name === "Function") return "Central features must not evaluate imported Skill or tool code";
-  if (/^apps\/worker\/src\/(?:contracts|domain|application)\//u.test(from) && ioGlobals.has(node.name))
-    return "Central pure contracts and rules must not reference platform I/O globals";
+  if ((/^apps\/worker\/src\/(?:contracts|domain|application)\//u.test(from) || provider(from)) && ioGlobals.has(node.name))
+    return "Central pure contracts, rules and MCP providers must not reference platform I/O globals";
   return undefined;
 }

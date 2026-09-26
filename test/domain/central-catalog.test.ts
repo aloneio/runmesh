@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { catalogJson } from "../../apps/worker/src/contracts/catalog-json.js";
+import { catalogSchemaGraph } from "../../apps/worker/src/contracts/catalog-schema.js";
 import { parseCatalogCommand, parseRemoteTool, parseCatalogSnapshot } from "../../apps/worker/src/contracts/catalog-values.js";
 import { catalogChanges, compatibleApprovedTools, verifiedCatalogSnapshot } from "../../apps/worker/src/domain/capabilities/catalog.js";
 import { createCatalogManager } from "../../apps/worker/src/application/capabilities/catalog-admin.js";
@@ -66,7 +67,29 @@ it("W04 enforces aggregate/count/depth budgets and accepts a genuine empty catal
   expect((await catalogSnapshot("docs", [])).tools).toEqual([]);
 });
 
-it("W04 metadata/risk/schema changes stay quarantined until explicit reapproval and regrant", async () => {
+it.each(["$defs", "definitions"])("W04 schema graph preserves indexed and escaped %s references without treating data as schemas", definitions => {
+  const schema = { type: "object", [definitions]: { "a/b~c value": { anyOf: [false, { type: "integer" }] } },
+    properties: { value: { $ref: "#/" + definitions + "/a~1b~0c%20value/anyOf/1" } },
+    default: { $ref: "https://data.invalid" }, examples: [{ allOf: ["data"] }] };
+  expect(parseRemoteTool({ name: "count", inputSchema: schema })).toBeDefined();
+  const graph = catalogSchemaGraph(schema, true)!;
+  expect(graph.get("/properties/value")).toEqual(["/" + definitions + "/a~1b~0c value/anyOf/1"]);
+  expect(graph.get("/" + definitions + "/a~1b~0c value/anyOf/0")).toEqual([]);
+  expect([...graph.keys()].some(path => path.startsWith("/default") || path.startsWith("/examples"))).toBe(false);
+});
+
+it("W04 schema analysis retains a bounded graph instead of expanding repeated references", () => {
+  const definitions: Record<string, object> = { layer0: { type: "integer" } };
+  for (let i = 1; i <= 20; i++) {
+    const ref = { $ref: "#/$defs/layer" + (i - 1) };
+    definitions["layer" + i] = { allOf: [ref, ref] };
+  }
+  const graph = catalogSchemaGraph({ type: "object", $defs: definitions, properties: { value: { $ref: "#/$defs/layer20" } } }, true)!;
+  expect(graph.size).toBe(63);
+  for (const index of [0, 1]) expect(graph.get("/$defs/layer20/allOf/" + index)).toEqual(["/$defs/layer19"]);
+});
+
+it("W04 metadata/risk/schema changes stay quarantined until explicit reapproval", async () => {
   const old = await catalogSnapshot("docs", [catalogDefinition("a"), catalogDefinition("b"), catalogDefinition("removed")]);
   const current = await catalogSnapshot("docs", [catalogDefinition("a"), { ...catalogDefinition("b"), annotations: { readOnlyHint: false } }, catalogDefinition("new")]);
   expect(compatibleApprovedTools(current, old, ["a", "b", "removed"]).map(tool => tool.definition.name)).toEqual(["a"]);
