@@ -1,9 +1,9 @@
-import { auth, refreshAuthorization, type FetchLike, type OAuthClientProvider, type OAuthDiscoveryState, type StoredOAuthClientInformation, type StoredOAuthTokens } from '@modelcontextprotocol/client';
+import { auth, extractWWWAuthenticateParams, refreshAuthorization, type FetchLike, type OAuthClientProvider, type OAuthDiscoveryState, type StoredOAuthClientInformation, type StoredOAuthTokens } from '@modelcontextprotocol/client';
 import { connectionClientMetadata } from '../../contracts/managed-connections.js';
 import type { ManagedOAuthDocument, ManagedOAuthProtocol } from '../../contracts/managed-oauth.js';
 import { catalogObject } from '../../contracts/catalog-json.js';
 import { OAuthFault } from '../../contracts/oauth.js';
-import { managedOAuthFetch, publicOAuthUrl, validDiscovery } from './managed-oauth-http.js';
+import { managedOAuthChallenge, managedOAuthFetch, publicOAuthUrl, validDiscovery } from './managed-oauth-http.js';
 
 const fault = (code: ConstructorParameters<typeof OAuthFault>[0]): never => { throw new OAuthFault(code); };
 
@@ -49,7 +49,12 @@ export function createManagedOAuthProtocol(send?: FetchLike): ManagedOAuthProtoc
   return {
     async begin(input) {
       const p = provider(input.origin, input.state);
+      const challenge = extractWWWAuthenticateParams(await managedOAuthChallenge(input.endpoint, { signal: input.signal, authorize: input.authorize, origin: input.origin, ...(send ? { send } : {}) }));
+      if ((challenge.resourceMetadataUrl && publicOAuthUrl(challenge.resourceMetadataUrl.href, input.origin) === undefined)
+        || (challenge.scope !== undefined && challenge.scope.length > 2048)) return fault("provider_unsupported");
       const result = await auth(p.value, { serverUrl: input.endpoint, forceReauthorization: true,
+        ...(challenge.resourceMetadataUrl ? { resourceMetadataUrl: challenge.resourceMetadataUrl } : {}),
+        ...(challenge.scope ? { scope: challenge.scope } : {}),
         fetchFn: managedOAuthFetch({ signal: input.signal, authorize: input.authorize, origin: input.origin,
           discovery: p.discovery, phase: 'begin', ...(send ? { send } : {}) }) });
       if (result !== 'REDIRECT' || !p.redirect() || !p.client() || !p.verifier() || !p.discovery()) return fault('provider_unsupported');

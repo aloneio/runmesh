@@ -14,7 +14,7 @@ export async function checkGuidedProduct(executable) {
  const digest='a'.repeat(64), oldDigest='b'.repeat(64), toolVersion='c'.repeat(64);
  const profiles=[], library=[], requests=[], exceptions=[];
  const pinned={kind:'skill',resource_id:'legacy-skill',version:oldDigest};
- let grant={client_id:'client-fixture',revision:1,enabled:true,rules:[pinned]}, conflict=false, failLibrary=false;
+ let grant={client_id:'client-fixture',revision:1,enabled:true,rules:[pinned]}, conflict=false, failLibrary=false, catalogRace=false;
  const catalogs=new Map();
  const server=createServer(async(req,res)=>{
   try {
@@ -47,7 +47,8 @@ export async function checkGuidedProduct(executable) {
     catalogs.set(id,{state:'found',head,snapshot,changes:[{name:'search',state:'added'}]});value={state:'written',head};
    }else if(kind==='catalogs'){
     value=catalogs.get(id);if(!value){code=404;value={state:'missing'};}
-    else if(body){assert.equal(body.expected_revision,value.head.revision);assert.equal(body.digest,digest);value.head={...value.head,revision:value.head.revision+1,approved_digest:digest,approved_names:body.tool_names};value={state:'written',head:value.head};}
+    else if(body){assert.equal(body.expected_revision,value.head.revision);assert.equal(body.digest,digest);value.head={...value.head,revision:value.head.revision+1,approved_digest:digest,approved_names:body.tool_names};value.approved=structuredClone(value.snapshot);value={state:'written',head:value.head};}
+    else if(url.searchParams.get('snapshot')===value.approved?.digest){if(catalogRace){value.head.revision++;catalogRace=false;}value={...value,snapshot:value.approved};}
    }else if(kind==='skills'&&!id)value={state:'listed',skills:library.map(s=>({head:s.head,summary:{name:s.bundle.name,description:s.bundle.description}})),next_after:null};
    else if(kind==='skills'){
     const item=library.find(s=>s.head.skill_id===id);
@@ -110,6 +111,21 @@ export async function checkGuidedProduct(executable) {
   const access=page.locator('[data-client-access]');await access.getByText('research (Skill)',{exact:true}).click();await access.getByText('团队文档 / search',{exact:true}).click();await access.getByRole('button').click();await status.filter({hasText:'Access saved.'}).waitFor();
   assert.equal(await access.getByText('unreviewed-draft (Skill)',{exact:true}).count(),0);
   assert.equal(grant.rules.length,3);assert.ok(grant.rules.some(r=>r.resource_id==='legacy-skill'&&r.version===oldDigest));
+  // Changed/removed upstream tools cannot be offered as current reviewed tools.
+  // Existing grants retain their old pin, visibly separated from current tools.
+  const serviceId=profiles[0].profile_id, reviewedCatalog=structuredClone(catalogs.get(serviceId));
+  for(const tools of [[{...reviewedCatalog.snapshot.tools[0],version:'d'.repeat(64)}],[]]){
+   catalogs.set(serviceId,{...structuredClone(reviewedCatalog),head:{...reviewedCatalog.head,revision:reviewedCatalog.head.revision+1,observed_digest:oldDigest},snapshot:{digest:oldDigest,tools}});
+   await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+   assert.equal(await access.getByText('团队文档 / search',{exact:true}).count(),0);
+   const pin=access.locator('label').filter({hasText:'Existing pinned permission: tool-search'}).locator('input');assert.equal(await pin.isChecked(),true);
+   await access.getByRole('button').click();await status.filter({hasText:'Access saved.'}).waitFor();
+   assert.ok(grant.rules.some(r=>r.resource_id==='tool-search'&&r.version===toolVersion));
+  }
+  catalogRace=true;const savedBeforeRace=requests.filter(r=>r.path.includes('/grants/')&&r.method==='POST').length;
+  await page.locator('[data-product-refresh]').click();await status.filter({hasText:'This item changed.'}).waitFor();
+  assert.equal(await access.getByRole('button').count(),0);assert.equal(requests.filter(r=>r.path.includes('/grants/')&&r.method==='POST').length,savedBeforeRace);
+  catalogs.set(serviceId,reviewedCatalog);await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
   conflict=true;await access.getByRole('button').click();await status.filter({hasText:'This item changed.'}).waitFor();const writes=requests.filter(r=>r.path.includes('/grants/')&&r.method==='POST').length;
   await access.getByRole('button').click();await status.filter({hasText:'Refresh the library before'}).waitFor();assert.equal(requests.filter(r=>r.path.includes('/grants/')&&r.method==='POST').length,writes);
   conflict=false;await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
@@ -122,7 +138,7 @@ export async function checkGuidedProduct(executable) {
   failLibrary=false;await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
   await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
   assert.deepEqual(exceptions,[]);
-  return {state:'passed',guided_homepage:true,direct_url_without_deployment_setup:true,service_explicit_review:true,oauth_return_to_tool_review:true,direct_skill_install_and_confirmed_update:true,published_skill_metadata:true,retained_pinned_access:true,client_handoff:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,mobile_no_overflow:true,screenshots:0};
+  return {state:'passed',guided_homepage:true,direct_url_without_deployment_setup:true,service_explicit_review:true,oauth_return_to_tool_review:true,direct_skill_install_and_confirmed_update:true,published_skill_metadata:true,changed_and_removed_tools_excluded:true,retained_pinned_access:true,client_handoff:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,mobile_no_overflow:true,screenshots:0};
  }finally{await browser?.close();await new Promise(r=>server.close(r));}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){

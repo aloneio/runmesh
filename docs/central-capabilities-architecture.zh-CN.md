@@ -7,10 +7,11 @@ W05 新增独立受控的 [HTTP 发现与调用](central-remote-mcp.zh-CN.md)；
 
 [English](central-capabilities-architecture.md)
 
-**状态：开发基础，尚未启用为产品功能。**
-本决策在 `dev` 上启动 2026-09-24 的 W00–W11 计划，开发基线为
-`f25486b46aa14f3f63097af6a91a88101f5041ca`。它不代表已发版、已部署、
-已接入上游 MCP，或已安装 Skill。
+**当前状态：开发配置已启用 MCP 直连和 Skill 安装；生产启用仍是独立验收。**
+当前行为见[控制端使用指南](central-administration.zh-CN.md)。下方 W00–W11 内容保留
+2026-09-24 的原始基础决策，开发基线为
+`f25486b46aa14f3f63097af6a91a88101f5041ca`；其中的分阶段启用描述属于历史记录，
+不代表当前开发功能配置。
 
 ## 决策与职责
 

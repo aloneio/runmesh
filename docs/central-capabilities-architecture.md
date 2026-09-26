@@ -8,10 +8,18 @@ Production activation remains subject to the [rollout gates](central-rollout.md)
 
 [简体中文](central-capabilities-architecture.zh-CN.md)
 
-**Status: development foundations; not an enabled product feature.**
-This decision starts the 2026-09-24 W00–W11 plan on `dev`, based on
-`f25486b46aa14f3f63097af6a91a88101f5041ca`. It does not announce a release,
-an upstream MCP integration, an installed Skill, or a deployment.
+**Current status: direct MCP connections and Skill installation are enabled in
+the development configuration; production activation remains separate.**
+The [control-panel guide](central-administration.md) describes current behavior.
+The W00–W11 sections below preserve the original 2026-09-24 foundation decision,
+based on `f25486b46aa14f3f63097af6a91a88101f5041ca`; their staged rollout descriptions
+are historical, not the current development feature configuration.
+
+Current managed OAuth ownership: the application owns authorization, durable
+state claims, refresh ordering and credential leases through SDK-free contracts.
+Platform adapters separately own protocol discovery, bounded HTTP and SQLite.
+Only `capabilities-do.ts` composes them. Architecture fixtures reject reverse
+dependencies, protocol-to-storage dependencies and SDK types in contracts.
 
 ## Decision and ownership
 

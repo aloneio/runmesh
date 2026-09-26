@@ -43,13 +43,22 @@ it("legacy null credentials do not acquire anonymous egress permission", () => {
 
 function oauthFixture(cimd = false, configuredOrigin: string | null = origin, protocol?: ManagedOAuthProtocol) {
   let record: ManagedOAuthRecord | undefined, now = 1_800_000_000_000, allowed = true, live = { ...base, authentication: "oauth" as const };
-  let failToken = false, revokeOnToken = false, privateToken = false;
+  let failToken = false, revokeOnToken = false, privateToken = false, challengeMetadata: string | undefined;
   const posts: string[] = [], state = { registration: 0, exchanges: 0, refreshes: 0 };
   const cipher = createOAuthCipher("managed-test", () => JSON.stringify({ schema_version: 1, active_key_id: "test-key", keys: { "test-key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE" } }), () => []);
   const repository = { read: () => record ? structuredClone(record) : undefined, find: (hash: string) => record?.state_hash === hash ? structuredClone(record) : undefined, replace: (value: ManagedOAuthRecord, expected: number) => { if ((record?.revision ?? 0) !== expected) return false; record = JSON.parse(JSON.stringify(value)) as ManagedOAuthRecord; return true; } };
   const send = vi.fn(async (url: string | URL, init?: RequestInit) => {
     const address = String(url); expect(init?.redirect).toBe("manual"); expect(init?.credentials).toBe("omit");
+    if (address === endpoint) {
+      expect(init?.method).toBe("POST"); expect(JSON.parse(String(init?.body))).toMatchObject({ method: "server/discover" });
+      expect(new Headers(init?.headers).has("authorization")).toBe(false); expect(new Headers(init?.headers).has("cookie")).toBe(false);
+      const quote = String.fromCharCode(34);
+      return new Response(null, { status: 401, headers: { "www-authenticate": challengeMetadata
+        ? "Bearer resource_metadata=" + quote + challengeMetadata + quote + ", scope=" + quote + "read profile" + quote : "Bearer" } });
+    }
     if ((init?.method ?? "GET") === "GET") {
+      if (challengeMetadata && address === challengeMetadata) return Response.json({ resource: endpoint, authorization_servers: [issuer], scopes_supported: ["read"] });
+      if (challengeMetadata && address.includes("oauth-protected-resource")) return new Response(null, { status: 404 });
       if (address.includes("oauth-protected-resource")) return Response.json({ resource: endpoint, authorization_servers: [issuer], scopes_supported: ["read"] });
       if (address.includes("oauth-authorization-server")) return Response.json({ issuer, authorization_endpoint: issuer + "/authorize", token_endpoint: privateToken ? "https://127.0.0.1/token" : issuer + "/token",
         registration_endpoint: issuer + "/register", response_types_supported: ["code"], code_challenge_methods_supported: ["S256"], token_endpoint_auth_methods_supported: ["none"], authorization_response_iss_parameter_supported: true, client_id_metadata_document_supported: cimd });
@@ -67,8 +76,38 @@ function oauthFixture(cimd = false, configuredOrigin: string | null = origin, pr
   const hash = "a".repeat(64), selection = { profile_id: base.profile_id, expected_revision: base.revision };
   const begin = async () => { const result = await service().run(hash, "begin", selection); expect(result.state).toBe("started"); if (result.state !== "started") throw new Error(JSON.stringify(result)); return new URL(result.authorization_url).searchParams.get("state")!; };
   return { service, begin, hash, selection, state, posts, send, repository, record: () => record, now: () => { now += 40_000; },
-    callback: (value: string) => ({ state: value, code: "synthetic-one-use-code", iss: issuer }), fail: () => { failToken = true; }, revokeOnToken: () => { revokeOnToken = true; }, privateToken: () => { privateToken = true; }, pause: () => { live = { ...live, revision: 3, enabled: false }; } };
+    callback: (value: string) => ({ state: value, code: "synthetic-one-use-code", iss: issuer }), fail: () => { failToken = true; }, revokeOnToken: () => { revokeOnToken = true; }, privateToken: () => { privateToken = true; }, pause: () => { live = { ...live, revision: 3, enabled: false }; },
+    challenge: (url: string) => { challengeMetadata = url; } };
 }
+it("OAuth connects through advertised resource metadata instead of requiring a well-known location", async () => {
+  const f = oauthFixture(), metadata = "https://mcp.provider.com/auth/resource"; f.challenge(metadata);
+  const started = await f.service().run(f.hash, "begin", f.selection);
+  expect(started.state).toBe("started"); if (started.state !== "started") throw new Error("OAuth did not discover the challenge");
+  const url = new URL(started.authorization_url); expect(url.searchParams.get("scope")).toBe("read profile");
+  expect(f.record()?.discovery?.resourceMetadataUrl).toBe(metadata);
+  expect(await f.service().run(f.hash, "complete", f.callback(url.searchParams.get("state")!))).toMatchObject({ state: "linked" });
+  expect(f.send.mock.calls.filter(([url]) => String(url) === endpoint)).toHaveLength(1);
+  expect(f.state).toEqual({ registration: 1, exchanges: 1, refreshes: 0 });
+});
+it.each(["https://127.0.0.1/resource", origin + "/resource"])("OAuth rejects an unsafe advertised resource before fetching it: %s", async metadata => {
+  const f = oauthFixture(); f.challenge(metadata);
+  expect(await f.service().run(f.hash, "begin", f.selection)).toMatchObject({ state: "failed", code: "provider_unsupported" });
+  expect(f.send.mock.calls.some(([url]) => String(url) === metadata)).toBe(false); expect(f.posts).toHaveLength(0);
+});
+it.each([302, 307, 429, 503])("OAuth challenge HTTP %s cancels its body without redirecting or registering", async status => {
+  const cancelled = vi.fn(), send = vi.fn(async () => new Response(new ReadableStream({ cancel: cancelled }),
+    { status, headers: { location: issuer + "/redirect" } }));
+  const protocol = createManagedOAuthProtocol(send);
+  await expect(protocol.begin({ endpoint, origin, state: oauthRandom(), signal: new AbortController().signal, authorize: async () => undefined })).rejects.toThrow();
+  expect(send).toHaveBeenCalledTimes(1); expect(cancelled).toHaveBeenCalledTimes(1);
+});
+it("OAuth revalidates admission after the service challenge before discovery or registration", async () => {
+  let allowed = true; const send = vi.fn(async () => { allowed = false; return new Response(null, { status: 401 }); });
+  const protocol = createManagedOAuthProtocol(send);
+  await expect(protocol.begin({ endpoint, origin, state: oauthRandom(), signal: new AbortController().signal,
+    authorize: async () => { if (!allowed) throw new Error("revoked"); } })).rejects.toThrow("revoked");
+  expect(send).toHaveBeenCalledTimes(1);
+});
 it.each([false, true])("OAuth discovers provider and registers automatically (CIMD=%s), survives restart and binds the browser session", async cimd => {
   const f = oauthFixture(cimd), state = await f.begin();
   expect(f.state.registration).toBe(cimd ? 0 : 1); expect(JSON.stringify(f.record())).not.toContain("fixture-client");
