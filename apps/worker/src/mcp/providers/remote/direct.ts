@@ -37,7 +37,7 @@ export function registerDirectRemoteTools(server: McpServer, port: RemoteToolPor
     try { for (const entry of ready) published.push(server.registerTool(entry.name, entry.config, args => invokeRemote(port, { ...entry.command, arguments: args }))); }
     catch { for (const tool of published) tool.remove(); state = 'unavailable'; }
   }
-  server.registerTool('remote_status', { description: 'Report the current direct central directory status. Capacity or unavailable means use remote_tools after checking the central configuration; native tools are independent.',
+  server.registerTool('remote_status', { description: 'Report the current direct central directory status. Capacity or unavailable means use remote_profiles and remote_tools to discover shared services; native tools are independent.',
     inputSchema: z.object({}).strict(), annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false, idempotentHint: true } },
     async () => ({ content: [{ type: 'text' as const, text: JSON.stringify({ state, direct_tools: state === 'listed' ? ready.length : 0 }) }] }));
 }

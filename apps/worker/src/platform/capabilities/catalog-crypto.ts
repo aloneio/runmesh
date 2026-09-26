@@ -15,7 +15,7 @@ export async function catalogSha256(value: string): Promise<string> {
 }
 
 /** Key is owner-local, independent of credentials. MACs are not authorization:
- * every page still checks live identity, grants and all relevant revisions. */
+ * every page still checks live identity, publications and all relevant revisions. */
 export function createCatalogCursor(namespace: string, loadKey: () => string): CatalogCursorCodec {
   const key = async (): Promise<CryptoKey> => {
     const raw = decode(loadKey());
@@ -24,7 +24,7 @@ export function createCatalogCursor(namespace: string, loadKey: () => string): C
       return await crypto.subtle.importKey("raw", raw, { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
     } finally { raw.fill(0); }
   };
-  const message = (body: string): Uint8Array<ArrayBuffer> => new TextEncoder().encode(`runmesh-catalog-cursor-v1:${namespace}:${body}`);
+  const message = (body: string): Uint8Array<ArrayBuffer> => new TextEncoder().encode(`runmesh-catalog-cursor-v2:${namespace}:${body}`);
   return {
     async seal(value) {
       const cursor = parseCatalogCursor(value), canonical = cursor === undefined ? undefined : catalogJson(cursor, 1024);

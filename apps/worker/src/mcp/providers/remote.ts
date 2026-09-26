@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import type { CatalogPage } from "../../contracts/catalog.js";
+import type { CatalogPage, SharedProfiles } from "../../contracts/catalog.js";
 import { CATALOG_LIMITS } from "../../contracts/catalog.js";
 import { catalogDigest, catalogJson, catalogObject } from "../../contracts/catalog-json.js";
 import { catalogPublicName, parseRemoteTool } from "../../contracts/catalog-values.js";
@@ -21,9 +21,20 @@ async function bounded<T>(call: () => Promise<T>, ms: number): Promise<T | undef
 
 /** Thin provider only. HTTP composition injects ports; no Worker environment,
  * Runner selection, credential vault, storage or application implementation. */
-export function registerRemoteTools(server: McpServer, port: RemoteToolPort): void {
+export function registerRemoteTools(server: McpServer, port: RemoteToolPort & { profiles(): Promise<SharedProfiles> }): void {
+  server.registerTool("remote_profiles", {
+    description: "List shared MCP services with published tools. Use profile_id with remote_tools to discover every service, including libraries too large for direct tool listing.",
+    inputSchema: z.object({}).strict(), annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, async () => {
+    const raw = await bounded(() => port.profiles(), 7000);
+    const parsed = z.object({ state: z.literal("listed"), profiles: z.array(z.object({
+      profile_id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u), name: z.string().min(1).max(128),
+    }).strict()).max(CATALOG_LIMITS.profiles) }).strict().safeParse(raw);
+    if (!parsed.success) return remoteFailure(raw?.state === "denied" ? "permission_denied" : "dependency_unavailable", "not_started");
+    return { content: [{ type: "text" as const, text: JSON.stringify(parsed.data) }] };
+  });
   server.registerTool("remote_tools", {
-    description: "List this client's approved remote MCP tools for a configured profile. No Runner is needed. Use the returned tool_id and version with remote_call. This lists saved reviewed definitions, not live discovery.",
+    description: "List shared published remote MCP tools for a profile from remote_profiles. No Runner is needed. Use the returned tool_id and version with remote_call. This lists saved reviewed definitions, not live discovery.",
     inputSchema: z.object({ profile_id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u),
       limit: z.number().int().min(1).max(CATALOG_LIMITS.page_tools).optional(), cursor: z.string().min(1).max(CATALOG_LIMITS.cursor_bytes).optional() }).strict(),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },

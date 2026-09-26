@@ -1,81 +1,64 @@
-# 中央 Skill 内容（开发中）
+# 共享 Skill 内容（开发版）
 
 [English](central-skills.md)
 
-W07 在可选 Capabilities 状态所有者内提供有界、经审核的文本 bundle。这是开发
-实现，不代表已启用生产或通过真实宿主验收。导入和读取均不安装 Runner、运行模型、
-执行 shell，也不授予工具权限。
-
-## 直接安装
+## 安装与发布
 
 控制端选择 SKILL.md 与配套文本文件或文件夹即可安装。
-POST /admin/central/skill-installations 根据验证后的元数据生成标识、名称及说明，
-原子保存内容、批准及启用状态。同名更新需确认并携带当前版本；已有客户端权限
-保持原固定版本。下方来源、许可证、预览、暂存与启用是旧 API 选项，日常无需填写。
+POST /admin/central/skill-installations 从已验证元数据提取标识、名称和说明，原子
+保存、批准并启用 bundle。同名更新需显式确认并携带当前 revision。所有凭据有效
+的客户端共享当前版本，无需逐客户端授权或模板分配，不执行脚本。
 
-## 启用与导入
+底层 GET/POST /admin/central/skills/{skill_id} 保留 preview、stage、activate、
+disable 和旧内容查看功能。修改要求管理员会话、同源 CSRF 和精确 revision。
+preview 不写入；stage 不发布；activate 发布选定摘要。日常安装无需手填来源和许可证。
 
-同时具备 CAPABILITIES 绑定和 CENTRAL_SKILLS_ENABLED=1 才暴露 Skill HTTP/MCP
-入口。关闭时，原生十工具及原生调用不访问中央存储。development Wrangler 配置
-现已增加独立的 CapabilitiesDOv1 SQLite 命名空间并显式启用 Skills，生产仍关闭。
-候选通过既有检查后推送 GitLab dev，由已连接的开发构建触发部署。
+CAPABILITIES 与 CENTRAL_SKILLS_ENABLED=1 启用这些可选接口。开发环境已启用，生产
+发布另行验收。发现请求实时验证客户端凭据；故障保留原生工具，原生调用不读取中央
+状态。Skill 内容、allowed-tools 和注解不授予 Runner、计算机或工作区权限。
 
-发现请求重新检查客户端身份和当前授权。只有具备已启用 Skill 规则的客户端才会
-看到 skill_list、skill_read 和资源模板；空规则、停用或缺失的 grant 均隐藏入口。
-可见性查询失败时保留原生目录；缓存调用仍执行实时授权，隐藏入口不能替代访问
-控制。原生工具调用不执行这次中央发现查询。
+## 内容与存储边界
 
-管理员使用原有会话打开 /admin/central。写请求必须同源并提供当前 CSRF token。
-JSON API 为 GET/POST /admin/central/skills/{skill_id}，ID 来自路径而非请求正文。
+SKILL.md 必须含 name、description 元数据。仅支持单行标量（包括简单引号），不
+支持通用多行 YAML、锚点或别名。名称为小写字母、数字和内部连字符，最多 64 UTF-8
+字节。内容由用户提供，摘要只校验一致性，不证明作者或可信度；来源和许可证不独立验证。
 
-1. 使用 action preview，提交 source、license 和 files（path/text 对象数组）。
-2. 审阅返回内容和 digest；preview 不写入存储。
-3. 使用 action stage 和 expected_revision 提交相同文件集合，首次创建为 0。
-4. 读取暂存 bundle，核对后用 action activate、digest、expected_revision 启用。
-5. 单独为客户端授予精确 Skill ID 和 digest；可直接授权或应用可复用工具集。
+仅接受文本文件集合，不支持压缩包、远程链接或可执行安装。拒绝绝对路径、路径穿越、
+空段、Windows 保留名及数据流、反斜杠、大小写冲突。文件对象只含 path、text。
+上限：32 文件、单文件 64 KiB、规范化 bundle 256 KiB、管理请求 512 KiB、每 Skill
+32 版本、1,000 个 Skill、总存储 16 MiB。它们不是实测容量承诺，不自动删除旧内容腾空间。
 
-必须包括 SKILL.md，frontmatter 包含 name 和 description。首版仅支持单行标量
-（包括简单引号），不支持多行 YAML、锚点、别名或通用 YAML 解析。name 使用小写
-字母、数字和内部连字符，最多 64 UTF-8 字节。正文和 frontmatter 始终是用户提供
-的内容；allowed-tools 和能力声明不能改变 ACL。来源、许可证由管理员填写，哈希
-只证明内容一致，不证明可信作者。
+## 列出、读取、更新与停用
 
-仅接受文本文件集合，不支持压缩包、链接或自动安装。拒绝绝对路径、路径穿越、空
-段、Windows 保留名称及数据流、反斜杠和大小写冲突。文件对象只能含 path 和 text。
-限制：32 文件、单文件 64 KiB、规范化 bundle 256 KiB、管理请求 512 KiB、每个
-Skill 32 版本、1,000 个 Skill、存储总量 16 MiB。达到上限时拒绝新增；不会自动
-删除旧批准版本。这些是安全上限，不是实测容量承诺。
+skill_list 只返回当前启用且批准的元数据，不读取正文。每页扫描最多 128 个 head，
+用 next_after 作为 after 继续，直到 null；停用项目导致空页时也要继续。也可只指定
+skill_id，但不能与 after 同时使用。after 仅表示位置，不是授权令牌或快照保证，
+每页独立验证凭据与发布 revision，并发更新时可能需要重新发现。
 
-## 读取、更新与撤权
+skill_read 接受 skill_id、digest、path（默认 SKILL.md）。只允许当前启用且已批准
+的 digest。更新对所有客户端生效，旧摘要请求被拒绝，须重新 skill_list 并使用同一
+新摘要读取正文和附件。旧 bundle 保留给管理员检查或使用当前 revision 显式回退。
+停用阻止读取但不删数据；撤销客户端凭据阻止该客户端访问，但无法清除已交付的内容。
 
-skill_list 只读授权后的批准元数据，不加载正文；最多返回客户端的 128 条授权
-规则对应条目。首版不分页，对任意 cursor 明确拒绝。skill_read 使用 skill_id、
-digest、path（默认 SKILL.md），同一任务所有附件必须复用同一 digest。
+资源接口复用同一实时校验，URI 为 runmesh-skill://bundle/{skill_id}/{digest}/{path}。
+resources/list 遍历有界分页、列出 SKILL.md；分页失败或循环时明确失败，不返回部分
+成功。附件按需读取，读取期间身份或发布变化会扣留内容；脚本始终作为文本返回。
 
-MCP resources 使用同一授权用例，URI 为
-runmesh-skill://bundle/{skill_id}/{digest}/{path}。资源目录列出 SKILL.md，附件
-按精确路径读取。两个入口返回前都复核凭据代次与授权。依赖故障明确失败，不伪造
-成功空列表。
+## 依赖元数据
 
-更新产生不可变新 bundle。启用会批准目标摘要并更新当前指针；旧批准版本只有在
-匹配授权下才能继续读取。回退需使用当前 revision 显式启用保留摘要。停用阻止该
-Skill 后续所有版本读取，但保留数据。撤权不能清除已进入客户端上下文的内容。
-scripts 始终是文本，不自动执行。
+可选 runmesh.json 文本附件包含 schema_version: 1、requiredCapabilities，最多八个
+精确 CapabilityTarget（kind、resource_id、version；remote_tool 另含
+connection_profile_id）。这是 Runmesh 扩展，不是标准 Skill 元数据。附件计入摘要，
+拒绝重复、额外字段及不支持种类。
 
-可选 runmesh.json 文本附件声明 Runmesh 专有依赖：schema_version 为 1，
-requiredCapabilities 为最多八个精确 CapabilityTarget 的数组，字段为 kind、
-resource_id、version，remote_tool 另需 connection_profile_id。这是产品扩展，
-不是标准 Skill frontmatter。附件计入不可变摘要，拒绝重复、额外字段及不支持的种类。
-skill_list 只返回声明；skill_read 返回 dependencies，状态为 configured、
-not_configured、not_authorized、disabled、incompatible 或 unavailable。
-resources/read 在内容的 _meta.runmesh/dependencies 返回同样观察。未授权目标
-不会被探测；检查仅使用有界的存储元数据，configured 不保证供应商在线或 OAuth
-令牌有效。不会联网探测、递归加载、安装或提权。原生前置条件仍是内容，在执行时
-检查；读取不选择 Runner，实际调用仍独立执行实时准入检查。
+skill_list 返回声明，skill_read 根据共享发布状态报告 configured、not_configured、
+disabled、incompatible、unavailable。not_authorized 仅保留为兼容枚举值，不代表
+逐客户端 ACL 决策；resources/read 返回同样的 runmesh/dependencies 元数据。
+Skill 依赖的当前摘要须与声明精确一致。检查不证明上游在线或 OAuth 有效，不自动
+安装、启用、调用或递归加载依赖，不授予任何权限；实际调用独立检查当前准入条件。
 
 ## 验证边界
 
-领域、SQLite 和真实本地 Worker/Registry/MCP 入口测试覆盖恶意路径、preview
-不写入、revision 冲突、回退、旧附件、读取期间撤权、摘要不加载正文、两套独立
-客户端凭据、resources/工具一致性和关闭时零中央 I/O。它们不是两个真实 AI 产品
-或公网供应商验收；剩余外部门禁见[灰度清单](central-rollout.md)。
+本地领域、SQLite、Worker/Registry/MCP 和浏览器测试覆盖发布、revision 冲突、旧摘要
+拒绝、两个无授权行客户端、旧限制无效、凭据撤销、超过 128 条及空页、资源一致性、
+路径拒绝、不读取正文和原生权限不变；不替代[真实宿主验收](central-rollout.md)。

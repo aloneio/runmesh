@@ -1,4 +1,4 @@
-import type { CatalogJson, CatalogMutation, CatalogPage, CatalogReadPorts, RemoteToolDefinition } from "./catalog.js";
+import type { CatalogJson, CatalogMutation, CatalogPage, CatalogReadPorts, RemoteToolDefinition, SharedProfiles } from "./catalog.js";
 import type { CapturedIdentity } from "./identity.js";
 import type { ConnectionProfile } from "./connectors.js";
 import type { CentralObservation, CentralReceipt } from "./central-audit.js";
@@ -39,7 +39,7 @@ export function remoteFailureMetadata(value: unknown, observed: unknown) {
     next_action: operation_state !== "not_started" ? "inspect_upstream_state" : code === "stale_catalog" ? "refresh_approved_catalog" : "check_central_configuration",
     recovery_hint: operation_state === "unknown" ? "The upstream action may have executed. Inspect its state before a new invocation; this call was not replayed."
       : operation_state === "completed" ? "The upstream action completed, but its result cannot be returned. Do not treat this response as a rollback."
-      : "Check the central connection, approved catalog and client grant before a new request." });
+      : "Check the central connection, approved catalog and client connection before a new request." });
 }
 export type RemoteFailure = { readonly state: "failed"; readonly code: RemoteCode;
   readonly operation_state: "not_started" | "completed" | "unknown" };
@@ -57,6 +57,7 @@ export interface RemoteConnector {
 }
 export type RemoteCallPorts = Omit<CatalogReadPorts, "cursor" | "now"> & { readonly connector: RemoteConnector; readonly observation?: CentralObservation };
 export interface CentralRemote {
+  listRemoteProfiles(principal: CapturedIdentity): Promise<SharedProfiles>;
   listCatalog(principal: CapturedIdentity, query: unknown): Promise<CatalogPage>;
   callRemote(principal: CapturedIdentity, command: unknown): Promise<RemoteOutcome>;
   discoverRemote(sessionHash: string, profileId: string, expectedRevision: number, principal?: CapturedIdentity): Promise<CatalogMutation | RemoteFailure>;

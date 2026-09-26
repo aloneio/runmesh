@@ -92,7 +92,7 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
         // Resolving the DO is lazy; server construction and native-only calls
         // do not touch central state or initialize any upstream connection.
         const owner = () => env.CAPABILITIES!.get(env.CAPABILITIES!.idFromName("central")) as unknown as CentralRemote;
-        remote.registerRemoteTools(server, { list: query => owner().listCatalog(principal, query), call: command => owner().callRemote(principal, command) });
+        remote.registerRemoteTools(server, { profiles: () => owner().listRemoteProfiles(principal), list: query => owner().listCatalog(principal, query), call: command => owner().callRemote(principal, command) });
         direct?.registerDirectRemoteTools(server, { list: query => owner().listCatalog(principal, query), call: command => owner().callRemote(principal, command) }, directory);
       }
       return server;

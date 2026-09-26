@@ -3,18 +3,18 @@
   "cases": [
     {
       "nonce": null,
-      "sha256": "d17a2b93ddb77ea77f073d50b8acddf87b49641555c1d6dd1946e43be49fcb4c",
+      "sha256": "d5204877473f9bbf5661352f6272960a1dc5d974d553120c1b72364a1fad6364",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e"
     },
     {
       "nonce": "test-nonce",
-      "sha256": "378d2afcee43d359f43561058f31653218a48da53df5f243918ec081320dd185",
+      "sha256": "faf064d8e4703a15751935ddbc204a41c9e44d9e3bee5acf2fec15aeda166aab",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224"
     }
   ],
-  "reviewed_change": "Direct URL and OAuth connections, direct Skill installation, and pinned grants remain intact. Changed or removed tools are excluded from current choices; catalog revision drift blocks saving. Covered by browser regressions without screenshots. Switching Skill file and folder selections uses only the latest choice. Changing or clearing a selection removes the obsolete update confirmation before another installation."
+  "reviewed_change": "Product workflows publish MCP tools and active Skills for every authenticated instance client, remove client access assignment, clear rotated credentials, and block mutations after failed refresh. Browser regressions verify these behaviors without screenshots."
 }

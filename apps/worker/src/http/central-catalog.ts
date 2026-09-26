@@ -4,8 +4,8 @@ import { parseCatalogCommand, parseCatalogHead, parseCatalogSnapshot } from "../
 import type { WorkerEnv } from "../platform/env.js";
 import { admitCentralAdmin, cancelCentralBody, centralFailure as fail, centralHeaders as headers } from "./central-boundary.js";
 
-/** Bounded manual capture/review entry. It does not fetch an upstream server,
- * install tools, change grants or make a capability callable. */
+/** Bounded manual capture/review entry. Approval publishes the selected tools
+ * to the shared library; invocation still validates live identity and schemas. */
 export async function handleCentralCatalogAdmin(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
   if (env.CAPABILITIES === undefined) { cancelCentralBody(request); return fail("central_disabled", 404); }
   const match = /^\/admin\/central\/catalogs\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})$/u.exec(url.pathname);

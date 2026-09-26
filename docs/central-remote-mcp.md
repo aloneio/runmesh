@@ -10,7 +10,9 @@ ephemeral-session extensions and their narrower support limits are documented in
 and invocation now connect the W03 credential profiles and W04 reviewed catalog.
 The development configuration now has an independent central binding and explicit
 Skills, direct-directory and governance opt-ins. It does not supply remote egress
-endpoints or vault keys; remote MCP stays disabled until those are configured.
+endpoints or vault keys. Managed connections store their endpoint policy through
+the control panel; only OAuth requires a vault. Legacy profiles require explicit
+egress configuration.
 Production remains unchanged. This is not a published release or evidence of
 successful public-network acceptance.
 
@@ -21,18 +23,15 @@ each Runner. Central operations can run without any Runner registration, selecti
 or machine permission. The client continues to reason and may separately invoke
 the existing Runner tools; Runmesh does not execute upstream text as shell code.
 
-The optional `remote_tools` tool reads reviewed definitions for one profile;
-`remote_call` accepts that profile, exact tool ID, approved version and arguments.
-The native ten-tool factory and its reviewed contracts remain unchanged. The two
-central tools require CAPABILITIES and a valid outbound policy. Discovery also
-requires a current, enabled remote-tool grant; clients without one do not see
-remote_tools, remote_call, remote_status or direct aliases. Native-only calls do
-not resolve central storage, read vault keys or create an upstream connection.
-A central discovery error hides its entries while preserving the native tools.
-This is a discovery/call interface, not dynamic injection
-of thousands of tools into every host's catalog.
+remote_profiles lists services with published tools. remote_tools reads the
+reviewed definitions for one profile; remote_call accepts the profile, exact
+tool ID/version and arguments. Every valid authenticated client shares these
+publications; no grant rows are needed. Client credentials, disabled services,
+upstream OAuth and exact live schemas are still checked. Native-only calls do
+not resolve central storage, vaults or upstream connections. Discovery failures
+preserve native tools. Large libraries use bounded service/tool discovery.
 
-## Supported protocol subset
+## W05 protocol baseline and later extensions
 
 Use an explicitly configured protocol per exact endpoint: `2026-07-28`, or the
 stateless Streamable HTTP compatibility lane `2025-11-25`. The official MCP client
@@ -48,7 +47,7 @@ are retained. Links are data and are never fetched by the relay. Progress/log
 notifications are bounded and discarded; root transport metadata is not forwarded
 into a client's authentication UI. There is no continuous progress relay.
 
-OAuth refresh/step-up, arbitrary headers, query-string credentials, stdio hosting,
+In the original W05 baseline, OAuth refresh/step-up, arbitrary headers, query-string credentials, stdio hosting,
 long-lived sessions, standalone GET SSE, resumption, tasks, sampling, elicitation,
 and multi-round input are not implemented. Session-bearing responses and unsupported
 interactive results fail explicitly. There is no protocol fallback after a failed
@@ -80,9 +79,9 @@ POST `/admin/central/discovery/{profile_id}` with `{"expected_revision":0}` and
 the administrator's existing session, same origin and matching CSRF token. The
 complete bounded tools/list result is staged into the W04 catalog, never approved.
 Then inspect and approve selected tools through the catalog review API. Finally
-grant each client the exact tool IDs, versions and connection profile through the
-[W08 administration console](central-administration.md). Identity creation,
-profile enablement and catalog approval alone are not a client grant.
+publish the reviewed tools for all authenticated clients through the
+[control panel](central-administration.md). Client credentials remain required;
+publication grants no Runner permissions.
 
 The discovery endpoint permits no caller URL, token, HTTP headers or command.
 Partial pages, duplicate tools, unsupported schemas, timeouts and failed upstream

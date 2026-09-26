@@ -1,5 +1,4 @@
 import type { CapturedIdentity, IdentityDecision } from "./identity.js";
-import type { CapabilityGrant } from "./capabilities.js";
 import type { AdminDecision, ConnectionProfile } from "./connectors.js";
 
 /** Safety ceilings for imported descriptions, not capacity or latency promises. */
@@ -62,12 +61,11 @@ export interface CatalogDelta { readonly name: string; readonly state: "added" |
 export type CatalogInspection = { readonly state: "found"; readonly head: CatalogHead; readonly snapshot: CatalogSnapshot;
   readonly changes: readonly CatalogDelta[] } | CatalogFailure;
 export interface CatalogCursor {
-  readonly schema_version: 1;
+  readonly schema_version: 2;
   readonly client_id: string;
   readonly secret_version: number;
   readonly profile_id: string;
   readonly profile_revision: number;
-  readonly grant_revision: number;
   readonly catalog_revision: number;
   readonly offset: number;
   readonly limit: number;
@@ -83,7 +81,6 @@ export type CatalogPage = { readonly state: "listed"; readonly tools: readonly C
 export interface CatalogReadPorts {
   readonly repository: CatalogRepository;
   readonly profile: (profileId: string) => ConnectionProfile | undefined;
-  readonly grant: (clientId: string) => CapabilityGrant | undefined;
   readonly identity: (principal: CapturedIdentity, signal: AbortSignal) => Promise<IdentityDecision>;
   readonly digest: (canonical: string) => Promise<string>;
   readonly cursor: CatalogCursorCodec;
@@ -96,3 +93,8 @@ export interface CatalogAdministration {
 export type CentralDirectory = { readonly state: "listed"; readonly view_version: string; readonly tools: readonly (CatalogTool & { readonly profile_id: string })[] }
   | { readonly state: "denied" | "unavailable" | "capacity" };
 export interface CentralDirectoryReader { listDirectory(principal: CapturedIdentity): Promise<CentralDirectory> }
+export type SharedProfiles = { readonly state: "listed"; readonly profiles: readonly { readonly profile_id: string; readonly name: string }[] }
+  | { readonly state: "denied" | "unavailable" };
+export interface DirectoryReadPorts extends CatalogReadPorts {
+  readonly profiles: (after: string) => { readonly profiles: readonly ConnectionProfile[]; readonly next_after: string | null };
+}

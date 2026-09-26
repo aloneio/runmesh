@@ -1,4 +1,4 @@
-import type { CapturedIdentity, ClientIdentity, IdentityReader } from "./identity.js";
+import type { CapturedIdentity } from "./identity.js";
 
 /** Initial safety ceilings, not measured production capacity promises. */
 export const CAPABILITY_LIMITS = Object.freeze({ rules_per_client: 128, grant_bytes: 65_536, grant_clients: 1_000, access_timeout_ms: 5_000 });
@@ -7,6 +7,7 @@ export type CapabilityTarget =
   | { readonly kind: "remote_tool"; readonly resource_id: string; readonly version: string; readonly connection_profile_id: string }
   | { readonly kind: "skill"; readonly resource_id: string; readonly version: string };
 
+/** Archived v1 records retained for migrations; never consulted by live access. */
 export interface CapabilityGrant {
   readonly schema_version: 1;
   readonly client_id: string;
@@ -28,20 +29,10 @@ export type GrantWriteResult =
   | { readonly state: "conflict"; readonly current_revision: number }
   | { readonly state: "invalid" | "capacity" };
 
-export interface CapabilityGrantReader { readGrant(clientId: string, signal: AbortSignal): Promise<CapabilityGrant | undefined> }
-/** Discovery metadata only; invocation must still check the exact live grant. */
+/** Discovery metadata only; invocation revalidates identity and shared publication state. */
 export type CentralToolVisibility = { readonly state: "visible"; readonly skill: boolean; readonly remote: boolean }
   | { readonly state: "denied" | "unavailable" };
 export interface CentralToolVisibilityReader { toolVisibility(principal: CapturedIdentity): Promise<CentralToolVisibility> }
-export interface CapabilityGrantStore extends CapabilityGrantReader { replaceGrant(input: GrantReplacement): Promise<GrantWriteResult> }
-export interface CapabilityAccessPorts { readonly identity: IdentityReader; readonly grants: CapabilityGrantReader }
-export type CapabilityAccessDecision =
-  | { readonly state: "allowed"; readonly identity: ClientIdentity; readonly grant_revision: number }
-  | { readonly state: "disabled" | "denied" | "unavailable" | "malformed" };
-export interface CapabilityAccess {
-  check(principal: CapturedIdentity, target: CapabilityTarget, signal: AbortSignal): Promise<CapabilityAccessDecision>;
-}
-
 export function isCapabilityIdentifier(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(value);
 }

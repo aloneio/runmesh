@@ -11,8 +11,8 @@ import { createManagedOAuth } from './application/connectors/managed-oauth.js';
 import { ManagedOAuthState } from "./platform/connectors/managed-store.js";
 import type { ManagedConnections } from "./contracts/managed-connections.js";
 import type { AdminDecision, CentralAdministration, ProfileResult } from "./contracts/connectors.js";
-import type { CapabilityGrant, GrantReplacement, GrantWriteResult, CentralToolVisibility } from "./contracts/capabilities.js";
-import { isCapabilityIdentifier, parseCapabilityGrant } from "./contracts/capabilities.js";
+import type { CentralToolVisibility } from "./contracts/capabilities.js";
+import { isCapabilityIdentifier } from "./contracts/capabilities.js";
 import type { CentralManagement } from "./contracts/central-management.js";
 import { CapabilityState } from "./platform/capabilities/store.js";
 import { ConnectionState } from "./platform/connectors/store.js";
@@ -29,6 +29,7 @@ import { catalogSha256, createCatalogCursor } from "./platform/capabilities/cata
 import { createCatalogManager } from "./application/capabilities/catalog-admin.js";
 import { createCatalogReader } from "./application/capabilities/catalog-read.js";
 import { createDirectoryReader } from "./application/capabilities/directory.js";
+import { createSharedProfileReader } from "./application/capabilities/profile-read.js";
 import { createDependencyReader } from "./application/capabilities/dependencies.js";
 import type { CentralDirectory } from "./contracts/catalog.js";
 import { withinDeadline } from "./application/connectors/deadline.js";
@@ -42,20 +43,17 @@ import { createSkillService } from "./application/skills/service.js";
 import type { CentralSkills } from "./contracts/skills.js";
 import { CentralGovernance } from "./platform/capabilities/central-audit.js";
 import type { CentralAuditRow } from "./contracts/central-audit.js";
-import type { ToolsetAdministration } from "./contracts/toolsets.js";
-import { ToolsetState } from "./platform/capabilities/toolsets.js";
 
 /** Reviewed composition root. Feature repositories never import each other.
  * Binding-only APIs return metadata, never decrypted credentials. No public fetch API. */
 export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements CentralAdministration, CatalogAdministration, CentralRemote, OAuthAdministration {
-  readonly #grants: CapabilityState;
+  readonly #state: CapabilityState;
   readonly #profiles: ConnectionState;
   readonly #namespace: string;
   readonly #catalog: CatalogState;
   readonly #oauthState: OAuthState;
   readonly #skills: SkillState;
   readonly #governance: CentralGovernance;
-  readonly #toolsets: ToolsetState;
   #oauthService: ReturnType<typeof createOAuthManager> | undefined;
   readonly #managedState: ManagedOAuthState;
   #managedService: ReturnType<typeof createManagedOAuth> | undefined;
@@ -63,54 +61,24 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
   public constructor(ctx: DurableObjectState, env: WorkerEnv) {
     super(ctx, env);
     this.#namespace = ctx.id.toString();
-    this.#grants = new CapabilityState(ctx.storage);
-    this.#profiles = new ConnectionState(ctx.storage, () => this.#grants.initialize());
-    this.#catalog = new CatalogState(ctx.storage, () => this.#grants.initialize());
-    this.#oauthState = new OAuthState(ctx.storage, () => this.#grants.initialize());
-    this.#managedState = new ManagedOAuthState(ctx.storage, () => this.#grants.initialize());
-    this.#skills = new SkillState(ctx.storage, () => this.#grants.initialize());
-    this.#governance = new CentralGovernance(ctx.storage, () => this.#grants.initialize());
-    this.#toolsets = new ToolsetState(ctx.storage, () => this.#grants.initialize());
+    this.#state = new CapabilityState(ctx.storage);
+    this.#profiles = new ConnectionState(ctx.storage, () => this.#state.initialize());
+    this.#catalog = new CatalogState(ctx.storage, () => this.#state.initialize());
+    this.#oauthState = new OAuthState(ctx.storage, () => this.#state.initialize());
+    this.#managedState = new ManagedOAuthState(ctx.storage, () => this.#state.initialize());
+    this.#skills = new SkillState(ctx.storage, () => this.#state.initialize());
+    this.#governance = new CentralGovernance(ctx.storage, () => this.#state.initialize());
   }
 
-  public async readGrant(clientId: string): Promise<CapabilityGrant | undefined> {
-    return this.#grants.readGrant(clientId);
-  }
   public async toolVisibility(principal: CapturedIdentity): Promise<CentralToolVisibility> {
     return withinDeadline<CentralToolVisibility>(new AbortController().signal, () => ({ state: "unavailable" }), async (signal, expired) => {
       try {
         const identity = await this.#identity(principal, signal);
         if (expired()) return { state: "unavailable" };
         if (identity.state !== "allowed") return { state: identity.state === "denied" ? "denied" : "unavailable" };
-        const grant = parseCapabilityGrant(this.#grants.readGrant(principal.client_id));
-        if (!grant?.enabled || grant.client_id !== principal.client_id) return { state: "denied" };
-        return { state: "visible", skill: grant.rules.some(rule => rule.kind === "skill"), remote: grant.rules.some(rule => rule.kind === "remote_tool") };
+        return { state: "visible", skill: this.env.CENTRAL_SKILLS_ENABLED === "1", remote: true };
       } catch { return { state: "unavailable" }; }
     });
-  }
-  public async getToolset(hash: string, id: string): ReturnType<ToolsetAdministration['getToolset']> {
-    try {
-      if (!isCapabilityIdentifier(id)) return { state: 'invalid' };
-      const decision = await this.#authorize(hash, new AbortController().signal);
-      if (decision !== 'allowed') return { state: decision };
-      const toolset = this.#toolsets.read(id); return toolset ? { state: 'found', toolset } : { state: 'missing' };
-    } catch { return { state: 'unavailable' }; }
-  }
-  public async mutateToolset(hash: string, input: unknown): ReturnType<ToolsetAdministration['mutateToolset']> {
-    try {
-      const decision = await this.#authorize(hash, new AbortController().signal);
-      if (decision !== 'allowed') return { state: decision };
-      if (typeof input !== 'object' || input === null || Array.isArray(input)) return { state: 'invalid' };
-      const value = input as Record<string, unknown>;
-      if (value.action !== 'apply') return this.#toolsets.replace(input);
-      if (!isCapabilityIdentifier(value.toolset_id) || !isCapabilityIdentifier(value.client_id)
-        || Object.keys(value).some(k => !['action', 'toolset_id', 'client_id', 'toolset_revision', 'expected_revision'].includes(k))
-        || !Number.isSafeInteger(value.toolset_revision) || (value.toolset_revision as number) < 1) return { state: 'invalid' };
-      const toolset = this.#toolsets.read(value.toolset_id);
-      if (!toolset?.enabled) return { state: 'missing' };
-      if (toolset.revision !== value.toolset_revision) return { state: 'conflict', current_revision: toolset.revision };
-      return this.#grants.replaceGrant({ client_id: value.client_id, enabled: true, expected_revision: value.expected_revision as number, rules: toolset.rules });
-    } catch { return { state: 'unavailable' }; }
   }
   public async listCentralReceipts(hash: string): Promise<{ state: "listed"; receipts: CentralAuditRow[] } | { state: "denied" | "unavailable" }> {
     if (this.env.CENTRAL_GOVERNANCE_ENABLED !== "1") return { state: "unavailable" };
@@ -121,7 +89,7 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
   }
 
   #skillService() {
-    return createSkillService({ repository: this.#skills, digest: catalogSha256, grant: id => this.#grants.readGrant(id),
+    return createSkillService({ repository: this.#skills, digest: catalogSha256,
       remoteDependency: (target, signal) => {
         const profile = this.#profiles.read(target.connection_profile_id)?.profile;
         if (profile && connectionPolicy(profile, this.env.CENTRAL_MCP_EGRESS) === undefined) return Promise.resolve("disabled");
@@ -152,34 +120,6 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
   public async readSkill(principal: CapturedIdentity, input: unknown): ReturnType<CentralSkills["readSkill"]> {
     return withinDeadline(new AbortController().signal, () => ({ state: "unavailable" } as const),
       signal => this.#skillService().read(principal, input, signal));
-  }
-  public async replaceGrant(input: GrantReplacement): Promise<GrantWriteResult> {
-    return this.#grants.replaceGrant(input);
-  }
-
-  public async getClientGrant(hash: string, id: string): ReturnType<CentralManagement["getClientGrant"]> {
-    try {
-      if (!isCapabilityIdentifier(id)) return { state: "invalid" };
-      const decision = await this.#authorize(hash, new AbortController().signal);
-      if (decision !== "allowed") return { state: decision };
-      const grant = this.#grants.readGrant(id);
-      return grant ? { state: "found", grant } : { state: "missing" };
-    } catch { return { state: "unavailable" }; }
-  }
-  public async setClientGrant(hash: string, input: unknown): ReturnType<CentralManagement["setClientGrant"]> {
-    try {
-      if (typeof input !== "object" || input === null || Array.isArray(input)) return { state: "invalid" };
-      const value = input as Record<string, unknown>;
-      if (Object.keys(value).some(k => !["client_id", "expected_revision", "enabled", "rules"].includes(k))
-        || !Number.isSafeInteger(value.expected_revision) || (value.expected_revision as number) < 0 || (value.expected_revision as number) >= Number.MAX_SAFE_INTEGER) return { state: "invalid" };
-      const grant = parseCapabilityGrant({ ...value, schema_version: 1, revision: (value.expected_revision as number) + 1 });
-      if (!grant) return { state: "invalid" };
-      const decision = await this.#authorize(hash, new AbortController().signal);
-      if (decision !== "allowed") return { state: decision };
-      // Grants remain exact immutable capability references. Approval and actual
-      // execution checks are independent; granting cannot approve content.
-      return this.#grants.replaceGrant({ client_id: grant.client_id, expected_revision: value.expected_revision as number, enabled: grant.enabled, rules: grant.rules });
-    } catch { return { state: "unavailable" }; }
   }
   public async listProfiles(hash: string, after?: string): ReturnType<CentralManagement["listProfiles"]> {
     try {
@@ -249,16 +189,22 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
 
   /** Internal reader for the later remote MCP provider; never selects a Runner. */
   public async listDirectory(principal: CapturedIdentity): Promise<CentralDirectory> {
-    const read = createDirectoryReader({ repository: this.#catalog, profile: id => this.#profiles.read(id)?.profile,
-      grant: id => this.#grants.readGrant(id), identity: (value, signal) => this.#identity(value, signal), digest: catalogSha256,
+    const read = createDirectoryReader({ profiles: after => this.#profiles.list(after), repository: this.#catalog, profile: id => this.#profiles.read(id)?.profile,
+      identity: (value, signal) => this.#identity(value, signal), digest: catalogSha256,
       cursor: createCatalogCursor(this.#namespace, () => this.#catalog.cursorKey()), now: Date.now });
     return withinDeadline<CentralDirectory>(new AbortController().signal, () => ({ state: "unavailable" }), (signal, expired) => read(principal, signal, expired));
   }
 
   /** Per-profile discovery remains available for larger direct directories. */
+  public async listRemoteProfiles(principal: CapturedIdentity): ReturnType<CentralRemote["listRemoteProfiles"]> {
+    const read = createSharedProfileReader({ repository: this.#catalog, profiles: after => this.#profiles.list(after),
+      profile: id => this.#profiles.read(id)?.profile, identity: (value, signal) => this.#identity(value, signal) });
+    return withinDeadline(new AbortController().signal, () => ({ state: "unavailable" } as const), signal => read(principal, signal));
+  }
+
   public async listCatalog(principal: CapturedIdentity, query: unknown): Promise<CatalogPage> {
     const read = createCatalogReader({ repository: this.#catalog, profile: id => this.#profiles.read(id)?.profile,
-      grant: id => this.#grants.readGrant(id), identity: (value, signal) => this.#identity(value, signal), digest: catalogSha256,
+      identity: (value, signal) => this.#identity(value, signal), digest: catalogSha256,
       cursor: createCatalogCursor(this.#namespace, () => this.#catalog.cursorKey()), now: Date.now });
     return withinDeadline<CatalogPage>(new AbortController().signal, () => ({ state: "unavailable" }),
       (signal, expired) => read(principal, query, signal, expired));
@@ -362,7 +308,7 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
     this.#remoteClients.add(key);
     try {
       return await createRemoteCaller({ repository: this.#catalog, profile: id => this.#profiles.read(id)?.profile,
-        grant: id => this.#grants.readGrant(id), identity: (value, signal) => this.#identity(value, signal),
+        identity: (value, signal) => this.#identity(value, signal),
         digest: catalogSha256, connector: this.#remoteConnector(principal),
         ...(this.env.CENTRAL_GOVERNANCE_ENABLED === "1" ? { observation: this.#governance } : {}) })(principal, command, new AbortController().signal);
     } finally { this.#remoteClients.delete(key); }

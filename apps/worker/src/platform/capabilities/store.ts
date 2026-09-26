@@ -4,7 +4,7 @@ import type { CapabilityGrant, GrantReplacement, GrantWriteResult } from "../../
 type Row = { client_id: string; revision: number; enabled: number; rules_json: string };
 type Storage = Pick<DurableObjectStorage, "sql" | "transactionSync">;
 
-/** Sole owner of central grant tables. No Registry, Runner or optional audit fallback. */
+/** Central schema bootstrap and archived v1 grant storage. Live capabilities never read grants. */
 export class CapabilityState {
   private initialized = false;
   public constructor(private readonly storage: Storage) {}

@@ -1,200 +1,69 @@
-# Central MCP and Skill foundations
-
-W04 directory implementation and its explicit support limits are documented in
-[Central catalog review](central-catalog.md). W05 adds the separately gated
-[controlled HTTP discovery and invocation](central-remote-mcp.md). W07-W09 add
-[Skill content](central-skills.md) and [administration and governance](central-administration.md).
-Production activation remains subject to the [rollout gates](central-rollout.md).
+# Central MCP and Skill architecture
 
 [简体中文](central-capabilities-architecture.zh-CN.md)
 
-**Current status: direct MCP connections and Skill installation are enabled in
-the development configuration; production activation remains separate.**
-The [control-panel guide](central-administration.md) describes current behavior.
-The W00–W11 sections below preserve the original 2026-09-24 foundation decision,
-based on `f25486b46aa14f3f63097af6a91a88101f5041ca`; their staged rollout descriptions
-are historical, not the current development feature configuration.
+Current development behavior: every valid authenticated client in an instance shares the enabled, published MCP tools and active Skills. Administrators connect MCP services and install Skills in the control panel. Clients do not need individual capability assignments. Production activation remains subject to the [rollout gates](central-rollout.md).
 
-Current managed OAuth ownership: the application owns authorization, durable
-state claims, refresh ordering and credential leases through SDK-free contracts.
-Platform adapters separately own protocol discovery, bounded HTTP and SQLite.
-Only `capabilities-do.ts` composes them. Architecture fixtures reject reverse
-dependencies, protocol-to-storage dependencies and SDK types in contracts.
+## Ownership and dependency direction
 
-## Decision and ownership
+One MCP connection exposes native Runner tools, centrally connected remote MCP tools and Skill content. Central operations do not select a Runner, create native Jobs, or install content on execution machines. Native scopes, Runner policy, workspace permissions and the Worker–Runner protocol retain their existing meaning.
 
-One client connection will expose three independently implemented paths:
-native Runner tools, centrally connected remote MCP tools, and central Skill
-content. The client remains responsible for reasoning and composing calls.
-Central tools and Skill reads must not require a selected or online Runner.
-They are not installed on each execution machine.
-
-Keep the existing native tool names, schemas, catalog fingerprint and
-Worker–Runner protocol unchanged. Do not route central operations through
-`activeRunnerTool`, convert them into native Jobs, store Skills in Context, or
-copy remote content into the original Runner-only audit envelope.
-
-| Boundary | Owner | Prohibited dependency |
+| Boundary | Owner | Dependency constraint |
 | --- | --- | --- |
-| Identity and native permissions | Existing Registry authentication | Central storage as a prerequisite to native authentication |
-| Central grant evaluation | `domain/capabilities` and `application/capabilities` | Runner selection, concrete SQL or SDKs |
-| Central grant persistence | `platform/capabilities` | Registry tables, Runner state or audit fallback |
-| Remote MCP adaptation | `platform/connectors` | Skill implementation and host process execution |
-| Skill content | Skill domain/application/platform modules | Automatic execution, permission grants or Runner Context |
-| Public providers | Thin `mcp/providers` adapters | Application implementations, storage and credential pools |
-| Composition | HTTP/entry layer | Duplicated permission rules |
+| Client identity and native permissions | Registry and existing authentication | Native authentication does not require central storage |
+| Shared discovery and invocation | application/capabilities | Narrow identity, profile, catalog and transport ports; no SQL or SDK ownership |
+| Publication and version rules | domain/capabilities and contracts | No platform I/O, SDKs or Runner dependency |
+| Remote connection protocols and credentials | platform/connectors | No Skill implementation or host execution dependency |
+| Skill content and activation | Skill application/domain/platform modules | No automatic execution or permission assignment |
+| Public MCP providers | mcp/providers | Adapt contracts; do not import application implementations or stores |
+| Composition | capabilities-do.ts and HTTP entry points | Supply feature ports without duplicating admission rules |
 
-Interfaces live in `contracts/`. The composition layer supplies small ports;
-no general dependency-injection framework or universal plugin executor is
-introduced. Each feature's internals are private to that feature. Native
-modules may not import central implementations outside composition.
+Managed OAuth application code owns authorization state, durable claims, refresh ordering and credential leases through SDK-free contracts. Platform adapters own protocol discovery, bounded HTTP and SQLite. Only the composition root wires these implementations together. Connector and Skill internals communicate through ports rather than importing one another.
 
-## Enforced architecture rules
+The architecture gate enforces module ownership, reverse-dependency restrictions, runtime/type cycle checks and SDK-free contracts. Pure central modules cannot perform platform-global I/O or dynamic code evaluation. These are maintenance checks, not an operating-system sandbox.
 
-`scripts/central-architecture-policy.mjs` supplements, rather than replaces,
-the existing layer and runtime/type-cycle checks. Connector and Skill internals
-cannot import one another. Pure rules cannot import SDKs, Worker environment
-types, storage implementations or the Runner wire package. New unreviewed
-top-level central directories are rejected, including modules without imports.
+## Shared admission and publication
 
-AST checks additionally reject direct platform-global I/O in pure central
-contracts/rules and direct dynamic code evaluation in central modules.
-These checks are conservative maintenance gates, not an operating-system
-sandbox or a proof against arbitrary obfuscation. Tests cover both forbidden
-dependencies and a valid composition/port path.
+Client authentication remains mandatory. Invalid, rotated or revoked credentials cannot discover or invoke central capabilities. Version-2 identities may have empty native scopes and still use the shared library; this does not grant Runner filesystem or execution access. Existing legacy identities keep their native scope behavior.
 
-## Versioned identity without automatic grants
+Catalog readers return the enabled profile’s reviewed, compatible tools. Invocation revalidates client identity, profile state, approved catalog/schema, current upstream schema and credential generation across waits. A previously listed tool is not a reusable authorization ticket. In-flight identity, profile or publication changes withhold results. Deadlines remain bounded; uncertain remote mutations are not replayed automatically.
 
-`ClientIdentity` version 2 separates `native_scopes` from credential identity.
-An empty native scope list is valid only in an explicit version-2 identity.
-It does not grant access to any central tool, Skill or machine.
+remote_profiles discovers published service IDs and names from local metadata. remote_tools pages each service’s published catalog and remote_call performs controlled invocation. Small libraries also expose direct tool names. Exceeding the direct directory limits falls back to these discovery tools instead of silently losing access to larger libraries.
 
-There remains one credential record and one authentication implementation.
-Legacy nonempty scope arrays keep their existing behavior. Explicit v2 records
-store `{schema_version: 2, native_scopes: [...]}` in the existing scope column;
-malformed arrays, unknown versions and unexpected persisted fields fail closed.
-No core namespace, table or credential is migrated or reset.
+Skill listing returns each enabled Skill’s current active digest. Reads require that exact active digest and recheck identity and head revision before returning content. Publishing a new version updates every client; an old cached digest is denied and the client refreshes skill_list. Historical bundles remain stored for administrator review or explicit rollback. Dependency status is advisory and never executes, enables or authorizes a capability.
 
-The internal client-creation and verification routes accept an explicit
-`identity_version: 2`. Legacy creation still rejects empty scopes. Versioned
-verification is projected into the existing MCP adapter without changing its
-tool schemas. Rotation, revocation and generation checks apply to both forms.
-The native RPC admission chain remains unchanged and denies empty native scopes.
-W08 adds the separate [central administration console](central-administration.md).
+## Storage and upgrade behavior
 
-**Rollback boundary:** old Worker code does not understand v2 stored identity
-objects and rejects those new identities. Existing legacy clients continue to
-work. Do not claim new v2 identities work after an old-code rollback; do not
-reset the database or silently convert them into machine permissions.
+CapabilitiesDOv1 remains the central state owner. Registry and Runner tables, identities, credentials and namespaces are not rewritten. The central schema bootstrap preserves archived v1 grant rows, but live listing, invocation and Skill reads never consult them. No default wildcard grant or fallback ACL is created.
 
-## Central grants and optional state
+The Client access UI, grant RPCs and toolset assignment implementation are retired. Requests below /admin/central/grants and /admin/central/toolsets return HTTP 410 with central_client_access_retired and cannot mutate state. These routes do not resolve the central owner. Existing restrictive or disabled grant records therefore no longer limit valid clients.
 
-Grant rules match an exact client, resource kind, stable resource ID and
-approved content digest. Remote-tool rules additionally bind a connection
-profile ID. There are no wildcards, implicit grants from coding scopes, or
-permissions derived from Skill text or tool annotations.
+Catalog cursors use version 2 and a version-2 MAC namespace. They remain bound to client identity, credential generation, profile/catalog revisions, page size and expiry. Old cursors are rejected; clients must refresh the catalog. No stored client secret needs to be replaced for this change.
 
-`createCapabilityAccess` performs bounded identity/grant observations and checks
-identity again after reading the independent grant owner. Its result is not a
-reusable dispatch ticket. Invocation code revalidates the relevant
-identity and grant revision after queue/connection waits; cross-owner or
-in-flight cancellation is not an atomic transaction.
+To withdraw one client, revoke its credential. To withdraw a capability from all clients, disable the service, publication or Skill. Use separate instances when clients must have separate capability libraries. Upstream OAuth authorization remains distinct from client capability assignment: managed connections retain their service authorization, and existing configured client-bound OAuth accounts retain their own credential boundaries.
 
-`CapabilitiesDOv1` is the reviewed central composition root in `capabilities-do.ts`,
-with no public Durable Object fetch API. The Worker has a separately protected
-browser-admin JSON route; the repositories do not import one another.
-Its grant repository owns lazy, atomic schema initialization and revision-checked
-writes. Unknown, partial or foreign state is rejected without clearing data.
-Concurrent writes require the observed revision. Disabling retains the record
-and advances its revision instead of deleting history.
+Older Worker code can reinstate legacy grant behavior and may reject version-2 identities; rollback is not equivalent to preserving the new shared access model. Review the [administration migration guidance](central-administration.md) before changing deployed versions.
 
-The **test** and **development** Wrangler environments bind this class. Development
-adds its own central-dev-v1 SQLite migration without changing existing Registry
-or Runner identities. Production bindings and required secrets remain unchanged.
-Native tool calls do not resolve central state or read vault keys. Enabled central
-discovery checks live identity and grants; failures retain the native catalog.
-The disabled access factory does not resolve ports or create timers.
+## Bounded operations
 
-W03 now includes a bearer-credential backend: versioned connection profiles,
-AES-256-GCM envelopes, a bounded deployment keyring, a ciphertext-only repository,
-and protected profile management. WebCrypto is confined to the connector adapter;
-application rules receive narrow authorization, cipher and storage ports.
-Invocation adapters consume narrowly scoped credential ports. There is no
-plaintext-read API or automatic key provisioning. W06 adds the separately
-configured OAuth adapter described in [the OAuth guide](central-oauth.md).
+| Item | Bound and behavior |
+| --- | --- |
+| Stored connection profiles | 1,000; discovery scans ordered metadata pages |
+| Catalog profiles | 200; only published enabled services are discoverable |
+| Direct directory | 8 profiles / 32 tools; overflow uses remote_profiles and remote_tools |
+| Catalog | 128 tools per snapshot; client pages up to 20 tools |
+| Catalog cursor | 2,048 bytes and 5-minute lifetime; version/revision/identity bound |
+| Skills | 1,000 heads; skill_list scans up to 128 heads per page |
+| Skill continuation | after / next_after; disabled heads may produce an empty page with a continuation |
+| Skill resources/list | Walks bounded pages, rejects duplicate/non-progressing results and never returns a partial success |
+| Skill bundle | 32 text files, 64 KiB per file, 256 KiB total, 32 stored versions per Skill |
 
-The protected route is `/admin/central/profiles/{profile_id}`. GET returns safe
-metadata. POST accepts only create, rotate, enable, disable and rekey commands.
-It requires an administrator session, same origin and the matching CSRF header
-and cookie. It has no ADMIN_TOKEN fallback. Session checks occur after body reads
-and again in the owner after crypto waits, immediately before the synchronous
-revision-checked write. Unknown/malformed receipts never become success or a
-reflected error string. A post-dispatch timeout remains an unknown outcome.
+Limits are explicit safety ceilings, not latency promises. Contracts remain authoritative for byte, count and deadline budgets. Unexpected state fails closed rather than being repaired or cleared automatically.
 
-New profiles are disabled. Connector identity and destination cannot be changed
-by rotation. Ciphertext authenticates the owner namespace, profile, connector,
-endpoint, secret generation and key ID. A fresh random IV is used per encryption.
-Only ciphertext and metadata enter SQLite. Keys are non-extractable after import;
-temporary byte arrays are cleared, but JavaScript strings cannot be reliably
-zeroized. This protects stored values, not a compromised Worker runtime.
+## Control panel and verification
 
-To rotate a vault key, add a new independent random key to CENTRAL_VAULT_KEYRING,
-select its ID, explicitly rekey profiles, and retain old keys until all referenced
-envelopes have been verified. Rekey advances the secret generation; enable/disable
-does not decrypt and still works with unavailable keys. Removing an old key early
-makes remaining envelopes unreadable; it does not authorize fallback to control
-secrets, fake values or automatic rewriting. No deployment secret was changed by
-this implementation. See Cloudflare's WebCrypto and Worker secrets documentation.
+The normal connection flow asks for a service name, MCP URL and no-authentication or OAuth. Tool publication remains an explicit review step; installing or updating a Skill publishes the current version to the shared library. Admin changes retain same-origin, session and CSRF checks. Stale previews, failed refreshes and revision conflicts cannot silently become successful writes.
 
-Profile URL checks currently validate credential-free HTTPS syntax and bounded
-canonical URLs; they do not establish outbound DNS/SSRF safety. No upstream
-request is made in W03. The reviewed egress adapter and capability admission are
-still mandatory before a profile can be used to invoke an upstream service.
+Regression coverage includes two independently authenticated clients without grant records, ignored legacy grants, active Skill version changes, more than 128 Skill heads, larger remote directories, credential revocation/rotation, disabled profiles, schema drift, OAuth boundaries, retired routes and unchanged native Runner admission. Browser checks cover the product workflow without screenshots. The full verification plan, architecture gate and exact-commit CI remain release requirements.
 
-## Initial enforced budgets
-
-| Item | Ceiling | Enforcement |
-| --- | --- | --- |
-| Native scope representation | 1,024 characters | Stored identity decoding |
-| Rules per client | 128 | Grant parsing |
-| Encoded grant | 65,536 bytes | Grant parsing and stored-read bounds |
-| Grant records per state owner | 1,000 | Create admission; existing disable remains available |
-| One access observation | 5,000 ms | Abortable request-local deadline, no recurring timer |
-| Profile records per owner | 1,000 | Create admission; existing profiles can still be disabled |
-| Bearer credential | 4,096 ASCII bytes | Closed bearer-token grammar; no header injection |
-| Admin command body | 16,384 bytes | Streaming body cap before parsing |
-| Keyring | 4 keys / 4,096 characters | Independent versioned keys, no control-secret reuse |
-| Profile operation | 5,000 ms | Recheck deadline after each awaited dependency |
-
-These are initial safety ceilings, not measured production capacity. Upstream
-discovery, schema complexity, result bytes, connection concurrency and Skill
-bundle budgets are enforced by the corresponding W04/W05/W07 modules. An audit
-failure must not become permission to replay a mutation or store secrets.
-
-## Evidence and remaining work
-
-Tests are separated into identity decoding, HTTP/Registry identity behavior,
-port-injected grant evaluation, real local DO storage, and architecture fixtures.
-Keep native catalog/contract and full regression tests alongside them.
-
-W00's original dirty checkout is preserved; development uses a separate checkout
-on `dev`. The observed host-catalog mismatch and native Git environment issue
-remain open acceptance items. A local HTTP SDK test does not prove the current
-chat host refreshed its tool list. They block enabling the corresponding live
-feature, not isolated development of the foundations.
-
-W01 feature gates and W02 identity foundations are implemented here. W03 provides
-grant state, encrypted credential profiles and protected administration, not an
-enabled upstream integration. Its local tests include HTTP session/CSRF checks,
-rekey/tamper scenarios, rollback of failed storage writes, and unknown-schema
-preservation. Live activation and real-host acceptance remain separate gates.
-W04 supplies imported catalog snapshots, reviewed per-profile selections and an
-ACL-filtered reader. W05 adds controlled stateless HTTP discovery and invocation,
-with optional remote_tools/remote_call provider registration. It remains disabled
-in deployed environments. W06 adds [client-bound OAuth and ephemeral legacy sessions](central-oauth.md),
-with explicit provider pins and no persistent shared session. W07-W09 add
-versioned text Skills, reusable grant templates, central administration, direct
-tool catalogs and optional metadata receipts/call budgets. Full cost acceptance,
-real-client validation and rollout remain separate gates.
-The default native tools/list is unchanged. No deployment or automatic upgrade
-is part of this decision.
+See [administration](central-administration.md), [catalog review](central-catalog.md), [remote MCP](central-remote-mcp.md), [Skills](central-skills.md) and [OAuth](central-oauth.md) for feature-specific contracts.

@@ -2,95 +2,86 @@
 
 [简体中文](central-administration.zh-CN.md)
 
-Open /admin/central using the existing browser session. The page provides direct
-MCP connection, Skill installation, tool review and client access. There is no
-advanced JSON console in the product UI. Internal revisions are carried by the
-application; conflicting or unknown writes are never automatically replayed.
+## Connect, publish and use
 
-## Getting started
+Open /admin/central with your administrator browser session. Enter a public HTTPS
+MCP URL and select No authentication or OAuth. The service name is optional.
+OAuth settings are discovered automatically; providers requiring manual client
+preregistration are not automatically connectable. After signing in, return to
+the control panel, review discovered tools and approve the ones to publish.
 
-1. Enter a public HTTPS MCP URL. Choose No authentication or OAuth; the service
-   name is optional. No endpoint list, environment JSON or Runner is needed.
-2. For OAuth, Runmesh discovers the provider and uses its client metadata document
-   support or dynamic client registration, then opens the service authorization
-   page. The callback returns to the control panel and discovers tools. Providers
-   that require manual preregistration are not automatically connectable.
-3. Review the discovered tools and approve the ones you want to share. OAuth
-   connects an instance-admin account; each AI client still needs explicit access.
-4. Select SKILL.md and supporting text files, or a Skill folder, and click Install
-   Skill. Name and description come from frontmatter. A duplicate name shows an
-   explicit update confirmation. Files are saved without executing scripts.
-5. Create an AI connection, save its one-time URL, and choose its services and
-   Skills under Client access. No Runner is needed for these capabilities.
+Select SKILL.md and supporting text files, or a complete Skill folder, to install
+a Skill. Its name and description come from frontmatter. Installing saves,
+approves and activates the files atomically; scripts never execute. Replacing
+an installed Skill requires confirmation and the currently observed revision.
 
-Installed Skill updates retain old pinned client grants until explicitly changed.
-Tool changes need fresh review. OAuth can be reconnected or disconnected from a
-service card; credentials never appear in read APIs. Each connection accepts only
-its saved public HTTPS destination, with no redirects or private-network routing.
+Create an AI connection and copy its one-time URL into the AI client. Every valid
+authenticated client in the instance shares all enabled published MCP tools and
+active Skills. There is no Client access tab, individual assignment, reusable
+grant template or advanced JSON console. No Runner is needed for these features.
+Clients may need to refresh their tool or Skill list after publication changes.
 
-OAuth token encryption is an instance deployment concern. The development
-setup:secrets command provisions a separate random vault key when missing and
-preserves an existing keyring. No-auth services and Skill installation do not need
-that vault. Real third-party account consent and AI-host acceptance remain
-provider-specific checks; mock regressions do not claim those external outcomes.
+## Shared access and migration
 
-## Shared configuration and grants
+Existing valid clients also use the shared library. Stored legacy grant rows,
+including disabled or restrictive rows, no longer affect listing or invocation.
+GET/POST /admin/central/grants/{client_id} and /admin/central/toolsets/{toolset_id}
+return HTTP 410 with central_client_access_retired and perform no owner mutation.
+Old rows are retained as archival data; they are not a hidden default ACL.
 
-GET /admin/central/profiles returns at most 50 credential-free profiles. Supply
-after from next_after to continue; every page independently checks the admin
-session. Profile secrets are write-only and the legacy credential form clears submitted
-credential input. Legacy profile/catalog/OAuth routes remain available for compatibility. Managed connections explicitly carry authentication none or oauth; a legacy null credential never becomes anonymous.
+Revoke or rotate a client's connection credential to stop that credential from
+being used. Pause a service or Skill to stop sharing that capability with every
+client. For separate capability trust boundaries, use separate instances.
+Native computer scopes and Runner/workspace permissions remain independent;
+sharing central capabilities never creates machine access.
 
-GET/POST /admin/central/grants/{client_id} reads or replaces an exact grant. A
-write contains expected_revision, enabled and rules. Every rule references either
-an exact remote tool ID/version/profile or a Skill ID/digest. This does not modify
-native scopes. An unapproved or unavailable capability remains unusable.
+Updates publish the active Skill version to all clients. A cached old digest is
+rejected; refresh skill_list and use its new digest for every attachment. Old
+bundles remain available to administrators for explicit rollback. Disabling or
+revoking access cannot erase content already delivered to a client's context.
 
-GET/POST /admin/central/toolsets/{toolset_id} manages up to 64 reusable templates.
-Use action replace, expected_revision, enabled and rules to save one; action
-apply, client_id, toolset_revision and expected_revision applies that exact
-template to one client's grant. Repeat only the assignment for another client.
-Both source and destination revisions are checked. Editing/disabling a template
-does not silently change existing grants: reapply explicitly, or revoke each
-client grant. A template is not a live inheritance mechanism.
+## Review, identity and connection boundaries
 
-## Direct versus discovery directories
+Tool publication remains explicit. Newly discovered or changed tool definitions
+are quarantined until reviewed; stale schemas cannot be called merely because
+the instance uses shared access. Each call revalidates client identity, enabled
+profile, reviewed catalog, content version and credential state before dispatch
+and again before returning output. An upstream action may already have executed
+when a later check withholds its result; that does not mean it was rolled back.
+Unknown or conflicting outcomes are never automatically replayed.
 
-CENTRAL_DIRECT_TOOLS_ENABLED=1 additionally publishes reviewed direct tools when
-the central binding and the selected profile’s egress authorization are valid. The stable rm_ aliases and
-exact JSON schemas come from saved, ACL-filtered snapshots. No live upstream
-discovery is performed by tools/list. Direct calls and remote_call share the
-same runtime validation, generation checks and invocation implementation.
-Discovery hides the generic remote entries and direct aliases when the current
-client has no enabled remote-tool grant. Skill entry points are independently
-filtered by Skill grants. A new directory request reflects revoked grants; a
-cached name still requires live authorization when called.
+Upstream OAuth consent remains required for OAuth services. Reconnect or
+disconnect the upstream account from its service card. OAuth credentials remain
+encrypted and absent from read APIs. Managed connections accept only their saved
+public HTTPS destination, without private-network routing or redirects. OAuth
+vault setup is an instance deployment concern; no-auth services and Skills do
+not require it. Legacy bearer profiles retain write-only credential rotation.
 
-Direct views are bounded to 8 profiles, 32 tools and 512 KiB. Larger views use
-remote_tools/remote_call. remote_status distinguishes capacity, denied and
-unavailable from an empty successful directory. Central failure preserves native
-registration. Native tool calls do not load the direct directory. Host cache
-refresh still requires real-host acceptance; a known old alias cannot bypass
-current authorization.
+GET /admin/central/profiles returns up to 50 credential-free profiles; use
+next_after as after to continue. Each page checks the administrator session.
+Mutations require same-origin session/CSRF admission and exact revisions.
+Failed refreshes invalidate pending confirmations and block further writes
+until the library refresh succeeds.
 
-## Optional persistent governance
+## Discovery and optional governance
 
-CENTRAL_GOVERNANCE_ENABLED=1 adds owner-local persistent admission and receipts
-to remote calls. Existing in-flight concurrency limits remain. Before connecting,
-an authorized call must fit 30 requests/client/minute and 120/profile/minute.
-At most 2,048 admission keys are retained. Three successive upstream transport,
-protocol or uncertain-result failures start a 30-second profile cooldown.
-There is no queue, background polling or automatic replay. Disabling this flag
-returns to the earlier concurrency-only baseline; it does not delete tables.
+remote_profiles lists the bounded shared service directory. remote_tools reads
+reviewed tools for its profile_id with cursor pagination; remote_call invokes
+one exact tool/version. CENTRAL_DIRECT_TOOLS_ENABLED=1 also publishes direct rm_
+aliases with their reviewed schemas, bounded to eight profiles and 32 tools.
+Larger libraries use remote_profiles, remote_tools and remote_call; they are not
+silently truncated. Discovery never contacts upstream services.
 
-Receipts contain only request ID, client ID, profile/tool/version, operation
-state, fixed error code and timestamp. They omit parameters, results, bodies,
-secrets and fake Runner IDs. A completed call stays completed if receipt storage
-fails; runmesh/receipt metadata reports audit_status unavailable. The store keeps
-at most 1,000 receipts, with a 24-hour read window and demand-driven expiry cleanup.
-GET /admin/central/receipts returns the latest 50 to an authenticated administrator.
-There is no client receipt lookup or replay API.
+CENTRAL_SKILLS_ENABLED=1 exposes skill_list, skill_read and the matching MCP
+resource surfaces. skill_list scans at most 128 heads per page and returns
+next_after; continue even when a page contains no active Skills.
 
-These budgets are safety ceilings, not measured production throughput. The
-supported OAuth/session subset remains in [Central OAuth](central-oauth.md);
-[Skill content](central-skills.md) has separate opt-in and content limits.
+CENTRAL_GOVERNANCE_ENABLED=1 enables bounded durable call budgets, cooldowns and
+metadata receipts. Receipts exclude arguments, results and credentials. Audit
+failure does not replay calls or change completed results. This is not a billing
+system or a promise of distributed rate limiting.
+
+Local browser checks use no screenshots and cover connection/review, OAuth
+callbacks, Skill updates, stale confirmations, failed refresh and no replay.
+Real supplier consent, two real AI hosts and production promotion require the
+separate evidence in [the rollout ledger](central-rollout.md).

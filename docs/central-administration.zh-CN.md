@@ -2,71 +2,62 @@
 
 [English](central-administration.md)
 
-/admin/central 提供直接连接 MCP、安装 Skill、审阅工具和分配客户端权限的操作。
-日常页面没有高级 JSON 控制台；revision 由程序携带，冲突或未知结果不会自动重放。
+## 连接、发布与使用
 
-## 开始使用
+用管理员浏览器会话打开 /admin/central，填写公网 HTTPS MCP 地址，选择「无身份验证」
+或 OAuth，服务名称可不填。OAuth 配置自动发现；必须人工预注册客户端的提供方暂不能
+自动连接。登录上游后返回控制端，审阅发现的工具并勾选批准。
 
-1. 输入公网 HTTPS MCP 地址，选择「无身份验证」或「OAuth」；名称可选。
-   无需预设地址清单、环境变量 JSON 或安装 Runner。
-2. OAuth 会自动发现服务配置，通过客户端元数据文档或动态客户端注册连接，
-   然后打开服务授权页。授权完成后返回控制端发现工具。仅支持手工预注册的服务
-   暂不能自动连接，不要求使用者自行填写高级配置。
-3. 审阅并批准需要的工具。连接的是实例管理员账号；每个 AI 客户端仍需单独授权。
-4. 选择 SKILL.md 与配套文本文件，或整个 Skill 文件夹，点击「安装 Skill」。
-   名称与说明从文件元数据读取；同名安装需要确认更新，不执行包内脚本。
-5. 创建 AI 连接，保存一次性 MCP 地址，再在「客户端授权」中分配服务与 Skill。
+选择 SKILL.md 和配套文本文件，或整个 Skill 文件夹即可安装。名称和说明从元数据
+读取；内容、批准和启用状态原子保存，不执行脚本。同名更新需查看内容并确认，提交
+当前 revision。无需高级 JSON 配置。
 
-更新 Skill 不会改变已有客户端固定版本的权限。服务工具变化后须重新审阅。
-OAuth 服务卡片支持重新授权、断开账号；读取接口不会返回凭据。连接仅访问保存的
-公网 HTTPS 目标，不跟随重定向，也不允许私网路由。
+创建 AI 连接，将一次性地址粘贴到 AI 客户端。同一实例中，所有凭据有效的客户端
+共享所有已启用且已发布的 MCP 工具和当前 Skill。没有「客户端授权」页、逐个分配
+或授权模板。使用服务和 Skill 不需要 Runner，发布更新后可能需要刷新客户端目录。
 
-OAuth 加密密钥由实例部署负责：开发环境的 setup:secrets 初始化会生成独立随机
-密钥，且不会覆盖已有密钥。无验证连接与 Skill 安装不依赖该密钥。真实第三方授权
-及 AI 宿主接入仍需分别验收，模拟测试不会被当成真实外部账号授权成功的证据。
+## 共享规则与迁移
 
-## 共享配置与授权
+现有有效客户端也使用共享库。旧的逐客户端规则（包括停用、空规则或受限规则）不再
+影响发现与调用。GET/POST /admin/central/grants/{client_id} 和
+/admin/central/toolsets/{toolset_id} 返回 HTTP 410、central_client_access_retired，
+不调用状态所有者、不修改旧数据。旧行仅作迁移存档，不作为隐藏的默认 ACL。
 
-GET /admin/central/profiles 每次返回最多 50 个不含凭据明文的档案，以 next_after
-作为下一页 after，每页重新验证管理员会话。凭据仅可写入，页面提交后清空含凭据
-的输入。已有 profile/catalog/OAuth 路由保持原契约。
+要停用某个客户端，请撤销其连接凭据；轮换会使旧凭据失效。暂停服务或 Skill 会停止
+对所有客户端共享该能力。需要不同能力信任边界时使用独立实例。原生计算机 scope、
+Runner 和工作区权限仍单独检查，共享中央能力不会自动增加机器权限。
 
-GET/POST /admin/central/grants/{client_id} 读取或替换精确授权。修改包含
-expected_revision、enabled、rules；规则引用远端 tool ID/version/profile，或
-Skill ID/digest。它不改变原生 scope，未批准或不可用的能力仍不能执行。
+Skill 更新对所有客户端生效。旧 digest 请求被拒绝，需要重新 skill_list，再按新
+digest 读取正文和附件。旧 bundle 保留给管理员显式回退。停用或撤销凭据不能清除
+已进入客户端上下文的内容。
 
-GET/POST /admin/central/toolsets/{toolset_id} 管理最多 64 个可复用模板。保存使用
-action replace、expected_revision、enabled、rules；应用使用 action apply、
-client_id、toolset_revision、expected_revision，只需为第二个客户端再次分配。
-源模板和目标授权均检查 revision。修改/停用模板不静默改变已有客户端授权，须显式
-重新应用或逐个撤销客户端授权；它不是实时权限继承。
+## 审核、身份与连接边界
 
-## 直接目录与发现入口
+工具发布仍须审阅。新工具或描述、schema 变化不会绕过审核；调用前与返回前仍校验
+客户端身份、服务启用状态、已批准目录、内容版本和凭据状态。执行后校验失败可能
+扣留结果，但不能宣称上游动作已回滚。冲突或未知结果不会自动重放。
 
-CENTRAL_DIRECT_TOOLS_ENABLED=1 在中央绑定与所选服务档案出站授权有效时发布审核后的直接工具，
-使用稳定 rm_ 别名和原始 JSON schema。tools/list 只读保存且经 ACL 筛选的快照，
-不向上游实时发现。直接调用和 remote_call 共用参数校验、代次检查与执行实现。
-当前客户端没有已启用的远程工具授权时，发现结果隐藏远程通用入口及直接别名；
-Skill 入口独立按 Skill 授权筛选。重新查询目录会反映撤权，旧缓存名称的调用仍须
-通过实时授权检查。
+OAuth 服务仍须完成上游同意。服务卡片提供重新授权和断开账号；OAuth 凭据加密保存，
+读取 API 不返回明文。受管连接仅访问已保存的公网 HTTPS 目标，不允许私网或重定向。
+密钥库由实例部署管理；无认证服务和 Skill 不需要密钥库。旧 bearer 档案仍支持只写
+令牌轮换。
 
-直接视图限制 8 个档案、32 工具、512 KiB；更大目录使用 remote_tools/remote_call。
-remote_status 区分容量、拒绝、故障和正常空目录。中央故障保留原生工具注册，原生
-工具调用不加载直接目录。真实宿主刷新仍需独立验收，旧缓存别名不能绕过当前授权。
+GET /admin/central/profiles 每页最多 50 个无凭据档案，用 next_after 作为 after
+继续，每页重新验证管理会话。修改要求同源、会话、CSRF 及精确 revision。刷新失败
+使待确认操作失效，并阻止进一步写入，直到成功刷新。
 
-## 可选持久化治理
+## 发现与可选治理
 
-CENTRAL_GOVERNANCE_ENABLED=1 为远端调用加入同一状态所有者内的持久准入与回执，
-并保留已有并发上限。授权后、连接前检查每客户端每分钟 30 次、每档案每分钟 120
-次，最多 2,048 个准入键。连续三次上游传输、协议或结果未知故障触发该档案 30 秒
-冷却。不排队、不后台轮询、不自动重放。关闭该标志恢复此前仅并发限制的基线，
-不会删除表。
+remote_profiles 列出有界共享服务目录；remote_tools 按 profile_id 和 cursor
+读取已审阅工具；remote_call 调用精确工具及版本。CENTRAL_DIRECT_TOOLS_ENABLED=1
+还发布带原始已审 schema 的 rm_ 别名，最多八个服务、32 个工具。更大的库通过
+remote_profiles、remote_tools、remote_call 使用，不静默截断。发现不会连接上游。
 
-回执只含请求 ID、客户端 ID、档案/工具/版本、操作状态、固定错误码、时间戳，
-不保存参数、结果、正文、密钥或虚假 Runner ID。回执写入失败不把已完成调用改成
-失败，runmesh/receipt 元数据返回 audit_status unavailable。最多保留 1,000 条，
-读取窗口 24 小时，过期记录在新写入时清理。GET /admin/central/receipts 向通过
-验证的管理员返回最近 50 条，没有客户端回执查询或重放 API。
+CENTRAL_SKILLS_ENABLED=1 提供 skill_list、skill_read 及对应资源接口。skill_list
+每页最多扫描 128 个 Skill head，返回 next_after；即使停用项目导致空页也须继续。
 
-这些是安全上限，不是生产吞吐测量。OAuth/会话边界见[中央 OAuth](central-oauth.zh-CN.md)，
-[Skill 内容](central-skills.zh-CN.md)具有独立开关和预算。
+CENTRAL_GOVERNANCE_ENABLED=1 提供有界调用预算、冷却和元数据回执；不保存参数、结果
+和凭据。审计故障不会重放调用或改变已完成结果，不宣称计费或分布式限流能力。
+
+本地浏览器检查不截图，覆盖连接、审核、OAuth 回调、Skill 更新、过期确认、刷新失败
+和不重放。真实供应商同意、两个真实 AI 宿主及生产发布仍遵循[验收清单](central-rollout.md)。

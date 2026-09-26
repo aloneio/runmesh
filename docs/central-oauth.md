@@ -11,7 +11,7 @@ The normal UI accepts an MCP URL and OAuth. It discovers resource/provider
 metadata, prefers OAuth client metadata documents, and otherwise registers a
 public client dynamically. PKCE, session-bound one-use state, issuer checks,
 encrypted durable credentials and claimed refresh operations are enforced. No
-per-provider environment policy is needed. Client grants remain separate.
+per-provider environment policy is needed. Published tools are shared by all authenticated clients; upstream consent remains required.
 One credential-free server discovery probe reads the service's `WWW-Authenticate`
 challenge. Its resource metadata URL and requested scopes take precedence over
 well-known metadata locations. The probe never initializes a legacy session or
@@ -27,7 +27,7 @@ An administrator explicitly delegates an upstream authorization to one Runmesh
 MCP client credential generation. Client IDs are not natural-person accounts.
 The binding includes the profile, client, secret generation, resource endpoint
 and approved OAuth configuration digest. Provider authorization, tool approval
-and client capability grants remain separate. OAuth grants no machine permission
+and shared tool publication remain separate. OAuth grants no machine permission
 and requires no software installation on a Runner.
 
 This batch supports pre-registered **public** OAuth clients, authorization code,
@@ -77,9 +77,9 @@ query-string logging there and do not log authorization URLs.
 
 After linking and enabling, discovery accepts `principal` alongside
 `expected_revision` at `/admin/central/discovery/{profile_id}`. OAuth discovery
-requires it. The resulting catalog still needs approval and independent grants.
-W08 now provides the [administrator and reusable toolset console](central-administration.md);
-OAuth still requires the explicit provider policies and independent grants above.
+requires it. The resulting catalog still needs approval before shared publication.
+W08 now provides the [shared library control panel](central-administration.md);
+OAuth still requires the explicit provider policies above; the retired client capability ACL does not apply.
 
 ## Tokens, recovery and sessions
 

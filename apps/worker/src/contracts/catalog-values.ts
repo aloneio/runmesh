@@ -95,9 +95,9 @@ export function parseCatalogQuery(value: unknown): CatalogQuery | undefined {
 export function parseCatalogCursor(value: unknown): CatalogCursor | undefined {
   const item = catalogObject(value);
   if (item === undefined || !catalogKeys(item, ["schema_version", "client_id", "secret_version", "profile_id", "profile_revision",
-    "grant_revision", "catalog_revision", "offset", "limit", "expires_at_ms"]) || item.schema_version !== 1
+    "catalog_revision", "offset", "limit", "expires_at_ms"]) || item.schema_version !== 2
     || !isCapabilityIdentifier(item.client_id) || !isCapabilityIdentifier(item.profile_id)
-    || ![item.secret_version, item.profile_revision, item.grant_revision, item.catalog_revision, item.expires_at_ms].every(v => catalogRevision(v))
+    || ![item.secret_version, item.profile_revision, item.catalog_revision, item.expires_at_ms].every(v => catalogRevision(v))
     || !Number.isSafeInteger(item.offset) || (item.offset as number) < 1 || (item.offset as number) > CATALOG_LIMITS.tools
     || !Number.isSafeInteger(item.limit) || (item.limit as number) < 1 || (item.limit as number) > CATALOG_LIMITS.page_tools) return undefined;
   return item as unknown as CatalogCursor;

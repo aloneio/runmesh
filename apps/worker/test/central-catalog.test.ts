@@ -43,15 +43,11 @@ async function fixture(tools: readonly RemoteToolDefinition[] = [catalogDefiniti
   expect(inspection.state).toBe("found");
   if (inspection.state !== "found") throw new Error("missing fixture");
   const snapshot = inspection.snapshot;
-  const grant = async (principal: { client_id: string }, selected = snapshot.tools, expected_revision = 0, enabled = true) => {
-    expect(await owner().replaceGrant({ client_id: principal.client_id, expected_revision, enabled, rules: selected.map(tool => ({ kind: "remote_tool" as const,
-      resource_id: tool.tool_id, version: tool.version, connection_profile_id: id })) })).toMatchObject({ state: "written" });
-  };
   const approve = async (names = tools.map(tool => tool.name), digest = snapshot.digest, revision = 1) => {
     const response = await post({ action: "approve", expected_revision: revision, digest, tool_names: names });
     expect(response.status).toBe(200); return response.json();
   };
-  return { admin, id, post, snapshot, grant, approve };
+  return { admin, id, post, snapshot, approve };
 }
 
 it("W04 real admin HTTP stages and reviews a catalog without an upstream fetch", async () => {
@@ -68,10 +64,9 @@ it("W04 real admin HTTP stages and reviews a catalog without an upstream fetch",
   } finally { network.mockRestore(); }
 });
 
-it("W04 zero-Runner central-only clients see only approved AND individually granted tools", async () => {
+it("W04 zero-Runner central-only clients see the same approved tools without grant rows", async () => {
   const f = await fixture(), principal = await client();
-  expect(await owner().listCatalog(principal, { profile_id: f.id })).toEqual({ state: "denied" });
-  await f.grant(principal);
+
   expect(await owner().listCatalog(principal, { profile_id: f.id })).toEqual({ state: "listed", tools: [], next_cursor: null });
   await f.approve(["a", "c"]);
   const page = await owner().listCatalog(principal, { profile_id: f.id });
@@ -85,7 +80,7 @@ it("W04 zero-Runner central-only clients see only approved AND individually gran
 
 it("W04 MAC-bound pages cannot be reused by another client or with changed page limits", async () => {
   const f = await fixture(), a = await client(), b = await client();
-  await f.grant(a); await f.grant(b); await f.approve();
+  await f.approve();
   const first = await owner().listCatalog(a, { profile_id: f.id, limit: 1 });
   expect(first.state).toBe("listed");
   if (first.state !== "listed" || first.next_cursor === null) throw new Error("missing page");
@@ -99,19 +94,18 @@ it("W04 MAC-bound pages cannot be reused by another client or with changed page 
   expect(await owner().listCatalog(a, { profile_id: f.id, cursor: changed })).toEqual({ state: "stale_cursor" });
 });
 
-it.each(["grant", "profile", "catalog", "identity"])("W04 stale pages are fenced after %s changes", async changed => {
-  const f = await fixture(), principal = await client(); await f.grant(principal); await f.approve();
+it.each(["profile", "catalog", "identity"])("W04 stale pages are fenced after %s changes", async changed => {
+  const f = await fixture(), principal = await client(); await f.approve();
   const first = await owner().listCatalog(principal, { profile_id: f.id, limit: 1 });
   if (first.state !== "listed" || first.next_cursor === null) throw new Error("missing page");
-  if (changed === "grant") await f.grant(principal, f.snapshot.tools, 1);
   if (changed === "profile") await owner().mutateProfile(f.admin.hash, { action: "rotate", profile_id: f.id, expected_revision: 2, credential: { kind: "bearer", token: "synthetic-rotated" } });
   if (changed === "catalog") await f.post({ action: "stage", expected_revision: 2, tools: f.snapshot.tools.map(tool => tool.definition) });
   if (changed === "identity") await runInDurableObject(registry(), instance => { instance.revokeMcpClient(principal.client_id, Date.now()); });
   expect(await owner().listCatalog(principal, { profile_id: f.id, cursor: first.next_cursor })).toEqual({ state: changed === "identity" ? "denied" : "stale_cursor" });
 });
 
-it("W04 observed changes quarantine old tools and approval does not enlarge existing grants", async () => {
-  const f = await fixture(), principal = await client(); await f.grant(principal); await f.approve();
+it("W04 observed changes quarantine old tools and approval publishes changed tools to all clients", async () => {
+  const f = await fixture(), principal = await client(); await f.approve();
   const changed = [catalogDefinition("a"), catalogDefinition("b", "New behavior"), catalogDefinition("new")];
   expect((await f.post({ action: "stage", expected_revision: 2, tools: changed })).status).toBe(200);
   let page = await owner().listCatalog(principal, { profile_id: f.id });
@@ -119,9 +113,6 @@ it("W04 observed changes quarantine old tools and approval does not enlarge exis
   const observation = await owner().getCatalog(f.admin.hash, f.id);
   if (observation.state !== "found") throw new Error("missing observation");
   await f.approve(["a", "b", "new"], observation.snapshot.digest, 3);
-  page = await owner().listCatalog(principal, { profile_id: f.id });
-  expect(page.state === "listed" && page.tools.map(tool => tool.definition.name)).toEqual(["a"]);
-  await f.grant(principal, observation.snapshot.tools, 1);
   page = await owner().listCatalog(principal, { profile_id: f.id });
   expect(page.state === "listed" && page.tools.map(tool => tool.definition.name)).toEqual(["a", "b", "new"]);
   const archived = await SELF.fetch(url(f.id) + `?snapshot=${f.snapshot.digest}`, { headers: f.admin.headers });
@@ -148,7 +139,7 @@ it.each(["no-session", "origin", "csrf", "body", "profile-id"])("W04 catalog HTT
 });
 
 it("W04 altered persisted content cannot become a successful directory result", async () => {
-  const f = await fixture(), principal = await client(); await f.grant(principal); await f.approve();
+  const f = await fixture(), principal = await client(); await f.approve();
   await runInDurableObject(owner(), (_instance, state) => {
     const row = state.storage.sql.exec<{ snapshot_json: string }>("SELECT snapshot_json FROM catalog_snapshots_v1 WHERE profile_id=? AND digest=?", f.id, f.snapshot.digest).one();
     const snapshot = JSON.parse(row.snapshot_json) as CatalogSnapshot;

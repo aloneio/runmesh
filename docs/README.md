@@ -31,8 +31,9 @@ Check [release status](release-readiness.md) for package availability and [build
 ## Advanced and maintainer references
 
 Development-only work: [central MCP and Skill foundations](central-capabilities-architecture.md)
-describes the new identity, grant and module boundaries. It is not an enabled
-upstream integration or Skill installation guide.
+describes shared capability publication, client identity and module boundaries.
+Development supports direct MCP connections and Skill installation; production
+activation remains separate.
 Use the development guides for [versioned Skill content](central-skills.md),
 [central administration and governance](central-administration.md), and
 [rollout and remaining acceptance gates](central-rollout.md).

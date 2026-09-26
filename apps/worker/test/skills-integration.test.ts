@@ -27,10 +27,8 @@ async function fixture(nativeScopes: ["coding:read"] | [] = []) {
   await runInDurableObject(stub, (_old, state) => { instance = new CapabilitiesDOv1(state, configured); });
   const invoke = <T>(action: (owner: CapabilitiesDOv1) => Promise<T>) => runInDurableObject(stub, () => action(instance));
   const port = { installSkill: (h: string, q: unknown) => invoke(o => o.installSkill(h, q)), listSkillLibrary: (h: string, after?: string) => invoke(o => o.listSkillLibrary(h, after)), toolVisibility: (p: { client_id: string; secret_version: number }) => invoke(o => o.toolVisibility(p)),
-    getToolset: (h: string, id: string) => invoke(o => o.getToolset(h, id)), mutateToolset: (h: string, q: unknown) => invoke(o => o.mutateToolset(h, q)),
     mutateSkill: (h: string, q: unknown) => invoke(o => o.mutateSkill(h, q)), inspectSkill: (h: string, id: string, d?: string) => invoke(o => o.inspectSkill(h, id, d)),
-    listSkills: (p: { client_id: string; secret_version: number }, q: unknown) => invoke(o => o.listSkills(p, q)), readSkill: (p: { client_id: string; secret_version: number }, q: unknown) => invoke(o => o.readSkill(p, q)),
-    getClientGrant: (h: string, id: string) => invoke(o => o.getClientGrant(h, id)), setClientGrant: (h: string, q: unknown) => invoke(o => o.setClientGrant(h, q)) };
+    listSkills: (p: { client_id: string; secret_version: number }, q: unknown) => invoke(o => o.listSkills(p, q)), readSkill: (p: { client_id: string; secret_version: number }, q: unknown) => invoke(o => o.readSkill(p, q)) };
   const config = { ...configured, CAPABILITIES: { idFromName: () => 'central', get: () => port } } as unknown as WorkerEnv;
   const admin = async (path: string, body?: unknown, h = headers) => { const request = new Request('https://worker.test/admin/central/' + path, { method: body ? 'POST' : 'GET', headers: h, ...(body ? { body: JSON.stringify(body) } : {}) }); return handleCentralAdmin(request, config, new URL(request.url)); };
   const rpc = async (secret: string, method: string, params: unknown, override = config) => {
@@ -40,7 +38,7 @@ async function fixture(nativeScopes: ["coding:read"] | [] = []) {
     const messages = response.headers.get('content-type')?.includes('text/event-stream') ? text.split(nl).filter(l => l.startsWith('data:')).map(l => JSON.parse(l.slice(5))) : [JSON.parse(text)];
     return messages.find(m => m.id === 'test');
   };
-  return { config, headers, clients, admin, rpc, invoke, hash, port };
+  return { config, headers, clients, admin, rpc, invoke, hash, port, stub };
 }
 it('W07/W08 two independent central-only clients read the same approved bundle through tools and resources without a Runner', async () => {
   const f = await fixture();
@@ -51,53 +49,50 @@ it('W07/W08 two independent central-only clients read the same approved bundle t
   expect((await f.admin('skills/research')).status).toBe(404);
   expect((await f.admin('skills/research', { ...stage, action: 'stage', expected_revision: 0 })).status).toBe(200);
   expect((await f.admin('skills/research', { action: 'activate', expected_revision: 1, digest })).status).toBe(200);
-  expect((await f.admin('toolsets/research-team', { action: 'replace', expected_revision: 0, enabled: true, rules: [{ kind: 'skill', resource_id: 'research', version: digest }] })).status).toBe(200);
+  await runInDurableObject(f.stub, (_owner, state) => {
+    for (const client of f.clients) state.storage.sql.exec("INSERT INTO capability_grants_v1 VALUES (?,1,0,?)", client.id, "not-json");
+  });
   for (const client of f.clients) {
-    expect((await f.admin('toolsets/research-team', { action: 'apply', expected_revision: 0, toolset_revision: 1, client_id: client.id })).status).toBe(200);
-    const tools = await f.rpc(client.secret, 'tools/list', {});
+      const tools = await f.rpc(client.secret, 'tools/list', {});
     expect(tools.result.tools.map((tool: { name: string }) => tool.name)).toEqual(expect.arrayContaining(['skill_list', 'skill_read']));
-    expect(tools.result.tools).toHaveLength(2);
+    expect(tools.result.tools).toHaveLength(5);
     const templates = await f.rpc(client.secret, 'resources/templates/list', {});
     expect(templates.result.resourceTemplates).toHaveLength(1);
     const listed = await f.rpc(client.secret, 'tools/call', { name: 'skill_list', arguments: {} });
     expect(JSON.parse(listed.result.content[0].text)).toMatchObject({ state: 'listed', skills: [{ digest }] });
     const read = await f.rpc(client.secret, 'tools/call', { name: 'skill_read', arguments: { skill_id: 'research', digest, path: 'references/proof.md' } });
-    expect(JSON.parse(read.result.content[0].text)).toMatchObject({ state: 'read', text: 'pinned proof', dependencies: [{ state: 'not_authorized' }] });
+    expect(JSON.parse(read.result.content[0].text)).toMatchObject({ state: 'read', text: 'pinned proof', dependencies: [{ state: 'not_configured' }] });
     const resource = await f.rpc(client.secret, 'resources/read', { uri: 'runmesh-skill://bundle/research/' + digest + '/references/proof.md' });
     expect(resource.result.contents[0].text).toBe('pinned proof');
     expect(resource.result.contents[0]._meta['runmesh/dependencies']).toEqual(JSON.parse(read.result.content[0].text).dependencies);
     const shell = await f.rpc(client.secret, 'tools/call', { name: 'shell', arguments: { workspace_id: 'any', script: 'echo test' } });
     expect(shell.result?.isError ?? !!shell.error).toBe(true);
   }
+  await runInDurableObject(registry(), owner => { owner.revokeMcpClient(f.clients[1]!.id, Date.now()); });
+  expect(await f.invoke(owner => owner.listSkills({ client_id: f.clients[1]!.id, secret_version: 1 }, {}))).toEqual({ state: 'denied' });
   const client = f.clients[0]!;
-  expect((await f.admin('toolsets/research-team', { action: 'replace', expected_revision: 1, enabled: false, rules: [] })).status).toBe(200);
-  const existingGrant = await (await f.admin('grants/' + client.id)).json() as { grant: { rules: unknown[] } };
-  expect(existingGrant.grant.rules).toHaveLength(1);
-  expect((await f.admin('toolsets/research-team', { action: 'apply', expected_revision: 1, toolset_revision: 1, client_id: client.id })).status).toBe(404);
-  expect((await f.admin('grants/' + client.id, { expected_revision: 1, enabled: false, rules: [] })).status).toBe(200);
-  expect((await f.rpc(client.secret, 'tools/list', {})).result.tools).toHaveLength(0);
+  expect((await f.admin('skills/research', { action: 'disable', expected_revision: 2 })).status).toBe(200);
+  expect((await f.rpc(client.secret, 'tools/list', {})).result.tools).toHaveLength(5);
   const denied = await f.rpc(client.secret, 'tools/call', { name: 'skill_read', arguments: { skill_id: 'research', digest } });
   expect(denied.result.isError).toBe(true);
   const request = new Request('https://worker.test/admin/central', { headers: f.headers });
   const page = await handleBrowserAdmin(request, f.config, new URL(request.url));
   expect(page.status).toBe(200); expect(await page.text()).toContain('data-central-product');
 });
-it('Acceptance T05 hides ungranted central tools and resource templates while cached calls remain denied', async () => {
+it('Acceptance T05 publishes shared discovery without grants and denies unpublished content', async () => {
   const f = await fixture(['coding:read']), client = f.clients[0]!;
   const config = { ...f.config, CENTRAL_DIRECT_TOOLS_ENABLED: '1',
     CENTRAL_MCP_EGRESS: JSON.stringify({ schema_version: 1, endpoints: [{ endpoint: 'https://remote.example.com/mcp', protocol: '2026-07-28' }] }) };
-  expect((await f.rpc(client.secret, 'tools/list', {}, config)).result.tools).toHaveLength(10);
+  expect((await f.rpc(client.secret, 'tools/list', {}, config)).result.tools).toHaveLength(16);
   const templates = await f.rpc(client.secret, 'resources/templates/list', {}, config);
-  expect(templates.error?.code).toBe(-32601);
+  expect(templates.result.resourceTemplates).toHaveLength(1);
   const denied = await f.rpc(client.secret, 'tools/call', { name: 'skill_read', arguments: { skill_id: 'ungranted', digest: 'a'.repeat(64) } }, config);
   expect(denied.result.isError).toBe(true);
   expect(JSON.parse(denied.result.content[0].text).error.code).toBe('skill_denied');
-  expect((await f.admin('grants/' + client.id, { expected_revision: 0, enabled: true, rules: [] })).status).toBe(200);
-  expect((await f.rpc(client.secret, 'tools/list', {}, config)).result.tools).toHaveLength(10);
-  expect((await f.admin('grants/' + client.id, { expected_revision: 1, enabled: true, rules: [{ kind: 'skill', resource_id: 'granted', version: 'a'.repeat(64) }] })).status).toBe(200);
+  expect((await f.rpc(client.secret, 'tools/list', {}, config)).result.tools).toHaveLength(16);
   const granted = await f.rpc(client.secret, 'tools/list', {}, config);
   expect(granted.result.tools.map((tool: { name: string }) => tool.name)).toEqual(expect.arrayContaining(['skill_list', 'skill_read']));
-  expect(granted.result.tools).toHaveLength(12);
+  expect(granted.result.tools).toHaveLength(16);
   expect(await f.invoke(o => o.toolVisibility({ client_id: client.id, secret_version: 2 }))).toEqual({ state: 'denied' });
 });
 it('central visibility failure or malformed metadata hides central discovery without touching native calls', async () => {
@@ -114,7 +109,7 @@ it('central visibility failure or malformed metadata hides central discovery wit
 });
 it('W07/W08 admin mutations require CSRF and feature-off retains the ten native tools without central I/O', async () => {
   const f = await fixture(['coding:read']);
-  expect((await f.admin('grants/' + f.clients[0]!.id, { expected_revision: 0, enabled: true, rules: [] }, { ...f.headers, 'x-csrf-token': 'wrong' })).status).toBe(403);
+  expect((await f.admin('skill-installations', { files: [] }, { ...f.headers, 'x-csrf-token': 'wrong' })).status).toBe(403);
   const off = { ...f.config, CENTRAL_SKILLS_ENABLED: '0', CAPABILITIES: { idFromName: () => { throw new Error('central I/O forbidden'); } } } as unknown as WorkerEnv;
   const result = await f.rpc(f.clients[0]!.secret, 'tools/list', {}, off);
   expect(result.result.tools).toHaveLength(10);
@@ -129,7 +124,7 @@ it('W08/W09 administration strips unexpected owner fields and rejects malformed 
   for (const path of ['toolsets/team', 'grants/client', 'receipts']) {
     const request = new Request('https://worker.test/admin/central/' + path, { headers: f.headers });
     const response = await handleCentralAdmin(request, config, new URL(request.url));
-    expect(response.status).toBe(path.startsWith('grants') ? 403 : 200);
+    expect(response.status).toBe(path === 'receipts' ? 200 : 410);
     expect(await response.text()).not.toContain(secret);
   }
   receipt.code = secret;
@@ -179,20 +174,57 @@ it('product Skill library includes drafts, paginates exactly, and never includes
   expect(await f.invoke(o => o.listSkillLibrary('invalid-session'))).toEqual({ state: 'denied' });
 });
 
-it('direct Skill installation derives metadata, installs atomically and preserves pinned permissions on update', async () => {
+it('shared Skills paginate beyond 128 including empty disabled pages through tools and resources', async () => {
+  const f = await fixture();
+  for (let n = 0; n < 130; n++) {
+    const id = 'shared-' + String(n).padStart(3, '0');
+    const result = await f.invoke(o => o.installSkill(f.hash, { expected_revision: 0,
+      files: [{ path: 'SKILL.md', text: '---\nname: ' + id + '\ndescription: Shared pagination\n---\nContent' }] }));
+    expect(result.state).toBe('written');
+    if (n < 128) expect((await f.invoke(o => o.mutateSkill(f.hash, { action: 'disable', skill_id: id, expected_revision: 1 }))).state).toBe('written');
+  }
+  for (const client of f.clients) {
+    const first = JSON.parse((await f.rpc(client.secret, 'tools/call', { name: 'skill_list', arguments: {} })).result.content[0].text);
+    expect(first).toEqual({ state: 'listed', skills: [], next_after: 'shared-127' });
+    const second = JSON.parse((await f.rpc(client.secret, 'tools/call', { name: 'skill_list', arguments: { after: first.next_after } })).result.content[0].text);
+    expect(second.skills.map((s: { skill_id: string }) => s.skill_id)).toEqual(['shared-128', 'shared-129']);
+    expect(second.next_after).toBeNull();
+    const resources = await f.rpc(client.secret, 'resources/list', {});
+    expect(resources.result.resources).toHaveLength(2);
+  }
+});
+
+it('retired grants and toolsets never reach owner methods or mutate legacy data', async () => {
+  const f = await fixture(), get = vi.fn(() => { throw new Error('retired owner must not resolve'); });
+  const config = { ...f.config, CAPABILITIES: { idFromName: get, get } } as unknown as WorkerEnv;
+  for (const path of ['grants/client', 'toolsets/team']) for (const method of ['GET', 'POST']) {
+    const request = new Request('https://worker.test/admin/central/' + path, { method, headers: f.headers, ...(method === 'POST' ? { body: '{}' } : {}) });
+    const response = await handleCentralAdmin(request, config, new URL(request.url));
+    expect(response.status).toBe(410);
+    expect(await response.json()).toMatchObject({ error: { code: 'central_client_access_retired' } });
+  }
+  expect(get).not.toHaveBeenCalled();
+});
+
+it('direct Skill installation derives metadata, installs atomically and updates all clients and rejects cached old digests', async () => {
   const f = await fixture(), client = f.clients[0]!;
   const files = [{ path: 'SKILL.md', text: ['---', 'name: direct-install', 'description: Installed from control panel', '---', 'First version'].join(String.fromCharCode(10)) }];
   const installed = await f.admin('skill-installations', { files }); expect(installed.status).toBe(200);
   const result = await installed.json() as { skill_id: string; digest: string }; expect(result.skill_id).toBe('direct-install');
   const item = await (await f.admin('skills/direct-install')).json() as { head: { enabled: boolean; revision: number }; bundle: { name: string } };
   expect(item.head).toMatchObject({ enabled: true, revision: 1 }); expect(item.bundle.name).toBe('direct-install');
-  expect((await f.rpc(client.secret, 'tools/list', {})).result.tools).toHaveLength(0);
-  expect((await f.admin('grants/' + client.id, { expected_revision: 0, enabled: true, rules: [{ kind: 'skill', resource_id: result.skill_id, version: result.digest }] })).status).toBe(200);
+  expect((await f.rpc(client.secret, 'tools/list', {})).result.tools).toHaveLength(5);
   files[0]!.text += ' updated';
   expect((await f.admin('skill-installations', { files })).status).toBe(409);
   expect((await f.admin('skill-installations', { files, expected_revision: 1 })).status).toBe(200);
   const read = await f.rpc(client.secret, 'tools/call', { name: 'skill_read', arguments: { skill_id: result.skill_id, digest: result.digest } });
-  expect(JSON.parse(read.result.content[0].text).text).not.toContain('updated');
+  expect(read.result.isError).toBe(true);
+  for (const current of f.clients) {
+    const list = JSON.parse((await f.rpc(current.secret, 'tools/call', { name: 'skill_list', arguments: {} })).result.content[0].text);
+    expect(list.skills[0].digest).not.toBe(result.digest);
+    const currentRead = await f.rpc(current.secret, 'tools/call', { name: 'skill_read', arguments: { skill_id: result.skill_id, digest: list.skills[0].digest } });
+    expect(JSON.parse(currentRead.result.content[0].text).text).toContain('updated');
+  }
   expect((await f.admin('skill-installations', { files }, { ...f.headers, 'x-csrf-token': 'invalid' })).status).toBe(403);
   expect((await f.admin('skill-installations', { files: [{ path: '../SKILL.md', text: files[0]!.text }] })).status).toBe(400);
 });
