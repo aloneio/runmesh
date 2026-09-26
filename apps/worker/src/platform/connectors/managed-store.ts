@@ -1,21 +1,8 @@
-import type { OAuthDiscoveryState } from "@modelcontextprotocol/client";
-import type { CredentialEnvelope } from "../../contracts/connectors.js";
-import { parseEnvelope } from "../../contracts/connector-values.js";
-import { isCapabilityIdentifier } from "../../contracts/capabilities.js";
-import { publicMcpEndpoint } from "../../contracts/remote-values.js";
+import type { ManagedOAuthRecord, ManagedOAuthRepository } from '../../contracts/managed-oauth.js';
+import { parseEnvelope } from '../../contracts/connector-values.js';
+import { isCapabilityIdentifier } from '../../contracts/capabilities.js';
+import { publicMcpEndpoint } from '../../contracts/remote-values.js';
 
-export interface ManagedOAuthRecord {
-  profile_id: string; profile_revision: number; revision: number;
-  state: "starting" | "pending" | "exchanging" | "ready" | "refreshing" | "revoked";
-  session_hash: string; state_hash: string; origin: string; expires_at: number; token_expires_at: number;
-  discovery?: OAuthDiscoveryState | undefined;
-  client?: CredentialEnvelope | undefined; verifier?: CredentialEnvelope | undefined; tokens?: CredentialEnvelope | undefined;
-}
-export interface ManagedOAuthRepository {
-  read(id: string): ManagedOAuthRecord | undefined;
-  find(stateHash: string): ManagedOAuthRecord | undefined;
-  replace(value: ManagedOAuthRecord, revision: number): boolean;
-}
 function valid(value: ManagedOAuthRecord): boolean {
   return !!value && isCapabilityIdentifier(value.profile_id) && [value.profile_revision, value.revision].every(n => Number.isSafeInteger(n) && n > 0)
     && publicMcpEndpoint(value.origin) !== undefined && new URL(value.origin).origin === value.origin

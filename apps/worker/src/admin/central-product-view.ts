@@ -1,8 +1,6 @@
 import { escapeHtml } from "./format.js";
 
-export interface CentralProductSetup { readonly endpoints: readonly string[]; readonly credentialsReady: boolean }
-
-export function centralProductView(csrf: string, skills: boolean, clients: readonly { id: string; label: string }[], _setup: CentralProductSetup): string {
+export function centralProductView(csrf: string, skills: boolean, clients: readonly { id: string; label: string }[]): string {
   const options = clients.map(client => '<option value="' + escapeHtml(client.id) + '" data-no-i18n>' + escapeHtml(client.label) + '</option>').join('');
   return '<section class="page-heading"><div><p class="eyebrow">YOUR AI WORKSPACE</p><h1>Services &amp; Skills</h1><p class="lede">Connect once. Choose what each AI client can use.</p></div><a class="button secondary" href="/admin/clients#add-client">Connect an AI client</a></section>'
     + '<div data-central-product data-csrf="' + escapeHtml(csrf) + '" data-skills="' + String(skills) + '">'

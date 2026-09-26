@@ -14,6 +14,13 @@ W05 新增独立受控的 [HTTP 发现与调用](central-remote-mcp.zh-CN.md)；
 
 ## 决策与职责
 
+当前控制端直连的分层约定：`application/connectors/managed-oauth.ts` 负责会话授权、
+状态认领、刷新顺序与凭据租约；`contracts/managed-oauth.ts` 定义窄接口，不引用
+SDK 或 SQLite 类型。SDK 协议转换、受控 HTTP 与 SQLite 持久化分别由平台适配器
+负责，仅在 `capabilities-do.ts` 中组装。架构回归检查阻止用例反向引用适配器、
+协议适配器引用存储或加密实现，以及 SDK 类型进入契约。页面渲染只接收展示参数，
+不再计算已经移除的部署地址清单和密钥就绪状态。
+
 一个客户端入口将提供三条独立路径：原生 Runner 工具、中央远程 MCP、
 中央 Skill 内容。客户端继续负责推理和组合调用。中央查询和内容读取不依赖
 所选 Runner，也不要求机器在线，不在每台执行机器重复安装 MCP。

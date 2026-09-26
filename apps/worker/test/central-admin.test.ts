@@ -6,7 +6,6 @@ import { passwordVerifier, randomBase64Url, sha256Hex } from "../src/security.js
 import type { WorkerEnv } from "../src/platform/env.js";
 import type { CapabilitiesDOv1 } from "../src/capabilities-do.js";
 import { createCredentialCipher } from "../src/platform/connectors/cipher.js";
-import { centralProductSetup } from "../src/http/central-product-setup.js";
 import { handleBrowserAdmin } from "../src/http/admin.js";
 import { localizeHtmlResponse } from "../src/i18n/html.js";
 import { secretCreatedPage } from "../src/admin/auth-views.js";
@@ -17,16 +16,6 @@ const central = () => namespace().get(namespace().idFromName("central"));
 const configured = () => ({ ...env, RUNMESH_PUBLIC_ORIGIN: "https://worker.test" }) as WorkerEnv;
 const creation = { action: "create", connector_id: "test-docs", endpoint: "https://docs.example/mcp",
   credential: { kind: "bearer", token: "synthetic-private-upstream-token" } };
-
-it("product setup exposes approved endpoints and readiness flags without credentials", async () => {
-  const config = { ...configured(), CENTRAL_MCP_EGRESS: JSON.stringify({ schema_version: 1, endpoints: [
-    { endpoint: 'https://docs.example.com/mcp', protocol: '2025-11-25' },
-    { endpoint: 'https://runmesh.example.com/mcp', protocol: '2025-11-25' },
-  ] }) };
-  expect(await centralProductSetup(config, 'https://runmesh.example.com')).toEqual({ endpoints: ['https://docs.example.com/mcp'], credentialsReady: true });
-  expect(await centralProductSetup({ ...config, CENTRAL_VAULT_KEYRING: 'malformed' }, 'https://runmesh.example.com')).toEqual({ endpoints: ['https://docs.example.com/mcp'], credentialsReady: false });
-  expect(await centralProductSetup({ ...config, CENTRAL_MCP_EGRESS: undefined, CENTRAL_VAULT_KEYRING: undefined }, 'https://runmesh.example.com')).toEqual({ endpoints: [], credentialsReady: false });
-});
 
 it("direct public connections and Skill installation are available without deployment endpoint configuration", async () => {
   const admin = await session();

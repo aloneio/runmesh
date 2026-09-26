@@ -6,7 +6,8 @@ import { OAuthState } from "./platform/connectors/oauth-store.js";
 import { createOAuthCipher, oauthRandom, oauthChallenge } from "./platform/connectors/oauth-crypto.js";
 import { createOAuthTransport } from "./platform/connectors/oauth-http.js";
 import { createOAuthManager } from "./application/connectors/oauth.js";
-import { createManagedOAuth } from "./platform/connectors/managed-oauth.js";
+import { createManagedOAuthProtocol } from "./platform/connectors/managed-oauth.js";
+import { createManagedOAuth } from './application/connectors/managed-oauth.js';
 import { ManagedOAuthState } from "./platform/connectors/managed-store.js";
 import type { ManagedConnections } from "./contracts/managed-connections.js";
 import type { AdminDecision, CentralAdministration, ProfileResult } from "./contracts/connectors.js";
@@ -307,7 +308,7 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
   }
 
   #managedOAuth() {
-    if (!this.#managedService) this.#managedService = createManagedOAuth({ repository: this.#managedState,
+    if (!this.#managedService) this.#managedService = createManagedOAuth({ repository: this.#managedState, protocol: createManagedOAuthProtocol(),
       cipher: createOAuthCipher(this.#namespace, () => this.env.CENTRAL_VAULT_KEYRING, () => [this.env.INTERNAL_CONTROL_SECRET, this.env.RUNNER_TOKEN_PEPPER]),
       profile: id => this.#profiles.read(id)?.profile, admin: (hash, signal) => this.#authorize(hash, signal),
       origin: () => this.env.RUNMESH_PUBLIC_ORIGIN, hash: catalogSha256, random: oauthRandom, now: Date.now });

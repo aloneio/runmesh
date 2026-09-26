@@ -5,7 +5,6 @@ import { ADMIN_CSRF_COOKIE } from "./constants.js";
 import { ADMIN_SESSION_COOKIE } from "./constants.js";
 import { adminDocument } from "../admin/layout.js";
 import { centralPage } from "../admin/central-view.js";
-import { centralProductSetup } from "./central-product-setup.js";
 import { adminError } from "./responses.js";
 import { adminUpstreamError } from "./responses.js";
 import { boundedJsonResponse } from "../platform/bounded-json.js";
@@ -77,8 +76,7 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
     const clients = rawClients.flatMap(value => { const client = record(value);
       return client && typeof client.client_id === "string" && isSafeIdentifier(client.client_id) && typeof client.label === "string" && client.revoked_at_ms === null
         ? [{ id: client.client_id, label: client.label }] : []; });
-    const setup = await centralProductSetup(env, url.origin);
-    return html(adminDocument("Services & Skills", centralPage(csrf, env.CAPABILITIES !== undefined, env.CENTRAL_SKILLS_ENABLED === "1", env.CENTRAL_GOVERNANCE_ENABLED === "1", clients, setup), "central"));
+    return html(adminDocument("Services & Skills", centralPage(csrf, env.CAPABILITIES !== undefined, env.CENTRAL_SKILLS_ENABLED === "1", clients), "central"));
   }
   if (request.method === "GET" && ["/admin", "/admin/runners", "/admin/clients", "/admin/settings"].includes(url.pathname)) {
     const csrf = cookieValue(request, ADMIN_CSRF_COOKIE);
