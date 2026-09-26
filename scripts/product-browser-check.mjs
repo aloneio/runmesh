@@ -16,7 +16,7 @@ export async function checkGuidedProduct(executable) {
  const digest='a'.repeat(64), oldDigest='b'.repeat(64), toolVersion='c'.repeat(64);
  const profiles=[], library=[], requests=[], exceptions=[];
  const pinned={kind:'skill',resource_id:'legacy-skill',version:oldDigest};
- let grant={client_id:'client-fixture',revision:1,enabled:true,rules:[pinned]}, conflict=false, failLibrary=false, catalogRace=false;
+ let grant={client_id:'client-fixture',revision:1,enabled:true,rules:[pinned]}, conflict=false, failLibrary=false, catalogRace=false, rejectDiscovery=false;
  const catalogs=new Map();
  const server=createServer(async(req,res)=>{
   try {
@@ -44,9 +44,11 @@ export async function checkGuidedProduct(executable) {
     else{const entry={head:{skill_id:'research',revision:body.expected_revision+1,enabled:true,staged_digest:digest,active_digest:digest},bundle:{skill_id:'research',name:'research',description:'Research fixture',source:'Control panel upload',license:'',files:body.files,digest}};if(item)library.splice(library.indexOf(item),1,entry);else library.push(entry);value={state:'installed',skill_id:'research',name:'research',revision:entry.head.revision,digest};}
    }else if(kind==='discovery'){
     assert.equal(body.expected_revision,0);
+    if(rejectDiscovery){code=503;value={error:{code:'remote_authorization_required',operation_state:'not_started'}};}
+    else{
     const head={revision:1,observed_digest:digest,approved_digest:null,approved_names:[]};
     const snapshot={digest,tools:[{tool_id:'tool-search',public_name:'search',version:toolVersion,definition:{name:'search',description:'<img src=x onerror=alert(1)>',inputSchema:{type:'object',properties:{query:{type:'string'}}},annotations:{readOnlyHint:true}}}]};
-    catalogs.set(id,{state:'found',head,snapshot,changes:[{name:'search',state:'added'}]});value={state:'written',head};
+    catalogs.set(id,{state:'found',head,snapshot,changes:[{name:'search',state:'added'}]});value={state:'written',head};}
    }else if(kind==='catalogs'){
     value=catalogs.get(id);if(!value){code=404;value={state:'missing'};}
     else if(body){assert.equal(body.expected_revision,value.head.revision);assert.equal(body.digest,digest);value.head={...value.head,revision:value.head.revision+1,approved_digest:digest,approved_names:body.tool_names};value.approved=structuredClone(value.snapshot);value={state:'written',head:value.head};}
@@ -97,9 +99,15 @@ export async function checkGuidedProduct(executable) {
   assert.equal(await review.locator('input[type=checkbox]').isChecked(),false);
   assert.equal(requests.filter(r=>r.path.includes('/catalogs/')&&r.method==='POST').length,0);
   await review.locator('input[type=checkbox]').check();await review.getByRole('button',{name:'Approve selected tools'}).click();await status.filter({hasText:'Tools approved.'}).waitFor();
-  await form.locator('[name=endpoint]').fill('https://oauth.provider.com/mcp');await form.locator('[name=authentication]').selectOption('oauth');await form.locator('button').click();
+  rejectDiscovery=true;await form.locator('[name=endpoint]').fill('https://oauth.provider.com/mcp');await form.locator('[name=authentication]').selectOption('oauth');await form.locator('button').click();
+  await status.filter({hasText:'Sign in to this service again using Reconnect.'}).waitFor();
+  assert.equal(catalogs.has(profiles.at(-1).profile_id),false);assert.equal(await review.isHidden(),true);
+  await page.getByRole('button',{name:'Reconnect',exact:true}).click();await status.filter({hasText:'Refresh the library before making another change.'}).waitFor();
+  assert.equal(requests.filter(r=>r.path==='/admin/central/connections/begin').length,1);
+  await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+  rejectDiscovery=false;await page.getByRole('button',{name:'Reconnect',exact:true}).click();
   await page.waitForURL(url=>url.pathname==='/admin/central'&&url.searchParams.has('connected'),{timeout:10000});await status.filter({hasText:'Review the tools before approving.'}).waitFor();
-  assert.equal(requests.filter(r=>r.path==='/admin/central/connections/begin').length,1);assert.equal(requests.filter(r=>r.path==='/admin/central/connections/complete').length,1);assert.equal(new URL(page.url()).search,'');
+  assert.equal(requests.filter(r=>r.path==='/admin/central/connections/begin').length,2);assert.equal(requests.filter(r=>r.path==='/admin/central/connections/complete').length,2);assert.equal(new URL(page.url()).search,'');
   await page.locator('[data-central-tab=skills]').click();
   const importer=page.locator('[data-skill-import]');
   const folderText=['---','name: research','description: Research fixture','---','Selected folder version'].join(String.fromCharCode(10));

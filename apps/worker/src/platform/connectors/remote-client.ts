@@ -111,7 +111,10 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
           let response = await (ports.fetch ?? fetch)(profile.endpoint, { method: "POST", body: init.body,
             headers, redirect: "manual", credentials: "omit", cache: "no-store", signal });
           if (signal.aborted) { void response.body?.cancel().catch(() => undefined); throw new RemoteFault("operation_timed_out"); }
-          if (response.status === 429 || response.status >= 500 || response.status === 401 || response.status === 403) {
+          if (response.status === 401 || response.status === 403) {
+            void response.body?.cancel().catch(() => undefined); throw new RemoteFault("authorization_required");
+          }
+          if (response.status === 429 || response.status >= 500) {
             void response.body?.cancel().catch(() => undefined); throw new RemoteFault("upstream_unavailable");
           }
           response = sessionState.response(response, method);
