@@ -1,48 +1,45 @@
-# Central administration and governance (development)
+# Services and Skills in the control panel (development)
 
 [简体中文](central-administration.zh-CN.md)
 
-The /admin/central page opens the Services & Skills library using the existing
-browser session, CSRF, strict cookies and CSP. Forms and explicit checkboxes guide
-service connections, tool review, Skill import/publication and client access. The
-interface carries the reviewed revisions and content versions. Failed or unknown
-mutations are never automatically retried. OAuth, reusable toolsets and raw API
-operations remain in the collapsed Advanced diagnostics section.
+Open /admin/central using the existing browser session. The page provides direct
+MCP connection, Skill installation, tool review and client access. There is no
+advanced JSON console in the product UI. Internal revisions are carried by the
+application; conflicting or unknown writes are never automatically replayed.
 
 ## Getting started
 
-The homepage leads with capabilities and AI connections. Computer access is an
-optional section, so a service-only user does not start with Runner setup.
+1. Enter a public HTTPS MCP URL. Choose No authentication or OAuth; the service
+   name is optional. No endpoint list, environment JSON or Runner is needed.
+2. For OAuth, Runmesh discovers the provider and uses its client metadata document
+   support or dynamic client registration, then opens the service authorization
+   page. The callback returns to the control panel and discovers tools. Providers
+   that require manual preregistration are not automatically connectable.
+3. Review the discovered tools and approve the ones you want to share. OAuth
+   connects an instance-admin account; each AI client still needs explicit access.
+4. Select SKILL.md and supporting text files, or a Skill folder, and click Install
+   Skill. Name and description come from frontmatter. A duplicate name shows an
+   explicit update confirmation. Files are saved without executing scripts.
+5. Create an AI connection, save its one-time URL, and choose its services and
+   Skills under Client access. No Runner is needed for these capabilities.
 
-1. The instance administrator configures approved service addresses and secure
-   credential storage once. Until ready, service creation stays disabled and the
-   page explains why. When enabled, the Skill library remains independently usable.
-2. Select an approved MCP service, name it and enter its upstream access token.
-   Review and explicitly approve the discovered tools. Update credentials from
-   the service card; submitted token fields are cleared.
-3. Import SKILL.md with its supporting text files or its folder, and record the
-   source and license. Preview makes no writes. Publication requires review and
-   confirmation; uploaded scripts remain text and never execute on the server.
-4. Create an AI connection. Services and Skills are the default, with no Runner
-   required. Save the one-time URL, then follow Choose services and Skills to
-   manage that exact connection's permissions.
-5. Add the URL as a remote MCP connection in your AI client. Refresh its tools
-   after access changes. Routine users need no environment variables or JSON.
+Installed Skill updates retain old pinned client grants until explicitly changed.
+Tool changes need fresh review. OAuth can be reconnected or disconnected from a
+service card; credentials never appear in read APIs. Each connection accepts only
+its saved public HTTPS destination, with no redirects or private-network routing.
 
-Access choices use published Skill metadata, even when a newer draft exists.
-Older pinned grants remain visible and are removed only when explicitly unchecked.
-Conflicts and failed library refreshes require a fresh read before further writes.
-
-This is a development administrator library. Guided supplier OAuth onboarding,
-visual reusable-toolset management, a public marketplace and real AI-host
-acceptance remain unfinished. It is not universal zero-configuration MCP access.
+OAuth token encryption is an instance deployment concern. The development
+setup:secrets command provisions a separate random vault key when missing and
+preserves an existing keyring. No-auth services and Skill installation do not need
+that vault. Real third-party account consent and AI-host acceptance remain
+provider-specific checks; mock regressions do not claim those external outcomes.
 
 ## Shared configuration and grants
 
 GET /admin/central/profiles returns at most 50 credential-free profiles. Supply
 after from next_after to continue; every page independently checks the admin
-session. Profile secrets are write-only and the console clears submitted
-credential input. Existing profile/catalog/OAuth routes retain their contracts.
+session. Profile secrets are write-only and the legacy credential form clears submitted
+credential input. Legacy profile/catalog/OAuth routes remain available for compatibility. Managed connections explicitly carry authentication none or oauth; a legacy null credential never becomes anonymous.
 
 GET/POST /admin/central/grants/{client_id} reads or replaces an exact grant. A
 write contains expected_revision, enabled and rules. Every rule references either
@@ -60,7 +57,7 @@ client grant. A template is not a live inheritance mechanism.
 ## Direct versus discovery directories
 
 CENTRAL_DIRECT_TOOLS_ENABLED=1 additionally publishes reviewed direct tools when
-the remote binding/egress configuration is valid. The stable rm_ aliases and
+the central binding and the selected profile’s egress authorization are valid. The stable rm_ aliases and
 exact JSON schemas come from saved, ACL-filtered snapshots. No live upstream
 discovery is performed by tools/list. Direct calls and remote_call share the
 same runtime validation, generation checks and invocation implementation.

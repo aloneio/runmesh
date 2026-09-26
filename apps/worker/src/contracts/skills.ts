@@ -27,6 +27,7 @@ export interface SkillRepository {
   bundle(id: string, digest: string): SkillBundle | undefined;
   summary(id: string, digest: string): Omit<SkillSummary, "revision"> | undefined;
   stage(bundle: SkillBundle, revision: number): SkillMutation;
+  install(bundle: SkillBundle, revision: number): SkillMutation;
   activate(id: string, digest: string, revision: number): SkillMutation;
   disable(id: string, revision: number): SkillMutation;
 }
@@ -36,6 +37,7 @@ export interface SkillPorts { readonly repository: SkillRepository; readonly dig
   readonly identity: (principal: CapturedIdentity, signal: AbortSignal) => Promise<IdentityDecision>;
   readonly admin: (sessionHash: string, signal: AbortSignal) => Promise<AdminDecision> }
 export interface CentralSkills {
+  installSkill(sessionHash: string, input: unknown): Promise<SkillMutation>;
   listSkillLibrary(sessionHash: string, after?: string): Promise<SkillLibraryPage>;
   mutateSkill(sessionHash: string, input: unknown): Promise<SkillMutation>;
   inspectSkill(sessionHash: string, id: string, digest?: string): Promise<SkillInspection>;

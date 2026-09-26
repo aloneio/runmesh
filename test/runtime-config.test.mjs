@@ -44,12 +44,22 @@ test("setup only plans by default and performs zero writes when required secrets
 });
 
 test("setup creates only the missing secret; reports and argv contain no generated values", () => {
-  const fake = fakeCloud(["RUNNER_TOKEN_PEPPER", "ADMIN_TOKEN"]);
+  const fake = fakeCloud(["RUNNER_TOKEN_PEPPER", "ADMIN_TOKEN", "CENTRAL_VAULT_KEYRING"]);
   const report = setupMissingSecrets({ environment: "development", apply: true, invoke: fake.invoke });
   assert.deepEqual(Object.keys(fake.uploaded), ["INTERNAL_CONTROL_SECRET"]);
   assert.deepEqual(report.created, ["INTERNAL_CONTROL_SECRET"]);
   const visible = JSON.stringify([report, fake.requests]);
   assert.ok(!visible.includes(fake.uploaded.INTERNAL_CONTROL_SECRET));
+});
+
+test("development setup provisions an independent OAuth vault once without exposing its key", () => {
+  const fake = fakeCloud(REQUIRED_SECRET_NAMES);
+  const report = setupMissingSecrets({ environment: "development", apply: true, invoke: fake.invoke });
+  assert.deepEqual(report.created, ["CENTRAL_VAULT_KEYRING"]);
+  const keyring = JSON.parse(fake.uploaded.CENTRAL_VAULT_KEYRING);
+  assert.equal(Buffer.from(keyring.keys.initial, "base64url").length, 32);
+  assert.equal(JSON.stringify(report).includes(keyring.keys.initial), false);
+  assert.deepEqual(setupMissingSecrets({ environment: "development", apply: true, invoke: fake.invoke }).created, []);
 });
 
 test("failed inventory, concurrent changes and uncertain upload never trigger a retry", () => {

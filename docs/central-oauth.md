@@ -3,7 +3,17 @@
 [简体中文](central-oauth.zh-CN.md)
 
 **W06 implements administrator-mediated OAuth and operation-local legacy MCP
-sessions. Central bindings remain test-only; this is not a production activation.**
+sessions. The development environment enables central bindings; production remains separate.**
+
+## Control-panel OAuth connections
+
+The normal UI accepts an MCP URL and OAuth. It discovers resource/provider
+metadata, prefers OAuth client metadata documents, and otherwise registers a
+public client dynamically. PKCE, session-bound one-use state, issuer checks,
+encrypted durable credentials and claimed refresh operations are enforced. No
+per-provider environment policy is needed. Client grants remain separate.
+See [the product workflow](central-administration.md). The remaining W06 sections
+describe the retained legacy, per-client, preregistered-provider API.
 
 ## Identity and supported providers
 

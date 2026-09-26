@@ -64,7 +64,8 @@ export class ConnectionState implements ProfileRepository {
         if (count === undefined || count >= CONNECTOR_LIMITS.profiles) return { state: "capacity" };
       } else {
         const old = current.profile, generation = old.credential?.secret_version, next = profile.credential?.secret_version;
-        if (old.connector_id !== profile.connector_id || old.endpoint !== profile.endpoint || (old.credential === null) !== (profile.credential === null)) return { state: "invalid" };
+        if (old.connector_id !== profile.connector_id || old.endpoint !== profile.endpoint || old.authentication !== profile.authentication
+          || (old.credential === null) !== (profile.credential === null)) return { state: "invalid" };
         if (generation !== undefined && next !== generation && next !== generation + 1) return { state: "invalid" };
         if (next === generation && JSON.stringify(current.envelope) !== JSON.stringify(envelope)) return { state: "invalid" };
       }

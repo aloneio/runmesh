@@ -3,18 +3,18 @@
   "cases": [
     {
       "nonce": null,
-      "sha256": "9ad9e2296fe14ceecfb891a0d6d3fe1e81fbe7671c980d9e92e729bbb1c48b7e",
+      "sha256": "901b7f22fee899fa617ca10f49550a5e593be303673166c7b760b9aa6089bfe6",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e"
     },
     {
       "nonce": "test-nonce",
-      "sha256": "98c54acb0643485c64b0ace49d4b1f0757182cd2b11e5f56ca864bc45baaefe4",
+      "sha256": "ba24af51026e24e21e18245e6bea2da884480b28605c37d554f94de991453221",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224"
     }
   ],
-  "reviewed_change": "Product workflows use approved destinations, clear rotated credentials, retain exact pinned grants, load published Skill metadata, and block mutations after failed refresh. Browser regressions verify these behaviors without screenshots."
+  "reviewed_change": "Direct URL connections negotiate MCP, OAuth returns to tool consent, Skill uploads install immediately with explicit update confirmation, and pinned grants remain intact. Browser regressions cover recovery without screenshots."
 }

@@ -8,7 +8,7 @@ export const REMOTE_LIMITS = Object.freeze({ operation_ms: 20_000, request_bytes
   aggregate_bytes: 2_097_152, fragments: 4096, events: 256, requests: 12, pages: 8, content_items: 32,
   active: 2, per_client: 1, policies: 64, policy_bytes: 16_384, validation_cost: 1_000_000 });
 export type RemoteProtocol = "2026-07-28" | "2025-11-25";
-export interface RemoteEgressRule { readonly endpoint: string; readonly protocol: RemoteProtocol; readonly session?: "ephemeral" }
+export interface RemoteEgressRule { readonly endpoint: string; readonly protocol: RemoteProtocol; readonly session?: "ephemeral" | "optional"; readonly negotiate?: true }
 export interface RemoteCall {
   readonly profile_id: string;
   readonly tool_id: string;

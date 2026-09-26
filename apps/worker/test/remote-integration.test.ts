@@ -198,14 +198,14 @@ it("W05 discovery requires the existing browser CSRF boundary before any upstrea
   finally { f.network.mockRestore(); }
 });
 
-it("W05 absent remote configuration retains the ten native tools without resolving central state", async () => {
+it("W05 unavailable central state retains native tools when no deployment endpoint list is configured", async () => {
   const current = await client(true), get = vi.fn(() => { throw new Error("must not resolve"); });
   const config = { ...env, CAPABILITIES: { idFromName: get, get } } as unknown as WorkerEnv;
   const response = await rpc(config, current.secret, "tools/list", {});
-  expect(response.result.tools).toHaveLength(10); expect(get).not.toHaveBeenCalled();
+  expect(response.result.tools).toHaveLength(10); expect(get).toHaveBeenCalledWith("central");
   const centralOnly = await client();
   expect((await rpc(config, centralOnly.secret, 'tools/list', {})).result.tools).toEqual([]);
-  expect(get).not.toHaveBeenCalled();
+  expect(get).toHaveBeenCalledTimes(2);
 });
 
 it("W05 a relay hop cannot recursively enter another Runmesh MCP endpoint", async () => {

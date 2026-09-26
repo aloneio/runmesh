@@ -6,6 +6,9 @@ import { OAuthState } from "./platform/connectors/oauth-store.js";
 import { createOAuthCipher, oauthRandom, oauthChallenge } from "./platform/connectors/oauth-crypto.js";
 import { createOAuthTransport } from "./platform/connectors/oauth-http.js";
 import { createOAuthManager } from "./application/connectors/oauth.js";
+import { createManagedOAuth } from "./platform/connectors/managed-oauth.js";
+import { ManagedOAuthState } from "./platform/connectors/managed-store.js";
+import type { ManagedConnections } from "./contracts/managed-connections.js";
 import type { AdminDecision, CentralAdministration, ProfileResult } from "./contracts/connectors.js";
 import type { CapabilityGrant, GrantReplacement, GrantWriteResult, CentralToolVisibility } from "./contracts/capabilities.js";
 import { isCapabilityIdentifier, parseCapabilityGrant } from "./contracts/capabilities.js";
@@ -32,7 +35,7 @@ import { createRemoteCaller } from "./application/capabilities/remote-call.js";
 import { createRemoteDiscovery } from "./application/capabilities/remote-discovery.js";
 import { createHttpRemoteConnector } from "./platform/connectors/remote-client.js";
 import { REMOTE_LIMITS, RemoteFault, type CentralRemote, type RemoteOutcome, type RemoteFailure } from "./contracts/remote.js";
-import { parseRemoteEgress } from "./contracts/remote-values.js";
+import { connectionPolicy } from "./platform/connectors/connection-policy.js";
 import { SkillState } from "./platform/skills/store.js";
 import { createSkillService } from "./application/skills/service.js";
 import type { CentralSkills } from "./contracts/skills.js";
@@ -53,6 +56,8 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
   readonly #governance: CentralGovernance;
   readonly #toolsets: ToolsetState;
   #oauthService: ReturnType<typeof createOAuthManager> | undefined;
+  readonly #managedState: ManagedOAuthState;
+  #managedService: ReturnType<typeof createManagedOAuth> | undefined;
   readonly #remoteClients = new Set<string>();
   public constructor(ctx: DurableObjectState, env: WorkerEnv) {
     super(ctx, env);
@@ -61,6 +66,7 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
     this.#profiles = new ConnectionState(ctx.storage, () => this.#grants.initialize());
     this.#catalog = new CatalogState(ctx.storage, () => this.#grants.initialize());
     this.#oauthState = new OAuthState(ctx.storage, () => this.#grants.initialize());
+    this.#managedState = new ManagedOAuthState(ctx.storage, () => this.#grants.initialize());
     this.#skills = new SkillState(ctx.storage, () => this.#grants.initialize());
     this.#governance = new CentralGovernance(ctx.storage, () => this.#grants.initialize());
     this.#toolsets = new ToolsetState(ctx.storage, () => this.#grants.initialize());
@@ -115,9 +121,16 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
 
   #skillService() {
     return createSkillService({ repository: this.#skills, digest: catalogSha256, grant: id => this.#grants.readGrant(id),
-      remoteDependency: (target, signal) => parseRemoteEgress(this.env.CENTRAL_MCP_EGRESS) === undefined ? Promise.resolve("disabled")
-        : createDependencyReader({ repository: this.#catalog, profile: id => this.#profiles.read(id)?.profile, digest: catalogSha256 })(target, signal),
+      remoteDependency: (target, signal) => {
+        const profile = this.#profiles.read(target.connection_profile_id)?.profile;
+        if (profile && connectionPolicy(profile, this.env.CENTRAL_MCP_EGRESS) === undefined) return Promise.resolve("disabled");
+        return createDependencyReader({ repository: this.#catalog, profile: id => this.#profiles.read(id)?.profile, digest: catalogSha256 })(target, signal);
+      },
       identity: (principal, signal) => this.#identity(principal, signal), admin: (hash, signal) => this.#authorize(hash, signal) });
+  }
+  public async installSkill(hash: string, input: unknown): ReturnType<CentralSkills["installSkill"]> {
+    return withinDeadline(new AbortController().signal, () => ({ state: "unknown" } as const),
+      signal => this.#skillService().install(hash, input, signal));
   }
   public async mutateSkill(hash: string, input: unknown): ReturnType<CentralSkills["mutateSkill"]> {
     return withinDeadline(new AbortController().signal, () => ({ state: "unknown" } as const),
@@ -293,15 +306,32 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
     return this.#oauthManager().revoke(sessionHash, input, new AbortController().signal);
   }
 
+  #managedOAuth() {
+    if (!this.#managedService) this.#managedService = createManagedOAuth({ repository: this.#managedState,
+      cipher: createOAuthCipher(this.#namespace, () => this.env.CENTRAL_VAULT_KEYRING, () => [this.env.INTERNAL_CONTROL_SECRET, this.env.RUNNER_TOKEN_PEPPER]),
+      profile: id => this.#profiles.read(id)?.profile, admin: (hash, signal) => this.#authorize(hash, signal),
+      origin: () => this.env.RUNMESH_PUBLIC_ORIGIN, hash: catalogSha256, random: oauthRandom, now: Date.now });
+    return this.#managedService;
+  }
+  public async connectionOAuth(hash: string, action: "begin" | "complete" | "revoke", input: unknown, requestOrigin?: string): ReturnType<ManagedConnections["connectionOAuth"]> {
+    return this.#managedOAuth().run(hash, action, input, requestOrigin);
+  }
+
   #remoteConnector(principal?: CapturedIdentity) {
     const cipher = createCredentialCipher(this.#namespace, () => this.env.CENTRAL_VAULT_KEYRING,
       () => [this.env.INTERNAL_CONTROL_SECRET, this.env.RUNNER_TOKEN_PEPPER]);
     return createHttpRemoteConnector({ policy: () => this.env.CENTRAL_MCP_EGRESS,
+      rules: profile => { const current = this.#profiles.read(profile.profile_id)?.profile; return current?.revision === profile.revision && current.enabled ? connectionPolicy(current, this.env.CENTRAL_MCP_EGRESS) : undefined; },
       ...(this.env.RUNMESH_PUBLIC_ORIGIN === undefined ? {} : { selfOrigin: this.env.RUNMESH_PUBLIC_ORIGIN }),
       credential: async (profile, signal, authorize) => {
         const record = this.#profiles.read(profile.profile_id);
         if (record?.profile.revision !== profile.revision || !record.profile.enabled || record.profile.endpoint !== profile.endpoint)
           throw new RemoteFault("permission_denied");
+        if (record.profile.authentication === "none") return null;
+        if (record.profile.authentication === "oauth") {
+          try { return await this.#managedOAuth().credential(profile, signal, authorize); }
+          catch { throw new RemoteFault("authorization_required"); }
+        }
         if (record.profile.credential === null) {
           if (principal === undefined) throw new RemoteFault("authorization_required");
           try { return await this.#oauthManager().credential(profile, principal, signal, authorize); }
@@ -326,7 +356,6 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
   public async callRemote(principal: CapturedIdentity, command: unknown): Promise<RemoteOutcome> {
     if (!isCapabilityIdentifier(principal?.client_id) || !Number.isSafeInteger(principal.secret_version) || principal.secret_version < 1)
       return { state: "failed", code: "invalid_request", operation_state: "not_started" };
-    if (parseRemoteEgress(this.env.CENTRAL_MCP_EGRESS) === undefined) return { state: "failed", code: "egress_denied", operation_state: "not_started" };
     const key = "client:" + principal.client_id;
     if (this.#remoteClients.has(key) || this.#remoteClients.size >= REMOTE_LIMITS.active) return { state: "failed", code: "busy", operation_state: "not_started" };
     this.#remoteClients.add(key);
@@ -341,7 +370,6 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
   public async discoverRemote(sessionHash: string, profileId: string, expectedRevision: number, principal?: CapturedIdentity): Promise<CatalogMutation | RemoteFailure> {
     if (typeof sessionHash !== "string" || !/^[a-f0-9]{64}$/u.test(sessionHash)) return { state: "denied" };
     if (principal !== undefined && parseOAuthSelection({ profile_id: profileId, principal, expected_revision: expectedRevision }) === undefined) return { state: "invalid" };
-    if (parseRemoteEgress(this.env.CENTRAL_MCP_EGRESS) === undefined) return { state: "failed", code: "egress_denied", operation_state: "not_started" };
     const key = "admin:" + sessionHash;
     if (this.#remoteClients.has(key) || this.#remoteClients.size >= REMOTE_LIMITS.active) return { state: "failed", code: "busy", operation_state: "not_started" };
     this.#remoteClients.add(key);

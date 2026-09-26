@@ -5,6 +5,8 @@ import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
 import { adminDocument } from '../apps/worker/dist/admin/layout.js';
 import { centralPage } from '../apps/worker/dist/admin/central-view.js';
+import { oauthLanding } from '../apps/worker/dist/http/oauth-landing.js';
+import { ADMIN_CSRF_COOKIE } from '../apps/worker/dist/http/constants.js';
 import { productOverviewPage } from '../apps/worker/dist/admin/dashboard-views.js';
 
 /** Isolated browser fixtures exercise the shipped UI, never a user browser or external service. */
@@ -17,16 +19,27 @@ export async function checkGuidedProduct(executable) {
  const server=createServer(async(req,res)=>{
   try {
    const url=new URL(req.url,'http://127.0.0.1');
+   if(url.pathname==='/oauth-fixture'){res.statusCode=302;res.setHeader('location','/admin/central/connections/callback?state=fixture-state&code=fixture-code&iss=https://login.provider.com');res.end();return;}
+   if(url.pathname==='/admin/central/connections/callback'){const page=oauthLanding(true);for(const [k,v] of page.headers)res.setHeader(k,v);res.end(await page.text());return;}
    if(url.pathname==='/admin') {res.setHeader('content-type','text/html');res.end(adminDocument('Dashboard',productOverviewPage({clients:[],runners:[]}),'dashboard'));return;}
-   if(url.pathname==='/admin/central') {res.setHeader('content-type','text/html');res.end(adminDocument('Services & Skills',centralPage('fixture-csrf',true,true,false,[{id:'client-fixture',label:'Team AI'}],url.searchParams.get('setup')==='missing'?{endpoints:[],credentialsReady:false}:{endpoints:['https://docs.example/mcp'],credentialsReady:true}),'central'));return;}
+   if(url.pathname==='/admin/central') {res.setHeader('set-cookie',ADMIN_CSRF_COOKIE+'=fixture-csrf; Path=/; SameSite=Strict; Secure');res.setHeader('content-type','text/html');res.end(adminDocument('Services & Skills',centralPage('fixture-csrf',true,true,false,[{id:'client-fixture',label:'Team AI'}],url.searchParams.get('setup')==='missing'?{endpoints:[],credentialsReady:false}:{endpoints:['https://docs.example/mcp'],credentialsReady:true}),'central'));return;}
    const raw=[];for await(const part of req)raw.push(part);
    const body=raw.length?JSON.parse(Buffer.concat(raw).toString()):undefined;
    requests.push({path:url.pathname,method:req.method,body});
    let value, code=200;const path=url.pathname.replace('/admin/central/',''),[kind,id]=path.split('/');
    if(kind==='profiles'&&!id){value={state:'listed',profiles,next_after:null};if(failLibrary){code=503;value={state:'unavailable'};}}
    else if(kind==='profiles'){
-    if(body.action==='create'){const p={profile_id:id,connector_id:body.connector_id,display_name:body.display_name,endpoint:body.endpoint,revision:1,enabled:false};profiles.push(p);value={state:'written',profile:p};}
+    if(body.action==='connect'){const p={profile_id:id,connector_id:body.connector_id,display_name:body.display_name,endpoint:body.endpoint,revision:1,enabled:false,credential:null,authentication:body.authentication};profiles.push(p);value={state:'written',profile:p};}
     else{const p=profiles.find(p=>p.profile_id===id);assert.equal(body.expected_revision,p.revision);p.revision++;if(body.action==='enable'||body.action==='disable')p.enabled=body.action==='enable';value={state:'written',profile:p};}
+   }else if(kind==='connections'){
+    assert.equal(req.headers['x-csrf-token'],'fixture-csrf');
+    if(id==='begin')value={state:'started',profile_id:body.profile_id,authorization_url:'/oauth-fixture'};
+    else if(id==='complete'){assert.equal(body.code,'fixture-code');value={state:'linked',profile_id:profiles.at(-1).profile_id};}
+    else value={state:'revoked',profile_id:body.profile_id};
+   }else if(kind==='skill-installations'){
+    const item=library.find(s=>s.head.skill_id==='research');
+    if((item?.head.revision??0)!==body.expected_revision){code=409;value={state:'conflict',skill_id:'research',current_revision:item.head.revision};}
+    else{const entry={head:{skill_id:'research',revision:body.expected_revision+1,enabled:true,staged_digest:digest,active_digest:digest},bundle:{skill_id:'research',name:'research',description:'Research fixture',source:'Control panel upload',license:'',files:body.files,digest}};if(item)library.splice(library.indexOf(item),1,entry);else library.push(entry);value={state:'installed',skill_id:'research',name:'research',revision:entry.head.revision,digest};}
    }else if(kind==='discovery'){
     assert.equal(body.expected_revision,0);
     const head={revision:1,observed_digest:digest,approved_digest:null,approved_names:[]};
@@ -66,30 +79,30 @@ export async function checkGuidedProduct(executable) {
   await page.locator('[data-product-status]').filter({hasText:'Library is up to date.'}).waitFor();
   await page.goto(origin+'/admin/central?setup=missing');
   const status=page.locator('[data-product-status]');await status.filter({hasText:'Library is up to date.'}).waitFor();
-  assert.equal(await page.locator('[data-service-create] button').isDisabled(),true);
+  assert.equal(await page.locator('[data-service-create] button').isEnabled(),true);
   assert.equal(await page.locator('[data-central-tab=skills]').isEnabled(),true);
-  assert.equal(await page.getByRole('heading',{name:'Service connections need instance setup'}).count(),1);
+  assert.equal(await page.locator('[data-service-create] [name=endpoint]').getAttribute('type'),'url');
   await page.goto(origin+'/admin/central');await status.filter({hasText:'Library is up to date.'}).waitFor();
-  assert.equal(await page.locator('.central-advanced').getAttribute('open'),null);
-  const form=page.locator('[data-service-create]');await form.locator('[name=name]').fill('团队文档');await form.locator('[name=endpoint]').selectOption('https://docs.example/mcp');await form.locator('[name=token]').fill('synthetic-fixture-token');await form.locator('button').click();
+  assert.equal(await page.locator('.central-advanced,[data-central-admin]').count(),0);
+  const form=page.locator('[data-service-create]');await form.locator('[name=name]').fill('团队文档');await form.locator('[name=endpoint]').fill('https://docs.example.com/mcp');await form.locator('button').click();
   await status.filter({hasText:'Review the tools before approving.'}).waitFor();
-  assert.equal(await form.locator('[name=token]').inputValue(),'');
+  assert.deepEqual(await form.locator('[name=authentication] option').evaluateAll(nodes=>nodes.map(n=>n.value)),['none','oauth']);assert.equal(await form.locator('[name=token]').count(),0);
   assert.equal(profiles[0].display_name,'团队文档');
   const review=page.locator('[data-service-review]');assert.equal(await review.locator('img').count(),0);
   assert.equal(await review.locator('input[type=checkbox]').isChecked(),false);
   assert.equal(requests.filter(r=>r.path.includes('/catalogs/')&&r.method==='POST').length,0);
   await review.locator('input[type=checkbox]').check();await review.getByRole('button',{name:'Approve selected tools'}).click();await status.filter({hasText:'Tools approved.'}).waitFor();
-  await page.getByText('Update service credentials',{exact:true}).click();
-  const rotate=page.locator('[data-service-list] form');await rotate.locator('input').fill('synthetic-replacement-token');await rotate.getByRole('button').click();await status.filter({hasText:'Access token updated.'}).waitFor();
-  assert.equal(await page.locator('[data-service-list] input').inputValue(),'');
-  assert.equal(requests.filter(r=>r.body?.action==='rotate').length,1);assert.equal(profiles[0].enabled,true);
+  await form.locator('[name=endpoint]').fill('https://oauth.provider.com/mcp');await form.locator('[name=authentication]').selectOption('oauth');await form.locator('button').click();
+  await page.waitForURL(url=>url.pathname==='/admin/central'&&url.searchParams.has('connected'));await status.filter({hasText:'Review the tools before approving.'}).waitFor();
+  assert.equal(requests.filter(r=>r.path==='/admin/central/connections/begin').length,1);assert.equal(requests.filter(r=>r.path==='/admin/central/connections/complete').length,1);assert.equal(new URL(page.url()).search,'');
   await page.locator('[data-central-tab=skills]').click();
   const importer=page.locator('[data-skill-import]');
   await importer.locator('[name=files]').setInputFiles({name:'SKILL.md',mimeType:'text/markdown',buffer:Buffer.from('---\nname: research\ndescription: Research fixture\n---\nReview this text.\n')});
-  await importer.locator('[name=source]').fill('Local fixture');await importer.locator('[name=license]').fill('MIT');await importer.getByRole('button',{name:'Preview Skill'}).click();
-  await status.filter({hasText:'Preview ready.'}).waitFor();assert.equal(library.length,0);
-  const skillReview=page.locator('[data-skill-review]');await skillReview.getByRole('button').click();await status.filter({hasText:'approval box first'}).waitFor();assert.equal(library.length,0);
-  await skillReview.locator('input[type=checkbox]').check();await skillReview.getByRole('button').click();await status.filter({hasText:'Skill published.'}).waitFor();assert.equal(library[0].head.enabled,true);
+  assert.equal(await importer.locator('[name=source],[name=license]').count(),0);await importer.getByRole('button',{name:'Install Skill',exact:true}).click();
+  await status.filter({hasText:'installed. Choose Client access'}).waitFor();assert.equal(library[0].head.enabled,true);
+  await importer.locator('[name=files]').setInputFiles({name:'SKILL.md',mimeType:'text/markdown',buffer:Buffer.from(['---','name: research','description: Research fixture','---','Updated text'].join(String.fromCharCode(10)))});await importer.getByRole('button',{name:'Install Skill',exact:true}).click();
+  await status.filter({hasText:'This Skill is already installed.'}).waitFor();assert.equal(library[0].head.revision,1);
+  const skillReview=page.locator('[data-skill-review]');await skillReview.getByRole('button',{name:'Update Skill',exact:true}).click();await status.filter({hasText:'installed. Choose Client access'}).waitFor();assert.equal(library[0].head.revision,2);
   // A staged draft must never describe the older version being granted.
   library[0].published=library[0].bundle;library[0].bundle={...library[0].bundle,name:'unreviewed-draft',description:'Unapproved description',digest:oldDigest};library[0].head.staged_digest=oldDigest;library[0].head.revision++;
   await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
@@ -105,11 +118,11 @@ export async function checkGuidedProduct(executable) {
   assert.equal(await access.isVisible(),true);assert.equal(await page.locator('[data-client-select]').inputValue(),'client-fixture');
   await page.locator('[data-central-tab=services]').click();
   failLibrary=true;await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Operation could not be confirmed.'}).waitFor();
-  const mutations=requests.filter(r=>r.method==='POST').length;await page.locator('[data-service-list]').getByRole('button',{name:'Pause',exact:true}).click();await status.filter({hasText:'Refresh the library before'}).waitFor();assert.equal(requests.filter(r=>r.method==='POST').length,mutations);
+  const mutations=requests.filter(r=>r.method==='POST').length;await page.locator('[data-service-list]').getByRole('button',{name:'Pause',exact:true}).first().click();await status.filter({hasText:'Refresh the library before'}).waitFor();assert.equal(requests.filter(r=>r.method==='POST').length,mutations);
   failLibrary=false;await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
   await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
   assert.deepEqual(exceptions,[]);
-  return {state:'passed',guided_homepage:true,setup_blocks_unavailable_connections:true,service_explicit_review:true,credential_rotation:true,skill_preview_before_publish:true,published_skill_metadata:true,retained_pinned_access:true,client_handoff:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,mobile_no_overflow:true,screenshots:0};
+  return {state:'passed',guided_homepage:true,direct_url_without_deployment_setup:true,service_explicit_review:true,oauth_return_to_tool_review:true,direct_skill_install_and_confirmed_update:true,published_skill_metadata:true,retained_pinned_access:true,client_handoff:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,mobile_no_overflow:true,screenshots:0};
  }finally{await browser?.close();await new Promise(r=>server.close(r));}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){

@@ -28,17 +28,19 @@ it("product setup exposes approved endpoints and readiness flags without credent
   expect(await centralProductSetup({ ...config, CENTRAL_MCP_EGRESS: undefined, CENTRAL_VAULT_KEYRING: undefined }, 'https://runmesh.example.com')).toEqual({ endpoints: [], credentialsReady: false });
 });
 
-it("unconfigured relay stays unavailable while the Chinese Skill library stays usable", async () => {
+it("direct public connections and Skill installation are available without deployment endpoint configuration", async () => {
   const admin = await session();
   const request = new Request('https://worker.test/admin/central?lang=zh-CN', { headers: admin.headers });
   const config = { ...configured(), CENTRAL_SKILLS_ENABLED: '1', CENTRAL_MCP_EGRESS: undefined, CENTRAL_VAULT_KEYRING: undefined };
   const response = localizeHtmlResponse(request, await handleBrowserAdmin(request, config, new URL(request.url)));
   expect(response.status).toBe(200);
   const markup = await response.text();
-  expect(markup).toContain('服务连接尚待实例初始化');
-  expect(markup).toContain('尚未配置允许连接的服务地址。');
-  expect(markup).toContain('安全凭据存储尚未就绪。');
-  expect(markup).toContain('<fieldset disabled>');
+  expect(markup).toContain('MCP 地址');
+  expect(markup).toContain('无身份验证');
+  expect(markup).toContain('value="oauth"');
+  expect(markup).not.toContain('<fieldset disabled>');
+  expect(markup).not.toContain('data-central-admin');
+  expect(markup).not.toContain('name="token"');
   expect(markup).toContain('data-skill-import');
   expect(markup).toContain('AI 连接');
   expect(markup).not.toContain('CENTRAL_VAULT_KEYRING');
@@ -94,6 +96,18 @@ it("W03 admin HTTP stores ciphertext, defaults disabled and checks revisions", a
     expect(await cipher.open(JSON.parse(row.profile_json), JSON.parse(row.envelope_json))).toEqual(rotated);
     expect(state.storage.sql.exec("SELECT name FROM sqlite_master WHERE name IN ('runners','mcp_clients','jobs')").toArray()).toEqual([]);
   });
+});
+
+it.each(["none", "oauth"])("control panel creates an explicit %s connection without a deployment endpoint allowlist", async authentication => {
+  const admin = await session(), id = `direct-${crypto.randomUUID()}`;
+  const config = { ...configured(), CENTRAL_MCP_EGRESS: undefined, CENTRAL_VAULT_KEYRING: undefined };
+  const request = new Request(url(id), { method: "POST", headers: admin.headers, body: JSON.stringify({ action: "connect",
+    connector_id: id, endpoint: "https://mcp.provider.com/mcp", authentication }) });
+  const response = await handleCentralAdmin(request, config, new URL(request.url));
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ state: "written", profile: { profile_id: id, authentication, credential: null, enabled: false, revision: 1 } });
+  const enabled = await SELF.fetch(url(id), { method: "POST", headers: admin.headers, body: JSON.stringify({ action: "enable", expected_revision: 1 }) });
+  expect(await enabled.json()).toMatchObject({ profile: { authentication, enabled: true, revision: 2 } });
 });
 
 it.each(["no-session", "no-csrf", "wrong-csrf", "cross-origin", "bearer-only"])("W03 rejects %s before resolving the owner", async variant => {

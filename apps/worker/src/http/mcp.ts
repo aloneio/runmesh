@@ -8,7 +8,6 @@ import { sha256Hex } from "../security.js";
 import { verifyMcpClient } from "../application/mcp-identity.js";
 import type { WorkerEnv } from "../platform/env.js";
 import type { CentralRemote } from "../contracts/remote.js";
-import { parseRemoteEgress } from "../contracts/remote-values.js";
 import type { CentralSkills } from "../contracts/skills.js";
 import type { CentralDirectory, CentralDirectoryReader } from "../contracts/catalog.js";
 import type { CentralToolVisibility, CentralToolVisibilityReader } from "../contracts/capabilities.js";
@@ -52,7 +51,7 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
     import("agents/mcp/server"),
     import("../mcp/server.js"),
   ]);
-  const remote = env.CAPABILITIES === undefined || parseRemoteEgress(env.CENTRAL_MCP_EGRESS) === undefined
+  const remote = env.CAPABILITIES === undefined
     ? undefined : await import("../mcp/providers/remote.js");
   const skills = env.CAPABILITIES !== undefined && env.CENTRAL_SKILLS_ENABLED === "1"
     ? await import("../mcp/providers/skills.js") : undefined;

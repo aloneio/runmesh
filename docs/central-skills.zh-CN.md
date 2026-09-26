@@ -6,6 +6,13 @@ W07 在可选 Capabilities 状态所有者内提供有界、经审核的文本 b
 实现，不代表已启用生产或通过真实宿主验收。导入和读取均不安装 Runner、运行模型、
 执行 shell，也不授予工具权限。
 
+## 直接安装
+
+控制端选择 SKILL.md 与配套文本文件或文件夹即可安装。
+POST /admin/central/skill-installations 根据验证后的元数据生成标识、名称及说明，
+原子保存内容、批准及启用状态。同名更新需确认并携带当前版本；已有客户端权限
+保持原固定版本。下方来源、许可证、预览、暂存与启用是旧 API 选项，日常无需填写。
+
 ## 启用与导入
 
 同时具备 CAPABILITIES 绑定和 CENTRAL_SKILLS_ENABLED=1 才暴露 Skill HTTP/MCP

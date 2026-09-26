@@ -10,6 +10,8 @@ export interface ConnectionProfile {
   readonly revision: number;
   readonly enabled: boolean;
   readonly credential: SecretReference | null;
+  /** Present only for connections explicitly created from the control panel. */
+  readonly authentication?: "none" | "oauth";
 }
 
 export interface SecretReference {
@@ -36,6 +38,7 @@ export interface CredentialEnvelope {
 }
 export interface ProfileRecord { readonly profile: ConnectionProfile; readonly envelope: CredentialEnvelope | null }
 export type ProfileCommand =
+  | { readonly action: "connect"; readonly profile_id: string; readonly connector_id: string; readonly display_name?: string; readonly endpoint: string; readonly authentication: "none" | "oauth" }
   | { readonly action: "create_oauth"; readonly profile_id: string; readonly connector_id: string; readonly display_name?: string; readonly endpoint: string }
   | { readonly action: "create"; readonly profile_id: string; readonly connector_id: string; readonly display_name?: string; readonly endpoint: string; readonly credential: CredentialInput }
   | { readonly action: "rotate"; readonly profile_id: string; readonly expected_revision: number; readonly credential: CredentialInput }

@@ -4,7 +4,8 @@ import { parseRemoteEgress } from "../../contracts/remote-values.js";
 /** A legacy session belongs to exactly one operation/credential. No persistence,
  * session recovery, heartbeat or server-driven replacement is supported. */
 export function createRemoteSessionState(rule: RemoteEgressRule, ports: {
-  policy: () => unknown; authorize: () => Promise<void>; current: () => boolean; token: string;
+  policy: () => unknown; authorize: () => Promise<void>; current: () => boolean; token: string | undefined;
+  protocol?: () => string; egressCurrent?: () => boolean;
   signal: AbortSignal; send: (url: string, init: RequestInit) => Promise<Response>;
 }) {
   let id: string | undefined, closed = false;
@@ -14,7 +15,7 @@ export function createRemoteSessionState(rule: RemoteEgressRule, ports: {
     response(response: Response, method: string): Response {
       const next = response.headers.get("mcp-session-id");
       if (next === null && !(method === "initialize" && rule.session === "ephemeral")) return response;
-      if (rule.session !== "ephemeral" || rule.protocol !== "2025-11-25" || next === null || !/^[\x21-\x7e]{1,128}$/u.test(next)
+      if ((rule.session !== "ephemeral" && rule.session !== "optional") || (rule.session !== "optional" && rule.protocol !== "2025-11-25") || next === null || !/^[\x21-\x7e]{1,128}$/u.test(next)
         || (id === undefined ? method !== "initialize" : next !== id)) {
         void response.body?.cancel().catch(() => undefined); throw new RemoteFault("upstream_protocol_error");
       }
@@ -32,10 +33,10 @@ export function createRemoteSessionState(rule: RemoteEgressRule, ports: {
             await ports.authorize();
             if (cleanup.signal.aborted || ports.signal.aborted || !ports.current()) return;
             const current = parseRemoteEgress(ports.policy())?.find(r => r.endpoint === rule.endpoint);
-            if (current?.session !== "ephemeral" || current.protocol !== rule.protocol) return;
+            if (ports.egressCurrent ? !ports.egressCurrent() : current?.session !== "ephemeral" || current.protocol !== rule.protocol) return;
             const response = await ports.send(rule.endpoint, { method: "DELETE", redirect: "manual", credentials: "omit",
-              cache: "no-store", signal: cleanup.signal, headers: { authorization: `Bearer ${ports.token}`,
-                "mcp-session-id": id!, "mcp-protocol-version": rule.protocol, "x-runmesh-mcp-hop": "1" } });
+              cache: "no-store", signal: cleanup.signal, headers: { ...(ports.token === undefined ? {} : { authorization: `Bearer ${ports.token}` }),
+                "mcp-session-id": id!, "mcp-protocol-version": ports.protocol?.() ?? rule.protocol, "x-runmesh-mcp-hop": "1" } });
             void response.body?.cancel().catch(() => undefined);
           })(),
           new Promise<void>(resolve => { timer = setTimeout(() => { cleanup.abort(); resolve(); }, 1000); }),
