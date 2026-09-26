@@ -1,13 +1,7 @@
 import type { FetchLike, OAuthDiscoveryState } from "@modelcontextprotocol/client";
 import { publicMcpEndpoint } from "../../contracts/remote-values.js";
+import { publicOAuthUrl } from "../../contracts/managed-connections.js";
 
-export function publicOAuthUrl(value: unknown, selfOrigin?: string): string | undefined {
-  if (typeof value !== "string" || value.length > 8192 || /[\u0000-\u0020\u007f\\]/u.test(value)) return undefined;
-  try {
-    const url = new URL(value), base = new URL(value); base.search = "";
-    return url.hash || url.origin === selfOrigin || publicMcpEndpoint(base.href) === undefined ? undefined : url.href;
-  } catch { return undefined; }
-}
 export function validDiscovery(value: OAuthDiscoveryState, selfOrigin: string) {
   const metadata = value.authorizationServerMetadata;
   return JSON.stringify(value).length <= 32_768 && metadata !== undefined
