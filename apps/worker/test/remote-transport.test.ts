@@ -5,6 +5,7 @@ import { z } from "zod";
 import { createHttpRemoteConnector } from "../src/platform/connectors/remote-client.js";
 import { guardedRemoteResponse } from "../src/platform/connectors/remote-response.js";
 import { BoundedRemoteValidator } from "../src/platform/connectors/remote-validation.js";
+import { parseRemoteTool } from "../src/contracts/catalog-values.js";
 import { RemoteFault, type RemoteProtocol } from "../src/contracts/remote.js";
 import type { ConnectionProfile } from "../src/contracts/connectors.js";
 
@@ -164,4 +165,56 @@ it("W05 JSON schema validation is non-coercing, bounded and supports approved lo
   expect(validator.validate(schema, { value: 2, extra: true })).toBe(false);
   expect(validator.validate({ type: "string", pattern: "(a+)+$" }, "a")).toBe(false);
   expect(validator.validate({ type: "object", $ref: "https://unvisited.example.com/schema" }, {})).toBe(false);
+});
+
+it.each(["allOf", "anyOf", "oneOf", "prefixItems"])("W05 published local references traverse %s schema arrays during validation", keyword => {
+  const schema = { type: "object", properties: { value: { $ref: "#/$defs/count/" + keyword + "/0" } }, required: ["value"],
+    $defs: { count: { [keyword]: [{ type: "integer", minimum: 1 }] } } };
+  expect(parseRemoteTool({ name: "count", inputSchema: schema, outputSchema: schema })).toBeDefined();
+  const validator = new BoundedRemoteValidator();
+  expect(validator.validate(schema, { value: 2 })).toBe(true);
+  expect(validator.validate(schema, { value: "2" })).toBe(false);
+  expect(validator.validate(schema, { value: 0 })).toBe(false);
+});
+
+it.each(["01", "1", "-", "length"])("W05 schema array references reject an invalid index %s", index => {
+  const schema = { type: "object", properties: { value: { $ref: "#/$defs/count/allOf/" + index } },
+    $defs: { count: { allOf: [{ type: "integer" }] } } };
+  expect(parseRemoteTool({ name: "count", inputSchema: schema })).toBeUndefined();
+  expect(new BoundedRemoteValidator().validate(schema, { value: 2 })).toBe(false);
+});
+
+it("W05 indexed local references retain the expanded schema work budget", () => {
+  const definitions: Record<string, object> = { layer0: { allOf: [{ type: "integer" }] } };
+  for (let i = 1; i <= 20; i++) {
+    const ref = { $ref: "#/$defs/layer" + (i - 1) + "/allOf/0" };
+    definitions["layer" + i] = { allOf: [{ allOf: [ref, ref] }] };
+  }
+  const schema = { type: "object", properties: { value: { $ref: "#/$defs/layer20/allOf/0" } }, $defs: definitions };
+  expect(parseRemoteTool({ name: "count", inputSchema: schema })).toBeDefined();
+  expect(new BoundedRemoteValidator().getValidator(schema)({ value: 2 })).toMatchObject({ valid: false, errorMessage: "remote_schema_budget" });
+});
+
+it.each(["2025-11-25", "2026-07-28"] as const)("W05 %s calls a discovered tool with indexed local input and output references once", async protocol => {
+  const remote = upstream(), dispatched = vi.fn(), authorize = vi.fn(async () => undefined);
+  const schema = { type: "object", properties: { value: { $ref: "#/$defs/count/allOf/0" } }, required: ["value"],
+    $defs: { count: { allOf: [{ type: "integer", minimum: 1 }] } } };
+  const connector = createHttpRemoteConnector({ rules: () => policy(protocol), credential: async () => ({ kind: "bearer", token }),
+    fetch: async (input, init) => {
+      const request = JSON.parse(String(init?.body));
+      const response = await remote.http(input, init);
+      if (request.method !== "tools/list") return response;
+      const reply = await (await guardedRemoteResponse(response, request.id, new AbortController().signal, () => undefined)).json() as { result: { tools: unknown[] } };
+      reply.result.tools = [{ name: "increment", inputSchema: schema, outputSchema: schema }];
+      return Response.json(reply);
+    } });
+  expect(connector.validate(schema, { value: 2 })).toBe(true);
+  expect(connector.validate(schema, { value: "2" })).toBe(false);
+  const session = await connector.open(profile, new AbortController().signal, dispatched, authorize);
+  try {
+    const tools = await session.listTools();
+    expect(tools).toHaveLength(1);
+    expect(await session.callTool(tools[0]!, { value: 2 }, authorize)).toMatchObject({ isError: false, structuredContent: { value: 3 } });
+    expect(remote.invoked).toHaveBeenCalledOnce(); expect(dispatched).toHaveBeenCalledOnce();
+  } finally { await session.close(); }
 });
