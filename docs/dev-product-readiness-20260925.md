@@ -60,6 +60,8 @@ No screenshots were captured. Browser tests used an isolated headless Microsoft 
 
 The system Node 24.19.0 does not satisfy the Runner's existing supported-runtime contract. Its initial CLI failures are environment failures, not evidence of a product regression. Node 22.23.2 was acquired for the rerun and its executable SHA-256 was checked against the official Node checksums. The Linux follow-up used a separately checksum-verified official Node archive and the distribution's trusted Git installation. The Windows Git E2E failure remains recorded as an environment limitation; the same test passed on Linux. Neither runtime requirements, trusted executable policy nor test assertions were relaxed.
 
+The initial GitHub CI run for `0d0a25c` found four rendering baseline mismatches. The local browser source contained 194 CRLF line endings, while `.gitattributes` commits it as LF. The reviewed fixture capture had therefore included 194 extra bytes in each full page. The browser source was restored to its identical Git-normalized bytes and both full-page and inline-script fixtures were recaptured. Runtime code and exact byte/hash assertions are unchanged; subsequent verification uses the normalized source.
+
 ## Remaining product and release boundaries
 
 - OAuth provider onboarding and reusable toolset management still use advanced operations. Public service discovery/marketplace and guided provider registration are not implemented.
