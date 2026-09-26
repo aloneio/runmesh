@@ -10,7 +10,8 @@ import { fileURLToPath } from "node:url";
 
 // Exercise the generated PowerShell downloader only, never installation,
 // credential enrollment, or service mutation. The HTTP loopback fixture
-// replaces HTTPS and reduces the production deadline/byte cap for the test.
+// replaces HTTPS and reduces the byte cap. Only deadline-specific cases shorten
+// the production deadline; cold Windows HTTP initialization can exceed 1.5s.
 const compiled = buildSync({ entryPoints: [fileURLToPath(new URL("../apps/worker/src/installer.ts", import.meta.url))], platform: "node", format: "cjs", bundle: true, write: false }).outputFiles[0].text;
 const loaded = { exports: {} };
 new Function("module", "exports", compiled)(loaded, loaded.exports);
@@ -21,10 +22,11 @@ assert.ok(start >= 0 && end > start);
 const downloader = rendered.slice(start, end)
   .replace("$HttpHandler.AllowAutoRedirect = $false", "$HttpHandler.AllowAutoRedirect = $false\n  $HttpHandler.UseProxy = $false")
   .replaceAll("-ne 'https'", "-ne 'http'")
-  .replaceAll("60000", "1500")
   .replaceAll("8388608", "1024");
 
-async function fixture(handler, { cancelAfter = true } = {}) {
+async function fixture(handler, { cancelAfter = true, deadlineMs = 60000 } = {}) {
+  let fixtureDownloader = downloader.replaceAll("60000", String(deadlineMs));
+  if (!cancelAfter) fixtureDownloader = fixtureDownloader.replace("$DownloadCancellation.CancelAfter(" + deadlineMs + ")", "# Deliberately emulate an operation which ignores cancellation.");
   const root = await mkdtemp(join(tmpdir(), "runmesh-download-"));
   const sockets = new Set();
   const server = createServer(handler);
@@ -42,7 +44,7 @@ $ArtifactName = 'runner.tgz'
 $HttpClient = $null
 $HttpHandler = $null
 try {
-${cancelAfter ? downloader : downloader.replace("$DownloadCancellation.CancelAfter(1500)", "# Deliberately emulate an operation which ignores cancellation.")}
+${fixtureDownloader}
   [Console]::WriteLine('DOWNLOAD_OK')
 } catch {
   [Console]::WriteLine('DOWNLOAD_FAILED: ' + $_.Exception.Message)
@@ -83,7 +85,7 @@ for (const cancelAfter of [true, false]) test(`PowerShell release body deadline 
   const result = await fixture((_request, response) => {
     response.writeHead(200, { "content-length": "2" });
     response.write("a");
-  }, { cancelAfter });
+  }, { cancelAfter, deadlineMs: 1500 });
   assert.equal(result.code, 1, result.stdout + result.stderr);
   assert.match(result.stdout, /DOWNLOAD_FAILED/);
   assert.doesNotMatch(result.stdout, /DOWNLOAD_OK/);
