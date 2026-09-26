@@ -180,3 +180,67 @@ it('product service names preserve Unicode without changing endpoint or credenti
       body: JSON.stringify({ ...creation, display_name }) })).status).toBe(400);
   }
 });
+
+async function connectionReceipt(action: "begin" | "complete" | "revoke", receipt: unknown) {
+  const admin = await session(), origin = "https://control.provider.com";
+  const connectionOAuth = vi.fn(async () => receipt);
+  const config = { ...configured(), RUNMESH_PUBLIC_ORIGIN: origin,
+    CAPABILITIES: { idFromName: () => "central", get: () => ({ connectionOAuth }) } } as unknown as WorkerEnv;
+  const body = action === "complete" ? { state: "s".repeat(43), code: "synthetic-code" } : { profile_id: "expected-profile", expected_revision: 2 };
+  const request = new Request(origin + "/admin/central/connections/" + action, { method: "POST",
+    headers: { ...admin.headers, origin }, body: JSON.stringify(body) });
+  const response = await handleCentralAdmin(request, config, new URL(request.url));
+  expect(connectionOAuth).toHaveBeenCalledOnce();
+  return response;
+}
+
+it.each(["begin", "complete", "revoke"] as const)("OAuth %s returns only its public receipt fields", async action => {
+  const safe = action === "begin" ? { state: "started", profile_id: "expected-profile", authorization_url: "https://login.provider.com/authorize?state=synthetic" }
+    : { state: action === "complete" ? "linked" : "revoked", profile_id: "expected-profile" };
+  const response = await connectionReceipt(action, { ...safe, access_token: "private-token-do-not-reflect", client: { client_secret: "private-client-do-not-reflect" } });
+  expect(response.status).toBe(200); expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(await response.json()).toEqual(safe);
+});
+
+it.each([
+  ["begin", { state: "started", profile_id: "other-profile", authorization_url: "https://login.provider.com/authorize" }],
+  ["revoke", { state: "revoked", profile_id: "other-profile" }],
+  ["complete", { state: "linked" }],
+  ["complete", { state: "linked", profile_id: "../private-profile" }],
+  ["begin", { state: "linked", profile_id: "expected-profile" }],
+  ["complete", { state: "started", profile_id: "expected-profile", authorization_url: "https://login.provider.com/authorize" }],
+  ["revoke", { state: "linked", profile_id: "expected-profile" }],
+  ["begin", { state: "failed", code: "private-error-do-not-reflect", operation_state: "unknown" }],
+  ["begin", { state: "failed", code: "unavailable", operation_state: "completed" }],
+  ["begin", { state: "failed", code: "unavailable" }],
+  ["begin", null],
+] as const)("OAuth %s rejects malformed or mismatched receipts: %j", async (action, receipt) => {
+  const response = await connectionReceipt(action, receipt);
+  expect(response.status).toBe(503);
+  expect(await response.json()).toEqual({ error: { code: "oauth_unavailable", operation_state: "unknown" } });
+});
+
+it.each([
+  "javascript:alert(1)", "/authorize", "http://login.provider.com/authorize", "https://127.0.0.1/authorize",
+  "https://user:password@login.provider.com/authorize", "https://login.provider.com/authorize#private",
+  "https://control.provider.com/authorize", "https://login.provider.com/authorize?scope=" + "r".repeat(8192),
+])("OAuth redirect receipt rejects an unsafe destination: %s", async authorization_url => {
+  const response = await connectionReceipt("begin", { state: "started", profile_id: "expected-profile", authorization_url });
+  expect(response.status).toBe(503);
+  expect(await response.json()).toEqual({ error: { code: "oauth_unavailable", operation_state: "unknown" } });
+});
+
+it("OAuth redirect receipts retain the existing bounded long-query support", async () => {
+  const receipt = { state: "started", profile_id: "expected-profile", authorization_url: "https://login.provider.com/authorize?scope=" + "r".repeat(3000) };
+  const response = await connectionReceipt("begin", receipt);
+  expect(response.status).toBe(200); expect(await response.json()).toEqual(receipt);
+});
+
+it.each([
+  ["invalid_request", 400], ["invalid_callback", 400], ["denied", 403], ["conflict", 409],
+  ["provider_unsupported", 503], ["unavailable", 503], ["reauthorization_required", 503],
+] as const)("OAuth preserves the recognized %s failure contract", async (code, status) => {
+  const response = await connectionReceipt("begin", { state: "failed", code, operation_state: "not_started", private_detail: "private-error-do-not-reflect" });
+  expect(response.status).toBe(status);
+  expect(await response.json()).toEqual({ error: { code: "oauth_" + code, operation_state: "not_started" } });
+});

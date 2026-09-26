@@ -1,9 +1,9 @@
 import { auth, extractWWWAuthenticateParams, refreshAuthorization, type FetchLike, type OAuthClientProvider, type OAuthDiscoveryState, type StoredOAuthClientInformation, type StoredOAuthTokens } from '@modelcontextprotocol/client';
-import { connectionClientMetadata } from '../../contracts/managed-connections.js';
+import { connectionClientMetadata, publicOAuthUrl } from '../../contracts/managed-connections.js';
 import type { ManagedOAuthDocument, ManagedOAuthProtocol } from '../../contracts/managed-oauth.js';
 import { catalogObject } from '../../contracts/catalog-json.js';
 import { OAuthFault } from '../../contracts/oauth.js';
-import { managedOAuthChallenge, managedOAuthFetch, publicOAuthUrl, validDiscovery } from './managed-oauth-http.js';
+import { managedOAuthChallenge, managedOAuthFetch, validDiscovery } from './managed-oauth-http.js';
 
 const fault = (code: ConstructorParameters<typeof OAuthFault>[0]): never => { throw new OAuthFault(code); };
 
