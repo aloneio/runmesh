@@ -106,6 +106,31 @@ export async function checkGuidedProduct(executable) {
   rejectDiscovery=false;await page.getByRole('button',{name:'Reconnect',exact:true}).click();
   await page.waitForURL(url=>url.pathname==='/admin/central'&&url.searchParams.has('connected'),{timeout:10000});await status.filter({hasText:'Review the tools before approving.'}).waitFor();
   assert.equal(requests.filter(r=>r.path==='/admin/central/connections/begin').length,2);assert.equal(requests.filter(r=>r.path==='/admin/central/connections/complete').length,2);assert.equal(new URL(page.url()).search,'');
+  const oauthCard=page.locator('[data-service-list] .central-card').filter({has:page.getByRole('button',{name:'Reconnect',exact:true})});
+  const discoveries=requests.filter(r=>r.path.startsWith('/admin/central/discovery/')).length;
+  await oauthCard.getByRole('button',{name:'Pause',exact:true}).click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+  assert.equal(await oauthCard.getByRole('button',{name:'Reconnect',exact:true}).isDisabled(),true);
+  assert.equal(await oauthCard.getByRole('button',{name:'Check connection & discover',exact:true}).isDisabled(),true);
+  assert.equal(await oauthCard.getByRole('button',{name:'Review tools',exact:true}).isEnabled(),true);
+  assert.equal(await oauthCard.getByText('Enable this service before checking its connection or reconnecting its account.',{exact:true}).isVisible(),true);
+  assert.equal(await oauthCard.getByRole('button',{name:'Disconnect account',exact:true}).isEnabled(),true);
+  assert.equal(requests.filter(r=>r.path==='/admin/central/connections/begin').length,2);
+  await oauthCard.getByRole('button',{name:'Enable',exact:true}).click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+  assert.equal(await oauthCard.getByRole('button',{name:'Reconnect',exact:true}).isEnabled(),true);
+  assert.equal(await oauthCard.getByRole('button',{name:'Check connection & discover',exact:true}).isEnabled(),true);
+  assert.equal(await oauthCard.getByText('Enable this service before checking its connection or reconnecting its account.',{exact:true}).count(),0);
+  const publicCard=page.locator('[data-service-list] .central-card').filter({has:page.getByText('https://docs.example.com/mcp',{exact:true})});
+  await publicCard.getByRole('button',{name:'Pause',exact:true}).click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+  assert.equal(await publicCard.getByRole('button',{name:'Check connection & discover',exact:true}).isDisabled(),true);
+  assert.equal(await publicCard.getByRole('button',{name:'Review tools',exact:true}).isEnabled(),true);
+  assert.equal(await publicCard.getByText('Enable this service before checking its connection.',{exact:true}).isVisible(),true);
+  assert.equal(await publicCard.getByRole('button',{name:'Reconnect',exact:true}).count(),0);
+  await publicCard.getByRole('button',{name:'Enable',exact:true}).click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+  assert.equal(await publicCard.getByRole('button',{name:'Check connection & discover',exact:true}).isEnabled(),true);
+  assert.equal(await publicCard.getByText('Enable this service before checking its connection.',{exact:true}).count(),0);
+  assert.equal(requests.filter(r=>r.path.startsWith('/admin/central/discovery/')).length,discoveries);
+  assert.equal(await page.locator('[data-service-list] input[type=password]').count(),0);
+  assert.equal(await page.getByText('Update service credentials',{exact:true}).count(),0);
   await page.locator('[data-central-tab=skills]').click();
   const importer=page.locator('[data-skill-import]');
   const folderText=['---','name: research','description: Research fixture','---','Selected folder version'].join(String.fromCharCode(10));
@@ -161,7 +186,7 @@ export async function checkGuidedProduct(executable) {
   }
   await callback.close();
   assert.deepEqual(exceptions,[]);
-  return {state:'passed',guided_homepage:true,direct_url_without_deployment_setup:true,service_explicit_review:true,oauth_return_to_tool_review:true,oauth_extra_parameters_ignored:true,oauth_duplicate_parameters_rejected:true,oauth_provider_errors_not_reflected:true,direct_skill_install_and_confirmed_update:true,skill_file_folder_selection_switch:true,skill_selection_invalidates_confirmation:true,shared_library_without_client_assignment:true,retired_access_api_not_called:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,mobile_no_overflow:true,screenshots:0};
+  return {state:'passed',guided_homepage:true,direct_url_without_deployment_setup:true,service_explicit_review:true,oauth_return_to_tool_review:true,paused_oauth_reconnect_guard:true,paused_service_discovery_guard:true,no_legacy_service_credentials:true,oauth_extra_parameters_ignored:true,oauth_duplicate_parameters_rejected:true,oauth_provider_errors_not_reflected:true,direct_skill_install_and_confirmed_update:true,skill_file_folder_selection_switch:true,skill_selection_invalidates_confirmation:true,shared_library_without_client_assignment:true,retired_access_api_not_called:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,mobile_no_overflow:true,screenshots:0};
  }finally{await browser?.close();await new Promise(r=>server.close(r));await rm(join(skillFolder,'SKILL.md'),{force:true});await rmdir(skillFolder);}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){

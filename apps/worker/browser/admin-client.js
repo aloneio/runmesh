@@ -42,10 +42,13 @@ function bindCentralProduct(root){
  function renderProfiles(){var list=app.querySelector('[data-service-list]');clear(list);if(!profiles.length)list.append(el('p',t('No services yet. Connect your first service to get started.','还没有服务，添加第一个 MCP 服务即可开始。'),'muted'));
   profiles.forEach(function(profile){var card=el('article',undefined,'central-card');card.append(el('h3',profile.display_name||profile.connector_id),el('p',profile.endpoint,'muted'),el('p',profile.enabled?t('Enabled · tool review required before sharing','已启用 · 分享前仍需审核工具'):t('Paused','已暂停')));var actions=el('div',undefined,'actions');
    button(actions,t('Review tools','审阅工具'),function(){return reviewService(profile,false);});
-   button(actions,t('Check connection & discover','检查连接并发现工具'),function(){return reviewService(profile,true);});
+   var discover=button(actions,t('Check connection & discover','检查连接并发现工具'),function(){return reviewService(profile,true);});discover.disabled=!profile.enabled;
    button(actions,profile.enabled?t('Pause','暂停'):t('Enable','启用'),async function(){await api('profiles/'+encodeURIComponent(profile.profile_id),{action:profile.enabled?'disable':'enable',expected_revision:profile.revision});await refresh();});card.append(actions);
-   if(profile.authentication==='oauth'){button(actions,t('Reconnect','重新授权'),function(){return connectOAuth(profile);});button(actions,t('Disconnect account','断开账号'),async function(){await api('connections/revoke',{profile_id:profile.profile_id,expected_revision:profile.revision});await refresh();say(t('Account disconnected. Reconnect to use this service.','账号已断开，重新授权后可使用此服务。'));});}
-   if(profile.credential){var credentials=el('details'),form=el('form'),label=el('label',t('New service access token','新的服务访问令牌')),input=el('input'),submit=el('button',t('Update access token','更新访问令牌'),'button small secondary');input.type='password';input.required=true;input.autocomplete='new-password';submit.type='submit';label.append(input);form.append(label,submit);credentials.append(el('summary',t('Update service credentials','更新服务凭据')),form);card.append(credentials);form.addEventListener('submit',function(event){event.preventDefault();run(async function(){var token=input.value;input.value='';await api('profiles/'+encodeURIComponent(profile.profile_id),{action:'rotate',expected_revision:profile.revision,credential:{kind:'bearer',token:token}});token='';await refresh();say(t('Access token updated. Check the connection before sharing tools.','访问令牌已更新，请检查连接后再分享工具。'));});});}
+   if(profile.authentication==='oauth'){
+    var reconnect=button(actions,t('Reconnect','重新授权'),function(){return connectOAuth(profile);});reconnect.disabled=!profile.enabled;
+    button(actions,t('Disconnect account','断开账号'),async function(){await api('connections/revoke',{profile_id:profile.profile_id,expected_revision:profile.revision});await refresh();say(t('Account disconnected. Reconnect to use this service.','账号已断开，重新授权后可使用此服务。'));});
+   }
+   if(!profile.enabled)card.append(el('p',profile.authentication==='oauth'?t('Enable this service before checking its connection or reconnecting its account.','请先启用服务，再检查连接或重新授权账号。'):t('Enable this service before checking its connection.','请先启用服务，再检查连接。'),'muted'));
    list.append(card);
   });
  }
