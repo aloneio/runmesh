@@ -61,7 +61,7 @@ export async function checkUiWithChromium(origin,cookie,output){
    const url=`${origin}/admin?lang=${locale}`, navigation=await tab("Page.navigate",{url});
    assert.equal(navigation.errorText,undefined);assert.ok(navigation.loaderId);
    await waitForUiNavigation(tab,{url,locale,frameId:navigation.frameId,loaderId:navigation.loaderId});
-   const first=await evaluate(`(()=>{const panel=[...document.querySelectorAll('.panel')].find(p=>/^(Recent jobs|最近任务)$/.test(p.querySelector('h2')?.textContent||''));if(!panel)throw Error('Missing recent jobs panel');window.__uiPanel=panel;window.__uiMutations=0;new MutationObserver(m=>window.__uiMutations+=m.length).observe(panel,{childList:true,subtree:true,characterData:true,attributes:true});const r=panel.getBoundingClientRect();return {lang:document.documentElement.lang,text:panel.textContent,top:r.top,height:r.height,opacity:getComputedStyle(panel).opacity}})()`);
+   const first=await evaluate(`(()=>{const panel=[...document.querySelectorAll('.panel')].find(p=>/^(Your AI connections|你的 AI 连接|Recent jobs|最近任务)$/.test(p.querySelector('h2')?.textContent||''));if(!panel)throw Error('Missing dashboard activity panel');window.__uiPanel=panel;window.__uiMutations=0;new MutationObserver(m=>window.__uiMutations+=m.length).observe(panel,{childList:true,subtree:true,characterData:true,attributes:true});const r=panel.getBoundingClientRect();return {lang:document.documentElement.lang,heading:panel.querySelector('h2').textContent,text:panel.textContent,top:r.top,height:r.height,opacity:getComputedStyle(panel).opacity}})()`);
    const requestsBefore=requests.length;await sleep(1000);
    const second=await evaluate(`(()=>{const p=window.__uiPanel,r=p.getBoundingClientRect();return {lang:document.documentElement.lang,text:p.textContent,top:r.top,height:r.height,opacity:getComputedStyle(p).opacity,mutations:window.__uiMutations,overflow:document.documentElement.scrollWidth>innerWidth+1}})()`);
    assert.equal(first.lang,locale);assert.equal(first.text,second.text);assert.equal(first.top,second.top);assert.equal(first.height,second.height);assert.equal(second.opacity,"1");assert.equal(second.mutations,0);assert.equal(second.overflow,false);
@@ -76,7 +76,7 @@ export async function checkUiWithChromium(origin,cookie,output){
    assert.equal(await evaluate("document.documentElement.lang"),locale);
    await evaluate("document.querySelector('.control-nav a[href=\"/admin\"]').click()");
    await waitForUiNavigation(tab,{url:`${origin}/admin`,locale});
-   const label=await evaluate("[...document.querySelectorAll('h2')].map(h=>h.textContent).join('|')");assert.ok(label.includes(locale==="en"?"Recent jobs":"最近任务"));
+   const labels=await evaluate("[...document.querySelectorAll('h2')].map(h=>h.textContent)");assert.ok(labels.includes(first.heading));
   }
   // A preference changed in another tab must reload the shell, not mix
   // its old language with the newly fetched main-content language.

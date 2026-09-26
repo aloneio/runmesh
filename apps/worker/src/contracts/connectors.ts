@@ -3,6 +3,7 @@ export interface ConnectionProfile {
   readonly schema_version: 1;
   readonly profile_id: string;
   readonly connector_id: string;
+  readonly display_name?: string;
   /** Immutable credential-free HTTPS destination; outbound SSRF admission is separate. */
   readonly endpoint: string;
   readonly owner: { readonly kind: "instance_admin" };
@@ -35,8 +36,8 @@ export interface CredentialEnvelope {
 }
 export interface ProfileRecord { readonly profile: ConnectionProfile; readonly envelope: CredentialEnvelope | null }
 export type ProfileCommand =
-  | { readonly action: "create_oauth"; readonly profile_id: string; readonly connector_id: string; readonly endpoint: string }
-  | { readonly action: "create"; readonly profile_id: string; readonly connector_id: string; readonly endpoint: string; readonly credential: CredentialInput }
+  | { readonly action: "create_oauth"; readonly profile_id: string; readonly connector_id: string; readonly display_name?: string; readonly endpoint: string }
+  | { readonly action: "create"; readonly profile_id: string; readonly connector_id: string; readonly display_name?: string; readonly endpoint: string; readonly credential: CredentialInput }
   | { readonly action: "rotate"; readonly profile_id: string; readonly expected_revision: number; readonly credential: CredentialInput }
   | { readonly action: "enable" | "disable" | "rekey"; readonly profile_id: string; readonly expected_revision: number };
 export type ProfileResult =

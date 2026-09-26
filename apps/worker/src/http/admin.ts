@@ -5,6 +5,7 @@ import { ADMIN_CSRF_COOKIE } from "./constants.js";
 import { ADMIN_SESSION_COOKIE } from "./constants.js";
 import { adminDocument } from "../admin/layout.js";
 import { centralPage } from "../admin/central-view.js";
+import { centralProductSetup } from "./central-product-setup.js";
 import { adminError } from "./responses.js";
 import { adminUpstreamError } from "./responses.js";
 import { boundedJsonResponse } from "../platform/bounded-json.js";
@@ -70,13 +71,20 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
   if (request.method === "GET" && url.pathname === "/admin/central") {
     const csrf = cookieValue(request, ADMIN_CSRF_COOKIE);
     if (csrf === undefined || !constantTimeEqual(await sha256Hex(csrf), session.csrf_hash)) return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
-    return html(adminDocument("Central capabilities", centralPage(csrf, env.CAPABILITIES !== undefined, env.CENTRAL_SKILLS_ENABLED === "1", env.CENTRAL_GOVERNANCE_ENABLED === "1"), "central"));
+    const listed = await boundedJsonResponse(signal => registryRequest(env, "/auth/clients", "GET", "", signal));
+    const rawClients = record(listed?.value)?.clients;
+    if (listed?.status !== 200 || !Array.isArray(rawClients)) return adminError(503, "Client directory is unavailable. Refresh to try again.");
+    const clients = rawClients.flatMap(value => { const client = record(value);
+      return client && typeof client.client_id === "string" && isSafeIdentifier(client.client_id) && typeof client.label === "string" && client.revoked_at_ms === null
+        ? [{ id: client.client_id, label: client.label }] : []; });
+    const setup = await centralProductSetup(env, url.origin);
+    return html(adminDocument("Services & Skills", centralPage(csrf, env.CAPABILITIES !== undefined, env.CENTRAL_SKILLS_ENABLED === "1", env.CENTRAL_GOVERNANCE_ENABLED === "1", clients, setup), "central"));
   }
   if (request.method === "GET" && ["/admin", "/admin/runners", "/admin/clients", "/admin/settings"].includes(url.pathname)) {
     const csrf = cookieValue(request, ADMIN_CSRF_COOKIE);
     if (csrf === undefined || !constantTimeEqual(await sha256Hex(csrf), session.csrf_hash)) return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
     const data = await loadDashboardData(env, url.pathname === "/admin" && url.searchParams.get("history") === "1" && env.RUNMESH_JOB_HISTORY_BACKEND !== "d1");
-    return html(adminPage(url.pathname, data, csrf));
+    return html(adminPage(url.pathname, data, csrf, env.CAPABILITIES !== undefined, url.searchParams.get("history") === "1"));
   }
   const runnerDetail = /^\/admin\/runners\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})$/.exec(url.pathname);
   const jobDetail = /^\/admin\/runners\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\/jobs\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})$/.exec(url.pathname);
@@ -238,17 +246,23 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
   const secret = randomBase64Url();
   const failure = await persistClientCredential(env, `/auth/clients/${encodeURIComponent(clientId)}/rotate`, clientId, secret);
   if (failure !== undefined) return failure;
-  return html(secretCreatedPage("MCP client rotated", secretUrl(publicOrigin, secret)));
+  return html(secretCreatedPage("MCP client rotated", secretUrl(publicOrigin, secret), env.CAPABILITIES !== undefined ? clientId : undefined));
 }
 
 async function createClient(env: WorkerEnv, form: FormData, baseUrl: string): Promise<Response> {
-  const label = form.get("label"); const scopes = selectedScopes(form);
-  if (typeof label !== "string" || !validLabel(label) || scopes === undefined) return adminError(400, "Client name or scopes are invalid.");
+  const label = form.get("label");
+  const mode = form.get("access_mode");
+  const centralOnly = mode === "central";
+  const scopes = centralOnly ? [] : selectedScopes(form);
+  if ((mode !== null && mode !== "central" && mode !== "native") || (centralOnly && env.CAPABILITIES === undefined)
+    || typeof label !== "string" || !validLabel(label) || scopes === undefined) return adminError(400, "Client name or scopes are invalid.");
   const secret = randomBase64Url();
   const clientId = `client-${crypto.randomUUID().replaceAll("-", "")}`;
-  const failure = await persistClientCredential(env, "/auth/clients", clientId, secret, { client_id: clientId, label, scopes });
+  const failure = await persistClientCredential(env, "/auth/clients", clientId, secret, centralOnly
+    ? { identity_version: 2, client_id: clientId, label, native_scopes: [] }
+    : { client_id: clientId, label, scopes });
   if (failure !== undefined) return failure;
-  return html(secretCreatedPage("MCP client created", secretUrl(baseUrl, secret)));
+  return html(secretCreatedPage("MCP client created", secretUrl(baseUrl, secret), env.CAPABILITIES !== undefined ? clientId : undefined));
 }
 
 function secretUrl(base: string, secret: string): string { const url = new URL(base); url.pathname = `/${secret}/mcp`; url.search = ""; return url.toString(); }
@@ -268,5 +282,16 @@ async function persistClientCredential(env: WorkerEnv, path: string, clientId: s
   // committed record. An accepted, truncated or unrelated receipt is uncertain.
   if (response?.status === 200 && receipt?.client_id === clientId && receipt.secret_prefix === prefix
     && Number.isSafeInteger(receipt.secret_version) && (receipt.secret_version as number) >= 1 && receipt.revoked_at_ms === null) return undefined;
+  if (fields.identity_version === 2 && response?.status === 200 && receipt?.schema_version === 2
+    && receipt.client_id === clientId && receipt.secret_version === 1
+    && Array.isArray(receipt.native_scopes) && receipt.native_scopes.length === 0) {
+    // Identity receipts omit credential metadata. Confirm the committed record
+    // separately; never retry creation after an uncertain write.
+    const readback = await boundedJsonResponse(signal => registryRequest(env, "/auth/clients", "GET", "", signal));
+    const clients = record(readback?.value)?.clients;
+    const client = Array.isArray(clients) ? clients.map(record).find(item => item?.client_id === clientId) : undefined;
+    if (readback?.status === 200 && client?.secret_prefix === prefix && client.secret_version === 1
+      && client.revoked_at_ms === null && Array.isArray(client.scopes) && client.scopes.length === 0) return undefined;
+  }
   return adminError(response?.status === 404 ? 404 : response?.status === 409 ? 409 : 503, "MCP credential could not be confirmed. Refresh the client state before trying again.");
 }

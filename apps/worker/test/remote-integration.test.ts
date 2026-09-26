@@ -25,9 +25,9 @@ async function administrator() {
   return { hash, headers: { cookie: `${ADMIN_SESSION_COOKIE}=${raw}; ${ADMIN_CSRF_COOKIE}=${csrf}`,
     origin: "https://worker.test", "content-type": "application/json", "x-csrf-token": csrf } };
 }
-async function client() {
+async function client(native = false) {
   const secret = randomBase64Url(), id = "remote-client-" + crypto.randomUUID(), path = "/auth/clients";
-  const body = JSON.stringify({ identity_version: 2, client_id: id, label: "Remote only", native_scopes: [],
+  const body = JSON.stringify({ identity_version: 2, client_id: id, label: native ? "Services and computer access" : "Remote only", native_scopes: native ? ['coding:read'] : [],
     secret_verifier: await sha256Hex(secret), secret_prefix: "fixture" });
   const response = await registry().fetch(new Request(`https://registry.internal${path}`, { method: "POST", body,
     headers: await internalHeaders(env.INTERNAL_CONTROL_SECRET, "POST", path, body) }));
@@ -46,8 +46,8 @@ async function rpc(config: WorkerEnv, secret: string, method: string, params: un
   return messages.find(message => message.id === "test");
 }
 
-async function fixture() {
-  const admin = await administrator(), current = await client();
+async function fixture(native = false) {
+  const admin = await administrator(), current = await client(native);
   const ns = (env as unknown as { CAPABILITIES: DurableObjectNamespace<CapabilitiesDOv1> }).CAPABILITIES;
   const stub = ns.get(ns.idFromName("remote-fixture-" + crypto.randomUUID()));
   const configured = { ...env, RUNMESH_PUBLIC_ORIGIN: "https://worker.test",
@@ -106,7 +106,7 @@ it("W05 admin discovery to approval to client invocation crosses the real HTTP/D
     const command = await f.approve();
     const list = await rpc(f.config, f.current.secret, "tools/list", {});
     expect(list.result.tools.map((tool: { name: string }) => tool.name)).toContain("remote_call");
-    expect(list.result.tools).toHaveLength(12);
+    expect(list.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(['remote_call', 'remote_tools']);
     const count = f.methods.length;
     const page = await rpc(f.config, f.current.secret, "tools/call", { name: "remote_tools", arguments: { profile_id: "docs" } });
     expect(JSON.parse(page.result.content[0].text).tools[0].tool_id).toBe(command.tool_id);
@@ -124,7 +124,7 @@ it("W05 unapproved callers cannot use a cached tool definition and argument vali
   try {
     expect((await f.discover()).status).toBe(200); const command = await f.approve(), other = await client(), before = f.methods.length;
     const config = { ...f.config, CENTRAL_SKILLS_ENABLED: '1', CENTRAL_DIRECT_TOOLS_ENABLED: '1' };
-    expect((await rpc(config, other.secret, 'tools/list', {})).result.tools).toHaveLength(10);
+    expect((await rpc(config, other.secret, 'tools/list', {})).result.tools).toEqual([]);
     const tools = (await rpc(config, f.current.secret, 'tools/list', {})).result.tools;
     expect(tools.map((tool: { name: string }) => tool.name)).toEqual(expect.arrayContaining(['remote_tools', 'remote_call', 'remote_status']));
     expect(tools.some((tool: { name: string }) => tool.name.startsWith('skill_'))).toBe(false);
@@ -199,10 +199,13 @@ it("W05 discovery requires the existing browser CSRF boundary before any upstrea
 });
 
 it("W05 absent remote configuration retains the ten native tools without resolving central state", async () => {
-  const current = await client(), get = vi.fn(() => { throw new Error("must not resolve"); });
+  const current = await client(true), get = vi.fn(() => { throw new Error("must not resolve"); });
   const config = { ...env, CAPABILITIES: { idFromName: get, get } } as unknown as WorkerEnv;
   const response = await rpc(config, current.secret, "tools/list", {});
   expect(response.result.tools).toHaveLength(10); expect(get).not.toHaveBeenCalled();
+  const centralOnly = await client();
+  expect((await rpc(config, centralOnly.secret, 'tools/list', {})).result.tools).toEqual([]);
+  expect(get).not.toHaveBeenCalled();
 });
 
 it("W05 a relay hop cannot recursively enter another Runmesh MCP endpoint", async () => {
@@ -211,7 +214,7 @@ it("W05 a relay hop cannot recursively enter another Runmesh MCP endpoint", asyn
 });
 
 it('W08 direct tools preserve reviewed schemas and stale names cannot bypass revoked grants', async () => {
-  const f = await fixture(); try {
+  const f = await fixture(true); try {
     expect((await f.discover()).status).toBe(200); await f.approve(); const config = { ...f.config, CENTRAL_DIRECT_TOOLS_ENABLED: '1' };
     const listed = await rpc(config, f.current.secret, 'tools/list', {}); const direct = listed.result.tools.find((t: { name: string }) => t.name.startsWith('rm_'));
     expect(direct.inputSchema.properties.value.type).toBe('integer'); const called = await rpc(config, f.current.secret, 'tools/call', { name: direct.name, arguments: { value: 9 } });

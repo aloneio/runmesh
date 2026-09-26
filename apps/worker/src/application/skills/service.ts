@@ -1,7 +1,7 @@
 import type { CapturedIdentity } from "../../contracts/identity.js";
 import { parseClientIdentity } from "../../contracts/identity.js";
 import { isCapabilityIdentifier, parseCapabilityGrant } from "../../contracts/capabilities.js";
-import { SKILL_LIMITS, type SkillPorts, type SkillMutation, type SkillInspection, type SkillPage, type SkillContent, type SkillSummary, type SkillDependency } from "../../contracts/skills.js";
+import { SKILL_LIMITS, type SkillPorts, type SkillMutation, type SkillInspection, type SkillPage, type SkillContent, type SkillSummary, type SkillDependency, type SkillLibraryPage } from "../../contracts/skills.js";
 import { makeSkillBundle, skillDigest, skillObject, skillPath } from "../../domain/skills/bundle.js";
 
 export function createSkillService(ports: SkillPorts) {
@@ -20,6 +20,21 @@ export function createSkillService(ports: SkillPorts) {
     return grant.enabled && grant.client_id === principal.client_id ? grant : undefined;
   }
   return {
+    async library(hash: string, after: string | undefined, signal: AbortSignal): Promise<SkillLibraryPage> {
+      try {
+        if (after !== undefined && !isCapabilityIdentifier(after)) return { state: "invalid" };
+        const admin = await ports.admin(hash, signal);
+        if (signal.aborted) return { state: "unavailable" };
+        if (admin !== "allowed") return { state: admin };
+        const heads = ports.repository.heads(after ?? "", 51);
+        const skills = heads.slice(0, 50).map(head => {
+          const summary = ports.repository.summary(head.skill_id, head.staged_digest);
+          if (!summary || summary.skill_id !== head.skill_id || summary.digest !== head.staged_digest) throw new Error("skill_summary_invalid");
+          return { head, summary };
+        });
+        return { state: "listed", skills, next_after: heads.length > 50 ? skills[49]!.head.skill_id : null };
+      } catch { return { state: "unavailable" }; }
+    },
     async mutate(hash: string, input: unknown, signal: AbortSignal): Promise<SkillMutation> {
       try {
         const v = skillObject(input);

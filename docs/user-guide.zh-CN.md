@@ -16,6 +16,12 @@ https://your-host.example/<generated-secret>/mcp
 
 ## 确认机器与工作区
 
+开发版如果仅使用管理员共享的中继 MCP 服务和 Skill，无需 Runner 或工作区，
+也无需执行下面的机器选择步骤。在 AI 客户端添加管理员提供的连接地址即可；
+可用工具由该连接的精确授权决定。管理员可按[能力库指南](central-administration.zh-CN.md)
+统一连接服务、审阅内容并分配权限。创建凭据本身不会自动授予全部能力。
+下面的机器与工作区步骤只适用于已获准访问计算机的连接。
+
 1. 用 `runner_current` 查看当前选择，再用 `runner_list` 查找目标机器。
 2. 尚未选择 Runner 时，调用 `runner_select`，即使列表中只有一台机器也应明确选择。切换已有选择须提供 `confirm_switch: true`；完成后用 `runner_current` 确认。
 3. 用 `workspace_list` 查看获准的工作区 ID。先用 `read` 或 `inspect` 查看内容，再修改文件或执行命令。

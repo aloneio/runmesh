@@ -18,8 +18,10 @@ export type SkillInspection = { readonly state: "found"; readonly head: SkillHea
 export interface SkillSummary { readonly skill_id: string; readonly digest: string; readonly name: string; readonly description: string;
   readonly source: string; readonly license: string; readonly revision: number; readonly required_capabilities?: readonly CapabilityTarget[] }
 export type SkillPage = { readonly state: "listed"; readonly skills: readonly SkillSummary[] } | SkillFailure;
+export type SkillLibraryPage = { readonly state: "listed"; readonly skills: readonly { readonly head: SkillHead; readonly summary: Omit<SkillSummary, "revision"> }[]; readonly next_after: string | null } | SkillFailure;
 export type SkillContent = { readonly state: "read"; readonly skill_id: string; readonly digest: string; readonly path: string; readonly text: string; readonly dependencies: readonly SkillDependency[] } | SkillFailure;
 export interface SkillRepository {
+  heads(after: string, limit: number): readonly SkillHead[];
   approved(id: string, digest: string): boolean;
   head(id: string): SkillHead | undefined;
   bundle(id: string, digest: string): SkillBundle | undefined;
@@ -34,6 +36,7 @@ export interface SkillPorts { readonly repository: SkillRepository; readonly dig
   readonly identity: (principal: CapturedIdentity, signal: AbortSignal) => Promise<IdentityDecision>;
   readonly admin: (sessionHash: string, signal: AbortSignal) => Promise<AdminDecision> }
 export interface CentralSkills {
+  listSkillLibrary(sessionHash: string, after?: string): Promise<SkillLibraryPage>;
   mutateSkill(sessionHash: string, input: unknown): Promise<SkillMutation>;
   inspectSkill(sessionHash: string, id: string, digest?: string): Promise<SkillInspection>;
   listSkills(principal: CapturedIdentity, query: unknown): Promise<SkillPage>;

@@ -116,7 +116,11 @@ it("opening dashboard and Runner details performs no Job or audit reads until re
     const response = await f.open(path), body=await response.text();
     expect(response.status).toBe(200);
     expect(f.paths.some((p) => p === "/dashboard" || /\/(jobs|mcp-calls)(?:\?|$)/.test(p))).toBe(false);
-    expect(body.includes("Jobs not loaded.")).toBe(true);
+    if (path === "/admin") {
+      expect(body).toContain('href="/admin?history=1"');
+      expect(body).toContain('Your AI connections');
+      expect(body).not.toContain('Active shell jobs');
+    } else expect(body).toContain("Jobs not loaded.");
   }
 });
 

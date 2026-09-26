@@ -15,7 +15,7 @@ export async function handleCentralAdmin(request: Request, env: WorkerEnv, url: 
   if (url.pathname.startsWith('/admin/central/toolsets/')) return handleCentralToolsets(request, env, url);
   if (url.pathname === "/admin/central/receipts") return handleCentralReceipts(request, env, url);
   if (url.pathname === "/admin/central/profiles" || url.pathname.startsWith("/admin/central/grants/")) return handleCentralManagement(request, env, url);
-  if (url.pathname.startsWith("/admin/central/skills/")) return handleCentralSkills(request, env, url);
+  if (url.pathname === "/admin/central/skills" || url.pathname.startsWith("/admin/central/skills/")) return handleCentralSkills(request, env, url);
   if (url.pathname.startsWith("/admin/central/oauth/")) return handleCentralOAuth(request, env, url);
   if (url.pathname.startsWith("/admin/central/discovery/")) return handleCentralDiscovery(request, env, url);
   if (url.pathname.startsWith("/admin/central/catalogs/")) return handleCentralCatalogAdmin(request, env, url);

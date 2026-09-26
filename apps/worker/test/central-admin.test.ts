@@ -6,6 +6,10 @@ import { passwordVerifier, randomBase64Url, sha256Hex } from "../src/security.js
 import type { WorkerEnv } from "../src/platform/env.js";
 import type { CapabilitiesDOv1 } from "../src/capabilities-do.js";
 import { createCredentialCipher } from "../src/platform/connectors/cipher.js";
+import { centralProductSetup } from "../src/http/central-product-setup.js";
+import { handleBrowserAdmin } from "../src/http/admin.js";
+import { localizeHtmlResponse } from "../src/i18n/html.js";
+import { secretCreatedPage } from "../src/admin/auth-views.js";
 
 const registry = () => env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
 const namespace = () => (env as unknown as { CAPABILITIES: DurableObjectNamespace<CapabilitiesDOv1> }).CAPABILITIES;
@@ -13,6 +17,40 @@ const central = () => namespace().get(namespace().idFromName("central"));
 const configured = () => ({ ...env, RUNMESH_PUBLIC_ORIGIN: "https://worker.test" }) as WorkerEnv;
 const creation = { action: "create", connector_id: "test-docs", endpoint: "https://docs.example/mcp",
   credential: { kind: "bearer", token: "synthetic-private-upstream-token" } };
+
+it("product setup exposes approved endpoints and readiness flags without credentials", async () => {
+  const config = { ...configured(), CENTRAL_MCP_EGRESS: JSON.stringify({ schema_version: 1, endpoints: [
+    { endpoint: 'https://docs.example.com/mcp', protocol: '2025-11-25' },
+    { endpoint: 'https://runmesh.example.com/mcp', protocol: '2025-11-25' },
+  ] }) };
+  expect(await centralProductSetup(config, 'https://runmesh.example.com')).toEqual({ endpoints: ['https://docs.example.com/mcp'], credentialsReady: true });
+  expect(await centralProductSetup({ ...config, CENTRAL_VAULT_KEYRING: 'malformed' }, 'https://runmesh.example.com')).toEqual({ endpoints: ['https://docs.example.com/mcp'], credentialsReady: false });
+  expect(await centralProductSetup({ ...config, CENTRAL_MCP_EGRESS: undefined, CENTRAL_VAULT_KEYRING: undefined }, 'https://runmesh.example.com')).toEqual({ endpoints: [], credentialsReady: false });
+});
+
+it("unconfigured relay stays unavailable while the Chinese Skill library stays usable", async () => {
+  const admin = await session();
+  const request = new Request('https://worker.test/admin/central?lang=zh-CN', { headers: admin.headers });
+  const config = { ...configured(), CENTRAL_SKILLS_ENABLED: '1', CENTRAL_MCP_EGRESS: undefined, CENTRAL_VAULT_KEYRING: undefined };
+  const response = localizeHtmlResponse(request, await handleBrowserAdmin(request, config, new URL(request.url)));
+  expect(response.status).toBe(200);
+  const markup = await response.text();
+  expect(markup).toContain('服务连接尚待实例初始化');
+  expect(markup).toContain('尚未配置允许连接的服务地址。');
+  expect(markup).toContain('安全凭据存储尚未就绪。');
+  expect(markup).toContain('<fieldset disabled>');
+  expect(markup).toContain('data-skill-import');
+  expect(markup).toContain('AI 连接');
+  expect(markup).not.toContain('CENTRAL_VAULT_KEYRING');
+});
+
+it("client handoff opens the exact client without putting its credential in the link", () => {
+  const page = secretCreatedPage('MCP client created', 'https://worker.test/synthetic-secret/mcp', 'client-product');
+  expect(page).toContain('href="/admin/central?client=client-product"');
+  expect(page).toContain('Copy your connection URL first.');
+  expect(page).not.toContain('client=synthetic-secret');
+  expect(secretCreatedPage('MCP client created', 'https://worker.test/synthetic-secret/mcp')).not.toContain('<section class="central-next-step">');
+});
 const url = (id: string) => `https://worker.test/admin/central/profiles/${id}`;
 
 async function session() {
@@ -134,4 +172,18 @@ it("W03 public input caps and closed routing fields prevent profile creation", a
     expect(response.status).toBe(400);
   }
   expect(await central().getProfile(admin.hash, id)).toEqual({ state: "missing" });
+});
+
+
+it('product service names preserve Unicode without changing endpoint or credential boundaries', async () => {
+  const admin = await session(), id = 'named-' + crypto.randomUUID();
+  const response = await SELF.fetch(url(id), { method: 'POST', headers: admin.headers,
+    body: JSON.stringify({ ...creation, display_name: '团队文档 <script>' }) });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ profile: { display_name: '团队文档 <script>', enabled: false } });
+  expect(await (await SELF.fetch(url(id), { headers: admin.headers })).json()).toMatchObject({ profile: { display_name: '团队文档 <script>' } });
+  for (const display_name of ['', 'a'.repeat(65), 'bad\nname']) {
+    expect((await SELF.fetch(url('invalid-name-' + crypto.randomUUID()), { method: 'POST', headers: admin.headers,
+      body: JSON.stringify({ ...creation, display_name }) })).status).toBe(400);
+  }
 });
