@@ -205,6 +205,10 @@ export class RunnerConnection {
         // (including os_access_denied diagnostics) and deliver a corrected
         // policy after an operator fixes the service identity/ACL; aborting
         // here would leave the Runner permanently offline and hide the cause.
+        // An empty runtime policy is no longer the previously applied snapshot.
+        // Clear its identity so admission and same-revision recovery agree.
+        this.appliedPolicyRevision = null;
+        this.appliedPolicyChecksum = null;
         this.runtime.applyPolicy([]);
       }
       this.desiredPolicyRevision = persisted.revision;
