@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { resolve } from 'node:path';
+import { mkdtemp, writeFile, rm, rmdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
 import { adminDocument } from '../apps/worker/dist/admin/layout.js';
@@ -19,8 +21,8 @@ export async function checkGuidedProduct(executable) {
  const server=createServer(async(req,res)=>{
   try {
    const url=new URL(req.url,'http://127.0.0.1');
-   if(url.pathname==='/oauth-fixture'){res.statusCode=302;res.setHeader('location','/admin/central/connections/callback?state=fixture-state&code=fixture-code&iss=https://login.provider.com');res.end();return;}
-   if(url.pathname==='/admin/central/connections/callback'){const page=oauthLanding(true);for(const [k,v] of page.headers)res.setHeader(k,v);res.end(await page.text());return;}
+   if(url.pathname==='/oauth-fixture'){res.statusCode=302;res.setHeader('location','/admin/central/connections/callback?state=fixture-state&code=fixture-code&iss=https://login.provider.com&scope=read&authuser=0');res.end();return;}
+   if(['/admin/central/connections/callback','/admin/central/oauth/callback'].includes(url.pathname)){const page=oauthLanding(url.pathname.includes('/connections/'));for(const [k,v] of page.headers)res.setHeader(k,v);res.end(await page.text());return;}
    if(url.pathname==='/admin') {res.setHeader('content-type','text/html');res.end(adminDocument('Dashboard',productOverviewPage({clients:[],runners:[]}),'dashboard'));return;}
    if(url.pathname==='/admin/central') {res.setHeader('set-cookie',ADMIN_CSRF_COOKIE+'=fixture-csrf; Path=/; SameSite=Strict; Secure');res.setHeader('content-type','text/html');res.end(adminDocument('Services & Skills',centralPage('fixture-csrf',true,true,[{id:'client-fixture',label:'Team AI'}]),'central'));return;}
    const raw=[];for await(const part of req)raw.push(part);
@@ -31,10 +33,10 @@ export async function checkGuidedProduct(executable) {
    else if(kind==='profiles'){
     if(body.action==='connect'){const p={profile_id:id,connector_id:body.connector_id,display_name:body.display_name,endpoint:body.endpoint,revision:1,enabled:false,credential:null,authentication:body.authentication};profiles.push(p);value={state:'written',profile:p};}
     else{const p=profiles.find(p=>p.profile_id===id);assert.equal(body.expected_revision,p.revision);p.revision++;if(body.action==='enable'||body.action==='disable')p.enabled=body.action==='enable';value={state:'written',profile:p};}
-   }else if(kind==='connections'){
+   }else if(kind==='connections'||kind==='oauth'){
     assert.equal(req.headers['x-csrf-token'],'fixture-csrf');
     if(id==='begin')value={state:'started',profile_id:body.profile_id,authorization_url:'/oauth-fixture'};
-    else if(id==='complete'){assert.equal(body.code,'fixture-code');value={state:'linked',profile_id:profiles.at(-1).profile_id};}
+    else if(id==='complete'){if(body.error){assert.deepEqual(body,{state:'cancel-state',error:'access_denied'});code=503;value={error:{code:'oauth_reauthorization_required'}};}else{assert.deepEqual(body,{state:'fixture-state',iss:'https://login.provider.com',code:'fixture-code'});value={state:'linked',profile_id:profiles.at(-1).profile_id};}}
     else value={state:'revoked',profile_id:body.profile_id};
    }else if(kind==='skill-installations'){
     const item=library.find(s=>s.head.skill_id==='research');
@@ -65,10 +67,12 @@ export async function checkGuidedProduct(executable) {
  });
  await new Promise(r=>server.listen(0,'127.0.0.1',r));
  const origin='http://127.0.0.1:'+server.address().port;
+ const skillFolder=await mkdtemp(join(tmpdir(),'runmesh-product-skill-'));
  let browser;
  try{
   browser=await chromium.launch({headless:true,...(executable?{executablePath:executable}:{})});
-  const page=await browser.newPage({viewport:{width:1365,height:1000}});page.on('pageerror',e=>exceptions.push(e.message));
+  const context=await browser.newContext({viewport:{width:1365,height:1000}});
+  const page=await context.newPage();page.on('pageerror',e=>exceptions.push(e.message));
   await page.goto(origin+'/admin');
   assert.equal(await page.getByRole('heading',{name:'Make your AI client more useful'}).count(),1);
   assert.equal(await page.locator('h1').count(),1);
@@ -94,16 +98,23 @@ export async function checkGuidedProduct(executable) {
   assert.equal(requests.filter(r=>r.path.includes('/catalogs/')&&r.method==='POST').length,0);
   await review.locator('input[type=checkbox]').check();await review.getByRole('button',{name:'Approve selected tools'}).click();await status.filter({hasText:'Tools approved.'}).waitFor();
   await form.locator('[name=endpoint]').fill('https://oauth.provider.com/mcp');await form.locator('[name=authentication]').selectOption('oauth');await form.locator('button').click();
-  await page.waitForURL(url=>url.pathname==='/admin/central'&&url.searchParams.has('connected'));await status.filter({hasText:'Review the tools before approving.'}).waitFor();
+  await page.waitForURL(url=>url.pathname==='/admin/central'&&url.searchParams.has('connected'),{timeout:10000});await status.filter({hasText:'Review the tools before approving.'}).waitFor();
   assert.equal(requests.filter(r=>r.path==='/admin/central/connections/begin').length,1);assert.equal(requests.filter(r=>r.path==='/admin/central/connections/complete').length,1);assert.equal(new URL(page.url()).search,'');
   await page.locator('[data-central-tab=skills]').click();
   const importer=page.locator('[data-skill-import]');
+  const folderText=['---','name: research','description: Research fixture','---','Selected folder version'].join(String.fromCharCode(10));
+  await writeFile(join(skillFolder,'SKILL.md'),folderText);
+  await importer.locator('[name=folder]').setInputFiles(skillFolder);
   await importer.locator('[name=files]').setInputFiles({name:'SKILL.md',mimeType:'text/markdown',buffer:Buffer.from('---\nname: research\ndescription: Research fixture\n---\nReview this text.\n')});
   assert.equal(await importer.locator('[name=source],[name=license]').count(),0);await importer.getByRole('button',{name:'Install Skill',exact:true}).click();
   await status.filter({hasText:'installed. Choose Client access'}).waitFor();assert.equal(library[0].head.enabled,true);
+  assert.ok(library[0].bundle.files[0].text.includes('Review this text.'));assert.equal(await importer.locator('[name=folder]').evaluate(input=>input.files.length),0);
   await importer.locator('[name=files]').setInputFiles({name:'SKILL.md',mimeType:'text/markdown',buffer:Buffer.from(['---','name: research','description: Research fixture','---','Updated text'].join(String.fromCharCode(10)))});await importer.getByRole('button',{name:'Install Skill',exact:true}).click();
   await status.filter({hasText:'This Skill is already installed.'}).waitFor();assert.equal(library[0].head.revision,1);
-  const skillReview=page.locator('[data-skill-review]');await skillReview.getByRole('button',{name:'Update Skill',exact:true}).click();await status.filter({hasText:'installed. Choose Client access'}).waitFor();assert.equal(library[0].head.revision,2);
+  const skillReview=page.locator('[data-skill-review]');await skillReview.getByRole('button',{name:'Cancel',exact:true}).click();
+  await importer.locator('[name=folder]').setInputFiles(skillFolder);assert.equal(await importer.locator('[name=files]').evaluate(input=>input.files.length),0);
+  await importer.getByRole('button',{name:'Install Skill',exact:true}).click();await status.filter({hasText:'This Skill is already installed.'}).waitFor();
+  await skillReview.getByRole('button',{name:'Update Skill',exact:true}).click();await status.filter({hasText:'installed. Choose Client access'}).waitFor();assert.equal(library[0].head.revision,2);assert.equal(library[0].bundle.files[0].text,folderText);
   // A staged draft must never describe the older version being granted.
   library[0].published=library[0].bundle;library[0].bundle={...library[0].bundle,name:'unreviewed-draft',description:'Unapproved description',digest:oldDigest};library[0].head.staged_digest=oldDigest;library[0].head.revision++;
   await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
@@ -137,9 +148,23 @@ export async function checkGuidedProduct(executable) {
   const mutations=requests.filter(r=>r.method==='POST').length;await page.locator('[data-service-list]').getByRole('button',{name:'Pause',exact:true}).first().click();await status.filter({hasText:'Refresh the library before'}).waitFor();assert.equal(requests.filter(r=>r.method==='POST').length,mutations);
   failLibrary=false;await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
   await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
+  const callback=await page.context().newPage();callback.on('pageerror',e=>exceptions.push(e.message));
+  await callback.goto(origin+'/admin/central/oauth/callback?state=fixture-state&code=fixture-code&iss=https://login.provider.com&scope=read');
+  await callback.getByText('Authorization completed.',{exact:false}).waitFor();assert.equal(new URL(callback.url()).search,'');
+  for(const route of ['connections','oauth']){
+   const path='/admin/central/'+route;
+   await callback.goto(origin+path+'/callback?state=cancel-state&error=access_denied&error_description=PRIVATE_PROVIDER_DETAIL&error_uri=https://provider.com/error');
+   await callback.getByText('Authorization was not confirmed.',{exact:false}).waitFor();assert.equal(new URL(callback.url()).search,'');assert.equal((await callback.content()).includes('PRIVATE_PROVIDER_DETAIL'),false);
+   const callbacks=requests.filter(r=>r.path===path+'/complete').length;
+   for(const duplicate of ['state=one&state=two&code=unused','state=one&code=unused&code=again','state=one&code=unused&iss=one&iss=two','state=one&error=access_denied&error=again']){
+    await callback.goto(origin+path+'/callback?'+duplicate);await callback.getByText('Authorization not completed.',{exact:false}).waitFor();assert.equal(new URL(callback.url()).search,'');
+   }
+   assert.equal(requests.filter(r=>r.path===path+'/complete').length,callbacks);
+  }
+  await callback.close();
   assert.deepEqual(exceptions,[]);
-  return {state:'passed',guided_homepage:true,direct_url_without_deployment_setup:true,service_explicit_review:true,oauth_return_to_tool_review:true,direct_skill_install_and_confirmed_update:true,published_skill_metadata:true,changed_and_removed_tools_excluded:true,retained_pinned_access:true,client_handoff:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,mobile_no_overflow:true,screenshots:0};
- }finally{await browser?.close();await new Promise(r=>server.close(r));}
+  return {state:'passed',guided_homepage:true,direct_url_without_deployment_setup:true,service_explicit_review:true,oauth_return_to_tool_review:true,oauth_extra_parameters_ignored:true,oauth_duplicate_parameters_rejected:true,oauth_provider_errors_not_reflected:true,direct_skill_install_and_confirmed_update:true,skill_file_folder_selection_switch:true,published_skill_metadata:true,changed_and_removed_tools_excluded:true,retained_pinned_access:true,client_handoff:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,mobile_no_overflow:true,screenshots:0};
+ }finally{await browser?.close();await new Promise(r=>server.close(r));await rm(join(skillFolder,'SKILL.md'),{force:true});await rmdir(skillFolder);}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
  console.log(JSON.stringify(await checkGuidedProduct(process.env.RUNMESH_CHROMIUM_EXECUTABLE)));

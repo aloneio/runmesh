@@ -9,7 +9,7 @@ export function oauthLanding(managed = false): Response {
   const path = managed ? "/admin/central/connections/" : "/admin/central/oauth/";
   const script = `const message=document.getElementById('status');
 const query=new URLSearchParams(location.search);history.replaceState(null,'','${path}callback');
-const input={};let valid=true;for(const key of query.keys()){if(!['state','iss','code','error'].includes(key)||query.getAll(key).length!==1)valid=false;else input[key]=query.get(key);}
+const input={};let valid=true;for(const key of ['state','iss','code','error']){const values=query.getAll(key);if(values.length>1)valid=false;else if(values.length===1)input[key]=values[0];}
 const cookie=document.cookie.split(';').map(v=>v.trim()).find(v=>v.startsWith('${ADMIN_CSRF_COOKIE}='));
 if(!valid||!cookie){message.textContent='Authorization not completed. Return to Runmesh administration and start again.';}
 else{fetch('${path}complete',{method:'POST',credentials:'same-origin',redirect:'error',cache:'no-store',headers:{'content-type':'application/json','x-csrf-token':cookie.slice('${ADMIN_CSRF_COOKIE}='.length)},body:JSON.stringify(input)}).then(async response=>{const result=await response.json();if(${managed}&&response.ok&&result.state==='linked'){location.replace('/admin/central?connected='+encodeURIComponent(result.profile_id));return;}message.textContent=response.ok&&result.state==='linked'?'Authorization completed. You can close this page.':'Authorization was not confirmed. Check its status in Runmesh administration; do not replay this callback.';}).catch(()=>{message.textContent='Authorization result is unknown. Check its status in Runmesh administration.';});}`;
