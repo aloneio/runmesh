@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "bffd44b61eefd4d9fedfe7eb4d38fc20fa2f269c2994a265c5420f23d851ccff",
-      "bytes": 123248,
+      "sha256": "341917535adba5c5866571884f3b0687033e56afa717982c19ead2d5eeaa18a9",
+      "bytes": 122732,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -30,8 +30,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "7e358d50c2cf70e7019e197cf6146bc469a0e78cc8174e078223a312bdd92d12",
-      "bytes": 123836,
+      "sha256": "5f23d924f40ba2f2b7f4dcd82aa5ccdf28f7e70f1309a390b42e9f1df5529d61",
+      "bytes": 123320,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -47,8 +47,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "175f8b620da2f5227de27c2ccc23139f0e898f8c8300854c57fd858a842d02af",
-      "bytes": 124990,
+      "sha256": "1cf3a81d0a34755d84558255c07d0af71d583cd9a1e0d8987e3fa3fcd4bb2882",
+      "bytes": 124468,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -152,8 +152,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "31c5677ef6427b896f0d3c47c2783c1cba0049233b32e08a7531bbe7f16c2b38",
-      "bytes": 2162,
+      "sha256": "3a6770acd5435b453c3c2214ee3b70ae33763504b75e7a423aec74c2a1454f60",
+      "bytes": 2153,
       "pre_presence_bytes": 1658,
       "pre_presence_sha256": "e74169b7613eb2646689d68bc42760c399f092ad60d9c6200c65b2b561342266",
       "reviewed_presence_change": "Replace client online/offline with credential validity, identify credential status, and explain it does not prove a live connection. Reversing only these reviewed changes matches pre_presence_sha256.",
@@ -211,8 +211,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "cecbfc3a7c3a82e47cefe4a356ffb986add1e91a98a697c997b2a38b00b719e0",
-      "bytes": 4610,
+      "sha256": "69e49cc57ec5466b80b303ac52c1f0e817508262f71ccf391a90cc6cc66c6609",
+      "bytes": 4601,
       "original_sha256": "57a9afa644d0576c73376174bad5c663efe58c9490697670a4c5925b21280795",
       "original_bytes": 4110,
       "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label",
@@ -413,8 +413,8 @@
           }
         ]
       ],
-      "sha256": "782fba4dd554f5e48133ca5e7ac53401e99b2bd44a74a9078d0bb2b2ac129f00",
-      "bytes": 125339,
+      "sha256": "81a741c4bcb5b148a8dabc5ef533ed07777aeb3c975ece18fb5c49b802009695",
+      "bytes": 124817,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -447,7 +447,7 @@
     ],
     "native_view_bodies_unchanged": true
   },
-  "product_review": "Guided Services and Skills workflows, responsive layout, and optional machine access.",
+  "product_review": "Customer-facing MCP and Skill management with concise tool cards, responsive layout, and optional computer access.",
   "browser_module_review": {
     "source_base": "d7f5a181d3694ebab97e6481cc37d45a9f26a285",
     "changed_cases": [
@@ -480,5 +480,18 @@
     ],
     "allowed_change": "The saved service is rendered before OAuth handoff so a failed provider setup retains its visible recovery controls. The controller still owns lifecycle, shared admission and busy state. DOM regression verifies persisted service visibility and no automatic replay after failed handoff. No screenshots.",
     "non_script_markup_unchanged": true
+  },
+  "mcp_skill_presentation_review": {
+    "source_base": "62239e1475b40c59bfd9235a57701fbef21631ba",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "clients-empty",
+      "clients-populated",
+      "admin-document"
+    ],
+    "allowed_change": "Rename customer navigation to MCP and Skill; show tool names and descriptions as plain cards with a count. Remove repeated sharing explanations and parameter/schema dumps. DOM regressions retain automatic connection, OAuth recovery, Skill installation and safe text rendering. No screenshots.",
+    "unrelated_markup_unchanged": true
   }
 }

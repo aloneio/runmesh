@@ -1,20 +1,20 @@
 {
-  "source_commit": "49ca444348aa26644f384232f0635dd8727f697e",
+  "source_commit": "62239e1475b40c59bfd9235a57701fbef21631ba",
   "cases": [
     {
       "nonce": null,
-      "sha256": "4b28f325e4fef0278b9fa09ebd9cc9fbd61ac9791222d3b89038cf6c9c34099c",
+      "sha256": "8a491f20f5467b56782129d16ed709ba3b4456d205998496800b07c34be4a13c",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e"
     },
     {
       "nonce": "test-nonce",
-      "sha256": "59901341a60335662269f175a200c095077619413d29f306abc7f2625a96a459",
+      "sha256": "26d771c49f4546d89ae82b9acc7bc9d4bb1737282930aeb2c2ce216608b5fc33",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224"
     }
   ],
-  "reviewed_change": "The saved service is rendered before OAuth handoff so a failed provider setup retains its visible recovery controls. The controller still owns lifecycle, shared admission and busy state. DOM regression verifies persisted service visibility and no automatic replay after failed handoff. No screenshots."
+  "reviewed_change": "Rename customer navigation to MCP and Skill; show tool names and descriptions as plain cards with a count. Remove repeated sharing explanations and parameter/schema dumps. DOM regressions retain automatic connection, OAuth recovery, Skill installation and safe text rendering. No screenshots."
 }

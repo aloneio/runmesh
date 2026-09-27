@@ -8,7 +8,7 @@ import { adminScript } from "./client-script.js";
 export function controlHeader(active?: ControlNavSection): string {
   const nav = ([
     ["dashboard", "Dashboard", "/admin"],
-    ["central", "Services &amp; Skills", "/admin/central"],
+    ["central", "MCP &amp; Skill", "/admin/central"],
     ["clients", "AI connections", "/admin/clients"],
     ["runners", "Runners", "/admin/runners"],
     ["settings", "Settings", "/admin/settings"],

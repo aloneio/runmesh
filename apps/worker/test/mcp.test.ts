@@ -652,7 +652,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(dashboard.headers.get("content-security-policy")).toContain("script-src 'nonce-");
     expect(dashboard.headers.get("content-security-policy")).not.toContain("script-src 'unsafe-inline'");
     const dashboardHtml = await dashboard.text();
-    for (const section of ["Dashboard", "AI connections", "Services &amp; Skills", "Runners", "Settings", "Make your AI client more useful", "Your AI connections", "Optional computer access"]) expect(dashboardHtml).toContain(section);
+    for (const section of ["Dashboard", "AI connections", "MCP &amp; Skill", "Runners", "Settings", "Make your AI client more useful", "Your AI connections", "Optional computer access"]) expect(dashboardHtml).toContain(section);
     expect(dashboardHtml).not.toContain('Active shell jobs');
     const chineseDashboard = await SELF.fetch("https://worker.test/admin?lang=zh-CN", { headers: { cookie: cookies(adminJar) } });
     expect(chineseDashboard.headers.get("content-language")).toBe("zh-CN");

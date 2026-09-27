@@ -70,7 +70,7 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
   if (request.method === "GET" && url.pathname === "/admin/central") {
     const csrf = cookieValue(request, ADMIN_CSRF_COOKIE);
     if (csrf === undefined || !constantTimeEqual(await sha256Hex(csrf), session.csrf_hash)) return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
-    return html(adminDocument("Services & Skills", centralPage(csrf, env.CAPABILITIES !== undefined, env.CENTRAL_SKILLS_ENABLED === "1"), "central"));
+    return html(adminDocument("MCP & Skill", centralPage(csrf, env.CAPABILITIES !== undefined, env.CENTRAL_SKILLS_ENABLED === "1"), "central"));
   }
   if (request.method === "GET" && ["/admin", "/admin/runners", "/admin/clients", "/admin/settings"].includes(url.pathname)) {
     const csrf = cookieValue(request, ADMIN_CSRF_COOKIE);
