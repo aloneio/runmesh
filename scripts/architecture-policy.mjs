@@ -16,6 +16,28 @@ export function layer(path) {
 }
 /** All parser-supported extensions receive the same architecture role. */
 const canonicalSource = path => path.replace(/\.(?:[cm]?[jt]s|[jt]sx)$/u, ".ts");
+const browserRoot = "apps/worker/browser/";
+const browserDependencies = {
+  "admin-client.ts": ["central/controller.ts"],
+  "central/controller.ts": ["central/api.ts", "central/messages.ts", "central/view.ts", "central/services.ts", "central/skills.ts"],
+  "central/api.ts": [], "central/messages.ts": [], "central/view.ts": [],
+  "central/services.ts": [], "central/skills.ts": [],
+};
+const registryRoute = path => /^apps\/worker\/src\/registry\/route-(?:inputs|projections)\.ts$/u.test(canonicalSource(path));
+const networkGlobals = new Set(["fetch", "WebSocket", "XMLHttpRequest", "EventSource", "WebTransport", "Worker", "SharedWorker", "caches", "globalThis", "window", "self", "process", "Deno", "Bun"]);
+
+/** Conservative source guard: stateful workflows receive API and view ports. */
+export function boundaryNodeProblem(from, node) {
+  const source = canonicalSource(from);
+  if (node.type !== "Identifier") return undefined;
+  if (registryRoute(source) && (networkGlobals.has(node.name) || ["Date", "eval", "Function"].includes(node.name)))
+    return "Registry route parsing and projection must use supplied values, not I/O or ambient state";
+  if (source.startsWith(browserRoot + "central/") && source !== browserRoot + "central/api.ts" && networkGlobals.has(node.name))
+    return "Central browser workflows and presentation receive network operations through the API port";
+  if ([browserRoot + "central/api.ts", browserRoot + "central/messages.ts"].includes(source) && ["document", "location", "history", "window", "globalThis", "self"].includes(node.name))
+    return "Central browser API and copy modules must not own DOM or navigation state";
+  return undefined;
+}
 const runnerIoModules = new Set([
   "jobs/ports.ts", "jobs/storage.ts", "jobs/process.ts", "jobs/logs.ts", "jobs/input.ts",
   "context/ports.ts", "context/files.ts", "context/repository.ts", "context/retention.ts", "context/recovery.ts",
@@ -96,6 +118,10 @@ export const WORKER_ALLOWED_DEPENDENCIES = Object.freeze({
 });
 export function dependencyProblem(from, to) {
   from = canonicalSource(from); to = canonicalSource(to);
+  if (from.startsWith(browserRoot) && !browserDependencies[from.slice(browserRoot.length)]?.includes(to.slice(browserRoot.length)))
+    return "Browser imports must follow the reviewed controller, API, presentation and workflow boundaries";
+  if (registryRoute(from) && !["apps/worker/src/registry/records.ts", "apps/worker/src/registry/values.ts", "packages/protocol/src/index.ts"].includes(to))
+    return "Registry route parsing and projection must not depend on state owners or adapters";
   const centralProblem = centralDependencyProblem(from, to);
   if (centralProblem) return centralProblem;
   const owner = layer(from), target = layer(to);

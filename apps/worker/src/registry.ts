@@ -1,3 +1,5 @@
+import { parseRunnerConnection, parseRunnerHeartbeat, parseRunnerSession, parseRunnerDisconnect, parseRunnerSync, parseJobFilters, parseMcpCallFilters, parseMcpCall, parseAdminSession, parseMcpIdentity, parseNativeMcpClient, parseManagedWorkspace, parseRunnerVersionPolicy } from "./registry/route-inputs.js";
+import { registryInputError, projectActiveWorkspaces, projectPolicyVersions, projectPolicyRevision, projectCombinedMcpCalls } from "./registry/route-projections.js";
 import { RegistryFeatureHealthStore } from "./registry/feature-health.js";
 import { historyCleanupDue, nextMaintenanceDeadline } from "./registry/maintenance-plan.js";
 import { createCoreRegistrySchema, registrySchemaIsCurrent, hasPersistedRegistrySchema } from "./registry/schema.js";
@@ -16,8 +18,6 @@ import { controlPlaneUnavailableResponse } from "./control-plane-errors.js";
 import { ensureHistoryRetentionSchema } from "./history-retention.js";
 import type { JobMetadata } from "@aloneio/runmesh-protocol";
 import { IdentifierSchema } from "@aloneio/runmesh-protocol";
-import { RunnerMetadataSchema } from "@aloneio/runmesh-protocol";
-import { RunnerSyncSchema } from "@aloneio/runmesh-protocol";
 import type { RunnerMetadata } from "@aloneio/runmesh-protocol";
 import type { RunnerPolicy } from "@aloneio/runmesh-protocol";
 import { containsControlCharacter } from "./security.js";
@@ -33,8 +33,8 @@ import { validWindow } from "./validity.js";
 import type { ValidityWindow } from "./validity.js";
 import type { ValidityStatus } from "./validity.js";
 import type { RunnerExecutionMode, PolicyAcknowledgementResult, RunnerMutationState, CodingScope, PermissionSet, WorkspaceValidationStatus, RunnerUpdateChannel, RunnerPublicInfo, RunnerRecord, WorkspaceRecord, DashboardSnapshot, RegistryFeatureKey, RegistryFeatureHealth, McpClientRecord, VerifiedMcpClient, RunnerRow, EnrollmentRow, AdminSettingsRow, AuthThrottleKind, InternalInput } from './registry/records.js';
-import { MAX_INTERNAL_BODY_BYTES, MAX_SYNC_ITEMS, DEFAULT_RUNNER_ENROLLMENT_TTL_MS, REGISTRY_HISTORY_CLEANUP_INTERVAL_MS, HISTORY_CLEANUP_DEADLINE_KEY } from './registry/records.js';
-import { authThrottleKind, validLifecycleId, parseTransportIdentity, matchesTransportIdentity, requestedExecutionMode, requestedExpectedExecutionMode, requestedExpectedLifecycleId, requestedPrivilegedConfirmation, requestedRunnerEnrollmentTtl, parseJobEvent, uniqueIds, parseRunnerId, parseJsonObject, stringField, integerField, nullableIntegerField, safeNonnegativeInteger, nullableChecksumField, runnerPublicInfoField, permissionSetField, workspaceStatusesField, validVerifier, validMutationId, mutationIdField, scopesField } from './registry/values.js';
+import { MAX_INTERNAL_BODY_BYTES, DEFAULT_RUNNER_ENROLLMENT_TTL_MS, REGISTRY_HISTORY_CLEANUP_INTERVAL_MS, HISTORY_CLEANUP_DEADLINE_KEY } from './registry/records.js';
+import { authThrottleKind, validLifecycleId, parseTransportIdentity, matchesTransportIdentity, requestedExecutionMode, requestedExpectedExecutionMode, requestedExpectedLifecycleId, requestedPrivilegedConfirmation, requestedRunnerEnrollmentTtl, parseJobEvent, parseRunnerId, parseJsonObject, stringField, integerField, nullableIntegerField, safeNonnegativeInteger, nullableChecksumField, runnerPublicInfoField, permissionSetField, workspaceStatusesField, validVerifier, validMutationId, mutationIdField, scopesField } from './registry/values.js';
 import { RegistryAuth } from './registry/auth.js';
 import { RegistryPolicy } from './registry/policy.js';
 import { RegistryLifecycle } from './registry/lifecycle.js';
@@ -556,8 +556,9 @@ export class RegistryDO {
       const authenticated = await this.authenticateRunner(runnerId, token); return authenticated === undefined ? new Response("unauthorized", { status: 401 }) : Response.json(authenticated);
     }
     if (request.method === "POST" && action === "connect") {
-      const sessionId = stringField(input, "session_id", 128); const credentialVersion = integerField(input, "credential_version"); const nowMs = integerField(input, "now_ms"); const metadata = RunnerMetadataSchema.safeParse(input.metadata); const protocolMin = integerField(input, "min_protocol_version"); const protocolMax = integerField(input, "max_protocol_version");
-      if (!metadata.success || sessionId === undefined || credentialVersion === undefined || nowMs === undefined || protocolMin === undefined || protocolMax === undefined || protocolMin < 1 || protocolMin > protocolMax || protocolMax > 1_000) return Response.json({ error: "invalid connection metadata" }, { status: 400 });
+      const parsed = parseRunnerConnection(input);
+      if (!parsed.ok) return registryInputError(parsed);
+      const { sessionId, credentialVersion, nowMs, metadata, protocolMin, protocolMax } = parsed.value;
       const epoch = this.beginConnection(runnerId, metadata.data, { min_protocol_version: protocolMin, max_protocol_version: protocolMax }, sessionId, credentialVersion, nowMs);
       const row = epoch === undefined ? undefined : this.runnerRow(runnerId);
       const policy = epoch === undefined ? undefined : this.desiredPolicy(runnerId);
@@ -568,27 +569,31 @@ export class RegistryDO {
       return Response.json({ epoch, lifecycle_id: row.lifecycle_id, desired_policy: policy, ...(this.env.RUNMESH_JOB_HISTORY_BACKEND === "d1" && metadata.data.capabilities.labels.job_history_protocol === "1" ? { job_history: this.jobHistorySettings(runnerId,row.lifecycle_id), ...(metadata.data.capabilities.labels.job_reporting_protocol === "2" ? {job_reporting: 2} : {}) } : {}) });
     }
     if (request.method === "POST" && action === "heartbeat") {
-      const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const nowMs = integerField(input, "now_ms"); const identity = parseTransportIdentity(input);
-      if (epoch === undefined || credentialVersion === undefined || nowMs === undefined || !identity.valid) return Response.json({ error: "invalid heartbeat" }, { status: 400 });
+      const parsed = parseRunnerHeartbeat(input);
+      if (!parsed.ok) return registryInputError(parsed);
+      const { epoch, credentialVersion, nowMs, identity } = parsed.value;
       return this.recordHeartbeat(runnerId, epoch, credentialVersion, nowMs, identity.lifecycleId, identity.sessionId) ? new Response(null, { status: 204 }) : new Response("stale session", { status: 409 });
     }
     if (request.method === "POST" && action === "session") {
-      const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const identity = parseTransportIdentity(input);
-      if (epoch === undefined || credentialVersion === undefined || !identity.valid) return Response.json({ error: "invalid session identity" }, { status: 400 });
+      const parsed = parseRunnerSession(input);
+      if (!parsed.ok) return registryInputError(parsed);
+      const { epoch, credentialVersion, identity } = parsed.value;
       return this.sessionIsCurrent(runnerId, epoch, credentialVersion, input.require_online === true, identity.lifecycleId, identity.sessionId) ? new Response(null, { status: 204 }) : new Response("stale session", { status: 409 });
     }
     if (request.method === "POST" && action === "disconnect") {
-      const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const nowMs = integerField(input, "now_ms"); const identity = parseTransportIdentity(input);
-      if (epoch === undefined || credentialVersion === undefined || nowMs === undefined || (input.state !== "offline" && input.state !== "stale") || !identity.valid) return Response.json({ error: "invalid disconnect" }, { status: 400 });
-      this.markDisconnected(runnerId, epoch, credentialVersion, input.state, nowMs, identity.lifecycleId, identity.sessionId);
+      const parsed = parseRunnerDisconnect(input);
+      if (!parsed.ok) return registryInputError(parsed);
+      const { epoch, credentialVersion, nowMs, identity, state } = parsed.value;
+      this.markDisconnected(runnerId, epoch, credentialVersion, state, nowMs, identity.lifecycleId, identity.sessionId);
       // Drop a stale maintenance alarm as soon as the last online runner
       // disconnects instead of waiting for the old deadline to wake this DO.
       await this.scheduleMaintenanceAlarm(nowMs);
       return new Response(null, { status: 204 });
     }
     if (request.method === "POST" && action === "sync") {
-      const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const nowMs = integerField(input, "now_ms"); const message = RunnerSyncSchema.safeParse(input.message); const identity = parseTransportIdentity(input);
-      if (!message.success || epoch === undefined || credentialVersion === undefined || nowMs === undefined || !identity.valid || message.data.runner_id !== runnerId || message.data.workspaces.length > MAX_SYNC_ITEMS || message.data.jobs.length > MAX_SYNC_ITEMS || !uniqueIds(message.data.workspaces.map((workspace) => workspace.workspace_id)) || !uniqueIds(message.data.jobs.map((job) => job.job_id))) return Response.json({ error: "invalid sync" }, { status: 400 });
+      const parsed = parseRunnerSync(input, runnerId);
+      if (!parsed.ok) return registryInputError(parsed);
+      const { epoch, credentialVersion, nowMs, message, identity } = parsed.value;
       if (this.env.RUNMESH_JOB_HISTORY_BACKEND === "d1") return this.storePackedJobs(runnerId,epoch,credentialVersion,identity.lifecycleId,identity.sessionId,message.data.jobs);
       return this.syncRunner(runnerId, epoch, credentialVersion, message.data.workspaces, message.data.jobs, message.data.sync_sequence, nowMs, true, identity.lifecycleId, identity.sessionId) ? new Response(null, { status: 204 }) : new Response("stale sync or session", { status: 409 });
     }
@@ -667,7 +672,7 @@ export class RegistryDO {
     if (request.method === "GET" && action === "active-workspaces" && itemId === undefined) {
       const policy = this.getActivePolicySnapshot(runnerId);
       if (policy === undefined) return new Response("not found", { status: 404 });
-      return Response.json({ runner_id: runnerId, revision: policy.revision, checksum: policy.checksum, workspaces: policy.workspaces.map((workspace) => ({ workspace_id: workspace.workspace_id, enabled: workspace.enabled, permissions: workspace.permissions })) });
+      return Response.json(projectActiveWorkspaces(runnerId, policy));
     }
     if (request.method === "GET" && action === "snapshot-authorization" && itemId === undefined) return Response.json(this.getSnapshotAuthorization(runnerId));
     if (request.method === "GET" && action === "policy-readiness" && itemId === undefined) {
@@ -683,14 +688,20 @@ export class RegistryDO {
       return Response.json({ ack_result: ack });
     }
     if (request.method === "GET" && action === "desired-policy" && itemId === undefined) { const policy = this.desiredPolicy(runnerId); const mutationId = policy === undefined ? undefined : this.ctx.storage.sql.exec<{ mutation_id: string | null }>("SELECT mutation_id FROM runner_policy_versions WHERE runner_id = ? AND revision = ?", runnerId, policy.revision).toArray()[0]?.mutation_id; return policy === undefined ? new Response("not found", { status: 404 }) : Response.json({ ...policy, mutation_id: mutationId ?? null }); }
-    if (request.method === "GET" && action === "policy-versions" && itemId === undefined) return Response.json({ runner_id: runnerId, versions: this.listPolicyVersions(runnerId).map((version) => ({ revision: version.revision, checksum: version.checksum.slice(0, 12), status: version.status, created_at_ms: version.created_at_ms, acknowledged_at_ms: version.acknowledged_at_ms, source_revision: version.source_revision, mutation_id: version.mutation_id, validation_summary: version.validation_summary_json === null ? null : JSON.parse(version.validation_summary_json) })) });
-    if (request.method === "GET" && action === "policy-revision" && itemId === undefined) { const runner = this.getRunner(runnerId); const mutationId = runner === undefined ? undefined : this.ctx.storage.sql.exec<{ mutation_id: string | null }>("SELECT mutation_id FROM runner_policy_versions WHERE runner_id = ? AND revision = ?", runnerId, runner.desired_policy_revision).toArray()[0]?.mutation_id; return runner === undefined ? new Response("not found", { status: 404 }) : Response.json({ desired_policy_revision: runner.desired_policy_revision, desired_policy_checksum: runner.desired_policy_checksum, desired_policy_mutation_id: mutationId ?? null, applied_policy_revision: runner.applied_policy_revision, active_policy_checksum: runner.active_policy_checksum, runner_reported_policy_revision: runner.runner_reported_policy_revision, runner_reported_policy_checksum: runner.runner_reported_policy_checksum, policy_status: runner.policy_status }); }
+    if (request.method === "GET" && action === "policy-versions" && itemId === undefined)
+      return Response.json(projectPolicyVersions(runnerId, this.listPolicyVersions(runnerId)));
+    if (request.method === "GET" && action === "policy-revision" && itemId === undefined) {
+      const runner = this.getRunner(runnerId);
+      if (runner === undefined) return new Response("not found", { status: 404 });
+      const mutationId = this.ctx.storage.sql.exec<{ mutation_id: string | null }>(
+        "SELECT mutation_id FROM runner_policy_versions WHERE runner_id = ? AND revision = ?", runnerId, runner.desired_policy_revision,
+      ).toArray()[0]?.mutation_id;
+      return Response.json(projectPolicyRevision(runner, mutationId));
+    }
     if (request.method === "GET" && action === "jobs" && itemId === undefined) {
-      const workspaceId = url.searchParams.get("workspace_id") ?? undefined;
-      const status = url.searchParams.get("status") ?? undefined;
-      const rawLimit = url.searchParams.get("limit");
-      const limit = rawLimit === null ? undefined : /^\d+$/.test(rawLimit) ? Number(rawLimit) : undefined;
-      if ((workspaceId !== undefined && !IdentifierSchema.safeParse(workspaceId).success) || (status !== undefined && !["queued", "running", "cancelling", "cancelled", "succeeded", "failed", "unknown", "interrupted"].includes(status)) || (rawLimit !== null && (limit === undefined || limit < 1 || limit > 100))) return Response.json({ error: "invalid job filters" }, { status: 400 });
+      const parsed = parseJobFilters(url);
+      if (!parsed.ok) return registryInputError(parsed);
+      const { workspaceId, status, limit } = parsed.value;
       if (this.env.RUNMESH_JOB_HISTORY_BACKEND === "d1") {
         const current = this.runnerRow(runnerId);
         if (current === undefined) return new Response("not found",{status:404});
@@ -704,9 +715,9 @@ export class RegistryDO {
       return Response.json({ runner_id: runnerId, jobs: this.listJobs(runnerId, { ...(workspaceId === undefined ? {} : { workspace_id: workspaceId }), ...(status === undefined ? {} : { status }), ...(limit === undefined ? {} : { limit }) }) });
     }
     if (request.method === "GET" && action === "mcp-calls" && itemId === undefined) {
-      const rawLimit = url.searchParams.get("limit");
-      const limit = rawLimit === null ? undefined : /^\d+$/.test(rawLimit) ? Number(rawLimit) : undefined;
-      if (rawLimit !== null && (limit === undefined || limit < 1 || limit > 100)) return Response.json({ error: "invalid MCP call filters" }, { status: 400 });
+      const parsed = parseMcpCallFilters(url);
+      if (!parsed.ok) return registryInputError(parsed);
+      const { limit } = parsed.value;
       if (this.env.RUNMESH_AUDIT_BACKEND === "d1") {
         const current = this.runnerRow(runnerId);
         if (current === undefined) return new Response("not found", { status: 404 });
@@ -716,28 +727,15 @@ export class RegistryDO {
           if (this.runnerRow(runnerId)?.lifecycle_id !== current.lifecycle_id) return new Response("Runner identity changed", { status: 409 });
           // Previously recorded DO rows retain their normal retention period.
           // No fallback is used when D1 fails: an empty success would lie.
-          const combined = [...this.listMcpCalls(runnerId, limit).map(projectMcpAuditMetadata), ...external];
-          const unique = [...new Map(combined.map((row) => [String(row.call_id), row])).values()];
-          unique.sort((a, b) => Number(b.completed_at_ms) - Number(a.completed_at_ms) || String(b.call_id).localeCompare(String(a.call_id)));
-          return Response.json({ runner_id: runnerId, history_backend: "d1", calls: unique.slice(0, limit ?? 100) });
+          return Response.json(projectCombinedMcpCalls(runnerId, this.listMcpCalls(runnerId, limit).map(projectMcpAuditMetadata), external, limit));
         } catch { return Response.json({ error: { code: "audit_history_unavailable", message: "Cloud audit history is temporarily unavailable; this does not undo execution." } }, { status: 503, headers: { "cache-control": "no-store", "retry-after": "900" } }); }
       }
       return Response.json({ runner_id: runnerId, calls: this.listMcpCalls(runnerId, limit) });
     }
     if (request.method === "POST" && action === "mcp-calls" && itemId === undefined) {
-      const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const nowMs = integerField(input, "now_ms"); const identity = parseTransportIdentity(input);
-      const callId = stringField(input, "call_id", 128);
-      const clientId = stringField(input, "client_id", 128);
-      const methodName = stringField(input, "method", 128);
-      const status = input.status === "ok" || input.status === "error" ? input.status : undefined;
-      const startedAtMs = integerField(input, "started_at_ms");
-      const completedAtMs = integerField(input, "completed_at_ms");
-      const durationMs = integerField(input, "duration_ms");
-      const errorCode = input.error_code === undefined || input.error_code === null ? null : stringField(input, "error_code", 128);
-      const workspaceId = input.workspace_id === undefined || input.workspace_id === null ? null : stringField(input, "workspace_id", 128);
-      const jobId = input.job_id === undefined || input.job_id === null ? null : stringField(input, "job_id", 128);
-      if (epoch === undefined || credentialVersion === undefined || nowMs === undefined || !identity.valid || callId === undefined || !validMutationId(callId) || clientId === undefined || methodName === undefined || status === undefined || startedAtMs === undefined || completedAtMs === undefined || durationMs === undefined || (errorCode === null ? false : errorCode === undefined) || (workspaceId === null ? false : workspaceId === undefined) || (jobId === null ? false : jobId === undefined)) return Response.json({ error: "invalid MCP call" }, { status: 400 });
-      if (completedAtMs - startedAtMs !== durationMs) return Response.json({ error: "invalid MCP call duration" }, { status: 400 });
+      const parsed = parseMcpCall(input);
+      if (!parsed.ok) return registryInputError(parsed);
+      const { epoch, credentialVersion, nowMs, identity, callId, clientId, methodName, status, startedAtMs, completedAtMs, durationMs, errorCode, workspaceId, jobId } = parsed.value;
       const wasDegraded = this.featureHealthDisabled("mcp_audit", nowMs);
       let captured: Record<string, unknown> | undefined;
       const capture = this.env.RUNMESH_AUDIT_BACKEND === "d1" ? (metadata: Record<string, unknown>) => { captured = metadata; } : undefined;
@@ -806,9 +804,9 @@ export class RegistryDO {
       return new Response(null, { status: 204 });
     }
     if (method === "POST" && action === "sessions" && clientId === undefined) {
-      const sessionHash = stringField(input, "session_hash", 64); const csrfHash = stringField(input, "csrf_hash", 64);
-      const expires = integerField(input, "expires_at_ms"); const expectedVersion = integerField(input, "expected_session_version");
-      if (sessionHash === undefined || csrfHash === undefined || expires === undefined || expectedVersion === undefined || expectedVersion < 1 || !validVerifier(sessionHash) || !validVerifier(csrfHash) || expires <= nowMs) return Response.json({ error: "invalid session" }, { status: 400 });
+      const parsed = parseAdminSession(input, nowMs);
+      if (!parsed.ok) return registryInputError(parsed);
+      const { sessionHash, csrfHash, expires, expectedVersion } = parsed.value;
       return this.createAdminSession(sessionHash, csrfHash, expires, nowMs, expectedVersion)
         ? new Response(null, { status: 204 }) : new Response("authentication generation changed", { status: 409 });
     }
@@ -817,15 +815,19 @@ export class RegistryDO {
     if (method === "POST" && action === "password" && clientId === undefined) { const verifier = stringField(input, "password_verifier", 4_096); return verifier === undefined ? Response.json({ error: "invalid verifier" }, { status: 400 }) : this.changeAdminPassword(verifier, nowMs) ? new Response(null, { status: 204 }) : new Response("not initialized", { status: 409 }); }
     if (method === "GET" && action === "clients" && clientId === undefined) return Response.json({ clients: this.listMcpClients() });
     if (method === "POST" && action === "clients" && clientId === undefined && input.identity_version !== undefined) {
-      if (input.identity_version !== 2 || input.scopes !== undefined) return Response.json({ error: "invalid identity version or mixed scope fields" }, { status: 400 });
-      const id = stringField(input, "client_id", 128), label = stringField(input, "label", 256);
-      const verifier = stringField(input, "secret_verifier", 64), prefix = stringField(input, "secret_prefix", 16);
-      const scopes = Array.isArray(input.native_scopes) && input.native_scopes.length === 0 ? [] : scopesField(input.native_scopes);
-      if (id === undefined || label === undefined || verifier === undefined || prefix === undefined || scopes === undefined) return Response.json({ error: "invalid identity" }, { status: 400 });
+      const parsed = parseMcpIdentity(input);
+      if (!parsed.ok) return registryInputError(parsed);
+      const { id, label, verifier, prefix, scopes } = parsed.value;
       const identity = this.auth.createMcpIdentity({ client_id: id, label, secret_verifier: verifier, secret_prefix: prefix, native_scopes: scopes }, nowMs);
       return identity === undefined ? new Response("conflict", { status: 409 }) : Response.json(identity);
     }
-    if (method === "POST" && action === "clients" && clientId === undefined) { const id = stringField(input, "client_id", 128); const label = stringField(input, "label", 256); const verifier = stringField(input, "secret_verifier", 64); const prefix = stringField(input, "secret_prefix", 16); const scopes = scopesField(input.scopes); if (id === undefined || label === undefined || verifier === undefined || prefix === undefined || scopes === undefined) return Response.json({ error: "invalid client" }, { status: 400 }); const client = this.createMcpClient({ client_id: id, label, secret_verifier: verifier, secret_prefix: prefix, scopes }, nowMs); return client === undefined ? new Response("conflict", { status: 409 }) : Response.json(client); }
+    if (method === "POST" && action === "clients" && clientId === undefined) {
+      const parsed = parseNativeMcpClient(input);
+      if (!parsed.ok) return registryInputError(parsed);
+      const { id, label, verifier, prefix, scopes } = parsed.value;
+      const client = this.createMcpClient({ client_id: id, label, secret_verifier: verifier, secret_prefix: prefix, scopes }, nowMs);
+      return client === undefined ? new Response("conflict", { status: 409 }) : Response.json(client);
+    }
     if (action === "clients" && clientId !== undefined && isSafeIdentifier(clientId)) {
       const subaction = segments[2];
       if (method === "POST" && subaction === "recording") {
@@ -903,9 +905,10 @@ export class RegistryDO {
     }
     if (method === "POST" && action === "runners" && clientId !== undefined && segments[2] === "managed-workspaces" && segments[3] === undefined) {
       if (!isSafeIdentifier(clientId)) return new Response("not found", { status: 404 });
-      const workspaceId = stringField(input, "workspace_id", 128); const displayName = stringField(input, "display_name", 256); const rootPath = stringField(input, "root_path", 4_096); const permissions = permissionSetField(input.permissions); const mutationId = mutationIdField(input);
-      if (workspaceId === undefined || displayName === undefined || rootPath === undefined || permissions === undefined || mutationId === undefined || typeof input.enabled !== "boolean") return Response.json({ error: "invalid workspace mutation" }, { status: 400 });
-      const workspace = this.createManagedWorkspace(clientId, { workspace_id: workspaceId, display_name: displayName, root_path: rootPath, enabled: input.enabled, permissions }, nowMs, mutationId);
+      const parsed = parseManagedWorkspace(input);
+      if (!parsed.ok) return registryInputError(parsed);
+      const { workspaceId, displayName, rootPath, permissions, mutationId, enabled } = parsed.value;
+      const workspace = this.createManagedWorkspace(clientId, { workspace_id: workspaceId, display_name: displayName, root_path: rootPath, enabled, permissions }, nowMs, mutationId);
       return workspace === undefined ? new Response("conflict", { status: 409 }) : Response.json(workspace);
     }
     if (action === "runners" && clientId !== undefined && segments[2] === "managed-workspaces" && segments[3] !== undefined && isSafeIdentifier(clientId) && isSafeIdentifier(segments[3])) {
@@ -923,8 +926,9 @@ export class RegistryDO {
       }
     }
     if (method === "POST" && action === "runners" && clientId !== undefined && segments[2] === "version-policy" && isSafeIdentifier(clientId)) {
-      const channel = input.update_channel; const desired = input.desired_runner_version; const latest = input.latest_runner_version;
-      if ((channel !== "stable" && channel !== "pinned") || (desired !== undefined && typeof desired !== "string") || (latest !== undefined && typeof latest !== "string")) return Response.json({ error: "invalid runner version policy" }, { status: 400 });
+      const parsed = parseRunnerVersionPolicy(input);
+      if (!parsed.ok) return registryInputError(parsed);
+      const { channel, desired, latest } = parsed.value;
       const runner = this.setRunnerVersionPolicy(clientId, { update_channel: channel, ...(typeof desired === "string" ? { desired_runner_version: desired } : {}), ...(typeof latest === "string" ? { latest_runner_version: latest } : {}) }, nowMs);
       return runner === undefined ? new Response("not found", { status: 404 }) : Response.json(runner);
     }

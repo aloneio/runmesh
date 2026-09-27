@@ -1,4 +1,5 @@
 import { createJobFileFaults } from "./helpers/job-file-faults.js";
+import { nativeJobProcesses } from "../src/jobs/process.js";
 import { lstat, mkdir, readFile, rm, symlink, writeFile, mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -776,37 +777,48 @@ describe("persistent local jobs", () => {
 
   it("does not signal a local PID after the child exits during cancellation persistence", async () => {
     const test = await fixture();
+    const faults = createJobFileFaults();
+    let child: ChildProcess | undefined;
     try {
       let terminateCalls = 0;
       const manager = new JobManager({
         policy: policy(test.workspace),
         stateDir: test.state,
         terminateProcess: async () => { terminateCalls += 1; return true; },
-      });
+      }, { files: faults.files, processes: {
+        ...nativeJobProcesses,
+        spawn: ((...args: Parameters<typeof spawn>) => { child = spawn(...args); return child; }) as typeof spawn,
+      } });
       await manager.initialize();
       const job = await manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"] });
-      const internals = manager as unknown as {
-        readonly processes: Map<string, { readonly kill: () => boolean }>;
-        persist: (record: JobRecord) => Promise<void>;
-      };
-      const child = internals.processes.get(job.job_id);
       expect(child).toBeDefined();
-      const originalPersist = internals.persist.bind(manager);
       let killed = false;
-      internals.persist = async (record) => {
+      faults.write = async (record, commit) => {
         if (!killed && record.job_id === job.job_id && record.status === "cancelling") {
           killed = true;
-          child?.kill();
-          // Let the close handler commit before the post-persist target check.
-          await new Promise((resolve) => setTimeout(resolve, 100));
+          // Observe real child exit inside the file-write barrier. The normal
+          // persistence queue must then converge before cancel can return.
+          const closed = new Promise<void>(resolve => child!.once("close", () => resolve()));
+          child!.kill();
+          await closed;
         }
-        return originalPersist(record);
+        return commit();
       };
       const result = await manager.cancel(job.job_id);
+      expect(killed).toBe(true);
       expect(terminateCalls).toBe(0);
       expect(["succeeded", "failed", "interrupted"]).toContain(result.status);
-      expect(["succeeded", "failed", "interrupted"]).toContain(manager.get(job.job_id).status);
-    } finally { await test.cleanup(); }
+      expect(manager.get(job.job_id).status).toBe(result.status);
+      const persisted = JSON.parse(await readFile(join(test.state, "jobs", job.job_id, "meta.json"), "utf8"));
+      expect(persisted).toMatchObject({ status: result.status, cancellation_delivered_at_ms: null });
+    } finally {
+      if (child !== undefined && child.exitCode === null && child.signalCode === null) {
+        const closed = new Promise<void>(resolve => child!.once("close", () => resolve()));
+        child.kill();
+        await closed;
+      }
+      await test.cleanup();
+    }
   });
 
   it("fails promptly when process-tree termination is not delivered", async () => {
@@ -1737,29 +1749,70 @@ describe("persistent local jobs", () => {
 });
 
 
-it("expires only opted-in terminal local Job metadata and logs, not active or uncertain Jobs",async()=>{
-  const f=await fixture();
-  const manager=new JobManager({policy:policy(f.workspace),stateDir:f.state,maxRetainedJobs:10});
+it("expires only opted-in terminal local Job metadata and logs, not active or uncertain Jobs", async () => {
+  const f = await fixture();
+  let manager: JobManager | undefined, runningId: string | undefined, queuedId: string | undefined;
+  let clock: ReturnType<typeof vi.spyOn> | undefined;
   try {
-    await manager.initialize();
-    const start=await manager.start({workspace_id:f.workspace.workspaceId,command:[process.execPath,"-e","console.log('retention-test')"]});
-    await manager.waitForTerminal(start.job_id);
-    const done=manager.get(start.job_id),old=Date.now()-3*86400000;
-    const expired={...done,updated_at_ms:old,completed_at_ms:old};
-    (manager as any).jobs.set(done.job_id,expired);
-    for(const status of ["queued","running","cancelling","unknown"]) {
-      const id=`job-retention-${status}`;
-      (manager as any).jobs.set(id,{...expired,job_id:id,status,completed_at_ms:null});
-      await mkdir(join(f.state,"jobs",id));
-      await writeFile(join(f.state,"jobs",id,"sentinel"),"preserve");
+    const initial = new JobManager({ policy: policy(f.workspace), stateDir: f.state });
+    await initial.initialize();
+    const start = await initial.start({ workspace_id: f.workspace.workspaceId, command: [process.execPath, "-e", "console.log('retention-test')"] });
+    await initial.waitForTerminal(start.job_id);
+    const done = initial.get(start.job_id);
+    expect(done.status).toBe("succeeded");
+    const old = Date.now() - 3 * 86400000;
+    const expired = { ...done, created_at_ms: old - 2, started_at_ms: old - 1, updated_at_ms: old, completed_at_ms: old };
+    await writeFile(join(f.state, "jobs", done.job_id, "meta.json"), JSON.stringify(expired));
+    const recoveredPid = 2147483000;
+    const recoveredJobs = [["job-00000000-0000-0000-0000-000000000001", "cancelling"], ["job-00000000-0000-0000-0000-000000000002", "unknown"]] as const;
+    for (const [id, status] of recoveredJobs) {
+      await mkdir(join(f.state, "jobs", id), { mode: 0o700 });
+      await writeFile(join(f.state, "jobs", id, "meta.json"), JSON.stringify({
+        ...expired, job_id: id, pid: recoveredPid, status, completed_at_ms: null, exit_code: null,
+      }));
+      await writeFile(join(f.state, "jobs", id, "sentinel"), "preserve");
     }
+    manager = new JobManager({
+      policy: policy(f.workspace), stateDir: f.state, maxRetainedJobs: 10, maxConcurrentJobs: 3,
+      authorizeQueuedJob: async () => true,
+    }, { processes: {
+      ...nativeJobProcesses,
+      inspectProcess: async (pid, fingerprint) => pid === recoveredPid
+        ? { alive: true, fingerprintMatches: true } : nativeJobProcesses.inspectProcess(pid, fingerprint),
+    } });
+    await manager.initialize();
+    for (const [id, status] of recoveredJobs) expect(manager.get(id).status).toBe(status);
+    const running = await manager.start({ workspace_id: f.workspace.workspaceId, command: [process.execPath, "-e", "process.stdin.resume();process.stdin.once('data',()=>process.exit(0))"] });
+    runningId = running.job_id;
+    const queued = await manager.start({ workspace_id: f.workspace.workspaceId, command: [process.execPath, "-e", "process.exit(0)"] });
+    queuedId = queued.job_id;
+    const protectedJobs = [[queuedId, "queued"], [runningId, "running"], ...recoveredJobs] as const;
+    for (const [id, status] of protectedJobs) {
+      expect(manager.get(id).status).toBe(status);
+      await writeFile(join(f.state, "jobs", id, "sentinel"), "preserve");
+    }
+    // Advance only the wall clock: real process callbacks and disk I/O still run.
+    // Even active/recovered records now older than the TTL must survive.
+    clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 3 * 86400000);
     await manager.cleanupExpired();
-    expect(await lstat(join(f.state,"jobs",done.job_id))).toBeDefined();
+    expect(await lstat(join(f.state, "jobs", done.job_id))).toBeDefined();
     manager.setRetentionDays(1);
     await manager.cleanupExpired();
-    await expect(lstat(join(f.state,"jobs",done.job_id))).rejects.toMatchObject({code:"ENOENT"});
-    for(const status of ["queued","running","cancelling","unknown"]) expect(await readFile(join(f.state,"jobs",`job-retention-${status}`,"sentinel"),"utf8")).toBe("preserve");
-    expect(()=>manager.setRetentionDays(-1)).toThrow();
-    expect(()=>manager.setRetentionDays(99999)).toThrow();
-  } finally {await f.cleanup();}
+    await expect(lstat(join(f.state, "jobs", done.job_id))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(() => manager!.get(done.job_id)).toThrow();
+    for (const [id, status] of protectedJobs) {
+      expect(manager.get(id).status).toBe(status);
+      expect(await readFile(join(f.state, "jobs", id, "sentinel"), "utf8")).toBe("preserve");
+    }
+    expect(() => manager!.setRetentionDays(-1)).toThrow();
+    expect(() => manager!.setRetentionDays(99999)).toThrow();
+  } finally {
+    clock?.mockRestore();
+    if (manager !== undefined && queuedId !== undefined) await manager.cancel(queuedId);
+    if (manager !== undefined && runningId !== undefined) {
+      await manager.input(runningId, "exit\n");
+      await manager.waitForTerminal(runningId);
+    }
+    await f.cleanup();
+  }
 });

@@ -1,20 +1,20 @@
 {
-  "source_commit": "6e43324a9681e75c4f4fe623759e6049f44edff2",
+  "source_commit": "d7f5a181d3694ebab97e6481cc37d45a9f26a285",
   "cases": [
     {
       "nonce": null,
-      "sha256": "6ba659ae1a2465818afc4c19bf9003ddb5239ffbae0fd2229a7bf047334c9d1f",
+      "sha256": "b96ea1e2406df7c4c2e45a8434e51217f0bcea20c12607e0f5313ae21344d9a0",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e"
     },
     {
       "nonce": "test-nonce",
-      "sha256": "6de936d2ba8370bf9ef126831b144b49eddf9b7767cbbf5ca5ffd14230bbe222",
+      "sha256": "1e8ebbb82b08c2300b3af7cd2a167b9f60988c6b20744de7f6f82b82f41292da",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224"
     }
   ],
-  "reviewed_change": "Enabled explicit publication of reviewed updates when a Skill is already enabled and its staged bundle differs from the active version. Browser regressions verify review performs no write, publishing uses the reviewed digest and revision, current versions have no redundant publication action, and paused Skills can resume without screenshots."
+  "reviewed_change": "Split central browser control into controller, HTTP API, service and Skill workflows, presentation and bilingual messages. The existing guided MCP/OAuth and direct Skill DOM regressions pass, including shared capabilities, pause/reconnect, explicit publication, ambiguous-write refresh fencing and no replay. Bundling is local, bounded, deterministic and preserves nonce rendering; no screenshots."
 }

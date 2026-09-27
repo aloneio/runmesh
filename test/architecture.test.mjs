@@ -80,6 +80,16 @@ const bad = [
   ["command to CLI facade", { "apps/runner/src/cli/doctor.ts": 'import "../cli.js";', "apps/runner/src/cli.ts": "export {};" }],
   ["patch planner to file mutator", { "apps/runner/src/patch/parse.ts": 'import "./files.js";', "apps/runner/src/patch/files.ts": "export {};" }],
   ["browser to Worker application", { "apps/worker/browser/main.js": 'import "../src/application/delete-runner.js";', "apps/worker/src/application/delete-runner.ts": "export {};" }],
+  ["browser service to Skill workflow", { "apps/worker/browser/central/services.js": 'import "./skills.js";', "apps/worker/browser/central/skills.js": "export {};" }],
+  ["browser API to controller", { "apps/worker/browser/central/api.js": 'import "./controller.js";', "apps/worker/browser/central/controller.js": "export {};" }],
+  ["browser workflow direct fetch", { "apps/worker/browser/central/services.js": 'export const discover = () => fetch("https://example.invalid");' }],
+  ["browser view aliased network", { "apps/worker/browser/central/view.mjs": 'const platform = globalThis; export const load = platform["fetch"];' }],
+  ["browser API owns DOM", { "apps/worker/browser/central/api.js": 'export const find = () => document.querySelector("form");' }],
+  ["browser copy owns navigation", { "apps/worker/browser/central/messages.js": 'export const locale = location.href;' }],
+  ["Registry route parser to domain owner", { "apps/worker/src/registry/route-inputs.ts": 'import "./auth.js";', "apps/worker/src/registry/auth.ts": "export {};" }],
+  ["Registry route projection to persistence", { "apps/worker/src/registry/route-projections.ts": 'import "./storage.js";', "apps/worker/src/registry/storage.ts": "export {};" }],
+  ["Registry route parser ambient clock", { "apps/worker/src/registry/route-inputs.mts": 'export const expires = () => Date.now();' }],
+  ["Registry route projection network", { "apps/worker/src/registry/route-projections.ts": 'export const project = () => fetch("https://example.invalid");' }],
 
   ["Registry to admin view", { "apps/worker/src/registry/auth.ts": 'import "../admin/client-views.js";', "apps/worker/src/admin/client-views.ts": "export {};" }],
   ["Registry to HTTP", { "apps/worker/src/registry/auth.ts": 'import "../http/html-response.js";', "apps/worker/src/http/html-response.ts": "export {};" }],
@@ -296,7 +306,6 @@ test("AR18 prevents retired private I/O mocks from returning", async () => {
     "waits for fast-exit terminal metadata before returning from start",
     "does not let a late running metadata write overwrite terminal state",
     "does not overwrite a queued cancellation after a spawn setup failure races",
-    "does not signal a local PID after the child exits during cancellation persistence",
   ]);
   const found = new Set();
   const runtime = parseTest(await readFile(join(project, "apps/runner/test/runtime.test.ts"), "utf8"));
@@ -304,6 +313,11 @@ test("AR18 prevents retired private I/O mocks from returning", async () => {
     if (node.type !== "CallExpression" || node.callee?.name !== "it" || node.arguments[0]?.type !== "StringLiteral") return;
     const name = node.arguments[0].value;
     visit(node.arguments[1], child => {
+      if (["expires only opted-in terminal local Job metadata and logs, not active or uncertain Jobs",
+        "does not signal a local PID after the child exits during cancellation persistence"].includes(name)
+        && child.type === "MemberExpression")
+        assert.ok(!["jobs", "processes", "persist", "jobDir", "closeLogHandles"].includes(property(child)),
+          name + ": use persisted fixtures and supported ports rather than private JobManager state");
       if (child.type !== "AssignmentExpression" || property(child.left) !== "persist") return;
       assert.ok(remaining.has(name), `${name}: inject JobFilePort rather than replacing persistence coordination`);
       found.add(name);
