@@ -1,13 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, writeFile, readFile, copyFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, copyFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:GIT_|WORKERS_CI|WRANGLER_CI_|CI_|GITHUB_)/u.test(key)));
 const buildUuid = "12345678-1234-4234-8234-123456789abc";
 const candidate = { version: "0.1.3", state: "candidate", release_branch: "main" };
+const project = fileURLToPath(new URL("../", import.meta.url));
 function git(root, ...args) {
   return execFileSync("git", ["-c", "user.name=aloneio", "-c", "user.email=git@aloneio.aleeas.com", ...args], { cwd: root, env: environment, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
@@ -16,8 +18,11 @@ async function fixture(t, state = { version: "0.1.3", state: "released", release
   t.after(() => rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 }));
   git(root, "init", "--initial-branch=main");
   for (const directory of ["scripts", "release", "apps/worker/src", "apps/worker/browser", "node_modules/wrangler/bin"]) await mkdir(join(root, directory), { recursive: true });
-  for (const script of ["deploy-worker.mjs", "deployment-policy.mjs", "build-provenance.mjs", "generate-build-provenance.mjs", "prepare-worker-build.mjs", "generate-browser-assets.mjs"]) await copyFile(new URL(`../scripts/${script}`, import.meta.url), join(root, "scripts", script));
-  await writeFile(join(root, ".gitignore"), "apps/worker/src/generated-provenance.ts*\napps/worker/src/generated-admin-client.ts*\n");
+  for (const script of ["deploy-worker.mjs", "deployment-policy.mjs", "build-provenance.mjs", "generate-build-provenance.mjs", "prepare-worker-build.mjs", "generate-browser-assets.mjs", "architecture-graph.mjs", "architecture-policy.mjs", "central-architecture-policy.mjs"]) await copyFile(new URL(`../scripts/${script}`, import.meta.url), join(root, "scripts", script));
+  // Exercise the real bounded bundler; only the deployment uploader is fake.
+  for (const dependency of ["esbuild", "@babel"])
+    await symlink(join(project, "node_modules", dependency), join(root, "node_modules", dependency), process.platform === "win32" ? "junction" : "dir");
+  await writeFile(join(root, ".gitignore"), "apps/worker/src/generated-provenance.ts*\napps/worker/src/generated-admin-client.ts*\nnode_modules/esbuild\nnode_modules/@babel\n");
   await writeFile(join(root, "apps/worker/wrangler.jsonc"), JSON.stringify({ name: "runmesh", env: { production: { name: "runmesh" }, development: { name: "runmeshdev" } } }));
   await writeFile(join(root, "apps/worker/browser/admin-client.js"), "(function () {})();\n");
   await writeFile(join(root, "package.json"), JSON.stringify({ version: "0.1.3" }));

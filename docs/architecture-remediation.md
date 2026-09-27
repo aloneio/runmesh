@@ -56,10 +56,19 @@ Registry startup.
 
 ## Browser source and messages
 
-Edit browser behavior in `apps/worker/browser/admin-client.js`. Its bounded
-generator checks syntax and atomically writes the ignored Worker module during
-build, typecheck and Wrangler preparation. Nonce/no-nonce rendering hashes cover
-the original script bytes.
+`apps/worker/browser/admin-client.js` is the browser entry. Central product
+modules live in `browser/central/`: `controller.js` owns busy state, write
+admission and refresh snapshots; `api.js` owns HTTP receipts and pagination;
+`services.js` and `skills.js` own their separate workflows; `view.js` owns
+shared DOM primitives and `messages.js` owns central browser bilingual copy.
+Workflow dependencies are injected by the controller, never imported from peers.
+Architecture fixtures reject reverse imports and direct workflow network calls.
+
+The generator bundles only local static JavaScript modules into one CSP-compatible
+script. It bounds the input graph and output, rejects external/dynamic imports and
+path/symlink escapes, checks syntax without executing DOM code, and atomically
+writes the ignored Worker module during build, typecheck and Wrangler preparation.
+Nonce/no-nonce hashes cover the reviewed bundled bytes; DOM tests cover behavior.
 
 `i18n/messages.ts` owns stable bilingual IDs. `message()` accepts typed keys,
 locales and key-specific parameters, with compiler regressions for invalid calls.
@@ -154,10 +163,25 @@ Eight Job fault scenarios use the atomic-file port. Concurrency, enrollment-fenc
 recovery and reporting-bridge tests use RegistryRequestPort with real DO storage,
 process execution, cancellation and observable-state assertions.
 
-Four Runtime tests retain private persistence-coordinator interception to preserve
-specific timing: fast-exit durability, late running snapshot, spawn-setup/cancellation
-and child-exit-before-signal. The architecture regression guards these names.
-Replace an exception only after demonstrating equivalent timing and assertions.
+Three Runtime tests retain private persistence-coordinator interception to preserve
+specific timing: fast-exit durability, late running snapshot and spawn-setup/cancellation.
+Their barriers are before persistence admission or after coordinator completion;
+a file adapter barrier alone cannot reproduce those exact ordering windows.
+The architecture regression guards these names. Replace an exception only after
+demonstrating equivalent timing and assertions.
+
+Child-exit-before-signal uses the file/process ports, observes the actual child
+close event and checks durable terminal state and zero termination calls. The
+retention fixture loads valid persisted records, creates running/queued Jobs via
+public admission and verifies opt-in deletion while all four protected states
+survive. Neither migrated test reads or mutates JobManager's private maps.
+
+Registry route parsing lives in `registry/route-inputs.ts`; policy/workspace
+and merged audit response projections live in `registry/route-projections.ts`.
+These functions receive values and do not acquire state or perform I/O. RegistryDO
+continues to own signed-request admission, transaction/nonce ordering, identity
+checks, SQL and post-await lifecycle revalidation. Pure and route regressions
+preserve validation errors, status codes, projection fields and audit ordering.
 
 Keep JobManager and RunnerDO as state owners. Run generated-source, contract,
 dependency and fault regressions with the required package, native and browser

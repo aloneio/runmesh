@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "d852bc83ac434183fd9251448185c2263fe9e44d65d38414bd1ae66fa3ed183c",
-      "bytes": 105834,
+      "sha256": "b4fa8475322d23b3a44bac77b55407ecd2ae262b809d49fed5316041e6102df2",
+      "bytes": 119869,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -30,8 +30,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "331f8a8ae298e01e381b5a080dcd662f2e2deb54e2af58726709aa50cb33bcd8",
-      "bytes": 106422,
+      "sha256": "4b31e45fe1ab19aaf16faa6a78b5f70f6adf06f8b8da8bd1e307407ce0b0b0b0",
+      "bytes": 120457,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -47,8 +47,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "75ffdf5060fc45a0372b5b9b08d3db76719a23e2d332fa56ef7dffe90615314e",
-      "bytes": 107576,
+      "sha256": "f21d896bf1bdcd2dc33e917c13f5d02b64494e190c00556e12498f3e9f1fec51",
+      "bytes": 121611,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -413,8 +413,8 @@
           }
         ]
       ],
-      "sha256": "657e59898eabe56937a0aecdeb3f5e5290582ba4dc4ae5d0059fd820bc2526fb",
-      "bytes": 107925,
+      "sha256": "9ac4d40eab1922c475abaac9971586cc7f7dff6e97b56d7717962da7644d7aa4",
+      "bytes": 121960,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -447,5 +447,16 @@
     ],
     "native_view_bodies_unchanged": true
   },
-  "product_review": "Guided Services and Skills workflows, responsive layout, and optional machine access."
+  "product_review": "Guided Services and Skills workflows, responsive layout, and optional machine access.",
+  "browser_module_review": {
+    "source_base": "d7f5a181d3694ebab97e6481cc37d45a9f26a285",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "allowed_change": "Bundled central browser modules. Replacing the bundle with the prior source exactly reproduces every previous page hash and byte count.",
+    "native_view_bodies_unchanged": true
+  }
 }
