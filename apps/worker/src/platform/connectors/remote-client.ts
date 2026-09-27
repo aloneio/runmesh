@@ -158,6 +158,7 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
         if (signal.aborted || client.getServerCapabilities()?.tools === undefined) throw new RemoteFault("upstream_protocol_error");
       } catch (error) { await close(); throw lastFault ?? (error instanceof RemoteFault ? error : new RemoteFault("upstream_protocol_error")); }
       return {
+        current: () => !parent.aborted && credentialCurrent() && egressCurrent(),
         async listTools() {
           try {
             const response = await client.listTools({}, { signal, timeout: REMOTE_LIMITS.operation_ms });

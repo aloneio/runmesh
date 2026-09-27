@@ -4,6 +4,9 @@ import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 import { createHttpRemoteConnector } from "../src/platform/connectors/remote-client.js";
 import { createRemoteDiscovery } from "../src/application/capabilities/remote-discovery.js";
+import { createRemoteCaller } from "../src/application/capabilities/remote-call.js";
+import { buildCatalogSnapshot } from "../src/domain/capabilities/catalog.js";
+import { catalogSha256 } from "../src/platform/capabilities/catalog-crypto.js";
 import type { CatalogHead, CatalogRepository, CatalogSnapshot } from "../src/contracts/catalog.js";
 import type { ConnectionProfile } from "../src/contracts/connectors.js";
 import { RemoteFault } from "../src/contracts/remote.js";
@@ -39,11 +42,13 @@ function fixture(afterCleanup: () => void = () => undefined) {
   return { connector, open, seen, execute, send, sessions, change: () => { changed = true; }, expire: () => { expired = true; }, revoke: () => { current = false; },
     changePolicy: () => { allowSession = false; }, changeOnResponse: () => { changeOnResponse = true; } };
 }
-it.each(["publish", "admin", "profile", "catalog"])("W06 discovery closes its session before publication and rechecks %s", async change => {
+it.each(["publish", "admin", "profile", "catalog", "credential", "egress", "credential-digest", "egress-digest"])("W06 discovery closes its session before publication and rechecks %s", async change => {
   let allowed = true, currentProfile = { ...profile }, head: CatalogHead | undefined, snapshot: CatalogSnapshot | undefined;
   const f = fixture(() => {
     if (change === "admin") allowed = false;
     if (change === "profile") currentProfile = { ...profile, revision: 2, enabled: false };
+    if (change === "credential") f.revoke();
+    if (change === "egress") f.changePolicy();
     if (change === "catalog") head = { schema_version: 1, profile_id: profile.profile_id, revision: 1,
       observed_digest: "a".repeat(64), approved_digest: null, approved_names: [] };
   });
@@ -58,7 +63,12 @@ it.each(["publish", "admin", "profile", "catalog"])("W06 discovery closes its se
     stage: () => ({ state: "invalid" }), approve: () => ({ state: "invalid" }), disable: () => ({ state: "invalid" }) };
   const discover = createRemoteDiscovery({ repository, connector: f.connector, profile: () => currentProfile,
     authorize: async () => allowed ? "allowed" : "denied",
-    digest: async value => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))), byte => byte.toString(16).padStart(2, "0")).join("") });
+    digest: async value => {
+      const digest = await catalogSha256(value);
+      if (change === "credential-digest") f.revoke();
+      if (change === "egress-digest") f.changePolicy();
+      return digest;
+    } });
   const result = await discover(profile.profile_id, 0, new AbortController().signal);
   expect(f.seen.filter(request => request.method === "DELETE")).toHaveLength(1);
   expect(f.sessions.size).toBe(0);
@@ -67,8 +77,42 @@ it.each(["publish", "admin", "profile", "catalog"])("W06 discovery closes its se
     expect(result).toMatchObject({ state: "written", head: { revision: 1, approved_names: ["read"] } });
     expect(publish).toHaveBeenCalledOnce();
   } else {
-    expect(result).toMatchObject({ state: "failed", operation_state: "not_started" });
+    expect(result).toMatchObject(change.endsWith("-digest") ? { state: "denied" } : { state: "failed", operation_state: "not_started" });
     expect(publish).not.toHaveBeenCalled();
+  }
+});
+it.each(["unchanged", "identity", "profile", "catalog", "credential", "egress", "cleanup-failure"])("W06 completed calls revalidate after session cleanup: %s", async change => {
+  let calling = false, allowed = true, currentProfile = { ...profile }, head: CatalogHead;
+  const f = fixture(() => {
+    if (!calling) return;
+    if (change === "identity") allowed = false;
+    if (change === "profile") currentProfile = { ...profile, revision: 2, enabled: false };
+    if (change === "catalog") head = { ...head, revision: head.revision + 1 };
+    if (change === "credential") f.revoke();
+    if (change === "egress") f.changePolicy();
+    if (change === "cleanup-failure") throw new Error("cleanup response lost");
+  });
+  const preparation = await f.open(), definitions = await preparation.listTools();
+  await preparation.close();
+  const snapshot = await buildCatalogSnapshot(profile, definitions, catalogSha256, () => false);
+  if (!snapshot) throw new Error("missing fixture catalog");
+  head = { schema_version: 1, profile_id: profile.profile_id, revision: 1,
+    observed_digest: snapshot.digest, approved_digest: snapshot.digest, approved_names: ["read"] };
+  const repository: CatalogRepository = { readHead: () => head, readSnapshot: () => snapshot,
+    publish: () => ({ state: "invalid" }), stage: () => ({ state: "invalid" }), approve: () => ({ state: "invalid" }), disable: () => ({ state: "invalid" }) };
+  const principal = { client_id: "session-reader", secret_version: 1 };
+  const call = createRemoteCaller({ repository, connector: f.connector, profile: () => currentProfile, digest: catalogSha256,
+    identity: async () => allowed ? { state: "allowed", identity: { schema_version: 2, ...principal, label: "Session reader", native_scopes: [] } } : { state: "denied" } });
+  const before = f.seen.length, tool = snapshot.tools[0]!; calling = true;
+  const result = await call(principal, { profile_id: profile.profile_id, tool_id: tool.tool_id, version: tool.version, arguments: {} }, new AbortController().signal);
+  expect(f.execute).toHaveBeenCalledOnce();
+  expect(f.seen.slice(before).filter(request => request.method === "tools/call")).toHaveLength(1);
+  expect(f.seen.slice(before).filter(request => request.method === "DELETE")).toHaveLength(1);
+  expect(f.sessions.size).toBe(0);
+  if (change === "unchanged" || change === "cleanup-failure") {
+    expect(result).toMatchObject({ state: "completed", operation_state: "completed", result: { content: [{ type: "text", text: "done" }] } });
+  } else {
+    expect(result).toEqual({ state: "failed", code: "result_withheld", operation_state: "completed" });
   }
 });
 it("W06 ephemeral sessions are isolated per operation and closed once", async () => {

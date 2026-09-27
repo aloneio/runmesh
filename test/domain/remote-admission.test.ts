@@ -21,7 +21,7 @@ async function fixture() {
     await before(); mark(); invoked(); afterCall(); return { content: [{ type: "text", text: "fixture" }], isError: false };
   });
   const listTools = vi.fn(async () => [tool.definition]);
-  const session: RemoteSession = { listTools, callTool, close: closed };
+  const session: RemoteSession = { current: () => true, listTools, callTool, close: closed };
   const repository: CatalogRepository = { readHead: () => head, readSnapshot: () => snapshot,
     stage: vi.fn(() => ({ state: "written", head })), publish: vi.fn(() => ({ state: "written", head })), approve: () => ({ state: "invalid" }), disable: () => ({ state: "invalid" }) };
   const ports: RemoteCallPorts = { repository, profile: vi.fn(() => profile), identity,
