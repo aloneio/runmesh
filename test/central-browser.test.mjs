@@ -68,6 +68,23 @@ test("a detached view cannot start reads previews or writes", async t => {
   assert.equal(api.requests.length, 0);
 });
 
+for (const detached of [false, true]) test("request timeout preserves " + (detached ? "detached-view cancellation" : "service-local recovery"), async t => {
+  const schedule = globalThis.setTimeout;
+  t.mock.method(globalThis, "setTimeout", (callback, delay) => schedule(callback, delay === 25000 ? 0 : delay));
+  const api = client(t, (_url, { signal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  }));
+  const pending = api.request("discovery/service", {});
+  if (detached) api.detach();
+  await assert.rejects(pending, detached ? { name: "AbortError" } : {
+    name: "Error", message: "connectionInterruptedRefreshToCheckWhetherTheOperationCompleted",
+  });
+  assert.equal(api.refreshRequired(), true);
+  assert.equal(api.requests.length, 1);
+  await assert.rejects(api.request("discovery/service", {}), detached ? { name: "AbortError" } : /refreshTheLibraryBeforeMakingAnotherChange/u);
+  assert.equal(api.requests.length, 1);
+});
+
 test("detaching during a pending response prevents a follow-up mutation", async t => {
   const response = deferred();
   const api = client(t, () => response.promise);

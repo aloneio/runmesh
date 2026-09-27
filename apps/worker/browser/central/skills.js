@@ -106,6 +106,8 @@ export function createSkillWorkflow({
         });
         importer.reset();
         await refresh();
+        var current = getSkills().find(item => item.head.skill_id === result.skill_id);
+        if (!current || !current.head.enabled || current.head.active_digest !== result.digest) throw new Error(t('skillChangedAfterInstallation'));
         say(result.name + t('installedReadyToUseInAllConnectedAiClients'));
       }
       try {

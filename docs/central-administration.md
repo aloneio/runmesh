@@ -14,10 +14,19 @@ unpublished tools finish on opening the library. View tools is read-only; Refres
 tools updates the shared catalog immediately. Resuming a paused service refreshes
 its tools automatically.
 
+An unavailable pending service does not block other connections. Recovery reports
+each failed service and refreshes the library before a different service can
+write; it never retries the failed connection in the same pass. If that refresh
+fails, recovery stops. Returning from OAuth also resumes other pending services.
+Ready-to-use messages require the refreshed service to remain enabled and its
+complete tool catalog to remain published.
+
 Select SKILL.md and supporting text files, or a complete Skill folder, to install
 a Skill. Its name and description come from frontmatter. Installing saves,
 approves and activates the files atomically; scripts never execute. Replacing
 an installed Skill requires confirmation and the currently observed revision.
+The success message also verifies that the installed version is still active
+after refresh; a concurrent pause or replacement is reported instead.
 
 Create an AI connection and copy its one-time URL into the AI client. Every valid
 authenticated client in the instance shares all enabled published MCP tools and

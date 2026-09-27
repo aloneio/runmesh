@@ -68,16 +68,52 @@ export function createServiceWorkflow({
     await api('discovery/' + id, {
       expected_revision: catalog ? catalog.head.revision : 0
     });
-    await refresh();
-    await showTools(profile);
+    var currentProfiles = await refresh(),
+      current = currentProfiles.find(item => item.profile_id === profile.profile_id);
+    if (!current || !current.enabled) throw new Error(t('serviceNoLongerEnabled'));
+    var published = await showTools(current);
+    if (!isPublished(published)) throw new Error(t('toolsNotReadyRefreshToConnect'));
     say(t('serviceConnectedToolsReady'));
+    return currentProfiles;
   }
-  async function resumePending(profiles) {
-    for (const profile of profiles) {
-      if (!profile.enabled) continue;
-      var catalog = await api('catalogs/' + encodeURIComponent(profile.profile_id), undefined, true);
-      if (!isPublished(catalog)) await connectService(profile);
+  async function resumePending(profiles, connected) {
+    const ids = profiles.map(profile => profile.profile_id);
+    if (ids.includes(connected)) {
+      ids.splice(ids.indexOf(connected), 1);
+      ids.unshift(connected);
     }
+    const failures = [];
+    var needsRefresh = false;
+    function failed(profile, error) {
+      if (error.name === 'AbortError') throw error;
+      failures.push((profile.display_name || profile.connector_id) + ': ' + error.message);
+      needsRefresh = true;
+    }
+    for (const id of ids) {
+      var profile = profiles.find(item => item.profile_id === id), catalog;
+      if (!profile || !profile.enabled) continue;
+      try {
+        catalog = await api('catalogs/' + encodeURIComponent(id), undefined, true);
+      } catch (error) {
+        failed(profile, error);
+        continue;
+      }
+      if (id !== connected && isPublished(catalog)) continue;
+      // Reconcile an uncertain write before a different service can mutate.
+      // The original failed service is never retried in this recovery pass.
+      if (needsRefresh) {
+        profiles = await refresh();
+        needsRefresh = false;
+        profile = profiles.find(item => item.profile_id === id);
+        if (!profile || !profile.enabled) continue;
+      }
+      try {
+        profiles = await connectService(profile);
+      } catch (error) {
+        failed(profile, error);
+      }
+    }
+    if (failures.length) throw new Error(t('someServicesNeedAttention') + '\n' + failures.join('\n'));
   }
   async function showTools(profile) {
     var catalog = await api('catalogs/' + encodeURIComponent(profile.profile_id), undefined, true),
@@ -88,9 +124,9 @@ export function createServiceWorkflow({
     if (!catalog) {
       panel.append(el('p', t('noToolsDiscoveredYetEnableTheServiceThenCheck')));
       say(t('noCatalogYet'));
-      return;
+      return null;
     }
-    panel.append(el('p', t('toolsAvailableAutomatically')));
+    panel.append(el('p', t(!profile.enabled ? 'serviceNoLongerEnabled' : isPublished(catalog) ? 'toolsAvailableAutomatically' : 'toolsNotReadyRefreshToConnect')));
     catalog.snapshot.tools.forEach(function (tool) {
       panel.append(el('h3', tool.definition.title || tool.definition.name), el('p', tool.definition.description || '', 'muted'));
       details(panel, t('parametersSafetyHints'), JSON.stringify({
@@ -104,6 +140,7 @@ export function createServiceWorkflow({
       block: 'nearest'
     });
     say(t('toolsReadyToView'));
+    return catalog;
   }
   async function connectOAuth(profile) {
     var result = await api('connections/begin', {
@@ -143,7 +180,6 @@ export function createServiceWorkflow({
   });
   return {
     render: renderProfiles,
-    connect: connectService,
     resumePending
   };
 }

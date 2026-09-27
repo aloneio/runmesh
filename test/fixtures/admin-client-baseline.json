@@ -1,20 +1,20 @@
 {
-  "source_commit": "880c183707b973d0ff9d5d7332ef44c80cc794db",
+  "source_commit": "85680e3ce590ab2e1e92ae3c4a681781ddfd478b",
   "cases": [
     {
       "nonce": null,
-      "sha256": "3433da2ea3adfc07e197f48353c1f9d2433474a832ffe4e5266b2b91741e1b7c",
+      "sha256": "8ae14e8c649dd42aeea055cbb73efde39f984111087c4a6c7a98f31c5bca0ef6",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e"
     },
     {
       "nonce": "test-nonce",
-      "sha256": "dfeb3c30471c36488d97e2b1034fa5bb10f700025452c3d66eb1af126c05aed3",
+      "sha256": "80d454c1bb5647e77aa592046f49a149d92fa9e0db15aa303e6a0c6e72a868e7",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224"
     }
   ],
-  "reviewed_change": "Successful service connection publishes all discovered tools immediately. DOM tests cover no-auth and OAuth completion, existing unpublished connections, pause/resume, read-only tool details, failed-write no-replay and unchanged Skill installation. No screenshots."
+  "reviewed_change": "Independent pending-service recovery preserves refresh admission and never retries a failed service within the pass. OAuth return continues other pending connections. Service and Skill readiness use refreshed enabled/publication state. DOM regressions cover partial failures, failed refresh, concurrent pauses and replacement. No screenshots."
 }
