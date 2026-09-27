@@ -56,6 +56,8 @@ export function createCentralApi({
       return value;
     } catch (error) {
       if (body && body.action !== 'preview') requireRefresh();
+      assertCurrent();
+      if (error.name === 'AbortError') throw new Error(t('connectionInterruptedRefreshToCheckWhetherTheOperationCompleted'));
       throw error;
     } finally {
       clearTimeout(timer);

@@ -79,6 +79,7 @@ export function bindCentralProduct(root) {
     skillWorkflow.render(skills);
     mustRefresh = false;
     say(t('libraryIsUpToDate'));
+    return profiles;
   }
   app.querySelector('[data-product-refresh]').addEventListener('click', function () {
     run(refresh);
@@ -92,16 +93,7 @@ export function bindCentralProduct(root) {
     await refresh();
     if (!isCurrent()) return;
     var connected = new URL(location.href).searchParams.get('connected');
-    if (connected) {
-      var connection = profiles.find(function (p) {
-        return p.profile_id === connected;
-      });
-      history.replaceState(null, '', '/admin/central');
-      if (connection) {
-        await services.connect(connection);
-        return;
-      }
-    }
-    await services.resumePending(profiles);
+    if (connected) history.replaceState(null, '', '/admin/central');
+    await services.resumePending(profiles, connected);
   });
 }

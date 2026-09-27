@@ -16,6 +16,7 @@ export async function checkGuidedProduct(executable) {
  const digest='a'.repeat(64), toolVersion='c'.repeat(64);
  const profiles=[], library=[], requests=[], exceptions=[];
  let conflict=false, failLibrary=false, rejectDiscovery=false, invalidCatalogReceipt=false, delayedOAuth;
+ let rejectedProfile, afterDiscovery, afterSkillInstallation, failRefreshAfterRejection=false;
  const catalogs=new Map();
  const server=createServer(async(req,res)=>{
   try {
@@ -41,16 +42,17 @@ export async function checkGuidedProduct(executable) {
    }else if(kind==='skill-installations'){
     const item=library.find(s=>s.head.skill_id==='research');
     if((item?.head.revision??0)!==body.expected_revision){code=409;value={state:'conflict',skill_id:'research',current_revision:item.head.revision};}
-    else{const entry={head:{skill_id:'research',revision:body.expected_revision+1,enabled:true,staged_digest:digest,active_digest:digest},bundle:{skill_id:'research',name:'research',description:'Research fixture',source:'Control panel upload',license:'',files:body.files,digest}};if(item)library.splice(library.indexOf(item),1,entry);else library.push(entry);value={state:'installed',skill_id:'research',name:'research',revision:entry.head.revision,digest};}
+    else{const entry={head:{skill_id:'research',revision:body.expected_revision+1,enabled:true,staged_digest:digest,active_digest:digest},bundle:{skill_id:'research',name:'research',description:'Research fixture',source:'Control panel upload',license:'',files:body.files,digest}};if(item)library.splice(library.indexOf(item),1,entry);else library.push(entry);value={state:'installed',skill_id:'research',name:'research',revision:entry.head.revision,digest};const change=afterSkillInstallation;afterSkillInstallation=undefined;change?.(entry);}
    }else if(kind==='discovery'){
     assert.equal(body.expected_revision,catalogs.get(id)?.head.revision??0);
     if(conflict){code=409;value={state:'conflict',current_revision:body.expected_revision+1};}
     else if(invalidCatalogReceipt)value={state:'listed',catalogs:[],next_after:null};
-    else if(rejectDiscovery){code=503;value={error:{code:'remote_authorization_required',operation_state:'not_started'}};}
+    else if(rejectDiscovery||id===rejectedProfile){code=503;value={error:{code:'remote_authorization_required',operation_state:'not_started'}};if(failRefreshAfterRejection)failLibrary=true;}
     else{
     const head={profile_id:id,revision:body.expected_revision+1,observed_digest:digest,approved_digest:digest,approved_names:['search']};
     const snapshot={digest,tools:[{tool_id:'tool-search',public_name:'search',version:toolVersion,definition:{name:'search',description:'<img src=x onerror=alert(1)>',inputSchema:{type:'object',properties:{query:{type:'string'}}},annotations:{readOnlyHint:true}}}]};
-    catalogs.set(id,{state:'found',head,snapshot,changes:[{name:'search',state:'added'}]});value={state:'written',head};}
+    catalogs.set(id,{state:'found',head,snapshot,changes:[{name:'search',state:'added'}]});value={state:'written',head:structuredClone(head)};
+    const change=afterDiscovery;afterDiscovery=undefined;change?.(id);}
    }else if(kind==='catalogs'){
     value=catalogs.get(id);if(!value){code=404;value={state:'missing'};}
     else if(body)throw new Error('Manual approval is not part of the connection flow');
@@ -250,8 +252,54 @@ export async function checkGuidedProduct(executable) {
   assert.equal(await page.getByRole('button',{name:'Reconnect',exact:true}).isEnabled(),true);
   assert.equal(requests.filter(r=>r.path.includes('/catalogs/')&&r.method==='POST').length,0);
   assert.equal(await page.getByText('Enabled · tool review required before sharing',{exact:true}).count(),0);
+  // A broken service must not strand another pending service or replay the failed write.
+  const publicId=profiles[0].profile_id;
+  const discoveryPath=id=>'/admin/central/discovery/'+id;
+  catalogs.delete(publicId);catalogs.delete(oauthId);rejectedProfile=publicId;
+  const recoveryStart=requests.length;
+  await page.reload();await status.filter({hasText:'Sign in to this service again using Reconnect.'}).waitFor();await page.waitForLoadState('networkidle');
+  assert.ok(catalogs.has(oauthId),'A healthy pending service must recover after another service fails');
+  const recovery=requests.slice(recoveryStart),failedIndex=recovery.findIndex(r=>r.path===discoveryPath(publicId)),healthyIndex=recovery.findIndex(r=>r.path===discoveryPath(oauthId));
+  assert.equal(recovery.filter(r=>r.path===discoveryPath(publicId)).length,1);
+  assert.equal(recovery.filter(r=>r.path===discoveryPath(oauthId)).length,1);
+  assert.ok(recovery.slice(failedIndex+1,healthyIndex).some(r=>r.path==='/admin/central/profiles'&&r.method==='GET'),'Refresh admission before a different service writes');
+  assert.ok((await status.textContent()).includes('团队文档'));assert.equal(await status.getAttribute('data-error'),'true');
+  // A failed refresh must still stop later recovery writes.
+  catalogs.delete(oauthId);failRefreshAfterRejection=true;
+  const blockedStart=requests.length;
+  await page.reload();await status.filter({hasText:'Operation could not be confirmed.'}).waitFor();await page.waitForLoadState('networkidle');
+  assert.equal(requests.slice(blockedStart).filter(r=>r.path===discoveryPath(oauthId)).length,0);
+  rejectedProfile=undefined;failRefreshAfterRejection=false;failLibrary=false;
+  // OAuth return finishes its own connection and other interrupted connections once each.
+  const callbackStart=requests.length;
+  await page.goto(origin+'/admin/central?connected='+oauthId);await status.filter({hasText:'Connected. Tools are ready to use'}).waitFor();await page.waitForLoadState('networkidle');
+  for(const id of [publicId,oauthId])assert.equal(requests.slice(callbackStart).filter(r=>r.path===discoveryPath(id)).length,1);
+  assert.equal(new URL(page.url()).search,'');
+  // The refreshed state, rather than an earlier successful write, determines readiness.
+  for(const state of ['paused','missing','unpublished']){
+   afterDiscovery=id=>{if(state==='paused'){const p=profiles.find(p=>p.profile_id===id);p.enabled=false;p.revision++;}else if(state==='missing')catalogs.delete(id);else catalogs.get(id).head.approved_names=[];};
+   await publicCard.getByRole('button',{name:'Refresh tools',exact:true}).click();
+   await status.filter({hasText:state==='paused'?'This service is paused or no longer available.':'Tools are not ready yet.'}).waitFor();
+   assert.equal((await status.textContent()).includes('Connected. Tools are ready to use'),false,'Do not announce ready after '+state);
+   assert.equal(await status.getAttribute('data-error'),'true',state+': '+await status.textContent());
+   assert.equal(await review.getByText('Tools from enabled services are available to all connected AI clients automatically.',{exact:true}).count(),0);
+   if(state==='paused')await publicCard.getByRole('button',{name:'Enable',exact:true}).click();
+   else await publicCard.getByRole('button',{name:'Refresh tools',exact:true}).click();
+   await status.filter({hasText:'Connected. Tools are ready to use'}).waitFor();
+  }
+  // A concurrent pause or replacement must not be reported as an active installation.
+  await page.locator('[data-central-tab=skills]').click();
+  for(const state of ['paused','replaced']){
+   await importer.locator('[name=files]').setInputFiles({name:'SKILL.md',mimeType:'text/markdown',buffer:Buffer.from(folderText)});
+   await importer.getByRole('button',{name:'Install Skill',exact:true}).click();await status.filter({hasText:'This Skill is already installed.'}).waitFor();
+   afterSkillInstallation=entry=>{entry.head.revision++;if(state==='paused')entry.head.enabled=false;else{entry.head.active_digest=entry.head.staged_digest='b'.repeat(64);entry.bundle.digest=entry.head.active_digest;}};
+   await skillReview.getByRole('button',{name:'Update Skill',exact:true}).click();
+   await page.waitForFunction(()=>{const text=document.querySelector('[data-product-status]').textContent;return text.includes('installed. Ready to use')||text.includes('The Skill changed after installation.');});
+   assert.equal((await status.textContent()).includes('installed. Ready to use'),false,'Do not report an active installation after '+state);
+   assert.equal(await status.getAttribute('data-error'),'true');
+  }
   assert.deepEqual(exceptions,[]);
-  return {state:'passed',guided_homepage:true,direct_url_without_deployment_setup:true,service_immediate_tools:true,existing_connections_complete_automatically:true,oauth_return_to_available_tools:true,paused_oauth_reconnect_guard:true,paused_service_discovery_guard:true,resume_refreshes_tools:true,no_legacy_service_credentials:true,oauth_extra_parameters_ignored:true,oauth_duplicate_parameters_rejected:true,oauth_provider_errors_not_reflected:true,direct_skill_install_and_confirmed_update:true,skill_file_folder_selection_switch:true,skill_selection_invalidates_confirmation:true,skill_pending_update_publication:true,skill_pause_and_resume:true,shared_library_without_client_assignment:true,retired_access_api_not_called:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,malformed_write_receipt_blocks_replay:true,detached_oauth_does_not_navigate:true,mobile_no_overflow:true,screenshots:0};
+  return {state:'passed',guided_homepage:true,direct_url_without_deployment_setup:true,service_immediate_tools:true,existing_connections_complete_automatically:true,pending_service_failure_isolation:true,recovery_refresh_failure_blocks_writes:true,oauth_return_recovers_other_services:true,connection_success_uses_refreshed_state:true,oauth_return_to_available_tools:true,paused_oauth_reconnect_guard:true,paused_service_discovery_guard:true,resume_refreshes_tools:true,no_legacy_service_credentials:true,oauth_extra_parameters_ignored:true,oauth_duplicate_parameters_rejected:true,oauth_provider_errors_not_reflected:true,direct_skill_install_and_confirmed_update:true,skill_file_folder_selection_switch:true,skill_selection_invalidates_confirmation:true,skill_pending_update_publication:true,skill_pause_and_resume:true,shared_library_without_client_assignment:true,retired_access_api_not_called:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,malformed_write_receipt_blocks_replay:true,detached_oauth_does_not_navigate:true,mobile_no_overflow:true,screenshots:0};
  }finally{await browser?.close();await new Promise(r=>server.close(r));await rm(join(skillFolder,'SKILL.md'),{force:true});await rmdir(skillFolder);}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
