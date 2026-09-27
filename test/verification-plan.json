@@ -26,6 +26,7 @@
         "test/domain/maintenance-planning.test.ts",
         "test/domain/messages.test.ts",
         "test/domain/public-rules.test.ts",
+        "test/domain/registry-route-adapters.test.ts",
         "test/domain/registry-routes.test.ts",
         "test/domain/remote-admission.test.ts",
         "test/domain/remote-policy.test.ts",

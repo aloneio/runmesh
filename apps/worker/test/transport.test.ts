@@ -39,13 +39,13 @@ describe("Worker runner transport", () => {
   it("updates heartbeat liveness with one fenced write", async () => {
     const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
     const heartbeatRunnerId = `heartbeat-${crypto.randomUUID()}`;
-    await runInDurableObject(registry, (instance) => {
+    await runInDurableObject(registry, (instance, registryState) => {
       expect(instance.registerRunner(heartbeatRunnerId, "heartbeat-runner", Date.now(), undefined, "dedicated_user")).toBe(true);
       const state = instance.getRunnerExecutionState(heartbeatRunnerId);
       expect(state).toBeDefined();
       const sessionId = `session-${crypto.randomUUID()}`;
       const now = Date.now();
-      (instance as any).ctx.storage.sql.exec("UPDATE runners SET state = 'online', session_id = ? WHERE runner_id = ?", sessionId, heartbeatRunnerId);
+      registryState.storage.sql.exec("UPDATE runners SET state = 'online', session_id = ? WHERE runner_id = ?", sessionId, heartbeatRunnerId);
       const sessionCheck = vi.spyOn(instance, "sessionIsCurrent");
       expect(instance.recordHeartbeat(heartbeatRunnerId, state!.runner.connection_epoch, state!.runner.credential_version, now, state!.lifecycle_id, sessionId)).toBe(true);
       expect(sessionCheck).not.toHaveBeenCalled();
@@ -99,12 +99,12 @@ describe("Worker runner transport", () => {
       expect(instance.registerRunner(auditRunnerId, "audit-runner", Date.now(), undefined, "dedicated_user")).toBe(true);
     });
 
-    const readiness = await runInDurableObject(registry, (instance) => {
+    const readiness = await runInDurableObject(registry, (instance, registryState) => {
       const current = instance.getRunnerExecutionState(auditRunnerId);
       expect(current).toBeDefined();
       const now = Date.now();
       const sessionId = `session-${crypto.randomUUID()}`;
-      (instance as any).ctx.storage.sql.exec("UPDATE runners SET state = 'online', session_id = ?, last_heartbeat_ms = ?, updated_at_ms = ? WHERE runner_id = ?", sessionId, now, now, auditRunnerId);
+      registryState.storage.sql.exec("UPDATE runners SET state = 'online', session_id = ?, last_heartbeat_ms = ?, updated_at_ms = ? WHERE runner_id = ?", sessionId, now, now, auditRunnerId);
       expect(instance.recordHeartbeat(auditRunnerId, current!.runner.connection_epoch, current!.runner.credential_version, now, current!.lifecycle_id, sessionId)).toBe(true);
       return { lifecycleId: current!.lifecycle_id, sessionId, epoch: current!.runner.connection_epoch, credentialVersion: current!.runner.credential_version };
     }) as { lifecycleId: string; sessionId: string; epoch: number; credentialVersion: number };
@@ -158,13 +158,13 @@ describe("Worker runner transport", () => {
   it("stops retrying optional registry writes after a feature breaker trips", async () => {
     const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
     const auditRunnerId = `breaker-${crypto.randomUUID()}`;
-    await runInDurableObject(registry, (instance) => {
+    await runInDurableObject(registry, (instance, registryState) => {
       expect(instance.registerRunner(auditRunnerId, "breaker-runner", Date.now(), undefined, "dedicated_user")).toBe(true);
       const current = instance.getRunnerExecutionState(auditRunnerId);
       expect(current).toBeDefined();
       const now = Date.now();
       const sessionId = `session-${crypto.randomUUID()}`;
-      (instance as any).ctx.storage.sql.exec("UPDATE runners SET state = 'online', session_id = ?, last_heartbeat_ms = ?, updated_at_ms = ? WHERE runner_id = ?", sessionId, now, now, auditRunnerId);
+      registryState.storage.sql.exec("UPDATE runners SET state = 'online', session_id = ?, last_heartbeat_ms = ?, updated_at_ms = ? WHERE runner_id = ?", sessionId, now, now, auditRunnerId);
       expect(instance.recordHeartbeat(auditRunnerId, current!.runner.connection_epoch, current!.runner.credential_version, now, current!.lifecycle_id, sessionId)).toBe(true);
       const readiness = {
         lifecycleId: current!.lifecycle_id,
@@ -193,7 +193,7 @@ describe("Worker runner transport", () => {
         session_id: readiness.sessionId,
         now_ms: completedAtMs,
       };
-      const storage = (instance as any).ctx.storage;
+      const storage = registryState.storage;
       const originalExec = storage.sql.exec.bind(storage.sql);
       let insertAttempts = 0;
       const execSpy = vi.spyOn(storage.sql, "exec").mockImplementation((statement: string, ...params: unknown[]) => {
@@ -232,8 +232,8 @@ describe("Worker runner transport", () => {
 
   it("keeps authentication available when optional quota writes fail", async () => {
     const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
-    await runInDurableObject(registry, (instance) => {
-      const storage = (instance as any).ctx.storage;
+    await runInDurableObject(registry, (instance, registryState) => {
+      const storage = registryState.storage;
       const originalExec = storage.sql.exec.bind(storage.sql);
       let quotaAttempts = 0;
       const execSpy = vi.spyOn(storage.sql, "exec").mockImplementation((statement: string, ...params: unknown[]) => {

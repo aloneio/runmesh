@@ -24,12 +24,20 @@ const browserDependencies = {
   "central/services.ts": [], "central/skills.ts": [],
 };
 const registryRoute = path => /^apps\/worker\/src\/registry\/route-(?:inputs|projections)\.ts$/u.test(canonicalSource(path));
+const registryRouteAdapter = path => canonicalSource(path).startsWith("apps/worker/src/registry/routes/");
+const registryPlatformTypes = new Set(["DurableObjectState", "DurableObjectStorage", "DurableObjectNamespace", "DurableObjectStub", "SqlStorage", "D1Database", "D1PreparedStatement", "ExecutionContext", "Fetcher"]);
 const networkGlobals = new Set(["fetch", "WebSocket", "XMLHttpRequest", "EventSource", "WebTransport", "Worker", "SharedWorker", "caches", "globalThis", "window", "self", "process", "Deno", "Bun"]);
 
 /** Conservative source guard: stateful workflows receive API and view ports. */
 export function boundaryNodeProblem(from, node) {
   const source = canonicalSource(from);
+  if (registryRouteAdapter(source) && (node.type === "AwaitExpression" || node.async === true))
+    return "Registry route adapters must preserve synchronous authority checks and mutations";
   if (node.type !== "Identifier") return undefined;
+  if (registryRouteAdapter(source) && registryPlatformTypes.has(node.name))
+    return "Registry route adapters receive operation ports, not platform or storage types";
+  if (registryRouteAdapter(source) && (networkGlobals.has(node.name) || ["Date", "Promise", "setTimeout", "setInterval", "queueMicrotask", "eval", "Function"].includes(node.name)))
+    return "Registry route adapters use synchronous ports and supplied values, not I/O or scheduling";
   if (registryRoute(source) && (networkGlobals.has(node.name) || ["Date", "eval", "Function"].includes(node.name)))
     return "Registry route parsing and projection must use supplied values, not I/O or ambient state";
   if (source.startsWith(browserRoot + "central/") && source !== browserRoot + "central/api.ts" && networkGlobals.has(node.name))
@@ -52,7 +60,7 @@ const cloudPlatform = /^(?:cloudflare:|cloudflare(?:\/|$)|workerd(?:\/|$)|@cloud
 const serverSdk = /^(?:@modelcontextprotocol\/|agents(?:\/|$))/u;
 const purePackages = /^(?:zod(?:\/|$)|@aloneio\/runmesh-protocol$)/u;
 const cloudRoles = new Set(["entry", "platform", "transport_owner", "registry_facade", "persistence", "central_owner"]);
-const pureWorkerRoles = new Set(["contracts", "domain", "presentation", "browser", "registry_foundation", "registry_domain"]);
+const pureWorkerRoles = new Set(["contracts", "domain", "presentation", "browser", "registry_foundation", "registry_domain", "registry_route"]);
 export function specifierProblem(from, specifier, typeOnly) {
   const source = canonicalSource(from);
   const centralProblem = centralSpecifierProblem(source, specifier);
@@ -93,6 +101,7 @@ export function workerRole(path) {
   if (workerRootRoles[name]) return workerRootRoles[name];
   if (foundations.has(name)) return "foundation";
   if (name.startsWith("admin/") || name.startsWith("i18n/")) return "presentation";
+  if (name.startsWith("registry/routes/")) return "registry_route";
   if (name.startsWith("registry/")) return /registry\/(records|ports|storage|values|schema|feature-health-model|maintenance-plan)\.[jt]s$/u.test(name) ? "registry_foundation" : "registry_domain";
   for (const role of ["contracts", "domain", "application", "platform", "http", "distribution", "mcp", "presentation"]) if (name.startsWith(role + "/")) return role;
   return "extension";
@@ -111,7 +120,8 @@ export const WORKER_ALLOWED_DEPENDENCIES = Object.freeze({
   persistence: ["persistence", "contracts", "foundation", "platform", "protocol"],
   registry_foundation: ["registry_foundation", "foundation", "contracts", "protocol"],
   registry_domain: ["registry_foundation", "registry_domain", "persistence", "foundation", "contracts", "protocol"],
-  registry_facade: ["registry_domain", "registry_foundation", "persistence", "foundation", "contracts", "platform", "protocol"],
+  registry_route: ["registry_route", "registry_domain", "registry_foundation", "foundation", "contracts", "protocol"],
+  registry_facade: ["registry_route", "registry_domain", "registry_foundation", "persistence", "foundation", "contracts", "platform", "protocol"],
   transport_owner: ["transport_owner", "foundation", "contracts", "platform", "protocol"],
   mcp: ["mcp", "contracts", "foundation", "platform", "protocol"],
   http: ["http", "application", "domain", "presentation", "distribution", "foundation", "contracts", "platform", "mcp", "protocol"],
@@ -122,6 +132,11 @@ export function dependencyProblem(from, to) {
     return "Browser imports must follow the reviewed controller, API, presentation and workflow boundaries";
   if (registryRoute(from) && !["apps/worker/src/registry/records.ts", "apps/worker/src/registry/values.ts", "packages/protocol/src/index.ts"].includes(to))
     return "Registry route parsing and projection must not depend on state owners or adapters";
+  if (registryRouteAdapter(from) && !(registryRoute(to)
+    || to === "apps/worker/src/registry/routes/request.ts"
+    || ["apps/worker/src/registry/records.ts", "apps/worker/src/registry/values.ts", "apps/worker/src/security.ts", "apps/worker/src/validity.ts"].includes(to)
+    || to.startsWith("apps/worker/src/contracts/") || to.startsWith("packages/protocol/src/")))
+    return "Registry route adapters must use narrow ports, not concrete owners, storage or peer adapters";
   const centralProblem = centralDependencyProblem(from, to);
   if (centralProblem) return centralProblem;
   const owner = layer(from), target = layer(to);

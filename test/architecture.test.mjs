@@ -90,6 +90,16 @@ const bad = [
   ["Registry route projection to persistence", { "apps/worker/src/registry/route-projections.ts": 'import "./storage.js";', "apps/worker/src/registry/storage.ts": "export {};" }],
   ["Registry route parser ambient clock", { "apps/worker/src/registry/route-inputs.mts": 'export const expires = () => Date.now();' }],
   ["Registry route projection network", { "apps/worker/src/registry/route-projections.ts": 'export const project = () => fetch("https://example.invalid");' }],
+  ["Registry route adapter to domain owner", { "apps/worker/src/registry/routes/admin.ts": 'import "../auth.js";', "apps/worker/src/registry/auth.ts": "export {};" }],
+  ["Registry route adapter to storage types", { "apps/worker/src/registry/routes/clients.ts": 'import type { Store } from "../storage.js";', "apps/worker/src/registry/storage.ts": "export type Store = {};" }],
+  ["Registry route adapter to peer adapter", { "apps/worker/src/registry/routes/admin.ts": 'import "./clients.js";', "apps/worker/src/registry/routes/clients.ts": "export {};" }],
+  ["Registry domain to route adapter", { "apps/worker/src/registry/auth.ts": 'import "./routes/admin.js";', "apps/worker/src/registry/routes/admin.ts": "export {};" }],
+  ["Registry route adapter to facade types", { "apps/worker/src/registry/routes/admin.ts": 'import type { RegistryDO } from "../../registry.js";', "apps/worker/src/registry.ts": "export type RegistryDO = {};" }],
+  ["Registry route adapter asynchronous function", { "apps/worker/src/registry/routes/clients.ts": 'export const route = async () => new Response();' }],
+  ["Registry route adapter scheduled mutation", { "apps/worker/src/registry/routes/clients.ts": 'export const route = () => queueMicrotask(() => {});' }],
+  ["Registry route adapter ambient clock", { "apps/worker/src/registry/routes/runner-policy.mts": 'export const route = () => Date.now();' }],
+  ["Registry route adapter network", { "apps/worker/src/registry/routes/identity.ts": 'export const route = () => fetch("https://example.invalid");' }],
+  ["Registry route adapter global storage type", { "apps/worker/src/registry/routes/admin.ts": 'export interface Ports { storage: DurableObjectStorage }' }],
 
   ["Registry to admin view", { "apps/worker/src/registry/auth.ts": 'import "../admin/client-views.js";', "apps/worker/src/admin/client-views.ts": "export {};" }],
   ["Registry to HTTP", { "apps/worker/src/registry/auth.ts": 'import "../http/html-response.js";', "apps/worker/src/http/html-response.ts": "export {};" }],
@@ -294,6 +304,14 @@ test("AR18 prevents retired private I/O mocks from returning", async () => {
   }
   const parseTest = source => parse(source, { sourceType: "module", plugins: ["typescript"] });
   const property = node => node?.computed ? node.property?.value : node?.property?.name;
+  for (const name of ["packed-job-integration", "no-record", "transport", "quota-resilience"]) {
+    const source = await readFile(join(project, 'apps/worker/test/' + name + '.test.ts'), "utf8");
+    visit(parseTest(source), node => {
+      if (node.type === "MemberExpression") assert.ok(!["ctx", "packedJobs", "externalAudit", "schemaIsCurrent"].includes(property(node)),
+        name + ": use constructor bindings, public storage fixtures and the schema module");
+      if (node.type === "AssignmentExpression") assert.notEqual(property(node.left), "env", name + ": construct the Registry with its environment");
+    });
+  }
   for (const name of ["concurrency", "enrollment-fence-recovery", "job-reporting-bridge"]) {
     const source = await readFile(join(project, `apps/worker/test/${name}.test.ts`), "utf8");
     visit(parseTest(source), node => {
