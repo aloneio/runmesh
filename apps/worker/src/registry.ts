@@ -1,4 +1,9 @@
-import { parseRunnerConnection, parseRunnerHeartbeat, parseRunnerSession, parseRunnerDisconnect, parseRunnerSync, parseJobFilters, parseMcpCallFilters, parseMcpCall, parseAdminSession, parseMcpIdentity, parseNativeMcpClient, parseManagedWorkspace, parseRunnerVersionPolicy } from "./registry/route-inputs.js";
+import { createAdminRoutes } from "./registry/routes/admin.js";
+import { createClientsRoutes } from "./registry/routes/clients.js";
+import { createRunnerPolicyRoutes } from "./registry/routes/runner-policy.js";
+import { createIdentityRoutes } from "./registry/routes/identity.js";
+import type { RegistryRoute } from "./registry/routes/request.js";
+import { parseRunnerConnection, parseRunnerHeartbeat, parseRunnerSession, parseRunnerDisconnect, parseRunnerSync, parseJobFilters, parseMcpCallFilters, parseMcpCall } from "./registry/route-inputs.js";
 import { registryInputError, projectActiveWorkspaces, projectPolicyVersions, projectPolicyRevision, projectCombinedMcpCalls } from "./registry/route-projections.js";
 import { RegistryFeatureHealthStore } from "./registry/feature-health.js";
 import { historyCleanupDue, nextMaintenanceDeadline } from "./registry/maintenance-plan.js";
@@ -21,7 +26,6 @@ import { IdentifierSchema } from "@aloneio/runmesh-protocol";
 import type { RunnerMetadata } from "@aloneio/runmesh-protocol";
 import type { RunnerPolicy } from "@aloneio/runmesh-protocol";
 import { containsControlCharacter } from "./security.js";
-import { isSafeIdentifier } from "./security.js";
 import { verifyInternalRequest } from "./security.js";
 import { readCappedText } from "./body.js";
 import { ensureMetadataOnlyAudit } from "./audit-metadata.js";
@@ -34,7 +38,7 @@ import type { ValidityWindow } from "./validity.js";
 import type { ValidityStatus } from "./validity.js";
 import type { RunnerExecutionMode, PolicyAcknowledgementResult, RunnerMutationState, CodingScope, PermissionSet, WorkspaceValidationStatus, RunnerUpdateChannel, RunnerPublicInfo, RunnerRecord, WorkspaceRecord, DashboardSnapshot, RegistryFeatureKey, RegistryFeatureHealth, McpClientRecord, VerifiedMcpClient, RunnerRow, EnrollmentRow, AdminSettingsRow, AuthThrottleKind, InternalInput } from './registry/records.js';
 import { MAX_INTERNAL_BODY_BYTES, DEFAULT_RUNNER_ENROLLMENT_TTL_MS, REGISTRY_HISTORY_CLEANUP_INTERVAL_MS, HISTORY_CLEANUP_DEADLINE_KEY } from './registry/records.js';
-import { authThrottleKind, validLifecycleId, parseTransportIdentity, matchesTransportIdentity, requestedExecutionMode, requestedExpectedExecutionMode, requestedExpectedLifecycleId, requestedPrivilegedConfirmation, requestedRunnerEnrollmentTtl, parseJobEvent, parseRunnerId, parseJsonObject, stringField, integerField, nullableIntegerField, safeNonnegativeInteger, nullableChecksumField, runnerPublicInfoField, permissionSetField, workspaceStatusesField, validVerifier, validMutationId, mutationIdField, scopesField } from './registry/values.js';
+import { validLifecycleId, parseTransportIdentity, matchesTransportIdentity, requestedExecutionMode, requestedExpectedExecutionMode, requestedExpectedLifecycleId, requestedPrivilegedConfirmation, requestedRunnerEnrollmentTtl, parseJobEvent, parseRunnerId, parseJsonObject, stringField, integerField, nullableIntegerField, safeNonnegativeInteger, nullableChecksumField, runnerPublicInfoField, workspaceStatusesField, validVerifier, validMutationId, mutationIdField } from './registry/values.js';
 import { RegistryAuth } from './registry/auth.js';
 import { RegistryPolicy } from './registry/policy.js';
 import { RegistryLifecycle } from './registry/lifecycle.js';
@@ -72,6 +76,11 @@ const VERIFIED_DEV_RELEASE_STORAGE_KEY = "distribution:verified-dev-runner-relea
 /** Public Registry facade: platform lifecycle, schema and existing HTTP routes.
  * Domain ports are synchronous closures, not remote RPCs or cached grants. */
 export class RegistryDO {
+  private readonly adminRoutes: RegistryRoute;
+  private readonly clientsRoutes: RegistryRoute;
+  private readonly runnerPolicyRoutes: RegistryRoute;
+  private readonly identityRoutes: RegistryRoute;
+
   private readonly auth: RegistryAuth;
   private readonly policy: RegistryPolicy;
   private readonly lifecycle: RegistryLifecycle;
@@ -122,6 +131,61 @@ export class RegistryDO {
       scheduleMaintenanceAlarm: (...args) => this.scheduleMaintenanceAlarm(...args),
       syncSequenceCanAdvance: (...args) => this.syncSequenceCanAdvance(...args),
       waitUntil: (...args) => this.ctx.waitUntil(...args),
+    });
+    this.adminRoutes = createAdminRoutes({
+      consumeInternalNonce: (...args) => this.consumeInternalNonce(...args),
+      adminStatus: (...args) => this.adminStatus(...args),
+      settings: (...args) => this.settings(...args),
+      setupAdmin: (...args) => this.setupAdmin(...args),
+      checkSourceAuthThrottle: (...args) => this.checkSourceAuthThrottle(...args),
+      recordSourceAuthAttempt: (...args) => this.recordSourceAuthAttempt(...args),
+      createAdminSession: (...args) => this.createAdminSession(...args),
+      verifyAdminSession: (...args) => this.verifyAdminSession(...args),
+      logoutAdminSession: (...args) => this.logoutAdminSession(...args),
+      changeAdminPassword: (...args) => this.changeAdminPassword(...args),
+    });
+    this.clientsRoutes = createClientsRoutes({
+      listMcpClients: (...args) => this.listMcpClients(...args),
+      createMcpIdentity: (...args) => this.auth.createMcpIdentity(...args),
+      createMcpClient: (...args) => this.createMcpClient(...args),
+      setJobRecording: (...args) => this.setJobRecording(...args),
+      renameMcpClient: (...args) => this.renameMcpClient(...args),
+      rotateMcpClient: (...args) => this.rotateMcpClient(...args),
+      revokeMcpClient: (...args) => this.revokeMcpClient(...args),
+      updateMcpClientScopes: (...args) => this.updateMcpClientScopes(...args),
+      hasMcpClient: clientId => this.getMcpClient(clientId) !== undefined,
+      listClientRunnerOverrides: (...args) => this.listClientRunnerOverrides(...args),
+      deleteClientRunnerOverride: (...args) => this.deleteClientRunnerOverride(...args),
+      setClientRunnerOverride: (...args) => this.setClientRunnerOverride(...args),
+      effectivePermissions: (...args) => this.effectivePermissions(...args),
+      getMcpClientActiveRunner: (...args) => this.getMcpClientActiveRunner(...args),
+      resetMcpClientRunner: (...args) => this.resetMcpClientRunner(...args),
+      revalidateMcpClient: (...args) => this.revalidateMcpClient(...args),
+      selectMcpClientRunner: (...args) => this.selectMcpClientRunner(...args),
+      autoSelectOnlyRunner: (...args) => this.autoSelectOnlyRunner(...args),
+      effectiveWorkspaceList: (...args) => this.effectiveWorkspaceList(...args),
+    });
+    this.runnerPolicyRoutes = createRunnerPolicyRoutes({
+      hasRunner: runnerId => this.runnerRow(runnerId) !== undefined,
+      listManagedWorkspaces: (...args) => this.listManagedWorkspaces(...args),
+      latestRunnerEnrollment: (...args) => this.latestRunnerEnrollment(...args),
+      runnerAccess: (...args) => this.runnerAccess(...args),
+      setRunnerValidity: (...args) => this.setRunnerValidity(...args),
+      createManagedWorkspace: (...args) => this.createManagedWorkspace(...args),
+      getManagedWorkspace: (...args) => this.getManagedWorkspace(...args),
+      updateManagedWorkspace: (...args) => this.updateManagedWorkspace(...args),
+      deleteManagedWorkspace: (...args) => this.deleteManagedWorkspace(...args),
+      setRunnerVersionPolicy: (...args) => this.setRunnerVersionPolicy(...args),
+      setRunnerPermissions: (...args) => this.setRunnerPermissions(...args),
+      emergencyLockRunner: (...args) => this.emergencyLockRunner(...args),
+      policyAcknowledgementFromInput: (...args) => this.policyAcknowledgementFromInput(...args),
+    });
+    this.identityRoutes = createIdentityRoutes({
+      revalidateMcpIdentity: (...args) => this.auth.revalidateMcpIdentity(...args),
+      revalidateMcpClient: (...args) => this.revalidateMcpClient(...args),
+      authorizeMcpRpc: (...args) => this.authorizeMcpRpc(...args),
+      verifyMcpIdentity: (...args) => this.auth.verifyMcpIdentity(...args),
+      verifyMcpClient: (...args) => this.verifyMcpClient(...args),
     });
     this.packedJobs = env.RUNMESH_JOB_HISTORY_BACKEND === "d1" && env.HISTORY_DB !== undefined ? new PackedJobHistory(env.HISTORY_DB, ctx.id.toString()) : undefined;
     this.externalAudit = env.RUNMESH_AUDIT_BACKEND === "d1" && env.HISTORY_DB !== undefined ? new ExternalAuditHistory(env.HISTORY_DB, ctx.id.toString()) : undefined;
@@ -780,196 +844,11 @@ export class RegistryDO {
     return this.acknowledgePolicy(runnerId, epoch, credentialVersion, { desired_revision: desiredRevision, desired_checksum: desiredChecksum, applied_revision: appliedRevision, applied_checksum: appliedChecksum, runner_reported_policy_revision: reportedRevision, runner_reported_policy_checksum: reportedChecksum, status, workspace_status: statuses }, nowMs, identity.lifecycleId, identity.sessionId);
   }
 
-  private async handleAuth(method: string, segments: string[], input: InternalInput, nowMs: number, url: URL): Promise<Response> {
-    const action = segments[0]; const clientId = segments[1];
-    if (method === "POST" && action === "internal-nonces" && clientId === undefined) {
-      const nonce = stringField(input, "nonce", 64); const expiresAtMs = integerField(input, "expires_at_ms");
-      return nonce === undefined || expiresAtMs === undefined || !this.consumeInternalNonce(nonce, expiresAtMs, nowMs)
-        ? new Response("not found", { status: 404 })
-        : new Response(null, { status: 204 });
-    }
-    if (method === "GET" && action === "status" && clientId === undefined) return Response.json(this.adminStatus());
-    if (method === "GET" && action === "settings" && clientId === undefined) { const settings = this.settings(); return settings === undefined ? new Response("not found", { status: 404 }) : Response.json({ password_verifier: settings.password_verifier, session_version: settings.session_version }); }
-    if (method === "POST" && action === "setup" && clientId === undefined) { const verifier = stringField(input, "password_verifier", 4_096); return verifier === undefined ? Response.json({ error: "invalid verifier" }, { status: 400 }) : this.setupAdmin(verifier, nowMs) ? new Response(null, { status: 204 }) : new Response("already initialized", { status: 409 }); }
-    if (method === "POST" && action === "throttle" && clientId === "check") {
-      const kind = authThrottleKind(input.kind);
-      const sourceHash = stringField(input, "source_hash", 64);
-      return kind === undefined || sourceHash === undefined || !validVerifier(sourceHash) ? Response.json({ error: "invalid throttle source" }, { status: 400 }) : Response.json(this.checkSourceAuthThrottle(kind, sourceHash, nowMs));
-    }
-    if (method === "POST" && action === "throttle" && clientId === "record") {
-      const kind = authThrottleKind(input.kind);
-      const sourceHash = stringField(input, "source_hash", 64);
-      if (kind === undefined || sourceHash === undefined || !validVerifier(sourceHash) || typeof input.success !== "boolean") return Response.json({ error: "invalid throttle record" }, { status: 400 });
-      this.recordSourceAuthAttempt(kind, sourceHash, input.success, nowMs);
-      return new Response(null, { status: 204 });
-    }
-    if (method === "POST" && action === "sessions" && clientId === undefined) {
-      const parsed = parseAdminSession(input, nowMs);
-      if (!parsed.ok) return registryInputError(parsed);
-      const { sessionHash, csrfHash, expires, expectedVersion } = parsed.value;
-      return this.createAdminSession(sessionHash, csrfHash, expires, nowMs, expectedVersion)
-        ? new Response(null, { status: 204 }) : new Response("authentication generation changed", { status: 409 });
-    }
-    if (method === "POST" && action === "sessions" && clientId === "verify") { const sessionHash = stringField(input, "session_hash", 64); if (sessionHash === undefined || !validVerifier(sessionHash)) return new Response("not found", { status: 404 }); const session = this.verifyAdminSession(sessionHash, nowMs); return session === undefined ? new Response("not found", { status: 404 }) : Response.json(session); }
-    if (method === "POST" && action === "sessions" && clientId === "logout") { const sessionHash = stringField(input, "session_hash", 64); if (sessionHash !== undefined && validVerifier(sessionHash)) this.logoutAdminSession(sessionHash); return new Response(null, { status: 204 }); }
-    if (method === "POST" && action === "password" && clientId === undefined) { const verifier = stringField(input, "password_verifier", 4_096); return verifier === undefined ? Response.json({ error: "invalid verifier" }, { status: 400 }) : this.changeAdminPassword(verifier, nowMs) ? new Response(null, { status: 204 }) : new Response("not initialized", { status: 409 }); }
-    if (method === "GET" && action === "clients" && clientId === undefined) return Response.json({ clients: this.listMcpClients() });
-    if (method === "POST" && action === "clients" && clientId === undefined && input.identity_version !== undefined) {
-      const parsed = parseMcpIdentity(input);
-      if (!parsed.ok) return registryInputError(parsed);
-      const { id, label, verifier, prefix, scopes } = parsed.value;
-      const identity = this.auth.createMcpIdentity({ client_id: id, label, secret_verifier: verifier, secret_prefix: prefix, native_scopes: scopes }, nowMs);
-      return identity === undefined ? new Response("conflict", { status: 409 }) : Response.json(identity);
-    }
-    if (method === "POST" && action === "clients" && clientId === undefined) {
-      const parsed = parseNativeMcpClient(input);
-      if (!parsed.ok) return registryInputError(parsed);
-      const { id, label, verifier, prefix, scopes } = parsed.value;
-      const client = this.createMcpClient({ client_id: id, label, secret_verifier: verifier, secret_prefix: prefix, scopes }, nowMs);
-      return client === undefined ? new Response("conflict", { status: 409 }) : Response.json(client);
-    }
-    if (action === "clients" && clientId !== undefined && isSafeIdentifier(clientId)) {
-      const subaction = segments[2];
-      if (method === "POST" && subaction === "recording") {
-        if (typeof input.record_jobs !== "boolean") return Response.json({ error: "record_jobs must be boolean" }, { status: 400 });
-        const client = this.setJobRecording(clientId, input.record_jobs, nowMs);
-        return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client);
-      }
-      if (method === "POST" && subaction === "rename") { const label = stringField(input, "label", 256); const client = label === undefined ? undefined : this.renameMcpClient(clientId, label, nowMs); return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client); }
-      if (method === "POST" && subaction === "rotate") { const verifier = stringField(input, "secret_verifier", 64); const prefix = stringField(input, "secret_prefix", 16); const client = verifier === undefined || prefix === undefined ? undefined : this.rotateMcpClient(clientId, verifier, prefix, nowMs); return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client); }
-      if (method === "POST" && subaction === "revoke") { const client = this.revokeMcpClient(clientId, nowMs); return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client); }
-      if (method === "POST" && subaction === "scopes") { const scopes = scopesField(input.scopes); const client = scopes === undefined ? undefined : this.updateMcpClientScopes(clientId, scopes, nowMs); return client === undefined ? new Response("invalid client scopes", { status: this.getMcpClient(clientId) === undefined ? 404 : 400 }) : Response.json(client); }
-    }
-    if (method === "GET" && action === "clients" && clientId !== undefined && segments[2] === "runner-overrides" && segments[3] === undefined) {
-      return this.getMcpClient(clientId) === undefined ? new Response("not found", { status: 404 }) : Response.json({ client_id: clientId, overrides: this.listClientRunnerOverrides(clientId) });
-    }
-    if (method === "DELETE" && action === "clients" && clientId !== undefined && segments[2] === "runner-overrides" && segments[3] !== undefined && isSafeIdentifier(segments[3])) {
-      return this.deleteClientRunnerOverride(clientId, segments[3]) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 });
-    }
-    if (method === "POST" && action === "clients" && clientId !== undefined && segments[2] === "runner-overrides" && segments[3] !== undefined && isSafeIdentifier(segments[3])) {
-      const permissions = permissionSetField(input.permissions);
-      return permissions !== undefined && this.setClientRunnerOverride(clientId, segments[3], permissions, nowMs) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 });
-    }
-    if (method === "GET" && action === "clients" && clientId !== undefined && segments[2] === "effective-permissions" && segments[3] !== undefined && isSafeIdentifier(segments[3])) {
-      const workspaceId = url.searchParams.get("workspace_id");
-      const permissions = workspaceId === null ? undefined : this.effectivePermissions(clientId, segments[3], workspaceId);
-      return permissions === undefined ? new Response("not found", { status: 404 }) : Response.json({ permissions });
-    }
-    if (method === "GET" && action === "clients" && clientId !== undefined && segments[2] === "active-runner") {
-      const selection = this.getMcpClientActiveRunner(clientId);
-      return selection === undefined ? new Response("not found", { status: 404 }) : Response.json(selection);
-    }
-    if (method === "POST" && action === "clients" && clientId !== undefined && segments[2] === "active-runner" && segments[3] === "reset") {
-      const selection = this.resetMcpClientRunner(clientId, nowMs);
-      return selection === undefined ? new Response("not found", { status: 404 }) : Response.json(selection);
-    }
-    if (method === "POST" && action === "clients" && clientId !== undefined && segments[2] === "active-runner") {
-      // Browser mutations were checked against their signed session above.
-      // MCP selection must instead commit under the original credential's
-      // generation, with no await between this check and the synchronous write.
-      if (!url.searchParams.has("admin_session")) {
-        const value = input.mcp_authorization;
-        const principal = typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
-        const client = principal === undefined ? undefined : this.revalidateMcpClient(principal.client_id, principal.secret_version);
-        if (client === undefined || client.client_id !== clientId) return Response.json({ ok: false, code: "permission_denied" }, { status: 403 });
-        if (!client.scopes.includes("coding:read")) return Response.json({ ok: false, code: "insufficient_scope" }, { status: 403 });
-      }
-      const runnerId = stringField(input, "runner_id", 128);
-      const confirmSwitch = input.confirm_switch === true;
-      if (runnerId === undefined) return Response.json({ error: "invalid runner" }, { status: 400 });
-      const result = this.selectMcpClientRunner(clientId, runnerId, confirmSwitch, nowMs);
-      return result.ok ? Response.json(result) : (result.code === "runner_switch_confirmation_required" || result.code === "runner_unavailable") ? Response.json(result, { status: 409 }) : new Response("not found", { status: 404 });
-    }
-    if (method === "POST" && action === "clients" && clientId !== undefined && segments[2] === "auto-select-runner") {
-      const result = this.autoSelectOnlyRunner(clientId, nowMs);
-      return result === undefined ? Response.json({ code: "runner_not_selected" }, { status: 409 }) : result.ok ? Response.json(result) : new Response("not found", { status: 404 });
-    }
-    if (method === "GET" && action === "runners" && clientId !== undefined && segments[2] === "managed-workspaces" && segments[3] === undefined) {
-      if (!isSafeIdentifier(clientId)) return new Response("not found", { status: 404 });
-      return this.runnerRow(clientId) === undefined
-        ? new Response("not found", { status: 404 })
-        : Response.json({ runner_id: clientId, workspaces: this.listManagedWorkspaces(clientId) });
-    }
-    if (method === "GET" && action === "runners" && clientId !== undefined && segments[2] === "enrollments" && segments[3] === undefined) {
-      return !isSafeIdentifier(clientId) || this.runnerRow(clientId) === undefined ? new Response("not found", { status: 404 }) : Response.json({ enrollment: this.latestRunnerEnrollment(clientId) ?? null });
-    }
-    if (method === "GET" && action === "runners" && clientId !== undefined && segments[2] === "access" && segments[3] === undefined) {
-      return !isSafeIdentifier(clientId) ? new Response("not found", { status: 404 }) : Response.json(this.runnerAccess(clientId));
-    }
-    if (method === "POST" && action === "runners" && clientId !== undefined && segments[2] === "validity" && segments[3] === undefined) {
-      if (!isSafeIdentifier(clientId)) return new Response("not found", { status: 404 });
-      const window = { valid_from_ms: input.valid_from_ms, valid_until_ms: input.valid_until_ms } as ValidityWindow;
-      const lifecycleId = requestedExpectedLifecycleId(input);
-      if (!validWindow(window) || typeof lifecycleId !== "string") return new Response("invalid validity window", { status: 400 });
-      return this.setRunnerValidity(clientId, window, lifecycleId, nowMs) ? new Response(null, { status: 204 }) : new Response("runner state changed", { status: 409 });
-    }
-    if (method === "POST" && action === "runners" && clientId !== undefined && segments[2] === "managed-workspaces" && segments[3] === undefined) {
-      if (!isSafeIdentifier(clientId)) return new Response("not found", { status: 404 });
-      const parsed = parseManagedWorkspace(input);
-      if (!parsed.ok) return registryInputError(parsed);
-      const { workspaceId, displayName, rootPath, permissions, mutationId, enabled } = parsed.value;
-      const workspace = this.createManagedWorkspace(clientId, { workspace_id: workspaceId, display_name: displayName, root_path: rootPath, enabled, permissions }, nowMs, mutationId);
-      return workspace === undefined ? new Response("conflict", { status: 409 }) : Response.json(workspace);
-    }
-    if (action === "runners" && clientId !== undefined && segments[2] === "managed-workspaces" && segments[3] !== undefined && isSafeIdentifier(clientId) && isSafeIdentifier(segments[3])) {
-      const workspaceId = segments[3];
-      if (method === "GET") { const workspace = this.getManagedWorkspace(clientId, workspaceId); return workspace === undefined ? new Response("not found", { status: 404 }) : Response.json(workspace); }
-      if (method === "PUT") {
-        const displayName = stringField(input, "display_name", 256); const rootPath = stringField(input, "root_path", 4_096); const permissions = permissionSetField(input.permissions); const mutationId = mutationIdField(input);
-        if (displayName === undefined || rootPath === undefined || permissions === undefined || mutationId === undefined || typeof input.enabled !== "boolean") return Response.json({ error: "invalid workspace mutation" }, { status: 400 });
-        const workspace = this.updateManagedWorkspace(clientId, workspaceId, { display_name: displayName, root_path: rootPath, enabled: input.enabled, permissions }, nowMs, mutationId);
-        return workspace === undefined ? new Response("not found", { status: 404 }) : Response.json(workspace);
-      }
-      if (method === "DELETE") {
-        const confirmation = stringField(input, "confirmation", 128); const mutationId = mutationIdField(input);
-        return confirmation === workspaceId && mutationId !== undefined && this.deleteManagedWorkspace(clientId, workspaceId, nowMs, mutationId) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 });
-      }
-    }
-    if (method === "POST" && action === "runners" && clientId !== undefined && segments[2] === "version-policy" && isSafeIdentifier(clientId)) {
-      const parsed = parseRunnerVersionPolicy(input);
-      if (!parsed.ok) return registryInputError(parsed);
-      const { channel, desired, latest } = parsed.value;
-      const runner = this.setRunnerVersionPolicy(clientId, { update_channel: channel, ...(typeof desired === "string" ? { desired_runner_version: desired } : {}), ...(typeof latest === "string" ? { latest_runner_version: latest } : {}) }, nowMs);
-      return runner === undefined ? new Response("not found", { status: 404 }) : Response.json(runner);
-    }
-    if (method === "POST" && action === "runners" && clientId !== undefined && segments[2] === "permissions" && isSafeIdentifier(clientId)) {
-      const permissions = permissionSetField(input.permissions);
-      const mutationId = mutationIdField(input);
-      if (mutationId === undefined) return Response.json({ error: "mutation_id is required" }, { status: 400 });
-      const runner = permissions === undefined ? undefined : this.setRunnerPermissions(clientId, permissions, nowMs, mutationId);
-      return runner === undefined ? new Response("not found", { status: 404 }) : Response.json(runner);
-    }
-    if (method === "POST" && action === "runners" && clientId !== undefined && segments[2] === "emergency-lock" && isSafeIdentifier(clientId)) {
-      const confirmation = stringField(input, "confirmation", 128); const mutationId = mutationIdField(input);
-      const runner = confirmation === clientId && mutationId !== undefined ? this.emergencyLockRunner(clientId, confirmation, nowMs, mutationId) : undefined;
-      return runner === undefined ? new Response("not found", { status: 404 }) : Response.json(runner);
-    }
-    if (method === "POST" && action === "runners" && clientId !== undefined && segments[2] === "policy-ack" && isSafeIdentifier(clientId)) {
-      const ack = this.policyAcknowledgementFromInput(clientId, input, nowMs);
-      if (ack === undefined) return Response.json({ error: "invalid policy acknowledgement" }, { status: 409 });
-      return Response.json({ ack_result: ack });
-    }
-    if (method === "POST" && action === "mcp" && clientId === "revalidate") {
-      if (input.identity_version !== undefined && input.identity_version !== 2) return new Response("unsupported identity version", { status: 400 });
-      const client = input.identity_version === 2 ? this.auth.revalidateMcpIdentity(input.client_id, input.secret_version)
-        : this.revalidateMcpClient(input.client_id, input.secret_version);
-      return client === undefined ? new Response("not found", { status: 404 }) : Response.json(client);
-    }
-    if (method === "POST" && action === "mcp" && clientId === "authorize-rpc") {
-      const decision = this.authorizeMcpRpc(input);
-      return Response.json(decision, { status: decision.ok ? 200 : decision.code === "stale_policy" ? 409 : 403 });
-    }
-    if (method === "GET" && action === "clients" && clientId !== undefined && segments[2] === "effective-workspaces" && segments[3] !== undefined && isSafeIdentifier(segments[3])) {
-      const value = this.effectiveWorkspaceList(clientId, segments[3]);
-      return value === undefined ? new Response("not found", { status: 404 }) : Response.json(value);
-    }
-    if (method === "POST" && action === "mcp" && clientId === "verify") {
-      if (input.identity_version !== undefined && input.identity_version !== 2) return new Response("unsupported identity version", { status: 400 });
-      const verifier = stringField(input, "secret_verifier", 64);
-      const client = verifier === undefined ? undefined : input.identity_version === 2 ? this.auth.verifyMcpIdentity(verifier, nowMs) : this.verifyMcpClient(verifier, nowMs);
-      return client === undefined ? Response.json({ error: { code: "invalid_mcp_credential" } }, { status: 404 }) : Response.json(client);
-    }
-    return new Response("not found", { status: 404 });
+  private handleAuth(method: string, segments: string[], input: InternalInput, nowMs: number, url: URL): Response {
+    const route = segments[0] === "clients" ? this.clientsRoutes
+      : segments[0] === "runners" ? this.runnerPolicyRoutes
+      : segments[0] === "mcp" ? this.identityRoutes : this.adminRoutes;
+    return route({ method, segments, input, nowMs, url }) ?? new Response("not found", { status: 404 });
   }
 
   private settings(): AdminSettingsRow | undefined { return this.auth.settings(); }

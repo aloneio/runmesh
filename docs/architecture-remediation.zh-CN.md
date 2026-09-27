@@ -152,5 +152,17 @@ Registry 路由解析位于 `registry/route-inputs.ts`；策略／工作区和�
 或执行 I/O。签名请求准入、事务／nonce 顺序、身份检查、SQL 和异步后的生命周期
 重验仍由 RegistryDO 管理。纯函数与路由回归覆盖原有错误、状态码、字段和审计排序。
 
+Registry 授权路由适配器位于 registry/routes/：admin 负责管理员会话与限流，
+clients 负责客户端设置与 Runner 选择，runner-policy 负责受管工作区及策略响应，
+identity 负责 MCP 身份与授权响应。每组只接收自身明确的同步操作端口，不导入
+RegistryDO、领域实现、存储、平台类型或其他适配器。RegistryDO 完成装配与请求准入，
+路由内的身份检查与修改之间不引入 await。架构门禁拒绝反向依赖、异步适配器、
+调度及直接网络访问。
+
+打包 Job 与外部审计路由回归通过真实环境契约和 D1 绑定构造 RegistryDO，在 D1
+prepare 边界注入故障；Transport 测试使用 DO 测试回调提供的存储，schema 测试调用
+schema 模块。测试不再修改私有环境／历史实例或读取私有 ctx，仍检查历史关闭与
+退出记录、零写入成本、历史降级及 Runner 可用性。架构回归防止这些私有测试接口回流。
+
 继续由 JobManager 和 RunnerDO 管理状态。运行生成代码、契约、依赖和故障回归，
 配合必需的安装包、原生平台与浏览器检查；按候选 SHA 记录通过、跳过和未执行环境。

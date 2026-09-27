@@ -189,6 +189,24 @@ continues to own signed-request admission, transaction/nonce ordering, identity
 checks, SQL and post-await lifecycle revalidation. Pure and route regressions
 preserve validation errors, status codes, projection fields and audit ordering.
 
+Registry authorization route adapters live in registry/routes/: admin owns
+administrator sessions and throttling, clients owns client settings and Runner
+selection, runner-policy owns managed workspace and policy responses, and
+identity owns MCP identity and authorization responses. Each receives its own
+explicit synchronous operation port; none imports RegistryDO, domain owners,
+storage, platform types or another adapter. RegistryDO wires these operations
+and admits requests before invoking a route. There is no await between an
+adapter's authority check and mutation. The architecture gate rejects reverse
+dependencies, asynchronous adapters, scheduling and ambient network access.
+
+Packed Job and external audit route regressions construct RegistryDO with the
+real environment contract and a D1 binding, injecting failures at D1 preparation.
+Transport tests use the Durable Object test callback's storage; schema tests call
+the schema module. These tests no longer replace private environment/history
+fields or read the private context. Archive opt-out, no-write cost checks,
+degraded history and Runner availability assertions remain in place. The gate
+also guards against reintroducing these retired private test seams.
+
 Keep JobManager and RunnerDO as state owners. Run generated-source, contract,
 dependency and fault regressions with the required package, native and browser
 checks; record passes, skips and unexecuted environments for the candidate SHA.

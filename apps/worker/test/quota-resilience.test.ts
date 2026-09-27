@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 import worker from "../src/index.js";
 import { ensureHistoryRetentionSchema, pruneHistory } from "../src/history-retention.js";
 import { FIXED_RELEASE_VERSION } from "../src/installer.js";
+import { registrySchemaIsCurrent } from "../src/registry/schema.js";
 
 it("MCP storage failures and malformed replies are 503, never invalid-secret 404", async () => {
   for (const result of [503, 429, 500, 404, "malformed", "throw"] as const) {
@@ -87,13 +88,13 @@ it("retention hot paths use constant reads at 1000 retained rows and do not prun
 
 it("structural validation uses supported SQLite metadata and rejects a missing required table", async () => {
   const stub = env.REGISTRY.get(env.REGISTRY.idFromName(`schema-contract-${crypto.randomUUID()}`));
-  await runInDurableObject(stub, (instance, state) => {
+  await runInDurableObject(stub, (_instance, state) => {
     const spy = vi.spyOn(state.storage.sql, "exec");
     try {
-      expect((instance as any).schemaIsCurrent()).toBe(true);
+      expect(registrySchemaIsCurrent(state.storage.sql)).toBe(true);
       expect(spy.mock.calls.some(([query]) => /PRAGMA schema_version/i.test(query))).toBe(false);
     } finally { spy.mockRestore(); }
     state.storage.sql.exec("DROP TABLE client_runner_overrides");
-    expect((instance as any).schemaIsCurrent()).toBe(false);
+    expect(registrySchemaIsCurrent(state.storage.sql)).toBe(false);
   });
 });
