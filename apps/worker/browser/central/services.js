@@ -175,11 +175,11 @@ export function createServiceWorkflow({
         expected_revision: result.profile.revision
       });
       form.reset();
+      await refresh();
       if (authentication === 'oauth') {
         await connectOAuth(enabled.profile);
         return;
       }
-      await refresh();
       await connectService(enabled.profile);
     });
   });

@@ -10,7 +10,7 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "d1b4d6c516a90c7a59e652b9d09f1852ec6a959e73436c81c22c856c43d9ae84",
+      "sha256": "bffd44b61eefd4d9fedfe7eb4d38fc20fa2f269c2994a265c5420f23d851ccff",
       "bytes": 123248,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
@@ -30,7 +30,7 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "2b592bc3e5e64f44822d4c1ce73332e275a95d3ea4c8ebb711d9f6ddd3d661d3",
+      "sha256": "7e358d50c2cf70e7019e197cf6146bc469a0e78cc8174e078223a312bdd92d12",
       "bytes": 123836,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
@@ -47,7 +47,7 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "7d22920dfb5aab771b8e0d0096f58cc8dd87b175e4b7b9f0d1bb7d2c1f314ca7",
+      "sha256": "175f8b620da2f5227de27c2ccc23139f0e898f8c8300854c57fd858a842d02af",
       "bytes": 124990,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
@@ -413,7 +413,7 @@
           }
         ]
       ],
-      "sha256": "ea512c64f634e08a302a1583041abf145372d64226d4f7120ad9f51ff3efab4c",
+      "sha256": "782fba4dd554f5e48133ca5e7ac53401e99b2bd44a74a9078d0bb2b2ac129f00",
       "bytes": 125339,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
@@ -471,14 +471,14 @@
     "non_script_markup_unchanged": true
   },
   "direct_connection_review": {
-    "source_base": "92d270f29074f98a26fdf3441e3917b4ad6562fe",
+    "source_base": "49ca444348aa26644f384232f0635dd8727f697e",
     "changed_cases": [
       "login",
       "setup",
       "secret",
       "admin-document"
     ],
-    "allowed_change": "Recreated controls retain the active operation lock and restore intended states. Invalid service and Skill inputs receive relevant messages and confirmed pre-validation rejections permit explicit corrections without refresh. URL-only setup shortens an overlong automatic display name without changing the endpoint. DOM/API regressions preserve uncertain-write no-replay and detached-view behavior. No screenshots.",
+    "allowed_change": "The saved service is rendered before OAuth handoff so a failed provider setup retains its visible recovery controls. The controller still owns lifecycle, shared admission and busy state. DOM regression verifies persisted service visibility and no automatic replay after failed handoff. No screenshots.",
     "non_script_markup_unchanged": true
   }
 }
