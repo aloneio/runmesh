@@ -9,7 +9,9 @@ MCP URL and select No authentication or OAuth. The service name is optional.
 When omitted, the name is derived from the hostname and shortened to fit its
 display limit; the saved MCP URL remains complete.
 OAuth settings are discovered automatically; providers requiring manual client
-preregistration are not automatically connectable. After signing in, return to
+preregistration are not automatically connectable. The saved service is displayed
+before opening OAuth, so a failed sign-in handoff retains its recovery controls.
+After signing in, return to
 the control panel. A successful connection discovers and publishes every tool
 atomically; no separate approval is required. Existing enabled connections with
 unpublished tools finish on opening the library. View tools is read-only; Refresh
@@ -93,6 +95,10 @@ one exact tool/version. CENTRAL_DIRECT_TOOLS_ENABLED=1 also publishes direct rm_
 aliases with their published schemas, bounded to eight profiles and 32 tools.
 Larger libraries use remote_profiles, remote_tools and remote_call; they are not
 silently truncated. Discovery never contacts upstream services.
+
+Connecting or refreshing a service closes any operation-scoped upstream session
+before publishing its discovered tools, then rechecks authorization and revisions.
+This prevents publication's own version change from blocking session cleanup.
 
 CENTRAL_SKILLS_ENABLED=1 exposes skill_list, skill_read and the matching MCP
 resource surfaces. skill_list scans at most 128 heads per page and returns

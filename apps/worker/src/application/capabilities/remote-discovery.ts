@@ -33,6 +33,10 @@ export function createRemoteDiscovery(ports: CatalogAdminPorts & { readonly conn
         session = await ports.connector.open(profile, signal, () => { throw new RemoteFault("upstream_protocol_error"); }, fence);
         const tools = await session.listTools();
         if (expired()) return { state: "unavailable" };
+        // Publication changes the catalog revision used by session cleanup.
+        // Close first, then revalidate admission after that asynchronous wait.
+        const completedSession = session; session = undefined;
+        await completedSession.close().catch(() => undefined);
         await fence();
         const manager = createCatalogManager({ ...ports, profile: id => {
           const current = ports.profile(id);

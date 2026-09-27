@@ -16,7 +16,7 @@ import { productOverviewPage } from '../apps/worker/dist/admin/dashboard-views.j
 export async function checkGuidedProduct(executable) {
  const digest='a'.repeat(64), toolVersion='c'.repeat(64);
  const profiles=[], library=[], requests=[], exceptions=[];
- let conflict=false, failLibrary=false, rejectDiscovery=false, invalidCatalogReceipt=false, delayedOAuth;
+ let conflict=false, failLibrary=false, rejectDiscovery=false, rejectOAuthStart=false, invalidCatalogReceipt=false, delayedOAuth;
  let rejectedProfile, afterDiscovery, afterSkillInstallation, delayedDiscovery, failRefreshAfterRejection=false;
  const catalogs=new Map();
  const server=createServer(async(req,res)=>{
@@ -38,7 +38,7 @@ export async function checkGuidedProduct(executable) {
     else{const p=profiles.find(p=>p.profile_id===id);assert.equal(body.expected_revision,p.revision);p.revision++;if(body.action==='enable'||body.action==='disable')p.enabled=body.action==='enable';value={state:'written',profile:p};}
    }else if(kind==='connections'){
     assert.equal(req.headers['x-csrf-token'],'fixture-csrf');
-    if(id==='begin'){const pending=delayedOAuth;if(pending)await pending;value={state:'started',profile_id:body.profile_id,authorization_url:pending?'/late-oauth-fixture':'/oauth-fixture'};}
+    if(id==='begin'){const pending=delayedOAuth;if(pending)await pending;if(rejectOAuthStart){code=503;value={error:{code:'oauth_provider_unsupported',operation_state:'not_started'}};}else value={state:'started',profile_id:body.profile_id,authorization_url:pending?'/late-oauth-fixture':'/oauth-fixture'};}
     else if(id==='complete'){if(body.error){assert.deepEqual(body,{state:'cancel-state',error:'access_denied'});code=503;value={error:{code:'oauth_reauthorization_required'}};}else{assert.deepEqual(body,{state:'fixture-state',iss:'https://login.provider.com',code:'fixture-code'});value={state:'linked',profile_id:profiles.at(-1).profile_id};}}
     else value={state:'revoked',profile_id:body.profile_id};
    }else if(kind==='skill-installations'){
@@ -329,6 +329,29 @@ export async function checkGuidedProduct(executable) {
   await page.waitForFunction(()=>{const text=document.querySelector('[data-product-status]').textContent;return text.includes('Connected. Tools are ready')||text.includes('Check the service name');});
   assert.equal(profiles.at(-1).endpoint,longEndpoint,'An automatic display name must not reject a valid service URL');
   assert.equal(profiles.at(-1).display_name.length<=64,true);
+  // A failed sign-in handoff must leave the already saved service visible.
+  rejectOAuthStart=true;
+  const failedOAuthStart=requests.length;
+  await form.locator('[name=name]').fill('Failed sign-in service');
+  await form.locator('[name=endpoint]').fill('https://unavailable.provider.com/mcp');
+  await form.locator('[name=authentication]').selectOption('oauth');await form.locator('button').click();
+  await status.filter({hasText:'This service does not support automatic OAuth connection.'}).waitFor();
+  const savedOAuth=profiles.at(-1);
+  const savedOAuthCard=page.locator('[data-service-list] .central-card').filter({has:page.getByText(savedOAuth.endpoint,{exact:true})});
+  assert.equal(await savedOAuthCard.count(),1,'A saved service must remain visible when OAuth setup fails');
+  assert.equal(await savedOAuthCard.getByRole('button',{name:'Reconnect',exact:true}).isVisible(),true);
+  assert.equal(requests.slice(failedOAuthStart).filter(r=>r.body?.action==='connect').length,1);
+  assert.equal(requests.slice(failedOAuthStart).filter(r=>r.path==='/admin/central/connections/begin').length,1);
+  await savedOAuthCard.getByRole('button',{name:'Reconnect',exact:true}).click();
+  await status.filter({hasText:'Refresh the library before making another change.'}).waitFor();
+  assert.equal(requests.slice(failedOAuthStart).filter(r=>r.path==='/admin/central/connections/begin').length,1,'A failed handoff must not be replayed');
+  rejectOAuthStart=false;
+  await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+  await savedOAuthCard.getByRole('button',{name:'Reconnect',exact:true}).click();
+  await status.filter({hasText:'Connected. Tools are ready to use'}).waitFor();
+  assert.equal(requests.slice(failedOAuthStart).filter(r=>r.body?.action==='connect').length,1,'Recover the saved service without creating a duplicate');
+  assert.equal(requests.slice(failedOAuthStart).filter(r=>r.path==='/admin/central/connections/begin').length,2);
+  assert.ok(catalogs.has(savedOAuth.profile_id));
   assert.deepEqual(exceptions,[]);
   return {state:'passed',guided_homepage:true,direct_url_without_deployment_setup:true,service_immediate_tools:true,existing_connections_complete_automatically:true,pending_service_failure_isolation:true,recovery_refresh_failure_blocks_writes:true,oauth_return_recovers_other_services:true,connection_success_uses_refreshed_state:true,oauth_return_to_available_tools:true,paused_oauth_reconnect_guard:true,paused_service_discovery_guard:true,resume_refreshes_tools:true,no_legacy_service_credentials:true,oauth_extra_parameters_ignored:true,oauth_duplicate_parameters_rejected:true,oauth_provider_errors_not_reflected:true,direct_skill_install_and_confirmed_update:true,skill_file_folder_selection_switch:true,skill_selection_invalidates_confirmation:true,skill_pending_update_publication:true,skill_pause_and_resume:true,shared_library_without_client_assignment:true,retired_access_api_not_called:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,malformed_write_receipt_blocks_replay:true,detached_oauth_does_not_navigate:true,mobile_no_overflow:true,screenshots:0};
  }finally{await browser?.close();await new Promise(r=>server.close(r));await rm(join(skillFolder,'SKILL.md'),{force:true});await rmdir(skillFolder);}
