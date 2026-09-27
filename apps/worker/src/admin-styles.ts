@@ -17,6 +17,8 @@ export function adminStyles(): string { return `<style>
 .central-card{border-bottom:1px solid var(--line);padding:18px 0;overflow-wrap:anywhere}
 .central-card:first-child{padding-top:4px}.central-card h3{margin:0 0 8px}
 .central-card .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+[data-service-tools] h2{min-width:0;max-width:100%;overflow-wrap:anywhere}
+[data-service-tools] h3{text-transform:none;letter-spacing:normal}
 [data-product-status]:not(:empty){padding:14px 18px;border:1px solid var(--line);border-radius:10px;background:var(--panel);white-space:pre-wrap}
 [data-product-status][data-error=true]{border-color:#b91c1c;color:#b91c1c}
 [data-central-product] pre{max-height:340px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
