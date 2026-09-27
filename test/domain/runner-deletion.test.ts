@@ -24,6 +24,12 @@ describe("Runner deletion use case", () => {
   it("does not commit after a refused fence", async () => {
     const f = fixture({ fence: async () => ({ ok: false }) }); expect(await deleteRunner(f.ports, "runner", "runner")).toEqual({ state: "unavailable", reason: "fence" }); expect(f.calls).toEqual(["id"]);
   });
+  it("does not retry or commit after losing a fence response", async () => {
+    let attempts = 0;
+    const f = fixture({ fence: async () => { attempts++; throw Error("response lost"); } });
+    expect(await deleteRunner(f.ports, "runner", "runner")).toEqual({ state: "unavailable", reason: "fence" });
+    expect(attempts).toBe(1); expect(f.calls).toEqual(["id"]);
+  });
   it.each([400, 404, 409])("observes and cancels deterministic refusal %s, without repeating deletion", async status => {
     const f = fixture({ remove: async () => ({ ok: false, status }) });
     expect(await deleteRunner(f.ports, "runner", "runner")).toEqual({ state: "rejected", reason: "registry", status }); expect(f.calls).toEqual(["id", "fence", "observe", "cancel"]);

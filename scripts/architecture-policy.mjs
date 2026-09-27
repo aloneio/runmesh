@@ -18,7 +18,8 @@ export function layer(path) {
 const canonicalSource = path => path.replace(/\.(?:[cm]?[jt]s|[jt]sx)$/u, ".ts");
 const browserRoot = "apps/worker/browser/";
 const browserDependencies = {
-  "admin-client.ts": ["central/controller.ts"],
+  "admin-client.ts": ["central/controller.ts", "runner-actions.ts"],
+  "runner-actions.ts": [],
   "central/controller.ts": ["central/api.ts", "central/messages.ts", "central/view.ts", "central/services.ts", "central/skills.ts"],
   "central/api.ts": [], "central/messages.ts": [], "central/view.ts": [],
   "central/services.ts": [], "central/skills.ts": [],

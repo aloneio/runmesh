@@ -12,9 +12,11 @@ import { ADMIN_CSRF_COOKIE } from '../apps/worker/dist/http/constants.js';
 import { parseProfileCommand } from '../apps/worker/dist/contracts/connector-values.js';
 import { skillInstallation } from '../apps/worker/dist/domain/skills/install.js';
 import { productOverviewPage } from '../apps/worker/dist/admin/dashboard-views.js';
+import { checkRunnerActions } from './runner-browser-check.mjs';
 
 /** Isolated browser fixtures exercise the shipped UI, never a user browser or external service. */
 export async function checkGuidedProduct(executable) {
+ await checkRunnerActions(executable);
  const digest='a'.repeat(64), toolVersion='c'.repeat(64);
  const profiles=[], library=[], requests=[], exceptions=[];
  let conflict=false, failLibrary=false, rejectDiscovery=false, rejectOAuthStart=false, invalidCatalogReceipt=false, delayedOAuth;

@@ -55,6 +55,7 @@ export class RegistryLifecycle {
       lifecycle_id: validLifecycleId(runner.lifecycle_id) ? runner.lifecycle_id : null,
       runner_state: runner.state,
       credential_mutation_committed: credentialCommitted,
+      credential_mutation_kind: credentialCommitted ? credentialMutation.kind : null,
       mutation_committed: policyCommitted || credentialCommitted,
       desired_revision: runner.desired_policy_revision,
       desired_checksum: runner.desired_policy_checksum,

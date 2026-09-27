@@ -1,4 +1,5 @@
 import { bindCentralProduct } from "./central/controller.js";
+import { bindRunnerActions } from "./runner-actions.js";
 
   (function(){
 
@@ -7,7 +8,7 @@ function applyLocale(locale){document.documentElement.lang=locale;document.query
 function requestedLocale(){return document.documentElement.lang==='zh-CN'?'zh-CN':'en'}
 function rememberLocale(locale){document.cookie='runmesh_lang='+locale+'; Max-Age=31536000; Path=/; SameSite=Lax'}
  document.querySelectorAll('[data-lang-toggle]').forEach(function(link){link.addEventListener('click',function(event){var locale=link.getAttribute('data-lang-toggle')||'en';rememberLocale(locale);var url=new URL(location.href);url.searchParams.set('lang',locale);event.preventDefault();location.href=url.toString()})});
-var locale=requestedLocale();if(new URLSearchParams(location.search).has('lang'))rememberLocale(locale);applyLocale(locale);bindCentralProduct(document);
+var locale=requestedLocale();if(new URLSearchParams(location.search).has('lang'))rememberLocale(locale);applyLocale(locale);bindCentralProduct(document);bindRunnerActions(document);
 function copyText(text){if(navigator.clipboard&&navigator.clipboard.writeText)return navigator.clipboard.writeText(text);var area=document.createElement('textarea');area.value=text;area.setAttribute('readonly','');area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.select();try{document.execCommand('copy')}catch(_){}area.remove();return Promise.resolve()}
 function copyValue(button){var panel=button.hasAttribute('data-copy-source')&&button.closest('[role=tabpanel]');if(panel){var code=panel.querySelector('pre code');return code?(code.textContent||''):''}var value=button.getAttribute('data-copy');return value===null?'':value}
 document.querySelectorAll('[data-copy],[data-copy-source]').forEach(function(button){button.addEventListener('click',function(){var result=copyText(copyValue(button));var mark=function(){button.textContent=document.documentElement.lang==='zh-CN'?'已复制':'Copied';button.classList.add('copied')};if(result&&typeof result.then==='function')result.then(mark,function(){});else mark()})});
@@ -27,6 +28,7 @@ function setActivePage(container,focus){var viewport=ensurePageViewport();if(!vi
 function bindDynamicContent(root){
   if(!root)return;
   bindCentralProduct(root);
+  bindRunnerActions(root);
   root.querySelectorAll('[data-copy],[data-copy-source]').forEach(function(button){if(button.__runmeshBound)return;button.__runmeshBound=true;button.addEventListener('click',function(){var result=copyText(copyValue(button));var mark=function(){button.textContent=document.documentElement.lang==='zh-CN'?'已复制':'Copied';button.classList.add('copied')};if(result&&typeof result.then==='function')result.then(mark,function(){});else mark()})});
   root.querySelectorAll('[data-tab]').forEach(function(tab){if(tab.__runmeshBound)return;tab.__runmeshBound=true;tab.addEventListener('click',function(){var target=tab.getAttribute('data-tab');var top=tab.getBoundingClientRect().top;root.querySelectorAll('[data-tab]').forEach(function(item){item.setAttribute('aria-selected',String(item===tab));item.tabIndex=item===tab?0:-1});root.querySelectorAll('[data-panel]').forEach(function(panel){panel.hidden=panel.getAttribute('data-panel')!==target});var delta=tab.getBoundingClientRect().top-top;if(delta)window.scrollBy(0,delta)});tab.addEventListener('keydown',function(event){if(event.key==='ArrowLeft'||event.key==='ArrowRight'){var tabs=Array.prototype.slice.call(root.querySelectorAll('[data-tab]'));var next=tabs[(tabs.indexOf(tab)+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length];next.focus();next.click()}})});
   root.querySelectorAll('.pwd-toggle-btn').forEach(function(btn){if(btn.__runmeshBound)return;btn.__runmeshBound=true;btn.addEventListener('click',function(){var wrap=btn.closest('.password-input-wrap');if(!wrap)return;var input=wrap.querySelector('input');if(!input)return;var isPwd=input.type==='password';input.type=isPwd?'text':'password';var label=isPwd?(document.documentElement.lang==='zh-CN'?'隐藏密码':'Hide password'):(document.documentElement.lang==='zh-CN'?'显示密码':'Show password');btn.setAttribute('aria-label',label);btn.setAttribute('title',label)})});

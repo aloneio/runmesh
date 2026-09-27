@@ -1,6 +1,7 @@
 import type { DevelopmentReleaseRefreshScheduler } from "../distribution/release.js";
 import { deleteRunnerFromControlPlane } from "./runner-deletion.js";
 import { adminError } from "./responses.js";
+import { adminRunnerError } from "./responses.js";
 import { adminUpstreamError } from "./responses.js";
 import { beginRunnerPolicyMutation } from "../application/runner-policy.js";
 import { cancelRunnerPolicyMutation } from "../application/runner-policy.js";
@@ -139,31 +140,31 @@ export async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, 
     const result = await deleteRunnerFromControlPlane(env, runnerId, form.get("confirmation"));
     if (result.state === "deleted") return redirect("/admin");
     if (result.state === "rejected") return result.reason === "confirmation"
-      ? adminError(400, "Type the Runner ID to confirm deletion.")
-      : adminError(result.status === 404 ? 404 : 400, "Runner delete failed.");
-    if (result.state === "unavailable") return adminError(503, "Runner deletion could not fence the Runner.");
-    if (result.reason === "cancel") return adminError(503, "Runner deletion failed; Runner remains safely fenced.");
-    if (result.reason === "recovery") return adminError(503, "Runner deletion state is uncertain; Runner remains safely fenced.");
-    return adminError(503, "Runner deletion outcome is uncertain; Runner remains safely fenced.");
+      ? adminRunnerError(400, "Type the Runner ID to confirm deletion.")
+      : adminRunnerError(result.status === 404 ? 404 : 400, "Runner delete failed.");
+    if (result.state === "unavailable") return adminRunnerError(503, "Runner deletion could not fence the Runner.");
+    if (result.reason === "cancel") return adminRunnerError(503, "Runner deletion failed; Runner remains safely fenced.");
+    if (result.reason === "recovery") return adminRunnerError(503, "Runner deletion state is uncertain; Runner remains safely fenced.");
+    return adminRunnerError(503, "Runner deletion outcome is uncertain; Runner remains safely fenced.");
   }
   if (action === "revoke") {
     const confirmation = form.get("confirmation");
-    if (confirmation !== runnerId) return adminError(400, "Type the Runner ID to confirm revocation.");
+    if (confirmation !== runnerId) return adminRunnerError(400, "Type the Runner ID to confirm revocation.");
     const mutationId = `credential-revoked-${crypto.randomUUID()}`;
     const fenced = await fenceRunnerTransport(env, runnerId, mutationId);
-    if (!fenced.ok) return adminError(503, "Runner revocation could not fence the Runner.");
+    if (!fenced.ok) return adminRunnerError(503, "Runner revocation could not fence the Runner.");
     let registryResponse: Response;
-    try { registryResponse = await runnerRegistryRequest(env, runnerId, "/revoke", "POST", JSON.stringify({ confirmation, mutation_id: mutationId })); } catch { return adminError(503, "Runner revocation outcome is uncertain; Runner remains safely fenced."); }
+    try { registryResponse = await runnerRegistryRequest(env, runnerId, "/revoke", "POST", JSON.stringify({ confirmation, mutation_id: mutationId })); } catch { return adminRunnerError(503, "Runner revocation outcome is uncertain; Runner remains safely fenced."); }
     if (!registryResponse.ok) {
-      if (![400, 404, 409].includes(registryResponse.status)) return adminError(503, "Runner revocation outcome is uncertain; Runner remains safely fenced.");
+      if (![400, 404, 409].includes(registryResponse.status)) return adminRunnerError(503, "Runner revocation outcome is uncertain; Runner remains safely fenced.");
       try {
         const cancelled = await cancelRunnerPolicyMutation(env, runnerId, mutationId);
-        if (!cancelled.ok) return adminError(503, "Runner revocation failed; Runner remains safely fenced.");
-      } catch { return adminError(503, "Runner revocation state is uncertain; Runner remains safely fenced."); }
-      return adminError(registryResponse.status === 404 ? 404 : 400, "Runner revoke failed.");
+        if (!cancelled.ok) return adminRunnerError(503, "Runner revocation failed; Runner remains safely fenced.");
+      } catch { return adminRunnerError(503, "Runner revocation state is uncertain; Runner remains safely fenced."); }
+      return adminRunnerError(registryResponse.status === 404 ? 404 : 400, "Runner revoke failed.");
     }
     try { await revokeRunnerTransport(env, runnerId, mutationId); }
-    catch { return adminError(503, "Runner revocation cleanup is uncertain; Runner remains safely fenced."); }
+    catch { return adminRunnerError(503, "Runner revocation cleanup is uncertain; Runner remains safely fenced."); }
     return redirect("/admin");
   }
   if (action === "rotate") {
