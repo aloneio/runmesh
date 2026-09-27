@@ -60,12 +60,56 @@ test("missing catalog remains an explicit optional read", async t => {
   await assert.rejects(api.request("catalogs/service"), /operationCouldNotBeConfirmedRefreshTheCurrentState/u);
 });
 
+for (const [path, body, message] of [
+  ["profiles/service", { action: "connect" }, "checkServiceNameAndPublicMcpUrl"],
+  ["profiles/service", { action: "enable" }, "invalidActionRefreshLibrary"],
+  ["connections/begin", {}, "invalidActionRefreshLibrary"],
+  ["discovery/service", {}, "invalidActionRefreshLibrary"],
+  ["skills/research", { action: "activate" }, "invalidActionRefreshLibrary"],
+  ["skills/research", { action: "preview" }, "checkSkillFilesRequireNameAndDescription"],
+  ["skill-installations", { files: [] }, "checkSkillFilesRequireNameAndDescription"],
+]) test("invalid " + path + " " + (body.action ?? "request") + " offers relevant recovery guidance", async t => {
+  const api = client(t, () => Response.json({ error: { code: "central_invalid_request" } }, { status: 400 }));
+  await assert.rejects(api.request(path, body), { message });
+  assert.equal(api.refreshRequired(), body.action !== "preview");
+  assert.equal(api.requests.length, 1);
+});
+
 test("a detached view cannot start reads previews or writes", async t => {
   const api = client(t, () => { throw new Error("No network request expected"); });
   api.detach();
   for (const body of [undefined, { action: "preview" }, { action: "enable" }])
     await assert.rejects(api.request("profiles/service", body), { name: "AbortError" });
   assert.equal(api.requests.length, 0);
+});
+
+for (const [path, body, code, state] of [
+  ["profiles/service", { action: "connect" }, "central_invalid_request", "written"],
+  ["profiles/service", { action: "connect" }, "central_invalid", "written"],
+  ["skill-installations", { files: [] }, "skill_invalid_package", "installed"],
+  ["skill-installations", { files: [] }, "skill_invalid", "installed"],
+  ["skill-installations", { files: [] }, "central_invalid_request", "installed"],
+]) test("confirmed " + code + " input rejection on " + path + " permits an explicit correction", async t => {
+  let rejected = true;
+  const api = client(t, () => rejected ? Response.json({ error: { code, operation_state: "not_started" } }, { status: 400 }) : Response.json({ state }));
+  await assert.rejects(api.request(path, body));
+  assert.equal(api.requests.length, 1, "Do not retry automatically");
+  assert.equal(api.refreshRequired(), false);
+  rejected = false;
+  assert.equal((await api.request(path, body)).state, state);
+  assert.equal(api.requests.length, 2);
+});
+
+for (const [status, code, operationState] of [
+  [400, "central_invalid", "unknown"], [400, "central_invalid", undefined],
+  [400, "unrecognized", "not_started"], [403, "central_invalid", "not_started"],
+  [409, "central_revision_conflict", "not_started"], [503, "central_invalid", "not_started"],
+]) test("input correction does not bypass refresh after " + status + " " + code + " " + operationState, async t => {
+  const api = client(t, () => Response.json({ error: { code, operation_state: operationState } }, { status }));
+  await assert.rejects(api.request("profiles/service", { action: "connect" }));
+  assert.equal(api.refreshRequired(), true);
+  await assert.rejects(api.request("profiles/service", { action: "connect" }), /refreshTheLibraryBeforeMakingAnotherChange/u);
+  assert.equal(api.requests.length, 1);
 });
 
 for (const detached of [false, true]) test("request timeout preserves " + (detached ? "detached-view cancellation" : "service-local recovery"), async t => {

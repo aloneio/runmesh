@@ -12,7 +12,10 @@ export function createCentralApi({
   async function api(path, body, missing) {
     assertCurrent();
     if (body && body.action !== 'preview' && refreshRequired()) throw new Error(t('refreshTheLibraryBeforeMakingAnotherChange'));
-    var ctl = new AbortController(),
+    const serviceInput = path.startsWith('profiles/') && body?.action === 'connect';
+    const skillInput = path === 'skill-installations' || path.startsWith('skills/') && body?.action === 'preview';
+    var rejectedInput = false,
+      ctl = new AbortController(),
       timer = setTimeout(function () {
         ctl.abort();
       }, 25000);
@@ -34,8 +37,12 @@ export function createCentralApi({
       if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
       if (missing && response.status === 404 && (value.state === 'missing' || value.error && value.error.code === 'central_missing')) return null;
       if (!response.ok) {
-        if (body && body.action !== 'preview') requireRefresh();
         var code = value.error && value.error.code;
+        // Only confirmed pre-validation failures allow correcting the form directly.
+        // Conflicts, authorization failures and uncertain writes still require refresh.
+        rejectedInput = response.status === 400 && value.error?.operation_state === 'not_started'
+          && (serviceInput && ['central_invalid_request', 'central_invalid'].includes(code)
+            || path === 'skill-installations' && ['central_invalid_request', 'skill_invalid_package', 'skill_invalid'].includes(code));
         if (response.status === 409 && path === 'skill-installations' && value.state === 'conflict') {
           var conflict = new Error('skill_exists');
           conflict.skillId = value.skill_id;
@@ -44,7 +51,7 @@ export function createCentralApi({
         }
         if (response.status === 409) throw new Error(t('thisItemChangedRefreshAndReviewItAgainBefore'));
         if (response.status === 403) throw new Error(t('accessWasDeniedSignInAgainOrCheckThe'));
-        if (response.status === 400) throw new Error(t('checkTheFieldsAndSkillFileFormatSkillMd'));
+        if (response.status === 400) throw new Error(t(serviceInput ? 'checkServiceNameAndPublicMcpUrl' : skillInput ? 'checkSkillFilesRequireNameAndDescription' : 'invalidActionRefreshLibrary'));
         if (code === 'oauth_provider_unsupported') throw new Error(t('thisServiceDoesNotSupportAutomaticOauthConnectionCheck'));
         if (code === 'remote_authorization_required' || code === 'oauth_reauthorization_required') throw new Error(t('signInToThisServiceAgainUsingReconnect'));
         if (code === 'oauth_unavailable') throw new Error(t('authorizationCouldNotBeCompletedRefreshAndReconnectIf'));
@@ -55,7 +62,7 @@ export function createCentralApi({
       if (value.state !== expected) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
       return value;
     } catch (error) {
-      if (body && body.action !== 'preview') requireRefresh();
+      if (body && body.action !== 'preview' && !rejectedInput) requireRefresh();
       assertCurrent();
       if (error.name === 'AbortError') throw new Error(t('connectionInterruptedRefreshToCheckWhetherTheOperationCompleted'));
       throw error;

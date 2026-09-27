@@ -6,6 +6,8 @@
 
 Open /admin/central with your administrator browser session. Enter a public HTTPS
 MCP URL and select No authentication or OAuth. The service name is optional.
+When omitted, the name is derived from the hostname and shortened to fit its
+display limit; the saved MCP URL remains complete.
 OAuth settings are discovered automatically; providers requiring manual client
 preregistration are not automatically connectable. After signing in, return to
 the control panel. A successful connection discovers and publishes every tool
@@ -77,13 +79,18 @@ next_after as after to continue. Each page checks the administrator session.
 Mutations require same-origin session/CSRF admission and exact revisions.
 Failed refreshes invalidate pending confirmations and block further writes
 until the library refresh succeeds.
+Confirmed input-validation rejections let you correct the service URL/name or
+Skill files and submit again without refreshing the library. This does not retry
+the request automatically; uncertain writes and revision conflicts still require
+a refresh. Controls remain disabled throughout an active operation, including
+cards recreated by an intermediate refresh.
 
 ## Discovery and optional governance
 
 remote_profiles lists the bounded shared service directory. remote_tools reads
-reviewed tools for its profile_id with cursor pagination; remote_call invokes
+published tools for its profile_id with cursor pagination; remote_call invokes
 one exact tool/version. CENTRAL_DIRECT_TOOLS_ENABLED=1 also publishes direct rm_
-aliases with their reviewed schemas, bounded to eight profiles and 32 tools.
+aliases with their published schemas, bounded to eight profiles and 32 tools.
 Larger libraries use remote_profiles, remote_tools and remote_call; they are not
 silently truncated. Discovery never contacts upstream services.
 
