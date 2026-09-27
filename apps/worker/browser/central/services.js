@@ -12,8 +12,7 @@ export function createServiceWorkflow({
     el,
     say,
     button,
-    clear,
-    details
+    clear
   } = view;
   function renderProfiles(profiles) {
     var list = app.querySelector('[data-service-list]');
@@ -120,20 +119,21 @@ export function createServiceWorkflow({
       panel = app.querySelector('[data-service-tools]');
     clear(panel);
     panel.hidden = false;
-    panel.append(el('h2', t('toolsForService') + (profile.display_name || profile.connector_id)));
+    var heading = el('div', undefined, 'section-title');
+    heading.append(el('h2', profile.display_name || profile.connector_id));
+    panel.append(heading);
     if (!catalog) {
       panel.append(el('p', t('noToolsDiscoveredYetEnableTheServiceThenCheck')));
       say(t('noCatalogYet'));
       return null;
     }
-    panel.append(el('p', t(!profile.enabled ? 'serviceNoLongerEnabled' : isPublished(catalog) ? 'toolsAvailableAutomatically' : 'toolsNotReadyRefreshToConnect')));
+    heading.append(el('span', catalog.snapshot.tools.length + ' ' + t(catalog.snapshot.tools.length === 1 ? 'toolCountOne' : 'toolCount'), 'muted'));
+    if (!profile.enabled || !isPublished(catalog)) panel.append(el('p', t(!profile.enabled ? 'serviceNoLongerEnabled' : 'toolsNotReadyRefreshToConnect')));
     catalog.snapshot.tools.forEach(function (tool) {
-      panel.append(el('h3', tool.definition.title || tool.definition.name), el('p', tool.definition.description || '', 'muted'));
-      details(panel, t('parametersSafetyHints'), JSON.stringify({
-        input: tool.definition.inputSchema,
-        output: tool.definition.outputSchema,
-        hints: tool.definition.annotations
-      }, null, 2));
+      var card = el('article', undefined, 'central-card');
+      card.append(el('h3', tool.definition.title || tool.definition.name));
+      if (tool.definition.description) card.append(el('p', tool.definition.description, 'muted'));
+      panel.append(card);
     });
     if (!catalog.snapshot.tools.length) panel.append(el('p', t('serviceHasNoTools')));
     panel.scrollIntoView({

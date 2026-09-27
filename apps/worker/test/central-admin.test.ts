@@ -22,6 +22,12 @@ it("direct public connections and Skill installation are available without deplo
   const response = localizeHtmlResponse(request, await handleBrowserAdmin(request, config, new URL(request.url)));
   expect(response.status).toBe(200);
   const markup = await response.text();
+  expect(markup).toContain('<h1>MCP 和 Skill</h1>');
+  expect(markup).toContain('data-central-tab="services" aria-pressed="true">MCP</button>');
+  expect(markup).toContain('data-central-tab="skills" aria-pressed="false">Skill</button>');
+  expect(markup).toContain('<h2>已连接的 MCP</h2>');
+  expect(markup).not.toContain('class="central-start"');
+  expect(markup).not.toContain('<p class="muted">所有已连接的 AI 客户端');
   expect(markup).toContain('MCP 地址');
   expect(markup).toContain('无身份验证');
   expect(markup).toContain('value="oauth"');

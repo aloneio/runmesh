@@ -26,7 +26,7 @@ export async function checkGuidedProduct(executable) {
    if(url.pathname==='/late-oauth-fixture'){res.setHeader('content-type','text/html');res.end('<p>Unexpected detached OAuth redirect</p>');return;}
    if(url.pathname==='/admin/central/connections/callback'){const page=oauthLanding();for(const [k,v] of page.headers)res.setHeader(k,v);res.end(await page.text());return;}
    if(url.pathname==='/admin') {res.setHeader('content-type','text/html');res.end(adminDocument('Dashboard',productOverviewPage({clients:[],runners:[]}),'dashboard'));return;}
-   if(url.pathname==='/admin/central') {res.setHeader('set-cookie',ADMIN_CSRF_COOKIE+'=fixture-csrf; Path=/; SameSite=Strict; Secure');res.setHeader('content-type','text/html');res.end(adminDocument('Services & Skills',centralPage('fixture-csrf',true,true),'central'));return;}
+   if(url.pathname==='/admin/central') {res.setHeader('set-cookie',ADMIN_CSRF_COOKIE+'=fixture-csrf; Path=/; SameSite=Strict; Secure');res.setHeader('content-type','text/html');res.end(adminDocument('MCP & Skill',centralPage('fixture-csrf',true,true),'central'));return;}
    const raw=[];for await(const part of req)raw.push(part);
    const body=raw.length?JSON.parse(Buffer.concat(raw).toString()):undefined;
    requests.push({path:url.pathname,method:req.method,body});
@@ -92,7 +92,7 @@ export async function checkGuidedProduct(executable) {
   assert.equal(await page.getByText('Active shell jobs',{exact:true}).count(),0);
   await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
   await page.setViewportSize({width:1365,height:1000});
-  await page.getByRole('link',{name:'Explore services and Skills'}).click();
+  await page.getByRole('link',{name:'Explore MCPs and Skills'}).click();
   await page.locator('[data-product-status]').filter({hasText:'Library is up to date.'}).waitFor();
   await page.goto(origin+'/admin/central?setup=missing');
   const status=page.locator('[data-product-status]');await status.filter({hasText:'Library is up to date.'}).waitFor();
@@ -100,6 +100,11 @@ export async function checkGuidedProduct(executable) {
   assert.equal(await page.locator('[data-central-tab=skills]').isEnabled(),true);
   assert.equal(await page.locator('[data-service-create] [name=endpoint]').getAttribute('type'),'url');
   await page.goto(origin+'/admin/central');await status.filter({hasText:'Library is up to date.'}).waitFor();
+  assert.equal(await page.getByRole('heading',{name:'MCP & Skill',exact:true}).count(),1);
+  assert.equal(await page.locator('[data-central-tab=services]').textContent(),'MCP');
+  assert.equal(await page.locator('[data-central-tab=skills]').textContent(),'Skill');
+  assert.equal(await page.locator('.central-start').count(),0);
+  assert.equal(await page.getByText('All connected AI clients share enabled MCPs and Skills. Pause an item to stop sharing it.',{exact:true}).count(),0);
   assert.equal(await page.locator('.central-advanced,[data-central-admin]').count(),0);
   const form=page.locator('[data-service-create]');
   await form.locator('[name=endpoint]').fill('http://docs.example.com/mcp');await form.locator('button').click();
@@ -108,10 +113,17 @@ export async function checkGuidedProduct(executable) {
   assert.equal(await form.locator('[name=endpoint]').inputValue(),'http://docs.example.com/mcp');
   // Correcting a confirmed rejected input needs no unrelated library refresh.
   await form.locator('[name=name]').fill('团队文档');await form.locator('[name=endpoint]').fill('https://docs.example.com/mcp');await form.locator('button').click();
-  await status.filter({hasText:'Connected. Tools are ready to use'}).waitFor();
+  await status.filter({hasText:'Connected.'}).waitFor();
   assert.deepEqual(await form.locator('[name=authentication] option').evaluateAll(nodes=>nodes.map(n=>n.value)),['none','oauth']);assert.equal(await form.locator('[name=token]').count(),0);
   assert.equal(profiles[0].display_name,'团队文档');
   const review=page.locator('[data-service-tools]');assert.equal(await review.locator('img').count(),0);
+  assert.equal(await review.locator('h2').textContent(),'团队文档');
+  assert.equal(await review.locator('.section-title span').textContent(),'1 tool');
+  assert.equal(await review.locator('article').count(),1);
+  assert.equal(await review.locator('article h3').textContent(),'search');
+  assert.equal(await review.locator('article p').textContent(),'<img src=x onerror=alert(1)>');
+  assert.equal(await review.locator('details,pre').count(),0);
+  assert.equal(await review.getByText('Tools from enabled services are available to all connected AI clients automatically.',{exact:true}).count(),0);
   assert.equal(await review.locator('input[type=checkbox]').count(),0);
   assert.deepEqual(catalogs.get(profiles[0].profile_id).head.approved_names,['search']);
   assert.equal(await review.getByRole('button').count(),0);
@@ -120,7 +132,7 @@ export async function checkGuidedProduct(executable) {
   for(const approved of [null,digest]){
    const existing=catalogs.get(profiles[0].profile_id);existing.head.approved_digest=approved;existing.head.approved_names=[];
    const before=requests.filter(r=>r.path.startsWith('/admin/central/discovery/')).length;
-   await page.reload();await status.filter({hasText:'Connected. Tools are ready to use'}).waitFor();
+   await page.reload();await status.filter({hasText:'Connected.'}).waitFor();
    assert.deepEqual(catalogs.get(profiles[0].profile_id).head.approved_names,['search']);
    assert.equal(requests.filter(r=>r.path.startsWith('/admin/central/discovery/')).length,before+1);
   }
@@ -131,11 +143,11 @@ export async function checkGuidedProduct(executable) {
   assert.equal(requests.filter(r=>r.path==='/admin/central/connections/begin').length,1);
   await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
   rejectDiscovery=false;await page.getByRole('button',{name:'Reconnect',exact:true}).click();
-  await page.waitForURL(url=>url.pathname==='/admin/central'&&url.searchParams.has('connected'),{timeout:10000});await status.filter({hasText:'Connected. Tools are ready to use'}).waitFor();
+  await page.waitForURL(url=>url.pathname==='/admin/central'&&url.searchParams.has('connected'),{timeout:10000});await status.filter({hasText:'Connected.'}).waitFor();
   assert.equal(requests.filter(r=>r.path==='/admin/central/connections/begin').length,2);assert.equal(requests.filter(r=>r.path==='/admin/central/connections/complete').length,2);assert.equal(new URL(page.url()).search,'');
   // A completed OAuth sign-in whose return was interrupted also finishes on reopening.
   const oauthId=profiles.at(-1).profile_id;catalogs.delete(oauthId);
-  await page.reload();await status.filter({hasText:'Connected. Tools are ready to use'}).waitFor();
+  await page.reload();await status.filter({hasText:'Connected.'}).waitFor();
   assert.deepEqual(catalogs.get(oauthId).head.approved_names,['search']);
   assert.equal(requests.filter(r=>r.path==='/admin/central/connections/begin').length,2);
   const oauthCard=page.locator('[data-service-list] .central-card').filter({has:page.getByRole('button',{name:'Reconnect',exact:true})});
@@ -147,7 +159,7 @@ export async function checkGuidedProduct(executable) {
   assert.equal(await oauthCard.getByText('Enable this service before checking its connection or reconnecting its account.',{exact:true}).isVisible(),true);
   assert.equal(await oauthCard.getByRole('button',{name:'Disconnect account',exact:true}).isEnabled(),true);
   assert.equal(requests.filter(r=>r.path==='/admin/central/connections/begin').length,2);
-  await oauthCard.getByRole('button',{name:'Enable',exact:true}).click();await status.filter({hasText:'Connected. Tools are ready to use'}).waitFor();
+  await oauthCard.getByRole('button',{name:'Enable',exact:true}).click();await status.filter({hasText:'Connected.'}).waitFor();
   assert.equal(await oauthCard.getByRole('button',{name:'Reconnect',exact:true}).isEnabled(),true);
   assert.equal(await oauthCard.getByRole('button',{name:'Refresh tools',exact:true}).isEnabled(),true);
   assert.equal(await oauthCard.getByText('Enable this service before checking its connection or reconnecting its account.',{exact:true}).count(),0);
@@ -157,7 +169,7 @@ export async function checkGuidedProduct(executable) {
   assert.equal(await publicCard.getByRole('button',{name:'View tools',exact:true}).isEnabled(),true);
   assert.equal(await publicCard.getByText('Enable this service before checking its connection.',{exact:true}).isVisible(),true);
   assert.equal(await publicCard.getByRole('button',{name:'Reconnect',exact:true}).count(),0);
-  await publicCard.getByRole('button',{name:'Enable',exact:true}).click();await status.filter({hasText:'Connected. Tools are ready to use'}).waitFor();
+  await publicCard.getByRole('button',{name:'Enable',exact:true}).click();await status.filter({hasText:'Connected.'}).waitFor();
   assert.equal(await publicCard.getByRole('button',{name:'Refresh tools',exact:true}).isEnabled(),true);
   assert.equal(await publicCard.getByText('Enable this service before checking its connection.',{exact:true}).count(),0);
   assert.equal(requests.filter(r=>r.path.startsWith('/admin/central/discovery/')).length,discoveries+2);
@@ -170,7 +182,7 @@ export async function checkGuidedProduct(executable) {
   await importer.locator('[name=folder]').setInputFiles(skillFolder);
   await importer.locator('[name=files]').setInputFiles({name:'SKILL.md',mimeType:'text/markdown',buffer:Buffer.from('---\nname: research\ndescription: Research fixture\n---\nReview this text.\n')});
   assert.equal(await importer.locator('[name=source],[name=license]').count(),0);await importer.getByRole('button',{name:'Install Skill',exact:true}).click();
-  await status.filter({hasText:'installed. Ready to use'}).waitFor();assert.equal(library[0].head.enabled,true);
+  await status.filter({hasText:'research installed.'}).waitFor();assert.equal(library[0].head.enabled,true);
   assert.ok(library[0].bundle.files[0].text.includes('Review this text.'));assert.equal(await importer.locator('[name=folder]').evaluate(input=>input.files.length),0);
   await importer.locator('[name=files]').setInputFiles({name:'SKILL.md',mimeType:'text/markdown',buffer:Buffer.from(['---','name: research','description: Research fixture','---','Updated text'].join(String.fromCharCode(10)))});await importer.getByRole('button',{name:'Install Skill',exact:true}).click();
   await status.filter({hasText:'This Skill is already installed.'}).waitFor();assert.equal(library[0].head.revision,1);
@@ -180,7 +192,7 @@ export async function checkGuidedProduct(executable) {
   async function checkSelectionChange(select){
    const before=requests.filter(r=>r.path==='/admin/central/skill-installations').length;await select();
    const staleConfirmation=skillReview.getByRole('button',{name:'Update Skill',exact:true});
-   if(await staleConfirmation.isVisible()){await staleConfirmation.click();await status.filter({hasText:'installed. Ready to use'}).waitFor();}
+   if(await staleConfirmation.isVisible()){await staleConfirmation.click();await status.filter({hasText:'research installed.'}).waitFor();}
    assert.equal(library[0].head.revision,1,'Changing the selection must not allow the previous files to be installed');
    assert.equal(requests.filter(r=>r.path==='/admin/central/skill-installations').length,before);assert.equal(await skillReview.isHidden(),true);
   }
@@ -191,7 +203,7 @@ export async function checkGuidedProduct(executable) {
   await checkSelectionChange(()=>importer.locator('[name=files]').setInputFiles([]));
   await importer.locator('[name=folder]').setInputFiles(skillFolder);
   await importer.getByRole('button',{name:'Install Skill',exact:true}).click();await status.filter({hasText:'This Skill is already installed.'}).waitFor();
-  await skillReview.getByRole('button',{name:'Update Skill',exact:true}).click();await status.filter({hasText:'installed. Ready to use'}).waitFor();assert.equal(library[0].head.revision,2);assert.equal(library[0].bundle.files[0].text,folderText);
+  await skillReview.getByRole('button',{name:'Update Skill',exact:true}).click();await status.filter({hasText:'research installed.'}).waitFor();assert.equal(library[0].head.revision,2);assert.equal(library[0].bundle.files[0].text,folderText);
   // A staged update must remain separate from the active bundle until reviewed and published.
   const installedSkill=library[0], stagedDigest='b'.repeat(64), stagedText=folderText.replace('Selected folder version','Reviewed staged version');
   const skillWrites=()=>requests.filter(r=>r.path==='/admin/central/skills/research'&&r.method==='POST').length;
@@ -216,7 +228,7 @@ export async function checkGuidedProduct(executable) {
   assert.equal(installedSkill.head.enabled,true);assert.equal(installedSkill.head.active_digest,stagedDigest);assert.equal(installedSkill.head.revision,6);
   // Publication conflict cannot trigger automatic replay, even after repeated clicks.
   await page.locator('[data-central-tab=services]').click();
-  await page.locator('[data-service-list]').getByRole('button',{name:'View tools',exact:true}).first().click();await status.filter({hasText:'Service tools are ready to view.'}).waitFor();
+  await page.locator('[data-service-list]').getByRole('button',{name:'View tools',exact:true}).first().click();await status.filter({hasText:'Tools loaded.'}).waitFor();
   conflict=true;await page.locator('[data-service-list]').getByRole('button',{name:'Refresh tools',exact:true}).first().click();await status.filter({hasText:'This item changed.'}).waitFor();
   const writes=requests.filter(r=>r.method==='POST').length;await page.locator('[data-service-list]').getByRole('button',{name:'Refresh tools',exact:true}).first().click();await status.filter({hasText:'Refresh the library before'}).waitFor();assert.equal(requests.filter(r=>r.method==='POST').length,writes);
   conflict=false;await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();assert.equal(await review.isHidden(),true);
@@ -241,7 +253,7 @@ export async function checkGuidedProduct(executable) {
   await callback.close();
   // A list receipt is not proof that a discovery publication succeeded.
   invalidCatalogReceipt=true;
-  await page.locator('[data-service-list]').getByRole('button',{name:'View tools',exact:true}).first().click();await status.filter({hasText:'Service tools are ready to view.'}).waitFor();
+  await page.locator('[data-service-list]').getByRole('button',{name:'View tools',exact:true}).first().click();await status.filter({hasText:'Tools loaded.'}).waitFor();
   const beforeInvalidReceipt=requests.filter(r=>r.method==='POST').length, approvedRevision=catalogs.get(profiles[0].profile_id).head.revision;
   await page.locator('[data-service-list]').getByRole('button',{name:'Refresh tools',exact:true}).first().click();await status.filter({hasText:'Unexpected response.'}).waitFor();
   assert.equal(catalogs.get(profiles[0].profile_id).head.revision,approvedRevision);assert.equal(await status.getAttribute('data-error'),'true');
@@ -281,7 +293,7 @@ export async function checkGuidedProduct(executable) {
   rejectedProfile=undefined;failRefreshAfterRejection=false;failLibrary=false;
   // OAuth return finishes its own connection and other interrupted connections once each.
   const callbackStart=requests.length;
-  await page.goto(origin+'/admin/central?connected='+oauthId);await status.filter({hasText:'Connected. Tools are ready to use'}).waitFor();await page.waitForLoadState('networkidle');
+  await page.goto(origin+'/admin/central?connected='+oauthId);await status.filter({hasText:'Connected.'}).waitFor();await page.waitForLoadState('networkidle');
   for(const id of [publicId,oauthId])assert.equal(requests.slice(callbackStart).filter(r=>r.path===discoveryPath(id)).length,1);
   assert.equal(new URL(page.url()).search,'');
   // The refreshed state, rather than an earlier successful write, determines readiness.
@@ -289,12 +301,12 @@ export async function checkGuidedProduct(executable) {
    afterDiscovery=id=>{if(state==='paused'){const p=profiles.find(p=>p.profile_id===id);p.enabled=false;p.revision++;}else if(state==='missing')catalogs.delete(id);else catalogs.get(id).head.approved_names=[];};
    await publicCard.getByRole('button',{name:'Refresh tools',exact:true}).click();
    await status.filter({hasText:state==='paused'?'This service is paused or no longer available.':'Tools are not ready yet.'}).waitFor();
-   assert.equal((await status.textContent()).includes('Connected. Tools are ready to use'),false,'Do not announce ready after '+state);
+   assert.equal((await status.textContent()).includes('Connected.'),false,'Do not announce ready after '+state);
    assert.equal(await status.getAttribute('data-error'),'true',state+': '+await status.textContent());
    assert.equal(await review.getByText('Tools from enabled services are available to all connected AI clients automatically.',{exact:true}).count(),0);
    if(state==='paused')await publicCard.getByRole('button',{name:'Enable',exact:true}).click();
    else await publicCard.getByRole('button',{name:'Refresh tools',exact:true}).click();
-   await status.filter({hasText:'Connected. Tools are ready to use'}).waitFor();
+   await status.filter({hasText:'Connected.'}).waitFor();
   }
   // A concurrent pause or replacement must not be reported as an active installation.
   await page.locator('[data-central-tab=skills]').click();
@@ -303,8 +315,8 @@ export async function checkGuidedProduct(executable) {
    await importer.getByRole('button',{name:'Install Skill',exact:true}).click();await status.filter({hasText:'This Skill is already installed.'}).waitFor();
    afterSkillInstallation=entry=>{entry.head.revision++;if(state==='paused')entry.head.enabled=false;else{entry.head.active_digest=entry.head.staged_digest='b'.repeat(64);entry.bundle.digest=entry.head.active_digest;}};
    await skillReview.getByRole('button',{name:'Update Skill',exact:true}).click();
-   await page.waitForFunction(()=>{const text=document.querySelector('[data-product-status]').textContent;return text.includes('installed. Ready to use')||text.includes('The Skill changed after installation.');});
-   assert.equal((await status.textContent()).includes('installed. Ready to use'),false,'Do not report an active installation after '+state);
+   await page.waitForFunction(()=>{const text=document.querySelector('[data-product-status]').textContent;return text.includes('research installed.')||text.includes('The Skill changed after installation.');});
+   assert.equal((await status.textContent()).includes('research installed.'),false,'Do not report an active installation after '+state);
    assert.equal(await status.getAttribute('data-error'),'true');
   }
   // Recreated controls must reflect the operation lock until recovery finishes.
@@ -318,7 +330,7 @@ export async function checkGuidedProduct(executable) {
    assert.equal(await oauthCard.getByRole('button',{name:'Enable',exact:true}).isDisabled(),true);
    assert.equal(await page.locator('[data-central-product]').getAttribute('aria-busy'),'true');
   }finally{releaseDiscovery();delayedDiscovery=undefined;}
-  await status.filter({hasText:'Connected. Tools are ready to use'}).waitFor();
+  await status.filter({hasText:'Connected.'}).waitFor();
   assert.equal(await publicCard.getByRole('button',{name:'Refresh tools',exact:true}).isEnabled(),true);
   assert.equal(await oauthCard.getByRole('button',{name:'Refresh tools',exact:true}).isDisabled(),true);
   assert.equal(await oauthCard.getByRole('button',{name:'Enable',exact:true}).isEnabled(),true);
@@ -326,7 +338,7 @@ export async function checkGuidedProduct(executable) {
   // A valid long hostname must still connect with the optional name left blank.
   const longEndpoint='https://docs-'+ 'a'.repeat(55) +'.example.com/mcp';
   await form.locator('[name=name]').fill('');await form.locator('[name=endpoint]').fill(longEndpoint);await form.locator('button').click();
-  await page.waitForFunction(()=>{const text=document.querySelector('[data-product-status]').textContent;return text.includes('Connected. Tools are ready')||text.includes('Check the service name');});
+  await page.waitForFunction(()=>{const text=document.querySelector('[data-product-status]').textContent;return text.includes('Connected.')||text.includes('Check the service name');});
   assert.equal(profiles.at(-1).endpoint,longEndpoint,'An automatic display name must not reject a valid service URL');
   assert.equal(profiles.at(-1).display_name.length<=64,true);
   // A failed sign-in handoff must leave the already saved service visible.
@@ -348,7 +360,7 @@ export async function checkGuidedProduct(executable) {
   rejectOAuthStart=false;
   await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
   await savedOAuthCard.getByRole('button',{name:'Reconnect',exact:true}).click();
-  await status.filter({hasText:'Connected. Tools are ready to use'}).waitFor();
+  await status.filter({hasText:'Connected.'}).waitFor();
   assert.equal(requests.slice(failedOAuthStart).filter(r=>r.body?.action==='connect').length,1,'Recover the saved service without creating a duplicate');
   assert.equal(requests.slice(failedOAuthStart).filter(r=>r.path==='/admin/central/connections/begin').length,2);
   assert.ok(catalogs.has(savedOAuth.profile_id));
