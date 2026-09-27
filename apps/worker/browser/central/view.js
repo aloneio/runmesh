@@ -30,19 +30,8 @@ export function createCentralView(app, t, run) {
     d.append(s, p);
     parent.appendChild(d);
   }
-  function choice(parent, title, description, checked) {
-    var label = el('label', undefined, 'central-choice'),
-      box = el('input'),
-      span = el('span');
-    box.type = 'checkbox';
-    box.checked = checked;
-    span.append(el('strong', title), el('p', description, 'muted'));
-    label.append(box, span);
-    parent.appendChild(label);
-    return box;
-  }
   function invalidate() {
-    app.querySelectorAll('[data-service-review],[data-skill-review]').forEach(function (n) {
+    app.querySelectorAll('[data-service-tools],[data-skill-review]').forEach(function (n) {
       clear(n);
       n.hidden = true;
     });
@@ -63,7 +52,6 @@ export function createCentralView(app, t, run) {
     button,
     clear,
     details,
-    choice,
     invalidate,
     showTab
   };

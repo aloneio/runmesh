@@ -43,17 +43,17 @@ export async function checkGuidedProduct(executable) {
     if((item?.head.revision??0)!==body.expected_revision){code=409;value={state:'conflict',skill_id:'research',current_revision:item.head.revision};}
     else{const entry={head:{skill_id:'research',revision:body.expected_revision+1,enabled:true,staged_digest:digest,active_digest:digest},bundle:{skill_id:'research',name:'research',description:'Research fixture',source:'Control panel upload',license:'',files:body.files,digest}};if(item)library.splice(library.indexOf(item),1,entry);else library.push(entry);value={state:'installed',skill_id:'research',name:'research',revision:entry.head.revision,digest};}
    }else if(kind==='discovery'){
-    assert.equal(body.expected_revision,0);
-    if(rejectDiscovery){code=503;value={error:{code:'remote_authorization_required',operation_state:'not_started'}};}
+    assert.equal(body.expected_revision,catalogs.get(id)?.head.revision??0);
+    if(conflict){code=409;value={state:'conflict',current_revision:body.expected_revision+1};}
+    else if(invalidCatalogReceipt)value={state:'listed',catalogs:[],next_after:null};
+    else if(rejectDiscovery){code=503;value={error:{code:'remote_authorization_required',operation_state:'not_started'}};}
     else{
-    const head={revision:1,observed_digest:digest,approved_digest:null,approved_names:[]};
+    const head={profile_id:id,revision:body.expected_revision+1,observed_digest:digest,approved_digest:digest,approved_names:['search']};
     const snapshot={digest,tools:[{tool_id:'tool-search',public_name:'search',version:toolVersion,definition:{name:'search',description:'<img src=x onerror=alert(1)>',inputSchema:{type:'object',properties:{query:{type:'string'}}},annotations:{readOnlyHint:true}}}]};
     catalogs.set(id,{state:'found',head,snapshot,changes:[{name:'search',state:'added'}]});value={state:'written',head};}
    }else if(kind==='catalogs'){
     value=catalogs.get(id);if(!value){code=404;value={state:'missing'};}
-    else if(body&&conflict){code=409;value={state:'conflict',current_revision:value.head.revision+1};}
-    else if(body&&invalidCatalogReceipt)value={state:'listed',catalogs:[],next_after:null};
-    else if(body){assert.equal(body.expected_revision,value.head.revision);assert.equal(body.digest,digest);value.head={...value.head,revision:value.head.revision+1,approved_digest:digest,approved_names:body.tool_names};value.approved=structuredClone(value.snapshot);value={state:'written',head:value.head};}
+    else if(body)throw new Error('Manual approval is not part of the connection flow');
     else if(url.searchParams.get('snapshot')===value.approved?.digest){value={...value,snapshot:value.approved};}
    }else if(kind==='skills'&&!id)value={state:'listed',skills:library.map(s=>({head:s.head,summary:{name:s.bundle.name,description:s.bundle.description}})),next_after:null};
    else if(kind==='skills'){
@@ -97,13 +97,22 @@ export async function checkGuidedProduct(executable) {
   await page.goto(origin+'/admin/central');await status.filter({hasText:'Library is up to date.'}).waitFor();
   assert.equal(await page.locator('.central-advanced,[data-central-admin]').count(),0);
   const form=page.locator('[data-service-create]');await form.locator('[name=name]').fill('团队文档');await form.locator('[name=endpoint]').fill('https://docs.example.com/mcp');await form.locator('button').click();
-  await status.filter({hasText:'Review the tools before approving.'}).waitFor();
+  await status.filter({hasText:'Connected. Tools are ready to use'}).waitFor();
   assert.deepEqual(await form.locator('[name=authentication] option').evaluateAll(nodes=>nodes.map(n=>n.value)),['none','oauth']);assert.equal(await form.locator('[name=token]').count(),0);
   assert.equal(profiles[0].display_name,'团队文档');
-  const review=page.locator('[data-service-review]');assert.equal(await review.locator('img').count(),0);
-  assert.equal(await review.locator('input[type=checkbox]').isChecked(),false);
+  const review=page.locator('[data-service-tools]');assert.equal(await review.locator('img').count(),0);
+  assert.equal(await review.locator('input[type=checkbox]').count(),0);
+  assert.deepEqual(catalogs.get(profiles[0].profile_id).head.approved_names,['search']);
+  assert.equal(await review.getByRole('button').count(),0);
   assert.equal(requests.filter(r=>r.path.includes('/catalogs/')&&r.method==='POST').length,0);
-  await review.locator('input[type=checkbox]').check();await review.getByRole('button',{name:'Approve selected tools'}).click();await status.filter({hasText:'Tools approved.'}).waitFor();
+  // Existing connected catalogs, including an empty prior selection, finish automatically.
+  for(const approved of [null,digest]){
+   const existing=catalogs.get(profiles[0].profile_id);existing.head.approved_digest=approved;existing.head.approved_names=[];
+   const before=requests.filter(r=>r.path.startsWith('/admin/central/discovery/')).length;
+   await page.reload();await status.filter({hasText:'Connected. Tools are ready to use'}).waitFor();
+   assert.deepEqual(catalogs.get(profiles[0].profile_id).head.approved_names,['search']);
+   assert.equal(requests.filter(r=>r.path.startsWith('/admin/central/discovery/')).length,before+1);
+  }
   rejectDiscovery=true;await form.locator('[name=endpoint]').fill('https://oauth.provider.com/mcp');await form.locator('[name=authentication]').selectOption('oauth');await form.locator('button').click();
   await status.filter({hasText:'Sign in to this service again using Reconnect.'}).waitFor();
   assert.equal(catalogs.has(profiles.at(-1).profile_id),false);assert.equal(await review.isHidden(),true);
@@ -111,31 +120,36 @@ export async function checkGuidedProduct(executable) {
   assert.equal(requests.filter(r=>r.path==='/admin/central/connections/begin').length,1);
   await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
   rejectDiscovery=false;await page.getByRole('button',{name:'Reconnect',exact:true}).click();
-  await page.waitForURL(url=>url.pathname==='/admin/central'&&url.searchParams.has('connected'),{timeout:10000});await status.filter({hasText:'Review the tools before approving.'}).waitFor();
+  await page.waitForURL(url=>url.pathname==='/admin/central'&&url.searchParams.has('connected'),{timeout:10000});await status.filter({hasText:'Connected. Tools are ready to use'}).waitFor();
   assert.equal(requests.filter(r=>r.path==='/admin/central/connections/begin').length,2);assert.equal(requests.filter(r=>r.path==='/admin/central/connections/complete').length,2);assert.equal(new URL(page.url()).search,'');
+  // A completed OAuth sign-in whose return was interrupted also finishes on reopening.
+  const oauthId=profiles.at(-1).profile_id;catalogs.delete(oauthId);
+  await page.reload();await status.filter({hasText:'Connected. Tools are ready to use'}).waitFor();
+  assert.deepEqual(catalogs.get(oauthId).head.approved_names,['search']);
+  assert.equal(requests.filter(r=>r.path==='/admin/central/connections/begin').length,2);
   const oauthCard=page.locator('[data-service-list] .central-card').filter({has:page.getByRole('button',{name:'Reconnect',exact:true})});
   const discoveries=requests.filter(r=>r.path.startsWith('/admin/central/discovery/')).length;
   await oauthCard.getByRole('button',{name:'Pause',exact:true}).click();await status.filter({hasText:'Library is up to date.'}).waitFor();
   assert.equal(await oauthCard.getByRole('button',{name:'Reconnect',exact:true}).isDisabled(),true);
-  assert.equal(await oauthCard.getByRole('button',{name:'Check connection & discover',exact:true}).isDisabled(),true);
-  assert.equal(await oauthCard.getByRole('button',{name:'Review tools',exact:true}).isEnabled(),true);
+  assert.equal(await oauthCard.getByRole('button',{name:'Refresh tools',exact:true}).isDisabled(),true);
+  assert.equal(await oauthCard.getByRole('button',{name:'View tools',exact:true}).isEnabled(),true);
   assert.equal(await oauthCard.getByText('Enable this service before checking its connection or reconnecting its account.',{exact:true}).isVisible(),true);
   assert.equal(await oauthCard.getByRole('button',{name:'Disconnect account',exact:true}).isEnabled(),true);
   assert.equal(requests.filter(r=>r.path==='/admin/central/connections/begin').length,2);
-  await oauthCard.getByRole('button',{name:'Enable',exact:true}).click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+  await oauthCard.getByRole('button',{name:'Enable',exact:true}).click();await status.filter({hasText:'Connected. Tools are ready to use'}).waitFor();
   assert.equal(await oauthCard.getByRole('button',{name:'Reconnect',exact:true}).isEnabled(),true);
-  assert.equal(await oauthCard.getByRole('button',{name:'Check connection & discover',exact:true}).isEnabled(),true);
+  assert.equal(await oauthCard.getByRole('button',{name:'Refresh tools',exact:true}).isEnabled(),true);
   assert.equal(await oauthCard.getByText('Enable this service before checking its connection or reconnecting its account.',{exact:true}).count(),0);
   const publicCard=page.locator('[data-service-list] .central-card').filter({has:page.getByText('https://docs.example.com/mcp',{exact:true})});
   await publicCard.getByRole('button',{name:'Pause',exact:true}).click();await status.filter({hasText:'Library is up to date.'}).waitFor();
-  assert.equal(await publicCard.getByRole('button',{name:'Check connection & discover',exact:true}).isDisabled(),true);
-  assert.equal(await publicCard.getByRole('button',{name:'Review tools',exact:true}).isEnabled(),true);
+  assert.equal(await publicCard.getByRole('button',{name:'Refresh tools',exact:true}).isDisabled(),true);
+  assert.equal(await publicCard.getByRole('button',{name:'View tools',exact:true}).isEnabled(),true);
   assert.equal(await publicCard.getByText('Enable this service before checking its connection.',{exact:true}).isVisible(),true);
   assert.equal(await publicCard.getByRole('button',{name:'Reconnect',exact:true}).count(),0);
-  await publicCard.getByRole('button',{name:'Enable',exact:true}).click();await status.filter({hasText:'Library is up to date.'}).waitFor();
-  assert.equal(await publicCard.getByRole('button',{name:'Check connection & discover',exact:true}).isEnabled(),true);
+  await publicCard.getByRole('button',{name:'Enable',exact:true}).click();await status.filter({hasText:'Connected. Tools are ready to use'}).waitFor();
+  assert.equal(await publicCard.getByRole('button',{name:'Refresh tools',exact:true}).isEnabled(),true);
   assert.equal(await publicCard.getByText('Enable this service before checking its connection.',{exact:true}).count(),0);
-  assert.equal(requests.filter(r=>r.path.startsWith('/admin/central/discovery/')).length,discoveries);
+  assert.equal(requests.filter(r=>r.path.startsWith('/admin/central/discovery/')).length,discoveries+2);
   assert.equal(await page.locator('[data-service-list] input[type=password]').count(),0);
   assert.equal(await page.getByText('Update service credentials',{exact:true}).count(),0);
   await page.locator('[data-central-tab=skills]').click();
@@ -191,9 +205,9 @@ export async function checkGuidedProduct(executable) {
   assert.equal(installedSkill.head.enabled,true);assert.equal(installedSkill.head.active_digest,stagedDigest);assert.equal(installedSkill.head.revision,6);
   // Publication conflict cannot trigger automatic replay, even after repeated clicks.
   await page.locator('[data-central-tab=services]').click();
-  await page.locator('[data-service-list]').getByRole('button',{name:'Review tools',exact:true}).first().click();await status.filter({hasText:'Review the tools before approving.'}).waitFor();
-  conflict=true;await review.getByRole('button',{name:'Approve selected tools'}).click();await status.filter({hasText:'This item changed.'}).waitFor();
-  const writes=requests.filter(r=>r.method==='POST').length;await review.getByRole('button',{name:'Approve selected tools'}).click();await status.filter({hasText:'Refresh the library before'}).waitFor();assert.equal(requests.filter(r=>r.method==='POST').length,writes);
+  await page.locator('[data-service-list]').getByRole('button',{name:'View tools',exact:true}).first().click();await status.filter({hasText:'Service tools are ready to view.'}).waitFor();
+  conflict=true;await page.locator('[data-service-list]').getByRole('button',{name:'Refresh tools',exact:true}).first().click();await status.filter({hasText:'This item changed.'}).waitFor();
+  const writes=requests.filter(r=>r.method==='POST').length;await page.locator('[data-service-list]').getByRole('button',{name:'Refresh tools',exact:true}).first().click();await status.filter({hasText:'Refresh the library before'}).waitFor();assert.equal(requests.filter(r=>r.method==='POST').length,writes);
   conflict=false;await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();assert.equal(await review.isHidden(),true);
   await page.goto(origin+'/admin/central?client=client-fixture');await status.filter({hasText:'Library is up to date.'}).waitFor();
   assert.equal(await page.locator('[data-central-tab=access],[data-client-select],[data-client-access]').count(),0);
@@ -214,13 +228,13 @@ export async function checkGuidedProduct(executable) {
    assert.equal(requests.filter(r=>r.path===path+'/complete').length,callbacks);
   }
   await callback.close();
-  // A list receipt is not proof that an approval write succeeded.
+  // A list receipt is not proof that a discovery publication succeeded.
   invalidCatalogReceipt=true;
-  await page.locator('[data-service-list]').getByRole('button',{name:'Review tools',exact:true}).first().click();await status.filter({hasText:'Review the tools before approving.'}).waitFor();
+  await page.locator('[data-service-list]').getByRole('button',{name:'View tools',exact:true}).first().click();await status.filter({hasText:'Service tools are ready to view.'}).waitFor();
   const beforeInvalidReceipt=requests.filter(r=>r.method==='POST').length, approvedRevision=catalogs.get(profiles[0].profile_id).head.revision;
-  await review.getByRole('button',{name:'Approve selected tools'}).click();await status.filter({hasText:'Unexpected response.'}).waitFor();
+  await page.locator('[data-service-list]').getByRole('button',{name:'Refresh tools',exact:true}).first().click();await status.filter({hasText:'Unexpected response.'}).waitFor();
   assert.equal(catalogs.get(profiles[0].profile_id).head.revision,approvedRevision);assert.equal(await status.getAttribute('data-error'),'true');
-  await review.getByRole('button',{name:'Approve selected tools'}).click();await status.filter({hasText:'Refresh the library before'}).waitFor();
+  await page.locator('[data-service-list]').getByRole('button',{name:'Refresh tools',exact:true}).first().click();await status.filter({hasText:'Refresh the library before'}).waitFor();
   assert.equal(requests.filter(r=>r.method==='POST').length,beforeInvalidReceipt+1);
   invalidCatalogReceipt=false;await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
   // Removed page instances must not redirect or continue an old workflow.
@@ -234,8 +248,10 @@ export async function checkGuidedProduct(executable) {
   assert.equal(new URL(page.url()).pathname,'/admin');assert.equal(await page.getByRole('heading',{name:'Make your AI client more useful'}).count(),1);
   await page.locator('.control-nav a[href="/admin/central"]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
   assert.equal(await page.getByRole('button',{name:'Reconnect',exact:true}).isEnabled(),true);
+  assert.equal(requests.filter(r=>r.path.includes('/catalogs/')&&r.method==='POST').length,0);
+  assert.equal(await page.getByText('Enabled · tool review required before sharing',{exact:true}).count(),0);
   assert.deepEqual(exceptions,[]);
-  return {state:'passed',guided_homepage:true,direct_url_without_deployment_setup:true,service_explicit_review:true,oauth_return_to_tool_review:true,paused_oauth_reconnect_guard:true,paused_service_discovery_guard:true,no_legacy_service_credentials:true,oauth_extra_parameters_ignored:true,oauth_duplicate_parameters_rejected:true,oauth_provider_errors_not_reflected:true,direct_skill_install_and_confirmed_update:true,skill_file_folder_selection_switch:true,skill_selection_invalidates_confirmation:true,skill_pending_update_publication:true,skill_pause_and_resume:true,shared_library_without_client_assignment:true,retired_access_api_not_called:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,malformed_write_receipt_blocks_replay:true,detached_oauth_does_not_navigate:true,mobile_no_overflow:true,screenshots:0};
+  return {state:'passed',guided_homepage:true,direct_url_without_deployment_setup:true,service_immediate_tools:true,existing_connections_complete_automatically:true,oauth_return_to_available_tools:true,paused_oauth_reconnect_guard:true,paused_service_discovery_guard:true,resume_refreshes_tools:true,no_legacy_service_credentials:true,oauth_extra_parameters_ignored:true,oauth_duplicate_parameters_rejected:true,oauth_provider_errors_not_reflected:true,direct_skill_install_and_confirmed_update:true,skill_file_folder_selection_switch:true,skill_selection_invalidates_confirmation:true,skill_pending_update_publication:true,skill_pause_and_resume:true,shared_library_without_client_assignment:true,retired_access_api_not_called:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,malformed_write_receipt_blocks_replay:true,detached_oauth_does_not_navigate:true,mobile_no_overflow:true,screenshots:0};
  }finally{await browser?.close();await new Promise(r=>server.close(r));await rm(join(skillFolder,'SKILL.md'),{force:true});await rmdir(skillFolder);}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){

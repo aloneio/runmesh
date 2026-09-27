@@ -6,7 +6,7 @@ import { newCatalogCursorKey } from "./catalog-crypto.js";
 
 type Storage = Pick<DurableObjectStorage, "sql" | "transactionSync">;
 
-/** Sole owner of immutable catalog bodies and reviewed heads. No credential
+/** Sole owner of immutable catalog bodies and published heads. No credential
  * material, upstream requests, native Jobs or cross-repository SQL. */
 export class CatalogState implements CatalogRepository {
   private ready = false;
@@ -69,6 +69,14 @@ export class CatalogState implements CatalogRepository {
   }
 
   public stage(value: CatalogSnapshot, expectedRevision: number): CatalogMutation {
+    return this.capture(value, expectedRevision, false);
+  }
+
+  public publish(value: CatalogSnapshot, expectedRevision: number): CatalogMutation {
+    return this.capture(value, expectedRevision, true);
+  }
+
+  private capture(value: CatalogSnapshot, expectedRevision: number, publish: boolean): CatalogMutation {
     const snapshot = parseCatalogSnapshot(value);
     if (snapshot === undefined || !catalogRevision(expectedRevision, true) || !catalogRevision(expectedRevision + 1)) return { state: "invalid" };
     const canonical = catalogJson(snapshot, CATALOG_LIMITS.snapshot_bytes)!;
@@ -87,7 +95,8 @@ export class CatalogState implements CatalogRepository {
         this.storage.sql.exec("INSERT INTO catalog_snapshots_v1 VALUES (?,?,?,?)", snapshot.profile_id, snapshot.digest, bytes, canonical);
       }
       return this.writeHead({ schema_version: 1, profile_id: snapshot.profile_id, revision: revision + 1, observed_digest: snapshot.digest,
-        approved_digest: head?.approved_digest ?? null, approved_names: head?.approved_names ?? [] });
+        approved_digest: publish ? snapshot.digest : head?.approved_digest ?? null,
+        approved_names: publish ? snapshot.tools.map(tool => tool.definition.name) : head?.approved_names ?? [] });
     });
   }
 

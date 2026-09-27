@@ -98,9 +98,10 @@ export function bindCentralProduct(root) {
       });
       history.replaceState(null, '', '/admin/central');
       if (connection) {
-        await services.review(connection, true);
+        await services.connect(connection);
         return;
       }
     }
+    await services.resumePending(profiles);
   });
 }

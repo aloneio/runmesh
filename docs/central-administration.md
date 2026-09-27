@@ -8,7 +8,11 @@ Open /admin/central with your administrator browser session. Enter a public HTTP
 MCP URL and select No authentication or OAuth. The service name is optional.
 OAuth settings are discovered automatically; providers requiring manual client
 preregistration are not automatically connectable. After signing in, return to
-the control panel, review discovered tools and approve the ones to publish.
+the control panel. A successful connection discovers and publishes every tool
+atomically; no separate approval is required. Existing enabled connections with
+unpublished tools finish on opening the library. View tools is read-only; Refresh
+tools updates the shared catalog immediately. Resuming a paused service refreshes
+its tools automatically.
 
 Select SKILL.md and supporting text files, or a complete Skill folder, to install
 a Skill. Its name and description come from frontmatter. Installing saves,
@@ -39,18 +43,21 @@ rejected; refresh skill_list and use its new digest for every attachment. Old
 bundles remain available to administrators for explicit rollback. Disabling or
 revoking access cannot erase content already delivered to a client's context.
 
-## Review, identity and connection boundaries
+## Publication, identity and connection boundaries
 
-Tool publication remains explicit. Newly discovered or changed tool definitions
-are quarantined until reviewed; stale schemas cannot be called merely because
-the instance uses shared access. Each call revalidates client identity, enabled
-profile, reviewed catalog, content version and credential state before dispatch
+Successful discovery publishes the complete catalog in one revision. Failed or
+partial discovery preserves the current publication. Stale tool schemas require
+a refresh; invoking a tool does not change its catalog or replay the operation.
+Each call revalidates client identity, enabled profile, published catalog, content
+version and credential state before dispatch
 and again before returning output. An upstream action may already have executed
 when a later check withholds its result; that does not mean it was rolled back.
 Unknown or conflicting outcomes are never automatically replayed.
 
 Upstream OAuth consent remains required for OAuth services. Reconnect or
 disconnect the upstream account from its service card. OAuth credentials remain
+available across a pause/resume of sharing; old in-flight leases stay invalid,
+and an explicitly disconnected account still requires fresh sign-in. They remain
 encrypted and absent from read APIs. Managed connections accept only their saved
 public HTTPS destination, without private-network routing or redirects. OAuth
 vault setup is an instance deployment concern; no-auth services and Skills do
@@ -80,7 +87,7 @@ metadata receipts. Receipts exclude arguments, results and credentials. Audit
 failure does not replay calls or change completed results. This is not a billing
 system or a promise of distributed rate limiting.
 
-Local browser checks use no screenshots and cover connection/review, OAuth
+Local browser checks use no screenshots and cover immediate availability, OAuth
 callbacks, Skill updates, stale confirmations, failed refresh and no replay.
 Real supplier consent, two real AI hosts and production promotion require the
 separate evidence in [the rollout ledger](central-rollout.md).

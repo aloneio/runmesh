@@ -8,7 +8,7 @@ Enter a public HTTPS MCP URL and select OAuth in /admin/central. Runmesh discove
 
 A credential-free discovery probe reads WWW-Authenticate; its resource metadata URL and scopes take precedence over well-known locations. Missing challenges use well-known discovery. The probe never initializes a session or invokes a tool. All destinations are bounded public HTTPS without redirects, private destinations or forwarding inbound credentials.
 
-Authorization belongs to the saved connection. After administrator review and tool publication, every authenticated instance client can use the service. Each caller is revalidated; publication does not grant native Runner or workspace permissions.
+Authorization belongs to the saved connection. After successful connection and automatic tool discovery, every authenticated instance client can use the service. Each caller is revalidated; publication does not grant native Runner or workspace permissions.
 
 ## Authorization and credential lifecycle
 

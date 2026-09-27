@@ -11,7 +11,7 @@ async function fixture() {
   const head: CatalogHead = { schema_version: 1, profile_id: "docs", revision: 2, observed_digest: snapshot.digest, approved_digest: snapshot.digest, approved_names: ["a", "b", "c"] };
   let saved: CatalogCursor | undefined;
   const ports = {
-    repository: { readHead: vi.fn(() => head), readSnapshot: vi.fn(() => snapshot), stage: vi.fn(), approve: vi.fn(), disable: vi.fn() },
+    repository: { readHead: vi.fn(() => head), readSnapshot: vi.fn(() => snapshot), publish: () => { throw new Error("write forbidden"); }, stage: vi.fn(), approve: vi.fn(), disable: vi.fn() },
     profile: vi.fn(() => catalogProfile()),
     identity: vi.fn(async (): Promise<IdentityDecision> => ({ state: "allowed", identity })), digest: vi.fn(fixtureDigest), now: vi.fn(() => 1000),
     cursor: { seal: vi.fn(async (cursor: CatalogCursor) => { saved = cursor; return "fixture-cursor"; }), open: vi.fn(async () => saved) },

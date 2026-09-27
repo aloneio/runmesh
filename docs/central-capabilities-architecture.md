@@ -64,7 +64,7 @@ Limits are explicit safety ceilings, not latency promises. Contracts remain auth
 
 ## Control panel and verification
 
-The normal connection flow asks for a service name, MCP URL and no-authentication or OAuth. Tool publication remains an explicit review step; installing or updating a Skill publishes the current version to the shared library. Admin changes retain same-origin, session and CSRF checks. Stale previews, failed refreshes and revision conflicts cannot silently become successful writes.
+The normal connection flow asks for a service name, MCP URL and no-authentication or OAuth. Successful connection atomically publishes every discovered tool without a separate review step; installing or updating a Skill publishes the current version to the shared library. Admin changes retain same-origin, session and CSRF checks. Stale previews, failed refreshes and revision conflicts cannot silently become successful writes.
 
 Regression coverage includes two independently authenticated clients without grant records, absent grant storage, active Skill version changes, more than 128 Skill heads, larger remote directories, credential revocation/rotation, disabled profiles, schema drift, OAuth boundaries, retired routes and unchanged native Runner admission. Browser checks cover the product workflow without screenshots. The full verification plan, architecture gate and exact-commit CI remain release requirements.
 

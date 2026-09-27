@@ -40,6 +40,8 @@ export async function handleCentralCatalogAdmin(request: Request, env: WorkerEnv
         if (command.action === "approve" && (head.approved_digest !== command.digest || head.observed_digest !== command.digest
           || JSON.stringify(head.approved_names) !== JSON.stringify(command.tool_names))) return fail("central_result_unconfirmed", 503, "unknown");
         if (command.action === "disable" && (head.approved_digest !== null || head.approved_names.length !== 0)) return fail("central_result_unconfirmed", 503, "unknown");
+        if (command.action === "publish" && (head.approved_digest !== head.observed_digest
+          || JSON.stringify(head.approved_names) !== JSON.stringify(command.tools.map(tool => tool.name)))) return fail("central_result_unconfirmed", 503, "unknown");
         return Response.json({ state: "written", head }, { headers });
       }
       const snapshot = parseCatalogSnapshot(result.snapshot);

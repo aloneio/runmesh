@@ -81,27 +81,25 @@ async function fixture(native = false) {
     const body = JSON.parse(String(init?.body)); methods.push(body.method);
     return upstream.fetch(new Request(input, init));
   });
-  const discover = async (headers = admin.headers) => {
-    const request = new Request(`https://worker.test/admin/central/discovery/${id}`, { method: "POST", headers, body: '{"expected_revision":0}' });
+  const discover = async (headers = admin.headers, expectedRevision = 0) => {
+    const request = new Request(`https://worker.test/admin/central/discovery/${id}`, { method: "POST", headers, body: JSON.stringify({ expected_revision: expectedRevision }) });
     return handleCentralAdmin(request, config, new URL(request.url));
   };
-  const approve = async () => {
+  const toolCommand = async () => {
     const observed = await call(owner => owner.getCatalog(admin.hash, id));
     if (observed.state !== "found") throw new Error("missing fixture catalog");
-    expect(await call(owner => owner.mutateCatalog(admin.hash, { action: "approve", profile_id: id, expected_revision: 1,
-      digest: observed.snapshot.digest, tool_names: ["lookup"] }))).toMatchObject({ state: "written" });
     const tool = observed.snapshot.tools[0]!;
     return { profile_id: id, tool_id: tool.tool_id, version: tool.version, arguments: { value: 7 } };
   };
-  return { admin, current, config, call, port, discover, approve, execute, network, methods, drift: () => { description = "Unreviewed change"; } };
+  return { admin, current, config, call, port, discover, toolCommand, execute, network, methods, drift: () => { description = "Unreviewed change"; } };
 }
 
-it("W05 admin discovery to approval to client invocation crosses the real HTTP/DO/SDK chain with no Runner", async () => {
+it("W05 admin discovery immediately enables client invocation crosses the real HTTP/DO/SDK chain with no Runner", async () => {
   const f = await fixture();
   try {
     expect((await f.discover()).status).toBe(200);
-    expect(await f.call(owner => owner.getCatalog(f.admin.hash, "docs"))).toMatchObject({ head: { approved_digest: null, revision: 1 } });
-    const command = await f.approve();
+    expect(await f.call(owner => owner.getCatalog(f.admin.hash, "docs"))).toMatchObject({ head: { approved_digest: expect.any(String), approved_names: ["lookup"], revision: 1 } });
+    const command = await f.toolCommand();
     const list = await rpc(f.config, f.current.secret, "tools/list", {});
     expect(list.result.tools.map((tool: { name: string }) => tool.name)).toContain("remote_call");
     expect(list.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(['remote_call', 'remote_profiles', 'remote_tools']);
@@ -119,7 +117,7 @@ it("W05 admin discovery to approval to client invocation crosses the real HTTP/D
 it("W05 shared clients discover publications without grants and invalid arguments precede network", async () => {
   const f = await fixture();
   try {
-    expect((await f.discover()).status).toBe(200); const command = await f.approve(), other = await client(), before = f.methods.length;
+    expect((await f.discover()).status).toBe(200); const command = await f.toolCommand(), other = await client(), before = f.methods.length;
     const config = { ...f.config, CENTRAL_SKILLS_ENABLED: '1', CENTRAL_DIRECT_TOOLS_ENABLED: '1' };
     const shared = (await rpc(config, other.secret, 'tools/list', {})).result.tools;
     const profiles = await rpc(config, other.secret, 'tools/call', { name: 'remote_profiles', arguments: {} });
@@ -135,20 +133,26 @@ it("W05 shared clients discover publications without grants and invalid argument
   } finally { f.network.mockRestore(); }
 });
 
-it("W05 live description changes block invocation without auto-approving or overwriting the reviewed catalog", async () => {
+it("W05 live description changes require a refresh which immediately publishes the new definition", async () => {
   const f = await fixture();
   try {
-    expect((await f.discover()).status).toBe(200); const command = await f.approve(); f.drift();
+    expect((await f.discover()).status).toBe(200); const command = await f.toolCommand(); f.drift();
     expect(await f.port.callRemote(f.current.principal, command)).toMatchObject({ code: "stale_catalog", operation_state: "not_started" });
     expect(f.execute).not.toHaveBeenCalled();
-    expect(await f.call(owner => owner.getCatalog(f.admin.hash, "docs"))).toMatchObject({ head: { revision: 2 } });
+    expect(await f.call(owner => owner.getCatalog(f.admin.hash, "docs"))).toMatchObject({ head: { revision: 1 } });
+    expect((await f.discover(f.admin.headers, 1)).status).toBe(200);
+    const updated = await f.toolCommand();
+    expect(updated.version).not.toBe(command.version);
+    expect(await f.port.callRemote(f.current.principal, updated)).toMatchObject({ state: "completed" });
+    expect(f.execute).toHaveBeenCalledOnce();
+    expect(await f.call(owner => owner.getCatalog(f.admin.hash, "docs"))).toMatchObject({ head: { revision: 2, approved_names: ["lookup"] } });
   } finally { f.network.mockRestore(); }
 });
 
 it("W05 a lost response is unknown at the public MCP boundary and never causes a second execution", async () => {
   const f = await fixture();
   try {
-    expect((await f.discover()).status).toBe(200); const command = await f.approve();
+    expect((await f.discover()).status).toBe(200); const command = await f.toolCommand();
     const http = f.network.getMockImplementation()!;
     f.network.mockImplementation(async (input, init) => {
       const response = await http(input, init);
@@ -172,7 +176,7 @@ it.each([401, 403])("W05 upstream HTTP %s preserves authorization guidance and u
     expect(f.network).toHaveBeenCalledOnce(); expect(f.execute).not.toHaveBeenCalled();
     expect(await f.call(owner => owner.getCatalog(f.admin.hash, "docs"))).toMatchObject({ state: "missing" });
     f.network.mockImplementation(http);
-    expect((await f.discover()).status).toBe(200); const command = await f.approve();
+    expect((await f.discover()).status).toBe(200); const command = await f.toolCommand();
     f.network.mockImplementation(async (input, init) => {
       const response = await http(input, init);
       return JSON.parse(String(init?.body)).method === "tools/call" ? new Response("untrusted upstream rejection", { status }) : response;
@@ -183,14 +187,14 @@ it.each([401, 403])("W05 upstream HTTP %s preserves authorization guidance and u
       failure_class: "authorization", operation_state: "unknown", next_action: "inspect_upstream_state" } });
     expect(JSON.stringify(response)).not.toContain("untrusted upstream rejection");
     expect(f.execute).toHaveBeenCalledOnce(); expect(f.methods.filter(method => method === "tools/call")).toHaveLength(1);
-    expect(await f.call(owner => owner.getCatalog(f.admin.hash, "docs"))).toMatchObject({ head: { revision: 2 } });
+    expect(await f.call(owner => owner.getCatalog(f.admin.hash, "docs"))).toMatchObject({ head: { revision: 1 } });
   } finally { f.network.mockRestore(); }
 });
 
 it("W05 same-client concurrent remote work is refused instead of queued or replayed", async () => {
   const f = await fixture(); let release: () => void = () => undefined;
   try {
-    expect((await f.discover()).status).toBe(200); const command = await f.approve();
+    expect((await f.discover()).status).toBe(200); const command = await f.toolCommand();
     let entered: () => void = () => undefined;
     const started = new Promise<void>(resolve => { entered = resolve; });
     const held = new Promise<void>(resolve => { release = resolve; });
@@ -209,7 +213,7 @@ it("W05 same-client concurrent remote work is refused instead of queued or repla
 it("W05 completed data is withheld if the client is revoked during upstream execution", async () => {
   const f = await fixture();
   try {
-    expect((await f.discover()).status).toBe(200); const command = await f.approve(), original = f.execute.getMockImplementation()!;
+    expect((await f.discover()).status).toBe(200); const command = await f.toolCommand(), original = f.execute.getMockImplementation()!;
     f.execute.mockImplementation(async args => {
       await runInDurableObject(registry(), instance => { instance.revokeMcpClient(f.current.principal.client_id, Date.now()); });
       return original(args);
@@ -242,7 +246,7 @@ it("W05 a relay hop cannot recursively enter another Runmesh MCP endpoint", asyn
 
 it('W08 direct tools preserve reviewed schemas and stale names cannot bypass a disabled service', async () => {
   const f = await fixture(true); try {
-    expect((await f.discover()).status).toBe(200); await f.approve(); const config = { ...f.config, CENTRAL_DIRECT_TOOLS_ENABLED: '1' };
+    expect((await f.discover()).status).toBe(200); await f.toolCommand(); const config = { ...f.config, CENTRAL_DIRECT_TOOLS_ENABLED: '1' };
     const listed = await rpc(config, f.current.secret, 'tools/list', {}); const direct = listed.result.tools.find((t: { name: string }) => t.name.startsWith('rm_'));
     expect(direct.inputSchema.properties.value.type).toBe('integer'); const called = await rpc(config, f.current.secret, 'tools/call', { name: direct.name, arguments: { value: 9 } });
     expect(called.result.structuredContent).toEqual({ value: 9 }); expect(f.execute).toHaveBeenCalledOnce();

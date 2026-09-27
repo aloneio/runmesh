@@ -6,13 +6,13 @@ import { parseProfile } from "../../contracts/connector-values.js";
 import { createCatalogManager } from "./catalog-admin.js";
 import { remoteDeadline } from "./remote-deadline.js";
 
-/** Complete, bounded discovery stages a candidate, never an approval. Partial
- * pages and failed observations leave the previously reviewed state intact. */
+/** Complete, bounded discovery publishes every tool in one transaction. Partial
+ * pages and failed observations leave the previously published state intact. */
 export function createRemoteDiscovery(ports: CatalogAdminPorts & { readonly connector: RemoteConnector }) {
   return async (profileId: string, expectedRevision: number, parent: AbortSignal): Promise<CatalogMutation | RemoteFailure> => {
     if (!isCapabilityIdentifier(profileId) || !catalogRevision(expectedRevision, true)) return { state: "invalid" };
-    let staging = false;
-    return remoteDeadline<CatalogMutation | RemoteFailure>(parent, () => ({ state: staging ? "unknown" : "unavailable" }), async (signal, expired) => {
+    let publishing = false;
+    return remoteDeadline<CatalogMutation | RemoteFailure>(parent, () => ({ state: publishing ? "unknown" : "unavailable" }), async (signal, expired) => {
       let session: RemoteSession | undefined;
       try {
         const admission = await ports.authorize(signal);
@@ -38,10 +38,10 @@ export function createRemoteDiscovery(ports: CatalogAdminPorts & { readonly conn
           const current = ports.profile(id);
           return current?.revision === profile.revision && current.enabled && current.endpoint === profile.endpoint ? current : undefined;
         } });
-        staging = true;
-        return await manager.mutate({ action: "stage", profile_id: profileId, expected_revision: expectedRevision, tools }, signal, expired);
+        publishing = true;
+        return await manager.mutate({ action: "publish", profile_id: profileId, expected_revision: expectedRevision, tools }, signal, expired);
       } catch (error) {
-        return { state: "failed", code: error instanceof RemoteFault ? error.code : "dependency_unavailable", operation_state: staging ? "unknown" : "not_started" };
+        return { state: "failed", code: error instanceof RemoteFault ? error.code : "dependency_unavailable", operation_state: publishing ? "unknown" : "not_started" };
       } finally { await session?.close().catch(() => undefined); }
     });
   };

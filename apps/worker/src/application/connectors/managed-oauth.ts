@@ -109,7 +109,20 @@ export function createManagedOAuth(ports: ManagedOAuthPorts) {
     async credential(selected: ConnectionProfile, signal: AbortSignal, admit: () => Promise<void>): Promise<CredentialLease> {
       await admit(); signal.throwIfAborted();
       let record = ports.repository.read(selected.profile_id);
-      if (!record || record.state !== "ready" || !record.tokens || !record.discovery || !record.client || !current(record)) return fault("reauthorization_required");
+      if (!record || record.state !== "ready" || !record.tokens || !record.discovery || !record.client) return fault("reauthorization_required");
+      if (record.profile_revision !== selected.revision) {
+        // Profile destinations and authentication are immutable; later revisions
+        // only pause/resume sharing. Rebind a ready account for a new lease,
+        // never an unfinished exchange/refresh or a revoked account.
+        await admit(); signal.throwIfAborted();
+        const live = profile(selected.profile_id, selected.revision);
+        if (live.endpoint !== selected.endpoint || live.connector_id !== selected.connector_id
+          || selected.authentication !== "oauth" || record.profile_revision >= live.revision) return fault("reauthorization_required");
+        const resumed = { ...record, profile_revision: live.revision, revision: record.revision + 1 };
+        if (!ports.repository.replace(resumed, record.revision)) return fault("reauthorization_required");
+        record = resumed;
+      }
+      if (!record.tokens || !record.client || !current(record)) return fault("reauthorization_required");
       const base = origin(record.origin);
       const authorize = async () => { await admit(); signal.throwIfAborted(); if (!current(record!)) return fault("reauthorization_required"); };
       let tokens = await ports.cipher.open(context(record, "tokens"), record.tokens) as ManagedOAuthTokens;

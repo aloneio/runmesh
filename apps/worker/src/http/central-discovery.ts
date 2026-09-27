@@ -21,7 +21,8 @@ export async function handleCentralDiscovery(request: Request, env: WorkerEnv, u
       new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), REMOTE_LIMITS.operation_ms + 2000); })]);
     if (result?.state === "written") {
       const head = parseCatalogHead(result.head);
-      if (head?.profile_id === profileId && head.revision === revision + 1) return Response.json({ state: "written", head }, { headers: centralHeaders });
+      if (head?.profile_id === profileId && head.revision === revision + 1 && head.approved_digest === head.observed_digest)
+        return Response.json({ state: "written", head }, { headers: centralHeaders });
     } else if (result?.state === "conflict" && catalogRevision(result.current_revision, true)) {
       return Response.json({ error: { code: "central_revision_conflict", operation_state: "not_started", current_revision: result.current_revision } }, { status: 409, headers: centralHeaders });
     } else if (result?.state === "failed" && REMOTE_CODES.includes(result.code) && ["not_started", "unknown"].includes(result.operation_state)) {
