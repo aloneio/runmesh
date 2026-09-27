@@ -10,6 +10,7 @@ import { centralPage } from '../apps/worker/dist/admin/central-view.js';
 import { oauthLanding } from '../apps/worker/dist/http/oauth-landing.js';
 import { ADMIN_CSRF_COOKIE } from '../apps/worker/dist/http/constants.js';
 import { parseProfileCommand } from '../apps/worker/dist/contracts/connector-values.js';
+import { skillInstallation } from '../apps/worker/dist/domain/skills/install.js';
 import { productOverviewPage } from '../apps/worker/dist/admin/dashboard-views.js';
 
 /** Isolated browser fixtures exercise the shipped UI, never a user browser or external service. */
@@ -42,9 +43,13 @@ export async function checkGuidedProduct(executable) {
     else if(id==='complete'){if(body.error){assert.deepEqual(body,{state:'cancel-state',error:'access_denied'});code=503;value={error:{code:'oauth_reauthorization_required'}};}else{assert.deepEqual(body,{state:'fixture-state',iss:'https://login.provider.com',code:'fixture-code'});value={state:'linked',profile_id:profiles.at(-1).profile_id};}}
     else value={state:'revoked',profile_id:body.profile_id};
    }else if(kind==='skill-installations'){
-    const item=library.find(s=>s.head.skill_id==='research');
-    if((item?.head.revision??0)!==body.expected_revision){code=409;value={state:'conflict',skill_id:'research',current_revision:item.head.revision};}
-    else{const entry={head:{skill_id:'research',revision:body.expected_revision+1,enabled:true,staged_digest:digest,active_digest:digest},bundle:{skill_id:'research',name:'research',description:'Research fixture',source:'Control panel upload',license:'',files:body.files,digest}};if(item)library.splice(library.indexOf(item),1,entry);else library.push(entry);value={state:'installed',skill_id:'research',name:'research',revision:entry.head.revision,digest};const change=afterSkillInstallation;afterSkillInstallation=undefined;change?.(entry);}
+    const installation=skillInstallation(body);
+    if(!installation){code=400;value={error:{code:'skill_invalid_package',operation_state:'not_started'}};}
+    else{
+     const {bundle,revision}=installation,item=library.find(s=>s.head.skill_id===bundle.skill_id);
+     if((item?.head.revision??0)!==revision){code=409;value={state:'conflict',skill_id:bundle.skill_id,current_revision:item.head.revision};}
+     else{const entry={head:{skill_id:bundle.skill_id,revision:revision+1,enabled:true,staged_digest:digest,active_digest:digest},bundle:{...bundle,digest}};if(item)library.splice(library.indexOf(item),1,entry);else library.push(entry);value={state:'installed',skill_id:bundle.skill_id,name:bundle.name,revision:entry.head.revision,digest};const change=afterSkillInstallation;afterSkillInstallation=undefined;change?.(entry);}
+    }
    }else if(kind==='discovery'){
     if(delayedDiscovery)await delayedDiscovery;
     assert.equal(body.expected_revision,catalogs.get(id)?.head.revision??0);
@@ -227,6 +232,26 @@ export async function checkGuidedProduct(executable) {
   await skillCard.getByRole('button',{name:'View files',exact:true}).click();await status.filter({hasText:'Skill files are ready to review.'}).waitFor();
   await skillReview.getByRole('button',{name:'Enable Skill',exact:true}).click();await status.filter({hasText:'Library is up to date.'}).waitFor();
   assert.equal(installedSkill.head.enabled,true);assert.equal(installedSkill.head.active_digest,stagedDigest);assert.equal(installedSkill.head.revision,6);
+  // Valid user content must remain readable inside its panel, including text clipped by ancestor overflow.
+  const longSkillName='s'.repeat(64),longSkillPath='p'.repeat(197)+'.md';
+  const longSkillFiles=[{path:'SKILL.md',text:['---','name: '+longSkillName,'description: '+'D'.repeat(512),'---','Skill instructions.'].join(String.fromCharCode(10))},{path:longSkillPath,text:'T'.repeat(600)}];
+  assert.ok(skillInstallation({files:longSkillFiles,expected_revision:0}),'The long-content regression must use a valid Skill package');
+  const fits=locator=>locator.evaluate(node=>node.scrollWidth<=node.clientWidth+1&&node.getBoundingClientRect().right<=innerWidth+1);
+  await page.setViewportSize({width:390,height:844});
+  await importer.locator('[name=files]').setInputFiles(longSkillFiles.map(file=>({name:file.path,mimeType:'text/markdown',buffer:Buffer.from(file.text)})));
+  await importer.getByRole('button',{name:'Install Skill',exact:true}).click();await status.filter({hasText:longSkillName+' installed.'}).waitFor();
+  assert.equal(await fits(status),true,'A long Skill name must not clip its installation status');
+  const longSkillCard=page.locator('[data-skill-list] .central-card').filter({has:page.getByRole('heading',{name:longSkillName,exact:true})});
+  assert.equal(await longSkillCard.locator('h3').evaluate(node=>getComputedStyle(node).textTransform),'none');
+  for(const heading of await page.locator('[data-service-list] h3').all())assert.equal(await heading.evaluate(node=>getComputedStyle(node).textTransform),'none');
+  await longSkillCard.getByRole('button',{name:'View files',exact:true}).click();await status.filter({hasText:'Skill files are ready to review.'}).waitFor();
+  for(const summary of await skillReview.locator('summary').all())await summary.click();
+  for(const width of [390,1365]){
+   await page.setViewportSize({width,height:1000});
+   for(const node of await skillReview.locator('h2,p,summary,pre').all())assert.equal(await fits(node),true,'Skill names, descriptions, paths and text must fit their panel');
+  }
+  library.splice(library.findIndex(item=>item.head.skill_id===longSkillName),1);
+  await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
   // Publication conflict cannot trigger automatic replay, even after repeated clicks.
   await page.locator('[data-central-tab=services]').click();
   await page.locator('[data-service-list]').getByRole('button',{name:'View tools',exact:true}).first().click();await status.filter({hasText:'Tools loaded.'}).waitFor();
