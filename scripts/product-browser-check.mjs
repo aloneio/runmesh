@@ -121,6 +121,7 @@ export async function checkGuidedProduct(executable) {
   assert.equal(await review.locator('.section-title span').textContent(),'1 tool');
   assert.equal(await review.locator('article').count(),1);
   assert.equal(await review.locator('article h3').textContent(),'search');
+  assert.equal(await review.locator('article h3').evaluate(node=>getComputedStyle(node).textTransform),'none');
   assert.equal(await review.locator('article p').textContent(),'<img src=x onerror=alert(1)>');
   assert.equal(await review.locator('details,pre').count(),0);
   assert.equal(await review.getByText('Tools from enabled services are available to all connected AI clients automatically.',{exact:true}).count(),0);
@@ -341,6 +342,16 @@ export async function checkGuidedProduct(executable) {
   await page.waitForFunction(()=>{const text=document.querySelector('[data-product-status]').textContent;return text.includes('Connected.')||text.includes('Check the service name');});
   assert.equal(profiles.at(-1).endpoint,longEndpoint,'An automatic display name must not reject a valid service URL');
   assert.equal(profiles.at(-1).display_name.length<=64,true);
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await review.locator('h2').textContent(),profiles.at(-1).display_name);
+  assert.equal(await review.evaluate(panel=>{
+   const bounds=panel.getBoundingClientRect();
+   return [...panel.querySelectorAll('.section-title h2,.section-title span')].every(node=>{
+    const box=node.getBoundingClientRect();
+    return box.left>=bounds.left&&box.right<=bounds.right&&node.scrollWidth<=node.clientWidth+1;
+   });
+  }),true,'Long MCP names and tool counts must fit their panel, not be clipped by the page');
+  await page.setViewportSize({width:1365,height:1000});
   // A failed sign-in handoff must leave the already saved service visible.
   rejectOAuthStart=true;
   const failedOAuthStart=requests.length;

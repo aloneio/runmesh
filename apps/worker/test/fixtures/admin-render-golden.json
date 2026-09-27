@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "341917535adba5c5866571884f3b0687033e56afa717982c19ead2d5eeaa18a9",
-      "bytes": 122732,
+      "sha256": "f35f55db5aeb2af29572c4977f6091f9d86eb6ef19f7afdf2b8d3a1b9871da82",
+      "bytes": 122874,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -30,8 +30,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "5f23d924f40ba2f2b7f4dcd82aa5ccdf28f7e70f1309a390b42e9f1df5529d61",
-      "bytes": 123320,
+      "sha256": "56905164b73903f5dca3065bd5d8d4bec46df12870bb1e2fa081f9d69c7b5bf8",
+      "bytes": 123462,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -47,8 +47,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "1cf3a81d0a34755d84558255c07d0af71d583cd9a1e0d8987e3fa3fcd4bb2882",
-      "bytes": 124468,
+      "sha256": "30b2134f77b4ae163552ff7966687ae1d3dac76da097b0b0928855f3143c8c65",
+      "bytes": 124610,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -413,8 +413,8 @@
           }
         ]
       ],
-      "sha256": "81a741c4bcb5b148a8dabc5ef533ed07777aeb3c975ece18fb5c49b802009695",
-      "bytes": 124817,
+      "sha256": "5479cff4200fc384aaeab74cd2816232184a33b114c79d2652c6fa9dc5a38c22",
+      "bytes": 124959,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -492,6 +492,17 @@
       "admin-document"
     ],
     "allowed_change": "Rename customer navigation to MCP and Skill; show tool names and descriptions as plain cards with a count. Remove repeated sharing explanations and parameter/schema dumps. DOM regressions retain automatic connection, OAuth recovery, Skill installation and safe text rendering. No screenshots.",
+    "unrelated_markup_unchanged": true
+  },
+  "tool_layout_review": {
+    "source_base": "d8b877812873d86c8f937ced694b7cecb075d17f",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "allowed_change": "Scope wrapping to the MCP tool panel heading so 64-character names remain visible on mobile; preserve upstream tool title casing. Removing only the two CSS rules reproduces every prior hash. Browser checks measure actual header bounds without screenshots.",
     "unrelated_markup_unchanged": true
   }
 }
