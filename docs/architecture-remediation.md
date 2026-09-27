@@ -64,6 +64,12 @@ shared DOM primitives and `messages.js` owns central browser bilingual copy.
 Workflow dependencies are injected by the controller, never imported from peers.
 Architecture fixtures reject reverse imports and direct workflow network calls.
 
+The controller supplies the mounted-view check and navigation port. Removed views
+cannot consume late receipts, start follow-up requests or redirect the new page.
+Already dispatched server operations may still complete; a new view reads current
+state rather than replaying them. Receipts must match collection, item or mutation
+operations; an unconfirmed write requires refresh before another mutation.
+
 The generator bundles only local static JavaScript modules into one CSP-compatible
 script. It bounds the input graph and output, rejects external/dynamic imports and
 path/symlink escapes, checks syntax without executing DOM code, and atomically

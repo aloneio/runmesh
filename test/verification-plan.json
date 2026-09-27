@@ -209,6 +209,7 @@
       "description": "Generated UI and language source checks",
       "files": [
         "test/admin-navigation.test.mjs",
+        "test/central-browser.test.mjs",
         "test/ui-catalog.test.mjs"
       ]
     },

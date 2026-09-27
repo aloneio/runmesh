@@ -19,6 +19,7 @@ export function bindCentralProduct(root) {
   var client = createCentralApi({
     csrf: app.getAttribute('data-csrf'),
     t,
+    isCurrent,
     refreshRequired: () => mustRefresh,
     requireRefresh: () => {
       mustRefresh = true;
@@ -30,7 +31,10 @@ export function bindCentralProduct(root) {
     view,
     t,
     refresh,
-    run
+    run,
+    navigate: url => {
+      if (isCurrent()) location.assign(url);
+    }
   });
   var skillWorkflow = createSkillWorkflow({
     app,
@@ -41,8 +45,11 @@ export function bindCentralProduct(root) {
     run,
     getSkills: () => skills
   });
+  function isCurrent() {
+    return app.isConnected;
+  }
   async function run(action) {
-    if (busy) return;
+    if (busy || !isCurrent()) return;
     busy = true;
     var controls = Array.from(app.querySelectorAll('button,input,select'));
     var disabled = controls.map(function (c) {
@@ -55,7 +62,7 @@ export function bindCentralProduct(root) {
     try {
       await action();
     } catch (error) {
-      say(error instanceof Error && error.name !== 'AbortError' ? error.message : t('connectionInterruptedRefreshToCheckWhetherTheOperationCompleted'), true);
+      if (isCurrent()) say(error instanceof Error && error.name !== 'AbortError' ? error.message : t('connectionInterruptedRefreshToCheckWhetherTheOperationCompleted'), true);
     } finally {
       busy = false;
       controls.forEach(function (c, i) {
@@ -83,6 +90,7 @@ export function bindCentralProduct(root) {
   });
   run(async function () {
     await refresh();
+    if (!isCurrent()) return;
     var connected = new URL(location.href).searchParams.get('connected');
     if (connected) {
       var connection = profiles.find(function (p) {

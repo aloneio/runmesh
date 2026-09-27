@@ -5,7 +5,8 @@ export function createServiceWorkflow({
   view,
   t,
   refresh,
-  run
+  run,
+  navigate
 }) {
   const {
     el,
@@ -121,7 +122,7 @@ export function createServiceWorkflow({
       expected_revision: profile.revision
     });
     say(t('openingTheServiceSignInPage'));
-    location.assign(result.authorization_url);
+    navigate(result.authorization_url);
   }
   app.querySelector('[data-service-create]').addEventListener('submit', function (event) {
     event.preventDefault();
