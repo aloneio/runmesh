@@ -38,7 +38,7 @@ export interface CatalogHead {
   readonly approved_names: readonly string[];
 }
 export type CatalogCommand =
-  | { readonly action: "stage"; readonly profile_id: string; readonly expected_revision: number; readonly tools: readonly RemoteToolDefinition[] }
+  | { readonly action: "stage" | "publish"; readonly profile_id: string; readonly expected_revision: number; readonly tools: readonly RemoteToolDefinition[] }
   | { readonly action: "approve"; readonly profile_id: string; readonly expected_revision: number; readonly digest: string; readonly tool_names: readonly string[] }
   | { readonly action: "disable"; readonly profile_id: string; readonly expected_revision: number };
 export type CatalogFailure = { readonly state: "invalid" | "missing" | "denied" | "unavailable" | "unknown" | "capacity" | "stale_profile" };
@@ -48,6 +48,7 @@ export interface CatalogRepository {
   readHead(profileId: string): CatalogHead | undefined;
   readSnapshot(profileId: string, digest: string): CatalogSnapshot | undefined;
   stage(snapshot: CatalogSnapshot, expectedRevision: number): CatalogMutation;
+  publish(snapshot: CatalogSnapshot, expectedRevision: number): CatalogMutation;
   approve(profileId: string, digest: string, toolNames: readonly string[], expectedRevision: number): CatalogMutation;
   disable(profileId: string, expectedRevision: number): CatalogMutation;
 }

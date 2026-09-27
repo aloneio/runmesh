@@ -64,6 +64,20 @@ it("W04 real admin HTTP stages and reviews a catalog without an upstream fetch",
   } finally { network.mockRestore(); }
 });
 
+it("complete publication replaces a pending catalog atomically and stale retries cannot overwrite it", async () => {
+  const f = await fixture(), principal = await client();
+  const tools = f.snapshot.tools.map(tool => tool.definition);
+  const response = await f.post({ action: "publish", expected_revision: 1, tools });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ state: "written", head: { revision: 2,
+    observed_digest: f.snapshot.digest, approved_digest: f.snapshot.digest, approved_names: ["a", "b", "c"] } });
+  expect((await f.post({ action: "publish", expected_revision: 1, tools: [] })).status).toBe(409);
+  expect(await (await SELF.fetch(url(f.id), { headers: f.admin.headers })).json()).toMatchObject({ head: { revision: 2, approved_names: ["a", "b", "c"] } });
+  const page = await owner().listCatalog(principal, { profile_id: f.id });
+  expect(page.state).toBe("listed");
+  if (page.state === "listed") expect(page.tools.map(tool => tool.definition.name)).toEqual(["a", "b", "c"]);
+});
+
 it("W04 zero-Runner central-only clients see the same approved tools without grant rows", async () => {
   const f = await fixture(), principal = await client();
 

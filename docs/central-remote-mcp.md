@@ -51,7 +51,7 @@ Arbitrary headers, query credentials, stdio hosting, persistent sessions, GET su
 resumption, tasks, sampling, elicitation and multi-round interactions are unsupported.
 Failed calls are not replayed.
 
-## Configuration and review flow
+## Connection and publication flow
 
 Enter a public HTTPS MCP URL and select No authentication or OAuth in the control panel.
 The saved enabled connection is exact outbound admission; no environment allowlist or
@@ -61,9 +61,9 @@ HTTPS ports, IP literals, private hosts, wildcards, URL credentials, queries and
 Create and enable a profile using the existing protected administration API.
 POST `/admin/central/discovery/{profile_id}` with `{"expected_revision":0}` and
 the administrator's existing session, same origin and matching CSRF token. The
-complete bounded tools/list result is staged into the W04 catalog, never approved.
-Then inspect and approve selected tools through the catalog review API. Finally
-publish the reviewed tools for all authenticated clients through the
+complete bounded tools/list result is stored and published atomically in one
+catalog revision. Every discovered tool is immediately available to authenticated
+clients; the connection requires no additional review or approval in the
 [control panel](central-administration.md). Client credentials remain required;
 publication grants no Runner permissions.
 
@@ -71,7 +71,7 @@ The discovery endpoint permits no caller URL, token, HTTP headers or command.
 Partial pages, duplicate tools, unsupported schemas, timeouts and failed upstream
 observations leave the previously reviewed catalog intact. An actual change in
 the selected tool's description/schema/annotations blocks invocation until the
-catalog is discovered and approved again. The call does not auto-approve changes
+catalog is refreshed, which publishes all current tools. The call does not publish changes
 or create a new catalog revision for every request.
 
 ## Trust and execution boundaries

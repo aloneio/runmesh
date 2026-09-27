@@ -1,4 +1,4 @@
-# Central catalog review (development)
+# Central catalog publication (development)
 
 For the optional W05 live discovery/call adapter and its explicit limits, see
 [Controlled central HTTP MCP](central-remote-mcp.md). This guide covers the
@@ -9,9 +9,10 @@ independently usable review/snapshot path.
 **Status: enabled shared catalogs in development; production activation remains separate.**
 All authenticated instance clients share the enabled published selection. The
 control panel connects MCP URLs with no authentication or OAuth, then discovers
-and reviews tools. This page describes the underlying snapshot contract.
+and automatically publishes every discovered tool in one revision. No manual
+approval is needed. This page describes the underlying snapshot contract.
 
-## Review workflow
+## Snapshot administration
 
 Create a connection profile through the W03 administrator API first. Its ID,
 Connector ID and endpoint bind the catalog. A catalog can be reviewed while the
@@ -24,6 +25,7 @@ content is not encrypted secret storage.
 
 | Operation | Body or query | Effect |
 | --- | --- | --- |
+| Publish a complete capture | `{"action":"publish","expected_revision":0,"tools":[...]}` | Stores and publishes every tool atomically; used by live discovery |
 | Import a complete capture | `{"action":"stage","expected_revision":0,"tools":[...]}` | Records the latest imported snapshot; does not approve it |
 | Inspect | GET with no query | Returns current head, the imported snapshot and a change summary |
 | Read a retained snapshot | GET with `?snapshot=<digest>` | Reads that immutable version in the same profile |
@@ -36,7 +38,7 @@ reuses its body, but still advances the observation revision. No directory read
 polls an upstream server or creates a native Job.
 
 The imported capture is administrator-supplied evidence, **not proof of a live
-upstream response**. The controlled HTTP discovery/egress adapter uses the same lifecycle. Failure to contact an upstream must never stage an empty
+upstream response**. The controlled HTTP discovery adapter uses atomic publication. Failure to contact an upstream must never stage an empty
 capture. An explicitly imported empty array represents a genuinely empty catalog
 and quarantines previously available tools.
 
@@ -53,10 +55,13 @@ Annotations are untrusted hints, not execution permissions. Field ordering and
 upstream list ordering are normalized; array semantics within schemas are not
 reordered. Unsupported descriptor fields are rejected, not silently stripped.
 
-The approved selection and latest imported capture are separate. Changed or
+Live discovery publishes the complete observed snapshot and all tool names in a
+single transaction, including an empty catalog. The lower-level staged-import
+API can keep the approved selection and latest imported capture separate. Changed or
 removed tools are immediately excluded from the old approved view; unchanged,
-previously selected tools can remain visible. New/changed tools require explicit
-review before the new content version is published to all authenticated clients. Restoring an old snapshot requires explicitly importing and reviewing it;
+previously selected tools can remain visible. A live discovery refresh publishes
+new or changed definitions automatically; manual snapshot imports can instead
+use stage/approve for separate capture and publication. Restoring an old snapshot requires explicitly importing and reviewing it;
 this does not assert that the live upstream has rolled back.
 
 The shared selection is per connection profile. Legacy client grants and toolset

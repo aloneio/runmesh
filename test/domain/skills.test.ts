@@ -57,7 +57,7 @@ it("Skill remote dependencies report stored readiness, disabled state and incomp
   let profile: ReturnType<typeof catalogProfile> | undefined = catalogProfile();
   let head: CatalogHead = { schema_version: 1, profile_id: 'docs', revision: 1, observed_digest: snapshot.digest, approved_digest: snapshot.digest, approved_names: ['search'] };
   const repository: CatalogRepository = { readHead: () => head, readSnapshot: () => snapshot,
-    stage: () => { throw new Error('write forbidden'); }, approve: () => { throw new Error('write forbidden'); }, disable: () => { throw new Error('write forbidden'); } };
+    publish: () => { throw new Error("write forbidden"); }, stage: () => { throw new Error('write forbidden'); }, approve: () => { throw new Error('write forbidden'); }, disable: () => { throw new Error('write forbidden'); } };
   const read = createDependencyReader({ repository, profile: () => profile, digest: fixtureDigest });
   const target = { kind: 'remote_tool' as const, resource_id: tool.tool_id, version: tool.version, connection_profile_id: 'docs' }, signal = new AbortController().signal;
   expect(await read(target, signal)).toBe('configured');

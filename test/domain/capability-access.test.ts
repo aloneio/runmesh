@@ -40,7 +40,7 @@ it("shared profile discovery crosses storage pages and exceeds direct catalog li
     profiles: (after: string) => { const rest = profiles.filter(p => p.profile_id > after); return { profiles: rest.slice(0, 50), next_after: rest.length > 50 ? rest[49]!.profile_id : null }; },
     profile: (id: string) => profiles.find(p => p.profile_id === id),
     repository: { readHead: (profile_id: string) => ({ schema_version: 1 as const, profile_id, revision: 1, observed_digest: snapshot.digest, approved_digest: snapshot.digest, approved_names: ["search"] }),
-      readSnapshot: () => snapshot, stage: () => ({ state: "invalid" as const }), approve: () => ({ state: "invalid" as const }), disable: () => ({ state: "invalid" as const }) },
+      readSnapshot: () => snapshot, publish: () => { throw new Error("write forbidden"); }, stage: () => ({ state: "invalid" as const }), approve: () => ({ state: "invalid" as const }), disable: () => ({ state: "invalid" as const }) },
     identity: async (p: { client_id: string; secret_version: number }) => ({ state: "allowed" as const, identity: { ...p, schema_version: 2 as const, label: "Fixture", native_scopes: [] } }),
     cursor: { seal: async () => "unused", open: async () => undefined }, now: Date.now, digest: fixtureDigest,
   };
@@ -62,7 +62,7 @@ it("shared profile discovery rejects looping pages and in-flight identity revoca
   let reads = 0;
   const ports = { profiles: () => ({ profiles: [profile], next_after: profile.profile_id }), profile: () => profile,
     repository: { readHead: () => ({ schema_version: 1 as const, profile_id: profile.profile_id, revision: 1, observed_digest: snapshot.digest, approved_digest: snapshot.digest, approved_names: ["search"] }),
-      readSnapshot: () => snapshot, stage: () => ({ state: "invalid" as const }), approve: () => ({ state: "invalid" as const }), disable: () => ({ state: "invalid" as const }) },
+      readSnapshot: () => snapshot, publish: () => { throw new Error("write forbidden"); }, stage: () => ({ state: "invalid" as const }), approve: () => ({ state: "invalid" as const }), disable: () => ({ state: "invalid" as const }) },
     identity: async (p: { client_id: string; secret_version: number }) => ++reads > 1 ? { state: "denied" as const } : { state: "allowed" as const, identity: { ...p, schema_version: 2 as const, label: "Fixture", native_scopes: [] } },
   };
   const principal = { client_id: "first", secret_version: 1 }, signal = new AbortController().signal;

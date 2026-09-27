@@ -1,4 +1,4 @@
-/** Service connection, OAuth handoff and catalog review use only injected UI/API ports. */
+/** Service connection, OAuth handoff and automatic publication use injected UI/API ports. */
 export function createServiceWorkflow({
   app,
   api,
@@ -13,8 +13,7 @@ export function createServiceWorkflow({
     say,
     button,
     clear,
-    details,
-    choice
+    details
   } = view;
   function renderProfiles(profiles) {
     var list = app.querySelector('[data-service-list]');
@@ -22,21 +21,22 @@ export function createServiceWorkflow({
     if (!profiles.length) list.append(el('p', t('noServicesYetConnectYourFirstServiceToGet'), 'muted'));
     profiles.forEach(function (profile) {
       var card = el('article', undefined, 'central-card');
-      card.append(el('h3', profile.display_name || profile.connector_id), el('p', profile.endpoint, 'muted'), el('p', profile.enabled ? t('enabledToolReviewRequiredBeforeSharing') : t('paused')));
+      card.append(el('h3', profile.display_name || profile.connector_id), el('p', profile.endpoint, 'muted'), el('p', profile.enabled ? t('enabled') : t('paused')));
       var actions = el('div', undefined, 'actions');
-      button(actions, t('reviewTools'), function () {
-        return reviewService(profile, false);
+      button(actions, t('viewTools'), function () {
+        return showTools(profile);
       });
-      var discover = button(actions, t('checkConnectionDiscover'), function () {
-        return reviewService(profile, true);
+      var discover = button(actions, t('refreshTools'), function () {
+        return connectService(profile);
       });
       discover.disabled = !profile.enabled;
       button(actions, profile.enabled ? t('pause') : t('enable'), async function () {
-        await api('profiles/' + encodeURIComponent(profile.profile_id), {
+        var result = await api('profiles/' + encodeURIComponent(profile.profile_id), {
           action: profile.enabled ? 'disable' : 'enable',
           expected_revision: profile.revision
         });
         await refresh();
+        if (result.profile.enabled) await connectService(result.profile);
       });
       card.append(actions);
       if (profile.authentication === 'oauth') {
@@ -57,64 +57,53 @@ export function createServiceWorkflow({
       list.append(card);
     });
   }
-  async function reviewService(profile, discover) {
+  function isPublished(catalog) {
+    return catalog && catalog.head.approved_digest === catalog.snapshot.digest
+      && catalog.head.approved_names.length === catalog.snapshot.tools.length
+      && catalog.snapshot.tools.every(tool => catalog.head.approved_names.includes(tool.definition.name));
+  }
+  async function connectService(profile) {
     var id = encodeURIComponent(profile.profile_id),
       catalog = await api('catalogs/' + id, undefined, true);
-    if (discover) {
-      await api('discovery/' + id, {
-        expected_revision: catalog ? catalog.head.revision : 0
-      });
-      catalog = await api('catalogs/' + id);
+    await api('discovery/' + id, {
+      expected_revision: catalog ? catalog.head.revision : 0
+    });
+    await refresh();
+    await showTools(profile);
+    say(t('serviceConnectedToolsReady'));
+  }
+  async function resumePending(profiles) {
+    for (const profile of profiles) {
+      if (!profile.enabled) continue;
+      var catalog = await api('catalogs/' + encodeURIComponent(profile.profile_id), undefined, true);
+      if (!isPublished(catalog)) await connectService(profile);
     }
-    var panel = app.querySelector('[data-service-review]');
+  }
+  async function showTools(profile) {
+    var catalog = await api('catalogs/' + encodeURIComponent(profile.profile_id), undefined, true),
+      panel = app.querySelector('[data-service-tools]');
     clear(panel);
     panel.hidden = false;
-    panel.append(el('h2', t('reviewTools2') + (profile.display_name || profile.connector_id)));
+    panel.append(el('h2', t('toolsForService') + (profile.display_name || profile.connector_id)));
     if (!catalog) {
       panel.append(el('p', t('noToolsDiscoveredYetEnableTheServiceThenCheck')));
       say(t('noCatalogYet'));
       return;
     }
-    panel.append(el('p', t('approvedToolsAreAvailableToAllConnectedAiClients')));
-    var selected = catalog.snapshot.tools.map(function (tool) {
-      var delta = catalog.changes.find(function (c) {
-        return c.name === tool.definition.name;
-      });
-      var changed = delta && delta.state !== 'unchanged';
-      var box = choice(panel, tool.definition.title || tool.definition.name, (changed ? t('newOrChanged') : '') + (tool.definition.description || ''), catalog.head.approved_digest === catalog.snapshot.digest && catalog.head.approved_names.includes(tool.definition.name));
+    panel.append(el('p', t('toolsAvailableAutomatically')));
+    catalog.snapshot.tools.forEach(function (tool) {
+      panel.append(el('h3', tool.definition.title || tool.definition.name), el('p', tool.definition.description || '', 'muted'));
       details(panel, t('parametersSafetyHints'), JSON.stringify({
         input: tool.definition.inputSchema,
         output: tool.definition.outputSchema,
         hints: tool.definition.annotations
       }, null, 2));
-      return {
-        box: box,
-        name: tool.definition.name
-      };
     });
-    catalog.changes.filter(function (c) {
-      return c.state === 'removed';
-    }).forEach(function (c) {
-      panel.append(el('p', t('removed') + c.name));
-    });
-    button(panel, t('approveSelectedTools'), async function () {
-      await api('catalogs/' + id, {
-        action: 'approve',
-        expected_revision: catalog.head.revision,
-        digest: catalog.snapshot.digest,
-        tool_names: selected.filter(function (s) {
-          return s.box.checked;
-        }).map(function (s) {
-          return s.name;
-        }).sort()
-      });
-      await refresh();
-      say(t('toolsApprovedRefreshTheToolListInYourAi'));
-    });
+    if (!catalog.snapshot.tools.length) panel.append(el('p', t('serviceHasNoTools')));
     panel.scrollIntoView({
       block: 'nearest'
     });
-    say(t('reviewTheToolsBeforeApproving'));
+    say(t('toolsReadyToView'));
   }
   async function connectOAuth(profile) {
     var result = await api('connections/begin', {
@@ -149,11 +138,12 @@ export function createServiceWorkflow({
         return;
       }
       await refresh();
-      await reviewService(enabled.profile, true);
+      await connectService(enabled.profile);
     });
   });
   return {
     render: renderProfiles,
-    review: reviewService
+    connect: connectService,
+    resumePending
   };
 }

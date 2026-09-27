@@ -78,8 +78,47 @@ function oauthFixture(cimd = false, configuredOrigin: string | null = origin, pr
   const begin = async () => { const result = await service().run(hash, "begin", selection); expect(result.state).toBe("started"); if (result.state !== "started") throw new Error(JSON.stringify(result)); return new URL(result.authorization_url).searchParams.get("state")!; };
   return { service, begin, hash, selection, state, posts, send, repository, record: () => record, now: (elapsed = 40_000) => { now += elapsed; },
     callback: (value: string) => ({ state: value, code: "synthetic-one-use-code", iss: issuer }), fail: () => { failToken = true; }, revokeOnToken: () => { revokeOnToken = true; }, privateToken: () => { privateToken = true; }, pause: () => { live = { ...live, revision: 3, enabled: false }; },
+    resume: () => { live = { ...live, revision: 4, enabled: true }; return live; },
     challenge: (url: string) => { challengeMetadata = url; } };
 }
+it("resuming a paused OAuth service keeps the account and replaces old leases without another consent", async () => {
+  const f = oauthFixture(), state = await f.begin(), signal = new AbortController().signal;
+  expect(await f.service().run(f.hash, "complete", f.callback(state))).toMatchObject({ state: "linked" });
+  const selected = { ...base, authentication: "oauth" as const };
+  const previous = await f.service().credential(selected, signal, async () => undefined);
+  expect(previous.current()).toBe(true);
+  f.pause(); expect(previous.current()).toBe(false);
+  await expect(f.service().credential(selected, signal, async () => undefined)).rejects.toMatchObject({ code: "reauthorization_required" });
+  const resumed = f.resume(); expect(previous.current()).toBe(false);
+  const current = await f.service().credential(resumed, signal, async () => undefined);
+  expect(current.current()).toBe(true); expect(previous.current()).toBe(false);
+  expect(f.record()?.profile_revision).toBe(resumed.revision);
+  expect(f.state).toEqual({ registration: 1, exchanges: 1, refreshes: 0 });
+});
+it("resuming sharing cannot revive an explicitly disconnected OAuth account", async () => {
+  const f = oauthFixture(), state = await f.begin();
+  await f.service().run(f.hash, "complete", f.callback(state));
+  await f.service().run(f.hash, "revoke", f.selection);
+  f.pause(); const selected = f.resume();
+  await expect(f.service().credential(selected, new AbortController().signal, async () => undefined)).rejects.toMatchObject({ code: "reauthorization_required" });
+  expect(f.record()?.state).toBe("revoked"); expect(f.record()?.tokens).toBeUndefined();
+});
+it("OAuth account revocation during resume admission prevents rebinding", async () => {
+  const f = oauthFixture(), state = await f.begin();
+  await f.service().run(f.hash, "complete", f.callback(state));
+  f.pause(); const selected = f.resume(); let admissions = 0;
+  await expect(f.service().credential(selected, new AbortController().signal, async () => {
+    if (++admissions === 2) await f.service().run(f.hash, "revoke", { ...f.selection, expected_revision: selected.revision });
+  })).rejects.toMatchObject({ code: "reauthorization_required" });
+  expect(f.record()?.state).toBe("revoked"); expect(f.record()?.tokens).toBeUndefined();
+});
+it("pause-resume does not revive an unfinished OAuth handoff", async () => {
+  const f = oauthFixture(), state = await f.begin();
+  f.pause(); const selected = f.resume();
+  await expect(f.service().credential(selected, new AbortController().signal, async () => undefined)).rejects.toMatchObject({ code: "reauthorization_required" });
+  expect(await f.service().run(f.hash, "complete", f.callback(state))).toMatchObject({ state: "failed", code: "conflict" });
+  expect(f.state.exchanges).toBe(0);
+});
 it("OAuth connects through advertised resource metadata instead of requiring a well-known location", async () => {
   const f = oauthFixture(), metadata = "https://mcp.provider.com/auth/resource"; f.challenge(metadata);
   const started = await f.service().run(f.hash, "begin", f.selection);

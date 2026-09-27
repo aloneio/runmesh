@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "5589cf99edb3e482dd80ac0b17b3dc0413ba114a82e13dd85d07cc7e762ec424",
-      "bytes": 120478,
+      "sha256": "5f3229bc6a1d4676dc935c92a6e26203347c05ac939dc9fabcaf512361b465dd",
+      "bytes": 119533,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -30,8 +30,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "89767251dbdeb3b3602ded6559f3de63498f86493f6204cc5c84aca6ac56704c",
-      "bytes": 121066,
+      "sha256": "5e94fb753359c12886ee80470d5a608192401b0984a6f634c90c79a424fa7951",
+      "bytes": 120121,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -47,8 +47,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "4f7247f1936005c8b8c17f10ccdaadb9a6e341632831c27f3421f9a90f4c02d2",
-      "bytes": 122220,
+      "sha256": "c1f24fc65495c43c54b02f61aae6743320edde53c7ab6da39d9db6851f3ab8b4",
+      "bytes": 121275,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -413,8 +413,8 @@
           }
         ]
       ],
-      "sha256": "4882995bb6c0b21a31f125ed7391fcf11906d3902e9e7a6f2db633783e00a38f",
-      "bytes": 122569,
+      "sha256": "dfb59b8b92c146969c658ccdc350adfd0387b2af6b86f7ce616c47568ea06880",
+      "bytes": 121624,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -468,6 +468,17 @@
       "admin-document"
     ],
     "allowed_change": "Fence detached central browser workflows and require operation-specific receipts. DOM regressions cover late OAuth responses after navigation, malformed write receipts, refresh-required no-replay behavior and unchanged MCP/Skill product flows; no screenshots.",
+    "non_script_markup_unchanged": true
+  },
+  "direct_connection_review": {
+    "source_base": "880c183707b973d0ff9d5d7332ef44c80cc794db",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "allowed_change": "Successful service connection publishes all discovered tools immediately. DOM tests cover no-auth and OAuth completion, existing unpublished connections, pause/resume, read-only tool details, failed-write no-replay and unchanged Skill installation. No screenshots.",
     "non_script_markup_unchanged": true
   }
 }

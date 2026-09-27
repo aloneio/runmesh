@@ -23,7 +23,7 @@ async function fixture() {
   const listTools = vi.fn(async () => [tool.definition]);
   const session: RemoteSession = { listTools, callTool, close: closed };
   const repository: CatalogRepository = { readHead: () => head, readSnapshot: () => snapshot,
-    stage: vi.fn(() => ({ state: "written", head })), approve: () => ({ state: "invalid" }), disable: () => ({ state: "invalid" }) };
+    stage: vi.fn(() => ({ state: "written", head })), publish: vi.fn(() => ({ state: "written", head })), approve: () => ({ state: "invalid" }), disable: () => ({ state: "invalid" }) };
   const ports: RemoteCallPorts = { repository, profile: vi.fn(() => profile), identity,
     digest: fixtureDigest, connector: { validate: vi.fn(() => true), open: vi.fn(async (_profile, _signal, dispatched, authorize) => {
       await authorize(); mark = dispatched; return session;
@@ -133,20 +133,35 @@ it("W05 a stalled identity has a bounded deadline and no surviving timeout", asy
   } finally { vi.useRealTimers(); }
 });
 
-it("W05 failed discovery does not stage a partial or empty successful replacement", async () => {
+it("W05 failed discovery does not publish a partial or empty successful replacement", async () => {
   const f = await fixture(); f.listTools.mockRejectedValue(new RemoteFault("upstream_protocol_error"));
   const discover = createRemoteDiscovery({ repository: f.ports.repository, profile: f.ports.profile,
     authorize: async () => "allowed", digest: fixtureDigest, connector: f.ports.connector });
   expect(await discover("docs", 2, new AbortController().signal)).toMatchObject({ state: "failed", operation_state: "not_started" });
-  expect(f.ports.repository.stage).not.toHaveBeenCalled();
+  expect(f.ports.repository.stage).not.toHaveBeenCalled(); expect(f.ports.repository.publish).not.toHaveBeenCalled();
 });
 
-it("W05 successful discovery only stages complete tool definitions", async () => {
-  const f = await fixture(), stage = vi.fn(() => ({ state: "written" as const, head: { ...f.head, revision: 3 } }));
-  f.ports.repository.stage = stage;
+it("W05 successful discovery publishes complete tool definitions without a separate approval", async () => {
+  const f = await fixture(), publish = vi.fn(() => ({ state: "written" as const, head: { ...f.head, revision: 3 } }));
+  f.ports.repository.publish = publish;
   f.listTools.mockResolvedValue([catalogDefinition()]);
   const discover = createRemoteDiscovery({ repository: f.ports.repository, profile: f.ports.profile,
     authorize: async () => "allowed", digest: fixtureDigest, connector: f.ports.connector });
   expect(await discover("docs", 2, new AbortController().signal)).toMatchObject({ state: "written", head: { revision: 3 } });
-  expect(stage).toHaveBeenCalledOnce(); expect(f.invoked).not.toHaveBeenCalled();
+  expect(publish).toHaveBeenCalledOnce(); expect(f.ports.repository.stage).not.toHaveBeenCalled(); expect(f.invoked).not.toHaveBeenCalled();
+});
+
+it.each(["session", "profile", "catalog"])("discovery cannot publish after the %s changes while listing tools", async changed => {
+  const f = await fixture();
+  let allowed = true;
+  f.listTools.mockImplementation(async () => {
+    if (changed === "session") allowed = false;
+    if (changed === "profile") f.profile.revision++;
+    if (changed === "catalog") f.head.revision++;
+    return [f.tool.definition];
+  });
+  const discover = createRemoteDiscovery({ repository: f.ports.repository, profile: f.ports.profile,
+    authorize: async () => allowed ? "allowed" : "denied", digest: fixtureDigest, connector: f.ports.connector });
+  expect(await discover("docs", 2, new AbortController().signal)).toMatchObject({ state: "failed", operation_state: "not_started" });
+  expect(f.ports.repository.publish).not.toHaveBeenCalled();
 });

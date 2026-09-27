@@ -36,7 +36,7 @@ export function parseCatalogCommand(value: unknown): CatalogCommand | undefined 
     return !catalogDigest(item.digest) || names === undefined ? undefined : { action: "approve", profile_id: item.profile_id,
       expected_revision: item.expected_revision, digest: item.digest, tool_names: names };
   }
-  if (item.action !== "stage" || !catalogKeys(item, ["action", "profile_id", "expected_revision", "tools"])
+  if (!["stage", "publish"].includes(item.action as string) || !catalogKeys(item, ["action", "profile_id", "expected_revision", "tools"])
     || !Array.isArray(item.tools) || item.tools.length > CATALOG_LIMITS.tools
     || catalogJson(item.tools, CATALOG_LIMITS.request_bytes) === undefined) return undefined;
   const tools: RemoteToolDefinition[] = [], seen = new Set<string>();
@@ -46,7 +46,7 @@ export function parseCatalogCommand(value: unknown): CatalogCommand | undefined 
     tools.push(tool); seen.add(tool.name);
   }
   tools.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
-  return { action: "stage", profile_id: item.profile_id, expected_revision: item.expected_revision, tools };
+  return { action: item.action as "stage" | "publish", profile_id: item.profile_id, expected_revision: item.expected_revision, tools };
 }
 
 export function parseCatalogHead(value: unknown): CatalogHead | undefined {
