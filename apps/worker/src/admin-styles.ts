@@ -10,6 +10,7 @@ export function adminStyles(): string { return `<style>
 .central-start p{margin:8px 0 0;color:var(--muted)}
 .central-grid{grid-template-columns:1.2fr 1fr;align-items:start}
 .central-tabs{display:flex;gap:10px;flex-wrap:wrap;margin:24px 0}
+[data-central-product]{overflow-wrap:anywhere}
 [data-central-product] form{display:grid;gap:16px}
 [data-central-product] label{display:grid;gap:8px;margin:12px 0}
 [data-central-product] .central-choice{display:flex;align-items:flex-start;gap:12px;padding:14px;border:1px solid var(--line);border-radius:10px}
@@ -18,7 +19,7 @@ export function adminStyles(): string { return `<style>
 .central-card:first-child{padding-top:4px}.central-card h3{margin:0 0 8px}
 .central-card .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
 [data-service-tools] h2{min-width:0;max-width:100%;overflow-wrap:anywhere}
-[data-service-tools] h3{text-transform:none;letter-spacing:normal}
+[data-central-product] .central-card h3{text-transform:none;letter-spacing:normal}
 [data-product-status]:not(:empty){padding:14px 18px;border:1px solid var(--line);border-radius:10px;background:var(--panel);white-space:pre-wrap}
 [data-product-status][data-error=true]{border-color:#b91c1c;color:#b91c1c}
 [data-central-product] pre{max-height:340px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
