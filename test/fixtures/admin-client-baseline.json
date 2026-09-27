@@ -1,20 +1,20 @@
 {
-  "source_commit": "d7f5a181d3694ebab97e6481cc37d45a9f26a285",
+  "source_commit": "6fb6b5901b361b7417897a3cfffc40cd188a1181",
   "cases": [
     {
       "nonce": null,
-      "sha256": "b96ea1e2406df7c4c2e45a8434e51217f0bcea20c12607e0f5313ae21344d9a0",
+      "sha256": "967f083969313f0378686f3b030dcb2eca0adf269a6f7617ecf5b941d598993b",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e"
     },
     {
       "nonce": "test-nonce",
-      "sha256": "1e8ebbb82b08c2300b3af7cd2a167b9f60988c6b20744de7f6f82b82f41292da",
+      "sha256": "4f4b6761174c9fb25e15a22506617f7312bcf6728ed8e7afe50b92d67de90166",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224"
     }
   ],
-  "reviewed_change": "Split central browser control into controller, HTTP API, service and Skill workflows, presentation and bilingual messages. The existing guided MCP/OAuth and direct Skill DOM regressions pass, including shared capabilities, pause/reconnect, explicit publication, ambiguous-write refresh fencing and no replay. Bundling is local, bounded, deterministic and preserves nonce rendering; no screenshots."
+  "reviewed_change": "Fence detached central browser workflows and require operation-specific receipts. DOM regressions cover late OAuth responses after navigation, malformed write receipts, refresh-required no-replay behavior and unchanged MCP/Skill product flows; no screenshots."
 }

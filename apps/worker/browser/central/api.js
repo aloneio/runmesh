@@ -2,10 +2,15 @@
 export function createCentralApi({
   csrf,
   t,
+  isCurrent,
   refreshRequired,
   requireRefresh
 }) {
+  function assertCurrent() {
+    if (!isCurrent()) throw new DOMException('View is no longer active', 'AbortError');
+  }
   async function api(path, body, missing) {
+    assertCurrent();
     if (body && body.action !== 'preview' && refreshRequired()) throw new Error(t('refreshTheLibraryBeforeMakingAnotherChange'));
     var ctl = new AbortController(),
       timer = setTimeout(function () {
@@ -25,6 +30,8 @@ export function createCentralApi({
         body: body === undefined ? undefined : JSON.stringify(body)
       });
       var value = await response.json();
+      assertCurrent();
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
       if (missing && response.status === 404 && (value.state === 'missing' || value.error && value.error.code === 'central_missing')) return null;
       if (!response.ok) {
         if (body && body.action !== 'preview') requireRefresh();
@@ -44,8 +51,8 @@ export function createCentralApi({
         if (code === 'remote_egress_denied' || code === 'remote_endpoint_denied' || code === 'central_disabled') throw new Error(t('enterAPublicHttpsMcpUrlPrivateAddressesAnd'));
         throw new Error(t('operationCouldNotBeConfirmedRefreshTheCurrentState'));
       }
-      var expected = path === 'skill-installations' ? 'installed' : path === 'connections/begin' ? 'started' : path === 'connections/revoke' ? 'revoked' : body === undefined ? 'found' : body.action === 'preview' ? 'previewed' : 'written';
-      if (value.state !== 'listed' && value.state !== expected) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
+      var expected = body === undefined ? (['profiles', 'skills'].includes(path.split('?')[0]) ? 'listed' : 'found') : path === 'skill-installations' ? 'installed' : path === 'connections/begin' ? 'started' : path === 'connections/revoke' ? 'revoked' : body.action === 'preview' ? 'previewed' : 'written';
+      if (value.state !== expected) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
       return value;
     } catch (error) {
       if (body && body.action !== 'preview') requireRefresh();

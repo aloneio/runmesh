@@ -15,12 +15,13 @@ import { productOverviewPage } from '../apps/worker/dist/admin/dashboard-views.j
 export async function checkGuidedProduct(executable) {
  const digest='a'.repeat(64), toolVersion='c'.repeat(64);
  const profiles=[], library=[], requests=[], exceptions=[];
- let conflict=false, failLibrary=false, rejectDiscovery=false;
+ let conflict=false, failLibrary=false, rejectDiscovery=false, invalidCatalogReceipt=false, delayedOAuth;
  const catalogs=new Map();
  const server=createServer(async(req,res)=>{
   try {
    const url=new URL(req.url,'http://127.0.0.1');
    if(url.pathname==='/oauth-fixture'){res.statusCode=302;res.setHeader('location','/admin/central/connections/callback?state=fixture-state&code=fixture-code&iss=https://login.provider.com&scope=read&authuser=0');res.end();return;}
+   if(url.pathname==='/late-oauth-fixture'){res.setHeader('content-type','text/html');res.end('<p>Unexpected detached OAuth redirect</p>');return;}
    if(url.pathname==='/admin/central/connections/callback'){const page=oauthLanding();for(const [k,v] of page.headers)res.setHeader(k,v);res.end(await page.text());return;}
    if(url.pathname==='/admin') {res.setHeader('content-type','text/html');res.end(adminDocument('Dashboard',productOverviewPage({clients:[],runners:[]}),'dashboard'));return;}
    if(url.pathname==='/admin/central') {res.setHeader('set-cookie',ADMIN_CSRF_COOKIE+'=fixture-csrf; Path=/; SameSite=Strict; Secure');res.setHeader('content-type','text/html');res.end(adminDocument('Services & Skills',centralPage('fixture-csrf',true,true),'central'));return;}
@@ -34,7 +35,7 @@ export async function checkGuidedProduct(executable) {
     else{const p=profiles.find(p=>p.profile_id===id);assert.equal(body.expected_revision,p.revision);p.revision++;if(body.action==='enable'||body.action==='disable')p.enabled=body.action==='enable';value={state:'written',profile:p};}
    }else if(kind==='connections'){
     assert.equal(req.headers['x-csrf-token'],'fixture-csrf');
-    if(id==='begin')value={state:'started',profile_id:body.profile_id,authorization_url:'/oauth-fixture'};
+    if(id==='begin'){const pending=delayedOAuth;if(pending)await pending;value={state:'started',profile_id:body.profile_id,authorization_url:pending?'/late-oauth-fixture':'/oauth-fixture'};}
     else if(id==='complete'){if(body.error){assert.deepEqual(body,{state:'cancel-state',error:'access_denied'});code=503;value={error:{code:'oauth_reauthorization_required'}};}else{assert.deepEqual(body,{state:'fixture-state',iss:'https://login.provider.com',code:'fixture-code'});value={state:'linked',profile_id:profiles.at(-1).profile_id};}}
     else value={state:'revoked',profile_id:body.profile_id};
    }else if(kind==='skill-installations'){
@@ -51,6 +52,7 @@ export async function checkGuidedProduct(executable) {
    }else if(kind==='catalogs'){
     value=catalogs.get(id);if(!value){code=404;value={state:'missing'};}
     else if(body&&conflict){code=409;value={state:'conflict',current_revision:value.head.revision+1};}
+    else if(body&&invalidCatalogReceipt)value={state:'listed',catalogs:[],next_after:null};
     else if(body){assert.equal(body.expected_revision,value.head.revision);assert.equal(body.digest,digest);value.head={...value.head,revision:value.head.revision+1,approved_digest:digest,approved_names:body.tool_names};value.approved=structuredClone(value.snapshot);value={state:'written',head:value.head};}
     else if(url.searchParams.get('snapshot')===value.approved?.digest){value={...value,snapshot:value.approved};}
    }else if(kind==='skills'&&!id)value={state:'listed',skills:library.map(s=>({head:s.head,summary:{name:s.bundle.name,description:s.bundle.description}})),next_after:null};
@@ -212,8 +214,28 @@ export async function checkGuidedProduct(executable) {
    assert.equal(requests.filter(r=>r.path===path+'/complete').length,callbacks);
   }
   await callback.close();
+  // A list receipt is not proof that an approval write succeeded.
+  invalidCatalogReceipt=true;
+  await page.locator('[data-service-list]').getByRole('button',{name:'Review tools',exact:true}).first().click();await status.filter({hasText:'Review the tools before approving.'}).waitFor();
+  const beforeInvalidReceipt=requests.filter(r=>r.method==='POST').length, approvedRevision=catalogs.get(profiles[0].profile_id).head.revision;
+  await review.getByRole('button',{name:'Approve selected tools'}).click();await status.filter({hasText:'Unexpected response.'}).waitFor();
+  assert.equal(catalogs.get(profiles[0].profile_id).head.revision,approvedRevision);assert.equal(await status.getAttribute('data-error'),'true');
+  await review.getByRole('button',{name:'Approve selected tools'}).click();await status.filter({hasText:'Refresh the library before'}).waitFor();
+  assert.equal(requests.filter(r=>r.method==='POST').length,beforeInvalidReceipt+1);
+  invalidCatalogReceipt=false;await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+  // Removed page instances must not redirect or continue an old workflow.
+  let releaseOAuth;delayedOAuth=new Promise(resolve=>{releaseOAuth=resolve;});
+  const pendingOAuth=page.waitForRequest(request=>request.url().endsWith('/connections/begin'));
+  await page.getByRole('button',{name:'Reconnect',exact:true}).click();await pendingOAuth;
+  await page.locator('.control-nav a[href="/admin"]').click();await page.waitForURL(url=>url.pathname==='/admin');
+  assert.equal(await page.locator('[data-central-product]').count(),0);
+  const settledOAuth=page.waitForResponse(response=>response.url().endsWith('/connections/begin'));
+  releaseOAuth();await(await settledOAuth).finished();await page.waitForLoadState('networkidle');delayedOAuth=undefined;
+  assert.equal(new URL(page.url()).pathname,'/admin');assert.equal(await page.getByRole('heading',{name:'Make your AI client more useful'}).count(),1);
+  await page.locator('.control-nav a[href="/admin/central"]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Reconnect',exact:true}).isEnabled(),true);
   assert.deepEqual(exceptions,[]);
-  return {state:'passed',guided_homepage:true,direct_url_without_deployment_setup:true,service_explicit_review:true,oauth_return_to_tool_review:true,paused_oauth_reconnect_guard:true,paused_service_discovery_guard:true,no_legacy_service_credentials:true,oauth_extra_parameters_ignored:true,oauth_duplicate_parameters_rejected:true,oauth_provider_errors_not_reflected:true,direct_skill_install_and_confirmed_update:true,skill_file_folder_selection_switch:true,skill_selection_invalidates_confirmation:true,skill_pending_update_publication:true,skill_pause_and_resume:true,shared_library_without_client_assignment:true,retired_access_api_not_called:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,mobile_no_overflow:true,screenshots:0};
+  return {state:'passed',guided_homepage:true,direct_url_without_deployment_setup:true,service_explicit_review:true,oauth_return_to_tool_review:true,paused_oauth_reconnect_guard:true,paused_service_discovery_guard:true,no_legacy_service_credentials:true,oauth_extra_parameters_ignored:true,oauth_duplicate_parameters_rejected:true,oauth_provider_errors_not_reflected:true,direct_skill_install_and_confirmed_update:true,skill_file_folder_selection_switch:true,skill_selection_invalidates_confirmation:true,skill_pending_update_publication:true,skill_pause_and_resume:true,shared_library_without_client_assignment:true,retired_access_api_not_called:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,malformed_write_receipt_blocks_replay:true,detached_oauth_does_not_navigate:true,mobile_no_overflow:true,screenshots:0};
  }finally{await browser?.close();await new Promise(r=>server.close(r));await rm(join(skillFolder,'SKILL.md'),{force:true});await rmdir(skillFolder);}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
