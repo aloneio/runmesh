@@ -25,6 +25,8 @@ export interface RunnerMutationState {
    * broader mutation_committed field also includes policy mutations, so
    * transport credential finalizers must use this narrower proof. */
   readonly credential_mutation_committed: boolean;
+  /** Exact current-generation operation; null without a committed receipt. */
+  readonly credential_mutation_kind: CredentialMutationKind | null;
   readonly mutation_committed: boolean;
   readonly desired_revision: number | null;
   readonly desired_checksum: string | null;

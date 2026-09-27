@@ -921,7 +921,16 @@ export class RunnerDO {
     const state = await response.json() as Record<string, unknown>;
     return state.runner_exists === true && state.mutation_committed === true && state.credential_mutation_committed === true
       && typeof state.lifecycle_id === "string" && validLifecycleId(state.lifecycle_id)
-      && (allowLifecycleChange || state.lifecycle_id === expected.lifecycleId);
+      && (allowLifecycleChange || this.mutationLifecycleMatches(expected, state.lifecycle_id));
+  }
+
+  private mutationLifecycleMatches(expected: AdmissionState, lifecycleId: string): boolean {
+    // A Runner can be created, rotated or revoked before its first hello.
+    // There is no transport lifecycle to compare in that case: the exact
+    // current-generation Registry mutation receipt is the authority. Never
+    // extend this exception to a previously bound connection identity.
+    return expected.lifecycleId === lifecycleId || (expected.lifecycleId === null
+      && expected.connectionEpoch === null && expected.credentialVersion === null && expected.sessionId === null);
   }
 
   private async recoverCommittedPrecommit(expected: AdmissionState): Promise<boolean> {
@@ -932,11 +941,20 @@ export class RunnerDO {
     // A committed delete leaves a tombstone in Registry but no Runner row.
     // Clear the transport fence so a later registration can acquire the DO
     // and establish a fresh lifecycle.
-    if (state.runner_exists !== true) {
+    if (state.runner_exists === false && state.mutation_committed === true) {
       const reset: AdmissionState = { ...FENCED_ADMISSION };
       return this.persistAdmissionIfCurrent(expected, reset);
     }
-    if (state.mutation_committed !== true) return false;
+    if (state.runner_exists !== true || state.mutation_committed !== true) return false;
+    // A revocation may have committed before its transport cleanup response
+    // was lost. Finalize only this proven owner before accepting a delete;
+    // an uncommitted operation or a creation still issuing enrollment stays
+    // exclusive. Finalization rechecks ownership under the write queue.
+    if (state.credential_mutation_kind === "credential_revoke" && state.credential_mutation_committed === true
+      && typeof state.lifecycle_id === "string" && validLifecycleId(state.lifecycle_id)
+      && this.mutationLifecycleMatches(expected, state.lifecycle_id)) {
+      return await this.finalizeOwnedMutation(expected.mutationId, "credentials revoked") === "ok";
+    }
     if (typeof state.lifecycle_id !== "string" || !validLifecycleId(state.lifecycle_id) || state.lifecycle_id !== expected.lifecycleId) return false;
     const desiredRevision = state.desired_revision;
     const desiredChecksum = state.desired_checksum;

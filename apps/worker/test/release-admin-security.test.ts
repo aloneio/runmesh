@@ -23,6 +23,22 @@ async function fixture() {
   return { stub, localEnv, hash, csrf, headers };
 }
 
+it("retains the authenticated console and session when a Runner deletion fence is unavailable", async () => {
+  const f = await fixture(); let fences = 0;
+  const localEnv = { ...f.localEnv, RUNNER: { idFromName: () => "runner", get: () => ({ fetch: () => { fences++; return new Response(null, { status: 503 }); } }) } } as unknown as typeof env;
+  const response = await worker.fetch(new Request("https://audit.test/admin/runners/delete-unavailable/delete", {
+    method: "POST", headers: f.headers, body: new URLSearchParams({ csrf_token: f.csrf, confirmation: "delete-unavailable" }),
+  }), localEnv, {} as ExecutionContext);
+  expect(response.status).toBe(503); expect(fences).toBe(1);
+  expect(response.headers.get("set-cookie")).toBeNull();
+  const page = await response.text();
+  expect(page).toContain('data-app-header'); expect(page).toContain('data-admin-error');
+  expect(page).toContain('Runner deletion could not fence the Runner.');
+  expect(page).not.toContain('<body class="auth-body">');
+  const next = await worker.fetch(new Request("https://audit.test/admin/runners", { headers: f.headers }), f.localEnv, {} as ExecutionContext);
+  expect(next.status).toBe(200); expect(next.headers.get("location")).toBeNull(); await next.body?.cancel();
+});
+
 it.each(["create", "rotate"] as const)("does not display an unconfirmed MCP %s credential", async action => {
   const f = await fixture(), original = f.localEnv.REGISTRY.get.bind(f.localEnv.REGISTRY);
   const path = action === "create" ? "/auth/clients" : "/auth/clients/test-client/rotate";

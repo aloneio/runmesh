@@ -6,8 +6,10 @@ import type { RunnerDeletionPorts, RunnerDeletionResult } from "../contracts/run
 export async function deleteRunner(ports: RunnerDeletionPorts, runnerId: string, confirmation: unknown): Promise<RunnerDeletionResult> {
   if (confirmation !== runnerId) return { state: "rejected", reason: "confirmation", status: 400 };
   const mutationId = ports.mutationId();
-  const fenced = await ports.fence(runnerId, mutationId);
-  if (!fenced.ok) return { state: "unavailable", reason: "fence" };
+  try {
+    const fenced = await ports.fence(runnerId, mutationId);
+    if (!fenced.ok) return { state: "unavailable", reason: "fence" };
+  } catch { return { state: "unavailable", reason: "fence" }; }
   let response: { readonly ok: boolean; readonly status: number };
   try { response = await ports.remove(runnerId, mutationId); }
   catch { return { state: "unknown", reason: "commit" }; }

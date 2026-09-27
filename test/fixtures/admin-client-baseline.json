@@ -3,18 +3,22 @@
   "cases": [
     {
       "nonce": null,
-      "sha256": "8a491f20f5467b56782129d16ed709ba3b4456d205998496800b07c34be4a13c",
+      "sha256": "5a3928d15d1ac9a0dae48e534aea70e8011587710d0c854f3b43dd390399bb64",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e"
     },
     {
       "nonce": "test-nonce",
-      "sha256": "26d771c49f4546d89ae82b9acc7bc9d4bb1737282930aeb2c2ce216608b5fc33",
+      "sha256": "3a83a504ffef16989a9d1d2771f55b92376a075d445a8811b8a22de9f6d688f7",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224"
     }
   ],
-  "reviewed_change": "Rename customer navigation to MCP and Skill; show tool names and descriptions as plain cards with a count. Remove repeated sharing explanations and parameter/schema dumps. DOM regressions retain automatic connection, OAuth recovery, Skill installation and safe text rendering. No screenshots."
+  "reviewed_change": "Rename customer navigation to MCP and Skill; show tool names and descriptions as plain cards with a count. Remove repeated sharing explanations and parameter/schema dumps. DOM regressions retain automatic connection, OAuth recovery, Skill installation and safe text rendering. No screenshots.",
+  "runner_action_review": {
+    "source_base": "cd27a389c95bb98638d6114cf5db4140c71a7c49",
+    "reviewed_change": "Bind scoped destructive Runner forms on first load and dynamic navigation; inline errors, submitter actions, duplicate POST prevention, successful GET refresh and expired-session redirects covered by DOM tests. No screenshots."
+  }
 }

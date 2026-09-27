@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "09cf742262fa156e02d8ab24569932e51f55aa0c3ce57a9cb314994afc24d161",
-      "bytes": 122937,
+      "sha256": "c6c0af5ca356f24b336d8b8777a1201fffef1c8883ccf7e048528ecd6ea94392",
+      "bytes": 125446,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -30,8 +30,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "62d5f0acaedb8d91ce315bb69bdc84863cc653f55673e43010943e11fe885276",
-      "bytes": 123525,
+      "sha256": "94ee31eacb7f7ab9db85312bf7d3bd0f09759749d3cb304b9d38858144555cad",
+      "bytes": 126034,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -47,8 +47,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "094d05ef2d35ed6128be927105ffa5026b58213f6a80ba4c4c45f8fde2d9b417",
-      "bytes": 124673,
+      "sha256": "8d41de4c162ac1c9ae985576d51b9adc00da435c80e8a095d7b7d751d30fbea8",
+      "bytes": 127182,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -344,8 +344,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "994101b4e4b938762f863a888bb6dc126f0eccf675d0ed024dd730aaa8c5490e",
-      "bytes": 6877,
+      "sha256": "98d37caa6cbc43ec370e20d2c394bbe77c6edd967207bd9ef88eb87a26714ed9",
+      "bytes": 6974,
       "presentation": {
         "configuredModes": {
           "runner-fixture": null
@@ -413,8 +413,8 @@
           }
         ]
       ],
-      "sha256": "7f9cd5c9289d91655b74d1d19ee22f4bbce4ae80ca9812db52a664fb020b25a4",
-      "bytes": 125022,
+      "sha256": "c123229f8fc5c86d9bdc7dc5c8c237609481be1c59c1af855a25ea1f35c631a1",
+      "bytes": 127531,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -514,6 +514,18 @@
       "admin-document"
     ],
     "allowed_change": "Wrap user-provided text within the MCP/Skill product surface, including Skill names, descriptions, file paths and installation status. Preserve original casing of all library card names. Reverting only these two CSS changes reproduces every prior hash. Valid Skill fixtures and DOM dimensions cover mobile and desktop without screenshots.",
+    "unrelated_markup_unchanged": true
+  },
+  "runner_action_review": {
+    "source_base": "cd27a389c95bb98638d6114cf5db4140c71a7c49",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "runners-populated",
+      "admin-document"
+    ],
+    "allowed_change": "Runner delete/revoke form feedback and scoped browser workflow. Failed actions retain the console; duplicate POSTs are blocked and uncertain writes are never replayed. Reversing only the reviewed form markup and bundle reproduces all prior hashes.",
     "unrelated_markup_unchanged": true
   }
 }
