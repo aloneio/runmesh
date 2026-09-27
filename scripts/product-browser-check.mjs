@@ -9,6 +9,7 @@ import { adminDocument } from '../apps/worker/dist/admin/layout.js';
 import { centralPage } from '../apps/worker/dist/admin/central-view.js';
 import { oauthLanding } from '../apps/worker/dist/http/oauth-landing.js';
 import { ADMIN_CSRF_COOKIE } from '../apps/worker/dist/http/constants.js';
+import { parseProfileCommand } from '../apps/worker/dist/contracts/connector-values.js';
 import { productOverviewPage } from '../apps/worker/dist/admin/dashboard-views.js';
 
 /** Isolated browser fixtures exercise the shipped UI, never a user browser or external service. */
@@ -16,7 +17,7 @@ export async function checkGuidedProduct(executable) {
  const digest='a'.repeat(64), toolVersion='c'.repeat(64);
  const profiles=[], library=[], requests=[], exceptions=[];
  let conflict=false, failLibrary=false, rejectDiscovery=false, invalidCatalogReceipt=false, delayedOAuth;
- let rejectedProfile, afterDiscovery, afterSkillInstallation, failRefreshAfterRejection=false;
+ let rejectedProfile, afterDiscovery, afterSkillInstallation, delayedDiscovery, failRefreshAfterRejection=false;
  const catalogs=new Map();
  const server=createServer(async(req,res)=>{
   try {
@@ -32,7 +33,8 @@ export async function checkGuidedProduct(executable) {
    let value, code=200;const path=url.pathname.replace('/admin/central/',''),[kind,id]=path.split('/');
    if(kind==='profiles'&&!id){value={state:'listed',profiles,next_after:null};if(failLibrary){code=503;value={state:'unavailable'};}}
    else if(kind==='profiles'){
-    if(body.action==='connect'){const p={profile_id:id,connector_id:body.connector_id,display_name:body.display_name,endpoint:body.endpoint,revision:1,enabled:false,credential:null,authentication:body.authentication};profiles.push(p);value={state:'written',profile:p};}
+    if(body.action==='connect'&&!parseProfileCommand({...body,profile_id:id})){code=400;value={error:{code:'central_invalid_request',operation_state:'not_started'}};}
+    else if(body.action==='connect'){const p={profile_id:id,connector_id:body.connector_id,display_name:body.display_name,endpoint:body.endpoint,revision:1,enabled:false,credential:null,authentication:body.authentication};profiles.push(p);value={state:'written',profile:p};}
     else{const p=profiles.find(p=>p.profile_id===id);assert.equal(body.expected_revision,p.revision);p.revision++;if(body.action==='enable'||body.action==='disable')p.enabled=body.action==='enable';value={state:'written',profile:p};}
    }else if(kind==='connections'){
     assert.equal(req.headers['x-csrf-token'],'fixture-csrf');
@@ -44,6 +46,7 @@ export async function checkGuidedProduct(executable) {
     if((item?.head.revision??0)!==body.expected_revision){code=409;value={state:'conflict',skill_id:'research',current_revision:item.head.revision};}
     else{const entry={head:{skill_id:'research',revision:body.expected_revision+1,enabled:true,staged_digest:digest,active_digest:digest},bundle:{skill_id:'research',name:'research',description:'Research fixture',source:'Control panel upload',license:'',files:body.files,digest}};if(item)library.splice(library.indexOf(item),1,entry);else library.push(entry);value={state:'installed',skill_id:'research',name:'research',revision:entry.head.revision,digest};const change=afterSkillInstallation;afterSkillInstallation=undefined;change?.(entry);}
    }else if(kind==='discovery'){
+    if(delayedDiscovery)await delayedDiscovery;
     assert.equal(body.expected_revision,catalogs.get(id)?.head.revision??0);
     if(conflict){code=409;value={state:'conflict',current_revision:body.expected_revision+1};}
     else if(invalidCatalogReceipt)value={state:'listed',catalogs:[],next_after:null};
@@ -98,7 +101,13 @@ export async function checkGuidedProduct(executable) {
   assert.equal(await page.locator('[data-service-create] [name=endpoint]').getAttribute('type'),'url');
   await page.goto(origin+'/admin/central');await status.filter({hasText:'Library is up to date.'}).waitFor();
   assert.equal(await page.locator('.central-advanced,[data-central-admin]').count(),0);
-  const form=page.locator('[data-service-create]');await form.locator('[name=name]').fill('团队文档');await form.locator('[name=endpoint]').fill('https://docs.example.com/mcp');await form.locator('button').click();
+  const form=page.locator('[data-service-create]');
+  await form.locator('[name=endpoint]').fill('http://docs.example.com/mcp');await form.locator('button').click();
+  await status.filter({hasText:'Check the service name and enter a public HTTPS MCP URL.'}).waitFor();
+  assert.equal(profiles.length,0);assert.equal((await status.textContent()).includes('SKILL.md'),false);
+  assert.equal(await form.locator('[name=endpoint]').inputValue(),'http://docs.example.com/mcp');
+  // Correcting a confirmed rejected input needs no unrelated library refresh.
+  await form.locator('[name=name]').fill('团队文档');await form.locator('[name=endpoint]').fill('https://docs.example.com/mcp');await form.locator('button').click();
   await status.filter({hasText:'Connected. Tools are ready to use'}).waitFor();
   assert.deepEqual(await form.locator('[name=authentication] option').evaluateAll(nodes=>nodes.map(n=>n.value)),['none','oauth']);assert.equal(await form.locator('[name=token]').count(),0);
   assert.equal(profiles[0].display_name,'团队文档');
@@ -298,6 +307,28 @@ export async function checkGuidedProduct(executable) {
    assert.equal((await status.textContent()).includes('installed. Ready to use'),false,'Do not report an active installation after '+state);
    assert.equal(await status.getAttribute('data-error'),'true');
   }
+  // Recreated controls must reflect the operation lock until recovery finishes.
+  catalogs.delete(publicId);
+  profiles.find(p=>p.profile_id===oauthId).enabled=false;
+  let releaseDiscovery;delayedDiscovery=new Promise(resolve=>{releaseDiscovery=resolve;});
+  const pendingDiscovery=page.waitForRequest(request=>request.url().endsWith('/discovery/'+publicId));
+  try{
+   await page.reload();await pendingDiscovery;
+   assert.equal(await publicCard.getByRole('button',{name:'View tools',exact:true}).isDisabled(),true,'Newly rendered service controls must stay disabled while recovery runs');
+   assert.equal(await oauthCard.getByRole('button',{name:'Enable',exact:true}).isDisabled(),true);
+   assert.equal(await page.locator('[data-central-product]').getAttribute('aria-busy'),'true');
+  }finally{releaseDiscovery();delayedDiscovery=undefined;}
+  await status.filter({hasText:'Connected. Tools are ready to use'}).waitFor();
+  assert.equal(await publicCard.getByRole('button',{name:'Refresh tools',exact:true}).isEnabled(),true);
+  assert.equal(await oauthCard.getByRole('button',{name:'Refresh tools',exact:true}).isDisabled(),true);
+  assert.equal(await oauthCard.getByRole('button',{name:'Enable',exact:true}).isEnabled(),true);
+  assert.equal(await page.locator('[data-central-product]').getAttribute('aria-busy'),'false');
+  // A valid long hostname must still connect with the optional name left blank.
+  const longEndpoint='https://docs-'+ 'a'.repeat(55) +'.example.com/mcp';
+  await form.locator('[name=name]').fill('');await form.locator('[name=endpoint]').fill(longEndpoint);await form.locator('button').click();
+  await page.waitForFunction(()=>{const text=document.querySelector('[data-product-status]').textContent;return text.includes('Connected. Tools are ready')||text.includes('Check the service name');});
+  assert.equal(profiles.at(-1).endpoint,longEndpoint,'An automatic display name must not reject a valid service URL');
+  assert.equal(profiles.at(-1).display_name.length<=64,true);
   assert.deepEqual(exceptions,[]);
   return {state:'passed',guided_homepage:true,direct_url_without_deployment_setup:true,service_immediate_tools:true,existing_connections_complete_automatically:true,pending_service_failure_isolation:true,recovery_refresh_failure_blocks_writes:true,oauth_return_recovers_other_services:true,connection_success_uses_refreshed_state:true,oauth_return_to_available_tools:true,paused_oauth_reconnect_guard:true,paused_service_discovery_guard:true,resume_refreshes_tools:true,no_legacy_service_credentials:true,oauth_extra_parameters_ignored:true,oauth_duplicate_parameters_rejected:true,oauth_provider_errors_not_reflected:true,direct_skill_install_and_confirmed_update:true,skill_file_folder_selection_switch:true,skill_selection_invalidates_confirmation:true,skill_pending_update_publication:true,skill_pause_and_resume:true,shared_library_without_client_assignment:true,retired_access_api_not_called:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,malformed_write_receipt_blocks_replay:true,detached_oauth_does_not_navigate:true,mobile_no_overflow:true,screenshots:0};
  }finally{await browser?.close();await new Promise(r=>server.close(r));await rm(join(skillFolder,'SKILL.md'),{force:true});await rmdir(skillFolder);}

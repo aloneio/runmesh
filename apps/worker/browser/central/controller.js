@@ -14,6 +14,7 @@ export function bindCentralProduct(root) {
     skills = [],
     busy = false,
     mustRefresh = false;
+  const lockedControls = new Map();
   var view = createCentralView(app, t, run),
     say = view.say;
   var client = createCentralApi({
@@ -48,16 +49,17 @@ export function bindCentralProduct(root) {
   function isCurrent() {
     return app.isConnected;
   }
+  function lockControls() {
+    app.querySelectorAll('button,input,select').forEach(function (control) {
+      if (!lockedControls.has(control)) lockedControls.set(control, control.disabled);
+      control.disabled = true;
+    });
+  }
   async function run(action) {
     if (busy || !isCurrent()) return;
     busy = true;
-    var controls = Array.from(app.querySelectorAll('button,input,select'));
-    var disabled = controls.map(function (c) {
-      return c.disabled;
-    });
-    controls.forEach(function (c) {
-      c.disabled = true;
-    });
+    app.setAttribute('aria-busy', 'true');
+    lockControls();
     say(t('working'));
     try {
       await action();
@@ -65,9 +67,11 @@ export function bindCentralProduct(root) {
       if (isCurrent()) say(error instanceof Error && error.name !== 'AbortError' ? error.message : t('connectionInterruptedRefreshToCheckWhetherTheOperationCompleted'), true);
     } finally {
       busy = false;
-      controls.forEach(function (c, i) {
-        if (c.isConnected) c.disabled = disabled[i];
+      app.setAttribute('aria-busy', 'false');
+      lockedControls.forEach(function (disabled, control) {
+        if (control.isConnected) control.disabled = disabled;
       });
+      lockedControls.clear();
     }
   }
   async function refresh() {
@@ -77,6 +81,7 @@ export function bindCentralProduct(root) {
     skills = app.getAttribute('data-skills') === 'true' ? await client.list('skills', 'skills') : [];
     services.render(profiles);
     skillWorkflow.render(skills);
+    if (busy) lockControls();
     mustRefresh = false;
     say(t('libraryIsUpToDate'));
     return profiles;

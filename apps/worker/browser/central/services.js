@@ -156,7 +156,12 @@ export function createServiceWorkflow({
     run(async function () {
       var endpoint = form.elements.endpoint.value.trim(),
         authentication = form.elements.authentication.value,
-        name = form.elements.name.value.trim() || new URL(endpoint).hostname;
+        name = form.elements.name.value.trim();
+      if (!name) {
+        name = new URL(endpoint).hostname;
+        var limit = form.elements.name.maxLength;
+        if (name.length > limit) name = name.slice(0, limit - 1) + '…';
+      }
       var id = 'service-' + crypto.randomUUID();
       var result = await api('profiles/' + id, {
         action: 'connect',
