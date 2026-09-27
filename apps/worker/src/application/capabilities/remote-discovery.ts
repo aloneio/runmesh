@@ -38,7 +38,11 @@ export function createRemoteDiscovery(ports: CatalogAdminPorts & { readonly conn
         const completedSession = session; session = undefined;
         await completedSession.close().catch(() => undefined);
         await fence();
-        const manager = createCatalogManager({ ...ports, profile: id => {
+        if (!completedSession.current()) throw new RemoteFault("result_withheld");
+        const manager = createCatalogManager({ ...ports, authorize: async signal => {
+          const decision = await ports.authorize(signal);
+          return decision === "allowed" && !completedSession.current() ? "denied" : decision;
+        }, profile: id => {
           const current = ports.profile(id);
           return current?.revision === profile.revision && current.enabled && current.endpoint === profile.endpoint ? current : undefined;
         } });

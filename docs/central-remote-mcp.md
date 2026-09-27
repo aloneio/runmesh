@@ -94,7 +94,7 @@ Deployment/network acceptance still needs independent verification.
 Every operation uses a fresh SDK client and credential context. Permission and
 profile generation checks occur before decryption, before network rounds, and
 again immediately before tools/call. A fresh tools/list checks the selected tool
-against its approved definition. Grant, catalog, profile and identity revisions
+against its approved definition. Catalog, profile and identity revisions
 are rechecked after awaited work. There is no cache that turns old tool visibility
 into current execution permission.
 
@@ -105,6 +105,13 @@ after the client's access was revoked, output is withheld while the action is
 reported completed. Local cancellation or deadline expiry cannot roll back an
 upstream effect. No exactly-once or cross-owner atomic transaction is promised.
 An outer MCP disconnect cannot prove that the owner RPC was canceled.
+
+Completed calls close their operation-local session before the final client and
+publication checks. Credential leases and outbound policy are checked again after
+that asynchronous cleanup; a changed authority withholds the result without
+replaying the completed action. Failed cleanup alone does not discard a valid
+result. Discovery retains the same credential/policy fence through catalog
+hashing and the final publication transaction.
 
 ## Bounded operation and persistence
 

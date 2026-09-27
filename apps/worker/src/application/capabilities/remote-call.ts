@@ -63,9 +63,14 @@ export function createRemoteCaller(ports: RemoteCallPorts) {
         if (result === undefined || (!result.isError && tool.definition.outputSchema !== undefined
           && !ports.connector.validate(tool.definition.outputSchema, result.structuredContent))) throw new RemoteFault("result_invalid");
         received = true;
+        // Cleanup awaits upstream I/O; revoke/disable may happen during that wait.
+        // Revalidate after cleanup before releasing the completed result.
+        const completedSession = session; session = undefined;
+        await completedSession.close().catch(() => undefined);
         // Revoked readers cannot receive data after an in-flight call. The effect
         // is still completed; withholding output never claims it was rolled back.
         try { await fence(); } catch { throw new RemoteFault("result_withheld"); }
+        if (!completedSession.current()) throw new RemoteFault("result_withheld");
         return { state: "completed", operation_state: "completed", result };
       } catch (error) {
         return { state: "failed", code: error instanceof RemoteFault ? error.code : "dependency_unavailable", operation_state: operationState() };
