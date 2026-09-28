@@ -1,21 +1,37 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createCentralApi } from "../apps/worker/browser/central/api.js";
+import { createCentralTranslator } from "../apps/worker/browser/central/messages.js";
 
 function deferred() {
   let resolve;
   const promise = new Promise(done => { resolve = done; });
   return { promise, resolve };
 }
-function client(t, send) {
+function client(t, send, translate = key => key) {
   let current = true, refresh = false;
   const requests = [];
   t.mock.method(globalThis, "fetch", async (...args) => { requests.push(args); return send(...args); });
-  const api = createCentralApi({ csrf: "fixture-csrf", t: key => key, isCurrent: () => current,
+  const api = createCentralApi({ csrf: "fixture-csrf", t: translate, isCurrent: () => current,
     refreshRequired: () => refresh, requireRefresh: () => { refresh = true; } });
   return { ...api, requests, detach: () => { current = false; }, refreshRequired: () => refresh };
 }
 const unexpected = /unexpectedResponseRefreshBeforeMakingAnotherChange/u;
+
+for (const locale of ["en", "zh-CN"]) for (const failure of ["network", "json", "body_abort"])
+test("native " + failure + " failures use " + locale + " UI guidance and never replay a write", async t => {
+  const translate = createCentralTranslator(locale);
+  const api = client(t, () => {
+    if (failure === "network") throw new TypeError("PRIVATE_NETWORK_DETAIL");
+    if (failure === "body_abort") return { json: () => Promise.reject(new DOMException("PRIVATE_ABORT_DETAIL", "AbortError")) };
+    return new Response("PRIVATE_INVALID_RESPONSE_BODY", { status: 200, headers: { "content-type": "application/json" } });
+  }, translate);
+  const expected = translate(failure === "json" ? "unexpectedResponseRefreshBeforeMakingAnotherChange" : "connectionInterruptedRefreshToCheckWhetherTheOperationCompleted");
+  await assert.rejects(api.request("profiles/service", { action: "enable" }), { message: expected });
+  assert.equal(api.refreshRequired(), true);
+  await assert.rejects(api.request("profiles/service", { action: "enable" }), { message: translate("refreshTheLibraryBeforeMakingAnotherChange") });
+  assert.equal(api.requests.length, 1);
+});
 
 test("central browser accepts only the expected receipt for each operation", async t => {
   const cases = [

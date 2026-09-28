@@ -87,9 +87,14 @@ export function createSkillWorkflow({
       var files = [];
       for (var f of picked) {
         var path = f.webkitRelativePath ? f.webkitRelativePath.split('/').slice(1).join('/') : f.name;
-        var text = new TextDecoder('utf-8', {
-          fatal: true
-        }).decode(await f.arrayBuffer());
+        var text;
+        try {
+          text = new TextDecoder('utf-8', {
+            fatal: true
+          }).decode(await f.arrayBuffer());
+        } catch {
+          throw new Error(t('couldNotReadTheSelectedFiles'));
+        }
         files.push({
           path: path,
           text: text

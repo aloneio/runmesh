@@ -3,7 +3,7 @@
   "cases": [
     {
       "nonce": null,
-      "sha256": "b5ac1b365f20fddef372c9d13496505591f1ebc5c89348fdd73f001c2b6cf224",
+      "sha256": "612fb097df688a5b829b5603ebe63b9bb0d5baa763513f287f63021e4c957a5a",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
@@ -11,7 +11,7 @@
     },
     {
       "nonce": "test-nonce",
-      "sha256": "7b3d2b1c7ac73c32d907e4bc45865a1a193d3b54c869846b3b9355f8c7101eef",
+      "sha256": "dc92677f52c566b500e507636b292ddab9895b80558c00cfdf0aabc028b5ce9d",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
@@ -41,6 +41,11 @@
   "ui_copy_review": {
     "source_base": "21a775ca291d04f68f4f1957fe3c03da51462a7d",
     "reviewed_change": "Natural English and Chinese interface copy; remove duplicate warnings and developer terminology. Exact reviewed substitutions reproduce all 20 rendered cases. Installer commands, CSS blocks, protected user data, form actions and permission controls are unchanged. No screenshots.",
+    "rendered_cases": 20
+  },
+  "browser_error_copy_review": {
+    "source_base": "e1911d63260b6737d89766b94ed3f4be9c80d369",
+    "reviewed_change": "Localize native Skill file-read, UTF-8, network and malformed-response failures in English and Chinese. Browser regressions reject invalid files without requests and recover through reselection, preserving text. Uncertain writes still require refresh and are never replayed. All non-script markup remains byte-for-byte unchanged. No screenshots.",
     "rendered_cases": 20
   }
 }

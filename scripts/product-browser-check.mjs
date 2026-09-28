@@ -14,6 +14,36 @@ import { skillInstallation } from '../apps/worker/dist/domain/skills/install.js'
 import { productOverviewPage } from '../apps/worker/dist/admin/dashboard-views.js';
 import { checkRunnerActions } from './runner-browser-check.mjs';
 
+async function checkSkillFileErrors(browser, origin, requests, library) {
+ for(const locale of ['en','zh-CN'])for(const failure of ['encoding','reading']){
+  const page=await browser.newPage();
+  try{
+   if(failure==='reading')await page.addInitScript(()=>{
+    const read=File.prototype.arrayBuffer;let fail=true;
+    File.prototype.arrayBuffer=function(){if(fail){fail=false;return Promise.reject(new DOMException('PRIVATE_FILE_READ_DETAIL','NotReadableError'));}return read.call(this);};
+   });
+   await page.goto(origin+'/admin/central?lang='+locale);
+   await page.locator('[data-central-product][aria-busy="false"]').waitFor();
+   await page.locator('[data-central-tab=skills]').click();
+   const form=page.locator('[data-skill-import]'),status=page.locator('[data-product-status]');
+   const name='file-recovery-'+failure,content='---\nname: '+name+'\ndescription: 文件读取测试\n---\nKeep this text unchanged.\n';
+   const writes=requests.filter(request=>request.path==='/admin/central/skill-installations').length;
+   await form.locator('[name=files]').setInputFiles({name:'SKILL.md',mimeType:'text/markdown',buffer:failure==='encoding'?Buffer.from([0xff]):Buffer.from(content)});
+   await form.locator('[type=submit]').click();
+   await page.locator('[data-central-product][aria-busy="false"]').waitFor();
+   assert.equal(await status.textContent(),locale==='en'?'Could not read the selected files. Select UTF-8 text files and try again.':'无法读取所选文件，请选择 UTF-8 文本文件后重试。');
+   assert.equal(await status.getAttribute('data-error'),'true');
+   assert.equal(requests.filter(request=>request.path==='/admin/central/skill-installations').length,writes);
+   await form.locator('[name=files]').setInputFiles({name:'SKILL.md',mimeType:'text/markdown',buffer:Buffer.from(content)});
+   await form.locator('[type=submit]').click();
+   await status.filter({hasText:name+(locale==='en'?' installed.':' 已安装。')}).waitFor();
+   const installs=requests.filter(request=>request.path==='/admin/central/skill-installations');
+   assert.equal(installs.length,writes+1);
+   assert.equal(installs.at(-1).body.files[0].text,content);
+  }finally{await page.close();library.length=0;}
+ }
+}
+
 /** Isolated browser fixtures exercise the shipped UI, never a user browser or external service. */
 export async function checkGuidedProduct(executable) {
  await checkRunnerActions(executable);
@@ -29,7 +59,7 @@ export async function checkGuidedProduct(executable) {
    if(url.pathname==='/late-oauth-fixture'){res.setHeader('content-type','text/html');res.end('<p>Unexpected detached OAuth redirect</p>');return;}
    if(url.pathname==='/admin/central/connections/callback'){const page=oauthLanding();for(const [k,v] of page.headers)res.setHeader(k,v);res.end(await page.text());return;}
    if(url.pathname==='/admin') {res.setHeader('content-type','text/html');res.end(adminDocument('Dashboard',productOverviewPage({clients:[],runners:[]}),'dashboard'));return;}
-   if(url.pathname==='/admin/central') {res.setHeader('set-cookie',ADMIN_CSRF_COOKIE+'=fixture-csrf; Path=/; SameSite=Strict; Secure');res.setHeader('content-type','text/html');res.end(adminDocument('MCP & Skill',centralPage('fixture-csrf',true,true),'central'));return;}
+   if(url.pathname==='/admin/central') {res.setHeader('set-cookie',ADMIN_CSRF_COOKIE+'=fixture-csrf; Path=/; SameSite=Strict; Secure');res.setHeader('content-type','text/html');const locale=url.searchParams.get('lang')==='zh-CN'?'zh-CN':'en';res.end(adminDocument('MCP & Skill',centralPage('fixture-csrf',true,true),'central').replace('<html lang="en">','<html lang="'+locale+'">'));return;}
    const raw=[];for await(const part of req)raw.push(part);
    const body=raw.length?JSON.parse(Buffer.concat(raw).toString()):undefined;
    requests.push({path:url.pathname,method:req.method,body});
@@ -90,6 +120,7 @@ export async function checkGuidedProduct(executable) {
  let browser;
  try{
   browser=await chromium.launch({headless:true,...(executable?{executablePath:executable}:{})});
+  await checkSkillFileErrors(browser,origin,requests,library);
   const context=await browser.newContext({viewport:{width:1365,height:1000}});
   const page=await context.newPage();page.on('pageerror',e=>exceptions.push(e.message));
   await page.goto(origin+'/admin');
