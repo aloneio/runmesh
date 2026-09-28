@@ -1,3 +1,4 @@
+import { matchIdentifierPath } from "./path-identifiers.js";
 import { developmentReleaseDependencies } from "./release-cache.js";
 import type { DevelopmentReleaseRefreshScheduler } from "../distribution/release.js";
 import { runnerSummary, runnerDetail as projectRunnerDetail, clientDetail as projectClientDetail } from "../application/admin-projections.js";
@@ -78,8 +79,8 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
     const data = await loadDashboardData(env, url.pathname === "/admin" && url.searchParams.get("history") === "1" && env.RUNMESH_JOB_HISTORY_BACKEND !== "d1");
     return html(adminPage(url.pathname, data, csrf, env.CAPABILITIES !== undefined, url.searchParams.get("history") === "1"));
   }
-  const runnerDetail = /^\/admin\/runners\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})$/.exec(url.pathname);
-  const jobDetail = /^\/admin\/runners\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\/jobs\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})$/.exec(url.pathname);
+  const runnerDetail = matchIdentifierPath(/^\/admin\/runners\/([^/]+)$/, url.pathname);
+  const jobDetail = matchIdentifierPath(/^\/admin\/runners\/([^/]+)\/jobs\/([^/]+)$/, url.pathname, [1, 2]);
   if (request.method === "GET" && jobDetail !== null) {
     const csrf = cookieValue(request, ADMIN_CSRF_COOKIE);
     if (csrf === undefined || !constantTimeEqual(await sha256Hex(csrf), session.csrf_hash)) return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
@@ -93,7 +94,7 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
     });
     return page.ok ? html(adminDocument(page.title, page.body, "runners")) : adminError(page.status, page.message);
   }
-  const clientDetail = /^\/admin\/clients\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})(?:\/scopes\/detail)?$/.exec(url.pathname);
+  const clientDetail = matchIdentifierPath(/^\/admin\/clients\/([^/]+)(?:\/scopes\/detail)?$/, url.pathname);
   if (request.method === "GET" && clientDetail !== null) {
     const csrf = cookieValue(request, ADMIN_CSRF_COOKIE);
     if (csrf === undefined || !constantTimeEqual(await sha256Hex(csrf), session.csrf_hash)) return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
@@ -167,7 +168,7 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
     }
     return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
   }
-  const historyAction = /^\/admin\/runners\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\/history-settings$/.exec(url.pathname);
+  const historyAction = matchIdentifierPath(/^\/admin\/runners\/([^/]+)\/history-settings$/, url.pathname);
   if (historyAction !== null) {
     const settings = parseJobHistorySettings({mode:form.get("mode"),interval_seconds:Number(form.get("interval_seconds")),retention_days:Number(form.get("retention_days")),local_retention_days:Number(form.get("local_retention_days"))});
     if (settings === undefined || (settings.local_retention_days > 0 && form.get("confirm_local_cleanup") !== "true")) return adminError(400,"Invalid settings or local cleanup not confirmed.");
@@ -177,9 +178,9 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
   if (url.pathname === "/admin/password") return changePassword(env, form);
   if (url.pathname === "/admin/clients") return createClient(env, form, publicOrigin);
   if (url.pathname === "/admin/runners") return createBrowserRunner(env, form, publicOrigin, scheduleRefresh);
-  const runnerMatch = /^\/admin\/runners\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\/(rename|rotate|revoke|delete|enrollment|validity|permissions|version-policy|emergency-lock|workspace-create|workspace-update|workspace-delete)$/.exec(url.pathname);
+  const runnerMatch = matchIdentifierPath(/^\/admin\/runners\/([^/]+)\/(rename|rotate|revoke|delete|enrollment|validity|permissions|version-policy|emergency-lock|workspace-create|workspace-update|workspace-delete)$/, url.pathname);
   if (runnerMatch !== null) return handleBrowserRunnerAction(env, form, publicOrigin, runnerMatch[1] as string, runnerMatch[2] as "rename" | "rotate" | "revoke" | "delete" | "enrollment" | "validity" | "permissions" | "version-policy" | "emergency-lock" | "workspace-create" | "workspace-update" | "workspace-delete", scheduleRefresh);
-  const clientMatch = /^\/admin\/clients\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})\/(rename|rotate|revoke|reset-runner|select-runner|active-runner|override|reset-override|scopes|recording)$/.exec(url.pathname);
+  const clientMatch = matchIdentifierPath(/^\/admin\/clients\/([^/]+)\/(rename|rotate|revoke|reset-runner|select-runner|active-runner|override|reset-override|scopes|recording)$/, url.pathname);
   if (clientMatch === null) return notFound();
   const clientId = clientMatch[1] as string; const action = clientMatch[2] as "rename" | "rotate" | "revoke" | "reset-runner" | "select-runner" | "active-runner" | "override" | "reset-override" | "scopes" | "recording";
   if (action === "recording") {

@@ -2,7 +2,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
 import worker from "../src/index.js";
-import { randomBase64Url, sha256Hex, passwordVerifier } from "../src/security.js";
+import { internalHeaders, randomBase64Url, sha256Hex, passwordVerifier } from "../src/security.js";
 import { LOGIN_CSRF_COOKIE } from "../src/http/constants.js";
 import { adminUpstreamError } from "../src/http/responses.js";
 import { handleBrowserRunnerAction } from "../src/http/runner-actions.js";
@@ -22,6 +22,44 @@ async function fixture() {
   const headers = { origin: "https://audit.test", cookie: `__Host-runmesh_admin_session=${session}; __Host-runmesh_admin_csrf=${csrf}`, "content-type": "application/x-www-form-urlencoded" };
   return { stub, localEnv, hash, csrf, headers };
 }
+
+it.each(["/admin/runners-extra", "/admin/runners-extra/r/delete", "/admin/runners//r/delete", "/admin/runners/r/delete/", "/internal/runners//r/rpc", "/internal/runners/r/rpc/"])("rejects a noncanonical Runner route before dispatch: %s", async path => {
+  let mutations = 0;
+  const localEnv = { ...env, RUNNER: { idFromName: () => { mutations++; return "r"; }, get: () => ({ fetch: () => new Response(null, { status: 204 }) }) } } as unknown as typeof env;
+  const body = JSON.stringify({ runner_id: "r", confirmation: "r", execution_mode: "dedicated_user" });
+  const headers = path.startsWith("/internal/") ? await internalHeaders(env.INTERNAL_CONTROL_SECRET!, "POST", path, body)
+    : { Authorization: "Bearer " + env.ADMIN_TOKEN, "content-type": "application/json" };
+  const response = await worker.fetch(new Request("https://audit.test" + path, { method: "POST", headers, body }), localEnv, {} as ExecutionContext);
+  await response.body?.cancel(); expect(response.status).toBe(404); expect(mutations).toBe(0);
+});
+
+it("routes an encoded internal Runner ID while verifying the original signed URL", async () => {
+  const names: string[] = [], bodies: string[] = [];
+  const localEnv = { ...env, RUNNER: { idFromName: (name: string) => { names.push(name); return name; }, get: () => ({ fetch: async (request: Request) => {
+    expect(new URL(request.url).pathname).toBe("/rpc"); bodies.push(await request.text()); return new Response(null, { status: 204 });
+  } }) } } as unknown as typeof env;
+  const path = "/internal/runners/runner%3Aencoded/rpc", body = JSON.stringify({ method: "fixture", params: {} });
+  for (const correct of [false, true]) {
+    const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET!, "POST", correct ? path : "/internal/runners/runner:encoded/rpc", body);
+    const response = await worker.fetch(new Request("https://audit.test" + path, { method: "POST", headers, body }), localEnv, {} as ExecutionContext);
+    expect(response.status).toBe(correct ? 204 : 404); await response.body?.cancel();
+    expect(names.length).toBe(correct ? 1 : 0);
+  }
+  expect(names).toEqual(["runner:encoded"]); expect(bodies).toEqual([body]);
+});
+
+it.each(["r%2Fx", "r%253Ax", "r%", "r%00x"])("rejects unsafe encoded Runner routes without dispatching a mutation: %s", async segment => {
+  const f = await fixture(); let mutations = 0;
+  const localEnv = { ...f.localEnv, RUNNER: { idFromName: () => { mutations++; return "runner"; }, get: () => ({ fetch: () => new Response(null, { status: 204 }) }) } } as unknown as typeof env;
+  for (const token of [false, true]) {
+    const response = await worker.fetch(new Request("https://audit.test/admin/runners/" + segment + "/delete", {
+      method: "POST", headers: token ? { Authorization: "Bearer " + env.ADMIN_TOKEN, "content-type": "application/json" } : f.headers,
+      body: token ? JSON.stringify({ confirmation: "r:x" }) : new URLSearchParams({ csrf_token: f.csrf, confirmation: "r:x" }),
+    }), localEnv, {} as ExecutionContext);
+    expect(response.status).toBe(404); await response.body?.cancel();
+  }
+  expect(mutations).toBe(0);
+});
 
 it("retains the authenticated console and session when a Runner deletion fence is unavailable", async () => {
   const f = await fixture(); let fences = 0;

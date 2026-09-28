@@ -280,7 +280,7 @@ describe("Worker runner transport", () => {
     expect(healthy.status).toBe(200);
   });
 
-  it.each(["offline", "browser-created", "pre-hello", "online", "enrollment", "rotate", "revoke", "interrupted-revoke"])("deletes a %s Runner through an authenticated browser session", async mode => {
+  it.each(["offline", "browser-created", "pre-hello", "online", "enrollment", "rotate", "revoke", "interrupted-revoke"].flatMap(mode => [false, true].map(encoded => ({ mode, encoded }))))("deletes a $mode Runner through an authenticated browser session (encoded=$encoded)", async ({ mode, encoded }) => {
     const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
     const session = randomBase64Url(), csrf = randomBase64Url();
     const hash = await sha256Hex(session), csrfHash = await sha256Hex(csrf);
@@ -291,11 +291,17 @@ describe("Worker runner transport", () => {
       expect(instance.createAdminSession(hash, csrfHash, now + 60000, now, 1)).toBe(true);
     });
     const headers = { origin: "https://worker.test", cookie: `__Host-runmesh_admin_session=${session}; __Host-runmesh_admin_csrf=${csrf}`, "content-type": "application/x-www-form-urlencoded" };
-    const target = mode === "browser-created" ? `browser-delete-${crypto.randomUUID()}` : runnerId;
+    const target = encoded ? `browser:delete:${crypto.randomUUID()}` : mode === "browser-created" ? `browser-delete-${crypto.randomUUID()}` : runnerId;
+    const pathId = encodeURIComponent(target);
+    if (encoded && mode !== "browser-created") { const registered = await enroll(target); expect(registered.status).toBe(200); await registered.body?.cancel(); }
     if (mode === "browser-created") {
       const created = await SELF.fetch("https://worker.test/admin/runners", { method: "POST", headers,
         body: new URLSearchParams({ csrf_token: csrf, runner_id: target, display_name: "Disposable Runner", execution_mode: "dedicated_user" }) });
       expect(created.status, await created.text()).toBe(200);
+    }
+    if (encoded) {
+      const detail = await SELF.fetch("https://worker.test/admin/runners/" + pathId, { headers });
+      expect(detail.status).toBe(200); await detail.body?.cancel();
     }
     let socket: WebSocket | null | undefined;
     if (["enrollment", "rotate", "revoke", "interrupted-revoke"].includes(mode)) {
@@ -304,14 +310,14 @@ describe("Worker runner transport", () => {
         return new URL(request.url).pathname === "/revoke" ? Promise.resolve(new Response(null, { status: 503 })) : original.call(this, request);
       }) : undefined;
       try {
-        const prepared = await SELF.fetch(`https://worker.test/admin/runners/${target}/${mode === "interrupted-revoke" ? "revoke" : mode}`, { method: "POST", redirect: "manual", headers,
+        const prepared = await SELF.fetch(`https://worker.test/admin/runners/${pathId}/${mode === "interrupted-revoke" ? "revoke" : mode}`, { method: "POST", redirect: "manual", headers,
           body: new URLSearchParams({ csrf_token: csrf, confirmation: target, execution_mode: "dedicated_user", expected_execution_mode: "dedicated_user" }) });
         await prepared.body?.cancel();
         expect(prepared.status).toBe(mode === "interrupted-revoke" ? 503 : mode === "revoke" ? 303 : 200);
       } finally { fault?.mockRestore(); }
     }
     if (mode === "pre-hello" || mode === "online") {
-      const upgrade = await SELF.fetch(`https://worker.test/runner/connect?runner_id=${target}`, { headers: { Upgrade: "websocket", Authorization: `Bearer ${token}` } });
+      const upgrade = await SELF.fetch(`https://worker.test/runner/connect?runner_id=${pathId}`, { headers: { Upgrade: "websocket", Authorization: `Bearer ${token}` } });
       expect(upgrade.status).toBe(101); socket = upgrade.webSocket; socket?.accept();
       if (mode === "online") {
         const welcome = new Promise<void>(resolve => socket?.addEventListener("message", () => resolve(), { once: true }));
@@ -320,7 +326,7 @@ describe("Worker runner transport", () => {
         await welcome;
       }
     }
-    const response = await SELF.fetch(`https://worker.test/admin/runners/${target}/delete`, {
+    const response = await SELF.fetch(`https://worker.test/admin/runners/${pathId}/delete`, {
       method: "POST", redirect: "manual",
       headers, body: new URLSearchParams({ csrf_token: csrf, confirmation: target }),
     });
@@ -330,6 +336,19 @@ describe("Worker runner transport", () => {
     expect(response.headers.get("set-cookie")).toBeNull();
     socket?.close();
     await runInDurableObject(registry, instance => { expect(instance.getRunnerExecutionState(target)).toBeUndefined(); });
+  });
+
+  it.each(["rotate", "revoke", "delete"])("routes an encoded Runner ID through the administrative %s API", async action => {
+    const target = "api:runner:" + crypto.randomUUID();
+    const registered = await enroll(target); expect(registered.status).toBe(200); await registered.body?.cancel();
+    const response = await SELF.fetch("https://worker.test/admin/runners/" + encodeURIComponent(target) + "/" + action, {
+      method: "POST", headers: { Authorization: "Bearer " + adminToken, "content-type": "application/json" },
+      body: JSON.stringify({ confirmation: target }),
+    });
+    expect(response.status, await response.text()).toBe(action === "rotate" ? 200 : 204);
+    await runInDurableObject(env.REGISTRY.get(env.REGISTRY.idFromName("registry")), instance => {
+      expect(instance.getRunnerExecutionState(target) === undefined).toBe(action === "delete");
+    });
   });
 
   it("does not steal an uncommitted creation fence merely because the Runner row is absent", async () => {
