@@ -47,10 +47,14 @@ try {
   // @types/node. Keep this check strict (no skipLibCheck) so missing ambient
   // dependencies cannot be hidden by the release smoke test.
   const consumerSource = [
-    'import { JobManager, RunnerConnection, RunnerRuntime, type HostPlatform, type RunnerConfig } from "@aloneio/runmesh-runner";',
+    'import { JobManager, RunnerConnection, RunnerRuntime, type HostPlatform, type RunnerConfig, type ConnectionRuntimePort, type ConnectionPolicyStorePort } from "@aloneio/runmesh-runner";',
     'import { parseRunnerArgs } from "@aloneio/runmesh-runner/config";',
     "declare const config: RunnerConfig;",
-    "void RunnerConnection;",
+    "const connectionRuntime: ConnectionRuntimePort = { initialize: async () => {}, applyPolicy: () => {}, dispatch: async () => undefined, configureJobRetention: () => {}, cleanupJobs: async () => {}, needsHistoryReconciliation: () => false, syncJobs: async () => [], syncWorkspaceMetadata: () => [], jobs: { list: () => [] } };",
+    "const connectionStore: ConnectionPolicyStorePort = { load: async () => undefined, activate: async () => {} };",
+    "void new RunnerConnection({ config, runtime: connectionRuntime, policyStore: connectionStore });",
+    "// @ts-expect-error Internal transport/runtime factories are not package options.",
+    "void new RunnerConnection({ config }, { createRuntime: () => connectionRuntime });",
     "void new RunnerRuntime({ config });",
     "const environment = { get: async () => ({ source: 'injected' }) };",
     "void new RunnerRuntime({ config, environment });",

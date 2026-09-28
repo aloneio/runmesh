@@ -256,3 +256,13 @@ and welcome projection. RunnerDO retains sockets, epochs, admission and pending
 RPC ownership, including replacement checks and synchronous dispatch ordering.
 Architecture fixtures reject reverse imports, ambient state and scheduling in
 these pure boundaries.
+
+RunnerConnection's public runtime and policy-store options use the exported
+ConnectionRuntimePort and ConnectionPolicyStorePort contracts. Supplied instances
+have one injection path; native runtime construction receives the synchronous
+job-event sink through an internal factory. Packaged ESM/CJS consumers verify
+structural substitution while the factory overload stays out of public declarations.
+Connection version, policy interruption, reconnect acknowledgement and history
+cadence tests observe hello/welcome, wire frames and injected ports. AR18 guards
+these migrated tests against private connection access. Socket identity, policy
+publication and asynchronous ordering remain owned by RunnerConnection.

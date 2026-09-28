@@ -31,7 +31,7 @@ export { RunnerAuthenticationError, RunnerServiceUnavailableError, classifyConne
 import { candidateWorkspaces, effectivePolicyWorkspaces, validationContext } from "./connection/policy-candidate.js";
 import { discoverCapabilities, currentProcessServiceIdentity, sanitizeServiceIdentity, processPrivilegeState } from "./connection/metadata.js";
 export { discoverCapabilities, currentProcessServiceIdentity } from "./connection/metadata.js";
-import type { ConnectionRuntimePort, ConnectionPolicyStorePort, ConnectionTransportFactory } from "./connection/ports.js";
+import type { ConnectionRuntimePort, ConnectionPolicyStorePort, ConnectionTransportFactory, ConnectionRuntimeFactory } from "./connection/ports.js";
 
 const MAX_IN_FLIGHT_RPCS = 64;
 const MAX_IN_FLIGHT_SYNC_CAPTURES = 2;
@@ -42,8 +42,7 @@ const CONTROL_RPC_METHODS = new Set(["echo", "runner.info", "job.get", "job.canc
 
 /** @internal Trusted composition only; no CLI, wire or deployment configuration. */
 export interface RunnerConnectionDependencies {
-  readonly runtime?: ConnectionRuntimePort;
-  readonly policyStore?: ConnectionPolicyStorePort;
+  readonly createRuntime?: ConnectionRuntimeFactory;
   readonly createSocket?: ConnectionTransportFactory;
 }
 
@@ -60,8 +59,8 @@ export interface RunnerConnectionOptions {
   readonly random?: () => number;
   readonly sleep?: (delayMs: number) => Promise<void>;
   readonly onStateChange?: (state: "connecting" | "online" | "offline") => void;
-  readonly runtime?: RunnerRuntime;
-  readonly policyStore?: PolicyStore;
+  readonly runtime?: ConnectionRuntimePort;
+  readonly policyStore?: ConnectionPolicyStorePort;
 }
 
 export class RunnerConnection {
@@ -151,8 +150,9 @@ export class RunnerConnection {
       this.cancelReconnectSleep = finish;
     }));
     this.onStateChange = options.onStateChange ?? (() => undefined);
-    this.runtime = dependencies.runtime ?? options.runtime ?? new RunnerRuntime({ config: this.config, ...(this.config.stateDir === undefined ? {} : { stateDir: this.config.stateDir }), onJobEvent: (event) => this.forwardJobEvent(event) });
-    this.policyStore = dependencies.policyStore ?? options.policyStore ?? new PolicyStore(this.config.stateDir);
+    const createRuntime: ConnectionRuntimeFactory = dependencies.createRuntime ?? (onJobEvent => new RunnerRuntime({ config: this.config, ...(this.config.stateDir === undefined ? {} : { stateDir: this.config.stateDir }), onJobEvent }));
+    this.runtime = options.runtime ?? createRuntime(event => this.forwardJobEvent(event));
+    this.policyStore = options.policyStore ?? new PolicyStore(this.config.stateDir);
     this.historyUploads = new HistoryUploadScheduler(async revision => {
       const socket = this.socket;
       if (socket !== undefined) await this.sendDemandSync(socket, revision);

@@ -172,3 +172,11 @@ schema 模块。测试不再修改私有环境／历史实例或读取私有 ctx
 domain/runner-handshake.ts 负责纯 hello 协商、Registry 回执解析和 welcome 投影。
 RunnerDO 继续独占 socket、epoch、准入和待处理 RPC，保留连接替换重验及同步
 派发顺序。架构负例阻止这些纯边界反向导入、访问环境状态或调度异步工作。
+
+RunnerConnection 的公开 runtime 和 policyStore 选项使用导出的
+ConnectionRuntimePort 与 ConnectionPolicyStorePort 契约，传入实例只有一条注入
+路径；默认运行时通过内部工厂接收同步 Job 事件回调。安装包的 ESM／CJS 消费者
+验证结构化替换，内部工厂重载不进入公开声明。连接版本、策略中断、重连确认和
+历史上传周期测试通过 hello／welcome、协议帧与注入端口检查行为，AR18 防止这些
+已迁移测试再次访问连接私有状态。socket 身份、策略发布及异步顺序仍由
+RunnerConnection 管理。
