@@ -11,7 +11,8 @@ export function bindRunnerActions(root) {
       event.preventDefault();
       if (pending) return;
       const action = new URL(event.submitter?.getAttribute('formaction') || form.action, location.href);
-      if (action.origin !== location.origin || !new RegExp('^/admin/runners/[A-Za-z0-9._:-]+/(delete|revoke)$').test(action.pathname)) return;
+      // The server-rendered form owns the route, including encoded Runner IDs.
+      if (action.origin !== location.origin) return;
       const body = new URLSearchParams(new FormData(form));
       const controls = Array.from(form.querySelectorAll('button,input'));
       const disabled = controls.map(control => control.disabled);

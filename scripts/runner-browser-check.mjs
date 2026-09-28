@@ -8,7 +8,7 @@ import { adminRunnerError } from '../apps/worker/dist/http/responses.js';
 /** Disposable HTTP fixtures exercise the shipped forms and bundle, without images. */
 export async function checkRunnerActions(executable) {
   const requests = [], errors = [];
-  let mode = 'fence', release, removed = false;
+  let mode = 'fence', release, removed = false, runnerId = 'browser-runner';
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url, 'http://127.0.0.1');
@@ -19,7 +19,7 @@ export async function checkRunnerActions(executable) {
         const body = new URLSearchParams(Buffer.concat(parts).toString());
         requests.push(url.pathname);
         assert.equal(body.get('csrf_token'), 'fixture-csrf');
-        assert.equal(body.get('confirmation'), 'browser-runner');
+        assert.equal(body.get('confirmation'), runnerId);
         if (mode === 'delayed') await new Promise(resolve => { release = resolve; });
         if (mode === 'success' || mode === 'expired') {
           removed = mode === 'success'; res.statusCode = 303;
@@ -37,8 +37,8 @@ export async function checkRunnerActions(executable) {
       }
       if (url.pathname === '/login') { res.end('<h1>Sign in</h1>'); return; }
       res.setHeader('set-cookie', 'fixture_console_session=active; Path=/; HttpOnly; SameSite=Lax');
-      const data = { runners: removed ? [] : [{ runner_id: 'browser-runner', display_name: 'Disposable Runner', state: 'offline', last_heartbeat_ms: null, public_info: null }] };
-      res.end(adminDocument('Runners', runnersPage({ configuredModes: new Map([['browser-runner', 'dedicated_user']]), maxValidityDays: 365 }, data, 'fixture-csrf'), 'runners'));
+      const data = { runners: removed ? [] : [{ runner_id: runnerId, display_name: 'Disposable Runner', state: 'offline', last_heartbeat_ms: null, public_info: null }] };
+      res.end(adminDocument('Runners', runnersPage({ configuredModes: new Map([[runnerId, 'dedicated_user']]), maxValidityDays: 365 }, data, 'fixture-csrf'), 'runners'));
     } catch (error) { errors.push(String(error)); res.statusCode = 500; res.end('fixture failed'); }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -51,7 +51,7 @@ export async function checkRunnerActions(executable) {
     const openForm = async () => {
       await page.goto(origin + '/admin/runners');
       await page.getByText('More actions', { exact: true }).click();
-      await page.locator('[name=confirmation]').fill('browser-runner');
+      await page.locator('[name=confirmation]').fill(runnerId);
     };
     await openForm();
     await page.getByRole('button', { name: 'Delete', exact: true }).click();
@@ -96,6 +96,10 @@ export async function checkRunnerActions(executable) {
     await page.getByRole('button', { name: 'Delete', exact: true }).click();
     await page.getByText('No runners yet.', { exact: true }).waitFor();
     assert.equal(await page.locator('[data-app-header]').count(), 1);
+    removed = false; runnerId = 'browser:runner'; mode = 'fence'; await openForm();
+    await page.getByRole('button', { name: 'Delete', exact: true }).click();
+    await notice.filter({ hasText: 'could not fence' }).waitFor();
+    assert.equal(requests.at(-1), '/admin/runners/browser%3Arunner/delete');
     removed = false; mode = 'expired'; await openForm();
     await page.getByRole('button', { name: 'Delete', exact: true }).click();
     await page.getByRole('heading', { name: 'Sign in' }).waitFor();
