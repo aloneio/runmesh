@@ -5,7 +5,7 @@ import { isSafeIdentifier } from "../../security.js";
 import type { CodingScope, McpClientRecord, VerifiedMcpClient, PermissionSet } from "../records.js";
 import { parseMcpIdentity, parseNativeMcpClient } from "../route-inputs.js";
 import { registryInputError } from "../route-projections.js";
-import { stringField, scopesField, permissionSetField } from "../values.js";
+import { stringField, scopesField, permissionSetField, parsePathIdentifier } from "../values.js";
 
 export interface ClientsRoutePorts {
   listMcpClients(): McpClientRecord[];
@@ -32,7 +32,9 @@ export interface ClientsRoutePorts {
 /** Parsing and responses only; authority and transactions stay with RegistryDO. */
 export function createClientsRoutes(ports: ClientsRoutePorts): RegistryRoute {
   return ({ method, segments, input, nowMs, url }) => {
-    const action = segments[0]; const clientId = segments[1];
+    const action = segments[0]; const clientId = parsePathIdentifier(segments[1]);
+    if (action !== "clients" || (segments[1] !== undefined && clientId === undefined)) return undefined;
+    const targetRunnerId = parsePathIdentifier(segments[3]);
     if (method === "GET" && action === "clients" && clientId === undefined) return Response.json({ clients: ports.listMcpClients() });
     if (method === "POST" && action === "clients" && clientId === undefined && input.identity_version !== undefined) {
       const parsed = parseMcpIdentity(input);
@@ -63,16 +65,16 @@ export function createClientsRoutes(ports: ClientsRoutePorts): RegistryRoute {
     if (method === "GET" && action === "clients" && clientId !== undefined && segments[2] === "runner-overrides" && segments[3] === undefined) {
       return !ports.hasMcpClient(clientId) ? new Response("not found", { status: 404 }) : Response.json({ client_id: clientId, overrides: ports.listClientRunnerOverrides(clientId) });
     }
-    if (method === "DELETE" && action === "clients" && clientId !== undefined && segments[2] === "runner-overrides" && segments[3] !== undefined && isSafeIdentifier(segments[3])) {
-      return ports.deleteClientRunnerOverride(clientId, segments[3]) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 });
+    if (method === "DELETE" && action === "clients" && clientId !== undefined && segments[2] === "runner-overrides" && targetRunnerId !== undefined) {
+      return ports.deleteClientRunnerOverride(clientId, targetRunnerId) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 });
     }
-    if (method === "POST" && action === "clients" && clientId !== undefined && segments[2] === "runner-overrides" && segments[3] !== undefined && isSafeIdentifier(segments[3])) {
+    if (method === "POST" && action === "clients" && clientId !== undefined && segments[2] === "runner-overrides" && targetRunnerId !== undefined) {
       const permissions = permissionSetField(input.permissions);
-      return permissions !== undefined && ports.setClientRunnerOverride(clientId, segments[3], permissions, nowMs) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 });
+      return permissions !== undefined && ports.setClientRunnerOverride(clientId, targetRunnerId, permissions, nowMs) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 });
     }
-    if (method === "GET" && action === "clients" && clientId !== undefined && segments[2] === "effective-permissions" && segments[3] !== undefined && isSafeIdentifier(segments[3])) {
+    if (method === "GET" && action === "clients" && clientId !== undefined && segments[2] === "effective-permissions" && targetRunnerId !== undefined) {
       const workspaceId = url.searchParams.get("workspace_id");
-      const permissions = workspaceId === null ? undefined : ports.effectivePermissions(clientId, segments[3], workspaceId);
+      const permissions = workspaceId === null ? undefined : ports.effectivePermissions(clientId, targetRunnerId, workspaceId);
       return permissions === undefined ? new Response("not found", { status: 404 }) : Response.json({ permissions });
     }
     if (method === "GET" && action === "clients" && clientId !== undefined && segments[2] === "active-runner") {
@@ -104,8 +106,8 @@ export function createClientsRoutes(ports: ClientsRoutePorts): RegistryRoute {
       const result = ports.autoSelectOnlyRunner(clientId, nowMs);
       return result === undefined ? Response.json({ code: "runner_not_selected" }, { status: 409 }) : result.ok ? Response.json(result) : new Response("not found", { status: 404 });
     }
-    if (method === "GET" && action === "clients" && clientId !== undefined && segments[2] === "effective-workspaces" && segments[3] !== undefined && isSafeIdentifier(segments[3])) {
-      const value = ports.effectiveWorkspaceList(clientId, segments[3]);
+    if (method === "GET" && action === "clients" && clientId !== undefined && segments[2] === "effective-workspaces" && targetRunnerId !== undefined) {
+      const value = ports.effectiveWorkspaceList(clientId, targetRunnerId);
       return value === undefined ? new Response("not found", { status: 404 }) : Response.json(value);
     }
     return undefined;

@@ -38,7 +38,7 @@ import type { ValidityWindow } from "./validity.js";
 import type { ValidityStatus } from "./validity.js";
 import type { RunnerExecutionMode, PolicyAcknowledgementResult, RunnerMutationState, CodingScope, PermissionSet, WorkspaceValidationStatus, RunnerUpdateChannel, RunnerPublicInfo, RunnerRecord, WorkspaceRecord, DashboardSnapshot, RegistryFeatureKey, RegistryFeatureHealth, McpClientRecord, VerifiedMcpClient, RunnerRow, EnrollmentRow, AdminSettingsRow, AuthThrottleKind, InternalInput } from './registry/records.js';
 import { MAX_INTERNAL_BODY_BYTES, DEFAULT_RUNNER_ENROLLMENT_TTL_MS, REGISTRY_HISTORY_CLEANUP_INTERVAL_MS, HISTORY_CLEANUP_DEADLINE_KEY } from './registry/records.js';
-import { validLifecycleId, parseTransportIdentity, matchesTransportIdentity, requestedExecutionMode, requestedExpectedExecutionMode, requestedExpectedLifecycleId, requestedPrivilegedConfirmation, requestedRunnerEnrollmentTtl, parseJobEvent, parseRunnerId, parseJsonObject, stringField, integerField, nullableIntegerField, safeNonnegativeInteger, nullableChecksumField, runnerPublicInfoField, workspaceStatusesField, validVerifier, validMutationId, mutationIdField } from './registry/values.js';
+import { validLifecycleId, parseTransportIdentity, matchesTransportIdentity, requestedExecutionMode, requestedExpectedExecutionMode, requestedExpectedLifecycleId, requestedPrivilegedConfirmation, requestedRunnerEnrollmentTtl, parseJobEvent, parsePathIdentifier, parseJsonObject, stringField, integerField, nullableIntegerField, safeNonnegativeInteger, nullableChecksumField, runnerPublicInfoField, workspaceStatusesField, validVerifier, validMutationId, mutationIdField } from './registry/values.js';
 import { RegistryAuth } from './registry/auth.js';
 import { RegistryPolicy } from './registry/policy.js';
 import { RegistryLifecycle } from './registry/lifecycle.js';
@@ -578,7 +578,7 @@ export class RegistryDO {
       }
       return new Response("not found", { status: 404 });
     }
-    const runnerId = segments[0] === "runners" ? parseRunnerId(segments[1]) : undefined;
+    const runnerId = segments[0] === "runners" ? parsePathIdentifier(segments[1]) : undefined;
     const action = segments[2]; const itemId = segments[3];
     if (runnerId === undefined || segments.length > 4) return new Response("not found", { status: 404 });
     if (action === "history-settings" && itemId === undefined) {
