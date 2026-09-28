@@ -92,10 +92,10 @@ export async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, 
     if (result.state === "rejected") return result.reason === "confirmation"
       ? adminRunnerError(400, "Type the Runner ID to confirm deletion.")
       : adminRunnerError(result.status === 404 ? 404 : 400, "Runner delete failed.");
-    if (result.state === "unavailable") return adminRunnerError(503, "Runner deletion could not fence the Runner.");
-    if (result.reason === "cancel") return adminRunnerError(503, "Runner deletion failed; Runner remains safely fenced.");
-    if (result.reason === "recovery") return adminRunnerError(503, "Runner deletion state is uncertain; Runner remains safely fenced.");
-    return adminRunnerError(503, "Runner deletion outcome is uncertain; Runner remains safely fenced.");
+    if (result.state === "unavailable") return adminRunnerError(503, "Could not start deleting the Runner. Try again.");
+    if (result.reason === "cancel") return adminRunnerError(503, "Runner deletion failed; Runner remains locked.");
+    if (result.reason === "recovery") return adminRunnerError(503, "Runner deletion state is uncertain; Runner remains locked.");
+    return adminRunnerError(503, "Runner deletion outcome is uncertain; Runner remains locked.");
   }
   if (action === "revoke") {
     if (form.get("confirmation") !== runnerId) return adminRunnerError(400, "Type the Runner ID to confirm revocation.");
@@ -120,7 +120,7 @@ export async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, 
     if (result.state === "failed") {
       if (result.reason === "cleanup") return enrollmentCleanupUnavailable(result.diagnostic);
       if (result.reason === "changed" || result.reason === "enrollment_rejected") return adminError(result.cause === "missing" ? 404 : 409, result.cause === "missing" ? "Runner was not found." : "Runner state changed; reload the Runner page and retry.");
-      const message = result.reason === "fence" ? "Runner enrollment could not fence the Runner." : result.reason === "recovery" ? "Runner enrollment state is uncertain; Runner remains safely fenced." : result.reason === "enrollment_recovery" ? "Enrollment code state is uncertain; Runner remains safely fenced." : "Enrollment code creation is uncertain; Runner remains safely fenced.";
+      const message = result.reason === "fence" ? "Could not start Runner registration. Try again." : result.reason === "recovery" ? "Runner enrollment state is uncertain; Runner remains locked." : result.reason === "enrollment_recovery" ? "Enrollment code state is uncertain; Runner remains locked." : "Enrollment code creation is uncertain; Runner remains locked.";
       return adminError(503, message);
     }
     return runnerEnrollmentPage(env, baseUrl, runnerId, result.enrollment.code, String(form.get("csrf_token") ?? ""), true, selection.mode, selection.confirmed, result.enrollment, registryDevelopmentReleaseCache(env), scheduleRefresh);
@@ -131,7 +131,7 @@ export async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, 
 /** Report the failed phase without exposing provider messages, enrollment codes or tokens. */
 function enrollmentCleanupUnavailable(diagnostic?: string): Response {
   const code = diagnostic ?? "cleanup_unavailable";
-  const response = adminError(503, `Enrollment code was created, but the temporary Runner safety lock could not be released. Diagnostic: ${code}. No enrollment code was disclosed. Regeneration does not require deleting or reinstalling the Runner.`);
+  const response = adminError(503, `Runner setup could not finish. Generate a new enrollment code to try again. Diagnostic: ${code}.`);
   response.headers.set("x-runmesh-error-code", code);
   response.headers.set("x-runmesh-error-phase", "enrollment_fence_release");
   return response;

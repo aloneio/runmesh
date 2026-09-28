@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "cad58892ace4449f8bb492532d8af2c310312483b58ee43100446fa1fc327415",
-      "bytes": 124550,
+      "sha256": "5e7974c1d78d8dad32c0b219cf102bb2b2d3d7238258d7c1b043c53d46c30338",
+      "bytes": 123836,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -32,8 +32,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "644a7606748a3c04990e4a85318097607403bf5d87e425dd4740ff3bb093b81b",
-      "bytes": 125138,
+      "sha256": "1522c03d21ed9d253f6143840d176adc68ebddc2434c3a5527a3eba3d028a11f",
+      "bytes": 124424,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -51,8 +51,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "dbdf87a7a20f0e4609d96534d8894cf9afc3e3abaeed98c77b2efe028a58bcad",
-      "bytes": 126286,
+      "sha256": "bfd9d94ad46cac976c095184aa32386803905b21dcc1fb2719c625c8a4f7dd55",
+      "bytes": 125572,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -76,8 +76,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "d9ac6fca648916eb548f51ac4625f5143ec5a12b47bb0be56130b998df111d3e",
-      "bytes": 2124
+      "sha256": "78bd5604b1ee384d37945e130fda94c5b30b2069e2c971796dcf814155e3e53f",
+      "bytes": 2065
     },
     {
       "name": "overview-populated",
@@ -127,8 +127,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "41753b3ad40be0ffbbdc099d65a84879960df7d1dfd3d5b3c954533e68198eb2",
-      "bytes": 3255,
+      "sha256": "1b0e675c5e2f1bdba0c966779a0370c6e2da363f9cd3f894e1f89af090f56371",
+      "bytes": 3196,
       "original_sha256": "b94fb8d802373820755732a807fc8cdc9d4f579a0d40b21cafdcac121ff7a957",
       "original_bytes": 3219,
       "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label",
@@ -142,8 +142,8 @@
       "args": [
         "fixture-csrf-<>&\""
       ],
-      "sha256": "fb56582e029a8b5b407982002db570f92288e23aeceeb6b2cee885f5e9e391af",
-      "bytes": 1389
+      "sha256": "d07cb834606fced579dc20687f3c8bf41f78224b1ca56a83c49643cf8b9bff46",
+      "bytes": 1274
     },
     {
       "name": "clients-empty",
@@ -158,8 +158,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "3a6770acd5435b453c3c2214ee3b70ae33763504b75e7a423aec74c2a1454f60",
-      "bytes": 2153,
+      "sha256": "41b033c19ac0c3b5197265767683e9b34334d0dd5a1e18d8da0dbb3cee092160",
+      "bytes": 1966,
       "pre_presence_bytes": 1658,
       "pre_presence_sha256": "e74169b7613eb2646689d68bc42760c399f092ad60d9c6200c65b2b561342266",
       "reviewed_presence_change": "Replace client online/offline with credential validity, identify credential status, and explain it does not prove a live connection. Reversing only these reviewed changes matches pre_presence_sha256.",
@@ -217,8 +217,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "69e49cc57ec5466b80b303ac52c1f0e817508262f71ccf391a90cc6cc66c6609",
-      "bytes": 4601,
+      "sha256": "567aaabd91037b4cd18f35b634443b2cc9118580d6b84fd5f20228189975b379",
+      "bytes": 4414,
       "original_sha256": "57a9afa644d0576c73376174bad5c663efe58c9490697670a4c5925b21280795",
       "original_bytes": 4110,
       "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label",
@@ -273,8 +273,8 @@
         [],
         "fixture-csrf-<>&\""
       ],
-      "sha256": "335f2ba7fa5cd0372fe1001e05a178a035fbc269764fa5d591332bdf83e4c3d6",
-      "bytes": 6806,
+      "sha256": "2e51d5097878ceec339c59002720158b1a45d157dad074db8bf59e989bf8a71a",
+      "bytes": 6495,
       "original_sha256": "e8468030bfaefe12378b3a9a7541e59679236f3888f7b6b0e69ef759cc5f8d66",
       "original_bytes": 6638,
       "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label",
@@ -295,8 +295,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "ad42baf8b35e827a1ccd89a0f8e4f3e9bf4bdd1c6c67787b3505779f6eaf1229",
-      "bytes": 3284,
+      "sha256": "59e21717a2a06e07ab125f4348bf1ff7e92399efbfc88c33d27dd84471a4a74d",
+      "bytes": 3200,
       "presentation": {
         "configuredModes": {},
         "maxValidityDays": 3650
@@ -350,8 +350,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "98d37caa6cbc43ec370e20d2c394bbe77c6edd967207bd9ef88eb87a26714ed9",
-      "bytes": 6974,
+      "sha256": "ef01b4d6eb79d546e439f3549a337d9c36df526e52ed8c808560fa7143b6eba6",
+      "bytes": 6852,
       "presentation": {
         "configuredModes": {
           "runner-fixture": null
@@ -395,8 +395,8 @@
           "distributable": true
         }
       ],
-      "sha256": "544a10f04c4921d4aa501454401eaf929c2fc74fb674e217e7c2f731d34fbba9",
-      "bytes": 13988,
+      "sha256": "f401b75e00befcb1f93eff48de92c0be60737ce471d9a2f271c768faad104c09",
+      "bytes": 13866,
       "presentation": {
         "configuredMode": null,
         "reportedMode": "dedicated_user",
@@ -419,8 +419,8 @@
           }
         ]
       ],
-      "sha256": "42c027adc3ef406b6ece45fba9128a5c4431bf6cb04e245073beb70be76a0293",
-      "bytes": 126635,
+      "sha256": "5fa910ed9297d9a127afed296a4ea3fb5d947620d0e34e1333b9566fc6d1bb99",
+      "bytes": 125921,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -549,5 +549,10 @@
     ],
     "reviewed_change": "Bound Runner delete/revoke response headers and body reads with one 25-second deadline. Stalled-response browser regressions retain session and page, restore controls, and never replay writes. Replacing only the inline bundle reproduces every prior hash and byte count. No screenshots.",
     "non_script_markup_unchanged": true
+  },
+  "ui_copy_review": {
+    "source_base": "21a775ca291d04f68f4f1957fe3c03da51462a7d",
+    "reviewed_change": "Natural English and Chinese interface copy; remove duplicate warnings and developer terminology. Exact reviewed substitutions reproduce all 20 rendered cases. Installer commands, CSS blocks, protected user data, form actions and permission controls are unchanged. No screenshots.",
+    "rendered_cases": 20
   }
 }

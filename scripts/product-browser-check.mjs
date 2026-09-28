@@ -93,20 +93,20 @@ export async function checkGuidedProduct(executable) {
   const context=await browser.newContext({viewport:{width:1365,height:1000}});
   const page=await context.newPage();page.on('pageerror',e=>exceptions.push(e.message));
   await page.goto(origin+'/admin');
-  assert.equal(await page.getByRole('heading',{name:'Make your AI client more useful'}).count(),1);
+  assert.equal(await page.getByRole('heading',{name:'Use your tools across AI clients'}).count(),1);
   assert.equal(await page.locator('h1').count(),1);
   assert.equal(await page.locator('details').getAttribute('open'),null);
   assert.equal(await page.getByText('Active shell jobs',{exact:true}).count(),0);
   await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
   await page.setViewportSize({width:1365,height:1000});
   await page.getByRole('link',{name:'Explore MCPs and Skills'}).click();
-  await page.locator('[data-product-status]').filter({hasText:'Library is up to date.'}).waitFor();
+  await page.locator('[data-product-status]').filter({hasText:'List refreshed.'}).waitFor();
   await page.goto(origin+'/admin/central?setup=missing');
-  const status=page.locator('[data-product-status]');await status.filter({hasText:'Library is up to date.'}).waitFor();
+  const status=page.locator('[data-product-status]');await status.filter({hasText:'List refreshed.'}).waitFor();
   assert.equal(await page.locator('[data-service-create] button').isEnabled(),true);
   assert.equal(await page.locator('[data-central-tab=skills]').isEnabled(),true);
   assert.equal(await page.locator('[data-service-create] [name=endpoint]').getAttribute('type'),'url');
-  await page.goto(origin+'/admin/central');await status.filter({hasText:'Library is up to date.'}).waitFor();
+  await page.goto(origin+'/admin/central');await status.filter({hasText:'List refreshed.'}).waitFor();
   assert.equal(await page.getByRole('heading',{name:'MCP & Skill',exact:true}).count(),1);
   assert.equal(await page.locator('[data-central-tab=services]').textContent(),'MCP');
   assert.equal(await page.locator('[data-central-tab=skills]').textContent(),'Skill');
@@ -115,7 +115,7 @@ export async function checkGuidedProduct(executable) {
   assert.equal(await page.locator('.central-advanced,[data-central-admin]').count(),0);
   const form=page.locator('[data-service-create]');
   await form.locator('[name=endpoint]').fill('http://docs.example.com/mcp');await form.locator('button').click();
-  await status.filter({hasText:'Check the service name and enter a public HTTPS MCP URL.'}).waitFor();
+  await status.filter({hasText:'Check the MCP name and enter a public HTTPS MCP URL.'}).waitFor();
   assert.equal(profiles.length,0);assert.equal((await status.textContent()).includes('SKILL.md'),false);
   assert.equal(await form.locator('[name=endpoint]').inputValue(),'http://docs.example.com/mcp');
   // Correcting a confirmed rejected input needs no unrelated library refresh.
@@ -145,11 +145,11 @@ export async function checkGuidedProduct(executable) {
    assert.equal(requests.filter(r=>r.path.startsWith('/admin/central/discovery/')).length,before+1);
   }
   rejectDiscovery=true;await form.locator('[name=endpoint]').fill('https://oauth.provider.com/mcp');await form.locator('[name=authentication]').selectOption('oauth');await form.locator('button').click();
-  await status.filter({hasText:'Sign in to this service again using Reconnect.'}).waitFor();
+  await status.filter({hasText:'Select Reconnect to sign in to this MCP again.'}).waitFor();
   assert.equal(catalogs.has(profiles.at(-1).profile_id),false);assert.equal(await review.isHidden(),true);
-  await page.getByRole('button',{name:'Reconnect',exact:true}).click();await status.filter({hasText:'Refresh the library before making another change.'}).waitFor();
+  await page.getByRole('button',{name:'Reconnect',exact:true}).click();await status.filter({hasText:'Refresh before making another change.'}).waitFor();
   assert.equal(requests.filter(r=>r.path==='/admin/central/connections/begin').length,1);
-  await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+  await page.locator('[data-product-refresh]').click();await status.filter({hasText:'List refreshed.'}).waitFor();
   rejectDiscovery=false;await page.getByRole('button',{name:'Reconnect',exact:true}).click();
   await page.waitForURL(url=>url.pathname==='/admin/central'&&url.searchParams.has('connected'),{timeout:10000});await status.filter({hasText:'Connected.'}).waitFor();
   assert.equal(requests.filter(r=>r.path==='/admin/central/connections/begin').length,2);assert.equal(requests.filter(r=>r.path==='/admin/central/connections/complete').length,2);assert.equal(new URL(page.url()).search,'');
@@ -160,26 +160,26 @@ export async function checkGuidedProduct(executable) {
   assert.equal(requests.filter(r=>r.path==='/admin/central/connections/begin').length,2);
   const oauthCard=page.locator('[data-service-list] .central-card').filter({has:page.getByRole('button',{name:'Reconnect',exact:true})});
   const discoveries=requests.filter(r=>r.path.startsWith('/admin/central/discovery/')).length;
-  await oauthCard.getByRole('button',{name:'Pause',exact:true}).click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+  await oauthCard.getByRole('button',{name:'Pause',exact:true}).click();await status.filter({hasText:'List refreshed.'}).waitFor();
   assert.equal(await oauthCard.getByRole('button',{name:'Reconnect',exact:true}).isDisabled(),true);
   assert.equal(await oauthCard.getByRole('button',{name:'Refresh tools',exact:true}).isDisabled(),true);
   assert.equal(await oauthCard.getByRole('button',{name:'View tools',exact:true}).isEnabled(),true);
-  assert.equal(await oauthCard.getByText('Enable this service before checking its connection or reconnecting its account.',{exact:true}).isVisible(),true);
+  assert.equal(await oauthCard.getByText('Enable this MCP to refresh tools or reconnect your account.',{exact:true}).isVisible(),true);
   assert.equal(await oauthCard.getByRole('button',{name:'Disconnect account',exact:true}).isEnabled(),true);
   assert.equal(requests.filter(r=>r.path==='/admin/central/connections/begin').length,2);
   await oauthCard.getByRole('button',{name:'Enable',exact:true}).click();await status.filter({hasText:'Connected.'}).waitFor();
   assert.equal(await oauthCard.getByRole('button',{name:'Reconnect',exact:true}).isEnabled(),true);
   assert.equal(await oauthCard.getByRole('button',{name:'Refresh tools',exact:true}).isEnabled(),true);
-  assert.equal(await oauthCard.getByText('Enable this service before checking its connection or reconnecting its account.',{exact:true}).count(),0);
+  assert.equal(await oauthCard.getByText('Enable this MCP to refresh tools or reconnect your account.',{exact:true}).count(),0);
   const publicCard=page.locator('[data-service-list] .central-card').filter({has:page.getByText('https://docs.example.com/mcp',{exact:true})});
-  await publicCard.getByRole('button',{name:'Pause',exact:true}).click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+  await publicCard.getByRole('button',{name:'Pause',exact:true}).click();await status.filter({hasText:'List refreshed.'}).waitFor();
   assert.equal(await publicCard.getByRole('button',{name:'Refresh tools',exact:true}).isDisabled(),true);
   assert.equal(await publicCard.getByRole('button',{name:'View tools',exact:true}).isEnabled(),true);
-  assert.equal(await publicCard.getByText('Enable this service before checking its connection.',{exact:true}).isVisible(),true);
+  assert.equal(await publicCard.getByText('Enable this MCP to refresh its tools.',{exact:true}).isVisible(),true);
   assert.equal(await publicCard.getByRole('button',{name:'Reconnect',exact:true}).count(),0);
   await publicCard.getByRole('button',{name:'Enable',exact:true}).click();await status.filter({hasText:'Connected.'}).waitFor();
   assert.equal(await publicCard.getByRole('button',{name:'Refresh tools',exact:true}).isEnabled(),true);
-  assert.equal(await publicCard.getByText('Enable this service before checking its connection.',{exact:true}).count(),0);
+  assert.equal(await publicCard.getByText('Enable this MCP to refresh its tools.',{exact:true}).count(),0);
   assert.equal(requests.filter(r=>r.path.startsWith('/admin/central/discovery/')).length,discoveries+2);
   assert.equal(await page.locator('[data-service-list] input[type=password]').count(),0);
   assert.equal(await page.getByText('Update service credentials',{exact:true}).count(),0);
@@ -218,21 +218,21 @@ export async function checkGuidedProduct(executable) {
   const beforeReview=skillWrites();installedSkill.published=structuredClone(installedSkill.bundle);
   installedSkill.bundle={...installedSkill.bundle,digest:stagedDigest,files:[{path:'SKILL.md',text:stagedText}]};
   installedSkill.head={...installedSkill.head,revision:3,staged_digest:stagedDigest};
-  await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+  await page.locator('[data-product-refresh]').click();await status.filter({hasText:'List refreshed.'}).waitFor();
   const skillCard=page.locator('[data-skill-list] .central-card');
-  assert.equal(await skillCard.getByText('An update is awaiting review.',{exact:true}).isVisible(),true);
-  await skillCard.getByRole('button',{name:'View files',exact:true}).click();await status.filter({hasText:'Skill files are ready to review.'}).waitFor();
+  assert.equal(await skillCard.getByText('Update available.',{exact:true}).isVisible(),true);
+  await skillCard.getByRole('button',{name:'View files',exact:true}).click();await status.filter({hasText:'Skill files loaded.'}).waitFor();
   assert.equal(await skillReview.locator('pre').textContent(),stagedText);assert.equal(installedSkill.head.active_digest,digest);assert.equal(skillWrites(),beforeReview);
-  assert.equal(await skillReview.getByRole('button',{name:'Publish update',exact:true}).count(),1,'An enabled Skill with a staged update needs an explicit publication action');
-  await skillReview.getByRole('button',{name:'Publish update',exact:true}).click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+  assert.equal(await skillReview.getByRole('button',{name:'Update Skill',exact:true}).count(),1,'An enabled Skill with a staged update needs an explicit publication action');
+  await skillReview.getByRole('button',{name:'Update Skill',exact:true}).click();await status.filter({hasText:'List refreshed.'}).waitFor();
   assert.equal(installedSkill.head.active_digest,stagedDigest);assert.equal(installedSkill.head.revision,4);assert.equal(skillWrites(),beforeReview+1);
-  assert.equal(await skillCard.getByText('An update is awaiting review.',{exact:true}).count(),0);
-  await skillCard.getByRole('button',{name:'View files',exact:true}).click();await status.filter({hasText:'Skill files are ready to review.'}).waitFor();
-  assert.equal(await skillReview.getByRole('button',{name:'Publish update',exact:true}).count(),0);assert.equal(await skillReview.getByRole('button',{name:'Enable Skill',exact:true}).count(),0);
-  await skillCard.getByRole('button',{name:'Pause',exact:true}).click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+  assert.equal(await skillCard.getByText('Update available.',{exact:true}).count(),0);
+  await skillCard.getByRole('button',{name:'View files',exact:true}).click();await status.filter({hasText:'Skill files loaded.'}).waitFor();
+  assert.equal(await skillReview.getByRole('button',{name:'Update Skill',exact:true}).count(),0);assert.equal(await skillReview.getByRole('button',{name:'Enable Skill',exact:true}).count(),0);
+  await skillCard.getByRole('button',{name:'Pause',exact:true}).click();await status.filter({hasText:'List refreshed.'}).waitFor();
   assert.equal(installedSkill.head.enabled,false);assert.equal(installedSkill.head.active_digest,stagedDigest);
-  await skillCard.getByRole('button',{name:'View files',exact:true}).click();await status.filter({hasText:'Skill files are ready to review.'}).waitFor();
-  await skillReview.getByRole('button',{name:'Enable Skill',exact:true}).click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+  await skillCard.getByRole('button',{name:'View files',exact:true}).click();await status.filter({hasText:'Skill files loaded.'}).waitFor();
+  await skillReview.getByRole('button',{name:'Enable Skill',exact:true}).click();await status.filter({hasText:'List refreshed.'}).waitFor();
   assert.equal(installedSkill.head.enabled,true);assert.equal(installedSkill.head.active_digest,stagedDigest);assert.equal(installedSkill.head.revision,6);
   // Valid user content must remain readable inside its panel, including text clipped by ancestor overflow.
   const longSkillName='s'.repeat(64),longSkillPath='p'.repeat(197)+'.md';
@@ -246,26 +246,26 @@ export async function checkGuidedProduct(executable) {
   const longSkillCard=page.locator('[data-skill-list] .central-card').filter({has:page.getByRole('heading',{name:longSkillName,exact:true})});
   assert.equal(await longSkillCard.locator('h3').evaluate(node=>getComputedStyle(node).textTransform),'none');
   for(const heading of await page.locator('[data-service-list] h3').all())assert.equal(await heading.evaluate(node=>getComputedStyle(node).textTransform),'none');
-  await longSkillCard.getByRole('button',{name:'View files',exact:true}).click();await status.filter({hasText:'Skill files are ready to review.'}).waitFor();
+  await longSkillCard.getByRole('button',{name:'View files',exact:true}).click();await status.filter({hasText:'Skill files loaded.'}).waitFor();
   for(const summary of await skillReview.locator('summary').all())await summary.click();
   for(const width of [390,1365]){
    await page.setViewportSize({width,height:1000});
    for(const node of await skillReview.locator('h2,p,summary,pre').all())assert.equal(await fits(node),true,'Skill names, descriptions, paths and text must fit their panel');
   }
   library.splice(library.findIndex(item=>item.head.skill_id===longSkillName),1);
-  await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+  await page.locator('[data-product-refresh]').click();await status.filter({hasText:'List refreshed.'}).waitFor();
   // Publication conflict cannot trigger automatic replay, even after repeated clicks.
   await page.locator('[data-central-tab=services]').click();
   await page.locator('[data-service-list]').getByRole('button',{name:'View tools',exact:true}).first().click();await status.filter({hasText:'Tools loaded.'}).waitFor();
-  conflict=true;await page.locator('[data-service-list]').getByRole('button',{name:'Refresh tools',exact:true}).first().click();await status.filter({hasText:'This item changed.'}).waitFor();
-  const writes=requests.filter(r=>r.method==='POST').length;await page.locator('[data-service-list]').getByRole('button',{name:'Refresh tools',exact:true}).first().click();await status.filter({hasText:'Refresh the library before'}).waitFor();assert.equal(requests.filter(r=>r.method==='POST').length,writes);
-  conflict=false;await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();assert.equal(await review.isHidden(),true);
-  await page.goto(origin+'/admin/central?client=client-fixture');await status.filter({hasText:'Library is up to date.'}).waitFor();
+  conflict=true;await page.locator('[data-service-list]').getByRole('button',{name:'Refresh tools',exact:true}).first().click();await status.filter({hasText:'This item has changed. Refresh before saving.'}).waitFor();
+  const writes=requests.filter(r=>r.method==='POST').length;await page.locator('[data-service-list]').getByRole('button',{name:'Refresh tools',exact:true}).first().click();await status.filter({hasText:'Refresh before making another change.'}).waitFor();assert.equal(requests.filter(r=>r.method==='POST').length,writes);
+  conflict=false;await page.locator('[data-product-refresh]').click();await status.filter({hasText:'List refreshed.'}).waitFor();assert.equal(await review.isHidden(),true);
+  await page.goto(origin+'/admin/central?client=client-fixture');await status.filter({hasText:'List refreshed.'}).waitFor();
   assert.equal(await page.locator('[data-central-tab=access],[data-client-select],[data-client-access]').count(),0);
   assert.equal(requests.filter(r=>/\/(grants|toolsets)\//.test(r.path)).length,0);
-  failLibrary=true;await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Operation could not be confirmed.'}).waitFor();
-  const mutations=requests.filter(r=>r.method==='POST').length;await page.locator('[data-service-list]').getByRole('button',{name:'Pause',exact:true}).first().click();await status.filter({hasText:'Refresh the library before'}).waitFor();assert.equal(requests.filter(r=>r.method==='POST').length,mutations);
-  failLibrary=false;await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+  failLibrary=true;await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Could not confirm the result. Refresh to check the status.'}).waitFor();
+  const mutations=requests.filter(r=>r.method==='POST').length;await page.locator('[data-service-list]').getByRole('button',{name:'Pause',exact:true}).first().click();await status.filter({hasText:'Refresh before making another change.'}).waitFor();assert.equal(requests.filter(r=>r.method==='POST').length,mutations);
+  failLibrary=false;await page.locator('[data-product-refresh]').click();await status.filter({hasText:'List refreshed.'}).waitFor();
   await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
   const callback=await page.context().newPage();callback.on('pageerror',e=>exceptions.push(e.message));
   for(const route of ['connections']){
@@ -285,9 +285,9 @@ export async function checkGuidedProduct(executable) {
   const beforeInvalidReceipt=requests.filter(r=>r.method==='POST').length, approvedRevision=catalogs.get(profiles[0].profile_id).head.revision;
   await page.locator('[data-service-list]').getByRole('button',{name:'Refresh tools',exact:true}).first().click();await status.filter({hasText:'Unexpected response.'}).waitFor();
   assert.equal(catalogs.get(profiles[0].profile_id).head.revision,approvedRevision);assert.equal(await status.getAttribute('data-error'),'true');
-  await page.locator('[data-service-list]').getByRole('button',{name:'Refresh tools',exact:true}).first().click();await status.filter({hasText:'Refresh the library before'}).waitFor();
+  await page.locator('[data-service-list]').getByRole('button',{name:'Refresh tools',exact:true}).first().click();await status.filter({hasText:'Refresh before making another change.'}).waitFor();
   assert.equal(requests.filter(r=>r.method==='POST').length,beforeInvalidReceipt+1);
-  invalidCatalogReceipt=false;await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+  invalidCatalogReceipt=false;await page.locator('[data-product-refresh]').click();await status.filter({hasText:'List refreshed.'}).waitFor();
   // Removed page instances must not redirect or continue an old workflow.
   let releaseOAuth;delayedOAuth=new Promise(resolve=>{releaseOAuth=resolve;});
   const pendingOAuth=page.waitForRequest(request=>request.url().endsWith('/connections/begin'));
@@ -296,8 +296,9 @@ export async function checkGuidedProduct(executable) {
   assert.equal(await page.locator('[data-central-product]').count(),0);
   const settledOAuth=page.waitForResponse(response=>response.url().endsWith('/connections/begin'));
   releaseOAuth();await(await settledOAuth).finished();await page.waitForLoadState('networkidle');delayedOAuth=undefined;
-  assert.equal(new URL(page.url()).pathname,'/admin');assert.equal(await page.getByRole('heading',{name:'Make your AI client more useful'}).count(),1);
-  await page.locator('.control-nav a[href="/admin/central"]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+  assert.equal(new URL(page.url()).pathname,'/admin');assert.equal(await page.getByRole('heading',{name:'Use your tools across AI clients'}).count(),1);
+  await page.locator('.control-nav a[href="/admin/central"]').click();await status.filter({hasText:'List refreshed.'}).waitFor();
+  await page.locator('[data-central-product][aria-busy="false"]').waitFor();
   assert.equal(await page.getByRole('button',{name:'Reconnect',exact:true}).isEnabled(),true);
   assert.equal(requests.filter(r=>r.path.includes('/catalogs/')&&r.method==='POST').length,0);
   assert.equal(await page.getByText('Enabled · tool review required before sharing',{exact:true}).count(),0);
@@ -306,7 +307,7 @@ export async function checkGuidedProduct(executable) {
   const discoveryPath=id=>'/admin/central/discovery/'+id;
   catalogs.delete(publicId);catalogs.delete(oauthId);rejectedProfile=publicId;
   const recoveryStart=requests.length;
-  await page.reload();await status.filter({hasText:'Sign in to this service again using Reconnect.'}).waitFor();await page.waitForLoadState('networkidle');
+  await page.reload();await status.filter({hasText:'Select Reconnect to sign in to this MCP again.'}).waitFor();await page.waitForLoadState('networkidle');
   assert.ok(catalogs.has(oauthId),'A healthy pending service must recover after another service fails');
   const recovery=requests.slice(recoveryStart),failedIndex=recovery.findIndex(r=>r.path===discoveryPath(publicId)),healthyIndex=recovery.findIndex(r=>r.path===discoveryPath(oauthId));
   assert.equal(recovery.filter(r=>r.path===discoveryPath(publicId)).length,1);
@@ -316,7 +317,7 @@ export async function checkGuidedProduct(executable) {
   // A failed refresh must still stop later recovery writes.
   catalogs.delete(oauthId);failRefreshAfterRejection=true;
   const blockedStart=requests.length;
-  await page.reload();await status.filter({hasText:'Operation could not be confirmed.'}).waitFor();await page.waitForLoadState('networkidle');
+  await page.reload();await status.filter({hasText:'Could not confirm the result. Refresh to check the status.'}).waitFor();await page.waitForLoadState('networkidle');
   assert.equal(requests.slice(blockedStart).filter(r=>r.path===discoveryPath(oauthId)).length,0);
   rejectedProfile=undefined;failRefreshAfterRejection=false;failLibrary=false;
   // OAuth return finishes its own connection and other interrupted connections once each.
@@ -328,7 +329,7 @@ export async function checkGuidedProduct(executable) {
   for(const state of ['paused','missing','unpublished']){
    afterDiscovery=id=>{if(state==='paused'){const p=profiles.find(p=>p.profile_id===id);p.enabled=false;p.revision++;}else if(state==='missing')catalogs.delete(id);else catalogs.get(id).head.approved_names=[];};
    await publicCard.getByRole('button',{name:'Refresh tools',exact:true}).click();
-   await status.filter({hasText:state==='paused'?'This service is paused or no longer available.':'Tools are not ready yet.'}).waitFor();
+   await status.filter({hasText:state==='paused'?'This MCP is paused or unavailable. Refresh to check its status.':'Could not finish loading tools. Select Refresh tools to try again.'}).waitFor();
    assert.equal((await status.textContent()).includes('Connected.'),false,'Do not announce ready after '+state);
    assert.equal(await status.getAttribute('data-error'),'true',state+': '+await status.textContent());
    assert.equal(await review.getByText('Tools from enabled services are available to all connected AI clients automatically.',{exact:true}).count(),0);
@@ -343,7 +344,7 @@ export async function checkGuidedProduct(executable) {
    await importer.getByRole('button',{name:'Install Skill',exact:true}).click();await status.filter({hasText:'This Skill is already installed.'}).waitFor();
    afterSkillInstallation=entry=>{entry.head.revision++;if(state==='paused')entry.head.enabled=false;else{entry.head.active_digest=entry.head.staged_digest='b'.repeat(64);entry.bundle.digest=entry.head.active_digest;}};
    await skillReview.getByRole('button',{name:'Update Skill',exact:true}).click();
-   await page.waitForFunction(()=>{const text=document.querySelector('[data-product-status]').textContent;return text.includes('research installed.')||text.includes('The Skill changed after installation.');});
+   await page.waitForFunction(()=>{const text=document.querySelector('[data-product-status]').textContent;return text.includes('research installed.')||text.includes('The Skill has changed. Refresh to view its current version.');});
    assert.equal((await status.textContent()).includes('research installed.'),false,'Do not report an active installation after '+state);
    assert.equal(await status.getAttribute('data-error'),'true');
   }
@@ -385,7 +386,7 @@ export async function checkGuidedProduct(executable) {
   await form.locator('[name=name]').fill('Failed sign-in service');
   await form.locator('[name=endpoint]').fill('https://unavailable.provider.com/mcp');
   await form.locator('[name=authentication]').selectOption('oauth');await form.locator('button').click();
-  await status.filter({hasText:'This service does not support automatic OAuth connection.'}).waitFor();
+  await status.filter({hasText:'Could not set up OAuth. Check the MCP URL and its support for automatic client registration.'}).waitFor();
   const savedOAuth=profiles.at(-1);
   const savedOAuthCard=page.locator('[data-service-list] .central-card').filter({has:page.getByText(savedOAuth.endpoint,{exact:true})});
   assert.equal(await savedOAuthCard.count(),1,'A saved service must remain visible when OAuth setup fails');
@@ -393,10 +394,10 @@ export async function checkGuidedProduct(executable) {
   assert.equal(requests.slice(failedOAuthStart).filter(r=>r.body?.action==='connect').length,1);
   assert.equal(requests.slice(failedOAuthStart).filter(r=>r.path==='/admin/central/connections/begin').length,1);
   await savedOAuthCard.getByRole('button',{name:'Reconnect',exact:true}).click();
-  await status.filter({hasText:'Refresh the library before making another change.'}).waitFor();
+  await status.filter({hasText:'Refresh before making another change.'}).waitFor();
   assert.equal(requests.slice(failedOAuthStart).filter(r=>r.path==='/admin/central/connections/begin').length,1,'A failed handoff must not be replayed');
   rejectOAuthStart=false;
-  await page.locator('[data-product-refresh]').click();await status.filter({hasText:'Library is up to date.'}).waitFor();
+  await page.locator('[data-product-refresh]').click();await status.filter({hasText:'List refreshed.'}).waitFor();
   await savedOAuthCard.getByRole('button',{name:'Reconnect',exact:true}).click();
   await status.filter({hasText:'Connected.'}).waitFor();
   assert.equal(requests.slice(failedOAuthStart).filter(r=>r.body?.action==='connect').length,1,'Recover the saved service without creating a duplicate');

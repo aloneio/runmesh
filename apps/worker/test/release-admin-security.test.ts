@@ -76,7 +76,7 @@ it("retains the authenticated console and session when a Runner deletion fence i
   expect(response.headers.get("set-cookie")).toBeNull();
   const page = await response.text();
   expect(page).toContain('data-app-header'); expect(page).toContain('data-admin-error');
-  expect(page).toContain('Runner deletion could not fence the Runner.');
+  expect(page).toContain('Could not start deleting the Runner. Try again.');
   expect(page).not.toContain('<body class="auth-body">');
   const next = await worker.fetch(new Request("https://audit.test/admin/runners", { headers: f.headers }), f.localEnv, {} as ExecutionContext);
   expect(next.status).toBe(200); expect(next.headers.get("location")).toBeNull(); await next.body?.cancel();

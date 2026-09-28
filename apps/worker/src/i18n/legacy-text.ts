@@ -21,7 +21,7 @@ export function localizeUiText(value: string, locale: UiLocale): string {
   if(title && catalog[title[1]!]!==undefined) return value.replace(text,catalog[title[1]!] + title[2]! + (catalog[title[3]!]??title[3]!));
   const until=/^This code is valid until ([0-9TZ:.+-]+) and can be used once\.$/.exec(text);
   if(until)return value.replace(text, () => formatMessage("enrollment.validUntil", locale, { until: until[1]! }));
-  const enrollment=/^Enrollment code was created, but the temporary Runner safety lock could not be released\. Diagnostic: ([a-z_]+)\. No enrollment code was disclosed\. Regeneration does not require deleting or reinstalling the Runner\.$/.exec(text);
-  if(enrollment)return value.replace(text,`注册码已创建，但临时安全隔离未能解除。诊断代码：${enrollment[1]}。未显示注册码，请勿因此删除或重装 Runner。`);
+  const enrollment=/^Runner setup could not finish\. Generate a new enrollment code to try again\. Diagnostic: ([a-z_]+)\.$/.exec(text);
+  if(enrollment)return value.replace(text,`Runner 配置未完成，请重新生成注册码后重试。诊断代码：${enrollment[1]}。`);
   return value;
 }

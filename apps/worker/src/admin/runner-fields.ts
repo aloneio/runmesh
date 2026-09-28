@@ -11,7 +11,7 @@ export function windowFields(prefix: "runner" | "code", maxValidityDays: number)
   return `<fieldset class="validity-fieldset"><legend>${label}</legend><label>${message("text.valid.days", "en")}<input type="number" name="${name}" value="${value}" min="${runner ? "0" : "1"}" max="${maxValidityDays}" step="1" inputmode="numeric" required></label><small>${help}</small></fieldset>`;
 }
 
-export const PRIVILEGED_HOST_WARNING = "Runner will run as root, SYSTEM, or the platform-equivalent highest-privilege identity. Shell commands can access files, processes, network, environment variables, credentials, and system services reachable by that service identity. Install only on a trusted dedicated machine, VM, or container.";
+export const PRIVILEGED_HOST_WARNING = "Runner will run as root, SYSTEM, or an equivalent account with full host privileges. Its commands can access files, processes, network, environment variables, credentials and system services available to that account. Use a trusted machine, VM or container.";
 
 export function executionModeFormFields(mode: ConsoleExecutionMode | undefined, csrf: string, interactive = false, requirePrivilegedConfirmation = mode === "privileged_host"): string {
   if (!interactive) {

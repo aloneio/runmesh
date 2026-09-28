@@ -139,29 +139,29 @@ export function browserRunnerAdministrationError(action: "create" | "rotate" | "
   const messages: Record<typeof action, Partial<Record<RunnerActionFailure["reason"], string>>> = {
     create: {
       read: "Runner creation could not read the Runner state.",
-      fence: "Runner creation could not fence the Runner.",
-      commit: "Runner creation outcome is uncertain; Runner remains safely fenced.",
-      enrollment_state: "Runner enrollment state is uncertain; Runner remains safely fenced.",
-      enrollment: "Runner enrollment code could not be created; Runner remains safely fenced.",
-      enrollment_recovery: "Runner enrollment code state is uncertain; Runner remains safely fenced.",
-      finalize: "Runner creation cleanup is uncertain; Runner remains safely fenced."
+      fence: "Could not start adding the Runner. Try again.",
+      commit: "Runner creation outcome is uncertain; Runner remains locked.",
+      enrollment_state: "Runner enrollment state is uncertain; Runner remains locked.",
+      enrollment: "Runner enrollment code could not be created; Runner remains locked.",
+      enrollment_recovery: "Runner enrollment code state is uncertain; Runner remains locked.",
+      finalize: "Runner creation cleanup is uncertain; Runner remains locked."
     },
     rotate: {
-      fence: "Runner credential rotation could not fence the Runner.",
-      commit: "Runner credential rotation outcome is uncertain; Runner remains safely fenced.",
-      cancel: "Runner credential rotation failed; Runner remains safely fenced.",
-      recovery: "Runner credential rotation state is uncertain; Runner remains safely fenced.",
-      enrollment: "Enrollment code could not be generated; Runner remains safely fenced.",
-      enrollment_recovery: "Enrollment code state is uncertain; Runner remains safely fenced.",
-      finalize: "Runner credential cleanup is uncertain; Runner remains safely fenced."
+      fence: "Could not start replacing the Runner credentials. Try again.",
+      commit: "Runner credential rotation outcome is uncertain; Runner remains locked.",
+      cancel: "Runner credential rotation failed; Runner remains locked.",
+      recovery: "Runner credential rotation state is uncertain; Runner remains locked.",
+      enrollment: "Enrollment code could not be generated; Runner remains locked.",
+      enrollment_recovery: "Enrollment code state is uncertain; Runner remains locked.",
+      finalize: "Runner credential cleanup is uncertain; Runner remains locked."
     },
     revoke: {
-      fence: "Runner revocation could not fence the Runner.",
-      commit: "Runner revocation outcome is uncertain; Runner remains safely fenced.",
-      cancel: "Runner revocation failed; Runner remains safely fenced.",
-      recovery: "Runner revocation state is uncertain; Runner remains safely fenced.",
-      finalize: "Runner revocation cleanup is uncertain; Runner remains safely fenced."
+      fence: "Could not start revoking the Runner. Try again.",
+      commit: "Runner revocation outcome is uncertain; Runner remains locked.",
+      cancel: "Runner revocation failed; Runner remains locked.",
+      recovery: "Runner revocation state is uncertain; Runner remains locked.",
+      finalize: "Runner revocation cleanup is uncertain; Runner remains locked."
     }
   };
-  return fail(503, messages[action][failure.reason] ?? "Runner mutation outcome is uncertain; Runner remains safely fenced.");
+  return fail(503, messages[action][failure.reason] ?? "Could not confirm the Runner change. Refresh to check its status.");
 }
