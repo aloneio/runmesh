@@ -67,10 +67,18 @@ export async function discoverDevelopmentRunnerRelease(dependencies: Development
   if (memory !== undefined && memory.expires_at_ms > now && usableCacheAge(memory.verified_at_ms, now, DEV_RELEASE_STALE_MS)) return memory.descriptor;
   if (now < runtime.next_refresh_at_ms) {
     if (memory !== undefined && usableCacheAge(memory.verified_at_ms, now, DEV_RELEASE_STALE_MS)) return memory.descriptor;
+    // Another request may still be loading the first persisted value. Its
+    // refresh lease limits public discovery, not reads of verified storage.
+    // Keep this I/O request-owned and do not change the owner's reservation.
+    const persisted = await readDevelopmentReleaseCache(cache);
+    now = clock();
+    const completed = runtime.cached;
+    if (completed !== undefined && usableCacheAge(completed.verified_at_ms, now, DEV_RELEASE_STALE_MS)) return completed.descriptor;
+    if (persisted !== undefined && usableCacheAge(persisted.verified_at_ms, now, DEV_RELEASE_STALE_MS)) return persisted.descriptor;
     throw new Error("development release refresh temporarily unavailable");
   }
-  // Reserve before cache I/O so concurrent cold requests cannot each read the
-  // Registry and launch a complete public GitHub discovery/verification chain.
+  // Reserve before cache I/O so concurrent cold requests cannot each launch
+  // a complete public GitHub discovery/verification chain.
   // The lease expires if its request disappears; no I/O promise crosses requests.
   const sequence = ++runtime.refresh_sequence;
   runtime.next_refresh_at_ms = now + DEV_RELEASE_REFRESH_BUDGET_MS;
