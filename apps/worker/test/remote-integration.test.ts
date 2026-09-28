@@ -46,7 +46,7 @@ async function rpc(config: WorkerEnv, secret: string, method: string, params: un
   return messages.find(message => message.id === "test");
 }
 
-async function fixture(native = false) {
+async function fixture(native = false, id = "docs") {
   const admin = await administrator(), current = await client(native);
   const ns = (env as unknown as { CAPABILITIES: DurableObjectNamespace<CapabilitiesDOv1> }).CAPABILITIES;
   const stub = ns.get(ns.idFromName("remote-fixture-" + crypto.randomUUID()));
@@ -61,7 +61,6 @@ async function fixture(native = false) {
     listCatalog: (principal, input) => call(owner => owner.listCatalog(principal, input)),
     discoverRemote: (hash, id, revision) => call(owner => owner.discoverRemote(hash, id, revision)) };
   const config = { ...configured, CAPABILITIES: { idFromName: () => "central", get: () => port } } as unknown as WorkerEnv;
-  const id = "docs";
   expect(await call(owner => owner.mutateProfile(admin.hash, { action: "connect", profile_id: id, connector_id: "example", endpoint,
     authentication: "none" }))).toMatchObject({ state: "written" });
   expect(await call(owner => owner.mutateProfile(admin.hash, { action: "enable", profile_id: id, expected_revision: 1 }))).toMatchObject({ state: "written" });
@@ -82,7 +81,7 @@ async function fixture(native = false) {
     return upstream.fetch(new Request(input, init));
   });
   const discover = async (headers = admin.headers, expectedRevision = 0) => {
-    const request = new Request(`https://worker.test/admin/central/discovery/${id}`, { method: "POST", headers, body: JSON.stringify({ expected_revision: expectedRevision }) });
+    const request = new Request(`https://worker.test/admin/central/discovery/${encodeURIComponent(id)}`, { method: "POST", headers, body: JSON.stringify({ expected_revision: expectedRevision }) });
     return handleCentralAdmin(request, config, new URL(request.url));
   };
   const toolCommand = async () => {
@@ -94,17 +93,17 @@ async function fixture(native = false) {
   return { admin, current, config, call, port, discover, toolCommand, execute, network, methods, drift: () => { description = "Unreviewed change"; } };
 }
 
-it("W05 admin discovery immediately enables client invocation crosses the real HTTP/DO/SDK chain with no Runner", async () => {
-  const f = await fixture();
+it.each(["docs", "docs:reference"])("W05 admin discovery immediately enables client invocation across the real HTTP/DO/SDK chain with no Runner (%s)", async id => {
+  const f = await fixture(false, id);
   try {
     expect((await f.discover()).status).toBe(200);
-    expect(await f.call(owner => owner.getCatalog(f.admin.hash, "docs"))).toMatchObject({ head: { approved_digest: expect.any(String), approved_names: ["lookup"], revision: 1 } });
+    expect(await f.call(owner => owner.getCatalog(f.admin.hash, id))).toMatchObject({ head: { approved_digest: expect.any(String), approved_names: ["lookup"], revision: 1 } });
     const command = await f.toolCommand();
     const list = await rpc(f.config, f.current.secret, "tools/list", {});
     expect(list.result.tools.map((tool: { name: string }) => tool.name)).toContain("remote_call");
     expect(list.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(['remote_call', 'remote_profiles', 'remote_tools']);
     const count = f.methods.length;
-    const page = await rpc(f.config, f.current.secret, "tools/call", { name: "remote_tools", arguments: { profile_id: "docs" } });
+    const page = await rpc(f.config, f.current.secret, "tools/call", { name: "remote_tools", arguments: { profile_id: id } });
     expect(JSON.parse(page.result.content[0].text).tools[0].tool_id).toBe(command.tool_id);
     expect(f.methods).toHaveLength(count);
     const response = await rpc(f.config, f.current.secret, "tools/call", { name: "remote_call", arguments: command });

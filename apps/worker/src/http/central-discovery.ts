@@ -3,9 +3,10 @@ import { REMOTE_CODES, REMOTE_LIMITS, type CentralRemote } from "../contracts/re
 import { catalogKeys, catalogRevision } from "../contracts/catalog-json.js";
 import { parseCatalogHead } from "../contracts/catalog-values.js";
 import { admitCentralAdmin, cancelCentralBody, centralHeaders, centralFailure } from "./central-boundary.js";
+import { matchIdentifierPath } from "./path-identifiers.js";
 
 export async function handleCentralDiscovery(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
-  const match = /^\/admin\/central\/discovery\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})$/u.exec(url.pathname);
+  const match = matchIdentifierPath(/^\/admin\/central\/discovery\/([^/]+)$/u, url.pathname);
   if (match === null || url.search || env.CAPABILITIES === undefined) {
     cancelCentralBody(request); return centralFailure("central_disabled", 404);
   }

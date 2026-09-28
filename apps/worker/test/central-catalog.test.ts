@@ -11,7 +11,7 @@ import { catalogDefinition, catalogProfile } from "../../../test/domain/catalog-
 const registry = () => env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
 const namespace = () => (env as unknown as { CAPABILITIES: DurableObjectNamespace<CapabilitiesDOv1> }).CAPABILITIES;
 const owner = () => namespace().get(namespace().idFromName("central"));
-const url = (id: string) => `https://worker.test/admin/central/catalogs/${id}`;
+const url = (id: string) => `https://worker.test/admin/central/catalogs/${encodeURIComponent(id)}`;
 
 async function session() {
   const raw = randomBase64Url(), csrf = randomBase64Url(), hash = await sha256Hex(raw), csrfHash = await sha256Hex(csrf);
@@ -32,8 +32,8 @@ async function client() {
   expect(result.status).toBe(200);
   return { client_id, secret_version: 1 };
 }
-async function fixture(tools: readonly RemoteToolDefinition[] = [catalogDefinition("a"), catalogDefinition("b"), catalogDefinition("c")]) {
-  const admin = await session(), id = `catalog-${crypto.randomUUID()}`, profile = catalogProfile(id);
+async function fixture(tools: readonly RemoteToolDefinition[] = [catalogDefinition("a"), catalogDefinition("b"), catalogDefinition("c")], id = `catalog-${crypto.randomUUID()}`) {
+  const admin = await session(), profile = catalogProfile(id);
   expect(await owner().mutateProfile(admin.hash, { action: "connect", profile_id: id, connector_id: profile.connector_id, endpoint: profile.endpoint,
     authentication: "none" })).toMatchObject({ state: "written" });
   expect(await owner().mutateProfile(admin.hash, { action: "enable", profile_id: id, expected_revision: 1 })).toMatchObject({ state: "written" });
@@ -50,10 +50,10 @@ async function fixture(tools: readonly RemoteToolDefinition[] = [catalogDefiniti
   return { admin, id, post, snapshot, approve };
 }
 
-it("W04 real admin HTTP stages and reviews a catalog without an upstream fetch", async () => {
+it.each(["catalog-", "catalog:"])("W04 real admin HTTP stages and reviews a catalog without an upstream fetch (%s)", async prefix => {
   const network = vi.spyOn(globalThis, "fetch");
   try {
-    const f = await fixture();
+    const f = await fixture(undefined, prefix + crypto.randomUUID());
     const response = await SELF.fetch(url(f.id), { headers: f.admin.headers }), text = await response.text();
     expect(response.status).toBe(200); expect(response.headers.get("cache-control")).toBe("no-store");
     expect(text).not.toContain("synthetic-private-catalog-token");
