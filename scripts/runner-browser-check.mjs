@@ -26,6 +26,8 @@ export async function checkRunnerActions(executable) {
           res.setHeader('location', mode === 'expired' ? '/login' : '/admin/runners'); res.end(); return;
         }
         if (mode === 'unknown') { res.statusCode = 502; res.end('PRIVATE_UPSTREAM_DIAGNOSTIC'); return; }
+        if (mode === 'stalled-headers') return;
+        if (mode === 'stalled-body') { res.write('<!doctype html><html>'); return; }
         if (mode === 'network') {
           // Lose the response after headers arrive. An empty reused HTTP
           // socket can be retried by Chromium below the application layer.
@@ -92,6 +94,26 @@ export async function checkRunnerActions(executable) {
     assert.equal(requests.length, beforeLoss + 1);
     assert.equal(page.url(), origin + '/admin/runners');
 
+    await page.clock.install();
+    for (const stalled of ['stalled-headers', 'stalled-body']) {
+      mode = stalled; const beforeStall = requests.length;
+      const response = stalled === 'stalled-body' ? page.waitForResponse(reply => reply.request().method() === 'POST') : undefined;
+      await page.getByRole('button', { name: stalled === 'stalled-body' ? 'Revoke' : 'Delete', exact: true }).click();
+      const deadline = Date.now() + 10000;
+      while (requests.length === beforeStall && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+      assert.equal(requests.length, beforeStall + 1, 'The stalled request must reach the server exactly once');
+      if (response) await response;
+      await page.clock.fastForward(25001);
+      await notice.filter({ hasText: 'outcome could not be confirmed' }).waitFor({ timeout: 2000 });
+      await page.waitForFunction(() => !document.querySelector('[data-runner-danger-action]').hasAttribute('aria-busy'), null, { timeout: 2000 });
+      assert.equal(await page.getByRole('button', { name: 'Delete', exact: true }).isEnabled(), true);
+      assert.equal(await page.getByRole('button', { name: 'Revoke', exact: true }).isEnabled(), true);
+      assert.equal(requests.length, beforeStall + 1, 'Timing out must not replay a destructive request');
+      assert.equal(page.url(), origin + '/admin/runners');
+      assert.equal(await page.locator('[data-app-header]').count(), 1);
+      assert.ok((await context.cookies()).some(cookie => cookie.name === 'fixture_console_session' && cookie.value === 'active'));
+    }
+
     mode = 'success';
     await page.getByRole('button', { name: 'Delete', exact: true }).click();
     await page.getByText('No runners yet.', { exact: true }).waitFor();
@@ -105,6 +127,6 @@ export async function checkRunnerActions(executable) {
     await page.getByRole('heading', { name: 'Sign in' }).waitFor();
     assert.equal(page.url(), origin + '/login');
     assert.deepEqual(errors, []);
-    return { state: 'passed', inline_errors: true, session_preserved: true, submitter_respected: true, duplicate_post_blocked: true, unknown_not_replayed: true, successful_delete_refresh: true, expired_session_redirect: true, screenshots: 0 };
+    return { state: 'passed', inline_errors: true, session_preserved: true, submitter_respected: true, duplicate_post_blocked: true, unknown_not_replayed: true, stalled_headers_recover: true, stalled_body_recovers: true, successful_delete_refresh: true, expired_session_redirect: true, screenshots: 0 };
   } finally { release?.(); await browser?.close(); await new Promise(resolve => server.close(resolve)); }
 }
