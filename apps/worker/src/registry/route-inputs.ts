@@ -1,5 +1,15 @@
 import { IdentifierSchema, RunnerMetadataSchema, RunnerSyncSchema } from "@aloneio/runmesh-protocol";
 import type { InternalInput } from "./records.js";
+
+export interface RunnerRouteRequest {
+  method: string;
+  runnerId: string;
+  action: string | undefined;
+  itemId: string | undefined;
+  input: InternalInput;
+  nowMs: number;
+  url: URL;
+}
 import { MAX_SYNC_ITEMS } from "./records.js";
 import { parseTransportIdentity, uniqueIds, stringField, integerField, permissionSetField, validVerifier, validMutationId, mutationIdField, scopesField } from "./values.js";
 

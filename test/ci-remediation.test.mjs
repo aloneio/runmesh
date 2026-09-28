@@ -150,8 +150,8 @@ function navigationFixture() {
     if (fixture.evaluateError) { const error = fixture.evaluateError; fixture.evaluateError = undefined; throw error; }
     fixture.evaluatedLoaders.push(state.loaderId);
     return { result: { value: runInNewContext(params.expression, {
-      location: new URL(state.url), document: { readyState: state.readyState, documentElement: { lang: state.locale } },
-      window: { __runmeshDynamicNavigation: state.initialized, __runmeshLoading: state.loading },
+      location: new URL(state.url), document: { readyState: state.readyState, documentElement: { lang: state.locale,
+        getAttribute: name => name === "data-runmesh-navigation" ? state.initialized ? "ready" : null : String(state.loading) } },
     }) } };
   };
   return fixture;

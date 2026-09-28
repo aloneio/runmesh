@@ -18,7 +18,9 @@ export function layer(path) {
 const canonicalSource = path => path.replace(/\.(?:[cm]?[jt]s|[jt]sx)$/u, ".ts");
 const browserRoot = "apps/worker/browser/";
 const browserDependencies = {
-  "admin-client.ts": ["central/controller.ts", "runner-actions.ts"],
+  "admin-client.ts": ["central/controller.ts", "runner-actions.ts", "locale.ts", "page-controls.ts", "admin-pages.ts", "admin-navigation.ts"],
+  "page-controls.ts": ["clipboard.ts"],
+  "locale.ts": [], "clipboard.ts": [], "admin-pages.ts": [], "admin-navigation.ts": [],
   "runner-actions.ts": [],
   "central/controller.ts": ["central/api.ts", "central/messages.ts", "central/view.ts", "central/services.ts", "central/skills.ts"],
   "central/api.ts": [], "central/messages.ts": [], "central/view.ts": [],
@@ -26,6 +28,8 @@ const browserDependencies = {
 };
 const registryRoute = path => /^apps\/worker\/src\/registry\/route-(?:inputs|projections)\.ts$/u.test(canonicalSource(path));
 const registryRouteAdapter = path => canonicalSource(path).startsWith("apps/worker/src/registry/routes/");
+const runnerUseCase = path => /^apps\/worker\/src\/application\/(?:create-runner|delete-runner|register-runner|runner-(?:credentials|enrollment|lifecycle|policy))\.ts$/u.test(canonicalSource(path));
+const registryCoordinator = path => /^apps\/worker\/src\/registry\/(?:history-routes|history-ports|transport-routes)\.ts$/u.test(canonicalSource(path));
 const registryPlatformTypes = new Set(["DurableObjectState", "DurableObjectStorage", "DurableObjectNamespace", "DurableObjectStub", "SqlStorage", "D1Database", "D1PreparedStatement", "ExecutionContext", "Fetcher"]);
 const networkGlobals = new Set(["fetch", "WebSocket", "XMLHttpRequest", "EventSource", "WebTransport", "Worker", "SharedWorker", "caches", "globalThis", "window", "self", "process", "Deno", "Bun"]);
 
@@ -35,6 +39,10 @@ export function boundaryNodeProblem(from, node) {
   if (registryRouteAdapter(source) && (node.type === "AwaitExpression" || node.async === true))
     return "Registry route adapters must preserve synchronous authority checks and mutations";
   if (node.type !== "Identifier") return undefined;
+  if (runnerUseCase(source) && (registryPlatformTypes.has(node.name) || networkGlobals.has(node.name) || ["WorkerEnv", "Request", "Response", "Date", "crypto", "setTimeout", "setInterval", "eval", "Function"].includes(node.name)))
+    return "Runner use cases receive operation ports and return outcomes, without HTTP or platform state";
+  if (registryCoordinator(source) && (registryPlatformTypes.has(node.name) || networkGlobals.has(node.name) || ["Date", "crypto", "setTimeout", "setInterval"].includes(node.name)))
+    return "Registry coordinators receive history and lifecycle ports, not ambient I/O or storage";
   if (registryRouteAdapter(source) && registryPlatformTypes.has(node.name))
     return "Registry route adapters receive operation ports, not platform or storage types";
   if (registryRouteAdapter(source) && (networkGlobals.has(node.name) || ["Date", "Promise", "setTimeout", "setInterval", "queueMicrotask", "eval", "Function"].includes(node.name)))
@@ -68,6 +76,8 @@ export function specifierProblem(from, specifier, typeOnly) {
   if (centralProblem) return centralProblem;
   const builtin = specifier.startsWith("node:") || isBuiltin(specifier);
   const external = !specifier.startsWith(".") && !specifier.startsWith("/");
+  if ((runnerUseCase(source) || registryCoordinator(source)) && external && !purePackages.test(specifier))
+    return "Runner use cases and Registry coordinators must not load platform implementations";
   if (source === "apps/runner/src/jobs/input.ts" && external && !(specifier === "node:stream" && typeOnly))
     return "Job stdin delivery may reference stream types only, not platform implementations";
   if (isPureRunner(source) && external && !purePackages.test(specifier) && !["node:crypto", "crypto", "node:path", "path"].includes(specifier))
@@ -129,6 +139,15 @@ export const WORKER_ALLOWED_DEPENDENCIES = Object.freeze({
 });
 export function dependencyProblem(from, to) {
   from = canonicalSource(from); to = canonicalSource(to);
+  if (runnerUseCase(from) && !(runnerUseCase(to) || /^apps\/worker\/src\/(?:contracts|domain)\//u.test(to) || to.startsWith("packages/protocol/src/")))
+    return "Runner use cases must depend on contracts and rules, not HTTP or transport adapters";
+  if (registryCoordinator(from) && ![
+    "apps/worker/src/registry/history-ports.ts", "apps/worker/src/registry/route-inputs.ts",
+    "apps/worker/src/registry/route-projections.ts", "apps/worker/src/registry/records.ts",
+    "apps/worker/src/registry/values.ts", "apps/worker/src/job-history-settings.ts",
+    "apps/worker/src/audit-metadata.ts", "apps/worker/src/control-plane-errors.ts", "apps/worker/src/security.ts",
+  ].includes(to) && !to.startsWith("apps/worker/src/contracts/") && !to.startsWith("packages/protocol/src/"))
+    return "Registry history and transport coordination must use narrow ports, not concrete owners";
   if (from.startsWith(browserRoot) && !browserDependencies[from.slice(browserRoot.length)]?.includes(to.slice(browserRoot.length)))
     return "Browser imports must follow the reviewed controller, API, presentation and workflow boundaries";
   if (registryRoute(from) && !["apps/worker/src/registry/records.ts", "apps/worker/src/registry/values.ts", "packages/protocol/src/index.ts"].includes(to))

@@ -664,7 +664,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(dashboardHtml).toMatch(headerLogoSvgTag);
     expect(dashboardHtml).not.toMatch(/<header\b[^>]*\bapp-header\b[^>]*>[\s\S]*?<img\b/i);
     expect(dashboardHtml).toContain('data-lang-toggle="zh-CN"'); expect(dashboardHtml).not.toContain("var ZH_UI_TEXT="); expect(dashboardHtml).not.toContain("智能体控制平面"); expect(dashboardHtml).not.toContain("translateTextNodes"); expect(dashboardHtml).toContain("runmesh_lang");
-    expect(dashboardHtml).toContain("@media(max-width:800px)"); expect(dashboardHtml).toContain("navigator.clipboard");
+    expect(dashboardHtml).toContain("@media(max-width:800px)"); expect(dashboardHtml).toMatch(/\.clipboard\.writeText\(/u);
     expect(dashboardHtml).toContain('class="button secondary" href="/admin">Refresh</a>');
     expect(dashboardHtml).not.toContain("data-refresh");
     expect(dashboardHtml).not.toContain("token_verifier"); expect(dashboardHtml).not.toContain("workspace_root");

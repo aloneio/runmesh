@@ -1,6 +1,7 @@
 import { deleteRunner } from "../application/delete-runner.js";
-import { fenceRunnerTransport, deleteRunnerTransport } from "../application/runner-lifecycle.js";
-import { cancelRunnerPolicyMutation } from "../application/runner-policy.js";
+import { fenceRunnerTransport } from "../platform/runner-mutations.js";
+import { deleteRunnerTransport } from "../platform/runner-mutations.js";
+import { cancelRunnerPolicyMutation } from "../platform/runner-mutations.js";
 import { runnerMutationState } from "../platform/runner-state.js";
 import { runnerRegistryRequest } from "../platform/control-plane.js";
 import type { WorkerEnv } from "../platform/env.js";

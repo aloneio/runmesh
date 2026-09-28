@@ -1,11 +1,10 @@
+import { registerRunnerFromControlPlane, revokeRunnerFromControlPlane } from "./runner-administration.js";
 import { matchIdentifierPath } from "./path-identifiers.js";
 import { deleteRunnerFromControlPlane } from "./runner-deletion.js";
-import { cancelRunnerPolicyMutation } from "../application/runner-policy.js";
 import { consumeInternalNonce } from "../platform/control-plane.js";
 import { containsControlCharacter } from "../security.js";
 import { credentialHeaders } from "./html-response.js";
 import { discardBody } from "./request.js";
-import { fenceRunnerTransport } from "../application/runner-lifecycle.js";
 import { generateRunnerToken } from "../security.js";
 import { isConfiguredSecret } from "../security.js";
 import { isRunnerAdminRequest } from "./session.js";
@@ -14,10 +13,6 @@ import { MAX_INTERNAL_RPC_BODY_BYTES } from "./constants.js";
 import { notFound } from "./responses.js";
 import { readAdminBody } from "./request.js";
 import { readCappedText as readBodyText } from "../body.js";
-import { revokeRunnerTransport } from "../application/runner-lifecycle.js";
-import { runnerMutationState } from "../application/runner-lifecycle.js";
-import { runnerRegistryRequest } from "../platform/control-plane.js";
-import { runnerTokenVerifier } from "../security.js";
 import { signedInternalHeaders } from "../platform/control-plane.js";
 import { verifyInternalRequest } from "../security.js";
 import type { WorkerEnv } from "../platform/env.js";
@@ -55,22 +50,13 @@ export async function handleRunnerAdmin(request: Request, env: WorkerEnv, url: U
   if (action === "revoke") {
     const input = await readAdminBody(request);
     if (input === undefined || input.confirmation !== runnerId) return Response.json({ error: "confirmation must equal runner_id" }, { status: 400 });
-    const mutationId = `credential-revoked-${crypto.randomUUID()}`;
-    const fenced = await fenceRunnerTransport(env, runnerId, mutationId);
-    if (!fenced.ok) return new Response("runner unavailable", { status: 503 });
-    let response: Response;
-    try { response = await runnerRegistryRequest(env, runnerId, "/revoke", "POST", JSON.stringify({ confirmation: runnerId, mutation_id: mutationId })); } catch { return new Response("registry mutation outcome is uncertain; Runner remains safely fenced", { status: 503 }); }
-    if (!response.ok) {
-      if (![400, 404, 409].includes(response.status)) return new Response("registry mutation outcome is uncertain; Runner remains safely fenced", { status: 503 });
-      try {
-        const cancelled = await cancelRunnerPolicyMutation(env, runnerId, mutationId);
-        if (!cancelled.ok) return new Response("Runner remains safely fenced", { status: 503 });
-      } catch { return new Response("Runner remains safely fenced", { status: 503 }); }
-      return new Response("runner revoke failed", { status: response.status });
-    }
-    try { await revokeRunnerTransport(env, runnerId, mutationId); }
-    catch { return new Response("runner revocation cleanup is uncertain; Runner remains safely fenced", { status: 503 }); }
-    return new Response(null, { status: 204 });
+    const result = await revokeRunnerFromControlPlane(env, runnerId);
+    if (result.state === "completed") return new Response(null, { status: 204 });
+    if (result.reason === "fence") return new Response("runner unavailable", { status: 503 });
+    if (result.reason === "write") return new Response("runner revoke failed", { status: result.cause === "missing" ? 404 : result.cause === "conflict" ? 409 : 400 });
+    if (result.reason === "commit") return new Response("registry mutation outcome is uncertain; Runner remains safely fenced", { status: 503 });
+    if (result.reason === "finalize") return new Response("runner revocation cleanup is uncertain; Runner remains safely fenced", { status: 503 });
+    return new Response("Runner remains safely fenced", { status: 503 });
   }
   return notFound();
 }
@@ -95,57 +81,16 @@ async function registerRunner(env: WorkerEnv, runnerId: string, input: Record<st
   if (requestedMode === "privileged_host" && input?.confirm_privileged_host !== true) return Response.json({ error: "privileged_host requires confirmation" }, { status: 400 });
   const token = typeof supplied === "string" ? supplied : generateRunnerToken(); const pepper = env.RUNNER_TOKEN_PEPPER;
   if (!isConfiguredSecret(pepper) || !isConfiguredSecret(env.INTERNAL_CONTROL_SECRET)) return new Response("admin control plane is not configured", { status: 503 });
-  const mutationId = `credential-rotated-${crypto.randomUUID()}`;
-  let existingResponse: Response;
-  try { existingResponse = await runnerRegistryRequest(env, runnerId, "", "GET", ""); } catch { return new Response("registry unavailable", { status: 503 }); }
-  if (!existingResponse.ok && existingResponse.status !== 404) return new Response("registry unavailable", { status: 503 });
-  if (existingResponse.status === 404 && requestedMode === undefined) return Response.json({ error: "execution_mode is required when creating a Runner" }, { status: 400 });
-  // A missing Registry row does not prove that the corresponding RunnerDO is
-  // empty: a prior delete may have committed in Registry while transport
-  // cleanup failed, leaving an authenticated pre-hello socket behind. Always
-  // acquire the DO fence before creating or replacing a credential.
-  const fenced = await fenceRunnerTransport(env, runnerId, mutationId);
-  if (!fenced.ok) return new Response("runner unavailable", { status: 503 });
-  let response: Response;
-  try {
-    // Creation mutations are recorded with a synthetic pre-version in
-    // Registry, making the same fenced cleanup/retry protocol work for both a
-    // fresh row and an existing credential replacement.
-    response = await runnerRegistryRequest(env, runnerId, "", "PUT", JSON.stringify({ token_verifier: await runnerTokenVerifier(token, pepper), mutation_id: mutationId, ...(requestedMode === undefined ? {} : { execution_mode: requestedMode }) }));
-  } catch {
-    const state = await runnerMutationState(env, runnerId, mutationId).catch(() => undefined);
-    if (state?.mutation_committed === true) {
-      // The Registry marker and the RunnerDO mutation owner jointly identify
-      // this exact registration.  The row may have crossed a delete/recreate
-      // lifecycle after the initial GET, so let the transport finalizer accept
-      // the committed marker's new lifecycle; it still fails closed when the
-      // marker is absent, stale, or owned by another mutation.
-      try { await revokeRunnerTransport(env, runnerId, mutationId, true); } catch { /* remain fenced */ }
-    } else {
-      try { await cancelRunnerPolicyMutation(env, runnerId, mutationId); } catch { /* remain fenced */ }
-    }
+  const result = await registerRunnerFromControlPlane(env, runnerId, token, pepper, requestedMode);
+  if (result.state === "failed") {
+    if (result.reason === "mode_required") return Response.json({ error: "execution_mode is required when creating a Runner" }, { status: 400 });
+    if (result.reason === "read") return new Response("registry unavailable", { status: 503 });
+    if (result.reason === "fence") return new Response("runner unavailable", { status: 503 });
+    if (result.reason === "write") return new Response("runner registration failed", { status: result.cause === "invalid" ? 400 : result.cause === "missing" ? 404 : 409 });
+    if (result.reason === "post_commit") return new Response("registry mutation failed after commit", { status: 503 });
+    if (result.reason === "recovery") return new Response("Runner remains safely fenced", { status: 503 });
+    if (result.reason === "finalize") return new Response("runner credential cleanup is uncertain; Runner remains safely fenced", { status: 503 });
     return new Response("registry mutation outcome is uncertain; Runner remains safely fenced", { status: 503 });
   }
-  if (!response.ok) {
-    if (![400, 404, 409].includes(response.status)) return new Response("registry mutation outcome is uncertain; Runner remains safely fenced", { status: 503 });
-    const state = await runnerMutationState(env, runnerId, mutationId).catch(() => undefined);
-    if (state?.mutation_committed === true) {
-      try { await revokeRunnerTransport(env, runnerId, mutationId, true); } catch { return new Response("Runner remains safely fenced", { status: 503 }); }
-      return new Response("registry mutation failed after commit", { status: 503 });
-    }
-    try {
-      const cancelled = await cancelRunnerPolicyMutation(env, runnerId, mutationId);
-      if (!cancelled.ok) return new Response("Runner remains safely fenced", { status: 503 });
-    } catch { return new Response("Runner remains safely fenced", { status: 503 }); }
-    return new Response("runner registration failed", { status: response.status });
-  }
-  const committed = await runnerMutationState(env, runnerId, mutationId).catch(() => undefined);
-  if (committed?.mutation_committed !== true) return new Response("registry mutation outcome is uncertain; Runner remains safely fenced", { status: 503 });
-  // A concurrent delete/recreate can replace the lifecycle between the
-  // pre-fence GET and this finalizer.  `allow_lifecycle_change` is safe here:
-  // RunnerDO still requires ownership of this mutation ID and verifies that
-  // Registry committed the matching marker before it closes any socket.
-  try { await revokeRunnerTransport(env, runnerId, mutationId, true); }
-  catch { return new Response("runner credential cleanup is uncertain; Runner remains safely fenced", { status: 503 }); }
   return Response.json({ runner_id: runnerId, token }, { headers: credentialHeaders("application/json; charset=utf-8") });
 }

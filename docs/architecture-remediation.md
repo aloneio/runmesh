@@ -165,7 +165,7 @@ I/O adapters explicitly; reviewed hash/path calculations and platform type ports
 have named exceptions. Patch contracts use `path-contracts.ts` while preserving
 the `PathSnapshot` compatibility export and resolved-path shape.
 
-Eight Job fault scenarios use the atomic-file port. Concurrency, enrollment-fence
+Job fault scenarios use the atomic-file port. Concurrency, enrollment-fence
 recovery and reporting-bridge tests use RegistryRequestPort with real DO storage,
 process execution, cancellation and observable-state assertions.
 
@@ -185,8 +185,9 @@ survive. Neither migrated test reads or mutates JobManager's private maps.
 Registry route parsing lives in `registry/route-inputs.ts`; policy/workspace
 and merged audit response projections live in `registry/route-projections.ts`.
 These functions receive values and do not acquire state or perform I/O. RegistryDO
-continues to own signed-request admission, transaction/nonce ordering, identity
-checks, SQL and post-await lifecycle revalidation. Pure and route regressions
+continues to own signed-request admission and transaction/nonce ordering. Registry
+state owners retain identity and SQL authority; history coordinators recheck the
+current lifecycle through owner ports after external reads. Pure and route regressions
 preserve validation errors, status codes, projection fields and audit ordering.
 
 Registry authorization route adapters live in registry/routes/: admin owns
@@ -210,3 +211,39 @@ also guards against reintroducing these retired private test seams.
 Keep JobManager and RunnerDO as state owners. Run generated-source, contract,
 dependency and fault regressions with the required package, native and browser
 checks; record passes, skips and unexecuted environments for the candidate SHA.
+
+## Native administration and browser composition
+
+Runner creation, token registration, credential rotation/revocation, enrollment
+regeneration, deletion and policy changes use contracts and explicit operation
+ports. These application use cases return typed outcomes and cannot import
+Worker transport, construct Request/Response, read platform globals or acquire
+time/randomness. HTTP modules compose operations and translate outcomes; signed
+RunnerDO mutation transport lives in platform/runner-mutations.ts. Mutation IDs,
+commit evidence, uncertain-write handling and finalization remain one workflow.
+
+Registry runner-lifecycle and runner-policy-read adapters are synchronous. Policy
+revision evidence is queried once through RegistryPolicy.policyMutationId.
+history-routes and transport-routes coordinate only their injected operations;
+they do not own database bindings or import state owners. D1 history failures stay
+explicit and never become a successful empty fallback. Request admission invokes
+the matching coordinator directly, without a yield between authority and a
+synchronous mutation. Alarm scheduling stays with RegistryDO.
+
+The browser entry composes locale, clipboard, page-controls, admin-pages and
+admin-navigation. Initial and mounted pages share one idempotent control binder.
+Navigation has one instance-owned pending/queued state; readiness is projected
+through data-runmesh-navigation and data-runmesh-navigation-busy on the document.
+Tests import modules normally and inspect DOM behavior rather than slicing source
+or depending on private window flags.
+
+Runtime fault tests capture children at JobProcessPort, intercept file operations
+at JobFilePort and load persisted recovery fixtures. Only the three named persist
+timing exceptions remain. Completion and retained-record operations have scoped
+ports in jobs/completion.ts and jobs/retention.ts; JobManager still exclusively
+owns all maps, publication and process retirement. Synthetic replacement races
+exercise those operations directly, with durable-write, event and retirement
+assertions. Public JobManager tests retain actual child, cancellation, late-output
+and restart coverage. Recovery concurrency tests now run across host platforms
+using controlled process inspections rather than private maps or process.kill
+interception; native process behavior remains covered separately.

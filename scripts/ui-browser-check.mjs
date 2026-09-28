@@ -21,7 +21,7 @@ export async function waitForUiNavigation(tab, expected, { now = Date.now, pause
    const { frameTree } = await read("Page.getFrameTree");
    if (matchesFrame(frameTree.frame)) {
     const value = await read("Runtime.evaluate", {
-     expression: "({url:location.href,locale:document.documentElement?.lang,ready:document.readyState==='complete'&&window.__runmeshDynamicNavigation===true&&!window.__runmeshLoading})",
+     expression: "({url:location.href,locale:document.documentElement?.lang,ready:document.readyState==='complete'&&document.documentElement?.getAttribute('data-runmesh-navigation')==='ready'&&document.documentElement?.getAttribute('data-runmesh-navigation-busy')!=='true'})",
      returnByValue: true,
     });
     if (value.exceptionDetails) throw new Error("Browser navigation readiness evaluation failed");

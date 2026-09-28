@@ -22,6 +22,15 @@ Fixtures cover `.mts`, `.cts`, JSX, bare built-ins such as `dgram` and `dns/prom
 
 Central MCP providers consume public contracts, helpers within their own provider and reviewed server/schema SDKs. They cannot import application or platform implementations, unreviewed external packages, client SDKs, or platform I/O globals. Fixtures include direct imports, types, re-exports, nested helpers and dynamic imports. Protocol execution and persistence are injected through ports by composition.
 
+Native Runner mutation use cases have a stricter boundary than request adapters:
+only contracts, rules and peer use cases are allowed, with no HTTP/platform globals.
+Registry mutation route adapters cannot yield; asynchronous history/transport
+coordinators receive narrow ports and cannot import concrete storage or owners.
+Browser navigation and page controls cannot import each other. Runtime tests may
+not reintroduce private maps/methods or unknown-cast test interfaces outside the
+three documented persist exceptions; public runtime.jobs and the process probe
+are explicitly distinguished from private JobManager state.
+
 ## Scope and limits
 
 The checker reads source without importing it or executing embedded installer text. It conservatively treats bare `require()` as module loading. Parsing is bounded to 5,000 files, 1 MiB per file, 16 MiB total source and 20,000 directory entries; parser or tooling failures produce a failed check.

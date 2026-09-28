@@ -1,3 +1,5 @@
+import { finishJobCompletion } from "./jobs/completion.js";
+import { removeRetainedJobIfCurrent } from "./jobs/retention.js";
 import { deliverJobInput } from "./jobs/input.js";
 import { availableLogBytes } from "./jobs/log-budget.js";
 import { retainedJobCandidates, expiredRetainedJob } from "./jobs/retention-plan.js";
@@ -10,7 +12,7 @@ import { randomUUID } from "node:crypto";
 import type { ChildProcess } from "node:child_process";
 import type { open } from "node:fs/promises";
 import type { PathPolicy } from "./path-policy.js";
-import type { JobRecord, RecoveryLiveness, LocalJobStatus, JobEvent } from "./jobs/records.js";
+import type { JobRecord, RecoveryLiveness, JobEvent } from "./jobs/records.js";
 export type { JobRecord, RecoveryLiveness, LocalJobStatus, JobEvent } from "./jobs/records.js";
 import { isActive, occupiesProcessSlot, sameJobProcessIdentity, safeJobId, normalizeJobRecord, isJobStatus } from "./jobs/records.js";
 import { parseInvocation, paramsObject, bounded, positiveInteger, boundedPositiveInteger, relativeWorkspacePath, safeOptionalIdentifier, safeOptionalRequestId, launchRequestFingerprint } from "./jobs/values.js";
@@ -841,27 +843,19 @@ export class JobManager {
    * await boundary so a stale pruning list cannot delete an active record (or
    * a directory whose metadata is still being durably written).
    */
-  private async removeRetainedJobIfCurrent(job: JobRecord): Promise<boolean> {
-    const canRemove = (): boolean => {
-      const current = this.jobs.get(job.job_id);
-      return current === job
-        && !occupiesProcessSlot(current)
-        && !this.finishing.has(job.job_id)
-        && !this.persistChains.has(job.job_id);
-    };
-    if (!canRemove()) return false;
-    const size = this.jobLogBytes.get(job.job_id) ?? await this.jobLogSize(job.job_id);
-    // jobLogSize() is asynchronous; do not trust the pre-await identity check.
-    if (!canRemove()) return false;
-    await this.files.rm(this.jobDir(job.job_id), { recursive: true, force: true, maxRetries: 3, retryDelay: 25 });
-    // A state transition is not expected for terminal records, but it can
-    // occur in injected/recovery paths while this.files.rm() is in flight. Never delete a
-    // newer map entry or subtract its accounting in that case.
-    if (!canRemove()) return false;
-    this.totalLogBytes = Math.max(0, this.totalLogBytes - size);
-    this.jobLogBytes.delete(job.job_id);
-    this.jobs.delete(job.job_id);
-    return true;
+  private removeRetainedJobIfCurrent(job: JobRecord): Promise<boolean> {
+    return removeRetainedJobIfCurrent(job, {
+      current: () => this.jobs.get(job.job_id),
+      busy: () => this.finishing.has(job.job_id) || this.persistChains.has(job.job_id),
+      cachedBytes: () => this.jobLogBytes.get(job.job_id),
+      measureBytes: () => this.jobLogSize(job.job_id),
+      removeFiles: () => this.files.rm(this.jobDir(job.job_id), { recursive: true, force: true, maxRetries: 3, retryDelay: 25 }),
+      retire: size => {
+        this.totalLogBytes = Math.max(0, this.totalLogBytes - size);
+        this.jobLogBytes.delete(job.job_id);
+        this.jobs.delete(job.job_id);
+      },
+    });
   }
 
   private async reconcileRecoveredJob(jobId: string): Promise<void> {
@@ -1039,138 +1033,20 @@ export class JobManager {
     await this.finish(jobId, observed.code, observed.signal, observed.spawnFailed);
   }
 
-  private async finishOnce(jobId: string, code: number | null, signal: NodeJS.Signals | null, spawnFailed: boolean): Promise<void> {
-    const pendingTermination = this.terminationAttempts.get(jobId);
-    let pendingDelivered = pendingTermination === undefined ? false : await pendingTermination.catch(() => false);
-    await this.flushLogs(jobId);
-    // A cancellation can register its termination decision while the log
-    // durability barrier is in flight. Observe that newer promise as well;
-    // otherwise this completion could classify a delivered signal as failed
-    // and overwrite its evidence before cancel() resumes.
-    const pendingAfterFlush = this.terminationAttempts.get(jobId);
-    if (pendingAfterFlush !== undefined && pendingAfterFlush !== pendingTermination) pendingDelivered = (await pendingAfterFlush.catch(() => false)) || pendingDelivered;
-    // Cancellation/recovery checks can terminalize the record while log
-    // durability is in flight. Re-read after that await so a stale active
-    // snapshot can never resurrect an already terminal identity decision.
-    const prior = this.jobs.get(jobId);
-    if (prior === undefined || !isActive(prior)) return;
-    const current = this.jobs.get(jobId) ?? prior;
-    const deliveredCancellation = current.status === "cancelling" && (pendingDelivered || this.terminationDelivered.has(jobId) || current.cancellation_delivered_at_ms !== null);
-    // A code-zero exit is a successful process completion even if cancel raced
-    // with it. Cancellation is reserved for a delivered termination with an
-    // abnormal/signal exit, so status does not overstate what happened.
-    const status: LocalJobStatus = spawnFailed ? "failed" : code === 0 ? "succeeded" : deliveredCancellation ? "cancelled" : "failed";
-    // A pending termination can settle before cancel() gets a chance to write
-    // its delivery marker (for example, when the platform emits `close`
-    // synchronously from the terminator). Preserve that evidence on the
-    // terminal record so a restart cannot reinterpret a delivered request as
-    // an ordinary interruption. This also applies when the process exits 0
-    // after a delivered cancellation race.
-    const cancellationDeliveredAt = current.cancellation_delivered_at_ms ?? (deliveredCancellation ? Date.now() : null);
-    let completed: JobRecord = {
-      ...current, status, updated_at_ms: Date.now(), completed_at_ms: Date.now(),
-      exit_code: status === "cancelled" ? null : code, signal,
-      cancellation_delivered_at_ms: cancellationDeliveredAt,
-    };
-    // Keep the in-memory record active until the terminal metadata is durable,
-    // but reserve the terminal write first.  `start()` may still be finishing
-    // its post-spawn running write; persist() uses this reservation to discard
-    // that stale active snapshot rather than letting it run after the terminal
-    // callback and overwrite the durable outcome.
-    this.terminalPersisting.add(jobId);
-    try {
-      await this.persist(completed);
-      // The terminal write yields to the filesystem and persistence queue. A
-      // recovery/cancellation callback can publish a newer terminal identity
-      // during that window. Do not overwrite it (or emit a duplicate
-      // completion event) when this stale finish task resumes. The map check
-      // is intentionally after the durability barrier: before it, `prior` is
-      // still the active record whose terminal write is authorized above.
-      const afterPersist = this.jobs.get(jobId);
-      if (afterPersist === undefined) {
-        this.processes.delete(jobId);
-        this.terminationDelivered.delete(jobId);
-        return;
-      }
-      if (afterPersist !== prior) {
-        // A newer active snapshot may have been published while the terminal
-        // write was in flight (for example output_truncated, or a concurrent
-        // cancellation). Never blindly replace it with the stale completed
-        // object. A running snapshot can be safely merged only when it still
-        // names the same child identity; preserve every newer field and
-        // recompute the terminal cancellation evidence from that snapshot.
-        if (!isActive(afterPersist) || !sameJobProcessIdentity(afterPersist, prior)) {
-          // A different active identity may now own this job key. Its
-          // ChildProcess/termination marker belongs to that newer process;
-          // never clean those maps from this stale completion callback. A
-          // terminal replacement has no newer process, so retire the old
-          // handle in that case.
-          if (!isActive(afterPersist)) {
-            this.processes.delete(jobId);
-            this.terminationDelivered.delete(jobId);
-          }
-          return;
-        }
-        // A cancellation that has not yet produced delivery evidence owns the
-        // state transition. Let its process/close path finish the job instead
-        // of converting a newer cancelling snapshot into a stale success or
-        // failure. This is deliberately conservative even for an exit code of
-        // zero: the cancellation caller may still be persisting its decision.
-        const latestAttempt = this.terminationAttempts.get(jobId);
-        if (latestAttempt !== undefined) pendingDelivered = (await latestAttempt.catch(() => false)) || pendingDelivered;
-        const cancellationPending = afterPersist.status === "cancelling"
-          && !pendingDelivered
-          && !this.terminationDelivered.has(jobId)
-          && afterPersist.cancellation_delivered_at_ms === null;
-        if (cancellationPending) {
-          // The first terminal write was authorized against `prior`, but the
-          // cancellation snapshot now owns this identity.  Keep the active
-          // state on disk as well as in memory before returning; otherwise a
-          // synthetic/late cancellation could leave a durable `succeeded`
-          // record with no completion event for the still-cancelling job.
-          // Drop the terminal reservation for this one current snapshot so
-          // persist() does not intentionally suppress it as stale.
-          this.terminalPersisting.delete(jobId);
-          await this.persist(afterPersist);
-          return;
-        }
-        const mergedDelivered = afterPersist.status === "cancelling"
-          && (pendingDelivered || this.terminationDelivered.has(jobId) || afterPersist.cancellation_delivered_at_ms !== null);
-        const mergedStatus: LocalJobStatus = spawnFailed ? "failed" : code === 0 ? "succeeded" : mergedDelivered ? "cancelled" : "failed";
-        const mergedCancellationDeliveredAt = afterPersist.cancellation_delivered_at_ms ?? (mergedDelivered ? Date.now() : null);
-        completed = {
-          ...afterPersist,
-          status: mergedStatus,
-          updated_at_ms: Date.now(),
-          completed_at_ms: Date.now(),
-          exit_code: mergedStatus === "cancelled" ? null : code,
-          signal,
-          cancellation_delivered_at_ms: mergedCancellationDeliveredAt,
-        };
-        // Persist the merged terminal snapshot as the first write intentionally
-        // used the older active identity. terminalPersisting permits this
-        // pre-publication terminal write, while the identity check below
-        // prevents a second active update from being overwritten.
-        await this.persist(completed);
-        const afterMergedPersist = this.jobs.get(jobId);
-        if (afterMergedPersist !== afterPersist) {
-          // Preserve a different active identity's process handle. Retire
-          // only when the map is absent/terminal or still names this child.
-          if (afterMergedPersist === undefined || !isActive(afterMergedPersist) || sameJobProcessIdentity(afterMergedPersist, afterPersist)) {
-            this.processes.delete(jobId);
-            this.terminationDelivered.delete(jobId);
-          }
-          return;
-        }
-      }
-      this.jobs.set(jobId, completed);
-      this.processes.delete(jobId);
-      this.terminationDelivered.delete(jobId);
-      this.onEvent({ type: "completed", job: completed });
-      await this.pruneRetainedJobs();
-    } finally {
-      this.terminalPersisting.delete(jobId);
-    }
+  private finishOnce(jobId: string, code: number | null, signal: NodeJS.Signals | null, spawnFailed: boolean): Promise<void> {
+    return finishJobCompletion({
+      current: () => this.jobs.get(jobId),
+      pendingTermination: () => this.terminationAttempts.get(jobId),
+      terminationDelivered: () => this.terminationDelivered.has(jobId),
+      flushLogs: () => this.flushLogs(jobId),
+      persist: record => this.persist(record),
+      reserveTerminal: reserved => { if (reserved) this.terminalPersisting.add(jobId); else this.terminalPersisting.delete(jobId); },
+      retireProcess: () => { this.processes.delete(jobId); this.terminationDelivered.delete(jobId); },
+      publish: record => { this.jobs.set(jobId, record); },
+      completed: job => this.onEvent({ type: "completed", job }),
+      prune: () => this.pruneRetainedJobs(),
+      now: () => Date.now(),
+    }, code, signal, spawnFailed);
   }
 
   private async flushLogs(jobId: string): Promise<void> {
