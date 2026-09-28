@@ -897,8 +897,8 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const response = await submitForm("/admin/runners", { csrf_token: csrf, display_name: "Enrollment E2E Runner", runner_id: runnerId, execution_mode: "dedicated_user" }, adminJar);
     expect(response.status).toBe(200);
     const html = await response.text();
-    expect(html).toContain("Manual portable-artifact enrollment");
-    expect(html).toContain("Manual Runner enrollment and install");
+    expect(html).toContain("Manual Runner setup");
+    expect(html).toContain("Install the verified Runner package, then run the commands below. Enter the enrollment code when prompted.");
     expect(html).toContain("RUNNER=/opt/runmesh/current/bin/runmesh");
     expect(html).toContain("C:\\Program Files\\Runmesh\\current\\runmesh.cmd");
     expect(html).toContain('sudo &quot;$RUNNER&quot; enroll');
