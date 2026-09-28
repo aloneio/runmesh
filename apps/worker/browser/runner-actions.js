@@ -25,8 +25,11 @@ export function bindRunnerActions(root) {
       controls.forEach(control => { control.disabled = true; });
       notice.hidden = true;
       notice.textContent = '';
+      const controller = new AbortController();
+      // Bound both response headers and body; an expired write remains unknown.
+      const timer = setTimeout(() => controller.abort(), 25000);
       try {
-        const response = await fetch(action.href, { method: 'POST', body, credentials: 'same-origin', cache: 'no-store' });
+        const response = await fetch(action.href, { method: 'POST', body, credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
         if (!form.isConnected) return;
         const destination = new URL(response.url, location.href);
         if (response.redirected && destination.origin === location.origin
@@ -43,6 +46,7 @@ export function bindRunnerActions(root) {
         notice.textContent = unknown;
         notice.hidden = false;
       } finally {
+        clearTimeout(timer);
         // A user may have navigated away while the request was pending.
         // Re-enabling this form never issues another mutation.
         pending = false;
