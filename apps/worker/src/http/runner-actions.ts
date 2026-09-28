@@ -19,12 +19,12 @@ import { registryPost } from "../platform/control-plane.js";
 import { runnerEnrollmentPage } from "./admin-presentation.js";
 import { runnerExecutionSnapshot } from "../application/runner-queries.js";
 import { runnerRegistryRequest } from "../platform/control-plane.js";
-import { runnerReleaseDescriptor } from "../distribution/release.js";
+import { runnerReleaseDescriptor, resolveRunnerReleaseDescriptor } from "../distribution/release.js";
 import { runnerWindowFromForm } from "./input.js";
 import { validLabel } from "./input.js";
 import { validRunnerVersion } from "./input.js";
 import type { WorkerEnv } from "../platform/env.js";
-import { registryDevelopmentReleaseCache } from "./release-cache.js";
+import { developmentReleaseDependencies } from "./release-cache.js";
 
 /**
  * Render mode fields for an authenticated action. Unconfigured rows render an
@@ -44,7 +44,7 @@ export async function createBrowserRunner(env: WorkerEnv, form: FormData, baseUr
   if (!isSafeIdentifier(runnerId) || typeof displayName !== "string" || !validLabel(displayName)) return adminError(400, "Runner identifier or display name is invalid.");
   const result = await createRunnerFromControlPlane(env, runnerId, { displayName, selection, validity: runnerValidity, ttlMs: enrollmentTtlMs, window: enrollmentWindow });
   if (result.state === "failed") return browserRunnerAdministrationError("create", result);
-  return runnerEnrollmentPage(env, baseUrl, runnerId, result.enrollment.code, String(form.get("csrf_token") ?? ""), false, selection.mode, selection.confirmed, result.enrollment, registryDevelopmentReleaseCache(env), scheduleRefresh);
+  return runnerEnrollmentPage(env, await resolveRunnerReleaseDescriptor(env, developmentReleaseDependencies(env), scheduleRefresh), baseUrl, runnerId, result.enrollment.code, String(form.get("csrf_token") ?? ""), false, selection.mode, selection.confirmed, result.enrollment);
 }
 
 export async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, baseUrl: string, runnerId: string, action: "rename" | "rotate" | "revoke" | "delete" | "enrollment" | "validity" | "permissions" | "version-policy" | "emergency-lock" | "workspace-create" | "workspace-update" | "workspace-delete", scheduleRefresh?: DevelopmentReleaseRefreshScheduler): Promise<Response> {
@@ -109,7 +109,7 @@ export async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, 
     if (selection === undefined) return adminError(400, "Runner execution mode must be selected explicitly; privileged-host mode also requires confirmation.");
     const result = await rotateRunnerFromControlPlane(env, runnerId, initialState.snapshot, { selection, ttlMs: enrollmentTtlMs, window: enrollmentWindow });
     if (result.state === "failed") return browserRunnerAdministrationError("rotate", result);
-    return runnerEnrollmentPage(env, baseUrl, runnerId, result.enrollment.code, String(form.get("csrf_token") ?? ""), true, selection.mode, selection.confirmed, result.enrollment, registryDevelopmentReleaseCache(env), scheduleRefresh);
+    return runnerEnrollmentPage(env, await resolveRunnerReleaseDescriptor(env, developmentReleaseDependencies(env), scheduleRefresh), baseUrl, runnerId, result.enrollment.code, String(form.get("csrf_token") ?? ""), true, selection.mode, selection.confirmed, result.enrollment);
   }
   if (action === "enrollment") {
     const initialState = await runnerExecutionSnapshot(env, runnerId);
@@ -123,7 +123,7 @@ export async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, 
       const message = result.reason === "fence" ? "Could not start Runner registration. Try again." : result.reason === "recovery" ? "Runner enrollment state is uncertain; Runner remains locked." : result.reason === "enrollment_recovery" ? "Enrollment code state is uncertain; Runner remains locked." : "Enrollment code creation is uncertain; Runner remains locked.";
       return adminError(503, message);
     }
-    return runnerEnrollmentPage(env, baseUrl, runnerId, result.enrollment.code, String(form.get("csrf_token") ?? ""), true, selection.mode, selection.confirmed, result.enrollment, registryDevelopmentReleaseCache(env), scheduleRefresh);
+    return runnerEnrollmentPage(env, await resolveRunnerReleaseDescriptor(env, developmentReleaseDependencies(env), scheduleRefresh), baseUrl, runnerId, result.enrollment.code, String(form.get("csrf_token") ?? ""), true, selection.mode, selection.confirmed, result.enrollment);
   }
   return adminError(404, "Runner enrollment action is not available.");
 }

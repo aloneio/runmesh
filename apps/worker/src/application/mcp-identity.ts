@@ -1,7 +1,7 @@
 import type { CodingScope } from "../contracts/administration.js";
 import { parseClientIdentity, parseNativeScopes } from "../contracts/identity.js";
 import { ControlPlaneUnavailableError } from "../control-plane-errors.js";
-import { boundedJsonReceipt } from "../platform/bounded-json.js";
+import { boundedJsonReceipt } from "../bounded-json.js";
 import { isSafeIdentifier } from "../security.js";
 import { record } from "../values.js";
 import { registryRequest } from "../platform/control-plane.js";

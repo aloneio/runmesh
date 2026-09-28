@@ -1,3 +1,4 @@
+import { runnerReleaseDescriptor } from "../src/distribution/release.js";
 import { describe, expect, it } from "vitest";
 import {
   FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS,
@@ -74,7 +75,7 @@ describe("hosted installer origin and template safety", () => {
 
   it("embeds enrollment codes in hosted commands while keeping manual enrollment available", async () => {
     const code = "A".repeat(43);
-    const page = await runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }, "https://worker.example", "runner-test", code, "csrf", false, "privileged_host", true);
+    const page = await runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }, runnerReleaseDescriptor({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }), "https://worker.example", "runner-test", code, "csrf", false, "privileged_host", true);
     expect(page.status).toBe(200);
     const html = await page.text();
     // Without a verified release gate, the manual path still prompts locally.
@@ -83,10 +84,10 @@ describe("hosted installer origin and template safety", () => {
     expect(html).not.toContain(`--code ${code}`);
     expect(html).toContain("--code-stdin");
 
-    const rejected = await runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }, "https://evil.example/path", "runner-test", code, "csrf");
+    const rejected = await runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }, runnerReleaseDescriptor({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }), "https://evil.example/path", "runner-test", code, "csrf");
     expect(rejected.status).toBe(421);
 
-    const hosted = await runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example", RUNMESH_SIGNED_RELEASE_AVAILABLE: FIXED_RELEASE_VERSION }, "https://worker.example", "runner-test", code, "csrf", false, "privileged_host", true);
+    const hosted = await runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example", RUNMESH_SIGNED_RELEASE_AVAILABLE: FIXED_RELEASE_VERSION }, runnerReleaseDescriptor({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example", RUNMESH_SIGNED_RELEASE_AVAILABLE: FIXED_RELEASE_VERSION }), "https://worker.example", "runner-test", code, "csrf", false, "privileged_host", true);
     expect(hosted.status).toBe(200);
     const hostedHtml = await hosted.text();
     expect(hostedHtml).toContain(code);
@@ -104,13 +105,13 @@ describe("hosted installer origin and template safety", () => {
 
   it("states the selected execution mode and enforces privileged confirmation on the enrollment page", async () => {
     const code = "B".repeat(43);
-    const page = await runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }, "https://worker.example", "runner-test", code, "csrf", false, "privileged_host", true);
+    const page = await runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }, runnerReleaseDescriptor({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }), "https://worker.example", "runner-test", code, "csrf", false, "privileged_host", true);
     expect(page.status).toBe(200);
     const html = await page.text();
     expect(html).toContain("Full host control (privileged_host)");
     expect(html).toContain("Runner will run as root, SYSTEM, or an equivalent account with full host privileges.");
     expect(html).toContain("--confirm-privileged-host");
-    expect((await runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }, "https://worker.example", "runner-test", code, "csrf", false, "privileged_host")).status).toBe(400);
+    expect((await runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }, runnerReleaseDescriptor({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }), "https://worker.example", "runner-test", code, "csrf", false, "privileged_host")).status).toBe(400);
   });
 
   it("never treats Runner-reported execution mode as administrator authorization", () => {

@@ -1,5 +1,5 @@
 import { cancelRunnerPolicyMutation } from "../platform/runner-mutations.js";
-import { boundedJsonResponse } from "../platform/bounded-json.js";
+import { boundedJsonResponse } from "../bounded-json.js";
 import { configuredPublicOrigin } from "./origin.js";
 import { credentialHeaders } from "./html-response.js";
 import { discardBody } from "./request.js";

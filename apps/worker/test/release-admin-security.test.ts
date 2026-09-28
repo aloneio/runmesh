@@ -1,5 +1,5 @@
 // Audit-only tests: an isolated DO and disposable session, never production.
-import { env, runInDurableObject } from "cloudflare:test";
+import { env, runInDurableObject, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
 import worker from "../src/index.js";
 import { internalHeaders, randomBase64Url, sha256Hex, passwordVerifier } from "../src/security.js";
@@ -14,9 +14,12 @@ import { deleteRunnerTransport } from "../src/platform/runner-mutations.js";
 import { fenceRunnerTransport } from "../src/platform/runner-mutations.js";
 import { revokeRunnerTransport } from "../src/platform/runner-mutations.js";
 import { runnerMutationState } from "../src/platform/runner-state.js";
+import { developmentDescriptor } from "../src/domain/release-selection.js";
+import { FIXED_RELEASE_VERSION } from "../src/domain/release-config.js";
+import { registryDevelopmentReleaseCache } from "../src/http/release-cache.js";
 
-async function fixture() {
-  const id = env.REGISTRY.idFromName(`audit-admin-${crypto.randomUUID()}`), stub = env.REGISTRY.get(id);
+async function fixture(registryName = `audit-admin-${crypto.randomUUID()}`) {
+  const id = env.REGISTRY.idFromName(registryName), stub = env.REGISTRY.get(id);
   const session = randomBase64Url(), csrf = randomBase64Url();
   const hash = await sha256Hex(session), csrfHash = await sha256Hex(csrf), verifier = await passwordVerifier("synthetic-admin-password");
   await runInDurableObject(stub, instance => {
@@ -27,6 +30,54 @@ async function fixture() {
   const headers = { origin: "https://audit.test", cookie: `__Host-runmesh_admin_session=${session}; __Host-runmesh_admin_csrf=${csrf}`, "content-type": "application/x-www-form-urlencoded" };
   return { stub, localEnv, hash, csrf, headers };
 }
+
+it("shares one development release refresh across Runner management and public downloads", async () => {
+  // Real RunnerDO mutations resolve the production Registry name. Test storage
+  // isolation keeps this binding disposable along with the authenticated session.
+  const f = await fixture("registry"), runnerId = `release-scope-${crypto.randomUUID()}`;
+  const form = () => new URLSearchParams({ csrf_token: f.csrf, runner_id: runnerId, display_name: "Release scope test", execution_mode: "dedicated_user" });
+  const localEnv = { ...f.localEnv, RUNMESH_ENVIRONMENT: "development", RUNMESH_PUBLIC_ORIGIN: "https://audit.test", RUNMESH_SIGNED_RELEASE_AVAILABLE: "dev", RUNMESH_TEST_MODE: "" };
+  const contexts: ExecutionContext[] = [];
+  const request = async (path: string, init?: RequestInit) => {
+    const context = createExecutionContext(); contexts.push(context);
+    const headers = new Headers(init?.headers); headers.set("host", "audit.test");
+    return worker.fetch(new Request(`https://audit.test${path}`, { ...init, headers }), localEnv, context);
+  };
+  const [major, minor, patch] = FIXED_RELEASE_VERSION.split(".");
+  const version = `${major}.${minor}.${Number(patch) + 1}-dev.1`;
+  const descriptor = developmentDescriptor({ tag_name: `v${version}`, draft: false, prerelease: true, immutable: true, published_at: "2026-09-16T08:00:00Z",
+    assets: ["LICENSE", "NOTICE", "SHA256SUMS", "THIRD_PARTY_NOTICES.md", "manifest.json", "manifest.sig", "manifest.signature.json", "trust-keyring.json", `runmesh-runner-${version}.tgz`].map(name => ({ name })) });
+  expect(descriptor).toBeDefined();
+  // Seed the trusted storage port; signature verification has its own tests.
+  await registryDevelopmentReleaseCache(localEnv).put(new Request("https://audit.test/cache-fixture"),
+    Response.json({ schema_version: 1, verified_at_ms: Date.now() - 120_000, descriptor }));
+  let finishRefresh!: (response: Response) => void;
+  const pendingRefresh = new Promise<Response>(resolve => { finishRefresh = resolve; });
+  const upstream = vi.spyOn(globalThis, "fetch").mockImplementation(() => pendingRefresh);
+  try {
+    const publicRelease = await request("/runner/releases/dev");
+    expect(publicRelease.status).toBe(200);
+    expect(await publicRelease.json()).toMatchObject({ distributable: true, package_version: version });
+    expect(upstream).toHaveBeenCalledOnce();
+    for (const surface of ["create", "detail", "rotate", "enrollment"] as const) {
+      const path = surface === "create" ? "/admin/runners" : `/admin/runners/${runnerId}${surface === "detail" ? "" : `/${surface}`}`;
+      const body = form(); if (surface !== "create") body.set("expected_execution_mode", "dedicated_user");
+      const response = await request(path, surface === "detail" ? { headers: f.headers } : { method: "POST", headers: f.headers, body });
+      expect(response.status, surface).toBe(200);
+      const page = await response.text();
+      if (surface === "detail") expect(page).toContain(version);
+      else { expect(page).toContain("One-command Runner setup"); expect(page).toContain("/runner/install.sh"); }
+      expect(upstream, surface).toHaveBeenCalledOnce();
+    }
+    const installer = await request("/runner/install.sh");
+    expect(installer.status).toBe(200); expect(await installer.text()).toContain(version);
+    expect(upstream).toHaveBeenCalledOnce();
+  } finally {
+    finishRefresh(new Response("missing", { status: 404 }));
+    try { await Promise.all(contexts.map(context => waitOnExecutionContext(context))); }
+    finally { upstream.mockRestore(); }
+  }
+});
 
 it.each(["/admin/runners-extra", "/admin/runners-extra/r/delete", "/admin/runners//r/delete", "/admin/runners/r/delete/", "/internal/runners//r/rpc", "/internal/runners/r/rpc/"])("rejects a noncanonical Runner route before dispatch: %s", async path => {
   let mutations = 0;
@@ -292,7 +343,7 @@ it.each([401, 403, 404])("SEC04 an actual session denial %s still signs out", as
 });
 
 it("SEC04 bounds a stalled authorization body and cancels its reader", async () => {
-  const { boundedJsonResponse } = await import("../src/platform/bounded-json.js");
+  const { boundedJsonResponse } = await import("../src/bounded-json.js");
   let signal: AbortSignal | undefined, cancelled = false;
   const result = await boundedJsonResponse(async value => { signal = value; return new Response(new ReadableStream({ cancel() { cancelled = true; } })); }, 10);
   expect(result).toBeUndefined(); expect(signal?.aborted).toBe(true); expect(cancelled).toBe(true);
@@ -324,7 +375,7 @@ it("SEC04 successful logout revokes the server session before clearing cookies",
 });
 
 it("SEC04 bounds empty response chunks even when they consume no byte budget", async () => {
-  const { boundedJsonResponse } = await import("../src/platform/bounded-json.js");
+  const { boundedJsonResponse } = await import("../src/bounded-json.js");
   let pulls = 0, cancelled = false;
   const stream = new ReadableStream<Uint8Array>({
     pull(controller) {
@@ -338,7 +389,7 @@ it("SEC04 bounds empty response chunks even when they consume no byte budget", a
 });
 
 it("SEC04 accepts occasional empty chunks and fragmented UTF-8 within the byte budget", async () => {
-  const { boundedJsonResponse } = await import("../src/platform/bounded-json.js");
+  const { boundedJsonResponse } = await import("../src/bounded-json.js");
   const value = { value: "中文😀" }, bytes = new TextEncoder().encode(JSON.stringify(value));
   const stream = new ReadableStream<Uint8Array>({ start(controller) {
     for (const byte of bytes) { controller.enqueue(new Uint8Array()); controller.enqueue(Uint8Array.of(byte)); }
@@ -408,7 +459,7 @@ it("SEC04 a completed password change revokes the old server session", async () 
 });
 
 it.each([401, 403, 404, 503])("SEC04 an expired status observation (%s) is unavailable, not a fresh denial", async status => {
-  const { boundedJsonResponse } = await import("../src/platform/bounded-json.js");
+  const { boundedJsonResponse } = await import("../src/bounded-json.js");
   let clock = 0, signal: AbortSignal | undefined;
   const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
   try {
@@ -419,13 +470,13 @@ it.each([401, 403, 404, 503])("SEC04 an expired status observation (%s) is unava
 
 
 it("bounds explicitly parsed denial receipts without broadening default authorization", async () => {
-  const { boundedJsonReceipt, boundedJsonResponse } = await import("../src/platform/bounded-json.js");
+  const { boundedJsonReceipt, boundedJsonResponse } = await import("../src/bounded-json.js");
   const denied = () => Response.json({ ok: false }, { status: 403 });
   expect(await boundedJsonResponse(async () => denied())).toEqual({ status: 403 });
   expect(await boundedJsonReceipt(async () => denied(), [200, 403])).toEqual({ status: 403, value: { ok: false } });
 });
 it("a bounded observation cancels a late response even when fetch ignores abort", async () => {
-  const { boundedJsonReceipt } = await import("../src/platform/bounded-json.js");
+  const { boundedJsonReceipt } = await import("../src/bounded-json.js");
   let finish: ((response: Response) => void) | undefined, signal: AbortSignal | undefined;
   const cancel = vi.fn();
   const response = new Response(new ReadableStream<Uint8Array>({ cancel }));
@@ -436,14 +487,14 @@ it("a bounded observation cancels a late response even when fetch ignores abort"
   expect(cancel).toHaveBeenCalledTimes(1);
 });
 it.each([200, 403, 409])("an unfinished explicitly parsed HTTP %s body cannot exhaust the observation deadline", async status => {
-  const { boundedJsonReceipt } = await import("../src/platform/bounded-json.js");
+  const { boundedJsonReceipt } = await import("../src/bounded-json.js");
   const cancel = vi.fn();
   const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode("{")); }, cancel });
   expect(await boundedJsonReceipt(async () => new Response(stream, { status }), [200, 403, 409], 10)).toBeUndefined();
   expect(cancel).toHaveBeenCalledTimes(1);
 });
 it("bounded receipt storage copies reused stream buffers and accepts fragmented valid JSON", async () => {
-  const { boundedJsonReceipt } = await import("../src/platform/bounded-json.js");
+  const { boundedJsonReceipt } = await import("../src/bounded-json.js");
   const encoded = new TextEncoder().encode('{"ok":true,"text":"中文😀"}');
   let offset = 0;
   const reused = new Uint8Array(1);

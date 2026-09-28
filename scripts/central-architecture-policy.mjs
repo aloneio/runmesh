@@ -27,7 +27,7 @@ export function centralDependencyProblem(from, to) {
     return 'Managed OAuth protocol adaptation must not own lifecycle state, persistence or encryption';
   if (from === "apps/worker/src/capabilities-do.ts" && !to.startsWith("apps/worker/src/contracts/")
     && centralFeature(to) === undefined
-    && !["apps/worker/src/platform/bounded-json.ts", "apps/worker/src/platform/control-plane.ts", "apps/worker/src/platform/env.ts"].includes(to))
+    && !["apps/worker/src/bounded-json.ts", "apps/worker/src/platform/control-plane.ts", "apps/worker/src/platform/env.ts"].includes(to))
     return "Central state composition may use central features and reviewed identity ports, not native use cases";
   if (unreviewed(from) || unreviewed(to)) return "Central modules require a reviewed domain, application, platform or provider role";
   const feature = centralFeature(from);

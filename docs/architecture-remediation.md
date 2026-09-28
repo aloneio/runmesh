@@ -274,6 +274,16 @@ replacement and the original hard cache expiry remain enforced without sharing
 I/O promises or multiplying upstream verification. Regression tests cover
 verification success/failure, bounded waiting, lease replacement and expiry.
 
+A53-01/A53-02: a failed refresh observes persisted verified data again, with a
+one-second deadline covering response headers and body. Recovery rechecks the
+original hard expiry and concurrent memory updates after I/O. The HTTP factory
+requires WorkerEnv and derives both storage and value-state scope from REGISTRY;
+there is no unscoped runtime fallback. Enrollment presentation receives the
+resolved descriptor from its caller. Authenticated HTTP tests exercise Runner
+detail, creation, rotation and enrollment alongside public downloads while one
+refresh is pending. The common bounded JSON reader lives in the Worker foundation
+layer, so distribution and platform adapters share it without reverse imports.
+
 Enrollment redemption requires a mutation identity in both Registry's facade
 and lifecycle implementation. Direct tests now exercise the production mutation
 ledger, including competing redemptions and recovery of the same operation after

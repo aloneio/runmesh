@@ -5,7 +5,7 @@ import { adminError } from "./responses.js";
 import { authEntryDocument } from "../admin/auth-views.js";
 import { authThrottleCheck } from "../application/auth-source.js";
 import { authThrottleRecord } from "../application/auth-source.js";
-import { boundedJsonResponse } from "../platform/bounded-json.js";
+import { boundedJsonResponse } from "../bounded-json.js";
 import { clearCookie } from "./session.js";
 import { csrfCookie } from "./session.js";
 import { discardBody } from "./request.js";
