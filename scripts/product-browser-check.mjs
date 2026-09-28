@@ -12,7 +12,57 @@ import { ADMIN_CSRF_COOKIE } from '../apps/worker/dist/http/constants.js';
 import { parseProfileCommand } from '../apps/worker/dist/contracts/connector-values.js';
 import { skillInstallation } from '../apps/worker/dist/domain/skills/install.js';
 import { productOverviewPage } from '../apps/worker/dist/admin/dashboard-views.js';
+import { clientsPage } from '../apps/worker/dist/admin/client-views.js';
+import { localizeUiText } from '../apps/worker/dist/i18n/legacy-text.js';
+import { requestLocale } from '../apps/worker/dist/i18n/locale.js';
 import { checkRunnerActions } from './runner-browser-check.mjs';
+
+async function checkClientPermissions(browser, origin, errors) {
+ for(const locale of ['en','zh-CN']) {
+  const page=await browser.newPage({viewport:{width:390,height:844}});
+  page.on('pageerror',error=>errors.push(error.message));
+  try {
+   await page.goto(origin+'/admin/clients?lang='+locale);
+   const form=page.locator('#add-client form'), mode=form.locator('[name=access_mode]');
+   const permissions=form.locator('[data-client-computer-permissions]');
+   const read=form.locator('[value="coding:read"]'), write=form.locator('[value="coding:write"]'), exec=form.locator('[value="coding:exec"]');
+   assert.equal(await permissions.locator('summary').textContent(),locale==='en'?'Computer permissions':'计算机权限');
+   assert.equal(await permissions.evaluate(node=>node.open),false);
+   await mode.selectOption('native');
+   assert.equal(await permissions.evaluate(node=>node.open),true);
+   assert.equal(await read.isVisible(),true);
+   assert.equal(await read.isChecked(),true);
+   assert.equal(await write.isChecked(),false);
+   assert.equal(await exec.isChecked(),false);
+   await write.check(); await read.uncheck();
+   await mode.selectOption('central');
+   assert.equal(await permissions.evaluate(node=>node.open),false);
+   await mode.selectOption('native');
+   assert.equal(await permissions.evaluate(node=>node.open),true);
+   assert.equal(await read.isChecked(),false);
+   assert.equal(await write.isChecked(),true);
+   assert.equal(await exec.isChecked(),false);
+   assert.deepEqual(await form.evaluate(node=>new FormData(node).getAll('scopes')),['coding:write']);
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+   await permissions.locator('summary').click();
+   assert.equal(await permissions.evaluate(node=>node.open),false);
+   await page.evaluate(()=>{window.clientPermissionsNavigationMarker=true;});
+   await page.locator('nav a[href="/admin/central"]').click();
+   await page.locator('[data-central-product][aria-busy="false"]').waitFor();
+   await page.locator('nav a[href="/admin/clients"]').click();
+   await mode.waitFor();
+   assert.equal(await page.evaluate(()=>window.clientPermissionsNavigationMarker),true,'Client permissions must bind after in-page navigation');
+   assert.equal(await permissions.evaluate(node=>node.open),false);
+   await mode.selectOption('native');
+   assert.equal(await read.isVisible(),true);
+   assert.equal(await permissions.evaluate(node=>node.open),true);
+   await page.goto(origin+'/admin/clients?native-only=1&lang='+locale);
+   assert.equal(await mode.inputValue(),'native');
+   assert.equal(await permissions.evaluate(node=>node.open),true);
+   assert.equal(await read.isVisible(),true);
+  } finally { await page.close(); }
+ }
+}
 
 async function checkSkillFileErrors(browser, origin, requests, library) {
  for(const locale of ['en','zh-CN'])for(const failure of ['encoding','reading']){
@@ -55,11 +105,17 @@ export async function checkGuidedProduct(executable) {
  const server=createServer(async(req,res)=>{
   try {
    const url=new URL(req.url,'http://127.0.0.1');
+   const locale=requestLocale(new Request(url,{headers:{cookie:req.headers.cookie??''}}));
    if(url.pathname==='/oauth-fixture'){res.statusCode=302;res.setHeader('location','/admin/central/connections/callback?state=fixture-state&code=fixture-code&iss=https://login.provider.com&scope=read&authuser=0');res.end();return;}
    if(url.pathname==='/late-oauth-fixture'){res.setHeader('content-type','text/html');res.end('<p>Unexpected detached OAuth redirect</p>');return;}
    if(url.pathname==='/admin/central/connections/callback'){const page=oauthLanding();for(const [k,v] of page.headers)res.setHeader(k,v);res.end(await page.text());return;}
    if(url.pathname==='/admin') {res.setHeader('content-type','text/html');res.end(adminDocument('Dashboard',productOverviewPage({clients:[],runners:[]}),'dashboard'));return;}
-   if(url.pathname==='/admin/central') {res.setHeader('set-cookie',ADMIN_CSRF_COOKIE+'=fixture-csrf; Path=/; SameSite=Strict; Secure');res.setHeader('content-type','text/html');const locale=url.searchParams.get('lang')==='zh-CN'?'zh-CN':'en';res.end(adminDocument('MCP & Skill',centralPage('fixture-csrf',true,true),'central').replace('<html lang="en">','<html lang="'+locale+'">'));return;}
+   if(url.pathname==='/admin/central') {res.setHeader('set-cookie',ADMIN_CSRF_COOKIE+'=fixture-csrf; Path=/; SameSite=Strict; Secure');res.setHeader('content-type','text/html');res.end(adminDocument('MCP & Skill',centralPage('fixture-csrf',true,true),'central').replace('<html lang="en">','<html lang="'+locale+'">'));return;}
+   if(url.pathname==='/admin/clients') {
+    res.setHeader('content-type','text/html');
+    const content=clientsPage({clients:[],runners:[],jobs:[],snapshot:{},notices:[]},'fixture-csrf',!url.searchParams.has('native-only'));
+    res.end(adminDocument('MCP clients',content.replace('>Computer permissions<','>'+localizeUiText('Computer permissions',locale)+'<'),'clients').replace('<html lang="en">','<html lang="'+locale+'">'));return;
+   }
    const raw=[];for await(const part of req)raw.push(part);
    const body=raw.length?JSON.parse(Buffer.concat(raw).toString()):undefined;
    requests.push({path:url.pathname,method:req.method,body});
@@ -120,6 +176,7 @@ export async function checkGuidedProduct(executable) {
  let browser;
  try{
   browser=await chromium.launch({headless:true,...(executable?{executablePath:executable}:{})});
+  await checkClientPermissions(browser,origin,exceptions);
   await checkSkillFileErrors(browser,origin,requests,library);
   const context=await browser.newContext({viewport:{width:1365,height:1000}});
   const page=await context.newPage();page.on('pageerror',e=>exceptions.push(e.message));

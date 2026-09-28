@@ -100,6 +100,22 @@ test("rebinding execution-mode controls does not duplicate listeners or lose ini
   assert.equal(input.events.get("change").length, 1); assert.equal(confirmation.required, true); assert.equal(warning.hidden, false);
   input.value = "dedicated_user"; input.dispatch("change"); assert.equal(confirmation.required, false); assert.equal(warning.hidden, true);
 });
+test("client computer permissions follow access type on initial and dynamically mounted pages", () => {
+  const h = controlsFixture();
+  for (const initialMode of ["central", "native"]) {
+    const select = element(), permissions = { open: false }; select.value = initialMode;
+    select.form = { querySelector: selector => selector === "[data-client-computer-permissions]" ? permissions : null };
+    const root = h.root({ 'select[name="access_mode"]': [select] });
+    h.controls.bindPageControls(root); h.controls.bindPageControls(root);
+    assert.equal(permissions.open, initialMode === "native");
+    assert.equal(select.events.get("change").length, 1);
+    select.value = "native"; select.dispatch("change"); assert.equal(permissions.open, true);
+    permissions.open = false; h.controls.bindPageControls(root); assert.equal(permissions.open, false);
+    select.value = "central"; select.dispatch("change"); assert.equal(permissions.open, false);
+    select.value = "native"; select.dispatch("change"); assert.equal(permissions.open, true);
+  }
+});
+
 test("page containers stay synchronous and do not cross-fade sensitive content", () => {
   const css = readFileSync(new URL("../apps/worker/src/admin-styles.ts", import.meta.url), "utf8");
   const container = css.match(/\.admin-page-container\{([^}]+)\}/)?.[1] ?? "";
