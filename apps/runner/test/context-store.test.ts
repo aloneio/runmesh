@@ -3,15 +3,16 @@ import { lstat, mkdtemp, rm, readFile, writeFile, readdir } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ContextStore } from "../src/context-store.js";
+import { ContextStore, type ContextStoreDependencies } from "../src/context-store.js";
+import { nativeContextFiles } from "../src/context/files.js";
 
 const cleanups: string[] = [];
 
-async function fixture(): Promise<{ root: string; state: string; store: ContextStore }> {
+async function fixture(dependencies: ContextStoreDependencies = {}): Promise<{ root: string; state: string; store: ContextStore }> {
   const root = await mkdtemp(join(tmpdir(), "runmesh-context-"));
   cleanups.push(root);
   const state = join(root, "state");
-  return { root, state, store: new ContextStore({ stateDir: state }) };
+  return { root, state, store: new ContextStore({ stateDir: state }, dependencies) };
 }
 
 afterEach(async () => {
@@ -88,10 +89,11 @@ it("R04 returns the last receipt for an identical expected-revision retry and st
   await expect(f.store.checkpoint(input)).rejects.toMatchObject({code:"context_revision_conflict"});
 });
 it("R04 refuses to create a second context when its record committed but the index write failed", async () => {
-  const f=await fixture();const input={workspace_id:"workspace",turn_id:"recover",goal:"durable receipt",expected_revision:0};
-  const internal=f.store as unknown as {writeIndex:(input:unknown)=>Promise<void>};
-  const write=vi.spyOn(internal,"writeIndex").mockRejectedValueOnce(new Error("synthetic index write failure"));
-  await expect(f.store.checkpoint(input)).rejects.toThrow();write.mockRestore();
+  const atomicReplace = vi.fn(nativeContextFiles.atomicReplace).mockRejectedValueOnce(new Error("synthetic index write failure"));
+  const f=await fixture({files:{...nativeContextFiles,atomicReplace}});const input={workspace_id:"workspace",turn_id:"recover",goal:"durable receipt",expected_revision:0};
+  await expect(f.store.checkpoint(input)).rejects.toThrow();
+  expect(atomicReplace).toHaveBeenCalledTimes(1);
+  expect(atomicReplace.mock.calls[0]?.[0]).toBe(join(f.state,"contexts","workspace","index.json"));
   const recovered=new ContextStore({stateDir:f.state});
   await expect(recovered.checkpoint(input)).rejects.toMatchObject({code:"context_index_stale"});
   expect(await recovered.rebuild({workspace_id:"workspace"})).toMatchObject({records:1});
@@ -126,11 +128,14 @@ it("R04 serializes two service instances sharing one managed state directory", a
   const records=await readdir(join(f.state,"contexts","workspace"));expect(records.filter(x=>x.startsWith("ctx-"))).toHaveLength(1);
 });
 it("R04 retains a committed next revision after index failure and recovers explicitly", async () => {
-  const f=await fixture();const base={workspace_id:"workspace",turn_id:"next",goal:"one",expected_revision:0};
+  const atomicReplace = vi.fn(nativeContextFiles.atomicReplace);
+  const f=await fixture({files:{...nativeContextFiles,atomicReplace}});const base={workspace_id:"workspace",turn_id:"next",goal:"one",expected_revision:0};
   const first=await f.store.checkpoint(base);const id=(first.context as any).context_id;
   const input={...base,context_id:id,goal:"two",expected_revision:1};
-  const fail=vi.spyOn(f.store as unknown as {writeIndex:(input:unknown)=>Promise<void>},"writeIndex").mockRejectedValueOnce(new Error("index failed"));
-  await expect(f.store.checkpoint(input)).rejects.toMatchObject({code:"context_index_stale"});fail.mockRestore();
+  atomicReplace.mockRejectedValueOnce(new Error("index failed"));
+  await expect(f.store.checkpoint(input)).rejects.toMatchObject({code:"context_index_stale"});
+  expect(atomicReplace).toHaveBeenCalledTimes(2);
+  expect(atomicReplace.mock.calls[1]?.[0]).toBe(join(f.state,"contexts","workspace","index.json"));
   await expect(f.store.checkpoint(input)).rejects.toMatchObject({code:"context_index_stale"});
   await f.store.rebuild({workspace_id:"workspace"});expect(await f.store.checkpoint(input)).toMatchObject({deduplicated:true,context:{revision:2}});
   expect((await readdir(join(f.state,"contexts","workspace",id))).sort()).toEqual(["1.json","2.json"]);
