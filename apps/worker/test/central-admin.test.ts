@@ -46,7 +46,7 @@ it("client handoff opens the shared library without putting its credential in th
   expect(page).not.toContain('client=synthetic-secret');
   expect(secretCreatedPage('MCP client created', 'https://worker.test/synthetic-secret/mcp')).not.toContain('<section class="central-next-step">');
 });
-const url = (id: string) => `https://worker.test/admin/central/profiles/${id}`;
+const url = (id: string) => `https://worker.test/admin/central/profiles/${encodeURIComponent(id)}`;
 
 async function session() {
   const raw = randomBase64Url(), csrf = randomBase64Url();
@@ -59,8 +59,8 @@ async function session() {
     origin: "https://worker.test", "content-type": "application/json", "x-csrf-token": csrf } };
 }
 
-it("W03 admin HTTP stores connection metadata, defaults disabled and checks revisions", async () => {
-  const admin = await session(), id = "profile-" + crypto.randomUUID();
+it.each(["profile-", "profile:"])("W03 admin HTTP stores connection metadata, defaults disabled and checks revisions (%s)", async prefix => {
+  const admin = await session(), id = prefix + crypto.randomUUID();
   const call = (value: unknown) => SELF.fetch(url(id), { method: "POST", headers: admin.headers, body: JSON.stringify(value) });
   const created = await call(creation);
   expect(created.status).toBe(200); expect(created.headers.get("cache-control")).toBe("no-store");
@@ -74,6 +74,17 @@ it("W03 admin HTTP stores connection metadata, defaults disabled and checks revi
     expect(state.storage.sql.exec<{ envelope_json: string }>("SELECT envelope_json FROM connection_profiles_v1 WHERE profile_id=?", id).one().envelope_json).toBe("null");
     expect(state.storage.sql.exec("SELECT name FROM sqlite_master WHERE name IN ('runners','mcp_clients','jobs')").toArray()).toEqual([]);
   });
+});
+
+it.each(["profiles", "catalogs", "discovery", "skills"].flatMap(route =>
+  ["r%2Fx", "r%5Cx", "r%253Ax", "r%", "r%00x", "%3Ar", "r".repeat(129), "r/extra", "r/"].map(segment => [route, segment])
+))("rejects unsafe central %s identifier %s before resolving its owner", async (route, segment) => {
+  const get = vi.fn(() => { throw new Error("must not resolve"); });
+  const config = { ...configured(), CENTRAL_SKILLS_ENABLED: "1", CAPABILITIES: { idFromName: () => "central", get } } as unknown as WorkerEnv;
+  const request = new Request(`https://worker.test/admin/central/${route}/${segment}`, { method: "POST", body: "{}" });
+  const response = await handleCentralAdmin(request, config, new URL(request.url));
+  expect(response.status).toBe(route === "skills" ? 400 : 404);
+  expect(get).not.toHaveBeenCalled();
 });
 
 it.each(["create", "create_oauth", "rotate", "rekey"])("removed profile action %s cannot resolve the owner", async action => {

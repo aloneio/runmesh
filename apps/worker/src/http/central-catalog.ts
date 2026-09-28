@@ -3,12 +3,13 @@ import { catalogDigest, catalogObject, catalogRevision, toolName } from "../cont
 import { parseCatalogCommand, parseCatalogHead, parseCatalogSnapshot } from "../contracts/catalog-values.js";
 import type { WorkerEnv } from "../platform/env.js";
 import { admitCentralAdmin, cancelCentralBody, centralFailure as fail, centralHeaders as headers } from "./central-boundary.js";
+import { matchIdentifierPath } from "./path-identifiers.js";
 
 /** Bounded manual capture/review entry. Approval publishes the selected tools
  * to the shared library; invocation still validates live identity and schemas. */
 export async function handleCentralCatalogAdmin(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
   if (env.CAPABILITIES === undefined) { cancelCentralBody(request); return fail("central_disabled", 404); }
-  const match = /^\/admin\/central\/catalogs\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})$/u.exec(url.pathname);
+  const match = matchIdentifierPath(/^\/admin\/central\/catalogs\/([^/]+)$/u, url.pathname);
   const requestedDigest = url.searchParams.get("snapshot") ?? undefined;
   if (match === null || [...url.searchParams.keys()].some(key => key !== "snapshot") || url.searchParams.getAll("snapshot").length > 1
     || (requestedDigest !== undefined && (!catalogDigest(requestedDigest) || request.method !== "GET"))) {

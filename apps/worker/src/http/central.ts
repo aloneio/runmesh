@@ -9,6 +9,7 @@ import { handleCentralManagement } from "./central-management.js";
 import { handleCentralReceipts } from "./central-receipts.js";
 import { handleSkillInstallation } from "./central-skill-install.js";
 import { handleConnections } from "./central-connections.js";
+import { matchIdentifierPath } from "./path-identifiers.js";
 
 /** Optional browser-admin JSON entry. No bearer-token fallback, plaintext read or MCP tool. */
 export async function handleCentralAdmin(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
@@ -20,7 +21,7 @@ export async function handleCentralAdmin(request: Request, env: WorkerEnv, url: 
   if (url.pathname.startsWith("/admin/central/discovery/")) return handleCentralDiscovery(request, env, url);
   if (url.pathname.startsWith("/admin/central/catalogs/")) return handleCentralCatalogAdmin(request, env, url);
   if (env.CAPABILITIES === undefined) { void request.body?.cancel().catch(() => undefined); return fail("central_disabled", 404); }
-  const match = /^\/admin\/central\/profiles\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})$/u.exec(url.pathname);
+  const match = matchIdentifierPath(/^\/admin\/central\/profiles\/([^/]+)$/u, url.pathname);
   if (match === null || url.search) { void request.body?.cancel().catch(() => undefined); return fail("central_not_found", 404); }
   const admission = await admitCentralAdmin(request, env, CONNECTOR_LIMITS.request_bytes);
   if (admission instanceof Response) return admission;

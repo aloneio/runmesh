@@ -40,15 +40,19 @@ async function fixture(nativeScopes: ["coding:read"] | [] = []) {
   };
   return { config, headers, clients, admin, rpc, invoke, hash, port, stub };
 }
-it('W07/W08 two independent central-only clients read the same approved bundle through tools and resources without a Runner', async () => {
+it.each(['research', 'research:docs'])('W07/W08 two independent central-only clients read the same approved bundle through tools and resources without a Runner (%s)', async id => {
   const f = await fixture();
+  const path = 'skills/' + encodeURIComponent(id);
   const files = [{ path: 'SKILL.md', text: ['---', 'name: research', 'description: Check central documentation', '---', 'Never auto-execute scripts.'].join(String.fromCharCode(10)) }, { path: 'references/proof.md', text: 'pinned proof' }];
   files.push({ path: 'runmesh.json', text: JSON.stringify({ schema_version: 1, requiredCapabilities: [{ kind: 'skill', resource_id: 'other', version: 'a'.repeat(64) }] }) });
   const stage = { action: 'preview', source: 'local', license: 'MIT', files };
-  const preview = await (await f.admin('skills/research', stage)).json() as { bundle: { digest: string } }; const digest = preview.bundle.digest;
-  expect((await f.admin('skills/research')).status).toBe(404);
-  expect((await f.admin('skills/research', { ...stage, action: 'stage', expected_revision: 0 })).status).toBe(200);
-  expect((await f.admin('skills/research', { action: 'activate', expected_revision: 1, digest })).status).toBe(200);
+  const previewResponse = await f.admin(path, stage);
+  expect(previewResponse.status).toBe(200);
+  const preview = await previewResponse.json() as { bundle: { digest: string } }; const digest = preview.bundle.digest;
+  expect((await f.admin(path)).status).toBe(404);
+  expect((await f.admin(path, { ...stage, action: 'stage', expected_revision: 0 })).status).toBe(200);
+  expect((await f.admin(path, { action: 'activate', expected_revision: 1, digest })).status).toBe(200);
+  expect(await (await f.admin(path)).json()).toMatchObject({ state: 'found', head: { skill_id: id, enabled: true } });
   await runInDurableObject(f.stub, (_owner, state) => {
     expect(state.storage.sql.exec("SELECT name FROM sqlite_master WHERE name='capability_grants_v1'").toArray()).toEqual([]);
   });
@@ -60,9 +64,9 @@ it('W07/W08 two independent central-only clients read the same approved bundle t
     expect(templates.result.resourceTemplates).toHaveLength(1);
     const listed = await f.rpc(client.secret, 'tools/call', { name: 'skill_list', arguments: {} });
     expect(JSON.parse(listed.result.content[0].text)).toMatchObject({ state: 'listed', skills: [{ digest }] });
-    const read = await f.rpc(client.secret, 'tools/call', { name: 'skill_read', arguments: { skill_id: 'research', digest, path: 'references/proof.md' } });
+    const read = await f.rpc(client.secret, 'tools/call', { name: 'skill_read', arguments: { skill_id: id, digest, path: 'references/proof.md' } });
     expect(JSON.parse(read.result.content[0].text)).toMatchObject({ state: 'read', text: 'pinned proof', dependencies: [{ state: 'not_configured' }] });
-    const resource = await f.rpc(client.secret, 'resources/read', { uri: 'runmesh-skill://bundle/research/' + digest + '/references/proof.md' });
+    const resource = await f.rpc(client.secret, 'resources/read', { uri: 'runmesh-skill://bundle/' + encodeURIComponent(id) + '/' + digest + '/references/proof.md' });
     expect(resource.result.contents[0].text).toBe('pinned proof');
     expect(resource.result.contents[0]._meta['runmesh/dependencies']).toEqual(JSON.parse(read.result.content[0].text).dependencies);
     const shell = await f.rpc(client.secret, 'tools/call', { name: 'shell', arguments: { workspace_id: 'any', script: 'echo test' } });
@@ -71,9 +75,9 @@ it('W07/W08 two independent central-only clients read the same approved bundle t
   await runInDurableObject(registry(), owner => { owner.revokeMcpClient(f.clients[1]!.id, Date.now()); });
   expect(await f.invoke(owner => owner.listSkills({ client_id: f.clients[1]!.id, secret_version: 1 }, {}))).toEqual({ state: 'denied' });
   const client = f.clients[0]!;
-  expect((await f.admin('skills/research', { action: 'disable', expected_revision: 2 })).status).toBe(200);
+  expect((await f.admin(path, { action: 'disable', expected_revision: 2 })).status).toBe(200);
   expect((await f.rpc(client.secret, 'tools/list', {})).result.tools).toHaveLength(5);
-  const denied = await f.rpc(client.secret, 'tools/call', { name: 'skill_read', arguments: { skill_id: 'research', digest } });
+  const denied = await f.rpc(client.secret, 'tools/call', { name: 'skill_read', arguments: { skill_id: id, digest } });
   expect(denied.result.isError).toBe(true);
   const request = new Request('https://worker.test/admin/central', { headers: f.headers });
   const page = await handleBrowserAdmin(request, f.config, new URL(request.url));
