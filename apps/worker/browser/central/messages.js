@@ -49,6 +49,7 @@ const messages = {
   "skillFilesAreReadyToReview": ["Skill files loaded.", "Skill 文件已加载。"],
   "selectionChangedCheckTheFilesAndSelectInstallSkill": ["Files changed. Select Install Skill to continue.", "文件选择已更改，请点击“安装 Skill”继续。"],
   "select132TextFilesUpTo64Kib": ["Select 1–32 text files, up to 64 KiB each and 256 KiB total.", "请选择 1–32 个文本文件，单个不超过 64 KiB，总计不超过 256 KiB。"],
+  "couldNotReadTheSelectedFiles": ["Could not read the selected files. Select UTF-8 text files and try again.", "无法读取所选文件，请选择 UTF-8 文本文件后重试。"],
   "theSelectedFolderMustContainSkillMdAtIts": ["The selected folder must contain SKILL.md at its root.", "所选文件夹根目录必须包含 SKILL.md。"],
   "installedReadyToUseInAllConnectedAiClients": [" installed.", " 已安装。"],
   "skillChangedAfterInstallation": ["The Skill has changed. Refresh to view its current version.", "Skill 状态已变化，请刷新查看当前版本。"],

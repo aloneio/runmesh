@@ -31,8 +31,16 @@ export function createCentralApi({
           'x-csrf-token': csrf
         },
         body: body === undefined ? undefined : JSON.stringify(body)
+      }).catch(() => {
+        throw new Error(t('connectionInterruptedRefreshToCheckWhetherTheOperationCompleted'));
       });
-      var value = await response.json();
+      var value;
+      try {
+        value = await response.json();
+      } catch (error) {
+        if (error.name === 'AbortError') throw error;
+        throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
+      }
       assertCurrent();
       if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
       if (missing && response.status === 404 && (value.state === 'missing' || value.error && value.error.code === 'central_missing')) return null;

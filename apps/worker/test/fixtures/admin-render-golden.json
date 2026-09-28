@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "5e7974c1d78d8dad32c0b219cf102bb2b2d3d7238258d7c1b043c53d46c30338",
-      "bytes": 123836,
+      "sha256": "8792b1bc73282f00b72737805c3c2cce4e24cfe1527555071e6133e8fb3d9aa6",
+      "bytes": 124485,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -32,8 +32,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "1522c03d21ed9d253f6143840d176adc68ebddc2434c3a5527a3eba3d028a11f",
-      "bytes": 124424,
+      "sha256": "2ab1899d35974a2da3955b6ea43e0264e31277401d7f91e4d2b13aadc7a0a8fb",
+      "bytes": 125073,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -51,8 +51,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "bfd9d94ad46cac976c095184aa32386803905b21dcc1fb2719c625c8a4f7dd55",
-      "bytes": 125572,
+      "sha256": "3fca9389d26d71876bd24a89c39a00a3cad8a84e257729ec69d34b3738574150",
+      "bytes": 126221,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -419,8 +419,8 @@
           }
         ]
       ],
-      "sha256": "5fa910ed9297d9a127afed296a4ea3fb5d947620d0e34e1333b9566fc6d1bb99",
-      "bytes": 125921,
+      "sha256": "f4fafb1026eda5c416ce27af3b841efef257b51461359d5920d1a6a8d3399301",
+      "bytes": 126570,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -553,6 +553,11 @@
   "ui_copy_review": {
     "source_base": "21a775ca291d04f68f4f1957fe3c03da51462a7d",
     "reviewed_change": "Natural English and Chinese interface copy; remove duplicate warnings and developer terminology. Exact reviewed substitutions reproduce all 20 rendered cases. Installer commands, CSS blocks, protected user data, form actions and permission controls are unchanged. No screenshots.",
+    "rendered_cases": 20
+  },
+  "browser_error_copy_review": {
+    "source_base": "e1911d63260b6737d89766b94ed3f4be9c80d369",
+    "reviewed_change": "Localize native Skill file-read, UTF-8, network and malformed-response failures in English and Chinese. Browser regressions reject invalid files without requests and recover through reselection, preserving text. Uncertain writes still require refresh and are never replayed. All non-script markup remains byte-for-byte unchanged. No screenshots.",
     "rendered_cases": 20
   }
 }
