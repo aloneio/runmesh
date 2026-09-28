@@ -33,6 +33,7 @@
         "test/domain/remote-policy.test.ts",
         "test/domain/runner-administration.test.ts",
         "test/domain/runner-deletion.test.ts",
+        "test/domain/runner-handshake.test.ts",
         "test/domain/skills.test.ts"
       ]
     },

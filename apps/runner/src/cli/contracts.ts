@@ -1,4 +1,4 @@
-import { EnvironmentInfoService } from "../runtime.js";
+import type { EnvironmentReader, ShellRuntime } from "../environment-contracts.js";
 import type { ExecutionMode } from "../service.js";
 import { ProfileStore } from "../profile.js";
 import { purgeInstallation } from "../purge.js";
@@ -7,7 +7,6 @@ import type { ServiceManifestFilesystem } from "../service.js";
 import type { ServicePlatform } from "../service.js";
 import type { ServicePrivilegeState } from "../service.js";
 import type { ServiceProvisioner } from "../service.js";
-import type { ShellRuntime } from "../runtime.js";
 import { validateRunnerConfig } from "../config.js";
 
 export interface CliDependencies {
@@ -28,7 +27,7 @@ export interface CliDependencies {
   /** Test hook for elevated system installation checks. */
   readonly isAdministrator?: () => boolean;
   /** Injectable local discovery keeps doctor diagnostics deterministic in tests. */
-  readonly environment?: EnvironmentInfoService;
+  readonly environment?: EnvironmentReader;
   readonly discoverShellRuntime?: () => Promise<ShellRuntime | undefined>;
   readonly executionMode?: ExecutionMode;
   readonly confirmPrivilegedHost?: boolean;

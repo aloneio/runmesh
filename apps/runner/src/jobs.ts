@@ -3,7 +3,7 @@ import { removeRetainedJobIfCurrent } from "./jobs/retention.js";
 import { deliverJobInput } from "./jobs/input.js";
 import { availableLogBytes } from "./jobs/log-budget.js";
 import { retainedJobCandidates, expiredRetainedJob } from "./jobs/retention-plan.js";
-import type { JobFilePort, JobProcessPort } from "./jobs/ports.js";
+import type { JobFilePort, JobProcessPort, JobPersistencePort } from "./jobs/ports.js";
 import { FairJobQueue } from "./job-queue.js";
 import { RpcRuntimeError } from "./errors.js";
 import { isAbsolute, join, parse, resolve } from "node:path";
@@ -22,7 +22,7 @@ import { nativeJobProcesses, type ProcessTerminator } from "./jobs/process.js";
 import { JobLogReader } from "./jobs/logs.js";
 
 /** @internal Internal composition seam; no CLI or wire configuration exposes adapters. */
-export interface JobManagerDependencies { readonly files?: JobFilePort; readonly processes?: JobProcessPort }
+export interface JobManagerDependencies { readonly files?: JobFilePort; readonly processes?: JobProcessPort; readonly persistence?: JobPersistencePort }
 
 export interface JobManagerOptions {
   readonly policy: PathPolicy;
@@ -64,6 +64,7 @@ export class JobManager {
   private readonly files: JobFilePort;
   private readonly processAdapter: JobProcessPort;
   private readonly logReader: JobLogReader;
+  private readonly persistence: JobPersistencePort | undefined;
   private readonly policy: PathPolicy;
   private readonly stateDir: string;
   private readonly jobsDir: string;
@@ -153,6 +154,7 @@ export class JobManager {
   public constructor(options: JobManagerOptions, dependencies: JobManagerDependencies);
   public constructor(options: JobManagerOptions, dependencies: JobManagerDependencies = {}) {
     this.files = dependencies.files ?? nativeJobFiles;
+    this.persistence = dependencies.persistence;
     this.processAdapter = dependencies.processes ?? nativeJobProcesses;
     this.policy = options.policy;
     this.queue = new FairJobQueue(options.maxQueuedJobs ?? 32, options.maxQueuedJobsPerClient ?? 8);
@@ -1113,8 +1115,16 @@ export class JobManager {
   private jobDir(jobId: string): string { return join(this.jobsDir, jobId); }
   private logPath(jobId: string, stream: "stdout" | "stderr"): string { return join(this.jobDir(jobId), `${stream}.log`); }
 
-  /** Serialize every job's rename write, avoiding a late running snapshot overwriting terminal metadata. */
   private persist(job: JobRecord): Promise<void> {
+    // Keep the native path synchronous through enqueue: an unconditional
+    // await here would change terminal reservation and cancellation ordering.
+    return this.persistence === undefined
+      ? this.enqueuePersistence(job)
+      : this.persistence.write(job, () => this.enqueuePersistence(job));
+  }
+
+  /** Serialize every job's rename write, avoiding a late running snapshot overwriting terminal metadata. */
+  private enqueuePersistence(job: JobRecord): Promise<void> {
     const path = join(this.jobDir(job.job_id), "meta.json");
     const prior = this.persistChains.get(job.job_id) ?? Promise.resolve();
     const next = prior.catch(() => undefined).then(async () => {

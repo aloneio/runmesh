@@ -1050,6 +1050,18 @@ describe("runner product CLI and service safety", () => {
       expect(manager.status).toHaveBeenCalledTimes(2);
     } finally { await test.cleanup(); }
   });
+  it("uses the injected environment reader for env JSON", async () => {
+    const test = await fixture();
+    try {
+      await test.store.save(profile(join(test.root, "workspace")));
+      const lines: string[] = [];
+      const get = vi.fn(async () => ({ source: "injected-environment" }));
+      await runCli(["env", "--json"], { store: test.store, stdout: line => lines.push(line), environment: { get } });
+      expect(JSON.parse(lines.join("\n"))).toEqual({ source: "injected-environment" });
+      expect(get).toHaveBeenCalledTimes(1);
+    } finally { await test.cleanup(); }
+  });
+
   it("emits stable doctor JSON checks and only fails its exit seam for required failures", async () => {
     const test = await fixture();
     try {
@@ -1066,7 +1078,7 @@ describe("runner product CLI and service safety", () => {
       await runCli(["doctor", "--json"], {
         store: test.store, stdout: (line) => lines.push(line), servicePlatform: doctorPlatform, serviceFilesystem: filesystem, serviceManager: manager,
         discoverShellRuntime: async () => ({ kind: "bash", executable: "/bin/bash", buildInvocation: (command) => ({ file: "/bin/bash", args: ["-lc", command] }) }),
-        environment: new (await import("../src/runtime.js")).EnvironmentInfoService({ probe: async (command) => command === "python3" || command === "python" || command === "docker" ? undefined : `${command} version` }),
+        environment: new (await import("../src/environment.js")).EnvironmentInfoService({ probe: async (command) => command === "python3" || command === "python" || command === "docker" ? undefined : `${command} version` }),
         policyRevision: async () => ({ desired: 3, applied: 3 }), setExitCode: (code) => exitCodes.push(code),
       });
       const result = JSON.parse(lines[0] ?? "{}") as { ok: boolean; checks: Array<{ name: string; status: string }> };
@@ -1083,7 +1095,7 @@ describe("runner product CLI and service safety", () => {
         store: new ProfileStore({ baseDir: join(test.root, "missing-profile") }), stdout: () => undefined,
         servicePlatform: doctorPlatform, serviceFilesystem: filesystem, serviceManager: manager,
         discoverShellRuntime: async () => undefined,
-        environment: new (await import("../src/runtime.js")).EnvironmentInfoService({ probe: async () => undefined }),
+        environment: new (await import("../src/environment.js")).EnvironmentInfoService({ probe: async () => undefined }),
         setExitCode: (code) => failingExitCodes.push(code),
       });
       expect(failingExitCodes).toEqual([1]);
@@ -1108,7 +1120,7 @@ describe("runner product CLI and service safety", () => {
       await runCli(["doctor", "--json", "--shareable"], {
         store: test.store, stdout: (line) => lines.push(line), servicePlatform: doctorPlatform, serviceFilesystem: filesystem, serviceManager: manager,
         discoverShellRuntime: async () => ({ kind: "bash", executable: "/bin/bash", buildInvocation: (command) => ({ file: "/bin/bash", args: ["-lc", command] }) }),
-        environment: new (await import("../src/runtime.js")).EnvironmentInfoService({ probe: async () => undefined }),
+        environment: new (await import("../src/environment.js")).EnvironmentInfoService({ probe: async () => undefined }),
         policyRevision: async () => ({ desired: 7, applied: 6 }), setExitCode: () => undefined,
       });
       const text = lines[0] ?? "";

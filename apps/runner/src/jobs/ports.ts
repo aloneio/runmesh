@@ -1,3 +1,4 @@
+import type { JobRecord } from "./records.js";
 import type { ChildProcess, spawn } from "node:child_process";
 import type { FileHandle, lstat, rm, readdir } from "node:fs/promises";
 
@@ -29,3 +30,10 @@ export interface JobLogScope {
   logPath(jobId: string, stream: "stdout" | "stderr"): string;
 }
 export type JobLogFilePort = Pick<JobFilePort, "openJobLog" | "lstat">;
+
+/** @internal Coordination around enqueue/completion, not a storage owner.
+ * The supplied enqueue callback retains JobManager's serialization and stale
+ * snapshot guards. Trusted tests can pause before enqueue or after durability. */
+export interface JobPersistencePort {
+  write(record: Readonly<JobRecord>, enqueue: () => Promise<void>): Promise<void>;
+}

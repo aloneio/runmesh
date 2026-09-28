@@ -27,6 +27,17 @@ async function fixture(t, sources) {
 }
 
 const bad = [
+  ["Handshake to asynchronous projection", { "apps/worker/src/domain/runner-handshake.ts": 'export async function project() { return {}; }' }],
+  ["Environment contracts to platform types", { "apps/runner/src/environment-contracts.ts": 'import type { PathLike } from "node:fs";' }],
+  ["Handshake to transport owner", { "apps/worker/src/domain/runner-handshake.ts": 'import "../runner-do.js";', "apps/worker/src/runner-do.ts": 'export {};' }],
+  ["Handshake to adapter types", { "apps/worker/src/domain/runner-handshake.ts": 'import type { Binding } from "../platform/env.js";', "apps/worker/src/platform/env.ts": 'export type Binding = {};' }],
+  ["Handshake to ambient clock", { "apps/worker/src/domain/runner-handshake.ts": 'export const now = Date.now();' }],
+  ["Handshake to scheduling", { "apps/worker/src/domain/runner-handshake.ts": 'export const schedule = queueMicrotask;' }],
+  ["Environment contracts to native probes", { "apps/runner/src/environment-contracts.ts": 'import type { EnvironmentInfoService } from "./environment.js";', "apps/runner/src/environment.ts": 'export class EnvironmentInfoService {}' }],
+  ["Environment contracts to process state", { "apps/runner/src/environment-contracts.ts": 'export const platform = process.platform;' }],
+  ["Environment contracts to filesystem", { "apps/runner/src/environment-contracts.ts": 'import "node:fs";' }],
+  ["CLI contract to environment implementation", { "apps/runner/src/cli/contracts.ts": 'import type { EnvironmentInfoService } from "../environment.js";', "apps/runner/src/environment.ts": 'export class EnvironmentInfoService {}' }],
+  ["Environment adapter to runtime", { "apps/runner/src/environment.ts": 'import "./runtime.js";', "apps/runner/src/runtime.ts": 'export {};' }],
   ["Runner creation to transport", { "apps/worker/src/application/create-runner.ts": 'import "../platform/runner-mutations.js";', "apps/worker/src/platform/runner-mutations.ts": 'export {};' }],
   ["Runner registration to HTTP response", { "apps/worker/src/application/register-runner.ts": 'export const result = () => new Response();' }],
   ["Runner policy to ambient network", { "apps/worker/src/application/runner-policy.ts": 'export const mutate = () => fetch("https://example.invalid");' }],
@@ -328,14 +339,6 @@ test("AR18 prevents retired private I/O mocks from returning", async () => {
       if (node.type === "AssignmentExpression") assert.notEqual(property(node.left), "registryRequest", `${name}: use the injected RegistryRequestPort`);
     });
   }
-  // These exact pre-enqueue/post-coordinator races are not equivalent to a
-  // file fault. Keep them explicit rather than weakening their assertions.
-  const remaining = new Set([
-    "waits for fast-exit terminal metadata before returning from start",
-    "does not let a late running metadata write overwrite terminal state",
-    "does not overwrite a queued cancellation after a spawn setup failure races",
-  ]);
-  const found = new Set();
   const runtime = parseTest(await readFile(join(project, "apps/runner/test/runtime.test.ts"), "utf8"));
   visit(runtime, node => {
     if (node.type !== "CallExpression" || node.arguments[0]?.type !== "StringLiteral"
@@ -343,21 +346,17 @@ test("AR18 prevents retired private I/O mocks from returning", async () => {
     const name = node.arguments[0].value;
     visit(node.arguments[1], child => {
       if (child.type === "TSAsExpression" && child.expression?.type === "TSAsExpression" && child.expression.typeAnnotation?.type === "TSUnknownKeyword")
-        assert.ok(remaining.has(name), name + ": do not cast JobManager to a private-state test interface");
+        assert.fail(name + ": do not cast JobManager to a private-state test interface");
       if (child.type === "MemberExpression") {
         const owner = child.object?.type === "TSNonNullExpression" ? child.object.expression?.name : child.object?.name;
         assert.ok(!["jobDir", "closeLogHandles", "queueLogAppend", "logWriteChain", "finish", "flushLogs", "pruneRetainedJobsNow", "cancelRecoveredUnknown", "reconcileRecoveredJob"].includes(property(child))
-          && (property(child) !== "persist" || remaining.has(name))
+          && !["persist", "enqueuePersistence"].includes(property(child))
           && (property(child) !== "jobs" || owner === "runtime")
           && (property(child) !== "processes" || owner === "probe"),
           name + ": use persisted fixtures and supported ports rather than private JobManager state");
       }
-      if (child.type !== "AssignmentExpression" || property(child.left) !== "persist") return;
-      assert.ok(remaining.has(name), `${name}: inject JobFilePort rather than replacing persistence coordination`);
-      found.add(name);
     });
   });
-  assert.deepEqual([...found].sort(), [...remaining].sort(), "review the documented exceptions when retiring a coordinator-only race");
 });
 
 test("stdin delivery accepts stream types without broadening planner permissions", async () => {

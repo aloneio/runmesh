@@ -36,9 +36,14 @@ const networkGlobals = new Set(["fetch", "WebSocket", "XMLHttpRequest", "EventSo
 /** Conservative source guard: stateful workflows receive API and view ports. */
 export function boundaryNodeProblem(from, node) {
   const source = canonicalSource(from);
+  if (source === "apps/worker/src/domain/runner-handshake.ts" && (node.type === "AwaitExpression" || node.async === true))
+    return "Runner handshake parsing and projection must stay synchronous";
   if (registryRouteAdapter(source) && (node.type === "AwaitExpression" || node.async === true))
     return "Registry route adapters must preserve synchronous authority checks and mutations";
   if (node.type !== "Identifier") return undefined;
+  if (["apps/worker/src/domain/runner-handshake.ts", "apps/runner/src/environment-contracts.ts"].includes(source)
+    && (registryPlatformTypes.has(node.name) || networkGlobals.has(node.name) || ["Date", "crypto", "setTimeout", "setInterval", "queueMicrotask", "eval", "Function"].includes(node.name)))
+    return "Handshake rules and environment contracts use supplied values, not platform state or scheduling";
   if (runnerUseCase(source) && (registryPlatformTypes.has(node.name) || networkGlobals.has(node.name) || ["WorkerEnv", "Request", "Response", "Date", "crypto", "setTimeout", "setInterval", "eval", "Function"].includes(node.name)))
     return "Runner use cases receive operation ports and return outcomes, without HTTP or platform state";
   if (registryCoordinator(source) && (registryPlatformTypes.has(node.name) || networkGlobals.has(node.name) || ["Date", "crypto", "setTimeout", "setInterval"].includes(node.name)))
@@ -63,7 +68,7 @@ const runnerIoModules = new Set([
 /** New Job/Context/Patch/Connection modules are pure until an adapter role is reviewed. */
 function isPureRunner(path) {
   const name = canonicalSource(path).replace(/^apps\/runner\/src\//u, "");
-  return name === "path-contracts.ts" || /^(?:jobs|context|patch|connection)\//u.test(name) && !runnerIoModules.has(name);
+  return name === "path-contracts.ts" || name === "environment-contracts.ts" || /^(?:jobs|context|patch|connection)\//u.test(name) && !runnerIoModules.has(name);
 }
 const cloudPlatform = /^(?:cloudflare:|cloudflare(?:\/|$)|workerd(?:\/|$)|@cloudflare\/)/u;
 const serverSdk = /^(?:@modelcontextprotocol\/|agents(?:\/|$))/u;
@@ -76,6 +81,8 @@ export function specifierProblem(from, specifier, typeOnly) {
   if (centralProblem) return centralProblem;
   const builtin = specifier.startsWith("node:") || isBuiltin(specifier);
   const external = !specifier.startsWith(".") && !specifier.startsWith("/");
+  if (source === "apps/runner/src/environment-contracts.ts" && external && !purePackages.test(specifier))
+    return "Environment contracts must not load platform implementations or types";
   if ((runnerUseCase(source) || registryCoordinator(source)) && external && !purePackages.test(specifier))
     return "Runner use cases and Registry coordinators must not load platform implementations";
   if (source === "apps/runner/src/jobs/input.ts" && external && !(specifier === "node:stream" && typeOnly))
@@ -133,12 +140,20 @@ export const WORKER_ALLOWED_DEPENDENCIES = Object.freeze({
   registry_domain: ["registry_foundation", "registry_domain", "persistence", "foundation", "contracts", "protocol"],
   registry_route: ["registry_route", "registry_domain", "registry_foundation", "foundation", "contracts", "protocol"],
   registry_facade: ["registry_route", "registry_domain", "registry_foundation", "persistence", "foundation", "contracts", "platform", "protocol"],
-  transport_owner: ["transport_owner", "foundation", "contracts", "platform", "protocol"],
+  transport_owner: ["transport_owner", "domain", "foundation", "contracts", "platform", "protocol"],
   mcp: ["mcp", "contracts", "foundation", "platform", "protocol"],
   http: ["http", "application", "domain", "presentation", "distribution", "foundation", "contracts", "platform", "mcp", "protocol"],
 });
 export function dependencyProblem(from, to) {
   from = canonicalSource(from); to = canonicalSource(to);
+  if (from === "apps/worker/src/domain/runner-handshake.ts" && to !== "apps/worker/src/values.ts" && !to.startsWith("packages/protocol/src/"))
+    return "Runner handshake parsing and projection must not depend on state owners or adapters";
+  if (from === "apps/runner/src/environment-contracts.ts" && !to.startsWith("packages/protocol/src/"))
+    return "Environment contracts must not depend on concrete probes or coordinators";
+  if (from === "apps/runner/src/cli/contracts.ts" && ["apps/runner/src/environment.ts", "apps/runner/src/runtime.ts"].includes(to))
+    return "CLI environment dependencies must use structural contracts, not concrete classes";
+  if (from === "apps/runner/src/environment.ts" && ["apps/runner/src/runtime.ts", "apps/runner/src/cli.ts"].includes(to))
+    return "Environment probes must not depend on runtime or CLI composition";
   if (runnerUseCase(from) && !(runnerUseCase(to) || /^apps\/worker\/src\/(?:contracts|domain)\//u.test(to) || to.startsWith("packages/protocol/src/")))
     return "Runner use cases must depend on contracts and rules, not HTTP or transport adapters";
   if (registryCoordinator(from) && ![

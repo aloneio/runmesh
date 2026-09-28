@@ -12,7 +12,8 @@ import { FilesystemService } from "../src/filesystem.js";
 import { JobManager, type JobEvent, type JobRecord } from "../src/jobs.js";
 import { PathPolicy } from "../src/path-policy.js";
 import { validateCentralWorkspacePolicy } from "../src/policy-config.js";
-import { discoverShellRuntime, RunnerRuntime } from "../src/runtime.js";
+import { RunnerRuntime } from "../src/runtime.js";
+import { discoverShellRuntime } from "../src/environment.js";
 import type { RunnerConfig, WorkspaceConfig } from "../src/config.js";
 
 async function fixture(): Promise<{ root: string; outside: string; state: string; workspace: WorkspaceConfig; cleanup: () => Promise<void> }> {
@@ -359,11 +360,8 @@ describe("persistent local jobs", () => {
     let released = false;
     let startPromise: Promise<JobRecord> | undefined;
     try {
-      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state, onEvent: (event) => events.push(event) });
-      const internals = manager as unknown as { persist: (record: JobRecord) => Promise<void> };
-      const originalPersist = internals.persist.bind(manager);
       let targetJobId: string | undefined;
-      internals.persist = async (record) => {
+      const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state, onEvent: (event) => events.push(event) }, { persistence: { write: async (record, enqueue) => {
         if (targetJobId === undefined && record.status === "queued") targetJobId = record.job_id;
         // Hold the start() running snapshot long enough for the child close
         // callback to prepare a terminal record and enter its own write.
@@ -372,8 +370,8 @@ describe("persistent local jobs", () => {
           terminalWriteStarted = true;
           await terminalWriteGate;
         }
-        return originalPersist(record);
-      };
+        return enqueue();
+      } } });
       await manager.initialize();
       startPromise = manager.start({ workspace_id: "workspace-1", command: process.execPath, args: ["-e", "process.exit(0)"] });
       await waitFor(() => terminalWriteStarted, Boolean);
@@ -414,32 +412,25 @@ describe("persistent local jobs", () => {
     let runningWriteQueued = false;
     let startPromise: Promise<JobRecord> | undefined;
     try {
+      let targetJobId: string | undefined;
       const manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state }, { files: { ...nativeJobFiles, openJobLog: async (path, mode) => {
         const handle = await nativeJobFiles.openJobLog(path, mode);
         if (mode === "append") { const close = handle.close.bind(handle); handle.close = async () => { await closeGate; await close(); }; }
         return handle;
-      } } });
-      const internals = manager as unknown as {
-
-        persist: (record: JobRecord) => Promise<void>;
-      };
-
-      const originalPersist = internals.persist.bind(manager);
-      let targetJobId: string | undefined;
-      internals.persist = async (record) => {
+      } }, persistence: { write: async (record, enqueue) => {
         if (targetJobId === undefined && record.status === "queued") targetJobId = record.job_id;
         if (record.job_id === targetJobId && record.status === "succeeded") {
           // Let the terminal metadata callback complete, then hold finishOnce
           // before it publishes the in-memory terminal record. This is the
           // ordering window in which start() can queue its stale running copy.
-          await originalPersist(record);
+          await enqueue();
           terminalWriteStarted = true;
           await terminalGate;
           return;
         }
         if (record.job_id === targetJobId && record.status === "running") runningWriteQueued = true;
-        return originalPersist(record);
-      };
+        return enqueue();
+      } } });
       await manager.initialize();
       startPromise = manager.start({ workspace_id: test.workspace.workspaceId, command: process.execPath, args: ["-e", "process.exit(0)"] });
       await waitFor(() => terminalWriteStarted, Boolean);
@@ -702,13 +693,10 @@ describe("persistent local jobs", () => {
     let cancelPromise: Promise<JobRecord> | undefined;
     let manager: JobManager | undefined;
     try {
-      manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state }, { processes: probe.processes });
-      const internals = manager as unknown as { persist: (record: JobRecord) => Promise<void> };
-      const originalPersist = internals.persist.bind(manager);
-      internals.persist = async (record) => {
+      manager = new JobManager({ policy: policy(test.workspace), stateDir: test.state }, { processes: probe.processes, persistence: { write: async (record, enqueue) => {
         if (record.status === "queued" && targetJobId === undefined) {
           targetJobId = record.job_id;
-          const write = originalPersist(record);
+          const write = enqueue();
           await queuedWriteGate;
           return write;
         }
@@ -719,8 +707,8 @@ describe("persistent local jobs", () => {
           resolveFailedPersist();
           await failedWriteGate;
         }
-        return originalPersist(record);
-      };
+        return enqueue();
+      } } });
       await manager.initialize();
       startPromise = manager.start({ workspace_id: test.workspace.workspaceId, command: process.execPath, args: ["-e", "setInterval(() => {}, 10000)"] });
       await waitFor(() => targetJobId, (value) => value !== undefined);
@@ -1188,8 +1176,8 @@ describe("persistent local jobs", () => {
     try {
       let calls = 0;
       const config: RunnerConfig = { server: "ws://127.0.0.1", token: "0123456789abcdef", runnerId: "runner-1", workspaces: [test.workspace] };
-      const runtimeModule = await import("../src/runtime.js");
-      const runtime = new RunnerRuntime({ config, stateDir: test.state, environment: new runtimeModule.EnvironmentInfoService({ probe: async (command) => { calls += 1; return command === "docker" ? undefined : `${command} version`; } }) });
+      const environmentModule = await import("../src/environment.js");
+      const runtime = new RunnerRuntime({ config, stateDir: test.state, environment: new environmentModule.EnvironmentInfoService({ probe: async (command) => { calls += 1; return command === "docker" ? undefined : `${command} version`; } }) });
       const [first, second] = await Promise.all([runtime.envInfo(), runtime.envInfo()]);
       expect(first).toEqual(second);
       expect(first).toMatchObject({ platform: process.platform, architecture: process.arch, tools: { docker: { available: false }, git: { available: true, version: "git version" } } });
@@ -1203,8 +1191,8 @@ describe("persistent local jobs", () => {
     try {
       let calls = 0;
       const config: RunnerConfig = { server: "ws://127.0.0.1", token: "0123456789abcdef", runnerId: "runner-1", workspaces: [test.workspace] };
-      const runtimeModule = await import("../src/runtime.js");
-      const runtime = new RunnerRuntime({ config, stateDir: test.state, environment: new runtimeModule.EnvironmentInfoService({ probe: async (command) => { calls += 1; return `${command} version`; } }) });
+      const environmentModule = await import("../src/environment.js");
+      const runtime = new RunnerRuntime({ config, stateDir: test.state, environment: new environmentModule.EnvironmentInfoService({ probe: async (command) => { calls += 1; return `${command} version`; } }) });
       await runtime.envInfo();
       const replacement = { ...test.workspace, workspaceId: "workspace-2", readonly: true };
       runtime.applyPolicy([replacement]);
