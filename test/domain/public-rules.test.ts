@@ -1,7 +1,27 @@
 import { expect, it } from "vitest";
+import { decodePathIdentifier, matchIdentifierPath } from "../../apps/worker/src/http/path-identifiers.js";
 import { FairJobQueue } from "../../apps/runner/src/job-queue.js";
 import { projectReauthorization } from "../../apps/worker/src/mcp/reauthorization.js";
 import { planContextRetention, type RetentionCandidate } from "../../apps/runner/src/context/retention-plan.js";
+
+it.each(["runner:host.1", "runner-1", "a".repeat(128)])("decodes a valid HTTP identifier exactly once: %s", id => {
+  expect(decodePathIdentifier(id)).toBe(id);
+  expect(decodePathIdentifier(encodeURIComponent(id))).toBe(id);
+});
+
+it.each([undefined, "", ".", "..", "r%2Fx", "r%5Cx", "r%253Ax", "r%00x", "r%3Fx", "r%23x", "r%", "%zz", "%E0%A4%A", "%E2%98%83", "a".repeat(129)])("rejects malformed or unsafe HTTP identifier %s", value => {
+  expect(decodePathIdentifier(value)).toBeUndefined();
+});
+
+it("decodes only identifier captures and preserves literal route actions", () => {
+  const action = /^\/admin\/runners\/([^/]+)\/(delete|revoke)$/;
+  expect(matchIdentifierPath(action, "/admin/runners/r%3A1/delete")?.slice(1)).toEqual(["r:1", "delete"]);
+  expect(matchIdentifierPath(action, "/admin/runners/r%2F1/delete")).toBeNull();
+  expect(matchIdentifierPath(action, "/admin/runners/r%3A1/%64elete")).toBeNull();
+  const job = /^\/admin\/runners\/([^/]+)\/jobs\/([^/]+)$/;
+  expect(matchIdentifierPath(job, "/admin/runners/r%3a1/jobs/job%3A2", [1, 2])?.slice(1)).toEqual(["r:1", "job:2"]);
+  expect(matchIdentifierPath(job, "/admin/runners/r%3A1/jobs/job%253A2", [1, 2])).toBeNull();
+});
 
 it("AR08 public queue operations preserve per-client FIFO and progress without a process manager", () => {
   const queue = new FairJobQueue<string>(4, 3);

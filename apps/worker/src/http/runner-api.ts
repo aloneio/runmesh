@@ -1,3 +1,4 @@
+import { matchIdentifierPath } from "./path-identifiers.js";
 import { deleteRunnerFromControlPlane } from "./runner-deletion.js";
 import { cancelRunnerPolicyMutation } from "../application/runner-policy.js";
 import { consumeInternalNonce } from "../platform/control-plane.js";
@@ -22,8 +23,9 @@ import { verifyInternalRequest } from "../security.js";
 import type { WorkerEnv } from "../platform/env.js";
 
 export async function forwardRunnerRpc(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
-  const segments = url.pathname.split("/").filter(Boolean);
-  if (request.method !== "POST" || segments.length !== 4 || segments[0] !== "internal" || segments[1] !== "runners" || segments[3] !== "rpc" || !isSafeIdentifier(segments[2] ?? "")) return notFound();
+  const route = matchIdentifierPath(/^\/internal\/runners\/([^/]+)\/rpc$/, url.pathname);
+  if (request.method !== "POST" || route === null) return notFound();
+  const runnerId = route[1]!;
   // This route is reachable before authentication. Cap the stream before
   // buffering it for HMAC verification so an unauthenticated large request
   // cannot exhaust Worker memory.
@@ -31,7 +33,6 @@ export async function forwardRunnerRpc(request: Request, env: WorkerEnv, url: UR
   let verified = false;
   try { verified = body !== undefined && await verifyInternalRequest(request, env.INTERNAL_CONTROL_SECRET, body, consumeInternalNonce.bind(undefined, env)); } catch { verified = false; }
   if (!verified || body === undefined) return notFound();
-  const runnerId = segments[2] as string;
   const headers = await signedInternalHeaders(env, "POST", "/rpc", body);
   if (headers === undefined) return notFound();
   try { return await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/rpc", { method: "POST", headers, body })); }
@@ -41,13 +42,14 @@ export async function forwardRunnerRpc(request: Request, env: WorkerEnv, url: UR
 export async function handleRunnerAdmin(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
   if (!isRunnerAdminRequest(request, env)) { await discardBody(request); return new Response("unauthorized", { status: 401 }); }
   if (!isConfiguredSecret(env.INTERNAL_CONTROL_SECRET) || !isConfiguredSecret(env.RUNNER_TOKEN_PEPPER)) { await discardBody(request); return new Response("admin control plane is not configured", { status: 503 }); }
-  const segments = url.pathname.split("/").filter(Boolean); const runnerId = segments[2]; const action = segments[3];
-  if (segments.length === 2 && request.method === "POST") {
+  if (url.pathname === "/admin/runners" && request.method === "POST") {
     const input = await readAdminBody(request); const id = typeof input?.runner_id === "string" && isSafeIdentifier(input.runner_id) ? input.runner_id : undefined;
     if (id === undefined) return Response.json({ error: "runner_id must be a safe identifier" }, { status: 400 });
     return registerRunner(env, id, input);
   }
-  if (runnerId === undefined || !isSafeIdentifier(runnerId) || action === undefined || segments.length !== 4 || request.method !== "POST") { await discardBody(request); return notFound(); }
+  const route = matchIdentifierPath(/^\/admin\/runners\/([^/]+)\/(rotate|revoke|delete)$/, url.pathname);
+  if (route === null || request.method !== "POST") { await discardBody(request); return notFound(); }
+  const runnerId = route[1]!, action = route[2]!;
   if (action === "rotate") return registerRunner(env, runnerId, await readAdminBody(request));
   if (action === "delete") return deleteRunnerWithAdminToken(env, runnerId, await readAdminBody(request));
   if (action === "revoke") {
