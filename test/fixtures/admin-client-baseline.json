@@ -3,7 +3,7 @@
   "cases": [
     {
       "nonce": null,
-      "sha256": "612fb097df688a5b829b5603ebe63b9bb0d5baa763513f287f63021e4c957a5a",
+      "sha256": "97773c3030b64163739164314135655e8a605b1656c9aea67b5f3c5fa3dbfed4",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
@@ -11,7 +11,7 @@
     },
     {
       "nonce": "test-nonce",
-      "sha256": "dc92677f52c566b500e507636b292ddab9895b80558c00cfdf0aabc028b5ce9d",
+      "sha256": "dd6100c54f2214997ed737fb7c0ba6e6691864943a2d9f7c70ff051a17174b82",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
@@ -47,5 +47,9 @@
     "source_base": "e1911d63260b6737d89766b94ed3f4be9c80d369",
     "reviewed_change": "Localize native Skill file-read, UTF-8, network and malformed-response failures in English and Chinese. Browser regressions reject invalid files without requests and recover through reselection, preserving text. Uncertain writes still require refresh and are never replayed. All non-script markup remains byte-for-byte unchanged. No screenshots.",
     "rendered_cases": 20
+  },
+  "client_permissions_review": {
+    "source_base": "ef81b5f0bd4085e3c9f16fec34b0c19afed53f52",
+    "reviewed_change": "Open computer permissions when the client selects computer access, including initial and dynamically mounted pages. Preserve selected scopes. Native-only forms start open without JavaScript. Bilingual mobile DOM tests; no screenshots."
   }
 }

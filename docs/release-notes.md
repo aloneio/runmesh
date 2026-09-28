@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Adding an AI connection now opens computer permissions automatically when you select “MCP, Skills and computer access”. Switching access types keeps your permission choices.
 - Development installers now wait for an ongoing release verification when several users download immediately after a cold start. Concurrent requests share the verified result once it is ready, within a bounded wait.
 
 ## 0.1.5 — published stable release

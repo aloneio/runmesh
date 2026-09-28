@@ -8,6 +8,7 @@ import { runnersPage } from "../src/admin/runner-list-view.js";
 import { runnerDetailPage } from "../src/admin/runner-detail-view.js";
 import { adminDocument } from "../src/admin/layout.js";
 import { html, htmlHeaders, redirect } from "../src/http/html-response.js";
+import { localizeHtmlResponse } from "../src/i18n/html.js";
 
 // Hashes were captured by evaluating the pre-refactor renderers at the fixed
 // baseline. Reviewed i18n annotations and login copy changes retain their
@@ -32,6 +33,23 @@ describe("AR04 rendering compatibility", () => {
     const value = render(...args);
     expect(new TextEncoder().encode(value).byteLength).toBe(fixture.bytes);
     expect(sha256Hex(value)).toBe(fixture.sha256);
+  });
+
+  it.each([true, false])("shows computer permissions for the initial access mode when central is %s", async (centralEnabled) => {
+    const content = clientsPage({ clients: [], runners: [], jobs: [], snapshot: {}, notices: [] }, "fixture-csrf", centralEnabled);
+    expect(content).toContain(`<details data-client-computer-permissions${centralEnabled ? "" : " open"}>`);
+    expect(content.includes('<option value="central">')).toBe(centralEnabled);
+    expect(content).toContain('<input type="checkbox" name="scopes" value="coding:read" checked>');
+    expect(content).toContain('<input type="checkbox" name="scopes" value="coding:write">');
+    expect(content).toContain('<input type="checkbox" name="scopes" value="coding:exec">');
+    for (const locale of ["en", "zh-CN"] as const) {
+      const response = localizeHtmlResponse(new Request(`https://worker.test/admin/clients?lang=${locale}`),
+        new Response(`<html><body>${content}</body></html>`, { headers: { "content-type": "text/html" } }));
+      const localized = await response.text();
+      expect(localized).toContain(`<details data-client-computer-permissions${centralEnabled ? "" : " open"}>`);
+      expect(localized).toContain(`<summary>${locale === "en" ? "Computer permissions" : "计算机权限"}</summary>`);
+      expect(localized).toContain('<input type="checkbox" name="scopes" value="coding:read" checked>');
+    }
   });
 
   it("keeps untrusted names escaped and rendering synchronous", () => {

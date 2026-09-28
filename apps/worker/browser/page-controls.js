@@ -148,6 +148,15 @@ function createPageControls({
       });
       syncExecutionMode(form);
     });
+    root.querySelectorAll('select[name="access_mode"]').forEach(function (select) {
+      var permissions = select.form && select.form.querySelector("[data-client-computer-permissions]");
+      if (!permissions || !claim(select, "client-access")) return;
+      function syncPermissions() {
+        permissions.open = select.value === "native";
+      }
+      select.addEventListener("change", syncPermissions);
+      syncPermissions();
+    });
     bindFeatureAlert(root);
     stabilizeTabPanels(root);
   }

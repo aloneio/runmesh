@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "8792b1bc73282f00b72737805c3c2cce4e24cfe1527555071e6133e8fb3d9aa6",
-      "bytes": 124485,
+      "sha256": "7de52c9d72b95e91b1243491cee3887ab43c52493510618b7f2c9de1e28f5cc9",
+      "bytes": 124945,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -32,8 +32,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "2ab1899d35974a2da3955b6ea43e0264e31277401d7f91e4d2b13aadc7a0a8fb",
-      "bytes": 125073,
+      "sha256": "5eb02505c6a6eed7853eda51d6c9a508511db856c03ae6f4f593e68e7c299bb4",
+      "bytes": 125533,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -51,8 +51,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "3fca9389d26d71876bd24a89c39a00a3cad8a84e257729ec69d34b3738574150",
-      "bytes": 126221,
+      "sha256": "c025a4bc9a1a1979138337f7bf8306e27031a8a171a41a3edaf9f155a9c312c1",
+      "bytes": 126681,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -158,8 +158,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "41b033c19ac0c3b5197265767683e9b34334d0dd5a1e18d8da0dbb3cee092160",
-      "bytes": 1966,
+      "sha256": "209ac6830d6fd1c86aef6bd8ae7446c7242e0a6f42cbaadaa3e120339b5e558e",
+      "bytes": 1999,
       "pre_presence_bytes": 1658,
       "pre_presence_sha256": "e74169b7613eb2646689d68bc42760c399f092ad60d9c6200c65b2b561342266",
       "reviewed_presence_change": "Replace client online/offline with credential validity, identify credential status, and explain it does not prove a live connection. Reversing only these reviewed changes matches pre_presence_sha256.",
@@ -217,8 +217,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "567aaabd91037b4cd18f35b634443b2cc9118580d6b84fd5f20228189975b379",
-      "bytes": 4414,
+      "sha256": "f224a1048d3b378c94d53aaa471ea86df0c0c988fdef2e9efbe16fda8236c14b",
+      "bytes": 4447,
       "original_sha256": "57a9afa644d0576c73376174bad5c663efe58c9490697670a4c5925b21280795",
       "original_bytes": 4110,
       "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label",
@@ -419,8 +419,8 @@
           }
         ]
       ],
-      "sha256": "f4fafb1026eda5c416ce27af3b841efef257b51461359d5920d1a6a8d3399301",
-      "bytes": 126570,
+      "sha256": "8007223976429546a41ac7c5913bc2485f70c38ee2ec75f2d6154478d477be17",
+      "bytes": 127030,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
