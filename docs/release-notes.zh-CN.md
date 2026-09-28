@@ -2,6 +2,10 @@
 
 [English](release-notes.md) · [文档目录](README.zh-CN.md) · [升级指南](upgrading.zh-CN.md)
 
+## 尚未发布
+
+- 改进开发版安装的冷启动体验：多个用户同时下载时，后续请求会在限定时间内等待正在进行的版本校验，校验完成后即可继续安装。
+
 ## 0.1.5 — 已发布正式版
 
 于 **2026 年 9 月 23 日**发布为[不可变正式版](https://github.com/aloneio/runmesh/releases/tag/v0.1.5)，提供已签名的便携 Runner 安装包。该版本来自受保护 main 提交 `77e82a1b59737a42cc090064651d1b0531890f21`；独立核验的 manifest SHA256 为 `34da9baefabddd882aeef79151b132b1de4086fce54de7a46fe853a7e8dac18a`。

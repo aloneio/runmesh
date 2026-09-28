@@ -2,6 +2,10 @@
 
 [Chinese](release-notes.zh-CN.md) · [Documentation](README.md) · [Upgrade guide](upgrading.md)
 
+## Unreleased
+
+- Development installers now wait for an ongoing release verification when several users download immediately after a cold start. Concurrent requests share the verified result once it is ready, within a bounded wait.
+
 ## 0.1.5 — published stable release
 
 Published on **September 23, 2026** as an [immutable stable release](https://github.com/aloneio/runmesh/releases/tag/v0.1.5) with a signed portable Runner package. The release was built from protected main commit `77e82a1b59737a42cc090064651d1b0531890f21`; the independently verified manifest SHA256 is `34da9baefabddd882aeef79151b132b1de4086fce54de7a46fe853a7e8dac18a`.

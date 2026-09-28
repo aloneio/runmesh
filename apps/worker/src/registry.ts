@@ -485,7 +485,7 @@ export class RegistryDO {
 
   public lookupRunnerEnrollment(verifier: string, nowMs: number): { runner_id: string } | undefined { return this.lifecycle.lookupRunnerEnrollment(verifier, nowMs); }
 
-  public redeemRunnerEnrollment(verifier: string, tokenVerifier: string, publicInfo: RunnerPublicInfo, nowMs: number, mutationId?: string): Promise<{ runner_id: string } | undefined> { return this.lifecycle.redeemRunnerEnrollment(verifier, tokenVerifier, publicInfo, nowMs, mutationId); }
+  public redeemRunnerEnrollment(verifier: string, tokenVerifier: string, publicInfo: RunnerPublicInfo, nowMs: number, mutationId: string): Promise<{ runner_id: string } | undefined> { return this.lifecycle.redeemRunnerEnrollment(verifier, tokenVerifier, publicInfo, nowMs, mutationId); }
 
   public authenticateRunner(runnerId: string, token: string): Promise<{ credential_version: number } | undefined> { return this.lifecycle.authenticateRunner(runnerId, token); }
 
@@ -589,10 +589,8 @@ export class RegistryDO {
     }
     if (request.method === "POST" && segments.length === 2 && segments[0] === "enrollments" && segments[1] === "redeem") {
       const verifier = stringField(input, "verifier", 64); const tokenVerifier = stringField(input, "token_verifier", 64); const publicInfo = runnerPublicInfoField(input.runner_public_info);
-      const mutationId = input.mutation_id === undefined ? undefined : mutationIdField(input);
-      // Public Worker redemption must always be paired with a RunnerDO fence;
-      // keeping the optional argument on the direct method only preserves old
-      // unit/test callers and cannot provide a production downgrade path.
+      const mutationId = mutationIdField(input);
+      // Redemption shares the mutation identity used to acquire the RunnerDO fence.
       if (mutationId === undefined) return Response.json({ error: "mutation_id is required" }, { status: 400 });
       const redeemed = verifier === undefined || tokenVerifier === undefined || publicInfo === undefined ? undefined : await this.redeemRunnerEnrollment(verifier, tokenVerifier, publicInfo, now, mutationId);
       return redeemed === undefined ? new Response("invalid enrollment", { status: 401 }) : Response.json(redeemed);

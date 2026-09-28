@@ -266,3 +266,16 @@ Connection version, policy interruption, reconnect acknowledgement and history
 cadence tests observe hello/welcome, wire frames and injected ports. AR18 guards
 these migrated tests against private connection access. Socket identity, policy
 publication and asynchronous ordering remain owned by RunnerConnection.
+
+Development release discovery keeps only verified values and refresh outcome
+counters in the shared runtime. Cold concurrent requests own their timers and
+wait at most one refresh budget for a verified result. Failure cooldowns, lease
+replacement and the original hard cache expiry remain enforced without sharing
+I/O promises or multiplying upstream verification. Regression tests cover
+verification success/failure, bounded waiting, lease replacement and expiry.
+
+Enrollment redemption requires a mutation identity in both Registry's facade
+and lifecycle implementation. Direct tests now exercise the production mutation
+ledger, including competing redemptions and recovery of the same operation after
+a lost response. The old test-only optional path is removed; credential changes
+remain within the existing synchronous transaction after the RunnerDO fence.

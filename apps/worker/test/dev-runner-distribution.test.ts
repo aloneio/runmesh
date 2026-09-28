@@ -2,7 +2,7 @@ import type { DevelopmentReleaseCache, DevelopmentReleaseRefreshScheduler, Devel
 import { env, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import worker from "../src/index.js";
 import { developmentReleaseDependencies, registryDevelopmentReleaseCache } from "../src/http/release-cache.js";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { discoverDevelopmentRunnerRelease as discoverRelease, resolveRunnerReleaseDescriptor as resolveRelease, createDevelopmentReleaseRuntime, verifyDevelopmentRunnerRelease } from "../src/distribution/release.js";
 import { FIXED_RELEASE_VERSION, installerReleaseTarget, renderPosixInstaller, renderPowerShellInstaller } from "../src/installer.js";
 import { runnerInstallScript, runnerRelease } from "../src/http/distribution.js";
@@ -291,6 +291,8 @@ describe("development Runner distribution", () => {
 
 
 describe("explicit development release runtime", () => {
+  afterEach(() => vi.useRealTimers());
+
   it.each([1_000, 120_000])("keeps a verified persistent release available during another request's first cache read (age %s ms)", async ageMs => {
     const now = Date.now();
     const seed = await discoverDevelopmentRunnerRelease(responseFetch([release(devVersion(0), "2026-09-16T08:00:00Z")]), async () => undefined);
@@ -318,6 +320,7 @@ describe("explicit development release runtime", () => {
     const seed = await discoverDevelopmentRunnerRelease(responseFetch([release(devVersion(0), "2026-09-16T08:00:00Z")]), async () => undefined);
     const record = { schema_version: 1, verified_at_ms: kind === "future" ? now + 1 : kind === "expired" ? now - 3_600_000 : now - 1_000,
       descriptor: kind === "invalid" ? { ...seed, signature_url: "https://untrusted.invalid/manifest.sig" } : seed };
+    vi.useFakeTimers();
     let finishRead!: (response: Response | undefined) => void;
     const cache = { match: vi.fn().mockImplementationOnce(() => new Promise<Response | undefined>(resolve => { finishRead = resolve; }))
       .mockImplementation(async () => Response.json(record)), put: vi.fn(async () => undefined) };
@@ -325,7 +328,9 @@ describe("explicit development release runtime", () => {
     const dependencies: DevelopmentReleaseDependencies = { fetch: fetchImpl, verify: async () => undefined, cache, now: () => now, runtime: createDevelopmentReleaseRuntime() };
     const first = resolveRelease(devEnv, dependencies);
     try {
-      expect(await resolveRelease(devEnv, dependencies)).toMatchObject({ channel: "dev", distributable: false, package_version: "" });
+      const concurrent = resolveRelease(devEnv, dependencies);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(await concurrent).toMatchObject({ channel: "dev", distributable: false, package_version: "" });
       expect(fetchImpl).not.toHaveBeenCalled();
       expect(cache.put).not.toHaveBeenCalled();
     } finally { finishRead(undefined); await first; }
@@ -357,6 +362,7 @@ describe("explicit development release runtime", () => {
     let now = Date.now();
     const seed = await discoverDevelopmentRunnerRelease(responseFetch([release(devVersion(0), "2026-09-16T08:00:00Z")]), async () => undefined);
     const record = { schema_version: 1, verified_at_ms: now - 3_599_999, descriptor: seed };
+    vi.useFakeTimers();
     const reads: ((response: Response | undefined) => void)[] = [];
     const cache = { match: vi.fn(() => new Promise<Response | undefined>(resolve => { reads.push(resolve); })), put: vi.fn(async () => undefined) };
     const fetchImpl = responseFetch([], 404);
@@ -367,31 +373,59 @@ describe("explicit development release runtime", () => {
     now += 2;
     reads[1]!(Response.json(record));
     try {
+      await vi.advanceTimersByTimeAsync(20_000);
       expect(await concurrent).toMatchObject({ channel: "dev", distributable: false, package_version: "" });
       expect(fetchImpl).not.toHaveBeenCalled();
       expect(cache.put).not.toHaveBeenCalled();
     } finally { reads[0]!(undefined); await first; }
   });
 
-  it("reserves one cold discovery while each request may read verified storage", async () => {
+  it("serves concurrent cold requests after one discovery and successful verification", async () => {
     let finish!: (response: Response) => void;
+    let finishVerification!: () => void;
     const fetchImpl = vi.fn(() => new Promise<Response>(resolve => { finish = resolve; })) as typeof fetch;
     const cache = { match: vi.fn(async () => undefined), put: vi.fn(async () => undefined) };
-    const verify = vi.fn(async () => undefined);
+    const verify = vi.fn(() => new Promise<void>(resolve => { finishVerification = resolve; }));
     const dependencies: DevelopmentReleaseDependencies = { fetch: fetchImpl, verify, cache, now: () => Date.now(), runtime: createDevelopmentReleaseRuntime() };
     const first = discoverRelease(dependencies);
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
-    const concurrent = await Promise.allSettled(Array.from({ length: 20 }, () => discoverRelease(dependencies)));
-    expect(concurrent.every(result => result.status === "rejected")).toBe(true);
+    let settled = 0;
+    const concurrent = Promise.all(Array.from({ length: 20 }, () => discoverRelease(dependencies).then(result => { settled++; return result; })));
     expect(cache.match).toHaveBeenCalledTimes(21);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(Object.values(dependencies.runtime).some(value => value instanceof Promise)).toBe(false);
     finish(Response.json([release(devVersion(1), "2026-09-16T09:00:00Z")]));
+    await vi.waitFor(() => expect(verify).toHaveBeenCalledOnce());
+    expect(settled).toBe(0);
+    expect(dependencies.runtime.cached).toBeUndefined();
+    finishVerification();
     const descriptor = await first;
+    expect(await concurrent).toEqual(Array(20).fill(descriptor));
     expect(await Promise.all(Array.from({ length: 20 }, () => discoverRelease(dependencies)))).toEqual(Array(20).fill(descriptor));
     expect(cache.put).toHaveBeenCalledTimes(1);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(verify).toHaveBeenCalledTimes(1);
+  });
+
+  it("finishes waiting callers promptly when signature verification fails", async () => {
+    vi.useFakeTimers();
+    const now = Date.now();
+    let rejectVerification!: (error: Error) => void;
+    const verify = vi.fn(() => new Promise<void>((_, reject) => { rejectVerification = reject; }));
+    const fetchImpl = responseFetch([release(devVersion(1), "2026-09-16T09:00:00Z")]);
+    const dependencies: DevelopmentReleaseDependencies = { fetch: fetchImpl, verify, cache: undefined, now: () => now, runtime: createDevelopmentReleaseRuntime() };
+    const first = resolveRelease(devEnv, dependencies);
+    await vi.advanceTimersByTimeAsync(0);
+    const concurrent = Promise.all(Array.from({ length: 20 }, () => resolveRelease(devEnv, dependencies)));
+    await vi.advanceTimersByTimeAsync(0);
+    rejectVerification(new Error("invalid signature"));
+    expect((await first).distributable).toBe(false);
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await concurrent).every(result => !result.distributable)).toBe(true);
+    expect((await resolveRelease(devEnv, dependencies)).distributable).toBe(false);
+    expect(dependencies.runtime.cached).toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(verify).toHaveBeenCalledOnce();
   });
 
   it("bounds repeated failed cold refreshes and recovers after a short in-memory cooldown", async () => {
@@ -414,6 +448,7 @@ describe("explicit development release runtime", () => {
   });
 
   it("renews an owned reservation after slow cache I/O for the complete network refresh budget", async () => {
+    vi.useFakeTimers();
     let now = Date.now();
     let finishRead!: (response: Response | undefined) => void;
     let finishRefresh!: (response: Response) => void;
@@ -425,21 +460,92 @@ describe("explicit development release runtime", () => {
     expect(cache.match).toHaveBeenCalledOnce();
     now += 20_001;
     finishRead(undefined);
-    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchImpl).toHaveBeenCalledOnce();
     try {
-      const concurrent = await Promise.allSettled(Array.from({ length: 20 }, () => discoverRelease(dependencies)));
-      expect(concurrent.every(result => result.status === "rejected")).toBe(true);
+      let settled = 0;
+      const concurrent = Promise.all(Array.from({ length: 20 }, () => discoverRelease(dependencies).then(result => { settled++; return result; })));
       now += 19_999;
-      await expect(discoverRelease(dependencies)).rejects.toThrow("refresh temporarily unavailable");
-      expect(cache.match).toHaveBeenCalledTimes(22);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(settled).toBe(0);
+      expect(cache.match).toHaveBeenCalledTimes(21);
       expect(fetchImpl).toHaveBeenCalledOnce();
       finishRefresh(Response.json([release(devVersion(1), "2026-09-16T09:00:00Z")]));
-      expect((await first).package_version).toBe(devVersion(1));
+      const descriptor = await first;
+      await vi.advanceTimersByTimeAsync(100);
+      expect(descriptor.package_version).toBe(devVersion(1));
+      expect(await concurrent).toEqual(Array(20).fill(descriptor));
       expect(cache.put).toHaveBeenCalledOnce();
     } finally {
       finishRefresh(Response.json([release(devVersion(1), "2026-09-16T09:00:00Z")]));
       await first.catch(() => undefined);
     }
+  });
+
+  it("bounds a cold caller's own waiting even when its clock stops advancing", async () => {
+    vi.useFakeTimers();
+    const now = Date.now();
+    let finish!: (response: Response) => void;
+    const fetchImpl = vi.fn(() => new Promise<Response>(resolve => { finish = resolve; })) as typeof fetch;
+    const dependencies: DevelopmentReleaseDependencies = { fetch: fetchImpl, verify: async () => undefined, cache: undefined, now: () => now, runtime: createDevelopmentReleaseRuntime() };
+    const first = resolveRelease(devEnv, dependencies);
+    await vi.advanceTimersByTimeAsync(0);
+    let settled = false;
+    const concurrent = resolveRelease(devEnv, dependencies).then(result => { settled = true; return result; });
+    try {
+      await vi.advanceTimersByTimeAsync(19_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await concurrent).toMatchObject({ distributable: false });
+      expect(fetchImpl).toHaveBeenCalledOnce();
+    } finally {
+      finish(Response.json([release(devVersion(1), "2026-09-16T09:00:00Z")]));
+      expect((await first).package_version).toBe(devVersion(1));
+    }
+  });
+
+  it("does not extend a cold caller's deadline when an abandoned refresh lease is replaced", async () => {
+    vi.useFakeTimers();
+    let now = Date.now();
+    const finishes: ((response: Response) => void)[] = [];
+    const fetchImpl = vi.fn(() => new Promise<Response>(resolve => { finishes.push(resolve); })) as typeof fetch;
+    const dependencies: DevelopmentReleaseDependencies = { fetch: fetchImpl, verify: async () => undefined, cache: undefined, now: () => now, runtime: createDevelopmentReleaseRuntime() };
+    const first = resolveRelease(devEnv, dependencies);
+    await vi.advanceTimersByTimeAsync(0);
+    now += 10_000;
+    let settled = false;
+    const concurrent = resolveRelease(devEnv, dependencies).then(result => { settled = true; return result; });
+    await vi.advanceTimersByTimeAsync(0);
+    now += 10_001;
+    const replacement = resolveRelease(devEnv, dependencies);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(settled).toBe(false);
+    now += 9_999;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await concurrent).toMatchObject({ distributable: false });
+    finishes[1]!(Response.json([release(devVersion(1), "2026-09-16T09:00:00Z")]));
+    expect((await replacement).package_version).toBe(devVersion(1));
+    finishes[0]!(Response.json([release(devVersion(0), "2026-09-16T08:00:00Z")]));
+    expect((await first).package_version).toBe(devVersion(1));
+  });
+
+  it("rechecks verified memory hard expiry before waking cold callers", async () => {
+    vi.useFakeTimers();
+    let now = Date.now();
+    let finish!: (response: Response) => void;
+    const fetchImpl = vi.fn(() => new Promise<Response>(resolve => { finish = resolve; })) as typeof fetch;
+    const dependencies: DevelopmentReleaseDependencies = { fetch: fetchImpl, verify: async () => undefined, cache: undefined, now: () => now, runtime: createDevelopmentReleaseRuntime() };
+    const first = resolveRelease(devEnv, dependencies);
+    await vi.advanceTimersByTimeAsync(0);
+    const concurrent = resolveRelease(devEnv, dependencies);
+    await vi.advanceTimersByTimeAsync(0);
+    finish(Response.json([release(devVersion(1), "2026-09-16T09:00:00Z")]));
+    expect((await first).distributable).toBe(true);
+    now += 3_600_000;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await concurrent).toMatchObject({ distributable: false });
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("isolates discovery values and cooldowns by Registry binding", async () => {
