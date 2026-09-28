@@ -325,6 +325,25 @@ test("AR18 prevents retired private I/O mocks from returning", async () => {
   }
   const parseTest = source => parse(source, { sourceType: "module", plugins: ["typescript"] });
   const property = node => node?.computed ? node.property?.value : node?.property?.name;
+  const connectionPrivateAccesses = source => {
+    const violations = [];
+    const retired = new Set(["applyDesiredPolicy", "forwardJobEvent", "historyPending", "welcomedSocket", "sendSyncNow", "lastSyncSnapshot", "syncTimer", "desiredPolicyRevision", "desiredPolicyChecksum", "appliedPolicyRevision", "appliedPolicyChecksum"]);
+    const unwrap = node => ["TSAsExpression", "TSTypeAssertion", "TSNonNullExpression", "ParenthesizedExpression"].includes(node?.type) ? unwrap(node.expression) : node;
+    visit(parseTest(source), node => {
+      if (["TSAsExpression", "TSTypeAssertion"].includes(node.type) && unwrap(node)?.name === "connection") violations.push("connection assertion");
+      if (node.type === "MemberExpression" && (retired.has(property(node))
+        || unwrap(node.object)?.name === "connection" && !["start", "stop", "rpc", "disconnectTransport"].includes(property(node)))) violations.push(property(node));
+    });
+    return violations;
+  };
+  assert.deepEqual(connectionPrivateAccesses("connection.start(); fixture.socket.open(); socket.send(frame);"), []);
+  for (const source of ["(connection as unknown as State).socket = socket;", "connection['metadata'];", "internals.applyDesiredPolicy(socket, policy);", "internals['historyPending'] = pending;"]) {
+    assert.ok(connectionPrivateAccesses(source).length > 0, "private connection fixture must be rejected");
+  }
+  for (const name of ["connection-handshake", "connection-budgets", "connection-outage", "product"]) {
+    const source = await readFile(join(project, "apps/runner/test/" + name + ".test.ts"), "utf8");
+    assert.deepEqual(connectionPrivateAccesses(source), [], name + ": exercise connection lifecycle and injected ports instead of private state");
+  }
   for (const name of ["packed-job-integration", "no-record", "transport", "quota-resilience"]) {
     const source = await readFile(join(project, 'apps/worker/test/' + name + '.test.ts'), "utf8");
     visit(parseTest(source), node => {

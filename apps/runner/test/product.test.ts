@@ -2,10 +2,9 @@ import { chmod, chown, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } 
 import { tmpdir } from "node:os";
 import { join, resolve, win32 } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { decodeWireFrame, runnerPolicyChecksum } from "@aloneio/runmesh-protocol";
+import { runnerPolicyChecksum } from "@aloneio/runmesh-protocol";
 import { runCli, runEnrollCli, parseProductArgs, shareableDoctorReport } from "../src/cli.js";
-import { RunnerConnection, classifyConnectionFailure } from "../src/connection.js";
-import { RUNNER_VERSION } from "../src/version.js";
+import { classifyConnectionFailure } from "../src/connection.js";
 import { enrollRunner } from "../src/enrollment.js";
 import { ProfileStore, validateProfile } from "../src/profile.js";
 import { PolicyStore } from "../src/policy-store.js";
@@ -455,12 +454,6 @@ describe("runner product profile and enrollment", () => {
   });
 });
 describe("runner product CLI and service safety", () => {
-  it("reports its installed package version instead of a hardcoded transport value", () => {
-    expect(RUNNER_VERSION).toMatch(/^\d+\.\d+\.\d+/);
-    const connection = new RunnerConnection({ config: { server: "wss://runner.example.test/runner/connect", runnerId: "version-runner", token: "0123456789abcdef", workspaces: [] } });
-    expect((connection as unknown as { metadata: { runner_version: string } }).metadata.runner_version).toBe(RUNNER_VERSION);
-  });
-
   it("rejects local workspace configuration and starts from the central profile", async () => {
     const test = await fixture();
     try {
@@ -690,90 +683,6 @@ describe("runner product CLI and service safety", () => {
       await manager.disable?.(manifest);
       expect(calls).toEqual(["systemctl daemon-reload", "systemctl is-enabled runmesh-runner.service"]);
     }
-  });
-  it("re-applies an unchanged desired policy after activation is interrupted before live publish", async () => {
-    const workspaces: [] = [];
-    const policyBase = {
-      schema_version: 1 as const,
-      runner_id: "policy-reapply-runner",
-      revision: 1,
-      runner_permissions: { read: true, edit: true, shell: true, job_control: true },
-      workspaces,
-    };
-    const desired = { ...policyBase, checksum: runnerPolicyChecksum(policyBase) };
-    const firstSocket = { readyState: 1, send: vi.fn() };
-    const replacementSocket = { readyState: 1, send: vi.fn() };
-    const applied: unknown[][] = [];
-    let activationCount = 0;
-    const runtime = {
-      applyPolicy: (value: unknown[]) => { applied.push(value); },
-      syncJobs: async () => [],
-      syncWorkspaceMetadata: () => [],
-    } as unknown as import("../src/runtime.js").RunnerRuntime;
-    const policyStore = {
-      activate: async () => {
-        activationCount += 1;
-        // Simulate the transport being superseded after durable activation but
-        // before the live runtime policy is published.
-        if (activationCount === 1) (connection as unknown as { socket: unknown }).socket = replacementSocket;
-      },
-      load: async () => undefined,
-    } as unknown as import("../src/policy-store.js").PolicyStore;
-    const connection = new RunnerConnection({
-      config: { server: "wss://runner.example.test/runner/connect", runnerId: policyBase.runner_id, token: "0123456789abcdef", workspaces: [] },
-      runtime,
-      policyStore,
-    });
-    const internals = connection as unknown as {
-      socket: unknown;
-      applyDesiredPolicy: (socket: unknown, policy: typeof desired) => Promise<void>;
-    };
-    internals.socket = firstSocket;
-    await internals.applyDesiredPolicy(firstSocket, desired);
-    expect(applied).toHaveLength(0);
-    internals.socket = replacementSocket;
-    await internals.applyDesiredPolicy(replacementSocket, desired);
-    expect(applied).toHaveLength(1);
-  });
-  it("re-acknowledges an already-active policy after a reconnect", async () => {
-    const policyBase = {
-      schema_version: 1 as const,
-      runner_id: "policy-reconnect-runner",
-      revision: 1,
-      runner_permissions: { read: true, edit: true, shell: true, job_control: true },
-      workspaces: [] as [],
-    };
-    const desired = { ...policyBase, checksum: runnerPolicyChecksum(policyBase) };
-    const socket = { readyState: 1, send: vi.fn() };
-    const runtime = {
-      syncJobs: async () => [],
-      syncWorkspaceMetadata: () => [],
-      applyPolicy: vi.fn(),
-    } as unknown as import("../src/runtime.js").RunnerRuntime;
-    const policyStore = { activate: vi.fn(), load: async () => undefined } as unknown as import("../src/policy-store.js").PolicyStore;
-    const connection = new RunnerConnection({
-      config: { server: "wss://runner.example.test/runner/connect", runnerId: policyBase.runner_id, token: "0123456789abcdef", workspaces: [] },
-      runtime,
-      policyStore,
-    });
-    const internals = connection as unknown as {
-      socket: unknown;
-      desiredPolicyRevision: number;
-      desiredPolicyChecksum: string;
-      appliedPolicyRevision: number | null;
-      appliedPolicyChecksum: string | null;
-      applyDesiredPolicy: (socket: unknown, policy: typeof desired) => Promise<void>;
-    };
-    internals.socket = socket;
-    internals.desiredPolicyRevision = desired.revision;
-    internals.desiredPolicyChecksum = desired.checksum;
-    internals.appliedPolicyRevision = desired.revision;
-    internals.appliedPolicyChecksum = desired.checksum;
-    await internals.applyDesiredPolicy(socket, desired);
-    expect(policyStore.activate).not.toHaveBeenCalled();
-    const frames = socket.send.mock.calls.map(([value]: [string]) => decodeWireFrame(value));
-    expect(frames.some((frame) => frame.type === "runner.policy_ack" && frame.status === "applied" && frame.applied_revision === desired.revision && frame.applied_checksum === desired.checksum)).toBe(true);
-    expect(frames.some((frame) => frame.type === "runner.sync")).toBe(true);
   });
   it("quotes Windows task arguments with trailing backslashes safely", () => {
     const executablePath = String.raw`C:\Program Files\Runmesh\current\runmesh.cmd`;

@@ -6,6 +6,8 @@ import { RunnerConnection } from "../src/connection.js";
 import * as policyCandidate from "../src/connection/policy-candidate.js";
 import type { WorkspaceConfig } from "../src/config.js";
 import type { ConnectionPolicyStorePort, ConnectionRuntimePort, ConnectionTransportFactory } from "../src/connection/ports.js";
+import { connectionRuntime } from "./helpers/connection-runtime.js";
+import { RUNNER_VERSION } from "../src/version.js";
 
 class Socket extends EventEmitter {
   readyState: number = WebSocket.CONNECTING;
@@ -33,24 +35,91 @@ function setup(overrides: Partial<ConnectionRuntimePort> = {}, restorePolicy = f
     const next = sockets.length === 0 ? socket : new Socket(); sockets.push(next);
     return next as unknown as WebSocket;
   });
-  const runtime: ConnectionRuntimePort = {
-    initialize: async () => {}, applyPolicy: () => {}, dispatch: async () => undefined,
-    configureJobRetention: () => {}, cleanupJobs: async () => {}, needsHistoryReconciliation: () => false,
-    syncJobs: async () => [], syncWorkspaceMetadata: () => [], jobs: { list: () => [] },
-    ...overrides,
-  };
+  const runtime = connectionRuntime(overrides);
   const policyFields = { schema_version: 1 as const, runner_id: "runner", revision: 1,
     runner_permissions: { read: true, edit: true, shell: true, job_control: true }, workspaces: [] };
   const policy = { ...policyFields, checksum: runnerPolicyChecksum(policyFields) };
   const sleep = vi.fn(async () => { if (!reconnect) connection.stop(); });
   const onStateChange = vi.fn();
   const policyStore: ConnectionPolicyStorePort = { load: async () => restorePolicy ? policy : undefined, activate: async () => {} };
-  const connection = new RunnerConnection({ config: { runnerId: "runner", server: "ws://127.0.0.1:1", token: "synthetic", workspaces: [] }, sleep, onStateChange }, {
-    runtime, policyStore, createSocket,
-  });
+  const connection = new RunnerConnection({ config: { runnerId: "runner", server: "ws://127.0.0.1:1", token: "synthetic", workspaces: [] }, sleep, onStateChange, runtime, policyStore }, { createSocket });
   return { connection, socket, sockets, createSocket, sleep, onStateChange, policyStore };
 }
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+it("reports its installed package version in the hello frame", async () => {
+  expect(RUNNER_VERSION).toMatch(/^\d+\.\d+\.\d+/);
+  const { connection, socket, createSocket } = setup();
+  const running = connection.start();
+  try {
+    await vi.waitFor(() => expect(createSocket).toHaveBeenCalledOnce());
+    socket.open();
+    expect(socket.send.mock.calls.map(([frame]) => decodeWireFrame(frame))).toContainEqual(expect.objectContaining({
+      type: "runner.hello", runner: expect.objectContaining({ runner_version: RUNNER_VERSION }),
+    }));
+  } finally { connection.stop(); await running; }
+});
+
+it("re-applies an unchanged policy when reconnect interrupts durable activation before live publish", async () => {
+  const applyPolicy = vi.fn();
+  const { connection, socket, sockets, createSocket, policyStore } = setup({ applyPolicy }, false, true);
+  const fields = { schema_version: 1 as const, runner_id: "runner", revision: 1,
+    runner_permissions: { read: true, edit: true, shell: true, job_control: true }, workspaces: [] };
+  const desired = { ...fields, checksum: runnerPolicyChecksum(fields) };
+  let release!: () => void;
+  let persisted: Parameters<ConnectionPolicyStorePort["activate"]>[0] | undefined;
+  const activated = new Promise<void>(resolve => { release = resolve; });
+  const activate = vi.spyOn(policyStore, "activate").mockImplementationOnce(async policy => {
+    // Hold the durable completion before the connection can publish to the live runtime.
+    persisted = policy;
+    await activated;
+  });
+  const running = connection.start();
+  try {
+    await vi.waitFor(() => expect(createSocket).toHaveBeenCalledOnce());
+    socket.open(); socket.emit("message", Buffer.from(encodeWireFrame({ ...welcome, desired_policy: desired })));
+    await vi.waitFor(() => expect(activate).toHaveBeenCalledOnce());
+    expect(persisted).toEqual(desired);
+    expect(applyPolicy).not.toHaveBeenCalled();
+    socket.close();
+    await vi.waitFor(() => expect(createSocket).toHaveBeenCalledTimes(2));
+    release();
+    const replacement = sockets[1]!;
+    replacement.open();
+    replacement.emit("message", Buffer.from(encodeWireFrame({ ...welcome, desired_policy: desired })));
+    await vi.waitFor(() => expect(replacement.send.mock.calls.map(([frame]) => decodeWireFrame(frame))).toContainEqual(expect.objectContaining({
+      type: "runner.policy_ack", status: "applied", applied_revision: desired.revision, applied_checksum: desired.checksum,
+    })));
+    expect(activate).toHaveBeenCalledTimes(2);
+    expect(applyPolicy).toHaveBeenCalledExactlyOnceWith([]);
+    expect(socket.send.mock.calls.map(([frame]) => decodeWireFrame(frame)).filter(frame => frame.type === "runner.policy_ack")).toEqual([]);
+  } finally { release(); connection.stop(); await running; }
+});
+
+it("re-acknowledges an already-active policy after reconnect without activating it again", async () => {
+  const applyPolicy = vi.fn();
+  const { connection, socket, sockets, createSocket, policyStore } = setup({ applyPolicy }, false, true);
+  const fields = { schema_version: 1 as const, runner_id: "runner", revision: 1,
+    runner_permissions: { read: true, edit: true, shell: true, job_control: true }, workspaces: [] };
+  const desired = { ...fields, checksum: runnerPolicyChecksum(fields) };
+  const activate = vi.spyOn(policyStore, "activate");
+  const appliedAck = expect.objectContaining({ type: "runner.policy_ack", status: "applied",
+    applied_revision: desired.revision, applied_checksum: desired.checksum });
+  const running = connection.start();
+  try {
+    await vi.waitFor(() => expect(createSocket).toHaveBeenCalledOnce());
+    socket.open(); socket.emit("message", Buffer.from(encodeWireFrame({ ...welcome, desired_policy: desired })));
+    await vi.waitFor(() => expect(socket.send.mock.calls.map(([frame]) => decodeWireFrame(frame))).toContainEqual(appliedAck));
+    socket.close();
+    await vi.waitFor(() => expect(createSocket).toHaveBeenCalledTimes(2));
+    const replacement = sockets[1]!;
+    replacement.open(); replacement.emit("message", Buffer.from(encodeWireFrame({ ...welcome, desired_policy: desired })));
+    await vi.waitFor(() => expect(replacement.send.mock.calls.map(([frame]) => decodeWireFrame(frame))).toContainEqual(appliedAck));
+    await vi.waitFor(() => expect(replacement.send.mock.calls.map(([frame]) => decodeWireFrame(frame))).toContainEqual(expect.objectContaining({ type: "runner.sync" })));
+    expect(activate).toHaveBeenCalledExactlyOnceWith(desired);
+    expect(applyPolicy).toHaveBeenCalledExactlyOnceWith([]);
+  } finally { connection.stop(); await running; }
+});
 
 it.each(["admission", "recovery"])("invalidates a failed restart restoration before policy %s", async check => {
   const applyPolicy = vi.fn(), dispatch = vi.fn(async () => ({ workspaces: [] }));
