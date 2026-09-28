@@ -1,4 +1,4 @@
-import { boundedJsonReceipt, boundedJsonResponse } from "../platform/bounded-json.js";
+import { boundedJsonReceipt, boundedJsonResponse } from "../bounded-json.js";
 import { MAX_FRAME_BYTES } from "@aloneio/runmesh-protocol";
 import { boundPageResponseProblem } from "./byte-pages.js";
 import { encodeWireFrame } from "@aloneio/runmesh-protocol";

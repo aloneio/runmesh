@@ -111,7 +111,7 @@ const workerRootRoles = {
   "auth-settings.ts": "application",
   "capabilities-do.ts": "central_owner",
 };
-const foundations = new Set(["public-origin.ts", "mcp-authorization.ts", "job-history-settings.ts", "validity.ts", "body.ts", "security.ts", "runtime-config.ts", "queue-grant.ts", "values.ts", "generated-release.ts", "generated-provenance.ts", "generated-admin-client.ts", "generated-release-validation.ts", "generated-version.ts", "deployment-provenance.ts", "control-plane-errors.ts"]);
+const foundations = new Set(["bounded-json.ts", "public-origin.ts", "mcp-authorization.ts", "job-history-settings.ts", "validity.ts", "body.ts", "security.ts", "runtime-config.ts", "queue-grant.ts", "values.ts", "generated-release.ts", "generated-provenance.ts", "generated-admin-client.ts", "generated-release-validation.ts", "generated-version.ts", "deployment-provenance.ts", "control-plane-errors.ts"]);
 export function workerRole(path) {
   if (path.startsWith("apps/worker/browser/")) return "browser";
   if (!path.startsWith("apps/worker/src/")) return layer(path);

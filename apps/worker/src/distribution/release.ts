@@ -8,6 +8,7 @@ export { verifyDevelopmentRunnerRelease } from "./release-io.js";
 
 const FAILED_REFRESH_COOLDOWN_MS = 5_000;
 const COLD_REFRESH_POLL_MS = 100;
+const FAILED_REFRESH_CACHE_READ_MS = 1_000;
 
 /** Each caller owns its timer; only verified values cross request boundaries. */
 async function waitForDevelopmentRelease(dependencies: DevelopmentReleaseDependencies, deadlineMs: number): Promise<RunnerReleaseDescriptor> {
@@ -129,15 +130,16 @@ export async function discoverDevelopmentRunnerRelease(dependencies: Development
   }
   try { return await refreshDevelopmentRunnerRelease(dependencies, sequence); }
   catch (error) {
+    // Another isolate may have verified and persisted a release since the
+    // initial read. Observe it once, within this request's recovery budget.
+    const persisted = await readDevelopmentReleaseCache(cache, FAILED_REFRESH_CACHE_READ_MS);
     const completedAtMs = clock();
-    const current = runtime.cached;
-    if (current !== undefined && usableCacheAge(current.verified_at_ms, completedAtMs, DEV_RELEASE_STALE_MS)) {
-      runtime.cached = { ...current, expires_at_ms: Math.min(completedAtMs + DEV_RELEASE_CACHE_MS, current.verified_at_ms + DEV_RELEASE_STALE_MS) };
-      return current.descriptor;
-    }
-    if (cached !== undefined && usableCacheAge(cached.verified_at_ms, completedAtMs, DEV_RELEASE_STALE_MS)) {
-      runtime.cached = { expires_at_ms: Math.min(now + DEV_RELEASE_CACHE_MS, cached.verified_at_ms + DEV_RELEASE_STALE_MS), verified_at_ms: cached.verified_at_ms, descriptor: cached.descriptor };
-      return cached.descriptor;
+    // Recheck memory after I/O so a late recovery cannot replace a newer
+    // in-isolate refresh. Retain every record's original hard expiry.
+    const recovered = [runtime.cached, persisted, cached].find(value => value !== undefined && usableCacheAge(value.verified_at_ms, completedAtMs, DEV_RELEASE_STALE_MS));
+    if (recovered !== undefined) {
+      runtime.cached = { expires_at_ms: Math.min(completedAtMs + DEV_RELEASE_CACHE_MS, recovered.verified_at_ms + DEV_RELEASE_STALE_MS), verified_at_ms: recovered.verified_at_ms, descriptor: recovered.descriptor };
+      return recovered.descriptor;
     }
     throw error;
   }

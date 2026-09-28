@@ -1,5 +1,5 @@
 import { PASSWORD_KDF_ITERATIONS } from "./security.js";
-import { boundedJsonResponse } from "./platform/bounded-json.js";
+import { boundedJsonResponse } from "./bounded-json.js";
 
 export interface LoginSettings { readonly password_verifier: string; readonly session_version: number }
 

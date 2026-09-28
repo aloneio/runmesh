@@ -1,4 +1,4 @@
-import { boundedJsonResponse } from "./bounded-json.js";
+import { boundedJsonResponse } from "../bounded-json.js";
 import { record } from "../values.js";
 import { registryRequest } from "./control-plane.js";
 import type { WorkerEnv } from "./env.js";

@@ -5,7 +5,7 @@ import { bearerToken } from "../security.js";
 import { configuredPublicOrigin } from "./origin.js";
 import { constantTimeEqual } from "../security.js";
 import { isConfiguredSecret } from "../security.js";
-import { boundedJsonResponse } from "../platform/bounded-json.js";
+import { boundedJsonResponse } from "../bounded-json.js";
 import { record } from "../values.js";
 import { registryRequest } from "../platform/control-plane.js";
 import { sameOrigin } from "./origin.js";

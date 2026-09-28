@@ -2,7 +2,7 @@ import { DEFAULT_RUNNER_ENROLLMENT_TTL_MS } from "../contracts/enrollment-option
 import type { EnrollmentCodeResult } from "../contracts/runner-admin.js";
 import type { EnrollmentWindow } from "../contracts/runner-admin.js";
 import type { ExecutionModeSelection } from "../contracts/runner-admin.js";
-import { boundedJsonResponse } from "../platform/bounded-json.js";
+import { boundedJsonResponse } from "../bounded-json.js";
 import { randomBase64Url } from "../security.js";
 import { record } from "../values.js";
 import type { RunnerExecutionExpectation } from "../contracts/runner-admin.js";

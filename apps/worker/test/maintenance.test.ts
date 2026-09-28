@@ -1,3 +1,4 @@
+import { runnerReleaseDescriptor } from "../src/distribution/release.js";
 import { describe, expect, it } from "vitest";
 import { FIXED_RELEASE_VERSION, renderPosixInstaller, renderPowerShellInstaller, renderPosixUninstaller, renderPowerShellUninstaller } from "../src/installer.js";
 import { runnerEnrollmentPage } from "../src/index.js";
@@ -40,7 +41,7 @@ describe("maintenance bootstrap", () => {
   });
   it("offers one-line reinstall-safe uninstall with no enrollment credential", async () => {
     const code = "A".repeat(43);
-    const response = await runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example", RUNMESH_SIGNED_RELEASE_AVAILABLE: FIXED_RELEASE_VERSION }, "https://worker.example", "test", code, "csrf");
+    const response = await runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example", RUNMESH_SIGNED_RELEASE_AVAILABLE: FIXED_RELEASE_VERSION }, runnerReleaseDescriptor({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example", RUNMESH_SIGNED_RELEASE_AVAILABLE: FIXED_RELEASE_VERSION }), "https://worker.example", "test", code, "csrf");
     const html = await response.text();
     expect(html).toContain("/runner/uninstall.sh"); expect(html).toContain("/runner/uninstall.ps1");
     for (const command of [...html.matchAll(/<pre><code>([\s\S]*?)<\/code><\/pre>/g)].map((m) => m[1]!)) {

@@ -1,4 +1,4 @@
-import { boundedJsonReceipt, boundedJsonResponse } from "./platform/bounded-json.js";
+import { boundedJsonReceipt, boundedJsonResponse } from "./bounded-json.js";
 import type { BridgeReply, BridgeReplyPort, RegistryRequestPort } from "./contracts/runner-transport.js";
 import { BridgeReplies } from "./platform/bridge-replies.js";
 import { requestRunnerRegistry } from "./platform/runner-registry.js";

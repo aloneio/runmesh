@@ -11,7 +11,7 @@ import type { CentralManagement } from "./contracts/central-management.js";
 import { CentralSchema } from "./platform/capabilities/schema.js";
 import { ConnectionState } from "./platform/connectors/store.js";
 import { createProfileManager } from "./application/connectors/profiles.js";
-import { boundedJsonResponse } from "./platform/bounded-json.js";
+import { boundedJsonResponse } from "./bounded-json.js";
 import { registryRequest } from "./platform/control-plane.js";
 import type { WorkerEnv } from "./platform/env.js";
 import type { CatalogAdministration, CatalogInspection, CatalogMutation, CatalogPage } from "./contracts/catalog.js";

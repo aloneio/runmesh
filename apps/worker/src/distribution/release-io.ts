@@ -3,6 +3,7 @@ import { FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS, FIXED_RELEASE_KEY_ID, FIXED_REL
 import { isRecord, isCurrentDevelopmentVersion, validatedCachedDevelopmentRelease } from "../domain/release-selection.js";
 import { releaseManifestProblem } from "../domain/release-manifest.js";
 import type { RunnerReleaseDescriptor, DevelopmentReleaseCache, CachedDevelopmentReleaseRecord } from "../contracts/runner-release.js";
+import { boundedJsonResponse } from "../bounded-json.js";
 
 export const DEV_RELEASE_DISCOVERY_URL = "https://api.github.com/repos/aloneio/runmesh/releases?per_page=20";
 const DEV_RELEASE_CACHE_KEY = new Request("https://runmeshdev.aloneiodev.workers.dev/__internal/verified-dev-runner-release-v1");
@@ -11,14 +12,12 @@ const DEV_RELEASE_RETRY_DELAY_MS = 75;
 const MAX_DISCOVERY_BYTES = 512 * 1024;
 const ALLOWED_RELEASE_ORIGINS = new Set<string>(FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS);
 
-export function defaultDevelopmentReleaseCache(): DevelopmentReleaseCache | undefined {
-  try {
-    if (typeof caches === "undefined") return undefined;
-    return (caches as unknown as { readonly default?: DevelopmentReleaseCache }).default;
-  } catch { return undefined; }
-}
-export async function readDevelopmentReleaseCache(cache: DevelopmentReleaseCache | undefined): Promise<CachedDevelopmentReleaseRecord | undefined> {
+export async function readDevelopmentReleaseCache(cache: DevelopmentReleaseCache | undefined, timeoutMs?: number): Promise<CachedDevelopmentReleaseRecord | undefined> {
   if (cache === undefined) return undefined;
+  if (timeoutMs !== undefined) {
+    const receipt = await boundedJsonResponse(async () => await cache.match(DEV_RELEASE_CACHE_KEY) ?? new Response(null, { status: 404 }), timeoutMs, MAX_DISCOVERY_BYTES);
+    return validatedCachedDevelopmentRelease(receipt?.value);
+  }
   try { const response = await cache.match(DEV_RELEASE_CACHE_KEY); return response === undefined || !response.ok ? undefined : validatedCachedDevelopmentRelease(await boundedJson(response)); } catch { return undefined; }
 }
 export async function writeDevelopmentReleaseCache(cache: DevelopmentReleaseCache | undefined, descriptor: RunnerReleaseDescriptor, verifiedAtMs: number): Promise<void> {
