@@ -338,6 +338,66 @@ describe("Worker runner transport", () => {
     await runInDurableObject(registry, instance => { expect(instance.getRunnerExecutionState(target)).toBeUndefined(); });
   });
 
+  it.each(["validity", "permissions", "version-policy", "emergency-lock", "workspace-create", "workspace-update", "workspace-delete"].flatMap(action => [false, true].map(encoded => ({ action, encoded }))))("manages Runner $action through the browser with encoded identifiers=$encoded", async ({ action, encoded }) => {
+    const target = (encoded ? "policy:runner:" : "policy-runner-") + crypto.randomUUID();
+    const workspaceId = encoded ? "workspace:one" : "workspace-one";
+    const registered = await enroll(target);
+    expect(registered.status).toBe(200); await registered.body?.cancel();
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
+    const session = randomBase64Url(), csrf = randomBase64Url();
+    const hash = await sha256Hex(session), csrfHash = await sha256Hex(csrf);
+    const verifier = await passwordVerifier("synthetic-admin-password");
+    await runInDurableObject(registry, instance => {
+      const now = Date.now();
+      instance.setupAdmin(verifier, now);
+      expect(instance.createAdminSession(hash, csrfHash, now + 60000, now, 1)).toBe(true);
+      if (["workspace-update", "workspace-delete"].includes(action)) expect(instance.createManagedWorkspace(target, {
+        workspace_id: workspaceId, display_name: "Before", root_path: "/tmp/before", enabled: true,
+        permissions: { read: true, edit: false, shell: false, job_control: false },
+      }, now, "fixture-workspace")).toBeDefined();
+    });
+    const response = await SELF.fetch(`https://worker.test/admin/runners/${encodeURIComponent(target)}/${action}`, {
+      method: "POST", redirect: "manual",
+      headers: { origin: "https://worker.test", cookie: `__Host-runmesh_admin_session=${session}; __Host-runmesh_admin_csrf=${csrf}`, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ csrf_token: csrf, confirmation: action === "workspace-delete" ? workspaceId : target,
+        workspace_id: workspaceId, display_name: "After", root_path: "/tmp/after", enabled: "true",
+        read: "true", edit: "false", shell: "false", job_control: "false", update_channel: "pinned", desired_runner_version: "1.2.3" }),
+    });
+    expect(response.status, await response.text()).toBe(303);
+    expect(response.headers.get("location")).toBe(`/admin/runners/${encodeURIComponent(target)}`);
+    if (action.startsWith("workspace-")) {
+      const workspace = await runInDurableObject(registry, instance => instance.getManagedWorkspace(target, workspaceId));
+      if (action === "workspace-delete") expect(workspace).toBeUndefined();
+      else expect(workspace).toMatchObject({ workspace_id: workspaceId, display_name: "After", root_path: "/tmp/after" });
+    }
+  });
+
+  it.each([false, true])("manages client and nested Runner identifiers through signed Registry routes (encoded=%s)", async encoded => {
+    const clientId = (encoded ? "client:" : "client-") + crypto.randomUUID();
+    const target = (encoded ? "override:runner:" : "override-runner-") + crypto.randomUUID();
+    const registered = await enroll(target); expect(registered.status).toBe(200); await registered.body?.cancel();
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
+    const request = async (path: string, method: string, input?: Record<string, unknown>) => {
+      const body = input === undefined ? "" : JSON.stringify(input);
+      const headers = await internalHeaders("test-internal-control-secret-not-for-production", method, path, body);
+      return registry.fetch(new Request("https://registry.internal" + path, { method, headers, ...(body ? { body } : {}) }));
+    };
+    const created = await request("/auth/clients", "POST", { client_id: clientId, label: "Before", secret_verifier: await sha256Hex(clientId), secret_prefix: "fixture", scopes: ["coding:read"] });
+    expect(created.status).toBe(200); await created.body?.cancel();
+    const clientPath = "/auth/clients/" + encodeURIComponent(clientId);
+    const renamed = await request(clientPath + "/rename", "POST", { label: "After" });
+    expect(renamed.status).toBe(200);
+    expect(await renamed.json()).toMatchObject({ client_id: clientId, label: "After" });
+    const overridePath = clientPath + "/runner-overrides/" + encodeURIComponent(target);
+    const permissions = { read: true, edit: false, shell: false, job_control: false };
+    expect((await request(overridePath, "POST", { permissions })).status).toBe(204);
+    const listed = await request(clientPath + "/runner-overrides", "GET");
+    expect(listed.status).toBe(200);
+    expect(await listed.json()).toMatchObject({ client_id: clientId, overrides: [{ runner_id: target, permissions }] });
+    expect((await request(overridePath, "DELETE")).status).toBe(204);
+    expect(await (await request(clientPath + "/runner-overrides", "GET")).json()).toMatchObject({ overrides: [] });
+  });
+
   it.each(["rotate", "revoke", "delete"])("routes an encoded Runner ID through the administrative %s API", async action => {
     const target = "api:runner:" + crypto.randomUUID();
     const registered = await enroll(target); expect(registered.status).toBe(200); await registered.body?.cancel();
