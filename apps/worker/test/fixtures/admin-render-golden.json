@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "4c6566f199f73ae5cc7b89ea55a42c42418fb6c143ed420324d4ffba32d41f4c",
-      "bytes": 124376,
+      "sha256": "cad58892ace4449f8bb492532d8af2c310312483b58ee43100446fa1fc327415",
+      "bytes": 124550,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -32,8 +32,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "ba6a3acf70fa45b852946a245ec863330e880d9bd913f7c253698f8b0ecc820a",
-      "bytes": 124964,
+      "sha256": "644a7606748a3c04990e4a85318097607403bf5d87e425dd4740ff3bb093b81b",
+      "bytes": 125138,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -51,8 +51,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "f5ac5c1f23354dff9fd0073a107b8eb36b35dabc210108a738bc13faeac46d4e",
-      "bytes": 126112,
+      "sha256": "dbdf87a7a20f0e4609d96534d8894cf9afc3e3abaeed98c77b2efe028a58bcad",
+      "bytes": 126286,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -419,8 +419,8 @@
           }
         ]
       ],
-      "sha256": "37e7e5fc1ac3647ccac8981bfaaea670ca8717296cdb75a98448c402077f47ed",
-      "bytes": 126461,
+      "sha256": "42c027adc3ef406b6ece45fba9128a5c4431bf6cb04e245073beb70be76a0293",
+      "bytes": 126635,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -538,5 +538,16 @@
   "controller_review": {
     "source_base": "f20286f27d938881b590cba4d1def8d60b18804e",
     "reviewed_change": "Separate locale, shared idempotent controls, page mounting and navigation from the composition entry. Preserve markup outside the script byte-for-byte. Public DOM and port-based regressions verify initial/dynamic controls, fresh navigation and Runner actions; no screenshots."
+  },
+  "runner_action_deadline_review": {
+    "source_base": "4811e50cd1f75b1151d40a5db2899c3673b810d0",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "reviewed_change": "Bound Runner delete/revoke response headers and body reads with one 25-second deadline. Stalled-response browser regressions retain session and page, restore controls, and never replay writes. Replacing only the inline bundle reproduces every prior hash and byte count. No screenshots.",
+    "non_script_markup_unchanged": true
   }
 }
