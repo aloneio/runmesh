@@ -169,12 +169,12 @@ Job fault scenarios use the atomic-file port. Concurrency, enrollment-fence
 recovery and reporting-bridge tests use RegistryRequestPort with real DO storage,
 process execution, cancellation and observable-state assertions.
 
-Three Runtime tests retain private persistence-coordinator interception to preserve
-specific timing: fast-exit durability, late running snapshot and spawn-setup/cancellation.
-Their barriers are before persistence admission or after coordinator completion;
-a file adapter barrier alone cannot reproduce those exact ordering windows.
-The architecture regression guards these names. Replace an exception only after
-demonstrating equivalent timing and assertions.
+The three Runtime coordination races use an internal JobPersistencePort: fast-exit
+durability, late running snapshot and spawn-setup/cancellation. The supplied
+enqueue callback retains JobManager serialization and identity checks while
+allowing pauses before enqueue or after coordinator completion. Production adds
+no asynchronous boundary; the internal constructor overload is stripped from
+package declarations. AR18 prohibits private persistence interception.
 
 Child-exit-before-signal uses the file/process ports, observes the actual child
 close event and checks durable terminal state and zero termination calls. The
@@ -238,8 +238,8 @@ Tests import modules normally and inspect DOM behavior rather than slicing sourc
 or depending on private window flags.
 
 Runtime fault tests capture children at JobProcessPort, intercept file operations
-at JobFilePort and load persisted recovery fixtures. Only the three named persist
-timing exceptions remain. Completion and retained-record operations have scoped
+at JobFilePort and load persisted recovery fixtures. Coordination timing uses
+the internal JobPersistencePort. Completion and retained-record operations have scoped
 ports in jobs/completion.ts and jobs/retention.ts; JobManager still exclusively
 owns all maps, publication and process retirement. Synthetic replacement races
 exercise those operations directly, with durable-write, event and retirement
@@ -247,3 +247,12 @@ assertions. Public JobManager tests retain actual child, cancellation, late-outp
 and restart coverage. Recovery concurrency tests now run across host platforms
 using controlled process inspections rather than private maps or process.kill
 interception; native process behavior remains covered separately.
+
+Environment discovery lives in apps/runner/src/environment.ts; Runtime and CLI
+consumers depend on environment-contracts.ts rather than the native probe class.
+The packaged ESM/CJS consumers verify structural environment substitution.
+domain/runner-handshake.ts owns pure hello negotiation, Registry receipt parsing
+and welcome projection. RunnerDO retains sockets, epochs, admission and pending
+RPC ownership, including replacement checks and synchronous dispatch ordering.
+Architecture fixtures reject reverse imports, ambient state and scheduling in
+these pure boundaries.

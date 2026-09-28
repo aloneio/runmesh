@@ -137,10 +137,10 @@ development 选择已验签的 dev 通道。
 八个 Job 故障场景使用原子文件端口。并发、注册围栏恢复和上报桥接测试使用
 RegistryRequestPort，保留真实 DO 存储、进程执行、取消和可观察状态断言。
 
-三个 Runtime 测试保留私有持久化协调器拦截，以维持特定时点：快速退出耐久性、
-晚到 running 快照、spawn 设置／取消。屏障分别位于持久化准入前或协调器完成后，
-仅阻塞文件适配器无法复现相同窗口。架构回归登记这些名称；替换例外前先验证
-等价的时点和断言。
+三个 Runtime 协调竞态改用内部 JobPersistencePort：快速退出耐久性、晚到 running
+快照、spawn 设置／取消。端口接收 JobManager 提供的入队回调，保留串行化和
+身份校验，并允许在入队前或协调完成后暂停。默认生产路径不新增异步边界，
+内部构造重载不会进入发布声明。AR18 禁止重新使用私有持久化拦截。
 
 发信号前子进程退出的测试已改用文件／进程端口，等待真实子进程 close 事件，检查
 持久化终态和零终止调用。保留策略夹具读取有效的落盘记录，通过公共准入创建运行
@@ -166,3 +166,9 @@ schema 模块。测试不再修改私有环境／历史实例或读取私有 ctx
 
 继续由 JobManager 和 RunnerDO 管理状态。运行生成代码、契约、依赖和故障回归，
 配合必需的安装包、原生平台与浏览器检查；按候选 SHA 记录通过、跳过和未执行环境。
+
+环境探测实现位于 apps/runner/src/environment.ts，Runtime 与 CLI 的依赖契约
+使用 environment-contracts.ts，安装包的 ESM／CJS 类型检查覆盖结构化替换。
+domain/runner-handshake.ts 负责纯 hello 协商、Registry 回执解析和 welcome 投影。
+RunnerDO 继续独占 socket、epoch、准入和待处理 RPC，保留连接替换重验及同步
+派发顺序。架构负例阻止这些纯边界反向导入、访问环境状态或调度异步工作。
