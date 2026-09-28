@@ -97,17 +97,18 @@ describe("hosted installer origin and template safety", () => {
     expect(commands[1]).toContain(`sudo sh -s -- &#039;${code}&#039;`);
     expect(commands[2]).toContain(`.Content)) &#039;${code}&#039;&quot;`);
     expect(hostedHtml).toContain("-NonInteractive");
-    expect(hostedHtml).toContain("no second code entry is needed");
-    expect(hostedHtml).toContain("Treat the command as a secret");
+    expect(hostedHtml).toContain("Run the command for your operating system to install and start the Runner.");
+    expect(hostedHtml).toContain("This command contains your one-time enrollment code. Keep it private.");
     expect(hostedHtml).toContain("Copy installer command");
   });
 
-  it("states the dedicated_user default and privileged confirmation requirement on the enrollment page", async () => {
+  it("states the selected execution mode and enforces privileged confirmation on the enrollment page", async () => {
     const code = "B".repeat(43);
     const page = await runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }, "https://worker.example", "runner-test", code, "csrf", false, "privileged_host", true);
     expect(page.status).toBe(200);
     const html = await page.text();
-    expect(html).toContain("The default is dedicated_user");
+    expect(html).toContain("Full host control (privileged_host)");
+    expect(html).toContain("Runner will run as root, SYSTEM, or an equivalent account with full host privileges.");
     expect(html).toContain("--confirm-privileged-host");
     expect((await runnerEnrollmentPage({ RUNMESH_PUBLIC_ORIGIN: "https://worker.example" }, "https://worker.example", "runner-test", code, "csrf", false, "privileged_host")).status).toBe(400);
   });

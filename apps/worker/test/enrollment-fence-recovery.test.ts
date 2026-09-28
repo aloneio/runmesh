@@ -167,7 +167,7 @@ it.each(["warm", "reconstructed", "cleanup-unavailable"])("browser enrollment re
       expect(response.headers.get("x-runmesh-error-code")).toBe("mutation_state_changed");
       expect(response.headers.get("x-runmesh-error-phase")).toBe("enrollment_fence_release");
       const text = await response.text();
-      expect(text).toContain("temporary Runner safety lock");
+      expect(text).toContain("Generate a new enrollment code to try again.");
       expect(text).not.toContain("PRIVATE_UPSTREAM_SENTINEL");
     } else {
       expect(response.status).toBe(200);

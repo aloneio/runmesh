@@ -34,7 +34,7 @@ export async function checkRunnerActions(executable) {
           res.setHeader('content-length', '1024'); res.write('incomplete response');
           setImmediate(() => res.destroy()); return;
         }
-        const response = adminRunnerError(503, 'Runner deletion could not fence the Runner.');
+        const response = adminRunnerError(503, 'Could not start deleting the Runner. Try again.');
         res.statusCode = response.status; res.end(await response.text()); return;
       }
       if (url.pathname === '/login') { res.end('<h1>Sign in</h1>'); return; }
@@ -58,7 +58,7 @@ export async function checkRunnerActions(executable) {
     await openForm();
     await page.getByRole('button', { name: 'Delete', exact: true }).click();
     const notice = page.locator('[data-runner-action-feedback]');
-    await notice.filter({ hasText: 'could not fence' }).waitFor();
+    await notice.filter({ hasText: 'Could not start deleting' }).waitFor();
     assert.equal(page.url(), origin + '/admin/runners');
     assert.equal(await page.locator('[data-app-header]').count(), 1);
     assert.equal(await page.locator('.auth-body').count(), 0);
@@ -120,7 +120,7 @@ export async function checkRunnerActions(executable) {
     assert.equal(await page.locator('[data-app-header]').count(), 1);
     removed = false; runnerId = 'browser:runner'; mode = 'fence'; await openForm();
     await page.getByRole('button', { name: 'Delete', exact: true }).click();
-    await notice.filter({ hasText: 'could not fence' }).waitFor();
+    await notice.filter({ hasText: 'Could not start deleting' }).waitFor();
     assert.equal(requests.at(-1), '/admin/runners/browser%3Arunner/delete');
     removed = false; mode = 'expired'; await openForm();
     await page.getByRole('button', { name: 'Delete', exact: true }).click();

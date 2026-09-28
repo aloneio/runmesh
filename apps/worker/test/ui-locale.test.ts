@@ -71,7 +71,7 @@ it("I18N01 translations preserve restricted defaults and destructive cleanup sco
  }
  expect(localizeUiText("Disabled","zh-CN")).toBe("禁用");
  expect(localizeUiText("stale","zh-CN")).toBe("状态陈旧");
- const removal="Run the command for the local OS to stop the managed service and remove the Runmesh installation, configuration, local job history, logs and supported legacy remnants. Project workspaces are preserved. Delete the Runner record separately from the administrator console when you no longer need its history.";
+ const removal="Stops the service and removes Runmesh, its configuration, local task history and logs. Project workspaces are kept. Delete the Runner record separately in the console when you no longer need it.";
  for(const term of ["任务历史","日志","工作区","保留"])expect(localizeUiText(removal,"zh-CN")).toContain(term);
 });
 

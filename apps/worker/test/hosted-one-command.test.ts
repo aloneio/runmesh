@@ -74,6 +74,6 @@ describe("verified one-command enrollment", () => {
 
   it("retains the explicit manual fallback only when signed distribution is disabled", async () => {
     const response = await runnerEnrollmentPage({ ...hostedEnv, RUNMESH_SIGNED_RELEASE_AVAILABLE: "" }, origin, "runner-test", "E".repeat(43), "csrf");
-    expect(await response.text()).toContain('<p class="eyebrow">Manual portable-artifact enrollment</p>');
+    expect(await response.text()).toContain('<p class="eyebrow">Manual Runner setup</p>');
   });
 });

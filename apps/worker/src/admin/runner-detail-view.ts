@@ -75,12 +75,12 @@ export function runnerDetailPage(presentation: RunnerDetailPresentation, runner:
   const unverifiedPrivilegedReport = reportedExecutionMode === "privileged_host" && executionMode !== "privileged_host";
   const configuredButNotRestarted = runner.service_manifest_changed === true && runner.service_restarted !== true;
   const warnings = [
-    identityMismatch ? "Runner-reported privilege state is mismatch; verify the service identity before granting access." : "",
-    executionMode === null ? "No trusted administrator execution-mode selection is recorded; choose and confirm a mode before (re)installing." : "",
-    unverifiedPrivilegedReport ? "Runner reports privileged_host, but that self-report is not authorization; re-enroll only after an administrator explicitly confirms the desired mode." : "",
+    identityMismatch ? "The Runner privileges differ from the configured mode. Check the service account." : "",
+    executionMode === null ? "Choose and confirm an execution mode before installing the Runner." : "",
+    unverifiedPrivilegedReport ? "The Runner reports full host privileges. Confirm the execution mode before re-enrolling." : "",
     executionMode === "dedicated_user" && hasFullHostWorkspace ? "dedicated_user is configured while a full-host workspace is enabled; migrate the service or narrow the workspace." : "",
     revisionLag ? "Desired policy revision is ahead of the applied or Runner-reported revision." : "",
-    hasOsAccessDenial ? "Workspace validation reported os_access_denied; review the service identity and migrate to privileged_host or grant the required OS access." : "",
+    hasOsAccessDenial ? "The Runner service account cannot access this workspace. Check its file permissions and execution mode." : "",
     configuredButNotRestarted ? "The managed service manifest changed but the Runner process was not restarted." : "",
     state === "online" && workspaceValidation.filter((item) => item.status === "valid").length === 0 ? "Runner is online but has zero valid workspaces." : "",
   ].filter(Boolean);
