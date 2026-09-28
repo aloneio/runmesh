@@ -803,9 +803,15 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(started.isError, JSON.stringify(started)).not.toBe(true);
     const id = started.structuredContent?.job_id;
     expect(typeof id).toBe("string");
+    // Idempotency excludes observation time, but includes the Job's status.
+    // Wait for durable completion so both checkpoints observe the same facts.
+    await waitFor(async () => (await mcpTool("job", { action: "get", workspace_id: "workspace-1", job_id: id })).structuredContent?.status === "succeeded", 10_000);
     const input = { action: "checkpoint", workspace_id: "workspace-1", turn_id: "e2e-observed-retry", goal: "retain one observed checkpoint", expected_revision: 0, evidence: [{ kind: "job", job_id: id }] };
     const first = await mcpTool("context", input);
     expect(first.isError, JSON.stringify(first)).not.toBe(true);
+    expect((first.structuredContent?.context as { evidence: unknown }).evidence).toEqual([
+      expect.objectContaining({ kind: "job", job_id: id, job_status: "succeeded", exit_code: 0 }),
+    ]);
     await delay(25);
     const next = await mcpTool("context", input);
     expect(next.isError, JSON.stringify(next)).not.toBe(true);
