@@ -27,6 +27,16 @@ async function fixture(t, sources) {
 }
 
 const bad = [
+  ["Runner creation to transport", { "apps/worker/src/application/create-runner.ts": 'import "../platform/runner-mutations.js";', "apps/worker/src/platform/runner-mutations.ts": 'export {};' }],
+  ["Runner registration to HTTP response", { "apps/worker/src/application/register-runner.ts": 'export const result = () => new Response();' }],
+  ["Runner policy to ambient network", { "apps/worker/src/application/runner-policy.ts": 'export const mutate = () => fetch("https://example.invalid");' }],
+  ["Runner enrollment to platform types", { "apps/worker/src/application/runner-enrollment.ts": 'export type Binding = DurableObjectNamespace;' }],
+  ["Runner lifecycle to concrete SDK", { "apps/worker/src/application/runner-lifecycle.ts": 'import "undici";' }],
+  ["Registry history coordinator to concrete store", { "apps/worker/src/registry/history-routes.ts": 'import "../job-history-store.js";', "apps/worker/src/job-history-store.ts": 'export {};' }],
+  ["Registry transport coordinator to ambient network", { "apps/worker/src/registry/transport-routes.ts": 'export const connect = () => fetch("https://example.invalid");' }],
+  ["Registry lifecycle routes cannot yield", { "apps/worker/src/registry/routes/runner-lifecycle.ts": 'export async function mutate() {}' }],
+  ["Browser navigation cannot depend on controls", { "apps/worker/browser/admin-navigation.js": 'import "./page-controls.js";', "apps/worker/browser/page-controls.js": 'export {};' }],
+  ["Browser controls cannot depend on navigation", { "apps/worker/browser/page-controls.js": 'import "./admin-navigation.js";', "apps/worker/browser/admin-navigation.js": 'export {};' }],
   ["managed OAuth contracts to SDK", { "apps/worker/src/contracts/managed-oauth.ts": 'import type { OAuthDiscoveryState } from "@modelcontextprotocol/client";' }],
   ["managed connection contracts to platform globals", { "apps/worker/src/contracts/managed-connections.ts": 'export const request = globalThis.fetch;' }],
   ["managed OAuth use case to protocol adapter", { "apps/worker/src/application/connectors/managed-oauth.ts": 'import "../../platform/connectors/managed-oauth.js";', "apps/worker/src/platform/connectors/managed-oauth.ts": 'export {};' }],
@@ -328,14 +338,20 @@ test("AR18 prevents retired private I/O mocks from returning", async () => {
   const found = new Set();
   const runtime = parseTest(await readFile(join(project, "apps/runner/test/runtime.test.ts"), "utf8"));
   visit(runtime, node => {
-    if (node.type !== "CallExpression" || node.callee?.name !== "it" || node.arguments[0]?.type !== "StringLiteral") return;
+    if (node.type !== "CallExpression" || node.arguments[0]?.type !== "StringLiteral"
+      || !(node.callee?.name === "it" || node.callee?.type === "CallExpression" && node.callee.callee?.object?.name === "it")) return;
     const name = node.arguments[0].value;
     visit(node.arguments[1], child => {
-      if (["expires only opted-in terminal local Job metadata and logs, not active or uncertain Jobs",
-        "does not signal a local PID after the child exits during cancellation persistence"].includes(name)
-        && child.type === "MemberExpression")
-        assert.ok(!["jobs", "processes", "persist", "jobDir", "closeLogHandles"].includes(property(child)),
+      if (child.type === "TSAsExpression" && child.expression?.type === "TSAsExpression" && child.expression.typeAnnotation?.type === "TSUnknownKeyword")
+        assert.ok(remaining.has(name), name + ": do not cast JobManager to a private-state test interface");
+      if (child.type === "MemberExpression") {
+        const owner = child.object?.type === "TSNonNullExpression" ? child.object.expression?.name : child.object?.name;
+        assert.ok(!["jobDir", "closeLogHandles", "queueLogAppend", "logWriteChain", "finish", "flushLogs", "pruneRetainedJobsNow", "cancelRecoveredUnknown", "reconcileRecoveredJob"].includes(property(child))
+          && (property(child) !== "persist" || remaining.has(name))
+          && (property(child) !== "jobs" || owner === "runtime")
+          && (property(child) !== "processes" || owner === "probe"),
           name + ": use persisted fixtures and supported ports rather than private JobManager state");
+      }
       if (child.type !== "AssignmentExpression" || property(child.left) !== "persist") return;
       assert.ok(remaining.has(name), `${name}: inject JobFilePort rather than replacing persistence coordination`);
       found.add(name);

@@ -1,10 +1,12 @@
+import { createRunnerLifecycleRoutes } from "./registry/routes/runner-lifecycle.js";
+import { createRunnerPolicyReadRoutes } from "./registry/routes/runner-policy-read.js";
+import { createRunnerHistoryRoutes } from "./registry/history-routes.js";
+import { createRunnerTransportRoutes } from "./registry/transport-routes.js";
 import { createAdminRoutes } from "./registry/routes/admin.js";
 import { createClientsRoutes } from "./registry/routes/clients.js";
 import { createRunnerPolicyRoutes } from "./registry/routes/runner-policy.js";
 import { createIdentityRoutes } from "./registry/routes/identity.js";
 import type { RegistryRoute } from "./registry/routes/request.js";
-import { parseRunnerConnection, parseRunnerHeartbeat, parseRunnerSession, parseRunnerDisconnect, parseRunnerSync, parseJobFilters, parseMcpCallFilters, parseMcpCall } from "./registry/route-inputs.js";
-import { registryInputError, projectActiveWorkspaces, projectPolicyVersions, projectPolicyRevision, projectCombinedMcpCalls } from "./registry/route-projections.js";
 import { RegistryFeatureHealthStore } from "./registry/feature-health.js";
 import { historyCleanupDue, nextMaintenanceDeadline } from "./registry/maintenance-plan.js";
 import { createCoreRegistrySchema, registrySchemaIsCurrent, hasPersistedRegistrySchema } from "./registry/schema.js";
@@ -14,36 +16,29 @@ import type { McpClientActiveRunner } from "./contracts/runner-selection.js";
 import type { McpRunnerSelectionResult } from "./contracts/runner-selection.js";
 import { resolveRuntimeConfiguration } from "./runtime-config.js";
 import { PackedJobHistory } from "./job-history-store.js";
-import { JobHistoryUnavailableError } from "./job-history-store.js";
 import { ensureJobHistorySettings } from "./job-history-settings.js";
 import type { JobHistorySettings } from "./job-history-settings.js";
 import { ExternalAuditHistory } from "./external-audit.js";
-import { AuditHistoryUnavailableError } from "./external-audit.js";
 import { controlPlaneUnavailableResponse } from "./control-plane-errors.js";
 import { ensureHistoryRetentionSchema } from "./history-retention.js";
-import type { JobMetadata } from "@aloneio/runmesh-protocol";
-import { IdentifierSchema } from "@aloneio/runmesh-protocol";
 import type { RunnerMetadata } from "@aloneio/runmesh-protocol";
 import type { RunnerPolicy } from "@aloneio/runmesh-protocol";
-import { containsControlCharacter } from "./security.js";
 import { verifyInternalRequest } from "./security.js";
 import { readCappedText } from "./body.js";
 import { ensureMetadataOnlyAudit } from "./audit-metadata.js";
 import { MCP_AUDIT_RETENTION_MS } from "./audit-metadata.js";
-import { projectMcpAuditMetadata } from "./audit-metadata.js";
 import { ensureAuthSourceThrottleSchema } from "./auth-throttle.js";
-import { validTimestamp } from "./validity.js";
-import { validWindow } from "./validity.js";
 import type { ValidityWindow } from "./validity.js";
 import type { ValidityStatus } from "./validity.js";
 import type { RunnerExecutionMode, PolicyAcknowledgementResult, RunnerMutationState, CodingScope, PermissionSet, WorkspaceValidationStatus, RunnerUpdateChannel, RunnerPublicInfo, RunnerRecord, WorkspaceRecord, DashboardSnapshot, RegistryFeatureKey, RegistryFeatureHealth, McpClientRecord, VerifiedMcpClient, RunnerRow, EnrollmentRow, AdminSettingsRow, AuthThrottleKind, InternalInput } from './registry/records.js';
 import { MAX_INTERNAL_BODY_BYTES, DEFAULT_RUNNER_ENROLLMENT_TTL_MS, REGISTRY_HISTORY_CLEANUP_INTERVAL_MS, HISTORY_CLEANUP_DEADLINE_KEY } from './registry/records.js';
-import { validLifecycleId, parseTransportIdentity, matchesTransportIdentity, requestedExecutionMode, requestedExpectedExecutionMode, requestedExpectedLifecycleId, requestedPrivilegedConfirmation, requestedRunnerEnrollmentTtl, parseJobEvent, parsePathIdentifier, parseJsonObject, stringField, integerField, nullableIntegerField, safeNonnegativeInteger, nullableChecksumField, runnerPublicInfoField, workspaceStatusesField, validVerifier, validMutationId, mutationIdField } from './registry/values.js';
+import { parseTransportIdentity, matchesTransportIdentity, parsePathIdentifier, parseJsonObject, stringField, integerField, nullableIntegerField, safeNonnegativeInteger, nullableChecksumField, runnerPublicInfoField, workspaceStatusesField, validVerifier, mutationIdField } from "./registry/values.js";
 import { RegistryAuth } from './registry/auth.js';
 import { RegistryPolicy } from './registry/policy.js';
 import { RegistryLifecycle } from './registry/lifecycle.js';
 import { RegistryHistory } from './registry/history.js';
 import { registryStorage } from './registry/storage.js';
+
 export type { RunnerConnectionState, PolicyReadiness, ActiveRunnerContext, McpClientActiveRunner, McpRunnerSelectionResult } from "./contracts/runner-selection.js";
 export type { RunnerExecutionMode } from './registry/records.js';
 export type { PolicyAcknowledgementResult } from './registry/records.js';
@@ -76,6 +71,10 @@ const VERIFIED_DEV_RELEASE_STORAGE_KEY = "distribution:verified-dev-runner-relea
 /** Public Registry facade: platform lifecycle, schema and existing HTTP routes.
  * Domain ports are synchronous closures, not remote RPCs or cached grants. */
 export class RegistryDO {
+  private readonly runnerLifecycleRoutes: ReturnType<typeof createRunnerLifecycleRoutes>;
+  private readonly runnerPolicyReadRoutes: ReturnType<typeof createRunnerPolicyReadRoutes>;
+  private readonly runnerHistoryRoutes: ReturnType<typeof createRunnerHistoryRoutes>;
+  private readonly runnerTransportRoutes: ReturnType<typeof createRunnerTransportRoutes>;
   private readonly adminRoutes: RegistryRoute;
   private readonly clientsRoutes: RegistryRoute;
   private readonly runnerPolicyRoutes: RegistryRoute;
@@ -189,6 +188,65 @@ export class RegistryDO {
     });
     this.packedJobs = env.RUNMESH_JOB_HISTORY_BACKEND === "d1" && env.HISTORY_DB !== undefined ? new PackedJobHistory(env.HISTORY_DB, ctx.id.toString()) : undefined;
     this.externalAudit = env.RUNMESH_AUDIT_BACKEND === "d1" && env.HISTORY_DB !== undefined ? new ExternalAuditHistory(env.HISTORY_DB, ctx.id.toString()) : undefined;
+    this.runnerLifecycleRoutes = createRunnerLifecycleRoutes({
+      authorizeMcpRpc: (...args) => this.authorizeMcpRpc(...args),
+      runnerRow: (...args) => this.runnerRow(...args),
+      registerRunner: (...args) => this.registerRunner(...args),
+      recordHeartbeat: (...args) => this.recordHeartbeat(...args),
+      sessionIsCurrent: (...args) => this.sessionIsCurrent(...args),
+      addRunner: (...args) => this.addRunner(...args),
+      deleteRunner: (...args) => this.deleteRunner(...args),
+      renameRunner: (...args) => this.renameRunner(...args),
+      createRunnerEnrollment: (...args) => this.createRunnerEnrollment(...args),
+      runnerAccess: (...args) => this.runnerAccess(...args),
+      latestRunnerEnrollment: (...args) => this.latestRunnerEnrollment(...args),
+      setRunnerValidity: (...args) => this.setRunnerValidity(...args),
+      invalidateRunnerCredential: (...args) => this.invalidateRunnerCredential(...args),
+      revokeRunner: (...args) => this.revokeRunner(...args),
+      getRunnerMutationState: (...args) => this.getRunnerMutationState(...args),
+      getRunnerExecutionState: (...args) => this.getRunnerExecutionState(...args),
+      getRunner: (...args) => this.getRunner(...args)
+    });
+    this.runnerPolicyReadRoutes = createRunnerPolicyReadRoutes({
+      getActivePolicySnapshot: (...args) => this.getActivePolicySnapshot(...args),
+      getSnapshotAuthorization: (...args) => this.getSnapshotAuthorization(...args),
+      getPolicyReadiness: (...args) => this.getPolicyReadiness(...args),
+      getRunner: (...args) => this.getRunner(...args),
+      policyAcknowledgementFromInput: (...args) => this.policyAcknowledgementFromInput(...args),
+      desiredPolicy: (...args) => this.desiredPolicy(...args),
+      listPolicyVersions: (...args) => this.listPolicyVersions(...args),
+      policyMutationId: (...args) => this.policy.policyMutationId(...args)
+    });
+    this.runnerHistoryRoutes = createRunnerHistoryRoutes({
+      runnerRow: (...args) => this.runnerRow(...args),
+      jobHistorySettings: (...args) => this.jobHistorySettings(...args),
+      setJobHistorySettings: (...args) => this.setJobHistorySettings(...args),
+      syncRunner: (...args) => this.syncRunner(...args),
+      sessionIsCurrent: (...args) => this.sessionIsCurrent(...args),
+      recordJobEvent: (...args) => this.recordJobEvent(...args),
+      listJobs: (...args) => this.listJobs(...args),
+      listMcpCalls: (...args) => this.listMcpCalls(...args),
+      featureHealthDisabled: (...args) => this.featureHealthDisabled(...args),
+      recordMcpCall: (...args) => this.recordMcpCall(...args),
+      recordsJobActivity: (...args) => this.recordsJobActivity(...args),
+      getJob: (...args) => this.getJob(...args),
+      runnerMatchesTransportFence: this.runnerMatchesTransportFence.bind(this),
+      getMcpClient: (...args) => this.getMcpClient(...args),
+      packedJobs: this.packedJobs,
+      externalAudit: this.externalAudit,
+      externalAuditing: env.RUNMESH_AUDIT_BACKEND === "d1",
+      packedHistory: env.RUNMESH_JOB_HISTORY_BACKEND === "d1"
+    });
+    this.runnerTransportRoutes = createRunnerTransportRoutes({
+      authenticateRunner: (...args) => this.authenticateRunner(...args),
+      beginConnection: (...args) => this.beginConnection(...args),
+      runnerRow: (...args) => this.runnerRow(...args),
+      desiredPolicy: (...args) => this.desiredPolicy(...args),
+      scheduleMaintenanceAlarm: (...args) => this.scheduleMaintenanceAlarm(...args),
+      jobHistorySettings: (...args) => this.jobHistorySettings(...args),
+      markDisconnected: (...args) => this.markDisconnected(...args),
+      packedHistory: env.RUNMESH_JOB_HISTORY_BACKEND === "d1"
+    });
     this.ctx.blockConcurrencyWhile(async () => {
       // Durable Objects may be evicted and reconstructed for every request.
       // Replaying CREATE TABLE/INDEX IF NOT EXISTS on every reconstruction is
@@ -341,27 +399,7 @@ export class RegistryDO {
 
   public setJobHistorySettings(runnerId: string, value: unknown): boolean { return this.history.setJobHistorySettings(runnerId, value); }
 
-  private async storePackedJobs(runnerId: string, epoch: number, credentialVersion: number, lifecycle: string, session: string, jobs: readonly JobMetadata[]): Promise<Response> {
-    const runner = this.runnerRow(runnerId);
-    if (!this.runnerMatchesTransportFence(runner,epoch,credentialVersion,true,lifecycle,session)) return new Response("stale history session",{status:409});
-    const settings = this.jobHistorySettings(runnerId,lifecycle);
-    if (settings.mode === "off") return Response.json({history_status:"disabled"});
-    const clients = new Map<string, McpClientRecord | undefined>();
-    const eligible = jobs.filter((job) => {
-      if (job.created_by_client_id === undefined) return true;
-      if (!clients.has(job.created_by_client_id)) clients.set(job.created_by_client_id,this.getMcpClient(job.created_by_client_id));
-      const client = clients.get(job.created_by_client_id);
-      return client !== undefined && client.record_jobs !== false && job.created_at_ms >= (client.record_jobs_since_ms ?? 0);
-    });
-    // Empty/ineligible updates are not deletions. Retention has its own
-    // bounded cleanup path; do not open D1 just to merge nothing.
-    if (eligible.length === 0) return Response.json({ history_status: "unchanged" });
-    try {
-      if (this.packedJobs === undefined) throw new JobHistoryUnavailableError();
-      const saved = await this.packedJobs.merge(runnerId,lifecycle,eligible,settings);
-      return Response.json({history_status:saved.recorded ? "recorded" : saved.deferred ? "deferred" : "unchanged",updated_at_ms:saved.updated_at_ms});
-    } catch { return Response.json({history_status:"degraded"},{status:202}); }
-  }
+
 
   public setJobRecording(clientId: string, enabled: boolean, nowMs: number): McpClientRecord | undefined { return this.auth.setJobRecording(clientId, enabled, nowMs); }
 
@@ -581,260 +619,12 @@ export class RegistryDO {
     const runnerId = segments[0] === "runners" ? parsePathIdentifier(segments[1]) : undefined;
     const action = segments[2]; const itemId = segments[3];
     if (runnerId === undefined || segments.length > 4) return new Response("not found", { status: 404 });
-    if (action === "history-settings" && itemId === undefined) {
-      if (this.runnerRow(runnerId) === undefined) return new Response("not found",{status:404});
-      if (request.method === "GET") return Response.json(this.jobHistorySettings(runnerId));
-      if (request.method === "POST") {
-        if (!this.setJobHistorySettings(runnerId,input)) return new Response("invalid history settings",{status:400});
-        const settings = this.jobHistorySettings(runnerId);
-        const life = this.runnerRow(runnerId)?.lifecycle_id;
-        if (this.packedJobs !== undefined && life !== undefined) {
-          try { await this.packedJobs.setRetention(runnerId,life,settings.retention_days); }
-          catch { return Response.json({...settings,cleanup_update:"pending_next_upload"},{status:202}); }
-        }
-        return Response.json(settings);
-      }
-    }
-    if (request.method === "POST" && action === "mcp-authorization" && itemId === undefined) {
-      const decision = this.authorizeMcpRpc({ ...input, runner_id: runnerId });
-      return Response.json(decision, { status: decision.ok ? 200 : decision.code === "stale_policy" ? 409 : 403 });
-    }
-    if (request.method === "PUT" && action === undefined) {
-      const tokenVerifier = stringField(input, "token_verifier", 64); const mutationId = input.mutation_id === undefined ? undefined : mutationIdField(input);
-      if (tokenVerifier === undefined || !validVerifier(tokenVerifier) || (input.mutation_id !== undefined && mutationId === undefined)) return Response.json({ error: "invalid token verifier or mutation" }, { status: 400 });
-      const configuredExecutionMode = requestedExecutionMode(input);
-      if (configuredExecutionMode === null) return Response.json({ error: "invalid execution mode" }, { status: 400 });
-      const existingRunner = this.runnerRow(runnerId);
-      // A credential replacement must be fenced by RunnerDO.  The public
-      // internal route is HMAC-authenticated, but an older Worker or a
-      // manually replayed request must not be able to update an existing row
-      // without the mutation identity that binds the Registry transaction to
-      // that fence.  Creation is the only operation that may omit it.
-      if (existingRunner !== undefined && mutationId === undefined) return Response.json({ error: "mutation_id is required for credential replacement" }, { status: 400 });
-      return this.registerRunner(runnerId, tokenVerifier, now, mutationId, configuredExecutionMode ?? undefined)
-        ? new Response(null, { status: 204 })
-        : new Response("mutation conflict", { status: 409 });
-    }
-    if (request.method === "POST" && action === "auth") {
-      const token = stringField(input, "token", 512); if (token === undefined || /\s/.test(token) || containsControlCharacter(token)) return new Response("unauthorized", { status: 401 });
-      const authenticated = await this.authenticateRunner(runnerId, token); return authenticated === undefined ? new Response("unauthorized", { status: 401 }) : Response.json(authenticated);
-    }
-    if (request.method === "POST" && action === "connect") {
-      const parsed = parseRunnerConnection(input);
-      if (!parsed.ok) return registryInputError(parsed);
-      const { sessionId, credentialVersion, nowMs, metadata, protocolMin, protocolMax } = parsed.value;
-      const epoch = this.beginConnection(runnerId, metadata.data, { min_protocol_version: protocolMin, max_protocol_version: protocolMax }, sessionId, credentialVersion, nowMs);
-      const row = epoch === undefined ? undefined : this.runnerRow(runnerId);
-      const policy = epoch === undefined ? undefined : this.desiredPolicy(runnerId);
-      if (epoch === undefined || row === undefined || row.connection_epoch !== epoch || row.session_id !== sessionId || !validLifecycleId(row.lifecycle_id)) {
-        return new Response("stale credentials", { status: 409 });
-      }
-      await this.scheduleMaintenanceAlarm(now);
-      return Response.json({ epoch, lifecycle_id: row.lifecycle_id, desired_policy: policy, ...(this.env.RUNMESH_JOB_HISTORY_BACKEND === "d1" && metadata.data.capabilities.labels.job_history_protocol === "1" ? { job_history: this.jobHistorySettings(runnerId,row.lifecycle_id), ...(metadata.data.capabilities.labels.job_reporting_protocol === "2" ? {job_reporting: 2} : {}) } : {}) });
-    }
-    if (request.method === "POST" && action === "heartbeat") {
-      const parsed = parseRunnerHeartbeat(input);
-      if (!parsed.ok) return registryInputError(parsed);
-      const { epoch, credentialVersion, nowMs, identity } = parsed.value;
-      return this.recordHeartbeat(runnerId, epoch, credentialVersion, nowMs, identity.lifecycleId, identity.sessionId) ? new Response(null, { status: 204 }) : new Response("stale session", { status: 409 });
-    }
-    if (request.method === "POST" && action === "session") {
-      const parsed = parseRunnerSession(input);
-      if (!parsed.ok) return registryInputError(parsed);
-      const { epoch, credentialVersion, identity } = parsed.value;
-      return this.sessionIsCurrent(runnerId, epoch, credentialVersion, input.require_online === true, identity.lifecycleId, identity.sessionId) ? new Response(null, { status: 204 }) : new Response("stale session", { status: 409 });
-    }
-    if (request.method === "POST" && action === "disconnect") {
-      const parsed = parseRunnerDisconnect(input);
-      if (!parsed.ok) return registryInputError(parsed);
-      const { epoch, credentialVersion, nowMs, identity, state } = parsed.value;
-      this.markDisconnected(runnerId, epoch, credentialVersion, state, nowMs, identity.lifecycleId, identity.sessionId);
-      // Drop a stale maintenance alarm as soon as the last online runner
-      // disconnects instead of waiting for the old deadline to wake this DO.
-      await this.scheduleMaintenanceAlarm(nowMs);
-      return new Response(null, { status: 204 });
-    }
-    if (request.method === "POST" && action === "sync") {
-      const parsed = parseRunnerSync(input, runnerId);
-      if (!parsed.ok) return registryInputError(parsed);
-      const { epoch, credentialVersion, nowMs, message, identity } = parsed.value;
-      if (this.env.RUNMESH_JOB_HISTORY_BACKEND === "d1") return this.storePackedJobs(runnerId,epoch,credentialVersion,identity.lifecycleId,identity.sessionId,message.data.jobs);
-      return this.syncRunner(runnerId, epoch, credentialVersion, message.data.workspaces, message.data.jobs, message.data.sync_sequence, nowMs, true, identity.lifecycleId, identity.sessionId) ? new Response(null, { status: 204 }) : new Response("stale sync or session", { status: 409 });
-    }
-    if (request.method === "POST" && action === "event") {
-      const epoch = integerField(input, "epoch"); const credentialVersion = integerField(input, "credential_version"); const nowMs = integerField(input, "now_ms"); const identity = parseTransportIdentity(input);
-      if (epoch === undefined || credentialVersion === undefined || nowMs === undefined || !identity.valid) return Response.json({ error: "invalid event identity" }, { status: 400 });
-      if (this.env.RUNMESH_JOB_HISTORY_BACKEND === "d1") {
-        // Old Runners emit events AND snapshots. Only the complete snapshot
-        // goes to optional history; no per-event nonce, Job or audit write.
-        if (parseJobEvent(input.message) === undefined) return new Response("invalid event",{status:400});
-        return this.sessionIsCurrent(runnerId,epoch,credentialVersion,true,identity.lifecycleId,identity.sessionId)
-          ? new Response(null,{status:204}) : new Response("stale session",{status:409});
-      }
-      if (!this.recordJobEvent(runnerId, epoch, credentialVersion, input.message, nowMs, true, identity.lifecycleId, identity.sessionId)) return new Response("stale session or invalid event", { status: 409 });
-      return new Response(null, { status: 204 });
-    }
-    if (request.method === "POST" && action === "add") {
-      const displayName = stringField(input, "display_name", 256); const mutationId = input.mutation_id === undefined ? undefined : mutationIdField(input);
-      if (input.mutation_id !== undefined && mutationId === undefined) return Response.json({ error: "invalid mutation_id" }, { status: 400 });
-      const configuredExecutionMode = requestedExecutionMode(input); const confirmation = requestedPrivilegedConfirmation(input);
-      if (configuredExecutionMode === null || confirmation === null || (configuredExecutionMode === "privileged_host" && confirmation !== true)) return Response.json({ error: "invalid execution mode or privileged-host confirmation" }, { status: 400 });
-      const validFrom = input.valid_from_ms === undefined || input.valid_from_ms === null ? null : validTimestamp(input.valid_from_ms) ? input.valid_from_ms : undefined;
-      const validUntil = input.valid_until_ms === undefined || input.valid_until_ms === null ? null : validTimestamp(input.valid_until_ms) ? input.valid_until_ms : undefined;
-      const runner = displayName === undefined || validFrom === undefined || validUntil === undefined ? undefined : this.addRunner(runnerId, displayName, now, mutationId, configuredExecutionMode, confirmation === true, { valid_from_ms: validFrom, valid_until_ms: validUntil });
-      return runner === undefined ? new Response("conflict", { status: 409 }) : Response.json(runner);
-    }
-    if (request.method === "DELETE" && action === undefined) { const confirmation = stringField(input, "confirmation", 128); const mutationId = mutationIdField(input); return confirmation !== undefined && mutationId !== undefined && this.deleteRunner(runnerId, confirmation, now, mutationId) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 }); }
-    if (request.method === "POST" && action === "rename") { const displayName = stringField(input, "display_name", 256); const runner = displayName === undefined ? undefined : this.renameRunner(runnerId, displayName, now); return runner === undefined ? new Response("not found", { status: 404 }) : Response.json(runner); }
-    if (request.method === "POST" && action === "enrollments") {
-      const enrollmentId = stringField(input, "enrollment_id", 43); const verifier = stringField(input, "verifier", 64);
-      const configuredExecutionMode = requestedExecutionMode(input); const confirmation = requestedPrivilegedConfirmation(input); const enrollmentTtlMs = requestedRunnerEnrollmentTtl(input);
-      const expectedMode = requestedExpectedExecutionMode(input); const expectedLifecycleId = requestedExpectedLifecycleId(input);
-      if ((input.not_before_ms !== undefined && !validTimestamp(input.not_before_ms)) || (input.expires_at_ms !== undefined && !validTimestamp(input.expires_at_ms))) return new Response("invalid enrollment dates", { status: 400 });
-      const hasExpectedMode = Object.prototype.hasOwnProperty.call(input, "expected_execution_mode");
-      const hasExpectedLifecycle = Object.prototype.hasOwnProperty.call(input, "expected_lifecycle_id");
-      // Any internal caller that supplies a mode for an existing Runner must
-      // also supply both CAS components. Requests that only create a code
-      // retain the already-recorded administrator selection.
-      if (configuredExecutionMode !== undefined && (!hasExpectedMode || !hasExpectedLifecycle)) return Response.json({ error: "expected runner state is required for execution-mode changes" }, { status: 409 });
-      if (hasExpectedMode !== hasExpectedLifecycle || configuredExecutionMode === null || confirmation === null || (configuredExecutionMode === "privileged_host" && confirmation !== true) || expectedMode === "invalid" || expectedLifecycleId === null || enrollmentTtlMs === null) return Response.json({ error: "invalid execution mode, confirmation, expiration, or expected runner state" }, { status: 400 });
-      const enrollment = enrollmentId === undefined || verifier === undefined ? undefined : this.createRunnerEnrollment(runnerId, enrollmentId, verifier, now, configuredExecutionMode, confirmation === true, expectedMode, expectedLifecycleId, enrollmentTtlMs, { ...(input.not_before_ms === undefined ? {} : { not_before_ms: input.not_before_ms as number }), ...(input.expires_at_ms === undefined ? {} : { expires_at_ms: input.expires_at_ms as number }) });
-      return enrollment === undefined ? new Response("not found", { status: 404 }) : Response.json(enrollment);
-    }
-    if (request.method === "GET" && action === "access") return Response.json(this.runnerAccess(runnerId));
-    if (request.method === "GET" && action === "enrollments") return Response.json({ enrollment: this.latestRunnerEnrollment(runnerId) ?? null });
-    if (request.method === "POST" && action === "validity") {
-      const window = { valid_from_ms: input.valid_from_ms, valid_until_ms: input.valid_until_ms } as ValidityWindow;
-      const lifecycleId = requestedExpectedLifecycleId(input);
-      if (!validWindow(window) || typeof lifecycleId !== "string") return new Response("invalid validity window", { status: 400 });
-      return this.setRunnerValidity(runnerId, window, lifecycleId, now) ? new Response(null, { status: 204 }) : new Response("runner state changed", { status: 409 });
-    }
-    if (request.method === "POST" && action === "rotate") {
-      const mutationId = mutationIdField(input);
-      if (this.runnerRow(runnerId) === undefined) return new Response("not found", { status: 404 });
-      if (mutationId === undefined) return Response.json({ error: "mutation_id is required" }, { status: 400 });
-      return this.invalidateRunnerCredential(runnerId, now, mutationId)
-        ? new Response(null, { status: 204 })
-        : new Response("mutation conflict", { status: 409 });
-    }
-    if (request.method === "POST" && action === "revoke") {
-      const confirmation = stringField(input, "confirmation", 128); const mutationId = mutationIdField(input);
-      return confirmation !== undefined && confirmation === runnerId && mutationId !== undefined && this.revokeRunner(runnerId, confirmation, now, mutationId) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 });
-    }
-    if (request.method === "GET" && action === "mutation-state" && itemId === undefined) {
-      const mutationId = url.searchParams.get("mutation_id");
-      return mutationId !== null && validMutationId(mutationId) ? Response.json(this.getRunnerMutationState(runnerId, mutationId)) : Response.json({ error: "invalid mutation_id" }, { status: 400 });
-    }
-    if (request.method === "GET" && action === "execution-state" && itemId === undefined) {
-      const state = this.getRunnerExecutionState(runnerId);
-      return state === undefined ? new Response("not found", { status: 404 }) : Response.json(state);
-    }
-    if (request.method === "GET" && action === "active-policy" && itemId === undefined) {
-      const policy = this.getActivePolicySnapshot(runnerId);
-      return policy === undefined ? new Response("not found", { status: 404 }) : Response.json(policy);
-    }
-    if (request.method === "GET" && action === "active-workspaces" && itemId === undefined) {
-      const policy = this.getActivePolicySnapshot(runnerId);
-      if (policy === undefined) return new Response("not found", { status: 404 });
-      return Response.json(projectActiveWorkspaces(runnerId, policy));
-    }
-    if (request.method === "GET" && action === "snapshot-authorization" && itemId === undefined) return Response.json(this.getSnapshotAuthorization(runnerId));
-    if (request.method === "GET" && action === "policy-readiness" && itemId === undefined) {
-      const readiness = this.getPolicyReadiness(runnerId);
-      const runner = this.getRunner(runnerId);
-      const desiredPolicyMutationId = runner === undefined ? null : this.ctx.storage.sql.exec<{ mutation_id: string | null }>("SELECT mutation_id FROM runner_policy_versions WHERE runner_id = ? AND revision = ?", runnerId, runner.desired_policy_revision).toArray()[0]?.mutation_id ?? null;
-      return Response.json({ ...readiness, desired_policy_mutation_id: desiredPolicyMutationId });
-    }
-    if (request.method === "POST" && action === "policy-ack") {
-      if (!parseTransportIdentity(input).valid) return Response.json({ error: "invalid policy acknowledgement identity" }, { status: 400 });
-      const ack = this.policyAcknowledgementFromInput(runnerId, input, now);
-      if (ack === undefined) return Response.json({ error: "invalid policy acknowledgement" }, { status: 409 });
-      return Response.json({ ack_result: ack });
-    }
-    if (request.method === "GET" && action === "desired-policy" && itemId === undefined) { const policy = this.desiredPolicy(runnerId); const mutationId = policy === undefined ? undefined : this.ctx.storage.sql.exec<{ mutation_id: string | null }>("SELECT mutation_id FROM runner_policy_versions WHERE runner_id = ? AND revision = ?", runnerId, policy.revision).toArray()[0]?.mutation_id; return policy === undefined ? new Response("not found", { status: 404 }) : Response.json({ ...policy, mutation_id: mutationId ?? null }); }
-    if (request.method === "GET" && action === "policy-versions" && itemId === undefined)
-      return Response.json(projectPolicyVersions(runnerId, this.listPolicyVersions(runnerId)));
-    if (request.method === "GET" && action === "policy-revision" && itemId === undefined) {
-      const runner = this.getRunner(runnerId);
-      if (runner === undefined) return new Response("not found", { status: 404 });
-      const mutationId = this.ctx.storage.sql.exec<{ mutation_id: string | null }>(
-        "SELECT mutation_id FROM runner_policy_versions WHERE runner_id = ? AND revision = ?", runnerId, runner.desired_policy_revision,
-      ).toArray()[0]?.mutation_id;
-      return Response.json(projectPolicyRevision(runner, mutationId));
-    }
-    if (request.method === "GET" && action === "jobs" && itemId === undefined) {
-      const parsed = parseJobFilters(url);
-      if (!parsed.ok) return registryInputError(parsed);
-      const { workspaceId, status, limit } = parsed.value;
-      if (this.env.RUNMESH_JOB_HISTORY_BACKEND === "d1") {
-        const current = this.runnerRow(runnerId);
-        if (current === undefined) return new Response("not found",{status:404});
-        try {
-          if (this.packedJobs === undefined) throw new JobHistoryUnavailableError();
-          const result = await this.packedJobs.list(runnerId,current.lifecycle_id,this.jobHistorySettings(runnerId,current.lifecycle_id),{ ...(workspaceId === undefined ? {} : {workspace_id:workspaceId}), ...(status === undefined ? {} : {status}), ...(limit === undefined ? {} : {limit}) });
-          if (this.runnerRow(runnerId)?.lifecycle_id !== current.lifecycle_id) return new Response("history identity changed",{status:409});
-          return Response.json({runner_id:runnerId,source:"packed_d1_snapshot",...result});
-        } catch { return Response.json({error:{code:"job_history_unavailable",message:"Job history is unavailable; query the online Runner with workspace_id."}},{status:503,headers:{"cache-control":"no-store","retry-after":"900"}}); }
-      }
-      return Response.json({ runner_id: runnerId, jobs: this.listJobs(runnerId, { ...(workspaceId === undefined ? {} : { workspace_id: workspaceId }), ...(status === undefined ? {} : { status }), ...(limit === undefined ? {} : { limit }) }) });
-    }
-    if (request.method === "GET" && action === "mcp-calls" && itemId === undefined) {
-      const parsed = parseMcpCallFilters(url);
-      if (!parsed.ok) return registryInputError(parsed);
-      const { limit } = parsed.value;
-      if (this.env.RUNMESH_AUDIT_BACKEND === "d1") {
-        const current = this.runnerRow(runnerId);
-        if (current === undefined) return new Response("not found", { status: 404 });
-        try {
-          if (this.externalAudit === undefined) throw new AuditHistoryUnavailableError();
-          const external = await this.externalAudit.list(runnerId, current.lifecycle_id, limit);
-          if (this.runnerRow(runnerId)?.lifecycle_id !== current.lifecycle_id) return new Response("Runner identity changed", { status: 409 });
-          // Previously recorded DO rows retain their normal retention period.
-          // No fallback is used when D1 fails: an empty success would lie.
-          return Response.json(projectCombinedMcpCalls(runnerId, this.listMcpCalls(runnerId, limit).map(projectMcpAuditMetadata), external, limit));
-        } catch { return Response.json({ error: { code: "audit_history_unavailable", message: "Cloud audit history is temporarily unavailable; this does not undo execution." } }, { status: 503, headers: { "cache-control": "no-store", "retry-after": "900" } }); }
-      }
-      return Response.json({ runner_id: runnerId, calls: this.listMcpCalls(runnerId, limit) });
-    }
-    if (request.method === "POST" && action === "mcp-calls" && itemId === undefined) {
-      const parsed = parseMcpCall(input);
-      if (!parsed.ok) return registryInputError(parsed);
-      const { epoch, credentialVersion, nowMs, identity, callId, clientId, methodName, status, startedAtMs, completedAtMs, durationMs, errorCode, workspaceId, jobId } = parsed.value;
-      const wasDegraded = this.featureHealthDisabled("mcp_audit", nowMs);
-      let captured: Record<string, unknown> | undefined;
-      const capture = this.env.RUNMESH_AUDIT_BACKEND === "d1" ? (metadata: Record<string, unknown>) => { captured = metadata; } : undefined;
-      const accepted = this.recordMcpCall(runnerId, epoch, credentialVersion, {
-        call_id: callId,
-        client_id: clientId,
-        method: methodName,
-        workspace_id: workspaceId,
-        job_id: jobId,
-        result_runner_id: input.result_runner_id ?? null,
-        status,
-        error_code: errorCode,
-        started_at_ms: startedAtMs,
-        completed_at_ms: completedAtMs,
-        duration_ms: durationMs,
-      }, nowMs, false, identity.lifecycleId, identity.sessionId, capture);
-      if (!accepted) return new Response("stale session or invalid MCP call", { status: 409 });
-      const disabled = (methodName.startsWith("exec.") || methodName.startsWith("job.")) && !this.recordsJobActivity(clientId);
-      const externalSaved = capture === undefined || (!disabled && captured !== undefined && await this.externalAudit?.append(captured) === true);
-      const auditStatus = disabled ? "disabled" : !externalSaved || wasDegraded || this.featureHealthDisabled("mcp_audit", nowMs) ? "degraded" : "recorded";
-      return Response.json({ audit_status: auditStatus }, { status: auditStatus === "recorded" ? 200 : 202 });
-    }
-    if (request.method === "GET" && action === "jobs" && itemId !== undefined && IdentifierSchema.safeParse(itemId).success) {
-      const current = this.runnerRow(runnerId);
-      if (current === undefined) return new Response("not found",{status:404});
-      let job: unknown;
-      if (this.env.RUNMESH_JOB_HISTORY_BACKEND === "d1") {
-        if (this.packedJobs === undefined) return controlPlaneUnavailableResponse();
-        try { job = await this.packedJobs.get(runnerId,current.lifecycle_id,itemId,this.jobHistorySettings(runnerId,current.lifecycle_id)); }
-        catch { return Response.json({error:{code:"job_history_unavailable"}},{status:503}); }
-        if (this.runnerRow(runnerId)?.lifecycle_id !== current.lifecycle_id) return new Response("history identity changed",{status:409});
-      } else job = this.getJob(runnerId,itemId);
-      return job === undefined ? Response.json({error:"job not yet archived; use workspace_id for live access"},{status:404}) : Response.json(job);
-    }
-    if (request.method === "GET" && action === undefined && itemId === undefined) { const runner = this.getRunner(runnerId); return runner === undefined ? Response.json({ error: "runner not found" }, { status: 404 }) : Response.json(runner); }
+    const route = { method: request.method, runnerId, action, itemId, input, nowMs: now, url };
+    const synchronous = this.runnerLifecycleRoutes(route) ?? this.runnerPolicyReadRoutes(route);
+    if (synchronous !== undefined) return synchronous;
+    if (["auth", "connect", "disconnect"].includes(action ?? "")) return await this.runnerTransportRoutes(route) ?? new Response("not found", { status: 404 });
+    if (["history-settings", "sync", "event", "jobs", "mcp-calls"].includes(action ?? "")) return await this.runnerHistoryRoutes(route) ?? new Response("not found", { status: 404 });
+
     return new Response("not found", { status: 404 });
   }
 

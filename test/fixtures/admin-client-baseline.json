@@ -3,22 +3,28 @@
   "cases": [
     {
       "nonce": null,
-      "sha256": "7a9d870a2f2611da0db8e5ab4bb304d92316341ed9bc62eea91231b3b886fa73",
+      "sha256": "bd96a1e96850f90727c2c312c2ff52899218f7bb1f8abd71e29fe8dbe0b3ed79",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
-      "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e"
+      "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
+      "pre_controller_split_sha256": "7a9d870a2f2611da0db8e5ab4bb304d92316341ed9bc62eea91231b3b886fa73"
     },
     {
       "nonce": "test-nonce",
-      "sha256": "61b424e06c3351693c105acb5f6f064c4e819883e21b9c96d6f2e5f14b05a4dd",
+      "sha256": "8279712f4176537c399d6fc1db320e2a1d6b37a931ccaf0d463b241f7e85c919",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
-      "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224"
+      "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
+      "pre_controller_split_sha256": "61b424e06c3351693c105acb5f6f064c4e819883e21b9c96d6f2e5f14b05a4dd"
     }
   ],
   "reviewed_change": "Rename customer navigation to MCP and Skill; show tool names and descriptions as plain cards with a count. Remove repeated sharing explanations and parameter/schema dumps. DOM regressions retain automatic connection, OAuth recovery, Skill installation and safe text rendering. No screenshots.",
   "runner_action_review": {
     "source_base": "549d01c3e3887f0971d4281f8634a32515980441",
     "reviewed_change": "Bind scoped destructive Runner forms on first load and dynamic navigation; inline errors, submitter actions, duplicate POST prevention, successful GET refresh and expired-session redirects covered by DOM tests. No screenshots."
+  },
+  "controller_review": {
+    "source_base": "f20286f27d938881b590cba4d1def8d60b18804e",
+    "reviewed_change": "Separate locale, shared idempotent controls, page mounting and navigation from the composition entry. Preserve markup outside the script byte-for-byte. Public DOM and port-based regressions verify initial/dynamic controls, fresh navigation and Runner actions; no screenshots."
   }
 }

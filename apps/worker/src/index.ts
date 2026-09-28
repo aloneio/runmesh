@@ -137,4 +137,4 @@ export { releaseGateDiagnostics } from "./distribution/release.js";
 export { runnerReleaseDescriptor } from "./distribution/release.js";
 export { runnerConfiguredExecutionMode } from "./domain/execution-mode.js";
 export { runnerEnrollmentPage } from "./http/admin-presentation.js";
-export { pushRunnerPolicy } from "./application/runner-policy.js";
+export { pushRunnerPolicy } from "./platform/runner-mutations.js";

@@ -6,8 +6,13 @@ import { internalHeaders, randomBase64Url, sha256Hex, passwordVerifier } from ".
 import { LOGIN_CSRF_COOKIE } from "../src/http/constants.js";
 import { adminUpstreamError } from "../src/http/responses.js";
 import { handleBrowserRunnerAction } from "../src/http/runner-actions.js";
-import { beginRunnerPolicyMutation, cancelRunnerPolicyMutation, mutateRunnerPolicy, pushRunnerPolicy } from "../src/application/runner-policy.js";
-import { deleteRunnerTransport, fenceRunnerTransport, revokeRunnerTransport } from "../src/application/runner-lifecycle.js";
+import { beginRunnerPolicyMutation } from "../src/platform/runner-mutations.js";
+import { cancelRunnerPolicyMutation } from "../src/platform/runner-mutations.js";
+import { mutateRunnerPolicy } from "../src/http/runner-policy.js";
+import { pushRunnerPolicy } from "../src/platform/runner-mutations.js";
+import { deleteRunnerTransport } from "../src/platform/runner-mutations.js";
+import { fenceRunnerTransport } from "../src/platform/runner-mutations.js";
+import { revokeRunnerTransport } from "../src/platform/runner-mutations.js";
 import { runnerMutationState } from "../src/platform/runner-state.js";
 
 async function fixture() {
