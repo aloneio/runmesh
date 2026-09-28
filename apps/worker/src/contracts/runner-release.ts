@@ -69,6 +69,7 @@ export interface DevelopmentReleaseRuntime {
   next_refresh_at_ms: number;
   refresh_sequence: number;
   committed_sequence: number;
+  failed_sequence: number;
 }
 export interface DevelopmentReleaseDependencies {
   readonly fetch: typeof fetch;

@@ -7,6 +7,25 @@ export { releaseGateDiagnostics, runnerReleaseDescriptor, createDevelopmentRelea
 export { verifyDevelopmentRunnerRelease } from "./release-io.js";
 
 const FAILED_REFRESH_COOLDOWN_MS = 5_000;
+const COLD_REFRESH_POLL_MS = 100;
+
+/** Each caller owns its timer; only verified values cross request boundaries. */
+async function waitForDevelopmentRelease(dependencies: DevelopmentReleaseDependencies, deadlineMs: number): Promise<RunnerReleaseDescriptor> {
+  const { runtime, now: clock } = dependencies;
+  let remainingMs = DEV_RELEASE_REFRESH_BUDGET_MS;
+  for (;;) {
+    const now = clock();
+    const completed = runtime.cached;
+    if (completed !== undefined && usableCacheAge(completed.verified_at_ms, now, DEV_RELEASE_STALE_MS)) return completed.descriptor;
+    if (remainingMs <= 0 || now >= deadlineMs || now >= runtime.next_refresh_at_ms || runtime.failed_sequence === runtime.refresh_sequence) {
+      throw new Error("development release refresh temporarily unavailable");
+    }
+    const delayMs = Math.min(COLD_REFRESH_POLL_MS, remainingMs, deadlineMs - now, runtime.next_refresh_at_ms - now);
+    await new Promise(resolve => setTimeout(resolve, delayMs));
+    // Also bound waiting if an injected or wall clock does not advance.
+    remainingMs -= delayMs;
+  }
+}
 
 /** One invocation owns its refresh I/O. The injected runtime owns values only. */
 async function fetchDevelopmentRunnerRelease(dependencies: DevelopmentReleaseDependencies, sequence: number): Promise<RunnerReleaseDescriptor> {
@@ -54,7 +73,10 @@ function refreshDevelopmentRunnerRelease(dependencies: DevelopmentReleaseDepende
   dependencies.runtime.next_refresh_at_ms = dependencies.now() + DEV_RELEASE_REFRESH_BUDGET_MS;
   return fetchDevelopmentRunnerRelease(dependencies, sequence).catch(error => {
     // A delayed failure must not shorten a newer request's reservation.
-    if (sequence === dependencies.runtime.refresh_sequence) dependencies.runtime.next_refresh_at_ms = dependencies.now() + FAILED_REFRESH_COOLDOWN_MS;
+    if (sequence === dependencies.runtime.refresh_sequence) {
+      dependencies.runtime.failed_sequence = sequence;
+      dependencies.runtime.next_refresh_at_ms = dependencies.now() + FAILED_REFRESH_COOLDOWN_MS;
+    }
     throw error;
   });
 }
@@ -63,6 +85,7 @@ function refreshDevelopmentRunnerRelease(dependencies: DevelopmentReleaseDepende
 export async function discoverDevelopmentRunnerRelease(dependencies: DevelopmentReleaseDependencies, scheduleRefresh?: DevelopmentReleaseRefreshScheduler): Promise<RunnerReleaseDescriptor> {
   const { runtime, cache, now: clock } = dependencies;
   let now = clock();
+  const waitDeadlineMs = now + DEV_RELEASE_REFRESH_BUDGET_MS;
   const memory = runtime.cached;
   if (memory !== undefined && memory.expires_at_ms > now && usableCacheAge(memory.verified_at_ms, now, DEV_RELEASE_STALE_MS)) return memory.descriptor;
   if (now < runtime.next_refresh_at_ms) {
@@ -75,7 +98,7 @@ export async function discoverDevelopmentRunnerRelease(dependencies: Development
     const completed = runtime.cached;
     if (completed !== undefined && usableCacheAge(completed.verified_at_ms, now, DEV_RELEASE_STALE_MS)) return completed.descriptor;
     if (persisted !== undefined && usableCacheAge(persisted.verified_at_ms, now, DEV_RELEASE_STALE_MS)) return persisted.descriptor;
-    throw new Error("development release refresh temporarily unavailable");
+    return waitForDevelopmentRelease(dependencies, waitDeadlineMs);
   }
   // Reserve before cache I/O so concurrent cold requests cannot each launch
   // a complete public GitHub discovery/verification chain.
@@ -90,7 +113,7 @@ export async function discoverDevelopmentRunnerRelease(dependencies: Development
   if (sequence !== runtime.refresh_sequence) {
     if (afterRead !== undefined && usableCacheAge(afterRead.verified_at_ms, now, DEV_RELEASE_STALE_MS)) return afterRead.descriptor;
     if (cached !== undefined && usableCacheAge(cached.verified_at_ms, now, DEV_RELEASE_STALE_MS)) return cached.descriptor;
-    throw new Error("development release refresh temporarily unavailable");
+    return waitForDevelopmentRelease(dependencies, waitDeadlineMs);
   }
   const cacheAgeMs = cached === undefined || cached.verified_at_ms > now ? Number.POSITIVE_INFINITY : now - cached.verified_at_ms;
   if (cached !== undefined && cacheAgeMs <= DEV_RELEASE_CACHE_MS) {

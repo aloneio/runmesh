@@ -83,5 +83,5 @@ export function usableCacheAge(verifiedAtMs: number, now: number, limit: number)
 }
 
 export function createDevelopmentReleaseRuntime(): DevelopmentReleaseRuntime {
-  return { next_refresh_at_ms: 0, refresh_sequence: 0, committed_sequence: 0 };
+  return { next_refresh_at_ms: 0, refresh_sequence: 0, committed_sequence: 0, failed_sequence: 0 };
 }

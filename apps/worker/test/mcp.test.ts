@@ -122,7 +122,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
       expect(instance.getRunner("mode-runner")).toMatchObject({ configured_execution_mode: "dedicated_user" });
       expect(instance.createRunnerEnrollment("mode-runner", randomBase64Url(), "b".repeat(64), now + 3, "privileged_host")).toBeUndefined();
       // Runner-authored enrollment metadata cannot change the trusted field.
-      await instance.redeemRunnerEnrollment("a".repeat(64), "c".repeat(64), { platform: "linux", architecture: "x64", hostname: "host", runner_version: "1.0.0", protocol_version: 2, execution_mode: "privileged_host" }, now + 4);
+      await instance.redeemRunnerEnrollment("a".repeat(64), "c".repeat(64), { platform: "linux", architecture: "x64", hostname: "host", runner_version: "1.0.0", protocol_version: 2, execution_mode: "privileged_host" }, now + 4, crypto.randomUUID());
       expect(instance.getRunner("mode-runner")).toMatchObject({ configured_execution_mode: "dedicated_user" });
     });
   });
@@ -204,7 +204,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     });
   });
 
-  it("redeems enrollment once, rejects expiry/regeneration, and exposes no raw enrollment code", async () => {
+  it("redeems enrollment once, recovers the same mutation, and rejects expiry/regeneration", async () => {
     const registry = env.REGISTRY.get(env.REGISTRY.idFromName(`runner-enrollment-${crypto.randomUUID()}`)); const now = Date.now();
     const code = randomBase64Url(); const verifier = await sha256Hex(code); const info = { platform: "linux", architecture: "x64", hostname: "runner-host", runner_version: "1.0.0", protocol_version: 1 };
     await runInDurableObject(registry, (instance) => {
@@ -212,19 +212,35 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
       expect(instance.createRunnerEnrollment("enrolled-runner", randomBase64Url(), verifier, now)).toBeDefined();
     });
     const tokenVerifier = "c".repeat(64);
-    const results = await Promise.all(Array.from({ length: 8 }, () => runInDurableObject(registry, (instance) => instance.redeemRunnerEnrollment(verifier, tokenVerifier, info, now + 1))));
+    const mutationIds = Array.from({ length: 8 }, () => crypto.randomUUID());
+    const results = await Promise.all(mutationIds.map(mutationId => runInDurableObject(registry, (instance) => instance.redeemRunnerEnrollment(verifier, tokenVerifier, info, now + 1, mutationId))));
     expect(results.filter((value) => value !== undefined)).toHaveLength(1);
-    expect(await runInDurableObject(registry, (instance) => instance.redeemRunnerEnrollment(verifier, tokenVerifier, info, now + 2))).toBeUndefined();
+    const committedMutation = mutationIds[results.findIndex(value => value !== undefined)]!;
+    expect(await runInDurableObject(registry, (instance) => instance.redeemRunnerEnrollment(verifier, tokenVerifier, info, now + 2, committedMutation))).toEqual({ runner_id: "enrolled-runner" });
+    expect(await runInDurableObject(registry, (instance) => instance.redeemRunnerEnrollment(verifier, tokenVerifier, info, now + 2, crypto.randomUUID()))).toBeUndefined();
     const oldCode = randomBase64Url(); const oldVerifier = await sha256Hex(oldCode); const replacement = randomBase64Url(); const replacementVerifier = await sha256Hex(replacement);
     await runInDurableObject(registry, (instance) => {
       expect(instance.createRunnerEnrollment("enrolled-runner", randomBase64Url(), oldVerifier, now + 3)).toBeDefined();
       expect(instance.createRunnerEnrollment("enrolled-runner", randomBase64Url(), replacementVerifier, now + 4)).toBeDefined();
     });
-    expect(await runInDurableObject(registry, (instance) => instance.redeemRunnerEnrollment(oldVerifier, tokenVerifier, info, now + 5))).toBeUndefined();
+    expect(await runInDurableObject(registry, (instance) => instance.redeemRunnerEnrollment(oldVerifier, tokenVerifier, info, now + 5, crypto.randomUUID()))).toBeUndefined();
     const expiredCode = randomBase64Url(); const expiredVerifier = await sha256Hex(expiredCode);
     await runInDurableObject(registry, (instance) => expect(instance.createRunnerEnrollment("enrolled-runner", randomBase64Url(), expiredVerifier, now)).toBeDefined());
-    expect(await runInDurableObject(registry, (instance) => instance.redeemRunnerEnrollment(expiredVerifier, tokenVerifier, info, now + 30 * 60 * 1_000 + 1))).toBeUndefined();
+    expect(await runInDurableObject(registry, (instance) => instance.redeemRunnerEnrollment(expiredVerifier, tokenVerifier, info, now + 30 * 60 * 1_000 + 1, crypto.randomUUID()))).toBeUndefined();
     expect(await runInDurableObject(registry, (instance) => instance.getRunner("enrolled-runner"))).not.toHaveProperty("token_verifier");
+  });
+
+  it.each([undefined, "", "invalid mutation"])("requires a valid enrollment mutation identity (%s)", async mutationId => {
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName('enrollment-mutation-' + crypto.randomUUID()));
+    const now = Date.now(); const verifier = "a".repeat(64); const tokenVerifier = "b".repeat(64);
+    const info = { platform: "linux", architecture: "x64", hostname: "runner", runner_version: "1.0.0", protocol_version: 1 };
+    await runInDurableObject(registry, async instance => {
+      expect(instance.addRunner("mutation-runner", "Mutation runner", now, undefined, "dedicated_user")).toBeDefined();
+      expect(instance.createRunnerEnrollment("mutation-runner", randomBase64Url(), verifier, now)).toBeDefined();
+      await expect(instance.redeemRunnerEnrollment(verifier, tokenVerifier, info, now + 1, mutationId as string)).resolves.toBeUndefined();
+      expect(instance.lookupRunnerEnrollment(verifier, now + 1)).toEqual({ runner_id: "mutation-runner" });
+      await expect(instance.redeemRunnerEnrollment(verifier, tokenVerifier, info, now + 2, crypto.randomUUID())).resolves.toEqual({ runner_id: "mutation-runner" });
+    });
   });
 
   it("serves public secret-free fixed bootstrap templates while availability remains fail closed", async () => {
@@ -770,6 +786,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
       "e".repeat(64),
       { platform: "<img src=x onerror=alert(1)>", architecture: "x64", hostname: "host", runner_version: "test", protocol_version: 1 },
       Date.now(),
+      crypto.randomUUID(),
     ))).resolves.toBeUndefined();
     expect(dashboardHtml).not.toContain("<img src=x onerror=alert(1)>");
     const clients = await SELF.fetch("https://worker.test/admin/clients", { headers: { cookie: cookies(adminJar) } });
