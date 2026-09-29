@@ -16,6 +16,7 @@ import { revokeRunnerTransport } from "../src/platform/runner-mutations.js";
 import { runnerMutationState } from "../src/platform/runner-state.js";
 import { developmentDescriptor } from "../src/domain/release-selection.js";
 import { FIXED_RELEASE_VERSION } from "../src/domain/release-config.js";
+import { REVIEWED_RELEASE_VERSION } from "../src/generated-release.js";
 import { registryDevelopmentReleaseCache } from "../src/http/release-cache.js";
 
 async function fixture(registryName = `audit-admin-${crypto.randomUUID()}`) {
@@ -44,7 +45,7 @@ it("shares one development release refresh across Runner management and public d
     return worker.fetch(new Request(`https://audit.test${path}`, { ...init, headers }), localEnv, context);
   };
   const [major, minor, patch] = FIXED_RELEASE_VERSION.split(".");
-  const version = `${major}.${minor}.${Number(patch) + 1}-dev.1`;
+  const version = `${major}.${minor}.${Number(patch) + (REVIEWED_RELEASE_VERSION ? 1 : 0)}-dev.1`;
   const descriptor = developmentDescriptor({ tag_name: `v${version}`, draft: false, prerelease: true, immutable: true, published_at: "2026-09-16T08:00:00Z",
     assets: ["LICENSE", "NOTICE", "SHA256SUMS", "THIRD_PARTY_NOTICES.md", "manifest.json", "manifest.sig", "manifest.signature.json", "trust-keyring.json", `runmesh-runner-${version}.tgz`].map(name => ({ name })) });
   expect(descriptor).toBeDefined();

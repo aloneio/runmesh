@@ -5,6 +5,8 @@ import { developmentReleaseDependencies, registryDevelopmentReleaseCache } from 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { discoverDevelopmentRunnerRelease as discoverRelease, resolveRunnerReleaseDescriptor as resolveRelease, createDevelopmentReleaseRuntime, verifyDevelopmentRunnerRelease } from "../src/distribution/release.js";
 import { FIXED_RELEASE_VERSION, installerReleaseTarget, renderPosixInstaller, renderPowerShellInstaller } from "../src/installer.js";
+import { REVIEWED_RELEASE_VERSION } from "../src/generated-release.js";
+import { matchesDevelopmentRelease } from "../src/domain/release-selection.js";
 import { runnerInstallScript, runnerRelease } from "../src/http/distribution.js";
 import { readDevelopmentReleaseCache } from "../src/distribution/release-io.js";
 
@@ -16,10 +18,10 @@ function resolveRunnerReleaseDescriptor(environment: RunnerReleaseEnvironment, f
   return resolveRelease(environment, { fetch: fetchImpl, verify: verifyDevelopmentRunnerRelease, cache: undefined, now: () => Date.now(), runtime: createDevelopmentReleaseRuntime() });
 }
 
-// Derive fixtures independently from the reviewed stable core, so a release
-// bump exercises the same next-patch contract instead of stale dev tags.
+// A candidate is the next stable core already; a released source advances it.
 const [releaseMajor, releaseMinor, releasePatch] = FIXED_RELEASE_VERSION.split(".");
-const devCore = `${releaseMajor}.${releaseMinor}.${Number(releasePatch) + 1}`;
+const devPatch = Number(releasePatch) + (REVIEWED_RELEASE_VERSION ? 1 : 0);
+const devCore = `${releaseMajor}.${releaseMinor}.${devPatch}`;
 const devVersion = (sequence: number | string): string => `${devCore}-dev.${sequence}`;
 
 const staticAssets = ["LICENSE", "NOTICE", "SHA256SUMS", "THIRD_PARTY_NOTICES.md", "manifest.json", "manifest.sig", "manifest.signature.json", "trust-keyring.json"];
@@ -36,6 +38,15 @@ function responseFetch(body: unknown, status = 200) {
 const devEnv = { RUNMESH_ENVIRONMENT: "development", WORKER_ID: "worker-development", RUNMESH_PUBLIC_ORIGIN: "https://runmeshdev.example", RUNMESH_SIGNED_RELEASE_AVAILABLE: "dev" };
 
 describe("development Runner distribution", () => {
+  it.each([
+    ["0.1.5", true, "0.1.6-dev.26", true],
+    ["0.1.6", false, "0.1.6-dev.26", true],
+    ["0.1.6", false, "0.1.7-dev.0", false],
+    ["0.1.6", true, "0.1.7-dev.0", true],
+    ["0.1.6", true, "0.1.6-dev.26", false],
+  ] as const)("matches source %s with published=%s against %s", (source, published, version, expected) => {
+    expect(matchesDevelopmentRelease(version, source, published)).toBe(expected);
+  });
   it("HTTP composition invokes native workerd fetch with its correct receiver", async () => {
     const dependencies = developmentReleaseDependencies({ ...env, REGISTRY: {} } as never);
     const controller = new AbortController();
@@ -63,7 +74,7 @@ describe("development Runner distribution", () => {
   });
 
   it("rejects prereleases from the old baseline and a later patch core", async () => {
-    for (const version of [`${FIXED_RELEASE_VERSION}-dev.0`, `${releaseMajor}.${releaseMinor}.${Number(releasePatch) + 2}-dev.0`]) {
+    for (const version of [`${releaseMajor}.${releaseMinor}.${devPatch - 1}-dev.0`, `${releaseMajor}.${releaseMinor}.${devPatch + 1}-dev.0`]) {
       const verify = vi.fn(async () => undefined);
       await expect(discoverDevelopmentRunnerRelease(responseFetch([release(version, "2026-09-16T08:00:00Z")]), verify)).rejects.toThrow("no immutable signed development Runner release");
       expect(verify).not.toHaveBeenCalled();
