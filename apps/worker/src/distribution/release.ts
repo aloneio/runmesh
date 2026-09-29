@@ -8,7 +8,14 @@ export { verifyDevelopmentRunnerRelease } from "./release-io.js";
 
 const FAILED_REFRESH_COOLDOWN_MS = 5_000;
 const COLD_REFRESH_POLL_MS = 100;
-const FAILED_REFRESH_CACHE_READ_MS = 1_000;
+const FAILED_REFRESH_RECOVERY_MS = 1_000;
+type VerifiedReleaseRecord = Pick<CachedDevelopmentReleaseRecord, "verified_at_ms" | "descriptor">;
+
+function newestUsableRelease(now: number, ...records: (VerifiedReleaseRecord | undefined)[]): VerifiedReleaseRecord | undefined {
+  // Match Registry's verification-time ordering; the first record wins ties.
+  return records.sort((a, b) => (b?.verified_at_ms ?? 0) - (a?.verified_at_ms ?? 0))
+    .find(value => value !== undefined && usableCacheAge(value.verified_at_ms, now, DEV_RELEASE_STALE_MS));
+}
 
 /** Each caller owns its timer; only verified values cross request boundaries. */
 async function waitForDevelopmentRelease(dependencies: DevelopmentReleaseDependencies, deadlineMs: number): Promise<RunnerReleaseDescriptor> {
@@ -67,8 +74,27 @@ async function fetchDevelopmentRunnerRelease(dependencies: DevelopmentReleaseDep
   throw new Error("no immutable signed development Runner release is available");
 }
 
+/** A cold miss may precede another isolate's successful verification. */
+async function recoverDevelopmentRelease(dependencies: DevelopmentReleaseDependencies, cached?: CachedDevelopmentReleaseRecord): Promise<VerifiedReleaseRecord | undefined> {
+  const deadline = performance.now() + FAILED_REFRESH_RECOVERY_MS;
+  let remainingMs = FAILED_REFRESH_RECOVERY_MS;
+  while (remainingMs > 0) {
+    const persisted = await readDevelopmentReleaseCache(dependencies.cache, remainingMs);
+    const now = dependencies.now();
+    const recovered = newestUsableRelease(now, dependencies.runtime.cached, persisted, cached);
+    if (recovered !== undefined || dependencies.cache === undefined) return recovered;
+    remainingMs = Math.min(remainingMs, Math.max(0, Math.ceil(deadline - performance.now())));
+    const delayMs = Math.min(COLD_REFRESH_POLL_MS, remainingMs);
+    if (delayMs === 0) break;
+    await new Promise(resolve => setTimeout(resolve, delayMs));
+    // Bound retries even when a test or host clock stops advancing.
+    remainingMs = Math.min(remainingMs - delayMs, Math.max(0, Math.ceil(deadline - performance.now())));
+  }
+  return undefined;
+}
+
 async function refreshDevelopmentRunnerRelease(dependencies: DevelopmentReleaseDependencies, sequence: number, cached?: CachedDevelopmentReleaseRecord): Promise<RunnerReleaseDescriptor> {
-  const { runtime, cache, now: clock } = dependencies;
+  const { runtime, now: clock } = dependencies;
   if (sequence !== runtime.refresh_sequence) throw new Error("development release refresh temporarily unavailable");
   // Cache I/O may have consumed the original reservation. Renew only while
   // still owning it, immediately before the request-owned network budget starts.
@@ -77,14 +103,10 @@ async function refreshDevelopmentRunnerRelease(dependencies: DevelopmentReleaseD
   catch (error) {
     // Recovery belongs to the refresh: waiting requests must not observe a
     // terminal failure while its cross-isolate cache read is still pending.
-    const persisted = await readDevelopmentReleaseCache(cache, FAILED_REFRESH_CACHE_READ_MS);
+    const observed = await recoverDevelopmentRelease(dependencies, cached);
     const completedAtMs = clock();
-    // Recheck memory after I/O so a late recovery cannot replace a newer
-    // in-isolate refresh. Retain every record's original hard expiry.
-    // Match Registry's verification-time ordering; memory wins equal timestamps.
-    const recovered = [runtime.cached, persisted, cached]
-      .sort((a, b) => (b?.verified_at_ms ?? 0) - (a?.verified_at_ms ?? 0))
-      .find(value => value !== undefined && usableCacheAge(value.verified_at_ms, completedAtMs, DEV_RELEASE_STALE_MS));
+    // An asynchronous recovery must not replace a newer committed value.
+    const recovered = newestUsableRelease(completedAtMs, runtime.cached, observed, cached);
     // A delayed failure must not shorten a newer request's reservation.
     if (sequence === runtime.refresh_sequence) {
       runtime.failed_sequence = sequence;
