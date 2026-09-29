@@ -1,13 +1,14 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { expect, it } from "vitest";
 import * as production from "../src/production.js";
-import worker, { RegistryDOv2, RunnerDOv2 } from "../src/index.js";
+import worker, { RegistryDOv2, RunnerDOv2, CapabilitiesDOv1 } from "../src/index.js";
 
-it("production exports only identical live v2 classes and unchanged handlers", () => {
-  expect(Object.keys(production).sort()).toEqual(["RegistryDOv2","RunnerDOv2","default"]);
+it("production exports central storage alongside identical native classes and unchanged handlers", () => {
+  expect(Object.keys(production).sort()).toEqual(["CapabilitiesDOv1","RegistryDOv2","RunnerDOv2","default"]);
   expect(production.default).toBe(worker);
   expect(production.RegistryDOv2).toBe(RegistryDOv2);
   expect(production.RunnerDOv2).toBe(RunnerDOv2);
+  expect(production.CapabilitiesDOv1).toBe(CapabilitiesDOv1);
 });
 
 it("v2 state remains readable through the production class export", async () => {

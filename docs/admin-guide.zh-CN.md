@@ -8,7 +8,7 @@
 
 准备 Cloudflare 账号、公网 HTTPS Worker 地址、至少 12 个字符的管理员密码，以及每台主机和工作区的最小权限方案。
 
-**0.1.4** 是当前已签名发布的正式版。生产环境从 `main` 上包含对应发行激活记录的已审核源码部署。安装包的可用情况见[发行状态](release-readiness.md)；测试后续改动时，使用独立的 `dev` Worker 和资源。
+当前已签名正式版与候选版本见[发行状态](release-readiness.md)。生产环境从 `main` 上包含对应发行激活记录的已审核源码部署。安装包的可用情况见[发行状态](release-readiness.md)；测试后续改动时，使用独立的 `dev` Worker 和资源。
 
 已激活的正式版本在 Cloudflare Workers Builds 中连接仓库并选择 `main`，仓库根目录构建命令设为 `npm run build`，部署命令为：
 
@@ -18,7 +18,7 @@ npm run deploy:worker -- --env production
 
 开发环境选择 `dev`，使用 `npm run deploy:worker -- --env development`。完整配置见[部署参考](deployment.md)。
 
-创建 `INTERNAL_CONTROL_SECRET` 和 `RUNNER_TOKEN_PEPPER` 两个独立的 Cloudflare 密钥，每个值至少来自 32 字节密码学安全随机数。升级时保留现有值，替换 pepper 会使已注册 Runner 凭据失效。初始化和可选代理/API 设置见[运行时配置](runtime-config.zh-CN.md)。
+运行 `npm run setup:secrets -- --env production` 检查所需密钥，再加 `--apply` 创建缺失的原生密钥和独立 OAuth 密钥环。升级时保留现有值，替换 pepper 会使已注册 Runner 凭据失效。初始化和可选代理/API 设置见[运行时配置](runtime-config.zh-CN.md)。
 
 在向不可信访问者开放前，打开管理页面完成密码设置，首个有效提交创建管理员。新 Runner 默认使用 `dedicated_user`，新 MCP 客户端从 `coding:read` 权限开始。
 

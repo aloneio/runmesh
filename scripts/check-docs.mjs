@@ -19,7 +19,7 @@ const config = JSON.parse((await readFile(new URL("apps/worker/wrangler.jsonc", 
 const releaseState = JSON.parse(await readFile(new URL("release/release-state.json", root), "utf8"));
 assert.equal(releaseState.version,pkg.version);
 assert.ok(["candidate","released"].includes(releaseState.state));
-assert.deepEqual(config.vars, {}, "source defaults replace redundant production runtime variables");
+assert.deepEqual(config.vars, { CENTRAL_SKILLS_ENABLED: "1", CENTRAL_DIRECT_TOOLS_ENABLED: "1", CENTRAL_GOVERNANCE_ENABLED: "1" }, "production enables the reviewed central capabilities");
 assert.deepEqual(config.env.production.vars, config.vars);
 assert.deepEqual(config.env.development.vars, { RUNMESH_ENVIRONMENT: "development",
   CENTRAL_SKILLS_ENABLED: "1", CENTRAL_DIRECT_TOOLS_ENABLED: "1", CENTRAL_GOVERNANCE_ENABLED: "1" });

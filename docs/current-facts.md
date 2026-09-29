@@ -8,7 +8,7 @@ Generated from the checked-out source by `npm run generate:facts` and validated 
 {
   "schema_version": 1,
   "evidence": "source_checkout_only",
-  "product_version": "0.1.5",
+  "product_version": "0.1.6",
   "protocol": {
     "minimum": 2,
     "current": 2
@@ -217,7 +217,11 @@ Generated from the checked-out source by `npm run generate:facts` and validated 
     "INTERNAL_CONTROL_SECRET",
     "RUNNER_TOKEN_PEPPER"
   ],
-  "production_plaintext_vars": {},
+  "production_plaintext_vars": {
+    "CENTRAL_SKILLS_ENABLED": "1",
+    "CENTRAL_DIRECT_TOOLS_ENABLED": "1",
+    "CENTRAL_GOVERNANCE_ENABLED": "1"
+  },
   "development_plaintext_vars": {
     "RUNMESH_ENVIRONMENT": "development",
     "CENTRAL_SKILLS_ENABLED": "1",
@@ -232,16 +236,18 @@ Generated from the checked-out source by `npm run generate:facts` and validated 
     {
       "binding": "RUNNER",
       "class": "RunnerDOv2"
+    },
+    {
+      "binding": "CAPABILITIES",
+      "class": "CapabilitiesDOv1"
     }
   ],
   "history_bindings": [
     "HISTORY_DB"
   ],
   "reviewed_release_record": {
-    "version": "0.1.5",
-    "state": "released",
-    "commit": "77e82a1b59737a42cc090064651d1b0531890f21",
-    "manifest_sha256": "34da9baefabddd882aeef79151b132b1de4086fce54de7a46fe853a7e8dac18a"
+    "version": "0.1.6",
+    "state": "candidate"
   },
   "observations": {
     "test_execution": "not_run",

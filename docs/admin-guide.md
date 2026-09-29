@@ -8,7 +8,7 @@ Deploy the Runmesh control plane on Cloudflare Workers, then enroll the Linux, m
 
 Prepare a Cloudflare account, a public HTTPS Worker origin, an administrator password of at least 12 characters, and a least-privilege plan for each machine and workspace.
 
-**0.1.4** is the current signed stable release. For production, deploy the reviewed `main` source containing its release activation. Check [release status](release-readiness.md) for package availability; test upcoming changes with a separate `dev` Worker and resources.
+See [release status](release-readiness.md) for the current signed stable release and candidate. For production, deploy the reviewed `main` source containing its release activation. Check [release status](release-readiness.md) for package availability; test upcoming changes with a separate `dev` Worker and resources.
 
 For an activated production release, connect the repository to Cloudflare Workers Builds, choose `main`, and set the repository-root build command to `npm run build`. Deploy with:
 
@@ -18,7 +18,7 @@ npm run deploy:worker -- --env production
 
 For development, choose `dev` and use `npm run deploy:worker -- --env development`. See [deployment](deployment.md) for the complete configuration.
 
-Create two independent Cloudflare secrets, `INTERNAL_CONTROL_SECRET` and `RUNNER_TOKEN_PEPPER`, using at least 32 cryptographically random bytes for each. Keep their values during upgrades: replacing the pepper invalidates enrolled Runner credentials. The [runtime configuration guide](runtime-config.md) covers initialization and optional proxy/API settings.
+Use `npm run setup:secrets -- --env production` to inspect required keys and add `--apply` to initialize missing native secrets and the independent OAuth vault. Preserve existing values during upgrades: replacing the pepper invalidates enrolled Runner credentials. The [runtime configuration guide](runtime-config.md) covers initialization and optional proxy/API settings.
 
 Open the administrator page and set the password before exposing an uninitialized instance to untrusted visitors. The first successful setup creates the administrator. New Runners use `dedicated_user`; new MCP clients start with `coding:read`.
 

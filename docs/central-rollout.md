@@ -22,8 +22,7 @@ acceptance. It is not a production release sign-off.
 
 The development follow-up adds CAPABILITIES / CapabilitiesDOv1 with the independent
 central-dev-v1 SQLite migration and enables Skills, direct tools and governance
-in the development environment only. Existing Registry/Runner identities and
-production configuration remain unchanged. Remote endpoints, OAuth policies and
+in the development environment. The 0.1.6 candidate now includes the same central binding and feature flags in both production configurations, using a declarative CapabilitiesDOv1 export. Existing Registry/Runner identities, tombstones and D1 bindings remain intact. These source changes have not activated the candidate in production. Remote endpoints, OAuth policies and
 vault keys are not provisioned by this change. The existing GitLab dev connection
 triggers Cloudflare Workers Builds; local Cloudflare account access is not needed
 to trigger that path. Verify the exact candidate on GitHub, fast-forward GitLab
@@ -35,8 +34,7 @@ successful push alone is not evidence that the build or deployment succeeded.
 2. Use a separate approved deployment with the existing optional Capabilities
    SQLite DO binding/migration and independent vault keyring. Retain public-only
    egress and exact HTTPS endpoint policies. Do not modify the old namespaces.
-3. Explicitly enable the desired flags: CENTRAL_SKILLS_ENABLED,
-   CENTRAL_DIRECT_TOOLS_ENABLED and CENTRAL_GOVERNANCE_ENABLED with value 1.
+3. Verify the source-configured CENTRAL_SKILLS_ENABLED, CENTRAL_DIRECT_TOOLS_ENABLED and CENTRAL_GOVERNANCE_ENABLED flags. The 0.1.6 candidate enables all three; initialize the independent vault through setup:secrets for the selected environment.
    Control-panel connections persist exact endpoint admission; no provider environment configuration is supported.
 4. With no Runner, configure two approved public MCP suppliers and one text Skill;
    connect two independently credentialed real clients to the shared publications,
@@ -64,5 +62,5 @@ No real upstream secrets, production deployment, public-host acceptance or
 published release is fabricated by this implementation.
 
 中文说明：代码实现与本地测试不等于完成 W00/W10 的真实双宿主、公网网络和性能验收，
-也不等于 W11 灰度或发布。当前生产配置保持关闭。上述外部门禁未取得证据前，整体
+也不等于 W11 灰度或发布。0.1.6 候选源码已包含生产绑定和功能开关，线上生产启用仍需完成签名验证与激活。上述外部门禁未取得证据前，整体
 计划不得标为已验收完成；使用独立部署按步骤验收后，再通过既有 dev→main 门禁。

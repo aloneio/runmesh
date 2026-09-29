@@ -13,8 +13,7 @@ POST /admin/central/skill-installations 从已验证元数据提取标识、名�
 disable 和旧内容查看功能。修改要求管理员会话、同源 CSRF 和精确 revision。
 preview 不写入；stage 不发布；activate 发布选定摘要。日常安装无需手填来源和许可证。
 
-CAPABILITIES 与 CENTRAL_SKILLS_ENABLED=1 启用这些可选接口。开发环境已启用，生产
-发布另行验收。发现请求实时验证客户端凭据；故障保留原生工具，原生调用不读取中央
+CAPABILITIES 与 CENTRAL_SKILLS_ENABLED=1 启用这些可选接口。开发环境已启用，0.1.6 候选源码也已包含生产配置，正式发布另行验收。发现请求实时验证客户端凭据；故障保留原生工具，原生调用不读取中央
 状态。Skill 内容、allowed-tools 和注解不授予 Runner、计算机或工作区权限。
 
 ## 内容与存储边界

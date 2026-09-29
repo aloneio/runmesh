@@ -21,10 +21,18 @@
       {
         "name": "RUNNER",
         "class_name": "RunnerDOv2"
+      },
+      {
+        "name": "CAPABILITIES",
+        "class_name": "CapabilitiesDOv1"
       }
     ]
   },
-  "vars": {},
+  "vars": {
+    "CENTRAL_SKILLS_ENABLED": "1",
+    "CENTRAL_DIRECT_TOOLS_ENABLED": "1",
+    "CENTRAL_GOVERNANCE_ENABLED": "1"
+  },
   "env": {
     "development": {
       "name": "runmeshdev",
@@ -116,7 +124,9 @@
         },
         {
           "tag": "central-test-v1",
-          "new_sqlite_classes": ["CapabilitiesDOv1"]
+          "new_sqlite_classes": [
+            "CapabilitiesDOv1"
+          ]
         }
       ],
       "vars": {
@@ -124,7 +134,10 @@
         "RUNMESH_PUBLIC_ORIGIN": "",
         "RUNMESH_SIGNED_RELEASE_AVAILABLE": "",
         "RUNMESH_AUDIT_BACKEND": "sqlite",
-        "RUNMESH_JOB_HISTORY_BACKEND": "sqlite"
+        "RUNMESH_JOB_HISTORY_BACKEND": "sqlite",
+        "CENTRAL_SKILLS_ENABLED": "0",
+        "CENTRAL_DIRECT_TOOLS_ENABLED": "0",
+        "CENTRAL_GOVERNANCE_ENABLED": "0"
       },
       "triggers": {
         "crons": []
@@ -152,10 +165,18 @@
           {
             "name": "RUNNER",
             "class_name": "RunnerDOv2"
+          },
+          {
+            "name": "CAPABILITIES",
+            "class_name": "CapabilitiesDOv1"
           }
         ]
       },
-      "vars": {},
+      "vars": {
+        "CENTRAL_SKILLS_ENABLED": "1",
+        "CENTRAL_DIRECT_TOOLS_ENABLED": "1",
+        "CENTRAL_GOVERNANCE_ENABLED": "1"
+      },
       "d1_databases": [
         {
           "binding": "HISTORY_DB",
@@ -183,6 +204,10 @@
         "RunnerDO": {
           "type": "durable-object",
           "state": "deleted"
+        },
+        "CapabilitiesDOv1": {
+          "type": "durable-object",
+          "storage": "sqlite"
         }
       },
       "main": "src/production.ts",
@@ -218,6 +243,10 @@
     "RunnerDO": {
       "type": "durable-object",
       "state": "deleted"
+    },
+    "CapabilitiesDOv1": {
+      "type": "durable-object",
+      "storage": "sqlite"
     }
   },
   "version_metadata": {
