@@ -81,7 +81,10 @@ async function refreshDevelopmentRunnerRelease(dependencies: DevelopmentReleaseD
     const completedAtMs = clock();
     // Recheck memory after I/O so a late recovery cannot replace a newer
     // in-isolate refresh. Retain every record's original hard expiry.
-    const recovered = [runtime.cached, persisted, cached].find(value => value !== undefined && usableCacheAge(value.verified_at_ms, completedAtMs, DEV_RELEASE_STALE_MS));
+    // Match Registry's verification-time ordering; memory wins equal timestamps.
+    const recovered = [runtime.cached, persisted, cached]
+      .sort((a, b) => (b?.verified_at_ms ?? 0) - (a?.verified_at_ms ?? 0))
+      .find(value => value !== undefined && usableCacheAge(value.verified_at_ms, completedAtMs, DEV_RELEASE_STALE_MS));
     // A delayed failure must not shorten a newer request's reservation.
     if (sequence === runtime.refresh_sequence) {
       runtime.failed_sequence = sequence;

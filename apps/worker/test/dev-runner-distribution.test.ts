@@ -388,6 +388,31 @@ describe("explicit development release runtime", () => {
     expect(Object.values(failing.runtime).some(value => value instanceof Promise)).toBe(false);
   });
 
+  it.each(["foreground", "background"])("recovers the newest verified cache over stale memory after a %s refresh fails", async mode => {
+    let now = Date.now(), stored: string | undefined, finishFailure!: (response: Response) => void;
+    const cache = { match: vi.fn(async () => stored === undefined ? undefined : new Response(stored)),
+      put: vi.fn(async (_request: Request, response: Response) => { stored = await response.text(); }) };
+    const dependencies: DevelopmentReleaseDependencies = { fetch: responseFetch([release(devVersion(0), "2026-09-16T08:00:00Z")]),
+      verify: vi.fn(async () => undefined), cache, now: () => now, runtime: createDevelopmentReleaseRuntime() };
+    const seed = await resolveRelease(devEnv, dependencies);
+    now += 60_001;
+    const fetchImpl = vi.fn(() => new Promise<Response>(resolve => { finishFailure = resolve; }));
+    const failing = { ...dependencies, fetch: fetchImpl }, tasks: Promise<void>[] = [];
+    const pending = resolveRelease(devEnv, failing, mode === "background" ? task => { tasks.push(task); } : undefined);
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledOnce());
+    now += 1;
+    const newest = await resolveRelease(devEnv, { ...dependencies, runtime: createDevelopmentReleaseRuntime(),
+      fetch: responseFetch([release(devVersion(1), "2026-09-16T09:00:00Z")]) });
+    finishFailure(new Response("unavailable", { status: 404 }));
+    const immediate = await pending;
+    await Promise.all(tasks);
+    expect(immediate).toEqual(mode === "background" ? seed : newest);
+    expect(await resolveRelease(devEnv, failing)).toEqual(newest);
+    expect(dependencies.runtime.cached?.verified_at_ms).toBe(now);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(cache.put).toHaveBeenCalledTimes(2);
+  });
+
   it.each([1, 2, 3])("keeps cold waiters pending until cross-isolate recovery completes (round %s)", async () => {
     const seed = await discoverDevelopmentRunnerRelease(responseFetch([release(devVersion(1), "2026-09-16T09:00:00Z")]), async () => undefined);
     vi.useFakeTimers();
