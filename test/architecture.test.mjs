@@ -27,6 +27,8 @@ async function fixture(t, sources) {
 }
 
 const bad = [
+  ["duplicate Worker storage cipher", { "apps/worker/src/platform/other.ts": 'export const algorithm = "AES-GCM";' }],
+  ["shared storage cipher to feature implementation", { "apps/worker/src/platform/secret-storage.ts": 'import "./connectors/managed-store.js";', "apps/worker/src/platform/connectors/managed-store.ts": 'export {};' }],
   ["Handshake to asynchronous projection", { "apps/worker/src/domain/runner-handshake.ts": 'export async function project() { return {}; }' }],
   ["Environment contracts to platform types", { "apps/runner/src/environment-contracts.ts": 'import type { PathLike } from "node:fs";' }],
   ["Handshake to transport owner", { "apps/worker/src/domain/runner-handshake.ts": 'import "../runner-do.js";', "apps/worker/src/runner-do.ts": 'export {};' }],
@@ -52,7 +54,7 @@ const bad = [
   ["managed connection contracts to platform globals", { "apps/worker/src/contracts/managed-connections.ts": 'export const request = globalThis.fetch;' }],
   ["managed OAuth use case to protocol adapter", { "apps/worker/src/application/connectors/managed-oauth.ts": 'import "../../platform/connectors/managed-oauth.js";', "apps/worker/src/platform/connectors/managed-oauth.ts": 'export {};' }],
   ["managed OAuth protocol to storage", { "apps/worker/src/platform/connectors/managed-oauth.ts": 'import type { State } from "./managed-store.js";', "apps/worker/src/platform/connectors/managed-store.ts": 'export type State = {};' }],
-  ["managed OAuth protocol to cipher", { "apps/worker/src/platform/connectors/managed-oauth.ts": 'import "./oauth-crypto.js";', "apps/worker/src/platform/connectors/oauth-crypto.ts": 'export {};' }],
+  ["managed OAuth protocol to cipher", { "apps/worker/src/platform/connectors/managed-oauth.ts": 'import "../secret-storage.js";', "apps/worker/src/platform/secret-storage.ts": 'export {};' }],
   ["managed OAuth storage to SDK", { "apps/worker/src/platform/connectors/managed-store.ts": 'import type { OAuthDiscoveryState } from "@modelcontextprotocol/client";' }],
   ["managed OAuth storage to SDK intermediary", { "apps/worker/src/platform/connectors/managed-store.ts": 'import type { Metadata } from "./provider-types.js";', "apps/worker/src/platform/connectors/provider-types.ts": 'export type Metadata = {};' }],
   ["OAuth contracts to SDK", { "apps/worker/src/contracts/oauth.ts": 'import { Client } from "@modelcontextprotocol/client";' }],
@@ -63,7 +65,7 @@ const bad = [
   ["remote provider to state owner", { "apps/worker/src/mcp/providers/remote.ts": 'import "../../capabilities-do.js";', "apps/worker/src/capabilities-do.ts": "export {};" }],
   ["central provider to concrete connector", { "apps/worker/src/mcp/providers/remote.ts": 'import "../../platform/connectors/remote-client.js";', "apps/worker/src/platform/connectors/remote-client.ts": "export {};" }],
   ["central provider to concrete Skill store type", { "apps/worker/src/mcp/providers/skills.mts": 'import type { State } from "../../platform/skills/store.mjs";', "apps/worker/src/platform/skills/store.mts": "export type State = {};" }],
-  ["central provider helper reexports concrete cipher", { "apps/worker/src/mcp/providers/remote/helper.ts": 'export * from "../../../platform/connectors/oauth-crypto.js";', "apps/worker/src/platform/connectors/oauth-crypto.ts": "export {};" }],
+  ["central provider helper reexports concrete cipher", { "apps/worker/src/mcp/providers/remote/helper.ts": 'export * from "../../../platform/secret-storage.js";', "apps/worker/src/platform/secret-storage.ts": "export {};" }],
   ["central provider helper dynamically loads concrete Skill store", { "apps/worker/src/mcp/providers/skills/helper.cts": 'void import("../../../platform/skills/store.cjs");', "apps/worker/src/platform/skills/store.cts": "export {};" }],
   ["central provider to client SDK types", { "apps/worker/src/mcp/providers/remote.ts": 'import type { Client } from "@modelcontextprotocol/client";' }],
   ["central provider to unreviewed HTTP package", { "apps/worker/src/mcp/providers/remote.ts": 'import { request } from "undici";' }],

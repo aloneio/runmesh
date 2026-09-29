@@ -1,5 +1,5 @@
-import type { ManagedOAuthRecord, ManagedOAuthRepository } from '../../contracts/managed-oauth.js';
-import { parseEnvelope } from '../../contracts/connector-values.js';
+import { MANAGED_OAUTH_RECORD_BYTES, type ManagedOAuthRecord, type ManagedOAuthRepository } from '../../contracts/managed-oauth.js';
+import { parseEncryptedSecret } from '../../contracts/secret-storage.js';
 import { isCapabilityIdentifier } from '../../contracts/capabilities.js';
 import { publicMcpEndpoint } from '../../contracts/remote-values.js';
 
@@ -9,8 +9,8 @@ function valid(value: ManagedOAuthRecord): boolean {
     && [value.expires_at, value.token_expires_at].every(n => Number.isSafeInteger(n) && n >= 0)
     && /^[a-f0-9]{64}$/u.test(value.session_hash) && /^[a-f0-9]{64}$/u.test(value.state_hash)
     && ["starting", "pending", "exchanging", "ready", "refreshing", "revoked"].includes(value.state)
-    && [value.client, value.verifier, value.tokens].every(v => v === undefined || parseEnvelope(v) !== undefined)
-    && JSON.stringify(value).length <= 65_536;
+    && [value.client, value.verifier, value.tokens].every(v => v === undefined || parseEncryptedSecret(v) !== undefined)
+    && new TextEncoder().encode(JSON.stringify(value)).byteLength <= MANAGED_OAUTH_RECORD_BYTES;
 }
 /** Secrets stay encrypted; state claims are synchronous and survive eviction. */
 export class ManagedOAuthState implements ManagedOAuthRepository {
@@ -25,7 +25,7 @@ export class ManagedOAuthState implements ManagedOAuthRepository {
     if (!isCapabilityIdentifier(id)) throw new Error("invalid_profile"); this.initialize();
     const row = this.storage.sql.exec<{ revision: number; record_json: string }>("SELECT revision,record_json FROM managed_oauth_v1 WHERE profile_id=?", id).toArray()[0];
     if (!row) return undefined;
-    if (row.record_json.length > 65_536) throw new Error("invalid_oauth_record");
+    if (new TextEncoder().encode(row.record_json).byteLength > MANAGED_OAUTH_RECORD_BYTES) throw new Error("invalid_oauth_record");
     const value = JSON.parse(row.record_json) as ManagedOAuthRecord;
     if (!valid(value) || value.profile_id !== id || value.revision !== row.revision) throw new Error("invalid_oauth_record");
     return value;

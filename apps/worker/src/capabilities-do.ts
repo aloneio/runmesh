@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
-import { createOAuthCipher, oauthRandom } from "./platform/connectors/oauth-crypto.js";
+import { createSecretStorage } from "./platform/secret-storage.js";
+import { randomBase64Url } from "./security.js";
 import { createManagedOAuthProtocol } from "./platform/connectors/managed-oauth.js";
 import { createManagedOAuth } from './application/connectors/managed-oauth.js';
 import { ManagedOAuthState } from "./platform/connectors/managed-store.js";
@@ -200,9 +201,9 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
 
   #managedOAuth() {
     if (!this.#managedService) this.#managedService = createManagedOAuth({ repository: this.#managedState, protocol: createManagedOAuthProtocol(),
-      cipher: createOAuthCipher(this.#namespace, () => this.env.INTERNAL_CONTROL_SECRET),
+      cipher: createSecretStorage(this.#namespace, () => this.env.INTERNAL_CONTROL_SECRET),
       profile: id => this.#profiles.read(id)?.profile, admin: (hash, signal) => this.#authorize(hash, signal),
-      origin: () => this.env.RUNMESH_PUBLIC_ORIGIN, hash: catalogSha256, random: oauthRandom, now: Date.now });
+      origin: () => this.env.RUNMESH_PUBLIC_ORIGIN, hash: catalogSha256, random: randomBase64Url, now: Date.now });
     return this.#managedService;
   }
   public async connectionOAuth(hash: string, action: "begin" | "complete" | "revoke", input: unknown, requestOrigin?: string): ReturnType<ManagedConnections["connectionOAuth"]> {
