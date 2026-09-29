@@ -77,10 +77,22 @@ test("a single-item receipt cannot masquerade as a complete collection", async t
   await assert.rejects(api.list("profiles", "profiles"), unexpected);
 });
 
-test("missing catalog remains an explicit optional read", async t => {
-  const api = client(t, () => Response.json({ error: { code: "central_missing" } }, { status: 404 }));
+test("empty catalog remains an explicit successful optional read", async t => {
+  const api = client(t, () => Response.json({ state: "empty" }));
   assert.equal(await api.request("catalogs/service", undefined, true), null);
-  await assert.rejects(api.request("catalogs/service"), /operationCouldNotBeConfirmedRefreshTheCurrentState/u);
+  await assert.rejects(api.request("catalogs/service"), unexpected);
+});
+
+test("a missing service is not mistaken for an empty catalog", async t => {
+  const api = client(t, () => Response.json({ error: { code: "central_missing" } }, { status: 404 }));
+  await assert.rejects(api.request("catalogs/service", undefined, true), /operationCouldNotBeConfirmedRefreshTheCurrentState/u);
+});
+
+test("discovery awaiting authorization keeps sign-in guidance without claiming publication", async t => {
+  const api = client(t, () => Response.json({ state: "authorization_required" }));
+  await assert.rejects(api.request("discovery/service", { expected_revision: 0 }), /signInToThisServiceAgainUsingReconnect/u);
+  assert.equal(api.requests.length, 1);
+  assert.equal(api.refreshRequired(), true);
 });
 
 for (const [path, body, message] of [

@@ -61,9 +61,9 @@ export function createServiceWorkflow({
       && catalog.head.approved_names.length === catalog.snapshot.tools.length
       && catalog.snapshot.tools.every(tool => catalog.head.approved_names.includes(tool.definition.name));
   }
-  async function connectService(profile) {
+  async function connectService(profile, observedCatalog) {
     var id = encodeURIComponent(profile.profile_id),
-      catalog = await api('catalogs/' + id, undefined, true);
+      catalog = observedCatalog === undefined ? await api('catalogs/' + id, undefined, true) : observedCatalog;
     await api('discovery/' + id, {
       expected_revision: catalog ? catalog.head.revision : 0
     });
@@ -107,7 +107,7 @@ export function createServiceWorkflow({
         if (!profile || !profile.enabled) continue;
       }
       try {
-        profiles = await connectService(profile);
+        profiles = await connectService(profile, catalog);
       } catch (error) {
         failed(profile, error);
       }

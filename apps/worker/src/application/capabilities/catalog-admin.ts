@@ -55,9 +55,10 @@ export function createCatalogManager(ports: CatalogAdminPorts) {
         if (signal.aborted || expired()) return { state: "unavailable" };
         if (initial !== "allowed") return { state: initial };
         const rawProfile = ports.profile(profileId), head = ports.repository.readHead(profileId);
-        if (rawProfile === undefined || head === undefined) return { state: "missing" };
+        if (rawProfile === undefined) return { state: "missing" };
         const profile = parseProfile(rawProfile);
         if (profile === undefined || profile.profile_id !== profileId) return { state: "unavailable" };
+        if (head === undefined) return { state: requestedDigest === undefined ? "empty" : "missing" };
         const digest = requestedDigest ?? head.observed_digest, snapshot = ports.repository.readSnapshot(profileId, digest);
         if (snapshot === undefined) return { state: "missing" };
         if (!await verifiedCatalogSnapshot(snapshot, profile, digest, ports.digest)) return { state: "unavailable" };

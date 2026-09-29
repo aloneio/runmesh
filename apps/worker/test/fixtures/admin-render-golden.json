@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "b9a50650af383699dafa9649b349e20d2978d30e943ec86cf586f9095189d607",
-      "bytes": 127602,
+      "sha256": "1717408b7bec017c932c34a28b636e7e70b1cc56c11c35100e26c04ef3a5d025",
+      "bytes": 127825,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -32,8 +32,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "e7a2f9ca19c02c71f51d033e614b2a023ebe82fa89968a31ed6c02e65bad54f4",
-      "bytes": 128190,
+      "sha256": "b3ea9b2987bcc1b9a8a050cd28ba645d7c9894ac97a3cedf8e139a4d4e7f29f8",
+      "bytes": 128413,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -51,8 +51,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "1fd39fd99d1709380a2bfceae163fef6548c1902bc6d3bbf7e264b5ad476e1b6",
-      "bytes": 129338,
+      "sha256": "aa5e28a142ba6c93fd14940434ee068fdf75d9547cbbbf1a87903236d855e2b2",
+      "bytes": 129561,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -419,8 +419,8 @@
           }
         ]
       ],
-      "sha256": "56c83f2e7697fb8e054cbf2d07380b220c58c7b12c4c8225f70db3817c5b8af4",
-      "bytes": 129687,
+      "sha256": "cbe7adaf4d1e55c6b9c27366e793822950d5b416f9545aec2ae5ba1701dc8a03",
+      "bytes": 129910,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -578,5 +578,16 @@
   "oauth_reconnect_review": {
     "source_base": "04c751c0ecda6d76fcb1a73a6cbce01278cb9d80",
     "reviewed_change": "Reconnect reconciles saved profiles before beginning OAuth, recovers failed discovery without a manual refresh, and checks current enabled state and revision. Missing or invalid vault readiness gets a specific bilingual configuration error. Regression covers fresh revisions, failed reconciliation, concurrent pause and preserved account state. No screenshots."
+  },
+  "oauth_discovery_review": {
+    "source_base": "6cb19d4d4989c426deed4ac6f2c5262a06fdd2d8",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "reviewed_change": "Represent an undiscovered catalog and pending authorization as explicit states. Reuse the initial catalog read during interrupted OAuth recovery. Browser regressions preserve reconnect guidance and publication checks. Replacing only the inline bundle reproduces every prior hash and byte count. No screenshots.",
+    "non_script_markup_unchanged": true
   }
 }
