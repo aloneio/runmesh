@@ -1,6 +1,6 @@
 import { encodeBase64Url, decodeBase64Url } from "../contracts/base64url.js";
 import { isConfiguredSecret } from "../contracts/deployment-secrets.js";
-import { catalogJson } from "../contracts/catalog-json.js";
+import { canonicalJson } from "../contracts/json.js";
 import { SECRET_STORAGE_LIMITS, parseEncryptedSecret, type SecretStorage } from "../contracts/secret-storage.js";
 
 const keyId = "internal-control-v1";
@@ -30,7 +30,7 @@ export function createSecretStorage(namespace: string, secret: () => unknown): S
     async seal(context, value) {
       let bytes: Uint8Array<ArrayBuffer> | undefined;
       try {
-        const canonical = catalogJson(value, SECRET_STORAGE_LIMITS.plaintext_bytes);
+        const canonical = canonicalJson(value, SECRET_STORAGE_LIMITS.plaintext_bytes);
         if (canonical === undefined) throw unavailable();
         const additionalData = aad(context), derived = await key(), iv = crypto.getRandomValues(new Uint8Array(12));
         bytes = encoder.encode(canonical);

@@ -18,6 +18,8 @@ OAuth client data, verifier and tokens use AES-256-GCM encryption. HKDF-SHA256 d
 
 All three encrypted values use the shared `platform/secret-storage.ts` adapter and `contracts/secret-storage.ts` contract. The adapter preserves the existing ciphertext format, so moving it does not require reconnection. Each value has a 64 KiB UTF-8 plaintext budget; ciphertext and record bounds derive from that budget, including space for a full access-token and refresh-token pair. Key derivation and base64url encoding have one implementation each.
 
+Credential serialization uses the feature-independent `contracts/json.ts` implementation. Discovery metadata has a shared 32 KiB UTF-8 byte budget used by both protocol validation and record sizing, so multibyte text is measured consistently.
+
 A durable claim precedes exchange or refresh to prevent concurrent reuse. Refresh is demand-driven; waiting requests recheck their own admission and use leases that validate the current OAuth revision. Unknown outcomes require reconnection and are not replayed. Preserve `INTERNAL_CONTROL_SECRET` during upgrades; rotating it requires OAuth reconnection. There is no stored raw-key cache or compatibility path for the former separate keyring.
 
 Disconnecting an account revokes local state and fences leases. It does not revoke tokens at the provider or roll back dispatched effects. Client revocation independently blocks that client without disconnecting the shared service. A 401 or credential change never automatically replays tools/call.

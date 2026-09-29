@@ -7,9 +7,9 @@ import type { ConnectionProfile } from "../src/contracts/connectors.js";
 import { createHttpRemoteConnector } from "../src/platform/connectors/remote-client.js";
 import { connectionPolicy } from "../src/platform/connectors/connection-policy.js";
 import { createManagedOAuthProtocol } from "../src/platform/connectors/managed-oauth.js";
-import { managedOAuthFetch } from "../src/platform/connectors/managed-oauth-http.js";
+import { managedOAuthFetch, validDiscovery } from "../src/platform/connectors/managed-oauth-http.js";
 import { createManagedOAuth } from '../src/application/connectors/managed-oauth.js';
-import type { ManagedOAuthRecord, ManagedOAuthProtocol } from '../src/contracts/managed-oauth.js';
+import { MANAGED_OAUTH_DISCOVERY_BYTES, type ManagedOAuthRecord, type ManagedOAuthProtocol } from '../src/contracts/managed-oauth.js';
 import { createSecretStorage } from "../src/platform/secret-storage.js";
 import { SECRET_STORAGE_LIMITS } from "../src/contracts/secret-storage.js";
 import { ManagedOAuthState } from "../src/platform/connectors/managed-store.js";
@@ -22,6 +22,17 @@ import { passwordVerifier, randomBase64Url, sha256Hex } from "../src/security.js
 
 const endpoint = "https://mcp.provider.com/mcp", origin = "https://runmesh.company.com", issuer = "https://login.provider.com";
 const base: ConnectionProfile = { schema_version: 1, profile_id: "direct", connector_id: "direct", endpoint, revision: 2, enabled: true, credential: null, authentication: "none", owner: { kind: "instance_admin" } };
+it.each(["a", "界"])("OAuth discovery counts UTF-8 bytes at the exact metadata boundary: %s", text => {
+  const value = { authorizationServerUrl: issuer, authorizationServerMetadata: { issuer, authorization_endpoint: issuer + "/authorize", token_endpoint: issuer + "/token", description: "" } };
+  const encoder = new TextEncoder(), available = MANAGED_OAUTH_DISCOVERY_BYTES - encoder.encode(JSON.stringify(value)).byteLength;
+  const width = encoder.encode(text).byteLength;
+  value.authorizationServerMetadata.description = text.repeat(Math.floor(available / width)) + "a".repeat(available % width);
+  expect(encoder.encode(JSON.stringify(value)).byteLength).toBe(MANAGED_OAUTH_DISCOVERY_BYTES);
+  expect(validDiscovery(value, origin)).toBe(true);
+  value.authorizationServerMetadata.description += "a";
+  expect(validDiscovery(value, origin)).toBe(false);
+});
+
 it.each(["modern", "legacy", "session"])("direct no-auth MCP negotiates %s and never sends an Authorization header", async mode => {
   const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "connected" }] }));
   const upstream = createMcpHandler(() => { const server = new McpServer({ name: "direct-fixture", version: "1" }); server.registerTool("read", { inputSchema: z.object({}).strict() }, execute); return server; }, { route: "/mcp", legacy: "stateless" });

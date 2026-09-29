@@ -1,10 +1,11 @@
+import { MANAGED_OAUTH_DISCOVERY_BYTES } from "../../contracts/managed-oauth.js";
 import type { FetchLike, OAuthDiscoveryState } from "@modelcontextprotocol/client";
 import { publicMcpEndpoint } from "../../contracts/remote-values.js";
 import { publicOAuthUrl } from "../../contracts/managed-connections.js";
 
 export function validDiscovery(value: OAuthDiscoveryState, selfOrigin: string) {
   const metadata = value.authorizationServerMetadata;
-  return JSON.stringify(value).length <= 32_768 && metadata !== undefined
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength <= MANAGED_OAUTH_DISCOVERY_BYTES && metadata !== undefined
     && [value.authorizationServerUrl, metadata.issuer, metadata.authorization_endpoint, metadata.token_endpoint].every(v => publicOAuthUrl(v, selfOrigin) !== undefined)
     && (metadata.registration_endpoint === undefined || publicOAuthUrl(metadata.registration_endpoint, selfOrigin) !== undefined);
 }

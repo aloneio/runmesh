@@ -43,6 +43,11 @@ It owns key derivation, authenticated encryption and envelope validation through
 shared contract, using the existing `INTERNAL_CONTROL_SECRET`. The source gate rejects
 a second Worker cipher implementation and feature dependencies in this adapter.
 Ciphertext and OAuth record limits derive from the same plaintext budget.
+The canonical serializer in `contracts/json.ts` has no feature dependencies;
+catalogs apply their own budgets through `catalog-json.ts`, while credential
+encryption uses the shared serializer directly. The shared ciphertext contract
+validates its envelope without importing catalog or capability contracts; key
+selection remains in the cipher adapter.
 `contracts/base64url.ts` supplies the common byte encoding for ciphertext, password
 verifiers and cursors. Password hashing and request signing retain their distinct
 one-way and integrity roles; Runner profiles use the existing local file-permission

@@ -1,9 +1,10 @@
+import { JSON_LIMITS } from "./json.js";
 import type { CapturedIdentity, IdentityDecision } from "./identity.js";
 import type { AdminDecision, ConnectionProfile } from "./connectors.js";
 
 /** Safety ceilings for imported descriptions, not capacity or latency promises. */
 export const CATALOG_LIMITS = Object.freeze({ tools: 128, tool_bytes: 32_768, snapshot_bytes: 524_288,
-  request_bytes: 524_288, depth: 16, nodes: 8_192, page_tools: 20, profiles: 200,
+  request_bytes: 524_288, depth: JSON_LIMITS.depth, nodes: JSON_LIMITS.nodes, page_tools: 20, profiles: 200,
   versions_per_profile: 32, snapshots: 512, storage_bytes: 16_777_216, cursor_bytes: 2_048, cursor_ttl_ms: 300_000 });
 export type CatalogJson = null | boolean | number | string | CatalogJson[] | { [key: string]: CatalogJson };
 export interface RemoteToolDefinition {
