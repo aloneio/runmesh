@@ -75,18 +75,19 @@ async function fetchDevelopmentRunnerRelease(dependencies: DevelopmentReleaseDep
 }
 
 /** A cold miss may precede another isolate's successful verification. */
-async function recoverDevelopmentRelease(dependencies: DevelopmentReleaseDependencies, cached?: CachedDevelopmentReleaseRecord): Promise<VerifiedReleaseRecord | undefined> {
-  const deadline = performance.now() + FAILED_REFRESH_RECOVERY_MS;
-  let remainingMs = FAILED_REFRESH_RECOVERY_MS;
+async function recoverDevelopmentRelease(dependencies: DevelopmentReleaseDependencies, budgetMs: number, cached?: CachedDevelopmentReleaseRecord): Promise<VerifiedReleaseRecord | undefined> {
+  const deadline = performance.now() + budgetMs;
+  let remainingMs = budgetMs, pollMs = COLD_REFRESH_POLL_MS;
   while (remainingMs > 0) {
-    const persisted = await readDevelopmentReleaseCache(dependencies.cache, remainingMs);
+    const persisted = await readDevelopmentReleaseCache(dependencies.cache, Math.min(FAILED_REFRESH_RECOVERY_MS, Math.ceil(remainingMs)));
     const now = dependencies.now();
     const recovered = newestUsableRelease(now, dependencies.runtime.cached, persisted, cached);
     if (recovered !== undefined || dependencies.cache === undefined) return recovered;
     remainingMs = Math.min(remainingMs, Math.max(0, Math.ceil(deadline - performance.now())));
-    const delayMs = Math.min(COLD_REFRESH_POLL_MS, remainingMs);
+    const delayMs = Math.min(pollMs, remainingMs);
     if (delayMs === 0) break;
     await new Promise(resolve => setTimeout(resolve, delayMs));
+    pollMs = Math.min(pollMs * 2, FAILED_REFRESH_RECOVERY_MS);
     // Bound retries even when a test or host clock stops advancing.
     remainingMs = Math.min(remainingMs - delayMs, Math.max(0, Math.ceil(deadline - performance.now())));
   }
@@ -99,11 +100,18 @@ async function refreshDevelopmentRunnerRelease(dependencies: DevelopmentReleaseD
   // Cache I/O may have consumed the original reservation. Renew only while
   // still owning it, immediately before the request-owned network budget starts.
   runtime.next_refresh_at_ms = clock() + DEV_RELEASE_REFRESH_BUDGET_MS;
+  const refreshStartedAtMs = performance.now();
   try { return await fetchDevelopmentRunnerRelease(dependencies, sequence); }
   catch (error) {
     // Recovery belongs to the refresh: waiting requests must not observe a
     // terminal failure while its cross-isolate cache read is still pending.
-    const observed = await recoverDevelopmentRelease(dependencies, cached);
+    // A cold isolate may fail before another isolate finishes its signature
+    // verification. Use the remaining refresh budget, with bounded storage
+    // recovery after a spent deadline; usable stale values still return promptly.
+    const recoveryBudgetMs = newestUsableRelease(clock(), runtime.cached, cached) === undefined
+      ? Math.max(FAILED_REFRESH_RECOVERY_MS, DEV_RELEASE_REFRESH_BUDGET_MS - (performance.now() - refreshStartedAtMs))
+      : FAILED_REFRESH_RECOVERY_MS;
+    const observed = await recoverDevelopmentRelease(dependencies, recoveryBudgetMs, cached);
     const completedAtMs = clock();
     // An asynchronous recovery must not replace a newer committed value.
     const recovered = newestUsableRelease(completedAtMs, runtime.cached, observed, cached);
