@@ -17,7 +17,7 @@ export function adminStyles(): string { return `<style>
 [data-central-product] input[type=checkbox]{width:auto;flex:none;margin-top:4px}
 .central-card{border-bottom:1px solid var(--line);padding:18px 0;overflow-wrap:anywhere}
 .central-card:first-child{padding-top:4px}.central-card h3{margin:0 0 8px}
-.central-card .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.central-card .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;width:100%;min-width:0}
 [data-service-tools] h2{min-width:0;max-width:100%;overflow-wrap:anywhere}
 [data-central-product] .central-card h3{text-transform:none;letter-spacing:normal}
 [data-product-status]:not(:empty){padding:14px 18px;border:1px solid var(--line);border-radius:10px;background:var(--panel);white-space:pre-wrap}
@@ -137,7 +137,7 @@ body::before{
   position:sticky;
   top:0;
   z-index:100;
-  height:57px;
+  height:auto;
   min-height:64px;
   view-transition-name:app-header;
   background:var(--panel);
@@ -154,7 +154,7 @@ body::before{
   max-width:1440px;
   margin:auto;
   padding:0 32px;
-  height:56px;
+  height:auto;
   min-height:56px;
   display:flex;
   align-items:center;
@@ -436,14 +436,20 @@ h3{font-size:12px;color:var(--muted-dark);text-transform:uppercase;letter-spacin
   background:var(--panel-card);
   border:1px solid var(--line);
 }
-.form-grid.add-form-grid,.form-grid.add-client-grid{
+.form-grid.add-form-grid{
   display:flex;
   align-items:flex-end;
   gap:12px;
   flex-wrap:wrap;
 }
-.form-grid.add-form-grid > label,.form-grid.add-client-grid > label:not(.check){flex:1 1 200px}
-.add-client-grid fieldset{flex:2 1 300px}
+.form-grid.add-form-grid > label{flex:1 1 200px}
+.form-grid.add-client-grid{grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}
+.add-client-grid > label{min-width:0}
+.add-client-grid > label > input,.add-client-grid > label > select{width:100%;min-height:38px}
+.add-client-grid > details,.add-client-grid > .muted,.add-client-grid > .form-submit-wrap{grid-column:1 / -1;min-width:0}
+.add-client-grid > .muted{margin:0}
+.add-client-grid summary{cursor:pointer}
+.add-client-grid fieldset{min-width:0;margin-top:12px}
 .form-submit-wrap{
   display:flex;
   align-items:flex-end;
@@ -705,6 +711,9 @@ a.strong:hover{color:var(--brand-hover);text-decoration:underline}
   align-items:center;
   flex-wrap:wrap;
 }
+.scope-selector-row .check{align-items:flex-start;min-width:0}
+.scope-selector-row .check input{flex:none;margin:3px 0 0}
+.scope-selector-row .check span{min-width:0;overflow-wrap:anywhere}
 .scope-editor-form{
   display:grid;
   grid-template-columns:minmax(0,1fr) auto;
@@ -1472,8 +1481,9 @@ pre{
   .scope-editor-form{grid-template-columns:1fr;align-items:stretch}
   .scope-editor-form .form-submit-wrap{margin-top:0}
   .version-policy-form{grid-template-columns:1fr}
-  .form-grid.add-form-grid,.form-grid.add-client-grid{flex-direction:column;align-items:stretch}
-  .form-grid.add-form-grid > label,.form-grid.add-client-grid > label:not(.check),.form-grid.add-client-grid fieldset,.form-grid.add-form-grid .form-submit-wrap,.form-grid.add-client-grid .form-submit-wrap{width:100%;flex:1 1 auto}
+  .form-grid.add-form-grid{flex-direction:column;align-items:stretch}
+  .form-grid.add-form-grid > label,.form-grid.add-form-grid .form-submit-wrap{width:100%;flex:1 1 auto}
+  .form-grid.add-client-grid{grid-template-columns:minmax(0,1fr)}
   .add-client-grid fieldset .scope-selector-row{align-items:flex-start}
   .login-brand-logo{width:190px;height:58px}
   .secret-mesh-mark,.error-mesh-mark{width:190px;height:56px}
@@ -1645,7 +1655,7 @@ pre{
 }
 .ops-body::before{opacity:.38;background-size:40px 40px;mask-image:linear-gradient(180deg,#000 0%,rgba(0,0,0,.18) 32%,transparent 62%)}
 .app-header{border-bottom-color:#dbe2ea;box-shadow:0 1px 0 rgba(15,23,42,.03),0 8px 24px rgba(15,23,42,.04)}
-.header-inner{height:64px}
+.header-inner{min-height:64px}
 .header-mesh-mark{width:174px;height:42px}
 .control-nav{background:#f3f5f8;border-color:#e1e7ee;border-radius:10px;padding:4px;gap:2px}
 .control-nav a{padding:7px 14px;font-size:13px}
@@ -1751,6 +1761,7 @@ tbody tr:hover{background:#f8fafc}
 .client-table .inline-action-form:first-of-type{grid-column:1 / -1}
 .client-table .action-btn-group>a,.client-table .action-btn-group>form{min-width:0}
 .client-table .action-btn-group>a{width:100%}
+.client-table .action-btn-group button{max-width:100%;white-space:normal;overflow-wrap:anywhere;text-align:center}
 .client-table .inline-action-form input{max-width:none;width:100%}
 .enrollment-body .shell{max-width:1120px}
 .enrollment-dialog{width:min(960px,100%);margin:0 auto;padding:32px 34px}
