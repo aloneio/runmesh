@@ -1,3 +1,6 @@
+import { containsControlCharacter, isConfiguredSecret } from "./contracts/deployment-secrets.js";
+export { containsControlCharacter, isConfiguredSecret } from "./contracts/deployment-secrets.js";
+
 export const INTERNAL_CONTROL_HEADER = "x-internal-control";
 export const INTERNAL_SIGNATURE_VERSION_HEADER = "x-internal-control-version";
 export const INTERNAL_TIMESTAMP_HEADER = "x-internal-control-timestamp";
@@ -11,21 +14,6 @@ export const SETUP_CSRF_TTL_MS = 10 * 60 * 1_000;
 export const MCP_SECRET_BYTES = 32;
 
 const encoder = new TextEncoder();
-// HTTP credentials must not contain C0/C1 control bytes or DEL.  Printable
-// punctuation remains valid for backwards compatibility with manually chosen
-// deployment secrets, while values that a header implementation may interpret
-// as framing/whitespace are rejected consistently at the boundary.
-const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
-
-export function containsControlCharacter(value: string): boolean {
-  return CONTROL_CHARACTER_PATTERN.test(value);
-}
-
-/** Deployment secrets require 32–512 non-whitespace characters; generate them randomly. */
-export function isConfiguredSecret(value: unknown): value is string {
-  return typeof value === "string" && value.length >= 32 && value.length <= 512 && !/\s/u.test(value) && !containsControlCharacter(value);
-}
-
 export function isSafeIdentifier(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
 }

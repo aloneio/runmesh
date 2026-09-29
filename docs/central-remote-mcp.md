@@ -9,9 +9,9 @@ All deployment activation remains explicit.
 **Development implementation; no production activation.** Central HTTP discovery
 and invocation connect control-panel profiles to the reviewed catalog.
 The development configuration now has an independent central binding and explicit
-Skills, direct-directory and governance opt-ins. It does not supply remote egress
-endpoints or vault keys. Managed connections store their endpoint policy through
-the control panel; only OAuth requires a vault.
+Skills, direct-directory and governance opt-ins. Managed connections store their
+endpoint policy through the control panel. OAuth encryption derives its key from
+the existing deployment secret without an additional variable.
 Production remains unchanged. This is not a published release or evidence of
 successful public-network acceptance.
 
@@ -27,7 +27,7 @@ reviewed definitions for one profile; remote_call accepts the profile, exact
 tool ID/version and arguments. Every valid authenticated client shares these
 publications; no grant rows are needed. Client credentials, disabled services,
 upstream OAuth and exact live schemas are still checked. Native-only calls do
-not resolve central storage, vaults or upstream connections. Discovery failures
+not resolve central storage, credentials or upstream connections. Discovery failures
 preserve native tools. Large libraries use bounded service/tool discovery.
 
 ## Protocol support
@@ -55,7 +55,7 @@ Failed calls are not replayed.
 
 Enter a public HTTPS MCP URL and select No authentication or OAuth in the control panel.
 The saved enabled connection is exact outbound admission; no environment allowlist or
-manual bearer configuration is supported. OAuth uses an independent vault. Nonstandard
+manual bearer configuration is supported. OAuth uses the existing deployment secret. Nonstandard
 HTTPS ports, IP literals, private hosts, wildcards, URL credentials, queries and fragments are rejected.
 
 Create and enable a profile using the existing protected administration API.

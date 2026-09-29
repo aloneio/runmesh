@@ -18,7 +18,7 @@ npm run deploy:worker -- --env production
 
 For development, choose `dev` and use `npm run deploy:worker -- --env development`. See [deployment](deployment.md) for the complete configuration.
 
-Use `npm run setup:secrets -- --env production` to inspect required keys and add `--apply` to initialize missing native secrets and the independent OAuth vault. Preserve existing values during upgrades: replacing the pepper invalidates enrolled Runner credentials. The [runtime configuration guide](runtime-config.md) covers initialization and optional proxy/API settings.
+Use `npm run setup:secrets -- --env production` to inspect the two required secrets and add `--apply` to initialize missing values. OAuth encryption automatically uses the existing `INTERNAL_CONTROL_SECRET`. Preserve both values during upgrades: replacing the pepper invalidates enrolled Runner credentials, and replacing the control secret requires OAuth reconnection. The [runtime configuration guide](runtime-config.md) covers initialization and optional proxy/API settings.
 
 Open the administrator page and set the password before exposing an uninitialized instance to untrusted visitors. The first successful setup creates the administrator. New Runners use `dedicated_user`; new MCP clients start with `coding:read`.
 

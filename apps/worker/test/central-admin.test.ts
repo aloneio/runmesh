@@ -18,7 +18,7 @@ const creation = { action: "connect", connector_id: "test-docs", endpoint: "http
 it("direct public connections and Skill installation are available without deployment endpoint configuration", async () => {
   const admin = await session();
   const request = new Request('https://worker.test/admin/central?lang=zh-CN', { headers: admin.headers });
-  const config = { ...configured(), CENTRAL_SKILLS_ENABLED: '1', CENTRAL_VAULT_KEYRING: undefined };
+  const config = { ...configured(), CENTRAL_SKILLS_ENABLED: '1' };
   const response = localizeHtmlResponse(request, await handleBrowserAdmin(request, config, new URL(request.url)));
   expect(response.status).toBe(200);
   const markup = await response.text();
@@ -36,7 +36,7 @@ it("direct public connections and Skill installation are available without deplo
   expect(markup).not.toContain('name="token"');
   expect(markup).toContain('data-skill-import');
   expect(markup).toContain('AI 连接');
-  expect(markup).not.toContain('CENTRAL_VAULT_KEYRING');
+  expect(markup).not.toContain('INTERNAL_CONTROL_SECRET');
 });
 
 it("client handoff opens the shared library without putting its credential in the link", () => {
@@ -96,7 +96,7 @@ it.each(["create", "create_oauth", "rotate", "rekey"])("removed profile action %
 
 it.each(["none", "oauth"])("control panel creates an explicit %s connection without a deployment endpoint allowlist", async authentication => {
   const admin = await session(), id = `direct-${crypto.randomUUID()}`;
-  const config = { ...configured(), CENTRAL_VAULT_KEYRING: undefined };
+  const config = configured();
   const request = new Request(url(id), { method: "POST", headers: admin.headers, body: JSON.stringify({ action: "connect",
     connector_id: id, endpoint: "https://mcp.provider.com/mcp", authentication }) });
   const response = await handleCentralAdmin(request, config, new URL(request.url));

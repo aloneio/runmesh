@@ -12,7 +12,7 @@
 
 The deployed stable channel serves 0.1.5. The 0.1.6 candidate aligns the package, lockfile and installer identities without reusing the prior release signature or activation record. Candidate commits preserve the running production Worker until independent signed-asset verification and a reviewed activation are complete.
 
-The candidate includes production bindings and exports for MCP connections and shared Skills, alongside the existing Registry and Runner namespaces. Run `npm run setup:secrets -- --env production` to inspect initialization requirements; its explicit `--apply` action creates only missing keys, including the independent OAuth vault. Existing native and OAuth keys must be retained.
+The candidate includes production bindings and exports for MCP connections and shared Skills, alongside the existing Registry and Runner namespaces. Run `npm run setup:secrets -- --env production` to inspect initialization requirements; its explicit `--apply` action creates only missing values for the two existing secrets. OAuth encryption derives its key from `INTERNAL_CONTROL_SECRET`. Retain both existing secrets during upgrades.
 
 Before promotion, complete the real-client and supplier checks in the [central rollout ledger](central-rollout.md) and obtain exact-source evidence from both CI providers. A successful development deployment is not a substitute for these release checks.
 

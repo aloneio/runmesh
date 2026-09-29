@@ -18,7 +18,7 @@ npm run deploy:worker -- --env production
 
 开发环境选择 `dev`，使用 `npm run deploy:worker -- --env development`。完整配置见[部署参考](deployment.md)。
 
-运行 `npm run setup:secrets -- --env production` 检查所需密钥，再加 `--apply` 创建缺失的原生密钥和独立 OAuth 密钥环。升级时保留现有值，替换 pepper 会使已注册 Runner 凭据失效。初始化和可选代理/API 设置见[运行时配置](runtime-config.zh-CN.md)。
+运行 `npm run setup:secrets -- --env production` 检查所需的两个密钥，再加 `--apply` 创建缺失项。OAuth 加密自动使用现有 `INTERNAL_CONTROL_SECRET`。升级时保留两个值：替换 pepper 会使已注册 Runner 凭据失效，替换控制密钥则需重新连接 OAuth。初始化和可选代理/API 设置见[运行时配置](runtime-config.zh-CN.md)。
 
 在向不可信访问者开放前，打开管理页面完成密码设置，首个有效提交创建管理员。新 Runner 默认使用 `dedicated_user`，新 MCP 客户端从 `coding:read` 权限开始。
 
