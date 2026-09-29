@@ -289,3 +289,12 @@ and lifecycle implementation. Direct tests now exercise the production mutation
 ledger, including competing redemptions and recovery of the same operation after
 a lost response. The old test-only optional path is removed; credential changes
 remain within the existing synchronous transaction after the RunnerDO fence.
+
+Release recovery is part of the request-owned refresh. Its terminal failure is
+published only after the bounded persistent-cache reread finishes, so cold
+waiters can observe the recovered verified value. The HTTP Registry adapter
+bounds cache reads (headers and body) and writes to five seconds, cancels late
+responses and never retries an uncertain write. Distribution still owns
+descriptor validation, verification timestamps and the original hard expiry;
+no I/O promise crosses requests. Regressions cover delayed recovery, recovery
+timeout and successful discovery despite stalled Registry reads or writes.
