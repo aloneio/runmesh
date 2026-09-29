@@ -493,7 +493,9 @@ test("AR15 Worker and both generated installer verifiers agree on signed manifes
       await build({ entryPoints: [join(repositoryRoot, "apps/worker/src", source)], outfile, bundle: true, platform: "node", format: "esm", target: "node22" });
       modules[name] = await import(pathToFileURL(outfile).href);
     }
-    const version = productVersion.replace(/(\d+)$/u, value => String(Number(value) + 1)) + "-dev.0";
+    const releaseState = JSON.parse(await readFile(join(repositoryRoot, "release/release-state.json"), "utf8")).state;
+    const developmentCore = releaseState === "released" ? productVersion.replace(/(\d+)$/u, value => String(Number(value) + 1)) : productVersion;
+    const version = `${developmentCore}-dev.0`;
     const { privateKey, publicKey } = generateKeyPairSync("ed25519");
     const trust = { key_id: "synthetic-parity-key", public_key_pem: String(publicKey.export({ type: "spki", format: "pem" })) };
     const target = { ...modules.installer.installerReleaseTarget(version, "dev"), release_key_id: trust.key_id, public_key_pem: trust.public_key_pem };
