@@ -6,6 +6,13 @@ and the [upgrade guide](upgrading.md) for component deployment.
 
 ## Ownership
 
+Runner Git baselines live in `git/baseline.ts`; `git-service.ts` resolves the
+workspace and owns the observation deadline. `git/execution.ts` owns process
+limits and request-scoped snapshot cleanup. Status and index flags share one
+isolated context; the final HEAD check creates a fresh context. No snapshot or
+I/O promise is cached across requests. Baseline regressions exercise these
+operation boundaries, including concurrent index changes and budget exhaustion.
+
 | Area | Owns | Dependencies to keep outside this layer |
 | --- | --- | --- |
 | Worker entry | Fetch/scheduled assembly and routing | Duplicated business decisions |

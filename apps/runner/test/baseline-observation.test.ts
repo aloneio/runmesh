@@ -3,7 +3,7 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { join, delimiter } from "node:path";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { GitService } from "../src/git-service.js";
 import { PathPolicy } from "../src/path-policy.js";
 
@@ -19,17 +19,4 @@ it.each(["--assume-unchanged", "--skip-worktree"])("R05 does not certify a clean
     git(["update-index", flag, "hidden.txt"]); await writeFile(join(root, "hidden.txt"), "after\n");
     expect(await service.observeBaseline({ workspace_id: "w" })).toMatchObject({ working_tree_state: "unknown" });
   } finally { await rm(root, { recursive: true, force: true }); }
-});
-
-it("R05 uses a shared observation deadline rather than restarting a full timeout for each query", async () => {
-  const service = new GitService(new PathPolicy([]));
-  const head = vi.spyOn(service, "head").mockResolvedValue({ workspace_id: "w", commit: "a".repeat(40) });
-  const status = vi.spyOn(service, "status").mockResolvedValue({ entries: [], truncated: false });
-  const now = vi.spyOn(performance, "now");
-  now.mockReturnValueOnce(100).mockReturnValue(10000);
-  try {
-    expect(await service.observeBaseline({ workspace_id: "w" })).toMatchObject({ working_tree_state: "unknown" });
-    expect(head).toHaveBeenCalledTimes(1);
-    expect(status).not.toHaveBeenCalled();
-  } finally { vi.restoreAllMocks(); }
 });

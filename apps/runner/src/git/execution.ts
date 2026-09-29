@@ -3,6 +3,7 @@ import { createIsolatedGitContext } from "./isolated-context.js";
 import { GIT_TIMEOUT_MS } from "./limits.js";
 import type { GitRun } from "./contracts.js";
 import type { GitServiceOptions } from "./contracts.js";
+import type { IsolatedGitContext } from "./contracts.js";
 import { HARD_KILL_MS } from "./limits.js";
 import { KILL_GRACE_MS } from "./limits.js";
 import { positiveTimeout } from "./values.js";
@@ -12,9 +13,24 @@ import { trustedWindowsEnvironment } from "../windows-tools.js";
 import { trustedWindowsRoot } from "../windows-tools.js";
 
 export async function git(cwd: string, args: readonly string[], cap: number, options: GitServiceOptions, deadline?: number): Promise<GitRun> {
+  return withIsolatedGit(cwd, options, deadline, run => run(args, cap));
+}
+
+/** Keep related observations on one request-owned metadata snapshot. */
+export async function withIsolatedGit<T>(
+  cwd: string, options: GitServiceOptions, deadline: number | undefined,
+  inspect: (run: (args: readonly string[], cap: number) => Promise<GitRun>) => Promise<T>,
+): Promise<T> {
   const context = await createIsolatedGitContext(cwd, deadline);
+  try {
+    return await inspect((args, cap) => runGit(context, cwd, args, cap, options, deadline));
+  } finally {
+    void context.cleanup().catch(() => undefined);
+  }
+}
+
+async function runGit(context: IsolatedGitContext, cwd: string, args: readonly string[], cap: number, options: GitServiceOptions, deadline?: number): Promise<GitRun> {
   if (deadline !== undefined && performance.now() >= deadline) {
-    await context.cleanup();
     return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), status: null, signal: null, truncated: true, timedOut: true, timeoutMs: 0 };
   }
   return new Promise((resolve, reject) => {
@@ -51,7 +67,6 @@ export async function git(cwd: string, args: readonly string[], cap: number, opt
       if (settled) return;
       settled = true;
       clearTimers();
-      void context.cleanup().catch(() => undefined);
       resolve(run);
     };
     const take = (chunks: Buffer[], size: number, chunk: Buffer): number => {
@@ -85,7 +100,6 @@ export async function git(cwd: string, args: readonly string[], cap: number, opt
       if (settled) return;
       clearTimers();
       settled = true;
-      void context.cleanup().catch(() => undefined);
       reject(new RpcRuntimeError("git_unavailable", `could not start git: ${error.message.slice(0, 512)}`));
     });
     child.once("close", (status, signal) => {
