@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "b28ff19d7611eab4a642bee32be84cdae8f82afdf4aacdefcd15131e380ae890",
-      "bytes": 125968,
+      "sha256": "0a28209120422ba1520ca3f9c0c2245682b48e11875e3d4635005ca6b5f3a58a",
+      "bytes": 126089,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -32,8 +32,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "465504eaa9d2cd0999e63f78003ceb226f3314d1818434e0b5eacc8843e120e1",
-      "bytes": 126556,
+      "sha256": "034b45897bf6fe1f2a8300aeab66610be5b435687a5c6bbf3d0c30dc175d116a",
+      "bytes": 126677,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -51,8 +51,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "fc5f45faa4c3c82394403f9ddcd85e94370c2e5b98130bf55b307a742191e328",
-      "bytes": 127704,
+      "sha256": "40e8c53b1ef7fa7fdc2156be4aebcdc562dfb2b47633cef916c3af5203a6a44d",
+      "bytes": 127825,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -419,8 +419,8 @@
           }
         ]
       ],
-      "sha256": "99e464f88f2d84c1950e1e495ef0d710070f4f94556d23cb4caea2cfc6a16477",
-      "bytes": 128053,
+      "sha256": "29dd5605bf5c45617e3b48da29cdb38074ce03e213d3b3bd8b4636cba6d9ca78",
+      "bytes": 128174,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
