@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- The Runner Git library validates timeout options before starting a process, so invalid configuration cannot leave an unmanaged child. Lifecycle regressions cover startup failures, expired deadlines, and snapshot cleanup.
 - Runner baseline checks use one isolated index for status and flag inspection, preventing concurrent flag changes from hiding uncommitted edits. Fewer snapshots and Git processes retain the 1.5-second observation budget and a fresh final commit check.
 - Concurrent development downloads now wait for cache recovery to finish before reporting a failed refresh. Registry cache reads and writes have deadlines, so stalled storage cannot indefinitely delay a verified download.
 - Development release discovery now recovers from a failed refresh using a verified release saved by another instance. Runner pages and downloads use the same release state for their Registry binding.

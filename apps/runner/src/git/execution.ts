@@ -33,6 +33,11 @@ async function runGit(context: IsolatedGitContext, cwd: string, args: readonly s
   if (deadline !== undefined && performance.now() >= deadline) {
     return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), status: null, signal: null, truncated: true, timedOut: true, timeoutMs: 0 };
   }
+  // Invalid library options must fail before a child exists: a throw after
+  // spawn would leave that process without error handlers or timeout timers.
+  const configuredTimeoutMs = positiveTimeout(options.timeoutMs, GIT_TIMEOUT_MS);
+  const killGraceMs = positiveTimeout(options.killGraceMs, KILL_GRACE_MS);
+  const hardKillMs = positiveTimeout(options.hardKillMs, HARD_KILL_MS);
   return new Promise((resolve, reject) => {
     const child = spawn(options.executable ?? "git", ["-C", cwd, ...args], {
       cwd: context.commandCwd,
@@ -51,9 +56,7 @@ async function runGit(context: IsolatedGitContext, cwd: string, args: readonly s
     let truncated = false;
     let timedOut = false;
     let settled = false;
-    const timeoutMs = Math.min(positiveTimeout(options.timeoutMs, GIT_TIMEOUT_MS), deadline === undefined ? GIT_TIMEOUT_MS : Math.max(1, Math.ceil(deadline - performance.now())));
-    const killGraceMs = positiveTimeout(options.killGraceMs, KILL_GRACE_MS);
-    const hardKillMs = positiveTimeout(options.hardKillMs, HARD_KILL_MS);
+    const timeoutMs = Math.min(configuredTimeoutMs, deadline === undefined ? GIT_TIMEOUT_MS : Math.max(1, Math.ceil(deadline - performance.now())));
     let termTimer: ReturnType<typeof setTimeout> | undefined;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
     let hardTimer: ReturnType<typeof setTimeout> | undefined;
