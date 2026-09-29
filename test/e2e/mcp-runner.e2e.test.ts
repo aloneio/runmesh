@@ -775,8 +775,12 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
   });
 
   it("lists shared MCPs and Skills without selecting a Runner", async () => {
+    const { adminJar, csrf } = await adminCredentials();
+    const created = await submitForm("/admin/clients", { csrf_token: csrf, label: "Shared library E2E", access_mode: "central" }, adminJar);
+    expect(created.status).toBe(200);
+    const centralClient = { endpoint: oneTimeMcpUrl(await created.text()) };
     for (const name of ["remote_profiles", "skill_list"]) {
-      const result = await mcpTool(name, {}, clientC);
+      const result = await mcpTool(name, {}, centralClient);
       expect(result.isError, JSON.stringify(result)).not.toBe(true);
       const content = JSON.parse(result.content?.[0]?.text ?? "null");
       expect(content.state).toBe("listed");
