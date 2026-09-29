@@ -475,6 +475,45 @@ it("bounds explicitly parsed denial receipts without broadening default authoriz
   expect(await boundedJsonResponse(async () => denied())).toEqual({ status: 403 });
   expect(await boundedJsonReceipt(async () => denied(), [200, 403])).toEqual({ status: 403, value: { ok: false } });
 });
+it("a pre-cancelled observation never starts a request", async () => {
+  const { boundedJsonResponse } = await import("../src/bounded-json.js");
+  const parent = new AbortController(), fetchResponse = vi.fn(async () => Response.json({ ok: true }));
+  parent.abort();
+  expect(await boundedJsonResponse(fetchResponse, 5000, 16384, parent.signal)).toBeUndefined();
+  expect(fetchResponse).not.toHaveBeenCalled();
+});
+it("parent cancellation settles ignored aborts without cancelling another observation", async () => {
+  const { boundedJsonResponse } = await import("../src/bounded-json.js");
+  const parent = new AbortController(), independentParent = new AbortController(), cancel = vi.fn();
+  let finish!: (response: Response) => void, finishIndependent!: (response: Response) => void;
+  let cancelledSignal: AbortSignal | undefined, independentSignal: AbortSignal | undefined;
+  const pending = boundedJsonResponse(signal => { cancelledSignal = signal; return new Promise(resolve => { finish = resolve; }); }, 5000, 16384, parent.signal);
+  const independent = boundedJsonResponse(signal => { independentSignal = signal; return new Promise(resolve => { finishIndependent = resolve; }); }, 5000, 16384, independentParent.signal);
+  parent.abort();
+  const cancelledBeforeCompletion = cancelledSignal?.aborted, independentBeforeCompletion = independentSignal?.aborted;
+  finishIndependent(Response.json({ ok: true }));
+  const result = await pending;
+  finish(new Response(new ReadableStream({ cancel })));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(result).toBeUndefined();
+  expect(cancelledBeforeCompletion).toBe(true);
+  expect(independentBeforeCompletion).toBe(false);
+  expect(await independent).toEqual({ status: 200, value: { ok: true } });
+  expect(independentParent.signal.aborted).toBe(false);
+  expect(cancel).toHaveBeenCalledOnce();
+});
+it.each(["complete", "cancel"])("a bounded observation removes its parent listener after %s", async outcome => {
+  const { boundedJsonResponse } = await import("../src/bounded-json.js");
+  const parent = new AbortController();
+  const added = vi.spyOn(parent.signal, "addEventListener"), removed = vi.spyOn(parent.signal, "removeEventListener");
+  try {
+    const pending = boundedJsonResponse(async () => { if (outcome === "cancel") parent.abort(); return Response.json({ ok: true }); }, 5000, 16384, parent.signal);
+    expect(await pending).toEqual(outcome === "cancel" ? undefined : { status: 200, value: { ok: true } });
+    expect(added).toHaveBeenCalledOnce();
+    expect(removed).toHaveBeenCalledExactlyOnceWith("abort", added.mock.calls[0]?.[1]);
+    expect(parent.signal.aborted).toBe(outcome === "cancel");
+  } finally { added.mockRestore(); removed.mockRestore(); }
+});
 it("a bounded observation cancels a late response even when fetch ignores abort", async () => {
   const { boundedJsonReceipt } = await import("../src/bounded-json.js");
   let finish: ((response: Response) => void) | undefined, signal: AbortSignal | undefined;

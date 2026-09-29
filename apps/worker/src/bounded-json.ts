@@ -1,12 +1,13 @@
 /** One bounded observation, never a retry or an authorization grant. */
-export async function boundedJsonResponse(fetchResponse: (signal: AbortSignal) => Promise<Response>, timeoutMs = 5000, maxBytes = 16384): Promise<{ readonly status: number; readonly value?: unknown } | undefined> {
-  return boundedJsonReceipt(fetchResponse, [200], timeoutMs, maxBytes);
+export async function boundedJsonResponse(fetchResponse: (signal: AbortSignal) => Promise<Response>, timeoutMs = 5000, maxBytes = 16384, parentSignal?: AbortSignal): Promise<{ readonly status: number; readonly value?: unknown } | undefined> {
+  return boundedJsonReceipt(fetchResponse, [200], timeoutMs, maxBytes, parentSignal);
 }
 
 /** Status parsing is explicit; callers still decide which receipt grants authority. */
-export async function boundedJsonReceipt(fetchResponse: (signal: AbortSignal) => Promise<Response>, acceptedStatuses: readonly number[], timeoutMs = 5000, maxBytes = 16384): Promise<{ readonly status: number; readonly value?: unknown } | undefined> {
+export async function boundedJsonReceipt(fetchResponse: (signal: AbortSignal) => Promise<Response>, acceptedStatuses: readonly number[], timeoutMs = 5000, maxBytes = 16384, parentSignal?: AbortSignal): Promise<{ readonly status: number; readonly value?: unknown } | undefined> {
   if (!Array.isArray(acceptedStatuses) || acceptedStatuses.length < 1 || acceptedStatuses.length > 16 || acceptedStatuses.some(status => !Number.isInteger(status) || status < 200 || status > 599)) return undefined;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 5000 || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 1048576) return undefined;
+  if (parentSignal?.aborted) return undefined;
   const controller = new AbortController();
   const deadline = performance.now() + timeoutMs;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -40,7 +41,16 @@ export async function boundedJsonReceipt(fetchResponse: (signal: AbortSignal) =>
       return { status: response.status, value };
     } catch { return undefined; }
   };
+  // Settle even when a transport ignores abort; its late body is cancelled above.
+  let stop!: () => void;
+  const stopped = new Promise<undefined>(resolve => { stop = () => { cancel(); resolve(undefined); }; });
+  parentSignal?.addEventListener("abort", stop, { once: true });
   try {
-    return await Promise.race([observe(), new Promise<undefined>(resolve => { timer = setTimeout(() => { cancel(); resolve(undefined); }, timeoutMs); })]);
-  } finally { if (timer !== undefined) clearTimeout(timer); cancel(); }
+    timer = setTimeout(stop, timeoutMs);
+    return await Promise.race([observe(), stopped]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    parentSignal?.removeEventListener("abort", stop);
+    cancel();
+  }
 }

@@ -35,8 +35,8 @@ async function persistReleaseCache(env: WorkerEnv, value: Record<string, unknown
  * revalidates every cached field before use. */
 export function registryDevelopmentReleaseCache(env: WorkerEnv): DevelopmentReleaseCache {
   return {
-    async match(): Promise<Response | undefined> {
-      const receipt = await boundedJsonResponse(signal => registryRequest(env, VERIFIED_DEV_RELEASE_PATH, "GET", "", signal), REGISTRY_CACHE_TIMEOUT_MS, MAX_CACHE_RECORD_BYTES);
+    async match(request: Request): Promise<Response | undefined> {
+      const receipt = await boundedJsonResponse(signal => registryRequest(env, VERIFIED_DEV_RELEASE_PATH, "GET", "", signal), REGISTRY_CACHE_TIMEOUT_MS, MAX_CACHE_RECORD_BYTES, request.signal);
       return receipt?.status === 200 && receipt.value !== undefined ? Response.json(receipt.value) : undefined;
     },
     async put(_request: Request, response: Response): Promise<void> {
