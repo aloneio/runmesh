@@ -13,6 +13,11 @@ import type { ManagedOAuthRecord, ManagedOAuthProtocol } from '../src/contracts/
 import { createOAuthCipher, oauthRandom } from "../src/platform/connectors/oauth-crypto.js";
 import { ManagedOAuthState } from "../src/platform/connectors/managed-store.js";
 import { catalogSha256 } from "../src/platform/capabilities/catalog-crypto.js";
+import { CapabilitiesDOv1 } from "../src/capabilities-do.js";
+import type { WorkerEnv } from "../src/platform/env.js";
+import { handleConnections } from "../src/http/central-connections.js";
+import { ADMIN_CSRF_COOKIE, ADMIN_SESSION_COOKIE } from "../src/http/constants.js";
+import { passwordVerifier, randomBase64Url, sha256Hex } from "../src/security.js";
 
 const endpoint = "https://mcp.provider.com/mcp", origin = "https://runmesh.company.com", issuer = "https://login.provider.com";
 const base: ConnectionProfile = { schema_version: 1, profile_id: "direct", connector_id: "direct", endpoint, revision: 2, enabled: true, credential: null, authentication: "none", owner: { kind: "instance_admin" } };
@@ -173,6 +178,48 @@ it.each([false, true])("OAuth discovers provider and registers automatically (CI
   const lease = await f.service().credential({ ...base, authentication: "oauth" }, new AbortController().signal, async () => undefined); expect(lease.current()).toBe(true);
   f.now(); const refreshed = await f.service().credential({ ...base, authentication: "oauth" }, new AbortController().signal, async () => undefined); expect(f.state.refreshes).toBe(1); expect(lease.current()).toBe(false);
   expect(await f.service().run(f.hash, "revoke", f.selection)).toMatchObject({ state: "revoked" }); expect(refreshed.current()).toBe(false); expect(f.record()?.tokens).toBeUndefined();
+});
+it.each([false, true])("OAuth HTTP handoff and callback persist through the real owner (CIMD=%s)", async cimd => {
+  const raw = randomBase64Url(), csrf = randomBase64Url(), hash = await sha256Hex(raw), csrfHash = await sha256Hex(csrf);
+  const verifier = await passwordVerifier("oauth-integration-administrator-password");
+  const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
+  await runInDurableObject(registry, owner => {
+    const now = Date.now(); owner.setupAdmin(verifier, now);
+    expect(owner.createAdminSession(hash, csrfHash, now + 60_000, now, 1)).toBe(true);
+  });
+  const namespace = (env as unknown as { CAPABILITIES: DurableObjectNamespace<CapabilitiesDOv1> }).CAPABILITIES;
+  const stub = namespace.get(namespace.idFromName("oauth-integration-" + crypto.randomUUID()));
+  const bindings = { ...env, RUNMESH_PUBLIC_ORIGIN: origin } as WorkerEnv;
+  let owner: CapabilitiesDOv1;
+  await runInDurableObject(stub, (_existing, storage) => { owner = new CapabilitiesDOv1(storage, bindings); });
+  const call = <T>(operation: (instance: CapabilitiesDOv1) => Promise<T>) => runInDurableObject(stub, () => operation(owner));
+  const configured = { ...bindings, CAPABILITIES: { idFromName: () => "central", get: () => ({
+    connectionOAuth: (...args: Parameters<CapabilitiesDOv1["connectionOAuth"]>) => call(instance => instance.connectionOAuth(...args)),
+  }) } } as unknown as WorkerEnv;
+  expect(await call(instance => instance.mutateProfile(hash, { action: "connect", profile_id: base.profile_id,
+    connector_id: base.connector_id, endpoint, authentication: "oauth" }))).toMatchObject({ state: "written" });
+  expect(await call(instance => instance.mutateProfile(hash, { action: "enable", profile_id: base.profile_id, expected_revision: 1 }))).toMatchObject({ state: "written" });
+  const f = oauthFixture(cimd), network = vi.spyOn(globalThis, "fetch").mockImplementation(f.send);
+  const request = async (action: string, input: unknown) => {
+    const url = new URL(origin + "/admin/central/connections/" + action);
+    return handleConnections(new Request(url, { method: "POST", body: JSON.stringify(input), headers: {
+      origin, "content-type": "application/json", "x-csrf-token": csrf,
+      cookie: ADMIN_SESSION_COOKIE + "=" + raw + "; " + ADMIN_CSRF_COOKIE + "=" + csrf,
+    } }), configured, url);
+  };
+  try {
+    const begin = await request("begin", f.selection), started = await begin.json() as { authorization_url: string };
+    expect({ status: begin.status, body: started }).toMatchObject({ status: 200, body: { state: "started" } });
+    await runInDurableObject(stub, (_existing, storage) => { owner = new CapabilitiesDOv1(storage, bindings); });
+    const completed = await request("complete", f.callback(new URL(started.authorization_url).searchParams.get("state")!));
+    expect({ status: completed.status, body: await completed.json() }).toMatchObject({ status: 200, body: { state: "linked" } });
+    expect(f.state).toEqual({ registration: cimd ? 0 : 1, exchanges: 1, refreshes: 0 });
+    await runInDurableObject(stub, (_existing, storage) => {
+      const record = new ManagedOAuthState(storage.storage, () => undefined).read(base.profile_id);
+      expect(record?.state).toBe("ready"); expect(record?.verifier).toBeUndefined();
+      expect(JSON.stringify(record)).not.toContain("synthetic-managed");
+    });
+  } finally { network.mockRestore(); }
 });
 it("OAuth rejects issuer mixup and never retries an invalid one-use code", async () => {
   const f = oauthFixture(), state = await f.begin();
