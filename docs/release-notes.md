@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Cold development downloads recheck shared verified storage within the existing one-second recovery window when an initial cache miss races another instance's verification. Recovery preserves the original expiry and does not repeat upstream discovery.
 - Failed development release refreshes recover the most recently verified usable cache record, including updates from another instance, while retaining its original expiry. Foreground and background regressions cover recovery over older in-memory values.
 - The Runner Git library validates timeout options before starting a process, so invalid configuration cannot leave an unmanaged child. Lifecycle regressions cover startup failures, expired deadlines, and snapshot cleanup.
 - Runner baseline checks use one isolated index for status and flag inspection, preventing concurrent flag changes from hiding uncommitted edits. Fewer snapshots and Git processes retain the 1.5-second observation budget and a fresh final commit check.
