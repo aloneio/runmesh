@@ -38,7 +38,7 @@ to the MCP SDK; `managed-oauth-http.ts` bounds public network requests;
 assembles them. Architecture fixtures reject SDK imports in these contracts,
 concrete adapter imports in use cases and storage/cipher ownership in the SDK adapter.
 The control-panel renderer receives explicit display inputs and does not load
-vault keys or compute unused endpoint-allowlist readiness.
+deployment secrets or compute unused endpoint-allowlist readiness.
 
 ## Authorization and state changes
 

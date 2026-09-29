@@ -47,12 +47,12 @@ it("connections require an explicit supported authentication mode", () => {
   expect(connectionPolicy({ ...base, endpoint: "https://127.0.0.1/mcp" })).toBeUndefined();
 });
 
-const fixtureKeyring = JSON.stringify({ schema_version: 1, active_key_id: "test-key", keys: { "test-key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE" } });
-function oauthFixture(cimd = false, configuredOrigin: string | null = origin, protocol?: ManagedOAuthProtocol, keyring: () => unknown = () => fixtureKeyring) {
+const fixtureControlSecret = "test-existing-internal-control-secret";
+function oauthFixture(cimd = false, configuredOrigin: string | null = origin, protocol?: ManagedOAuthProtocol, secret: () => unknown = () => fixtureControlSecret) {
   let record: ManagedOAuthRecord | undefined, now = 1_800_000_000_000, allowed = true, live = { ...base, authentication: "oauth" as const };
   let failToken = false, revokeOnToken = false, privateToken = false, challengeMetadata: string | undefined;
   const posts: string[] = [], state = { registration: 0, exchanges: 0, refreshes: 0 };
-  const cipher = createOAuthCipher("managed-test", keyring, () => []);
+  const cipher = createOAuthCipher("managed-test", secret);
   const repository = { read: () => record ? structuredClone(record) : undefined, find: (hash: string) => record?.state_hash === hash ? structuredClone(record) : undefined, replace: (value: ManagedOAuthRecord, expected: number) => { if ((record?.revision ?? 0) !== expected) return false; record = JSON.parse(JSON.stringify(value)) as ManagedOAuthRecord; return true; } };
   const send = vi.fn(async (url: string | URL, init?: RequestInit) => {
     const address = String(url); expect(init?.redirect).toBe("manual"); expect(init?.credentials).toBe("omit");
@@ -87,23 +87,23 @@ function oauthFixture(cimd = false, configuredOrigin: string | null = origin, pr
     resume: () => { live = { ...live, revision: 4, enabled: true }; return live; },
     challenge: (url: string) => { challengeMetadata = url; } };
 }
-it.each([undefined, "", "malformed-keyring"])("OAuth reports a configuration fault before contacting the provider for keyring %s", async unavailable => {
-  let keyring: unknown = unavailable;
-  const f = oauthFixture(false, origin, undefined, () => keyring);
+it.each([undefined, "", "short"])("OAuth reports invalid existing server configuration before contacting the provider: %s", async unavailable => {
+  let secret: unknown = unavailable;
+  const f = oauthFixture(false, origin, undefined, () => secret);
   expect(await f.service().run(f.hash, "begin", f.selection)).toEqual({ state: "failed", code: "configuration_required", operation_state: "not_started" });
   expect(f.send).not.toHaveBeenCalled(); expect(f.record()).toBeUndefined();
-  keyring = fixtureKeyring;
+  secret = fixtureControlSecret;
   await f.begin();
   expect(f.state.registration).toBe(1);
 });
-it("an unavailable vault does not replace an existing account during reconnect", async () => {
-  let keyring: unknown = fixtureKeyring;
-  const f = oauthFixture(false, origin, undefined, () => keyring), state = await f.begin();
+it("an unavailable control secret does not replace an existing account during reconnect", async () => {
+  let secret: unknown = fixtureControlSecret;
+  const f = oauthFixture(false, origin, undefined, () => secret), state = await f.begin();
   expect(await f.service().run(f.hash, "complete", f.callback(state))).toMatchObject({ state: "linked" });
-  const previous = f.record(), requests = f.send.mock.calls.length; keyring = undefined;
+  const previous = f.record(), requests = f.send.mock.calls.length; secret = undefined;
   expect(await f.service().run(f.hash, "begin", f.selection)).toEqual({ state: "failed", code: "configuration_required", operation_state: "not_started" });
   expect(f.record()).toEqual(previous); expect(f.send.mock.calls).toHaveLength(requests);
-  keyring = fixtureKeyring;
+  secret = fixtureControlSecret;
   expect((await f.service().credential({ ...base, authentication: "oauth" }, new AbortController().signal, async () => undefined)).current()).toBe(true);
 });
 it("resuming a paused OAuth service keeps the account and replaces old leases without another consent", async () => {
@@ -228,14 +228,7 @@ it.each([false, true])("OAuth HTTP handoff and callback persist through the real
     } }), configured, url);
   };
   try {
-    const configuredKeyring = bindings.CENTRAL_VAULT_KEYRING;
-    delete bindings.CENTRAL_VAULT_KEYRING;
-    const unavailable = await request("begin", f.selection);
-    expect({ status: unavailable.status, body: await unavailable.json() }).toEqual({
-      status: 503, body: { error: { code: "oauth_configuration_required", operation_state: "not_started" } },
-    });
-    expect(f.send).not.toHaveBeenCalled();
-    if (configuredKeyring !== undefined) bindings.CENTRAL_VAULT_KEYRING = configuredKeyring;
+    // The real Durable Object uses only the existing control secret binding.
     const begin = await request("begin", f.selection), started = await begin.json() as { authorization_url: string };
     expect({ status: begin.status, body: started }).toMatchObject({ status: 200, body: { state: "started" } });
     await runInDurableObject(stub, (_existing, storage) => { owner = new CapabilitiesDOv1(storage, bindings); });

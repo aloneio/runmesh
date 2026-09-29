@@ -10,7 +10,7 @@ Current development central-library upgrade: all existing valid clients share en
 
 Read the [release notes](release-notes.md) and [release status](release-readiness.md). Production upgrades use published, independently verified signed packages; candidate and development prereleases belong in a separate test environment.
 
-For the 0.1.6 candidate, rehearse the production MCP and Skill bindings alongside the existing Registry and Runner namespaces. Inspect missing OAuth vault keys with `npm run setup:secrets -- --env production`; retain existing keys and resource identities. Schedule the production upgrade after the signed release is published and activated. The 0.1.3-to-0.1.4 procedure below is a historical example of the managed service update steps.
+For the 0.1.6 candidate, rehearse the production MCP and Skill bindings alongside the existing Registry and Runner namespaces. Retain both existing secrets and resource identities; OAuth encryption automatically uses `INTERNAL_CONTROL_SECRET` without another variable. Schedule the production upgrade after the signed release is published and activated. The 0.1.3-to-0.1.4 procedure below is a historical example of the managed service update steps.
 
 Plan these updates separately:
 

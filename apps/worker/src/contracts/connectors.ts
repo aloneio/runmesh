@@ -15,7 +15,7 @@ export interface ConnectionProfile {
 }
 
 export const CONNECTOR_LIMITS = Object.freeze({ profiles: 1_000, token_bytes: 4_096, envelope_bytes: 8_192,
-  request_bytes: 16_384, keyring_bytes: 4_096, keys: 4, operation_ms: 5_000 });
+  request_bytes: 16_384, operation_ms: 5_000 });
 
 export interface CredentialInput { readonly kind: "bearer"; readonly token: string }
 export interface CredentialEnvelope {

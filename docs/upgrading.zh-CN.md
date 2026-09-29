@@ -10,7 +10,7 @@
 
 先读[版本说明](release-notes.zh-CN.md)和[发行状态](release-readiness.md)。生产升级使用已发布、独立验签的正式包；候选版和开发预发布放在独立测试环境。
 
-验收 0.1.6 候选版时，检查新增的 MCP、Skill 生产绑定，并保留现有 Registry 和 Runner 命名空间。运行 `npm run setup:secrets -- --env production` 查看是否缺少 OAuth vault 密钥，已有密钥和资源标识保持不变。正式升级安排在签名发行物发布并激活后。下文 0.1.3 升至 0.1.4 的流程是受管服务更新的历史示例。
+验收 0.1.6 候选版时，检查新增的 MCP、Skill 生产绑定，并保留现有 Registry 和 Runner 命名空间。已有的两个密钥和资源标识保持不变；OAuth 加密自动使用 `INTERNAL_CONTROL_SECRET`，无需增加变量。正式升级安排在签名发行物发布并激活后。下文 0.1.3 升至 0.1.4 的流程是受管服务更新的历史示例。
 
 分别安排以下更新：
 

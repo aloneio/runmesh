@@ -59,7 +59,7 @@ npm exec --offline -- wrangler secret put RUNNER_TOKEN_PEPPER --env production
 npm exec --offline -- wrangler secret put INTERNAL_CONTROL_SECRET --env production
 ```
 
-Use the appropriate environment for your Worker, and retain both values during updates. For MCP OAuth connections, run `npm run setup:secrets -- --env production --apply` from the repository root to initialize the independent vault; this helper also creates either native key if missing. Replacing `RUNNER_TOKEN_PEPPER` invalidates enrolled Runner credentials. The [runtime configuration guide](runtime-config.md) includes a helper that initializes only missing secrets.
+Use the appropriate environment for your Worker, and retain both values during updates. MCP OAuth automatically derives its encryption key from `INTERNAL_CONTROL_SECRET` and needs no additional setup. Replacing `RUNNER_TOKEN_PEPPER` invalidates enrolled Runner credentials; replacing `INTERNAL_CONTROL_SECRET` requires OAuth reconnection. The [runtime configuration guide](runtime-config.md) includes a helper that initializes only missing secrets.
 
 The default public origin is the validated HTTPS request URL with a matching Host. A reverse proxy that supplies an internal URL needs an explicit `RUNMESH_PUBLIC_ORIGIN`: an HTTPS origin without path, query, fragment, credentials or whitespace. An empty or invalid override rejects requests requiring a trusted public origin.
 

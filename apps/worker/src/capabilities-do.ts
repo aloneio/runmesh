@@ -200,7 +200,7 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
 
   #managedOAuth() {
     if (!this.#managedService) this.#managedService = createManagedOAuth({ repository: this.#managedState, protocol: createManagedOAuthProtocol(),
-      cipher: createOAuthCipher(this.#namespace, () => this.env.CENTRAL_VAULT_KEYRING, () => [this.env.INTERNAL_CONTROL_SECRET, this.env.RUNNER_TOKEN_PEPPER]),
+      cipher: createOAuthCipher(this.#namespace, () => this.env.INTERNAL_CONTROL_SECRET),
       profile: id => this.#profiles.read(id)?.profile, admin: (hash, signal) => this.#authorize(hash, signal),
       origin: () => this.env.RUNMESH_PUBLIC_ORIGIN, hash: catalogSha256, random: oauthRandom, now: Date.now });
     return this.#managedService;

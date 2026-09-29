@@ -11,7 +11,7 @@ test("release defaults require independent publication evidence and version alig
   for (const invalid of [{ ...state, version: "1.2.4" }, { ...state, state: "unknown" }, { ...state, manifest_sha256: null }, { ...state, release_commit: "main" }]) assert.throws(() => reviewedReleaseSource("1.2.3", invalid));
 });
 
-test("native control needs two secrets; OAuth setup adds its separate vault; existing values are never requested", () => {
+test("native control and OAuth share the two existing secret bindings; values are never requested", () => {
   assert.deepEqual(REQUIRED_SECRET_NAMES, ["INTERNAL_CONTROL_SECRET", "RUNNER_TOKEN_PEPPER"]);
   assert.deepEqual(missingSecretNames([]), [...REQUIRED_SECRET_NAMES]);
   assert.deepEqual(missingSecretNames(REQUIRED_SECRET_NAMES.map(name => ({ name, type: "secret_text" }))), []);
@@ -37,14 +37,14 @@ function fakeCloud(existing = []) {
 
 test("setup only plans by default and performs zero writes when required secrets already exist", () => {
   const empty = fakeCloud(); const report = setupMissingSecrets({ environment: "production", invoke: empty.invoke });
-  assert.deepEqual(report.missing, [...REQUIRED_SECRET_NAMES, "CENTRAL_VAULT_KEYRING"]); assert.equal(empty.requests.length, 1);
-  const ready = fakeCloud([...REQUIRED_SECRET_NAMES, "CENTRAL_VAULT_KEYRING"]);
+  assert.deepEqual(report.missing, [...REQUIRED_SECRET_NAMES]); assert.equal(empty.requests.length, 1);
+  const ready = fakeCloud(REQUIRED_SECRET_NAMES);
   assert.deepEqual(setupMissingSecrets({ environment: "production", apply: true, invoke: ready.invoke }).created, []);
   assert.equal(ready.requests.length, 1);
 });
 
 test("setup creates only the missing secret; reports and argv contain no generated values", () => {
-  const fake = fakeCloud(["RUNNER_TOKEN_PEPPER", "ADMIN_TOKEN", "CENTRAL_VAULT_KEYRING"]);
+  const fake = fakeCloud(["RUNNER_TOKEN_PEPPER", "ADMIN_TOKEN"]);
   const report = setupMissingSecrets({ environment: "development", apply: true, invoke: fake.invoke });
   assert.deepEqual(Object.keys(fake.uploaded), ["INTERNAL_CONTROL_SECRET"]);
   assert.deepEqual(report.created, ["INTERNAL_CONTROL_SECRET"]);
@@ -52,14 +52,11 @@ test("setup creates only the missing secret; reports and argv contain no generat
   assert.ok(!visible.includes(fake.uploaded.INTERNAL_CONTROL_SECRET));
 });
 
-for (const environment of ["development", "production"]) test(environment + " setup provisions an independent OAuth vault once without exposing its key", () => {
+for (const environment of ["development", "production"]) test(environment + " setup requires no additional OAuth secret or upload", () => {
   const fake = fakeCloud(REQUIRED_SECRET_NAMES);
   const report = setupMissingSecrets({ environment, apply: true, invoke: fake.invoke });
-  assert.deepEqual(report.created, ["CENTRAL_VAULT_KEYRING"]);
-  const keyring = JSON.parse(fake.uploaded.CENTRAL_VAULT_KEYRING);
-  assert.equal(Buffer.from(keyring.keys.initial, "base64url").length, 32);
-  assert.equal(JSON.stringify(report).includes(keyring.keys.initial), false);
-  assert.deepEqual(setupMissingSecrets({ environment, apply: true, invoke: fake.invoke }).created, []);
+  assert.deepEqual(report.required, REQUIRED_SECRET_NAMES); assert.deepEqual(report.created, []);
+  assert.equal(fake.uploaded, undefined); assert.equal(fake.requests.length, 1);
 });
 
 test("failed inventory, concurrent changes and uncertain upload never trigger a retry", () => {

@@ -16,8 +16,6 @@ export interface WorkerEnv extends RuntimeConfiguration {
   CENTRAL_GOVERNANCE_ENABLED?: string;
   /** Small approved direct catalogs; large views retain discovery/call tools. */
   CENTRAL_DIRECT_TOOLS_ENABLED?: string;
-  /** Independent versioned encryption keyring; never stored in SQLite or returned. */
-  CENTRAL_VAULT_KEYRING?: string;
   RUNNER: DurableObjectNamespace;
   WORKER_ID?: string;
   RUNMESH_DEPLOYMENT_BRANCH?: string;

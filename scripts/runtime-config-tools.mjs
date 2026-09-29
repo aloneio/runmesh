@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 
 export const REQUIRED_SECRET_NAMES = Object.freeze(["INTERNAL_CONTROL_SECRET", "RUNNER_TOKEN_PEPPER"]);
-export const CENTRAL_VAULT_SECRET = "CENTRAL_VAULT_KEYRING";
 
 export function reviewedReleaseSource(version, state) {
   assert.equal(state?.version, version, "Runtime defaults must match the release lifecycle version");
@@ -27,8 +26,6 @@ export function missingSecretNames(list, required = REQUIRED_SECRET_NAMES) {
 
 export function generateMissingSecrets(names) {
   assert.ok(Array.isArray(names) && new Set(names).size === names.length);
-  assert.ok(names.every((name) => REQUIRED_SECRET_NAMES.includes(name) || name === CENTRAL_VAULT_SECRET), "Only missing required secrets may be generated");
-  return Object.fromEntries(names.map((name) => [name, name === CENTRAL_VAULT_SECRET
-    ? JSON.stringify({ schema_version: 1, active_key_id: "initial", keys: { initial: randomBytes(32).toString("base64url") } })
-    : randomBytes(48).toString("base64url")]));
+  assert.ok(names.every((name) => REQUIRED_SECRET_NAMES.includes(name)), "Only missing required secrets may be generated");
+  return Object.fromEntries(names.map((name) => [name, randomBytes(48).toString("base64url")]));
 }

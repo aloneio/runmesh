@@ -73,8 +73,8 @@ available across a pause/resume of sharing; old in-flight leases stay invalid,
 and an explicitly disconnected account still requires fresh sign-in. They remain
 encrypted and absent from read APIs. Managed connections accept only their saved
 public HTTPS destination, without private-network routing or redirects. OAuth
-vault setup is an instance deployment concern; no-auth services and Skills do
-not require it. Upstream credentials are managed through the OAuth connection lifecycle.
+encryption uses the existing deployment secret without an additional variable.
+Upstream credentials are managed through the OAuth connection lifecycle.
 
 GET /admin/central/profiles returns up to 50 credential-free profiles; use
 next_after as after to continue. Each page checks the administrator session.

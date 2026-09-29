@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { missingSecretNames, generateMissingSecrets, REQUIRED_SECRET_NAMES, CENTRAL_VAULT_SECRET } from "./runtime-config-tools.mjs";
+import { missingSecretNames, generateMissingSecrets, REQUIRED_SECRET_NAMES } from "./runtime-config-tools.mjs";
 
 /** Explicit setup action, never part of a Worker request or recurring build. */
 export function setupMissingSecrets({ environment, apply = false, invoke }) {
   assert.ok(environment === "production" || environment === "development", "Select --env production|development");
   const target = ["--config", "apps/worker/wrangler.jsonc", "--env", environment];
-  const required = [...REQUIRED_SECRET_NAMES, CENTRAL_VAULT_SECRET];
+  const required = REQUIRED_SECRET_NAMES;
   const inventory = () => {
     const result = invoke(["secret", "list", ...target, "--format", "json"]);
     assert.equal(result.status, 0, "Cannot read Cloudflare secret names. Authenticate and deploy the Worker first; no secrets changed.");

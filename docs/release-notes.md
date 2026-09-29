@@ -8,7 +8,7 @@ This candidate is being prepared for release; the current stable package remains
 
 - Connect MCP services from the control panel using a URL and either no authentication or OAuth. Connected AI clients can use the enabled tools immediately.
 - Install Skills from SKILL.md and supporting text files or a folder, and confirm updates directly in the control panel.
-- Production configuration now includes shared MCP and Skill storage. Initial setup also prepares the separate OAuth credential vault.
+- Production configuration now includes shared MCP and Skill storage. OAuth encryption automatically uses the existing deployment secret and needs no additional variable.
 - Local development now initializes shared MCP and Skill storage alongside Miniflare runtime metadata. End-to-end checks cover library access without selecting a Runner.
 - Preparing a stable candidate keeps development downloads on the current prerelease series; the next patch series starts after stable publication is recorded.
 
