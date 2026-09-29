@@ -51,6 +51,10 @@ export function createCentralApi({
         rejectedInput = response.status === 400 && value.error?.operation_state === 'not_started'
           && (serviceInput && ['central_invalid_request', 'central_invalid'].includes(code)
             || path === 'skill-installations' && ['central_invalid_request', 'skill_invalid_package', 'skill_invalid'].includes(code));
+        if (response.status === 413 && skillInput && code === 'central_request_too_large' && value.error?.operation_state === 'not_started') {
+          rejectedInput = true;
+          throw new Error(t('skillUploadTooLarge'));
+        }
         if (response.status === 409 && path === 'skill-installations' && value.state === 'conflict') {
           var conflict = new Error('skill_exists');
           conflict.skillId = value.skill_id;

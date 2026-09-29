@@ -64,6 +64,15 @@ export function createSkillWorkflow({
     say(t('skillFilesAreReadyToReview'));
   }
   var importer = app.querySelector('[data-skill-import]');
+  const limits = importer && {
+    files: Number(importer.dataset.maxFiles),
+    fileBytes: Number(importer.dataset.maxFileBytes),
+    bundleBytes: Number(importer.dataset.maxBundleBytes)
+  };
+  function sizeError() {
+    return new Error(t('skillFileLimits').replace('{files}', limits.files)
+      .replace('{fileMiB}', limits.fileBytes / 1048576).replace('{bundleMiB}', limits.bundleBytes / 1048576));
+  }
   if (importer) ['files', 'folder'].forEach(function (name) {
     importer.elements[name].addEventListener('change', function () {
       if (this.files.length) importer.elements[name === 'files' ? 'folder' : 'files'].value = '';
@@ -79,11 +88,11 @@ export function createSkillWorkflow({
     event.preventDefault();
     run(async function () {
       var picked = Array.from(importer.elements.folder.files.length ? importer.elements.folder.files : importer.elements.files.files);
-      if (!picked.length || picked.length > 32 || picked.some(function (f) {
-        return f.size > 65536;
+      if (!picked.length || picked.length > limits.files || picked.some(function (f) {
+        return f.size > limits.fileBytes;
       }) || picked.reduce(function (n, f) {
         return n + f.size;
-      }, 0) > 262144) throw new Error(t('select132TextFilesUpTo64Kib'));
+      }, 0) > limits.bundleBytes) throw sizeError();
       var files = [];
       for (var f of picked) {
         var path = f.webkitRelativePath ? f.webkitRelativePath.split('/').slice(1).join('/') : f.name;
@@ -104,6 +113,7 @@ export function createSkillWorkflow({
         return f.path === 'SKILL.md';
       });
       if (!main) throw new Error(t('theSelectedFolderMustContainSkillMdAtIts'));
+      if (new TextEncoder().encode(JSON.stringify(files)).byteLength > limits.bundleBytes) throw sizeError();
       async function install(revision) {
         var result = await api('skill-installations', {
           files: files,
