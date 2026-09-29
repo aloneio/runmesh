@@ -1,3 +1,4 @@
+import { encodeBase64Url, decodeBase64Url } from "./contracts/base64url.js";
 import { containsControlCharacter, isConfiguredSecret } from "./contracts/deployment-secrets.js";
 export { containsControlCharacter, isConfiguredSecret } from "./contracts/deployment-secrets.js";
 
@@ -149,18 +150,14 @@ export function randomHex(bytes: number): string {
 }
 
 export function randomBase64Url(bytes = MCP_SECRET_BYTES): string {
-  const value = new Uint8Array(bytes);
-  crypto.getRandomValues(value);
-  let binary = "";
-  for (const byte of value) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
+  return encodeBase64Url(crypto.getRandomValues(new Uint8Array(bytes)));
 }
 
 export async function passwordVerifier(password: string): Promise<string> {
   const salt = new Uint8Array(16);
   crypto.getRandomValues(salt);
   const digest = await derivePassword(password, salt, PASSWORD_KDF_ITERATIONS);
-  return `pbkdf2-sha256$${PASSWORD_KDF_ITERATIONS}$${toBase64Url(salt)}$${toBase64Url(new Uint8Array(digest))}`;
+  return `pbkdf2-sha256$${PASSWORD_KDF_ITERATIONS}$${encodeBase64Url(salt)}$${encodeBase64Url(new Uint8Array(digest))}`;
 }
 
 export async function verifyPassword(password: string, verifier: string): Promise<boolean> {
@@ -168,8 +165,8 @@ export async function verifyPassword(password: string, verifier: string): Promis
   if (parts.length !== 4 || parts[0] !== "pbkdf2-sha256") return false;
   const iterations = Number(parts[1]);
   if (!Number.isSafeInteger(iterations) || iterations < 10_000 || iterations > PASSWORD_KDF_ITERATIONS) return false;
-  const salt = fromBase64Url(parts[2] ?? "");
-  const expected = fromBase64Url(parts[3] ?? "");
+  const salt = decodeBase64Url(parts[2] ?? "", 24);
+  const expected = decodeBase64Url(parts[3] ?? "", 44);
   if (salt === undefined || expected === undefined || expected.length !== 32) return false;
   try {
     const actual = new Uint8Array(await derivePassword(password, salt, iterations));
@@ -190,20 +187,5 @@ function constantTimeBytesEqual(left: Uint8Array, right: Uint8Array): boolean {
   let difference = 0;
   for (let index = 0; index < left.length; index += 1) difference |= (left[index] ?? 0) ^ (right[index] ?? 0);
   return difference === 0;
-}
-function toBase64Url(value: Uint8Array): string {
-  let binary = "";
-  for (const byte of value) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
-}
-function fromBase64Url(value: string): Uint8Array | undefined {
-  if (!/^[A-Za-z0-9_-]+$/.test(value)) return undefined;
-  try {
-    const normalized = value.replaceAll("-", "+").replaceAll("_", "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
-    const binary = atob(normalized);
-    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
-  } catch {
-    return undefined;
-  }
 }
 function toHex(value: Uint8Array): string { return Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join(""); }

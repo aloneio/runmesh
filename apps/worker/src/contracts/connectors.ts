@@ -14,16 +14,10 @@ export interface ConnectionProfile {
   readonly authentication: "none" | "oauth";
 }
 
-export const CONNECTOR_LIMITS = Object.freeze({ profiles: 1_000, token_bytes: 4_096, envelope_bytes: 8_192,
+export const CONNECTOR_LIMITS = Object.freeze({ profiles: 1_000, token_bytes: 4_096, profile_bytes: 8_192,
   request_bytes: 16_384, operation_ms: 5_000 });
 
 export interface CredentialInput { readonly kind: "bearer"; readonly token: string }
-export interface CredentialEnvelope {
-  readonly schema_version: 1;
-  readonly key_id: string;
-  readonly iv: string;
-  readonly ciphertext: string;
-}
 export interface ProfileRecord { readonly profile: ConnectionProfile; readonly envelope: null }
 export type ProfileCommand =
   | { readonly action: "connect"; readonly profile_id: string; readonly connector_id: string; readonly display_name?: string; readonly endpoint: string; readonly authentication: "none" | "oauth" }

@@ -66,7 +66,7 @@ it.each(["invalid-json", "wrong-id", "wrong-revision", "oversized-envelope"])("W
     if (field === "invalid-json") state.storage.sql.exec("UPDATE connection_profiles_v1 SET profile_json='invalid'");
     if (field === "wrong-id") state.storage.sql.exec("UPDATE connection_profiles_v1 SET profile_json=?", JSON.stringify({ ...record.profile, profile_id: "other" }));
     if (field === "wrong-revision") state.storage.sql.exec("UPDATE connection_profiles_v1 SET revision=2");
-    if (field === "oversized-envelope") state.storage.sql.exec("UPDATE connection_profiles_v1 SET envelope_json=?", "a".repeat(CONNECTOR_LIMITS.envelope_bytes + 1));
+    if (field === "oversized-envelope") state.storage.sql.exec("UPDATE connection_profiles_v1 SET envelope_json=?", "a".repeat(CONNECTOR_LIMITS.profile_bytes + 1));
     expect(() => repository.read("profile-a")).toThrow("connector_record_invalid");
     expect(state.storage.sql.exec("SELECT * FROM connection_profiles_v1").toArray()).toHaveLength(1);
   });

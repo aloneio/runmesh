@@ -34,7 +34,7 @@ export class ConnectionState implements ProfileRepository {
     const row = this.storage.sql.exec<Row>("SELECT profile_id,revision,profile_json,envelope_json FROM connection_profiles_v1 WHERE profile_id=?", profileId).toArray()[0];
     if (row === undefined) return undefined;
     try {
-      if (row.profile_json.length > CONNECTOR_LIMITS.envelope_bytes || row.envelope_json.length > CONNECTOR_LIMITS.envelope_bytes) throw new Error();
+      if (row.profile_json.length > CONNECTOR_LIMITS.profile_bytes || row.envelope_json.length > CONNECTOR_LIMITS.profile_bytes) throw new Error();
       const profile = parseProfile(JSON.parse(row.profile_json)), rawEnvelope: unknown = JSON.parse(row.envelope_json);
       const envelope = rawEnvelope === null ? null : undefined;
       if (profile === undefined || envelope === undefined || !validProfileEnvelope(profile, envelope) || profile.profile_id !== profileId || row.profile_id !== profileId || profile.revision !== row.revision) throw new Error();

@@ -17,6 +17,8 @@ const unreviewed = path => /^apps\/worker\/src\/(?:capabilities|connectors|skill
 const provider = path => /^apps\/worker\/src\/mcp\/providers\/(?:remote|skills)(?:[/.])/u.test(path);
 
 export function centralDependencyProblem(from, to) {
+  if (from === "apps/worker/src/platform/secret-storage.ts" && !to.startsWith("apps/worker/src/contracts/"))
+    return "Shared secret storage depends only on pure contracts, not a feature, transport or repository";
   if (provider(from) && !to.startsWith('apps/worker/src/contracts/')
     && !(provider(to) && centralFeature(from) === centralFeature(to)))
     return 'Central MCP providers receive public ports and provider helpers, not application or platform implementations';
@@ -27,7 +29,7 @@ export function centralDependencyProblem(from, to) {
     return 'Managed OAuth protocol adaptation must not own lifecycle state, persistence or encryption';
   if (from === "apps/worker/src/capabilities-do.ts" && !to.startsWith("apps/worker/src/contracts/")
     && centralFeature(to) === undefined
-    && !["apps/worker/src/bounded-json.ts", "apps/worker/src/platform/control-plane.ts", "apps/worker/src/platform/env.ts"].includes(to))
+    && !["apps/worker/src/bounded-json.ts", "apps/worker/src/platform/control-plane.ts", "apps/worker/src/platform/env.ts", "apps/worker/src/platform/secret-storage.ts", "apps/worker/src/security.ts"].includes(to))
     return "Central state composition may use central features and reviewed identity ports, not native use cases";
   if (unreviewed(from) || unreviewed(to)) return "Central modules require a reviewed domain, application, platform or provider role";
   const feature = centralFeature(from);
@@ -65,6 +67,9 @@ const ioGlobals = new Set(["fetch", "WebSocket", "XMLHttpRequest", "EventSource"
 /** A conservative source gate, not a sandbox or proof against arbitrary obfuscation.
  * Pure contracts/rules use narrow ports rather than platform-global aliases. */
 export function centralNodeProblem(from, node) {
+  if (from.startsWith("apps/worker/src/") && from !== "apps/worker/src/platform/secret-storage.ts"
+    && node.type === "StringLiteral" && node.value === "AES-GCM")
+    return "Worker storage encryption belongs to the shared secret-storage adapter";
   if (unreviewed(from)) return node.type === "Program" ? "Central modules require a reviewed feature role" : undefined;
   if (centralFeature(from) === undefined || node.type !== "Identifier") return undefined;
   if (node.name === "eval" || node.name === "Function") return "Central features must not evaluate imported Skill or tool code";

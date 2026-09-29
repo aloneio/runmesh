@@ -1,4 +1,4 @@
-import { CONNECTOR_LIMITS, type ConnectionProfile, type CredentialEnvelope, type CredentialInput, type ProfileCommand } from "./connectors.js";
+import { CONNECTOR_LIMITS, type ConnectionProfile, type CredentialInput, type ProfileCommand } from "./connectors.js";
 import { isCapabilityIdentifier } from "./capabilities.js";
 
 const object = (value: unknown): Record<string, unknown> | undefined => typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
@@ -35,15 +35,6 @@ export function parseProfile(value: unknown): ConnectionProfile | undefined {
   if (endpoint === undefined || endpoint !== item.endpoint) return undefined;
   return { schema_version: 1, profile_id: item.profile_id, connector_id: item.connector_id, ...(item.display_name === undefined ? {} : { display_name: item.display_name as string }), endpoint,
     owner: { kind: "instance_admin" }, revision: item.revision, enabled: item.enabled, authentication: item.authentication, credential: null };
-}
-
-export function parseEnvelope(value: unknown): CredentialEnvelope | undefined {
-  const item = object(value);
-  if (item === undefined || !exact(item, ["schema_version", "key_id", "iv", "ciphertext"]) || item.schema_version !== 1
-    || !isCapabilityIdentifier(item.key_id) || typeof item.iv !== "string" || !/^[A-Za-z0-9_-]{16}$/u.test(item.iv)
-    || typeof item.ciphertext !== "string" || item.ciphertext.length < 24 || item.ciphertext.length > CONNECTOR_LIMITS.envelope_bytes
-    || !/^[A-Za-z0-9_-]+$/u.test(item.ciphertext)) return undefined;
-  return { schema_version: 1, key_id: item.key_id, iv: item.iv, ciphertext: item.ciphertext };
 }
 
 export function validProfileEnvelope(profile: ConnectionProfile, envelope: unknown): boolean {

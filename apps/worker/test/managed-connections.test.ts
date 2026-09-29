@@ -10,7 +10,8 @@ import { createManagedOAuthProtocol } from "../src/platform/connectors/managed-o
 import { managedOAuthFetch } from "../src/platform/connectors/managed-oauth-http.js";
 import { createManagedOAuth } from '../src/application/connectors/managed-oauth.js';
 import type { ManagedOAuthRecord, ManagedOAuthProtocol } from '../src/contracts/managed-oauth.js';
-import { createOAuthCipher, oauthRandom } from "../src/platform/connectors/oauth-crypto.js";
+import { createSecretStorage } from "../src/platform/secret-storage.js";
+import { SECRET_STORAGE_LIMITS } from "../src/contracts/secret-storage.js";
 import { ManagedOAuthState } from "../src/platform/connectors/managed-store.js";
 import { catalogSha256 } from "../src/platform/capabilities/catalog-crypto.js";
 import { CapabilitiesDOv1 } from "../src/capabilities-do.js";
@@ -53,7 +54,7 @@ function oauthFixture(cimd = false, configuredOrigin: string | null = origin, pr
   let failToken = false, revokeOnToken = false, privateToken = false, challengeMetadata: string | undefined;
   let tokenResponse: Record<string, unknown> = {};
   const posts: string[] = [], state = { registration: 0, exchanges: 0, refreshes: 0 };
-  const cipher = createOAuthCipher("managed-test", secret);
+  const cipher = createSecretStorage("managed-test", secret);
   const repository = { read: () => record ? structuredClone(record) : undefined, find: (hash: string) => record?.state_hash === hash ? structuredClone(record) : undefined, replace: (value: ManagedOAuthRecord, expected: number) => { if ((record?.revision ?? 0) !== expected) return false; record = JSON.parse(JSON.stringify(value)) as ManagedOAuthRecord; return true; } };
   const send = vi.fn(async (url: string | URL, init?: RequestInit) => {
     const address = String(url); expect(init?.redirect).toBe("manual"); expect(init?.credentials).toBe("omit");
@@ -80,7 +81,7 @@ function oauthFixture(cimd = false, configuredOrigin: string | null = origin, pr
     if (failToken) return Response.json({ error: "invalid_grant" }, { status: 400 });
     return Response.json({ access_token: "synthetic-managed-access-" + state.refreshes, refresh_token: "synthetic-managed-refresh", token_type: "Bearer", expires_in: 60, ...tokenResponse });
   });
-  const service = () => createManagedOAuth({ repository, cipher, profile: () => live, admin: async () => allowed ? "allowed" : "denied", origin: () => configuredOrigin ?? undefined, hash: catalogSha256, random: oauthRandom, now: () => now, protocol: protocol ?? createManagedOAuthProtocol(send) });
+  const service = () => createManagedOAuth({ repository, cipher, profile: () => live, admin: async () => allowed ? "allowed" : "denied", origin: () => configuredOrigin ?? undefined, hash: catalogSha256, random: randomBase64Url, now: () => now, protocol: protocol ?? createManagedOAuthProtocol(send) });
   const hash = "a".repeat(64), selection = { profile_id: base.profile_id, expected_revision: base.revision };
   const begin = async () => { const result = await service().run(hash, "begin", selection); expect(result.state).toBe("started"); if (result.state !== "started") throw new Error(JSON.stringify(result)); return new URL(result.authorization_url).searchParams.get("state")!; };
   return { service, begin, hash, selection, state, posts, send, repository, record: () => record, now: (elapsed = 40_000) => { now += elapsed; },
@@ -103,6 +104,17 @@ it.each([false, true])("opaque Cloudflare-style tokens survive exchange, persist
   expect(refreshed.credential.token).toBe(token); expect(refreshed.current()).toBe(true);
   expect(f.state.exchanges).toBe(1); expect(f.state.refreshes).toBe(1);
 });
+it("maximum-sized access and refresh tokens survive shared storage and refresh", async () => {
+  const f = oauthFixture(), token = "a".repeat(4096), refresh = "r".repeat(4096);
+  f.tokens({ access_token: token, refresh_token: refresh });
+  const state = await f.begin();
+  expect(await f.service().run(f.hash, "complete", f.callback(state))).toMatchObject({ state: "linked" });
+  f.now();
+  const lease = await f.service().credential({ ...base, authentication: "oauth" }, new AbortController().signal, async () => undefined);
+  expect(lease.credential.token).toBe(token); expect(lease.current()).toBe(true);
+  expect(f.state.refreshes).toBe(1); expect(JSON.stringify(f.record())).not.toContain(refresh);
+});
+
 it.each([undefined, "", "short"])("OAuth reports invalid existing server configuration before contacting the provider: %s", async unavailable => {
   let secret: unknown = unavailable;
   const f = oauthFixture(false, origin, undefined, () => secret);
@@ -179,7 +191,7 @@ it.each([302, 307, 429, 503])("OAuth challenge HTTP %s cancels its body without 
   const cancelled = vi.fn(), send = vi.fn(async () => new Response(new ReadableStream({ cancel: cancelled }),
     { status, headers: { location: issuer + "/redirect" } }));
   const protocol = createManagedOAuthProtocol(send);
-  await expect(protocol.begin({ endpoint, origin, state: oauthRandom(), signal: new AbortController().signal, authorize: async () => undefined })).rejects.toThrow();
+  await expect(protocol.begin({ endpoint, origin, state: randomBase64Url(), signal: new AbortController().signal, authorize: async () => undefined })).rejects.toThrow();
   expect(send).toHaveBeenCalledTimes(1); expect(cancelled).toHaveBeenCalledTimes(1);
 });
 it.each(["errored", "rejected", "stalled"] as const)("OAuth redirect denial handles %s response cleanup without following it", async mode => {
@@ -199,7 +211,7 @@ it.each(["errored", "rejected", "stalled"] as const)("OAuth redirect denial hand
 it("OAuth revalidates admission after the service challenge before discovery or registration", async () => {
   let allowed = true; const send = vi.fn(async () => { allowed = false; return new Response(null, { status: 401 }); });
   const protocol = createManagedOAuthProtocol(send);
-  await expect(protocol.begin({ endpoint, origin, state: oauthRandom(), signal: new AbortController().signal,
+  await expect(protocol.begin({ endpoint, origin, state: randomBase64Url(), signal: new AbortController().signal,
     authorize: async () => { if (!allowed) throw new Error("revoked"); } })).rejects.toThrow("revoked");
   expect(send).toHaveBeenCalledTimes(1);
 });
@@ -361,6 +373,22 @@ it("managed OAuth SQLite claims survive repository recreation and reject stale w
     expect(open().read(record.profile_id)?.revision).toBe(2);
   });
 });
+it("managed SQLite storage budgets are derived from the shared cipher and survive restart", async () => {
+  const namespace = (env as unknown as { CAPABILITIES: DurableObjectNamespace }).CAPABILITIES;
+  await runInDurableObject(namespace.get(namespace.idFromName("managed-storage-budget-test")), async (_instance, state) => {
+    const cipher = createSecretStorage("storage-budget", () => fixtureControlSecret);
+    const value = "x".repeat(SECRET_STORAGE_LIMITS.plaintext_bytes - 2);
+    const record: ManagedOAuthRecord = { profile_id: "maximum-record", profile_revision: 2, revision: 1, state: "ready",
+      session_hash: "a".repeat(64), state_hash: "c".repeat(64), origin, expires_at: 1_800_000_060_000, token_expires_at: 1_800_000_060_000,
+      client: await cipher.seal("client", value), verifier: await cipher.seal("verifier", "synthetic-verifier"), tokens: await cipher.seal("tokens", value) };
+    expect(new ManagedOAuthState(state.storage, () => undefined).replace(record, 0)).toBe(true);
+    const restored = new ManagedOAuthState(state.storage, () => undefined).read(record.profile_id)!;
+    expect(await cipher.open("client", restored.client!)).toBe(value);
+    expect(await cipher.open("tokens", restored.tokens!)).toBe(value);
+    expect(JSON.stringify(restored)).not.toContain(value);
+  });
+});
+
 it("OAuth binds the authenticated browser origin and refreshes after restart without a deployment origin variable", async () => {
   const f = oauthFixture(false, null);
   const start = await f.service().run(f.hash, "begin", f.selection, origin);

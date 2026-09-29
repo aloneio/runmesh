@@ -1,5 +1,8 @@
-import type { AdminDecision, ConnectionProfile, CredentialEnvelope } from "./connectors.js";
-import type { OAuthCipher } from "./oauth.js";
+import type { AdminDecision, ConnectionProfile } from "./connectors.js";
+import { SECRET_STORAGE_LIMITS, type EncryptedSecret, type SecretStorage } from "./secret-storage.js";
+
+/** Three encrypted values, discovery metadata and bounded record fields. */
+export const MANAGED_OAUTH_RECORD_BYTES = 3 * (SECRET_STORAGE_LIMITS.ciphertext_bytes + 256) + 32_768 + 4096;
 
 /** Opaque provider metadata is interpreted only by the protocol adapter.
  * Neither lifecycle rules nor persistence depend on the SDK's versioned types. */
@@ -16,7 +19,7 @@ export interface ManagedOAuthRecord {
   state: "starting" | "pending" | "exchanging" | "ready" | "refreshing" | "revoked";
   session_hash: string; state_hash: string; origin: string; expires_at: number; token_expires_at: number;
   discovery?: ManagedOAuthDocument | undefined;
-  client?: CredentialEnvelope | undefined; verifier?: CredentialEnvelope | undefined; tokens?: CredentialEnvelope | undefined;
+  client?: EncryptedSecret | undefined; verifier?: EncryptedSecret | undefined; tokens?: EncryptedSecret | undefined;
 }
 export interface ManagedOAuthRepository {
   read(id: string): ManagedOAuthRecord | undefined;
@@ -38,7 +41,7 @@ export interface ManagedOAuthProtocol {
     readonly refresh_token: string }): Promise<ManagedOAuthTokens>;
 }
 export interface ManagedOAuthPorts {
-  readonly repository: ManagedOAuthRepository; readonly cipher: OAuthCipher; readonly protocol: ManagedOAuthProtocol;
+  readonly repository: ManagedOAuthRepository; readonly cipher: SecretStorage; readonly protocol: ManagedOAuthProtocol;
   readonly profile: (id: string) => ConnectionProfile | undefined;
   readonly admin: (hash: string, signal: AbortSignal) => Promise<AdminDecision>;
   readonly origin: () => string | undefined; readonly hash: (value: string) => Promise<string>;

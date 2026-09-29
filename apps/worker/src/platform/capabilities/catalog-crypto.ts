@@ -1,12 +1,11 @@
+import { encodeBase64Url as encode, decodeBase64Url } from "../../contracts/base64url.js";
 import { CATALOG_LIMITS, type CatalogCursorCodec } from "../../contracts/catalog.js";
 import { catalogJson } from "../../contracts/catalog-json.js";
 import { parseCatalogCursor } from "../../contracts/catalog-values.js";
 
-const encode = (bytes: Uint8Array): string => btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
 const decode = (value: string): Uint8Array<ArrayBuffer> => {
-  if (!/^[A-Za-z0-9_-]+$/u.test(value) || value.length > CATALOG_LIMITS.cursor_bytes) throw new Error("catalog_cursor_invalid");
-  const bytes = Uint8Array.from(atob(value.replaceAll("-", "+").replaceAll("_", "/")), c => c.charCodeAt(0));
-  if (encode(bytes) !== value) throw new Error("catalog_cursor_invalid");
+  const bytes = decodeBase64Url(value, CATALOG_LIMITS.cursor_bytes);
+  if (bytes === undefined) throw new Error("catalog_cursor_invalid");
   return bytes;
 };
 export const newCatalogCursorKey = (): string => encode(crypto.getRandomValues(new Uint8Array(32)));
