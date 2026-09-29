@@ -52,7 +52,8 @@ export function createManagedOAuth(ports: ManagedOAuthPorts) {
     const selected = profile(input.profile_id, input.expected_revision as number), base = origin(requestOrigin);
     await admin(hash, signal);
     // Check independent encryption availability before registering a client.
-    await ports.cipher.seal("connection-readiness", { ready: true });
+    try { await ports.cipher.seal("connection-readiness", { ready: true }); }
+    catch { return fault("configuration_required"); }
     const state = ports.random(), stateHash = await ports.hash(state); await admin(hash, signal); profile(selected.profile_id, selected.revision);
     const old = ports.repository.read(selected.profile_id);
     let record: ManagedOAuthRecord = { profile_id: selected.profile_id, profile_revision: selected.revision, revision: (old?.revision ?? 0) + 1,
@@ -102,7 +103,7 @@ export function createManagedOAuth(ports: ManagedOAuthPorts) {
         if (old && !ports.repository.replace({ ...old, revision: old.revision + 1, state: "revoked", tokens: undefined, client: undefined, verifier: undefined, discovery: undefined }, old.revision)) return fault("conflict");
         return { state: "revoked", profile_id: input.profile_id };
       } catch (error) {
-        const code = error instanceof OAuthFault && ["invalid_request", "denied", "conflict", "invalid_callback", "provider_unsupported", "reauthorization_required"].includes(error.code) ? error.code : "unavailable";
+        const code = error instanceof OAuthFault && ["invalid_request", "denied", "conflict", "invalid_callback", "provider_unsupported", "reauthorization_required", "configuration_required"].includes(error.code) ? error.code : "unavailable";
         return { state: "failed", code, operation_state: code === "unavailable" ? "unknown" : "not_started" } as ManagedConnectionResult;
       } finally { clearTimeout(timer); controller.abort(); active.delete(hash); }
     },

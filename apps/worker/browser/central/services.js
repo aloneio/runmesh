@@ -143,9 +143,14 @@ export function createServiceWorkflow({
     return catalog;
   }
   async function connectOAuth(profile) {
+    // Reconcile a failed discovery or earlier handoff before starting a new one.
+    // Use the refreshed revision so a paused or removed MCP cannot reconnect.
+    var currentProfiles = await refresh(),
+      current = currentProfiles.find(item => item.profile_id === profile.profile_id);
+    if (!current || !current.enabled || current.authentication !== 'oauth') throw new Error(t('serviceNoLongerEnabled'));
     var result = await api('connections/begin', {
-      profile_id: profile.profile_id,
-      expected_revision: profile.revision
+      profile_id: current.profile_id,
+      expected_revision: current.revision
     });
     say(t('openingTheServiceSignInPage'));
     navigate(result.authorization_url);

@@ -28,6 +28,10 @@ Managed OAuth application code owns lifecycle ordering through SDK-free ports. P
 
 ## Verification boundary
 
+Reconnect first reloads the saved connection and then starts one new authorization attempt. A failed discovery does not require a separate manual refresh. Failed state reads and paused or removed connections prevent the handoff.
+
+Authorization checks credential encryption before contacting the provider. A missing or invalid independent keyring returns `oauth_configuration_required` (503, `not_started`) without contacting the provider or replacing an existing account. Deployment administrators should inspect missing configuration with `setup:secrets` for the selected environment; restore an invalid existing keyring instead of generating a replacement. Configuration failures are presented separately from unsupported or unavailable providers. End users still connect with the MCP URL and OAuth selection.
+
 Tests cover encryption binding, key rotation, callback identity/origin, refresh claims, revocation, session cleanup and no replay. Local protocol fixtures do not prove consent with every real provider. Deployment activation and external consent evidence remain in [the rollout ledger](central-rollout.md).
 
 See [the product workflow](central-administration.md), [MCP authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization) and [MCP transports](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports).

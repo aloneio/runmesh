@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "ed02e442d359279d8384a15dc5d90a199b4b3ab1b4c93a84fda618541f820be0",
-      "bytes": 127067,
+      "sha256": "b9a50650af383699dafa9649b349e20d2978d30e943ec86cf586f9095189d607",
+      "bytes": 127602,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -32,8 +32,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "6dfa688516fa3377a6be84488ae4b0e542c0ecb9c76bc88b278751e50ed013f5",
-      "bytes": 127655,
+      "sha256": "e7a2f9ca19c02c71f51d033e614b2a023ebe82fa89968a31ed6c02e65bad54f4",
+      "bytes": 128190,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -51,8 +51,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "a4c9048f73c765c2c106ef3c840749cdf8a8506ec4e9482b9794838e2967ded6",
-      "bytes": 128803,
+      "sha256": "1fd39fd99d1709380a2bfceae163fef6548c1902bc6d3bbf7e264b5ad476e1b6",
+      "bytes": 129338,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -419,8 +419,8 @@
           }
         ]
       ],
-      "sha256": "1dfc73fb6a4fc6d22d5cfefced7893fbe0d427c9be17a525032ce44da6df189b",
-      "bytes": 129152,
+      "sha256": "56c83f2e7697fb8e054cbf2d07380b220c58c7b12c4c8225f70db3817c5b8af4",
+      "bytes": 129687,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -574,5 +574,9 @@
   "skill_upload_review": {
     "source_base": "bfccf9278288e5674da23ad3a9be5f2abc9d4218",
     "reviewed_change": "Raise Skill uploads to 256 files, 1 MiB per file and 8 MiB per canonical package. Form limits come from the server contract. Bilingual DOM tests cover actual folder selection, oversized selections, JSON escaping and retry after confirmed HTTP 413. No screenshots."
+  },
+  "oauth_reconnect_review": {
+    "source_base": "04c751c0ecda6d76fcb1a73a6cbce01278cb9d80",
+    "reviewed_change": "Reconnect reconciles saved profiles before beginning OAuth, recovers failed discovery without a manual refresh, and checks current enabled state and revision. Missing or invalid vault readiness gets a specific bilingual configuration error. Regression covers fresh revisions, failed reconciliation, concurrent pause and preserved account state. No screenshots."
   }
 }

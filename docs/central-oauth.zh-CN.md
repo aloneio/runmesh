@@ -28,6 +28,10 @@
 
 ## 验证范围
 
+点击“重新授权”会先同步已保存连接的当前状态，再发起一次新的授权；自动发现失败后无需额外手动刷新。若状态读取失败，或连接已暂停、移除，则不发起授权。
+
+授权开始前会检查凭据加密是否可用。缺少或无效的独立密钥环返回 `oauth_configuration_required`（503，`not_started`），不会访问提供方或覆盖已有账号。部署管理员应使用对应环境的 `setup:secrets` 检查缺失配置；已存在但无效的密钥需恢复，不能重新生成覆盖。此错误与提供方不支持或暂时不可用分别展示，终端用户仍只需填写 MCP URL 并选择 OAuth。
+
 测试覆盖加密绑定、密钥轮换、回调身份与 origin、刷新占用、撤销、会话清理及不重放。本地协议样例不能证明每个真实提供方的同意流程；部署启用与外部授权证据记录在[上线核验表](central-rollout.md)。
 
 参见[产品使用流程](central-administration.zh-CN.md)、[MCP 授权](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)和 [MCP 传输](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)。
