@@ -58,12 +58,20 @@ test("generated workflow files and source CI contain the exact tested checks", a
   assert.equal(await readFile(new URL(".gitlab/main-policy.yml", root), "utf8"), gitlabPolicyEntrypoint());
   assert.equal((await readFile(new URL(".gitlab-ci.yml", root), "utf8")).split(GITLAB_POLICY_MARKER + "\n")[1], gitlabPolicyJob());
 });
-test("GitHub metadata job is unconditional, read-only, unfiltered by paths and never checks out PR code", () => {
+test("GitHub metadata job excludes only closed PRs and remains read-only without checking out PR code", () => {
   const text = githubPolicyWorkflow();
   assert.match(text, /branches: \[main\]/u); assert.match(text, /permissions: \{\}/u);
-  assert.ok(!/^\s*(?:if|paths|paths-ignore|continue-on-error):/mu.test(text));
+  assert.deepEqual(text.match(/^ +if:.*$/gmu), ["    if: github.event.pull_request.state != 'closed'"]);
+  assert.ok(!/^\s*(?:paths|paths-ignore|continue-on-error):/mu.test(text));
   assert.ok(!text.includes("uses:") && !text.includes("secrets.") && !text.includes("workflow_dispatch:"));
   assert.ok(text.includes("GITHUB_EVENT_PATH") && text.includes("main-source-policy:"));
+});
+
+test("editing a merged or closed PR cannot produce a main promotion receipt", () => {
+  for (const merged of [false, true]) {
+    const value = event(); value.action = "edited"; value.pull_request.state = "closed"; value.pull_request.merged = merged;
+    assert.throws(() => githubMainPromotion(value, { ...github, GITHUB_REF: merged ? "refs/heads/main" : github.GITHUB_REF }));
+  }
 });
 test("GitLab trusted root overlays the source config without checkout, inherited scripts or optional failure", () => {
   const text = gitlabPolicyEntrypoint();
