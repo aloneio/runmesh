@@ -16,11 +16,11 @@ Use `inspect` with `action=diagnostics` and a readable `workspace_id` to check R
 
 A missing report is `not_reported`; malformed or unsupported reports are `invalid`. Both leave method support `unknown`. A valid partial list can identify unsupported methods. Use the reported method list for capability decisions and a verified release artifact for build provenance; a version label or contract hash serves a different purpose.
 
-The catalog contains 10 public tools, 26 Runner-backed actions and 27 protected RPC methods, including the internal workspace-list method. Each operation requires its own scope, current policy and workspace permission. Live file, execution and Context operations also require an available Runner connection.
+The native catalog contains 10 tools, 26 Runner-backed actions and 27 protected RPC methods, including the internal workspace-list method. Each native operation requires its own scope, current policy and workspace permission. Live file, execution and Context operations also require an available Runner connection. The MCP and Skill library adds its discovery and call tools, plus tools from connected MCPs; these shared capabilities do not require a selected Runner.
 
 ## Check a stale connector catalog
 
-`/health` exposes `mcp_catalog` with the schema version, SHA-256 fingerprint, tool names/count, action count and operation hash. Each `tools/list` entry carries the compact fingerprint in `_meta["io.runmesh/catalog"]`; diagnostics includes the full summary.
+`/health` exposes the native `mcp_catalog` with the schema version, SHA-256 fingerprint, tool names/count, action count and operation hash. Each native `tools/list` entry carries the compact fingerprint in `_meta["io.runmesh/catalog"]`; diagnostics includes the full summary. Use authenticated `tools/list` for the complete active catalog, including shared MCPs and Skills.
 
 Compare that summary with the authenticated `tools/list` response and the inputs shown by your MCP application. Refresh the affected connector when its catalog is stale. Keep the existing credential unless it needs rotation for a separate reason, and keep its secret-bearing MCP URL private.
 
