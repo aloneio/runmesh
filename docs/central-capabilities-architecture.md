@@ -58,7 +58,7 @@ Catalog cursors are version 2, MAC authenticated and bound to client identity, c
 | Skills | 1,000 heads; skill_list scans up to 128 heads per page |
 | Skill continuation | after / next_after; disabled heads may produce an empty page with a continuation |
 | Skill resources/list | Walks bounded pages, rejects duplicate/non-progressing results and never returns a partial success |
-| Skill bundle | 32 text files, 64 KiB per file, 256 KiB total, 32 stored versions per Skill |
+| Skill bundle | 256 text files, 1 MiB per file, 8 MiB per canonical bundle, 256 MiB stored total, 32 stored versions per Skill |
 
 Limits are explicit safety ceilings, not latency promises. Contracts remain authoritative for byte, count and deadline budgets. Unexpected state fails closed rather than being repaired or cleared automatically.
 

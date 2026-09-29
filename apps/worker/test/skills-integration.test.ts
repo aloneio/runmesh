@@ -40,6 +40,23 @@ async function fixture(nativeScopes: ["coding:read"] | [] = []) {
   };
   return { config, headers, clients, admin, rpc, invoke, hash, port, stub };
 }
+it('large Skill packages install through HTTP and return complete one MiB files through MCP tools and resources', async () => {
+  const f = await fixture(), client = f.clients[0]!;
+  const files = [{ path: 'SKILL.md', text: '---\nname: large-folder\ndescription: Large folder fixture\n---\nRead the references.' },
+    ...Array.from({ length: 7 }, (_, n) => ({ path: 'references/' + n + '.txt', text: 'x'.repeat(1_048_576) }))];
+  const response = await f.admin('skill-installations', { files, expected_revision: 0 });
+  expect(response.status).toBe(200);
+  const receipt = await response.json() as { skill_id: string; digest: string };
+  expect(receipt.skill_id).toBe('large-folder');
+  const inspected = await f.admin('skills/' + receipt.skill_id);
+  expect(inspected.status).toBe(200);
+  expect(await inspected.json()).toMatchObject({ bundle: { files } });
+  const read = await f.rpc(client.secret, 'tools/call', { name: 'skill_read', arguments: { skill_id: receipt.skill_id, digest: receipt.digest, path: 'references/0.txt' } });
+  expect(read.result.isError).not.toBe(true);
+  expect(JSON.parse(read.result.content[0].text).text).toBe(files[1]!.text);
+  const resource = await f.rpc(client.secret, 'resources/read', { uri: 'runmesh-skill://bundle/' + receipt.skill_id + '/' + receipt.digest + '/references/0.txt' });
+  expect(resource.result.contents[0].text).toBe(files[1]!.text);
+});
 it.each(['research', 'research:docs'])('W07/W08 two independent central-only clients read the same approved bundle through tools and resources without a Runner (%s)', async id => {
   const f = await fixture();
   const path = 'skills/' + encodeURIComponent(id);

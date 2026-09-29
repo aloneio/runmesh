@@ -18,6 +18,7 @@ import { requestLocale } from '../apps/worker/dist/i18n/locale.js';
 import { checkRunnerActions } from './runner-browser-check.mjs';
 import { checkAdminNavigation } from './navigation-browser-check.mjs';
 import { checkAdminLayout } from './layout-browser-check.mjs';
+import { checkSkillUploads } from './skill-upload-browser-check.mjs';
 
 async function checkClientPermissions(browser, origin, errors) {
  for(const locale of ['en','zh-CN']) {
@@ -182,6 +183,7 @@ export async function checkGuidedProduct(executable) {
   browser=await chromium.launch({headless:true,...(executable?{executablePath:executable}:{})});
   await checkClientPermissions(browser,origin,exceptions);
   await checkSkillFileErrors(browser,origin,requests,library);
+  await checkSkillUploads(browser,origin,requests,library);
   const context=await browser.newContext({viewport:{width:1365,height:1000}});
   const page=await context.newPage();page.on('pageerror',e=>exceptions.push(e.message));
   await page.goto(origin+'/admin');

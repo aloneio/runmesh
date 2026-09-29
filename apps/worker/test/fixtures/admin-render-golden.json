@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "0a28209120422ba1520ca3f9c0c2245682b48e11875e3d4635005ca6b5f3a58a",
-      "bytes": 126089,
+      "sha256": "ed02e442d359279d8384a15dc5d90a199b4b3ab1b4c93a84fda618541f820be0",
+      "bytes": 127067,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -32,8 +32,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "034b45897bf6fe1f2a8300aeab66610be5b435687a5c6bbf3d0c30dc175d116a",
-      "bytes": 126677,
+      "sha256": "6dfa688516fa3377a6be84488ae4b0e542c0ecb9c76bc88b278751e50ed013f5",
+      "bytes": 127655,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -51,8 +51,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "40e8c53b1ef7fa7fdc2156be4aebcdc562dfb2b47633cef916c3af5203a6a44d",
-      "bytes": 127825,
+      "sha256": "a4c9048f73c765c2c106ef3c840749cdf8a8506ec4e9482b9794838e2967ded6",
+      "bytes": 128803,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -419,8 +419,8 @@
           }
         ]
       ],
-      "sha256": "29dd5605bf5c45617e3b48da29cdb38074ce03e213d3b3bd8b4636cba6d9ca78",
-      "bytes": 128174,
+      "sha256": "1dfc73fb6a4fc6d22d5cfefced7893fbe0d427c9be17a525032ce44da6df189b",
+      "bytes": 129152,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -570,5 +570,9 @@
     ],
     "reviewed_change": "Bound navigation response headers and body with one 25-second deadline. Full-page fallbacks preserve the latest queued destination without extra requests. Replacing only the inline bundle reproduces every prior hash and byte count. No screenshots.",
     "non_script_markup_unchanged": true
+  },
+  "skill_upload_review": {
+    "source_base": "bfccf9278288e5674da23ad3a9be5f2abc9d4218",
+    "reviewed_change": "Raise Skill uploads to 256 files, 1 MiB per file and 8 MiB per canonical package. Form limits come from the server contract. Bilingual DOM tests cover actual folder selection, oversized selections, JSON escaping and retry after confirmed HTTP 413. No screenshots."
   }
 }

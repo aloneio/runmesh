@@ -6,7 +6,7 @@ import { makeSkillBundle } from "../src/domain/skills/bundle.js";
 import { catalogSha256 } from "../src/platform/capabilities/catalog-crypto.js";
 import { createSkillService } from "../src/application/skills/service.js";
 import type { CapabilityTarget } from "../src/contracts/capabilities.js";
-import type { SkillPorts } from "../src/contracts/skills.js";
+import type { SkillBundle, SkillPorts } from "../src/contracts/skills.js";
 
 const owner = () => (env as unknown as { CAPABILITIES: DurableObjectNamespace }).CAPABILITIES.get((env as unknown as { CAPABILITIES: DurableObjectNamespace }).CAPABILITIES.idFromName(crypto.randomUUID()));
 const principal = { client_id: "client-skills", secret_version: 1 };
@@ -53,9 +53,78 @@ it("Skill stage rolls back content if head publication fails and rejects unknown
     const schema = new CentralSchema(state.storage), store = new SkillState(state.storage, () => schema.initialize()); store.stage(a, 0);
     state.storage.sql.exec("CREATE TRIGGER reject_skill_head BEFORE UPDATE ON skill_heads_v1 BEGIN SELECT RAISE(ABORT,'synthetic'); END");
     expect(() => store.stage(b, 1)).toThrow(); expect(store.bundle(b.skill_id, b.digest)).toBeUndefined();
-    state.storage.sql.exec("UPDATE skill_meta SET schema_version=2");
+    state.storage.sql.exec("UPDATE skill_meta SET schema_version=99");
     expect(() => new SkillState(state.storage, () => schema.initialize()).head(a.skill_id)).toThrow("skill_schema_unsupported");
     expect(store.bundle(a.skill_id, a.digest)).toEqual(a);
+  });
+});
+it("large Skill folders survive storage recreation and roll back every file on publication failure", async () => {
+  const base = (await bundle())!;
+  const large = (await makeSkillBundle({ ...base, files: [base.files[0]!, ...Array.from({ length: 255 }, (_, n) => ({
+    path: 'references/' + String(n).padStart(3, '0') + '.txt', text: n < 3 ? (n === 0 ? '"' : 'x').repeat(1_048_576) : 'reference'
+  }))] }, catalogSha256))!;
+  expect(large).toBeDefined();
+  await runInDurableObject(owner(), (_instance, state) => {
+    const schema = new CentralSchema(state.storage), store = new SkillState(state.storage, () => schema.initialize());
+    expect(store.install(large, 0)).toMatchObject({ state: 'written', head: { enabled: true } });
+    const reopened = new SkillState(state.storage, () => schema.initialize());
+    expect(reopened.bundle(large.skill_id, large.digest)).toEqual(large);
+    expect(reopened.approved(large.skill_id, large.digest)).toBe(true);
+    state.storage.sql.exec("CREATE TRIGGER reject_skill_head BEFORE UPDATE ON skill_heads_v1 BEGIN SELECT RAISE(ABORT,'synthetic'); END");
+    expect(() => reopened.stage(base, 1)).toThrow();
+    expect(reopened.bundle(base.skill_id, base.digest)).toBeUndefined();
+    expect(state.storage.sql.exec("SELECT * FROM skill_files_v2 WHERE digest=?", base.digest).toArray()).toEqual([]);
+    expect(reopened.head(base.skill_id)?.active_digest).toBe(large.digest);
+  });
+});
+function seedLegacy(storage: DurableObjectStorage, bundles: readonly SkillBundle[]): void {
+  new CentralSchema(storage).initialize();
+  storage.sql.exec("CREATE TABLE skill_meta (id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL)");
+  storage.sql.exec("INSERT INTO skill_meta VALUES (1,1)");
+  storage.sql.exec("CREATE TABLE skill_heads_v1 (skill_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, staged_digest TEXT NOT NULL, active_digest TEXT, enabled INTEGER NOT NULL)");
+  storage.sql.exec("CREATE TABLE skill_bundles_v1 (skill_id TEXT NOT NULL, digest TEXT NOT NULL, summary_json TEXT NOT NULL, content_json TEXT NOT NULL, bytes INTEGER NOT NULL, approved INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(skill_id,digest))");
+  for (const [index, item] of bundles.entries()) {
+    const { files: _files, schema_version: _schema, ...summary } = item, content = JSON.stringify(item);
+    storage.sql.exec("INSERT INTO skill_bundles_v1 VALUES (?,?,?,?,?,?)", item.skill_id, item.digest, JSON.stringify(summary), content, new TextEncoder().encode(content).byteLength, index === 0 ? 1 : 0);
+  }
+  storage.sql.exec("INSERT INTO skill_heads_v1 VALUES (?,?,?,?,?)", bundles[0]!.skill_id, 3, bundles.at(-1)!.digest, bundles[0]!.digest, 0);
+}
+it("Skill schema upgrades preserve files, digests, approval, revisions and paused state", async () => {
+  const a = (await bundle())!, b = (await bundle('second'))!;
+  await runInDurableObject(owner(), (_instance, state) => {
+    seedLegacy(state.storage, [a, b]);
+    const store = new SkillState(state.storage, () => new CentralSchema(state.storage).initialize());
+    expect(store.head(a.skill_id)).toEqual({ skill_id: a.skill_id, revision: 3, staged_digest: b.digest, active_digest: a.digest, enabled: false });
+    for (const item of [a, b]) expect(store.bundle(item.skill_id, item.digest)).toEqual(item);
+    expect(store.approved(a.skill_id, a.digest)).toBe(true);
+    expect(store.approved(b.skill_id, b.digest)).toBe(false);
+    expect(state.storage.sql.exec("SELECT schema_version FROM skill_meta").toArray()).toEqual([{ schema_version: 2 }]);
+    expect(state.storage.sql.exec("SELECT name FROM sqlite_master WHERE name='skill_bundles_v1'").toArray()).toEqual([]);
+    expect(store.install(b, 3)).toMatchObject({ state: 'written', head: { revision: 4, enabled: true } });
+    expect(new SkillState(state.storage, () => undefined).bundle(b.skill_id, b.digest)).toEqual(b);
+  });
+});
+it("failed Skill schema upgrades roll back all new tables and can retry", async () => {
+  const a = (await bundle())!, b = (await bundle('second'))!;
+  await runInDurableObject(owner(), (_instance, state) => {
+    seedLegacy(state.storage, [a, b]);
+    state.storage.sql.exec("UPDATE skill_bundles_v1 SET content_json='invalid' WHERE digest=?", b.digest);
+    const store = new SkillState(state.storage, () => new CentralSchema(state.storage).initialize());
+    expect(() => store.head(a.skill_id)).toThrow();
+    expect(state.storage.sql.exec("SELECT schema_version FROM skill_meta").toArray()).toEqual([{ schema_version: 1 }]);
+    expect(state.storage.sql.exec("SELECT name FROM sqlite_master WHERE name IN ('skill_bundles_v2','skill_files_v2')").toArray()).toEqual([]);
+    state.storage.sql.exec("UPDATE skill_bundles_v1 SET content_json=? WHERE digest=?", JSON.stringify(b), b.digest);
+    expect(store.bundle(a.skill_id, a.digest)).toEqual(a);
+    expect(store.bundle(b.skill_id, b.digest)).toEqual(b);
+  });
+});
+it("Skill storage rejects incomplete file sets after recreation", async () => {
+  const a = (await bundle())!;
+  await runInDurableObject(owner(), (_instance, state) => {
+    const store = new SkillState(state.storage, () => new CentralSchema(state.storage).initialize());
+    store.install(a, 0);
+    state.storage.sql.exec("DELETE FROM skill_files_v2 WHERE position=1");
+    expect(() => new SkillState(state.storage, () => undefined).bundle(a.skill_id, a.digest)).toThrow('skill_record_invalid');
   });
 });
 it("Skill reads follow active publications, do not load bodies during listing, and reject revoked or mismatched clients", async () => {

@@ -2,8 +2,8 @@ import type { CapturedIdentity, IdentityDecision } from "./identity.js";
 import type { CapabilityTarget } from "./capabilities.js";
 import type { AdminDecision } from "./connectors.js";
 
-export const SKILL_LIMITS = Object.freeze({ files: 32, file_bytes: 65_536, bundle_bytes: 262_144, request_bytes: 524_288,
-  skills: 1_000, versions: 32, storage_bytes: 16_777_216, page: 128, dependencies: 8, operation_ms: 5_000 });
+export const SKILL_LIMITS = Object.freeze({ files: 256, file_bytes: 1_048_576, bundle_bytes: 8_388_608, request_bytes: 12_582_912,
+  skills: 1_000, versions: 32, storage_bytes: 268_435_456, page: 128, dependencies: 8, operation_ms: 5_000 });
 export type SkillDependencyState = "configured" | "not_configured" | "disabled" | "incompatible" | "unavailable";
 export interface SkillDependency { readonly target: CapabilityTarget; readonly state: SkillDependencyState }
 export interface SkillFile { readonly path: string; readonly text: string }

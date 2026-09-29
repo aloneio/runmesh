@@ -34,10 +34,14 @@ authorship or trust. Source/license metadata is not independently verified.
 Only text collections are accepted. Archives, remote links and executable
 installation are unsupported. Absolute/traversal paths, empty segments, Windows
 reserved names/streams, backslashes and case-folding collisions are rejected.
-A file object contains only path and text. Limits are 32 files, 64 KiB per file,
-256 KiB per canonical bundle, 512 KiB per admin request, 32 versions per Skill,
-1,000 Skills and 16 MiB of stored bundles. These are safety bounds, not measured
+A file object contains only path and text. Limits are 256 files, 1 MiB per file,
+8 MiB per canonical bundle, 12 MiB per admin request, 32 versions per Skill,
+1,000 Skills and 256 MiB of stored bundles. These are safety bounds, not measured
 capacity promises. Old content is never silently deleted to make room.
+File sizes count UTF-8 bytes; bundle sizes include JSON encoding and metadata.
+The browser receives these limits from the same contract as the server. File
+content is stored in separate rows below SQLite's row limit. Existing bundles
+upgrade atomically, preserving digests, revisions and publication state.
 
 ## List, read, update and disable
 
