@@ -9,6 +9,7 @@ This candidate is being prepared for release; the current stable package remains
 - Connect MCP services from the control panel using a URL and either no authentication or OAuth. Connected AI clients can use the enabled tools immediately.
 - Install Skills from SKILL.md and supporting text files or a folder, and confirm updates directly in the control panel.
 - Production configuration now includes shared MCP and Skill storage. Initial setup also prepares the separate OAuth credential vault.
+- Local development now initializes shared MCP and Skill storage alongside Miniflare runtime metadata. End-to-end checks cover library access without selecting a Runner.
 
 - Console navigation now recovers from stalled page requests after 25 seconds. When a full page load is needed, it opens your most recently selected destination.
 - Development release cache recovery now stops its Registry request and response reader when the recovery deadline ends, including when the request is still waiting for headers.

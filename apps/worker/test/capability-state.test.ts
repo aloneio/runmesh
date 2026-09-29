@@ -31,6 +31,27 @@ it("central namespace rejects unknown versions without rewriting data", async ()
   });
 });
 
+it("central namespace initializes around Miniflare runtime metadata without changing it", async () => {
+  await runInDurableObject(owner(), (_instance, state) => {
+    state.storage.sql.exec("CREATE TABLE __miniflare_do_name (name TEXT)");
+    state.storage.sql.exec("INSERT INTO __miniflare_do_name VALUES ('central')");
+    new CentralSchema(state.storage).initialize();
+    expect(state.storage.sql.exec("SELECT * FROM capabilities_meta").toArray()).toEqual([{ id: 1, schema_version: 1 }]);
+    expect(state.storage.sql.exec("SELECT * FROM __miniflare_do_name").toArray()).toEqual([{ name: "central" }]);
+  });
+});
+
+it.each(["__miniflare_unrelated", "abcf_foreign"])("central namespace preserves and rejects foreign table %s beside runtime metadata", async name => {
+  await runInDurableObject(owner(), (_instance, state) => {
+    state.storage.sql.exec("CREATE TABLE __miniflare_do_name (name TEXT)");
+    state.storage.sql.exec(`CREATE TABLE ${name} (value TEXT)`);
+    state.storage.sql.exec(`INSERT INTO ${name} VALUES ('preserve')`);
+    expect(() => new CentralSchema(state.storage).initialize()).toThrow("capabilities_schema_unsupported");
+    expect(state.storage.sql.exec(`SELECT * FROM ${name}`).toArray()).toEqual([{ value: "preserve" }]);
+    expect(state.storage.sql.exec("SELECT name FROM sqlite_master WHERE name='capabilities_meta'").toArray()).toEqual([]);
+  });
+});
+
 it("central namespace rejects partial or foreign state without fabricating ownership", async () => {
   for (const partial of [false, true]) await runInDurableObject(owner(), (_instance, state) => {
     if (partial) state.storage.sql.exec("CREATE TABLE capabilities_meta (id INTEGER PRIMARY KEY, schema_version INTEGER)");

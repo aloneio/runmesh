@@ -8,7 +8,9 @@ export class CentralSchema {
   public initialize(): void {
     if (this.initialized) return;
     this.storage.transactionSync(() => {
-      const tables = this.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '__cf_%'").toArray();
+      // Miniflare records named DOs before application initialization. Match the
+      // exact runtime table; GLOB keeps underscores literal in reserved prefixes.
+      const tables = this.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT GLOB 'sqlite_*' AND name NOT GLOB '__cf_*' AND name != '__miniflare_do_name'").toArray();
       if (!tables.some(table => table.name === "capabilities_meta")) {
         if (tables.length !== 0) throw new Error("capabilities_schema_unsupported");
         this.storage.sql.exec("CREATE TABLE capabilities_meta (id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL)");
