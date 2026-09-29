@@ -12,6 +12,11 @@ export function createAdminNavigation({
   let queued;
   const boundLinks = new WeakSet();
   const pageKey = url => url.pathname + url.search;
+  function navigateFully(url) {
+    const destination = queued?.url ?? url;
+    queued = undefined;
+    location.href = destination.href;
+  }
   async function open(url, shouldPush) {
     if (loading) {
       queued = {
@@ -22,15 +27,20 @@ export function createAdminNavigation({
     }
     loading = true;
     view.setLoading(true);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 25000);
     try {
       const response = await fetch(url.href, {
         credentials: "same-origin",
-        cache: "no-store"
+        cache: "no-store",
+        signal: controller.signal
       });
       if (!response.ok) throw new Error("HTTP " + response.status);
-      const parsed = parse(await response.text());
+      const markup = await response.text();
+      controller.signal.throwIfAborted();
+      const parsed = parse(markup);
       if (parsed.documentElement?.lang && parsed.documentElement.lang !== locale.requestedLocale()) {
-        location.href = url.href;
+        navigateFully(url);
         return;
       }
       const next = parsed.querySelector("#main-content");
@@ -40,8 +50,10 @@ export function createAdminNavigation({
       view.mount(root, parsed.title || "", pageKey(url), shouldPush, url);
     } catch (error) {
       onError(error);
-      location.href = url.href;
+      navigateFully(url);
     } finally {
+      clearTimeout(timer);
+      controller.abort();
       loading = false;
       view.setLoading(false);
       if (queued) {

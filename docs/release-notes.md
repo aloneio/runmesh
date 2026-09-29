@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Console navigation now recovers from stalled page requests after 25 seconds. When a full page load is needed, it opens your most recently selected destination.
 - Development release cache recovery now stops its Registry request and response reader when the recovery deadline ends, including when the request is still waiting for headers.
 - Cold development downloads recheck shared verified storage within the existing one-second recovery window when an initial cache miss races another instance's verification. Recovery preserves the original expiry and does not repeat upstream discovery.
 - Failed development release refreshes recover the most recently verified usable cache record, including updates from another instance, while retaining its original expiry. Foreground and background regressions cover recovery over older in-memory values.
