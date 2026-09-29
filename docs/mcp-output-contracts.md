@@ -1,6 +1,6 @@
 # Read and validate MCP tool results
 
-Use the output schema in `tools/list` to interpret each of Runmesh's ten public tools. The Worker validates a successful result against the requested action and returns allowed fields within its response-size budget. Truncated results carry explicit truncation information.
+Use the output schema in `tools/list` to interpret each of Runmesh's ten native tools. The Worker validates a successful native result against the requested action and returns allowed fields within its response-size budget. Truncated results carry explicit truncation information. Shared MCP and Skill tools add separate entries to the active catalog; use each entry's schema and returned content for those calls.
 
 ## Interpret a receipt
 
