@@ -112,9 +112,10 @@ child.once("close", (code, signal) => {
   clearTimeout(forceExitTimer);
   if (timedOut || interrupted || spawnFailed) {
     process.exitCode = 1;
-  } else if (markerSeen && ((code === 0 && signal === null) || (rootTerminationRequested && (process.platform === "win32" || signal === "SIGTERM" || signal === "SIGKILL")))) {
+  } else if (markerSeen && ((code === 0 && signal === null) || (rootTerminationRequested && (signal === "SIGTERM" || signal === "SIGKILL" || (process.platform === "win32" && code === 1))))) {
     // Wrangler may report success and then be terminated solely to release a
-    // leaked esbuild child. Preserve the successful dry-run result.
+    // leaked esbuild child. Windows taskkill uses exit code 1; never accept
+    // another explicit failure code when natural exit races with cleanup.
     process.exitCode = 0;
   } else if (code === 0 && signal === null) {
     // A zero exit without Wrangler's explicit dry-run marker is not proof that

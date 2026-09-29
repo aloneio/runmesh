@@ -2,6 +2,13 @@ import type { UiLocale } from "../contracts/locale.js";
 
 /** Stable identifiers are source-owned. Do not derive or rename keys when editing copy. */
 const definitions = {
+  "oauth.callback.title": { en: "Connecting MCP", "zh-CN": "正在连接 MCP" },
+  "oauth.callback.pending": { en: "Completing authorization. You will return to MCP & Skill shortly.", "zh-CN": "正在完成授权，即将返回 MCP 和 Skill。" },
+  "oauth.callback.failed": { en: "Connection not completed", "zh-CN": "连接尚未完成" },
+  "oauth.callback.restart": { en: "Return to MCP & Skill and start authorization again.", "zh-CN": "请返回 MCP 和 Skill，重新开始授权。" },
+  "oauth.callback.unconfirmed": { en: "We could not confirm the connection. Return to check its status.", "zh-CN": "暂时无法确认连接结果，请返回查看状态。" },
+  "oauth.callback.cancelled": { en: "Authorization was cancelled. You can connect again from MCP & Skill.", "zh-CN": "授权已取消，可返回 MCP 和 Skill 重新连接。" },
+  "oauth.callback.back": { en: "Back to MCP & Skill", "zh-CN": "返回 MCP 和 Skill" },
   "product.shared.library": { en: "All connected AI clients share enabled MCPs and Skills. Pause an item to stop sharing it.", "zh-CN": "所有已连接的 AI 客户端共享已启用的 MCP 和 Skill；暂停项目即可停止共享。" },
   "product.home.connect": { en: "2. Connect your AI client", "zh-CN": "2. 连接 AI 客户端" },
   "product.home.help": { en: "Create a connection for each AI client to use your MCPs and Skills.", "zh-CN": "为每个 AI 客户端创建连接，即可使用 MCP 和 Skill。" },

@@ -3,6 +3,7 @@ import { connectionClientMetadata, parseManagedConnectionResult, type ManagedCon
 import { publicMcpEndpoint } from "../contracts/remote-values.js";
 import { admitCentralAdmin, cancelCentralBody, centralFailure, centralHeaders } from "./central-boundary.js";
 import { oauthLanding } from "./oauth-landing.js";
+import { requestLocale } from "../i18n/locale.js";
 
 export async function handleConnections(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
   const action = url.pathname.slice("/admin/central/connections/".length), origin = env.RUNMESH_PUBLIC_ORIGIN;
@@ -11,7 +12,7 @@ export async function handleConnections(request: Request, env: WorkerEnv, url: U
     if (!origin || publicMcpEndpoint(origin) === undefined || new URL(origin).origin !== origin) return centralFailure("oauth_unavailable", 503);
     return Response.json({ client_id: origin + "/admin/central/connections/client-metadata", ...connectionClientMetadata(origin) }, { headers: centralHeaders });
   }
-  if (action === "callback" && request.method === "GET" && url.href.length <= 8192) return oauthLanding();
+  if (action === "callback" && request.method === "GET" && url.href.length <= 8192) return oauthLanding(requestLocale(request));
   if (!["begin", "complete", "revoke"].includes(action) || request.method !== "POST" || url.search) { cancelCentralBody(request); return centralFailure("central_not_found", 404); }
   const admission = await admitCentralAdmin(request, env, 16_384); if (admission instanceof Response) return admission;
   let timer: ReturnType<typeof setTimeout> | undefined;

@@ -51,6 +51,7 @@ const fixtureControlSecret = "test-existing-internal-control-secret";
 function oauthFixture(cimd = false, configuredOrigin: string | null = origin, protocol?: ManagedOAuthProtocol, secret: () => unknown = () => fixtureControlSecret) {
   let record: ManagedOAuthRecord | undefined, now = 1_800_000_000_000, allowed = true, live = { ...base, authentication: "oauth" as const };
   let failToken = false, revokeOnToken = false, privateToken = false, challengeMetadata: string | undefined;
+  let tokenResponse: Record<string, unknown> = {};
   const posts: string[] = [], state = { registration: 0, exchanges: 0, refreshes: 0 };
   const cipher = createOAuthCipher("managed-test", secret);
   const repository = { read: () => record ? structuredClone(record) : undefined, find: (hash: string) => record?.state_hash === hash ? structuredClone(record) : undefined, replace: (value: ManagedOAuthRecord, expected: number) => { if ((record?.revision ?? 0) !== expected) return false; record = JSON.parse(JSON.stringify(value)) as ManagedOAuthRecord; return true; } };
@@ -77,7 +78,7 @@ function oauthFixture(cimd = false, configuredOrigin: string | null = origin, pr
     if (params.get("grant_type") === "refresh_token") state.refreshes++; else { state.exchanges++; expect(params.get("code_verifier")).toBeTruthy(); }
     if (revokeOnToken) allowed = false;
     if (failToken) return Response.json({ error: "invalid_grant" }, { status: 400 });
-    return Response.json({ access_token: "synthetic-managed-access-" + state.refreshes, refresh_token: "synthetic-managed-refresh", token_type: "Bearer", expires_in: 60 });
+    return Response.json({ access_token: "synthetic-managed-access-" + state.refreshes, refresh_token: "synthetic-managed-refresh", token_type: "Bearer", expires_in: 60, ...tokenResponse });
   });
   const service = () => createManagedOAuth({ repository, cipher, profile: () => live, admin: async () => allowed ? "allowed" : "denied", origin: () => configuredOrigin ?? undefined, hash: catalogSha256, random: oauthRandom, now: () => now, protocol: protocol ?? createManagedOAuthProtocol(send) });
   const hash = "a".repeat(64), selection = { profile_id: base.profile_id, expected_revision: base.revision };
@@ -85,8 +86,23 @@ function oauthFixture(cimd = false, configuredOrigin: string | null = origin, pr
   return { service, begin, hash, selection, state, posts, send, repository, record: () => record, now: (elapsed = 40_000) => { now += elapsed; },
     callback: (value: string) => ({ state: value, code: "synthetic-one-use-code", iss: issuer }), fail: () => { failToken = true; }, revokeOnToken: () => { revokeOnToken = true; }, privateToken: () => { privateToken = true; }, pause: () => { live = { ...live, revision: 3, enabled: false }; },
     resume: () => { live = { ...live, revision: 4, enabled: true }; return live; },
-    challenge: (url: string) => { challengeMetadata = url; } };
+    challenge: (url: string) => { challengeMetadata = url; }, tokens: (value: Record<string, unknown>) => { tokenResponse = value; } };
 }
+it.each([false, true])("opaque Cloudflare-style tokens survive exchange, persistence and refresh (CIMD=%s)", async cimd => {
+  const f = oauthFixture(cimd), token = "synthetic-user:synthetic-grant:opaque-secret_9-";
+  f.tokens({ access_token: token, refresh_token: "synthetic-user:synthetic-grant:refresh-secret", scope: "read:".repeat(1500) });
+  const state = await f.begin();
+  expect(await f.service().run(f.hash, "complete", f.callback(state))).toEqual({ state: "linked", profile_id: base.profile_id });
+  const selected = { ...base, authentication: "oauth" as const };
+  const credential = await f.service().credential(selected, new AbortController().signal, async () => undefined);
+  expect(credential.credential).toEqual({ kind: "bearer", token });
+  expect(new Headers({ authorization: "Bearer " + credential.credential.token }).get("authorization")).toBe("Bearer " + token);
+  expect(JSON.stringify(f.record())).not.toContain(token);
+  f.now();
+  const refreshed = await f.service().credential(selected, new AbortController().signal, async () => undefined);
+  expect(refreshed.credential.token).toBe(token); expect(refreshed.current()).toBe(true);
+  expect(f.state.exchanges).toBe(1); expect(f.state.refreshes).toBe(1);
+});
 it.each([undefined, "", "short"])("OAuth reports invalid existing server configuration before contacting the provider: %s", async unavailable => {
   let secret: unknown = unavailable;
   const f = oauthFixture(false, origin, undefined, () => secret);

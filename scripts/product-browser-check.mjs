@@ -104,7 +104,7 @@ export async function checkGuidedProduct(executable) {
  await checkRunnerActions(executable);
  const digest='a'.repeat(64), toolVersion='c'.repeat(64);
  const profiles=[], library=[], requests=[], exceptions=[];
- let conflict=false, failLibrary=false, rejectDiscovery=false, rejectOAuthStart=false, invalidCatalogReceipt=false, delayedOAuth;
+ let conflict=false, failLibrary=false, rejectDiscovery=false, rejectOAuthStart=false, rejectOAuthComplete=false, invalidCatalogReceipt=false, delayedOAuth;
  let rejectedProfile, afterDiscovery, afterSkillInstallation, delayedDiscovery, failRefreshAfterRejection=false;
  const catalogs=new Map();
  const server=createServer(async(req,res)=>{
@@ -113,7 +113,7 @@ export async function checkGuidedProduct(executable) {
    const locale=requestLocale(new Request(url,{headers:{cookie:req.headers.cookie??''}}));
    if(url.pathname==='/oauth-fixture'){res.statusCode=302;res.setHeader('location','/admin/central/connections/callback?state=fixture-state&code=fixture-code&iss=https://login.provider.com&scope=read&authuser=0');res.end();return;}
    if(url.pathname==='/late-oauth-fixture'){res.setHeader('content-type','text/html');res.end('<p>Unexpected detached OAuth redirect</p>');return;}
-   if(url.pathname==='/admin/central/connections/callback'){const page=oauthLanding();for(const [k,v] of page.headers)res.setHeader(k,v);res.end(await page.text());return;}
+   if(url.pathname==='/admin/central/connections/callback'){const page=oauthLanding(locale);for(const [k,v] of page.headers)res.setHeader(k,v);res.end(await page.text());return;}
    if(url.pathname==='/admin') {res.setHeader('content-type','text/html');res.end(adminDocument('Dashboard',productOverviewPage({clients:[],runners:[]}),'dashboard'));return;}
    if(url.pathname==='/admin/central') {res.setHeader('set-cookie',ADMIN_CSRF_COOKIE+'=fixture-csrf; Path=/; SameSite=Strict; Secure');res.setHeader('content-type','text/html');res.end(adminDocument('MCP & Skill',centralPage('fixture-csrf',true,true),'central').replace('<html lang="en">','<html lang="'+locale+'">'));return;}
    if(url.pathname==='/admin/clients') {
@@ -133,7 +133,7 @@ export async function checkGuidedProduct(executable) {
    }else if(kind==='connections'){
     assert.equal(req.headers['x-csrf-token'],'fixture-csrf');
     if(id==='begin'){const pending=delayedOAuth;if(pending)await pending;if(rejectOAuthStart){code=503;value={error:{code:'oauth_provider_unsupported',operation_state:'not_started'}};}else value={state:'started',profile_id:body.profile_id,authorization_url:pending?'/late-oauth-fixture':'/oauth-fixture'};}
-    else if(id==='complete'){if(body.error){assert.deepEqual(body,{state:'cancel-state',error:'access_denied'});code=503;value={error:{code:'oauth_reauthorization_required'}};}else{assert.deepEqual(body,{state:'fixture-state',iss:'https://login.provider.com',code:'fixture-code'});value={state:'linked',profile_id:profiles.at(-1).profile_id};}}
+    else if(id==='complete'){if(body.error){assert.deepEqual(body,{state:'cancel-state',error:'access_denied'});code=503;value={error:{code:'oauth_reauthorization_required'}};}else{assert.deepEqual(body,{state:'fixture-state',iss:'https://login.provider.com',code:'fixture-code'});if(rejectOAuthComplete){code=503;value={error:{code:'oauth_unavailable',operation_state:'unknown'}};}else value={state:'linked',profile_id:profiles.at(-1).profile_id};}}
     else value={state:'revoked',profile_id:body.profile_id};
    }else if(kind==='skill-installations'){
     const installation=skillInstallation(body);
@@ -368,15 +368,34 @@ export async function checkGuidedProduct(executable) {
   failLibrary=false;await page.locator('[data-product-refresh]').click();await status.filter({hasText:'List refreshed.'}).waitFor();
   await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
   const callback=await page.context().newPage();callback.on('pageerror',e=>exceptions.push(e.message));
-  for(const route of ['connections']){
-   const path='/admin/central/'+route;
-   await callback.goto(origin+path+'/callback?state=cancel-state&error=access_denied&error_description=PRIVATE_PROVIDER_DETAIL&error_uri=https://provider.com/error');
-   await callback.getByText('Authorization was not confirmed.',{exact:false}).waitFor();assert.equal(new URL(callback.url()).search,'');assert.equal((await callback.content()).includes('PRIVATE_PROVIDER_DETAIL'),false);
+  for(const locale of ['en','zh-CN']){
+   const path='/admin/central/connections', chinese=locale==='zh-CN';
+   await callback.setViewportSize({width:390,height:844});
+   await callback.goto(origin+path+'/callback?state=cancel-state&error=access_denied&error_description=PRIVATE_PROVIDER_DETAIL&error_uri=https://provider.com/error&lang='+locale);
+   await callback.getByText(chinese?'授权已取消，可返回 MCP 和 Skill 重新连接。':'Authorization was cancelled. You can connect again from MCP & Skill.',{exact:true}).waitFor();
+   assert.equal(new URL(callback.url()).search,'');assert.equal((await callback.content()).includes('PRIVATE_PROVIDER_DETAIL'),false);
+   assert.equal(await callback.locator('.app-header').isVisible(),true);
+   assert.equal(await callback.locator('.auth-card.secret-card').isVisible(),true);
+   assert.equal(await callback.getByRole('link',{name:chinese?'返回 MCP 和 Skill':'Back to MCP & Skill',exact:true}).getAttribute('href'),'/admin/central');
+   assert.equal(await callback.locator('[data-oauth-callback]').getAttribute('aria-busy'),'false');
+   assert.equal(await callback.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
+   assert.notEqual(await callback.locator('.auth-card').evaluate(element=>getComputedStyle(element).backgroundColor),'rgba(0, 0, 0, 0)');
    const callbacks=requests.filter(r=>r.path===path+'/complete').length;
    for(const duplicate of ['state=one&state=two&code=unused','state=one&code=unused&code=again','state=one&code=unused&iss=one&iss=two','state=one&error=access_denied&error=again']){
-    await callback.goto(origin+path+'/callback?'+duplicate);await callback.getByText('Authorization not completed.',{exact:false}).waitFor();assert.equal(new URL(callback.url()).search,'');
+    await callback.goto(origin+path+'/callback?'+duplicate+'&lang='+locale);await callback.getByText(chinese?'请返回 MCP 和 Skill，重新开始授权。':'Return to MCP & Skill and start authorization again.',{exact:true}).waitFor();assert.equal(new URL(callback.url()).search,'');
    }
    assert.equal(requests.filter(r=>r.path===path+'/complete').length,callbacks);
+   rejectOAuthComplete=true;
+   await callback.setViewportSize({width:1365,height:1000});
+   await callback.goto(origin+path+'/callback?state=fixture-state&code=fixture-code&iss=https://login.provider.com&lang='+locale);
+   await callback.getByText(chinese?'暂时无法确认连接结果，请返回查看状态。':'We could not confirm the connection. Return to check its status.',{exact:true}).waitFor();
+   assert.equal(await callback.getByRole('heading',{name:chinese?'连接尚未完成':'Connection not completed',exact:true}).isVisible(),true);
+   assert.equal(new URL(callback.url()).search,'');
+   assert.equal(requests.filter(r=>r.path===path+'/complete').length,callbacks+1);
+   assert.equal(await callback.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
+   await callback.getByRole('link',{name:chinese?'返回 MCP 和 Skill':'Back to MCP & Skill',exact:true}).click();
+   assert.equal(new URL(callback.url()).pathname,'/admin/central');
+   rejectOAuthComplete=false;
   }
   await callback.close();
   // A list receipt is not proof that a discovery publication succeeded.
