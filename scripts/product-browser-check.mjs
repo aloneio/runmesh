@@ -240,8 +240,13 @@ export async function checkGuidedProduct(executable) {
   await page.getByRole('button',{name:'Reconnect',exact:true}).click();await status.filter({hasText:'Refresh before making another change.'}).waitFor();
   assert.equal(requests.filter(r=>r.path==='/admin/central/connections/begin').length,1);
   await page.locator('[data-product-refresh]').click();await status.filter({hasText:'List refreshed.'}).waitFor();
-  rejectDiscovery=false;await page.getByRole('button',{name:'Reconnect',exact:true}).click();
-  await page.waitForURL(url=>url.pathname==='/admin/central'&&url.searchParams.has('connected'),{timeout:10000});await status.filter({hasText:'Connected.'}).waitFor();
+  rejectDiscovery=false;
+  // Observe the return before clicking: completion removes its query from history.
+  await Promise.all([
+   page.waitForURL(url=>url.pathname==='/admin/central'&&url.searchParams.has('connected'),{waitUntil:'commit',timeout:10000}),
+   page.getByRole('button',{name:'Reconnect',exact:true}).click(),
+  ]);
+  await status.filter({hasText:'Connected.'}).waitFor();
   assert.equal(requests.filter(r=>r.path==='/admin/central/connections/begin').length,2);assert.equal(requests.filter(r=>r.path==='/admin/central/connections/complete').length,2);assert.equal(new URL(page.url()).search,'');
   // A completed OAuth sign-in whose return was interrupted also finishes on reopening.
   const oauthId=profiles.at(-1).profile_id;catalogs.delete(oauthId);

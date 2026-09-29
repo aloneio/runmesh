@@ -4,12 +4,23 @@ import { test } from "node:test";
 import { reviewedReleaseSource } from "../scripts/runtime-config-tools.mjs";
 import { checkCommand } from "../scripts/ci-contract.mjs";
 
-test("top-level Worker config is reviewed production while development enables only reviewed central flags", async () => {
+test("release candidate ships central capabilities in both production entrypoints", async () => {
+  const config = JSON.parse(await readFile(new URL("../apps/worker/wrangler.jsonc", import.meta.url), "utf8"));
+  const entrypoint = await readFile(new URL("../apps/worker/src/production.ts", import.meta.url), "utf8");
+  for (const section of [config, config.env.production]) {
+    assert.deepEqual(section.durable_objects.bindings.filter(binding => binding.name === "CAPABILITIES"), [{ name: "CAPABILITIES", class_name: "CapabilitiesDOv1" }]);
+    assert.deepEqual(section.exports.CapabilitiesDOv1, { type: "durable-object", storage: "sqlite" });
+    for (const name of ["CENTRAL_SKILLS_ENABLED", "CENTRAL_DIRECT_TOOLS_ENABLED", "CENTRAL_GOVERNANCE_ENABLED"]) assert.equal(section.vars[name], "1");
+  }
+  assert.match(entrypoint, /export \{[^}]*CapabilitiesDOv1[^}]*\} from "[.]\/index[.]js"/u);
+});
+
+test("top-level and named Worker environments enable the reviewed central capabilities", async () => {
   const source = await readFile(new URL("../apps/worker/wrangler.jsonc", import.meta.url), "utf8");
   const config = JSON.parse(source.replace(/^\s*\/\/.*$/gm, ""));
   const root = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.equal(config.name, "runmesh");
-  assert.deepEqual(config.vars, {});
+  assert.deepEqual(config.vars, { CENTRAL_SKILLS_ENABLED: "1", CENTRAL_DIRECT_TOOLS_ENABLED: "1", CENTRAL_GOVERNANCE_ENABLED: "1" });
   const releaseState=JSON.parse(await readFile(new URL("../release/release-state.json",import.meta.url),"utf8"));
   assert.equal(releaseState.version,root.version);
   assert.ok(["candidate","released"].includes(releaseState.state));
@@ -111,27 +122,27 @@ test("central outbound transport retains public-only routing and requires explic
     assert.equal(environment.vars.CENTRAL_VAULT_KEYRING,undefined);
   }
   for (const environment of [config, config.env.production])
-    assert.ok(!environment.durable_objects.bindings.some(binding=>binding.name==="CAPABILITIES"));
+    assert.deepEqual(environment.durable_objects.bindings.filter(binding=>binding.name==="CAPABILITIES"), [{name:"CAPABILITIES",class_name:"CapabilitiesDOv1"}]);
   assert.deepEqual(config.env.development.durable_objects.bindings.filter(binding=>binding.name==="CAPABILITIES"),
     [{name:"CAPABILITIES",class_name:"CapabilitiesDOv1"}]);
 });
 
-test("OAuth activation is never implicit in deployed Worker settings", async () => {
+test("OAuth credentials and provider policies are never plaintext deployed Worker settings", async () => {
   const config = JSON.parse(await readFile(new URL("../apps/worker/wrangler.jsonc", import.meta.url), "utf8"));
   for (const section of [config, config.env.development, config.env.production]) {
     assert.equal(section.vars?.CENTRAL_OAUTH_POLICIES, undefined);
     assert.equal(section.vars?.CENTRAL_VAULT_KEYRING, undefined);
-    assert.equal(section.durable_objects.bindings.some(binding => binding.name === "CAPABILITIES"), section === config.env.development);
+    assert.equal(section.durable_objects.bindings.some(binding => binding.name === "CAPABILITIES"), true);
   }
 });
 
 test("retirement cannot target v2, other environments, or a replacement production namespace", async () => {
   const config=JSON.parse(await readFile(new URL("../apps/worker/wrangler.jsonc",import.meta.url),"utf8"));
-  const expected={RegistryDOv2:{type:"durable-object",storage:"sqlite"},RunnerDOv2:{type:"durable-object",storage:"sqlite"},RegistryDO:{type:"durable-object",state:"deleted"},RunnerDO:{type:"durable-object",state:"deleted"}};
+  const expected={RegistryDOv2:{type:"durable-object",storage:"sqlite"},RunnerDOv2:{type:"durable-object",storage:"sqlite"},CapabilitiesDOv1:{type:"durable-object",storage:"sqlite"},RegistryDO:{type:"durable-object",state:"deleted"},RunnerDO:{type:"durable-object",state:"deleted"}};
   for(const c of [config,config.env.production]) {
     assert.equal(c.name,"runmesh");assert.equal(c.main,"src/production.ts");
     assert.deepEqual(c.exports,expected);assert.equal(c.migrations,undefined);
-    assert.deepEqual(c.durable_objects.bindings,[{name:"REGISTRY",class_name:"RegistryDOv2"},{name:"RUNNER",class_name:"RunnerDOv2"}]);
+    assert.deepEqual(c.durable_objects.bindings,[{name:"REGISTRY",class_name:"RegistryDOv2"},{name:"RUNNER",class_name:"RunnerDOv2"},{name:"CAPABILITIES",class_name:"CapabilitiesDOv1"}]);
     assert.deepEqual(c.d1_databases,[{binding:"HISTORY_DB",database_name:"runmesh-audit-history"}]);
   }
   const originalMigrations=[{tag:"v1",new_sqlite_classes:["RegistryDO","RunnerDO"]},{tag:"v2",new_sqlite_classes:["RegistryDOv2","RunnerDOv2"]}];

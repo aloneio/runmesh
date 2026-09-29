@@ -7,7 +7,7 @@ import { missingSecretNames, generateMissingSecrets, REQUIRED_SECRET_NAMES, CENT
 export function setupMissingSecrets({ environment, apply = false, invoke }) {
   assert.ok(environment === "production" || environment === "development", "Select --env production|development");
   const target = ["--config", "apps/worker/wrangler.jsonc", "--env", environment];
-  const required = environment === "development" ? [...REQUIRED_SECRET_NAMES, CENTRAL_VAULT_SECRET] : REQUIRED_SECRET_NAMES;
+  const required = [...REQUIRED_SECRET_NAMES, CENTRAL_VAULT_SECRET];
   const inventory = () => {
     const result = invoke(["secret", "list", ...target, "--format", "json"]);
     assert.equal(result.status, 0, "Cannot read Cloudflare secret names. Authenticate and deploy the Worker first; no secrets changed.");

@@ -266,16 +266,16 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     }
   });
 
-  it("advertises exactly the compact catalog and leaves legacy public names absent", async () => {
+  it("advertises the native and central catalogs and leaves legacy public names absent", async () => {
     const response = await fetch((clientA as McpClient).endpoint, {
       method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
       body: JSON.stringify({ jsonrpc: "2.0", id: requestId++, method: "tools/list", params: {} }),
     });
     const listed = await readMcp(response) as { result?: { tools?: Array<{ name?: string; description?: string; inputSchema?: unknown; outputSchema?: unknown; annotations?: unknown; _meta?: Record<string,unknown> }> } };
-    expect(listed.result?.tools?.map((tool) => tool.name).sort()).toEqual(["context", "edit", "inspect", "job", "read", "runner_current", "runner_list", "runner_select", "shell", "workspace_list"].sort());
+    expect(listed.result?.tools?.map((tool) => tool.name).sort()).toEqual(["context", "edit", "inspect", "job", "read", "runner_current", "runner_list", "runner_select", "shell", "workspace_list", "remote_profiles", "remote_tools", "remote_call", "remote_status", "skill_list", "skill_read"].sort());
     const expected = catalogContract();
-    for (const advertised of listed.result!.tools!) {
-      const wanted = expected.tools.find(tool => tool.name === advertised.name)!;
+    for (const wanted of expected.tools) {
+      const advertised = listed.result!.tools!.find(tool => tool.name === wanted.name)!;
       expect(advertised.description).toBe(wanted.description);
       expect(advertised.inputSchema).toEqual(wanted.inputSchema);
       expect(advertised.outputSchema).toEqual(wanted.outputSchema);
@@ -772,6 +772,16 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       const logs = await mcpTool("job", { action: "logs", workspace_id: "workspace-1", job_id: jobId, stream: "stdout", limit: 1024 });
       expect(logs.structuredContent?.data).toContain("batched-live-log");
     } finally { expect((await save("immediate")).status).toBe(303); }
+  });
+
+  it("lists shared MCPs and Skills without selecting a Runner", async () => {
+    for (const name of ["remote_profiles", "skill_list"]) {
+      const result = await mcpTool(name, {}, clientC);
+      expect(result.isError, JSON.stringify(result)).not.toBe(true);
+      const content = JSON.parse(result.content?.[0]?.text ?? "null");
+      expect(content.state).toBe("listed");
+      expect(content[name === "remote_profiles" ? "profiles" : "skills"]).toEqual([]);
+    }
   });
 
   it("R03 reads three real commits and literal blame through MCP without shell permission", async () => {

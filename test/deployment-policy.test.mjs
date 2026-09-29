@@ -58,11 +58,11 @@ test("cutover preserves the current production namespace, storage and fixed rele
   const state=JSON.parse(await readFile(new URL("../release/release-state.json",import.meta.url),"utf8"));
   assert.equal(await readFile(new URL("../apps/worker/src/generated-release.ts",import.meta.url),"utf8"), reviewedReleaseSource(p.version,state));
   assert.equal(c.env.production.d1_databases[0].database_name,"runmesh-audit-history");
-  assert.deepEqual(c.env.production.durable_objects.bindings.map(x=>x.class_name),["RegistryDOv2","RunnerDOv2"]);
+  assert.deepEqual(c.env.production.durable_objects.bindings.map(x=>x.class_name),["RegistryDOv2","RunnerDOv2","CapabilitiesDOv1"]);
   assert.notEqual(c.env.development.name,c.name);
 });
 
-test("dev central activation adds an independent namespace while remote egress and production remain opt-in", async () => {
+test("central activation uses independent namespaces while credentials remain environment-specific", async () => {
   const config = JSON.parse(await readFile(new URL("../apps/worker/wrangler.jsonc", import.meta.url), "utf8"));
   const dev = config.env.development;
   assert.deepEqual(dev.durable_objects.bindings, [
@@ -77,8 +77,8 @@ test("dev central activation adds an independent namespace while remote egress a
   ]);
   for (const name of ["CENTRAL_SKILLS_ENABLED", "CENTRAL_DIRECT_TOOLS_ENABLED", "CENTRAL_GOVERNANCE_ENABLED"]) assert.equal(dev.vars[name], "1");
   for (const target of [config, config.env.production]) {
-    assert.ok(target.durable_objects.bindings.every(binding => binding.name !== "CAPABILITIES"));
-    assert.ok(Object.keys(target.vars).every(name => !name.startsWith("CENTRAL_")));
+    assert.deepEqual(target.durable_objects.bindings, dev.durable_objects.bindings);
+    assert.deepEqual(target.vars, { CENTRAL_SKILLS_ENABLED: "1", CENTRAL_DIRECT_TOOLS_ENABLED: "1", CENTRAL_GOVERNANCE_ENABLED: "1" });
   }
   assert.equal(dev.vars.CENTRAL_MCP_EGRESS, undefined);
   assert.equal(dev.vars.CENTRAL_VAULT_KEYRING, undefined);
