@@ -3,10 +3,25 @@ import { createSecretStorage } from "../src/platform/secret-storage.js";
 import { SECRET_STORAGE_LIMITS, parseEncryptedSecret } from "../src/contracts/secret-storage.js";
 import { encodeBase64Url, decodeBase64Url } from "../src/contracts/base64url.js";
 import { parseCredential, parseProfileCommand } from "../src/contracts/connector-values.js";
+import { canonicalJson } from "../src/contracts/json.js";
 
 const secretA = "a".repeat(32), secretB = "b".repeat(32);
 const context = JSON.stringify(["managed-oauth", "docs-account", "https://docs.example.com/mcp", 1]);
 const credential = { kind: "bearer" as const, token: "synthetic-test-token" };
+
+it("W03 shared serialization applies caller budgets without changing data or evaluating getters", () => {
+  const value = { z: "é", a: [1] }, expected = '{"a":[1],"z":"é"}';
+  const bytes = new TextEncoder().encode(expected).byteLength;
+  expect(canonicalJson(value, bytes)).toBe(expected);
+  expect(canonicalJson(value, bytes - 1)).toBeUndefined();
+  expect(canonicalJson(value, bytes, { depth: 1, nodes: 10 })).toBeUndefined();
+  expect(canonicalJson(value, bytes, { depth: 2, nodes: 3 })).toBeUndefined();
+  expect(canonicalJson(value, bytes)).toBe(expected);
+  expect(Object.keys(value)).toEqual(["z", "a"]);
+  const getter = vi.fn(() => "synthetic-secret");
+  expect(canonicalJson(Object.defineProperty({}, "token", { enumerable: true, get: getter }), 1024)).toBeUndefined();
+  expect(getter).not.toHaveBeenCalled();
+});
 
 it("W03 cipher uses the existing control secret and round-trips across restart without storing a key", async () => {
   const load = vi.fn(() => secretA), cipher = createSecretStorage("namespace-a", load);
@@ -23,7 +38,11 @@ it.each(["profile", "connector", "endpoint", "generation", "namespace", "ciphert
   const sealed = { ...await cipher.seal(context, credential) };
   const changed = ["profile", "connector", "endpoint", "generation"].includes(field) ? context + ":" + field : context;
   if (field === "ciphertext") sealed.ciphertext = (sealed.ciphertext[0] === "A" ? "B" : "A") + sealed.ciphertext.slice(1);
-  if (field === "key") sealed.key_id = "missing";
+  if (field === "key") {
+    sealed.key_id = "missing";
+    // State can be read and replaced on reconnect; only the cipher selects a key.
+    expect(parseEncryptedSecret(sealed)).toEqual(sealed);
+  }
   const reader = field === "namespace" ? createSecretStorage("namespace-b", () => secretA) : cipher;
   await expect(reader.open(changed, sealed)).rejects.toThrow(/^secret_storage_unavailable$/u);
 });

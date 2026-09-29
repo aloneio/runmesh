@@ -27,6 +27,10 @@ async function fixture(t, sources) {
 }
 
 const bad = [
+  ["shared storage cipher to catalog contract", { "apps/worker/src/platform/secret-storage.ts": 'import "../contracts/catalog-json.js";', "apps/worker/src/contracts/catalog-json.ts": 'export {};' }],
+  ["shared ciphertext contract to capability contract", { "apps/worker/src/contracts/secret-storage.ts": 'import "./capabilities.js";', "apps/worker/src/contracts/capabilities.ts": 'export {};' }],
+  ["shared serializer to feature contract", { "apps/worker/src/contracts/json.ts": 'import "./catalog.js";', "apps/worker/src/contracts/catalog.ts": 'export {};' }],
+  ["shared serializer to provider SDK", { "apps/worker/src/contracts/json.ts": 'import "@modelcontextprotocol/client";' }],
   ["duplicate Worker storage cipher", { "apps/worker/src/platform/other.ts": 'export const algorithm = "AES-GCM";' }],
   ["shared storage cipher to feature implementation", { "apps/worker/src/platform/secret-storage.ts": 'import "./connectors/managed-store.js";', "apps/worker/src/platform/connectors/managed-store.ts": 'export {};' }],
   ["Handshake to asynchronous projection", { "apps/worker/src/domain/runner-handshake.ts": 'export async function project() { return {}; }' }],

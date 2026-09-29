@@ -1,8 +1,10 @@
 import type { AdminDecision, ConnectionProfile } from "./connectors.js";
 import { SECRET_STORAGE_LIMITS, type EncryptedSecret, type SecretStorage } from "./secret-storage.js";
 
+export const MANAGED_OAUTH_DISCOVERY_BYTES = 32_768;
+
 /** Three encrypted values, discovery metadata and bounded record fields. */
-export const MANAGED_OAUTH_RECORD_BYTES = 3 * (SECRET_STORAGE_LIMITS.ciphertext_bytes + 256) + 32_768 + 4096;
+export const MANAGED_OAUTH_RECORD_BYTES = 3 * (SECRET_STORAGE_LIMITS.ciphertext_bytes + 256) + MANAGED_OAUTH_DISCOVERY_BYTES + 4096;
 
 /** Opaque provider metadata is interpreted only by the protocol adapter.
  * Neither lifecycle rules nor persistence depend on the SDK's versioned types. */

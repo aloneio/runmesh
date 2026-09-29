@@ -16,8 +16,13 @@ export function centralFeature(path) {
 const unreviewed = path => /^apps\/worker\/src\/(?:capabilities|connectors|skills)\//u.test(path);
 const provider = path => /^apps\/worker\/src\/mcp\/providers\/(?:remote|skills)(?:[/.])/u.test(path);
 
+const storageContracts = new Set(["apps/worker/src/contracts/secret-storage.ts", "apps/worker/src/contracts/base64url.ts", "apps/worker/src/contracts/json.ts"]);
+const storageDependencies = new Set([...storageContracts, "apps/worker/src/contracts/deployment-secrets.ts"]);
+
 export function centralDependencyProblem(from, to) {
-  if (from === "apps/worker/src/platform/secret-storage.ts" && !to.startsWith("apps/worker/src/contracts/"))
+  if (storageContracts.has(from) && !storageContracts.has(to))
+    return "Shared encryption contracts must stay independent of feature and platform contracts";
+  if (from === "apps/worker/src/platform/secret-storage.ts" && !storageDependencies.has(to))
     return "Shared secret storage depends only on pure contracts, not a feature, transport or repository";
   if (provider(from) && !to.startsWith('apps/worker/src/contracts/')
     && !(provider(to) && centralFeature(from) === centralFeature(to)))
@@ -49,6 +54,8 @@ export function centralDependencyProblem(from, to) {
 }
 
 export function centralSpecifierProblem(from, specifier) {
+  if ((storageContracts.has(from) || from === "apps/worker/src/platform/secret-storage.ts") && !specifier.startsWith("."))
+    return "Shared encryption and serialization use local foundation contracts, not external feature SDKs";
   if (unreviewed(from)) return "Central modules require a reviewed feature role";
   if (centralFeature(from) === undefined || specifier.startsWith(".")) return undefined;
   if (provider(from) && !/^(?:zod(?:\/|$)|@modelcontextprotocol\/server(?:\/|$))/u.test(specifier))
