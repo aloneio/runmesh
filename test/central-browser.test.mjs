@@ -18,6 +18,13 @@ function client(t, send, translate = key => key) {
 }
 const unexpected = /unexpectedResponseRefreshBeforeMakingAnotherChange/u;
 
+for (const locale of ["en", "zh-CN"]) test("OAuth deployment configuration failures give specific " + locale + " guidance", async t => {
+  const translate = createCentralTranslator(locale);
+  const api = client(t, () => Response.json({ error: { code: "oauth_configuration_required", operation_state: "not_started" } }, { status: 503 }), translate);
+  await assert.rejects(api.request("connections/begin", { profile_id: "service", expected_revision: 1 }), { message: translate("oauthConfigurationRequired") });
+  assert.equal(api.requests.length, 1);
+});
+
 for (const locale of ["en", "zh-CN"]) for (const failure of ["network", "json", "body_abort"])
 test("native " + failure + " failures use " + locale + " UI guidance and never replay a write", async t => {
   const translate = createCentralTranslator(locale);

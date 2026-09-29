@@ -65,6 +65,7 @@ export function createCentralApi({
         if (response.status === 403) throw new Error(t('accessWasDeniedSignInAgainOrCheckThe'));
         if (response.status === 400) throw new Error(t(serviceInput ? 'checkServiceNameAndPublicMcpUrl' : skillInput ? 'checkSkillFilesRequireNameAndDescription' : 'invalidActionRefreshLibrary'));
         if (code === 'oauth_provider_unsupported') throw new Error(t('thisServiceDoesNotSupportAutomaticOauthConnectionCheck'));
+        if (code === 'oauth_configuration_required') throw new Error(t('oauthConfigurationRequired'));
         if (code === 'remote_authorization_required' || code === 'oauth_reauthorization_required') throw new Error(t('signInToThisServiceAgainUsingReconnect'));
         if (code === 'oauth_unavailable') throw new Error(t('authorizationCouldNotBeCompletedRefreshAndReconnectIf'));
         if (code === 'remote_egress_denied' || code === 'remote_endpoint_denied' || code === 'central_disabled') throw new Error(t('enterAPublicHttpsMcpUrlPrivateAddressesAnd'));

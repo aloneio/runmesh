@@ -7,6 +7,7 @@ const messages = {
   "invalidActionRefreshLibrary": ["Could not complete this action. Refresh and try again.", "操作未完成，请刷新后重试。"],
   "thisServiceDoesNotSupportAutomaticOauthConnectionCheck": ["Could not set up OAuth. Check the MCP URL and its support for automatic client registration.", "OAuth 连接失败，请检查 MCP 地址，并确认该 MCP 支持自动注册客户端。"],
   "signInToThisServiceAgainUsingReconnect": ["Select Reconnect to sign in to this MCP again.", "请点击“重新授权”登录此 MCP。"],
+  "oauthConfigurationRequired": ["OAuth is not configured for this control plane. Contact its administrator.", "此控制端尚未完成 OAuth 配置，请联系管理员。"],
   "authorizationCouldNotBeCompletedRefreshAndReconnectIf": ["Could not complete authorization. Refresh and reconnect. If this keeps happening, contact your administrator.", "授权未完成，请刷新后重新连接。如仍有问题，请联系管理员。"],
   "enterAPublicHttpsMcpUrlPrivateAddressesAnd": ["Enter a public HTTPS MCP URL that connects directly, without redirects.", "请输入可直接访问、无需跳转的公网 HTTPS MCP 地址。"],
   "operationCouldNotBeConfirmedRefreshTheCurrentState": ["Could not confirm the result. Refresh to check the status.", "未能确认操作结果，请刷新查看状态。"],

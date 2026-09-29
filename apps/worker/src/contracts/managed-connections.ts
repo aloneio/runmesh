@@ -2,7 +2,7 @@ import { isCapabilityIdentifier } from "./capabilities.js";
 import { catalogObject } from "./catalog-json.js";
 import { publicMcpEndpoint } from "./remote-values.js";
 
-const failureCodes = ["invalid_request", "denied", "conflict", "invalid_callback", "provider_unsupported", "unavailable", "reauthorization_required"] as const;
+const failureCodes = ["invalid_request", "denied", "conflict", "invalid_callback", "provider_unsupported", "unavailable", "reauthorization_required", "configuration_required"] as const;
 
 export type ManagedConnectionResult =
   | { readonly state: "started"; readonly authorization_url: string; readonly profile_id: string }

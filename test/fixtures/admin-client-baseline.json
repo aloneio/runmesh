@@ -3,7 +3,7 @@
   "cases": [
     {
       "nonce": null,
-      "sha256": "c55a0e9e3139da6897c3b1053fad4489a995c8d38110ae8a5d646e3e06e621e1",
+      "sha256": "3f8f307dbd9e6be0ed69b40095254aef38d9937c0973edb2087f68efa6a08841",
       "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
       "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
       "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
@@ -11,7 +11,7 @@
     },
     {
       "nonce": "test-nonce",
-      "sha256": "f0d0b689b071b22cf4e389b6a70960a5e3f7a787c4669be7d83b3bc6c412041e",
+      "sha256": "9472d6eba7b4d5100ec33742257906d658ef5474d54e5eec0cd7def94c4294ed",
       "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
       "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
       "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
@@ -66,5 +66,9 @@
   "skill_upload_review": {
     "source_base": "bfccf9278288e5674da23ad3a9be5f2abc9d4218",
     "reviewed_change": "Raise Skill uploads to 256 files, 1 MiB per file and 8 MiB per canonical package. Form limits come from the server contract. Bilingual DOM tests cover actual folder selection, oversized selections, JSON escaping and retry after confirmed HTTP 413. No screenshots."
+  },
+  "oauth_reconnect_review": {
+    "source_base": "04c751c0ecda6d76fcb1a73a6cbce01278cb9d80",
+    "reviewed_change": "Reconnect reconciles saved profiles before beginning OAuth, recovers failed discovery without a manual refresh, and checks current enabled state and revision. Missing or invalid vault readiness gets a specific bilingual configuration error. Regression covers fresh revisions, failed reconciliation, concurrent pause and preserved account state. No screenshots."
   }
 }

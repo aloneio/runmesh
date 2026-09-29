@@ -241,10 +241,11 @@ export async function checkGuidedProduct(executable) {
   rejectDiscovery=true;await form.locator('[name=endpoint]').fill('https://oauth.provider.com/mcp');await form.locator('[name=authentication]').selectOption('oauth');await form.locator('button').click();
   await status.filter({hasText:'Select Reconnect to sign in to this MCP again.'}).waitFor();
   assert.equal(catalogs.has(profiles.at(-1).profile_id),false);assert.equal(await review.isHidden(),true);
-  await page.getByRole('button',{name:'Reconnect',exact:true}).click();await status.filter({hasText:'Refresh before making another change.'}).waitFor();
+  // Reconnect refreshes state itself; failed reconciliation must still block the handoff.
+  failLibrary=true;
+  await page.getByRole('button',{name:'Reconnect',exact:true}).click();await status.filter({hasText:'Could not confirm the result. Refresh to check the status.'}).waitFor();
   assert.equal(requests.filter(r=>r.path==='/admin/central/connections/begin').length,1);
-  await page.locator('[data-product-refresh]').click();await status.filter({hasText:'List refreshed.'}).waitFor();
-  rejectDiscovery=false;
+  failLibrary=false;rejectDiscovery=false;
   // Observe the return before clicking: completion removes its query from history.
   await Promise.all([
    page.waitForURL(url=>url.pathname==='/admin/central'&&url.searchParams.has('connected'),{waitUntil:'commit',timeout:10000}),
@@ -492,16 +493,27 @@ export async function checkGuidedProduct(executable) {
   assert.equal(await savedOAuthCard.getByRole('button',{name:'Reconnect',exact:true}).isVisible(),true);
   assert.equal(requests.slice(failedOAuthStart).filter(r=>r.body?.action==='connect').length,1);
   assert.equal(requests.slice(failedOAuthStart).filter(r=>r.path==='/admin/central/connections/begin').length,1);
+  const retryStart=requests.length;
+  savedOAuth.revision++;
   await savedOAuthCard.getByRole('button',{name:'Reconnect',exact:true}).click();
-  await status.filter({hasText:'Refresh before making another change.'}).waitFor();
-  assert.equal(requests.slice(failedOAuthStart).filter(r=>r.path==='/admin/central/connections/begin').length,1,'A failed handoff must not be replayed');
+  await status.filter({hasText:'Could not set up OAuth. Check the MCP URL and its support for automatic client registration.'}).waitFor();
+  const retry=requests.slice(retryStart),beginIndex=retry.findIndex(r=>r.path==='/admin/central/connections/begin');
+  assert.ok(retry.slice(0,beginIndex).some(r=>r.path==='/admin/central/profiles'&&r.method==='GET'),'An explicit reconnect must reconcile an earlier failure first');
+  assert.equal(retry[beginIndex].body.expected_revision,savedOAuth.revision,'Use the refreshed profile revision');
+  assert.equal(retry.filter(r=>r.path==='/admin/central/connections/begin').length,1,'Start once per explicit reconnect');
   rejectOAuthStart=false;
-  await page.locator('[data-product-refresh]').click();await status.filter({hasText:'List refreshed.'}).waitFor();
   await savedOAuthCard.getByRole('button',{name:'Reconnect',exact:true}).click();
   await status.filter({hasText:'Connected.'}).waitFor();
   assert.equal(requests.slice(failedOAuthStart).filter(r=>r.body?.action==='connect').length,1,'Recover the saved service without creating a duplicate');
-  assert.equal(requests.slice(failedOAuthStart).filter(r=>r.path==='/admin/central/connections/begin').length,2);
+  assert.equal(requests.slice(failedOAuthStart).filter(r=>r.path==='/admin/central/connections/begin').length,3);
   assert.ok(catalogs.has(savedOAuth.profile_id));
+  // Another tab may pause the MCP after this card was rendered.
+  savedOAuth.enabled=false;savedOAuth.revision++;
+  const pausedRetry=requests.length;
+  await savedOAuthCard.getByRole('button',{name:'Reconnect',exact:true}).click();
+  await status.filter({hasText:'This MCP is paused or unavailable. Refresh to check its status.'}).waitFor();
+  assert.equal(requests.slice(pausedRetry).filter(r=>r.path==='/admin/central/connections/begin').length,0);
+  assert.equal(await savedOAuthCard.getByRole('button',{name:'Reconnect',exact:true}).isDisabled(),true);
   assert.deepEqual(exceptions,[]);
   return {state:'passed',guided_homepage:true,direct_url_without_deployment_setup:true,service_immediate_tools:true,existing_connections_complete_automatically:true,pending_service_failure_isolation:true,recovery_refresh_failure_blocks_writes:true,oauth_return_recovers_other_services:true,connection_success_uses_refreshed_state:true,oauth_return_to_available_tools:true,paused_oauth_reconnect_guard:true,paused_service_discovery_guard:true,resume_refreshes_tools:true,no_legacy_service_credentials:true,oauth_extra_parameters_ignored:true,oauth_duplicate_parameters_rejected:true,oauth_provider_errors_not_reflected:true,direct_skill_install_and_confirmed_update:true,skill_file_folder_selection_switch:true,skill_selection_invalidates_confirmation:true,skill_pending_update_publication:true,skill_pause_and_resume:true,shared_library_without_client_assignment:true,retired_access_api_not_called:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,malformed_write_receipt_blocks_replay:true,detached_oauth_does_not_navigate:true,mobile_no_overflow:true,screenshots:0};
  }finally{await browser?.close();await new Promise(r=>server.close(r));await rm(join(skillFolder,'SKILL.md'),{force:true});await rmdir(skillFolder);}
