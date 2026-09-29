@@ -9,6 +9,7 @@ import type { GitServiceOptions } from "./git/public-contracts.js";
 import { literalPathspec } from "./git/values.js";
 import { MAX_PROCESS_OUTPUT_BYTES } from "./git/limits.js";
 import { object } from "./git/values.js";
+import { observeGitBaseline } from "./git/baseline.js";
 import { outputCap } from "./git/values.js";
 import { parseStatus } from "./git/projection.js";
 import { PathPolicy } from "./path-policy.js";
@@ -109,25 +110,12 @@ export class GitService {
   /** Conservative sampled baseline, not a filesystem transaction. Never
    * treat a truncated/unavailable status or a moving HEAD as a clean tree. */
   public async observeBaseline(input: unknown): Promise<{ commit: string | null; working_tree_state: "clean" | "dirty" | "unknown" }> {
-    let commit: string | null = null;
     const deadline = performance.now() + Math.min(this.options.timeoutMs ?? 1_500, 1_500);
     try {
       const params = object(input);
-      commit = (await this.head(params, deadline)).commit;
-      if (performance.now() >= deadline) return { commit, working_tree_state: "unknown" };
-      const status = await this.status({ ...params, max_bytes: 32 * 1024 }, deadline);
-      if (status.truncated !== false || !Array.isArray(status.entries) || performance.now() >= deadline) return { commit, working_tree_state: "unknown" };
-      // Git status can hide tracked changes when the index has skip-worktree
-      // or assume-unchanged flags. Do not certify such an observation as clean.
       const scope = await resolveGitPath(this.policy, params.workspace_id, ".");
-      const flags = await git(scope.rootPath, ["ls-files", "-v", "-z", "--cached", "--", literalPathspec(scope.relativePath)], 64 * 1024, this.options, deadline);
-      const flagRecords = flags.stdout.toString("utf8").split("\0");
-      const terminated = flagRecords.pop() === "";
-      if (flags.status !== 0 || flags.truncated || !terminated || flagRecords.some(record => !record.startsWith("H ")) || performance.now() >= deadline) return { commit, working_tree_state: "unknown" };
-      const after = (await this.head(params, deadline)).commit;
-      if (after !== commit || performance.now() >= deadline) return { commit: after, working_tree_state: "unknown" };
-      return { commit, working_tree_state: status.entries.length === 0 ? "clean" : "dirty" };
-    } catch { return { commit, working_tree_state: "unknown" }; }
+      return await observeGitBaseline(scope.rootPath, this.options, deadline);
+    } catch { return { commit: null, working_tree_state: "unknown" }; }
   }
 
   public async log(input: unknown): Promise<Record<string, unknown>> {

@@ -50,6 +50,8 @@
       "id": "runner",
       "description": "Local Runner unit, filesystem, process and adapter integration; not all pure",
       "files": [
+        "apps/runner/test/baseline-budget.test.ts",
+        "apps/runner/test/baseline-consistency.test.ts",
         "apps/runner/test/baseline-observation.test.ts",
         "apps/runner/test/byte-pagination.test.ts",
         "apps/runner/test/capability-contracts.test.ts",
