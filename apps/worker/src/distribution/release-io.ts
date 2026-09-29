@@ -15,7 +15,7 @@ const ALLOWED_RELEASE_ORIGINS = new Set<string>(FIXED_RELEASE_ALLOWED_REDIRECT_O
 export async function readDevelopmentReleaseCache(cache: DevelopmentReleaseCache | undefined, timeoutMs?: number): Promise<CachedDevelopmentReleaseRecord | undefined> {
   if (cache === undefined) return undefined;
   if (timeoutMs !== undefined) {
-    const receipt = await boundedJsonResponse(async () => await cache.match(DEV_RELEASE_CACHE_KEY) ?? new Response(null, { status: 404 }), timeoutMs, MAX_DISCOVERY_BYTES);
+    const receipt = await boundedJsonResponse(async signal => await cache.match(new Request(DEV_RELEASE_CACHE_KEY, { signal })) ?? new Response(null, { status: 404 }), timeoutMs, MAX_DISCOVERY_BYTES);
     return validatedCachedDevelopmentRelease(receipt?.value);
   }
   try { const response = await cache.match(DEV_RELEASE_CACHE_KEY); return response === undefined || !response.ok ? undefined : validatedCachedDevelopmentRelease(await boundedJson(response)); } catch { return undefined; }

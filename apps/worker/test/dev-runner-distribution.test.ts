@@ -319,6 +319,34 @@ describe("explicit development release runtime", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it.each(["headers", "body"])("cancels Registry recovery %s when its caller budget ends", async phase => {
+    vi.useFakeTimers();
+    let finish!: (response: Response) => void;
+    const cancel = vi.fn(), response = new Response(new ReadableStream({ cancel }));
+    const registryFetch = vi.fn((_request: Request): Promise<Response> => phase === "body"
+      ? Promise.resolve(response) : new Promise(resolve => { finish = resolve; }))
+      .mockResolvedValueOnce(new Response(null, { status: 404 }));
+    const cache = registryDevelopmentReleaseCache({ ...env, REGISTRY: { idFromName: () => "registry", get: () => ({ fetch: registryFetch }) } } as never);
+    const fetchImpl = responseFetch([], 404);
+    const pending = resolveRelease(devEnv, { fetch: fetchImpl, verify: async () => undefined, cache, now: () => Date.now(), runtime: createDevelopmentReleaseRuntime() });
+    await vi.waitFor(() => expect(registryFetch).toHaveBeenCalledTimes(2));
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await pending;
+    const abortedAtDeadline = registryFetch.mock.calls[1]?.[0].signal.aborted;
+    const timersAtDeadline = vi.getTimerCount(), cancelledAtDeadline = cancel.mock.calls.length;
+    // Settle ignored aborts before asserting, including on the unfixed path.
+    if (phase === "headers") finish(response);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(result).toMatchObject({ distributable: false });
+    expect(abortedAtDeadline).toBe(true);
+    expect(timersAtDeadline).toBe(0);
+    if (phase === "body") expect(cancelledAtDeadline).toBe(1);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(registryFetch).toHaveBeenCalledTimes(2);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it.each(["GET", "POST"])("returns a verified release when Registry cache %s stalls", async method => {
     vi.useFakeTimers();
     let finish!: (response: Response) => void;
