@@ -1757,7 +1757,8 @@ tbody tr:hover{background:#f8fafc}
 .client-table th:nth-child(1){width:19%}.client-table th:nth-child(2){width:16%}.client-table th:nth-child(3){width:14%}.client-table th:nth-child(4){width:15%}.client-table th:nth-child(5){width:9%}.client-table th:nth-child(6){width:27%}
 .client-table .actions{vertical-align:top;width:auto;min-width:0}
 .client-table .action-btn-group{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;width:100%}
-.client-table .inline-action-form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px;min-width:0}
+.client-table .inline-action-form{display:grid;grid-template-columns:minmax(0,1fr);align-items:stretch;gap:5px;min-width:0}
+.client-table .inline-action-form:has(input:not([type=hidden])){grid-template-columns:minmax(0,1fr) auto}
 .client-table .inline-action-form:first-of-type{grid-column:1 / -1}
 .client-table .action-btn-group>a,.client-table .action-btn-group>form{min-width:0}
 .client-table .action-btn-group>a{width:100%}

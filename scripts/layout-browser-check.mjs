@@ -70,6 +70,11 @@ async function layoutIssues(page) {
     for (const actions of document.querySelectorAll('.central-card .actions')) {
       if (visible(actions) && !inside(rect(actions), rect(actions.closest('.central-card')))) issues.push('card actions overflow');
     }
+    for (const form of document.querySelectorAll('.client-table .inline-action-form')) {
+      if (!visible(form) || form.querySelector('input:not([type=hidden]),select,textarea')) continue;
+      const button = form.querySelector('button'), area = rect(form), control = rect(button);
+      if (['top', 'bottom', 'left', 'right'].some(edge => Math.abs(area[edge] - control[edge]) > 1)) issues.push('client action button does not fill its grid cell');
+    }
     for (const label of document.querySelectorAll('.scope-selector-row .check')) {
       if (!visible(label)) continue;
       const input = rect(label.querySelector('input')), title = rect(label.querySelector('strong'));
