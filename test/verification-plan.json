@@ -142,6 +142,7 @@
         "apps/worker/test/mcp-output-contracts.test.ts",
         "apps/worker/test/mcp.test.ts",
         "apps/worker/test/no-record.test.ts",
+        "apps/worker/test/oauth-landing.test.ts",
         "apps/worker/test/packed-job-history.test.ts",
         "apps/worker/test/packed-job-integration.test.ts",
         "apps/worker/test/permission-chain.test.ts",

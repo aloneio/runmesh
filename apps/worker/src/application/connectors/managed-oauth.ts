@@ -44,14 +44,18 @@ export function createManagedOAuth(ports: ManagedOAuthPorts) {
     if (raw.token_type?.toLowerCase() !== "bearer" || parseCredential({ kind: "bearer", token: raw.access_token }) === undefined
       || (raw.refresh_token !== undefined && (typeof raw.refresh_token !== "string" || raw.refresh_token.length > 4096))
       || (raw.expires_in !== undefined && (!Number.isFinite(raw.expires_in) || raw.expires_in <= 0 || raw.expires_in > 31_536_000))) return fault("unavailable");
-    return { tokens: { ...raw, ...(raw.refresh_token === undefined && previous?.refresh_token ? { refresh_token: previous.refresh_token } : {}) },
+    const refresh = raw.refresh_token ?? previous?.refresh_token;
+    return { tokens: { access_token: raw.access_token, token_type: raw.token_type,
+      ...(refresh === undefined ? {} : { refresh_token: refresh }),
+      ...(raw.expires_in === undefined ? {} : { expires_in: raw.expires_in }),
+      ...(raw.issuer === undefined ? {} : { issuer: raw.issuer }) },
       expires: ports.now() + Math.floor((raw.expires_in ?? 3600) * 1000) };
   };
   async function begin(hash: string, input: Record<string, unknown>, signal: AbortSignal, requestOrigin?: string): Promise<ManagedConnectionResult> {
     if (!catalogKeys(input, ["profile_id", "expected_revision"]) || !isCapabilityIdentifier(input.profile_id) || !Number.isSafeInteger(input.expected_revision)) return fault("invalid_request");
     const selected = profile(input.profile_id, input.expected_revision as number), base = origin(requestOrigin);
     await admin(hash, signal);
-    // Check independent encryption availability before registering a client.
+    // Check credential encryption before registering a client.
     try { await ports.cipher.seal("connection-readiness", { ready: true }); }
     catch { return fault("configuration_required"); }
     const state = ports.random(), stateHash = await ports.hash(state); await admin(hash, signal); profile(selected.profile_id, selected.revision);

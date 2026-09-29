@@ -59,7 +59,8 @@ it("W03 supports the exact token bound and rejects injection, oversize and mixed
   const cipher = createOAuthCipher("namespace-a", () => secretA);
   const maximum = { kind: "bearer" as const, token: "a".repeat(4096) };
   expect(await cipher.open(context, await cipher.seal(context, maximum))).toEqual(maximum);
-  for (const token of ["a".repeat(4097), "a\r\nb", "a b", "\"quoted\"", "a\\b", ""]) expect(parseCredential({ kind: "bearer", token })).toBeUndefined();
+  for (const token of ["a".repeat(4097), "a\r\nb", "a b", "a\tb", String.fromCharCode(127), "令牌", ""]) expect(parseCredential({ kind: "bearer", token })).toBeUndefined();
+  for (const token of ["user:grant:opaque-secret", "\"quoted\"", "a\\b"]) expect(parseCredential({ kind: "bearer", token })).toEqual({ kind: "bearer", token });
   expect(parseProfileCommand({ action: "create", profile_id: "p", connector_id: "c", endpoint: "https://user:pass@example.com/mcp", credential })).toBeUndefined();
   expect(parseProfileCommand({ action: "rotate", profile_id: "p", expected_revision: 1, credential, owner: "other" })).toBeUndefined();
 });

@@ -19,8 +19,9 @@ export function profileEndpoint(value: unknown): string | undefined {
 
 export function parseCredential(value: unknown): CredentialInput | undefined {
   const item = object(value);
+  // Provider tokens are opaque header values; Cloudflare tokens include colons.
   if (item === undefined || !exact(item, ["kind", "token"]) || item.kind !== "bearer" || typeof item.token !== "string"
-    || item.token.length < 1 || item.token.length > CONNECTOR_LIMITS.token_bytes || !/^[A-Za-z0-9._~+\/-]+=*$/u.test(item.token)) return undefined;
+    || item.token.length < 1 || item.token.length > CONNECTOR_LIMITS.token_bytes || !/^[\x21-\x7e]+$/u.test(item.token)) return undefined;
   return { kind: "bearer", token: item.token };
 }
 
