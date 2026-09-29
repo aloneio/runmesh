@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Concurrent development downloads now wait for cache recovery to finish before reporting a failed refresh. Registry cache reads and writes have deadlines, so stalled storage cannot indefinitely delay a verified download.
 - Development release discovery now recovers from a failed refresh using a verified release saved by another instance. Runner pages and downloads use the same release state for their Registry binding.
 - Adding an AI connection now opens computer permissions automatically when you select “MCP, Skills and computer access”. Switching access types keeps your permission choices.
 - Development installers now wait for an ongoing release verification when several users download immediately after a cold start. Concurrent requests share the verified result once it is ready, within a bounded wait.

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { discoverDevelopmentRunnerRelease as discoverRelease, resolveRunnerReleaseDescriptor as resolveRelease, createDevelopmentReleaseRuntime, verifyDevelopmentRunnerRelease } from "../src/distribution/release.js";
 import { FIXED_RELEASE_VERSION, installerReleaseTarget, renderPosixInstaller, renderPowerShellInstaller } from "../src/installer.js";
 import { runnerInstallScript, runnerRelease } from "../src/http/distribution.js";
+import { readDevelopmentReleaseCache } from "../src/distribution/release-io.js";
 
 // Each call models a new isolate, with the real runtime algorithm enabled.
 function discoverDevelopmentRunnerRelease(fetchImpl: typeof fetch, verify: DevelopmentReleaseVerifier, cache?: DevelopmentReleaseCache | null, schedule?: DevelopmentReleaseRefreshScheduler) {
@@ -294,6 +295,75 @@ describe("development Runner distribution", () => {
 describe("explicit development release runtime", () => {
   afterEach(() => vi.useRealTimers());
 
+  it.each(["read headers", "read body", "write headers"])("bounds Registry cache %s without blocking release discovery", async phase => {
+    vi.useFakeTimers();
+    let finish!: (response: Response) => void, finishBody!: () => void;
+    const cancel = vi.fn(), response = new Response(new ReadableStream({ start(controller) { finishBody = () => controller.close(); }, cancel }));
+    const registryFetch = vi.fn((_request: Request) => phase === "read body" ? Promise.resolve(response) : new Promise<Response>(resolve => { finish = resolve; }));
+    const cache = registryDevelopmentReleaseCache({ ...env, REGISTRY: { idFromName: () => "registry", get: () => ({ fetch: registryFetch }) } } as never);
+    let settled = false;
+    const request = new Request("https://cache.test/verified");
+    const pending = (phase === "write headers" ? cache.put(request, Response.json({ schema_version: 1 })) : readDevelopmentReleaseCache(cache))
+      .then(value => { settled = true; return value; }, () => { settled = true; return undefined; });
+    await vi.waitFor(() => expect(registryFetch).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(5_000);
+    const bounded = settled;
+    // Cleanup remains deterministic even before the production deadline exists.
+    if (!bounded && phase !== "write headers") finishBody();
+    if (phase !== "read body") finish(response);
+    await vi.advanceTimersByTimeAsync(0);
+    await pending;
+    expect(bounded).toBe(true);
+    expect(registryFetch.mock.calls[0]?.[0].signal.aborted).toBe(true);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["GET", "POST"])("returns a verified release when Registry cache %s stalls", async method => {
+    vi.useFakeTimers();
+    let finish!: (response: Response) => void;
+    const registryFetch = vi.fn((request: Request) => request.method === method
+      ? new Promise<Response>(resolve => { finish = resolve; })
+      : Promise.resolve(new Response(null, { status: request.method === "GET" ? 404 : 204 })));
+    const runtimeEnv = { ...env, REGISTRY: { idFromName: () => "registry", get: () => ({ fetch: registryFetch }) } };
+    const fetchImpl = responseFetch([release(devVersion(1), "2026-09-16T09:00:00Z")]), verify = vi.fn(async () => undefined);
+    const dependencies = { ...developmentReleaseDependencies(runtimeEnv as never), fetch: fetchImpl, verify };
+    let settled = false;
+    const pending = resolveRelease(devEnv, dependencies).then(value => { settled = true; return value; });
+    await vi.waitFor(() => expect(registryFetch.mock.calls.some(([request]) => request.method === method)).toBe(true));
+    await vi.advanceTimersByTimeAsync(5_000);
+    try { await vi.waitFor(() => expect(settled).toBe(true)); }
+    finally { finish(new Response(null, { status: method === "GET" ? 404 : 204 })); await vi.advanceTimersByTimeAsync(0); }
+    expect(await pending).toMatchObject({ channel: "dev", distributable: true, package_version: devVersion(1) });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(verify).toHaveBeenCalledOnce();
+    expect(registryFetch).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("finishes cold waiters after the recovery deadline when storage remains unavailable", async () => {
+    vi.useFakeTimers();
+    let finishRefresh!: (response: Response) => void;
+    const cache = { match: vi.fn().mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined)
+      .mockImplementation(() => new Promise<Response | undefined>(() => {})), put: vi.fn(async () => undefined) };
+    const fetchImpl = vi.fn(() => new Promise<Response>(resolve => { finishRefresh = resolve; }));
+    const dependencies: DevelopmentReleaseDependencies = { fetch: fetchImpl, verify: async () => undefined, cache, now: () => Date.now(), runtime: createDevelopmentReleaseRuntime() };
+    let settled = 0;
+    const owner = resolveRelease(devEnv, dependencies).then(value => { settled++; return value; });
+    await vi.advanceTimersByTimeAsync(0);
+    const waiter = resolveRelease(devEnv, dependencies).then(value => { settled++; return value; });
+    await vi.advanceTimersByTimeAsync(0);
+    finishRefresh(new Response(null, { status: 404 }));
+    await vi.advanceTimersByTimeAsync(999);
+    expect(settled).toBe(0);
+    await vi.advanceTimersByTimeAsync(101);
+    expect(await Promise.all([owner, waiter])).toEqual([expect.objectContaining({ distributable: false }), expect.objectContaining({ distributable: false })]);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(cache.match).toHaveBeenCalledTimes(3);
+    expect(cache.put).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it.each([1, 2, 3])("recovers a release verified by another runtime before refresh failure (round %s)", async () => {
     const now = Date.now(); let stored: string | undefined, finishFailure!: () => void;
     const failure = new Promise<void>(resolve => { finishFailure = resolve; });
@@ -316,6 +386,37 @@ describe("explicit development release runtime", () => {
     expect(cache.put).toHaveBeenCalledOnce();
     expect(failing.runtime.cached?.verified_at_ms).toBe(now);
     expect(Object.values(failing.runtime).some(value => value instanceof Promise)).toBe(false);
+  });
+
+  it.each([1, 2, 3])("keeps cold waiters pending until cross-isolate recovery completes (round %s)", async () => {
+    const seed = await discoverDevelopmentRunnerRelease(responseFetch([release(devVersion(1), "2026-09-16T09:00:00Z")]), async () => undefined);
+    vi.useFakeTimers();
+    const verifiedAtMs = Date.now();
+    let finishRefresh!: (response: Response) => void, finishRead!: (response: Response) => void;
+    const cache = { match: vi.fn(async (): Promise<Response | undefined> => undefined), put: vi.fn(async () => undefined) };
+    const fetchImpl = vi.fn(() => new Promise<Response>(resolve => { finishRefresh = resolve; }));
+    const dependencies: DevelopmentReleaseDependencies = { fetch: fetchImpl, verify: async () => undefined, cache, now: () => Date.now(), runtime: createDevelopmentReleaseRuntime() };
+    const owner = resolveRelease(devEnv, dependencies);
+    await vi.advanceTimersByTimeAsync(0);
+    let settled = 0;
+    const waiters = Promise.all(Array.from({ length: 3 }, () => resolveRelease(devEnv, dependencies).then(value => { settled++; return value; })));
+    await vi.advanceTimersByTimeAsync(0);
+    cache.match.mockImplementationOnce(() => new Promise<Response>(resolve => { finishRead = resolve; }));
+    finishRefresh(new Response("unavailable", { status: 404 }));
+    await vi.advanceTimersByTimeAsync(100);
+    const prematurelySettled = settled;
+    finishRead(Response.json({ schema_version: 1, verified_at_ms: verifiedAtMs, descriptor: seed }));
+    const recovered = await owner;
+    await vi.advanceTimersByTimeAsync(100);
+    const concurrent = await waiters;
+    expect(prematurelySettled).toBe(0);
+    expect(recovered).toEqual(seed);
+    expect(concurrent).toEqual(Array(3).fill(seed));
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(cache.match).toHaveBeenCalledTimes(5);
+    expect(cache.put).not.toHaveBeenCalled();
+    expect(dependencies.runtime.cached?.verified_at_ms).toBe(verifiedAtMs);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each(["expired", "future", "invalid"])("rejects a newly observed %s record after refresh failure", async kind => {
@@ -370,7 +471,7 @@ describe("explicit development release runtime", () => {
     const dependencies: DevelopmentReleaseDependencies = { fetch: fetchImpl, verify: async () => undefined, cache, now: () => now, runtime: createDevelopmentReleaseRuntime() };
     const older = resolveRelease(devEnv, dependencies);
     await vi.waitFor(() => expect(cache.match).toHaveBeenCalledTimes(2));
-    now += 5_001;
+    now += 20_001; // A pending recovery still owns the original refresh lease.
     const newer = await resolveRelease(devEnv, dependencies);
     finishRead(Response.json({ schema_version: 1, verified_at_ms: now - 1_000, descriptor: seed }));
     expect(await older).toEqual(newer);

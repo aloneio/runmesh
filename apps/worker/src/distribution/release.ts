@@ -1,4 +1,4 @@
-import type { RunnerReleaseDescriptor, RunnerReleaseEnvironment, DevelopmentReleaseDependencies, DevelopmentReleaseRefreshScheduler } from "../contracts/runner-release.js";
+import type { RunnerReleaseDescriptor, RunnerReleaseEnvironment, DevelopmentReleaseDependencies, DevelopmentReleaseRefreshScheduler, CachedDevelopmentReleaseRecord } from "../contracts/runner-release.js";
 import { DEV_RELEASE_CACHE_MS, DEV_RELEASE_STALE_MS, DEV_RELEASE_REFRESH_BUDGET_MS, developmentDescriptor, usableCacheAge, isDevelopment, unavailableDevelopmentRelease, releaseGateDiagnostics, runnerReleaseDescriptor } from "../domain/release-selection.js";
 import { DEV_RELEASE_DISCOVERY_URL, releaseFetch, boundedJson, readDevelopmentReleaseCache, writeDevelopmentReleaseCache } from "./release-io.js";
 
@@ -67,19 +67,32 @@ async function fetchDevelopmentRunnerRelease(dependencies: DevelopmentReleaseDep
   throw new Error("no immutable signed development Runner release is available");
 }
 
-function refreshDevelopmentRunnerRelease(dependencies: DevelopmentReleaseDependencies, sequence: number): Promise<RunnerReleaseDescriptor> {
-  if (sequence !== dependencies.runtime.refresh_sequence) return Promise.reject(new Error("development release refresh temporarily unavailable"));
+async function refreshDevelopmentRunnerRelease(dependencies: DevelopmentReleaseDependencies, sequence: number, cached?: CachedDevelopmentReleaseRecord): Promise<RunnerReleaseDescriptor> {
+  const { runtime, cache, now: clock } = dependencies;
+  if (sequence !== runtime.refresh_sequence) throw new Error("development release refresh temporarily unavailable");
   // Cache I/O may have consumed the original reservation. Renew only while
   // still owning it, immediately before the request-owned network budget starts.
-  dependencies.runtime.next_refresh_at_ms = dependencies.now() + DEV_RELEASE_REFRESH_BUDGET_MS;
-  return fetchDevelopmentRunnerRelease(dependencies, sequence).catch(error => {
+  runtime.next_refresh_at_ms = clock() + DEV_RELEASE_REFRESH_BUDGET_MS;
+  try { return await fetchDevelopmentRunnerRelease(dependencies, sequence); }
+  catch (error) {
+    // Recovery belongs to the refresh: waiting requests must not observe a
+    // terminal failure while its cross-isolate cache read is still pending.
+    const persisted = await readDevelopmentReleaseCache(cache, FAILED_REFRESH_CACHE_READ_MS);
+    const completedAtMs = clock();
+    // Recheck memory after I/O so a late recovery cannot replace a newer
+    // in-isolate refresh. Retain every record's original hard expiry.
+    const recovered = [runtime.cached, persisted, cached].find(value => value !== undefined && usableCacheAge(value.verified_at_ms, completedAtMs, DEV_RELEASE_STALE_MS));
     // A delayed failure must not shorten a newer request's reservation.
-    if (sequence === dependencies.runtime.refresh_sequence) {
-      dependencies.runtime.failed_sequence = sequence;
-      dependencies.runtime.next_refresh_at_ms = dependencies.now() + FAILED_REFRESH_COOLDOWN_MS;
+    if (sequence === runtime.refresh_sequence) {
+      runtime.failed_sequence = sequence;
+      runtime.next_refresh_at_ms = completedAtMs + FAILED_REFRESH_COOLDOWN_MS;
+    }
+    if (recovered !== undefined) {
+      runtime.cached = { expires_at_ms: Math.min(completedAtMs + DEV_RELEASE_CACHE_MS, recovered.verified_at_ms + DEV_RELEASE_STALE_MS), verified_at_ms: recovered.verified_at_ms, descriptor: recovered.descriptor };
+      return recovered.descriptor;
     }
     throw error;
-  });
+  }
 }
 
 /** Production and tests execute this same path with explicit state and ports. */
@@ -124,25 +137,11 @@ export async function discoverDevelopmentRunnerRelease(dependencies: Development
   }
   if (cached !== undefined && cacheAgeMs < DEV_RELEASE_STALE_MS && scheduleRefresh !== undefined) {
     runtime.cached = { expires_at_ms: Math.min(now + DEV_RELEASE_CACHE_MS, cached.verified_at_ms + DEV_RELEASE_STALE_MS), verified_at_ms: cached.verified_at_ms, descriptor: cached.descriptor };
-    const refresh = refreshDevelopmentRunnerRelease(dependencies, sequence).then(() => undefined).catch(() => undefined);
+    const refresh = refreshDevelopmentRunnerRelease(dependencies, sequence, cached).then(() => undefined).catch(() => undefined);
     try { scheduleRefresh(refresh); } catch { /* Original hard expiry still applies. */ }
     return cached.descriptor;
   }
-  try { return await refreshDevelopmentRunnerRelease(dependencies, sequence); }
-  catch (error) {
-    // Another isolate may have verified and persisted a release since the
-    // initial read. Observe it once, within this request's recovery budget.
-    const persisted = await readDevelopmentReleaseCache(cache, FAILED_REFRESH_CACHE_READ_MS);
-    const completedAtMs = clock();
-    // Recheck memory after I/O so a late recovery cannot replace a newer
-    // in-isolate refresh. Retain every record's original hard expiry.
-    const recovered = [runtime.cached, persisted, cached].find(value => value !== undefined && usableCacheAge(value.verified_at_ms, completedAtMs, DEV_RELEASE_STALE_MS));
-    if (recovered !== undefined) {
-      runtime.cached = { expires_at_ms: Math.min(completedAtMs + DEV_RELEASE_CACHE_MS, recovered.verified_at_ms + DEV_RELEASE_STALE_MS), verified_at_ms: recovered.verified_at_ms, descriptor: recovered.descriptor };
-      return recovered.descriptor;
-    }
-    throw error;
-  }
+  return refreshDevelopmentRunnerRelease(dependencies, sequence, cached);
 }
 
 /** Development is dev-only. Stable stays source-pinned and network-free. */

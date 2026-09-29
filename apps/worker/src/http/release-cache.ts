@@ -1,13 +1,33 @@
 import type { DevelopmentReleaseDependencies, DevelopmentReleaseRuntime, DevelopmentReleaseCache } from "../contracts/runner-release.js";
 import { createDevelopmentReleaseRuntime } from "../domain/release-selection.js";
 import { verifyDevelopmentRunnerRelease } from "../distribution/release-io.js";
-import { registryGet, registryPost } from "../platform/control-plane.js";
+import { registryRequest } from "../platform/control-plane.js";
+import { boundedJsonResponse } from "../bounded-json.js";
 import type { WorkerEnv } from "../platform/env.js";
 
 const VERIFIED_DEV_RELEASE_PATH = "/distribution/dev-runner-release";
+const REGISTRY_CACHE_TIMEOUT_MS = 5_000;
+const MAX_CACHE_RECORD_BYTES = 512 * 1024;
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Persistence is best effort; a stalled Registry must not hold a verified
+ * release response open. Never retry a write with an unknown outcome. */
+async function persistReleaseCache(env: WorkerEnv, value: Record<string, unknown>): Promise<void> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const write = async (): Promise<void> => {
+    const response = await registryRequest(env, VERIFIED_DEV_RELEASE_PATH, "POST", JSON.stringify(value), controller.signal);
+    void response.body?.cancel().catch(() => undefined);
+    if (controller.signal.aborted || response.status !== 204) throw new Error("development release registry cache write failed");
+  };
+  try {
+    await Promise.race([write(), new Promise<never>((_, reject) => {
+      timer = setTimeout(() => { controller.abort(); reject(new Error("development release registry cache write timed out")); }, REGISTRY_CACHE_TIMEOUT_MS);
+    })]);
+  } finally { if (timer !== undefined) clearTimeout(timer); controller.abort(); }
 }
 
 /** HTTP composition adapter for the globally persisted descriptor that has
@@ -16,17 +36,14 @@ function record(value: unknown): value is Record<string, unknown> {
 export function registryDevelopmentReleaseCache(env: WorkerEnv): DevelopmentReleaseCache {
   return {
     async match(): Promise<Response | undefined> {
-      const response = await registryGet(env, VERIFIED_DEV_RELEASE_PATH);
-      if (!response.ok) { await response.body?.cancel().catch(() => undefined); return undefined; }
-      return response;
+      const receipt = await boundedJsonResponse(signal => registryRequest(env, VERIFIED_DEV_RELEASE_PATH, "GET", "", signal), REGISTRY_CACHE_TIMEOUT_MS, MAX_CACHE_RECORD_BYTES);
+      return receipt?.status === 200 && receipt.value !== undefined ? Response.json(receipt.value) : undefined;
     },
     async put(_request: Request, response: Response): Promise<void> {
       let value: unknown;
       try { value = await response.json(); } catch { throw new Error("development release cache record is invalid"); }
       if (!record(value)) throw new Error("development release cache record is invalid");
-      const stored = await registryPost(env, VERIFIED_DEV_RELEASE_PATH, value);
-      if (!stored.ok) { await stored.body?.cancel().catch(() => undefined); throw new Error("development release registry cache write failed"); }
-      await stored.body?.cancel().catch(() => undefined);
+      await persistReleaseCache(env, value);
     },
   };
 }
