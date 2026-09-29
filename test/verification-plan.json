@@ -69,6 +69,7 @@
         "apps/runner/test/filesystem-security.test.ts",
         "apps/runner/test/ga-regressions.test.ts",
         "apps/runner/test/git-directory-race.test.ts",
+        "apps/runner/test/git-execution.test.ts",
         "apps/runner/test/git-ownership.test.ts",
         "apps/runner/test/git-root-workspace.test.ts",
         "apps/runner/test/history-reporting-transport.test.ts",
