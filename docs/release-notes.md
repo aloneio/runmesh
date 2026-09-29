@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Failed development release refreshes recover the most recently verified usable cache record, including updates from another instance, while retaining its original expiry. Foreground and background regressions cover recovery over older in-memory values.
 - The Runner Git library validates timeout options before starting a process, so invalid configuration cannot leave an unmanaged child. Lifecycle regressions cover startup failures, expired deadlines, and snapshot cleanup.
 - Runner baseline checks use one isolated index for status and flag inspection, preventing concurrent flag changes from hiding uncommitted edits. Fewer snapshots and Git processes retain the 1.5-second observation budget and a fresh final commit check.
 - Concurrent development downloads now wait for cache recovery to finish before reporting a failed refresh. Registry cache reads and writes have deadlines, so stalled storage cannot indefinitely delay a verified download.
