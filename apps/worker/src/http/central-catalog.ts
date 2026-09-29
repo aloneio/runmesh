@@ -33,6 +33,8 @@ export async function handleCentralCatalogAdmin(request: Request, env: WorkerEnv
     ]);
     const result = catalogObject(response);
     if (result === undefined) return fail("central_result_unconfirmed", 503, "unknown");
+    if (result.state === "empty" && command === undefined && requestedDigest === undefined)
+      return Response.json({ state: "empty" }, { headers });
     if (result.state === "written" || result.state === "found") {
       const head = parseCatalogHead(result.head);
       if (head === undefined || head.profile_id !== profileId || (result.state === "written") !== (command !== undefined)) return fail("central_result_unconfirmed", 503, "unknown");

@@ -34,6 +34,8 @@ Managed OAuth application code owns lifecycle ordering through SDK-free ports. P
 
 Reconnect first reloads the saved connection and then starts one new authorization attempt. A failed discovery does not require a separate manual refresh. Failed state reads and paused or removed connections prevent the handoff.
 
+Before tool discovery, an existing connection's current catalog returns HTTP 200 with an empty state; a missing connection or requested snapshot still returns 404. Discovery that requires authorization and has not started returns HTTP 200 with an authorization-required state, allowing the panel to offer reconnection. Other failures retain their error responses. Reopening the panel after an interrupted OAuth return resumes discovery automatically and reuses the initial catalog read.
+
 Authorization checks credential encryption before contacting the provider. A missing or invalid `INTERNAL_CONTROL_SECRET` returns `oauth_configuration_required` (503, `not_started`) without contacting the provider or replacing an existing account. Restore the existing deployment secret if it becomes unavailable. A normally configured instance needs no additional OAuth setup: users enter the MCP URL, select OAuth and continue to the provider's authorization page. Configuration failures are presented separately from unsupported or unavailable providers.
 
 Tests cover encryption binding, key rotation, callback identity/origin, refresh claims, revocation, session cleanup and no replay. Local protocol fixtures do not prove consent with every real provider. Deployment activation and external consent evidence remain in [the rollout ledger](central-rollout.md).

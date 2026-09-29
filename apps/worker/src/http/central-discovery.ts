@@ -27,6 +27,8 @@ export async function handleCentralDiscovery(request: Request, env: WorkerEnv, u
     } else if (result?.state === "conflict" && catalogRevision(result.current_revision, true)) {
       return Response.json({ error: { code: "central_revision_conflict", operation_state: "not_started", current_revision: result.current_revision } }, { status: 409, headers: centralHeaders });
     } else if (result?.state === "failed" && REMOTE_CODES.includes(result.code) && ["not_started", "unknown"].includes(result.operation_state)) {
+      if (result.code === "authorization_required" && result.operation_state === "not_started")
+        return Response.json({ state: "authorization_required" }, { headers: centralHeaders });
       return centralFailure(`remote_${result.code}`, result.code === "permission_denied" ? 403 : result.code === "busy" ? 429 : 503, result.operation_state);
     } else if (result && ["invalid", "missing", "denied", "unavailable", "capacity", "stale_profile", "unknown"].includes(result.state)) {
       return centralFailure(`central_${result.state}`, result.state === "denied" ? 403 : result.state === "invalid" ? 400 : 503, result.state === "unknown" ? "unknown" : "not_started");

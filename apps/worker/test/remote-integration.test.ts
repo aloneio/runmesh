@@ -170,10 +170,10 @@ it.each([401, 403])("W05 upstream HTTP %s preserves authorization guidance and u
     const http = f.network.getMockImplementation()!;
     f.network.mockImplementation(async () => new Response("untrusted upstream rejection", { status }));
     const discovery = await f.discover();
-    expect(discovery.status).toBe(503);
-    expect(await discovery.json()).toMatchObject({ error: { code: "remote_authorization_required", operation_state: "not_started" } });
+    expect(discovery.status).toBe(200);
+    expect(await discovery.json()).toEqual({ state: "authorization_required" });
     expect(f.network).toHaveBeenCalledOnce(); expect(f.execute).not.toHaveBeenCalled();
-    expect(await f.call(owner => owner.getCatalog(f.admin.hash, "docs"))).toMatchObject({ state: "missing" });
+    expect(await f.call(owner => owner.getCatalog(f.admin.hash, "docs"))).toMatchObject({ state: "empty" });
     f.network.mockImplementation(http);
     expect((await f.discover()).status).toBe(200); const command = await f.toolCommand();
     f.network.mockImplementation(async (input, init) => {

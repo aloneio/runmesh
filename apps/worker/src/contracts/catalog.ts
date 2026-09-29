@@ -61,7 +61,7 @@ export interface CatalogAdminPorts {
 }
 export interface CatalogDelta { readonly name: string; readonly state: "added" | "changed" | "removed" | "unchanged" }
 export type CatalogInspection = { readonly state: "found"; readonly head: CatalogHead; readonly snapshot: CatalogSnapshot;
-  readonly changes: readonly CatalogDelta[] } | CatalogFailure;
+  readonly changes: readonly CatalogDelta[] } | { readonly state: "empty" } | CatalogFailure;
 export interface CatalogCursor {
   readonly schema_version: 2;
   readonly client_id: string;

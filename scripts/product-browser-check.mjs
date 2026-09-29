@@ -148,14 +148,14 @@ export async function checkGuidedProduct(executable) {
     assert.equal(body.expected_revision,catalogs.get(id)?.head.revision??0);
     if(conflict){code=409;value={state:'conflict',current_revision:body.expected_revision+1};}
     else if(invalidCatalogReceipt)value={state:'listed',catalogs:[],next_after:null};
-    else if(rejectDiscovery||id===rejectedProfile){code=503;value={error:{code:'remote_authorization_required',operation_state:'not_started'}};if(failRefreshAfterRejection)failLibrary=true;}
+    else if(rejectDiscovery||id===rejectedProfile){value={state:'authorization_required'};if(failRefreshAfterRejection)failLibrary=true;}
     else{
     const head={profile_id:id,revision:body.expected_revision+1,observed_digest:digest,approved_digest:digest,approved_names:['search']};
     const snapshot={digest,tools:[{tool_id:'tool-search',public_name:'search',version:toolVersion,definition:{name:'search',description:'<img src=x onerror=alert(1)>',inputSchema:{type:'object',properties:{query:{type:'string'}}},annotations:{readOnlyHint:true}}}]};
     catalogs.set(id,{state:'found',head,snapshot,changes:[{name:'search',state:'added'}]});value={state:'written',head:structuredClone(head)};
     const change=afterDiscovery;afterDiscovery=undefined;change?.(id);}
    }else if(kind==='catalogs'){
-    value=catalogs.get(id);if(!value){code=404;value={state:'missing'};}
+    value=catalogs.get(id);if(!value)value={state:'empty'};
     else if(body)throw new Error('Manual approval is not part of the connection flow');
     else if(url.searchParams.get('snapshot')===value.approved?.digest){value={...value,snapshot:value.approved};}
    }else if(kind==='skills'&&!id)value={state:'listed',skills:library.map(s=>({head:s.head,summary:{name:s.bundle.name,description:s.bundle.description}})),next_after:null};
@@ -234,9 +234,12 @@ export async function checkGuidedProduct(executable) {
   for(const approved of [null,digest]){
    const existing=catalogs.get(profiles[0].profile_id);existing.head.approved_digest=approved;existing.head.approved_names=[];
    const before=requests.filter(r=>r.path.startsWith('/admin/central/discovery/')).length;
+   const catalogPath='/admin/central/catalogs/'+profiles[0].profile_id;
+   const reads=requests.filter(r=>r.path===catalogPath&&r.method==='GET').length;
    await page.reload();await status.filter({hasText:'Connected.'}).waitFor();
    assert.deepEqual(catalogs.get(profiles[0].profile_id).head.approved_names,['search']);
    assert.equal(requests.filter(r=>r.path.startsWith('/admin/central/discovery/')).length,before+1);
+   assert.equal(requests.filter(r=>r.path===catalogPath&&r.method==='GET').length,reads+2,'Recovery reads the catalog once before discovery and once after publication');
   }
   rejectDiscovery=true;await form.locator('[name=endpoint]').fill('https://oauth.provider.com/mcp');await form.locator('[name=authentication]').selectOption('oauth');await form.locator('button').click();
   await status.filter({hasText:'Select Reconnect to sign in to this MCP again.'}).waitFor();

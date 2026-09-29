@@ -64,6 +64,20 @@ it.each(["catalog-", "catalog:"])("W04 real admin HTTP stages and reviews a cata
   } finally { network.mockRestore(); }
 });
 
+it("an existing MCP without a discovered catalog is empty, while missing profiles and snapshots stay missing", async () => {
+  const admin = await session(), id = "empty-" + crypto.randomUUID(), profile = catalogProfile(id);
+  expect(await owner().mutateProfile(admin.hash, { action: "connect", profile_id: id, connector_id: profile.connector_id,
+    endpoint: profile.endpoint, authentication: "oauth" })).toMatchObject({ state: "written" });
+  const empty = await SELF.fetch(url(id), { headers: admin.headers });
+  expect(empty.status).toBe(200); expect(await empty.json()).toEqual({ state: "empty" });
+  expect(empty.headers.get("cache-control")).toBe("no-store");
+  const archived = await SELF.fetch(url(id) + "?snapshot=" + "a".repeat(64), { headers: admin.headers });
+  expect(archived.status).toBe(404);
+  expect(await archived.json()).toMatchObject({ error: { code: "central_missing" } });
+  expect((await SELF.fetch(url("missing-" + crypto.randomUUID()), { headers: admin.headers })).status).toBe(404);
+  expect((await SELF.fetch(url(id))).status).toBe(403);
+});
+
 it("complete publication replaces a pending catalog atomically and stale retries cannot overwrite it", async () => {
   const f = await fixture(), principal = await client();
   const tools = f.snapshot.tools.map(tool => tool.definition);
