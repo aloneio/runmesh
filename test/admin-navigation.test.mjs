@@ -21,7 +21,12 @@ function harness() {
 test("revisiting a URL always revalidates with no-store and same-origin credentials", async () => {
   const h = harness(); await h.open("/admin", false); await h.open("/admin", false);
   assert.deepEqual(h.mounted.map(item => item.title), ["version-1", "version-2"]);
-  for (const { options } of h.fetched) assert.deepEqual(options, { cache: "no-store", credentials: "same-origin" });
+  for (const { options } of h.fetched) {
+    const { signal, ...request } = options;
+    assert.deepEqual(request, { cache: "no-store", credentials: "same-origin" });
+    assert.ok(signal instanceof AbortSignal);
+    assert.equal(signal.aborted, true);
+  }
   assert.equal(h.nav.isLoading(), false);
 });
 test("history navigation also revalidates without pushing another history entry", async () => {
@@ -46,6 +51,44 @@ test("a changed server locale triggers full navigation without mounting a mixed-
   const h = harness(); h.context.parse = () => ({ documentElement: { lang: "zh-CN" }, querySelector: () => ({}) });
   await h.open("/admin?lang=zh-CN"); assert.equal(h.mounted.length, 0);
   assert.equal(h.context.location.href, "https://worker.test/admin?lang=zh-CN");
+});
+for (const phase of ["headers", "body"]) test("stalled navigation " + phase + " releases its owner and falls back after the deadline", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const h = harness(); let finish, settled = false;
+  h.context.fetch = (url, options) => {
+    h.fetched.push({ url, options });
+    const stalled = new Promise((resolve, reject) => {
+      finish = resolve;
+      options.signal?.addEventListener("abort", () => reject(options.signal.reason), { once: true });
+    });
+    return phase === "headers" ? stalled : Promise.resolve({ ok: true, text: () => stalled });
+  };
+  const pending = h.open("/admin/runners").then(() => { settled = true; });
+  await new Promise(setImmediate);
+  t.mock.timers.tick(25000);
+  await new Promise(setImmediate);
+  const observed = { settled, busy: h.nav.isLoading(), url: h.context.location.href, mounted: h.mounted.length, aborted: h.fetched[0].options.signal?.aborted };
+  // Release the old implementation before asserting so a failed regression is clean.
+  finish(phase === "headers" ? { ok: true, text: async () => "late" } : "late");
+  await pending;
+  assert.deepEqual(observed, { settled: true, busy: false, url: "https://worker.test/admin/runners", mounted: 0, aborted: true });
+});
+for (const failure of ["network", "locale"]) test(failure + " navigation fallback uses the last queued destination once", async () => {
+  const h = harness(); let finish, reject;
+  h.context.fetch = (url, options) => {
+    h.fetched.push({ url, options });
+    return h.fetched.length === 1 ? new Promise((resolve, fail) => { finish = resolve; reject = fail; }) : Promise.resolve({ ok: true, text: async () => "latest" });
+  };
+  if (failure === "locale") h.context.parse = () => ({ documentElement: { lang: "zh-CN" }, querySelector: () => ({}) });
+  const first = h.open("/admin/runners");
+  void h.open("/admin/clients"); void h.open("/admin/settings");
+  if (failure === "network") reject(new Error("offline"));
+  else finish({ ok: true, text: async () => "first" });
+  await first; await new Promise(setImmediate);
+  assert.equal(h.context.location.href, "https://worker.test/admin/settings");
+  assert.equal(h.fetched.length, 1);
+  assert.equal(h.mounted.length, 0);
+  assert.equal(h.nav.isLoading(), false);
 });
 function element() {
   const events = new Map(), attrs = new Map(), classes = new Set();

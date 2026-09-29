@@ -16,6 +16,7 @@ import { clientsPage } from '../apps/worker/dist/admin/client-views.js';
 import { localizeUiText } from '../apps/worker/dist/i18n/legacy-text.js';
 import { requestLocale } from '../apps/worker/dist/i18n/locale.js';
 import { checkRunnerActions } from './runner-browser-check.mjs';
+import { checkAdminNavigation } from './navigation-browser-check.mjs';
 
 async function checkClientPermissions(browser, origin, errors) {
  for(const locale of ['en','zh-CN']) {
@@ -96,6 +97,7 @@ async function checkSkillFileErrors(browser, origin, requests, library) {
 
 /** Isolated browser fixtures exercise the shipped UI, never a user browser or external service. */
 export async function checkGuidedProduct(executable) {
+ await checkAdminNavigation(executable);
  await checkRunnerActions(executable);
  const digest='a'.repeat(64), toolVersion='c'.repeat(64);
  const profiles=[], library=[], requests=[], exceptions=[];

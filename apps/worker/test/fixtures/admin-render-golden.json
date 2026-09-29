@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "7de52c9d72b95e91b1243491cee3887ab43c52493510618b7f2c9de1e28f5cc9",
-      "bytes": 124945,
+      "sha256": "b8f7ce097b6725aa42a98ea15cdac96618ecaa24cfa82fc1322bba9e580a9172",
+      "bytes": 125362,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -32,8 +32,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "5eb02505c6a6eed7853eda51d6c9a508511db856c03ae6f4f593e68e7c299bb4",
-      "bytes": 125533,
+      "sha256": "0c75f3e940ef5a942d1a860ac1f627d5c7619f100d30dbd151c11b1672ba9a6f",
+      "bytes": 125950,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -51,8 +51,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "c025a4bc9a1a1979138337f7bf8306e27031a8a171a41a3edaf9f155a9c312c1",
-      "bytes": 126681,
+      "sha256": "08b3ac7b6d40787eb89db11033deb51ee0a4100d07b127a4246f8cb319fe72ff",
+      "bytes": 127098,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -419,8 +419,8 @@
           }
         ]
       ],
-      "sha256": "8007223976429546a41ac7c5913bc2485f70c38ee2ec75f2d6154478d477be17",
-      "bytes": 127030,
+      "sha256": "9b0c7e850d432ccbb0934161e4dbc1af93e6d1039da709445cda1596fc83609e",
+      "bytes": 127447,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -559,5 +559,16 @@
     "source_base": "e1911d63260b6737d89766b94ed3f4be9c80d369",
     "reviewed_change": "Localize native Skill file-read, UTF-8, network and malformed-response failures in English and Chinese. Browser regressions reject invalid files without requests and recover through reselection, preserving text. Uncertain writes still require refresh and are never replayed. All non-script markup remains byte-for-byte unchanged. No screenshots.",
     "rendered_cases": 20
+  },
+  "navigation_deadline_review": {
+    "source_base": "e6cfe1755e8a467a5a3a0225ef2377c177ead489",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "reviewed_change": "Bound navigation response headers and body with one 25-second deadline. Full-page fallbacks preserve the latest queued destination without extra requests. Replacing only the inline bundle reproduces every prior hash and byte count. No screenshots.",
+    "non_script_markup_unchanged": true
   }
 }
