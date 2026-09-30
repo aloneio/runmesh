@@ -395,14 +395,17 @@
           "distributable": true
         }
       ],
-      "sha256": "f401b75e00befcb1f93eff48de92c0be60737ce471d9a2f271c768faad104c09",
-      "bytes": 13866,
+      "sha256": "8254c1c061edf768a72857fadebc14015d07fc2d97175b9315154607b5bb3f4d",
+      "bytes": 13841,
       "presentation": {
         "configuredMode": null,
         "reportedMode": "dedicated_user",
         "maxValidityDays": 3650,
         "dayMs": 86400000
-      }
+      },
+      "pre_enrollment_status_sha256": "f401b75e00befcb1f93eff48de92c0be60737ce471d9a2f271c768faad104c09",
+      "pre_enrollment_status_bytes": 13866,
+      "reviewed_change": "Enrollment detail only displays timing metadata; direct users to generate a new single-use code instead of asking them to save a code absent from this page. Consumed-state labels are separately verified in both locales."
     },
     {
       "name": "admin-document",
