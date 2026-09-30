@@ -5,9 +5,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, parse } from "node:path";
 import { probeSessionConflict } from "../helpers/session-conflict-probe.js";
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolveTrustedWindowsTool, trustedWindowsRoot } from "../../apps/runner/src/windows-tools.js";
+import { isolatedGitEnvironment, trustedGitCwd } from "../../apps/runner/src/git/trust.js";
 import { catalogContract, MCP_CATALOG_SUMMARY } from "../../apps/worker/src/mcp/catalog-contract.js";
 import { fromJsonSchema } from "@modelcontextprotocol/server";
 import { inspectInputCases } from "../helpers/inspect-input-cases.js";
@@ -403,7 +404,15 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     runnerOutput = collectOutput(runner);
     await waitFor(async () => (await mcpTool("runner_list", {}, clientA)).structuredContent?.runners?.some((item: { runner_id?: string; state?: string }) => item.runner_id === runnerId && item.state === "online"), 15_000, runnerOutput);
     await writeFile(join(workspace, "recovery-finish"), "finish\\n");
-    await waitFor(async () => (await mcpTool("job", { action: "get", job_id: jobId as string }, clientB)).structuredContent?.status === "interrupted", 10_000);
+    let recovered: ToolResult = {};
+    await waitFor(async () => {
+      recovered = await mcpTool("job", { action: "get", job_id: jobId as string }, clientB);
+      return recovered.structuredContent?.status === "interrupted";
+    }, 10_000, () => JSON.stringify({
+      status: recovered.structuredContent?.status, source: recovered.structuredContent?.source,
+      runner_context: recovered.structuredContent?.runner_context,
+      error: (recovered.structuredContent?.error as { code?: string } | undefined)?.code,
+    }));
     const completedSnapshot = await mcpTool("job", { action: "get", job_id: jobId as string }, clientB);
     expect(completedSnapshot.structuredContent?.status).toBe("interrupted");
 
@@ -788,14 +797,40 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     }
   });
 
-  it("R03 reads three real commits and literal blame through MCP without shell permission", async () => {
-    const git = (args: string[]) => execFileSync("git", args, { cwd: workspace, stdio: "ignore" });
+  it("R03 inspects real Git history without shell permission or reports a missing trusted installation", async () => {
+    const git = (args: string[]) => execFileSync("git", ["-c", "gc.auto=0", "-c", "maintenance.auto=false", ...args], { cwd: workspace, stdio: "ignore" });
     git(["init"]); git(["config", "user.name", "Fixture"]); git(["config", "user.email", "fixture@example.invalid"]);
     const file = "review-history.txt";
     for (const value of ["first", "second", "third"]) {
       await writeFile(join(workspace, file), `${value}\nunchanged\n`);
       git(["add", "-f", "--", file]); git(["commit", "-m", value, "--", file]);
     }
+    // Fixture setup can use a developer's PATH, while the production Runner
+    // accepts only trusted machine installations. Probe that prerequisite
+    // independently; an absent binary must produce the documented MCP error,
+    // never a skipped test or a production executable-path override.
+    const trustedGit = spawnSync("git", ["--version"], {
+      cwd: trustedGitCwd(), env: isolatedGitEnvironment(join(workspace, ".git"), workspace),
+      stdio: "ignore", windowsHide: true, timeout: 5_000,
+    });
+    if (trustedGit.error !== undefined) {
+      expect((trustedGit.error as NodeJS.ErrnoException).code).toBe("ENOENT");
+      // Hosted CI provides machine Git and must retain the real history path.
+      expect(process.env.CI, "CI requires a trusted Git installation").not.toBeTruthy();
+      const revision = execFileSync("git", ["rev-parse", "HEAD"], { cwd: workspace, encoding: "utf8", windowsHide: true }).trim();
+      for (const input of [
+        { action: "git_log", path: file },
+        { action: "git_blame", path: file },
+        { action: "git_show", path: file, revision },
+      ]) {
+        expect(await mcpTool("inspect", { workspace_id: "workspace-1", ...input }, clientB)).toMatchObject({
+          isError: true, structuredContent: { error: { code: "git_unavailable", failure_class: "availability",
+            operation_state: "not_started", next_action: "contact_operator" } },
+        });
+      }
+      return;
+    }
+    expect(trustedGit.status, "trusted Git prerequisite must run successfully").toBe(0);
     const history = await mcpTool("inspect", { action: "git_log", workspace_id: "workspace-1", path: file, max_results: 10 }, clientB);
     expect(history.isError, JSON.stringify(history)).not.toBe(true);
     expect((history.structuredContent?.commits as Array<{subject:string}>).map(row => row.subject)).toEqual(["third", "second", "first"]);

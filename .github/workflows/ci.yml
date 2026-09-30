@@ -102,6 +102,9 @@ jobs:
       - run: node --test test/verification-tools.test.mjs test/package-verification.test.mjs
       - run: node --test test/architecture.test.mjs
       - run: node --test test/build-provenance.test.mjs test/deployment-provenance-cli.test.mjs test/live-provenance.test.mjs
+      - name: Verify Windows MCP transport and Runner recovery
+        if: matrix.os == 'windows-latest'
+        run: npm run test:e2e
   runner-lts:
     name: Runner LTS (${{ matrix.node }})
     strategy:
