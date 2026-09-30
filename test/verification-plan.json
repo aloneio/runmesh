@@ -142,6 +142,7 @@
         "apps/worker/test/mcp-job-redaction.test.ts",
         "apps/worker/test/mcp-output-contracts.test.ts",
         "apps/worker/test/mcp-registration.test.ts",
+        "apps/worker/test/mcp-response.test.ts",
         "apps/worker/test/mcp.test.ts",
         "apps/worker/test/no-record.test.ts",
         "apps/worker/test/oauth-landing.test.ts",

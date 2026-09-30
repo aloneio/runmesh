@@ -3,6 +3,7 @@ import { discardMcpBody as discardBody } from "./mcp-errors.js";
 import { MCP_SECRET_RE } from "./constants.js";
 import type { McpAuth } from "../mcp/server.js";
 import { mcpHttpError } from "./mcp-errors.js";
+import { primeMcpResponse } from "./mcp-response.js";
 import { readCappedBytes } from "../body.js";
 import { sha256Hex } from "../security.js";
 import { verifyMcpClient } from "../application/mcp-identity.js";
@@ -40,7 +41,7 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
       discoversProviders = rpc?.method === "tools/list" || rpc?.method === "resources/list" || rpc?.method === "resources/templates/list";
       needsDirectory = env.CENTRAL_DIRECT_TOOLS_ENABLED === "1" && (rpc?.method === "tools/list" || (rpc?.method === "tools/call" && typeof rpc.params?.name === "string" && (rpc.params.name.startsWith("rm_") || rpc.params.name === "remote_status")));
     } catch { /* The SDK owns malformed JSON-RPC responses. */ }
-    forwarded = new Request(rewritten, { method: request.method, headers: request.headers, body: body.buffer as ArrayBuffer });
+    forwarded = new Request(rewritten, { method: request.method, headers: request.headers, body: body.buffer as ArrayBuffer, signal: request.signal });
   } else {
     forwarded = new Request(rewritten, request);
   }
@@ -55,9 +56,10 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
     import("agents/mcp/server"),
     import("../mcp/server.js"),
   ]);
-  const remote = env.CAPABILITIES === undefined
+  const nativeCall = calledTool !== undefined && MCP_TOOL_NAMES.some(name => name === calledTool);
+  const remote = nativeCall || env.CAPABILITIES === undefined
     ? undefined : await import("../mcp/providers/remote.js");
-  const skills = env.CAPABILITIES !== undefined && env.CENTRAL_SKILLS_ENABLED === "1"
+  const skills = !nativeCall && env.CAPABILITIES !== undefined && env.CENTRAL_SKILLS_ENABLED === "1"
     ? await import("../mcp/providers/skills.js") : undefined;
   const direct = remote !== undefined && env.CENTRAL_DIRECT_TOOLS_ENABLED === "1" ? await import("../mcp/providers/remote/direct.js") : undefined;
   let visibility: CentralToolVisibility | undefined;
@@ -115,7 +117,7 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
       legacy: "stateless",
     },
   );
-  const response = await handler.fetch(forwarded, { authInfo: auth, ...(parsedBody !== undefined ? { parsedBody } : {}) });
+  const response = await primeMcpResponse(await handler.fetch(forwarded, { authInfo: auth, ...(parsedBody !== undefined ? { parsedBody } : {}) }), parsedBody);
   // The MCP credential is carried in the request path.  Do not allow an SDK
   // response (or an intermediary) to cache that path or disclose it through
   // a referrer when a client follows a response link.  These headers also
