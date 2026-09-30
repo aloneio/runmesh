@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { WebSocket } from "ws";
 import { decodeWireFrame, encodeWireFrame, PROTOCOL_CURRENT_VERSION as version, PROTOCOL_MIN_VERSION, type WireMessage } from "@aloneio/runmesh-protocol";
 
-/** Public transport only. A valid sync is acknowledged before an older one
- * is sent. Use an explicitly authorized, isolated test Runner identity:
+/** Public transport only. Superseded snapshots keep their session alive; a
+ * second connection replaces it. Use an isolated test Runner identity:
  * opening this socket replaces any existing connection for that identity. */
 export async function probeSessionConflict(input: { server: string; runnerId: string; token: string }) {
   const sockets: WebSocket[] = [];
@@ -46,17 +46,20 @@ export async function probeSessionConflict(input: { server: string; runnerId: st
     first.send(sync(2));
     await first.until(() => first.messages.find(frame => frame.type === "rpc.response" && frame.request_id === "history-2"));
     first.send(sync(1));
-    const rejection = await first.until(first.closed);
-    assert.deepEqual(rejection, { code: 4000, reason: "stale runner session" });
-    assert.ok(!first.messages.some(frame => frame.type === "rpc.response" && frame.request_id === "history-1"), "stale sync must not be acknowledged");
+    const superseded = await first.until(() => first.messages.find(frame => frame.type === "rpc.response" && frame.request_id === "history-1"));
+    assert.ok(superseded.type === "rpc.response");
+    assert.deepEqual(JSON.parse(JSON.stringify(superseded.result)), { history_status: "unchanged" });
+    assert.equal(first.socket.readyState, WebSocket.OPEN);
     const recovered = await connect();
+    const rejection = await first.until(first.closed);
+    assert.deepEqual(rejection, { code: 4000, reason: "replaced by newer session" });
     assert.ok(first.welcome.type === "runner.welcome" && recovered.welcome.type === "runner.welcome");
     assert.notEqual(first.welcome.session_id, recovered.welcome.session_id);
     recovered.send({ type: "rpc.request", protocol_version: version, request_id: "probe-recovery", method: "echo", params: { recovered: true } });
     const echo = await recovered.until(() => recovered.messages.find(frame => frame.type === "rpc.response" && frame.request_id === "probe-recovery"));
     assert.ok(echo.type === "rpc.response");
     assert.deepEqual(JSON.parse(JSON.stringify(echo.result)), { recovered: true });
-    return { valid_sync_acknowledged: true, stale_sync_acknowledged: false, close_code: rejection.code,
+    return { valid_sync_acknowledged: true, superseded_sync_acknowledged: true, close_code: rejection.code,
       close_reason: rejection.reason, same_credential_reconnected: true, new_session: true, recovery_echo: true };
   } finally {
     for (const socket of sockets) {
