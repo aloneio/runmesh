@@ -15,6 +15,7 @@ export interface ClientsRoutePorts {
   renameMcpClient(clientId: string, label: string, nowMs: number): McpClientRecord | undefined;
   rotateMcpClient(clientId: string, secretVerifier: string, secretPrefix: string, nowMs: number): McpClientRecord | undefined;
   revokeMcpClient(clientId: string, nowMs: number): McpClientRecord | undefined;
+  deleteMcpClient(clientId: string): boolean;
   updateMcpClientScopes(clientId: string, scopes: readonly CodingScope[], nowMs: number): McpClientRecord | undefined;
   hasMcpClient(clientId: string): boolean;
   listClientRunnerOverrides(clientId: string): Array<{ runner_id: string; permissions: PermissionSet }>;
@@ -35,6 +36,9 @@ export function createClientsRoutes(ports: ClientsRoutePorts): RegistryRoute {
     const action = segments[0]; const clientId = parsePathIdentifier(segments[1]);
     if (action !== "clients" || (segments[1] !== undefined && clientId === undefined)) return undefined;
     const targetRunnerId = parsePathIdentifier(segments[3]);
+    if (method === "DELETE" && clientId !== undefined && segments.length === 2) {
+      return ports.deleteMcpClient(clientId) ? new Response(null, { status: 204 }) : new Response("not found", { status: 404 });
+    }
     if (method === "GET" && action === "clients" && clientId === undefined) return Response.json({ clients: ports.listMcpClients() });
     if (method === "POST" && action === "clients" && clientId === undefined && input.identity_version !== undefined) {
       const parsed = parseMcpIdentity(input);

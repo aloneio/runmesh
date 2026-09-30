@@ -134,6 +134,7 @@
         "apps/worker/test/managed-connections.test.ts",
         "apps/worker/test/mcp-agent-inputs.test.ts",
         "apps/worker/test/mcp-catalog.test.ts",
+        "apps/worker/test/mcp-client-lifecycle.test.ts",
         "apps/worker/test/mcp-connector-contract.test.ts",
         "apps/worker/test/mcp-failure-chain.test.ts",
         "apps/worker/test/mcp-http-errors.test.ts",

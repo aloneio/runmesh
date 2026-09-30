@@ -157,6 +157,13 @@ function createPageControls({
       select.addEventListener("change", syncPermissions);
       syncPermissions();
     });
+    root.querySelectorAll("form[data-client-delete]").forEach(function (form) {
+      if (!claim(form, "client-delete")) return;
+      form.addEventListener("submit", function (event) {
+        var prompt = document.documentElement.lang === "zh-CN" ? "删除这个 AI 连接？其连接地址将立即失效。" : "Delete this AI connection? Its connection URL will stop working.";
+        if (!window.confirm(prompt)) event.preventDefault();
+      });
+    });
     bindFeatureAlert(root);
     stabilizeTabPanels(root);
   }

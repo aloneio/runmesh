@@ -75,8 +75,8 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
   if (request.method === "GET" && ["/admin", "/admin/runners", "/admin/clients", "/admin/settings"].includes(url.pathname)) {
     const csrf = cookieValue(request, ADMIN_CSRF_COOKIE);
     if (csrf === undefined || !constantTimeEqual(await sha256Hex(csrf), session.csrf_hash)) return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
-    const data = await loadDashboardData(env, url.pathname === "/admin" && url.searchParams.get("history") === "1" && env.RUNMESH_JOB_HISTORY_BACKEND !== "d1");
-    return html(adminPage(url.pathname, data, csrf, env.CAPABILITIES !== undefined, url.searchParams.get("history") === "1"));
+    const data = await loadDashboardData(env, url.pathname === "/admin" && env.RUNMESH_JOB_HISTORY_BACKEND !== "d1");
+    return html(adminPage(url.pathname, data, csrf, env.CAPABILITIES !== undefined));
   }
   const runnerDetail = matchIdentifierPath(/^\/admin\/runners\/([^/]+)$/, url.pathname);
   const jobDetail = matchIdentifierPath(/^\/admin\/runners\/([^/]+)\/jobs\/([^/]+)$/, url.pathname, [1, 2]);
@@ -179,9 +179,9 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
   if (url.pathname === "/admin/runners") return createBrowserRunner(env, form, publicOrigin, scheduleRefresh);
   const runnerMatch = matchIdentifierPath(/^\/admin\/runners\/([^/]+)\/(rename|rotate|revoke|delete|enrollment|validity|permissions|version-policy|emergency-lock|workspace-create|workspace-update|workspace-delete)$/, url.pathname);
   if (runnerMatch !== null) return handleBrowserRunnerAction(env, form, publicOrigin, runnerMatch[1] as string, runnerMatch[2] as "rename" | "rotate" | "revoke" | "delete" | "enrollment" | "validity" | "permissions" | "version-policy" | "emergency-lock" | "workspace-create" | "workspace-update" | "workspace-delete", scheduleRefresh);
-  const clientMatch = matchIdentifierPath(/^\/admin\/clients\/([^/]+)\/(rename|rotate|revoke|reset-runner|select-runner|active-runner|override|reset-override|scopes|recording)$/, url.pathname);
+  const clientMatch = matchIdentifierPath(/^\/admin\/clients\/([^/]+)\/(rename|rotate|revoke|delete|reset-runner|select-runner|active-runner|override|reset-override|scopes|recording)$/, url.pathname);
   if (clientMatch === null) return notFound();
-  const clientId = clientMatch[1] as string; const action = clientMatch[2] as "rename" | "rotate" | "revoke" | "reset-runner" | "select-runner" | "active-runner" | "override" | "reset-override" | "scopes" | "recording";
+  const clientId = clientMatch[1] as string; const action = clientMatch[2] as "rename" | "rotate" | "revoke" | "delete" | "reset-runner" | "select-runner" | "active-runner" | "override" | "reset-override" | "scopes" | "recording";
   if (action === "recording") {
     const value = form.get("record_jobs");
     if (value !== "true" && value !== "false") return adminError(400, "Recording preference is invalid.");
@@ -231,9 +231,13 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
     const response = await registryPost(env, `/auth/clients/${encodeURIComponent(clientId)}/rename`, { label });
     return adminMutationResponse(response, "/admin", "Client update failed.");
   }
+  if (action === "delete") {
+    const response = await registryRequest(env, "/auth/clients/" + encodeURIComponent(clientId), "DELETE", "");
+    return adminMutationResponse(response, "/admin/clients", "Client deletion failed.", 204);
+  }
   if (action === "revoke") {
     const response = await registryPost(env, `/auth/clients/${encodeURIComponent(clientId)}/revoke`, {});
-    return adminMutationResponse(response, "/admin", "Client revoke failed.");
+    return adminMutationResponse(response, "/admin/clients", "Client revoke failed.");
   }
   const secret = randomBase64Url();
   const failure = await persistClientCredential(env, `/auth/clients/${encodeURIComponent(clientId)}/rotate`, clientId, secret);

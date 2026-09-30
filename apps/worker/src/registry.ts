@@ -151,6 +151,7 @@ export class RegistryDO {
       renameMcpClient: (...args) => this.renameMcpClient(...args),
       rotateMcpClient: (...args) => this.rotateMcpClient(...args),
       revokeMcpClient: (...args) => this.revokeMcpClient(...args),
+      deleteMcpClient: (...args) => this.deleteMcpClient(...args),
       updateMcpClientScopes: (...args) => this.updateMcpClientScopes(...args),
       hasMcpClient: clientId => this.getMcpClient(clientId) !== undefined,
       listClientRunnerOverrides: (...args) => this.listClientRunnerOverrides(...args),
@@ -411,6 +412,8 @@ export class RegistryDO {
   public rotateMcpClient(clientId: string, secretVerifier: string, secretPrefix: string, nowMs: number): McpClientRecord | undefined { return this.auth.rotateMcpClient(clientId, secretVerifier, secretPrefix, nowMs); }
 
   public revokeMcpClient(clientId: string, nowMs: number): McpClientRecord | undefined { return this.auth.revokeMcpClient(clientId, nowMs); }
+
+  public deleteMcpClient(clientId: string): boolean { return this.auth.deleteMcpClient(clientId); }
 
   public verifyMcpClient(secretVerifier: string, nowMs: number): VerifiedMcpClient | undefined { return this.auth.verifyMcpClient(secretVerifier, nowMs); }
 

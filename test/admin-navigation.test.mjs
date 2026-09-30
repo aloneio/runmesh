@@ -159,6 +159,27 @@ test("client computer permissions follow access type on initial and dynamically 
   }
 });
 
+test("client deletion asks once and cancelling keeps both initial and mounted forms intact", () => {
+  for (const lang of ["en", "zh-CN"]) {
+    const document = { documentElement: { lang } }, prompts = [];
+    let approved = false;
+    const controls = createPageControls({ document, window: { confirm(prompt) { prompts.push(prompt); return approved; } }, location: {}, navigator: {}, locale: createLocale({ document }) });
+    for (const form of [element(), element()]) {
+      const root = { querySelectorAll: selector => selector === "form[data-client-delete]" ? [form] : [], querySelector: () => null };
+      controls.bindPageControls(root); controls.bindPageControls(root);
+      assert.equal(form.events.get("submit").length, 1);
+      let prevented = false;
+      approved = false; form.dispatch("submit", { preventDefault() { prevented = true; } });
+      assert.equal(prevented, true);
+      prevented = false;
+      approved = true; form.dispatch("submit", { preventDefault() { prevented = true; } });
+      assert.equal(prevented, false);
+    }
+    assert.equal(prompts.length, 4);
+    assert.ok(prompts.every(prompt => prompt.includes(lang === "zh-CN" ? "删除这个 AI 连接" : "Delete this AI connection")));
+  }
+});
+
 test("page containers stay synchronous and do not cross-fade sensitive content", () => {
   const css = readFileSync(new URL("../apps/worker/src/admin-styles.ts", import.meta.url), "utf8");
   const container = css.match(/\.admin-page-container\{([^}]+)\}/)?.[1] ?? "";
