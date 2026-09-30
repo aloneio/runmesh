@@ -61,12 +61,16 @@ export function createServiceWorkflow({
       && catalog.head.approved_names.length === catalog.snapshot.tools.length
       && catalog.snapshot.tools.every(tool => catalog.head.approved_names.includes(tool.definition.name));
   }
-  async function connectService(profile, observedCatalog) {
+  async function connectService(profile, { catalog: observedCatalog, authorize = true } = {}) {
     var id = encodeURIComponent(profile.profile_id),
       catalog = observedCatalog === undefined ? await api('catalogs/' + id, undefined, true) : observedCatalog;
-    await api('discovery/' + id, {
+    var result = await api('discovery/' + id, {
       expected_revision: catalog ? catalog.head.revision : 0
     });
+    if (result.state === 'authorization_required') {
+      if (authorize && profile.authentication === 'oauth') return connectOAuth(profile);
+      throw new Error(t('signInToThisServiceAgainUsingReconnect'));
+    }
     var currentProfiles = await refresh(),
       current = currentProfiles.find(item => item.profile_id === profile.profile_id);
     if (!current || !current.enabled) throw new Error(t('serviceNoLongerEnabled'));
@@ -107,7 +111,8 @@ export function createServiceWorkflow({
         if (!profile || !profile.enabled) continue;
       }
       try {
-        profiles = await connectService(profile, catalog);
+        // Background recovery, including OAuth returns, must not start another sign-in.
+        profiles = await connectService(profile, { catalog, authorize: false });
       } catch (error) {
         failed(profile, error);
       }
@@ -143,17 +148,18 @@ export function createServiceWorkflow({
     return catalog;
   }
   async function connectOAuth(profile) {
+    say(t('openingTheServiceSignInPage'));
     // Reconcile a failed discovery or earlier handoff before starting a new one.
     // Use the refreshed revision so a paused or removed MCP cannot reconnect.
-    var currentProfiles = await refresh(),
+    var currentProfiles = await refresh({ silent: true }),
       current = currentProfiles.find(item => item.profile_id === profile.profile_id);
     if (!current || !current.enabled || current.authentication !== 'oauth') throw new Error(t('serviceNoLongerEnabled'));
     var result = await api('connections/begin', {
       profile_id: current.profile_id,
       expected_revision: current.revision
     });
-    say(t('openingTheServiceSignInPage'));
     navigate(result.authorization_url);
+    return currentProfiles;
   }
   app.querySelector('[data-service-create]').addEventListener('submit', function (event) {
     event.preventDefault();
