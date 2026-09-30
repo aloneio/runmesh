@@ -244,8 +244,7 @@ export class RegistryDO {
       desiredPolicy: (...args) => this.desiredPolicy(...args),
       scheduleMaintenanceAlarm: (...args) => this.scheduleMaintenanceAlarm(...args),
       jobHistorySettings: (...args) => this.jobHistorySettings(...args),
-      markDisconnected: (...args) => this.markDisconnected(...args),
-      packedHistory: env.RUNMESH_JOB_HISTORY_BACKEND === "d1"
+      markDisconnected: (...args) => this.markDisconnected(...args)
     });
     this.ctx.blockConcurrencyWhile(async () => {
       // Durable Objects may be evicted and reconstructed for every request.

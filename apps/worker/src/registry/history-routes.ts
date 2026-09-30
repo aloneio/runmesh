@@ -87,11 +87,22 @@ export function createRunnerHistoryRoutes(ports: RunnerHistoryPorts): (request: 
         identity
       } = parsed.value;
       if (ports.packedHistory) return storePackedJobs(runnerId, epoch, credentialVersion, identity.lifecycleId, identity.sessionId, message.data.jobs);
-      return ports.syncRunner(runnerId, epoch, credentialVersion, message.data.workspaces, message.data.jobs, message.data.sync_sequence, nowMs, true, identity.lifecycleId, identity.sessionId) ? new Response(null, {
-        status: 204
-      }) : new Response("stale sync or session", {
-        status: 409
-      });
+      const current = ports.runnerRow(runnerId);
+      if (!ports.runnerMatchesTransportFence(current, epoch, credentialVersion, true, identity.lifecycleId, identity.sessionId)) {
+        return new Response("stale sync session", { status: 409 });
+      }
+      const receipt = (status: "recorded" | "unchanged" | "disabled" | "degraded") =>
+        message.data.extensions?.runmesh_history_ack === true
+          ? Response.json({ history_status: status }, { status: status === "degraded" ? 202 : 200 })
+          : new Response(null, { status: 204 });
+      if (ports.jobHistorySettings(runnerId, identity.lifecycleId).mode === "off") return receipt("disabled");
+      // WebSocket handlers can reach Registry out of order. An older snapshot
+      // from the current session is already superseded, not a replaced session.
+      if (current.last_sync_sequence !== null && message.data.sync_sequence <= current.last_sync_sequence) return receipt("unchanged");
+      if (!ports.syncRunner(runnerId, epoch, credentialVersion, message.data.workspaces, message.data.jobs, message.data.sync_sequence, nowMs, true, identity.lifecycleId, identity.sessionId)) {
+        return new Response("stale sync session", { status: 409 });
+      }
+      return receipt(ports.featureHealthDisabled("job_recording", nowMs) ? "degraded" : "recorded");
     }
     if (method === "POST" && action === "event") {
       const epoch = integerField(input, "epoch");

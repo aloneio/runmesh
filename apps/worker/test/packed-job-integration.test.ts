@@ -6,7 +6,7 @@ import { DEFAULT_JOB_HISTORY } from "../src/job-history-settings.js";
 const db=(env as unknown as {HISTORY_DB:D1Database}).HISTORY_DB;
 
 type Send=(action:string,input:Record<string,unknown>,method?:string)=>Promise<Response>;
-async function fixture(test:(instance:RegistryDO,state:DurableObjectState,send:Send,identity:Record<string,unknown>,prepare:Mock<D1Database["prepare"]>)=>Promise<void>) {
+async function fixture(test:(instance:RegistryDO,state:DurableObjectState,send:Send,identity:Record<string,unknown>,prepare:Mock<D1Database["prepare"]>)=>Promise<void>, backend: "d1" | "sqlite" = "d1") {
   const stub=env.REGISTRY.get(env.REGISTRY.idFromName(`packed-integration-${crypto.randomUUID()}`));
   await runInDurableObject(stub,async(_instance,state)=>{
     const prepare = vi.fn(db.prepare.bind(db));
@@ -15,7 +15,7 @@ async function fixture(test:(instance:RegistryDO,state:DurableObjectState,send:S
       const value = Reflect.get(target, key, target);
       return typeof value === "function" ? value.bind(target) : value;
     } });
-    const instance = new RegistryDO(state, { ...env, HISTORY_DB: historyDb, RUNMESH_JOB_HISTORY_BACKEND: "d1" });
+    const instance = new RegistryDO(state, { ...env, HISTORY_DB: historyDb, RUNMESH_JOB_HISTORY_BACKEND: backend });
     await state.blockConcurrencyWhile(async () => {});
     const now=Date.now();
     instance.registerRunner("r","a".repeat(64),now,undefined,"dedicated_user");
@@ -34,6 +34,29 @@ function sync(identity:Record<string,unknown>,ids=["one","two"]):Record<string,u
   const now=Date.now();
   return {...identity,message:{type:"runner.sync",protocol_version:2,runner_id:"r",sync_sequence:1,sent_at_ms:now,workspaces:[],jobs:ids.map(job_id=>({job_id,runner_id:"r",workspace_id:"w",status:"succeeded",created_at_ms:now,updated_at_ms:now,created_by_client_id:"c"}))}};
 }
+
+it("SQLite acknowledges superseded snapshots without regressing jobs or accepting replaced sessions", async () => {
+  await fixture(async (instance, _state, send, identity) => {
+    const snapshot = (sequence: number, ids: string[]) => {
+      const value = sync(identity, ids);
+      return { ...value, message: { ...(value.message as Record<string, unknown>), sync_sequence: sequence,
+        extensions: { runmesh_history_ack: true } } };
+    };
+    expect(await (await send("sync", snapshot(2, ["newer"]))).json()).toEqual({ history_status: "recorded" });
+    for (const sequence of [1, 2]) {
+      const response = await send("sync", snapshot(sequence, ["superseded"]));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ history_status: "unchanged" });
+    }
+    expect(instance.getJob("r", "newer")).toBeDefined();
+    expect(instance.getJob("r", "superseded")).toBeUndefined();
+    expect(instance.getRunner("r")?.state).toBe("online");
+    expect((await send("sync", { ...snapshot(1, ["replaced"]), session_id: "replaced-session" })).status).toBe(409);
+    instance.setJobHistorySettings("r", { ...DEFAULT_JOB_HISTORY, mode: "off" });
+    expect(await (await send("sync", snapshot(3, ["disabled"]))).json()).toEqual({ history_status: "disabled" });
+    expect(instance.getJob("r", "disabled")).toBeUndefined();
+  }, "sqlite");
+});
 
 it("the production archive route stores a packed snapshot without writing core Job rows",async()=>{
   await fixture(async(instance,state,send,identity)=>{
