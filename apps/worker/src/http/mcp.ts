@@ -20,19 +20,23 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
   if (secret === undefined || !MCP_SECRET_RE.test(secret)) { await discardBody(request); return mcpHttpError(404, "Not found"); }
   const verified = await verifyMcpClient(env, await sha256Hex(secret)).catch(async error => { await discardBody(request); throw error; });
   if (verified === undefined) { await discardBody(request); return mcpHttpError(404, "Not found"); }
-  // createMcpHandler requires an exact /mcp route. Do not consume request.body
-  // before cloning it: the SDK must receive the original JSON-RPC stream.
+  // createMcpHandler requires an exact /mcp route. Forward the bounded body
+  // and its parsed value; protocol validation remains owned by the SDK.
   const rewritten = new URL(request.url);
   rewritten.pathname = "/mcp";
   rewritten.search = "";
   let forwarded: Request;
   let needsDirectory = false;
   let discoversProviders = false;
+  let calledTool: string | undefined;
+  let parsedBody: unknown;
   if (request.method === "POST") {
     const body = await readCappedBytes(request, MAX_MCP_BODY_BYTES);
     if (body === undefined) return mcpHttpError(413, "request body too large");
     try {
-      const rpc = JSON.parse(new TextDecoder().decode(body)) as { method?: string; params?: { name?: string } };
+      parsedBody = JSON.parse(new TextDecoder().decode(body)) as unknown;
+      const rpc = parsedBody as { method?: string; params?: { name?: string } } | null;
+      if (rpc?.method === "tools/call" && typeof rpc.params?.name === "string") calledTool = rpc.params.name;
       discoversProviders = rpc?.method === "tools/list" || rpc?.method === "resources/list" || rpc?.method === "resources/templates/list";
       needsDirectory = env.CENTRAL_DIRECT_TOOLS_ENABLED === "1" && (rpc?.method === "tools/list" || (rpc?.method === "tools/call" && typeof rpc.params?.name === "string" && (rpc.params.name.startsWith("rm_") || rpc.params.name === "remote_status")));
     } catch { /* The SDK owns malformed JSON-RPC responses. */ }
@@ -47,7 +51,7 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
     scopes: [...verified.scopes],
     extra: { client_label: verified.label, secret_version: verified.secret_version },
   };
-  const [{ createMcpHandler }, { createCodingMcpServer }] = await Promise.all([
+  const [{ createMcpHandler }, { createCodingMcpServer, MCP_TOOL_NAMES }] = await Promise.all([
     import("agents/mcp/server"),
     import("../mcp/server.js"),
   ]);
@@ -81,7 +85,14 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
   }
   const handler = createMcpHandler(
     () => {
-      const server = createCodingMcpServer(env, auth, discoversProviders && verified.scopes.length === 0);
+      // Stateless calls need only their selected native tool. Discovery still
+      // publishes the full catalog; unknown calls retain an SDK tool handler
+      // even when central providers are disabled. This never caches auth.
+      const selectedNative = calledTool === undefined ? undefined : MCP_TOOL_NAMES.filter(name => name === calledTool);
+      const server = createCodingMcpServer(env, auth, {
+        hideNative: discoversProviders && verified.scopes.length === 0,
+        ...(selectedNative !== undefined && (selectedNative.length > 0 || publishRemote || publishSkills) ? { tools: selectedNative } : {}),
+      });
       if (skills !== undefined && publishSkills) {
         const principal = { client_id: verified.client_id, secret_version: verified.secret_version };
         const owner = () => env.CAPABILITIES!.get(env.CAPABILITIES!.idFromName("central")) as unknown as CentralSkills;
@@ -104,7 +115,7 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
       legacy: "stateless",
     },
   );
-  const response = await handler.fetch(forwarded, { authInfo: auth });
+  const response = await handler.fetch(forwarded, { authInfo: auth, ...(parsedBody !== undefined ? { parsedBody } : {}) });
   // The MCP credential is carried in the request path.  Do not allow an SDK
   // response (or an intermediary) to cache that path or disclose it through
   // a referrer when a client follows a response link.  These headers also
