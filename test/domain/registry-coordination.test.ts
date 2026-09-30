@@ -5,6 +5,9 @@ import { createRunnerPolicyReadRoutes, type RunnerPolicyReadPorts } from "../../
 import type { RunnerRouteRequest } from "../../apps/worker/src/registry/route-inputs.js";
 import type { RunnerRow } from "../../apps/worker/src/registry/records.js";
 import type { RunnerPolicy } from "@aloneio/runmesh-protocol";
+import { PROTOCOL_CURRENT_VERSION } from "@aloneio/runmesh-protocol";
+import { createRunnerTransportRoutes, type RunnerTransportPorts } from "../../apps/worker/src/registry/transport-routes.js";
+import { DEFAULT_JOB_HISTORY } from "../../apps/worker/src/job-history-settings.js";
 
 function unexpected(): never {
   throw new Error("unexpected route dependency");
@@ -93,6 +96,80 @@ function history() {
     }
   };
 }
+function syncRequest(sequence = 2, acknowledge = true) {
+  return request("sync", "POST", {
+    epoch: 1, credential_version: 1, now_ms: 123, lifecycle_id: "audit88-lifecycle", session_id: "audit88-session-id",
+    message: { type: "runner.sync", protocol_version: PROTOCOL_CURRENT_VERSION, runner_id: "r",
+      sync_sequence: sequence, sent_at_ms: 123, workspaces: [], jobs: [],
+      ...(acknowledge ? { extensions: { runmesh_history_ack: true } } : {}) }
+  });
+}
+function sqliteHistory(overrides: Partial<RunnerHistoryPorts> = {}) {
+  const syncRunner = vi.fn(() => true);
+  const ports: RunnerHistoryPorts = {
+    ...history().ports, packedHistory: false, syncRunner,
+    runnerRow: () => ({ ...runner("audit88-lifecycle"), state: "online", session_id: "audit88-session-id", last_sync_sequence: 1 }),
+    runnerMatchesTransportFence: (current): current is RunnerRow => current?.session_id === "audit88-session-id",
+    jobHistorySettings: () => DEFAULT_JOB_HISTORY, featureHealthDisabled: () => false,
+    ...overrides
+  };
+  return { route: createRunnerHistoryRoutes(ports), syncRunner };
+}
+it.each([0, 1])("acknowledges superseded snapshot %s without disconnecting the current session", async sequence => {
+  const h = sqliteHistory();
+  const response = await h.route(syncRequest(sequence));
+  expect(response?.status).toBe(200);
+  expect(await response?.json()).toEqual({ history_status: "unchanged" });
+  expect(h.syncRunner).not.toHaveBeenCalled();
+});
+it("still rejects superseded snapshots from a replaced session", async () => {
+  const h = sqliteHistory({ runnerRow: () => ({ ...runner(), session_id: "replacement", last_sync_sequence: 5 }) });
+  expect((await h.route(syncRequest(1)))?.status).toBe(409);
+  expect(h.syncRunner).not.toHaveBeenCalled();
+});
+it("acknowledges SQLite history persistence for batched reporting", async () => {
+  const h = sqliteHistory();
+  const response = await h.route(syncRequest());
+  expect(response?.status).toBe(200);
+  expect(await response?.json()).toEqual({ history_status: "recorded" });
+  expect(h.syncRunner).toHaveBeenCalledOnce();
+});
+it("does not report a degraded SQLite write as persisted", async () => {
+  const h = sqliteHistory({ featureHealthDisabled: () => true });
+  const response = await h.route(syncRequest());
+  expect(response?.status).toBe(202);
+  expect(await response?.json()).toEqual({ history_status: "degraded" });
+});
+it("honors disabled history with SQLite while keeping session validation", async () => {
+  const h = sqliteHistory({ jobHistorySettings: () => ({ ...DEFAULT_JOB_HISTORY, mode: "off" }) });
+  expect(await (await h.route(syncRequest()))?.json()).toEqual({ history_status: "disabled" });
+  expect(h.syncRunner).not.toHaveBeenCalled();
+});
+it("keeps legacy sync acknowledgement empty", async () => {
+  const h = sqliteHistory();
+  const response = await h.route(syncRequest(2, false));
+  expect(response?.status).toBe(204);
+  expect(await response?.text()).toBe("");
+});
+it("negotiates batched job reporting independently of the history backend", async () => {
+  const ports: RunnerTransportPorts = {
+    authenticateRunner: unexpected, beginConnection: () => 1,
+    runnerRow: () => ({ ...runner("audit88-lifecycle"), session_id: "audit88-session-id" }), desiredPolicy: () => undefined,
+    scheduleMaintenanceAlarm: async () => {}, jobHistorySettings: () => DEFAULT_JOB_HISTORY,
+    markDisconnected: unexpected
+  };
+  const route = createRunnerTransportRoutes(ports);
+  const response = await route(request("connect", "POST", {
+    session_id: "audit88-session-id", credential_version: 1, now_ms: 123,
+    min_protocol_version: PROTOCOL_CURRENT_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION,
+    metadata: { runner_id: "r", runner_version: "test", platform: "linux", architecture: "x64",
+      capabilities: { filesystem: true, process_execution: true, workspace_sync: true, pty: false,
+        network_access: false, max_concurrent_jobs: 2, supported_rpc_methods: ["exec.start"],
+        labels: { job_history_protocol: "1", job_reporting_protocol: "2" } } }
+  }));
+  expect(response?.status).toBe(200);
+  expect(await response?.json()).toMatchObject({ job_history: DEFAULT_JOB_HISTORY, job_reporting: 2 });
+});
 it.each(["jobs", "mcp-calls"])("history %s rechecks lifecycle after the external read", async action => {
   const h = history();
   if (action === "jobs") h.ports.packedJobs.list = async () => {

@@ -21,7 +21,6 @@ export interface RunnerTransportPorts {
   scheduleMaintenanceAlarm(nowMs: number): Promise<void>;
   jobHistorySettings(runnerId: string, lifecycleId?: string): JobHistorySettings;
   markDisconnected(runnerId: string, epoch: number, credentialVersion: number, state: Exclude<RunnerConnectionState, "online">, nowMs: number, lifecycleId: string, sessionId: string): void;
-  readonly packedHistory: boolean;
 }
 
 /** Admitted requests only; authority remains with synchronous Registry operations. */
@@ -70,7 +69,7 @@ export function createRunnerTransportRoutes(ports: RunnerTransportPorts): (reque
         epoch,
         lifecycle_id: row.lifecycle_id,
         desired_policy: policy,
-        ...(ports.packedHistory && metadata.data.capabilities.labels.job_history_protocol === "1" ? {
+        ...(metadata.data.capabilities.labels.job_history_protocol === "1" ? {
           job_history: ports.jobHistorySettings(runnerId, row.lifecycle_id),
           ...(metadata.data.capabilities.labels.job_reporting_protocol === "2" ? {
             job_reporting: 2
