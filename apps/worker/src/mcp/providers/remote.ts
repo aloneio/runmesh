@@ -6,6 +6,14 @@ import { catalogDigest, catalogJson, catalogObject } from "../../contracts/catal
 import { catalogPublicName, parseRemoteTool } from "../../contracts/catalog-values.js";
 import { REMOTE_CODES, REMOTE_LIMITS, remoteFailureMetadata, type RemoteCode, type RemoteOutcome } from "../../contracts/remote.js";
 import { parseRemoteResult } from "../../contracts/remote-values.js";
+import { publishSchema } from "./schema-publication.js";
+
+const profileId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u);
+const profilesInput = publishSchema(z.object({}).strict(), "input");
+const toolsInput = publishSchema(z.object({ profile_id: profileId,
+  limit: z.number().int().min(1).max(CATALOG_LIMITS.page_tools).optional(), cursor: z.string().min(1).max(CATALOG_LIMITS.cursor_bytes).optional() }).strict(), "input");
+const callInput = publishSchema(z.object({ profile_id: profileId, tool_id: z.string().regex(/^mcp\.[a-f0-9]{64}$/u),
+  version: z.string().regex(/^[a-f0-9]{64}$/u), arguments: z.record(z.string(), z.unknown()) }).strict(), "input");
 
 export interface RemoteToolPort {
   list(query: unknown): Promise<CatalogPage>;
@@ -24,7 +32,7 @@ async function bounded<T>(call: () => Promise<T>, ms: number): Promise<T | undef
 export function registerRemoteTools(server: McpServer, port: RemoteToolPort & { profiles(): Promise<SharedProfiles> }): void {
   server.registerTool("remote_profiles", {
     description: "List shared MCP services with published tools. Use profile_id with remote_tools to discover every service, including libraries too large for direct tool listing.",
-    inputSchema: z.object({}).strict(), annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    inputSchema: profilesInput, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async () => {
     const raw = await bounded(() => port.profiles(), 7000);
     const parsed = z.object({ state: z.literal("listed"), profiles: z.array(z.object({
@@ -35,8 +43,7 @@ export function registerRemoteTools(server: McpServer, port: RemoteToolPort & { 
   });
   server.registerTool("remote_tools", {
     description: "List shared published remote MCP tools for a profile from remote_profiles. No Runner is needed. Use the returned tool_id and version with remote_call. This lists saved reviewed definitions, not live discovery.",
-    inputSchema: z.object({ profile_id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u),
-      limit: z.number().int().min(1).max(CATALOG_LIMITS.page_tools).optional(), cursor: z.string().min(1).max(CATALOG_LIMITS.cursor_bytes).optional() }).strict(),
+    inputSchema: toolsInput,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     _meta: { "runmesh/central_contract": 1 },
   }, async query => {
@@ -61,9 +68,7 @@ export function registerRemoteTools(server: McpServer, port: RemoteToolPort & { 
   });
   server.registerTool("remote_call", {
     description: "Invoke exactly one approved remote MCP tool using profile_id, tool_id and version from remote_tools. Arguments follow that tool's reviewed inputSchema. No Runner or machine permission is implied. Never repeat an unknown outcome blindly; upstream writes are never automatically retried.",
-    inputSchema: z.object({ profile_id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u),
-      tool_id: z.string().regex(/^mcp\.[a-f0-9]{64}$/u), version: z.string().regex(/^[a-f0-9]{64}$/u),
-      arguments: z.record(z.string(), z.unknown()) }).strict(),
+    inputSchema: callInput,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     _meta: { "runmesh/central_contract": 1 },
   }, async command => {
