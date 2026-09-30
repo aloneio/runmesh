@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServiceManager, createServiceProvisioner, renderService, serviceLayout, serviceProfilePath } from "../src/service.js";
@@ -53,6 +53,42 @@ describe("native service package ownership", () => {
       await chmod(root, 0o700).catch(() => undefined); await chmod(directory, 0o700).catch(() => undefined);
       await rm(parent, { recursive: true, force: true });
     }
+  });
+
+  it.skipIf(process.platform !== "linux" && process.platform !== "darwin").each(["dedicated_user", "privileged_host"] as const)("keeps existing %s runtime state private across repeated provisioning", async executionMode => {
+    const platform = process.platform as "linux" | "darwin";
+    const layout = serviceLayout({ platform, mode: "system" });
+    const commands: { file: string; args: readonly string[] }[] = [];
+    const provisioner = createServiceProvisioner({ platform, executor: {
+      execute: async (file, args) => {
+        if (args.includes(layout.stateRoot) && (file === "chmod" || (file === "find" && args.includes("chmod")))) commands.push({ file, args });
+        return { exitCode: 0, stdout: "PrimaryGroupID: 501" };
+      },
+    } });
+    const parent = await mkdtemp(join(tmpdir(), "runmesh-private-state-"));
+    const root = join(parent, "state"), policy = join(root, "policy"), jobs = join(root, "jobs");
+    const activePolicy = join(policy, "active-policy.json"), job = join(jobs, "job.json"), outside = join(parent, "workspace.txt");
+    try {
+      for (const directory of [root, policy, jobs]) await mkdir(directory, { mode: 0o700 });
+      for (const path of [activePolicy, job, outside]) await writeFile(path, "private fixture", { mode: 0o600 });
+      await symlink(outside, join(root, "workspace-link"));
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        commands.length = 0;
+        await provisioner.provision(renderService({ platform, mode: "system", executionMode }), serviceProfilePath(layout));
+        expect(commands.length).toBeGreaterThan(0);
+        for (const { file, args } of commands) {
+          // Execute only state permission actions against this disposable tree.
+          const mapped = file === "chmod" ? [args[0]!, root] : args.map(arg => arg === layout.stateRoot ? root : arg);
+          const result = spawnSync(file, mapped, { encoding: "utf8", timeout: 10_000 });
+          expect(result.status, result.stderr).toBe(0);
+        }
+        for (const directory of [root, policy, jobs]) expect((await stat(directory)).mode & 0o777).toBe(0o700);
+        for (const path of [activePolicy, job, outside]) {
+          expect((await stat(path)).mode & 0o777).toBe(0o600);
+          expect(await readFile(path, "utf8")).toBe("private fixture");
+        }
+      }
+    } finally { await rm(parent, { recursive: true, force: true }); }
   });
 
   it.each(["dedicated_user", "privileged_host"] as const)("provisions macOS %s with native account and traversal syntax", async (executionMode) => {
