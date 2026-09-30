@@ -107,6 +107,7 @@ export async function checkGuidedProduct(executable) {
  let conflict=false, failLibrary=false, rejectDiscovery=false, rejectOAuthStart=false, rejectOAuthComplete=false, invalidCatalogReceipt=false, delayedOAuth;
  let rejectedProfile, afterDiscovery, afterSkillInstallation, delayedDiscovery, failRefreshAfterRejection=false;
  let authorizeDiscoveryOnComplete=false, uncertainAuthorization=false;
+ let oauthProfileId;
  const catalogs=new Map();
  const server=createServer(async(req,res)=>{
   try {
@@ -134,8 +135,24 @@ export async function checkGuidedProduct(executable) {
    }else if(kind==='connections'){
     assert.equal(req.headers['x-csrf-token'],'fixture-csrf');
     if(id==='complete'&&!body.error&&authorizeDiscoveryOnComplete){rejectDiscovery=false;authorizeDiscoveryOnComplete=false;}
-    if(id==='begin'){const pending=delayedOAuth;if(pending)await pending;if(rejectOAuthStart){code=503;value={error:{code:'oauth_provider_unsupported',operation_state:'not_started'}};}else value={state:'started',profile_id:body.profile_id,authorization_url:pending?'/late-oauth-fixture':'/oauth-fixture'};}
-    else if(id==='complete'){if(body.error){assert.deepEqual(body,{state:'cancel-state',error:'access_denied'});code=503;value={error:{code:'oauth_reauthorization_required'}};}else{assert.deepEqual(body,{state:'fixture-state',iss:'https://login.provider.com',code:'fixture-code'});if(rejectOAuthComplete){code=503;value={error:{code:'oauth_unavailable',operation_state:'unknown'}};}else value={state:'linked',profile_id:profiles.at(-1).profile_id};}}
+    if(id==='begin'){
+     const pending=delayedOAuth;if(pending)await pending;
+     if(rejectOAuthStart){code=503;value={error:{code:'oauth_provider_unsupported',operation_state:'not_started'}};}
+     else{
+      oauthProfileId=body.profile_id;
+      value={state:'started',profile_id:oauthProfileId,authorization_url:pending?'/late-oauth-fixture':'/oauth-fixture'};
+     }
+    }else if(id==='complete'){
+     if(body.error){assert.deepEqual(body,{state:'cancel-state',error:'access_denied'});code=503;value={error:{code:'oauth_reauthorization_required'}};}
+     else{
+      assert.deepEqual(body,{state:'fixture-state',iss:'https://login.provider.com',code:'fixture-code'});
+      if(rejectOAuthComplete){code=503;value={error:{code:'oauth_unavailable',operation_state:'unknown'}};}
+      else{
+       assert.equal(typeof oauthProfileId,'string','An OAuth callback must follow a successful begin');
+       value={state:'linked',profile_id:oauthProfileId};oauthProfileId=undefined;
+      }
+     }
+    }
     else value={state:'revoked',profile_id:body.profile_id};
    }else if(kind==='skill-installations'){
     const installation=skillInstallation(body);
@@ -287,6 +304,24 @@ export async function checkGuidedProduct(executable) {
   assert.equal(await publicCard.getByRole('button',{name:'Refresh tools',exact:true}).isEnabled(),true);
   assert.equal(await publicCard.getByText('Enable this MCP to refresh its tools.',{exact:true}).count(),0);
   assert.equal(requests.filter(r=>r.path.startsWith('/admin/central/discovery/')).length,discoveries+2);
+  // Reauthorizing an earlier MCP must retain its identity after another is added.
+  await form.locator('[name=name]').fill('Later public MCP');
+  await form.locator('[name=endpoint]').fill('https://later.example.com/mcp');
+  await form.locator('[name=authentication]').selectOption('none');
+  await form.locator('button').click();await status.filter({hasText:'Connected.'}).waitFor();
+  const reconnectStart=requests.length;
+  let returnedProfile;
+  await Promise.all([
+   page.waitForURL(url=>{if(url.pathname!=='/admin/central'||!url.searchParams.has('connected'))return false;returnedProfile=url.searchParams.get('connected');return true;},{waitUntil:'commit',timeout:10000}),
+   oauthCard.getByRole('button',{name:'Reconnect',exact:true}).click(),
+  ]);
+  assert.equal(returnedProfile,oauthId,'OAuth completion must belong to the MCP that started it');
+  await status.filter({hasText:'Connected.'}).waitFor();await page.waitForLoadState('networkidle');
+  const reconnectedFlow=requests.slice(reconnectStart);
+  assert.equal(reconnectedFlow.find(r=>r.path==='/admin/central/connections/begin').body.profile_id,oauthId);
+  assert.equal(reconnectedFlow.filter(r=>r.path==='/admin/central/discovery/'+oauthId).length,1);
+  assert.equal(reconnectedFlow.filter(r=>r.path==='/admin/central/connections/complete').length,1);
+  assert.equal(await review.locator('h2').textContent(),'oauth.provider.com');
   // User-triggered discovery continues directly to sign-in when OAuth is missing.
   for(const action of ['Refresh tools','Enable']){
    if(action==='Enable'){await oauthCard.getByRole('button',{name:'Pause',exact:true}).click();await status.filter({hasText:'List refreshed.'}).waitFor();}
