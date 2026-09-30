@@ -5,6 +5,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 import { checkDomainImports, inventoryTests, validateTestPlan, validateTestWiring } from "../scripts/verification-plan.mjs";
 import { summarizeVitest, packageEvidence } from "../scripts/test-evidence.mjs";
 import { browserFailureEvidence, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
@@ -13,6 +14,47 @@ import { renderExamples, renderFacts, validateExampleCoverage, verifyDocReferenc
 const root = fileURLToPath(new URL("../", import.meta.url));
 const plan = JSON.parse(await readFile(join(root, "test/verification-plan.json"), "utf8"));
 const files = plan.groups.flatMap(g => g.files);
+
+test("format gate discovers every supported script extension in the Git index", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "runmesh-format-"));
+  t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 }));
+  assert.equal(spawnSync("git", ["init", "--quiet"], { cwd: dir }).status, 0);
+  const run = () => spawnSync(process.execPath, [join(root, "scripts/check-format.mjs")], { cwd: dir, encoding: "utf8", timeout: 10000 });
+  for (const extension of ["ts", "mts", "cts", "tsx", "js", "mjs", "cjs", "jsx"]) {
+    const name = "browser." + extension;
+    await writeFile(join(dir, name), "export {};  \n");
+    assert.equal(spawnSync("git", ["add", "--", name], { cwd: dir }).status, 0);
+    const rejected = run();
+    assert.equal(rejected.status, 1, name + ": " + rejected.stdout);
+    assert.ok(rejected.stderr.includes(name + ":1: trailing whitespace"));
+    await writeFile(join(dir, name), "export {};\n");
+    assert.equal(run().status, 0);
+  }
+});
+
+test("format gate reads quoted Git paths and untracked browser sources", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "runmesh-format-paths-"));
+  t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 }));
+  assert.equal(spawnSync("git", ["init", "--quiet"], { cwd: dir }).status, 0);
+  assert.equal(spawnSync("git", ["config", "core.quotePath", "true"], { cwd: dir }).status, 0);
+  const name = "中文 source.ts", path = join(dir, name);
+  const run = () => spawnSync(process.execPath, [join(root, "scripts/check-format.mjs")], { cwd: dir, encoding: "utf8", timeout: 10000 });
+  await writeFile(path, "export {};  \n");
+  assert.equal(spawnSync("git", ["add", "--", name], { cwd: dir }).status, 0);
+  const unicode = run();
+  assert.equal(unicode.status, 1);
+  assert.ok(unicode.stderr.includes(name + ":1: trailing whitespace"));
+  await writeFile(path, "export {};\r\n");
+  assert.equal(run().status, 0, "Windows CRLF remains supported");
+  await rm(path);
+  assert.equal(run().status, 0, "Deleting an indexed file is a valid change");
+  await writeFile(join(dir, "new browser.js"), "export {}; ");
+  const untracked = run();
+  assert.equal(untracked.status, 1);
+  assert.ok(untracked.stderr.includes("new browser.js: missing final newline"));
+  await writeFile(join(dir, "new browser.js"), Buffer.from([0xff, 0x0a]));
+  assert.ok(run().stderr.includes("new browser.js: invalid UTF-8"));
+});
 
 test("failed browser diagnostics retain only status counts and the required check state", () => {
   const summary = browserFailureEvidence({ testResults: [{ name: "/private/source", assertionResults: [
