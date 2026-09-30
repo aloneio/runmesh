@@ -21,6 +21,7 @@ import type { McpClientActiveRunner } from "../contracts/runner-selection.js";
 import type { McpRequestEnv } from "./contracts.js";
 import { McpServer } from "@modelcontextprotocol/server";
 import { PRODUCT_VERSION } from "../generated-version.js";
+import { publishSchema } from "./providers/schema-publication.js";
 import { reauthorizePrincipal } from "./reauthorization.js";
 import { REGISTERED_TOOL_NAMES } from "./handler-registry.js";
 import { safeSelectionValue } from "./results/selection.js";
@@ -34,6 +35,11 @@ import type { ToolHandlers } from "./handler-registry.js";
 import type { ToolName } from "./catalog.js";
 import type { WorkerEnv } from "../platform/env.js";
 import { z } from "zod";
+
+const publishedToolSchemas = Object.fromEntries(REGISTERED_TOOL_NAMES.map(name => {
+  const spec = TOOL_SPECS[name];
+  return [name, { inputSchema: publishSchema<unknown, unknown>(spec.inputSchema, "input"), outputSchema: publishSchema<unknown, unknown>(spec.outputSchema, "output") }];
+}));
 
 /**
  * Fresh server factory target for createMcpHandler. Every HTTP request receives
@@ -76,7 +82,7 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth, hideNati
   function register<Name extends ToolName>(target: McpServer, name: Name, action: ToolHandlers[Name]): void {
     const spec = TOOL_SPECS[name];
     type Input = z.output<(typeof TOOL_SPECS)[Name]["inputSchema"]>;
-    const tool = (target.registerTool as unknown as (toolName: string, config: Record<string, unknown>, callback: (input: Input, context: ServerContext) => Promise<unknown>) => { disable(): void })(name, { description: spec.description, inputSchema: spec.inputSchema, outputSchema: spec.outputSchema, annotations: spec.annotations, _meta: MCP_CATALOG_METADATA }, async (input, _context) => {
+    const tool = (target.registerTool as unknown as (toolName: string, config: Record<string, unknown>, callback: (input: Input, context: ServerContext) => Promise<unknown>) => { disable(): void })(name, { description: spec.description, ...publishedToolSchemas[name], annotations: spec.annotations, _meta: MCP_CATALOG_METADATA }, async (input, _context) => {
       // The URL credential can be rotated while a body or SDK import is
       // awaited. Re-read the exact generation and scopes before every tool.
       const live = await reauthorizePrincipal(async signal => {

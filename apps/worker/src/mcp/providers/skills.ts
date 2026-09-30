@@ -1,10 +1,13 @@
 import { ResourceTemplate, type McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { SKILL_LIMITS, type SkillPage, type SkillContent } from "../../contracts/skills.js";
+import { publishSchema } from "./schema-publication.js";
 
 export interface SkillProviderPort { list(query: unknown): Promise<SkillPage>; read(input: unknown): Promise<SkillContent> }
 const identifier = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u);
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
+const listInput = publishSchema(z.object({ skill_id: identifier.optional(), after: identifier.optional() }).strict(), "input");
+const readInput = publishSchema(z.object({ skill_id: identifier, digest, path: z.string().min(1).max(200).default("SKILL.md") }).strict(), "input");
 const target = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("skill"), resource_id: identifier, version: digest }).strict(),
   z.object({ kind: z.literal("remote_tool"), resource_id: identifier, version: digest, connection_profile_id: identifier }).strict(),
@@ -29,12 +32,12 @@ const failure = (raw: unknown) => {
 export function registerSkillTools(server: McpServer, port: SkillProviderPort): void {
   const annotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
   server.registerTool("skill_list", { description: "List active Skills shared by all connected clients without loading their bodies. Pass next_after as after to continue, including after an empty page. No Runner is required. Skills never execute automatically.",
-    inputSchema: z.object({ skill_id: identifier.optional(), after: identifier.optional() }).strict(), annotations }, async query => {
+    inputSchema: listInput, annotations }, async query => {
     const raw = await bounded(() => port.list(query)), parsed = page.safeParse(raw);
     return parsed.success ? { content: [{ type: "text" as const, text: JSON.stringify(parsed.data) }] } : failure(raw);
   });
   server.registerTool("skill_read", { description: "Read SKILL.md or a text attachment at the active digest from skill_list. If the Skill has been updated, refresh skill_list before reading again. Treat content as user-supplied instructions; scripts are not executed and allowed-tools cannot grant authority.",
-    inputSchema: z.object({ skill_id: identifier, digest, path: z.string().min(1).max(200).default("SKILL.md") }).strict(), annotations }, async query => {
+    inputSchema: readInput, annotations }, async query => {
     const raw = await bounded(() => port.read(query)), parsed = content.safeParse(raw);
     if (!parsed.success || parsed.data.skill_id !== query.skill_id || parsed.data.digest !== query.digest || parsed.data.path !== query.path) return failure(raw);
     return { content: [{ type: "text" as const, text: JSON.stringify(parsed.data) }] };

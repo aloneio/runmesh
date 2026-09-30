@@ -18,8 +18,12 @@ const provider = path => /^apps\/worker\/src\/mcp\/providers\/(?:remote|skills)(
 
 const storageContracts = new Set(["apps/worker/src/contracts/secret-storage.ts", "apps/worker/src/contracts/base64url.ts", "apps/worker/src/contracts/json.ts"]);
 const storageDependencies = new Set([...storageContracts, "apps/worker/src/contracts/deployment-secrets.ts"]);
+const sharedProvider = path => path === "apps/worker/src/mcp/providers/schema-publication.ts";
 
 export function centralDependencyProblem(from, to) {
+  if (sharedProvider(from) && !to.startsWith("apps/worker/src/contracts/"))
+    return "Shared schema publication must not import feature, request or platform implementations";
+  if (provider(from) && sharedProvider(to)) return undefined;
   if (storageContracts.has(from) && !storageContracts.has(to))
     return "Shared encryption contracts must stay independent of feature and platform contracts";
   if (from === "apps/worker/src/platform/secret-storage.ts" && !storageDependencies.has(to))
@@ -57,8 +61,8 @@ export function centralSpecifierProblem(from, specifier) {
   if ((storageContracts.has(from) || from === "apps/worker/src/platform/secret-storage.ts") && !specifier.startsWith("."))
     return "Shared encryption and serialization use local foundation contracts, not external feature SDKs";
   if (unreviewed(from)) return "Central modules require a reviewed feature role";
-  if (centralFeature(from) === undefined || specifier.startsWith(".")) return undefined;
-  if (provider(from) && !/^(?:zod(?:\/|$)|@modelcontextprotocol\/server(?:\/|$))/u.test(specifier))
+  if ((centralFeature(from) === undefined && !sharedProvider(from)) || specifier.startsWith(".")) return undefined;
+  if ((provider(from) || sharedProvider(from)) && !/^(?:zod(?:\/|$)|@modelcontextprotocol\/server(?:\/|$))/u.test(specifier))
     return 'Central MCP providers use reviewed server/schema SDKs; external implementations belong behind ports';
   if (from === 'apps/worker/src/platform/connectors/managed-store.ts')
     return 'Managed OAuth persistence must use SDK-independent record contracts';
@@ -78,9 +82,9 @@ export function centralNodeProblem(from, node) {
     && node.type === "StringLiteral" && node.value === "AES-GCM")
     return "Worker storage encryption belongs to the shared secret-storage adapter";
   if (unreviewed(from)) return node.type === "Program" ? "Central modules require a reviewed feature role" : undefined;
-  if (centralFeature(from) === undefined || node.type !== "Identifier") return undefined;
+  if ((centralFeature(from) === undefined && !sharedProvider(from)) || node.type !== "Identifier") return undefined;
   if (node.name === "eval" || node.name === "Function") return "Central features must not evaluate imported Skill or tool code";
-  if ((/^apps\/worker\/src\/(?:contracts|domain|application)\//u.test(from) || provider(from)) && ioGlobals.has(node.name))
+  if ((/^apps\/worker\/src\/(?:contracts|domain|application)\//u.test(from) || provider(from) || sharedProvider(from)) && ioGlobals.has(node.name))
     return "Central pure contracts, rules and MCP providers must not reference platform I/O globals";
   return undefined;
 }

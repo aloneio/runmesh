@@ -27,6 +27,9 @@ async function fixture(t, sources) {
 }
 
 const bad = [
+  ["shared schema helper to request state", { "apps/worker/src/mcp/providers/schema-publication.ts": 'import "../server.js";', "apps/worker/src/mcp/server.ts": "export {};" }],
+  ["shared schema helper to client SDK", { "apps/worker/src/mcp/providers/schema-publication.ts": 'import type { Client } from "@modelcontextprotocol/client";' }],
+  ["shared schema helper to ambient network", { "apps/worker/src/mcp/providers/schema-publication.ts": 'export const load = () => fetch("https://example.invalid");' }],
   ["shared storage cipher to catalog contract", { "apps/worker/src/platform/secret-storage.ts": 'import "../contracts/catalog-json.js";', "apps/worker/src/contracts/catalog-json.ts": 'export {};' }],
   ["shared ciphertext contract to capability contract", { "apps/worker/src/contracts/secret-storage.ts": 'import "./capabilities.js";', "apps/worker/src/contracts/capabilities.ts": 'export {};' }],
   ["shared serializer to feature contract", { "apps/worker/src/contracts/json.ts": 'import "./catalog.js";', "apps/worker/src/contracts/catalog.ts": 'export {};' }],
@@ -196,9 +199,10 @@ test("W01 composition injects central public ports without widening native depen
     "apps/worker/src/application/capabilities/access.ts": 'import type { Port } from "../../contracts/capabilities.js"; import { enabled } from "../../domain/capabilities/grants.js"; export const create = (port: Port) => port;',
     "apps/worker/src/platform/capabilities/owner.ts": 'import "cloudflare:workers"; import type { Port } from "../../contracts/capabilities.js"; export type Adapter = Port;',
     "apps/worker/src/http/central.ts": 'import { create } from "../application/capabilities/access.js"; import "../platform/capabilities/owner.js";',
-    "apps/worker/src/mcp/providers/remote.ts": 'import type { Port } from "../../contracts/capabilities.js"; import "./remote/helper.js"; export const bind = (port: Port) => port;',
+    "apps/worker/src/mcp/providers/remote.ts": 'import type { Port } from "../../contracts/capabilities.js"; import "./remote/helper.js"; import "./schema-publication.js"; export const bind = (port: Port) => port;',
     "apps/worker/src/mcp/providers/remote/helper.ts": 'import type { McpServer } from "@modelcontextprotocol/server"; import type { ZodType } from "zod"; export type { Port } from "../../../contracts/capabilities.js";',
-    "apps/worker/src/mcp/providers/skills.mts": 'export * from "./skills/helper.mjs";',
+    "apps/worker/src/mcp/providers/skills.mts": 'export * from "./skills/helper.mjs"; import "./schema-publication.js";',
+    "apps/worker/src/mcp/providers/schema-publication.ts": 'import type { StandardSchemaWithJSON } from "@modelcontextprotocol/server"; export type Schema = StandardSchemaWithJSON;',
     "apps/worker/src/mcp/providers/skills/helper.mts": 'import type { Port } from "../../../contracts/capabilities.js"; export type Input = Port;',
   });
   assert.deepEqual((await checkArchitecture(f.root)).failures, []);
