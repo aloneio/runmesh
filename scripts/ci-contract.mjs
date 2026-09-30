@@ -31,12 +31,17 @@ export const CI_CHECKS = Object.freeze({
 export const CHECK_IDS = Object.freeze(Object.keys(CI_CHECKS));
 export const UPLOAD_ACTION = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 export const AGGREGATE_JOBS = Object.freeze(["verify", "native-runner", "runner-lts", "browser"]);
+/** Native gates added after the frozen CI migration input. */
+export const NATIVE_ADDED_COMMANDS = Object.freeze([
+  "node --test test/installer-download.test.mjs test/installer-concurrency.test.mjs",
+  "node --test test/build-provenance.test.mjs test/deployment-provenance-cli.test.mjs test/live-provenance.test.mjs",
+]);
 export const NATIVE_COMMANDS = Object.freeze([
   "npm ci", "npm run typecheck", "npm run build", "npm run test --workspace=@aloneio/runmesh-runner", "npm run pack:smoke",
   "node scripts/check-installer-syntax.mjs", "node --test test/installer-arguments.test.mjs test/installer-preflight.test.mjs",
-  "node --test test/installer-download.test.mjs test/installer-concurrency.test.mjs",
   "node --test test/worker-validation.test.mjs", "npm run test:domain", "npm run test:contracts",
   "node --test test/verification-tools.test.mjs test/package-verification.test.mjs", "node --test test/architecture.test.mjs",
+  ...NATIVE_ADDED_COMMANDS,
 ]);
 export const LTS_COMMANDS = Object.freeze(["npm ci", "npm run build", "npm run pack:smoke", "npm run test --workspace=@aloneio/runmesh-runner", "node apps/runner/dist/runmesh.cjs --version"]);
 export const checkCommand = id => `node scripts/ci-check.mjs ${id}`;

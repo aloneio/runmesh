@@ -23,6 +23,7 @@ test("CI integration preserves native, LTS and generated main-admission jobs", a
   const old = parseCi(input.github), next = parseCi(result.files[".github/workflows/ci.yml"]);
   const expectedNative = structuredClone(old.jobs["native-runner"]);
   expectedNative.steps.push({ run: "node --test test/installer-download.test.mjs test/installer-concurrency.test.mjs" });
+  expectedNative.steps.push({ run: "node --test test/build-provenance.test.mjs test/deployment-provenance-cli.test.mjs test/live-provenance.test.mjs" });
   assert.deepEqual(expectedNative, next.jobs["native-runner"]);
   assert.deepEqual(old.jobs["runner-lts"], next.jobs["runner-lts"]);
   assert.equal(result.files[".gitlab-ci.yml"].split("# BEGIN GENERATED MAIN SOURCE POLICY")[1], input.gitlab.split("# BEGIN GENERATED MAIN SOURCE POLICY")[1]);
