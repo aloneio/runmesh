@@ -384,6 +384,18 @@ it("managed OAuth SQLite claims survive repository recreation and reject stale w
     expect(open().read(record.profile_id)?.revision).toBe(2);
   });
 });
+it("managed OAuth reads after reconstruction issue no schema writes", async () => {
+  const namespace = (env as unknown as { CAPABILITIES: DurableObjectNamespace }).CAPABILITIES;
+  await runInDurableObject(namespace.get(namespace.idFromName(crypto.randomUUID())), (_instance, state) => {
+    const open = () => new ManagedOAuthState(state.storage, () => undefined);
+    expect(open().read("missing")).toBeUndefined();
+    const spy = vi.spyOn(state.storage.sql, "exec");
+    try {
+      for (let n = 0; n < 5; n++) { expect(open().read("missing")).toBeUndefined(); expect(open().find("a".repeat(64))).toBeUndefined(); }
+      expect(spy.mock.calls.every(([query]) => query.startsWith("SELECT"))).toBe(true);
+    } finally { spy.mockRestore(); }
+  });
+});
 it("managed SQLite storage budgets are derived from the shared cipher and survive restart", async () => {
   const namespace = (env as unknown as { CAPABILITIES: DurableObjectNamespace }).CAPABILITIES;
   await runInDurableObject(namespace.get(namespace.idFromName("managed-storage-budget-test")), async (_instance, state) => {

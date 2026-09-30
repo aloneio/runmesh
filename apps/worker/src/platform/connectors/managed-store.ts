@@ -18,7 +18,9 @@ export class ManagedOAuthState implements ManagedOAuthRepository {
   constructor(private readonly storage: Pick<DurableObjectStorage, "sql" | "transactionSync">, private readonly initializeOwner: () => void) {}
   private initialize() {
     if (this.ready) return; this.initializeOwner();
-    this.storage.sql.exec("CREATE TABLE IF NOT EXISTS managed_oauth_v1 (profile_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, state_hash TEXT UNIQUE NOT NULL, record_json TEXT NOT NULL)");
+    if (!this.storage.sql.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='managed_oauth_v1'").toArray().length) {
+      this.storage.sql.exec("CREATE TABLE managed_oauth_v1 (profile_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, state_hash TEXT UNIQUE NOT NULL, record_json TEXT NOT NULL)");
+    }
     this.ready = true;
   }
   read(id: string): ManagedOAuthRecord | undefined {

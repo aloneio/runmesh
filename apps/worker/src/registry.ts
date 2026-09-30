@@ -571,7 +571,12 @@ export class RegistryDO {
       (segments[0] === "auth" && segments[1] === "mcp" && ["verify", "revalidate", "authorize-rpc"].includes(segments[2]!))
       || (segments[0] === "runners" && segments[2] === "mcp-authorization")
     );
-    const consumeNonce = request.method === "GET" || replaySafeHeartbeat || replaySafeSession || replaySafeHistory || replaySafeAuthorization
+    // Metadata-only completed-call receipts are immutable in both backends.
+    // Their unique call IDs and live transport fence make retries idempotent;
+    // persisting a separate nonce adds index writes and later deletion work.
+    const replaySafeReceipt = request.method === "POST" && segments.length === 3
+      && segments[0] === "runners" && segments[2] === "mcp-calls";
+    const consumeNonce = request.method === "GET" || replaySafeHeartbeat || replaySafeSession || replaySafeHistory || replaySafeAuthorization || replaySafeReceipt
       ? () => true
       : (nonce: string, expiresAtMs: number) => this.consumeInternalNonce(nonce, expiresAtMs);
     if (!await verifyInternalRequest(request, this.env.INTERNAL_CONTROL_SECRET, rawBody, consumeNonce)) return new Response("not found", { status: 404 });

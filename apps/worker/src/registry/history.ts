@@ -215,8 +215,11 @@ export class RegistryHistory {
           };
         if (captureAudit !== undefined) captureAudit(metadata);
         else {
+          // A completed call has one immutable receipt. Its unique call ID
+          // deduplicates retries without a second durable nonce per receipt.
+          // Transport identity is still checked above on every attempt.
           this.storage.sql.exec(`INSERT INTO mcp_calls (runner_id, call_id, call_json, completed_at_ms) VALUES (?, ?, ?, ?)
-            ON CONFLICT(runner_id, call_id) DO UPDATE SET call_json = excluded.call_json, completed_at_ms = excluded.completed_at_ms`,
+            ON CONFLICT(runner_id, call_id) DO NOTHING`,
             runnerId, callId, JSON.stringify(metadata), completedAtMs);
           this.pruneMcpCalls(runnerId);
         }
