@@ -1,13 +1,13 @@
 import { matchIdentifierPath } from "./path-identifiers.js";
 import { developmentReleaseDependencies } from "./release-cache.js";
 import type { DevelopmentReleaseRefreshScheduler } from "../distribution/release.js";
-import { runnerSummary, runnerDetail as projectRunnerDetail, clientDetail as projectClientDetail } from "../application/admin-projections.js";
+import { runnerDetail as projectRunnerDetail } from "../application/admin-projections.js";
 import { ADMIN_CSRF_COOKIE } from "./constants.js";
 import { ADMIN_SESSION_COOKIE } from "./constants.js";
 import { adminDocument } from "../admin/layout.js";
 import { centralPage } from "../admin/central-view.js";
 import { adminError } from "./responses.js";
-import { adminUpstreamError } from "./responses.js";
+import { adminClientError, adminSectionError, adminUpstreamError } from "./responses.js";
 import { boundedJsonResponse } from "../bounded-json.js";
 import { adminPage } from "./admin-presentation.js";
 import { adminSession } from "./session.js";
@@ -29,7 +29,7 @@ import { installerOriginUnavailable } from "./distribution.js";
 import { isSafeIdentifier } from "../security.js";
 import { json } from "../platform/control-plane.js";
 import { loadAdminJobPage } from "../admin-jobs.js";
-import { loadDashboardData } from "./admin-query.js";
+import { loadClientDetailData, loadAdminPageData } from "./admin-query.js";
 import { loadFeatureNotices } from "./admin-query.js";
 import { loadLiveJobs } from "../application/runner-queries.js";
 import { MAX_VALIDITY_DAYS } from "../domain/execution-mode.js";
@@ -48,11 +48,11 @@ import { resolveConnectionOrigin } from "./origin.js";
 import { runnerConfiguredExecutionMode } from "../domain/execution-mode.js";
 import { runnerDetailPage } from "../admin/runner-detail-view.js";
 import { runnerEnvironment } from "../application/runner-queries.js";
-import type { RunnerSummaryViewModel } from "../contracts/admin-views.js";
 import { resolveRunnerReleaseDescriptor } from "../distribution/release.js";
 import { runnerReportedExecutionMode } from "../domain/execution-mode.js";
 import { runnerRpc } from "../platform/control-plane.js";
 import { secretCreatedPage } from "../admin/auth-views.js";
+import { settingsPage } from "../admin/dashboard-views.js";
 import { selectedScopes } from "./input.js";
 import { sha256Hex } from "../security.js";
 import { validLabel } from "./input.js";
@@ -75,7 +75,10 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
   if (request.method === "GET" && ["/admin", "/admin/runners", "/admin/clients", "/admin/settings"].includes(url.pathname)) {
     const csrf = cookieValue(request, ADMIN_CSRF_COOKIE);
     if (csrf === undefined || !constantTimeEqual(await sha256Hex(csrf), session.csrf_hash)) return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
-    const data = await loadDashboardData(env, url.pathname === "/admin" && env.RUNMESH_JOB_HISTORY_BACKEND !== "d1");
+    if (url.pathname === "/admin/settings") return html(adminDocument("Settings", settingsPage(csrf), "settings", await loadFeatureNotices(env)));
+    const section = url.pathname === "/admin" ? "dashboard" : url.pathname === "/admin/runners" ? "runners" : "clients";
+    const data = await loadAdminPageData(env, section);
+    if (data === undefined) return adminSectionError(503, "Console data could not be loaded. Try again.", section);
     return html(adminPage(url.pathname, data, csrf, env.CAPABILITIES !== undefined));
   }
   const runnerDetail = matchIdentifierPath(/^\/admin\/runners\/([^/]+)$/, url.pathname);
@@ -97,20 +100,11 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
   if (request.method === "GET" && clientDetail !== null) {
     const csrf = cookieValue(request, ADMIN_CSRF_COOKIE);
     if (csrf === undefined || !constantTimeEqual(await sha256Hex(csrf), session.csrf_hash)) return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
-    const [clientResponse, runnersResponse, overridesResponse, notices] = await Promise.all([
-      registryGet(env, `/auth/clients`),
-      registryGet(env, "/runners"),
-      registryGet(env, `/auth/clients/${encodeURIComponent(clientDetail[1] as string)}/runner-overrides`),
-      loadFeatureNotices(env),
-    ]);
-    let clients: unknown[] = [];
-    try { clients = clientResponse.ok ? arrayField(record(await json(clientResponse))?.clients) : []; } catch { clients = []; }
-    const client = clients.map(record).find((item) => item?.client_id === clientDetail[1]);
-    let runners: RunnerSummaryViewModel[] = [];
-    let overrides: Record<string, unknown>[] = [];
-    try { runners = runnersResponse.ok ? arrayField(record(await json(runnersResponse))?.runners).filter(record) as RunnerSummaryViewModel[] : []; } catch { runners = []; }
-    try { overrides = overridesResponse.ok ? arrayField(record(await json(overridesResponse))?.overrides).flatMap((item) => { const value = record(item); return value === undefined ? [] : [value]; }) : []; } catch { overrides = []; }
-    return client === undefined ? adminError(404, "MCP client was not found.") : html(adminDocument(`${typeof client.label === "string" ? client.label : clientDetail[1]} · MCP Client`, await clientDetailPage(projectClientDetail(client), runners.map(runnerSummary), overrides as Record<string, unknown>[], csrf), "clients", notices));
+    const data = await loadClientDetailData(env, clientDetail[1] as string);
+    if (data.state === "unavailable") return adminClientError(503, "Client details could not be loaded. Try again.");
+    if (data.state === "missing") return adminClientError(404, "MCP client was not found.");
+    const { client, runners, overrides, notices } = data;
+    return html(adminDocument(`${typeof client.label === "string" ? client.label : clientDetail[1]} · MCP Client`, clientDetailPage(client, runners, overrides, csrf), "clients", notices));
   }
 
   if (request.method === "GET" && runnerDetail !== null) {
@@ -184,13 +178,13 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
   const clientId = clientMatch[1] as string; const action = clientMatch[2] as "rename" | "rotate" | "revoke" | "delete" | "reset-runner" | "select-runner" | "active-runner" | "override" | "reset-override" | "scopes" | "recording";
   if (action === "recording") {
     const value = form.get("record_jobs");
-    if (value !== "true" && value !== "false") return adminError(400, "Recording preference is invalid.");
+    if (value !== "true" && value !== "false") return adminClientError(400, "Recording preference is invalid.");
     const response = await registryPost(env, `/auth/clients/${encodeURIComponent(clientId)}/recording`, { record_jobs: value === "true" });
     return adminMutationResponse(response, `/admin/clients/${encodeURIComponent(clientId)}`, "Recording preference could not be updated.");
   }
   if (action === "scopes") {
     const scopes = selectedScopes(form);
-    if (scopes === undefined) return adminError(400, "Client scopes are invalid.");
+    if (scopes === undefined) return adminClientError(400, "Client scopes are invalid.");
     const response = await registryPost(env, `/auth/clients/${encodeURIComponent(clientId)}/scopes`, { scopes });
     return adminMutationResponse(response, `/admin/clients/${encodeURIComponent(clientId)}`, "Client scopes could not be updated.");
   }
@@ -200,7 +194,7 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
   }
   if (action === "select-runner" || action === "active-runner") {
     const runnerId = form.get("runner_id");
-    if (typeof runnerId !== "string" || !isSafeIdentifier(runnerId)) return adminError(400, "Runner identifier is invalid.");
+    if (typeof runnerId !== "string" || !isSafeIdentifier(runnerId)) return adminClientError(400, "Runner identifier is invalid.");
     const confirmValue = form.get("confirm_switch");
     const confirmSwitch = confirmValue === "true" || confirmValue === "on" || confirmValue === "1";
     const response = await registryPost(env, `/auth/clients/${encodeURIComponent(clientId)}/active-runner`, { runner_id: runnerId, confirm_switch: confirmSwitch });
@@ -208,26 +202,26 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
     if (response.status === 409) {
       let code: unknown;
       try { code = record(await response.json())?.code; } catch { code = undefined; }
-      return adminError(409, code === "runner_unavailable" ? "The selected Runner is unavailable or has not completed enrollment." : "A different Runner is already selected. Check Confirm switch and try again.");
+      return adminClientError(409, code === "runner_unavailable" ? "The selected Runner is unavailable or has not completed enrollment." : "A different Runner is already selected. Check Confirm switch and try again.");
     }
-    return adminUpstreamError(response, "Runner selection could not be updated.");
+    return adminUpstreamError(response, "Runner selection could not be updated.", 400, adminClientError);
   }
   if (action === "override" || action === "reset-override") {
     const runnerId = form.get("runner_id");
-    if (typeof runnerId !== "string" || !isSafeIdentifier(runnerId)) return adminError(400, "Runner identifier is invalid.");
+    if (typeof runnerId !== "string" || !isSafeIdentifier(runnerId)) return adminClientError(400, "Runner identifier is invalid.");
     const path = `/auth/clients/${encodeURIComponent(clientId)}/runner-overrides/${encodeURIComponent(runnerId)}`;
     if (action === "reset-override") {
       const response = await registryRequest(env, path, "DELETE", "");
       return adminMutationResponse(response, `/admin/clients/${encodeURIComponent(clientId)}`, "Runner restriction could not be reset.", 204);
     }
     const permissions = permissionsFromForm(form);
-    if (permissions === undefined) return adminError(400, "Runner restriction is invalid.");
+    if (permissions === undefined) return adminClientError(400, "Runner restriction is invalid.");
     const response = await registryPost(env, path, { permissions });
     return adminMutationResponse(response, `/admin/clients/${encodeURIComponent(clientId)}`, "Runner restriction could not be saved.", 204);
   }
   if (action === "rename") {
     const label = form.get("label");
-    if (typeof label !== "string" || !validLabel(label)) return adminError(400, "Client name is invalid.");
+    if (typeof label !== "string" || !validLabel(label)) return adminClientError(400, "Client name is invalid.");
     const response = await registryPost(env, `/auth/clients/${encodeURIComponent(clientId)}/rename`, { label });
     return adminMutationResponse(response, "/admin", "Client update failed.");
   }
@@ -251,7 +245,7 @@ async function createClient(env: WorkerEnv, form: FormData, baseUrl: string): Pr
   const centralOnly = mode === "central";
   const scopes = centralOnly ? [] : selectedScopes(form);
   if ((mode !== null && mode !== "central" && mode !== "native") || (centralOnly && env.CAPABILITIES === undefined)
-    || typeof label !== "string" || !validLabel(label) || scopes === undefined) return adminError(400, "Client name or scopes are invalid.");
+    || typeof label !== "string" || !validLabel(label) || scopes === undefined) return adminClientError(400, "Client name or scopes are invalid.");
   const secret = randomBase64Url();
   const clientId = `client-${crypto.randomUUID().replaceAll("-", "")}`;
   const failure = await persistClientCredential(env, "/auth/clients", clientId, secret, centralOnly
@@ -264,7 +258,7 @@ async function createClient(env: WorkerEnv, form: FormData, baseUrl: string): Pr
 function secretUrl(base: string, secret: string): string { const url = new URL(base); url.pathname = `/${secret}/mcp`; url.search = ""; return url.toString(); }
 
 function adminMutationResponse(response: Response, location: string, message: string, completedStatus = 200): Response {
-  if (response.status !== completedStatus) return adminUpstreamError(response, message);
+  if (response.status !== completedStatus) return adminUpstreamError(response, message, 400, adminClientError);
   void response.body?.cancel().catch(() => undefined);
   return redirect(location);
 }
@@ -289,5 +283,5 @@ async function persistClientCredential(env: WorkerEnv, path: string, clientId: s
     if (readback?.status === 200 && client?.secret_prefix === prefix && client.secret_version === 1
       && client.revoked_at_ms === null && Array.isArray(client.scopes) && client.scopes.length === 0) return undefined;
   }
-  return adminError(response?.status === 404 ? 404 : response?.status === 409 ? 409 : 503, "MCP credential could not be confirmed. Refresh the client state before trying again.");
+  return adminClientError(response?.status === 404 ? 404 : response?.status === 409 ? 409 : 503, "MCP credential could not be confirmed. Refresh the client state before trying again.");
 }

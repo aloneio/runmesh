@@ -59,6 +59,7 @@ it("shows recent jobs of all lifecycle states instead of filtering only running"
 it("does not query job snapshots on unrelated top-level pages", async () => {
   const f = await fixture(); expect((await f.open("/admin/settings")).status).toBe(200);
   expect(f.paths).not.toContain("/dashboard"); expect(f.paths.some((path) => path.includes("/jobs"))).toBe(false); expect(f.runnerFetch).not.toHaveBeenCalled();
+  expect(f.paths).not.toContain("/auth/clients"); expect(f.paths).not.toContain("/runners");
 });
 
 it("authenticates job pages before reading metadata or contacting the Runner", async () => {
@@ -89,6 +90,9 @@ it("does not render an unavailable dashboard as zero active jobs or empty histor
   expect(text).toContain('Active shell jobs</span><strong class="metric-value">—</strong>');
   expect(text).toContain('<p class="empty">Job metadata is temporarily unavailable.</p>');
   expect(text).not.toContain('<p class="empty">No recent jobs.</p>');
+  expect(response.status).toBe(200);
+  expect(text).toContain('href="/admin/runners/jobs-runner"');
+  expect(f.paths.filter(path => path === "/runners")).toHaveLength(1);
 });
 
 it("keeps a failed Runner history query distinct from a successfully loaded empty list", async () => {

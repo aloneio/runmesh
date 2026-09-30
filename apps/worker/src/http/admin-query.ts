@@ -1,4 +1,4 @@
-import { runnerSummary, clientSummary } from "../application/admin-projections.js";
+import { runnerSummary, clientSummary, clientDetail } from "../application/admin-projections.js";
 import type { AdminData } from "../admin/view-models.js";
 import type { AdminNotice } from "../admin/view-models.js";
 import { arrayField } from "../values.js";
@@ -46,20 +46,63 @@ const FEATURE_STATUS_UNAVAILABLE_NOTICE: AdminNotice = {
   message: "Core Runner and MCP paths remain available; retry the console shortly.",
 };
 
-export async function loadDashboardData(env: WorkerEnv, includeJobs = true): Promise<AdminData> {
+export async function loadAdminPageData(env: WorkerEnv, section: "dashboard" | "runners" | "clients"): Promise<AdminData | undefined> {
   // The dashboard includes persisted job summaries. Other top-level pages do
   // not need job queries, and no page load performs a live Runner job scan.
-  const [clientsResponse, snapshotResponse, notices] = await Promise.all([
-    registryGet(env, "/auth/clients"), registryGet(env, includeJobs ? "/dashboard" : "/runners"), loadFeatureNotices(env),
-  ]);
-  let clients: ClientViewModel[] = [];
-  try { clients = clientsResponse.ok ? ((record(await json(clientsResponse))?.clients ?? []) as ClientViewModel[]) : []; } catch { clients = []; }
-  let snapshotBody: Record<string, unknown> | undefined;
-  try { snapshotBody = snapshotResponse.ok ? record(await json(snapshotResponse)) : undefined; } catch { snapshotBody = undefined; }
-  const runners = Array.isArray(snapshotBody?.runners) ? snapshotBody.runners as RunnerSummaryViewModel[] : [];
-  const jobs = includeJobs && Array.isArray(snapshotBody?.jobs) ? snapshotBody.jobs.filter(record) as Record<string, unknown>[] : [];
-  const snapshotUnavailable = includeJobs && !Array.isArray(snapshotBody?.jobs);
-  return { clients: clients.map(clientSummary), runners: runners.map(runnerSummary), jobs, snapshot: { ...(Array.isArray(snapshotBody?.runners) ? { runners: runners.map(runnerSummary) } : {}), ...(Array.isArray(snapshotBody?.jobs) ? { jobs } : {}) }, notices: snapshotUnavailable ? [...notices, { title: "Job snapshot unavailable", message: "Job metadata is temporarily unavailable." }] : notices };
+  const includeJobs = section === "dashboard" && env.RUNMESH_JOB_HISTORY_BACKEND !== "d1";
+  try {
+    const [clients, snapshotBody, notices] = await Promise.all([
+      section === "runners" ? Promise.resolve([]) : registryGet(env, "/auth/clients").then(response => registryArray(response, "clients")),
+      registryGet(env, includeJobs ? "/dashboard" : "/runners").then(registryRecord),
+      loadFeatureNotices(env),
+    ]);
+    if (clients === undefined) return undefined;
+    // History can fail independently; the Runner list remains authoritative.
+    const runners = recordArray(snapshotBody?.runners) ?? (includeJobs ? await registryGet(env, "/runners").then(response => registryArray(response, "runners")) : undefined);
+    if (runners === undefined) return undefined;
+    const jobs = includeJobs ? recordArray(snapshotBody?.jobs) : undefined;
+    const projectedRunners = (runners as unknown as RunnerSummaryViewModel[]).map(runnerSummary);
+    return { clients: (clients as unknown as ClientViewModel[]).map(clientSummary), runners: projectedRunners, jobs: jobs ?? [], snapshot: { runners: projectedRunners, ...(jobs === undefined ? {} : { jobs }) }, notices: includeJobs && jobs === undefined ? [...notices, { title: "Job snapshot unavailable", message: "Job metadata is temporarily unavailable." }] : notices };
+  } catch { return undefined; }
+}
+
+type ClientDetailData =
+  | { state: "missing" }
+  | { state: "unavailable" }
+  | { state: "loaded"; client: Record<string, unknown>; runners: RunnerSummaryViewModel[]; overrides: Record<string, unknown>[]; notices: readonly AdminNotice[] };
+
+/** A failed permission read cannot be rendered as an empty, editable list. */
+export async function loadClientDetailData(env: WorkerEnv, clientId: string): Promise<ClientDetailData> {
+  try {
+    const [clients, runners, overrides, notices] = await Promise.all([
+      registryGet(env, "/auth/clients").then(response => registryArray(response, "clients")),
+      registryGet(env, "/runners").then(response => registryArray(response, "runners")),
+      registryGet(env, "/auth/clients/" + encodeURIComponent(clientId) + "/runner-overrides").then(response => registryArray(response, "overrides")),
+      loadFeatureNotices(env),
+    ]);
+    if (clients === undefined) return { state: "unavailable" };
+    const client = clients.find(value => value.client_id === clientId);
+    if (client === undefined) return { state: "missing" };
+    if (runners === undefined || overrides === undefined) return { state: "unavailable" };
+    return { state: "loaded", client: clientDetail(client), runners: (runners as unknown as RunnerSummaryViewModel[]).map(runnerSummary), overrides, notices };
+  } catch { return { state: "unavailable" }; }
+}
+
+async function registryArray(response: Response, key: string): Promise<Record<string, unknown>[] | undefined> {
+  return recordArray((await registryRecord(response))?.[key]);
+}
+
+function recordArray(value: unknown): Record<string, unknown>[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const rows = value.map(record);
+  return rows.every((row): row is Record<string, unknown> => row !== undefined) ? rows : undefined;
+}
+
+async function registryRecord(response: Response): Promise<Record<string, unknown> | undefined> {
+  try {
+    if (!response.ok) { void response.body?.cancel().catch(() => undefined); return undefined; }
+    return record(await json(response));
+  } catch { return undefined; }
 }
 
 export async function loadFeatureNotices(env: WorkerEnv): Promise<readonly AdminNotice[]> {
