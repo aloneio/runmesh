@@ -1,9 +1,31 @@
 import { env, runInDurableObject } from "cloudflare:test";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { CentralGovernance } from "../src/platform/capabilities/central-audit.js";
 import { CentralSchema } from "../src/platform/capabilities/schema.js";
 const owner = () => (env as unknown as { CAPABILITIES: DurableObjectNamespace }).CAPABILITIES.get((env as unknown as { CAPABILITIES: DurableObjectNamespace }).CAPABILITIES.idFromName(crypto.randomUUID()));
 const principal = { client_id: 'client-a', secret_version: 1 }, command = { profile_id: 'profile-a', tool_id: 'mcp.' + 'a'.repeat(64), version: 'b'.repeat(64) };
+it("successful Central calls only reset persisted cooldown when it changed", async () => {
+  await runInDurableObject(owner(), (_instance, state) => {
+    const schema = new CentralSchema(state.storage), service = new CentralGovernance(state.storage, () => schema.initialize());
+    expect(service.admit(principal, command)).toBe(true);
+    const original = state.storage.sql.exec.bind(state.storage.sql), updates: number[] = [];
+    const spy = vi.spyOn(state.storage.sql, "exec").mockImplementation((query: string, ...args: any[]) => {
+      const cursor = original(query, ...args);
+      if (query.startsWith("UPDATE central_admission_v1 SET failures=0")) updates.push(cursor.rowsWritten);
+      return cursor;
+    });
+    try {
+      expect(service.record(principal, command, { state: "completed", operation_state: "completed" }).audit_status).toBe("recorded");
+      expect(updates.splice(0)).toEqual([0]);
+      service.record(principal, command, { state: "failed", code: "upstream_unavailable", operation_state: "unknown" });
+      expect(service.record(principal, command, { state: "completed", operation_state: "completed" }).audit_status).toBe("recorded");
+      expect(updates.splice(0)).toEqual([1]);
+      expect(service.record(principal, command, { state: "completed", operation_state: "completed" }).audit_status).toBe("recorded");
+      expect(updates).toEqual([0]);
+      expect(service.list()).toHaveLength(4);
+    } finally { spy.mockRestore(); }
+  });
+});
 it("Central budgets persist across owner reconstruction and recover without timers", async () => {
   await runInDurableObject(owner(), (_instance, state) => {
     let now = 1_000_000; const schema = new CentralSchema(state.storage);

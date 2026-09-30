@@ -13,11 +13,12 @@ function metadata(callId = "call-test", completed = Date.now()): Record<string, 
 
 it("D1 audit stores only bounded metadata, isolates identities, and counts retries once", async () => {
   const namespace = `audit-${crypto.randomUUID()}`, sink = new ExternalAuditHistory(db, namespace);
-  expect(await sink.append(metadata())).toBe(true);
-  expect(await sink.append(metadata())).toBe(true);
+  const first = metadata();
+  expect(await sink.append(first)).toBe(true);
+  expect(await sink.append({ ...first, status: "error", completed_at_ms: (first.completed_at_ms as number) + 1 })).toBe(true);
   const rows = await sink.list("r", life);
   expect(rows).toHaveLength(1);
-  expect(rows[0]).toMatchObject({ call_id: "call-test", runner_id: "r", lifecycle_id: life, method: "fs.read" });
+  expect(rows[0]).toMatchObject({ call_id: "call-test", runner_id: "r", lifecycle_id: life, method: "fs.read", status: "ok", completed_at_ms: first.completed_at_ms });
   expect(JSON.stringify(rows)).not.toMatch(/DO_NOT_PERSIST|command|secret|output/);
   expect(await sink.list("other-runner", life)).toEqual([]);
   expect(await sink.list("r", "replacement-lifecycle")).toEqual([]);

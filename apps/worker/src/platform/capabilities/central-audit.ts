@@ -46,7 +46,7 @@ export class CentralGovernance implements CentralObservation {
         const now = this.now(), key = "profile:" + command.profile_id;
         const failure = outcome.state === "failed" && ["upstream_unavailable", "upstream_protocol_error", "operation_timed_out", "result_unconfirmed", "result_invalid"].includes(outcome.code ?? "");
         if (failure) this.storage.sql.exec("UPDATE central_admission_v1 SET failures=failures+1,cooldown_ms=CASE WHEN failures+1>=? THEN ? ELSE cooldown_ms END WHERE key=?", LIMITS.failures, now + LIMITS.cooldown_ms, key);
-        else if (outcome.state === "completed") this.storage.sql.exec("UPDATE central_admission_v1 SET failures=0,cooldown_ms=0 WHERE key=?", key);
+        else if (outcome.state === "completed") this.storage.sql.exec("UPDATE central_admission_v1 SET failures=0,cooldown_ms=0 WHERE key=? AND (failures<>0 OR cooldown_ms<>0)", key);
         this.storage.sql.exec("DELETE FROM central_receipts_v1 WHERE created_at_ms<?", now - LIMITS.retention_ms);
         const code = outcome.state === "completed" ? "completed" : REMOTE_CODES.includes(outcome.code as RemoteCode) ? outcome.code! : "result_unconfirmed";
         this.storage.sql.exec("INSERT INTO central_receipts_v1 VALUES (?,?,?,?,?,?,?,?)", request_id, principal.client_id, command.profile_id, command.tool_id, command.version, outcome.operation_state, code, now);

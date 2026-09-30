@@ -4,6 +4,7 @@ import worker from "../src/index.js";
 import { ensureHistoryRetentionSchema, pruneHistory } from "../src/history-retention.js";
 import { FIXED_RELEASE_VERSION } from "../src/installer.js";
 import { registrySchemaIsCurrent } from "../src/registry/schema.js";
+import { internalHeaders } from "../src/security.js";
 
 it("MCP storage failures and malformed replies are 503, never invalid-secret 404", async () => {
   for (const result of [503, 429, 500, 404, "malformed", "throw"] as const) {
@@ -96,5 +97,38 @@ it("structural validation uses supported SQLite metadata and rejects a missing r
     } finally { spy.mockRestore(); }
     state.storage.sql.exec("DROP TABLE client_runner_overrides");
     expect(registrySchemaIsCurrent(state.storage.sql)).toBe(false);
+  });
+});
+
+it("metadata receipts are replay-safe without per-call nonce rows or duplicate writes", async () => {
+  const stub = env.REGISTRY.get(env.REGISTRY.idFromName(`receipt-cost-${crypto.randomUUID()}`));
+  await runInDurableObject(stub, async (instance, state) => {
+    const now = Date.now(), runner = "cost-runner", session = "cost-session";
+    instance.registerRunner(runner, "a".repeat(64), now, undefined, "dedicated_user");
+    const fence = instance.getRunnerExecutionState(runner)!;
+    state.storage.sql.exec("UPDATE runners SET state='online', session_id=?, last_heartbeat_ms=? WHERE runner_id=?", session, now, runner);
+    const path = `/runners/${runner}/mcp-calls`;
+    const input = { call_id: "cost-call", client_id: "cost-client", method: "fs.read", status: "ok", started_at_ms: now, completed_at_ms: now, duration_ms: 0, now_ms: now,
+      epoch: fence.runner.connection_epoch, credential_version: fence.runner.credential_version, lifecycle_id: fence.lifecycle_id, session_id: session };
+    const request = async (value: Record<string, unknown>) => { const body = JSON.stringify(value); return new Request(`https://registry.internal${path}`, { method: "POST", body, headers: await internalHeaders("test-internal-control-secret-not-for-production", "POST", path, body) }); };
+    const writes: Array<{ query: string; rows: number }> = [], original = state.storage.sql.exec.bind(state.storage.sql);
+    const spy = vi.spyOn(state.storage.sql, "exec").mockImplementation((query: string, ...args: any[]) => { const cursor = original(query, ...args); if (cursor.rowsWritten > 0) writes.push({ query: query.split(String.fromCharCode(10))[0]!, rows: cursor.rowsWritten }); return cursor; });
+    try {
+      const signed = await request(input);
+      expect((await instance.fetch(signed.clone())).status).toBe(200);
+      const first = writes.splice(0);
+      const replay = await instance.fetch(signed.clone());
+      const exactReplay = writes.splice(0);
+      expect((await instance.fetch(await request({ ...input, status: "error", now_ms: now + 1 }))).status).toBe(200);
+      const retry = writes.splice(0);
+      expect(replay.status).toBe(200);
+      expect(first.reduce((total, write) => total + write.rows, 0)).toBe(6);
+      expect(first.some(write => write.query.includes("internal_request_nonces"))).toBe(false);
+      expect(exactReplay).toEqual([]); expect(retry).toEqual([]);
+      expect(instance.listMcpCalls(runner)).toEqual([expect.objectContaining({ call_id: input.call_id, status: "ok", recorded_at_ms: now })]);
+      expect((await instance.fetch(new Request(`https://registry.internal${path}`, { method: "POST", body: JSON.stringify(input) }))).status).toBe(404);
+      state.storage.sql.exec("UPDATE runners SET session_id='replacement' WHERE runner_id=?", runner);
+      expect((await instance.fetch(signed.clone())).status).toBe(409);
+    } finally { spy.mockRestore(); }
   });
 });
