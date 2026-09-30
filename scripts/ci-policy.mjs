@@ -26,6 +26,7 @@ function requiredStep(steps, command) {
   const matches = steps.filter(step => step.run === command);
   assert.equal(matches.length, 1, `missing/duplicate executable step: ${command}`);
   const step = matches[0];
+  assert.equal(step.shell, undefined, "critical steps must use the reviewed default shell");
   assert.ok(step.if === undefined && step["continue-on-error"] === undefined && step["working-directory"] === undefined, `conditional/nonblocking critical step: ${command}`);
 }
 
@@ -50,10 +51,18 @@ export function validateCiWiring(pkg, githubText, gitlabText) {
       if (step.uses) assert.match(step.uses, /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_./-]+@[a-f0-9]{40}$/u, "actions must use full immutable commits");
     }
   }
-  eq(gh.jobs["native-runner"].strategy?.matrix?.os, ["ubuntu-latest", "windows-latest", "macos-latest"], "native platforms removed");
-  eq(gh.jobs["runner-lts"].strategy?.matrix?.node, ["22.23.2", "24.21.0"], "supported runtimes changed without contract update");
+  eq(gh.jobs["native-runner"].strategy?.matrix, { os: ["ubuntu-latest", "windows-latest", "macos-latest"] }, "native matrix must execute every declared platform");
+  assert.equal(gh.jobs["native-runner"]["runs-on"], "${{ matrix.os }}", "native jobs must run on their matrix platform");
+  eq(gh.jobs["runner-lts"].strategy?.matrix, { node: ["22.23.2", "24.21.0"] }, "LTS matrix must execute every declared runtime");
   for (const command of NATIVE_COMMANDS) requiredStep(gh.jobs["native-runner"].steps, command);
   for (const command of LTS_COMMANDS) requiredStep(gh.jobs["runner-lts"].steps, command);
+  const ltsSteps = gh.jobs["runner-lts"].steps;
+  const runtimeSetup = ltsSteps.filter(step => step.uses?.startsWith("actions/setup-node@")).at(-1);
+  assert.equal(runtimeSetup?.with?.["node-version"], "${{ matrix.node }}", "LTS tests must use the matrix runtime");
+  assert.ok(runtimeSetup.if === undefined && runtimeSetup["continue-on-error"] === undefined, "LTS runtime setup must be unconditional and blocking");
+  for (const command of ["npm run test --workspace=@aloneio/runmesh-runner", "node apps/runner/dist/runmesh.cjs --version"]) {
+    assert.ok(ltsSteps.indexOf(runtimeSetup) < ltsSteps.findIndex(step => step.run === command), "LTS runtime must be selected before its tests");
+  }
   requiredStep(gh.jobs.browser.steps, "npm run test:browser");
   requiredStep(gh.jobs.browser.steps, "npm run browser:install");
   const aggregate = gh.jobs["verify-all"];
@@ -63,6 +72,7 @@ export function validateCiWiring(pkg, githubText, gitlabText) {
   const env = Object.fromEntries(AGGREGATE_JOBS.map(name => [name.replaceAll("-", "_").toUpperCase(), `\${{ needs.${name}.result }}`]));
   eq(aggregate.steps[0].env, env, "aggregate must consume actual dependency results");
   assert.equal(aggregate.steps[0].run, Object.keys(env).map(key => `test "$${key}" = success`).join(" && "), "aggregate cannot mask failed dependencies");
+  requiredStep(aggregate.steps, aggregate.steps[0].run);
   const upload = verify.steps.find(s => s.uses === UPLOAD_ACTION);
   assert.ok(upload, "safe result artifact upload missing");
   eq(upload.with?.path, "ci-results/*.json\nci-results/*.xml\n", "artifact scope must remain a report-only whitelist");
