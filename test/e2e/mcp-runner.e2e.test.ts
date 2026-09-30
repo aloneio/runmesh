@@ -879,7 +879,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     } finally { await stop(rootRunner); }
   });
 
-  it("fences a genuinely stale Registry sync with 4000 and recovers using the same credential", async () => {
+  it("keeps out-of-order sync connected and fences replaced sessions with the same credential", async () => {
     const testRunner = "e2e-session-conflict";
     const token = "synthetic-session-conflict-token-0123456789";
     // The main fixture exercises packed D1 history, whose batch endpoint has
@@ -899,8 +899,8 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
         body: JSON.stringify({ runner_id: testRunner, token, execution_mode: "dedicated_user" }) });
       expect(registration.status).toBe(200);
       const result = await probeSessionConflict({ server: `${origin.replace("http:", "ws:")}/runner/connect`, runnerId: testRunner, token });
-      expect(result).toMatchObject({ close_code: 4000, close_reason: "stale runner session", valid_sync_acknowledged: true,
-        stale_sync_acknowledged: false, same_credential_reconnected: true, new_session: true, recovery_echo: true });
+      expect(result).toMatchObject({ close_code: 4000, close_reason: "replaced by newer session", valid_sync_acknowledged: true,
+        superseded_sync_acknowledged: true, same_credential_reconnected: true, new_session: true, recovery_echo: true });
     } finally { await stop(sqliteWorker); }
   });
 
