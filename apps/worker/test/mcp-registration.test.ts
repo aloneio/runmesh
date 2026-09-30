@@ -31,9 +31,9 @@ function fixture(central = true, scopes: string[] = ["coding:read"], clientId = 
     expect(value).toBeDefined();
     return value;
   }
-  function rpcBody(body: string) {
+  function rpcBody(body: string, signal?: AbortSignal) {
     const request = new Request("https://worker.test/" + "a".repeat(43) + "/mcp", { method: "POST",
-      headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body });
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body, signal });
     return handleMcpSecret(request, config, new URL(request.url));
   }
   return { rpc, rpcBody, registry, principals };
@@ -61,7 +61,7 @@ it("native calls register only their own schema and still validate input before 
   const f = fixture(), register = vi.spyOn(McpServer.prototype, "registerTool");
   const result = await f.rpc("tools/call", { name: "read", arguments: {} });
   expect(result.result?.isError ?? Boolean(result.error)).toBe(true);
-  expect(register.mock.calls.map(call => call[0]).filter(tool => MCP_TOOL_NAMES.some(native => native === tool))).toEqual(["read"]);
+  expect(register.mock.calls.map(call => call[0])).toEqual(["read"]);
   expect(f.registry).toHaveBeenCalledOnce();
 });
 
@@ -70,6 +70,19 @@ it("selected native calls still revalidate current scopes before an action", asy
   const result = await f.rpc("tools/call", { name: "read", arguments: { workspace_id: "work", path: "fixture.txt" } });
   expect(result.result).toMatchObject({ isError: true, structuredContent: { error: { code: "insufficient_scope" } } });
   expect(f.registry).toHaveBeenCalledTimes(2);
+});
+
+it("preserves caller cancellation through the bounded POST rewrite", async () => {
+  const f = fixture(), controller = new AbortController();
+  const connect = McpServer.prototype.connect;
+  vi.spyOn(McpServer.prototype, "connect").mockImplementation(function (this: McpServer, ...args) {
+    controller.abort();
+    return connect.apply(this, args);
+  });
+  const response = await f.rpcBody(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "skill_list", arguments: {} } }), controller.signal);
+  expect(response.status).toBe(499);
+  expect(f.registry).toHaveBeenCalledOnce();
+  expect(f.principals).toEqual([]);
 });
 
 it.each([true, false])("unknown tools receive an SDK error with central=%s", async central => {
@@ -81,6 +94,7 @@ it.each([true, false])("unknown tools receive an SDK error with central=%s", asy
 it("tool discovery after a selective call still publishes the complete native catalog", async () => {
   const f = fixture();
   await f.rpc("tools/call", { name: "skill_list", arguments: {} });
+  await f.rpc("tools/call", { name: "read", arguments: {} });
   const listed = await f.rpc("tools/list");
   expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual(expect.arrayContaining([...MCP_TOOL_NAMES, "skill_list", "skill_read", "remote_profiles", "remote_tools", "remote_call"]));
   const sharedOnly = await fixture(true, []).rpc("tools/list");

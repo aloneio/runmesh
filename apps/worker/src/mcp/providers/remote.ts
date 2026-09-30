@@ -10,6 +10,9 @@ import { publishSchema } from "./schema-publication.js";
 
 const profileId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u);
 const profilesInput = publishSchema(z.object({}).strict(), "input");
+const profilesResponse = z.object({ state: z.literal("listed"), profiles: z.array(z.object({
+  profile_id: profileId, name: z.string().min(1).max(128),
+}).strict()).max(CATALOG_LIMITS.profiles) }).strict();
 const toolsInput = publishSchema(z.object({ profile_id: profileId,
   limit: z.number().int().min(1).max(CATALOG_LIMITS.page_tools).optional(), cursor: z.string().min(1).max(CATALOG_LIMITS.cursor_bytes).optional() }).strict(), "input");
 const callInput = publishSchema(z.object({ profile_id: profileId, tool_id: z.string().regex(/^mcp\.[a-f0-9]{64}$/u),
@@ -35,9 +38,7 @@ export function registerRemoteTools(server: McpServer, port: RemoteToolPort & { 
     inputSchema: profilesInput, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async () => {
     const raw = await bounded(() => port.profiles(), 7000);
-    const parsed = z.object({ state: z.literal("listed"), profiles: z.array(z.object({
-      profile_id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u), name: z.string().min(1).max(128),
-    }).strict()).max(CATALOG_LIMITS.profiles) }).strict().safeParse(raw);
+    const parsed = profilesResponse.safeParse(raw);
     if (!parsed.success) return remoteFailure(raw?.state === "denied" ? "permission_denied" : "dependency_unavailable", "not_started");
     return { content: [{ type: "text" as const, text: JSON.stringify(parsed.data) }] };
   });
