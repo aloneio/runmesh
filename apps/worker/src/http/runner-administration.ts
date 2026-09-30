@@ -14,7 +14,7 @@ import { record } from "../values.js";
 import { json } from "../platform/control-plane.js";
 import type { ValidityWindow } from "../validity.js";
 import { runnerLifecyclePorts } from "./runner-mutations.js";
-import { adminError, adminRunnerError } from "./responses.js";
+import { adminRunnerError } from "./responses.js";
 export function runnerWriteOutcome(response: Response): RunnerWriteOutcome {
   return response.ok ? "accepted" : response.status === 400 ? "invalid" : response.status === 404 ? "missing" : response.status === 409 ? "conflict" : "unknown";
 }
@@ -133,7 +133,7 @@ export function revokeRunnerFromControlPlane(env: WorkerEnv, runnerId: string) {
 }
 export function browserRunnerAdministrationError(action: "create" | "rotate" | "revoke", failure: RunnerActionFailure): Response {
   const missing = failure.cause === "missing";
-  const fail = action === "revoke" ? adminRunnerError : adminError;
+  const fail = adminRunnerError;
   if (failure.reason === "write") return fail(action === "create" ? failure.cause === "unknown" ? 503 : failure.cause === "conflict" ? 409 : 400 : missing ? 404 : 400, action === "create" ? "Runner could not be added." : action === "rotate" ? "Runner credential rotation failed." : "Runner revoke failed.");
   if (failure.reason === "changed" || failure.reason === "enrollment_rejected") return fail(missing ? 404 : 409, missing ? action === "create" ? "Runner enrollment target was not found." : "Runner was not found." : "Runner state changed; reload the Runner page and retry.");
   const messages: Record<typeof action, Partial<Record<RunnerActionFailure["reason"], string>>> = {

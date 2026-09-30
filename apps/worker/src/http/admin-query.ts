@@ -9,6 +9,7 @@ import type { RegistryFeatureHealth } from "../contracts/feature-health.js";
 import { registryGet } from "../platform/control-plane.js";
 import type { RunnerSummaryViewModel } from "../contracts/admin-views.js";
 import type { WorkerEnv } from "../platform/env.js";
+import { recordArray, registryArray, registryRecord } from "./admin-read.js";
 
 const FEATURE_LABELS: Record<RegistryFeatureHealth["feature"], string> = {
   job_recording: "Job recording",
@@ -86,23 +87,6 @@ export async function loadClientDetailData(env: WorkerEnv, clientId: string): Pr
     if (runners === undefined || overrides === undefined) return { state: "unavailable" };
     return { state: "loaded", client: clientDetail(client), runners: (runners as unknown as RunnerSummaryViewModel[]).map(runnerSummary), overrides, notices };
   } catch { return { state: "unavailable" }; }
-}
-
-async function registryArray(response: Response, key: string): Promise<Record<string, unknown>[] | undefined> {
-  return recordArray((await registryRecord(response))?.[key]);
-}
-
-function recordArray(value: unknown): Record<string, unknown>[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const rows = value.map(record);
-  return rows.every((row): row is Record<string, unknown> => row !== undefined) ? rows : undefined;
-}
-
-async function registryRecord(response: Response): Promise<Record<string, unknown> | undefined> {
-  try {
-    if (!response.ok) { void response.body?.cancel().catch(() => undefined); return undefined; }
-    return record(await json(response));
-  } catch { return undefined; }
 }
 
 export async function loadFeatureNotices(env: WorkerEnv): Promise<readonly AdminNotice[]> {
