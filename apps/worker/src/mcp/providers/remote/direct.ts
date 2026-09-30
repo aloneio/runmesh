@@ -17,7 +17,9 @@ export function registerDirectRemoteTools(server: McpServer, port: RemoteToolPor
     annotations?: NonNullable<RemoteToolDefinition['annotations']>; _meta: Record<string, unknown> }; command: { profile_id: string; tool_id: string; version: string } }[] = [];
   if (directory?.state === 'listed') {
     const names = new Set<string>();
-    if (!/^[a-f0-9]{64}$/u.test(directory.view_version) || !Array.isArray(directory.tools) || directory.tools.length > 32 || catalogJson(directory, 524_288) === undefined) state = 'unavailable';
+    // Project the directory data; RPC envelope metadata is not catalog content.
+    const data = { state: directory.state, tools: directory.tools, view_version: directory.view_version };
+    if (!/^[a-f0-9]{64}$/u.test(directory.view_version) || !Array.isArray(directory.tools) || directory.tools.length > 32 || catalogJson(data, 524_288) === undefined) state = 'unavailable';
     else for (const entry of directory.tools) {
       if (!entry || typeof entry !== 'object' || Array.isArray(entry)) { state = 'unavailable'; break; }
       const definition = parseRemoteTool(entry.definition);

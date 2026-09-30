@@ -41,9 +41,13 @@ export function registerRemoteTools(server: McpServer, port: RemoteToolPort & { 
     _meta: { "runmesh/central_contract": 1 },
   }, async query => {
     const raw = await bounded(() => port.list(query), 7000);
-    if (raw === undefined || catalogJson(raw, CATALOG_LIMITS.snapshot_bytes) === undefined) return remoteFailure("dependency_unavailable", "not_started");
+    if (raw === undefined) return remoteFailure("dependency_unavailable", "not_started");
     if (raw.state !== "listed") return remoteFailure(raw.state === "denied" ? "permission_denied" : raw.state === "invalid" ? "invalid_request"
       : raw.state === "stale_cursor" ? "stale_catalog" : "dependency_unavailable", "not_started");
+    // RPC envelopes carry transport metadata (for example Symbol.dispose).
+    // Validate the declared data fields without serializing the transport wrapper.
+    if (catalogJson({ state: raw.state, tools: raw.tools, next_cursor: raw.next_cursor }, CATALOG_LIMITS.snapshot_bytes) === undefined)
+      return remoteFailure("dependency_unavailable", "not_started");
     if (!Array.isArray(raw.tools) || raw.tools.length > CATALOG_LIMITS.page_tools
       || (raw.next_cursor !== null && (typeof raw.next_cursor !== "string" || raw.next_cursor.length > CATALOG_LIMITS.cursor_bytes))) return remoteFailure("dependency_unavailable", "not_started");
     const tools = [];
