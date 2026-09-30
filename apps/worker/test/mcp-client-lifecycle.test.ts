@@ -32,9 +32,13 @@ async function fixture(native: boolean) {
     expect(instance.setClientRunnerOverride(clientId, "keep-runner", permissions, now)).toBe(true);
     expect(instance.setClientRunnerOverride(otherId, "keep-runner", permissions, now)).toBe(true);
   });
-  let unavailable = false;
+  let unavailableAction: "delete" | "revoke" | undefined;
+  let unavailableRead: string | undefined;
+  let malformedRead = false;
   const registry = { idFromName: () => id, get: () => ({ fetch: (request: Request) => {
-    if (unavailable && request.method === "DELETE") return Promise.resolve(new Response("unavailable", { status: 503 }));
+    if (request.method === "GET" && new URL(request.url).pathname === unavailableRead) return Promise.resolve(malformedRead ? Response.json({}) : new Response("unavailable", { status: 503 }));
+    if ((unavailableAction === "delete" && request.method === "DELETE")
+      || (unavailableAction === "revoke" && new URL(request.url).pathname.endsWith("/revoke"))) return Promise.resolve(new Response("unavailable", { status: 503 }));
     return stub.fetch(request);
   } }) } as unknown as typeof env.REGISTRY;
   const cookie = "__Host-runmesh_admin_session=" + session + "; __Host-runmesh_admin_csrf=" + csrf;
@@ -46,7 +50,7 @@ async function fixture(native: boolean) {
   });
   const mcp = () => request("/" + secret + "/mcp", { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }) });
-  return { stub, clientId, otherId, internal, open, submit, mcp, failDelete: () => { unavailable = true; } };
+  return { stub, clientId, otherId, internal, open, submit, mcp, failAction: (action: "delete" | "revoke") => { unavailableAction = action; }, failRead: (path?: string, malformed = false) => { unavailableRead = path; malformedRead = malformed; } };
 }
 
 it.each([false, true])("deletes active MCP clients and their overrides when computer access is %s", async native => {
@@ -65,7 +69,9 @@ it.each([false, true])("deletes active MCP clients and their overrides when comp
     expect(instance.listClientRunnerOverrides(f.otherId)).toHaveLength(1);
     expect(instance.getRunner("keep-runner")).toBeDefined();
   });
-  expect((await f.open("/admin/clients/" + encodeURIComponent(f.clientId))).status).toBe(404);
+  const missing = await f.open("/admin/clients/" + encodeURIComponent(f.clientId));
+  expect(missing.status).toBe(404);
+  expect(await missing.text()).toContain('aria-current="page" href="/admin/clients"');
   expect((await f.open("/admin")).status).toBe(200);
 });
 
@@ -80,7 +86,9 @@ it("revocation retains the client until it is deleted", async () => {
   expect(detail).toContain('/delete"');
   expect(detail).not.toContain('action="/admin/clients/client%3Atarget/revoke"');
   expect((await f.submit("delete")).status).toBe(303);
-  expect((await f.submit("delete")).status).toBe(404);
+  const repeated = await f.submit("delete");
+  expect(repeated.status).toBe(404);
+  expect(await repeated.text()).toContain('aria-current="page" href="/admin/clients"');
   expect((await f.open("/admin/clients")).status).toBe(200);
 });
 
@@ -93,17 +101,74 @@ it("deletion requires the current administrator and CSRF token", async () => {
   expect((await f.mcp()).status).toBe(200);
 });
 
-it("a failed deletion leaves the client and admin session available", async () => {
+it.each(["delete", "revoke"] as const)("a failed %s keeps the client, session and console navigation available", async action => {
   const f = await fixture(false);
-  f.failDelete();
-  const response = await f.submit("delete");
+  f.failAction(action);
+  const response = await f.submit(action);
   expect(response.status).toBe(503);
   expect(response.headers.get("set-cookie")).toBeNull();
+  const body = await response.text();
+  expect(body).toContain('<body class="ops-body">');
+  expect(body).toContain('aria-current="page" href="/admin/clients"');
+  expect(body).not.toContain('<body class="auth-body">');
   expect((await f.mcp()).status).toBe(200);
   expect((await f.open("/admin")).status).toBe(200);
   await runInDurableObject(f.stub, instance => {
     expect(instance.listClientRunnerOverrides(f.clientId)).toHaveLength(1);
   });
+});
+
+it.each(["/auth/clients", "/runners", "/auth/clients/client%3Atarget/runner-overrides"])("keeps failed %s reads distinct from absent clients or empty permissions", async path => {
+  const f = await fixture(true);
+  f.failRead(path);
+  const response = await f.open("/admin/clients/" + encodeURIComponent(f.clientId));
+  expect(response.status).toBe(503);
+  const body = await response.text();
+  expect(body).toContain('aria-current="page" href="/admin/clients"');
+  expect(body).not.toContain('class="scope-editor-form"');
+  expect(body).not.toContain("MCP client was not found.");
+  expect(response.headers.get("set-cookie")).toBeNull();
+  f.failRead();
+  expect((await f.open("/admin/clients/" + encodeURIComponent(f.clientId))).status).toBe(200);
+  expect((await f.mcp()).status).toBe(200);
+});
+
+it.each(["rename", "scopes", "active-runner"])("keeps invalid %s form submissions in the client console", async action => {
+  const f = await fixture(true);
+  const response = await f.submit(action);
+  expect(response.status).toBe(400);
+  expect(await response.text()).toContain('aria-current="page" href="/admin/clients"');
+  expect((await f.mcp()).status).toBe(200);
+});
+
+it("loads the Runner list independently of unavailable client storage", async () => {
+  const f = await fixture(true);
+  f.failRead("/auth/clients");
+  const response = await f.open("/admin/runners");
+  expect(response.status).toBe(200);
+  expect(await response.text()).toContain("keep-runner");
+});
+
+it.each([
+  ["/admin/clients", "/auth/clients"],
+  ["/admin/runners", "/runners"],
+  ["/admin", "/auth/clients"],
+].flatMap(([page, dependency]) => [false, true].map(malformed => ({ page: page!, dependency: dependency!, malformed }))))("keeps $page read failures distinct from empty data (malformed: $malformed)", async ({ page, dependency, malformed }) => {
+  const f = await fixture(true);
+  f.failRead(dependency, malformed);
+  const response = await f.open(page);
+  expect(response.status).toBe(503);
+  const body = await response.text();
+  expect(body).toContain('aria-current="page" href="' + page + '"');
+  expect(body).toContain("data-admin-error");
+  expect(body).not.toContain('class="metric-value"');
+  expect(response.headers.get("set-cookie")).toBeNull();
+  expect((await f.open("/admin/settings")).status).toBe(200);
+  f.failRead();
+  const recovered = await f.open(page);
+  expect(recovered.status).toBe(200);
+  expect(await recovered.text()).toContain(page === "/admin/runners" ? "keep-runner" : "Target client");
+  expect((await f.mcp()).status).toBe(200);
 });
 
 it.each([false, true])("offers localized revoke and delete actions on list and details when computer access is %s", async native => {
