@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "fc152a3b1d735ce025344898bd371226f536da3d36489f78631b3b6aa7aeb80f",
-      "bytes": 128154,
+      "sha256": "909a5a5aaaa901a2247387aa9fbae5239c06a38b3eff42635524787c449d6b05",
+      "bytes": 128629,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -32,8 +32,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "7f7211f46f276ed15a658cab7f2b0f529a2f5a4dd4002473270eea5345312601",
-      "bytes": 128742,
+      "sha256": "61afd5882f7df01698d15df7757d6396c157e1b1f94b78cc95714364c8aedc6f",
+      "bytes": 129217,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -51,8 +51,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "0a7606fb6ee41b3a48b4ac01e14b8d717d03c74c2941e172ebc781d4cefe1881",
-      "bytes": 129890,
+      "sha256": "495b693f8698d4777602b9044b5f2ccdfff3e8d016ecf43d5faf34e871b0bac0",
+      "bytes": 130365,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -217,8 +217,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "f224a1048d3b378c94d53aaa471ea86df0c0c988fdef2e9efbe16fda8236c14b",
-      "bytes": 4447,
+      "sha256": "3a9b5f797b74f097975101112db7405f86b62614c7c668166a94a9d71695006a",
+      "bytes": 4732,
       "original_sha256": "57a9afa644d0576c73376174bad5c663efe58c9490697670a4c5925b21280795",
       "original_bytes": 4110,
       "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label",
@@ -273,8 +273,8 @@
         [],
         "fixture-csrf-<>&\""
       ],
-      "sha256": "2e51d5097878ceec339c59002720158b1a45d157dad074db8bf59e989bf8a71a",
-      "bytes": 6495,
+      "sha256": "27a51eb97349bff5acd8407041f20a680e380ce2dfde18c03f2542809ca8accb",
+      "bytes": 7025,
       "original_sha256": "e8468030bfaefe12378b3a9a7541e59679236f3888f7b6b0e69ef759cc5f8d66",
       "original_bytes": 6638,
       "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label",
@@ -419,8 +419,8 @@
           }
         ]
       ],
-      "sha256": "d94090f873c8c79d2cbd93f822172aae71385280c932fba79878c0b341ecaf2c",
-      "bytes": 130239,
+      "sha256": "35934ff85fd67d919b6e6360500a8b4bbdfd0fb092371e0388b3cebbf1ec8a19",
+      "bytes": 130714,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -600,5 +600,17 @@
     ],
     "reviewed_change": "User-triggered MCP discovery starts OAuth automatically when authorization is required. Reconnect preserves sign-in progress through internal refresh; callback recovery never starts a new authorization. Replacing only the browser bundle reproduces every prior render hash and byte count. No screenshots.",
     "non_script_markup_unchanged": true
+  },
+  "client_lifecycle_review": {
+    "source_base": "acfa7fe5eeefa9004efbb878109401b8fb12b5df",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "clients-populated",
+      "client-detail",
+      "admin-document"
+    ],
+    "allowed_change": "Shared revoke/delete forms on MCP client list and details, including central-only clients, plus the reviewed deletion confirmation script. Other renderers remain unchanged."
   }
 }

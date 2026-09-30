@@ -1,17 +1,8 @@
 import { message } from "../i18n/messages.js";
 import type { AdminData } from "./view-models.js";
 import { arrayField, record, escapeHtml } from "./format.js";
-import { runnerList, clientList, clientCredentialBadge, jobTable } from "./tables.js";
+import { runnerList, clientList, jobTable } from "./tables.js";
 import { JOBS_EXPLANATION, jobSnapshotNote } from "./job-views.js";
-
-export function productOverviewPage(data: AdminData): string {
-  const connections = data.clients.slice(0, 5).map(client => '<li><a class="card-row" href="/admin/clients/' + encodeURIComponent(client.client_id) + '"><div class="card-row-main"><span class="strong" data-no-i18n>' + escapeHtml(client.label) + '</span><span class="card-row-sub">' + clientCredentialBadge(client.revoked_at_ms !== null) + '</span></div><span class="row-arrow">→</span></a></li>').join('');
-  return '<section class="page-heading"><div><p class="eyebrow">YOUR AI WORKSPACE</p><h1>Use your tools across AI clients</h1><p class="lede">Connect MCPs and install Skills, then add your AI clients.</p></div><a class="button" href="/admin/clients#add-client">Connect an AI client</a></section>'
-    + '<div class="central-grid"><section class="panel"><h2>1. Add MCPs and Skills</h2><p>Connect an MCP or install a Skill.</p><a class="button" href="/admin/central">Explore MCPs and Skills</a></section>'
-    + '<section class="panel"><h2>2. Connect your AI client</h2><p>Create a connection for each AI client to use your MCPs and Skills.</p><a class="button secondary" href="/admin/clients">Manage AI connections</a></section></div>'
-    + '<section class="panel"><div class="section-title"><h2>Your AI connections</h2><div class="actions"><a href="/admin/clients">View all</a><a class="button secondary" href="/admin">Refresh</a></div></div>' + (connections ? '<ul class="item-list">' + connections + '</ul>' : '<p class="empty">No AI clients connected yet. Create a connection to get started.</p>') + '</section>'
-    + '<details class="panel"><summary>Optional computer access</summary><p>Add a Runner when your AI client needs to work with files or run commands on your computer.</p><div class="actions"><a class="button secondary" href="/admin/runners">Manage computers and activity</a><a class="button secondary" href="/admin?history=1">View computer activity</a></div>' + (data.runners.length ? runnerList(data.runners.slice(0, 5)) : '') + '</details>';
-}
 
 export function overviewPage(data: AdminData, csrf: string): string {
   const online = data.runners.filter((runner) => runner.state === "online").length;

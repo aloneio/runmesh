@@ -105,13 +105,16 @@ export async function checkGuidedProduct(executable) {
   const context=await browser.newContext({viewport:{width:1365,height:1000}});
   const page=await context.newPage();page.on('pageerror',e=>exceptions.push(e.message));
   await page.goto(origin+'/admin');
-  assert.equal(await page.getByRole('heading',{name:'Use your tools across AI clients'}).count(),1);
+  assert.equal(await page.getByRole('heading',{name:'Dashboard',exact:true}).count(),1);
   assert.equal(await page.locator('h1').count(),1);
-  assert.equal(await page.locator('details').getAttribute('open'),null);
-  assert.equal(await page.getByText('Active shell jobs',{exact:true}).count(),0);
+  assert.equal(await page.getByText('Active shell jobs',{exact:true}).count(),1);
+  assert.equal(await page.getByRole('heading',{name:'Recent runners',exact:true}).count(),1);
+  await page.goto(origin+'/admin?history=1');
+  assert.equal(await page.getByRole('heading',{name:'Dashboard',exact:true}).count(),1);
+  assert.equal(await page.getByText('Active shell jobs',{exact:true}).count(),1);
   await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
   await page.setViewportSize({width:1365,height:1000});
-  await page.getByRole('link',{name:'Explore MCPs and Skills'}).click();
+  await page.locator('.control-nav a[href="/admin/central"]').click();
   await page.locator('[data-product-status]').filter({hasText:'List refreshed.'}).waitFor();
   await page.goto(origin+'/admin/central?setup=missing');
   const status=page.locator('[data-product-status]');await status.filter({hasText:'List refreshed.'}).waitFor();
@@ -388,7 +391,7 @@ export async function checkGuidedProduct(executable) {
   assert.equal(await page.locator('[data-central-product]').count(),0);
   const settledOAuth=page.waitForResponse(response=>response.url().endsWith('/connections/begin'));
   releaseOAuth();await(await settledOAuth).finished();await page.waitForLoadState('networkidle');controls.oauth.delayed=undefined;
-  assert.equal(new URL(page.url()).pathname,'/admin');assert.equal(await page.getByRole('heading',{name:'Use your tools across AI clients'}).count(),1);
+  assert.equal(new URL(page.url()).pathname,'/admin');assert.equal(await page.getByRole('heading',{name:'Dashboard',exact:true}).count(),1);
   await page.locator('.control-nav a[href="/admin/central"]').click();await status.filter({hasText:'List refreshed.'}).waitFor();
   await page.locator('[data-central-product][aria-busy="false"]').waitFor();
   assert.equal(await page.getByRole('button',{name:'Reconnect',exact:true}).isEnabled(),true);
@@ -507,7 +510,7 @@ export async function checkGuidedProduct(executable) {
   assert.equal(requests.slice(pausedRetry).filter(r=>r.path==='/admin/central/connections/begin').length,0);
   assert.equal(await savedOAuthCard.getByRole('button',{name:'Reconnect',exact:true}).isDisabled(),true);
   assert.deepEqual(exceptions,[]);
-  return {state:'passed',guided_homepage:true,direct_url_without_deployment_setup:true,service_immediate_tools:true,existing_connections_complete_automatically:true,pending_service_failure_isolation:true,recovery_refresh_failure_blocks_writes:true,oauth_return_recovers_other_services:true,connection_success_uses_refreshed_state:true,oauth_return_to_available_tools:true,paused_oauth_reconnect_guard:true,paused_service_discovery_guard:true,resume_refreshes_tools:true,no_legacy_service_credentials:true,oauth_extra_parameters_ignored:true,oauth_duplicate_parameters_rejected:true,oauth_provider_errors_not_reflected:true,direct_skill_install_and_confirmed_update:true,skill_file_folder_selection_switch:true,skill_selection_invalidates_confirmation:true,skill_pending_update_publication:true,skill_pause_and_resume:true,shared_library_without_client_assignment:true,retired_access_api_not_called:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,malformed_write_receipt_blocks_replay:true,detached_oauth_does_not_navigate:true,mobile_no_overflow:true,screenshots:0};
+  return {state:'passed',single_dashboard:true,direct_url_without_deployment_setup:true,service_immediate_tools:true,existing_connections_complete_automatically:true,pending_service_failure_isolation:true,recovery_refresh_failure_blocks_writes:true,oauth_return_recovers_other_services:true,connection_success_uses_refreshed_state:true,oauth_return_to_available_tools:true,paused_oauth_reconnect_guard:true,paused_service_discovery_guard:true,resume_refreshes_tools:true,no_legacy_service_credentials:true,oauth_extra_parameters_ignored:true,oauth_duplicate_parameters_rejected:true,oauth_provider_errors_not_reflected:true,direct_skill_install_and_confirmed_update:true,skill_file_folder_selection_switch:true,skill_selection_invalidates_confirmation:true,skill_pending_update_publication:true,skill_pause_and_resume:true,shared_library_without_client_assignment:true,retired_access_api_not_called:true,failed_refresh_blocks_writes:true,conflict_no_replay:true,malformed_write_receipt_blocks_replay:true,detached_oauth_does_not_navigate:true,mobile_no_overflow:true,screenshots:0};
  }finally{await browser?.close();await fixture.close();await rm(join(skillFolder,'SKILL.md'),{force:true});await rmdir(skillFolder);}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){

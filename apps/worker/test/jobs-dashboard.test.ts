@@ -37,9 +37,9 @@ async function fixture(statuses: string[] = ["succeeded"]) {
   return { open, saveHistory, stub, paths, runnerFetch, setReady: () => { ready = true; }, failSnapshot: () => { unavailable = true; } };
 }
 
-it("reads the correct dashboard response and counts active jobs outside the recent 20 records", async () => {
+it.each(["/admin", "/admin?history=1"])("reads the same dashboard and counts active jobs outside the recent 20 records at %s", async (path) => {
   const f = await fixture([...Array<string>(25).fill("running"), ...Array<string>(25).fill("succeeded")]);
-  const response = await f.open("/admin?history=1"); const text = await response.text();
+  const response = await f.open(path); const text = await response.text();
   expect(response.status).toBe(200); expect(response.headers.get("cache-control")).toBe("no-store");
   expect(text).toContain('Active shell jobs</span><strong class="metric-value">25</strong>');
   expect(text).toContain('href="/admin/runners/jobs-runner/jobs/job-49"');
@@ -109,18 +109,14 @@ it.each(["/admin?history=1", "/admin/runners/jobs-runner?history=jobs&limit=20",
 });
 
 
-it("opening dashboard and Runner details performs no Job or audit reads until requested", async () => {
+it("opening Runner details performs no Job or audit reads until requested", async () => {
   const f = await fixture();
-  for (const path of ["/admin","/admin/runners/jobs-runner"]) {
+  for (const path of ["/admin/runners/jobs-runner"]) {
     f.paths.length=0;
     const response = await f.open(path), body=await response.text();
     expect(response.status).toBe(200);
     expect(f.paths.some((p) => p === "/dashboard" || /\/(jobs|mcp-calls)(?:\?|$)/.test(p))).toBe(false);
-    if (path === "/admin") {
-      expect(body).toContain('href="/admin?history=1"');
-      expect(body).toContain('Your AI connections');
-      expect(body).not.toContain('Active shell jobs');
-    } else expect(body).toContain("Jobs not loaded.");
+    expect(body).toContain("Jobs not loaded.");
   }
 });
 

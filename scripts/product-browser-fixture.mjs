@@ -6,7 +6,7 @@ import { oauthLanding } from '../apps/worker/dist/http/oauth-landing.js';
 import { ADMIN_CSRF_COOKIE } from '../apps/worker/dist/http/constants.js';
 import { parseProfileCommand } from '../apps/worker/dist/contracts/connector-values.js';
 import { skillInstallation } from '../apps/worker/dist/domain/skills/install.js';
-import { productOverviewPage } from '../apps/worker/dist/admin/dashboard-views.js';
+import { overviewPage } from '../apps/worker/dist/admin/dashboard-views.js';
 import { clientsPage } from '../apps/worker/dist/admin/client-views.js';
 import { localizeUiText } from '../apps/worker/dist/i18n/legacy-text.js';
 import { requestLocale } from '../apps/worker/dist/i18n/locale.js';
@@ -31,7 +31,7 @@ export async function createProductFixture() {
    if(url.pathname==='/oauth-fixture'){res.statusCode=302;res.setHeader('location','/admin/central/connections/callback?state=fixture-state&code=fixture-code&iss=https://login.provider.com&scope=read&authuser=0');res.end();return;}
    if(url.pathname==='/late-oauth-fixture'){res.setHeader('content-type','text/html');res.end('<p>Unexpected detached OAuth redirect</p>');return;}
    if(url.pathname==='/admin/central/connections/callback'){const page=oauthLanding(locale);for(const [k,v] of page.headers)res.setHeader(k,v);res.end(await page.text());return;}
-   if(url.pathname==='/admin') {res.setHeader('content-type','text/html');res.end(adminDocument('Dashboard',productOverviewPage({clients:[],runners:[]}),'dashboard'));return;}
+   if(url.pathname==='/admin') {res.setHeader('content-type','text/html');res.end(adminDocument('Dashboard',overviewPage({clients:[],runners:[],jobs:[],snapshot:{runners:[],jobs:[]},notices:[]},'fixture-csrf'),'dashboard'));return;}
    if(url.pathname==='/admin/central') {res.setHeader('set-cookie',ADMIN_CSRF_COOKIE+'=fixture-csrf; Path=/; SameSite=Strict; Secure');res.setHeader('content-type','text/html');res.end(adminDocument('MCP & Skill',centralPage('fixture-csrf',true,true),'central').replace('<html lang="en">','<html lang="'+locale+'">'));return;}
    if(url.pathname==='/admin/clients') {
     res.setHeader('content-type','text/html');

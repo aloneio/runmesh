@@ -389,6 +389,7 @@ const definitions = {
   "text.client.name.is.invalid": { en: "Client name is invalid.", "zh-CN": "客户端名称无效。" },
   "text.client.update.failed": { en: "Client update failed.", "zh-CN": "客户端更新失败。" },
   "text.client.revoke.failed": { en: "Client revoke failed.", "zh-CN": "客户端撤销失败。" },
+  "client.delete.failed": { en: "Client deletion failed.", "zh-CN": "客户端删除失败。" },
   "text.client.rotation.failed": { en: "Client rotation failed.", "zh-CN": "客户端轮换失败。" },
   "text.password.change.is.invalid": { en: "Password change is invalid.", "zh-CN": "密码修改请求无效。" },
   "text.current.administrator.password.is.invalid": { en: "Current administrator password is invalid.", "zh-CN": "当前管理员密码无效。" },

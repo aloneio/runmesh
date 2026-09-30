@@ -295,6 +295,16 @@ export class RegistryAuth {
     return this.getMcpClient(clientId);
   }
 
+  public deleteMcpClient(clientId: string): boolean {
+    if (!isSafeIdentifier(clientId)) return false;
+    return this.storage.transactionSync(() => {
+      if (this.getMcpClient(clientId) === undefined) return false;
+      this.storage.sql.exec("DELETE FROM client_runner_overrides WHERE client_id = ?", clientId);
+      this.storage.sql.exec("DELETE FROM mcp_clients WHERE client_id = ?", clientId);
+      return true;
+    });
+  }
+
   public verifyMcpClient(secretVerifier: string, nowMs: number): VerifiedMcpClient | undefined {
     const identity = this.verifyMcpIdentity(secretVerifier, nowMs);
     return identity === undefined || identity.native_scopes.length === 0 ? undefined : {
