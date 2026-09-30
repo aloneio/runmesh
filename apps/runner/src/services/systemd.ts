@@ -15,7 +15,14 @@ export function createSystemdManager(mode: ServiceMode, executor: ServiceCommand
     const prefix = mode === "user" ? ["--user"] : [];
     return {
       platform, mode,
-      install: async () => { await execute("systemctl", [...prefix, "daemon-reload"]); await execute("systemctl", [...prefix, "enable", "--now", LINUX_SERVICE_NAME]); await execute("systemctl", [...prefix, "is-active", "--quiet", LINUX_SERVICE_NAME]); },
+      install: async () => {
+        await execute("systemctl", [...prefix, "daemon-reload"]);
+        await execute("systemctl", [...prefix, "enable", "--now", LINUX_SERVICE_NAME]);
+        // Type=simple may report active before exec fails under the service
+        // account. Apply the same stability window used for a restart.
+        await new Promise((resolve) => setTimeout(resolve, SERVICE_STARTUP_STABILITY_DELAY_MS));
+        await execute("systemctl", [...prefix, "is-active", "--quiet", LINUX_SERVICE_NAME]);
+      },
       stop: async () => execute("systemctl", [...prefix, "stop", LINUX_SERVICE_NAME]),
       // Rollback of a previously disabled/masked/linked unit must not call
       // install(), because install enables and starts the unit.  Probe the

@@ -140,8 +140,12 @@ async function securePosixInstallTree(required: (file: string, args: readonly st
   const traversal = platform === "darwin" ? ["-P", "-x", root] : ["-P", root, "-xdev"];
   await required("find", [...traversal, "-type", "d", "-exec", "chown", owner, "{}", "+"]);
   await required("find", [...traversal, "-type", "f", "-exec", "chown", owner, "{}", "+"]);
-  await required("find", [...traversal, "-type", "d", "-exec", "chmod", "a-w", "{}", "+"]);
-  await required("find", [...traversal, "-type", "f", "-exec", "chmod", "a-w", "{}", "+"]);
+  // Bootstrap uses umask 077. Removing write access alone strands the
+  // dedicated account outside private package directories. Package code is
+  // public; normalize read/traverse access while keeping every inode read-only
+  // and preserving which files are executable. Credentials live elsewhere.
+  await required("find", [...traversal, "-type", "d", "-exec", "chmod", "0555", "{}", "+"]);
+  await required("find", [...traversal, "-type", "f", "-exec", "chmod", "a=rX", "{}", "+"]);
 }
 
 async function provisionMacIdentity(execute: (file: string, args: readonly string[]) => Promise<ServiceCommandResult>, required: (file: string, args: readonly string[]) => Promise<void>, user: string, group: string): Promise<void> {
