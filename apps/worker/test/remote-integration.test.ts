@@ -12,6 +12,18 @@ import type { WorkerEnv } from "../src/platform/env.js";
 import type { CentralRemote } from "../src/contracts/remote.js";
 import type { CentralDirectoryReader } from "../src/contracts/catalog.js";
 import type { CentralToolVisibilityReader } from "../src/contracts/capabilities.js";
+import { invokeRemote } from "../src/mcp/providers/remote.js";
+
+it.each(["not_started", "unknown", "completed"] as const)("W05 busy recovery guidance preserves the %s operation state", async operation_state => {
+  const response = await invokeRemote({ list: async () => ({ state: "invalid" }),
+    call: async () => ({ state: "failed", code: "busy", operation_state }) }, {});
+  expect(response.isError).toBe(true);
+  const { error } = JSON.parse(response.content[0]!.text);
+  expect(error).toMatchObject({ code: "remote_busy", failure_class: "capacity", operation_state,
+    next_action: operation_state === "not_started" ? "wait_for_capacity" : "inspect_upstream_state" });
+  if (operation_state === "not_started") expect(error.recovery_hint).toBe("The MCP connection is busy. Wait briefly, then try again.");
+  else expect(error.recovery_hint).not.toContain("then try again");
+});
 
 const endpoint = "https://remote.example.com/mcp";
 const registry = () => env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
