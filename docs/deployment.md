@@ -102,7 +102,7 @@ Production installation uses the activated stable release. Development discovers
 
 The default `dedicated_user` mode requires explicit OS access to approved workspaces. `runmesh install` provisions Runmesh-owned accounts/directories and starts the service; administrators grant project-directory access separately. Privileged execution requires `--execution-mode privileged_host --confirm-privileged-host`.
 
-POSIX owner-only profiles use directory/file modes `0700`/`0600`. A dedicated system service uses the controlled root/group boundary with `0750`/`0640`. Windows provisioning applies Local Service ACLs to Runmesh-owned paths. Protect profiles as long-lived credentials.
+POSIX owner-only profiles use directory/file modes `0700`/`0600`. A dedicated system service uses the controlled root/group boundary with `0750`/`0640` for its configuration. Runtime state, including policies and Jobs, remains private to the service identity with `0700`/`0600`, including after upgrades and reinstalls. Windows provisioning applies Local Service ACLs to Runmesh-owned paths. Protect profiles as long-lived credentials.
 
 Use the actual service executable for `runmesh --version`, with no additional arguments. Use `doctor --json` for configuration and host-service checks; add `--profile` for a custom profile or `--user` for the current user's service. `status --json` shows the redacted profile summary. Check Windows ACLs separately when diagnosing access.
 

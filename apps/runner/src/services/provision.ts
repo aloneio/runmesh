@@ -71,9 +71,11 @@ export function createServiceProvisioner(options: ServiceProvisionerOptions = {}
         await required("chown", ["root:root", layout.installRoot]); await required("chmod", ["0755", layout.installRoot]);
         await securePosixInstallTree(required, layout.installRoot, "root:root", platform);
         await required("chown", [`root:${identity.group}`, layout.configRoot]); await required("chmod", ["0750", layout.configRoot]);
-        await required("chown", [`${identity.user}:${identity.group}`, layout.stateRoot, layout.logRoot]); await required("chmod", ["0750", layout.stateRoot, layout.logRoot]);
+        await required("chown", [`${identity.user}:${identity.group}`, layout.stateRoot, layout.logRoot]); await required("chmod", ["0750", layout.logRoot]);
         await securePosixTree(required, layout.configRoot, `root:${identity.group}`, "0750", "0640", platform);
-        await securePosixTree(required, layout.stateRoot, `${identity.user}:${identity.group}`, "0750", "0640", platform);
+        // Runtime policy and job stores require owner-only state, including
+        // existing files when provisioning an upgrade or reinstall.
+        await securePosixTree(required, layout.stateRoot, `${identity.user}:${identity.group}`, "0700", "0600", platform);
         await securePosixTree(required, layout.logRoot, `${identity.user}:${identity.group}`, "0750", "0640", platform);
         if ((await execute("test", ["-f", profilePath])).exitCode === 0) {
           await required("chown", [`root:${identity.group}`, profilePath]); await required("chmod", ["0640", profilePath]);
@@ -104,9 +106,9 @@ export function createServiceProvisioner(options: ServiceProvisionerOptions = {}
         await required("chown", ["root:wheel", layout.installRoot]); await required("chmod", ["0755", layout.installRoot]);
         await securePosixInstallTree(required, layout.installRoot, "root:wheel", platform);
         await required("chown", [`root:${identity.group}`, layout.configRoot]); await required("chmod", ["0750", layout.configRoot]);
-        await required("chown", [`${identity.user}:${identity.group}`, layout.stateRoot, layout.logRoot]); await required("chmod", ["0750", layout.stateRoot, layout.logRoot]);
+        await required("chown", [`${identity.user}:${identity.group}`, layout.stateRoot, layout.logRoot]); await required("chmod", ["0750", layout.logRoot]);
         await securePosixTree(required, layout.configRoot, `root:${identity.group}`, "0750", "0640", platform);
-        await securePosixTree(required, layout.stateRoot, `${identity.user}:${identity.group}`, "0750", "0640", platform);
+        await securePosixTree(required, layout.stateRoot, `${identity.user}:${identity.group}`, "0700", "0600", platform);
         await securePosixTree(required, layout.logRoot, `${identity.user}:${identity.group}`, "0750", "0640", platform);
         if ((await execute("test", ["-f", profilePath])).exitCode === 0) {
           await required("chown", [`root:${identity.group}`, profilePath]); await required("chmod", ["0640", profilePath]);
