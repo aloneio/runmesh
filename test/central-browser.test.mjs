@@ -88,10 +88,17 @@ test("a missing service is not mistaken for an empty catalog", async t => {
   await assert.rejects(api.request("catalogs/service", undefined, true), /operationCouldNotBeConfirmedRefreshTheCurrentState/u);
 });
 
-test("discovery awaiting authorization keeps sign-in guidance without claiming publication", async t => {
+test("discovery awaiting authorization returns a workflow result without claiming publication", async t => {
   const api = client(t, () => Response.json({ state: "authorization_required" }));
-  await assert.rejects(api.request("discovery/service", { expected_revision: 0 }), /signInToThisServiceAgainUsingReconnect/u);
+  assert.deepEqual(await api.request("discovery/service", { expected_revision: 0 }), { state: "authorization_required" });
   assert.equal(api.requests.length, 1);
+  assert.equal(api.refreshRequired(), false);
+});
+
+for (const [path, status] of [["connections/begin", 200], ["profiles/service", 200], ["discovery/service", 503]])
+test("authorization-required is only a successful discovery result: " + path + " " + status, async t => {
+  const api = client(t, () => Response.json({ state: "authorization_required" }, { status }));
+  await assert.rejects(api.request(path, {}));
   assert.equal(api.refreshRequired(), true);
 });
 

@@ -106,6 +106,7 @@ export async function checkGuidedProduct(executable) {
  const profiles=[], library=[], requests=[], exceptions=[];
  let conflict=false, failLibrary=false, rejectDiscovery=false, rejectOAuthStart=false, rejectOAuthComplete=false, invalidCatalogReceipt=false, delayedOAuth;
  let rejectedProfile, afterDiscovery, afterSkillInstallation, delayedDiscovery, failRefreshAfterRejection=false;
+ let authorizeDiscoveryOnComplete=false, uncertainAuthorization=false;
  const catalogs=new Map();
  const server=createServer(async(req,res)=>{
   try {
@@ -132,6 +133,7 @@ export async function checkGuidedProduct(executable) {
     else{const p=profiles.find(p=>p.profile_id===id);assert.equal(body.expected_revision,p.revision);p.revision++;if(body.action==='enable'||body.action==='disable')p.enabled=body.action==='enable';value={state:'written',profile:p};}
    }else if(kind==='connections'){
     assert.equal(req.headers['x-csrf-token'],'fixture-csrf');
+    if(id==='complete'&&!body.error&&authorizeDiscoveryOnComplete){rejectDiscovery=false;authorizeDiscoveryOnComplete=false;}
     if(id==='begin'){const pending=delayedOAuth;if(pending)await pending;if(rejectOAuthStart){code=503;value={error:{code:'oauth_provider_unsupported',operation_state:'not_started'}};}else value={state:'started',profile_id:body.profile_id,authorization_url:pending?'/late-oauth-fixture':'/oauth-fixture'};}
     else if(id==='complete'){if(body.error){assert.deepEqual(body,{state:'cancel-state',error:'access_denied'});code=503;value={error:{code:'oauth_reauthorization_required'}};}else{assert.deepEqual(body,{state:'fixture-state',iss:'https://login.provider.com',code:'fixture-code'});if(rejectOAuthComplete){code=503;value={error:{code:'oauth_unavailable',operation_state:'unknown'}};}else value={state:'linked',profile_id:profiles.at(-1).profile_id};}}
     else value={state:'revoked',profile_id:body.profile_id};
@@ -148,6 +150,7 @@ export async function checkGuidedProduct(executable) {
     assert.equal(body.expected_revision,catalogs.get(id)?.head.revision??0);
     if(conflict){code=409;value={state:'conflict',current_revision:body.expected_revision+1};}
     else if(invalidCatalogReceipt)value={state:'listed',catalogs:[],next_after:null};
+    else if(uncertainAuthorization){code=503;value={error:{code:'remote_authorization_required',operation_state:'unknown'}};}
     else if(rejectDiscovery||id===rejectedProfile){value={state:'authorization_required'};if(failRefreshAfterRejection)failLibrary=true;}
     else{
     const head={profile_id:id,revision:body.expected_revision+1,observed_digest:digest,approved_digest:digest,approved_names:['search']};
@@ -284,6 +287,39 @@ export async function checkGuidedProduct(executable) {
   assert.equal(await publicCard.getByRole('button',{name:'Refresh tools',exact:true}).isEnabled(),true);
   assert.equal(await publicCard.getByText('Enable this MCP to refresh its tools.',{exact:true}).count(),0);
   assert.equal(requests.filter(r=>r.path.startsWith('/admin/central/discovery/')).length,discoveries+2);
+  // User-triggered discovery continues directly to sign-in when OAuth is missing.
+  for(const action of ['Refresh tools','Enable']){
+   if(action==='Enable'){await oauthCard.getByRole('button',{name:'Pause',exact:true}).click();await status.filter({hasText:'List refreshed.'}).waitFor();}
+   rejectDiscovery=true;authorizeDiscoveryOnComplete=true;
+   const start=requests.length;
+   await oauthCard.getByRole('button',{name:action,exact:true}).click();
+   await status.filter({hasText:'Connected.'}).waitFor();await page.waitForLoadState('networkidle');
+   const flow=requests.slice(start);
+   assert.equal(flow.filter(r=>r.path==='/admin/central/connections/begin').length,1,'One click starts one OAuth handoff: '+action);
+   assert.equal(flow.filter(r=>r.path==='/admin/central/connections/complete').length,1);
+   assert.equal(flow.filter(r=>r.path==='/admin/central/discovery/'+oauthId).length,2,'Discover before authorization and publish after callback');
+   assert.equal(flow.find(r=>r.path==='/admin/central/connections/begin').body.expected_revision,profiles.find(p=>p.profile_id===oauthId).revision);
+  }
+  // Failed authorization after a callback cannot redirect in a loop, even on reload.
+  rejectDiscovery=true;
+  const noLoopStart=requests.length;
+  await oauthCard.getByRole('button',{name:'Refresh tools',exact:true}).click();
+  await status.filter({hasText:'Select Reconnect to sign in to this MCP again.'}).waitFor();await page.waitForLoadState('networkidle');
+  assert.equal(requests.slice(noLoopStart).filter(r=>r.path==='/admin/central/connections/begin').length,1);
+  catalogs.delete(oauthId);await page.reload();
+  await status.filter({hasText:'Select Reconnect to sign in to this MCP again.'}).waitFor();await page.waitForLoadState('networkidle');
+  assert.equal(requests.slice(noLoopStart).filter(r=>r.path==='/admin/central/connections/begin').length,1,'Background recovery does not restart authorization');
+  // A public MCP and an uncertain failure must never silently initiate OAuth.
+  for(const card of [publicCard,oauthCard]){
+   uncertainAuthorization=card===oauthCard;
+   const start=requests.length;
+   await card.getByRole('button',{name:'Refresh tools',exact:true}).click();
+   await status.filter({hasText:'Select Reconnect to sign in to this MCP again.'}).waitFor();await page.waitForLoadState('networkidle');
+   assert.equal(requests.slice(start).filter(r=>r.path==='/admin/central/connections/begin').length,0);
+  }
+  uncertainAuthorization=false;rejectDiscovery=false;
+  await page.locator('[data-product-refresh]').click();await status.filter({hasText:'List refreshed.'}).waitFor();
+  await oauthCard.getByRole('button',{name:'Refresh tools',exact:true}).click();await status.filter({hasText:'Connected.'}).waitFor();
   assert.equal(await page.locator('[data-service-list] input[type=password]').count(),0);
   assert.equal(await page.getByText('Update service credentials',{exact:true}).count(),0);
   await page.locator('[data-central-tab=skills]').click();
@@ -414,6 +450,7 @@ export async function checkGuidedProduct(executable) {
   let releaseOAuth;delayedOAuth=new Promise(resolve=>{releaseOAuth=resolve;});
   const pendingOAuth=page.waitForRequest(request=>request.url().endsWith('/connections/begin'));
   await page.getByRole('button',{name:'Reconnect',exact:true}).click();await pendingOAuth;
+  assert.equal(await status.textContent(),'Opening the MCP sign-in page…','Internal reconciliation must not replace sign-in progress with List refreshed');
   await page.locator('.control-nav a[href="/admin"]').click();await page.waitForURL(url=>url.pathname==='/admin');
   assert.equal(await page.locator('[data-central-product]').count(),0);
   const settledOAuth=page.waitForResponse(response=>response.url().endsWith('/connections/begin'));

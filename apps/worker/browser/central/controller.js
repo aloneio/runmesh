@@ -74,7 +74,7 @@ export function bindCentralProduct(root) {
       lockedControls.clear();
     }
   }
-  async function refresh() {
+  async function refresh({ silent = false } = {}) {
     mustRefresh = true;
     view.invalidate();
     profiles = await client.list('profiles', 'profiles');
@@ -83,7 +83,7 @@ export function bindCentralProduct(root) {
     skillWorkflow.render(skills);
     if (busy) lockControls();
     mustRefresh = false;
-    say(t('libraryIsUpToDate'));
+    if (!silent) say(t('libraryIsUpToDate'));
     return profiles;
   }
   app.querySelector('[data-product-refresh]').addEventListener('click', function () {

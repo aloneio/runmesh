@@ -44,7 +44,7 @@ export function createCentralApi({
       assertCurrent();
       if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(t('unexpectedResponseRefreshBeforeMakingAnotherChange'));
       if (missing && body === undefined && path.startsWith('catalogs/') && response.ok && value.state === 'empty') return null;
-      if (body && path.startsWith('discovery/') && response.ok && value.state === 'authorization_required') throw new Error(t('signInToThisServiceAgainUsingReconnect'));
+      if (body && path.startsWith('discovery/') && response.ok && value.state === 'authorization_required') return value;
       if (!response.ok) {
         var code = value.error && value.error.code;
         // Only confirmed pre-validation failures allow correcting the form directly.
