@@ -56,7 +56,7 @@ export function runnerDetailPage(presentation: RunnerDetailPresentation, runner:
   const runnerValidityStatus = runner.validity_status === "scheduled" || runner.validity_status === "expired" || runner.validity_status === "active" ? runner.validity_status : validityStatus({ valid_from_ms: runnerFrom, valid_until_ms: runnerUntil });
   const enrollmentFrom = typeof enrollment?.not_before_ms === "number" && enrollment.not_before_ms > 0 ? enrollment.not_before_ms : null;
   const enrollmentUntil = typeof enrollment?.expires_at_ms === "number" ? enrollment.expires_at_ms : null;
-  const enrollmentStatus = enrollment === undefined ? "none" : validityStatus({ valid_from_ms: enrollmentFrom, valid_until_ms: enrollmentUntil });
+  const enrollmentStatus = enrollment === undefined ? "none" : typeof enrollment.used_at_ms === "number" ? "used" : validityStatus({ valid_from_ms: enrollmentFrom, valid_until_ms: enrollmentUntil });
   const validityDaysInput = (value: number | null, allowZero = false): string => {
     if (value === null || value <= Date.now()) return allowZero ? "0" : "1";
     return String(Math.min(presentation.maxValidityDays, Math.max(1, Math.ceil((value - Date.now()) / presentation.dayMs))));
@@ -137,8 +137,8 @@ export function runnerDetailPage(presentation: RunnerDetailPresentation, runner:
       <form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/validity" class="form-grid validity-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>${message("text.valid.days", "en")}<input type="number" name="runner_valid_days" value="${escapeHtml(validityDaysInput(runnerUntil, true))}" min="0" max="${presentation.maxValidityDays}" step="1" inputmode="numeric" required></label><p class="muted font-12 full-width-submit">${message("text.0.means.no.expiry.saving.starts.a.new.authorization.window.now", "en")}</p><div class="form-submit-wrap full-width-submit"><button class="button">${message("text.save.authorization.window", "en")}</button></div></form>
     </section>
     <section class="panel">
-      <div class="section-title"><h2>${message("text.latest.enrollment.code", "en")}</h2><span class="badge ${enrollmentStatus === "active" ? "online" : enrollmentStatus === "scheduled" ? "pending" : enrollmentStatus === "expired" ? "offline" : "invalid"}">${escapeHtml(enrollmentStatus)}</span></div>
-      <p class="muted font-12">${message("text.codes.are.single.use.only.timing.metadata.is.retained.the.code.itself.is.never.stored.or.s", "en")}</p>
+      <div class="section-title"><h2>${message("text.latest.enrollment.code", "en")}</h2><span class="badge ${enrollmentStatus === "active" ? "online" : enrollmentStatus === "scheduled" ? "pending" : enrollmentStatus === "expired" || enrollmentStatus === "used" ? "offline" : "invalid"}">${enrollmentStatus === "used" ? message("text.enrollment.used", "en") : escapeHtml(enrollmentStatus)}</span></div>
+      <p class="muted font-12">${message("text.enrollment.single.use.help", "en")}</p>
       <dl class="details"><dt>${message("text.active.from", "en")}</dt><dd class="mono">${escapeHtml(time(enrollmentFrom))}</dd><dt>${message("text.expires.at", "en")}</dt><dd class="mono">${escapeHtml(time(enrollmentUntil))}</dd><dt>${message("text.consumed", "en")}</dt><dd class="mono">${escapeHtml(time(typeof enrollment?.used_at_ms === "number" ? enrollment.used_at_ms : null))}</dd></dl>
       <form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment" class="form-grid validity-form">${executionModeFormFields(executionMode ?? undefined, csrf, false)}${windowFields("code", presentation.maxValidityDays)}<div class="form-submit-wrap full-width-submit"><button class="button secondary">${message("text.generate.new.enrollment.code", "en")}</button></div></form>
     </section>
