@@ -8,9 +8,9 @@ import { runnerRegistryFaults } from "./runner-registry-faults.js";
  * Only the socket transport and the existing Registry request port are simulated. */
 export async function runnerSession(state: DurableObjectState, env: WorkerEnv, options: {
   history?: boolean; credentialVersion?: number; lifecycleId?: string;
-  runnerId?: string; connectionEpoch?: number; policy?: RunnerPolicy;
+  runnerId?: string; sessionId?: string; connectionEpoch?: number; policy?: RunnerPolicy;
 } = {}) {
-  const runnerId = options.runnerId ?? "r", sessionId = "session-test", connectionEpoch = options.connectionEpoch ?? 1;
+  const runnerId = options.runnerId ?? "r", sessionId = options.sessionId ?? "session-test", connectionEpoch = options.connectionEpoch ?? 1;
   const credentialVersion = options.credentialVersion ?? 1, lifecycleId = options.lifecycleId ?? "session-fixture-lifecycle";
   const input = { schema_version: 1 as const, runner_id: runnerId, revision: 1,
     runner_permissions: { read: true, edit: true, shell: true, job_control: true }, workspaces: [] };
@@ -48,10 +48,10 @@ export async function runnerSession(state: DurableObjectState, env: WorkerEnv, o
       connection_epoch: connectionEpoch, credential_version: credentialVersion, session_id: sessionId, lifecycle_id: lifecycleId });
     throw new Error("Unexpected fixture Registry route: " + action);
   });
-  const request = async (path: string, body: Record<string, unknown>) => {
-    const payload = JSON.stringify(body);
-    const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET!, "POST", path, payload);
-    return runner.fetch(new Request("https://runner.internal" + path, { method: "POST", headers, body: payload }));
+  const request = async (path: string, body?: Record<string, unknown>) => {
+    const method = body === undefined ? "GET" : "POST", payload = body === undefined ? "" : JSON.stringify(body);
+    const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET!, method, path, payload);
+    return runner.fetch(new Request("https://runner.internal" + path, { method, headers, ...(body === undefined ? {} : { body: payload }) }));
   };
   await runner.webSocketMessage(socket, encodeWireFrame({ type: "runner.hello", protocol_version: PROTOCOL_CURRENT_VERSION,
     request_id: "hello-session", min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION,
