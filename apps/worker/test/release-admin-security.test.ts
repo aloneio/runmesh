@@ -134,6 +134,77 @@ it("retains the authenticated console and session when a Runner deletion fence i
   expect(next.status).toBe(200); expect(next.headers.get("location")).toBeNull(); await next.body?.cancel();
 });
 
+it.each(["create", "rename", "rotate", "enrollment", "validity", "permissions", "version-policy", "emergency-lock", "workspace-create", "workspace-update", "workspace-delete", "history-settings"])("keeps invalid Runner %s forms inside the authenticated console", async action => {
+  const f = await fixture();
+  const path = action === "create" ? "/admin/runners" : "/admin/runners/form-test/" + action;
+  const response = await worker.fetch(new Request("https://audit.test" + path, {
+    method: "POST", headers: f.headers,
+    body: new URLSearchParams({ csrf_token: f.csrf, runner_valid_days: "invalid", enrollment_ttl_ms: "invalid" }),
+  }), f.localEnv, {} as ExecutionContext);
+  expect(response.status).toBe(400); expect(response.headers.get("set-cookie")).toBeNull();
+  const page = await response.text();
+  expect(page).toContain('aria-current="page" href="/admin/runners"');
+  expect(page).toContain("data-admin-error"); expect(page).not.toContain('<body class="auth-body">');
+});
+
+it.each(["create", "rotate", "enrollment", "rename", "version-policy"])("retains console navigation when Runner %s dependencies fail", async action => {
+  const f = await fixture(), runnerId = "action-unavailable";
+  const localEnv = { ...f.localEnv, REGISTRY: { idFromName: f.localEnv.REGISTRY.idFromName, get: () => ({ fetch: (request: Request) => {
+    const path = new URL(request.url).pathname;
+    return path === "/runners/" + runnerId || path === "/runners/" + runnerId + "/execution-state" || path === "/runners/" + runnerId + "/rename" || path === "/auth/runners/" + runnerId + "/version-policy"
+      ? Promise.resolve(new Response("PRIVATE_FAILURE", { status: 503 })) : f.stub.fetch(request);
+  } }) } } as unknown as typeof env;
+  const path = action === "create" ? "/admin/runners" : "/admin/runners/" + runnerId + "/" + action;
+  const response = await worker.fetch(new Request("https://audit.test" + path, { method: "POST", headers: f.headers,
+    body: new URLSearchParams({ csrf_token: f.csrf, runner_id: runnerId, display_name: "Test Runner", execution_mode: "dedicated_user", expected_execution_mode: "dedicated_user", update_channel: "stable" }),
+  }), localEnv, {} as ExecutionContext);
+  expect(response.status).toBe(503); expect(response.headers.get("set-cookie")).toBeNull();
+  const page = await response.text();
+  expect(page).toContain('aria-current="page" href="/admin/runners"'); expect(page).not.toContain("PRIVATE_FAILURE");
+  const recovered = await worker.fetch(new Request("https://audit.test/admin/runners", { headers: f.headers }), f.localEnv, {} as ExecutionContext);
+  expect(recovered.status).toBe(200); await recovered.body?.cancel();
+});
+
+it.each(["runner", "workspaces", "enrollment"].flatMap(part => [false, true].map(malformed => ({ part, malformed }))))("distinguishes unavailable Runner $part details from empty settings (malformed: $malformed)", async ({ part, malformed }) => {
+  const f = await fixture(), runnerId = "detail-unavailable";
+  await runInDurableObject(f.stub, instance => { expect(instance.registerRunner(runnerId, "synthetic", Date.now(), undefined, "dedicated_user")).toBe(true); });
+  const paths: Record<string, string> = { runner: "/runners/" + runnerId, workspaces: "/auth/runners/" + runnerId + "/managed-workspaces", enrollment: "/auth/runners/" + runnerId + "/enrollments" };
+  const localEnv = { ...f.localEnv, REGISTRY: { idFromName: f.localEnv.REGISTRY.idFromName, get: () => ({ fetch: (request: Request) =>
+    new URL(request.url).pathname === paths[part] ? Promise.resolve(malformed ? Response.json({}) : new Response("PRIVATE_FAILURE", { status: 503 })) : f.stub.fetch(request),
+  }) } } as unknown as typeof env;
+  const response = await worker.fetch(new Request("https://audit.test/admin/runners/" + runnerId, { headers: f.headers }), localEnv, {} as ExecutionContext);
+  expect(response.status).toBe(503); expect(response.headers.get("set-cookie")).toBeNull();
+  const page = await response.text();
+  expect(page).toContain('aria-current="page" href="/admin/runners"');
+  expect(page).not.toContain("Runner was not found."); expect(page).not.toContain("PRIVATE_FAILURE");
+  expect(page).not.toContain('action="/admin/runners/' + runnerId + '/workspace-create"');
+  const recovered = await worker.fetch(new Request("https://audit.test/admin/runners/" + runnerId, { headers: f.headers }), f.localEnv, {} as ExecutionContext);
+  expect(recovered.status).toBe(200); await recovered.body?.cancel();
+});
+
+it("keeps a confirmed missing Runner inside the console", async () => {
+  const f = await fixture();
+  const response = await worker.fetch(new Request("https://audit.test/admin/runners/missing-runner", { headers: f.headers }), f.localEnv, {} as ExecutionContext);
+  expect(response.status).toBe(404); expect(response.headers.get("set-cookie")).toBeNull();
+  const page = await response.text();
+  expect(page).toContain("Runner was not found."); expect(page).toContain('aria-current="page" href="/admin/runners"');
+});
+
+it.each(["history-settings", "mcp-calls"].flatMap(part => [false, true].map(malformed => ({ part, malformed }))))("keeps Runner management available when optional $part fails (malformed: $malformed)", async ({ part, malformed }) => {
+  const f = await fixture(), runnerId = "optional-unavailable";
+  await runInDurableObject(f.stub, instance => { expect(instance.registerRunner(runnerId, "synthetic", Date.now(), undefined, "dedicated_user")).toBe(true); });
+  const localEnv = { ...f.localEnv, REGISTRY: { idFromName: f.localEnv.REGISTRY.idFromName, get: () => ({ fetch: (request: Request) =>
+    new URL(request.url).pathname === "/runners/" + runnerId + "/" + part ? Promise.resolve(malformed ? Response.json({}) : new Response("PRIVATE_FAILURE", { status: 503 })) : f.stub.fetch(request),
+  }) } } as unknown as typeof env;
+  const response = await worker.fetch(new Request("https://audit.test/admin/runners/" + runnerId + "?history=audit", { headers: f.headers }), localEnv, {} as ExecutionContext);
+  expect(response.status).toBe(200);
+  const page = await response.text();
+  expect(page).toContain('action="/admin/runners/' + runnerId + '/workspace-create"');
+  expect(page).toContain(part === "history-settings" ? "History settings unavailable." : "Audit history unavailable.");
+  expect(page).not.toContain("PRIVATE_FAILURE");
+  if (part === "history-settings") expect(page).not.toContain('action="/admin/runners/' + runnerId + '/history-settings"');
+});
+
 it.each(["create", "rotate"] as const)("does not display an unconfirmed MCP %s credential", async action => {
   const f = await fixture(), original = f.localEnv.REGISTRY.get.bind(f.localEnv.REGISTRY);
   const path = action === "create" ? "/auth/clients" : "/auth/clients/test-client/rotate";

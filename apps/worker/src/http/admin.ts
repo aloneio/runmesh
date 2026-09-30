@@ -1,17 +1,15 @@
 import { matchIdentifierPath } from "./path-identifiers.js";
 import { developmentReleaseDependencies } from "./release-cache.js";
 import type { DevelopmentReleaseRefreshScheduler } from "../distribution/release.js";
-import { runnerDetail as projectRunnerDetail } from "../application/admin-projections.js";
 import { ADMIN_CSRF_COOKIE } from "./constants.js";
 import { ADMIN_SESSION_COOKIE } from "./constants.js";
 import { adminDocument } from "../admin/layout.js";
 import { centralPage } from "../admin/central-view.js";
 import { adminError } from "./responses.js";
-import { adminClientError, adminSectionError, adminUpstreamError } from "./responses.js";
+import { adminClientError, adminRunnerError, adminSectionError, adminUpstreamError } from "./responses.js";
 import { boundedJsonResponse } from "../bounded-json.js";
 import { adminPage } from "./admin-presentation.js";
 import { adminSession } from "./session.js";
-import { arrayField } from "../values.js";
 import { changePassword } from "./auth.js";
 import { clearCookie } from "./session.js";
 import { clientDetailPage } from "../admin/client-views.js";
@@ -27,11 +25,10 @@ import { historyView } from "../history-ui.js";
 import { html } from "./html-response.js";
 import { installerOriginUnavailable } from "./distribution.js";
 import { isSafeIdentifier } from "../security.js";
-import { json } from "../platform/control-plane.js";
 import { loadAdminJobPage } from "../admin-jobs.js";
 import { loadClientDetailData, loadAdminPageData } from "./admin-query.js";
 import { loadFeatureNotices } from "./admin-query.js";
-import { loadLiveJobs } from "../application/runner-queries.js";
+import { loadRunnerDetailData } from "./runner-detail-query.js";
 import { MAX_VALIDITY_DAYS } from "../domain/execution-mode.js";
 import { methodNotAllowed } from "./responses.js";
 import { notFound } from "./responses.js";
@@ -94,7 +91,7 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
       const readiness = await policyReadiness(env,runnerId);
       return readiness.ok ? runnerRpc(env,runnerId,"job.get",params,readiness.value.applied_revision,readiness.value.active_checksum) : undefined;
     });
-    return page.ok ? html(adminDocument(page.title, page.body, "runners")) : adminError(page.status, page.message);
+    return page.ok ? html(adminDocument(page.title, page.body, "runners")) : adminRunnerError(page.status, page.message);
   }
   const clientDetail = matchIdentifierPath(/^\/admin\/clients\/([^/]+)(?:\/scopes\/detail)?$/, url.pathname);
   if (request.method === "GET" && clientDetail !== null) {
@@ -112,33 +109,17 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
     if (csrf === undefined || !constantTimeEqual(await sha256Hex(csrf), session.csrf_hash)) return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
     const runnerId = runnerDetail[1] as string;
     const view = historyView(url);
-    if (view === undefined) return adminError(400,"Invalid history query.");
-    const [runnerResponse, workspaceResponse, jobsResponse, mcpCallsResponse, policyVersionsResponse, enrollmentResponse, environment, releaseResponse, notices, historyResponse] = await Promise.all([
-      registryGet(env, `/runners/${encodeURIComponent(runnerId)}`),
-      registryGet(env, `/auth/runners/${encodeURIComponent(runnerId)}/managed-workspaces`),
-      view.scope === "live" ? loadLiveJobs(env,runnerId,view.workspace!,view.limit) : (view.scope === "jobs" || view.scope === "all") ? registryGet(env, `/runners/${encodeURIComponent(runnerId)}/jobs?limit=${view.limit}`) : Promise.resolve(new Response(null,{status:204})),
-      (view.scope === "audit" || view.scope === "all") ? registryGet(env, `/runners/${encodeURIComponent(runnerId)}/mcp-calls?limit=${view.limit}`) : Promise.resolve(new Response(null,{status:204})),
-      registryGet(env, `/runners/${encodeURIComponent(runnerId)}/policy-versions`),
-      registryGet(env, `/auth/runners/${encodeURIComponent(runnerId)}/enrollments`),
+    if (view === undefined) return adminRunnerError(400,"Invalid history query.");
+    const [data, environment, releaseResponse, notices] = await Promise.all([
+      loadRunnerDetailData(env, runnerId, view),
       runnerEnvironment(env, runnerId),
       resolveRunnerReleaseDescriptor(env, developmentReleaseDependencies(env), scheduleRefresh),
       loadFeatureNotices(env),
-      registryGet(env, `/runners/${encodeURIComponent(runnerId)}/history-settings`),
     ]);
-    const settings = historyResponse.ok ? parseJobHistorySettings(await json(historyResponse)) : undefined;
-    let runner: Record<string, unknown> | undefined;
-    let workspaces: unknown[] = [];
-    let jobs: unknown[] | undefined;
-    let mcpCalls: unknown[] | undefined;
-    let policyVersions: unknown[] = [];
-    let enrollment: Record<string, unknown> | undefined;
-    try { runner = runnerResponse.ok ? record(await json(runnerResponse)) : undefined; } catch { runner = undefined; }
-    try { workspaces = workspaceResponse.ok ? arrayField(record(await json(workspaceResponse))?.workspaces) : []; } catch { workspaces = []; }
-    try { const value = jobsResponse.ok ? record(await json(jobsResponse))?.jobs : undefined; jobs = Array.isArray(value) ? value : undefined; } catch { jobs = undefined; }
-    try { mcpCalls = mcpCallsResponse.ok ? arrayField(record(await json(mcpCallsResponse))?.calls) : undefined; } catch { mcpCalls = undefined; }
-    try { policyVersions = policyVersionsResponse.ok ? arrayField(record(await json(policyVersionsResponse))?.versions) : []; } catch { policyVersions = []; }
-    try { enrollment = enrollmentResponse.ok ? record(record(await json(enrollmentResponse))?.enrollment) : undefined; } catch { enrollment = undefined; }
-    return runner === undefined ? adminError(404, "Runner was not found.") : html(adminDocument(`${typeof runner.display_name === "string" ? runner.display_name : runnerId} · Runner`, runnerDetailPage({ configuredMode: runnerConfiguredExecutionMode(runner), reportedMode: runnerReportedExecutionMode(runner), maxValidityDays: MAX_VALIDITY_DAYS, dayMs: DAY_MS }, projectRunnerDetail(runner), workspaces, jobs, environment, csrf, releaseResponse, policyVersions, enrollment, mcpCalls, view, settings), "runners", notices));
+    if (data.state === "missing") return adminRunnerError(404, "Runner was not found.");
+    if (data.state === "unavailable") return adminRunnerError(503, "Runner details could not be loaded. Try again.");
+    const { runner, workspaces, jobs, mcpCalls, policyVersions, enrollment, settings } = data;
+    return html(adminDocument(`${typeof runner.display_name === "string" ? runner.display_name : runnerId} · Runner`, runnerDetailPage({ configuredMode: runnerConfiguredExecutionMode(runner), reportedMode: runnerReportedExecutionMode(runner), maxValidityDays: MAX_VALIDITY_DAYS, dayMs: DAY_MS }, runner, workspaces, jobs, environment, csrf, releaseResponse, policyVersions, enrollment, mcpCalls, view, settings), "runners", notices));
   }
   if (request.method !== "POST") { await discardBody(request); return methodNotAllowed("GET, POST"); }
   const form = await formData(request);
@@ -164,9 +145,9 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
   const historyAction = matchIdentifierPath(/^\/admin\/runners\/([^/]+)\/history-settings$/, url.pathname);
   if (historyAction !== null) {
     const settings = parseJobHistorySettings({mode:form.get("mode"),interval_seconds:Number(form.get("interval_seconds")),retention_days:Number(form.get("retention_days")),local_retention_days:Number(form.get("local_retention_days"))});
-    if (settings === undefined || (settings.local_retention_days > 0 && form.get("confirm_local_cleanup") !== "true")) return adminError(400,"Invalid settings or local cleanup not confirmed.");
+    if (settings === undefined || (settings.local_retention_days > 0 && form.get("confirm_local_cleanup") !== "true")) return adminRunnerError(400,"Invalid settings or local cleanup not confirmed.");
     const response = await registryPost(env,`/runners/${encodeURIComponent(historyAction[1]!)}/history-settings`,{...settings});
-    return response.ok ? redirect(`/admin/runners/${encodeURIComponent(historyAction[1]!)}`) : adminError(response.status === 404 ? 404 : 503,"History settings could not be saved.");
+    return response.ok ? redirect(`/admin/runners/${encodeURIComponent(historyAction[1]!)}`) : adminRunnerError(response.status === 404 ? 404 : 503,"History settings could not be saved.");
   }
   if (url.pathname === "/admin/password") return changePassword(env, form);
   if (url.pathname === "/admin/clients") return createClient(env, form, publicOrigin);
