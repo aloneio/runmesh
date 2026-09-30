@@ -36,9 +36,11 @@ export function remoteFailureMetadata(value: unknown, observed: unknown) {
   const operation_state = code === "result_unconfirmed" || !["not_started", "completed", "unknown"].includes(observed as string)
     ? "unknown" : observed as "not_started" | "completed" | "unknown";
   return Object.freeze({ code: `remote_${code}`, failure_class: remoteClasses[code], operation_state,
-    next_action: operation_state !== "not_started" ? "inspect_upstream_state" : code === "stale_catalog" ? "refresh_approved_catalog" : "check_central_configuration",
+    next_action: operation_state !== "not_started" ? "inspect_upstream_state" : code === "busy" ? "wait_for_capacity"
+      : code === "stale_catalog" ? "refresh_approved_catalog" : "check_central_configuration",
     recovery_hint: operation_state === "unknown" ? "The upstream action may have executed. Inspect its state before a new invocation; this call was not replayed."
       : operation_state === "completed" ? "The upstream action completed, but its result cannot be returned. Do not treat this response as a rollback."
+      : code === "busy" ? "The MCP connection is busy. Wait briefly, then try again."
       : "Check the central connection, approved catalog and client connection before a new request." });
 }
 export type RemoteFailure = { readonly state: "failed"; readonly code: RemoteCode;
