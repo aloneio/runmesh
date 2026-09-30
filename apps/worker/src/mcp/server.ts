@@ -45,7 +45,7 @@ const publishedToolSchemas = Object.fromEntries(REGISTERED_TOOL_NAMES.map(name =
  * Fresh server factory target for createMcpHandler. Every HTTP request receives
  * an isolated McpServer and the default stateless 2025 compatibility lane.
  */
-export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth, hideNative = false): McpServer {
+export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth, options: { hideNative?: boolean; tools?: readonly ToolName[] } = {}): McpServer {
   const env: McpRequestEnv = { ...rawEnv, mcpPrincipal: { client_id: auth.clientId, secret_version: auth.extra?.secret_version } };
   const server = new McpServer({ name: "runmesh", version: PRODUCT_VERSION });
 
@@ -75,7 +75,7 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth, hideNati
     job: async (params, scopes) => jobTool(env, auth.clientId, params, scopes),
     context: async (params, scopes) => contextTool(env, auth.clientId, params, scopes),
   });
-  for (const name of REGISTERED_TOOL_NAMES) register(server, name, handlers[name]);
+  for (const name of options.tools ?? REGISTERED_TOOL_NAMES) register(server, name, handlers[name]);
 
   return server;
 
@@ -112,11 +112,11 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth, hideNati
         return failure("internal_error", "The MCP tool could not confirm the operation outcome.", "Inspect the existing Job or change receipt before deciding what to do next; do not blindly repeat a write or command. Contact the operator if the outcome cannot be established.");
       }
     });
-    if (hideNative) tool.disable();
+    if (options.hideNative) tool.disable();
   }
 }
 
-export const MCP_TOOL_NAMES = Object.freeze(Object.keys(TOOL_SPECS));
+export const MCP_TOOL_NAMES = REGISTERED_TOOL_NAMES;
 
 export const MCP_SUPPORTED_SCOPES = SUPPORTED_SCOPES;
 
