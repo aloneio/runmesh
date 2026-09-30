@@ -46,6 +46,7 @@ export function validateCiWiring(pkg, githubText, gitlabText) {
   eq(order, CHECK_IDS.map(checkCommand), "mandatory checks reordered, removed, or duplicated");
   for (const name of AGGREGATE_JOBS) {
     hardJob(gh.jobs?.[name], name);
+    assert.equal(gh.jobs[name].defaults, undefined, "critical jobs must not override the reviewed shell or working directory");
     for (const step of gh.jobs[name].steps ?? []) {
       if (step.uses?.startsWith("actions/checkout@")) assert.equal(step.with?.["persist-credentials"], false, "checkout must not retain credentials");
       if (step.uses) assert.match(step.uses, /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_./-]+@[a-f0-9]{40}$/u, "actions must use full immutable commits");
@@ -66,6 +67,7 @@ export function validateCiWiring(pkg, githubText, gitlabText) {
   requiredStep(gh.jobs.browser.steps, "npm run test:browser");
   requiredStep(gh.jobs.browser.steps, "npm run browser:install");
   const aggregate = gh.jobs["verify-all"];
+  assert.equal(aggregate?.defaults, undefined, "aggregate must not override the result-check shell or working directory");
   eq(aggregate?.needs, [...AGGREGATE_JOBS], "aggregate must include every required job");
   assert.equal(aggregate.if, "always()", "aggregate must run after failure or skip");
   assert.ok(!aggregate["continue-on-error"] && aggregate.steps?.length === 1);
@@ -81,7 +83,9 @@ export function validateCiWiring(pkg, githubText, gitlabText) {
 
   hardJob(gl.verify, "GitLab verify"); hardJob(gl.browser, "GitLab browser");
   rules(gl.workflow?.rules, "GitLab workflow"); rules(gl.verify.rules, "GitLab verify"); rules(gl.browser.rules, "GitLab browser");
-  assert.ok(gl.verify.extends === undefined && gl.verify.when === undefined, "unreviewed inherited/manual verification");
+  for (const name of ["verify", "browser"]) {
+    assert.ok(gl[name].extends === undefined && gl[name].when === undefined, "unreviewed inherited/manual " + name);
+  }
   eq(gl.verify.script, ["npm install --global npm@10.9.3", ...CHECK_IDS.map(checkCommand)], "GitLab must execute all checks without shell masking");
   assert.equal(gl.verify.timeout, "30m");
   eq(gl.verify.artifacts?.paths, ["ci-results/*.json", "ci-results/*.xml"], "GitLab artifact whitelist changed");
