@@ -7,6 +7,7 @@ import { handleCentralCatalogAdmin } from "../src/http/central-catalog.js";
 import { internalHeaders, passwordVerifier, randomBase64Url, sha256Hex } from "../src/security.js";
 import type { WorkerEnv } from "../src/platform/env.js";
 import { catalogDefinition, catalogProfile } from "../../../test/domain/catalog-fixtures.js";
+import { handleMcpSecret } from "../src/http/mcp.js";
 
 const registry = () => env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
 const namespace = () => (env as unknown as { CAPABILITIES: DurableObjectNamespace<CapabilitiesDOv1> }).CAPABILITIES;
@@ -23,8 +24,8 @@ async function session() {
   return { hash, headers: { cookie: `${ADMIN_SESSION_COOKIE}=${raw}; ${ADMIN_CSRF_COOKIE}=${csrf}`, origin: "https://worker.test",
     "content-type": "application/json", "x-csrf-token": csrf } };
 }
-async function client() {
-  const client_id = `catalog-client-${crypto.randomUUID()}`, verifier = await sha256Hex(randomBase64Url());
+async function client(secret = randomBase64Url()) {
+  const client_id = "catalog-client-" + crypto.randomUUID(), verifier = await sha256Hex(secret);
   const path = "/auth/clients", body = JSON.stringify({ identity_version: 2, client_id, label: "Catalog-only fixture", native_scopes: [],
     secret_verifier: verifier, secret_prefix: "test-only" });
   const result = await registry().fetch(new Request(`https://registry.internal${path}`, { method: "POST", body,
@@ -90,6 +91,49 @@ it("complete publication replaces a pending catalog atomically and stale retries
   const page = await owner().listCatalog(principal, { profile_id: f.id });
   expect(page.state).toBe("listed");
   if (page.state === "listed") expect(page.tools.map(tool => tool.definition.name)).toEqual(["a", "b", "c"]);
+});
+
+it("published nested output schemas survive catalog RPC and pagination for generated service identifiers", async () => {
+  const tools: RemoteToolDefinition[] = [
+    { name: "migration_guide", annotations: { readOnlyHint: true, title: "Migration guide" },
+      inputSchema: { "$schema": "https://json-schema.org/draft/2020-12/schema", type: "object", properties: {} } },
+    { name: "search_documentation", description: "Search documentation.\n\tReturn relevant results.",
+      annotations: { readOnlyHint: true, title: "Search documentation" },
+      inputSchema: { "$schema": "https://json-schema.org/draft/2020-12/schema", type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+      outputSchema: { "$schema": "https://json-schema.org/draft/2020-12/schema", type: "object", additionalProperties: false,
+        properties: { results: { type: "array", items: { type: "object", additionalProperties: false,
+          properties: { id: { type: "string" }, similarity: { type: "number" }, text: { type: "string" }, title: { type: "string" }, url: { type: "string" } },
+          required: ["similarity", "id", "url", "title", "text"] } } }, required: ["results"] } },
+  ];
+  const secret = randomBase64Url(), f = await fixture(tools, "service-" + crypto.randomUUID()), principal = await client(secret);
+  await f.approve();
+  const page = await owner().listCatalog(principal, { profile_id: f.id });
+  expect(page).toMatchObject({ state: "listed", next_cursor: null });
+  if (page.state !== "listed") throw new Error("missing published tools");
+  expect(page.tools.map(tool => tool.definition)).toEqual(tools);
+  const first = await owner().listCatalog(principal, { profile_id: f.id, limit: 1 });
+  if (first.state !== "listed" || !first.next_cursor) throw new Error("missing cursor");
+  expect(await owner().listCatalog(principal, { profile_id: f.id, cursor: first.next_cursor }))
+    .toMatchObject({ state: "listed", next_cursor: null, tools: [page.tools[1]] });
+  const rpc = async (method: string, params: unknown) => {
+    const request = new Request("https://worker.test/" + secret + "/mcp", { method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
+    const response = await handleMcpSecret(request, { ...env, CENTRAL_SKILLS_ENABLED: "1", CENTRAL_DIRECT_TOOLS_ENABLED: "1" } as WorkerEnv, new URL(request.url));
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    const messages = response.headers.get("content-type")?.includes("text/event-stream")
+      ? text.split("\n").filter(line => line.startsWith("data:")).map(line => JSON.parse(line.slice(5))) : [JSON.parse(text)];
+    return messages.find(message => message.id === 1);
+  };
+  const listed = await rpc("tools/call", { name: "remote_tools", arguments: { profile_id: f.id } });
+  expect(listed.result.isError).not.toBe(true);
+  expect(JSON.parse(listed.result.content[0].text)).toEqual({ tools: page.tools, next_cursor: null });
+  const direct = await rpc("tools/list", {});
+  const directNames = direct.result.tools.map((tool: { name: string }) => tool.name).filter((name: string) => name.startsWith("rm_"));
+  expect(directNames).toEqual(expect.arrayContaining(page.tools.map(tool => tool.public_name)));
+  const status = await rpc("tools/call", { name: "remote_status", arguments: {} });
+  expect(JSON.parse(status.result.content[0].text)).toEqual({ state: "listed", direct_tools: directNames.length });
 });
 
 it("W04 zero-Runner central-only clients see the same approved tools without grant rows", async () => {
