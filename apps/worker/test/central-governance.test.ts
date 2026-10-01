@@ -2,6 +2,7 @@ import { env, runInDurableObject } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
 import { CentralGovernance } from "../src/platform/capabilities/central-audit.js";
 import { CentralSchema } from "../src/platform/capabilities/schema.js";
+import { CENTRAL_GOVERNANCE_LIMITS as LIMITS } from "../src/contracts/central-audit.js";
 const owner = () => (env as unknown as { CAPABILITIES: DurableObjectNamespace }).CAPABILITIES.get((env as unknown as { CAPABILITIES: DurableObjectNamespace }).CAPABILITIES.idFromName(crypto.randomUUID()));
 const principal = { client_id: 'client-a', secret_version: 1 }, command = { profile_id: 'profile-a', tool_id: 'mcp.' + 'a'.repeat(64), version: 'b'.repeat(64) };
 it("successful Central calls only reset persisted cooldown when it changed", async () => {
@@ -34,6 +35,43 @@ it("Central budgets persist across owner reconstruction and recover without time
     expect(create().admit(principal, command)).toBe(false);
     expect(service.admit({ ...principal, client_id: 'client-b' }, command)).toBe(true);
     now += 60_001; expect(service.admit(principal, command)).toBe(true);
+  });
+});
+it.each(["client", "profile", "cooldown"] as const)("Central %s rejection stays read-only within its active window after reconstruction", async limit => {
+  await runInDurableObject(owner(), (_instance, state) => {
+    let now = 1_000_000;
+    const create = () => {
+      const schema = new CentralSchema(state.storage);
+      return new CentralGovernance(state.storage, () => schema.initialize(), () => now);
+    };
+    const service = create();
+    const attempts = limit === "client" ? LIMITS.calls_per_minute : limit === "profile" ? LIMITS.profile_calls_per_minute : LIMITS.failures;
+    for (let n = 0; n < attempts; n++) {
+      const caller = limit === "profile" ? { ...principal, client_id: `profile-budget-${n}` } : principal;
+      expect(service.admit(caller, command)).toBe(true);
+      if (limit === "cooldown") expect(service.record(caller, command, { state: "failed", code: "upstream_unavailable", operation_state: "unknown" }).audit_status).toBe("recorded");
+    }
+    const receipts = service.list();
+    const original = state.storage.sql.exec.bind(state.storage.sql);
+    let written = 0;
+    const spy = vi.spyOn(state.storage.sql, "exec").mockImplementation((query: string, ...args: any[]) => {
+      const cursor = original(query, ...args);
+      written += cursor.rowsWritten;
+      return cursor;
+    });
+    try {
+      // Rejected retries within an active window must not change storage,
+      // including schema checks after both storage adapters are rebuilt.
+      for (let n = 0; n < 20; n++) {
+        expect(service.admit(principal, command)).toBe(false);
+        expect(create().admit(principal, command)).toBe(false);
+      }
+      expect(written).toBe(0);
+      expect(service.list()).toEqual(receipts);
+      now += 60_001;
+      expect(create().admit(principal, command)).toBe(true);
+      expect(written).toBeGreaterThan(0);
+    } finally { spy.mockRestore(); }
   });
 });
 it("Central cooldown isolates profiles, receipts omit payloads, and history faults do not replay", async () => {
