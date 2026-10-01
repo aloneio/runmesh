@@ -2,7 +2,7 @@ import { normalizeJobRecord } from "../../apps/runner/src/jobs/records.js";
 import { retainedJobCandidates, expiredRetainedJob } from "../../apps/runner/src/jobs/retention-plan.js";
 import { jobEventMessage } from "../../apps/runner/src/connection/job-events.js";
 import { expect, it } from "vitest";
-import { historyCleanupDue, nextMaintenanceDeadline } from "../../apps/worker/src/registry/maintenance-plan.js";
+import { historyCleanupDue, nextHistoryCleanupDeadline, nextMaintenanceDeadline } from "../../apps/worker/src/registry/maintenance-plan.js";
 import { summarizeFeatureError } from "../../apps/worker/src/registry/feature-health-model.js";
 import { availableLogBytes } from "../../apps/runner/src/jobs/log-budget.js";
 
@@ -15,6 +15,16 @@ it("maintenance only schedules a bounded deadline for valid observations", () =>
 it("cleanup validates persisted deadlines and retains the exact expiry boundary", () => {
   for (const next of [undefined, null, -1, Number.NaN, 9999, 10000, 20001]) expect(historyCleanupDue(next,10000,10000)).toBe(true);
   for (const next of [10001, 20000]) expect(historyCleanupDue(next,10000,10000)).toBe(false);
+});
+it("pending history follows expiry and the durable sweep floor without keeping empty stores awake", () => {
+  for (const expiry of [undefined, null, -1, Number.NaN]) expect(nextHistoryCleanupDeadline(10000, expiry, 15000, 10000)).toBeNull();
+  expect(nextHistoryCleanupDeadline(10000, 12000, 15000, 10000)).toBe(15000);
+  expect(nextHistoryCleanupDeadline(10000, 18000, 15000, 10000)).toBe(18000);
+  expect(nextHistoryCleanupDeadline(10000, 9000, 15000, 10000)).toBe(15000);
+  for (const sweep of [undefined, null, -1, Number.NaN, 10000, 20001]) expect(nextHistoryCleanupDeadline(10000, 9000, sweep, 10000)).toBe(10000);
+  expect(nextMaintenanceDeadline(10000, null, null, 15000)).toBe(15000);
+  expect(nextMaintenanceDeadline(10000, 12000, 13000, 15000)).toBe(12000);
+  expect(nextMaintenanceDeadline(10000, null, null, 9000)).toBe(11000);
 });
 it("feature errors remain bounded and unserializable values get the existing fallback", () => {
   expect(summarizeFeatureError(new Error("quota"))).toBe("Error: quota");
