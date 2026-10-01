@@ -132,7 +132,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     worker.once("error", (error) => recordWorkerEvent("error", diagnosticErrorCode(error), null));
     worker.once("exit", (code, signal) => recordWorkerEvent("exit", code, signal));
     worker.once("close", (code, signal) => recordWorkerEvent("close", code, signal));
-    await waitForWorker(workerDiagnosticState);
+    await waitForWorker(workerUrl, 60_000, workerDiagnosticState);
     const createdClients = await setupAdminAndClients();
     enrollmentCode = await createBrowserRunnerEnrollment();
     expect(enrollmentCode).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -914,31 +914,6 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     } finally { await stop(rootRunner); }
   });
 
-  it("keeps out-of-order sync connected and fences replaced sessions with the same credential", async () => {
-    const testRunner = "e2e-session-conflict";
-    const token = "synthetic-session-conflict-token-0123456789";
-    // The main fixture exercises packed D1 history, whose batch endpoint has
-    // different sequence semantics. Match the live dev SQLite sync path in an
-    // independent real Worker instead of mocking a Registry response.
-    const port = await freePort();
-    const origin = `http://127.0.0.1:${port}`;
-    const sqliteWorker = spawn(process.execPath, [wranglerCli, "dev", "--local", "--ip", "127.0.0.1", "--config", "apps/worker/wrangler.jsonc",
-      "--port", String(port), "--persist-to", join(root, "sqlite-probe"), "--show-interactive-dev-session=false", ...workerVars(), "--var", "RUNMESH_JOB_HISTORY_BACKEND:sqlite"], {
-      cwd: projectDirectory, env: { ...process.env, ...workerEnv }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
-    });
-    const logs = collectOutput(sqliteWorker);
-    try {
-      await waitFor(async () => (await fetch(`${origin}/health`).catch(() => undefined))?.ok === true, 20000, logs);
-      const registration = await fetch(`${origin}/admin/runners`, { method: "POST",
-        headers: { Authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
-        body: JSON.stringify({ runner_id: testRunner, token, execution_mode: "dedicated_user" }) });
-      expect(registration.status).toBe(200);
-      const result = await probeSessionConflict({ server: `${origin.replace("http:", "ws:")}/runner/connect`, runnerId: testRunner, token });
-      expect(result).toMatchObject({ close_code: 4000, close_reason: "replaced by newer session", valid_sync_acknowledged: true,
-        superseded_sync_acknowledged: true, same_credential_reconnected: true, new_session: true, recovery_echo: true });
-    } finally { await stop(sqliteWorker); }
-  });
-
   it("reports a runner_offline structured error after the real runner disconnects", async () => {
     await stop(runner); runner = undefined;
     // Close handling is asynchronous across the runner socket and DO.
@@ -1076,6 +1051,61 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
   }
 });
 
+describe.sequential("real local SQLite Runner sessions", () => {
+  const testRunner = "e2e-session-conflict";
+  const token = "synthetic-session-conflict-token-0123456789";
+  let root = "";
+  let origin = "";
+  let worker: ChildProcess | undefined;
+
+  beforeAll(async () => {
+    // This fixture needs SQLite history, independent of the main D1 suite.
+    // Keep process startup outside the unchanged transport assertion budget.
+    root = await mkdtemp(join(tmpdir(), "mcp-runner-e2e-sqlite-"));
+    const port = await freePort();
+    origin = `http://127.0.0.1:${port}`;
+    worker = spawn(process.execPath, [wranglerCli, "dev", "--local", "--ip", "127.0.0.1", "--config", "apps/worker/wrangler.jsonc",
+      "--port", String(port), "--persist-to", root, "--show-interactive-dev-session=false", ...workerVars(), "--var", "RUNMESH_JOB_HISTORY_BACKEND:sqlite"], {
+      cwd: projectDirectory, env: { ...process.env, ...workerEnv }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
+    });
+    const logs = collectOutput(worker);
+    await waitForWorker(origin, 20_000, logs);
+    const registration = await fetch(`${origin}/admin/runners`, { method: "POST", signal: AbortSignal.timeout(5_000),
+      headers: { Authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ runner_id: testRunner, token, execution_mode: "dedicated_user" }) });
+    await registration.body?.cancel();
+    expect(registration.status).toBe(200);
+  });
+
+  afterAll(async () => {
+    await stop(worker);
+    if (root) await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  });
+
+  it("keeps out-of-order sync connected and fences replaced sessions with the same credential", async () => {
+    const result = await probeSessionConflict({ server: `${origin.replace("http:", "ws:")}/runner/connect`, runnerId: testRunner, token });
+    expect(result).toMatchObject({ close_code: 4000, close_reason: "replaced by newer session", valid_sync_acknowledged: true,
+      superseded_sync_acknowledged: true, same_credential_reconnected: true, new_session: true, recovery_echo: true });
+  });
+});
+
+it("bounds Worker readiness when an accepted health request never responds", async () => {
+  const { createServer } = await import("node:http");
+  let disconnected = false;
+  const server = createServer((_request, response) => { response.on("close", () => { disconnected = true; }); });
+  await new Promise<void>(resolveListen => server.listen(0, "127.0.0.1", resolveListen));
+  try {
+    const address = server.address();
+    if (address === null || typeof address === "string") throw new Error("fixture did not bind a TCP port");
+    await expect(waitForWorker(`http://127.0.0.1:${address.port}`, 1_000, () => "health probe stalled"))
+      .rejects.toThrow("timed out after 1000ms\nhealth probe stalled");
+    await waitFor(() => disconnected, 1_000);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolveClose, reject) => server.close(error => error ? reject(error) : resolveClose()));
+  }
+}, 5_000);
+
 async function freePort(): Promise<number> {
   const net = await import("node:net");
   return new Promise<number>((resolvePort, reject) => {
@@ -1133,7 +1163,16 @@ async function waitFor(predicate: () => boolean | Promise<boolean>, timeout: num
   const output = detail?.() ?? "";
   throw new Error(`timed out after ${timeout}ms${output ? `\n${output}` : ""}`);
 }
-async function waitForWorker(detail: () => string): Promise<void> { await waitFor(async () => (await fetch(`${workerUrl}/health`).catch(() => undefined))?.ok === true, 60_000, detail); }
+async function waitForWorker(origin: string, timeout: number, detail: () => string): Promise<void> {
+  // An accepted connection can stall before headers; the polling loop alone
+  // cannot enforce its deadline while awaiting that request.
+  const signal = AbortSignal.timeout(timeout);
+  await waitFor(async () => {
+    const response = await fetch(`${origin}/health`, { signal }).catch(() => undefined);
+    await response?.body?.cancel();
+    return response?.ok === true;
+  }, timeout, detail);
+}
 async function waitForExit(child: ChildProcess, timeout: number, detail: () => string): Promise<void> {
   await Promise.race([
     new Promise<void>((resolveExit) => child.once("exit", () => resolveExit())),

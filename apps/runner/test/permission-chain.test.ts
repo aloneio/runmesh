@@ -50,6 +50,10 @@ it("RUN-AUTH-02 a stale resolved file cannot be read after workspace read access
 });
 it("RUN-CONTEXT-01 observes the Git baseline and marks old handoff evidence stale after HEAD changes", async () => {
   const f = await fixture();
+  // This case tests evidence propagation through real Git and the runtime.
+  // Baseline budget/observation tests own deadline behavior; host scheduling
+  // must not turn their allowed unknown fallback into a semantic failure here.
+  const clock = vi.spyOn(performance, "now").mockReturnValue(100);
   try {
     git(f.workspace.rootPath, ["init"]);
     git(f.workspace.rootPath, ["config", "user.email", "test@example.test"]);
@@ -76,12 +80,13 @@ it("RUN-CONTEXT-01 observes the Git baseline and marks old handoff evidence stal
 
     const read = await f.runtime.dispatch("context.read", { workspace_id: "w", context_id: checkpoint.context.context_id }) as { context: { base_commit: string; base_commit_status: string; baseline_state: string; current_commit: string } };
     expect(read.context).toMatchObject({ base_commit: firstCommit, base_commit_status: "observed", baseline_state: "stale", current_commit: secondCommit });
-  } finally { await f.cleanup(); }
+  } finally { clock.mockRestore(); await f.cleanup(); }
 });
 
 
 it.each(["tracked", "untracked"])("R05 does not claim evidence is current after an uncommitted %s change", async (kind) => {
   const f=await fixture();
+  const clock = vi.spyOn(performance, "now").mockReturnValue(100);
   try {
     git(f.workspace.rootPath,["init"]);git(f.workspace.rootPath,["config","user.name","Fixture"]);git(f.workspace.rootPath,["config","user.email","fixture@example.invalid"]);
     await writeFile(join(f.workspace.rootPath,"tracked.txt"),"one\n");git(f.workspace.rootPath,["add","tracked.txt"]);git(f.workspace.rootPath,["commit","-m","baseline"]);
@@ -91,7 +96,7 @@ it.each(["tracked", "untracked"])("R05 does not claim evidence is current after 
     const next=await f.runtime.dispatch("context.read",{workspace_id:"w",context_id:first.context.context_id}) as any;
     expect(next.context.current_commit).toBe(first.context.base_commit);
     expect(next.context.baseline_state).toBe("stale");
-  } finally {await f.cleanup();}
+  } finally {clock.mockRestore(); await f.cleanup();}
 });
 
 
