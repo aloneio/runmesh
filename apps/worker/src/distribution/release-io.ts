@@ -18,7 +18,7 @@ export async function readDevelopmentReleaseCache(cache: DevelopmentReleaseCache
     const receipt = await boundedJsonResponse(async signal => await cache.match(new Request(DEV_RELEASE_CACHE_KEY, { signal })) ?? new Response(null, { status: 404 }), timeoutMs, MAX_DISCOVERY_BYTES);
     return validatedCachedDevelopmentRelease(receipt?.value);
   }
-  try { const response = await cache.match(DEV_RELEASE_CACHE_KEY); return response === undefined || !response.ok ? undefined : validatedCachedDevelopmentRelease(await boundedJson(response)); } catch { return undefined; }
+  try { const response = await cache.match(DEV_RELEASE_CACHE_KEY); return response === undefined ? undefined : validatedCachedDevelopmentRelease(await boundedJson(response)); } catch { return undefined; }
 }
 export async function writeDevelopmentReleaseCache(cache: DevelopmentReleaseCache | undefined, descriptor: RunnerReleaseDescriptor, verifiedAtMs: number): Promise<void> {
   if (cache === undefined) return;
@@ -46,10 +46,11 @@ export async function releaseFetch(input: string, init: Omit<RequestInit, "signa
   throw lastError instanceof Error ? lastError : new Error("development release fetch failed");
 }
 
+/** Own the response body even when status or headers reject it before reading. */
 export async function boundedJson(response: Response): Promise<unknown> {
-  if (!response.ok) throw new Error("development release discovery failed");
+  if (!response.ok) { void response.body?.cancel().catch(() => undefined); throw new Error("development release discovery failed"); }
   const declared = response.headers.get("content-length");
-  if (declared !== null && (!/^\d+$/u.test(declared) || Number(declared) > MAX_DISCOVERY_BYTES)) throw new Error("development release discovery response is too large");
+  if (declared !== null && (!/^\d+$/u.test(declared) || Number(declared) > MAX_DISCOVERY_BYTES)) { void response.body?.cancel().catch(() => undefined); throw new Error("development release discovery response is too large"); }
   if (response.body === null) throw new Error("development release discovery response is empty");
   const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let bytes = 0;
   try {
