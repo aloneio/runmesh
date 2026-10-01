@@ -8,7 +8,7 @@ import { createRunnerPolicyRoutes } from "./registry/routes/runner-policy.js";
 import { createIdentityRoutes } from "./registry/routes/identity.js";
 import type { RegistryRoute } from "./registry/routes/request.js";
 import { RegistryFeatureHealthStore } from "./registry/feature-health.js";
-import { historyCleanupDue, nextMaintenanceDeadline } from "./registry/maintenance-plan.js";
+import { historyCleanupDue, nextHistoryCleanupDeadline, nextMaintenanceDeadline } from "./registry/maintenance-plan.js";
 import { createCoreRegistrySchema, registrySchemaIsCurrent, hasPersistedRegistrySchema } from "./registry/schema.js";
 import type { RunnerConnectionState } from "./contracts/runner-selection.js";
 import type { PolicyReadiness } from "./contracts/runner-selection.js";
@@ -31,7 +31,7 @@ import { ensureAuthSourceThrottleSchema } from "./auth-throttle.js";
 import type { ValidityWindow } from "./validity.js";
 import type { ValidityStatus } from "./validity.js";
 import type { RunnerExecutionMode, PolicyAcknowledgementResult, RunnerMutationState, CodingScope, PermissionSet, WorkspaceValidationStatus, RunnerUpdateChannel, RunnerPublicInfo, RunnerRecord, WorkspaceRecord, DashboardSnapshot, RegistryFeatureKey, RegistryFeatureHealth, McpClientRecord, VerifiedMcpClient, RunnerRow, EnrollmentRow, AdminSettingsRow, AuthThrottleKind, InternalInput } from './registry/records.js';
-import { MAX_INTERNAL_BODY_BYTES, DEFAULT_RUNNER_ENROLLMENT_TTL_MS, REGISTRY_HISTORY_CLEANUP_INTERVAL_MS, HISTORY_CLEANUP_DEADLINE_KEY } from './registry/records.js';
+import { MAX_INTERNAL_BODY_BYTES, DEFAULT_RUNNER_ENROLLMENT_TTL_MS, REGISTRY_HISTORY_CLEANUP_INTERVAL_MS, RUNNER_ENROLLMENT_RETENTION_MS, HISTORY_CLEANUP_DEADLINE_KEY } from './registry/records.js';
 import { parseTransportIdentity, matchesTransportIdentity, parsePathIdentifier, parseJsonObject, stringField, integerField, nullableIntegerField, safeNonnegativeInteger, nullableChecksumField, runnerPublicInfoField, workspaceStatusesField, validVerifier, mutationIdField } from "./registry/values.js";
 import { RegistryAuth } from './registry/auth.js';
 import { RegistryPolicy } from './registry/policy.js';
@@ -306,7 +306,7 @@ export class RegistryDO {
       if (this.ctx.storage.sql.exec("SELECT 1 FROM admin_sessions WHERE expires_at_ms <= ? LIMIT 1", nowMs).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM admin_sessions WHERE expires_at_ms <= ?", nowMs);
       if (this.ctx.storage.sql.exec("SELECT 1 FROM internal_request_nonces WHERE expires_at_ms <= ? LIMIT 1", nowMs).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM internal_request_nonces WHERE expires_at_ms <= ?", nowMs);
       // Keep recent expired/used metadata visible in the console; never retain raw codes.
-      const enrollmentRetentionCutoff = nowMs - 30 * 24 * 60 * 60 * 1_000;
+      const enrollmentRetentionCutoff = nowMs - RUNNER_ENROLLMENT_RETENTION_MS;
       if (this.ctx.storage.sql.exec("SELECT 1 FROM runner_enrollments WHERE expires_at_ms <= ? LIMIT 1", enrollmentRetentionCutoff).toArray().length > 0) this.ctx.storage.sql.exec("DELETE FROM runner_enrollments WHERE expires_at_ms <= ?", enrollmentRetentionCutoff);
       await this.ctx.storage.put(HISTORY_CLEANUP_DEADLINE_KEY, nowMs + REGISTRY_HISTORY_CLEANUP_INTERVAL_MS);
     }
@@ -328,9 +328,21 @@ export class RegistryDO {
       const nextAudit = this.ctx.storage.sql.exec<{ next_ms: number | null }>(
         "SELECT MIN(completed_at_ms) + ? AS next_ms FROM mcp_calls", MCP_AUDIT_RETENTION_MS,
       ).toArray()[0]?.next_ms;
-      const deadline = nextMaintenanceDeadline(nowMs, nextStale, nextAudit);
-      if (deadline === null) { await this.ctx.storage.deleteAlarm(); return; }
+      // Pending records need one expiry-driven wake even without a Runner.
+      // The durable sweep deadline batches cleanup; an empty store stays idle.
+      const nextExpiry = this.ctx.storage.sql.exec<{ next_ms: number | null }>(
+        `SELECT MIN(expires_ms) AS next_ms FROM (
+          SELECT MIN(expires_at_ms) AS expires_ms FROM internal_request_nonces
+          UNION ALL SELECT MIN(expires_at_ms) FROM admin_sessions
+          UNION ALL SELECT MIN(disabled_until_ms) FROM feature_health
+          UNION ALL SELECT MIN(expires_at_ms) + ? FROM runner_enrollments
+        )`, RUNNER_ENROLLMENT_RETENTION_MS,
+      ).one().next_ms;
+      const nextSweep = nextExpiry === null ? undefined : await this.ctx.storage.get<number>(HISTORY_CLEANUP_DEADLINE_KEY);
+      const nextHistory = nextHistoryCleanupDeadline(nowMs, nextExpiry, nextSweep, REGISTRY_HISTORY_CLEANUP_INTERVAL_MS);
+      const deadline = nextMaintenanceDeadline(nowMs, nextStale, nextAudit, nextHistory);
       const current = await this.ctx.storage.getAlarm();
+      if (deadline === null) { if (current !== null) await this.ctx.storage.deleteAlarm(); return; }
       if (current === null || current <= nowMs || current > deadline) await this.ctx.storage.setAlarm(deadline);
       this.clearFeatureHealth("maintenance_alarm");
     } catch (error) { this.disableFeatureHealth("maintenance_alarm", error, nowMs); }
@@ -569,6 +581,7 @@ export class RegistryDO {
     // Keep timestamp/HMAC verification and all nonces for actual mutations.
     const replaySafeAuthorization = request.method === "POST" && segments.length === 3 && (
       (segments[0] === "auth" && segments[1] === "mcp" && ["verify", "revalidate", "authorize-rpc"].includes(segments[2]!))
+      || (segments[0] === "auth" && segments[1] === "sessions" && segments[2] === "verify")
       || (segments[0] === "runners" && segments[2] === "mcp-authorization")
     );
     // Metadata-only completed-call receipts are immutable in both backends.
@@ -578,7 +591,11 @@ export class RegistryDO {
       && segments[0] === "runners" && segments[2] === "mcp-calls";
     const consumeNonce = request.method === "GET" || replaySafeHeartbeat || replaySafeSession || replaySafeHistory || replaySafeAuthorization || replaySafeReceipt
       ? () => true
-      : (nonce: string, expiresAtMs: number) => this.consumeInternalNonce(nonce, expiresAtMs);
+      : async (nonce: string, expiresAtMs: number) => {
+        const consumed = this.consumeInternalNonce(nonce, expiresAtMs);
+        if (consumed) await this.scheduleMaintenanceAlarm(Date.now());
+        return consumed;
+      };
     if (!await verifyInternalRequest(request, this.env.INTERNAL_CONTROL_SECRET, rawBody, consumeNonce)) return new Response("not found", { status: 404 });
     const input = rawBody.length === 0 ? {} : parseJsonObject(rawBody);
     if (input === undefined) return Response.json({ error: "invalid JSON object" }, { status: 400 });

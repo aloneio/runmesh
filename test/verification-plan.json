@@ -99,6 +99,7 @@
       "description": "Local workerd/Miniflare unit and integration; not deployed Cloudflare",
       "files": [
         "apps/worker/test/admin-jobs.test.ts",
+        "apps/worker/test/admin-session-cost.test.ts",
         "apps/worker/test/admin-view-contracts.test.ts",
         "apps/worker/test/audit-metadata.test.ts",
         "apps/worker/test/bridge-admission-errors.test.ts",
