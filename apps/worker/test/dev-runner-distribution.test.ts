@@ -8,7 +8,7 @@ import { FIXED_RELEASE_VERSION, installerReleaseTarget, renderPosixInstaller, re
 import { REVIEWED_RELEASE_VERSION } from "../src/generated-release.js";
 import { matchesDevelopmentRelease } from "../src/domain/release-selection.js";
 import { runnerInstallScript, runnerRelease } from "../src/http/distribution.js";
-import { readDevelopmentReleaseCache } from "../src/distribution/release-io.js";
+import { boundedJson, readDevelopmentReleaseCache, releaseFetch } from "../src/distribution/release-io.js";
 
 // Each call models a new isolate, with the real runtime algorithm enabled.
 function discoverDevelopmentRunnerRelease(fetchImpl: typeof fetch, verify: DevelopmentReleaseVerifier, cache?: DevelopmentReleaseCache | null, schedule?: DevelopmentReleaseRefreshScheduler) {
@@ -37,6 +37,53 @@ function responseFetch(body: unknown, status = 200) {
 }
 const devEnv = { RUNMESH_ENVIRONMENT: "development", WORKER_ID: "worker-development", RUNMESH_PUBLIC_ORIGIN: "https://runmeshdev.example", RUNMESH_SIGNED_RELEASE_AVAILABLE: "dev" };
 afterEach(() => vi.useRealTimers());
+
+it.each([
+  [503, null, "development release discovery failed"],
+  [200, String(512 * 1024 + 1), "development release discovery response is too large"],
+  [200, "invalid", "development release discovery response is too large"],
+] as const)("rejected release response %i with length %s cancels its body", async (status, length, message) => {
+  const cancel = vi.fn(), body = new ReadableStream<Uint8Array>({ cancel });
+  const response = new Response(body, { status, headers: length === null ? {} : { "content-length": length } });
+  try {
+    await expect(boundedJson(response)).rejects.toThrow(message);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(body.locked).toBe(false);
+  } finally { void body.cancel().catch(() => undefined); }
+});
+
+it.each([undefined, 100] as const)("rejected cached release cancels its body with timeout %s", async timeout => {
+  const cancel = vi.fn(), body = new ReadableStream<Uint8Array>({ cancel });
+  const cache: DevelopmentReleaseCache = { match: async () => new Response(body, { status: 503 }), put: async () => undefined };
+  try {
+    expect(await readDevelopmentReleaseCache(cache, timeout)).toBeUndefined();
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(body.locked).toBe(false);
+  } finally { void body.cancel().catch(() => undefined); }
+});
+
+it.each(["rejected", "pending"] as const)("release rejection settles when body cancellation is %s", async mode => {
+  const cancel = vi.fn(() => mode === "rejected" ? Promise.reject(new Error("synthetic cancellation failure")) : new Promise<void>(() => undefined));
+  const body = new ReadableStream<Uint8Array>({ cancel });
+  try {
+    await expect(boundedJson(new Response(body, { status: 503 }))).rejects.toThrow("development release discovery failed");
+    expect(cancel).toHaveBeenCalledTimes(1);
+  } finally { void body.cancel().catch(() => undefined); }
+});
+
+it("rejected release response cancels every retry including the final response", async () => {
+  const bodies: ReadableStream<Uint8Array>[] = [], cancel = vi.fn();
+  const send = vi.fn(async () => {
+    const body = new ReadableStream<Uint8Array>({ cancel }); bodies.push(body);
+    return new Response(body, { status: 503 });
+  }) as unknown as typeof fetch;
+  try {
+    const response = await releaseFetch("https://example.invalid/release", { method: "GET" }, send);
+    await expect(boundedJson(response)).rejects.toThrow("development release discovery failed");
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(cancel).toHaveBeenCalledTimes(3);
+  } finally { for (const body of bodies) void body.cancel().catch(() => undefined); }
+});
 
 describe("development Runner distribution", () => {
   it.each([
