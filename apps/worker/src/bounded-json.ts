@@ -12,6 +12,7 @@ export async function boundedJsonReceipt(fetchResponse: (signal: AbortSignal) =>
   const deadline = performance.now() + timeoutMs;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let completed = false;
   const cancel = (): void => { controller.abort(); void reader?.cancel().catch(() => undefined); };
   const observe = async (): Promise<{ readonly status: number; readonly value?: unknown } | undefined> => {
     try {
@@ -22,7 +23,9 @@ export async function boundedJsonReceipt(fetchResponse: (signal: AbortSignal) =>
       if (length !== null && (!/^\d+$/u.test(length) || Number(length) > maxBytes)) { void response.body?.cancel().catch(() => undefined); return undefined; }
       if (response.body === null) return undefined;
       reader = response.body.getReader();
-      const bytes = new Uint8Array(maxBytes); let size = 0, emptyChunks = 0;
+      // The wire limit is an admission bound, not a per-response allocation.
+      // Most control-plane receipts are tiny even when their route permits 1 MiB.
+      let bytes = new Uint8Array(0), size = 0, emptyChunks = 0;
       for (;;) {
         const next = await reader.read();
         if (controller.signal.aborted || performance.now() >= deadline) { cancel(); return undefined; }
@@ -34,10 +37,15 @@ export async function boundedJsonReceipt(fetchResponse: (signal: AbortSignal) =>
           continue;
         }
         if (next.value.byteLength > maxBytes - size) { cancel(); return undefined; }
+        if (size + next.value.byteLength > bytes.length) {
+          const grown = new Uint8Array(Math.min(maxBytes, Math.max(1024, bytes.length * 2, size + next.value.byteLength)));
+          grown.set(bytes.subarray(0, size)); bytes = grown;
+        }
         bytes.set(next.value, size); size += next.value.byteLength;
       }
       const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, size)));
       if (controller.signal.aborted || performance.now() >= deadline) { cancel(); return undefined; }
+      completed = true;
       return { status: response.status, value };
     } catch { return undefined; }
   };
@@ -51,6 +59,7 @@ export async function boundedJsonReceipt(fetchResponse: (signal: AbortSignal) =>
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     parentSignal?.removeEventListener("abort", stop);
-    cancel();
+    if (completed) reader?.releaseLock();
+    else cancel();
   }
 }

@@ -15,6 +15,10 @@ export const SETUP_CSRF_TTL_MS = 10 * 60 * 1_000;
 export const MCP_SECRET_BYTES = 32;
 
 const encoder = new TextEncoder();
+const HEX_BYTES = Array.from({ length: 256 }, (_, byte) => byte.toString(16).padStart(2, "0"));
+// One completed, non-extractable key per isolate. Never retain an in-flight
+// promise across request contexts or cache signatures/authorization decisions.
+let signingKey: { readonly secret: string; readonly key: CryptoKey } | undefined;
 export function isSafeIdentifier(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
 }
@@ -110,13 +114,11 @@ function internalSignatureValue(
 }
 
 export async function hmacHex(secret: string, value: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
+  let key = signingKey?.secret === secret ? signingKey.key : undefined;
+  if (key === undefined) {
+    key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    signingKey = { secret, key };
+  }
   const digest = await crypto.subtle.sign("HMAC", key, encoder.encode(value));
   return toHex(new Uint8Array(digest));
 }
@@ -188,4 +190,8 @@ function constantTimeBytesEqual(left: Uint8Array, right: Uint8Array): boolean {
   for (let index = 0; index < left.length; index += 1) difference |= (left[index] ?? 0) ^ (right[index] ?? 0);
   return difference === 0;
 }
-function toHex(value: Uint8Array): string { return Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join(""); }
+function toHex(value: Uint8Array): string {
+  let result = "";
+  for (const byte of value) result += HEX_BYTES[byte]!;
+  return result;
+}
