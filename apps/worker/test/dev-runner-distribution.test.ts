@@ -85,6 +85,76 @@ it("rejected release response cancels every retry including the final response",
   } finally { for (const body of bodies) void body.cancel().catch(() => undefined); }
 });
 
+/** Observe settlement while cleanup is deliberately held, then release the fixture. */
+async function beforeCancellationCompletes(action: (cancel: () => Promise<void>) => Promise<unknown>): Promise<PromiseSettledResult<unknown>> {
+  vi.useFakeTimers();
+  let release!: () => void, observed: PromiseSettledResult<unknown> | undefined;
+  const cleanup = new Promise<void>(resolve => { release = resolve; });
+  const cancel = vi.fn(() => cleanup);
+  const operation = action(cancel).then(
+    value => { observed = { status: "fulfilled", value }; },
+    reason => { observed = { status: "rejected", reason }; },
+  );
+  try {
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(observed, "release I/O must settle before underlying cancellation finishes").toBeDefined();
+    expect(cancel).toHaveBeenCalledTimes(1);
+    return observed!;
+  } finally { release(); await vi.advanceTimersByTimeAsync(1_000); await operation; }
+}
+
+it("stalled cancellation does not block the next release fetch attempt", async () => {
+  let attempts = 0;
+  const result = await beforeCancellationCompletes(cancel => releaseFetch("https://example.invalid/release", { method: "GET" },
+    (async () => ++attempts === 1 ? new Response(new ReadableStream({ cancel }), { status: 503 }) : Response.json([])) as typeof fetch));
+  expect(result).toMatchObject({ status: "fulfilled", value: expect.objectContaining({ status: 200 }) });
+  expect(attempts).toBe(2);
+});
+
+it.each(["oversized", "fragmented"] as const)("stalled cancellation does not delay rejection of %s discovery JSON", async mode => {
+  let body!: ReadableStream<Uint8Array>;
+  const result = await beforeCancellationCompletes(cancel => {
+    body = new ReadableStream<Uint8Array>({ pull(controller) { controller.enqueue(new Uint8Array(mode === "oversized" ? 512 * 1024 + 1 : 0)); }, cancel });
+    return boundedJson(new Response(body));
+  });
+  expect(result).toMatchObject({ status: "rejected", reason: expect.objectContaining({ message: mode === "oversized"
+    ? "development release discovery response is too large" : "development release discovery response is fragmented" }) });
+  expect(body.locked).toBe(false);
+});
+
+it.each([
+  ["status", "development release asset is unavailable"],
+  ["redirect", "development release redirect is invalid"],
+  ["header", "development release asset exceeds its size bound"],
+  ["oversized", "development release asset exceeds its size bound"],
+  ["fragmented", "development release asset is fragmented"],
+] as const)("stalled cancellation does not delay rejection of a release asset: %s", async (mode, message) => {
+  const descriptor = await discoverDevelopmentRunnerRelease(responseFetch([release(devVersion(0), "2026-09-16T08:00:00Z")]), async () => undefined);
+  let body!: ReadableStream<Uint8Array>;
+  const result = await beforeCancellationCompletes(cancel => {
+    body = new ReadableStream<Uint8Array>({ pull(controller) {
+      if (mode === "oversized" || mode === "fragmented") controller.enqueue(new Uint8Array(mode === "oversized" ? 64 * 1024 + 1 : 0));
+    }, cancel });
+    const response = new Response(body, { status: mode === "status" ? 404 : mode === "redirect" ? 302 : 200,
+      headers: mode === "header" ? { "content-length": "invalid" } : {} });
+    return verifyDevelopmentRunnerRelease(descriptor, (async () => response) as typeof fetch);
+  });
+  expect(result).toMatchObject({ status: "rejected", reason: expect.objectContaining({ message }) });
+  expect(body.locked).toBe(false);
+});
+
+it("stalled cancellation does not block a trusted release redirect", async () => {
+  const descriptor = await discoverDevelopmentRunnerRelease(responseFetch([release(devVersion(0), "2026-09-16T08:00:00Z")]), async () => undefined);
+  const requested: string[] = [];
+  const destination = "https://github.com/aloneio/runmesh/releases/download/probe/manifest.json";
+  const result = await beforeCancellationCompletes(cancel => verifyDevelopmentRunnerRelease(descriptor, (async (input: RequestInfo | URL) => {
+    requested.push(String(input));
+    return requested.length === 1 ? new Response(new ReadableStream({ cancel }), { status: 302, headers: { location: destination } }) : new Response(null, { status: 404 });
+  }) as typeof fetch));
+  expect(result).toMatchObject({ status: "rejected", reason: expect.objectContaining({ message: "development release asset is unavailable" }) });
+  expect(requested).toEqual([installerReleaseTarget(devVersion(0), "dev").manifest_url, destination]);
+});
+
 describe("development Runner distribution", () => {
   it.each([
     ["0.1.5", true, "0.1.6-dev.26", true],

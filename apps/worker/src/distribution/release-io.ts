@@ -36,7 +36,8 @@ export async function releaseFetch(input: string, init: Omit<RequestInit, "signa
     try {
       const response = await fetchImpl(input, { ...init, signal: AbortSignal.timeout(10_000) });
       if (!retryableReleaseResponse(response) || attempt + 1 === DEV_RELEASE_FETCH_ATTEMPTS) return response;
-      await response.body?.cancel().catch(() => undefined);
+      // Start disposal without letting a peer's cleanup promise own the retry budget.
+      void response.body?.cancel().catch(() => undefined);
     } catch (error) {
       lastError = error;
       if (attempt + 1 === DEV_RELEASE_FETCH_ATTEMPTS) throw error;
@@ -59,7 +60,7 @@ export async function boundedJson(response: Response): Promise<unknown> {
       const part = await reader.read(); if (part.done) break;
       bytes += part.value.byteLength; if (bytes > MAX_DISCOVERY_BYTES) throw new Error("development release discovery response is too large"); chunks.push(part.value);
     }
-  } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
+  } finally { void reader.cancel().catch(() => undefined); reader.releaseLock(); }
   const body = new Uint8Array(bytes); let offset = 0; for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.byteLength; }
   return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
 }
@@ -70,13 +71,13 @@ async function boundedReleaseBytes(url: string, limit: number, fetchImpl: typeof
     if (current.protocol !== "https:" || !ALLOWED_RELEASE_ORIGINS.has(current.origin)) throw new Error("development release redirect origin is not trusted");
     const response = await releaseFetch(current.toString(), { method: "GET", redirect: "manual", cache: "no-store", credentials: "omit", headers: { accept: "application/octet-stream", "user-agent": "runmeshdev-release-verifier/1" } }, fetchImpl);
     if (response.status >= 300 && response.status < 400) {
-      const location = response.headers.get("location"); await response.body?.cancel().catch(() => undefined);
+      const location = response.headers.get("location"); void response.body?.cancel().catch(() => undefined);
       if (location === null || redirect === 4) throw new Error("development release redirect is invalid");
       current = new URL(location, current); continue;
     }
-    if (!response.ok || response.body === null) { await response.body?.cancel().catch(() => undefined); throw new Error("development release asset is unavailable"); }
+    if (!response.ok || response.body === null) { void response.body?.cancel().catch(() => undefined); throw new Error("development release asset is unavailable"); }
     const declared = response.headers.get("content-length");
-    if (declared !== null && (!/^\d+$/u.test(declared) || Number(declared) > limit)) { await response.body.cancel().catch(() => undefined); throw new Error("development release asset exceeds its size bound"); }
+    if (declared !== null && (!/^\d+$/u.test(declared) || Number(declared) > limit)) { void response.body.cancel().catch(() => undefined); throw new Error("development release asset exceeds its size bound"); }
     const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let bytes = 0;
     try {
       for (let index = 0; ; index++) {
@@ -84,7 +85,7 @@ async function boundedReleaseBytes(url: string, limit: number, fetchImpl: typeof
         const part = await reader.read(); if (part.done) break;
         bytes += part.value.byteLength; if (bytes > limit) throw new Error("development release asset exceeds its size bound"); chunks.push(part.value);
       }
-    } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
+    } finally { void reader.cancel().catch(() => undefined); reader.releaseLock(); }
     if (bytes === 0) throw new Error("development release asset is empty");
     const result = new Uint8Array(bytes); let offset = 0; for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.byteLength; }
     return result;
