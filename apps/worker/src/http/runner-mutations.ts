@@ -5,7 +5,11 @@ import type { WorkerEnv } from "../platform/env.js";
 export function runnerLifecyclePorts(env: WorkerEnv): RunnerLifecyclePorts {
   return {
     observe: (id, mutation) => runnerMutationState(env, id, mutation),
-    cancel: async (id, mutation) => (await cancelRunnerPolicyMutation(env, id, mutation)).ok,
+    cancel: async (id, mutation) => {
+      const response = await cancelRunnerPolicyMutation(env, id, mutation);
+      void response.body?.cancel().catch(() => undefined);
+      return response.ok;
+    },
     finalize: (id, mutation, changed) => revokeRunnerTransport(env, id, mutation, changed)
   };
 }

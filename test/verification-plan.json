@@ -168,6 +168,7 @@
         "apps/worker/test/runner-admission-initialization.test.ts",
         "apps/worker/test/runner-capability-admission.test.ts",
         "apps/worker/test/runner-hello-maintenance.test.ts",
+        "apps/worker/test/runner-policy-responses.test.ts",
         "apps/worker/test/runner-presence.test.ts",
         "apps/worker/test/runtime-config.test.ts",
         "apps/worker/test/schema-publication.test.ts",
