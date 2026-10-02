@@ -124,6 +124,7 @@
         "apps/worker/test/ga-regressions.test.ts",
         "apps/worker/test/hibernation.test.ts",
         "apps/worker/test/hosted-one-command.test.ts",
+        "apps/worker/test/http-observation-cost.test.ts",
         "apps/worker/test/idle-budget.test.ts",
         "apps/worker/test/idle-maintenance.test.ts",
         "apps/worker/test/installer-security.test.ts",
