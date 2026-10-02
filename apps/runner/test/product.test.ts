@@ -31,14 +31,8 @@ describe("runner product profile and enrollment", () => {
     const firstEnteredPromise = new Promise<void>((resolve) => { resolveFirstEntered = resolve; });
     let releaseFirst!: () => void;
     const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
-    const store = new PolicyStore(join(test.root, "state"));
-    // Interpose at the start of the private activation body so this test does
-    // not depend on platform-specific filesystem latency before the first
-    // operation reaches its coordination point.
-    type ActivateVerified = (policy: Parameters<PolicyStore["activate"]>[0]) => Promise<void>;
-    const internals = store as unknown as { activateVerified: ActivateVerified };
-    const originalActivateVerified = internals.activateVerified.bind(store);
-    internals.activateVerified = async (policy) => {
+    // Gate the existing pre-commit port rather than replacing a private method.
+    const store = new PolicyStore(join(test.root, "state"), { failBeforeActivate: async () => {
       if (holdConcurrent) {
         if (!firstEntered) {
           firstEntered = true;
@@ -48,8 +42,7 @@ describe("runner product profile and enrollment", () => {
           secondEntered = true;
         }
       }
-      return originalActivateVerified(policy);
-    };
+    } });
     let first: Promise<void> | undefined;
     let second: Promise<void> | undefined;
     try {
@@ -66,9 +59,10 @@ describe("runner product profile and enrollment", () => {
         first.then(() => { throw new Error("first activation was not gated"); }, (error) => { throw error; }),
       ]);
       second = store.activate(latest);
-      // The second hook must remain behind the first activation. Without the
-      // store FIFO it reaches the hook and can rename active-policy.json first.
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      // Keep the first commit gated while a competing filesystem activation
+      // has time to reach the public hook; one event-loop turn is insufficient.
+      // Removing the FIFO must expose the second commit during this window.
+      await new Promise<void>((resolve) => setTimeout(resolve, 1000));
       expect(secondEntered).toBe(false);
       releaseFirst();
       await Promise.all([first, second]);
@@ -176,6 +170,60 @@ describe("runner product profile and enrollment", () => {
       })).rejects.toThrow("outcome is unknown");
       await expect(test.store.load()).resolves.toBeUndefined();
     } finally { await test.cleanup(); }
+  });
+  it.each([400, 409, 503, 302])("disposes a rejected enrollment body for HTTP %s without changing its outcome", async status => {
+    const test = await fixture();
+    const cancel = vi.fn(async () => { throw new Error("cleanup failure must not replace enrollment outcome"); });
+    const response = new Response(new ReadableStream<Uint8Array>({ cancel }), { status });
+    try {
+      const fetch = vi.fn(async () => response);
+      const failure = status === 409 ? "already in progress" : status === 400 ? "enrollment failed (400)" : "outcome is unknown";
+      await expect(enrollRunner({ server: "https://example.test/runner/enroll", code: "a".repeat(43), store: test.store, fetch })).rejects.toThrow(failure);
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(response.body!.locked).toBe(false);
+      await expect(test.store.load()).resolves.toBeUndefined();
+    } finally { await response.body!.cancel().catch(() => undefined); await test.cleanup(); }
+  });
+  it.each(["invalid", "65537", "9007199254740992"])("disposes a rejected enrollment body with content-length %s", async length => {
+    const test = await fixture();
+    const cancel = vi.fn(async () => { throw new Error("cleanup failure must not replace enrollment outcome"); });
+    const response = new Response(new ReadableStream<Uint8Array>({ cancel }), { headers: { "content-length": length } });
+    try {
+      const fetch = vi.fn(async () => response);
+      await expect(enrollRunner({ server: "https://example.test/runner/enroll", code: "a".repeat(43), store: test.store, fetch })).rejects.toThrow("outcome is unknown");
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(response.body!.locked).toBe(false);
+      await expect(test.store.load()).resolves.toBeUndefined();
+    } finally { await response.body!.cancel().catch(() => undefined); await test.cleanup(); }
+  });
+  it("rejects an oversized enrollment body before stalled cancellation finishes", async () => {
+    const test = await fixture();
+    let finishCancellation!: () => void;
+    let cancellationStarted!: () => void;
+    const cancellation = new Promise<void>(resolve => { finishCancellation = resolve; });
+    const started = new Promise<void>(resolve => { cancellationStarted = resolve; });
+    const cancel = vi.fn(() => { cancellationStarted(); return cancellation; });
+    const response = new Response(new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new Uint8Array(65_537)); }, cancel }));
+    const fetch = vi.fn(async () => response);
+    let settled = false;
+    const pending = enrollRunner({ server: "https://example.test/runner/enroll", code: "a".repeat(43), store: test.store, fetch })
+      .then(value => { settled = true; return value; }, error => { settled = true; return error as Error; });
+    try {
+      await started;
+      // All enrollment work after the byte limit is synchronous; let its
+      // promise continuations settle while upstream cancellation stays gated.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(settled).toBe(true);
+      const outcome = await pending;
+      expect(outcome).toBeInstanceOf(Error);
+      expect(outcome).toMatchObject({ message: expect.stringContaining("outcome is unknown") });
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(response.body!.locked).toBe(false);
+      await expect(test.store.load()).resolves.toBeUndefined();
+    } finally { finishCancellation(); await pending; await test.cleanup(); }
   });
   it("re-enrollment replaces connection credentials without adding a workspace", async () => {
     const test = await fixture();
