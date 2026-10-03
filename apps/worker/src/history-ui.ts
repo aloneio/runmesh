@@ -1,4 +1,5 @@
-import { HISTORY_DAYS, HISTORY_INTERVALS, HISTORY_LIMITS, type JobHistorySettings } from "./job-history-settings.js";
+import { HISTORY_DAYS, HISTORY_INTERVALS, type JobHistorySettings } from "@aloneio/runmesh-protocol";
+import { HISTORY_LIMITS } from "./job-history-settings.js";
 export type HistoryView = { scope: "none" | "jobs" | "live" | "audit" | "all"; limit: number; workspace?: string };
 export function historyView(url: URL): HistoryView | undefined {
   for (const k of ["history","limit","workspace_id"]) if (url.searchParams.getAll(k).length > 1) return undefined;

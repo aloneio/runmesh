@@ -1,5 +1,5 @@
 import { message } from "../i18n/messages.js";
-import type { AdminNotice, ControlNavSection } from "./view-models.js";
+import type { AdminNotice, ControlNavSection } from "../contracts/admin-views.js";
 import { escapeHtml } from "./format.js";
 import { adminStyles } from "../admin-styles.js";
 import { meshMarkSvg, languageSwitch } from "./brand.js";

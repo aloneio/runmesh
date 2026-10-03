@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "909a5a5aaaa901a2247387aa9fbae5239c06a38b3eff42635524787c449d6b05",
-      "bytes": 128629,
+      "sha256": "8b2996ac84bc7f040b46c38886a2685d0c097f01ae0629b3ca0d4668922ca09b",
+      "bytes": 128657,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -32,8 +32,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "61afd5882f7df01698d15df7757d6396c157e1b1f94b78cc95714364c8aedc6f",
-      "bytes": 129217,
+      "sha256": "62fb6a83b8ccbbbab7cc5460d7c6454af275a592da06f977a1d4caead400989c",
+      "bytes": 129245,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -51,8 +51,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "495b693f8698d4777602b9044b5f2ccdfff3e8d016ecf43d5faf34e871b0bac0",
-      "bytes": 130365,
+      "sha256": "42aec00cf81398bf9fc15db19760da0a6cc9979054afa4bb7a2064ce84cd1698",
+      "bytes": 130393,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -422,8 +422,8 @@
           }
         ]
       ],
-      "sha256": "35934ff85fd67d919b6e6360500a8b4bbdfd0fb092371e0388b3cebbf1ec8a19",
-      "bytes": 130714,
+      "sha256": "b969bd64f8de5720fa76c538af81934a373a993db8427d2e392c5ad87e27dc1f",
+      "bytes": 130742,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -615,5 +615,16 @@
       "admin-document"
     ],
     "allowed_change": "Shared revoke/delete forms on MCP client list and details, including central-only clients, plus the reviewed deletion confirmation script. Other renderers remain unchanged."
+  },
+  "navigation_superseded_review": {
+    "source_base": "4238be3840a6da34b7c74acfa59401fe3e5d7a4e",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "reviewed_change": "Discard a superseded navigation response before mounting controllers or updating history. The final queued page owns its URL and content; existing failure and locale fallbacks are unchanged. Replacing only the inline bundle reproduces every prior hash and byte count. No screenshots.",
+    "non_script_markup_unchanged": true
   }
 }

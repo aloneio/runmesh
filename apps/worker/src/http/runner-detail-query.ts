@@ -1,7 +1,8 @@
 import { runnerDetail } from "../application/admin-projections.js";
 import { loadLiveJobs } from "../application/runner-queries.js";
+import { runnerQueryPorts } from "../platform/control-plane-receipts.js";
 import type { HistoryView } from "../history-ui.js";
-import { parseJobHistorySettings, type JobHistorySettings } from "../job-history-settings.js";
+import { parseJobHistorySettings, type JobHistorySettings } from "@aloneio/runmesh-protocol";
 import { registryGet } from "../platform/control-plane.js";
 import type { WorkerEnv } from "../platform/env.js";
 import { record } from "../values.js";
@@ -29,7 +30,7 @@ export async function loadRunnerDetailData(env: WorkerEnv, runnerId: string, vie
       registryGet(env, path + "/policy-versions").then(response => registryArray(response, "versions")),
       registryGet(env, "/auth" + path + "/enrollments").then(registryRecord),
       registryGet(env, path + "/history-settings").then(registryRecord),
-      view.scope === "live" ? loadLiveJobs(env, runnerId, view.workspace!, view.limit).then(response => registryArray(response, "jobs"))
+      view.scope === "live" ? loadLiveJobs(runnerQueryPorts(env), runnerId, view.workspace!, view.limit)
         : view.scope === "jobs" || view.scope === "all" ? registryGet(env, path + "/jobs?limit=" + view.limit).then(response => registryArray(response, "jobs")) : undefined,
       view.scope === "audit" || view.scope === "all" ? registryGet(env, path + "/mcp-calls?limit=" + view.limit).then(response => registryArray(response, "calls")) : undefined,
     ]);

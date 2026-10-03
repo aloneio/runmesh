@@ -3,6 +3,7 @@ import type { BridgeReply, BridgeReplyPort, RegistryRequestPort } from "./contra
 import { BridgeReplies } from "./platform/bridge-replies.js";
 import { requestRunnerRegistry } from "./platform/runner-registry.js";
 import { consumeInternalNonceStatus } from "./platform/control-plane.js";
+import { appliedPolicyIdentity } from "./contracts/runner-selection.js";
 
 /** @internal Trusted composition, never an HTTP or deployment option. */
 export interface RunnerDoDependencies { readonly registryRequest?: RegistryRequestPort; readonly replies?: BridgeReplyPort }
@@ -1097,13 +1098,8 @@ export class RunnerDO {
     const value = await response.json() as Record<string, unknown>;
     const revision = value.applied_revision;
     const checksum = value.active_checksum;
-    const ready = value.ok === true
-      && value.policy_status === "applied"
+    const ready = appliedPolicyIdentity(value) !== undefined
       && (before.mutationId === null || before.mutationId === RESTART_RECONCILE_MUTATION_ID || value.desired_policy_mutation_id === before.mutationId)
-      && value.desired_revision === revision
-      && value.runner_reported_policy_revision === revision
-      && value.desired_checksum === checksum
-      && value.runner_reported_policy_checksum === checksum
       && value.connection_epoch === attachment.epoch
       && value.credential_version === attachment.credentialVersion
       && value.session_id === attachment.sessionId
@@ -1250,15 +1246,8 @@ function transportIdentityFields(attachment: Pick<ConnectionAttachment, "session
 }
 
 function isCurrentPolicyReadiness(value: Record<string, unknown>, attachment: ConnectionAttachment, revision: unknown, checksum: unknown): revision is number {
-  return value.ok === true && value.policy_status === "applied"
-    && typeof value.desired_revision === "number" && Number.isSafeInteger(value.desired_revision) && value.desired_revision > 0
-    && typeof revision === "number" && Number.isSafeInteger(revision) && revision > 0
-    && typeof value.runner_reported_policy_revision === "number" && Number.isSafeInteger(value.runner_reported_policy_revision) && value.runner_reported_policy_revision > 0
-    && typeof value.desired_checksum === "string" && /^[a-f0-9]{64}$/.test(value.desired_checksum)
-    && typeof checksum === "string" && /^[a-f0-9]{64}$/.test(checksum)
-    && typeof value.runner_reported_policy_checksum === "string" && /^[a-f0-9]{64}$/.test(value.runner_reported_policy_checksum)
-    && value.desired_revision === revision && value.runner_reported_policy_revision === revision
-    && value.desired_checksum === checksum && value.runner_reported_policy_checksum === checksum
+  return appliedPolicyIdentity(value) !== undefined
+    && value.applied_revision === revision && value.active_checksum === checksum
     && value.connection_epoch === attachment.epoch && value.credential_version === attachment.credentialVersion && value.session_id === attachment.sessionId
     && typeof value.lifecycle_id === "string"
     && validLifecycleId(value.lifecycle_id)

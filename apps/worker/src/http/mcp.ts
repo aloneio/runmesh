@@ -7,6 +7,7 @@ import { primeMcpResponse } from "./mcp-response.js";
 import { readCappedBytes } from "../body.js";
 import { sha256Hex } from "../security.js";
 import { verifyMcpClient } from "../application/mcp-identity.js";
+import { mcpIdentityVerifier } from "../platform/control-plane-receipts.js";
 import type { WorkerEnv } from "../platform/env.js";
 import type { CentralRemote } from "../contracts/remote.js";
 import type { CentralSkills } from "../contracts/skills.js";
@@ -19,7 +20,7 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
   const parts = url.pathname.split("/").filter(Boolean);
   const secret = parts[0];
   if (secret === undefined || !MCP_SECRET_RE.test(secret)) { await discardBody(request); return mcpHttpError(404, "Not found"); }
-  const verified = await verifyMcpClient(env, await sha256Hex(secret)).catch(async error => { await discardBody(request); throw error; });
+  const verified = await verifyMcpClient(mcpIdentityVerifier(env), await sha256Hex(secret)).catch(async error => { await discardBody(request); throw error; });
   if (verified === undefined) { await discardBody(request); return mcpHttpError(404, "Not found"); }
   // createMcpHandler requires an exact /mcp route. Forward the bounded body
   // and its parsed value; protocol validation remains owned by the SDK.

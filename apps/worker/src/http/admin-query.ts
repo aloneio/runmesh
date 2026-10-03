@@ -1,6 +1,5 @@
 import { runnerSummary, clientSummary, clientDetail } from "../application/admin-projections.js";
-import type { AdminData } from "../admin/view-models.js";
-import type { AdminNotice } from "../admin/view-models.js";
+import type { AdminData, AdminNotice } from "../contracts/admin-views.js";
 import { arrayField } from "../values.js";
 import { json } from "../platform/control-plane.js";
 import type { ClientViewModel } from "../contracts/admin-views.js";

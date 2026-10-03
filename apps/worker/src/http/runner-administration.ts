@@ -4,6 +4,7 @@ import { regenerateRunnerEnrollment } from "../application/runner-enrollment.js"
 import { createEnrollmentCode } from "../application/enrollment.js";
 import { revokeRunner, rotateRunner } from "../application/runner-credentials.js";
 import { runnerExecutionSnapshot } from "../application/runner-queries.js";
+import { enrollmentPorts, runnerQueryPorts } from "../platform/control-plane-receipts.js";
 import type { RunnerActionFailure, RunnerActionPorts, RunnerWriteOutcome } from "../contracts/runner-administration.js";
 import type { EnrollmentWindow, ExecutionModeSelection, RunnerExecutionSnapshot } from "../contracts/runner-admin.js";
 import { runnerRegistryRequest } from "../platform/control-plane.js";
@@ -52,7 +53,7 @@ export function regenerateEnrollmentFromControlPlane(env: WorkerEnv, runnerId: s
     fence: async (id, mutation) => (await beginRunnerPolicyMutation(env, id, mutation)).ok,
     cancel: runnerLifecyclePorts(env).cancel,
     snapshot: async id => {
-      const result = await runnerExecutionSnapshot(env, id);
+      const result = await runnerExecutionSnapshot(runnerQueryPorts(env), id);
       return result.snapshot === undefined ? {
         state: result.status === 404 ? "missing" : "unavailable"
       } : {
@@ -60,7 +61,7 @@ export function regenerateEnrollmentFromControlPlane(env: WorkerEnv, runnerId: s
         snapshot: result.snapshot
       };
     },
-    enroll: (id, snapshot) => createEnrollmentCode(env, id, input.selection, {
+    enroll: (id, snapshot) => createEnrollmentCode(enrollmentPorts(env), id, input.selection, {
       configuredMode: snapshot.configuredMode,
       lifecycleId: snapshot.lifecycleId
     }, input.ttlMs, input.window),
@@ -95,7 +96,7 @@ export function createRunnerFromControlPlane(env: WorkerEnv, runnerId: string, i
       confirm_privileged_host: input.selection.confirmed,
       ...input.validity
     }))),
-    enroll: (id, lifecycleId) => createEnrollmentCode(env, id, input.selection, {
+    enroll: (id, lifecycleId) => createEnrollmentCode(enrollmentPorts(env), id, input.selection, {
       configuredMode: input.selection.mode,
       lifecycleId
     }, input.ttlMs, input.window)
@@ -105,7 +106,7 @@ export function rotateRunnerFromControlPlane(env: WorkerEnv, runnerId: string, i
   return rotateRunner({
     ...actionPorts(env, "credential-rotated-"),
     snapshot: async id => {
-      const result = await runnerExecutionSnapshot(env, id);
+      const result = await runnerExecutionSnapshot(runnerQueryPorts(env), id);
       return result.snapshot === undefined ? {
         state: result.status === 404 ? "missing" : "unavailable"
       } : {
@@ -116,7 +117,7 @@ export function rotateRunnerFromControlPlane(env: WorkerEnv, runnerId: string, i
     rotate: async (id, mutation) => runnerWriteOutcome(await runnerRegistryRequest(env, id, "/rotate", "POST", JSON.stringify({
       mutation_id: mutation
     }))),
-    enroll: (id, snapshot) => createEnrollmentCode(env, id, input.selection, {
+    enroll: (id, snapshot) => createEnrollmentCode(enrollmentPorts(env), id, input.selection, {
       configuredMode: snapshot.configuredMode,
       lifecycleId: snapshot.lifecycleId
     }, input.ttlMs, input.window)

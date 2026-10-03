@@ -15,7 +15,7 @@ function fixture(reply: () => Response = () => Response.json({ type: "rpc.respon
     const path = new URL(request.url).pathname;
     if (path.endsWith("/active-runner")) return Response.json({ active_runner_id: "runner-test", active_runner_updated_at_ms: 1, runner: selection.context });
     if (path.includes("/effective-permissions/")) return Response.json({ permissions: { read: true, edit: true, shell: true, job_control: true } });
-    if (path.endsWith("/policy-readiness")) return Response.json({ ok: true, desired_revision: 1, applied_revision: 1, runner_reported_policy_revision: 1,
+    if (path.endsWith("/policy-readiness")) return Response.json({ ok: true, policy_status: "applied", desired_revision: 1, applied_revision: 1, runner_reported_policy_revision: 1,
       desired_checksum: checksum, active_checksum: checksum, runner_reported_policy_checksum: checksum, connection_epoch: 1, credential_version: 1, lifecycle_id: checksum, session_id: "session-test" });
     if (path.includes("/jobs/")) return new Response(null, { status: 404 });
     if (path.endsWith("/authorize-rpc")) return Response.json({ ok: true });
@@ -161,6 +161,18 @@ describe("sticky Runner selection receipt integrity", () => {
 });
 
 describe("agent-visible recovery receipts", () => {
+  it.each([undefined, "pending", "offline_pending", "invalid"])("does not turn policy state %s into applied or dispatch a Job", async policy_status => {
+    const f = fixture();
+    const read = f.registry.getMockImplementation()!;
+    f.registry.mockImplementation(async request => {
+      const response = await read(request);
+      if (!new URL(request.url).pathname.endsWith("/policy-readiness")) return response;
+      return Response.json({ ...await response.json() as Record<string, unknown>, policy_status });
+    });
+    expect(await policyReadiness(f.env, "runner-test")).toMatchObject({ ok: false, error: { error: { code: "policy_pending" } } });
+    expect(await jobTool(f.env, "client-test", { action: "get", job_id: "job-original", workspace_id: "work" }, ["coding:read"])).toMatchObject({ isError: true, structuredContent: { error: { code: "policy_pending" } } });
+    expect(f.dispatch).not.toHaveBeenCalled();
+  });
   it("does not misclassify a policy dependency outage as stale policy", async () => {
     const f = fixture();
     f.registry.mockImplementation(async () => new Response(null, { status: 503 }));

@@ -1,7 +1,9 @@
 import { message } from "../i18n/messages.js";
 import type { RunnerExecutionMode } from "../contracts/administration.js";
+import type { AdminData } from "../contracts/admin-views.js";
+import type { RunnerReleaseDescriptor } from "../contracts/runner-release.js";
 import type { HistoryView } from "../history-ui.js";
-import type { JobHistorySettings } from "../job-history-settings.js";
+import type { JobHistorySettings } from "@aloneio/runmesh-protocol";
 import { historyControls, historySettingsForm } from "../history-ui.js";
 import { JOBS_EXPLANATION, jobSnapshotNote } from "./job-views.js";
 import { validityStatus } from "../validity.js";
@@ -17,7 +19,24 @@ export interface RunnerDetailPresentation {
   readonly dayMs: number;
 }
 
-export function runnerDetailPage(presentation: RunnerDetailPresentation, runner: Record<string, unknown>, workspaces: readonly unknown[], jobs: readonly unknown[] | undefined, environment: Record<string, unknown> | undefined, csrf: string, release: { readonly latest_version: string; readonly distributable: boolean }, policyVersions: readonly unknown[] = [], enrollment?: Record<string, unknown>, mcpCalls: readonly unknown[] | undefined = undefined, view: HistoryView = {scope:"none",limit:10}, historySettings?: JobHistorySettings): string {
+export interface RunnerDetailPageInput {
+  readonly presentation: RunnerDetailPresentation;
+  readonly runner: Readonly<Record<string, unknown>>;
+  readonly workspaces: readonly Record<string, unknown>[];
+  readonly jobs?: AdminData["jobs"] | undefined;
+  readonly environment?: Readonly<Record<string, unknown>> | undefined;
+  readonly csrf: string;
+  readonly release: Pick<RunnerReleaseDescriptor, "latest_version" | "distributable">;
+  readonly policyVersions?: readonly Record<string, unknown>[] | undefined;
+  readonly enrollment?: Readonly<Record<string, unknown>> | undefined;
+  readonly mcpCalls?: readonly Record<string, unknown>[] | undefined;
+  readonly view?: HistoryView | undefined;
+  readonly historySettings?: JobHistorySettings | undefined;
+}
+
+export function runnerDetailPage({ presentation, runner, workspaces, jobs, environment, csrf, release,
+  policyVersions = [], enrollment, mcpCalls, view = { scope: "none", limit: 10 }, historySettings,
+}: RunnerDetailPageInput): string {
   const runnerId = typeof runner.runner_id === "string" ? runner.runner_id : "unknown";
   const displayName = typeof runner.display_name === "string" ? runner.display_name : runnerId;
   const state = typeof runner.state === "string" ? runner.state : "offline";

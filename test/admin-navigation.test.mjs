@@ -40,6 +40,30 @@ test("concurrent navigation coalesces to the latest destination within one owner
   assert.equal(h.fetched.length, 1); assert.equal(h.nav.isLoading(), true);
   resolveFirst({ ok: true, text: async () => "first" }); await first; await new Promise(setImmediate);
   assert.deepEqual(h.fetched.map(item => new URL(item.url).pathname), ["/admin/runners", "/admin/settings"]);
+  assert.deepEqual(h.mounted.map(item => item.key), ["/admin/settings"]);
+  assert.equal(h.nav.isLoading(), false);
+});
+for (const [destination, push] of [["/admin", false], ["/admin/settings", true]])
+test("superseded responses preserve the final page and history destination " + destination, async () => {
+  const h = harness(), history = [];
+  let finishBody;
+  h.context.fetch = (url, options) => {
+    h.fetched.push({ url, options });
+    return Promise.resolve({ ok: true, text: () => h.fetched.length === 1
+      ? new Promise(resolve => { finishBody = resolve; }) : Promise.resolve("latest") });
+  };
+  h.context.view.mount = (_root, _title, key, shouldPush, url) => {
+    h.mounted.push({ key });
+    if (shouldPush) { history.push(url.href); h.context.location.href = url.href; }
+  };
+  const pending = h.open("/admin/runners");
+  await new Promise(setImmediate);
+  void h.open(destination, push);
+  finishBody("superseded");
+  await pending; await new Promise(setImmediate);
+  assert.deepEqual(h.mounted, [{ key: destination }]);
+  assert.equal(new URL(h.context.location.href).pathname, destination);
+  assert.deepEqual(history, push ? ["https://worker.test" + destination] : []);
   assert.equal(h.nav.isLoading(), false);
 });
 test("failed navigation falls back to a full request and never mounts stale content", async () => {

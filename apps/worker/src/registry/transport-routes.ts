@@ -2,7 +2,7 @@ import type { RunnerRouteRequest } from "./route-inputs.js";
 import { parseRunnerConnection, parseRunnerDisconnect } from "./route-inputs.js";
 import { registryInputError } from "./route-projections.js";
 import type { RunnerConnectionState } from "../contracts/runner-selection.js";
-import type { JobHistorySettings } from "../job-history-settings.js";
+import type { JobHistorySettings } from "@aloneio/runmesh-protocol";
 import type { RunnerMetadata } from "@aloneio/runmesh-protocol";
 import type { RunnerPolicy } from "@aloneio/runmesh-protocol";
 import { containsControlCharacter } from "../security.js";

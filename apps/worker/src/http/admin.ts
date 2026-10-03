@@ -32,7 +32,7 @@ import { loadRunnerDetailData } from "./runner-detail-query.js";
 import { MAX_VALIDITY_DAYS } from "../domain/execution-mode.js";
 import { methodNotAllowed } from "./responses.js";
 import { notFound } from "./responses.js";
-import { parseJobHistorySettings } from "../job-history-settings.js";
+import { parseJobHistorySettings } from "@aloneio/runmesh-protocol";
 import { permissionsFromForm } from "./input.js";
 import { policyReadiness } from "../application/runner-queries.js";
 import { randomBase64Url } from "../security.js";
@@ -45,6 +45,7 @@ import { resolveConnectionOrigin } from "./origin.js";
 import { runnerConfiguredExecutionMode } from "../domain/execution-mode.js";
 import { runnerDetailPage } from "../admin/runner-detail-view.js";
 import { runnerEnvironment } from "../application/runner-queries.js";
+import { runnerQueryPorts } from "../platform/control-plane-receipts.js";
 import { resolveRunnerReleaseDescriptor } from "../distribution/release.js";
 import { runnerReportedExecutionMode } from "../domain/execution-mode.js";
 import { runnerRpc } from "../platform/control-plane.js";
@@ -85,10 +86,10 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
     if (csrf === undefined || !constantTimeEqual(await sha256Hex(csrf), session.csrf_hash)) return redirect("/", [clearCookie(ADMIN_SESSION_COOKIE), clearCookie(ADMIN_CSRF_COOKIE)]);
     const runnerId = jobDetail[1] as string;
     const page = await loadAdminJobPage(url, runnerId, jobDetail[2] as string, (path) => registryGet(env, path), async (params) => {
-      const readiness = await policyReadiness(env, runnerId);
+      const readiness = await policyReadiness(runnerQueryPorts(env), runnerId);
       return readiness.ok ? runnerRpc(env, runnerId, "job.logs", params, readiness.value.applied_revision, readiness.value.active_checksum) : undefined;
     }, async (params) => {
-      const readiness = await policyReadiness(env,runnerId);
+      const readiness = await policyReadiness(runnerQueryPorts(env), runnerId);
       return readiness.ok ? runnerRpc(env,runnerId,"job.get",params,readiness.value.applied_revision,readiness.value.active_checksum) : undefined;
     });
     return page.ok ? html(adminDocument(page.title, page.body, "runners")) : adminRunnerError(page.status, page.message);
@@ -112,14 +113,17 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
     if (view === undefined) return adminRunnerError(400,"Invalid history query.");
     const [data, environment, releaseResponse, notices] = await Promise.all([
       loadRunnerDetailData(env, runnerId, view),
-      runnerEnvironment(env, runnerId),
+      runnerEnvironment(runnerQueryPorts(env), runnerId),
       resolveRunnerReleaseDescriptor(env, developmentReleaseDependencies(env), scheduleRefresh),
       loadFeatureNotices(env),
     ]);
     if (data.state === "missing") return adminRunnerError(404, "Runner was not found.");
     if (data.state === "unavailable") return adminRunnerError(503, "Runner details could not be loaded. Try again.");
     const { runner, workspaces, jobs, mcpCalls, policyVersions, enrollment, settings } = data;
-    return html(adminDocument(`${typeof runner.display_name === "string" ? runner.display_name : runnerId} · Runner`, runnerDetailPage({ configuredMode: runnerConfiguredExecutionMode(runner), reportedMode: runnerReportedExecutionMode(runner), maxValidityDays: MAX_VALIDITY_DAYS, dayMs: DAY_MS }, runner, workspaces, jobs, environment, csrf, releaseResponse, policyVersions, enrollment, mcpCalls, view, settings), "runners", notices));
+    return html(adminDocument(`${typeof runner.display_name === "string" ? runner.display_name : runnerId} · Runner`, runnerDetailPage({
+      presentation: { configuredMode: runnerConfiguredExecutionMode(runner), reportedMode: runnerReportedExecutionMode(runner), maxValidityDays: MAX_VALIDITY_DAYS, dayMs: DAY_MS },
+      runner, workspaces, jobs, environment, csrf, release: releaseResponse, policyVersions, enrollment, mcpCalls, view, historySettings: settings,
+    }), "runners", notices));
   }
   if (request.method !== "POST") { await discardBody(request); return methodNotAllowed("GET, POST"); }
   const form = await formData(request);

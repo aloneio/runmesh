@@ -1,6 +1,6 @@
 import { message } from "../i18n/messages.js";
 import type { ClientViewModel, RunnerSummaryViewModel } from "../contracts/admin-views.js";
-import type { AdminData } from "./view-models.js";
+import type { AdminData } from "../contracts/admin-views.js";
 import { record, escapeHtml, time, displayScopeLabel } from "./format.js";
 import { permissionSelect, scopeCheckboxes } from "./forms.js";
 import { clientCredentialBadge } from "./tables.js";

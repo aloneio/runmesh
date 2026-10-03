@@ -1,4 +1,21 @@
 export type RunnerConnectionState = "online" | "offline" | "stale";
+export type AppliedPolicyIdentity = {
+  readonly applied_revision: number;
+  readonly active_checksum: string;
+};
+
+/** The desired, applied and Runner-reported identities must agree before use. */
+export function appliedPolicyIdentity(value: unknown): AppliedPolicyIdentity | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  const revision = candidate.applied_revision, checksum = candidate.active_checksum;
+  if (candidate.ok !== true || candidate.policy_status !== "applied"
+    || typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1
+    || typeof checksum !== "string" || !/^[a-f0-9]{64}$/u.test(checksum)
+    || candidate.desired_revision !== revision || candidate.runner_reported_policy_revision !== revision
+    || candidate.desired_checksum !== checksum || candidate.runner_reported_policy_checksum !== checksum) return undefined;
+  return { applied_revision: revision, active_checksum: checksum };
+}
 export type PolicyReadiness =
   | {
       readonly ok: true;

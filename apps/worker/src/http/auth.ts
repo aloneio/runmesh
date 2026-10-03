@@ -5,6 +5,7 @@ import { adminError } from "./responses.js";
 import { authEntryDocument } from "../admin/auth-views.js";
 import { authThrottleCheck } from "../application/auth-source.js";
 import { authThrottleRecord } from "../application/auth-source.js";
+import { authThrottlePorts } from "../platform/control-plane-receipts.js";
 import { boundedJsonResponse } from "../bounded-json.js";
 import { clearCookie } from "./session.js";
 import { csrfCookie } from "./session.js";
@@ -66,7 +67,8 @@ async function submitSetup(request: Request, env: WorkerEnv): Promise<Response> 
   const form = await formData(request);
   if (form === undefined) return adminError(400, "Invalid setup request.");
   if (!await verifyPreAuthCsrf(request, form, SETUP_CSRF_COOKIE, env)) return adminError(403, "Setup request was rejected.");
-  const throttle = await authThrottleCheck(env, "setup", request);
+  const throttlePorts = authThrottlePorts(env, request.headers.get("cf-connecting-ip"));
+  const throttle = await authThrottleCheck(throttlePorts, "setup");
   if (throttle === undefined) return adminError(503, "Setup could not be completed. Try again.");
   if (!throttle.allowed) return throttleError(throttle.retry_after_ms);
   const password = form.get("password"); const confirmation = form.get("confirm_password");
@@ -74,10 +76,10 @@ async function submitSetup(request: Request, env: WorkerEnv): Promise<Response> 
   const verifier = await passwordVerifier(password);
   const response = await registryPost(env, "/auth/setup", { password_verifier: verifier });
   if (response.status === 204) {
-    await authThrottleRecord(env, "setup", true, request);
+    await authThrottleRecord(throttlePorts, "setup", true);
     return redirect("/", [clearCookie(SETUP_CSRF_COOKIE)]);
   }
-  await authThrottleRecord(env, "setup", false, request);
+  await authThrottleRecord(throttlePorts, "setup", false);
   if (response.status === 409) return adminError(409, "This instance is already initialized.", [clearCookie(SETUP_CSRF_COOKIE)]);
   return adminError(503, "Setup could not be completed. Try again.");
 }
@@ -92,12 +94,13 @@ async function submitLogin(request: Request, env: WorkerEnv): Promise<Response> 
   // run when Registry fails, so infrastructure failures must not source-lock.
   const settings = await loadLoginSettings((signal) => registryRequest(env, "/auth/settings", "GET", "", signal));
   if (settings === undefined) return adminError(503, "Authentication service unavailable. Try again.");
-  const throttle = await authThrottleCheck(env, "login", request);
+  const throttlePorts = authThrottlePorts(env, request.headers.get("cf-connecting-ip"));
+  const throttle = await authThrottleCheck(throttlePorts, "login");
   if (throttle === undefined) return adminError(503, "Login could not be completed. Try again.");
   if (!throttle.allowed) return throttleError(throttle.retry_after_ms);
   const sessionVersion = settings.session_version;
   const valid = await verifyPassword(password, settings.password_verifier);
-  await authThrottleRecord(env, "login", valid, request);
+  await authThrottleRecord(throttlePorts, "login", valid);
   if (!valid) return adminError(403, "Invalid administrator password.", [clearCookie(LOGIN_CSRF_COOKIE)]);
   const rawSession = randomBase64Url(); const rawCsrf = randomBase64Url();
   const sessionResponse = await registryPost(env, "/auth/sessions", {

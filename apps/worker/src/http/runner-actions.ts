@@ -17,6 +17,7 @@ import { redirect } from "./html-response.js";
 import { registryPost } from "../platform/control-plane.js";
 import { runnerEnrollmentPage } from "./admin-presentation.js";
 import { runnerExecutionSnapshot } from "../application/runner-queries.js";
+import { runnerQueryPorts } from "../platform/control-plane-receipts.js";
 import { runnerRegistryRequest } from "../platform/control-plane.js";
 import { runnerReleaseDescriptor, resolveRunnerReleaseDescriptor } from "../distribution/release.js";
 import { runnerWindowFromForm } from "./input.js";
@@ -53,7 +54,7 @@ export async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, 
   if (action === "validity") {
     const window = runnerWindowFromForm(form);
     if (window === undefined) return adminRunnerError(400, "Runner authorization validity settings are invalid.");
-    const state = await runnerExecutionSnapshot(env, runnerId);
+    const state = await runnerExecutionSnapshot(runnerQueryPorts(env), runnerId);
     if (state.snapshot === undefined) return adminRunnerError(state.status === 404 ? 404 : 503, "Runner authorization could not read the Runner state.");
     const response = await registryPost(env, `/auth/runners/${encodeURIComponent(runnerId)}/validity`, { valid_from_ms: window.valid_from_ms, valid_until_ms: window.valid_until_ms, expected_lifecycle_id: state.snapshot.lifecycleId });
     return response.ok ? redirect(`/admin/runners/${encodeURIComponent(runnerId)}`) : adminUpstreamError(response, "Runner authorization validity could not be updated.", response.status === 409 ? 409 : 400, adminRunnerError);
@@ -102,7 +103,7 @@ export async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, 
     return result.state === "completed" ? redirect("/admin") : browserRunnerAdministrationError("revoke", result);
   }
   if (action === "rotate") {
-    const initialState = await runnerExecutionSnapshot(env, runnerId);
+    const initialState = await runnerExecutionSnapshot(runnerQueryPorts(env), runnerId);
     if (initialState.snapshot === undefined) return adminRunnerError(initialState.status === 404 ? 404 : 503, initialState.status === 404 ? "Runner was not found." : "Runner credential rotation could not read the Runner state.");
     const selection = executionModeForExistingRunner(form, initialState.snapshot.runner);
     if (selection === undefined) return adminRunnerError(400, "Runner execution mode must be selected explicitly; privileged-host mode also requires confirmation.");
@@ -111,7 +112,7 @@ export async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, 
     return runnerEnrollmentPage(env, await resolveRunnerReleaseDescriptor(env, developmentReleaseDependencies(env), scheduleRefresh), baseUrl, runnerId, result.enrollment.code, String(form.get("csrf_token") ?? ""), true, selection.mode, selection.confirmed, result.enrollment);
   }
   if (action === "enrollment") {
-    const initialState = await runnerExecutionSnapshot(env, runnerId);
+    const initialState = await runnerExecutionSnapshot(runnerQueryPorts(env), runnerId);
     if (initialState.snapshot === undefined) return adminRunnerError(initialState.status === 404 ? 404 : 503, initialState.status === 404 ? "Runner was not found." : "Runner enrollment could not read the Runner state.");
     const selection = executionModeForExistingRunner(form, initialState.snapshot.runner);
     if (selection === undefined) return adminRunnerError(400, "Runner execution mode must be selected explicitly; privileged-host mode also requires confirmation.");

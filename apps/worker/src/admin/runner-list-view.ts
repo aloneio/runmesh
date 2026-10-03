@@ -1,7 +1,7 @@
 import { message } from "../i18n/messages.js";
 import type { RunnerExecutionMode } from "../contracts/administration.js";
 import type { RunnerSummaryViewModel } from "../contracts/admin-views.js";
-import type { AdminData } from "./view-models.js";
+import type { AdminData } from "../contracts/admin-views.js";
 import { escapeHtml, time } from "./format.js";
 import { statusBadge, safePlatform } from "./tables.js";
 import { executionModeFormFields, windowFields, PRIVILEGED_HOST_WARNING } from "./runner-fields.js";

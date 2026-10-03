@@ -1,5 +1,4 @@
-import { JobMetadataSchema, type JobMetadata } from "@aloneio/runmesh-protocol";
-import type { JobHistorySettings } from "./job-history-settings.js";
+import { HISTORY_DAYS, JobMetadataSchema, type JobHistorySettings, type JobMetadata } from "@aloneio/runmesh-protocol";
 
 const MAX_JOBS = 500, MAX_BYTES = 768 * 1024, DAY = 86_400_000;
 const statusRank = (s: string): number => s === "queued" ? 0 : s === "running" ? 1 : s === "cancelling" ? 2 : 3;
@@ -101,7 +100,7 @@ export class PackedJobHistory {
     } catch (error) { return this.failed(error); }
   }
   public async setRetention(runnerId: string, lifecycle: string, days: number): Promise<void> {
-    if (![1, 3, 7, 14, 30, 90].includes(days)) throw new JobHistoryUnavailableError();
+    if (!HISTORY_DAYS.some((allowed) => allowed === days)) throw new JobHistoryUnavailableError();
     if (Date.now() < this.disabledUntil) throw new JobHistoryUnavailableError();
     try {
       await this.initialize();

@@ -43,6 +43,9 @@ export function createAdminNavigation({
         navigateFully(url);
         return;
       }
+      // A newer destination owns both the page and history. Mounting this response
+      // would also start controllers for a page the user has already left.
+      if (queued) return;
       const next = parsed.querySelector("#main-content");
       if (!next) throw new Error("main content missing");
       const root = view.pageRoot(next);

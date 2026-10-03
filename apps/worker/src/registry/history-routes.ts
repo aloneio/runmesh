@@ -2,7 +2,7 @@ import type { RunnerRouteRequest } from "./route-inputs.js";
 import type { PackedHistoryPort, AuditHistoryPort } from "./history-ports.js";
 import { parseRunnerSync, parseJobFilters, parseMcpCallFilters, parseMcpCall } from "./route-inputs.js";
 import { registryInputError, projectCombinedMcpCalls } from "./route-projections.js";
-import type { JobHistorySettings } from "../job-history-settings.js";
+import type { JobHistorySettings } from "@aloneio/runmesh-protocol";
 import { controlPlaneUnavailableResponse } from "../control-plane-errors.js";
 import type { JobMetadata } from "@aloneio/runmesh-protocol";
 import { IdentifierSchema } from "@aloneio/runmesh-protocol";

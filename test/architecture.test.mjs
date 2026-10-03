@@ -27,6 +27,14 @@ async function fixture(t, sources) {
 }
 
 const bad = [
+  ["history display defaults own SQL", { "apps/worker/src/job-history-settings.ts": 'export function initialize(sql: SqlStorage) { sql.exec("SELECT 1"); }' }],
+  ["history display defaults own network", { "apps/worker/src/job-history-settings.mts": 'export const load = () => fetch("https://example.invalid");' }],
+  ["application to concrete platform adapter", { "apps/worker/src/application/query.ts": 'import "../platform/control-plane.js";', "apps/worker/src/platform/control-plane.ts": "export {};" }],
+  ["application to platform environment types", { "apps/worker/src/application/query.mts": 'import type { WorkerEnv } from "../platform/env.js";', "apps/worker/src/platform/env.ts": "export type WorkerEnv = {};" }],
+  ["request use case owns HTTP response", { "apps/worker/src/application/runner-queries.ts": 'export const reply = () => Response.json({});' }],
+  ["request use case reads incoming HTTP headers", { "apps/worker/src/application/auth-source.ts": 'export const source = (request: Request) => request.headers.get("cf-connecting-ip");' }],
+  ["request use case owns randomness", { "apps/worker/src/application/enrollment.cts": 'export const code = () => crypto.randomUUID();' }],
+  ["request use case owns network", { "apps/worker/src/application/mcp-identity.ts": 'export const verify = () => fetch("https://example.invalid");' }],
   ["shared schema helper to request state", { "apps/worker/src/mcp/providers/schema-publication.ts": 'import "../server.js";', "apps/worker/src/mcp/server.ts": "export {};" }],
   ["shared schema helper to client SDK", { "apps/worker/src/mcp/providers/schema-publication.ts": 'import type { Client } from "@modelcontextprotocol/client";' }],
   ["shared schema helper to ambient network", { "apps/worker/src/mcp/providers/schema-publication.ts": 'export const load = () => fetch("https://example.invalid");' }],
@@ -175,6 +183,16 @@ for (const [name, sources] of bad) test(`AR01 rejects ${name}`, async t => {
   const f = await fixture(t, sources), result = f.run();
   assert.notEqual(result.status, 0, `${name} incorrectly passed: ${result.stdout}`);
   assert.match(result.stderr, /Architecture check failed/);
+});
+
+test("request composition injects platform operations into application ports", async t => {
+  const f = await fixture(t, {
+    "apps/worker/src/contracts/receipts.ts": 'export type Receipt = { status: number; value: unknown }; export type Port = { read(): Promise<Receipt> };',
+    "apps/worker/src/application/auth-source.mts": 'import type { Port } from "../contracts/receipts.js"; export const check = async (port: Port) => (await port.read()).status === 200;',
+    "apps/worker/src/platform/source.ts": 'import type { Port } from "../contracts/receipts.js"; export const port: Port = { read: async () => ({ status: 200, value: {} }) };',
+    "apps/worker/src/index.ts": 'import { check } from "./application/auth-source.mjs"; import { port } from "./platform/source.js"; export const result = () => check(port);',
+  });
+  const result = f.run(); assert.equal(result.status, 0, result.stderr);
 });
 
 test("architecture rejects type-only cycles without confusing them with runtime cycles", async t => {
