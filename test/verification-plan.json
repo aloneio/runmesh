@@ -128,6 +128,8 @@
         "apps/worker/test/idle-budget.test.ts",
         "apps/worker/test/idle-maintenance.test.ts",
         "apps/worker/test/installer-security.test.ts",
+        "apps/worker/test/internal-nonce-receipts.test.ts",
+        "apps/worker/test/internal-nonce-storage.test.ts",
         "apps/worker/test/job-reporting-bridge.test.ts",
         "apps/worker/test/job-snapshots.test.ts",
         "apps/worker/test/jobs-dashboard.test.ts",

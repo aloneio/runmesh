@@ -1,7 +1,7 @@
 // Audit-only tests: an isolated DO and disposable session, never production.
 import { env, runInDurableObject, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
-import worker from "../src/index.js";
+import worker, { RunnerDO } from "../src/index.js";
 import { internalHeaders, randomBase64Url, sha256Hex, passwordVerifier } from "../src/security.js";
 import { LOGIN_CSRF_COOKIE } from "../src/http/constants.js";
 import { adminUpstreamError } from "../src/http/responses.js";
@@ -132,6 +132,61 @@ it("retains the authenticated console and session when a Runner deletion fence i
   expect(page).not.toContain('<body class="auth-body">');
   const next = await worker.fetch(new Request("https://audit.test/admin/runners", { headers: f.headers }), f.localEnv, {} as ExecutionContext);
   expect(next.status).toBe(200); expect(next.headers.get("location")).toBeNull(); await next.body?.cancel();
+});
+
+it("releases a rejected deletion fence when the browser session is revoked after fencing", async () => {
+  const f = await fixture(), runnerId = `delete-session-race-${crypto.randomUUID()}`;
+  const adminHeaders = { Authorization: "Bearer " + env.ADMIN_TOKEN, "content-type": "application/json" };
+  await runInDurableObject(env.RUNNER.get(env.RUNNER.idFromName(runnerId)), async (_existing, state) => {
+    // Bind the real Runner lifecycle and unique DO storage to this fixture's
+    // unique Registry, without sharing the default Registry's admin setup.
+    const registryBinding = { idFromName: f.localEnv.REGISTRY.idFromName,
+      get: () => env.REGISTRY.get(f.localEnv.REGISTRY.idFromName("registry")) };
+    const runnerEnv = { ...f.localEnv, REGISTRY: registryBinding } as unknown as typeof env;
+    const runner = new RunnerDO(state, runnerEnv), events: string[] = [];
+    const runnerBinding = { idFromName: env.RUNNER.idFromName.bind(env.RUNNER), get: () => ({ fetch: (request: Request) => runner.fetch(request) }) };
+    const baseEnv = { ...runnerEnv, RUNNER: runnerBinding } as unknown as typeof env;
+    const created = await worker.fetch(new Request("https://audit.test/admin/runners", {
+      method: "POST", headers: adminHeaders, body: JSON.stringify({ runner_id: runnerId, execution_mode: "dedicated_user" }),
+    }), baseEnv, {} as ExecutionContext);
+    expect(created.status).toBe(200); await created.body?.cancel();
+    const localEnv = { ...baseEnv,
+      REGISTRY: { idFromName: f.localEnv.REGISTRY.idFromName, get: () => ({ fetch: async (request: Request) => {
+        const response = await registryBinding.get().fetch(request), path = new URL(request.url).pathname;
+        if (path === "/auth/sessions/verify") {
+          expect(response.status).toBe(200);
+          if (!events.includes("session verified")) events.push("session verified");
+        }
+        if (request.method === "DELETE" && path === "/runners/" + runnerId) {
+          expect(response.status).toBe(403); events.push("Registry rejected deletion");
+        }
+        return response;
+      } }) },
+      RUNNER: { ...runnerBinding, get: () => ({ fetch: async (request: Request) => {
+        const response = await runner.fetch(request), path = new URL(request.url).pathname;
+        if (path === "/begin-policy-mutation") {
+          expect(response.status).toBe(204); expect(events).toEqual(["session verified"]); events.push("fence acquired");
+          const logout = await worker.fetch(new Request("https://audit.test/admin/logout", {
+            method: "POST", headers: f.headers, body: new URLSearchParams({ csrf_token: f.csrf }),
+          }), baseEnv, {} as ExecutionContext);
+          expect(logout.status).toBe(303); await logout.body?.cancel(); events.push("session revoked");
+        }
+        if (path === "/cancel-policy-mutation") { expect(response.status).toBe(204); events.push("fence cancelled"); }
+        return response;
+      } }) },
+    } as unknown as typeof env;
+    const rejected = await worker.fetch(new Request(`https://audit.test/admin/runners/${runnerId}/delete`, {
+      method: "POST", headers: f.headers, body: new URLSearchParams({ csrf_token: f.csrf, confirmation: runnerId }),
+    }), localEnv, {} as ExecutionContext);
+    expect(rejected.status, events.join(" -> ")).toBe(400); expect(await rejected.text()).toContain("Runner delete failed.");
+    expect(events).toEqual(["session verified", "fence acquired", "session revoked", "Registry rejected deletion", "fence cancelled"]);
+    // A second authenticated mutation proves the rejected delete preserved the
+    // Runner and released ownership without inspecting private admission state.
+    const next = await worker.fetch(new Request(`https://audit.test/admin/runners/${runnerId}/revoke`, {
+      method: "POST", headers: adminHeaders, body: JSON.stringify({ confirmation: runnerId }),
+    }), baseEnv, {} as ExecutionContext);
+    expect(next.status).toBe(204); await next.body?.cancel();
+  });
 });
 
 it.each(["create", "rename", "rotate", "enrollment", "validity", "permissions", "version-policy", "emergency-lock", "workspace-create", "workspace-update", "workspace-delete", "history-settings"])("keeps invalid Runner %s forms inside the authenticated console", async action => {

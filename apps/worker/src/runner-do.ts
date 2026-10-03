@@ -2,6 +2,7 @@ import { boundedJsonReceipt, boundedJsonResponse } from "./bounded-json.js";
 import type { BridgeReply, BridgeReplyPort, RegistryRequestPort } from "./contracts/runner-transport.js";
 import { BridgeReplies } from "./platform/bridge-replies.js";
 import { requestRunnerRegistry } from "./platform/runner-registry.js";
+import { consumeInternalNonceStatus } from "./platform/control-plane.js";
 
 /** @internal Trusted composition, never an HTTP or deployment option. */
 export interface RunnerDoDependencies { readonly registryRequest?: RegistryRequestPort; readonly replies?: BridgeReplyPort }
@@ -20,7 +21,7 @@ import {
   WORKER_BRIDGE_TIMEOUT_MS,
   type WireMessage,
 } from "@aloneio/runmesh-protocol";
-import { bearerToken, internalHeaders, isConfiguredSecret, isSafeIdentifier, verifyInternalRequest } from "./security.js";
+import { bearerToken, isConfiguredSecret, isSafeIdentifier, verifyInternalRequest } from "./security.js";
 import { isRunnerPolicy, validLifecycleId, negotiateRunnerHello, parseRegistryHelloReceipt, runnerWelcome } from "./domain/runner-handshake.js";
 import { PRODUCT_VERSION } from "./generated-version.js";
 import { readCappedText } from "./body.js";
@@ -1195,15 +1196,10 @@ export class RunnerDO {
     const consumeNonce = request.method === "GET" && url.pathname === "/admission-state"
       ? async () => true
       : async (nonce: string, expiresAtMs: number) => {
-        const payload = JSON.stringify({ nonce, expires_at_ms: expiresAtMs });
-        if (!isConfiguredSecret(this.env.INTERNAL_CONTROL_SECRET)) return false;
-        try {
-          const headers = await internalHeaders(this.env.INTERNAL_CONTROL_SECRET, "POST", "/auth/internal-nonces", payload);
-          const response = await this.env.REGISTRY.get(this.env.REGISTRY.idFromName("registry")).fetch(new Request("https://registry.internal/auth/internal-nonces", { method: "POST", headers, body: payload }));
-          if (response.status === 204) return true;
-          if (response.status === 409) return false;
-          throw new ControlPlaneUnavailableError();
-        } catch { throw new ControlPlaneUnavailableError(); }
+        const status = await consumeInternalNonceStatus(this.env, nonce, expiresAtMs);
+        if (status === 204) return true;
+        if (status === 404 || status === 409) return false;
+        throw new ControlPlaneUnavailableError();
       };
     return verifyInternalRequest(request, this.env.INTERNAL_CONTROL_SECRET, body, consumeNonce);
   }
