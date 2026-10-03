@@ -589,7 +589,11 @@ export class RegistryDO {
     // persisting a separate nonce adds index writes and later deletion work.
     const replaySafeReceipt = request.method === "POST" && segments.length === 3
       && segments[0] === "runners" && segments[2] === "mcp-calls";
-    const consumeNonce = request.method === "GET" || replaySafeHeartbeat || replaySafeSession || replaySafeHistory || replaySafeAuthorization || replaySafeReceipt
+    // This wrapper atomically consumes the original request nonce in its
+    // route. A second nonce for the wrapper adds no replay protection; its
+    // HMAC still binds the method, path, timestamp and complete payload.
+    const delegatedNonce = request.method === "POST" && url.pathname === "/auth/internal-nonces";
+    const consumeNonce = request.method === "GET" || replaySafeHeartbeat || replaySafeSession || replaySafeHistory || replaySafeAuthorization || replaySafeReceipt || delegatedNonce
       ? () => true
       : async (nonce: string, expiresAtMs: number) => {
         const consumed = this.consumeInternalNonce(nonce, expiresAtMs);
@@ -619,7 +623,13 @@ export class RegistryDO {
       const redeemed = verifier === undefined || tokenVerifier === undefined || publicInfo === undefined ? undefined : await this.redeemRunnerEnrollment(verifier, tokenVerifier, publicInfo, now, mutationId);
       return redeemed === undefined ? new Response("invalid enrollment", { status: 401 }) : Response.json(redeemed);
     }
-    if (segments[0] === "auth") return this.handleAuth(request.method, segments.slice(1), input, now, url);
+    if (segments[0] === "auth") {
+      const response = this.handleAuth(request.method, segments.slice(1), input, now, url);
+      // Only successful consumption creates expiry work. Keep scheduling in
+      // the async facade so the domain route retains its synchronous contract.
+      if (delegatedNonce && response.status === 204) await this.scheduleMaintenanceAlarm(now);
+      return response;
+    }
     if (request.method === "GET" && segments.length === 1 && segments[0] === "runners") return Response.json({ runners: this.listRunners() });
     if (request.method === "GET" && segments.length === 1 && segments[0] === "dashboard") return Response.json(this.dashboardSnapshot());
     if (request.method === "GET" && segments.length === 2 && segments[0] === "status" && segments[1] === "features") return Response.json({ features: this.featureHealthSnapshot(now) });

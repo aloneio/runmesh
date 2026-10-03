@@ -14,13 +14,18 @@ export async function deleteRunner(ports: RunnerDeletionPorts, runnerId: string,
   try { response = await ports.remove(runnerId, mutationId); }
   catch { return { state: "unknown", reason: "commit" }; }
   if (!response.ok) {
-    if (![400, 404, 409].includes(response.status)) return { state: "unknown", reason: "commit" };
+    if (![400, 403, 404, 409].includes(response.status)) return { state: "unknown", reason: "commit" };
     try {
       const state = await ports.observe(runnerId, mutationId);
       if (state?.runner_exists === false && state.mutation_committed === true) {
         try { await ports.finalize(runnerId, mutationId); }
         catch { return { state: "unknown", reason: "finalize_recovered" }; }
         return { state: "deleted" };
+      }
+      // Browser authorization can expire after the transport fence is taken.
+      // Release that rejected write only with explicit uncommitted evidence.
+      if (response.status === 403 && (state?.runner_exists !== true || state.mutation_committed !== false)) {
+        return { state: "unknown", reason: "recovery" };
       }
       const cancelled = await ports.cancel(runnerId, mutationId);
       if (!cancelled.ok) return { state: "unknown", reason: "cancel" };
