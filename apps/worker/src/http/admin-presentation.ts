@@ -1,5 +1,5 @@
 import type { RunnerReleaseDescriptor, RunnerReleaseEnvironment } from "../contracts/runner-release.js";
-import type { AdminData } from "../admin/view-models.js";
+import type { AdminData } from "../contracts/admin-views.js";
 import { adminDocument } from "../admin/layout.js";
 import { adminRunnerError } from "./responses.js";
 import { canonicalPublicOrigin } from "../installer.js";

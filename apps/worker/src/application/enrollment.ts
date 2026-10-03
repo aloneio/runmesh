@@ -2,24 +2,20 @@ import { DEFAULT_RUNNER_ENROLLMENT_TTL_MS } from "../contracts/enrollment-option
 import type { EnrollmentCodeResult } from "../contracts/runner-admin.js";
 import type { EnrollmentWindow } from "../contracts/runner-admin.js";
 import type { ExecutionModeSelection } from "../contracts/runner-admin.js";
-import { boundedJsonResponse } from "../bounded-json.js";
-import { randomBase64Url } from "../security.js";
 import { record } from "../values.js";
 import type { RunnerExecutionExpectation } from "../contracts/runner-admin.js";
-import { registryRequest } from "../platform/control-plane.js";
-import { sha256Hex } from "../security.js";
 import { validTimestamp } from "../validity.js";
-import type { WorkerEnv } from "../platform/env.js";
+import type { EnrollmentPorts } from "../contracts/control-plane-receipts.js";
 
-export async function createEnrollmentCode(env: WorkerEnv, runnerId: string, selection?: ExecutionModeSelection, expected?: RunnerExecutionExpectation, enrollmentTtlMs = DEFAULT_RUNNER_ENROLLMENT_TTL_MS, window: EnrollmentWindow = {}): Promise<EnrollmentCodeResult> {
-  const code = randomBase64Url(), enrollmentId = randomBase64Url();
-  const payload = JSON.stringify({
-    enrollment_id: enrollmentId, verifier: await sha256Hex(code),
-    enrollment_ttl_ms: enrollmentTtlMs, ...window,
+export async function createEnrollmentCode(ports: EnrollmentPorts, runnerId: string, selection?: ExecutionModeSelection, expected?: RunnerExecutionExpectation, enrollmentTtlMs = DEFAULT_RUNNER_ENROLLMENT_TTL_MS, enrollmentWindow: EnrollmentWindow = {}): Promise<EnrollmentCodeResult> {
+  const code = ports.randomCode(), enrollmentId = ports.randomCode();
+  const payload = {
+    enrollment_id: enrollmentId, verifier: await ports.digest(code),
+    enrollment_ttl_ms: enrollmentTtlMs, ...enrollmentWindow,
     ...(selection === undefined ? {} : { execution_mode: selection.mode, confirm_privileged_host: selection.confirmed }),
     ...(expected === undefined ? {} : { expected_execution_mode: expected.configuredMode, expected_lifecycle_id: expected.lifecycleId }),
-  });
-  const response = await boundedJsonResponse(signal => registryRequest(env, `/runners/${encodeURIComponent(runnerId)}/enrollments`, "POST", payload, signal));
+  };
+  const response = await ports.create(runnerId, payload);
   if (response?.status !== 200) return { ok: false, status: response?.status ?? 503, deterministic: response !== undefined && [400, 404, 409].includes(response.status) };
   try {
     const value = record(response.value);

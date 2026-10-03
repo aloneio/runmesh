@@ -14,7 +14,7 @@ Runner 的 Git 基线判断位于 `git/baseline.ts`；`git-service.ts` 负责解
 | --- | --- | --- |
 | Worker 入口 | fetch／scheduled 装配、顶层分发 | 重复的业务决策 |
 | HTTP | 解析、认证、CSRF、响应格式 | Registry 实现与持久化记录类型 |
-| Application | 生命周期／策略编排、数据投影 | HTTP、页面、Registry facade |
+| Application | 生命周期／策略编排、数据投影 | HTTP、页面、平台适配器、Registry facade |
 | Contracts／Domain | 稳定类型、窄接口、纯决策 | 平台与表现层实现 |
 | MCP Server | SDK 装配、逐次授权、输出验证 | Registry、RunnerDO 具体类 |
 | MCP Results | 安全字段投影、有界输出 | 处理器、派发、审计、传输执行 |
@@ -38,6 +38,14 @@ Registry 管理 HMAC 路由与同步事务，RunnerDO 管理会话派发。
 在授权后选择字段。凭据校验值由权限层保管。MCP 工作区元数据省略配置的绝对根路径；
 请求的文件内容和命令输出仍可能带有路径。
 
+认证回执、注册和 Runner 查询通过 `contracts/control-plane-receipts.ts` 的操作端口
+接收依赖。平台适配器管理签名请求、有界响应读取和机密访问，由 HTTP／入口层注入
+业务用例。Application 模块不能导入平台模块，包括平台类型。MCP 和管理操作通过
+共享契约校验策略是否已应用，再决定是否派发操作。
+
+渲染器直接引用 `contracts/admin-views.ts` 的展示类型。`runnerDetailPage` 接收一个
+具名输入对象，避免诊断、历史和注册码等可选数据在位置参数中混淆。
+
 ## 原生适配器与包声明
 
 JobManager 管理准入、运行记录、终态落盘及取消／恢复顺序。ContextStore 管理
@@ -48,6 +56,10 @@ JobManager 管理准入、运行记录、终态落盘及取消／恢复顺序。
 systemd、launchd、Task Scheduler 分别有自己的适配器。CLI 输入、注册、诊断和
 生命周期命令分别维护。补丁规划、Git 投影与原生执行分开，由协调者管理完整操作。
 `registry/schema.ts` 在 Registry 同步启动阶段提供 DDL 和结构检查。
+
+`packages/protocol/src/job-history.ts` 统一定义历史记录 welcome 扩展的类型、上传间隔、
+保留天数及双方共用的严格解析。Worker 的默认配置和分页大小保持为纯数据，历史设置
+建表归 Registry schema 管理，历史存储使用同一份协议取值校验保留天数。
 
 ## 浏览器源码与文案
 
@@ -60,6 +72,9 @@ systemd、launchd、Task Scheduler 分别有自己的适配器。CLI 输入、�
 控制器提供视图挂载状态检查和导航端口。已移除的视图不能消费迟到回执、发起后续
 请求或跳转新页面。已发出的服务端操作仍可能完成；新视图重新读取状态，不自动重放。
 回执必须匹配列表、单项或写入操作；无法确认的写入必须刷新后才能继续修改。
+
+导航所有者在挂载控制器或修改浏览器历史前，丢弃已被后续目的地取代的成功响应。
+只由最终目的地改变页面和 URL，完整页面跳转的回退也使用最终目的地。
 
 生成器只打包本地静态 JavaScript 模块，输出一个符合 CSP 的脚本。它限制整个输入图
 和输出大小，拒绝外部／动态依赖及路径／符号链接越界，在不执行 DOM 代码的情况下

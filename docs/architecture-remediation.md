@@ -17,7 +17,7 @@ operation boundaries, including concurrent index changes and budget exhaustion.
 | --- | --- | --- |
 | Worker entry | Fetch/scheduled assembly and routing | Duplicated business decisions |
 | HTTP | Parsing, authentication, CSRF, response representation | Registry implementation/record types |
-| Application | Lifecycle/policy coordination and data projection | HTTP, views, concrete Registry facade |
+| Application | Lifecycle/policy coordination and data projection | HTTP, views, platform adapters, concrete Registry facade |
 | Contracts/domain | Stable types, ports, pure decisions | Platform or presentation implementations |
 | MCP server | SDK assembly, reauthorization, output verification | Registry or RunnerDO classes |
 | MCP results | Safe projection and bounded envelopes | Handlers, dispatch, audit, transport |
@@ -46,6 +46,17 @@ Keep credential verifiers in the authority layer. MCP workspace metadata omits
 configured absolute roots; requested file contents and command output may contain
 paths.
 
+Authentication receipts, enrollment and Runner queries receive operation ports
+from `contracts/control-plane-receipts.ts`. The platform adapter owns signed
+requests, bounded response reads and secret access; HTTP/entry composition supplies
+it to the use cases. Application modules cannot import platform modules, including
+their types. Policy readiness is validated once through its shared contract before
+MCP or administration dispatches an operation.
+
+Renderers import display shapes directly from `contracts/admin-views.ts`.
+`runnerDetailPage` takes one named input object so optional diagnostics, history
+and enrollment values cannot be confused by positional arguments.
+
 ## Native adapters and package declarations
 
 JobManager owns admission, maps, terminal persistence and cancellation/recovery
@@ -60,6 +71,12 @@ diagnosis and lifecycle commands have separate owners. Patch planning and Git
 projection are separated from native execution, while their coordinators own the
 complete operation. `registry/schema.ts` supplies DDL and checks at synchronous
 Registry startup.
+
+`packages/protocol/src/job-history.ts` owns the history welcome-extension type,
+supported intervals and retention periods, and strict parsing for both peers.
+Worker history defaults and page sizes remain pure display/configuration values;
+Registry schema initialization owns the settings table. History storage validates
+retention against the same protocol values.
 
 ## Browser source and messages
 
@@ -76,6 +93,10 @@ cannot consume late receipts, start follow-up requests or redirect the new page.
 Already dispatched server operations may still complete; a new view reads current
 state rather than replaying them. Receipts must match collection, item or mutation
 operations; an unconfirmed write requires refresh before another mutation.
+
+The navigation owner discards successful responses superseded by a queued
+destination before mounting controllers or updating history. Only the final
+destination changes the page and URL; full-navigation fallbacks also use it.
 
 The generator bundles only local static JavaScript modules into one CSP-compatible
 script. It bounds the input graph and output, rejects external/dynamic imports and

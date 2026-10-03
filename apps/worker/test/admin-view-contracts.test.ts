@@ -25,9 +25,11 @@ describe("AR04 rendering compatibility", () => {
       args.unshift({ ...presentation, configuredModes: new Map(Object.entries(presentation.configuredModes)) });
     }
     if (fixture.fn === "runnerDetailPage") {
-      if (args[2] === null) args[2] = undefined;
-      if (args[3] === null) args[3] = undefined;
-      args.unshift((fixture as unknown as { presentation: unknown }).presentation);
+      const [runner, workspaces, jobs, environment, csrf, release] = args;
+      args.splice(0, args.length, {
+        presentation: (fixture as unknown as { presentation: unknown }).presentation,
+        runner, workspaces, jobs: jobs ?? undefined, environment: environment ?? undefined, csrf, release,
+      });
     }
     const render = views[fixture.fn as keyof typeof views] as (...args: unknown[]) => string;
     const value = render(...args);
@@ -61,9 +63,11 @@ describe("AR04 rendering compatibility", () => {
 
   it.each(["active", "scheduled", "expired"] as const)("shows a used enrollment code as consumed regardless of its %s window", async window => {
     const now = fixtures.clock_ms;
-    const content = runnerDetailPage({ configuredMode: "dedicated_user", reportedMode: "dedicated_user", maxValidityDays: 3650, dayMs: 86400000 },
-      { runner_id: "enrollment-fixture" }, [], undefined, undefined, "fixture-csrf", { latest_version: "0.1.6", distributable: true }, [],
-      { not_before_ms: window === "scheduled" ? now + 1000 : now - 1000, expires_at_ms: window === "expired" ? now - 1 : now + 2000, used_at_ms: now - 500 });
+    const content = runnerDetailPage({
+      presentation: { configuredMode: "dedicated_user", reportedMode: "dedicated_user", maxValidityDays: 3650, dayMs: 86400000 },
+      runner: { runner_id: "enrollment-fixture" }, workspaces: [], csrf: "fixture-csrf", release: { latest_version: "0.1.6", distributable: true },
+      enrollment: { not_before_ms: window === "scheduled" ? now + 1000 : now - 1000, expires_at_ms: window === "expired" ? now - 1 : now + 2000, used_at_ms: now - 500 },
+    });
     for (const locale of ["en", "zh-CN"] as const) {
       const localized = await localizeHtmlResponse(new Request('https://worker.test/admin/runners/enrollment-fixture?lang=' + locale),
         new Response('<html><body>' + content + '</body></html>', { headers: { "content-type": "text/html" } })).text();

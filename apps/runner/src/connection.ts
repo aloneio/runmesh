@@ -2,7 +2,7 @@ import { jobEventMessage } from "./connection/job-events.js";
 import { createHash } from "node:crypto";
 import { HistoryUploadScheduler, type HistoryUploadClock } from "./history-upload.js";
 import { QueueGrantSchema } from "@aloneio/runmesh-protocol";
-import { parseRunnerJobHistory, type RunnerJobHistory } from "./job-history.js";
+import { parseJobHistorySettings, type JobHistorySettings } from "@aloneio/runmesh-protocol";
 import {
   decodeWireFrame,
   encodeWireFrame,
@@ -73,7 +73,7 @@ export class RunnerConnection {
   private readonly heartbeatMs: number;
   private readonly rpcTimeoutMs: number;
   private readonly syncMs: number;
-  private jobHistory: RunnerJobHistory | undefined;
+  private jobHistory: JobHistorySettings | undefined;
   private historyPending: {requestId:string;snapshot:string;socket:WebSocket;revision?:number} | undefined;
   private cleanupTimer: ReturnType<typeof setInterval> | undefined;
   private cleanupBusy = false;
@@ -398,7 +398,7 @@ export class RunnerConnection {
             return;
           }
           const rawHistory = message.extensions?.runmesh_job_history;
-          const history = rawHistory === undefined ? undefined : parseRunnerJobHistory(rawHistory);
+          const history = rawHistory === undefined ? undefined : parseJobHistorySettings(rawHistory);
           if (rawHistory !== undefined && history === undefined) { socket.close(1008,"invalid history settings"); return; }
           const priorHistory = this.jobHistory;
           this.jobHistory = history;

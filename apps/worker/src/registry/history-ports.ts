@@ -1,5 +1,5 @@
 import type { JobMetadata } from "@aloneio/runmesh-protocol";
-import type { JobHistorySettings } from "../job-history-settings.js";
+import type { JobHistorySettings } from "@aloneio/runmesh-protocol";
 
 /** Optional history sinks; these operations never own Registry authority. */
 export interface PackedHistoryPort {

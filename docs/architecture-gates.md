@@ -24,6 +24,10 @@ Central MCP providers consume public contracts, helpers within their own provide
 
 Native Runner mutation use cases have a stricter boundary than request adapters:
 only contracts, rules and peer use cases are allowed, with no HTTP/platform globals.
+Application modules cannot import platform adapters or their environment types.
+Authentication, enrollment and Runner query use cases consume operation ports and
+parsed receipts; they cannot own HTTP objects, network globals or random generation.
+History display defaults cannot own SQL or network access.
 Registry mutation route adapters cannot yield; asynchronous history/transport
 coordinators receive narrow ports and cannot import concrete storage or owners.
 Browser navigation and page controls cannot import each other. Runtime tests may

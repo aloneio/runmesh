@@ -1,6 +1,5 @@
 import { DEFAULT_JOB_HISTORY } from "../job-history-settings.js";
-import { parseJobHistorySettings } from "../job-history-settings.js";
-import type { JobHistorySettings } from "../job-history-settings.js";
+import { parseJobHistorySettings, type JobHistorySettings } from "@aloneio/runmesh-protocol";
 import { pruneHistory } from "../history-retention.js";
 import { isSafeIdentifier } from "../security.js";
 import { MCP_AUDIT_RETENTION_MS } from "../audit-metadata.js";

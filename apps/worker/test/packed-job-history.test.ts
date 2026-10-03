@@ -1,7 +1,8 @@
 import { env } from "cloudflare:test";
 import { expect,it,vi } from "vitest";
 import { PackedJobHistory,JobHistoryUnavailableError } from "../src/job-history-store.js";
-import { DEFAULT_JOB_HISTORY,parseJobHistorySettings } from "../src/job-history-settings.js";
+import { DEFAULT_JOB_HISTORY } from "../src/job-history-settings.js";
+import { parseJobHistorySettings } from "@aloneio/runmesh-protocol";
 const db=(env as unknown as {HISTORY_DB:D1Database}).HISTORY_DB;
 const settings={...DEFAULT_JOB_HISTORY,mode:"immediate" as const};
 const make=(id:string,t=Date.now(),status="succeeded") => ({job_id:id,runner_id:"r",workspace_id:"w",status,created_at_ms:t,updated_at_ms:t}) as any;

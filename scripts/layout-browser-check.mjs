@@ -22,9 +22,9 @@ async function fixtureDocuments() {
     const args = structuredClone(fixture.args);
     if (fixture.fn === 'runnersPage') args.unshift({ ...fixture.presentation, configuredModes: new Map(Object.entries(fixture.presentation.configuredModes)) });
     if (fixture.fn === 'runnerDetailPage') {
-      if (args[2] === null) args[2] = undefined;
-      if (args[3] === null) args[3] = undefined;
-      args.unshift(fixture.presentation);
+      const [runner, workspaces, jobs, environment, csrf, release] = args;
+      args.splice(0, args.length, { presentation: fixture.presentation,
+        runner, workspaces, jobs: jobs ?? undefined, environment: environment ?? undefined, csrf, release });
     }
     const body = views[fixture.fn](...args);
     documents.set('/layout/' + fixture.name, body.startsWith('<!doctype') ? body : adminDocument('Layout fixture', body, 'clients'));

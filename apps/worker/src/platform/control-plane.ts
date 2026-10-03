@@ -45,11 +45,11 @@ export async function registryRequest(env: WorkerEnv, path: string, method: stri
   } catch { return new Response("registry unavailable", { status: 503 }); }
 }
 
-export async function runnerRpc(env: WorkerEnv, runnerId: string, method: string, params: Record<string, unknown>, policyRevision?: number, policyChecksum?: string): Promise<Response> {
+export async function runnerRpc(env: WorkerEnv, runnerId: string, method: string, params: Record<string, unknown>, policyRevision?: number, policyChecksum?: string, signal?: AbortSignal): Promise<Response> {
   const body = JSON.stringify({ method, params, ...(policyRevision === undefined || policyChecksum === undefined ? {} : { policy_revision: policyRevision, expected_policy_revision: policyRevision, expected_policy_checksum: policyChecksum }) });
   const headers = await signedInternalHeaders(env, "POST", "/rpc", body);
   if (headers === undefined) return controlPlaneUnavailable();
-  try { return await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/rpc", { method: "POST", headers, body })); }
+  try { return await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/rpc", { method: "POST", headers, body, ...(signal === undefined ? {} : { signal }) })); }
   catch { return new Response("runner unavailable", { status: 503 }); }
 }
 

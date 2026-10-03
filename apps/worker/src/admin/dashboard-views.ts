@@ -1,5 +1,5 @@
 import { message } from "../i18n/messages.js";
-import type { AdminData } from "./view-models.js";
+import type { AdminData } from "../contracts/admin-views.js";
 import { arrayField, record, escapeHtml } from "./format.js";
 import { runnerList, clientList, jobTable } from "./tables.js";
 import { JOBS_EXPLANATION, jobSnapshotNote } from "./job-views.js";

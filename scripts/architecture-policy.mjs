@@ -29,6 +29,7 @@ const browserDependencies = {
 const registryRoute = path => /^apps\/worker\/src\/registry\/route-(?:inputs|projections)\.ts$/u.test(canonicalSource(path));
 const registryRouteAdapter = path => canonicalSource(path).startsWith("apps/worker/src/registry/routes/");
 const runnerUseCase = path => /^apps\/worker\/src\/application\/(?:create-runner|delete-runner|register-runner|runner-(?:credentials|enrollment|lifecycle|policy))\.ts$/u.test(canonicalSource(path));
+const requestUseCase = path => /^apps\/worker\/src\/application\/(?:auth-source|enrollment|mcp-identity|runner-queries)\.ts$/u.test(canonicalSource(path));
 const registryCoordinator = path => /^apps\/worker\/src\/registry\/(?:history-routes|history-ports|transport-routes)\.ts$/u.test(canonicalSource(path));
 const registryPlatformTypes = new Set(["DurableObjectState", "DurableObjectStorage", "DurableObjectNamespace", "DurableObjectStub", "SqlStorage", "D1Database", "D1PreparedStatement", "ExecutionContext", "Fetcher"]);
 const networkGlobals = new Set(["fetch", "WebSocket", "XMLHttpRequest", "EventSource", "WebTransport", "Worker", "SharedWorker", "caches", "globalThis", "window", "self", "process", "Deno", "Bun"]);
@@ -41,11 +42,15 @@ export function boundaryNodeProblem(from, node) {
   if (registryRouteAdapter(source) && (node.type === "AwaitExpression" || node.async === true))
     return "Registry route adapters must preserve synchronous authority checks and mutations";
   if (node.type !== "Identifier") return undefined;
+  if (source === "apps/worker/src/job-history-settings.ts" && (registryPlatformTypes.has(node.name) || networkGlobals.has(node.name) || ["Date", "crypto", "setTimeout", "setInterval"].includes(node.name)))
+    return "History display defaults use shared protocol values, not storage or ambient I/O";
   if (["apps/worker/src/domain/runner-handshake.ts", "apps/runner/src/environment-contracts.ts"].includes(source)
     && (registryPlatformTypes.has(node.name) || networkGlobals.has(node.name) || ["Date", "crypto", "setTimeout", "setInterval", "queueMicrotask", "eval", "Function"].includes(node.name)))
     return "Handshake rules and environment contracts use supplied values, not platform state or scheduling";
   if (runnerUseCase(source) && (registryPlatformTypes.has(node.name) || networkGlobals.has(node.name) || ["WorkerEnv", "Request", "Response", "Date", "crypto", "setTimeout", "setInterval", "eval", "Function"].includes(node.name)))
     return "Runner use cases receive operation ports and return outcomes, without HTTP or platform state";
+  if (requestUseCase(source) && (registryPlatformTypes.has(node.name) || networkGlobals.has(node.name) || ["WorkerEnv", "Request", "Response", "Date", "crypto", "setTimeout", "setInterval", "eval", "Function"].includes(node.name)))
+    return "Request use cases receive operation ports and parsed receipts, not HTTP or platform state";
   if (registryCoordinator(source) && (registryPlatformTypes.has(node.name) || networkGlobals.has(node.name) || ["Date", "crypto", "setTimeout", "setInterval"].includes(node.name)))
     return "Registry coordinators receive history and lifecycle ports, not ambient I/O or storage";
   if (registryRouteAdapter(source) && registryPlatformTypes.has(node.name))
@@ -83,7 +88,7 @@ export function specifierProblem(from, specifier, typeOnly) {
   const external = !specifier.startsWith(".") && !specifier.startsWith("/");
   if (source === "apps/runner/src/environment-contracts.ts" && external && !purePackages.test(specifier))
     return "Environment contracts must not load platform implementations or types";
-  if ((runnerUseCase(source) || registryCoordinator(source)) && external && !purePackages.test(specifier))
+  if ((runnerUseCase(source) || requestUseCase(source) || registryCoordinator(source)) && external && !purePackages.test(specifier))
     return "Runner use cases and Registry coordinators must not load platform implementations";
   if (source === "apps/runner/src/jobs/input.ts" && external && !(specifier === "node:stream" && typeOnly))
     return "Job stdin delivery may reference stream types only, not platform implementations";
@@ -133,7 +138,7 @@ export const WORKER_ALLOWED_DEPENDENCIES = Object.freeze({
   extension: ["extension", "foundation", "contracts", "protocol"],
   presentation: ["presentation", "contracts", "foundation", "distribution", "protocol"],
   distribution: ["distribution", "domain", "contracts", "foundation", "protocol"],
-  application: ["application", "domain", "contracts", "foundation", "platform", "protocol"],
+  application: ["application", "domain", "contracts", "foundation", "protocol"],
   platform: ["platform", "contracts", "foundation", "protocol"],
   persistence: ["persistence", "contracts", "foundation", "platform", "protocol"],
   registry_foundation: ["registry_foundation", "foundation", "contracts", "protocol"],
