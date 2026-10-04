@@ -86,6 +86,22 @@ it("invalid workspace and lifecycle mutations touch no owner", async () => {
   expect(await response?.text()).toBe("invalid validity window");
 });
 
+it.each([
+  undefined,
+  { read: true, edit: false, shell: true, job_control: true },
+  { read: false, edit: true, shell: false, job_control: false },
+  { read: false, edit: false, shell: false, job_control: true },
+])("invalid Runner permission combinations return 400 without touching the owner", permissions => {
+  const route = createRunnerPolicyRoutes(ports<RunnerPolicyRoutePorts>());
+  expect(route(request("runners/r/permissions", { mutation_id: "permission-test", permissions }))?.status).toBe(400);
+});
+
+it("a valid permission update still distinguishes a missing Runner", () => {
+  const route = createRunnerPolicyRoutes(ports<RunnerPolicyRoutePorts>({ setRunnerPermissions: () => undefined }));
+  expect(route(request("runners/r/permissions", { mutation_id: "permission-test",
+    permissions: { read: true, edit: true, shell: true, job_control: true } }))?.status).toBe(404);
+});
+
 it.each(["verify", "revalidate"])("unsupported identity version fails before %s reaches state", action => {
   expect(createIdentityRoutes(ports<IdentityRoutePorts>())(request("mcp/" + action, { identity_version: 99 }))?.status).toBe(400);
 });

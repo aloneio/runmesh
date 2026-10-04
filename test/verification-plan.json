@@ -190,7 +190,8 @@
         "apps/worker/test/throttle-csp.test.ts",
         "apps/worker/test/transport-outage.test.ts",
         "apps/worker/test/transport.test.ts",
-        "apps/worker/test/ui-locale.test.ts"
+        "apps/worker/test/ui-locale.test.ts",
+        "apps/worker/test/unregistered-runner-policy.test.ts"
       ]
     },
     {

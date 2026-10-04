@@ -8,6 +8,8 @@ import { MAX_VALIDITY_DAYS } from "../domain/execution-mode.js";
 import { RUNNER_ENROLLMENT_TTL_OPTIONS_MS } from "../contracts/enrollment-options.js";
 import { runnerConfiguredExecutionMode } from "../domain/execution-mode.js";
 import type { ValidityWindow } from "../validity.js";
+import { validatePermissionSet } from "@aloneio/runmesh-protocol";
+export { workspacePermissionPreset as configuredWorkspacePreset } from "../contracts/permission-profiles.js";
 
 function formDays(form: FormData, name: string): number | null | undefined {
   const value = form.get(name);
@@ -78,18 +80,10 @@ export function executionModeForExistingRunner(form: FormData, runner: { readonl
   return { mode: raw, confirmed: raw === "privileged_host" };
 }
 
-export function configuredWorkspacePreset(value: FormDataEntryValue | null): { read: boolean; edit: boolean; shell: boolean; job_control: boolean } | undefined {
-  if (value === "read_only") return { read: true, edit: false, shell: false, job_control: false };
-  if (value === "edit_only") return { read: true, edit: true, shell: false, job_control: false };
-  if (value === "controlled_exec" || value === "coding") return { read: true, edit: true, shell: true, job_control: true };
-  if (value === "custom" || value === null) return undefined;
-  return undefined;
-}
-
 export function permissionsFromForm(form: FormData): { read: boolean; edit: boolean; shell: boolean; job_control: boolean } | undefined {
   const value = (name: string): boolean | undefined => { const entry = form.get(name); return entry === "true" ? true : entry === "false" ? false : undefined; };
   const read = value("read"); const edit = value("edit"); const shell = value("shell"); const jobControl = value("job_control");
-  return read === undefined || edit === undefined || shell === undefined || jobControl === undefined ? undefined : { read, edit, shell, job_control: jobControl };
+  return read === undefined || edit === undefined || shell === undefined || jobControl === undefined ? undefined : validatePermissionSet({ read, edit, shell, job_control: jobControl });
 }
 
 export function isAbsolutePath(value: string): boolean { return value.length > 0 && value.length <= 4_096 && !value.includes("\0") && (/^\//.test(value) || /^[A-Za-z]:[\\/]/.test(value) || /^\\\\/.test(value)); }

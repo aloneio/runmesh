@@ -10,8 +10,8 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "5bdbb656f4991aed1599789dfa7cd9fe97cac4922d40456afc8b64babd7fd135",
-      "bytes": 129838,
+      "sha256": "a7d0a3e4c0aa2b28a8dded3921b9dc67219d0f563ee302777d9efba43c1a47c8",
+      "bytes": 131382,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
@@ -32,8 +32,8 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "bcfeb03d9bfecfee6dbf6ae2b2f2d84d64ff512af64ca03707706034c9fe39f9",
-      "bytes": 130426,
+      "sha256": "db151b22ecf90d785d907dca6036803e5e31c708488f9e8f177f744a499a5738",
+      "bytes": 131970,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
       "pre_central_bytes": 86657,
       "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
@@ -51,8 +51,8 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "d318f9e3b22ba0b5265d09b453773349370b9cee1c7d82c5eb2f2160e80d0865",
-      "bytes": 131574,
+      "sha256": "e7e424a79f8db9d0676a05f9011ab33e50ec7d801897b14d31b4880c0de22026",
+      "bytes": 133118,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
       "pre_central_bytes": 87739,
       "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
@@ -273,8 +273,8 @@
         [],
         "fixture-csrf-<>&\""
       ],
-      "sha256": "b55cf0083ef646f485deef3e422752e81dbd0fe133d3557bf23be36bd82d509c",
-      "bytes": 7029,
+      "sha256": "face56acc8c36fcc28b5a6bbc105881920c50e4bebdd0db367c9b521e034152d",
+      "bytes": 7170,
       "original_sha256": "e8468030bfaefe12378b3a9a7541e59679236f3888f7b6b0e69ef759cc5f8d66",
       "original_bytes": 6638,
       "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label",
@@ -395,8 +395,8 @@
           "distributable": true
         }
       ],
-      "sha256": "8254c1c061edf768a72857fadebc14015d07fc2d97175b9315154607b5bb3f4d",
-      "bytes": 13841,
+      "sha256": "3afab9d73c58fd93a0d3d69a8fb08d048d7863edf8f303c97c7f4f483331570d",
+      "bytes": 14238,
       "presentation": {
         "configuredMode": null,
         "reportedMode": "dedicated_user",
@@ -422,8 +422,8 @@
           }
         ]
       ],
-      "sha256": "0c4e8bea2f2b3f8c2da77d3880356e7cea434789e63e047d957d294f06c94b10",
-      "bytes": 131923,
+      "sha256": "b69b2050641116fccf76ceaa8bf7a6a98c70f632b4ca7a5b519c771b37b65316",
+      "bytes": 133467,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
       "pre_central_bytes": 88098,
       "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
@@ -648,6 +648,19 @@
       "admin-document"
     ],
     "reviewed_change": "Constrain client Runner selectors and long values to their table cells. Give recording preferences an independent single-column form. Replacing only the reviewed CSS and recording form class reproduces all 20 prior rendered hashes and byte counts.",
+    "other_markup_unchanged": true
+  },
+  "permission_controls_review": {
+    "source_base": "e240c5c5c65c1e373b79f5a845bc526f5a13c1ac",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "client-detail",
+      "runner-detail",
+      "admin-document"
+    ],
+    "reviewed_change": "Permission selectors expose dependencies derived from the shared protocol and use one browser controller for Runner, workspace and client override forms. Workspace presets share the submitted-form definition and update displayed values; manual field edits choose Custom. Version guidance describes selecting a target, installing on the Runner host and restarting the service. Restoring only the previous bundle, dependency/preset attributes and version sentence reproduces every prior rendered hash and byte count.",
     "other_markup_unchanged": true
   }
 }

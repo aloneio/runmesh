@@ -163,6 +163,13 @@
     },
     "production": {
       "name": "runmesh",
+      "observability": {
+        "logs": {
+          "enabled": true,
+          "invocation_logs": true,
+          "persist": true
+        }
+      },
       "durable_objects": {
         "bindings": [
           {

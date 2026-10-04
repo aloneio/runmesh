@@ -183,6 +183,7 @@ test("MCP queued-command failure phases distinguish each operation without argum
   for (const [name, args, phase] of [
     ["runner_select", { runner_id: "private-runner" }, "runner_select"],
     ["shell", { command: "private-command" }, "shell"],
+    ["edit", { patch: "private-patch" }, "edit"],
     ["job", { action: "get", job_id: "private-job" }, "job_get"],
     ["job", { action: "logs", cursor: "private-cursor" }, "job_logs"],
     ["job", { action: "cancel", job_id: "private-job" }, "job_cancel"],
@@ -284,6 +285,18 @@ test("MCP Worker diagnostics cross fragmented process output into the final safe
   assert.deepEqual(mcpWorkerFailureEvidence("private stderr\n" + emitted.join("") + "x".repeat(70000)), expected);
   assert.ok(!emitted.join("").includes("private"));
   assert.equal(emitted.length, 2);
+});
+
+test("MCP outer-boundary diagnostics retain fixed stages through the CI evidence projection", () => {
+  const stages = ["request_validation", "identity_verification", "request_body", "module_loading", "provider_setup", "response_priming", "response_headers"];
+  const emitted = [], forward = createMcpWorkerDiagnosticForwarder(line => emitted.push(line));
+  for (const stage of stages) forward(`RUNMESH_MCP_HANDLER_ERROR kind=error stage=${stage} reason=network_connection_lost\n`);
+  const expected = stages.map(stage => ({ event: "mcp_handler_error", kind: "error", stage, reason: "network_connection_lost" }));
+  assert.deepEqual(mcpWorkerFailureEvidence(emitted.join("")), expected);
+  assert.ok(!emitted.join("").includes("Network connection lost."));
+  forward("RUNMESH_MCP_HANDLER_ERROR kind=error stage=private-token reason=network_connection_lost\n");
+  forward("RUNMESH_MCP_HANDLER_ERROR kind=error stage=request_body reason=network_connection_lost_private-token\n");
+  assert.deepEqual(mcpWorkerFailureEvidence(emitted.join("")), expected);
 });
 
 test("MCP Worker diagnostics accept the observed Wrangler warning prefix without accepting arbitrary prefixes", () => {

@@ -1,4 +1,5 @@
 import { copyText, copyValue } from "./clipboard.js";
+import { bindPermissionControls } from "./permission-controls.js";
 function createPageControls({
   document,
   window,
@@ -59,6 +60,7 @@ function createPageControls({
   }
   function bindPageControls(root) {
     if (!root) return;
+    bindPermissionControls(root, claim);
     root.querySelectorAll("[data-lang-toggle]").forEach(function (link) {
       if (!claim(link, "locale")) return;
       link.addEventListener("click", function (event) {

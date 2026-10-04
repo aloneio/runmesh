@@ -2,6 +2,8 @@ import { message } from "../i18n/messages.js";
 import type { CodingScope } from "../contracts/administration.js";
 import { escapeHtml, record, statusClass } from "./format.js";
 import { isFullHostPath } from "./host-path-label.js";
+import { LOCKED_PERMISSION_SET, PERMISSION_BITS, normalizeUiPermissionSet } from "@aloneio/runmesh-protocol";
+import { workspacePermissionPreset } from "../contracts/permission-profiles.js";
 
 export function passwordToggle(): string {
   return `<button type="button" class="pwd-toggle-btn" aria-label="Show password">
@@ -9,7 +11,16 @@ export function passwordToggle(): string {
   </button>`;
 }
 
-export function permissionSelect(name: string, selected: boolean): string { return `<label class="perm-select-label"><span>${escapeHtml(name.replaceAll("_", " "))}</span><select name="${escapeHtml(name)}"><option value="true"${selected ? " selected" : ""}>${message("text.allow", "en")}</option><option value="false"${selected ? "" : " selected"}>${message("text.deny", "en")}</option></select></label>`; }
+export function permissionSelect(name: (typeof PERMISSION_BITS)[number], selected: boolean): string {
+  const enabled = normalizeUiPermissionSet({ ...LOCKED_PERMISSION_SET, [name]: true });
+  const dependencies = PERMISSION_BITS.filter(bit => bit !== name && enabled[bit]).join(" ");
+  return `<label class="perm-select-label"><span>${escapeHtml(name.replaceAll("_", " "))}</span><select name="${escapeHtml(name)}" data-permission-requires="${dependencies}"><option value="true"${selected ? " selected" : ""}>${message("text.allow", "en")}</option><option value="false"${selected ? "" : " selected"}>${message("text.deny", "en")}</option></select></label>`;
+}
+
+function permissionPreset(value: string): string {
+  const permissions = workspacePermissionPreset(value);
+  return permissions === undefined ? "" : PERMISSION_BITS.filter(bit => permissions[bit]).join(" ");
+}
 
 export function scopeCheckboxes(selected: readonly string[] = ["coding:read"]): string {
   const descriptions: Record<CodingScope, string> = {
@@ -42,9 +53,10 @@ export function permissionForm(runnerId: string, permissions: Record<string, unk
 }
 
 export function workspaceProfile(permissions: Record<string, unknown> | undefined): "custom" | "read_only" | "edit_only" | "controlled_exec" {
-  if (permissions?.read === true && permissions.edit !== true && permissions.shell !== true && permissions.job_control !== true) return "read_only";
-  if (permissions?.read === true && permissions.edit === true && permissions.shell !== true && permissions.job_control !== true) return "edit_only";
-  if (permissions?.read === true && permissions.edit === true && permissions.shell === true && permissions.job_control === true) return "controlled_exec";
+  for (const name of ["read_only", "edit_only", "controlled_exec"] as const) {
+    const preset = workspacePermissionPreset(name)!;
+    if (PERMISSION_BITS.every(bit => (permissions?.[bit] === true) === preset[bit])) return name;
+  }
   return "custom";
 }
 
@@ -75,9 +87,9 @@ export function managedWorkspaceForm(runnerId: string, workspace: Record<string,
         <label>Usage profile
           <select name="profile">
             <option value="custom"${profile === "custom" ? " selected" : ""}>${message("text.custom", "en")}</option>
-            <option value="read_only"${profile === "read_only" ? " selected" : ""}>${message("text.read.only", "en")}</option>
-            <option value="edit_only"${profile === "edit_only" ? " selected" : ""}>${message("text.workspace.edit", "en")}</option>
-            <option value="controlled_exec"${profile === "controlled_exec" ? " selected" : ""}>${message("text.controlled.execution", "en")}</option>
+            <option value="read_only" data-permission-preset="${permissionPreset("read_only")}"${profile === "read_only" ? " selected" : ""}>${message("text.read.only", "en")}</option>
+            <option value="edit_only" data-permission-preset="${permissionPreset("edit_only")}"${profile === "edit_only" ? " selected" : ""}>${message("text.workspace.edit", "en")}</option>
+            <option value="controlled_exec" data-permission-preset="${permissionPreset("controlled_exec")}"${profile === "controlled_exec" ? " selected" : ""}>${message("text.controlled.execution", "en")}</option>
           </select>
         </label>
         <label>Enabled

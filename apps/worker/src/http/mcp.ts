@@ -16,14 +16,28 @@ import type { CentralToolVisibility, CentralToolVisibilityReader } from "../cont
 
 /** The URL segment is the only MCP credential. Authorization headers are ignored. */
 export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
+  const boundary: { stage: McpHandlerStage } = { stage: "request_validation" };
+  try { return await handleMcpRequest(request, env, url, boundary); }
+  catch (error) {
+    // Preserve the original failure. SDK callbacks do not observe exceptions
+    // before dispatch or while preparing the outgoing HTTP response.
+    try { reportMcpHandlerError(error, boundary.stage); }
+    catch { /* Diagnostic failures cannot replace the original request error. */ }
+    throw error;
+  }
+}
+
+async function handleMcpRequest(request: Request, env: WorkerEnv, url: URL, boundary: { stage: McpHandlerStage }): Promise<Response> {
   if (request.headers.has("x-runmesh-mcp-hop")) return mcpHttpError(508, "MCP relay recursion rejected", await readRejectedMcpRequestId(request));
   const parts = url.pathname.split("/").filter(Boolean);
   const secret = parts[0];
   if (secret === undefined || !MCP_SECRET_RE.test(secret)) return mcpHttpError(404, "Not found", await readRejectedMcpRequestId(request));
+  boundary.stage = "identity_verification";
   const verified = await verifyMcpClient(mcpIdentityVerifier(env), await sha256Hex(secret)).catch(async error => { await readRejectedMcpRequestId(request); throw error; });
   if (verified === undefined) return mcpHttpError(404, "Not found", await readRejectedMcpRequestId(request));
   // createMcpHandler requires an exact /mcp route. Forward the bounded body
   // and its parsed value; protocol validation remains owned by the SDK.
+  boundary.stage = "request_body";
   const rewritten = new URL(request.url);
   rewritten.pathname = "/mcp";
   rewritten.search = "";
@@ -53,10 +67,12 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
     scopes: [...verified.scopes],
     extra: { client_label: verified.label, secret_version: verified.secret_version },
   };
+  boundary.stage = "module_loading";
   const [{ createMcpHandler }, { createCodingMcpServer, MCP_TOOL_NAMES }] = await Promise.all([
     import("agents/mcp/server"),
     import("../mcp/server.js"),
   ]);
+  boundary.stage = "provider_setup";
   const nativeCall = calledTool !== undefined && MCP_TOOL_NAMES.some(name => name === calledTool);
   const remote = nativeCall || env.CAPABILITIES === undefined
     ? undefined : await import("../mcp/providers/remote.js");
@@ -89,9 +105,11 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
   // Record the last entered boundary; this is diagnostic state for this call,
   // never a request identifier or shared lifecycle state.
   let handlerStage: McpHandlerStage = "handler_dispatch";
+  boundary.stage = handlerStage;
   const handler = createMcpHandler(
     () => {
       handlerStage = "server_factory";
+      boundary.stage = handlerStage;
       // Stateless calls need only their selected native tool. Discovery still
       // publishes the full catalog; unknown calls retain an SDK tool handler
       // even when central providers are disabled. This never caches auth.
@@ -114,6 +132,7 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
         direct?.registerDirectRemoteTools(server, { list: query => owner().listCatalog(principal, query), call: command => owner().callRemote(principal, command) }, directory);
       }
       handlerStage = "sdk_transport";
+      boundary.stage = handlerStage;
       return server;
     },
     {
@@ -124,12 +143,15 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
       onerror: error => reportMcpHandlerError(error, handlerStage),
     },
   );
-  const response = await primeMcpResponse(await handler.fetch(forwarded, { authInfo: auth, ...(parsedBody !== undefined ? { parsedBody } : {}) }), parsedBody);
+  const handled = await handler.fetch(forwarded, { authInfo: auth, ...(parsedBody !== undefined ? { parsedBody } : {}) });
+  boundary.stage = "response_priming";
+  const response = await primeMcpResponse(handled, parsedBody);
   // The MCP credential is carried in the request path.  Do not allow an SDK
   // response (or an intermediary) to cache that path or disclose it through
   // a referrer when a client follows a response link.  These headers also
   // keep the JSON/SSE endpoint from becoming an embeddable cross-origin
   // document if a future SDK response changes its content type.
+  boundary.stage = "response_headers";
   const headers = new Headers(response.headers);
   headers.set("cache-control", "no-store");
   headers.set("referrer-policy", "no-referrer");
