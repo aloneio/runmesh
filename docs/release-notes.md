@@ -16,6 +16,10 @@ Runmesh 0.1.7 is published as an [immutable stable release](https://github.com/a
 - Temporary control-plane interruptions preserve the existing OAuth connection. Authorization opens when the account needs to sign in again.
 - Runner connections release unused responses during disconnects and temporary control-plane failures.
 
+### Control panel
+
+- Client lists show concise credential statuses and put dates and UTC times on separate lines, with full timestamps available for reference.
+
 ### Security
 
 - Updated Hono to 4.13.7, which fixes GHSA-hxh3-vqpv-xpqv in JSX rendering.

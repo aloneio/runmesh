@@ -88,6 +88,7 @@ const definitions = {
   "product.ui.48": { en: "e.g. Your team or original repository", "zh-CN": "例如：团队名称或原始仓库" },
   "product.ui.49": { en: "e.g. MIT or Internal use", "zh-CN": "例如：MIT 或内部使用" },
   "client.credential.active": { en: "Credential valid", "zh-CN": "凭据有效" },
+  "client.credential.active.short": { en: "Valid", "zh-CN": "有效" },
   "client.credential.revoked": { en: "Credential revoked", "zh-CN": "凭据已撤销" },
   "client.credential.status": { en: "Credential status", "zh-CN": "凭据状态" },
   "client.credential.explanation": { en: "Credential status shows whether the connection URL is active.", "zh-CN": "凭据状态表示连接地址是否有效。" },

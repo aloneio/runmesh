@@ -16,7 +16,7 @@ import { localizeUiText } from '../apps/worker/dist/i18n/legacy-text.js';
 
 // Reuse public render fixtures; measurements exercise the shipped CSS and browser bundle.
 const views = { authEntryDocument, secretCreatedPage, overviewPage, settingsPage, clientsPage, clientDetailPage, runnersPage, runnerDetailPage };
-const viewports = [320, 390, 768, 800, 801, 900, 1024, 1051, 1365, 1440, 1787];
+const viewports = [320, 390, 768, 800, 801, 900, 1024, 1050, 1051, 1064, 1365, 1440, 1787];
 async function fixtureDocuments() {
   const { cases } = JSON.parse(await readFile(new URL('../apps/worker/test/fixtures/admin-render-golden.json', import.meta.url), 'utf8'));
   const documents = new Map();
@@ -37,6 +37,7 @@ async function fixtureDocuments() {
   clientData.clients[0] = { ...clientData.clients[0], label: 'TeamClientWithoutSpaces'.repeat(4), active_runner_id: clientData.runners[0].runner_id,
     scopes: ['coding:read', 'coding:write', 'coding:exec'], last_used_at_ms: Date.UTC(2026, 9, 4, 0, 50, 21, 590) };
   clientData.clients.push({ ...clientData.clients[0], client_id: 'client-unselected', active_runner_id: null });
+  clientData.clients.push({ ...clientData.clients[0], client_id: 'client-revoked', revoked_at_ms: Date.UTC(2026, 9, 4) });
   documents.set('/layout/clients-long-values', adminDocument('Client layout fixture', clientsPage(clientData, csrf), 'clients'));
   documents.set('/layout/client-detail-long-values', adminDocument('Client detail layout fixture', clientDetailPage(clientData.clients[0], clientData.runners, [], csrf), 'clients'));
   documents.set('/layout/central', adminDocument('MCP & Skill', centralPage('fixture-csrf', true, true), 'central'));
@@ -93,6 +94,11 @@ async function layoutIssues(page) {
     }
     for (const cell of document.querySelectorAll('.client-table td')) {
       const area = rect(cell), column = cell.cellIndex + 1;
+      if (column === 5 && getComputedStyle(cell).display === 'block') {
+        const label = getComputedStyle(cell, '::before').content.slice(1, -1);
+        const heading = cell.closest('table').querySelector('th:nth-child(5)').textContent.trim();
+        if (label.toLowerCase() !== heading.toLowerCase()) issues.push('mobile client status loses its credential context');
+      }
       for (const control of cell.querySelectorAll('input:not([type=hidden]),select,button,a,.runner-selection-controls,.runner-selection-form')) {
         if (visible(control) && !inside(rect(control), area)) issues.push('client column ' + column + ' control crosses its cell boundary');
       }
@@ -102,6 +108,18 @@ async function layoutIssues(page) {
         const range = document.createRange(); range.selectNodeContents(text);
         if ([...range.getClientRects()].some(line => !inside(line, area))) issues.push('client column ' + column + ' text crosses its cell boundary');
       }
+    }
+    for (const node of document.querySelectorAll('.client-table .credential-badge,.client-table .timestamp>span')) {
+      const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+      for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+        if (!text.textContent.trim()) continue;
+        const range = document.createRange(); range.selectNodeContents(text);
+        if (range.getClientRects().length !== 1) issues.push('client status or timestamp line wraps inside its text');
+      }
+    }
+    for (const timestamp of document.querySelectorAll('.client-table .timestamp')) {
+      const [date, clock] = [...timestamp.children].map(rect);
+      if (clock.top < date.bottom - 1 || Math.abs(clock.left - date.left) > 1) issues.push('client date and UTC time are not aligned on separate lines');
     }
     const recording = document.querySelector('form[action$="/recording"]');
     if (recording) {
