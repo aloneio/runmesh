@@ -2,7 +2,7 @@ import { jobEventMessage } from "./connection/job-events.js";
 import { createHash } from "node:crypto";
 import { HistoryUploadScheduler, type HistoryUploadClock } from "./history-upload.js";
 import { QueueGrantSchema } from "@aloneio/runmesh-protocol";
-import { parseRunnerJobHistory, type RunnerJobHistory } from "./job-history.js";
+import { parseJobHistorySettings, type JobHistorySettings } from "@aloneio/runmesh-protocol";
 import {
   decodeWireFrame,
   encodeWireFrame,
@@ -31,7 +31,7 @@ export { RunnerAuthenticationError, RunnerServiceUnavailableError, classifyConne
 import { candidateWorkspaces, effectivePolicyWorkspaces, validationContext } from "./connection/policy-candidate.js";
 import { discoverCapabilities, currentProcessServiceIdentity, sanitizeServiceIdentity, processPrivilegeState } from "./connection/metadata.js";
 export { discoverCapabilities, currentProcessServiceIdentity } from "./connection/metadata.js";
-import type { ConnectionRuntimePort, ConnectionPolicyStorePort, ConnectionTransportFactory } from "./connection/ports.js";
+import type { ConnectionRuntimePort, ConnectionPolicyStorePort, ConnectionTransportFactory, ConnectionRuntimeFactory } from "./connection/ports.js";
 
 const MAX_IN_FLIGHT_RPCS = 64;
 const MAX_IN_FLIGHT_SYNC_CAPTURES = 2;
@@ -42,8 +42,7 @@ const CONTROL_RPC_METHODS = new Set(["echo", "runner.info", "job.get", "job.canc
 
 /** @internal Trusted composition only; no CLI, wire or deployment configuration. */
 export interface RunnerConnectionDependencies {
-  readonly runtime?: ConnectionRuntimePort;
-  readonly policyStore?: ConnectionPolicyStorePort;
+  readonly createRuntime?: ConnectionRuntimeFactory;
   readonly createSocket?: ConnectionTransportFactory;
 }
 
@@ -60,8 +59,8 @@ export interface RunnerConnectionOptions {
   readonly random?: () => number;
   readonly sleep?: (delayMs: number) => Promise<void>;
   readonly onStateChange?: (state: "connecting" | "online" | "offline") => void;
-  readonly runtime?: RunnerRuntime;
-  readonly policyStore?: PolicyStore;
+  readonly runtime?: ConnectionRuntimePort;
+  readonly policyStore?: ConnectionPolicyStorePort;
 }
 
 export class RunnerConnection {
@@ -74,7 +73,7 @@ export class RunnerConnection {
   private readonly heartbeatMs: number;
   private readonly rpcTimeoutMs: number;
   private readonly syncMs: number;
-  private jobHistory: RunnerJobHistory | undefined;
+  private jobHistory: JobHistorySettings | undefined;
   private historyPending: {requestId:string;snapshot:string;socket:WebSocket;revision?:number} | undefined;
   private cleanupTimer: ReturnType<typeof setInterval> | undefined;
   private cleanupBusy = false;
@@ -151,8 +150,9 @@ export class RunnerConnection {
       this.cancelReconnectSleep = finish;
     }));
     this.onStateChange = options.onStateChange ?? (() => undefined);
-    this.runtime = dependencies.runtime ?? options.runtime ?? new RunnerRuntime({ config: this.config, ...(this.config.stateDir === undefined ? {} : { stateDir: this.config.stateDir }), onJobEvent: (event) => this.forwardJobEvent(event) });
-    this.policyStore = dependencies.policyStore ?? options.policyStore ?? new PolicyStore(this.config.stateDir);
+    const createRuntime: ConnectionRuntimeFactory = dependencies.createRuntime ?? (onJobEvent => new RunnerRuntime({ config: this.config, ...(this.config.stateDir === undefined ? {} : { stateDir: this.config.stateDir }), onJobEvent }));
+    this.runtime = options.runtime ?? createRuntime(event => this.forwardJobEvent(event));
+    this.policyStore = options.policyStore ?? new PolicyStore(this.config.stateDir);
     this.historyUploads = new HistoryUploadScheduler(async revision => {
       const socket = this.socket;
       if (socket !== undefined) await this.sendDemandSync(socket, revision);
@@ -192,15 +192,23 @@ export class RunnerConnection {
     if (persisted !== undefined) {
       try {
         const restored = await candidateWorkspaces(persisted, this.metadata.execution_mode, this.metadata.service_identity);
+        // Validation may finish after stop() or a replacement start(). Neither
+        // its success nor failure may change the replacement runtime policy.
+        if (this.stopped || generation !== this.lifecycleGeneration) return;
         this.runtime.applyPolicy(restored);
         this.appliedPolicyRevision = persisted.revision;
         this.appliedPolicyChecksum = persisted.checksum;
       } catch {
+        if (this.stopped || generation !== this.lifecycleGeneration) return;
         // Keep the live policy fail-closed but continue to the authenticated
         // transport.  The Worker can then receive an explicit `invalid` ACK
         // (including os_access_denied diagnostics) and deliver a corrected
         // policy after an operator fixes the service identity/ACL; aborting
         // here would leave the Runner permanently offline and hide the cause.
+        // An empty runtime policy is no longer the previously applied snapshot.
+        // Clear its identity so admission and same-revision recovery agree.
+        this.appliedPolicyRevision = null;
+        this.appliedPolicyChecksum = null;
         this.runtime.applyPolicy([]);
       }
       this.desiredPolicyRevision = persisted.revision;
@@ -210,8 +218,10 @@ export class RunnerConnection {
       this.onStateChange("connecting");
       try {
         await this.connectOnce();
+        if (this.stopped || generation !== this.lifecycleGeneration) return;
         this.reconnectAttempt = 0;
       } catch (error) {
+        if (this.stopped || generation !== this.lifecycleGeneration) return;
         const detail = error instanceof Error ? error.message : String(error);
         if (detail.length > 0) console.error(`runner connection error: ${detail}`);
         this.onStateChange("offline");
@@ -226,6 +236,7 @@ export class RunnerConnection {
           : reconnectDelayMs(this.reconnectAttempt, this.random());
         console.error(`runner reconnect scheduled: class=${error instanceof RunnerServiceUnavailableError ? "service_unavailable" : error instanceof RunnerSessionConflictError ? "session_conflict" : "network"} delay_ms=${delayMs}`);
         await this.sleep(delayMs);
+        if (this.stopped || generation !== this.lifecycleGeneration) return;
         this.reconnectAttempt += 1;
       }
     }
@@ -240,8 +251,12 @@ export class RunnerConnection {
     if (this.cleanupTimer !== undefined) clearInterval(this.cleanupTimer);
     if (this.heartbeatTimer !== undefined) clearInterval(this.heartbeatTimer);
     if (this.syncTimer !== undefined) clearInterval(this.syncTimer);
+    // Retire ownership before close callbacks can arrive, including while a
+    // replacement start is still initializing and has no new socket yet.
+    const socket = this.socket;
+    this.socket = undefined;
     this.welcomedSocket = undefined;
-    this.socket?.close(1000, "runner stopped");
+    socket?.close(1000, "runner stopped");
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(new Error("runner stopped"));
@@ -383,7 +398,7 @@ export class RunnerConnection {
             return;
           }
           const rawHistory = message.extensions?.runmesh_job_history;
-          const history = rawHistory === undefined ? undefined : parseRunnerJobHistory(rawHistory);
+          const history = rawHistory === undefined ? undefined : parseJobHistorySettings(rawHistory);
           if (rawHistory !== undefined && history === undefined) { socket.close(1008,"invalid history settings"); return; }
           const priorHistory = this.jobHistory;
           this.jobHistory = history;
@@ -492,7 +507,7 @@ export class RunnerConnection {
             ? new RunnerServiceUnavailableError(`runner service temporarily unavailable (close ${code})`)
             : new Error(welcomed ? "connection closed" : "connection closed before welcome");
         // A brief welcome during an outage must not reset the retry budget.
-        if (welcomed && Date.now() - welcomedAtMs >= 60_000) this.reconnectAttempt = 0;
+        if (currentSocket && welcomed && Date.now() - welcomedAtMs >= 60_000) this.reconnectAttempt = 0;
         if (!this.stopped) fail(failure);
         else if (!settled) {
           settled = true;

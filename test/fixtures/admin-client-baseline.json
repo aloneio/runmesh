@@ -1,16 +1,118 @@
 {
-  "source_commit": "6e43324a9681e75c4f4fe623759e6049f44edff2",
+  "source_commit": "acfa7fe5eeefa9004efbb878109401b8fb12b5df",
   "cases": [
     {
       "nonce": null,
-      "sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
-      "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20"
+      "sha256": "47948c1cc69d5ceae88a834779a38c8aeb9f73b3e3eed57e714ea38585d10a14",
+      "pre_central_sha256": "c439e1d68d4516d022325b342293966cc8bb0519de55633d95a79d0191f83f20",
+      "pre_product_sha256": "14cd33ffdc5baa9c83cf4aa04cc28e7ba9bfa6dcbad77ce0a761fed5855c8b7a",
+      "pre_product_recovery_sha256": "d1a0e5e2847c41cbcbb540857c932494142490fb019c5f80141da294ed48f56e",
+      "pre_controller_split_sha256": "7a9d870a2f2611da0db8e5ab4bb304d92316341ed9bc62eea91231b3b886fa73"
     },
     {
       "nonce": "test-nonce",
-      "sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
-      "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1"
+      "sha256": "f6285c32b8e15f0b8f36500921a7d1d3331f7186aa5fbba31cfc58c9a7d56d4b",
+      "pre_central_sha256": "b7292cd4bec51ba0cd256587d03390a6d164756132c3099d8c503072c48082e1",
+      "pre_product_sha256": "a4f1f20c62e5040705dc350b3930c868a812cf62b3cf4f01f088230c8ff6384b",
+      "pre_product_recovery_sha256": "2fb231bcb23b4ca28d3d76b2aea268d7c137a5c7df813aa688d9ec970a770224",
+      "pre_controller_split_sha256": "61b424e06c3351693c105acb5f6f064c4e819883e21b9c96d6f2e5f14b05a4dd"
     }
   ],
-  "reviewed_change": "Add bounded, no-retry central administration requests; preserve existing handlers and nonce binding."
+  "reviewed_change": "One idempotent localized confirmation for MCP client deletion on initial and mounted pages. No screenshots.",
+  "runner_action_review": {
+    "source_base": "549d01c3e3887f0971d4281f8634a32515980441",
+    "reviewed_change": "Bind scoped destructive Runner forms on first load and dynamic navigation; inline errors, submitter actions, duplicate POST prevention, successful GET refresh and expired-session redirects covered by DOM tests. No screenshots."
+  },
+  "controller_review": {
+    "source_base": "f20286f27d938881b590cba4d1def8d60b18804e",
+    "reviewed_change": "Separate locale, shared idempotent controls, page mounting and navigation from the composition entry. Preserve markup outside the script byte-for-byte. Public DOM and port-based regressions verify initial/dynamic controls, fresh navigation and Runner actions; no screenshots."
+  },
+  "runner_action_deadline_review": {
+    "source_base": "4811e50cd1f75b1151d40a5db2899c3673b810d0",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "reviewed_change": "Bound Runner delete/revoke response headers and body reads with one 25-second deadline. Stalled-response browser regressions retain session and page, restore controls, and never replay writes. Replacing only the inline bundle reproduces every prior hash and byte count. No screenshots.",
+    "non_script_markup_unchanged": true
+  },
+  "ui_copy_review": {
+    "source_base": "21a775ca291d04f68f4f1957fe3c03da51462a7d",
+    "reviewed_change": "Natural English and Chinese interface copy; remove duplicate warnings and developer terminology. Exact reviewed substitutions reproduce all 20 rendered cases. Installer commands, CSS blocks, protected user data, form actions and permission controls are unchanged. No screenshots.",
+    "rendered_cases": 20
+  },
+  "browser_error_copy_review": {
+    "source_base": "e1911d63260b6737d89766b94ed3f4be9c80d369",
+    "reviewed_change": "Localize native Skill file-read, UTF-8, network and malformed-response failures in English and Chinese. Browser regressions reject invalid files without requests and recover through reselection, preserving text. Uncertain writes still require refresh and are never replayed. All non-script markup remains byte-for-byte unchanged. No screenshots.",
+    "rendered_cases": 20
+  },
+  "client_permissions_review": {
+    "source_base": "ef81b5f0bd4085e3c9f16fec34b0c19afed53f52",
+    "reviewed_change": "Open computer permissions when the client selects computer access, including initial and dynamically mounted pages. Preserve selected scopes. Native-only forms start open without JavaScript. Bilingual mobile DOM tests; no screenshots."
+  },
+  "navigation_deadline_review": {
+    "source_base": "e6cfe1755e8a467a5a3a0225ef2377c177ead489",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "reviewed_change": "Bound navigation response headers and body with one 25-second deadline. Full-page fallbacks preserve the latest queued destination without extra requests. Replacing only the inline bundle reproduces every prior hash and byte count. No screenshots.",
+    "non_script_markup_unchanged": true
+  },
+  "skill_upload_review": {
+    "source_base": "bfccf9278288e5674da23ad3a9be5f2abc9d4218",
+    "reviewed_change": "Raise Skill uploads to 256 files, 1 MiB per file and 8 MiB per canonical package. Form limits come from the server contract. Bilingual DOM tests cover actual folder selection, oversized selections, JSON escaping and retry after confirmed HTTP 413. No screenshots."
+  },
+  "oauth_reconnect_review": {
+    "source_base": "04c751c0ecda6d76fcb1a73a6cbce01278cb9d80",
+    "reviewed_change": "Reconnect reconciles saved profiles before beginning OAuth, recovers failed discovery without a manual refresh, and checks current enabled state and revision. Missing or invalid vault readiness gets a specific bilingual configuration error. Regression covers fresh revisions, failed reconciliation, concurrent pause and preserved account state. No screenshots."
+  },
+  "oauth_discovery_review": {
+    "source_base": "6cb19d4d4989c426deed4ac6f2c5262a06fdd2d8",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "reviewed_change": "Represent an undiscovered catalog and pending authorization as explicit states. Reuse the initial catalog read during interrupted OAuth recovery. Browser regressions preserve reconnect guidance and publication checks. Replacing only the inline bundle reproduces every prior hash and byte count. No screenshots.",
+    "non_script_markup_unchanged": true
+  },
+  "oauth_handoff_review": {
+    "source_base": "750a09d2e286c787b3f5e5878df549ec037bcdb4",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "reviewed_change": "User-triggered MCP discovery starts OAuth automatically when authorization is required. Reconnect preserves sign-in progress through internal refresh; callback recovery never starts a new authorization. Replacing only the browser bundle reproduces every prior render hash and byte count. No screenshots.",
+    "non_script_markup_unchanged": true
+  },
+  "navigation_superseded_review": {
+    "source_base": "4238be3840a6da34b7c74acfa59401fe3e5d7a4e",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "reviewed_change": "Discard a superseded navigation response before mounting controllers or updating history. The final queued page owns its URL and content; existing failure and locale fallbacks are unchanged. Replacing only the inline bundle reproduces every prior hash and byte count. No screenshots.",
+    "non_script_markup_unchanged": true
+  },
+  "navigation_layout_review": {
+    "source_base": "a4213f95816afc2f5a13730da6f301f20e8594eb",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "reviewed_change": "Restore fragment focus and scrolling below the sticky header after soft navigation; move newly opened pages to their heading while preserving same-page refresh position. Let mounted pages use their content height instead of retaining the previous page height. Reset measured command-panel heights before resize. Reset the mobile enrollment action form flex basis. Describe OAuth recovery with direct next steps in both languages. Independently rebuilding and substituting only the prior bundle and style block reproduces every original hash and byte count.",
+    "other_markup_unchanged": true
+  }
 }

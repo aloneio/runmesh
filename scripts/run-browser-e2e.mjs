@@ -1,3 +1,4 @@
+import { checkGuidedProduct } from "./product-browser-check.mjs";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -29,11 +30,13 @@ try {
     env: { ...process.env, RUNMESH_BROWSER_CHECK: "1", RUNMESH_TEST_RESULT_PATH: path, RUNMESH_CHROMIUM_EXECUTABLE: executable, RUNMESH_BROWSER_OUTPUT: "" },
   });
   process.stdout.write(result.stdout); process.stderr.write(result.stderr);
+  stage = "guided_product";
+  const guidedProduct = await checkGuidedProduct(executable);
   stage = "evidence_validation";
   const stat = await lstat(path); assert.ok(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 8 * 1024 * 1024);
   const evidence = browserEvidence(JSON.parse(await readFile(path, "utf8")), 0);
   await writeSupplement("browser-tests", { schema_version: 1, evidence: "real_local_browser_e2e", attestation: "self_reported", source, ...evidence, runtime: { node: process.version, platform: process.platform, arch: process.arch }, production: "not_run" });
-  console.log(JSON.stringify({ browser_gate: "passed", ...evidence })); code = 0;
+  console.log(JSON.stringify({ browser_gate: "passed", guided_product: guidedProduct, ...evidence })); code = 0;
 } catch (error) {
   // Do not publish subprocess stderr, raw reports, cookies, or screenshots.
   let failure = { report_available: false };

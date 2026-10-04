@@ -2,6 +2,10 @@
 
 Runmesh combines MCP client scopes, Runner policy, workspace permissions and the host's OS identity. Use these controls to grant each client the access its work requires. Setup steps are in the [administrator guide](admin-guide.md) and [user guide](user-guide.md).
 
+## Shared central library
+
+In the current development configuration, every authenticated client shares enabled, reviewed MCP tools and active Skills. Per-client central capability assignments are retired. Client credentials, upstream OAuth, publication checks and global capability disabling remain enforced; native Runner scopes and workspace policies remain separate. Revoke a client credential to withdraw that client, disable a capability to withdraw it instance-wide, or use separate instances for separate capability libraries. See [central administration](central-administration.md) for upgrade behavior.
+
 ## Protect each credential
 
 | Credential | Purpose and storage |
@@ -37,7 +41,7 @@ The Runner's file tools accept relative paths and check traversal, links/junctio
 
 Host shell uses the Runner's OS identity. The workspace sets its initial directory; the command can access whatever that account's host permissions allow. New Runners default to `dedicated_user`: Linux uses `runmesh:runmesh`, macOS uses `UserName=runmesh`, and Windows uses `NT AUTHORITY\LOCAL SERVICE`. Grant that identity the required workspace access. Use VM/container isolation for commands that need an additional host boundary.
 
-The advanced `privileged_host` mode runs as root/SYSTEM and requires explicit confirmation, including `--confirm-privileged-host` in the CLI. Existing service identities and client permissions retain their configured values; new MCP clients default to `coding:read`.
+The advanced `privileged_host` mode runs as root/SYSTEM and requires explicit confirmation, including `--confirm-privileged-host` in the CLI. Existing service identities and native client permissions retain their configured values. When the central library is enabled, new control-panel connections default to Services and Skills only, with no native computer scopes. Selecting computer access uses the chosen native scopes, initially `coding:read`; when the central library is disabled, the form offers only computer access.
 
 ## Protect the local profile and installation
 

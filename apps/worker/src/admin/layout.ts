@@ -1,5 +1,5 @@
 import { message } from "../i18n/messages.js";
-import type { AdminNotice, ControlNavSection } from "./view-models.js";
+import type { AdminNotice, ControlNavSection } from "../contracts/admin-views.js";
 import { escapeHtml } from "./format.js";
 import { adminStyles } from "../admin-styles.js";
 import { meshMarkSvg, languageSwitch } from "./brand.js";
@@ -8,9 +8,9 @@ import { adminScript } from "./client-script.js";
 export function controlHeader(active?: ControlNavSection): string {
   const nav = ([
     ["dashboard", "Dashboard", "/admin"],
+    ["central", "MCP &amp; Skill", "/admin/central"],
+    ["clients", "AI connections", "/admin/clients"],
     ["runners", "Runners", "/admin/runners"],
-    ["clients", "MCP Clients", "/admin/clients"],
-    ["central", "Central", "/admin/central"],
     ["settings", "Settings", "/admin/settings"],
   ] as const).map(([key, label, href]) => `<a class="${active === key ? "active" : ""}"${active === key ? ' aria-current="page"' : ""} href="${href}">${label}</a>`).join("");
   return `<header class="app-header" data-app-header><div class="header-inner"><div class="header-left"><a class="brand" href="/admin" aria-label="Runmesh · Agent Control Plane">${meshMarkSvg("header-mesh-mark")}<span class="brand-copy"><span>Runmesh</span><small>${message("text.agent.control.plane", "en")}</small></span></a><nav class="control-nav" aria-label="Main navigation">${nav}</nav></div><div class="header-actions">${languageSwitch()}</div></div></header>`;

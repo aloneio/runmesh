@@ -2,18 +2,18 @@
 
 [简体中文](runtime-config.zh-CN.md) · [Administrator guide](admin-guide.md)
 
-Start with the source defaults and two independent Worker secrets. Add an override only when your deployment needs one.
+Start with the source defaults and the Worker secrets prepared by the initialization helper. Add an override only when your deployment needs one.
 
 ## Required secrets
 
 | Secret | Purpose | During upgrades |
 | --- | --- | --- |
-| `INTERNAL_CONTROL_SECRET` | Authenticates internal control-plane messages | Preserve the current value |
+| `INTERNAL_CONTROL_SECRET` | Authenticates internal control-plane messages and derives the OAuth encryption key | Preserve the current value; replacement requires OAuth reconnection |
 | `RUNNER_TOKEN_PEPPER` | Protects stored Runner token verifiers | Preserve the current value; replacement invalidates current tokens |
 
-Generate each value from at least 32 cryptographically random bytes encoded as text. Store them as Cloudflare secrets and keep them out of source, logs and conversations. Set the administrator password through the first-setup page.
+The helper generates these two secrets from at least 32 cryptographically random bytes each. OAuth encryption derives its key automatically from `INTERNAL_CONTROL_SECRET`; no additional variable is required. Store both values as Cloudflare secrets and keep them out of source, logs and conversations. Set the administrator password through the first-setup page.
 
-For programmatic Runner administration, also configure `ADMIN_TOKEN`. Dashboard-only installations can use the two required secrets.
+For programmatic Runner administration, also configure `ADMIN_TOKEN`. Dashboard administration does not require `ADMIN_TOKEN`.
 
 ## Defaults and overrides
 
@@ -32,7 +32,7 @@ Development uses `RUNMESH_ENVIRONMENT=development`. Keep test variables in the l
 
 ## Release and environment selection
 
-The signed **0.1.4** stable release has been independently verified. Its reviewed activation in `release/release-state.json` enables stable hosted distribution in source. Deploy the activated `main` source, then check your Worker's release descriptor for installation availability. An explicit empty `RUNMESH_SIGNED_RELEASE_AVAILABLE` override still disables hosted installation.
+The [release status](release-readiness.md) identifies the current stable package and candidate. A `released` record in `release/release-state.json` enables the independently verified stable package; a `candidate` record keeps its hosted stable installer disabled. Deploy the activated `main` source, then check your Worker's release descriptor for installation availability. An explicit empty `RUNMESH_SIGNED_RELEASE_AVAILABLE` override still disables hosted installation.
 
 Production uses protected `main`; candidate testing uses the separate `dev` Worker. Development selects a verified signed prerelease from its own channel and closes hosted installation when that selection is unavailable. See [development prereleases](dev-runner-prereleases.md).
 
@@ -56,7 +56,7 @@ Cloudflare retains the generated keys. If you require an independently recoverab
 
 ## Update or move an installation
 
-Preserve the Worker name, live data bindings, both required secrets and intentional overrides such as a proxy origin or emergency installer disable. Deploy the updated Worker, then follow the [upgrade guide](upgrading.md) for each Runner.
+Preserve the Worker name, live data bindings, both existing secrets and intentional overrides such as a proxy origin or emergency installer disable. Deploy the updated Worker, then follow the [upgrade guide](upgrading.md) for each Runner.
 
 A new account can provision its own resources and use its routed HTTPS domain. Moving existing data requires a separate transfer plan that includes the original credential-protection keys.
 

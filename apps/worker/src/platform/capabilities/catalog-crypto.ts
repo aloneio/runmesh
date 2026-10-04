@@ -1,12 +1,11 @@
+import { encodeBase64Url as encode, decodeBase64Url } from "../../contracts/base64url.js";
 import { CATALOG_LIMITS, type CatalogCursorCodec } from "../../contracts/catalog.js";
 import { catalogJson } from "../../contracts/catalog-json.js";
 import { parseCatalogCursor } from "../../contracts/catalog-values.js";
 
-const encode = (bytes: Uint8Array): string => btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
 const decode = (value: string): Uint8Array<ArrayBuffer> => {
-  if (!/^[A-Za-z0-9_-]+$/u.test(value) || value.length > CATALOG_LIMITS.cursor_bytes) throw new Error("catalog_cursor_invalid");
-  const bytes = Uint8Array.from(atob(value.replaceAll("-", "+").replaceAll("_", "/")), c => c.charCodeAt(0));
-  if (encode(bytes) !== value) throw new Error("catalog_cursor_invalid");
+  const bytes = decodeBase64Url(value, CATALOG_LIMITS.cursor_bytes);
+  if (bytes === undefined) throw new Error("catalog_cursor_invalid");
   return bytes;
 };
 export const newCatalogCursorKey = (): string => encode(crypto.getRandomValues(new Uint8Array(32)));
@@ -15,7 +14,7 @@ export async function catalogSha256(value: string): Promise<string> {
 }
 
 /** Key is owner-local, independent of credentials. MACs are not authorization:
- * every page still checks live identity, grants and all relevant revisions. */
+ * every page still checks live identity, publications and all relevant revisions. */
 export function createCatalogCursor(namespace: string, loadKey: () => string): CatalogCursorCodec {
   const key = async (): Promise<CryptoKey> => {
     const raw = decode(loadKey());
@@ -24,7 +23,7 @@ export function createCatalogCursor(namespace: string, loadKey: () => string): C
       return await crypto.subtle.importKey("raw", raw, { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
     } finally { raw.fill(0); }
   };
-  const message = (body: string): Uint8Array<ArrayBuffer> => new TextEncoder().encode(`runmesh-catalog-cursor-v1:${namespace}:${body}`);
+  const message = (body: string): Uint8Array<ArrayBuffer> => new TextEncoder().encode(`runmesh-catalog-cursor-v2:${namespace}:${body}`);
   return {
     async seal(value) {
       const cursor = parseCatalogCursor(value), canonical = cursor === undefined ? undefined : catalogJson(cursor, 1024);

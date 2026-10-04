@@ -6,7 +6,11 @@
 
 ## 选择目标版本
 
+0.1.6 候选版本将已启用的 MCP 工具与当前 Skill 共享给实例中的所有有效客户端。升级开发实例前，请核对共享内容与客户端范围；部署后刷新客户端目录和 Skill 版本。停止某个客户端的访问时，撤销其凭据；停止共享某个 MCP 或 Skill 时，在控制端暂停它。计算机访问保留原有 Runner 和工作区权限，具体操作见[MCP 和 Skill 指南](central-administration.zh-CN.md)。
+
 先读[版本说明](release-notes.zh-CN.md)和[发行状态](release-readiness.md)。生产升级使用已发布、独立验签的正式包；候选版和开发预发布放在独立测试环境。
+
+验收 0.1.6 候选版时，检查新增的 MCP、Skill 生产绑定，并保留现有 Registry 和 Runner 命名空间。已有的两个密钥和资源标识保持不变；OAuth 加密自动使用 `INTERNAL_CONTROL_SECRET`，无需增加变量。正式升级安排在签名发行物发布并激活后。下文 0.1.3 升至 0.1.4 的流程是受管服务更新的历史示例。
 
 分别安排以下更新：
 
@@ -16,7 +20,7 @@
 | Runner | 在每台主机上，按适用的服务更新流程安装已验证包 |
 | MCP 客户端 | Worker 更新后刷新缓存的工具定义 |
 
-功能取决于整套组件是否兼容。例如 Context `storage` 和 `prune` 需要 Runner 0.1.4 提供的能力。兼容 Worker 对未支持的动作返回 `runner_upgrade_required`；支持该能力的 Runner 若在 Worker 更新前已连接，可能需要重新连接以识别能力。
+功能取决于整套组件是否兼容。例如 Context `storage` 和 `prune` 从 Runner 0.1.4 开始提供。动作返回 `runner_upgrade_required` 时，安装兼容 Runner 并重新连接，使 Worker 读取其当前能力。
 
 ## 准备维护窗口
 

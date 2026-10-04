@@ -122,7 +122,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
       expect(instance.getRunner("mode-runner")).toMatchObject({ configured_execution_mode: "dedicated_user" });
       expect(instance.createRunnerEnrollment("mode-runner", randomBase64Url(), "b".repeat(64), now + 3, "privileged_host")).toBeUndefined();
       // Runner-authored enrollment metadata cannot change the trusted field.
-      await instance.redeemRunnerEnrollment("a".repeat(64), "c".repeat(64), { platform: "linux", architecture: "x64", hostname: "host", runner_version: "1.0.0", protocol_version: 2, execution_mode: "privileged_host" }, now + 4);
+      await instance.redeemRunnerEnrollment("a".repeat(64), "c".repeat(64), { platform: "linux", architecture: "x64", hostname: "host", runner_version: "1.0.0", protocol_version: 2, execution_mode: "privileged_host" }, now + 4, crypto.randomUUID());
       expect(instance.getRunner("mode-runner")).toMatchObject({ configured_execution_mode: "dedicated_user" });
     });
   });
@@ -204,7 +204,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     });
   });
 
-  it("redeems enrollment once, rejects expiry/regeneration, and exposes no raw enrollment code", async () => {
+  it("redeems enrollment once, recovers the same mutation, and rejects expiry/regeneration", async () => {
     const registry = env.REGISTRY.get(env.REGISTRY.idFromName(`runner-enrollment-${crypto.randomUUID()}`)); const now = Date.now();
     const code = randomBase64Url(); const verifier = await sha256Hex(code); const info = { platform: "linux", architecture: "x64", hostname: "runner-host", runner_version: "1.0.0", protocol_version: 1 };
     await runInDurableObject(registry, (instance) => {
@@ -212,19 +212,35 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
       expect(instance.createRunnerEnrollment("enrolled-runner", randomBase64Url(), verifier, now)).toBeDefined();
     });
     const tokenVerifier = "c".repeat(64);
-    const results = await Promise.all(Array.from({ length: 8 }, () => runInDurableObject(registry, (instance) => instance.redeemRunnerEnrollment(verifier, tokenVerifier, info, now + 1))));
+    const mutationIds = Array.from({ length: 8 }, () => crypto.randomUUID());
+    const results = await Promise.all(mutationIds.map(mutationId => runInDurableObject(registry, (instance) => instance.redeemRunnerEnrollment(verifier, tokenVerifier, info, now + 1, mutationId))));
     expect(results.filter((value) => value !== undefined)).toHaveLength(1);
-    expect(await runInDurableObject(registry, (instance) => instance.redeemRunnerEnrollment(verifier, tokenVerifier, info, now + 2))).toBeUndefined();
+    const committedMutation = mutationIds[results.findIndex(value => value !== undefined)]!;
+    expect(await runInDurableObject(registry, (instance) => instance.redeemRunnerEnrollment(verifier, tokenVerifier, info, now + 2, committedMutation))).toEqual({ runner_id: "enrolled-runner" });
+    expect(await runInDurableObject(registry, (instance) => instance.redeemRunnerEnrollment(verifier, tokenVerifier, info, now + 2, crypto.randomUUID()))).toBeUndefined();
     const oldCode = randomBase64Url(); const oldVerifier = await sha256Hex(oldCode); const replacement = randomBase64Url(); const replacementVerifier = await sha256Hex(replacement);
     await runInDurableObject(registry, (instance) => {
       expect(instance.createRunnerEnrollment("enrolled-runner", randomBase64Url(), oldVerifier, now + 3)).toBeDefined();
       expect(instance.createRunnerEnrollment("enrolled-runner", randomBase64Url(), replacementVerifier, now + 4)).toBeDefined();
     });
-    expect(await runInDurableObject(registry, (instance) => instance.redeemRunnerEnrollment(oldVerifier, tokenVerifier, info, now + 5))).toBeUndefined();
+    expect(await runInDurableObject(registry, (instance) => instance.redeemRunnerEnrollment(oldVerifier, tokenVerifier, info, now + 5, crypto.randomUUID()))).toBeUndefined();
     const expiredCode = randomBase64Url(); const expiredVerifier = await sha256Hex(expiredCode);
     await runInDurableObject(registry, (instance) => expect(instance.createRunnerEnrollment("enrolled-runner", randomBase64Url(), expiredVerifier, now)).toBeDefined());
-    expect(await runInDurableObject(registry, (instance) => instance.redeemRunnerEnrollment(expiredVerifier, tokenVerifier, info, now + 30 * 60 * 1_000 + 1))).toBeUndefined();
+    expect(await runInDurableObject(registry, (instance) => instance.redeemRunnerEnrollment(expiredVerifier, tokenVerifier, info, now + 30 * 60 * 1_000 + 1, crypto.randomUUID()))).toBeUndefined();
     expect(await runInDurableObject(registry, (instance) => instance.getRunner("enrolled-runner"))).not.toHaveProperty("token_verifier");
+  });
+
+  it.each([undefined, "", "invalid mutation"])("requires a valid enrollment mutation identity (%s)", async mutationId => {
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName('enrollment-mutation-' + crypto.randomUUID()));
+    const now = Date.now(); const verifier = "a".repeat(64); const tokenVerifier = "b".repeat(64);
+    const info = { platform: "linux", architecture: "x64", hostname: "runner", runner_version: "1.0.0", protocol_version: 1 };
+    await runInDurableObject(registry, async instance => {
+      expect(instance.addRunner("mutation-runner", "Mutation runner", now, undefined, "dedicated_user")).toBeDefined();
+      expect(instance.createRunnerEnrollment("mutation-runner", randomBase64Url(), verifier, now)).toBeDefined();
+      await expect(instance.redeemRunnerEnrollment(verifier, tokenVerifier, info, now + 1, mutationId as string)).resolves.toBeUndefined();
+      expect(instance.lookupRunnerEnrollment(verifier, now + 1)).toEqual({ runner_id: "mutation-runner" });
+      await expect(instance.redeemRunnerEnrollment(verifier, tokenVerifier, info, now + 2, crypto.randomUUID())).resolves.toEqual({ runner_id: "mutation-runner" });
+    });
   });
 
   it("serves public secret-free fixed bootstrap templates while availability remains fail closed", async () => {
@@ -423,7 +439,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     const list = await mcp(secretUrl, toolsList());
     expect(list.status).toBe(200);
     const listBody = await readMcp(list) as { result?: { tools?: { name: string }[] } };
-    expect(listBody.result?.tools?.map((tool) => tool.name).sort()).toEqual(["context", "edit", "inspect", "job", "read", "runner_current", "runner_list", "runner_select", "shell", "workspace_list"].sort());
+    expect(listBody.result?.tools?.map((tool) => tool.name).sort()).toEqual(["context", "edit", "inspect", "job", "read", "runner_current", "runner_list", "runner_select", "shell", "workspace_list", "remote_profiles", "remote_tools", "remote_call"].sort());
     const readOnlyShell = await mcp(secretUrl, { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "shell", arguments: { workspace_id: "workspace", command: "echo ignored" } } });
     const readOnlyBody = await readMcp(readOnlyShell) as { result?: { isError?: boolean; structuredContent?: { error?: { code?: string } } } };
     expect(readOnlyBody.result).toMatchObject({ isError: true, structuredContent: { error: { code: "insufficient_scope" } } });
@@ -434,7 +450,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     const dashboardText = await dashboard.text();
     expect(dashboardText).toContain("Read only ChatGPT");
     expect(dashboardText).not.toContain(new URL(secretUrl).pathname);
-    const clientId = /\/admin\/clients\/(client-[a-f0-9]+)\/rename/.exec(dashboardText)?.[1];
+    const clientId = /href="\/admin\/clients\/(client-[a-f0-9]+)"/.exec(dashboardText)?.[1];
     expect(clientId).toBeDefined();
     const scopeUpdate = new URLSearchParams([['csrf_token', csrf], ['scopes', 'coding:read'], ['scopes', 'coding:write']]);
     const scopesResponse = await SELF.fetch(`https://worker.test/admin/clients/${clientId as string}/scopes`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded', cookie: cookies(adminJar), origin: 'https://worker.test' }, body: scopeUpdate });
@@ -586,7 +602,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(enrollment).toContain('class="app-header"');
     expect(enrollment).toContain('class="header-mesh-mark"');
     expect(enrollment).toContain("Linux"); expect(enrollment).toContain("macOS"); expect(enrollment).toContain("Windows");
-    expect(enrollment).toContain("Manual portable-artifact enrollment"); expect(enrollment).toContain("Manual Runner enrollment and install"); expect(enrollment).toContain("RUNNER=/opt/runmesh/current/bin/runmesh"); expect(enrollment).toContain("C:\\Program Files\\Runmesh\\current\\runmesh.cmd"); expect(enrollment).toContain('sudo &quot;$RUNNER&quot; enroll'); expect(enrollment).toContain('sudo &quot;$RUNNER&quot; install'); expect(enrollment).toContain("&amp; $RunnerPath enroll"); expect(enrollment).toContain("&amp; $RunnerPath install"); expect(enrollment).toContain("--code-stdin"); expect(enrollment).toContain("commands below"); expect(enrollment).toContain("One-time enrollment code"); expect(enrollment).not.toMatch(/--code [A-Za-z0-9_-]{20,}/u); expect(enrollment).toContain("--executable-path"); expect(enrollment).not.toContain("curl -fsSL"); expect(enrollment).not.toContain("curl --fail --location"); expect(enrollment).not.toContain("Invoke-RestMethod"); expect(enrollment).not.toContain("Invoke-WebRequest");
+    expect(enrollment).toContain("Manual Runner setup"); expect(enrollment).toContain("Install the verified Runner package, then run the commands below. Enter the enrollment code when prompted."); expect(enrollment).toContain("RUNNER=/opt/runmesh/current/bin/runmesh"); expect(enrollment).toContain("C:\\Program Files\\Runmesh\\current\\runmesh.cmd"); expect(enrollment).toContain('sudo &quot;$RUNNER&quot; enroll'); expect(enrollment).toContain('sudo &quot;$RUNNER&quot; install'); expect(enrollment).toContain("&amp; $RunnerPath enroll"); expect(enrollment).toContain("&amp; $RunnerPath install"); expect(enrollment).toContain("--code-stdin"); expect(enrollment).toContain("commands below"); expect(enrollment).toContain("One-time enrollment code"); expect(enrollment).not.toMatch(/--code [A-Za-z0-9_-]{20,}/u); expect(enrollment).toContain("--executable-path"); expect(enrollment).not.toContain("curl -fsSL"); expect(enrollment).not.toContain("curl --fail --location"); expect(enrollment).not.toContain("Invoke-RestMethod"); expect(enrollment).not.toContain("Invoke-WebRequest");
     const enrollmentCodeValue = enrollmentCode(enrollment);
     const redeemed = await SELF.fetch("https://worker.test/runner/enroll", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ enrollment_code: enrollmentCodeValue, runner_public_info: { platform: "linux", architecture: "x64", hostname: "dashboard-host", runner_version: "1.0.0", protocol_version: 2 } }) });
     expect(redeemed.status).toBe(200);
@@ -608,16 +624,16 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(enrollmentUiText["Target Runner ID"]).toBe("目标 Runner ID");
     expect(enrollmentUiText["One-time enrollment code"]).toBe("一次性注册代码");
     expect(enrollmentUiText["Signed fixed-preview enrollment"]).toBe("签名固定预览版注册");
-    expect(enrollmentUiText["Manual Runner enrollment and install"]).toBe("手动注册并安装 Runner");
+    expect(enrollmentUiText["Manual Runner setup"]).toBe("手动安装 Runner");
     expect(enrollmentUiText["Copy enrollment and install command"]).toBe("复制注册并安装命令");
-    expect(enrollmentUiText["Paste it only into the local prompt after verification; it is deliberately excluded from copied commands."]).toContain("本地提示");
+    expect(enrollmentUiText["Enter this one-time code when prompted. Keep it private."]).toBe("运行命令后，按提示输入此一次性注册码，并妥善保管。");
     for (const copied of enrollment.matchAll(/data-copy="([^"]*)"/g)) expect(copied[1]).not.toContain("--code ");
     expect(enrollment).not.toContain("--re-enroll"); expect(enrollment).not.toContain("-ReEnroll");
     expect(enrollment).not.toContain("--runner-id"); expect(enrollment).not.toContain("ADMIN_TOKEN"); expect(enrollment).not.toMatch(/RUNMESH_TOKEN|MCP_SECRET/i);
     const rotatedEnrollment = await submit("https://worker.test/admin/runners/dashboard-runner/rotate", { csrf_token: csrf, expected_execution_mode: "dedicated_user" }, adminJar);
     expect(rotatedEnrollment.status).toBe(200);
     const rotatedText = await rotatedEnrollment.text();
-    expect(rotatedText).toContain("Manual Runner enrollment and install");
+    expect(rotatedText).toContain("Manual Runner setup");
     const runnerInternalPaths: string[] = [];
     const originalRunnerFetch = RunnerDO.prototype.fetch;
     const runnerFetchSpy = vi.spyOn(RunnerDO.prototype, "fetch").mockImplementation(function (this: RunnerDO, request: Request) {
@@ -652,17 +668,20 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     expect(dashboard.headers.get("content-security-policy")).toContain("script-src 'nonce-");
     expect(dashboard.headers.get("content-security-policy")).not.toContain("script-src 'unsafe-inline'");
     const dashboardHtml = await dashboard.text();
-    for (const section of ["Dashboard", "MCP Clients", "Runners", "Settings", "Active MCP clients", "Online / total runners", "Active shell jobs", "Recent jobs", "Recent runners", "Recent MCP clients"]) expect(dashboardHtml).toContain(section);
+    for (const section of ["Dashboard", "AI connections", "MCP &amp; Skill", "Runners", "Settings", "Active shell jobs", "Recent runners", "Recent MCP clients"]) expect(dashboardHtml).toContain(section);
+    expect(dashboardHtml).not.toContain('Use your tools across AI clients');
+    expect(dashboardHtml).not.toContain('href="/admin?history=1"');
     const chineseDashboard = await SELF.fetch("https://worker.test/admin?lang=zh-CN", { headers: { cookie: cookies(adminJar) } });
     expect(chineseDashboard.headers.get("content-language")).toBe("zh-CN");
     const chineseDashboardHtml = await chineseDashboard.text();
     expect(chineseDashboardHtml).toContain("仪表盘");
-    expect(chineseDashboardHtml).toContain("最近任务");
+    expect(chineseDashboardHtml).toContain("最近 MCP 客户端");
+    expect(chineseDashboardHtml).toContain("活跃 Shell 任务");
     expect(chineseDashboardHtml).not.toContain("<h1>Dashboard</h1>");
     expect(dashboardHtml).toMatch(headerLogoSvgTag);
     expect(dashboardHtml).not.toMatch(/<header\b[^>]*\bapp-header\b[^>]*>[\s\S]*?<img\b/i);
     expect(dashboardHtml).toContain('data-lang-toggle="zh-CN"'); expect(dashboardHtml).not.toContain("var ZH_UI_TEXT="); expect(dashboardHtml).not.toContain("智能体控制平面"); expect(dashboardHtml).not.toContain("translateTextNodes"); expect(dashboardHtml).toContain("runmesh_lang");
-    expect(dashboardHtml).toContain("@media(max-width:800px)"); expect(dashboardHtml).toContain("navigator.clipboard");
+    expect(dashboardHtml).toContain("@media(max-width:800px)"); expect(dashboardHtml).toMatch(/\.clipboard\.writeText\(/u);
     expect(dashboardHtml).toContain('class="button secondary" href="/admin">Refresh</a>');
     expect(dashboardHtml).not.toContain("data-refresh");
     expect(dashboardHtml).not.toContain("token_verifier"); expect(dashboardHtml).not.toContain("workspace_root");
@@ -710,7 +729,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
       if (typeof translated === "string") expect(translated).not.toMatch(englishWords);
     }
     for (const mixed of ["Inspect workspaces and 读取 files.", "Apply approved 编辑s.", "Use Host shell and control 任务s.", "Use Host shell and 控制 Jobs."]) expect(dashboardHtml).not.toContain(mixed);
-    const clientId = /\/admin\/clients\/(client-[a-f0-9]+)\/rename/.exec(dashboardHtml)?.[1];
+    const clientId = /href="\/admin\/clients\/(client-[a-f0-9]+)"/.exec(dashboardHtml)?.[1];
     expect(clientId).toBeDefined();
     const clientsPage = await SELF.fetch("https://worker.test/admin/clients", { headers: { cookie: cookies(adminJar) } });
     const routingClientsHtml = await clientsPage.text();
@@ -735,7 +754,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     const scopesDetail = await SELF.fetch(`https://worker.test/admin/clients/${clientId as string}/scopes/detail`, { headers: { cookie: cookies(adminJar) } });
     expect(scopesDetail.status).toBe(200);
     const scopesDetailHtml = await scopesDetail.text();
-    expect(scopesDetailHtml).toContain("<!doctype html>"); expect(scopesDetailHtml).toContain('class="app-header"'); expect(scopesDetailHtml).toContain('class="active" aria-current="page" href="/admin/clients"'); expect(scopesDetailHtml).toContain("Base scopes"); expect(scopesDetailHtml).toContain("Each base scope has a distinct ceiling"); expect(scopesDetailHtml).not.toContain('data-theme-toggle'); expect(scopesDetailHtml).not.toContain('runmesh-theme'); expect(scopesDetailHtml).toContain('name="csrf_token"');
+    expect(scopesDetailHtml).toContain("<!doctype html>"); expect(scopesDetailHtml).toContain('class="app-header"'); expect(scopesDetailHtml).toContain('class="active" aria-current="page" href="/admin/clients"'); expect(scopesDetailHtml).toContain("Base scopes"); expect(scopesDetailHtml).toContain("Permission levels:"); expect(scopesDetailHtml).not.toContain('data-theme-toggle'); expect(scopesDetailHtml).not.toContain('runmesh-theme'); expect(scopesDetailHtml).toContain('name="csrf_token"');
     expect(scopesDetailHtml).toMatch(headerLogoSvgTag);
     expect(scopesDetailHtml).not.toMatch(/<header\b[^>]*\bapp-header\b[^>]*>[\s\S]*?<img\b/i);
     const detailScopeFormClass = /<form\b[^>]*class=["']([^"']*\bscope-editor-form\b[^"']*)["'][^>]*>/i.exec(scopesDetailHtml)?.[1] ?? "";
@@ -768,6 +787,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
       "e".repeat(64),
       { platform: "<img src=x onerror=alert(1)>", architecture: "x64", hostname: "host", runner_version: "test", protocol_version: 1 },
       Date.now(),
+      crypto.randomUUID(),
     ))).resolves.toBeUndefined();
     expect(dashboardHtml).not.toContain("<img src=x onerror=alert(1)>");
     const clients = await SELF.fetch("https://worker.test/admin/clients", { headers: { cookie: cookies(adminJar) } });
@@ -796,7 +816,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     try {
        const failedEnrollment = await submit(`https://worker.test/admin/runners/${failedRunnerId}/enrollment`, { csrf_token: csrf, expected_execution_mode: "dedicated_user" }, adminJar);
       expect(failedEnrollment.status).toBe(503);
-      expect(await failedEnrollment.text()).toContain("safely fenced");
+      expect(await failedEnrollment.text()).toContain("remains locked");
     } finally {
       registryFetchSpy.mockRestore();
       runnerFetchSpyOnFailure.mockRestore();

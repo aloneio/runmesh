@@ -5,9 +5,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, parse } from "node:path";
 import { probeSessionConflict } from "../helpers/session-conflict-probe.js";
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolveTrustedWindowsTool, trustedWindowsRoot } from "../../apps/runner/src/windows-tools.js";
+import { isolatedGitEnvironment, trustedGitCwd } from "../../apps/runner/src/git/trust.js";
 import { catalogContract, MCP_CATALOG_SUMMARY } from "../../apps/worker/src/mcp/catalog-contract.js";
 import { fromJsonSchema } from "@modelcontextprotocol/server";
 import { inspectInputCases } from "../helpers/inspect-input-cases.js";
@@ -131,7 +132,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     worker.once("error", (error) => recordWorkerEvent("error", diagnosticErrorCode(error), null));
     worker.once("exit", (code, signal) => recordWorkerEvent("exit", code, signal));
     worker.once("close", (code, signal) => recordWorkerEvent("close", code, signal));
-    await waitForWorker(workerDiagnosticState);
+    await waitForWorker(workerUrl, 60_000, workerDiagnosticState);
     const createdClients = await setupAdminAndClients();
     enrollmentCode = await createBrowserRunnerEnrollment();
     expect(enrollmentCode).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -266,16 +267,16 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     }
   });
 
-  it("advertises exactly the compact catalog and leaves legacy public names absent", async () => {
+  it("advertises the native and central catalogs and leaves legacy public names absent", async () => {
     const response = await fetch((clientA as McpClient).endpoint, {
       method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
       body: JSON.stringify({ jsonrpc: "2.0", id: requestId++, method: "tools/list", params: {} }),
     });
     const listed = await readMcp(response) as { result?: { tools?: Array<{ name?: string; description?: string; inputSchema?: unknown; outputSchema?: unknown; annotations?: unknown; _meta?: Record<string,unknown> }> } };
-    expect(listed.result?.tools?.map((tool) => tool.name).sort()).toEqual(["context", "edit", "inspect", "job", "read", "runner_current", "runner_list", "runner_select", "shell", "workspace_list"].sort());
+    expect(listed.result?.tools?.map((tool) => tool.name).sort()).toEqual(["context", "edit", "inspect", "job", "read", "runner_current", "runner_list", "runner_select", "shell", "workspace_list", "remote_profiles", "remote_tools", "remote_call", "remote_status", "skill_list", "skill_read"].sort());
     const expected = catalogContract();
-    for (const advertised of listed.result!.tools!) {
-      const wanted = expected.tools.find(tool => tool.name === advertised.name)!;
+    for (const wanted of expected.tools) {
+      const advertised = listed.result!.tools!.find(tool => tool.name === wanted.name)!;
       expect(advertised.description).toBe(wanted.description);
       expect(advertised.inputSchema).toEqual(wanted.inputSchema);
       expect(advertised.outputSchema).toEqual(wanted.outputSchema);
@@ -403,7 +404,15 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     runnerOutput = collectOutput(runner);
     await waitFor(async () => (await mcpTool("runner_list", {}, clientA)).structuredContent?.runners?.some((item: { runner_id?: string; state?: string }) => item.runner_id === runnerId && item.state === "online"), 15_000, runnerOutput);
     await writeFile(join(workspace, "recovery-finish"), "finish\\n");
-    await waitFor(async () => (await mcpTool("job", { action: "get", job_id: jobId as string }, clientB)).structuredContent?.status === "interrupted", 10_000);
+    let recovered: ToolResult = {};
+    await waitFor(async () => {
+      recovered = await mcpTool("job", { action: "get", job_id: jobId as string }, clientB);
+      return recovered.structuredContent?.status === "interrupted";
+    }, 10_000, () => JSON.stringify({
+      status: recovered.structuredContent?.status, source: recovered.structuredContent?.source,
+      runner_context: recovered.structuredContent?.runner_context,
+      error: (recovered.structuredContent?.error as { code?: string } | undefined)?.code,
+    }));
     const completedSnapshot = await mcpTool("job", { action: "get", job_id: jobId as string }, clientB);
     expect(completedSnapshot.structuredContent?.status).toBe("interrupted");
 
@@ -774,14 +783,54 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     } finally { expect((await save("immediate")).status).toBe(303); }
   });
 
-  it("R03 reads three real commits and literal blame through MCP without shell permission", async () => {
-    const git = (args: string[]) => execFileSync("git", args, { cwd: workspace, stdio: "ignore" });
+  it("lists shared MCPs and Skills without selecting a Runner", async () => {
+    const { adminJar, csrf } = await adminCredentials();
+    const created = await submitForm("/admin/clients", { csrf_token: csrf, label: "Shared library E2E", access_mode: "central" }, adminJar);
+    expect(created.status).toBe(200);
+    const centralClient = { endpoint: oneTimeMcpUrl(await created.text()) };
+    for (const name of ["remote_profiles", "skill_list"]) {
+      const result = await mcpTool(name, {}, centralClient);
+      expect(result.isError, JSON.stringify(result)).not.toBe(true);
+      const content = JSON.parse(result.content?.[0]?.text ?? "null");
+      expect(content.state).toBe("listed");
+      expect(content[name === "remote_profiles" ? "profiles" : "skills"]).toEqual([]);
+    }
+  });
+
+  it("R03 inspects real Git history without shell permission or reports a missing trusted installation", async () => {
+    const git = (args: string[]) => execFileSync("git", ["-c", "gc.auto=0", "-c", "maintenance.auto=false", ...args], { cwd: workspace, stdio: "ignore" });
     git(["init"]); git(["config", "user.name", "Fixture"]); git(["config", "user.email", "fixture@example.invalid"]);
     const file = "review-history.txt";
     for (const value of ["first", "second", "third"]) {
       await writeFile(join(workspace, file), `${value}\nunchanged\n`);
       git(["add", "-f", "--", file]); git(["commit", "-m", value, "--", file]);
     }
+    // Fixture setup can use a developer's PATH, while the production Runner
+    // accepts only trusted machine installations. Probe that prerequisite
+    // independently; an absent binary must produce the documented MCP error,
+    // never a skipped test or a production executable-path override.
+    const trustedGit = spawnSync("git", ["--version"], {
+      cwd: trustedGitCwd(), env: isolatedGitEnvironment(join(workspace, ".git"), workspace),
+      stdio: "ignore", windowsHide: true, timeout: 5_000,
+    });
+    if (trustedGit.error !== undefined) {
+      expect((trustedGit.error as NodeJS.ErrnoException).code).toBe("ENOENT");
+      // Hosted CI provides machine Git and must retain the real history path.
+      expect(process.env.CI, "CI requires a trusted Git installation").not.toBeTruthy();
+      const revision = execFileSync("git", ["rev-parse", "HEAD"], { cwd: workspace, encoding: "utf8", windowsHide: true }).trim();
+      for (const input of [
+        { action: "git_log", path: file },
+        { action: "git_blame", path: file },
+        { action: "git_show", path: file, revision },
+      ]) {
+        expect(await mcpTool("inspect", { workspace_id: "workspace-1", ...input }, clientB)).toMatchObject({
+          isError: true, structuredContent: { error: { code: "git_unavailable", failure_class: "availability",
+            operation_state: "not_started", next_action: "contact_operator" } },
+        });
+      }
+      return;
+    }
+    expect(trustedGit.status, "trusted Git prerequisite must run successfully").toBe(0);
     const history = await mcpTool("inspect", { action: "git_log", workspace_id: "workspace-1", path: file, max_results: 10 }, clientB);
     expect(history.isError, JSON.stringify(history)).not.toBe(true);
     expect((history.structuredContent?.commits as Array<{subject:string}>).map(row => row.subject)).toEqual(["third", "second", "first"]);
@@ -803,9 +852,15 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(started.isError, JSON.stringify(started)).not.toBe(true);
     const id = started.structuredContent?.job_id;
     expect(typeof id).toBe("string");
+    // Idempotency excludes observation time, but includes the Job's status.
+    // Wait for durable completion so both checkpoints observe the same facts.
+    await waitFor(async () => (await mcpTool("job", { action: "get", workspace_id: "workspace-1", job_id: id })).structuredContent?.status === "succeeded", 10_000);
     const input = { action: "checkpoint", workspace_id: "workspace-1", turn_id: "e2e-observed-retry", goal: "retain one observed checkpoint", expected_revision: 0, evidence: [{ kind: "job", job_id: id }] };
     const first = await mcpTool("context", input);
     expect(first.isError, JSON.stringify(first)).not.toBe(true);
+    expect((first.structuredContent?.context as { evidence: unknown }).evidence).toEqual([
+      expect.objectContaining({ kind: "job", job_id: id, job_status: "succeeded", exit_code: 0 }),
+    ]);
     await delay(25);
     const next = await mcpTool("context", input);
     expect(next.isError, JSON.stringify(next)).not.toBe(true);
@@ -859,31 +914,6 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     } finally { await stop(rootRunner); }
   });
 
-  it("fences a genuinely stale Registry sync with 4000 and recovers using the same credential", async () => {
-    const testRunner = "e2e-session-conflict";
-    const token = "synthetic-session-conflict-token-0123456789";
-    // The main fixture exercises packed D1 history, whose batch endpoint has
-    // different sequence semantics. Match the live dev SQLite sync path in an
-    // independent real Worker instead of mocking a Registry response.
-    const port = await freePort();
-    const origin = `http://127.0.0.1:${port}`;
-    const sqliteWorker = spawn(process.execPath, [wranglerCli, "dev", "--local", "--ip", "127.0.0.1", "--config", "apps/worker/wrangler.jsonc",
-      "--port", String(port), "--persist-to", join(root, "sqlite-probe"), "--show-interactive-dev-session=false", ...workerVars(), "--var", "RUNMESH_JOB_HISTORY_BACKEND:sqlite"], {
-      cwd: projectDirectory, env: { ...process.env, ...workerEnv }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
-    });
-    const logs = collectOutput(sqliteWorker);
-    try {
-      await waitFor(async () => (await fetch(`${origin}/health`).catch(() => undefined))?.ok === true, 20000, logs);
-      const registration = await fetch(`${origin}/admin/runners`, { method: "POST",
-        headers: { Authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
-        body: JSON.stringify({ runner_id: testRunner, token, execution_mode: "dedicated_user" }) });
-      expect(registration.status).toBe(200);
-      const result = await probeSessionConflict({ server: `${origin.replace("http:", "ws:")}/runner/connect`, runnerId: testRunner, token });
-      expect(result).toMatchObject({ close_code: 4000, close_reason: "stale runner session", valid_sync_acknowledged: true,
-        stale_sync_acknowledged: false, same_credential_reconnected: true, new_session: true, recovery_echo: true });
-    } finally { await stop(sqliteWorker); }
-  });
-
   it("reports a runner_offline structured error after the real runner disconnects", async () => {
     await stop(runner); runner = undefined;
     // Close handling is asynchronous across the runner socket and DO.
@@ -897,8 +927,8 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     const response = await submitForm("/admin/runners", { csrf_token: csrf, display_name: "Enrollment E2E Runner", runner_id: runnerId, execution_mode: "dedicated_user" }, adminJar);
     expect(response.status).toBe(200);
     const html = await response.text();
-    expect(html).toContain("Manual portable-artifact enrollment");
-    expect(html).toContain("Manual Runner enrollment and install");
+    expect(html).toContain("Manual Runner setup");
+    expect(html).toContain("Install the verified Runner package, then run the commands below. Enter the enrollment code when prompted.");
     expect(html).toContain("RUNNER=/opt/runmesh/current/bin/runmesh");
     expect(html).toContain("C:\\Program Files\\Runmesh\\current\\runmesh.cmd");
     expect(html).toContain('sudo &quot;$RUNNER&quot; enroll');
@@ -1021,6 +1051,61 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
   }
 });
 
+describe.sequential("real local SQLite Runner sessions", () => {
+  const testRunner = "e2e-session-conflict";
+  const token = "synthetic-session-conflict-token-0123456789";
+  let root = "";
+  let origin = "";
+  let worker: ChildProcess | undefined;
+
+  beforeAll(async () => {
+    // This fixture needs SQLite history, independent of the main D1 suite.
+    // Keep process startup outside the unchanged transport assertion budget.
+    root = await mkdtemp(join(tmpdir(), "mcp-runner-e2e-sqlite-"));
+    const port = await freePort();
+    origin = `http://127.0.0.1:${port}`;
+    worker = spawn(process.execPath, [wranglerCli, "dev", "--local", "--ip", "127.0.0.1", "--config", "apps/worker/wrangler.jsonc",
+      "--port", String(port), "--persist-to", root, "--show-interactive-dev-session=false", ...workerVars(), "--var", "RUNMESH_JOB_HISTORY_BACKEND:sqlite"], {
+      cwd: projectDirectory, env: { ...process.env, ...workerEnv }, stdio: ["ignore", "pipe", "pipe"], detached: true, ...childSpawnOptions,
+    });
+    const logs = collectOutput(worker);
+    await waitForWorker(origin, 20_000, logs);
+    const registration = await fetch(`${origin}/admin/runners`, { method: "POST", signal: AbortSignal.timeout(5_000),
+      headers: { Authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ runner_id: testRunner, token, execution_mode: "dedicated_user" }) });
+    await registration.body?.cancel();
+    expect(registration.status).toBe(200);
+  });
+
+  afterAll(async () => {
+    await stop(worker);
+    if (root) await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  });
+
+  it("keeps out-of-order sync connected and fences replaced sessions with the same credential", async () => {
+    const result = await probeSessionConflict({ server: `${origin.replace("http:", "ws:")}/runner/connect`, runnerId: testRunner, token });
+    expect(result).toMatchObject({ close_code: 4000, close_reason: "replaced by newer session", valid_sync_acknowledged: true,
+      superseded_sync_acknowledged: true, same_credential_reconnected: true, new_session: true, recovery_echo: true });
+  });
+});
+
+it("bounds Worker readiness when an accepted health request never responds", async () => {
+  const { createServer } = await import("node:http");
+  let disconnected = false;
+  const server = createServer((_request, response) => { response.on("close", () => { disconnected = true; }); });
+  await new Promise<void>(resolveListen => server.listen(0, "127.0.0.1", resolveListen));
+  try {
+    const address = server.address();
+    if (address === null || typeof address === "string") throw new Error("fixture did not bind a TCP port");
+    await expect(waitForWorker(`http://127.0.0.1:${address.port}`, 1_000, () => "health probe stalled"))
+      .rejects.toThrow("timed out after 1000ms\nhealth probe stalled");
+    await waitFor(() => disconnected, 1_000);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolveClose, reject) => server.close(error => error ? reject(error) : resolveClose()));
+  }
+}, 5_000);
+
 async function freePort(): Promise<number> {
   const net = await import("node:net");
   return new Promise<number>((resolvePort, reject) => {
@@ -1078,7 +1163,16 @@ async function waitFor(predicate: () => boolean | Promise<boolean>, timeout: num
   const output = detail?.() ?? "";
   throw new Error(`timed out after ${timeout}ms${output ? `\n${output}` : ""}`);
 }
-async function waitForWorker(detail: () => string): Promise<void> { await waitFor(async () => (await fetch(`${workerUrl}/health`).catch(() => undefined))?.ok === true, 60_000, detail); }
+async function waitForWorker(origin: string, timeout: number, detail: () => string): Promise<void> {
+  // An accepted connection can stall before headers; the polling loop alone
+  // cannot enforce its deadline while awaiting that request.
+  const signal = AbortSignal.timeout(timeout);
+  await waitFor(async () => {
+    const response = await fetch(`${origin}/health`, { signal }).catch(() => undefined);
+    await response?.body?.cancel();
+    return response?.ok === true;
+  }, timeout, detail);
+}
 async function waitForExit(child: ChildProcess, timeout: number, detail: () => string): Promise<void> {
   await Promise.race([
     new Promise<void>((resolveExit) => child.once("exit", () => resolveExit())),

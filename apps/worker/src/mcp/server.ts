@@ -21,6 +21,7 @@ import type { McpClientActiveRunner } from "../contracts/runner-selection.js";
 import type { McpRequestEnv } from "./contracts.js";
 import { McpServer } from "@modelcontextprotocol/server";
 import { PRODUCT_VERSION } from "../generated-version.js";
+import { publishSchema } from "./providers/schema-publication.js";
 import { reauthorizePrincipal } from "./reauthorization.js";
 import { REGISTERED_TOOL_NAMES } from "./handler-registry.js";
 import { safeSelectionValue } from "./results/selection.js";
@@ -35,11 +36,16 @@ import type { ToolName } from "./catalog.js";
 import type { WorkerEnv } from "../platform/env.js";
 import { z } from "zod";
 
+const publishedToolSchemas = Object.fromEntries(REGISTERED_TOOL_NAMES.map(name => {
+  const spec = TOOL_SPECS[name];
+  return [name, { inputSchema: publishSchema<unknown, unknown>(spec.inputSchema, "input"), outputSchema: publishSchema<unknown, unknown>(spec.outputSchema, "output") }];
+}));
+
 /**
  * Fresh server factory target for createMcpHandler. Every HTTP request receives
  * an isolated McpServer and the default stateless 2025 compatibility lane.
  */
-export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth): McpServer {
+export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth, options: { hideNative?: boolean; tools?: readonly ToolName[] } = {}): McpServer {
   const env: McpRequestEnv = { ...rawEnv, mcpPrincipal: { client_id: auth.clientId, secret_version: auth.extra?.secret_version } };
   const server = new McpServer({ name: "runmesh", version: PRODUCT_VERSION });
 
@@ -69,14 +75,14 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth): McpServ
     job: async (params, scopes) => jobTool(env, auth.clientId, params, scopes),
     context: async (params, scopes) => contextTool(env, auth.clientId, params, scopes),
   });
-  for (const name of REGISTERED_TOOL_NAMES) register(server, name, handlers[name]);
+  for (const name of options.tools ?? REGISTERED_TOOL_NAMES) register(server, name, handlers[name]);
 
   return server;
 
   function register<Name extends ToolName>(target: McpServer, name: Name, action: ToolHandlers[Name]): void {
     const spec = TOOL_SPECS[name];
     type Input = z.output<(typeof TOOL_SPECS)[Name]["inputSchema"]>;
-    (target.registerTool as unknown as (toolName: string, config: Record<string, unknown>, callback: (input: Input, context: ServerContext) => Promise<unknown>) => unknown)(name, { description: spec.description, inputSchema: spec.inputSchema, outputSchema: spec.outputSchema, annotations: spec.annotations, _meta: MCP_CATALOG_METADATA }, async (input, _context) => {
+    const tool = (target.registerTool as unknown as (toolName: string, config: Record<string, unknown>, callback: (input: Input, context: ServerContext) => Promise<unknown>) => { disable(): void })(name, { description: spec.description, ...publishedToolSchemas[name], annotations: spec.annotations, _meta: MCP_CATALOG_METADATA }, async (input, _context) => {
       // The URL credential can be rotated while a body or SDK import is
       // awaited. Re-read the exact generation and scopes before every tool.
       const live = await reauthorizePrincipal(async signal => {
@@ -106,10 +112,11 @@ export function createCodingMcpServer(rawEnv: WorkerEnv, auth: McpAuth): McpServ
         return failure("internal_error", "The MCP tool could not confirm the operation outcome.", "Inspect the existing Job or change receipt before deciding what to do next; do not blindly repeat a write or command. Contact the operator if the outcome cannot be established.");
       }
     });
+    if (options.hideNative) tool.disable();
   }
 }
 
-export const MCP_TOOL_NAMES = Object.freeze(Object.keys(TOOL_SPECS));
+export const MCP_TOOL_NAMES = REGISTERED_TOOL_NAMES;
 
 export const MCP_SUPPORTED_SCOPES = SUPPORTED_SCOPES;
 

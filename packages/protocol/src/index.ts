@@ -430,3 +430,5 @@ export { RunnerCapabilityReportSchema } from "./capabilities.js";
 export { ContextPruneOptionsSchema, ContextStorageReportSchema, ContextPruneReportSchema, safeContextStorageReport } from "./context-storage.js";
 
 export { BoundBytePageMetadataSchema, BoundFileCursorSchema, BoundLogCursorSchema, isBoundCursor } from "./cursors.js";
+export { HISTORY_DAYS, HISTORY_INTERVALS, parseJobHistorySettings } from "./job-history.js";
+export type { JobHistorySettings } from "./job-history.js";

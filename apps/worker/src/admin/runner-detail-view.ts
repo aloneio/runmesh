@@ -1,7 +1,9 @@
 import { message } from "../i18n/messages.js";
 import type { RunnerExecutionMode } from "../contracts/administration.js";
+import type { AdminData } from "../contracts/admin-views.js";
+import type { RunnerReleaseDescriptor } from "../contracts/runner-release.js";
 import type { HistoryView } from "../history-ui.js";
-import type { JobHistorySettings } from "../job-history-settings.js";
+import type { JobHistorySettings } from "@aloneio/runmesh-protocol";
 import { historyControls, historySettingsForm } from "../history-ui.js";
 import { JOBS_EXPLANATION, jobSnapshotNote } from "./job-views.js";
 import { validityStatus } from "../validity.js";
@@ -17,7 +19,24 @@ export interface RunnerDetailPresentation {
   readonly dayMs: number;
 }
 
-export function runnerDetailPage(presentation: RunnerDetailPresentation, runner: Record<string, unknown>, workspaces: readonly unknown[], jobs: readonly unknown[] | undefined, environment: Record<string, unknown> | undefined, csrf: string, release: { readonly latest_version: string; readonly distributable: boolean }, policyVersions: readonly unknown[] = [], enrollment?: Record<string, unknown>, mcpCalls: readonly unknown[] | undefined = undefined, view: HistoryView = {scope:"none",limit:10}, historySettings?: JobHistorySettings): string {
+export interface RunnerDetailPageInput {
+  readonly presentation: RunnerDetailPresentation;
+  readonly runner: Readonly<Record<string, unknown>>;
+  readonly workspaces: readonly Record<string, unknown>[];
+  readonly jobs?: AdminData["jobs"] | undefined;
+  readonly environment?: Readonly<Record<string, unknown>> | undefined;
+  readonly csrf: string;
+  readonly release: Pick<RunnerReleaseDescriptor, "latest_version" | "distributable">;
+  readonly policyVersions?: readonly Record<string, unknown>[] | undefined;
+  readonly enrollment?: Readonly<Record<string, unknown>> | undefined;
+  readonly mcpCalls?: readonly Record<string, unknown>[] | undefined;
+  readonly view?: HistoryView | undefined;
+  readonly historySettings?: JobHistorySettings | undefined;
+}
+
+export function runnerDetailPage({ presentation, runner, workspaces, jobs, environment, csrf, release,
+  policyVersions = [], enrollment, mcpCalls, view = { scope: "none", limit: 10 }, historySettings,
+}: RunnerDetailPageInput): string {
   const runnerId = typeof runner.runner_id === "string" ? runner.runner_id : "unknown";
   const displayName = typeof runner.display_name === "string" ? runner.display_name : runnerId;
   const state = typeof runner.state === "string" ? runner.state : "offline";
@@ -56,7 +75,7 @@ export function runnerDetailPage(presentation: RunnerDetailPresentation, runner:
   const runnerValidityStatus = runner.validity_status === "scheduled" || runner.validity_status === "expired" || runner.validity_status === "active" ? runner.validity_status : validityStatus({ valid_from_ms: runnerFrom, valid_until_ms: runnerUntil });
   const enrollmentFrom = typeof enrollment?.not_before_ms === "number" && enrollment.not_before_ms > 0 ? enrollment.not_before_ms : null;
   const enrollmentUntil = typeof enrollment?.expires_at_ms === "number" ? enrollment.expires_at_ms : null;
-  const enrollmentStatus = enrollment === undefined ? "none" : validityStatus({ valid_from_ms: enrollmentFrom, valid_until_ms: enrollmentUntil });
+  const enrollmentStatus = enrollment === undefined ? "none" : typeof enrollment.used_at_ms === "number" ? "used" : validityStatus({ valid_from_ms: enrollmentFrom, valid_until_ms: enrollmentUntil });
   const validityDaysInput = (value: number | null, allowZero = false): string => {
     if (value === null || value <= Date.now()) return allowZero ? "0" : "1";
     return String(Math.min(presentation.maxValidityDays, Math.max(1, Math.ceil((value - Date.now()) / presentation.dayMs))));
@@ -75,12 +94,12 @@ export function runnerDetailPage(presentation: RunnerDetailPresentation, runner:
   const unverifiedPrivilegedReport = reportedExecutionMode === "privileged_host" && executionMode !== "privileged_host";
   const configuredButNotRestarted = runner.service_manifest_changed === true && runner.service_restarted !== true;
   const warnings = [
-    identityMismatch ? "Runner-reported privilege state is mismatch; verify the service identity before granting access." : "",
-    executionMode === null ? "No trusted administrator execution-mode selection is recorded; choose and confirm a mode before (re)installing." : "",
-    unverifiedPrivilegedReport ? "Runner reports privileged_host, but that self-report is not authorization; re-enroll only after an administrator explicitly confirms the desired mode." : "",
+    identityMismatch ? "The Runner privileges differ from the configured mode. Check the service account." : "",
+    executionMode === null ? "Choose and confirm an execution mode before installing the Runner." : "",
+    unverifiedPrivilegedReport ? "The Runner reports full host privileges. Confirm the execution mode before re-enrolling." : "",
     executionMode === "dedicated_user" && hasFullHostWorkspace ? "dedicated_user is configured while a full-host workspace is enabled; migrate the service or narrow the workspace." : "",
     revisionLag ? "Desired policy revision is ahead of the applied or Runner-reported revision." : "",
-    hasOsAccessDenial ? "Workspace validation reported os_access_denied; review the service identity and migrate to privileged_host or grant the required OS access." : "",
+    hasOsAccessDenial ? "The Runner service account cannot access this workspace. Check its file permissions and execution mode." : "",
     configuredButNotRestarted ? "The managed service manifest changed but the Runner process was not restarted." : "",
     state === "online" && workspaceValidation.filter((item) => item.status === "valid").length === 0 ? "Runner is online but has zero valid workspaces." : "",
   ].filter(Boolean);
@@ -137,8 +156,8 @@ export function runnerDetailPage(presentation: RunnerDetailPresentation, runner:
       <form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/validity" class="form-grid validity-form"><input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}"><label>${message("text.valid.days", "en")}<input type="number" name="runner_valid_days" value="${escapeHtml(validityDaysInput(runnerUntil, true))}" min="0" max="${presentation.maxValidityDays}" step="1" inputmode="numeric" required></label><p class="muted font-12 full-width-submit">${message("text.0.means.no.expiry.saving.starts.a.new.authorization.window.now", "en")}</p><div class="form-submit-wrap full-width-submit"><button class="button">${message("text.save.authorization.window", "en")}</button></div></form>
     </section>
     <section class="panel">
-      <div class="section-title"><h2>${message("text.latest.enrollment.code", "en")}</h2><span class="badge ${enrollmentStatus === "active" ? "online" : enrollmentStatus === "scheduled" ? "pending" : enrollmentStatus === "expired" ? "offline" : "invalid"}">${escapeHtml(enrollmentStatus)}</span></div>
-      <p class="muted font-12">${message("text.codes.are.single.use.only.timing.metadata.is.retained.the.code.itself.is.never.stored.or.s", "en")}</p>
+      <div class="section-title"><h2>${message("text.latest.enrollment.code", "en")}</h2><span class="badge ${enrollmentStatus === "active" ? "online" : enrollmentStatus === "scheduled" ? "pending" : enrollmentStatus === "expired" || enrollmentStatus === "used" ? "offline" : "invalid"}">${enrollmentStatus === "used" ? message("text.enrollment.used", "en") : escapeHtml(enrollmentStatus)}</span></div>
+      <p class="muted font-12">${message("text.enrollment.single.use.help", "en")}</p>
       <dl class="details"><dt>${message("text.active.from", "en")}</dt><dd class="mono">${escapeHtml(time(enrollmentFrom))}</dd><dt>${message("text.expires.at", "en")}</dt><dd class="mono">${escapeHtml(time(enrollmentUntil))}</dd><dt>${message("text.consumed", "en")}</dt><dd class="mono">${escapeHtml(time(typeof enrollment?.used_at_ms === "number" ? enrollment.used_at_ms : null))}</dd></dl>
       <form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/enrollment" class="form-grid validity-form">${executionModeFormFields(executionMode ?? undefined, csrf, false)}${windowFields("code", presentation.maxValidityDays)}<div class="form-submit-wrap full-width-submit"><button class="button secondary">${message("text.generate.new.enrollment.code", "en")}</button></div></form>
     </section>

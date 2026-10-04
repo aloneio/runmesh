@@ -1,10 +1,10 @@
 # Call MCP tools and recover operations
 
-Read the current authenticated `tools/list` catalog before using Runmesh. It exposes ten tools: `runner_list`, `runner_current`, `runner_select`, `workspace_list`, `inspect`, `read`, `edit`, `shell`, `job` and `context`. Compare `io.runmesh/catalog` when diagnosing a stale connector; refresh its metadata if it omits tools or rejects current parameters.
+Read the current authenticated `tools/list` catalog before using Runmesh. Its ten native tools are `runner_list`, `runner_current`, `runner_select`, `workspace_list`, `inspect`, `read`, `edit`, `shell`, `job` and `context`. The MCP and Skill library also provides `remote_profiles`, `remote_tools`, `remote_call`, `remote_status`, `skill_list` and `skill_read`, alongside tools from connected MCPs. Shared library calls do not require a selected Runner. Compare `io.runmesh/catalog` when diagnosing a stale native catalog; refresh the connection if tools are missing or current parameters are rejected.
 
 ## Prepare the call
 
-Select the intended Runner and a readable workspace. Action tools publish shared root properties and action-specific branches; use the fields for the chosen action. Unknown fields are rejected. For example, `revision` belongs to `inspect`'s `git_show` action. Paths are workspace-relative, and `workspace_id` is the opaque identifier from `workspace_list`.
+For native workspace operations, select the intended Runner and a readable workspace. Action tools publish shared root properties and action-specific branches; use the fields for the chosen action. Unknown fields are rejected. For example, `revision` belongs to `inspect`'s `git_show` action. Paths are workspace-relative, and `workspace_id` is the opaque identifier from `workspace_list`.
 
 Save `job_id`, `workspace_id` and any `request_id` from a shell launch. Keep that Runner selected while following the operation. Foreground waiting ends at its wait limit while the command can continue; check the Job's status and exit code even when the MCP call succeeds.
 

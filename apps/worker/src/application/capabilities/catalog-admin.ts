@@ -23,9 +23,10 @@ export function createCatalogManager(ports: CatalogAdminPorts) {
         if (profile === undefined || profile.profile_id !== command.profile_id) return { state: "unavailable" };
         const current = ports.repository.readHead(command.profile_id), revision = current?.revision ?? 0;
         if (revision !== command.expected_revision) return { state: "conflict", current_revision: revision };
-        const snapshot = command.action === "stage" ? await buildCatalogSnapshot(profile, command.tools, ports.digest, expired) : undefined;
+        const captures = command.action === "stage" || command.action === "publish";
+        const snapshot = captures ? await buildCatalogSnapshot(profile, command.tools, ports.digest, expired) : undefined;
         if (signal.aborted || expired()) return { state: "unavailable" };
-        if (command.action === "stage" && snapshot === undefined) return { state: "invalid" };
+        if (captures && snapshot === undefined) return { state: "invalid" };
         if (command.action === "approve") {
           const captured = ports.repository.readSnapshot(command.profile_id, command.digest);
           if (captured === undefined || current?.observed_digest !== command.digest) return { state: "invalid" };
@@ -40,7 +41,8 @@ export function createCatalogManager(ports: CatalogAdminPorts) {
           || latest.connector_id !== profile.connector_id) return { state: "stale_profile" };
         writing = true;
         // No await from the final observations to a revision-checked transaction.
-        if (snapshot !== undefined) return ports.repository.stage(snapshot, command.expected_revision);
+        if (snapshot !== undefined) return command.action === "publish" ? ports.repository.publish(snapshot, command.expected_revision)
+          : ports.repository.stage(snapshot, command.expected_revision);
         return command.action === "approve" ? ports.repository.approve(command.profile_id, command.digest, command.tool_names, command.expected_revision)
           : ports.repository.disable(command.profile_id, command.expected_revision);
       } catch { return { state: writing ? "unknown" : "unavailable" }; }
@@ -53,9 +55,10 @@ export function createCatalogManager(ports: CatalogAdminPorts) {
         if (signal.aborted || expired()) return { state: "unavailable" };
         if (initial !== "allowed") return { state: initial };
         const rawProfile = ports.profile(profileId), head = ports.repository.readHead(profileId);
-        if (rawProfile === undefined || head === undefined) return { state: "missing" };
+        if (rawProfile === undefined) return { state: "missing" };
         const profile = parseProfile(rawProfile);
         if (profile === undefined || profile.profile_id !== profileId) return { state: "unavailable" };
+        if (head === undefined) return { state: requestedDigest === undefined ? "empty" : "missing" };
         const digest = requestedDigest ?? head.observed_digest, snapshot = ports.repository.readSnapshot(profileId, digest);
         if (snapshot === undefined) return { state: "missing" };
         if (!await verifiedCatalogSnapshot(snapshot, profile, digest, ports.digest)) return { state: "unavailable" };

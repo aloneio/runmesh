@@ -5,6 +5,26 @@
 // nothing from its former scope.
 
 export function adminStyles(): string { return `<style>
+.central-start,.central-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px;margin:24px 0}
+.central-start>div{padding:20px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+.central-start p{margin:8px 0 0;color:var(--muted)}
+.central-grid{grid-template-columns:1.2fr 1fr;align-items:start}
+.central-tabs{display:flex;gap:10px;flex-wrap:wrap;margin:24px 0}
+[data-central-product]{overflow-wrap:anywhere}
+[data-central-product] form{display:grid;gap:16px}
+[data-central-product] label{display:grid;gap:8px;margin:12px 0}
+[data-central-product] .central-choice{display:flex;align-items:flex-start;gap:12px;padding:14px;border:1px solid var(--line);border-radius:10px}
+[data-central-product] input[type=checkbox]{width:auto;flex:none;margin-top:4px}
+.central-card{border-bottom:1px solid var(--line);padding:18px 0;overflow-wrap:anywhere}
+.central-card:first-child{padding-top:4px}.central-card h3{margin:0 0 8px}
+.central-card .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;width:100%;min-width:0}
+[data-service-tools] h2{min-width:0;max-width:100%;overflow-wrap:anywhere}
+[data-central-product] .central-card h3{text-transform:none;letter-spacing:normal}
+[data-product-status]:not(:empty){padding:14px 18px;border:1px solid var(--line);border-radius:10px;background:var(--panel);white-space:pre-wrap}
+[data-product-status][data-error=true]{border-color:#b91c1c;color:#b91c1c}
+[data-central-product] pre{max-height:340px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
+[data-central-product] [hidden]{display:none!important}.central-advanced{margin-top:32px}.central-advanced>summary{cursor:pointer}
+@media(max-width:760px){.central-start,.central-grid{grid-template-columns:1fr}.central-tabs .button{flex:1}.central-start{gap:8px}}
 /* Explicit admin navigation is rendered without cross-document fades. */
 ::view-transition-old(app-header),::view-transition-new(app-header){animation:none}
 :root{
@@ -117,7 +137,7 @@ body::before{
   position:sticky;
   top:0;
   z-index:100;
-  height:57px;
+  height:auto;
   min-height:64px;
   view-transition-name:app-header;
   background:var(--panel);
@@ -134,7 +154,7 @@ body::before{
   max-width:1440px;
   margin:auto;
   padding:0 32px;
-  height:56px;
+  height:auto;
   min-height:56px;
   display:flex;
   align-items:center;
@@ -416,14 +436,20 @@ h3{font-size:12px;color:var(--muted-dark);text-transform:uppercase;letter-spacin
   background:var(--panel-card);
   border:1px solid var(--line);
 }
-.form-grid.add-form-grid,.form-grid.add-client-grid{
+.form-grid.add-form-grid{
   display:flex;
   align-items:flex-end;
   gap:12px;
   flex-wrap:wrap;
 }
-.form-grid.add-form-grid > label,.form-grid.add-client-grid > label:not(.check){flex:1 1 200px}
-.add-client-grid fieldset{flex:2 1 300px}
+.form-grid.add-form-grid > label{flex:1 1 200px}
+.form-grid.add-client-grid{grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}
+.add-client-grid > label{min-width:0}
+.add-client-grid > label > input,.add-client-grid > label > select{width:100%;min-height:38px}
+.add-client-grid > details,.add-client-grid > .muted,.add-client-grid > .form-submit-wrap{grid-column:1 / -1;min-width:0}
+.add-client-grid > .muted{margin:0}
+.add-client-grid summary{cursor:pointer}
+.add-client-grid fieldset{min-width:0;margin-top:12px}
 .form-submit-wrap{
   display:flex;
   align-items:flex-end;
@@ -497,16 +523,20 @@ a.strong:hover{color:var(--brand-hover);text-decoration:underline}
   font-weight:600;
   color:var(--ink-heading);
 }
-.runner-selection-controls{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.runner-selection-controls{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0;max-width:100%}
 .runner-selection-form{
   display:flex;
   align-items:center;
   gap:6px;
   flex-wrap:wrap;
   margin:0;
+  min-width:0;
+  max-width:100%;
+  flex:1 1 180px;
 }
-.runner-selection-form select{min-width:150px;max-width:100%;height:30px;padding:3px 8px;font-size:12px}
-.runner-selection-form .check{font-size:11px;white-space:nowrap}
+.runner-selection-form select{min-width:0;width:100%;max-width:100%;flex:1 1 150px;height:30px;padding:3px 8px;font-size:12px}
+.runner-selection-form .check{font-size:11px;white-space:normal;min-width:0;max-width:100%;margin-right:0}
+.runner-selection-form .check span{min-width:0;overflow-wrap:anywhere}
 .runner-selection-form button{height:30px}
 
 /* Action Groups & Forms */
@@ -685,12 +715,19 @@ a.strong:hover{color:var(--brand-hover);text-decoration:underline}
   align-items:center;
   flex-wrap:wrap;
 }
+.scope-selector-row .check{align-items:flex-start;min-width:0}
+.scope-selector-row .check input{flex:none;margin:3px 0 0}
+.scope-selector-row .check span{min-width:0;overflow-wrap:anywhere}
 .scope-editor-form{
   display:grid;
   grid-template-columns:minmax(0,1fr) auto;
   align-items:end;
   gap:12px;
 }
+.client-recording-form{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;margin-top:20px;padding-top:16px;border-top:1px solid var(--line)}
+.client-recording-form>label,.client-recording-form>p{margin:0}
+.client-recording-form>select{width:100%;max-width:360px;min-width:0}
+.client-recording-form>button{justify-self:start;max-width:100%}
 .scope-fieldset{
   flex:1;
   min-width:0;
@@ -1119,7 +1156,7 @@ legend{
   text-transform:uppercase;
   letter-spacing:0.04em;
 }
-.details dd{margin:0;font-weight:600;color:var(--ink-heading);overflow-wrap:anywhere}
+.details dd{margin:0;min-width:0;font-weight:600;color:var(--ink-heading);overflow-wrap:anywhere}
 
 /* Secret & Enrollment Full-Page Dialogs */
 .auth-body{
@@ -1452,8 +1489,9 @@ pre{
   .scope-editor-form{grid-template-columns:1fr;align-items:stretch}
   .scope-editor-form .form-submit-wrap{margin-top:0}
   .version-policy-form{grid-template-columns:1fr}
-  .form-grid.add-form-grid,.form-grid.add-client-grid{flex-direction:column;align-items:stretch}
-  .form-grid.add-form-grid > label,.form-grid.add-client-grid > label:not(.check),.form-grid.add-client-grid fieldset,.form-grid.add-form-grid .form-submit-wrap,.form-grid.add-client-grid .form-submit-wrap{width:100%;flex:1 1 auto}
+  .form-grid.add-form-grid{flex-direction:column;align-items:stretch}
+  .form-grid.add-form-grid > label,.form-grid.add-form-grid .form-submit-wrap{width:100%;flex:1 1 auto}
+  .form-grid.add-client-grid{grid-template-columns:minmax(0,1fr)}
   .add-client-grid fieldset .scope-selector-row{align-items:flex-start}
   .login-brand-logo{width:190px;height:58px}
   .secret-mesh-mark,.error-mesh-mark{width:190px;height:56px}
@@ -1625,7 +1663,7 @@ pre{
 }
 .ops-body::before{opacity:.38;background-size:40px 40px;mask-image:linear-gradient(180deg,#000 0%,rgba(0,0,0,.18) 32%,transparent 62%)}
 .app-header{border-bottom-color:#dbe2ea;box-shadow:0 1px 0 rgba(15,23,42,.03),0 8px 24px rgba(15,23,42,.04)}
-.header-inner{height:64px}
+.header-inner{min-height:64px}
 .header-mesh-mark{width:174px;height:42px}
 .control-nav{background:#f3f5f8;border-color:#e1e7ee;border-radius:10px;padding:4px;gap:2px}
 .control-nav a{padding:7px 14px;font-size:13px}
@@ -1724,13 +1762,16 @@ tbody tr:hover{background:#f8fafc}
 .runner-actions .danger-action-buttons{display:flex;align-items:flex-end;gap:5px;flex-wrap:wrap}
 .runner-actions .danger-action-buttons .small{flex:1 1 auto}
 .client-table{min-width:0;table-layout:fixed}
-.client-table th:nth-child(1){width:19%}.client-table th:nth-child(2){width:16%}.client-table th:nth-child(3){width:14%}.client-table th:nth-child(4){width:15%}.client-table th:nth-child(5){width:9%}.client-table th:nth-child(6){width:27%}
+.client-table td{overflow-wrap:anywhere}
+.client-table th:nth-child(1){width:19%}.client-table th:nth-child(2){width:12%}.client-table th:nth-child(3){width:16%}.client-table th:nth-child(4){width:15%}.client-table th:nth-child(5){width:11%}.client-table th:nth-child(6){width:27%}
 .client-table .actions{vertical-align:top;width:auto;min-width:0}
 .client-table .action-btn-group{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;width:100%}
-.client-table .inline-action-form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px;min-width:0}
+.client-table .inline-action-form{display:grid;grid-template-columns:minmax(0,1fr);align-items:stretch;gap:5px;min-width:0}
+.client-table .inline-action-form:has(input:not([type=hidden])){grid-template-columns:minmax(0,1fr) auto}
 .client-table .inline-action-form:first-of-type{grid-column:1 / -1}
 .client-table .action-btn-group>a,.client-table .action-btn-group>form{min-width:0}
 .client-table .action-btn-group>a{width:100%}
+.client-table .action-btn-group button{max-width:100%;white-space:normal;overflow-wrap:anywhere;text-align:center}
 .client-table .inline-action-form input{max-width:none;width:100%}
 .enrollment-body .shell{max-width:1120px}
 .enrollment-dialog{width:min(960px,100%);margin:0 auto;padding:32px 34px}
@@ -1764,8 +1805,13 @@ html[lang="zh-CN"] legend,html[lang="zh-CN"] h3,html[lang="zh-CN"] .eyebrow,html
   .runner-actions .inline-action-form:first-of-type,.client-table .inline-action-form:first-of-type{grid-column:auto}
   .enrollment-dialog{padding:22px 18px}
   .enrollment-dialog .dialog-actions{align-items:stretch;flex-direction:column}
-  .enrollment-dialog .dialog-actions form{width:100%;flex-direction:column;align-items:stretch}
+  .enrollment-dialog .dialog-actions form{width:100%;flex:0 1 auto;flex-direction:column;align-items:stretch}
   .enrollment-dialog .dialog-actions form .button,.enrollment-dialog .dialog-actions>a{width:100%}
   .secret-card{padding:24px 20px}
 }
+.central-next-step{margin-top:24px;padding-top:24px;border-top:1px solid var(--line)}
+.central-setup-notice{padding:16px;border:1px solid var(--line);border-radius:12px;margin-bottom:16px;background:var(--panel)}
+[data-service-create] fieldset{min-width:0;border:0;padding:0;margin:0;display:grid;gap:14px}
+[data-service-create] fieldset:disabled{opacity:.6}
+.central-card details form{display:grid;gap:12px;margin-top:12px}
 </style>`; }

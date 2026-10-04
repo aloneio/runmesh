@@ -53,9 +53,9 @@ export async function loadAdminJobPage(url: URL, runnerId: string, jobId: string
     return { ok: false, status: 503, message: "Job metadata is temporarily unavailable." };
   }
 
-  let logPanel = '<p class="muted">Logs stay on the Runner and are fetched only when you select a stream. No automatic polling.</p>';
+  let logPanel = '<p class="muted">Open an output stream to load logs from the Runner.</p>';
   if (stream !== null) {
-    logPanel = '<p class="muted">Logs are unavailable. The Runner must be online with read permission, an applied policy and retained local logs.</p>';
+    logPanel = '<p class="muted">Could not load logs. Check that the Runner is online, its read permission is active, and the logs are still available.</p>';
     if (runner.state === "online") {
       try {
         const response = await readLogs({ job_id: jobId, expected_workspace_id: job.workspace_id, stream, limit, ...(cursor === null ? (view === "tail" ? { tail:true } : {}) : { cursor }) });
@@ -82,7 +82,7 @@ export async function loadAdminJobPage(url: URL, runnerId: string, jobId: string
     ${workspaceId === null ? "" : `<input type="hidden" name="workspace_id" value="${escapeHtml(workspaceId)}">`}
     <select name="stream"><option value="stdout">stdout</option><option value="stderr"${stream === "stderr" ? " selected" : ""}>stderr</option></select>
     <label>Log bytes<select name="bytes">${[1024,4096,16384].map((n) => `<option value="${n}"${n === limit ? " selected" : ""}>${n/1024} KiB</option>`).join("")}</select></label>
-    <select name="view"><option value="tail">Latest tail</option><option value="head"${view === "head" ? " selected" : ""}>Beginning</option></select>
+    <select name="view"><option value="tail">Latest output</option><option value="head"${view === "head" ? " selected" : ""}>Beginning</option></select>
     <button class="button secondary">Read / Refresh</button></form>`;
   return {
     ok: true,

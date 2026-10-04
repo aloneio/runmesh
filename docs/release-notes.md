@@ -2,11 +2,37 @@
 
 [Chinese](release-notes.zh-CN.md) · [Documentation](README.md) · [Upgrade guide](upgrading.md)
 
+## 0.1.6 — release candidate
+
+This candidate is being prepared for release; the current stable package remains 0.1.5. Try the candidate in the development environment and follow [release status](release-readiness.md) for publication.
+
+### MCP and Skill
+
+- Connect an MCP from its URL using no authentication or OAuth. Sign-in returns to the control panel and loads the available tools automatically.
+- Start a fresh provider sign-in with **Reconnect**. Refreshing tools also opens authorization when the account needs it.
+- Install a Skill folder or SKILL.md with supporting text files. Review same-name updates and publish them to all connected clients.
+- Use shared MCP tools and Skills directly from an AI connection. Choose computer access to add Runner file and command tools; the permission choices open automatically.
+
+### Daily use and reliability
+
+- Console links open the intended section below the header, and new pages start at their heading. Switching between long and short pages fits the content to the page. Fast navigation keeps the browser address aligned with the displayed page; a stalled request reloads the last selected destination after 25 seconds.
+- The Runner installation page uses space more closely on narrow screens. Command panels readjust when the window size changes, clearing excess blank space after resizing.
+- Runner details show when workspace settings are still being applied and report stalled queries after a limited wait.
+- Development downloads and Runner pages show the same verified version. Concurrent downloads share verification, and a failed refresh can recover a still-valid verified release.
+- Git checks identify concurrent workspace changes more consistently and catch invalid timeout settings before starting a command.
+- English and Chinese guides now separate MCP/Skill setup from computer access, with direct instructions for OAuth, Skill updates and version selection.
+
+### Upgrade preparation
+
+The candidate adds shared MCP connections and Skills to production deployments. Preserve the existing deployment secrets so connected OAuth accounts retain their credentials. Install the signed release after publication and activation, then refresh client catalogs using the [upgrade guide](upgrading.md).
+
+Development downloads continue on their current prerelease series during candidate preparation. The next patch series starts after stable publication is recorded.
+
 ## 0.1.5 — published stable release
 
 Published on **September 23, 2026** as an [immutable stable release](https://github.com/aloneio/runmesh/releases/tag/v0.1.5) with a signed portable Runner package. The release was built from protected main commit `77e82a1b59737a42cc090064651d1b0531890f21`; the independently verified manifest SHA256 is `34da9baefabddd882aeef79151b132b1de4086fce54de7a46fe853a7e8dac18a`.
 
-This release includes a Windows installation fix: on localized Windows hosts, a missing `RunmeshRunner` Task Scheduler task is now recognized through the locale-independent COM API. Permission and Task Scheduler failures remain fail-closed.
+This release includes a Windows installation fix: on localized Windows hosts, a missing `RunmeshRunner` Task Scheduler task is now recognized through the locale-independent COM API. Permission or Task Scheduler errors stop installation and report the cause for the administrator to resolve.
 
 Follow the [upgrade guide](upgrading.md) to update an existing installation while preserving its credentials and configuration.
 

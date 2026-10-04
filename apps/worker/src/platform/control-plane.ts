@@ -3,15 +3,23 @@ import { isConfiguredSecret } from "../security.js";
 import type { WorkerEnv } from "./env.js";
 
 export async function consumeInternalNonce(env: WorkerEnv, nonce: string, expiresAtMs: number): Promise<boolean> {
+  return await consumeInternalNonceStatus(env, nonce, expiresAtMs) === 204;
+}
+
+/** A nonce grant requires 204; callers classify other status receipts themselves. */
+export async function consumeInternalNonceStatus(env: WorkerEnv, nonce: string, expiresAtMs: number): Promise<number | undefined> {
   const body = JSON.stringify({ nonce, expires_at_ms: expiresAtMs });
   const headers = await signedInternalHeaders(env, "POST", "/auth/internal-nonces", body);
-  if (headers === undefined) return false;
+  if (headers === undefined) return undefined;
   try {
     const response = await env.REGISTRY.get(env.REGISTRY.idFromName("registry")).fetch(
       new Request("https://registry.internal/auth/internal-nonces", { method: "POST", headers, body }),
     );
-    return response.status === 204;
-  } catch { return false; }
+    // This status-only receipt owns its body, including explicit nonce denials.
+    // A peer's cleanup promise must not delay the verification decision.
+    void response.body?.cancel().catch(() => undefined);
+    return response.status;
+  } catch { return undefined; }
 }
 
 export async function signedInternalHeaders(env: WorkerEnv, method: string, path: string, body: string): Promise<HeadersInit | undefined> {
@@ -37,11 +45,11 @@ export async function registryRequest(env: WorkerEnv, path: string, method: stri
   } catch { return new Response("registry unavailable", { status: 503 }); }
 }
 
-export async function runnerRpc(env: WorkerEnv, runnerId: string, method: string, params: Record<string, unknown>, policyRevision?: number, policyChecksum?: string): Promise<Response> {
+export async function runnerRpc(env: WorkerEnv, runnerId: string, method: string, params: Record<string, unknown>, policyRevision?: number, policyChecksum?: string, signal?: AbortSignal): Promise<Response> {
   const body = JSON.stringify({ method, params, ...(policyRevision === undefined || policyChecksum === undefined ? {} : { policy_revision: policyRevision, expected_policy_revision: policyRevision, expected_policy_checksum: policyChecksum }) });
   const headers = await signedInternalHeaders(env, "POST", "/rpc", body);
   if (headers === undefined) return controlPlaneUnavailable();
-  try { return await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/rpc", { method: "POST", headers, body })); }
+  try { return await env.RUNNER.get(env.RUNNER.idFromName(runnerId)).fetch(new Request("https://runner.internal/rpc", { method: "POST", headers, body, ...(signal === undefined ? {} : { signal }) })); }
   catch { return new Response("runner unavailable", { status: 503 }); }
 }
 

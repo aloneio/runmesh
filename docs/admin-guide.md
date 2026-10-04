@@ -2,13 +2,13 @@
 
 [简体中文](admin-guide.zh-CN.md) · [Documentation](README.md) · [Upgrade guide](upgrading.md)
 
-Deploy the Runmesh control plane on Cloudflare Workers, then enroll the Linux, macOS or Windows machines that will execute work.
+Deploy the Runmesh control plane on Cloudflare Workers, connect your MCPs and install Skills, then add AI clients. For computer access, enroll the Linux, macOS or Windows machines that will execute work. MCP and Skill sharing is available in the 0.1.6 candidate and development channel.
 
 ## Prepare the deployment
 
 Prepare a Cloudflare account, a public HTTPS Worker origin, an administrator password of at least 12 characters, and a least-privilege plan for each machine and workspace.
 
-**0.1.4** is the current signed stable release. For production, deploy the reviewed `main` source containing its release activation. Check [release status](release-readiness.md) for package availability; test upcoming changes with a separate `dev` Worker and resources.
+See [release status](release-readiness.md) for the current signed stable release and candidate. For production, deploy the reviewed `main` source containing its release activation. Check [release status](release-readiness.md) for package availability; test upcoming changes with a separate `dev` Worker and resources.
 
 For an activated production release, connect the repository to Cloudflare Workers Builds, choose `main`, and set the repository-root build command to `npm run build`. Deploy with:
 
@@ -18,9 +18,17 @@ npm run deploy:worker -- --env production
 
 For development, choose `dev` and use `npm run deploy:worker -- --env development`. See [deployment](deployment.md) for the complete configuration.
 
-Create two independent Cloudflare secrets, `INTERNAL_CONTROL_SECRET` and `RUNNER_TOKEN_PEPPER`, using at least 32 cryptographically random bytes for each. Keep their values during upgrades: replacing the pepper invalidates enrolled Runner credentials. The [runtime configuration guide](runtime-config.md) covers initialization and optional proxy/API settings.
+Use `npm run setup:secrets -- --env production` to inspect the two required secrets and add `--apply` to initialize missing values. OAuth encryption automatically uses the existing `INTERNAL_CONTROL_SECRET`. Preserve both values during upgrades: replacing the pepper invalidates enrolled Runner credentials, and replacing the control secret requires OAuth reconnection. The [runtime configuration guide](runtime-config.md) covers initialization and optional proxy/API settings.
 
-Open the administrator page and set the password before exposing an uninitialized instance to untrusted visitors. The first successful setup creates the administrator. New Runners use `dedicated_user`; new MCP clients start with `coding:read`.
+Open the administrator page and set the password before exposing an uninitialized instance to untrusted visitors. The first successful setup creates the administrator. New Runners use `dedicated_user`. When shared MCP and Skill access is enabled, new clients default to **MCP and Skills**; choosing computer access opens its permissions with Read selected.
+
+## Connect MCPs and install Skills
+
+Open **MCP & Skill**. In **MCP**, enter the provider's URL, choose **No authentication** or **OAuth**, and select **Connect**. OAuth opens the provider's authorization page; on return, Runmesh loads the tools automatically.
+
+In **Skill**, select a Skill folder or `SKILL.md` and its supporting text files, then select **Install Skill**. Enabled MCP tools and Skills are shared with all active AI clients in the instance.
+
+Create a client from **Connect an AI client** or **MCP Clients**. Choose **MCP and Skills** for the shared collection, or **MCP, Skills and computer access** to add machine access. Copy its one-time URL into the AI client's MCP settings. For everyday connection, update and pause actions, see the [MCP and Skill guide](central-administration.md).
 
 ## Enroll a machine
 
@@ -42,7 +50,7 @@ On the Runner details page, add a stable workspace name, an absolute host path a
 
 MCP workspace and diagnostic metadata omit configured host roots. Review file contents and command output before sharing them, as those can contain paths or other private data.
 
-Open **MCP Clients**, choose a clear label and the minimum scopes, optionally restrict the client to selected Runners, then copy its one-time URL to the intended user. Rotate or revoke a URL if it is exposed.
+For a client using computers, open **MCP Clients**, choose **MCP, Skills and computer access**, and select the required permissions. Its details page lets you restrict access to selected Runners. Copy the one-time URL to the intended user; rotate or revoke it if exposed.
 
 ## Manage access and retire machines
 

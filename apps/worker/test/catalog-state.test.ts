@@ -1,7 +1,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { expect, it } from "vitest";
 import type { CapabilitiesDOv1 } from "../src/capabilities-do.js";
-import { CapabilityState } from "../src/platform/capabilities/store.js";
+import { CentralSchema } from "../src/platform/capabilities/schema.js";
 import { CatalogState } from "../src/platform/capabilities/catalog-store.js";
 import { createCatalogCursor, newCatalogCursorKey } from "../src/platform/capabilities/catalog-crypto.js";
 import { CATALOG_LIMITS, type CatalogCursor } from "../src/contracts/catalog.js";
@@ -12,8 +12,8 @@ function owner() {
   return namespace.get(namespace.idFromName(`catalog-state-${crypto.randomUUID()}`));
 }
 function repository(storage: DurableObjectStorage) {
-  const grants = new CapabilityState(storage);
-  return new CatalogState(storage, () => grants.initialize());
+  const schema = new CentralSchema(storage);
+  return new CatalogState(storage, () => schema.initialize());
 }
 
 it("W04 catalog construction creates no tables and no credentials", async () => {
@@ -146,8 +146,9 @@ it("W04 total storage budget rejects new captures but does not prevent disabling
 
 it("W04 cursor MACs bind the owner and reject tampering without a shared credential", async () => {
   const key = newCatalogCursorKey(), codec = createCatalogCursor("owner-a", () => key), other = createCatalogCursor("owner-b", () => key);
-  const value: CatalogCursor = { schema_version: 1, client_id: "client-test", secret_version: 1, profile_id: "docs", profile_revision: 2,
-    grant_revision: 3, catalog_revision: 4, offset: 1, limit: 1, expires_at_ms: Date.now() + 1000 };
+  const value: CatalogCursor = { schema_version: 2, client_id: "client-test", secret_version: 1, profile_id: "docs", profile_revision: 2,
+    catalog_revision: 4, offset: 1, limit: 1, expires_at_ms: Date.now() + 1000 };
+  await expect(codec.seal({ ...value, schema_version: 1 } as unknown as CatalogCursor)).rejects.toThrow("catalog_cursor_invalid");
   const cursor = await codec.seal(value);
   expect(await codec.open(cursor)).toEqual(value);
   expect(await other.open(cursor)).toBeUndefined();

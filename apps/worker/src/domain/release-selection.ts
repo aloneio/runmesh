@@ -1,5 +1,6 @@
 import { PROTOCOL_CURRENT_VERSION, PROTOCOL_MIN_VERSION } from "@aloneio/runmesh-protocol";
 import { canonicalPublicOrigin } from "../public-origin.js";
+import { REVIEWED_RELEASE_VERSION } from "../generated-release.js";
 import { FIXED_RELEASE_VERSION, fixedReleaseDescriptor, installerReleaseTarget, signedReleaseIsAvailable } from "./release-config.js";
 import { validReleaseTimestamp as validTimestamp } from "./release-manifest.js";
 import type { RunnerReleaseDescriptor, ReleaseGateDiagnostics, RunnerReleaseEnvironment, CachedDevelopmentReleaseRecord, DevelopmentReleaseRuntime } from "../contracts/runner-release.js";
@@ -17,10 +18,14 @@ export function isDevelopment(env: RunnerReleaseEnvironment): boolean {
   return env.RUNMESH_ENVIRONMENT === "development" || (env.RUNMESH_ENVIRONMENT === undefined && env.WORKER_ID === "worker-development");
 }
 export function isCurrentDevelopmentVersion(version: string): boolean {
-  const stable = STABLE_VERSION.exec(FIXED_RELEASE_VERSION);
+  return matchesDevelopmentRelease(version, FIXED_RELEASE_VERSION, Boolean(REVIEWED_RELEASE_VERSION));
+}
+/** A candidate already names the next stable core; a published release advances it. */
+export function matchesDevelopmentRelease(version: string, sourceVersion: string, released: boolean): boolean {
+  const stable = STABLE_VERSION.exec(sourceVersion);
   const dev = DEV_VERSION.exec(version);
   if (stable === null || dev === null || version.length > 64 || !dev.slice(1).every(value => Number.isSafeInteger(Number(value)))) return false;
-  return dev[1] === stable[1] && dev[2] === stable[2] && Number(dev[3]) === Number(stable[3]) + 1;
+  return dev[1] === stable[1] && dev[2] === stable[2] && Number(dev[3]) === Number(stable[3]) + (released ? 1 : 0);
 }
 export function unavailableDevelopmentRelease(): RunnerReleaseDescriptor {
   return { channel: "dev", distributable: false, current_version: "", latest_version: "", package_name: "", package_version: "", package_spec: "", artifact: null, artifacts: null, manifest_url: null, signature_url: null, signature_descriptor_url: null, checksums_url: null, release_key_id: null, published_at: null, protocol: protocol() };
@@ -83,5 +88,5 @@ export function usableCacheAge(verifiedAtMs: number, now: number, limit: number)
 }
 
 export function createDevelopmentReleaseRuntime(): DevelopmentReleaseRuntime {
-  return { next_refresh_at_ms: 0, refresh_sequence: 0, committed_sequence: 0 };
+  return { next_refresh_at_ms: 0, refresh_sequence: 0, committed_sequence: 0, failed_sequence: 0 };
 }

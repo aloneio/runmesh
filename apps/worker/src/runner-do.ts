@@ -1,7 +1,9 @@
-import { boundedJsonReceipt, boundedJsonResponse } from "./platform/bounded-json.js";
+import { boundedJsonReceipt, boundedJsonResponse } from "./bounded-json.js";
 import type { BridgeReply, BridgeReplyPort, RegistryRequestPort } from "./contracts/runner-transport.js";
 import { BridgeReplies } from "./platform/bridge-replies.js";
 import { requestRunnerRegistry } from "./platform/runner-registry.js";
+import { consumeInternalNonceStatus } from "./platform/control-plane.js";
+import { appliedPolicyIdentity } from "./contracts/runner-selection.js";
 
 /** @internal Trusted composition, never an HTTP or deployment option. */
 export interface RunnerDoDependencies { readonly registryRequest?: RegistryRequestPort; readonly replies?: BridgeReplyPort }
@@ -15,17 +17,13 @@ import {
   decodeWireFrame,
   encodeWireFrame,
   failureMetadata,
-  negotiateProtocolVersion,
   PROTOCOL_CURRENT_VERSION,
-  PROTOCOL_MIN_VERSION,
   RpcRequestSchema,
-  RunnerPolicySchema,
   WORKER_BRIDGE_TIMEOUT_MS,
-  runnerPolicyChecksum,
-  validatePermissionSet,
   type WireMessage,
 } from "@aloneio/runmesh-protocol";
-import { bearerToken, internalHeaders, isConfiguredSecret, isSafeIdentifier, verifyInternalRequest } from "./security.js";
+import { bearerToken, isConfiguredSecret, isSafeIdentifier, verifyInternalRequest } from "./security.js";
+import { isRunnerPolicy, validLifecycleId, negotiateRunnerHello, parseRegistryHelloReceipt, runnerWelcome } from "./domain/runner-handshake.js";
 import { PRODUCT_VERSION } from "./generated-version.js";
 import { readCappedText } from "./body.js";
 
@@ -186,7 +184,7 @@ export class RunnerDO {
       if (desiredRecord.mutation_id !== requestedMutationId) return Response.json({ error: { code: "mutation_mismatch", message: "desired policy belongs to another mutation" } }, { status: 409 });
       const { mutation_id: _mutationId, ...policyValue } = desiredRecord;
       const policy = policyValue as unknown;
-      if (!isPolicy(policy)) return Response.json({ error: { code: "invalid_policy", message: "registry returned an invalid policy" } }, { status: 502 });
+      if (!isRunnerPolicy(policy)) return Response.json({ error: { code: "invalid_policy", message: "registry returned an invalid policy" } }, { status: 502 });
       const latest = await this.admission();
       const phase = latest.runnerId === null || latest.connectionEpoch === null || latest.sessionId === null ? "offline_pending" : "committed_pending";
       const state = latest.mutationId === requestedMutationId ? latest : undefined;
@@ -325,16 +323,9 @@ export class RunnerDO {
       this.helloInFlight.add(ws);
       let welcomeSent = false;
       try {
-      if (message.runner.runner_id !== attachment.runnerId) {
-        ws.close(1008, "runner id mismatch");
-        return;
-      }
-      const negotiation = negotiateProtocolVersion(
-        { min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION },
-        { min_protocol_version: message.min_protocol_version, max_protocol_version: message.max_protocol_version },
-      );
+      const negotiation = negotiateRunnerHello(message, attachment.runnerId);
       if (!negotiation.ok) {
-        ws.close(1002, negotiation.error.code);
+        ws.close(negotiation.code, negotiation.reason);
         return;
       }
       const epochResponse = await this.registryRequest(attachment.runnerId, "/connect", {
@@ -348,35 +339,23 @@ export class RunnerDO {
         this.closeForRegistryFailure(ws, epochResponse);
         return;
       }
-      let body: { epoch?: unknown; lifecycle_id?: unknown; desired_policy?: unknown; job_history?: unknown; job_reporting?: unknown };
+      let receipt: ReturnType<typeof parseRegistryHelloReceipt>;
       try {
-        const parsed = await epochResponse.json();
-        if (!isRecord(parsed)) {
-          ws.close(1011, "invalid registry response");
-          return;
-        }
-        body = parsed;
+        receipt = parseRegistryHelloReceipt(await epochResponse.json(), message);
       } catch {
         ws.close(1011, "invalid registry response");
         return;
       }
-      // A connected socket must always carry a real, positive Registry epoch;
-      // zero is reserved for the pre-hello attachment state.
-      if (!isSafePositiveInteger(body.epoch)) {
+      if (receipt === undefined) {
         ws.close(1011, "invalid registry response");
         return;
       }
-      attachment.epoch = body.epoch;
-      if (!validLifecycleId(body.lifecycle_id)) {
-        ws.close(1011, "invalid registry response");
-        return;
-      }
-      attachment.lifecycleId = body.lifecycle_id;
-      attachment.protocolVersion = negotiation.protocol_version;
-      attachment.contextMethods = (["context.storage", "context.prune"] as const)
-        .filter(method => message.runner.capabilities.supported_rpc_methods.includes(method));
-      if (message.runner.capabilities.labels.job_queue_protocol === "1") attachment.queueProtocol = 1;
-      if (message.runner.capabilities.labels.job_reporting_protocol === "2" && body.job_reporting === 2 && isRecord(body.job_history)) attachment.historyProtocol = 2;
+      attachment.epoch = receipt.epoch;
+      attachment.lifecycleId = receipt.lifecycleId;
+      attachment.protocolVersion = negotiation.protocolVersion;
+      attachment.contextMethods = receipt.contextMethods;
+      if (receipt.queueProtocol !== undefined) attachment.queueProtocol = receipt.queueProtocol;
+      if (receipt.historyProtocol !== undefined) attachment.historyProtocol = receipt.historyProtocol;
       ws.serializeAttachment(attachment);
       // `/connect` allocates/publishes the epoch, but a delayed response can
       // race a newer connection. Re-read the complete transport identity
@@ -404,16 +383,10 @@ export class RunnerDO {
           }
         }
       }
-      const welcome: WireMessage = {
-        type: "runner.welcome", protocol_version: negotiation.protocol_version, request_id: message.request_id,
-        session_id: attachment.sessionId, negotiated_protocol_version: negotiation.protocol_version,
-        extensions: { ...(isRecord(body.job_history) ? {runmesh_job_history:body.job_history as never} : {}), ...(attachment.queueProtocol === 1 ? {runmesh_job_queue:1} : {}), ...(attachment.historyProtocol === 2 ? {runmesh_job_reporting:2} : {}) },
-        worker: {
-          worker_id: this.env.WORKER_ID ?? "runmesh", worker_version: PRODUCT_VERSION,
-          capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: ["echo", "runner.info"], labels: { runtime: "cloudflare" } },
-        },
-        ...(isPolicy(body.desired_policy) ? { desired_policy: body.desired_policy } : {}),
-      };
+      const welcome = runnerWelcome(receipt, {
+        protocolVersion: negotiation.protocolVersion, requestId: message.request_id,
+        sessionId: attachment.sessionId, workerId: this.env.WORKER_ID ?? "runmesh", workerVersion: PRODUCT_VERSION,
+      });
       try { ws.send(encodeWireFrame(welcome)); welcomeSent = true; } catch {
         // A concurrent revoke/delete may close the socket after the Registry
         // handshake but before the welcome is published. Treat that as a
@@ -737,7 +710,7 @@ export class RunnerDO {
     if (!isCurrentPolicyReadiness(value, attachment, revision, checksum)) return false;
     const active = await this.registryRequest(attachment.runnerId, "/active-policy", { method: "GET" });
     const policy = active.ok ? await active.json() as unknown : undefined;
-    if (!isPolicy(policy) || policy.revision !== revision || policy.checksum !== checksum) return false;
+    if (!isRunnerPolicy(policy) || policy.revision !== revision || policy.checksum !== checksum) return false;
     const next: AdmissionState = {
       fenced: false, reconciled: true, runnerId: attachment.runnerId,
       activeRevision: revision, activeChecksum: checksum, desiredRevision: revision, desiredChecksum: checksum,
@@ -921,7 +894,16 @@ export class RunnerDO {
     const state = await response.json() as Record<string, unknown>;
     return state.runner_exists === true && state.mutation_committed === true && state.credential_mutation_committed === true
       && typeof state.lifecycle_id === "string" && validLifecycleId(state.lifecycle_id)
-      && (allowLifecycleChange || state.lifecycle_id === expected.lifecycleId);
+      && (allowLifecycleChange || this.mutationLifecycleMatches(expected, state.lifecycle_id));
+  }
+
+  private mutationLifecycleMatches(expected: AdmissionState, lifecycleId: string): boolean {
+    // A Runner can be created, rotated or revoked before its first hello.
+    // There is no transport lifecycle to compare in that case: the exact
+    // current-generation Registry mutation receipt is the authority. Never
+    // extend this exception to a previously bound connection identity.
+    return expected.lifecycleId === lifecycleId || (expected.lifecycleId === null
+      && expected.connectionEpoch === null && expected.credentialVersion === null && expected.sessionId === null);
   }
 
   private async recoverCommittedPrecommit(expected: AdmissionState): Promise<boolean> {
@@ -932,11 +914,20 @@ export class RunnerDO {
     // A committed delete leaves a tombstone in Registry but no Runner row.
     // Clear the transport fence so a later registration can acquire the DO
     // and establish a fresh lifecycle.
-    if (state.runner_exists !== true) {
+    if (state.runner_exists === false && state.mutation_committed === true) {
       const reset: AdmissionState = { ...FENCED_ADMISSION };
       return this.persistAdmissionIfCurrent(expected, reset);
     }
-    if (state.mutation_committed !== true) return false;
+    if (state.runner_exists !== true || state.mutation_committed !== true) return false;
+    // A revocation may have committed before its transport cleanup response
+    // was lost. Finalize only this proven owner before accepting a delete;
+    // an uncommitted operation or a creation still issuing enrollment stays
+    // exclusive. Finalization rechecks ownership under the write queue.
+    if (state.credential_mutation_kind === "credential_revoke" && state.credential_mutation_committed === true
+      && typeof state.lifecycle_id === "string" && validLifecycleId(state.lifecycle_id)
+      && this.mutationLifecycleMatches(expected, state.lifecycle_id)) {
+      return await this.finalizeOwnedMutation(expected.mutationId, "credentials revoked") === "ok";
+    }
     if (typeof state.lifecycle_id !== "string" || !validLifecycleId(state.lifecycle_id) || state.lifecycle_id !== expected.lifecycleId) return false;
     const desiredRevision = state.desired_revision;
     const desiredChecksum = state.desired_checksum;
@@ -1080,7 +1071,7 @@ export class RunnerDO {
     }
     const active = await this.registryRequest(before.runnerId, "/active-policy", { method: "GET" });
     const policy = active.ok ? await active.json() as unknown : undefined;
-    if (!isPolicy(policy) || policy.revision !== before.preMutationActiveRevision || policy.checksum !== before.preMutationActiveChecksum) return Response.json({ error: { code: "mutation_state_changed", message: "active policy snapshot cannot be verified" } }, { status: 409 });
+    if (!isRunnerPolicy(policy) || policy.revision !== before.preMutationActiveRevision || policy.checksum !== before.preMutationActiveChecksum) return Response.json({ error: { code: "mutation_state_changed", message: "active policy snapshot cannot be verified" } }, { status: 409 });
     if (socket === undefined || attachment === null || attachment.runnerId !== before.runnerId || (attachment.lifecycleId ?? null) !== (before.lifecycleId ?? null) || attachment.sessionId !== before.sessionId || attachment.epoch !== before.connectionEpoch || attachment.credentialVersion !== before.credentialVersion) return Response.json({ error: { code: "runner_unavailable", message: "Runner session is no longer current" } }, { status: 503 });
     const next: AdmissionState = {
       ...before, fenced: false, reconciled: true, activeRevision: before.preMutationActiveRevision, activeChecksum: before.preMutationActiveChecksum,
@@ -1107,13 +1098,8 @@ export class RunnerDO {
     const value = await response.json() as Record<string, unknown>;
     const revision = value.applied_revision;
     const checksum = value.active_checksum;
-    const ready = value.ok === true
-      && value.policy_status === "applied"
+    const ready = appliedPolicyIdentity(value) !== undefined
       && (before.mutationId === null || before.mutationId === RESTART_RECONCILE_MUTATION_ID || value.desired_policy_mutation_id === before.mutationId)
-      && value.desired_revision === revision
-      && value.runner_reported_policy_revision === revision
-      && value.desired_checksum === checksum
-      && value.runner_reported_policy_checksum === checksum
       && value.connection_epoch === attachment.epoch
       && value.credential_version === attachment.credentialVersion
       && value.session_id === attachment.sessionId
@@ -1124,7 +1110,7 @@ export class RunnerDO {
     if (!ready) return;
     const active = await this.registryRequest(attachment.runnerId, "/active-policy", { method: "GET" });
     const policy = active.ok ? await active.json() as unknown : undefined;
-    if (!isPolicy(policy) || policy.revision !== revision || policy.checksum !== checksum) return;
+    if (!isRunnerPolicy(policy) || policy.revision !== revision || policy.checksum !== checksum) return;
     const next: AdmissionState = {
       fenced: false, reconciled: true, runnerId: attachment.runnerId,
       activeRevision: revision, activeChecksum: checksum, desiredRevision: revision, desiredChecksum: checksum,
@@ -1206,15 +1192,10 @@ export class RunnerDO {
     const consumeNonce = request.method === "GET" && url.pathname === "/admission-state"
       ? async () => true
       : async (nonce: string, expiresAtMs: number) => {
-        const payload = JSON.stringify({ nonce, expires_at_ms: expiresAtMs });
-        if (!isConfiguredSecret(this.env.INTERNAL_CONTROL_SECRET)) return false;
-        try {
-          const headers = await internalHeaders(this.env.INTERNAL_CONTROL_SECRET, "POST", "/auth/internal-nonces", payload);
-          const response = await this.env.REGISTRY.get(this.env.REGISTRY.idFromName("registry")).fetch(new Request("https://registry.internal/auth/internal-nonces", { method: "POST", headers, body: payload }));
-          if (response.status === 204) return true;
-          if (response.status === 409) return false;
-          throw new ControlPlaneUnavailableError();
-        } catch { throw new ControlPlaneUnavailableError(); }
+        const status = await consumeInternalNonceStatus(this.env, nonce, expiresAtMs);
+        if (status === 204) return true;
+        if (status === 404 || status === 409) return false;
+        throw new ControlPlaneUnavailableError();
       };
     return verifyInternalRequest(request, this.env.INTERNAL_CONTROL_SECRET, body, consumeNonce);
   }
@@ -1265,15 +1246,8 @@ function transportIdentityFields(attachment: Pick<ConnectionAttachment, "session
 }
 
 function isCurrentPolicyReadiness(value: Record<string, unknown>, attachment: ConnectionAttachment, revision: unknown, checksum: unknown): revision is number {
-  return value.ok === true && value.policy_status === "applied"
-    && typeof value.desired_revision === "number" && Number.isSafeInteger(value.desired_revision) && value.desired_revision > 0
-    && typeof revision === "number" && Number.isSafeInteger(revision) && revision > 0
-    && typeof value.runner_reported_policy_revision === "number" && Number.isSafeInteger(value.runner_reported_policy_revision) && value.runner_reported_policy_revision > 0
-    && typeof value.desired_checksum === "string" && /^[a-f0-9]{64}$/.test(value.desired_checksum)
-    && typeof checksum === "string" && /^[a-f0-9]{64}$/.test(checksum)
-    && typeof value.runner_reported_policy_checksum === "string" && /^[a-f0-9]{64}$/.test(value.runner_reported_policy_checksum)
-    && value.desired_revision === revision && value.runner_reported_policy_revision === revision
-    && value.desired_checksum === checksum && value.runner_reported_policy_checksum === checksum
+  return appliedPolicyIdentity(value) !== undefined
+    && value.applied_revision === revision && value.active_checksum === checksum
     && value.connection_epoch === attachment.epoch && value.credential_version === attachment.credentialVersion && value.session_id === attachment.sessionId
     && typeof value.lifecycle_id === "string"
     && validLifecycleId(value.lifecycle_id)
@@ -1316,23 +1290,9 @@ function validAdmissionState(value: unknown): value is AdmissionState {
     && (state.preMutationDesiredChecksum === null || typeof state.preMutationDesiredChecksum === "string")
     && (state.lastReconciledAtMs === null || Number.isSafeInteger(state.lastReconciledAtMs));
 }
-
-function validLifecycleId(value: unknown): value is string {
-  return typeof value === "string" && value.length >= 16 && value.length <= 128 && /^[A-Za-z0-9._:-]+$/u.test(value);
-}
-
 function validSessionId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(value);
 }
-
-function isPolicy(value: unknown): value is { schema_version: 1; runner_id: string; revision: number; checksum: string; runner_permissions: { read: boolean; edit: boolean; shell: boolean; job_control: boolean }; workspaces: Array<{ workspace_id: string; root_path: string; enabled: boolean; permissions: { read: boolean; edit: boolean; shell: boolean; job_control: boolean } }> } {
-  const parsed = RunnerPolicySchema.safeParse(value);
-  if (!parsed.success || parsed.data.workspaces.length > 64 || new Set(parsed.data.workspaces.map((workspace) => workspace.workspace_id)).size !== parsed.data.workspaces.length || !validatePermissionSet(parsed.data.runner_permissions)) return false;
-  const policy = parsed.data;
-  if (policy.workspaces.some((workspace) => workspace.root_path.includes("\0") || !validatePermissionSet(workspace.permissions))) return false;
-  return runnerPolicyChecksum({ schema_version: policy.schema_version, runner_id: policy.runner_id, revision: policy.revision, runner_permissions: policy.runner_permissions, workspaces: policy.workspaces }) === policy.checksum;
-}
-
 function parseRunnerPath(pathname: string): string | undefined {
   const value = pathname.split("/").filter(Boolean).pop();
   if (value === undefined) return undefined;

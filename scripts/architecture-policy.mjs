@@ -16,6 +16,55 @@ export function layer(path) {
 }
 /** All parser-supported extensions receive the same architecture role. */
 const canonicalSource = path => path.replace(/\.(?:[cm]?[jt]s|[jt]sx)$/u, ".ts");
+const browserRoot = "apps/worker/browser/";
+const browserDependencies = {
+  "admin-client.ts": ["central/controller.ts", "runner-actions.ts", "locale.ts", "page-controls.ts", "admin-pages.ts", "admin-navigation.ts"],
+  "page-controls.ts": ["clipboard.ts"],
+  "locale.ts": [], "clipboard.ts": [], "admin-pages.ts": [], "admin-navigation.ts": [],
+  "runner-actions.ts": [],
+  "central/controller.ts": ["central/api.ts", "central/messages.ts", "central/view.ts", "central/services.ts", "central/skills.ts"],
+  "central/api.ts": [], "central/messages.ts": [], "central/view.ts": [],
+  "central/services.ts": [], "central/skills.ts": [],
+};
+const registryRoute = path => /^apps\/worker\/src\/registry\/route-(?:inputs|projections)\.ts$/u.test(canonicalSource(path));
+const registryRouteAdapter = path => canonicalSource(path).startsWith("apps/worker/src/registry/routes/");
+const runnerUseCase = path => /^apps\/worker\/src\/application\/(?:create-runner|delete-runner|register-runner|runner-(?:credentials|enrollment|lifecycle|policy))\.ts$/u.test(canonicalSource(path));
+const requestUseCase = path => /^apps\/worker\/src\/application\/(?:auth-source|enrollment|mcp-identity|runner-queries)\.ts$/u.test(canonicalSource(path));
+const registryCoordinator = path => /^apps\/worker\/src\/registry\/(?:history-routes|history-ports|transport-routes)\.ts$/u.test(canonicalSource(path));
+const registryPlatformTypes = new Set(["DurableObjectState", "DurableObjectStorage", "DurableObjectNamespace", "DurableObjectStub", "SqlStorage", "D1Database", "D1PreparedStatement", "ExecutionContext", "Fetcher"]);
+const networkGlobals = new Set(["fetch", "WebSocket", "XMLHttpRequest", "EventSource", "WebTransport", "Worker", "SharedWorker", "caches", "globalThis", "window", "self", "process", "Deno", "Bun"]);
+
+/** Conservative source guard: stateful workflows receive API and view ports. */
+export function boundaryNodeProblem(from, node) {
+  const source = canonicalSource(from);
+  if (source === "apps/worker/src/domain/runner-handshake.ts" && (node.type === "AwaitExpression" || node.async === true))
+    return "Runner handshake parsing and projection must stay synchronous";
+  if (registryRouteAdapter(source) && (node.type === "AwaitExpression" || node.async === true))
+    return "Registry route adapters must preserve synchronous authority checks and mutations";
+  if (node.type !== "Identifier") return undefined;
+  if (source === "apps/worker/src/job-history-settings.ts" && (registryPlatformTypes.has(node.name) || networkGlobals.has(node.name) || ["Date", "crypto", "setTimeout", "setInterval"].includes(node.name)))
+    return "History display defaults use shared protocol values, not storage or ambient I/O";
+  if (["apps/worker/src/domain/runner-handshake.ts", "apps/runner/src/environment-contracts.ts"].includes(source)
+    && (registryPlatformTypes.has(node.name) || networkGlobals.has(node.name) || ["Date", "crypto", "setTimeout", "setInterval", "queueMicrotask", "eval", "Function"].includes(node.name)))
+    return "Handshake rules and environment contracts use supplied values, not platform state or scheduling";
+  if (runnerUseCase(source) && (registryPlatformTypes.has(node.name) || networkGlobals.has(node.name) || ["WorkerEnv", "Request", "Response", "Date", "crypto", "setTimeout", "setInterval", "eval", "Function"].includes(node.name)))
+    return "Runner use cases receive operation ports and return outcomes, without HTTP or platform state";
+  if (requestUseCase(source) && (registryPlatformTypes.has(node.name) || networkGlobals.has(node.name) || ["WorkerEnv", "Request", "Response", "Date", "crypto", "setTimeout", "setInterval", "eval", "Function"].includes(node.name)))
+    return "Request use cases receive operation ports and parsed receipts, not HTTP or platform state";
+  if (registryCoordinator(source) && (registryPlatformTypes.has(node.name) || networkGlobals.has(node.name) || ["Date", "crypto", "setTimeout", "setInterval"].includes(node.name)))
+    return "Registry coordinators receive history and lifecycle ports, not ambient I/O or storage";
+  if (registryRouteAdapter(source) && registryPlatformTypes.has(node.name))
+    return "Registry route adapters receive operation ports, not platform or storage types";
+  if (registryRouteAdapter(source) && (networkGlobals.has(node.name) || ["Date", "Promise", "setTimeout", "setInterval", "queueMicrotask", "eval", "Function"].includes(node.name)))
+    return "Registry route adapters use synchronous ports and supplied values, not I/O or scheduling";
+  if (registryRoute(source) && (networkGlobals.has(node.name) || ["Date", "eval", "Function"].includes(node.name)))
+    return "Registry route parsing and projection must use supplied values, not I/O or ambient state";
+  if (source.startsWith(browserRoot + "central/") && source !== browserRoot + "central/api.ts" && networkGlobals.has(node.name))
+    return "Central browser workflows and presentation receive network operations through the API port";
+  if ([browserRoot + "central/api.ts", browserRoot + "central/messages.ts"].includes(source) && ["document", "location", "history", "window", "globalThis", "self"].includes(node.name))
+    return "Central browser API and copy modules must not own DOM or navigation state";
+  return undefined;
+}
 const runnerIoModules = new Set([
   "jobs/ports.ts", "jobs/storage.ts", "jobs/process.ts", "jobs/logs.ts", "jobs/input.ts",
   "context/ports.ts", "context/files.ts", "context/repository.ts", "context/retention.ts", "context/recovery.ts",
@@ -24,19 +73,23 @@ const runnerIoModules = new Set([
 /** New Job/Context/Patch/Connection modules are pure until an adapter role is reviewed. */
 function isPureRunner(path) {
   const name = canonicalSource(path).replace(/^apps\/runner\/src\//u, "");
-  return name === "path-contracts.ts" || /^(?:jobs|context|patch|connection)\//u.test(name) && !runnerIoModules.has(name);
+  return name === "path-contracts.ts" || name === "environment-contracts.ts" || /^(?:jobs|context|patch|connection)\//u.test(name) && !runnerIoModules.has(name);
 }
 const cloudPlatform = /^(?:cloudflare:|cloudflare(?:\/|$)|workerd(?:\/|$)|@cloudflare\/)/u;
 const serverSdk = /^(?:@modelcontextprotocol\/|agents(?:\/|$))/u;
 const purePackages = /^(?:zod(?:\/|$)|@aloneio\/runmesh-protocol$)/u;
 const cloudRoles = new Set(["entry", "platform", "transport_owner", "registry_facade", "persistence", "central_owner"]);
-const pureWorkerRoles = new Set(["contracts", "domain", "presentation", "browser", "registry_foundation", "registry_domain"]);
+const pureWorkerRoles = new Set(["contracts", "domain", "presentation", "browser", "registry_foundation", "registry_domain", "registry_route"]);
 export function specifierProblem(from, specifier, typeOnly) {
   const source = canonicalSource(from);
   const centralProblem = centralSpecifierProblem(source, specifier);
   if (centralProblem) return centralProblem;
   const builtin = specifier.startsWith("node:") || isBuiltin(specifier);
   const external = !specifier.startsWith(".") && !specifier.startsWith("/");
+  if (source === "apps/runner/src/environment-contracts.ts" && external && !purePackages.test(specifier))
+    return "Environment contracts must not load platform implementations or types";
+  if ((runnerUseCase(source) || requestUseCase(source) || registryCoordinator(source)) && external && !purePackages.test(specifier))
+    return "Runner use cases and Registry coordinators must not load platform implementations";
   if (source === "apps/runner/src/jobs/input.ts" && external && !(specifier === "node:stream" && typeOnly))
     return "Job stdin delivery may reference stream types only, not platform implementations";
   if (isPureRunner(source) && external && !purePackages.test(specifier) && !["node:crypto", "crypto", "node:path", "path"].includes(specifier))
@@ -63,7 +116,7 @@ const workerRootRoles = {
   "auth-settings.ts": "application",
   "capabilities-do.ts": "central_owner",
 };
-const foundations = new Set(["public-origin.ts", "mcp-authorization.ts", "job-history-settings.ts", "validity.ts", "body.ts", "security.ts", "runtime-config.ts", "queue-grant.ts", "values.ts", "generated-release.ts", "generated-provenance.ts", "generated-admin-client.ts", "generated-release-validation.ts", "generated-version.ts", "deployment-provenance.ts", "control-plane-errors.ts"]);
+const foundations = new Set(["bounded-json.ts", "public-origin.ts", "mcp-authorization.ts", "job-history-settings.ts", "validity.ts", "body.ts", "security.ts", "runtime-config.ts", "queue-grant.ts", "values.ts", "generated-release.ts", "generated-provenance.ts", "generated-admin-client.ts", "generated-release-validation.ts", "generated-version.ts", "deployment-provenance.ts", "control-plane-errors.ts"]);
 export function workerRole(path) {
   if (path.startsWith("apps/worker/browser/")) return "browser";
   if (!path.startsWith("apps/worker/src/")) return layer(path);
@@ -71,6 +124,7 @@ export function workerRole(path) {
   if (workerRootRoles[name]) return workerRootRoles[name];
   if (foundations.has(name)) return "foundation";
   if (name.startsWith("admin/") || name.startsWith("i18n/")) return "presentation";
+  if (name.startsWith("registry/routes/")) return "registry_route";
   if (name.startsWith("registry/")) return /registry\/(records|ports|storage|values|schema|feature-health-model|maintenance-plan)\.[jt]s$/u.test(name) ? "registry_foundation" : "registry_domain";
   for (const role of ["contracts", "domain", "application", "platform", "http", "distribution", "mcp", "presentation"]) if (name.startsWith(role + "/")) return role;
   return "extension";
@@ -84,18 +138,45 @@ export const WORKER_ALLOWED_DEPENDENCIES = Object.freeze({
   extension: ["extension", "foundation", "contracts", "protocol"],
   presentation: ["presentation", "contracts", "foundation", "distribution", "protocol"],
   distribution: ["distribution", "domain", "contracts", "foundation", "protocol"],
-  application: ["application", "domain", "contracts", "foundation", "platform", "protocol"],
+  application: ["application", "domain", "contracts", "foundation", "protocol"],
   platform: ["platform", "contracts", "foundation", "protocol"],
   persistence: ["persistence", "contracts", "foundation", "platform", "protocol"],
   registry_foundation: ["registry_foundation", "foundation", "contracts", "protocol"],
   registry_domain: ["registry_foundation", "registry_domain", "persistence", "foundation", "contracts", "protocol"],
-  registry_facade: ["registry_domain", "registry_foundation", "persistence", "foundation", "contracts", "platform", "protocol"],
-  transport_owner: ["transport_owner", "foundation", "contracts", "platform", "protocol"],
+  registry_route: ["registry_route", "registry_domain", "registry_foundation", "foundation", "contracts", "protocol"],
+  registry_facade: ["registry_route", "registry_domain", "registry_foundation", "persistence", "foundation", "contracts", "platform", "protocol"],
+  transport_owner: ["transport_owner", "domain", "foundation", "contracts", "platform", "protocol"],
   mcp: ["mcp", "contracts", "foundation", "platform", "protocol"],
   http: ["http", "application", "domain", "presentation", "distribution", "foundation", "contracts", "platform", "mcp", "protocol"],
 });
 export function dependencyProblem(from, to) {
   from = canonicalSource(from); to = canonicalSource(to);
+  if (from === "apps/worker/src/domain/runner-handshake.ts" && to !== "apps/worker/src/values.ts" && !to.startsWith("packages/protocol/src/"))
+    return "Runner handshake parsing and projection must not depend on state owners or adapters";
+  if (from === "apps/runner/src/environment-contracts.ts" && !to.startsWith("packages/protocol/src/"))
+    return "Environment contracts must not depend on concrete probes or coordinators";
+  if (from === "apps/runner/src/cli/contracts.ts" && ["apps/runner/src/environment.ts", "apps/runner/src/runtime.ts"].includes(to))
+    return "CLI environment dependencies must use structural contracts, not concrete classes";
+  if (from === "apps/runner/src/environment.ts" && ["apps/runner/src/runtime.ts", "apps/runner/src/cli.ts"].includes(to))
+    return "Environment probes must not depend on runtime or CLI composition";
+  if (runnerUseCase(from) && !(runnerUseCase(to) || /^apps\/worker\/src\/(?:contracts|domain)\//u.test(to) || to.startsWith("packages/protocol/src/")))
+    return "Runner use cases must depend on contracts and rules, not HTTP or transport adapters";
+  if (registryCoordinator(from) && ![
+    "apps/worker/src/registry/history-ports.ts", "apps/worker/src/registry/route-inputs.ts",
+    "apps/worker/src/registry/route-projections.ts", "apps/worker/src/registry/records.ts",
+    "apps/worker/src/registry/values.ts", "apps/worker/src/job-history-settings.ts",
+    "apps/worker/src/audit-metadata.ts", "apps/worker/src/control-plane-errors.ts", "apps/worker/src/security.ts",
+  ].includes(to) && !to.startsWith("apps/worker/src/contracts/") && !to.startsWith("packages/protocol/src/"))
+    return "Registry history and transport coordination must use narrow ports, not concrete owners";
+  if (from.startsWith(browserRoot) && !browserDependencies[from.slice(browserRoot.length)]?.includes(to.slice(browserRoot.length)))
+    return "Browser imports must follow the reviewed controller, API, presentation and workflow boundaries";
+  if (registryRoute(from) && !["apps/worker/src/registry/records.ts", "apps/worker/src/registry/values.ts", "packages/protocol/src/index.ts"].includes(to))
+    return "Registry route parsing and projection must not depend on state owners or adapters";
+  if (registryRouteAdapter(from) && !(registryRoute(to)
+    || to === "apps/worker/src/registry/routes/request.ts"
+    || ["apps/worker/src/registry/records.ts", "apps/worker/src/registry/values.ts", "apps/worker/src/security.ts", "apps/worker/src/validity.ts"].includes(to)
+    || to.startsWith("apps/worker/src/contracts/") || to.startsWith("packages/protocol/src/")))
+    return "Registry route adapters must use narrow ports, not concrete owners, storage or peer adapters";
   const centralProblem = centralDependencyProblem(from, to);
   if (centralProblem) return centralProblem;
   const owner = layer(from), target = layer(to);

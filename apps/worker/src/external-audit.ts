@@ -63,7 +63,7 @@ export class ExternalAuditHistory {
       await this.initialize();
       await this.database.batch([
         this.database.prepare(`INSERT INTO runmesh_audit_v1 VALUES (?, ?, ?, ?, ?, ?)
-          ON CONFLICT(namespace, runner_id, lifecycle_id, call_id) DO UPDATE SET completed_at_ms = excluded.completed_at_ms, call_json = excluded.call_json`).bind(this.namespace, runnerId, lifecycleId, callId, completed, body),
+          ON CONFLICT(namespace, runner_id, lifecycle_id, call_id) DO NOTHING`).bind(this.namespace, runnerId, lifecycleId, callId, completed, body),
         this.database.prepare(`DELETE FROM runmesh_audit_v1 WHERE namespace = ? AND runner_id = ? AND lifecycle_id = ? AND call_id IN (
           SELECT call_id FROM runmesh_audit_v1 WHERE namespace = ? AND runner_id = ? AND lifecycle_id = ?
           ORDER BY completed_at_ms, call_id LIMIT MAX(COALESCE((SELECT total FROM runmesh_audit_counts_v1 WHERE namespace = ? AND runner_id = ? AND lifecycle_id = ?), 0) - 1000, 0))`).bind(this.namespace, runnerId, lifecycleId, this.namespace, runnerId, lifecycleId, this.namespace, runnerId, lifecycleId),

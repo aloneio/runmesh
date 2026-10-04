@@ -5,7 +5,7 @@ import { doctor } from "./cli/doctor.js";
 import { enrollmentCode } from "./cli/enrollment.js";
 import { enrollmentFailureMessage } from "./cli/enrollment.js";
 import { enrollRunner } from "./enrollment.js";
-import { EnvironmentInfoService } from "./runtime.js";
+import { EnvironmentInfoService } from "./environment.js";
 import type { ExecutionMode } from "./service.js";
 import { HELP } from "./cli/help.js";
 import { hostServiceManifestFilesystem } from "./service.js";
@@ -133,7 +133,7 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
       return;
     }
     if (parsed.command === "workspace") { await workspaceCommand(parsed, store, output); return; }
-    if (parsed.command === "env") { const profile = await requireProfile(store); const info = await new EnvironmentInfoService().get(workspaceOptions(profile)); report(output, parsed.json, info); return; }
+    if (parsed.command === "env") { const profile = await requireProfile(store); const info = await (dependencies.environment ?? new EnvironmentInfoService()).get(workspaceOptions(profile)); report(output, parsed.json, info); return; }
     if (parsed.command === "doctor") {
       const result = await doctor(store, parsed.values.user === true ? "user" : "system", dependencies.servicePlatform, dependencies);
       report(output, parsed.json, parsed.values.shareable === true ? shareableDoctorReport(result) : result);
@@ -146,11 +146,11 @@ export async function runCli(argv: readonly string[], dependencies: CliDependenc
   } catch (cause) {
     const detail = cause instanceof Error ? cause.message : String(cause);
     const outcomeUnknown = parsed.command === "enroll" && isEnrollmentOutcomeUnknown(cause);
-    const profileRemoved = parsed.command === "enroll" && (enrolledDuringThisInvocation || outcomeUnknown)
+    const profileCleanup = parsed.command === "enroll" && (enrolledDuringThisInvocation || outcomeUnknown)
       ? await removeEnrollmentProfileIfCurrent(store, enrolledProfile ?? previousProfile)
-      : false;
+      : undefined;
     const message = parsed.command === "enroll"
-      ? enrollmentFailureMessage(detail, enrolledDuringThisInvocation, outcomeUnknown, profileRemoved)
+      ? enrollmentFailureMessage(detail, enrolledDuringThisInvocation, outcomeUnknown, profileCleanup)
       : detail;
     error(message); throw cause;
   }

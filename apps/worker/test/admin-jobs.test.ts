@@ -17,7 +17,7 @@ describe("on-demand administrator job detail", () => {
     expect(page.ok).toBe(true); if (!page.ok) return;
     expect(f.registry.mock.calls.map(([url]) => url)).toEqual(["/runners/test-runner", "/runners/test-runner/jobs/test-job"]);
     expect(f.logs).not.toHaveBeenCalled();
-    expect(page.body).toContain("succeeded"); expect(page.body).toContain("No automatic polling.");
+    expect(page.body).toContain("succeeded"); expect(page.body).toContain("Open an output stream to load logs from the Runner.");
     expect(page.body).toContain("?stream=stdout"); expect(page.body).toContain("?stream=stderr");
     expect(page.body).not.toContain("PRIVATE_COMMAND_SENTINEL"); expect(page.body).not.toContain("PRIVATE_HOST_PATH_SENTINEL");
   });
@@ -31,12 +31,12 @@ describe("on-demand administrator job detail", () => {
   it.each(["offline", "stale", "revoked"])("retains metadata but does not contact an %s Runner", async (state) => {
     const f = fixture(state); const page = await f.open("?stream=stdout");
     expect(page.ok).toBe(true); if (!page.ok) return;
-    expect(f.logs).not.toHaveBeenCalled(); expect(page.body).toContain("succeeded"); expect(page.body).toContain("Logs are unavailable.");
+    expect(f.logs).not.toHaveBeenCalled(); expect(page.body).toContain("succeeded"); expect(page.body).toContain("Could not load logs. Check that the Runner is online, its read permission is active, and the logs are still available.");
   });
   it.each([403, 404, 503])("keeps metadata visible when logs return HTTP %s", async (status) => {
     const f = fixture(); f.logs.mockImplementation(async () => new Response("PRIVATE_ERROR_SENTINEL", { status }));
     const page = await f.open("?stream=stderr"); expect(page.ok).toBe(true); if (!page.ok) return;
-    expect(page.body).toContain("succeeded"); expect(page.body).toContain("Logs are unavailable."); expect(page.body).not.toContain("PRIVATE_ERROR_SENTINEL");
+    expect(page.body).toContain("succeeded"); expect(page.body).toContain("Could not load logs. Check that the Runner is online, its read permission is active, and the logs are still available."); expect(page.body).not.toContain("PRIVATE_ERROR_SENTINEL");
   });
   it("tolerates a log transport failure without losing saved metadata", async () => {
     const f = fixture(); f.logs.mockRejectedValue(new Error("offline"));

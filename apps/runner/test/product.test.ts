@@ -2,10 +2,9 @@ import { chmod, chown, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } 
 import { tmpdir } from "node:os";
 import { join, resolve, win32 } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { decodeWireFrame, runnerPolicyChecksum } from "@aloneio/runmesh-protocol";
+import { runnerPolicyChecksum } from "@aloneio/runmesh-protocol";
 import { runCli, runEnrollCli, parseProductArgs, shareableDoctorReport } from "../src/cli.js";
-import { RunnerConnection, classifyConnectionFailure } from "../src/connection.js";
-import { RUNNER_VERSION } from "../src/version.js";
+import { classifyConnectionFailure } from "../src/connection.js";
 import { enrollRunner } from "../src/enrollment.js";
 import { ProfileStore, validateProfile } from "../src/profile.js";
 import { PolicyStore } from "../src/policy-store.js";
@@ -32,14 +31,8 @@ describe("runner product profile and enrollment", () => {
     const firstEnteredPromise = new Promise<void>((resolve) => { resolveFirstEntered = resolve; });
     let releaseFirst!: () => void;
     const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
-    const store = new PolicyStore(join(test.root, "state"));
-    // Interpose at the start of the private activation body so this test does
-    // not depend on platform-specific filesystem latency before the first
-    // operation reaches its coordination point.
-    type ActivateVerified = (policy: Parameters<PolicyStore["activate"]>[0]) => Promise<void>;
-    const internals = store as unknown as { activateVerified: ActivateVerified };
-    const originalActivateVerified = internals.activateVerified.bind(store);
-    internals.activateVerified = async (policy) => {
+    // Gate the existing pre-commit port rather than replacing a private method.
+    const store = new PolicyStore(join(test.root, "state"), { failBeforeActivate: async () => {
       if (holdConcurrent) {
         if (!firstEntered) {
           firstEntered = true;
@@ -49,8 +42,7 @@ describe("runner product profile and enrollment", () => {
           secondEntered = true;
         }
       }
-      return originalActivateVerified(policy);
-    };
+    } });
     let first: Promise<void> | undefined;
     let second: Promise<void> | undefined;
     try {
@@ -67,9 +59,10 @@ describe("runner product profile and enrollment", () => {
         first.then(() => { throw new Error("first activation was not gated"); }, (error) => { throw error; }),
       ]);
       second = store.activate(latest);
-      // The second hook must remain behind the first activation. Without the
-      // store FIFO it reaches the hook and can rename active-policy.json first.
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      // Keep the first commit gated while a competing filesystem activation
+      // has time to reach the public hook; one event-loop turn is insufficient.
+      // Removing the FIFO must expose the second commit during this window.
+      await new Promise<void>((resolve) => setTimeout(resolve, 1000));
       expect(secondEntered).toBe(false);
       releaseFirst();
       await Promise.all([first, second]);
@@ -177,6 +170,60 @@ describe("runner product profile and enrollment", () => {
       })).rejects.toThrow("outcome is unknown");
       await expect(test.store.load()).resolves.toBeUndefined();
     } finally { await test.cleanup(); }
+  });
+  it.each([400, 409, 503, 302])("disposes a rejected enrollment body for HTTP %s without changing its outcome", async status => {
+    const test = await fixture();
+    const cancel = vi.fn(async () => { throw new Error("cleanup failure must not replace enrollment outcome"); });
+    const response = new Response(new ReadableStream<Uint8Array>({ cancel }), { status });
+    try {
+      const fetch = vi.fn(async () => response);
+      const failure = status === 409 ? "already in progress" : status === 400 ? "enrollment failed (400)" : "outcome is unknown";
+      await expect(enrollRunner({ server: "https://example.test/runner/enroll", code: "a".repeat(43), store: test.store, fetch })).rejects.toThrow(failure);
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(response.body!.locked).toBe(false);
+      await expect(test.store.load()).resolves.toBeUndefined();
+    } finally { await response.body!.cancel().catch(() => undefined); await test.cleanup(); }
+  });
+  it.each(["invalid", "65537", "9007199254740992"])("disposes a rejected enrollment body with content-length %s", async length => {
+    const test = await fixture();
+    const cancel = vi.fn(async () => { throw new Error("cleanup failure must not replace enrollment outcome"); });
+    const response = new Response(new ReadableStream<Uint8Array>({ cancel }), { headers: { "content-length": length } });
+    try {
+      const fetch = vi.fn(async () => response);
+      await expect(enrollRunner({ server: "https://example.test/runner/enroll", code: "a".repeat(43), store: test.store, fetch })).rejects.toThrow("outcome is unknown");
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(response.body!.locked).toBe(false);
+      await expect(test.store.load()).resolves.toBeUndefined();
+    } finally { await response.body!.cancel().catch(() => undefined); await test.cleanup(); }
+  });
+  it("rejects an oversized enrollment body before stalled cancellation finishes", async () => {
+    const test = await fixture();
+    let finishCancellation!: () => void;
+    let cancellationStarted!: () => void;
+    const cancellation = new Promise<void>(resolve => { finishCancellation = resolve; });
+    const started = new Promise<void>(resolve => { cancellationStarted = resolve; });
+    const cancel = vi.fn(() => { cancellationStarted(); return cancellation; });
+    const response = new Response(new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new Uint8Array(65_537)); }, cancel }));
+    const fetch = vi.fn(async () => response);
+    let settled = false;
+    const pending = enrollRunner({ server: "https://example.test/runner/enroll", code: "a".repeat(43), store: test.store, fetch })
+      .then(value => { settled = true; return value; }, error => { settled = true; return error as Error; });
+    try {
+      await started;
+      // All enrollment work after the byte limit is synchronous; let its
+      // promise continuations settle while upstream cancellation stays gated.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(settled).toBe(true);
+      const outcome = await pending;
+      expect(outcome).toBeInstanceOf(Error);
+      expect(outcome).toMatchObject({ message: expect.stringContaining("outcome is unknown") });
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(response.body!.locked).toBe(false);
+      await expect(test.store.load()).resolves.toBeUndefined();
+    } finally { finishCancellation(); await pending; await test.cleanup(); }
   });
   it("re-enrollment replaces connection credentials without adding a workspace", async () => {
     const test = await fixture();
@@ -286,6 +333,69 @@ describe("runner product profile and enrollment", () => {
       await expect(test.store.load()).resolves.toBeUndefined();
       expect(errors.join("\n")).toContain("local profile was removed");
       expect(errors.join("\n")).toContain("generate a new enrollment code");
+    } finally { await test.cleanup(); }
+  });
+
+  it.each(["main", "enrollment"] as const)("reports a missing profile accurately after uncertain initial enrollment through the %s CLI", async entry => {
+    const test = await fixture();
+    try {
+      const errors: string[] = [];
+      const remove = vi.spyOn(test.store, "remove");
+      const cli = entry === "main" ? runCli : runEnrollCli;
+      const argv = ["--server", "https://example.test/runner/enroll", "--code", "j".repeat(43)];
+      await expect(cli(entry === "main" ? ["enroll", ...argv] : argv, {
+        store: test.store,
+        stderr: line => errors.push(line),
+        fetch: async () => { throw new Error("socket reset"); },
+      })).rejects.toThrow("outcome is unknown");
+      await expect(test.store.load()).resolves.toBeUndefined();
+      expect(remove).not.toHaveBeenCalled();
+      expect(errors.join("\n")).toContain("no local profile was found");
+      expect(errors.join("\n")).not.toContain("could not be removed");
+      expect(errors.join("\n")).not.toContain("existing profile");
+      expect(errors.join("\n")).toContain("generate a new enrollment code");
+    } finally { await test.cleanup(); }
+  });
+
+  it.each(["main", "enrollment"] as const)("preserves and identifies a concurrent new profile through the %s CLI", async entry => {
+    const test = await fixture();
+    try {
+      const errors: string[] = [];
+      const concurrent = { ...profile(), runner_id: "concurrent-runner", token: "concurrent-token-0123456789" };
+      const remove = vi.spyOn(test.store, "remove");
+      const cli = entry === "main" ? runCli : runEnrollCli;
+      const argv = ["--server", "https://example.test/runner/enroll", "--code", "k".repeat(43)];
+      await expect(cli(entry === "main" ? ["enroll", ...argv] : argv, {
+        store: test.store,
+        stderr: line => errors.push(line),
+        fetch: async () => { await test.store.save(concurrent); throw new Error("socket reset"); },
+      })).rejects.toThrow("outcome is unknown");
+      await expect(test.store.load()).resolves.toMatchObject(concurrent);
+      expect(remove).not.toHaveBeenCalled();
+      expect(errors.join("\n")).toContain("the updated local profile was preserved");
+      expect(errors.join("\n")).not.toContain("could not be removed");
+      expect(errors.join("\n")).not.toContain(concurrent.token);
+    } finally { await test.cleanup(); }
+  });
+
+  it.each(["main", "enrollment"] as const)("reports an actual profile removal failure through the %s CLI", async entry => {
+    const test = await fixture();
+    try {
+      const errors: string[] = [];
+      const original = profile();
+      await test.store.save(original);
+      vi.spyOn(test.store, "remove").mockRejectedValue(new Error("permission denied"));
+      const cli = entry === "main" ? runCli : runEnrollCli;
+      const argv = ["--server", "https://example.test/runner/enroll", "--code", "l".repeat(43), "--re-enroll"];
+      await expect(cli(entry === "main" ? ["enroll", ...argv] : argv, {
+        store: test.store,
+        stderr: line => errors.push(line),
+        fetch: async () => { throw new Error("socket reset"); },
+      })).rejects.toThrow("outcome is unknown");
+      await expect(test.store.load()).resolves.toMatchObject(original);
+      expect(errors.join("\n")).toContain("local profile could not be removed");
+      expect(errors.join("\n")).toContain("until its credential is verified");
+      expect(errors.join("\n")).not.toContain(original.token);
     } finally { await test.cleanup(); }
   });
 
@@ -455,12 +565,6 @@ describe("runner product profile and enrollment", () => {
   });
 });
 describe("runner product CLI and service safety", () => {
-  it("reports its installed package version instead of a hardcoded transport value", () => {
-    expect(RUNNER_VERSION).toMatch(/^\d+\.\d+\.\d+/);
-    const connection = new RunnerConnection({ config: { server: "wss://runner.example.test/runner/connect", runnerId: "version-runner", token: "0123456789abcdef", workspaces: [] } });
-    expect((connection as unknown as { metadata: { runner_version: string } }).metadata.runner_version).toBe(RUNNER_VERSION);
-  });
-
   it("rejects local workspace configuration and starts from the central profile", async () => {
     const test = await fixture();
     try {
@@ -690,90 +794,6 @@ describe("runner product CLI and service safety", () => {
       await manager.disable?.(manifest);
       expect(calls).toEqual(["systemctl daemon-reload", "systemctl is-enabled runmesh-runner.service"]);
     }
-  });
-  it("re-applies an unchanged desired policy after activation is interrupted before live publish", async () => {
-    const workspaces: [] = [];
-    const policyBase = {
-      schema_version: 1 as const,
-      runner_id: "policy-reapply-runner",
-      revision: 1,
-      runner_permissions: { read: true, edit: true, shell: true, job_control: true },
-      workspaces,
-    };
-    const desired = { ...policyBase, checksum: runnerPolicyChecksum(policyBase) };
-    const firstSocket = { readyState: 1, send: vi.fn() };
-    const replacementSocket = { readyState: 1, send: vi.fn() };
-    const applied: unknown[][] = [];
-    let activationCount = 0;
-    const runtime = {
-      applyPolicy: (value: unknown[]) => { applied.push(value); },
-      syncJobs: async () => [],
-      syncWorkspaceMetadata: () => [],
-    } as unknown as import("../src/runtime.js").RunnerRuntime;
-    const policyStore = {
-      activate: async () => {
-        activationCount += 1;
-        // Simulate the transport being superseded after durable activation but
-        // before the live runtime policy is published.
-        if (activationCount === 1) (connection as unknown as { socket: unknown }).socket = replacementSocket;
-      },
-      load: async () => undefined,
-    } as unknown as import("../src/policy-store.js").PolicyStore;
-    const connection = new RunnerConnection({
-      config: { server: "wss://runner.example.test/runner/connect", runnerId: policyBase.runner_id, token: "0123456789abcdef", workspaces: [] },
-      runtime,
-      policyStore,
-    });
-    const internals = connection as unknown as {
-      socket: unknown;
-      applyDesiredPolicy: (socket: unknown, policy: typeof desired) => Promise<void>;
-    };
-    internals.socket = firstSocket;
-    await internals.applyDesiredPolicy(firstSocket, desired);
-    expect(applied).toHaveLength(0);
-    internals.socket = replacementSocket;
-    await internals.applyDesiredPolicy(replacementSocket, desired);
-    expect(applied).toHaveLength(1);
-  });
-  it("re-acknowledges an already-active policy after a reconnect", async () => {
-    const policyBase = {
-      schema_version: 1 as const,
-      runner_id: "policy-reconnect-runner",
-      revision: 1,
-      runner_permissions: { read: true, edit: true, shell: true, job_control: true },
-      workspaces: [] as [],
-    };
-    const desired = { ...policyBase, checksum: runnerPolicyChecksum(policyBase) };
-    const socket = { readyState: 1, send: vi.fn() };
-    const runtime = {
-      syncJobs: async () => [],
-      syncWorkspaceMetadata: () => [],
-      applyPolicy: vi.fn(),
-    } as unknown as import("../src/runtime.js").RunnerRuntime;
-    const policyStore = { activate: vi.fn(), load: async () => undefined } as unknown as import("../src/policy-store.js").PolicyStore;
-    const connection = new RunnerConnection({
-      config: { server: "wss://runner.example.test/runner/connect", runnerId: policyBase.runner_id, token: "0123456789abcdef", workspaces: [] },
-      runtime,
-      policyStore,
-    });
-    const internals = connection as unknown as {
-      socket: unknown;
-      desiredPolicyRevision: number;
-      desiredPolicyChecksum: string;
-      appliedPolicyRevision: number | null;
-      appliedPolicyChecksum: string | null;
-      applyDesiredPolicy: (socket: unknown, policy: typeof desired) => Promise<void>;
-    };
-    internals.socket = socket;
-    internals.desiredPolicyRevision = desired.revision;
-    internals.desiredPolicyChecksum = desired.checksum;
-    internals.appliedPolicyRevision = desired.revision;
-    internals.appliedPolicyChecksum = desired.checksum;
-    await internals.applyDesiredPolicy(socket, desired);
-    expect(policyStore.activate).not.toHaveBeenCalled();
-    const frames = socket.send.mock.calls.map(([value]: [string]) => decodeWireFrame(value));
-    expect(frames.some((frame) => frame.type === "runner.policy_ack" && frame.status === "applied" && frame.applied_revision === desired.revision && frame.applied_checksum === desired.checksum)).toBe(true);
-    expect(frames.some((frame) => frame.type === "runner.sync")).toBe(true);
   });
   it("quotes Windows task arguments with trailing backslashes safely", () => {
     const executablePath = String.raw`C:\Program Files\Runmesh\current\runmesh.cmd`;
@@ -1050,6 +1070,18 @@ describe("runner product CLI and service safety", () => {
       expect(manager.status).toHaveBeenCalledTimes(2);
     } finally { await test.cleanup(); }
   });
+  it("uses the injected environment reader for env JSON", async () => {
+    const test = await fixture();
+    try {
+      await test.store.save(profile(join(test.root, "workspace")));
+      const lines: string[] = [];
+      const get = vi.fn(async () => ({ source: "injected-environment" }));
+      await runCli(["env", "--json"], { store: test.store, stdout: line => lines.push(line), environment: { get } });
+      expect(JSON.parse(lines.join("\n"))).toEqual({ source: "injected-environment" });
+      expect(get).toHaveBeenCalledTimes(1);
+    } finally { await test.cleanup(); }
+  });
+
   it("emits stable doctor JSON checks and only fails its exit seam for required failures", async () => {
     const test = await fixture();
     try {
@@ -1066,7 +1098,7 @@ describe("runner product CLI and service safety", () => {
       await runCli(["doctor", "--json"], {
         store: test.store, stdout: (line) => lines.push(line), servicePlatform: doctorPlatform, serviceFilesystem: filesystem, serviceManager: manager,
         discoverShellRuntime: async () => ({ kind: "bash", executable: "/bin/bash", buildInvocation: (command) => ({ file: "/bin/bash", args: ["-lc", command] }) }),
-        environment: new (await import("../src/runtime.js")).EnvironmentInfoService({ probe: async (command) => command === "python3" || command === "python" || command === "docker" ? undefined : `${command} version` }),
+        environment: new (await import("../src/environment.js")).EnvironmentInfoService({ probe: async (command) => command === "python3" || command === "python" || command === "docker" ? undefined : `${command} version` }),
         policyRevision: async () => ({ desired: 3, applied: 3 }), setExitCode: (code) => exitCodes.push(code),
       });
       const result = JSON.parse(lines[0] ?? "{}") as { ok: boolean; checks: Array<{ name: string; status: string }> };
@@ -1083,7 +1115,7 @@ describe("runner product CLI and service safety", () => {
         store: new ProfileStore({ baseDir: join(test.root, "missing-profile") }), stdout: () => undefined,
         servicePlatform: doctorPlatform, serviceFilesystem: filesystem, serviceManager: manager,
         discoverShellRuntime: async () => undefined,
-        environment: new (await import("../src/runtime.js")).EnvironmentInfoService({ probe: async () => undefined }),
+        environment: new (await import("../src/environment.js")).EnvironmentInfoService({ probe: async () => undefined }),
         setExitCode: (code) => failingExitCodes.push(code),
       });
       expect(failingExitCodes).toEqual([1]);
@@ -1108,7 +1140,7 @@ describe("runner product CLI and service safety", () => {
       await runCli(["doctor", "--json", "--shareable"], {
         store: test.store, stdout: (line) => lines.push(line), servicePlatform: doctorPlatform, serviceFilesystem: filesystem, serviceManager: manager,
         discoverShellRuntime: async () => ({ kind: "bash", executable: "/bin/bash", buildInvocation: (command) => ({ file: "/bin/bash", args: ["-lc", command] }) }),
-        environment: new (await import("../src/runtime.js")).EnvironmentInfoService({ probe: async () => undefined }),
+        environment: new (await import("../src/environment.js")).EnvironmentInfoService({ probe: async () => undefined }),
         policyRevision: async () => ({ desired: 7, applied: 6 }), setExitCode: () => undefined,
       });
       const text = lines[0] ?? "";

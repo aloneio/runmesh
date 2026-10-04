@@ -16,5 +16,6 @@ export type { RawRunnerOptions, RunnerConfig, WorkspaceConfig, WorkspaceOption }
 export type { RunnerProfile, StoredWorkspace, ProfileExecutionMode, ProfileStoreOptions, ProfileSaveOptions, ProfilePermissions, ProfileOwnershipCheck } from "./profile.js";
 export type { JobEvent, JobManagerOptions, JobRecord, LocalJobStatus } from "./jobs.js";
 export type { RunnerConnectionOptions } from "./connection.js";
+export type { ConnectionRuntimePort, ConnectionPolicyStorePort } from "./connection/ports.js";
 export type { HostPlatform } from "./platform-types.js";
 export type { ServiceAdapterOptions, ServiceCommandExecutor, ServiceLayout, ServiceManagerAdapter, ServiceManagerOptions, ServiceManifest, ServiceManifestFilesystem, ServiceMode, ServicePlatform, ExecutionMode, ServicePrivilegeState, ServiceRuntimeStatus, ServiceProvisioner, ServiceProvisionerOptions, ServiceProvisioningStatus } from "./service.js";

@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import { internalHeaders, randomBase64Url, sha256Hex } from "../src/security.js";
 import { projectReauthorization } from "../src/mcp/reauthorization.js";
 import { verifyMcpClient } from "../src/application/mcp-identity.js";
+import { mcpIdentityVerifier } from "../src/platform/control-plane-receipts.js";
 
 const registry = () => env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
 async function request(path: string, value: unknown): Promise<Response> {
@@ -35,10 +36,10 @@ async function rpc(secret: string, method: string, params: unknown) {
 
 it("W02 accepts central-only identity at the real HTTP boundary without any Runner", async () => {
   const client = await create();
-  expect(await verifyMcpClient(env, client.secret_verifier)).toMatchObject({ client_id: client.client_id, scopes: [] });
+  expect(await verifyMcpClient(mcpIdentityVerifier(env), client.secret_verifier)).toMatchObject({ client_id: client.client_id, scopes: [] });
   const listed = await rpc(client.secret, "tools/list", {});
   expect(listed.error).toBeUndefined();
-  expect(listed.result.tools).toHaveLength(10);
+  expect(listed.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(["remote_call", "remote_profiles", "remote_tools"]);
   for (const [name, args] of [
     ["read", { workspace_id: "not-configured", path: "README.md" }],
     ["shell", { workspace_id: "not-configured", command: "echo never-dispatched" }],
@@ -63,9 +64,9 @@ it("W02 keeps legacy admission nonempty and offers explicit versioned revalidati
   expect((await request("/auth/mcp/revalidate", { client_id: client.client_id, secret_version: 1, identity_version: 3 })).status).toBe(400);
 });
 
-it("W02 mixed identities preserve native scopes without granting central capabilities", async () => {
+it("W02 mixed identities preserve native scopes without granting computer execution", async () => {
   const client = await create(["coding:read"]);
-  expect(await verifyMcpClient(env, client.secret_verifier)).toEqual({ client_id: client.client_id,
+  expect(await verifyMcpClient(mcpIdentityVerifier(env), client.secret_verifier)).toEqual({ client_id: client.client_id,
     label: "Central identity regression", secret_version: 1, scopes: ["coding:read"] });
   const reply = await rpc(client.secret, "tools/call", { name: "shell", arguments: { workspace_id: "none", command: "echo denied" } });
   expect(reply.result.structuredContent.error.code).toBe("insufficient_scope");
@@ -76,7 +77,7 @@ it("W02 rotation and revocation fence versioned identities and their old credent
   await runInDurableObject(registry(), instance => {
     instance.rotateMcpClient(client.client_id, "a".repeat(64), "test-rotated", Date.now());
   });
-  expect(await verifyMcpClient(env, client.secret_verifier)).toBeUndefined();
+  expect(await verifyMcpClient(mcpIdentityVerifier(env), client.secret_verifier)).toBeUndefined();
   expect((await request("/auth/mcp/revalidate", { client_id: client.client_id, secret_version: 1, identity_version: 2 })).status).toBe(404);
   expect((await request("/auth/mcp/revalidate", { client_id: client.client_id, secret_version: 2, identity_version: 2 })).status).toBe(200);
   await runInDurableObject(registry(), instance => { instance.revokeMcpClient(client.client_id, Date.now()); });
@@ -89,7 +90,7 @@ it.each(["[]", '"bad"', '{"schema_version":3,"native_scopes":[]}', '{"schema_ver
     await runInDurableObject(registry(), (_instance, state) => {
       state.storage.sql.exec("UPDATE mcp_clients SET scopes_json = ? WHERE client_id = ?", encoded, client.client_id);
     });
-    expect(await verifyMcpClient(env, client.secret_verifier)).toBeUndefined();
+    expect(await verifyMcpClient(mcpIdentityVerifier(env), client.secret_verifier)).toBeUndefined();
     expect((await request("/auth/mcp/revalidate", { client_id: client.client_id, secret_version: 1, identity_version: 2 })).status).toBe(404);
   });
 

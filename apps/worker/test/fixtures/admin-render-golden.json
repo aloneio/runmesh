@@ -10,13 +10,20 @@
         "login",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "a9bfcaa7468d7ea6836f9169d56ef09907e1559cf4f044f4b5f97a12f424c7f9",
-      "bytes": 88591,
+      "sha256": "5bdbb656f4991aed1599789dfa7cd9fe97cac4922d40456afc8b64babd7fd135",
+      "bytes": 129838,
       "original_sha256": "d833c2b1755d1425c8eaaa2aa686b2e0d21b03f93a432c5349019499fe7bc24e",
       "original_bytes": 86099,
       "reviewed_change": "Replace sandbox claim with the actual Runner tools, jobs and MCP connection scope; all other markup is unchanged.",
       "pre_central_sha256": "fa50e8e91a72151f9e0e1d85023484851e5d2dd10ef516408d50f743510c93db",
-      "pre_central_bytes": 86069
+      "pre_central_bytes": 86069,
+      "pre_product_sha256": "a9bfcaa7468d7ea6836f9169d56ef09907e1559cf4f044f4b5f97a12f424c7f9",
+      "pre_product_bytes": 88591,
+      "pre_product_recovery_sha256": "907d8c8bc932b5a61596a99ee9d381364b2c0df6626d238e91dccbe4ae85c7a4",
+      "pre_product_recovery_bytes": 108669,
+      "product_recovery_change": "Reviewed explicit publication of staged updates for already enabled Skills. Product browser regressions confirm separate active/staged digests, publication only after review, no redundant action for the current version, and pause/resume behavior without screenshots.",
+      "pre_controller_split_sha256": "9d07f1413b4f8f2619d7a2b9e570e8f4163644c1d64cd75823517ff027642621",
+      "pre_controller_split_bytes": 125356
     },
     {
       "name": "setup",
@@ -25,10 +32,17 @@
         "setup",
         "fixture-csrf-<>&\""
       ],
-      "sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
-      "bytes": 89179,
+      "sha256": "bcfeb03d9bfecfee6dbf6ae2b2f2d84d64ff512af64ca03707706034c9fe39f9",
+      "bytes": 130426,
       "pre_central_sha256": "eea5ddb7669fdd9bd97c63dea4f9256b8cecac05cd6f16783f3e252d60c04ffc",
-      "pre_central_bytes": 86657
+      "pre_central_bytes": 86657,
+      "pre_product_sha256": "8e68713f89ec05c801a7fd2b2720573fb18bdd589f7c3c29233852d487ae7747",
+      "pre_product_bytes": 89179,
+      "pre_product_recovery_sha256": "a355bbea6b0a6de46d476bf1d992125a1443995b4de8b670d6b0626bad820887",
+      "pre_product_recovery_bytes": 109257,
+      "product_recovery_change": "Reviewed explicit publication of staged updates for already enabled Skills. Product browser regressions confirm separate active/staged digests, publication only after review, no redundant action for the current version, and pause/resume behavior without screenshots.",
+      "pre_controller_split_sha256": "818c3917787be5ee5a70170ffd5dfbd59f7668a3d1056cca849ecc7841fb7761",
+      "pre_controller_split_bytes": 125944
     },
     {
       "name": "secret",
@@ -37,10 +51,17 @@
         "Fixture <title>",
         "https://example.test/fixture-no-credential"
       ],
-      "sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
-      "bytes": 90306,
+      "sha256": "d318f9e3b22ba0b5265d09b453773349370b9cee1c7d82c5eb2f2160e80d0865",
+      "bytes": 131574,
       "pre_central_sha256": "8c15fe901a2602ce3598ccce22a5a322f40ccb9500163ccec57e207bc96863ec",
-      "pre_central_bytes": 87739
+      "pre_central_bytes": 87739,
+      "pre_product_sha256": "66271be9cc4fb424f675ec8f54fb9f96d1da8bfcc0bb50446215baaad6256e4c",
+      "pre_product_bytes": 90306,
+      "pre_product_recovery_sha256": "110d36e91fe8b8fa1b9a6520175942a5c58bde7365804947ec53f15558918b04",
+      "pre_product_recovery_bytes": 110384,
+      "product_recovery_change": "Reviewed explicit publication of staged updates for already enabled Skills. Product browser regressions confirm separate active/staged digests, publication only after review, no redundant action for the current version, and pause/resume behavior without screenshots.",
+      "pre_controller_split_sha256": "975b82a2f50bae641d2a4037ec889ff67b3e082a57539833268c2397f8722b7f",
+      "pre_controller_split_bytes": 127092
     },
     {
       "name": "overview-empty",
@@ -55,8 +76,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "d9ac6fca648916eb548f51ac4625f5143ec5a12b47bb0be56130b998df111d3e",
-      "bytes": 2124
+      "sha256": "78bd5604b1ee384d37945e130fda94c5b30b2069e2c971796dcf814155e3e53f",
+      "bytes": 2065
     },
     {
       "name": "overview-populated",
@@ -106,8 +127,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "41753b3ad40be0ffbbdc099d65a84879960df7d1dfd3d5b3c954533e68198eb2",
-      "bytes": 3255,
+      "sha256": "1b0e675c5e2f1bdba0c966779a0370c6e2da363f9cd3f894e1f89af090f56371",
+      "bytes": 3196,
       "original_sha256": "b94fb8d802373820755732a807fc8cdc9d4f579a0d40b21cafdcac121ff7a957",
       "original_bytes": 3219,
       "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label",
@@ -121,8 +142,8 @@
       "args": [
         "fixture-csrf-<>&\""
       ],
-      "sha256": "fb56582e029a8b5b407982002db570f92288e23aeceeb6b2cee885f5e9e391af",
-      "bytes": 1389
+      "sha256": "d07cb834606fced579dc20687f3c8bf41f78224b1ca56a83c49643cf8b9bff46",
+      "bytes": 1274
     },
     {
       "name": "clients-empty",
@@ -137,11 +158,16 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "a1dfbb8e9e6c76e1b83b95e79c6f47cb2a9aae8d00b004b85898ea6c89bffe45",
-      "bytes": 1767,
+      "sha256": "209ac6830d6fd1c86aef6bd8ae7446c7242e0a6f42cbaadaa3e120339b5e558e",
+      "bytes": 1999,
       "pre_presence_bytes": 1658,
       "pre_presence_sha256": "e74169b7613eb2646689d68bc42760c399f092ad60d9c6200c65b2b561342266",
-      "reviewed_presence_change": "Replace client online/offline with credential validity, identify credential status, and explain it does not prove a live connection. Reversing only these reviewed changes matches pre_presence_sha256."
+      "reviewed_presence_change": "Replace client online/offline with credential validity, identify credential status, and explain it does not prove a live connection. Reversing only these reviewed changes matches pre_presence_sha256.",
+      "pre_product_sha256": "a1dfbb8e9e6c76e1b83b95e79c6f47cb2a9aae8d00b004b85898ea6c89bffe45",
+      "pre_product_bytes": 1767,
+      "pre_product_recovery_sha256": "29d7c4a208d8f75657405598b8f966392f2ee1fdf818e0fb8b73297c2a23bb0c",
+      "pre_product_recovery_bytes": 2187,
+      "product_recovery_change": "Reviewed setup readiness, AI connection handoff, published Skill selection, credential rotation and product navigation; behavior covered by product browser and central admin tests."
     },
     {
       "name": "clients-populated",
@@ -191,14 +217,19 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "c3a3be6562e9e2f58e9cbfcdbf961bdbf638bd345fb9a718b486df51005456fa",
-      "bytes": 4215,
+      "sha256": "3a9b5f797b74f097975101112db7405f86b62614c7c668166a94a9d71695006a",
+      "bytes": 4732,
       "original_sha256": "57a9afa644d0576c73376174bad5c663efe58c9490697670a4c5925b21280795",
       "original_bytes": 4110,
       "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label",
       "pre_presence_bytes": 4096,
       "pre_presence_sha256": "1041ebda357b2c49560e9a894a8de702e622a2c7d67d2eb8e366c0bd4a4c4bb5",
-      "reviewed_presence_change": "Replace client online/offline with credential validity, identify credential status, and explain it does not prove a live connection. Reversing only these reviewed changes matches pre_presence_sha256."
+      "reviewed_presence_change": "Replace client online/offline with credential validity, identify credential status, and explain it does not prove a live connection. Reversing only these reviewed changes matches pre_presence_sha256.",
+      "pre_product_sha256": "c3a3be6562e9e2f58e9cbfcdbf961bdbf638bd345fb9a718b486df51005456fa",
+      "pre_product_bytes": 4215,
+      "pre_product_recovery_sha256": "4ec80c3ae95ee6ce8f4f34f3cdd7af7e2b03caa38f7145aefb2f3e84c105b4f4",
+      "pre_product_recovery_bytes": 4635,
+      "product_recovery_change": "Reviewed setup readiness, AI connection handoff, published Skill selection, credential rotation and product navigation; behavior covered by product browser and central admin tests."
     },
     {
       "name": "client-detail",
@@ -242,8 +273,8 @@
         [],
         "fixture-csrf-<>&\""
       ],
-      "sha256": "335f2ba7fa5cd0372fe1001e05a178a035fbc269764fa5d591332bdf83e4c3d6",
-      "bytes": 6806,
+      "sha256": "b55cf0083ef646f485deef3e422752e81dbd0fe133d3557bf23be36bd82d509c",
+      "bytes": 7029,
       "original_sha256": "e8468030bfaefe12378b3a9a7541e59679236f3888f7b6b0e69ef759cc5f8d66",
       "original_bytes": 6638,
       "reviewed_change": "i18n: data/labels excluded from translation; rename input has a translatable accessible label",
@@ -264,8 +295,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "ad42baf8b35e827a1ccd89a0f8e4f3e9bf4bdd1c6c67787b3505779f6eaf1229",
-      "bytes": 3284,
+      "sha256": "59e21717a2a06e07ab125f4348bf1ff7e92399efbfc88c33d27dd84471a4a74d",
+      "bytes": 3200,
       "presentation": {
         "configuredModes": {},
         "maxValidityDays": 3650
@@ -319,8 +350,8 @@
         },
         "fixture-csrf-<>&\""
       ],
-      "sha256": "994101b4e4b938762f863a888bb6dc126f0eccf675d0ed024dd730aaa8c5490e",
-      "bytes": 6877,
+      "sha256": "ef01b4d6eb79d546e439f3549a337d9c36df526e52ed8c808560fa7143b6eba6",
+      "bytes": 6852,
       "presentation": {
         "configuredModes": {
           "runner-fixture": null
@@ -364,14 +395,17 @@
           "distributable": true
         }
       ],
-      "sha256": "544a10f04c4921d4aa501454401eaf929c2fc74fb674e217e7c2f731d34fbba9",
-      "bytes": 13988,
+      "sha256": "8254c1c061edf768a72857fadebc14015d07fc2d97175b9315154607b5bb3f4d",
+      "bytes": 13841,
       "presentation": {
         "configuredMode": null,
         "reportedMode": "dedicated_user",
         "maxValidityDays": 3650,
         "dayMs": 86400000
-      }
+      },
+      "pre_enrollment_status_sha256": "f401b75e00befcb1f93eff48de92c0be60737ce471d9a2f271c768faad104c09",
+      "pre_enrollment_status_bytes": 13866,
+      "reviewed_change": "Enrollment detail only displays timing metadata; direct users to generate a new single-use code instead of asking them to save a code absent from this page. Consumed-state labels are separately verified in both locales."
     },
     {
       "name": "admin-document",
@@ -388,10 +422,17 @@
           }
         ]
       ],
-      "sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
-      "bytes": 90665,
+      "sha256": "0c4e8bea2f2b3f8c2da77d3880356e7cea434789e63e047d957d294f06c94b10",
+      "bytes": 131923,
       "pre_central_sha256": "175bfabf6a09c0ba9244fe11d64e1a16e13ffd2ad7dab821c11ed29d9c4118a0",
-      "pre_central_bytes": 88098
+      "pre_central_bytes": 88098,
+      "pre_product_sha256": "49495e423373153678165b13103aa11c2c9351576ab9391c3a92849ea4560b30",
+      "pre_product_bytes": 90665,
+      "pre_product_recovery_sha256": "35235a669d34c99a0fd1b737d0f58f38a5ac76ca5ba21e8137da291c119846b7",
+      "pre_product_recovery_bytes": 110743,
+      "product_recovery_change": "Reviewed explicit publication of staged updates for already enabled Skills. Product browser regressions confirm separate active/staged digests, publication only after review, no redundant action for the current version, and pause/resume behavior without screenshots.",
+      "pre_controller_split_sha256": "dad8609aa36e4856106dab38292d082bca4219bea2aaf18b702ff530f86b164a",
+      "pre_controller_split_bytes": 127441
     }
   ],
   "i18n_review": {
@@ -416,5 +457,197 @@
       "Central navigation entry on authenticated pages"
     ],
     "native_view_bodies_unchanged": true
+  },
+  "product_review": "Customer-facing MCP and Skill management with concise tool cards, responsive layout, and optional computer access.",
+  "browser_module_review": {
+    "source_base": "d7f5a181d3694ebab97e6481cc37d45a9f26a285",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "allowed_change": "Bundled central browser modules. Replacing the bundle with the prior source exactly reproduces every previous page hash and byte count.",
+    "native_view_bodies_unchanged": true
+  },
+  "browser_lifecycle_review": {
+    "source_base": "6fb6b5901b361b7417897a3cfffc40cd188a1181",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "allowed_change": "Fence detached central browser workflows and require operation-specific receipts. DOM regressions cover late OAuth responses after navigation, malformed write receipts, refresh-required no-replay behavior and unchanged MCP/Skill product flows; no screenshots.",
+    "non_script_markup_unchanged": true
+  },
+  "direct_connection_review": {
+    "source_base": "49ca444348aa26644f384232f0635dd8727f697e",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "allowed_change": "The saved service is rendered before OAuth handoff so a failed provider setup retains its visible recovery controls. The controller still owns lifecycle, shared admission and busy state. DOM regression verifies persisted service visibility and no automatic replay after failed handoff. No screenshots.",
+    "non_script_markup_unchanged": true
+  },
+  "mcp_skill_presentation_review": {
+    "source_base": "62239e1475b40c59bfd9235a57701fbef21631ba",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "clients-empty",
+      "clients-populated",
+      "admin-document"
+    ],
+    "allowed_change": "Rename customer navigation to MCP and Skill; show tool names and descriptions as plain cards with a count. Remove repeated sharing explanations and parameter/schema dumps. DOM regressions retain automatic connection, OAuth recovery, Skill installation and safe text rendering. No screenshots.",
+    "unrelated_markup_unchanged": true
+  },
+  "tool_layout_review": {
+    "source_base": "d8b877812873d86c8f937ced694b7cecb075d17f",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "allowed_change": "Scope wrapping to the MCP tool panel heading so 64-character names remain visible on mobile; preserve upstream tool title casing. Removing only the two CSS rules reproduces every prior hash. Browser checks measure actual header bounds without screenshots.",
+    "unrelated_markup_unchanged": true
+  },
+  "library_content_layout_review": {
+    "source_base": "8ee71c7ec4f926d32b09900d9d70ee9ee8de4fce",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "allowed_change": "Wrap user-provided text within the MCP/Skill product surface, including Skill names, descriptions, file paths and installation status. Preserve original casing of all library card names. Reverting only these two CSS changes reproduces every prior hash. Valid Skill fixtures and DOM dimensions cover mobile and desktop without screenshots.",
+    "unrelated_markup_unchanged": true
+  },
+  "runner_action_review": {
+    "source_base": "549d01c3e3887f0971d4281f8634a32515980441",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "allowed_change": "Runner delete/revoke form feedback and scoped browser workflow. Failed actions retain the console; duplicate POSTs are blocked and uncertain writes are never replayed. Reversing only the reviewed form markup and bundle reproduces all prior hashes.",
+    "unrelated_markup_unchanged": true
+  },
+  "controller_review": {
+    "source_base": "f20286f27d938881b590cba4d1def8d60b18804e",
+    "reviewed_change": "Separate locale, shared idempotent controls, page mounting and navigation from the composition entry. Preserve markup outside the script byte-for-byte. Public DOM and port-based regressions verify initial/dynamic controls, fresh navigation and Runner actions; no screenshots."
+  },
+  "runner_action_deadline_review": {
+    "source_base": "4811e50cd1f75b1151d40a5db2899c3673b810d0",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "reviewed_change": "Bound Runner delete/revoke response headers and body reads with one 25-second deadline. Stalled-response browser regressions retain session and page, restore controls, and never replay writes. Replacing only the inline bundle reproduces every prior hash and byte count. No screenshots.",
+    "non_script_markup_unchanged": true
+  },
+  "ui_copy_review": {
+    "source_base": "21a775ca291d04f68f4f1957fe3c03da51462a7d",
+    "reviewed_change": "Natural English and Chinese interface copy; remove duplicate warnings and developer terminology. Exact reviewed substitutions reproduce all 20 rendered cases. Installer commands, CSS blocks, protected user data, form actions and permission controls are unchanged. No screenshots.",
+    "rendered_cases": 20
+  },
+  "browser_error_copy_review": {
+    "source_base": "e1911d63260b6737d89766b94ed3f4be9c80d369",
+    "reviewed_change": "Localize native Skill file-read, UTF-8, network and malformed-response failures in English and Chinese. Browser regressions reject invalid files without requests and recover through reselection, preserving text. Uncertain writes still require refresh and are never replayed. All non-script markup remains byte-for-byte unchanged. No screenshots.",
+    "rendered_cases": 20
+  },
+  "navigation_deadline_review": {
+    "source_base": "e6cfe1755e8a467a5a3a0225ef2377c177ead489",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "reviewed_change": "Bound navigation response headers and body with one 25-second deadline. Full-page fallbacks preserve the latest queued destination without extra requests. Replacing only the inline bundle reproduces every prior hash and byte count. No screenshots.",
+    "non_script_markup_unchanged": true
+  },
+  "skill_upload_review": {
+    "source_base": "bfccf9278288e5674da23ad3a9be5f2abc9d4218",
+    "reviewed_change": "Raise Skill uploads to 256 files, 1 MiB per file and 8 MiB per canonical package. Form limits come from the server contract. Bilingual DOM tests cover actual folder selection, oversized selections, JSON escaping and retry after confirmed HTTP 413. No screenshots."
+  },
+  "oauth_reconnect_review": {
+    "source_base": "04c751c0ecda6d76fcb1a73a6cbce01278cb9d80",
+    "reviewed_change": "Reconnect reconciles saved profiles before beginning OAuth, recovers failed discovery without a manual refresh, and checks current enabled state and revision. Missing or invalid vault readiness gets a specific bilingual configuration error. Regression covers fresh revisions, failed reconciliation, concurrent pause and preserved account state. No screenshots."
+  },
+  "oauth_discovery_review": {
+    "source_base": "6cb19d4d4989c426deed4ac6f2c5262a06fdd2d8",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "reviewed_change": "Represent an undiscovered catalog and pending authorization as explicit states. Reuse the initial catalog read during interrupted OAuth recovery. Browser regressions preserve reconnect guidance and publication checks. Replacing only the inline bundle reproduces every prior hash and byte count. No screenshots.",
+    "non_script_markup_unchanged": true
+  },
+  "oauth_handoff_review": {
+    "source_base": "750a09d2e286c787b3f5e5878df549ec037bcdb4",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "reviewed_change": "User-triggered MCP discovery starts OAuth automatically when authorization is required. Reconnect preserves sign-in progress through internal refresh; callback recovery never starts a new authorization. Replacing only the browser bundle reproduces every prior render hash and byte count. No screenshots.",
+    "non_script_markup_unchanged": true
+  },
+  "client_lifecycle_review": {
+    "source_base": "acfa7fe5eeefa9004efbb878109401b8fb12b5df",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "clients-populated",
+      "client-detail",
+      "admin-document"
+    ],
+    "allowed_change": "Shared revoke/delete forms on MCP client list and details, including central-only clients, plus the reviewed deletion confirmation script. Other renderers remain unchanged."
+  },
+  "navigation_superseded_review": {
+    "source_base": "4238be3840a6da34b7c74acfa59401fe3e5d7a4e",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "reviewed_change": "Discard a superseded navigation response before mounting controllers or updating history. The final queued page owns its URL and content; existing failure and locale fallbacks are unchanged. Replacing only the inline bundle reproduces every prior hash and byte count. No screenshots.",
+    "non_script_markup_unchanged": true
+  },
+  "navigation_layout_review": {
+    "source_base": "a4213f95816afc2f5a13730da6f301f20e8594eb",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "admin-document"
+    ],
+    "reviewed_change": "Restore fragment focus and scrolling below the sticky header after soft navigation; move newly opened pages to their heading while preserving same-page refresh position. Let mounted pages use their content height instead of retaining the previous page height. Reset measured command-panel heights before resize. Reset the mobile enrollment action form flex basis. Describe OAuth recovery with direct next steps in both languages. Independently rebuilding and substituting only the prior bundle and style block reproduces every original hash and byte count.",
+    "other_markup_unchanged": true
+  },
+  "client_layout_review": {
+    "source_base": "b03254512e2feda19140c6572121716d45ba9cd9",
+    "changed_cases": [
+      "login",
+      "setup",
+      "secret",
+      "client-detail",
+      "admin-document"
+    ],
+    "reviewed_change": "Constrain client Runner selectors and long values to their table cells. Give recording preferences an independent single-column form. Replacing only the reviewed CSS and recording form class reproduces all 20 prior rendered hashes and byte counts.",
+    "other_markup_unchanged": true
   }
 }

@@ -1,14 +1,9 @@
 import type { ConsoleExecutionMode } from "../contracts/runner-admin.js";
 import { record } from "../values.js";
-import type { RunnerExecutionSnapshot } from "../contracts/runner-admin.js";
 
 export const DAY_MS = 24 * 60 * 60 * 1_000;
 
 export const MAX_VALIDITY_DAYS = 3_650;
-
-export function expectedConfiguredMode(snapshot: RunnerExecutionSnapshot): ConsoleExecutionMode | null {
-  return snapshot.configuredMode;
-}
 
 /**
  * Read the server-owned administrator choice. `metadata` and `public_info`

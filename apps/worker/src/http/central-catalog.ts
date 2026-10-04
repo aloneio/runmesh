@@ -3,12 +3,13 @@ import { catalogDigest, catalogObject, catalogRevision, toolName } from "../cont
 import { parseCatalogCommand, parseCatalogHead, parseCatalogSnapshot } from "../contracts/catalog-values.js";
 import type { WorkerEnv } from "../platform/env.js";
 import { admitCentralAdmin, cancelCentralBody, centralFailure as fail, centralHeaders as headers } from "./central-boundary.js";
+import { matchIdentifierPath } from "./path-identifiers.js";
 
-/** Bounded manual capture/review entry. It does not fetch an upstream server,
- * install tools, change grants or make a capability callable. */
+/** Bounded manual capture/review entry. Approval publishes the selected tools
+ * to the shared library; invocation still validates live identity and schemas. */
 export async function handleCentralCatalogAdmin(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
   if (env.CAPABILITIES === undefined) { cancelCentralBody(request); return fail("central_disabled", 404); }
-  const match = /^\/admin\/central\/catalogs\/([A-Za-z0-9][A-Za-z0-9._:-]{0,127})$/u.exec(url.pathname);
+  const match = matchIdentifierPath(/^\/admin\/central\/catalogs\/([^/]+)$/u, url.pathname);
   const requestedDigest = url.searchParams.get("snapshot") ?? undefined;
   if (match === null || [...url.searchParams.keys()].some(key => key !== "snapshot") || url.searchParams.getAll("snapshot").length > 1
     || (requestedDigest !== undefined && (!catalogDigest(requestedDigest) || request.method !== "GET"))) {
@@ -32,6 +33,8 @@ export async function handleCentralCatalogAdmin(request: Request, env: WorkerEnv
     ]);
     const result = catalogObject(response);
     if (result === undefined) return fail("central_result_unconfirmed", 503, "unknown");
+    if (result.state === "empty" && command === undefined && requestedDigest === undefined)
+      return Response.json({ state: "empty" }, { headers });
     if (result.state === "written" || result.state === "found") {
       const head = parseCatalogHead(result.head);
       if (head === undefined || head.profile_id !== profileId || (result.state === "written") !== (command !== undefined)) return fail("central_result_unconfirmed", 503, "unknown");
@@ -40,6 +43,8 @@ export async function handleCentralCatalogAdmin(request: Request, env: WorkerEnv
         if (command.action === "approve" && (head.approved_digest !== command.digest || head.observed_digest !== command.digest
           || JSON.stringify(head.approved_names) !== JSON.stringify(command.tool_names))) return fail("central_result_unconfirmed", 503, "unknown");
         if (command.action === "disable" && (head.approved_digest !== null || head.approved_names.length !== 0)) return fail("central_result_unconfirmed", 503, "unknown");
+        if (command.action === "publish" && (head.approved_digest !== head.observed_digest
+          || JSON.stringify(head.approved_names) !== JSON.stringify(command.tools.map(tool => tool.name)))) return fail("central_result_unconfirmed", 503, "unknown");
         return Response.json({ state: "written", head }, { headers });
       }
       const snapshot = parseCatalogSnapshot(result.snapshot);

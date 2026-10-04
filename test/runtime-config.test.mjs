@@ -11,7 +11,7 @@ test("release defaults require independent publication evidence and version alig
   for (const invalid of [{ ...state, version: "1.2.4" }, { ...state, state: "unknown" }, { ...state, manifest_sha256: null }, { ...state, release_commit: "main" }]) assert.throws(() => reviewedReleaseSource("1.2.3", invalid));
 });
 
-test("only two required secrets; API administration is optional; existing values are never requested", () => {
+test("native control and OAuth share the two existing secret bindings; values are never requested", () => {
   assert.deepEqual(REQUIRED_SECRET_NAMES, ["INTERNAL_CONTROL_SECRET", "RUNNER_TOKEN_PEPPER"]);
   assert.deepEqual(missingSecretNames([]), [...REQUIRED_SECRET_NAMES]);
   assert.deepEqual(missingSecretNames(REQUIRED_SECRET_NAMES.map(name => ({ name, type: "secret_text" }))), []);
@@ -52,6 +52,13 @@ test("setup creates only the missing secret; reports and argv contain no generat
   assert.ok(!visible.includes(fake.uploaded.INTERNAL_CONTROL_SECRET));
 });
 
+for (const environment of ["development", "production"]) test(environment + " setup requires no additional OAuth secret or upload", () => {
+  const fake = fakeCloud(REQUIRED_SECRET_NAMES);
+  const report = setupMissingSecrets({ environment, apply: true, invoke: fake.invoke });
+  assert.deepEqual(report.required, REQUIRED_SECRET_NAMES); assert.deepEqual(report.created, []);
+  assert.equal(fake.uploaded, undefined); assert.equal(fake.requests.length, 1);
+});
+
 test("failed inventory, concurrent changes and uncertain upload never trigger a retry", () => {
   assert.throws(() => setupMissingSecrets({ environment: "production", apply: true, invoke: () => ({ status: 1, stdout: "" }) }), /no secrets changed/);
   let read = 0;
@@ -61,11 +68,11 @@ test("failed inventory, concurrent changes and uncertain upload never trigger a 
   assert.equal(uploads, 1);
 });
 
-test("normal production has no required plaintext vars; production namespace and key identities remain", async () => {
+test("production enables central capabilities while retaining native namespace and key identities", async () => {
   const config = JSON.parse(await readFile(new URL("../apps/worker/wrangler.jsonc", import.meta.url), "utf8"));
   for (const env of [config, config.env.production]) {
-    assert.deepEqual(env.vars, {});
-    assert.deepEqual(env.durable_objects.bindings.map(b => b.class_name), ["RegistryDOv2", "RunnerDOv2"]);
+    assert.deepEqual(env.vars, { CENTRAL_SKILLS_ENABLED: "1", CENTRAL_DIRECT_TOOLS_ENABLED: "1", CENTRAL_GOVERNANCE_ENABLED: "1" });
+    assert.deepEqual(env.durable_objects.bindings.map(b => b.class_name), ["RegistryDOv2", "RunnerDOv2", "CapabilitiesDOv1"]);
     assert.equal(env.d1_databases[0].database_name, "runmesh-audit-history");
     assert.equal(env.version_metadata.binding, "CF_VERSION_METADATA");
   }

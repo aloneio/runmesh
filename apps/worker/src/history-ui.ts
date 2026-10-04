@@ -1,4 +1,5 @@
-import { HISTORY_DAYS, HISTORY_INTERVALS, HISTORY_LIMITS, type JobHistorySettings } from "./job-history-settings.js";
+import { HISTORY_DAYS, HISTORY_INTERVALS, type JobHistorySettings } from "@aloneio/runmesh-protocol";
+import { HISTORY_LIMITS } from "./job-history-settings.js";
 export type HistoryView = { scope: "none" | "jobs" | "live" | "audit" | "all"; limit: number; workspace?: string };
 export function historyView(url: URL): HistoryView | undefined {
   for (const k of ["history","limit","workspace_id"]) if (url.searchParams.getAll(k).length > 1) return undefined;
@@ -17,7 +18,7 @@ export function historyControls(runnerId: string, view: HistoryView): string {
   <label>Latest records<select name="limit">${HISTORY_LIMITS.map((n) => `<option${n === view.limit ? " selected" : ""}>${n}</option>`).join("")}</select></label>
   <label>Workspace for live Jobs<input name="workspace_id" value="${escape(view.workspace)}" maxlength="128"></label>
   <button class="button secondary">Load / Refresh</button>
-  <p class="muted">No background polling. Only the selected history and record count are queried. Log content is read only on explicit request.</p></form>`;
+  <p class="muted">Choose a history type and record count, then select Load / Refresh. Open a log to view its contents.</p></form>`;
 }
 export function historySettingsForm(runnerId: string, csrf: string, settings: JobHistorySettings | undefined): string {
   if (settings === undefined) return '<p class="muted">History settings unavailable.</p>';
@@ -27,9 +28,9 @@ export function historySettingsForm(runnerId: string, csrf: string, settings: Jo
   <input type="hidden" name="csrf_token" value="${escape(csrf)}">
   <label>Cloud recording<select name="mode">${[["off","Do not upload"],["batched","Batched"],["immediate","Immediate (higher usage)"]].map(([v,label]) => `<option value="${v}"${v === settings.mode ? " selected" : ""}>${label}</option>`).join("")}</select></label>
   <label>Upload interval<select name="interval_seconds">${HISTORY_INTERVALS.map((n) => option(n,settings.interval_seconds,`${n/60} min`)).join("")}</select></label>
-  <label>Cloud terminal history retention<select name="retention_days">${HISTORY_DAYS.map((n) => option(n,settings.retention_days,`${n} days`)).join("")}</select></label>
-  <label>Local terminal Jobs and logs<select name="local_retention_days">${option(0,settings.local_retention_days,"Existing count/size limits only")}${HISTORY_DAYS.map((n) => option(n,settings.local_retention_days,`${n} days`)).join("")}</select></label>
+  <label>Completed task retention in the cloud<select name="retention_days">${HISTORY_DAYS.map((n) => option(n,settings.retention_days,`${n} days`)).join("")}</select></label>
+  <label>Local completed tasks and logs<select name="local_retention_days">${option(0,settings.local_retention_days,"Keep current count and size limits")}${HISTORY_DAYS.map((n) => option(n,settings.local_retention_days,`${n} days`)).join("")}</select></label>
   <label><input type="checkbox" name="confirm_local_cleanup" value="true">I approve deleting expired terminal local Job metadata and logs; this cannot be undone.</label>
   <button class="button secondary">Save history settings</button>
-  <p class="muted">Running, queued, cancelling and uncertain recovered processes are never deleted. Local cleanup is disabled by default. Compatible Runners apply settings on reconnect. Cloud history keeps at most 500 recent jobs, subject to both age and count limits.</p></form></section>`;
+  <p class="muted">Cleanup applies to expired tasks confirmed as finished. Local cleanup is off by default; enable it to apply these settings when the Runner reconnects. Cloud history keeps up to 500 recent tasks within the selected retention period.</p></form></section>`;
 }

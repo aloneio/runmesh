@@ -18,6 +18,12 @@ export interface CapabilityMetadata {
   labels: Record<string, string>;
 }
 export type JobStatus = "queued" | "running" | "cancelling" | "cancelled" | "succeeded" | "failed" | "unknown" | "interrupted";
+export interface WorkspaceMetadata {
+  workspace_id: string;
+  persistence: "persistent" | "ephemeral";
+  revision?: string | undefined;
+  labels: Record<string, string>;
+}
 export interface JobMetadata {
   job_id: string;
   workspace_id: string;

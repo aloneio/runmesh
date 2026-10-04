@@ -1,12 +1,10 @@
 import { RemoteFault, type RemoteCallPorts, type RemoteOutcome, type RemoteSession } from "../../contracts/remote.js";
 import { parseRemoteCall, parseRemoteResult } from "../../contracts/remote-values.js";
 import { parseClientIdentity, type CapturedIdentity } from "../../contracts/identity.js";
-import { parseCapabilityGrant } from "../../contracts/capabilities.js";
 import { parseProfile } from "../../contracts/connector-values.js";
 import { catalogJson } from "../../contracts/catalog-json.js";
 import { parseCatalogHead } from "../../contracts/catalog-values.js";
 import { compatibleApprovedTools, verifiedCatalogSnapshot } from "../../domain/capabilities/catalog.js";
-import { grantAllows } from "../../domain/capabilities/grants.js";
 import { remoteDeadline } from "./remote-deadline.js";
 
 /** Execution has its own admission, independent of a previous directory read.
@@ -30,9 +28,6 @@ export function createRemoteCaller(ports: RemoteCallPorts) {
       };
       try {
         await liveIdentity();
-        const grant = parseCapabilityGrant(ports.grant(principal.client_id));
-        const target = { kind: "remote_tool" as const, resource_id: command.tool_id, version: command.version, connection_profile_id: command.profile_id };
-        if (grant === undefined || !grantAllows(grant, principal.client_id, target)) throw new RemoteFault("permission_denied");
         const profile = parseProfile(ports.profile(command.profile_id));
         if (profile === undefined || profile.profile_id !== command.profile_id || !profile.enabled) throw new RemoteFault("permission_denied");
         const head = parseCatalogHead(ports.repository.readHead(profile.profile_id));
@@ -47,12 +42,10 @@ export function createRemoteCaller(ports: RemoteCallPorts) {
         if (!ports.connector.validate(tool.definition.inputSchema, command.arguments)) throw new RemoteFault("invalid_arguments");
         const fence = async () => {
           await liveIdentity();
-          const latestGrant = parseCapabilityGrant(ports.grant(principal.client_id)), latestProfile = parseProfile(ports.profile(profile.profile_id));
-          if (latestGrant === undefined || latestProfile === undefined || !latestProfile.enabled
-            || !grantAllows(latestGrant, principal.client_id, target)) throw new RemoteFault("permission_denied");
-          if (latestGrant.revision !== grant.revision || latestProfile.revision !== profile.revision
+          const latestProfile = parseProfile(ports.profile(profile.profile_id));
+          if (latestProfile === undefined || !latestProfile.enabled) throw new RemoteFault("permission_denied");
+          if (latestProfile.revision !== profile.revision
             || latestProfile.endpoint !== profile.endpoint || latestProfile.connector_id !== profile.connector_id
-            || latestProfile.credential?.secret_version !== profile.credential?.secret_version
             || ports.repository.readHead(profile.profile_id)?.revision !== head.revision) throw new RemoteFault("stale_catalog");
           if (expired()) throw new RemoteFault("operation_timed_out");
         };
@@ -70,9 +63,14 @@ export function createRemoteCaller(ports: RemoteCallPorts) {
         if (result === undefined || (!result.isError && tool.definition.outputSchema !== undefined
           && !ports.connector.validate(tool.definition.outputSchema, result.structuredContent))) throw new RemoteFault("result_invalid");
         received = true;
+        // Cleanup awaits upstream I/O; revoke/disable may happen during that wait.
+        // Revalidate after cleanup before releasing the completed result.
+        const completedSession = session; session = undefined;
+        await completedSession.close().catch(() => undefined);
         // Revoked readers cannot receive data after an in-flight call. The effect
         // is still completed; withholding output never claims it was rolled back.
         try { await fence(); } catch { throw new RemoteFault("result_withheld"); }
+        if (!completedSession.current()) throw new RemoteFault("result_withheld");
         return { state: "completed", operation_state: "completed", result };
       } catch (error) {
         return { state: "failed", code: error instanceof RemoteFault ? error.code : "dependency_unavailable", operation_state: operationState() };

@@ -2,13 +2,13 @@
 
 [English](admin-guide.md) · [文档目录](README.zh-CN.md) · [升级指南](upgrading.zh-CN.md)
 
-将 Runmesh 控制面部署到 Cloudflare Workers，再注册执行任务的 Linux、macOS 或 Windows 主机。
+将 Runmesh 控制端部署到 Cloudflare Workers，连接 MCP、安装 Skill，再接入 AI 客户端。需要访问计算机时，注册执行任务的 Linux、macOS 或 Windows 主机。MCP 和 Skill 共享已提供于 0.1.6 候选版本与开发渠道。
 
 ## 准备部署
 
 准备 Cloudflare 账号、公网 HTTPS Worker 地址、至少 12 个字符的管理员密码，以及每台主机和工作区的最小权限方案。
 
-**0.1.4** 是当前已签名发布的正式版。生产环境从 `main` 上包含对应发行激活记录的已审核源码部署。安装包的可用情况见[发行状态](release-readiness.md)；测试后续改动时，使用独立的 `dev` Worker 和资源。
+当前已签名正式版与候选版本见[发行状态](release-readiness.md)。生产环境从 `main` 上包含对应发行激活记录的已审核源码部署。安装包的可用情况见[发行状态](release-readiness.md)；测试后续改动时，使用独立的 `dev` Worker 和资源。
 
 已激活的正式版本在 Cloudflare Workers Builds 中连接仓库并选择 `main`，仓库根目录构建命令设为 `npm run build`，部署命令为：
 
@@ -18,9 +18,17 @@ npm run deploy:worker -- --env production
 
 开发环境选择 `dev`，使用 `npm run deploy:worker -- --env development`。完整配置见[部署参考](deployment.md)。
 
-创建 `INTERNAL_CONTROL_SECRET` 和 `RUNNER_TOKEN_PEPPER` 两个独立的 Cloudflare 密钥，每个值至少来自 32 字节密码学安全随机数。升级时保留现有值，替换 pepper 会使已注册 Runner 凭据失效。初始化和可选代理/API 设置见[运行时配置](runtime-config.zh-CN.md)。
+运行 `npm run setup:secrets -- --env production` 检查所需的两个密钥，再加 `--apply` 创建缺失项。OAuth 加密自动使用现有 `INTERNAL_CONTROL_SECRET`。升级时保留两个值：替换 pepper 会使已注册 Runner 凭据失效，替换控制密钥则需重新连接 OAuth。初始化和可选代理/API 设置见[运行时配置](runtime-config.zh-CN.md)。
 
-在向不可信访问者开放前，打开管理页面完成密码设置，首个有效提交创建管理员。新 Runner 默认使用 `dedicated_user`，新 MCP 客户端从 `coding:read` 权限开始。
+在向不可信访问者开放前，打开管理页面完成密码设置，首个有效提交创建管理员。新 Runner 默认使用 `dedicated_user`。启用共享 MCP 和 Skill 的实例，新客户端默认选择「MCP 和 Skill」；选择计算机访问时会展开权限，初始勾选读取。
+
+## 连接 MCP 和安装 Skill
+
+打开「MCP 和 Skill」。在「MCP」中填写提供方地址，选择「无身份验证」或「OAuth」，点击「连接」。OAuth 会打开提供方的授权页面，返回后 Runmesh 自动加载工具。
+
+在「Skill」中选择 Skill 文件夹，或 `SKILL.md` 及配套文本文件，点击「安装 Skill」。已启用的 MCP 工具和 Skill 共享给实例中的所有有效 AI 客户端。
+
+通过「连接 AI 客户端」或「MCP 客户端」创建连接。使用共享内容时选择「MCP 和 Skill」，需要访问机器时选择「MCP、Skill 和计算机访问」，再将一次性地址复制到 AI 客户端的 MCP 设置中。日常连接、更新和暂停操作见[MCP 和 Skill 指南](central-administration.zh-CN.md)。
 
 ## 注册主机
 
@@ -42,7 +50,7 @@ Runner 授权从保存时生效，`0` 表示永久。注册码立即生效且只
 
 MCP 工作区和诊断元数据省略主机根路径。文件内容、命令输出仍可能含有路径或其他私有数据，分享前应检查。
 
-打开「MCP 客户端」，设置清晰标签与最小 scope，按需限制可用 Runner，再把一次性地址交给指定使用者。地址泄露时及时轮换或撤销。
+使用计算机的客户端，在「MCP 客户端」中选择「MCP、Skill 和计算机访问」并勾选所需权限。可在客户端详情页限定可用 Runner。将一次性地址交给指定使用者，地址泄露时及时轮换或撤销。
 
 ## 管理访问与移除主机
 

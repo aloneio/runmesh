@@ -55,6 +55,7 @@ export class RegistryLifecycle {
       lifecycle_id: validLifecycleId(runner.lifecycle_id) ? runner.lifecycle_id : null,
       runner_state: runner.state,
       credential_mutation_committed: credentialCommitted,
+      credential_mutation_kind: credentialCommitted ? credentialMutation.kind : null,
       mutation_committed: policyCommitted || credentialCommitted,
       desired_revision: runner.desired_policy_revision,
       desired_checksum: runner.desired_policy_checksum,
@@ -244,8 +245,8 @@ export class RegistryLifecycle {
     return row !== undefined && this.runnerRow(row.runner_id) !== undefined ? { runner_id: row.runner_id } : undefined;
   }
 
-  public async redeemRunnerEnrollment(verifier: string, tokenVerifier: string, publicInfo: RunnerPublicInfo, nowMs: number, mutationId?: string): Promise<{ runner_id: string } | undefined> {
-    if (!validVerifier(verifier) || !validVerifier(tokenVerifier) || !validRunnerPublicInfo(publicInfo) || !validOptionalMutationId(mutationId)) return undefined;
+  public async redeemRunnerEnrollment(verifier: string, tokenVerifier: string, publicInfo: RunnerPublicInfo, nowMs: number, mutationId: string): Promise<{ runner_id: string } | undefined> {
+    if (!validVerifier(verifier) || !validVerifier(tokenVerifier) || !validRunnerPublicInfo(publicInfo) || !validMutationId(mutationId)) return undefined;
     return this.storage.transactionSync(() => {
       const row = this.storage.sql.exec<EnrollmentRow>(
         "SELECT * FROM runner_enrollments WHERE verifier = ? AND used_at_ms IS NULL AND not_before_ms <= ? AND expires_at_ms > ?", verifier, nowMs, nowMs,
@@ -257,7 +258,6 @@ export class RegistryLifecycle {
         // current Runner lifecycle/credential generation proves the mutation
         // committed.  Never recover solely by mutation id: that would let a
         // caller replay an id against a different enrollment code.
-        if (mutationId === undefined) return undefined;
         const committed = this.consumedEnrollmentMutation(mutationId, verifier);
         if (committed === undefined) return undefined;
         const recorded = this.recordCredentialMutation(committed.runner_id, mutationId, "credential_enroll", nowMs);
@@ -267,35 +267,31 @@ export class RegistryLifecycle {
       }
       const runner = this.runnerRow(row.runner_id);
       if (runner === undefined) return undefined;
-      if (mutationId !== undefined) {
-        // Keep enrollment credential replacement on the same idempotent
-        // mutation ledger as rotate/revoke.  The WorkerDO fence is acquired
-        // before this transaction, so an attached old socket cannot race the
-        // credential change and continue serving protected RPCs.
-        const recorded = this.recordCredentialMutation(row.runner_id, mutationId, "credential_enroll", nowMs);
-        if (recorded === "conflict") return undefined;
-        if (recorded === "committed") {
-          // A replay with a different token verifier must not be reported as a
-          // successful enrollment: the original verifier is the credential
-          // that Registry committed and is the only one the Worker may return.
-          if (!constantTimeEqual(runner.token_verifier, tokenVerifier)) return undefined;
-          // A committed marker with no consumed row represents a partial
-          // transaction (the marker was written before the one-time row was
-          // marked used). Complete only that row; if a used row is
-          // already present, leave any newer pending enrollment untouched and
-          // return the idempotent result above instead.
-          const consumed = this.storage.sql.exec<{ enrollment_id: string }>(
-            "SELECT enrollment_id FROM runner_enrollments WHERE runner_id = ? AND verifier = ? AND used_at_ms IS NOT NULL ORDER BY used_at_ms DESC LIMIT 1", row.runner_id, verifier,
-          ).toArray()[0];
-          if (consumed !== undefined) return { runner_id: row.runner_id };
-          const anyConsumed = this.storage.sql.exec<{ enrollment_id: string }>(
-            "SELECT enrollment_id FROM runner_enrollments WHERE runner_id = ? AND used_at_ms IS NOT NULL LIMIT 1", row.runner_id,
-          ).toArray()[0];
-          if (anyConsumed !== undefined) return undefined;
-          this.storage.sql.exec("UPDATE runner_enrollments SET used_at_ms = ? WHERE enrollment_id = ? AND used_at_ms IS NULL", nowMs, row.enrollment_id);
-          this.storage.sql.exec("DELETE FROM runner_enrollments WHERE runner_id = ? AND used_at_ms IS NULL", row.runner_id);
-          return { runner_id: row.runner_id };
-        }
+      // Enrollment credential replacement uses the same idempotent mutation
+      // ledger as rotate/revoke, after the Worker has acquired the RunnerDO fence.
+      const recorded = this.recordCredentialMutation(row.runner_id, mutationId, "credential_enroll", nowMs);
+      if (recorded === "conflict") return undefined;
+      if (recorded === "committed") {
+        // A replay with a different token verifier must not be reported as a
+        // successful enrollment: the original verifier is the credential
+        // that Registry committed and is the only one the Worker may return.
+        if (!constantTimeEqual(runner.token_verifier, tokenVerifier)) return undefined;
+        // A committed marker with no consumed row represents a partial
+        // transaction (the marker was written before the one-time row was
+        // marked used). Complete only that row; if a used row is
+        // already present, leave any newer pending enrollment untouched and
+        // return the idempotent result above instead.
+        const consumed = this.storage.sql.exec<{ enrollment_id: string }>(
+          "SELECT enrollment_id FROM runner_enrollments WHERE runner_id = ? AND verifier = ? AND used_at_ms IS NOT NULL ORDER BY used_at_ms DESC LIMIT 1", row.runner_id, verifier,
+        ).toArray()[0];
+        if (consumed !== undefined) return { runner_id: row.runner_id };
+        const anyConsumed = this.storage.sql.exec<{ enrollment_id: string }>(
+          "SELECT enrollment_id FROM runner_enrollments WHERE runner_id = ? AND used_at_ms IS NOT NULL LIMIT 1", row.runner_id,
+        ).toArray()[0];
+        if (anyConsumed !== undefined) return undefined;
+        this.storage.sql.exec("UPDATE runner_enrollments SET used_at_ms = ? WHERE enrollment_id = ? AND used_at_ms IS NULL", nowMs, row.enrollment_id);
+        this.storage.sql.exec("DELETE FROM runner_enrollments WHERE runner_id = ? AND used_at_ms IS NULL", row.runner_id);
+        return { runner_id: row.runner_id };
       }
       const changed = this.storage.sql.exec("UPDATE runner_enrollments SET used_at_ms = ? WHERE enrollment_id = ? AND used_at_ms IS NULL AND not_before_ms <= ? AND expires_at_ms > ?", nowMs, row.enrollment_id, nowMs, nowMs);
       if (changed.rowsWritten !== 1) return undefined;

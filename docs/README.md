@@ -10,6 +10,9 @@ Choose a guide for the task you want to complete. Start with the user guide to c
 | --- | --- |
 | Connect an MCP client and run your first task | [User guide](user-guide.md) |
 | Deploy the control plane, enroll a machine and grant access | [Administrator guide](admin-guide.md) |
+| Connect MCPs, install Skills and share them with AI clients | [MCP and Skill guide](central-administration.md) |
+| Complete OAuth sign-in or reconnect an MCP account | [Account authorization](central-oauth.md) |
+| Prepare a Skill folder and update its contents | [Skill installation](central-skills.md) |
 | Update an existing installation and preserve its data | [Upgrade guide](upgrading.md) |
 | Resolve connection, permission, installation or Job problems | [Troubleshooting](troubleshooting.md) |
 | Check shipped changes versus upcoming improvements | [Release notes](release-notes.md) |
@@ -24,18 +27,13 @@ Read the [security model](security.md) and [permission model](permission-model.m
 
 ## Versions and features
 
-The latest published stable release is **0.1.5**, and these guides describe its features. To use a new feature, deploy the compatible Worker, install the appropriate Runner package and refresh the client's tool catalog.
+The latest published stable release is **0.1.5**. **0.1.6** is a release candidate available for development verification, including shared MCP connections and Skills. The relevant guides identify candidate features. To use new computer capabilities, deploy the compatible Worker, install the appropriate Runner package and refresh the client's tool catalog.
 
 Check [release status](release-readiness.md) for package availability and [build provenance](build-provenance.md) for your deployed Worker. [Development prereleases](dev-runner-prereleases.md) provide a separate testing channel.
 
 ## Advanced and maintainer references
 
-Development-only work: [central MCP and Skill foundations](central-capabilities-architecture.md)
-describes the new identity, grant and module boundaries. It is not an enabled
-upstream integration or Skill installation guide.
-Use the development guides for [versioned Skill content](central-skills.md),
-[central administration and governance](central-administration.md), and
-[rollout and remaining acceptance gates](central-rollout.md).
+The [central MCP and Skill architecture](central-capabilities-architecture.md) describes shared publication, client identity and module boundaries. Implementation references cover [administration](maintainers/central-administration.md), [HTTP transport](maintainers/central-remote-mcp.md), [OAuth](maintainers/central-oauth.md) and [versioned Skill storage](maintainers/central-skills.md). Maintainers use the [rollout ledger](central-rollout.md) to track release acceptance.
 
 For integrations, use the [MCP call contract](mcp-agent-call-contract.md), [tool examples](tool-examples.md), [catalog refresh guide](mcp-connector-refresh.md), [capability contracts](capability-contracts.md) and [workspace Context storage](context-storage.md). For maintenance, see [architecture](architecture.md), [verification](verification.md) and [main promotion policy](main-promotion-policy.md).
 

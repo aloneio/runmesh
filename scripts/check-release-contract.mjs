@@ -21,7 +21,7 @@ assert.equal(fixed, root.version, "installer must match source version");
 await checkStablePublication(fileURLToPath(new URL("../", import.meta.url)), root.version, undefined, false);
 assert.notEqual(root.version, "0.1.0-dev.3", "security fixes cannot reuse the immutable dev.3 identity");
 assert.equal(config.name, "runmesh", "top-level Wrangler config is the canonical production Worker");
-assert.deepEqual(config.vars, {}, "ordinary production deployment must not require plaintext runtime settings");
+assert.deepEqual(config.vars, { CENTRAL_SKILLS_ENABLED: "1", CENTRAL_DIRECT_TOOLS_ENABLED: "1", CENTRAL_GOVERNANCE_ENABLED: "1" }, "production ships the reviewed central capabilities without provider credentials in source");
 assert.equal(readFileSync(new URL("../apps/worker/src/generated-release.ts", import.meta.url), "utf8"), reviewedReleaseSource(root.version, state), "compiled activation must match reviewed publication evidence");
 assert.equal(config.env.production.name, config.name, "named production alias must target the same Worker");
 assert.deepEqual(config.env.production.vars, config.vars, "named production alias must mirror top-level production vars");
@@ -30,11 +30,12 @@ assert.deepEqual(config.env.development.vars, { RUNMESH_ENVIRONMENT: "developmen
   CENTRAL_SKILLS_ENABLED: "1", CENTRAL_DIRECT_TOOLS_ENABLED: "1", CENTRAL_GOVERNANCE_ENABLED: "1" });
 for (const environment of [config, config.env.production, config.env.development]) {
   if (environment.name === "runmesh") {
-    assert.deepEqual(environment.durable_objects.bindings.map((binding) => binding.class_name).sort(), ["RegistryDOv2", "RunnerDOv2"]);
+    assert.deepEqual(environment.durable_objects.bindings.map((binding) => binding.class_name).sort(), ["CapabilitiesDOv1", "RegistryDOv2", "RunnerDOv2"]);
     assert.equal(environment.main,"src/production.ts");
     assert.equal(environment.migrations,undefined,"production must retain declarative lifecycle after cutover");
     assert.deepEqual(environment.exports,{
       RegistryDOv2:{type:"durable-object",storage:"sqlite"},RunnerDOv2:{type:"durable-object",storage:"sqlite"},
+      CapabilitiesDOv1:{type:"durable-object",storage:"sqlite"},
       RegistryDO:{type:"durable-object",state:"deleted"},RunnerDO:{type:"durable-object",state:"deleted"},
     },"retirement is limited to the two approved old production classes");
   } else {

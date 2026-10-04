@@ -21,7 +21,7 @@ for (const revoked of [false, true]) for (const locale of ["en", "zh-CN"]) {
     const explanation = locale === "en" ? "Credential validity does not indicate a connected client or an online Runner." : "凭据有效不代表客户端已连接，也不代表 Runner 在线。";
     for (const page of pages.slice(1)) {
       const response = localizeHtmlResponse(new Request("https://worker.test/admin?lang=" + locale), new Response('<html lang="en"><body>' + page + '</body></html>', { headers: { "content-type": "text/html; charset=utf-8" } }));
-      expect(await response.text()).toContain(explanation);
+      expect(await response.text()).not.toContain(explanation);
     }
   });
 }

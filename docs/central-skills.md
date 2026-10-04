@@ -1,97 +1,65 @@
-# Central Skill content (development)
+# Install and update a Skill
 
-[简体中文](central-skills.zh-CN.md)
+[简体中文](central-skills.zh-CN.md) · [MCP and Skill guide](central-administration.md)
 
-W07 adds bounded, reviewed text bundles in the optional Capabilities owner. This
-is development code, not a production activation or evidence of real-host
-acceptance. No Runner installation, model loop, shell execution or permission
-grant occurs when importing or reading content.
+Install a Skill's instructions and supporting text files once, then make them available to your connected AI clients. This guide covers the 0.1.6 candidate and development channel.
 
-## Enable and import
+## Prepare the files
 
-Both the optional CAPABILITIES binding and CENTRAL_SKILLS_ENABLED=1 are required
-to expose the Skill HTTP/MCP surfaces. Absent flags leave the ten native tools
-and native calls independent of central storage. The development Wrangler
-environment now adds an independent CapabilitiesDOv1 SQLite namespace and enables
-Skills explicitly. Production remains disabled. GitLab dev pushes trigger the
-connected development build after the candidate passes the existing checks.
+Place `SKILL.md` at the root of the selected folder. Put references and other text files beneath that root:
 
-Discovery revalidates the client identity and current grant. Only clients with
-an enabled Skill rule see skill_list, skill_read and the resource template; empty,
-disabled or absent grants hide them. A failed visibility lookup preserves the
-native catalog. Cached calls still reach the live authorization checks, so hiding
-an entry never substitutes for access control. Native calls do not perform this
-central discovery lookup.
+```text
+project-review/
+  SKILL.md
+  references/
+    checklist.md
+```
 
-Open /admin/central with the existing administrator session. Skill mutations
-require same-origin requests and the current CSRF token. The JSON API is
-GET/POST /admin/central/skills/{skill_id}. The ID comes from the path, not the body.
+Start `SKILL.md` with a name and description, each on one line:
 
-1. Submit action preview with source, license and files (path/text objects).
-2. Inspect the returned bundle and digest. Preview writes nothing.
-3. Submit the same collection with action stage and expected_revision (0 to create).
-4. Read the staged bundle, then submit action activate, digest and expected_revision.
-5. Grant a client the exact skill ID and digest, directly or through a reusable
-   toolset. Import and activation never grant access by themselves.
+```markdown
+---
+name: project-review
+description: Review a project using its checklist and report actionable findings.
+---
 
-Include SKILL.md with a frontmatter name and description. This first importer
-supports single-line scalar values (including simple quotes); multiline YAML
-scalars, aliases, anchors and general YAML parsing are not supported. The name
-uses lowercase letters/digits and internal hyphens, up to 64 UTF-8 bytes.
-Frontmatter and bodies remain user-provided content. allowed-tools and capability
-declarations do not alter ACLs. Source/license metadata is supplied by the
-administrator; a digest verifies consistency, not authorship or trust.
+Read references/checklist.md, inspect the project, and summarize the findings.
+```
 
-Only text collections are accepted. Archives, links and executable installation
-are not implemented. Absolute/traversal paths, empty segments, Windows reserved
-names/streams, backslashes and case-folding collisions are rejected. A file
-object can contain only path and text. Limits: 32 files, 64 KiB per file, 256 KiB
-per canonical bundle, 512 KiB per admin request, 32 versions per Skill, 1,000
-Skills and 16 MiB total stored bundles. These are safety ceilings, not capacity
-measurements. Reaching retention limits requires an explicit future archival
-design; old approved versions are never silently deleted or overwritten.
+Names use lowercase letters, digits and internal hyphens, up to 64 UTF-8 bytes. Save all files as UTF-8 text. For a downloaded archive, extract it first and select the Skill folder containing `SKILL.md`. Select a folder to preserve nested paths; selecting individual files places them at the root.
 
-## Read, update and revoke
+## Install
 
-skill_list returns only authorized approved metadata, without loading bodies.
-The bounded response includes at most the client's 128 grant rules; arbitrary
-cursors are rejected rather than accepted without subject binding. skill_read
-takes skill_id, digest and path (default SKILL.md). Reuse the same digest for
-every attachment in a task.
+1. Open **MCP & Skill → Skill**.
+2. Select the whole **Skill folder**, or select `SKILL.md` and its supporting files through **Skill files**.
+3. Select **Install Skill**.
+4. Open **View files** on the installed card to check the content.
 
-MCP resources expose the same use cases at
-runmesh-skill://bundle/{skill_id}/{digest}/{path}. resources/list advertises
-SKILL.md; attachments are read on demand at their exact paths. Both surfaces
-revalidate the credential generation and grant before returning content. Unknown
-dependencies fail explicitly instead of returning an invented empty directory.
+The Skill becomes available to all active AI clients in the instance. In the client, refresh the Runmesh tool or resource list, then use `skill_list` to find it and `skill_read` to read its instructions and attachments. Clients that browse MCP resources can also open the Skill there.
 
-Updates create new immutable bundles. Activation changes the current head and
-approves that digest; old approved versions remain readable only with a matching
-grant. A rollback explicitly activates a retained digest with the current
-revision. Disable blocks all later reads for that Skill while retaining data.
-Grant revocation blocks later reads but cannot erase content already delivered
-to a client's context. Scripts are always returned as text.
+Skill files are delivered as text. An AI client follows the instructions through its available tools, with each tool using its own permissions. Review a Skill's source and content before sharing it.
 
-An optional runmesh.json text sidecar declares Runmesh-specific dependencies:
-schema_version: 1 and requiredCapabilities: an array of at most eight exact
-CapabilityTarget objects (kind, resource_id, version, plus connection_profile_id
-for remote_tool). This is a product extension, not standard Skill frontmatter.
-The sidecar participates in the immutable digest. Duplicates, extra fields and
-unsupported capability kinds are rejected. skill_list exposes only declarations.
-skill_read returns dependencies with configured, not_configured, not_authorized,
-disabled, incompatible or unavailable states; resources/read returns the same
-observations in content _meta under runmesh/dependencies. Unauthorized targets
-are not probed. Configuration is checked only against bounded stored metadata;
-configured does not prove supplier reachability or OAuth token validity. No
-network probe, recursive loading, installation or permission upgrade occurs.
-Native prerequisites remain content and are checked at execution; reading never
-selects a Runner. Calls always perform their own current admission checks.
+## Update, pause and resume
 
-## Verification boundary
+To update, select the new files with the same Skill name and select **Install Skill**. Review the displayed files, then select **Update Skill**. The new version becomes active for every client.
 
-Domain, SQLite and real local Worker/Registry/MCP entry tests exercise path
-rejection, preview without writes, revision conflicts, rollback, old attachments,
-revocation during reads, no-body metadata listing, two independent client
-credentials, resources/tool parity and feature-off zero central I/O. These are
-local fixtures, not two real AI products or public supplier acceptance. See
-[the rollout checklist](central-rollout.md) for remaining external gates.
+**Pause** stops subsequent reads and retains the files. To resume, select **View files → Enable Skill**. Content already read into a conversation remains in that conversation; begin a fresh conversation when the task should use only the new version.
+
+After an update, clients should call `skill_list` again and use the returned digest for both `SKILL.md` and its attachments. This keeps the task on one version of the Skill.
+
+## File and storage limits
+
+| Item | Limit |
+| --- | --- |
+| Files per Skill | 256 |
+| One file | 1 MiB |
+| Upload bundle, including encoded paths and metadata | 8 MiB |
+| Retained versions per Skill | 32 |
+| Skills per instance | 1,000 |
+| Stored Skill bundles per instance | 256 MiB |
+
+Sizes use UTF-8 bytes. Keep the selected folder focused on the Skill's instructions and references; leave out dependency directories, generated output and unrelated files. Use relative paths with forward slashes and distinct filenames, including when compared without case. When a storage limit is reached, existing content is retained and the panel reports the limit.
+
+If an upload needs correction, follow the panel's message, select the revised files and submit again. See [troubleshooting](troubleshooting.md) for common upload and update issues.
+
+API pagination, optional dependency metadata and version administration are documented in the [Skill reference](maintainers/central-skills.md).

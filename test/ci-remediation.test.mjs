@@ -17,8 +17,12 @@ function fixture() {
   const env = Object.fromEntries(AGGREGATE_JOBS.map(name => [name.replaceAll("-", "_").toUpperCase(), `\${{ needs.${name}.result }}`]));
   const gh = { on: { push: { branches: ["main", "dev"] }, pull_request: null, workflow_dispatch: null, workflow_call: null }, permissions: { contents: "read" }, jobs: {
     verify: { "runs-on": "ubuntu-latest", "timeout-minutes": 30, steps: [...CHECK_IDS.map(id => ({ run: checkCommand(id) })), { uses: UPLOAD_ACTION, if: "always()", with: { path: "ci-results/*.json\nci-results/*.xml\n", "if-no-files-found": "error" } }] },
-    "native-runner": { strategy: { matrix: { os: ["ubuntu-latest", "windows-latest", "macos-latest"] } }, steps: NATIVE_COMMANDS.map(run => ({ run })) },
-    "runner-lts": { strategy: { matrix: { node: ["22.23.2", "24.21.0"] } }, steps: LTS_COMMANDS.map(run => ({ run })) },
+    "native-runner": { "runs-on": "${{ matrix.os }}", strategy: { matrix: { os: ["ubuntu-latest", "windows-latest", "macos-latest"] } }, steps: NATIVE_COMMANDS.map(run => ({ run })) },
+    "runner-lts": { strategy: { matrix: { node: ["22.23.2", "24.21.0"] } }, steps: [
+      ...LTS_COMMANDS.slice(0, 3).map(run => ({ run })),
+      { uses: "actions/setup-node@" + "a".repeat(40), with: { "node-version": "${{ matrix.node }}" } },
+      ...LTS_COMMANDS.slice(3).map(run => ({ run })),
+    ] },
     browser: { steps: [{ run: "npm run browser:install" }, { run: "npm run test:browser" }] },
     "verify-all": { if: "always()", needs: [...AGGREGATE_JOBS], steps: [{ env, run: Object.keys(env).map(key => `test "$${key}" = success`).join(" && ") }] },
   } };
@@ -41,6 +45,11 @@ for (const [name, mutate] of Object.entries({
   "GitLab soft job": f => f.gl.verify.allow_failure = true,
   "GitLab dynamic soft job": f => f.gl.verify.allow_failure = "$SOFT_FAIL",
   "GitLab manual job": f => f.gl.verify.when = "manual",
+  "GitLab manual browser job": f => f.gl.browser.when = "manual",
+  "native job overrides critical shell": f => f.gh.jobs["native-runner"].defaults = { run: { shell: "bash {0} || true" } },
+  "LTS job overrides critical shell": f => f.gh.jobs["runner-lts"].defaults = { run: { shell: "bash {0} || true" } },
+  "browser job overrides critical shell": f => f.gh.jobs.browser.defaults = { run: { shell: "bash {0} || true" } },
+  "aggregate job overrides result-check shell": f => f.gh.jobs["verify-all"].defaults = { run: { shell: "bash {0} || true" } },
   "GitLab skipped MR": f => f.gl.verify.rules = [{ when: "never" }],
   "GitLab omitted schedule": f => f.gl.workflow.rules = f.gl.workflow.rules.filter(rule => !rule.if?.includes("schedule")),
   "removed workspace tests": f => f.pkg.scripts["test:unit"] = "npm run test:domain && npm run test:contracts",
@@ -54,7 +63,17 @@ for (const [name, mutate] of Object.entries({
   "removed browser dependency": f => f.gh.jobs["verify-all"].needs.pop(),
   "unconditional success aggregate": f => f.gh.jobs["verify-all"].steps[0].run = "true",
   "aggregate skips failures": f => f.gh.jobs["verify-all"].if = "success()",
+  "aggregate step skips failed dependencies": f => f.gh.jobs["verify-all"].steps[0].if = "success()",
+  "aggregate step masks failed dependencies": f => f.gh.jobs["verify-all"].steps[0]["continue-on-error"] = true,
+  "aggregate step overrides the result-check shell": f => f.gh.jobs["verify-all"].steps[0].shell = "bash {0} || true",
   "fewer native platforms": f => f.gh.jobs["native-runner"].strategy.matrix.os.pop(),
+  "excluded native platform": f => f.gh.jobs["native-runner"].strategy.matrix.exclude = [{ os: "windows-latest" }],
+  "excluded supported runtime": f => f.gh.jobs["runner-lts"].strategy.matrix.exclude = [{ node: "24.21.0" }],
+  "native matrix bound to one host": f => f.gh.jobs["native-runner"]["runs-on"] = "ubuntu-latest",
+  "LTS matrix bound to one version": f => f.gh.jobs["runner-lts"].steps[3].with["node-version"] = "22.23.2",
+  "LTS runtime setup skipped": f => f.gh.jobs["runner-lts"].steps[3].if = false,
+  "LTS runtime setup allows failure": f => f.gh.jobs["runner-lts"].steps[3]["continue-on-error"] = true,
+  "LTS runtime selected after tests": f => f.gh.jobs["runner-lts"].steps.push(f.gh.jobs["runner-lts"].steps.splice(3, 1)[0]),
   "browser optional": f => f.gh.jobs.browser.steps[1].if = "false",
   "native test optional": f => f.gh.jobs["native-runner"].steps[3].if = "false",
   "native soft failure": f => f.gh.jobs["native-runner"].steps[3]["continue-on-error"] = true,
@@ -72,6 +91,18 @@ test("CI02 all-comment YAML and duplicate keys cannot create executable proof", 
   assert.throws(() => parseCi("# name: check\n# jobs: {}\n"));
   assert.throws(() => parseCi("jobs: {}\njobs: {}\n"));
   assert.throws(() => parseCi("source: &x {}\ncopy: *x\n"));
+});
+
+test("CI02 native provenance regressions remain a mandatory cross-platform command", async () => {
+  const base = new URL("../", import.meta.url);
+  const read = path => readFile(new URL(path, base), "utf8");
+  const pkg = JSON.parse(await read("package.json")), github = parseCi(await read(".github/workflows/ci.yml"));
+  const gitlab = await read(".gitlab-ci.yml");
+  const command = "node --test test/build-provenance.test.mjs test/deployment-provenance-cli.test.mjs test/live-provenance.test.mjs";
+  assert.equal(github.jobs["native-runner"].steps.filter(step => step.run === command).length, 1);
+  validateCiWiring(pkg, stringify(github), gitlab);
+  github.jobs["native-runner"].steps = github.jobs["native-runner"].steps.filter(step => step.run !== command);
+  assert.throws(() => validateCiWiring(pkg, stringify(github), gitlab));
 });
 test("CI02 current old configuration is rejected rather than silently upgraded", async () => {
   const base = new URL("../", import.meta.url);
@@ -150,8 +181,8 @@ function navigationFixture() {
     if (fixture.evaluateError) { const error = fixture.evaluateError; fixture.evaluateError = undefined; throw error; }
     fixture.evaluatedLoaders.push(state.loaderId);
     return { result: { value: runInNewContext(params.expression, {
-      location: new URL(state.url), document: { readyState: state.readyState, documentElement: { lang: state.locale } },
-      window: { __runmeshDynamicNavigation: state.initialized, __runmeshLoading: state.loading },
+      location: new URL(state.url), document: { readyState: state.readyState, documentElement: { lang: state.locale,
+        getAttribute: name => name === "data-runmesh-navigation" ? state.initialized ? "ready" : null : String(state.loading) } },
     }) } };
   };
   return fixture;

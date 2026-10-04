@@ -3,6 +3,7 @@ import { FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS, FIXED_RELEASE_KEY_ID, FIXED_REL
 import { isRecord, isCurrentDevelopmentVersion, validatedCachedDevelopmentRelease } from "../domain/release-selection.js";
 import { releaseManifestProblem } from "../domain/release-manifest.js";
 import type { RunnerReleaseDescriptor, DevelopmentReleaseCache, CachedDevelopmentReleaseRecord } from "../contracts/runner-release.js";
+import { boundedJsonResponse } from "../bounded-json.js";
 
 export const DEV_RELEASE_DISCOVERY_URL = "https://api.github.com/repos/aloneio/runmesh/releases?per_page=20";
 const DEV_RELEASE_CACHE_KEY = new Request("https://runmeshdev.aloneiodev.workers.dev/__internal/verified-dev-runner-release-v1");
@@ -11,15 +12,13 @@ const DEV_RELEASE_RETRY_DELAY_MS = 75;
 const MAX_DISCOVERY_BYTES = 512 * 1024;
 const ALLOWED_RELEASE_ORIGINS = new Set<string>(FIXED_RELEASE_ALLOWED_REDIRECT_ORIGINS);
 
-export function defaultDevelopmentReleaseCache(): DevelopmentReleaseCache | undefined {
-  try {
-    if (typeof caches === "undefined") return undefined;
-    return (caches as unknown as { readonly default?: DevelopmentReleaseCache }).default;
-  } catch { return undefined; }
-}
-export async function readDevelopmentReleaseCache(cache: DevelopmentReleaseCache | undefined): Promise<CachedDevelopmentReleaseRecord | undefined> {
+export async function readDevelopmentReleaseCache(cache: DevelopmentReleaseCache | undefined, timeoutMs?: number): Promise<CachedDevelopmentReleaseRecord | undefined> {
   if (cache === undefined) return undefined;
-  try { const response = await cache.match(DEV_RELEASE_CACHE_KEY); return response === undefined || !response.ok ? undefined : validatedCachedDevelopmentRelease(await boundedJson(response)); } catch { return undefined; }
+  if (timeoutMs !== undefined) {
+    const receipt = await boundedJsonResponse(async signal => await cache.match(new Request(DEV_RELEASE_CACHE_KEY, { signal })) ?? new Response(null, { status: 404 }), timeoutMs, MAX_DISCOVERY_BYTES);
+    return validatedCachedDevelopmentRelease(receipt?.value);
+  }
+  try { const response = await cache.match(DEV_RELEASE_CACHE_KEY); return response === undefined ? undefined : validatedCachedDevelopmentRelease(await boundedJson(response)); } catch { return undefined; }
 }
 export async function writeDevelopmentReleaseCache(cache: DevelopmentReleaseCache | undefined, descriptor: RunnerReleaseDescriptor, verifiedAtMs: number): Promise<void> {
   if (cache === undefined) return;
@@ -37,7 +36,8 @@ export async function releaseFetch(input: string, init: Omit<RequestInit, "signa
     try {
       const response = await fetchImpl(input, { ...init, signal: AbortSignal.timeout(10_000) });
       if (!retryableReleaseResponse(response) || attempt + 1 === DEV_RELEASE_FETCH_ATTEMPTS) return response;
-      await response.body?.cancel().catch(() => undefined);
+      // Start disposal without letting a peer's cleanup promise own the retry budget.
+      void response.body?.cancel().catch(() => undefined);
     } catch (error) {
       lastError = error;
       if (attempt + 1 === DEV_RELEASE_FETCH_ATTEMPTS) throw error;
@@ -47,10 +47,11 @@ export async function releaseFetch(input: string, init: Omit<RequestInit, "signa
   throw lastError instanceof Error ? lastError : new Error("development release fetch failed");
 }
 
+/** Own the response body even when status or headers reject it before reading. */
 export async function boundedJson(response: Response): Promise<unknown> {
-  if (!response.ok) throw new Error("development release discovery failed");
+  if (!response.ok) { void response.body?.cancel().catch(() => undefined); throw new Error("development release discovery failed"); }
   const declared = response.headers.get("content-length");
-  if (declared !== null && (!/^\d+$/u.test(declared) || Number(declared) > MAX_DISCOVERY_BYTES)) throw new Error("development release discovery response is too large");
+  if (declared !== null && (!/^\d+$/u.test(declared) || Number(declared) > MAX_DISCOVERY_BYTES)) { void response.body?.cancel().catch(() => undefined); throw new Error("development release discovery response is too large"); }
   if (response.body === null) throw new Error("development release discovery response is empty");
   const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let bytes = 0;
   try {
@@ -59,7 +60,7 @@ export async function boundedJson(response: Response): Promise<unknown> {
       const part = await reader.read(); if (part.done) break;
       bytes += part.value.byteLength; if (bytes > MAX_DISCOVERY_BYTES) throw new Error("development release discovery response is too large"); chunks.push(part.value);
     }
-  } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
+  } finally { void reader.cancel().catch(() => undefined); reader.releaseLock(); }
   const body = new Uint8Array(bytes); let offset = 0; for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.byteLength; }
   return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
 }
@@ -70,13 +71,13 @@ async function boundedReleaseBytes(url: string, limit: number, fetchImpl: typeof
     if (current.protocol !== "https:" || !ALLOWED_RELEASE_ORIGINS.has(current.origin)) throw new Error("development release redirect origin is not trusted");
     const response = await releaseFetch(current.toString(), { method: "GET", redirect: "manual", cache: "no-store", credentials: "omit", headers: { accept: "application/octet-stream", "user-agent": "runmeshdev-release-verifier/1" } }, fetchImpl);
     if (response.status >= 300 && response.status < 400) {
-      const location = response.headers.get("location"); await response.body?.cancel().catch(() => undefined);
+      const location = response.headers.get("location"); void response.body?.cancel().catch(() => undefined);
       if (location === null || redirect === 4) throw new Error("development release redirect is invalid");
       current = new URL(location, current); continue;
     }
-    if (!response.ok || response.body === null) { await response.body?.cancel().catch(() => undefined); throw new Error("development release asset is unavailable"); }
+    if (!response.ok || response.body === null) { void response.body?.cancel().catch(() => undefined); throw new Error("development release asset is unavailable"); }
     const declared = response.headers.get("content-length");
-    if (declared !== null && (!/^\d+$/u.test(declared) || Number(declared) > limit)) { await response.body.cancel().catch(() => undefined); throw new Error("development release asset exceeds its size bound"); }
+    if (declared !== null && (!/^\d+$/u.test(declared) || Number(declared) > limit)) { void response.body.cancel().catch(() => undefined); throw new Error("development release asset exceeds its size bound"); }
     const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let bytes = 0;
     try {
       for (let index = 0; ; index++) {
@@ -84,7 +85,7 @@ async function boundedReleaseBytes(url: string, limit: number, fetchImpl: typeof
         const part = await reader.read(); if (part.done) break;
         bytes += part.value.byteLength; if (bytes > limit) throw new Error("development release asset exceeds its size bound"); chunks.push(part.value);
       }
-    } finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
+    } finally { void reader.cancel().catch(() => undefined); reader.releaseLock(); }
     if (bytes === 0) throw new Error("development release asset is empty");
     const result = new Uint8Array(bytes); let offset = 0; for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.byteLength; }
     return result;

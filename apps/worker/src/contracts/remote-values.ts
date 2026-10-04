@@ -1,4 +1,4 @@
-import { REMOTE_LIMITS, type RemoteCall, type RemoteEgressRule, type RemoteResult } from "./remote.js";
+import { REMOTE_LIMITS, type RemoteCall, type RemoteResult } from "./remote.js";
 import { catalogDigest, catalogJson, catalogKeys, catalogObject } from "./catalog-json.js";
 import { isCapabilityIdentifier } from "./capabilities.js";
 import { profileEndpoint } from "./connector-values.js";
@@ -23,24 +23,6 @@ export function publicMcpEndpoint(value: unknown): string | undefined {
     || /(?:^|\.)(?:localhost|local|internal|intranet|lan|home|test|invalid|example|onion)$/u.test(host)
     || /(?:^|\.)metadata(?:\.|$)/u.test(host)) return undefined;
   return endpoint;
-}
-
-export function parseRemoteEgress(raw: unknown): readonly RemoteEgressRule[] | undefined {
-  if (typeof raw !== "string" || raw.length > REMOTE_LIMITS.policy_bytes) return undefined;
-  try {
-    const item = catalogObject(JSON.parse(raw));
-    if (item === undefined || !catalogKeys(item, ["schema_version", "endpoints"]) || item.schema_version !== 1
-      || !Array.isArray(item.endpoints) || item.endpoints.length < 1 || item.endpoints.length > REMOTE_LIMITS.policies) return undefined;
-    const rules: RemoteEgressRule[] = [], seen = new Set<string>();
-    for (const value of item.endpoints) {
-      const rule = catalogObject(value), endpoint = publicMcpEndpoint(rule?.endpoint);
-      if (rule === undefined || !catalogKeys(rule, ["endpoint", "protocol", "session"]) || endpoint === undefined || endpoint !== rule.endpoint
-        || (rule.session !== undefined && (rule.session !== "ephemeral" || rule.protocol !== "2025-11-25"))
-        || (rule.protocol !== "2026-07-28" && rule.protocol !== "2025-11-25") || seen.has(endpoint)) return undefined;
-      seen.add(endpoint); rules.push({ endpoint, protocol: rule.protocol, ...(rule.session === undefined ? {} : { session: "ephemeral" as const }) });
-    }
-    return rules;
-  } catch { return undefined; }
 }
 
 /** Content stays data. Resource links are returned but never fetched. Transport

@@ -5,14 +5,15 @@ import { z } from "zod";
 import { createHttpRemoteConnector } from "../src/platform/connectors/remote-client.js";
 import { guardedRemoteResponse } from "../src/platform/connectors/remote-response.js";
 import { BoundedRemoteValidator } from "../src/platform/connectors/remote-validation.js";
+import { parseRemoteTool } from "../src/contracts/catalog-values.js";
 import { RemoteFault, type RemoteProtocol } from "../src/contracts/remote.js";
 import type { ConnectionProfile } from "../src/contracts/connectors.js";
 
 const endpoint = "https://remote.example.com/mcp";
 const profile: ConnectionProfile = { schema_version: 1, profile_id: "docs", connector_id: "fixture", endpoint,
-  owner: { kind: "instance_admin" }, enabled: true, revision: 2, credential: { secret_id: "docs", secret_version: 1 } };
+  owner: { kind: "instance_admin" }, enabled: true, revision: 2, authentication: "oauth", credential: null };
 const token = "synthetic-upstream-secret";
-const policy = (protocol: RemoteProtocol) => JSON.stringify({ schema_version: 1, endpoints: [{ endpoint, protocol }] });
+const policy = (protocol: RemoteProtocol) => [{ endpoint, protocol }];
 function upstream() {
   const invoked = vi.fn(async ({ value }: { value: number }) => ({ content: [{ type: "text" as const, text: String(value + 1) }], structuredContent: { value: value + 1 } }));
   const handler = createMcpHandler(() => {
@@ -33,7 +34,7 @@ function upstream() {
 
 it.each(["2025-11-25", "2026-07-28"] as const)("W05 official SDK exchanges real HTTP request objects in %s without Runner state", async protocol => {
   const remote = upstream(), dispatched = vi.fn(), authorize = vi.fn(async () => undefined);
-  const connector = createHttpRemoteConnector({ policy: () => policy(protocol), credential: async () => ({ kind: "bearer", token }), fetch: remote.http });
+  const connector = createHttpRemoteConnector({ rules: () => policy(protocol), credential: async () => ({ kind: "bearer", token }), fetch: remote.http });
   const session = await connector.open(profile, new AbortController().signal, dispatched, authorize);
   try {
     const tools = await session.listTools(); expect(tools.map(tool => tool.name)).toEqual(["increment"]);
@@ -66,9 +67,9 @@ it.each([
   await expect(guardedRemoteResponse(new Response(text, { headers: { "content-type": "application/json" } }), 1, new AbortController().signal, () => undefined)).rejects.toBeInstanceOf(RemoteFault);
 });
 
-it.each([401, 403, 429, 500, 302, 307])("W05 HTTP %s after a tool dispatch never retries or follows authentication redirects", async status => {
+it.each([401, 403, 429, 500, 302, 307])("W05 HTTP %s after a tool dispatch preserves the recovery category without retrying", async status => {
   const remote = upstream(), attempts = vi.fn(), sent = vi.fn();
-  const connector = createHttpRemoteConnector({ policy: () => policy("2026-07-28"), credential: async () => ({ kind: "bearer", token }),
+  const connector = createHttpRemoteConnector({ rules: () => policy("2026-07-28"), credential: async () => ({ kind: "bearer", token }),
     fetch: async (input, init) => {
       if (JSON.parse(String(init?.body)).method === "tools/call") { attempts(); return new Response("untrusted-error", { status, headers: { location: "https://other.example.com/private", "www-authenticate": "Bearer resource_metadata=\"https://other.example.com/oauth\"" } }); }
       return remote.http(input, init);
@@ -76,14 +77,41 @@ it.each([401, 403, 429, 500, 302, 307])("W05 HTTP %s after a tool dispatch never
   const session = await connector.open(profile, new AbortController().signal, sent, async () => undefined);
   try {
     const tools = await session.listTools();
-    await expect(session.callTool(tools[0]!, { value: 1 }, async () => undefined)).rejects.toBeInstanceOf(RemoteFault);
+    await expect(session.callTool(tools[0]!, { value: 1 }, async () => undefined)).rejects.toMatchObject({
+      code: status === 401 || status === 403 ? "authorization_required" : status === 429 || status >= 500 ? "upstream_unavailable" : "upstream_protocol_error",
+    });
     expect(attempts).toHaveBeenCalledOnce(); expect(sent).toHaveBeenCalledOnce();
   } finally { await session.close(); }
 });
 
+it.each([401, 403])("W05 HTTP %s during connection and discovery requests requires authorization without dispatch", async status => {
+  for (const protocol of ["2025-11-25", "2026-07-28"] as const) {
+    for (const method of [protocol === "2025-11-25" ? "initialize" : "server/discover", "tools/list"]) {
+      const remote = upstream(), attempts = vi.fn(), sent = vi.fn(), cancelled = vi.fn();
+      const connector = createHttpRemoteConnector({ rules: () => policy(protocol), credential: async () => ({ kind: "bearer", token }),
+        fetch: async (input, init) => {
+          if (JSON.parse(String(init?.body)).method === method) {
+            attempts(); return new Response(new ReadableStream({ cancel: cancelled }), { status,
+              headers: { "www-authenticate": 'Bearer resource_metadata="https://unvisited.example.com/oauth"' } });
+          }
+          return remote.http(input, init);
+        } });
+      if (method === "tools/list") {
+        const session = await connector.open(profile, new AbortController().signal, sent, async () => undefined);
+        try { await expect(session.listTools()).rejects.toMatchObject({ code: "authorization_required" }); }
+        finally { await session.close(); }
+      } else {
+        await expect(connector.open(profile, new AbortController().signal, sent, async () => undefined)).rejects.toMatchObject({ code: "authorization_required" });
+      }
+      expect(attempts).toHaveBeenCalledOnce(); expect(cancelled).toHaveBeenCalledOnce();
+      expect(sent).not.toHaveBeenCalled(); expect(remote.invoked).not.toHaveBeenCalled();
+    }
+  }
+});
+
 it("W05 final authorization refusal does not release a tool request to fetch", async () => {
   const remote = upstream(), sent = vi.fn();
-  const connector = createHttpRemoteConnector({ policy: () => policy("2026-07-28"), credential: async () => ({ kind: "bearer", token }), fetch: remote.http });
+  const connector = createHttpRemoteConnector({ rules: () => policy("2026-07-28"), credential: async () => ({ kind: "bearer", token }), fetch: remote.http });
   const session = await connector.open(profile, new AbortController().signal, sent, async () => undefined);
   try {
     const tools = await session.listTools();
@@ -97,7 +125,7 @@ it("W05 a session-bearing server is explicitly unsupported instead of sharing it
     const response = await remote.http(input, init), headers = new Headers(response.headers); headers.set("mcp-session-id", "private-session");
     return new Response(response.body, { status: response.status, headers });
   });
-  const connector = createHttpRemoteConnector({ policy: () => policy("2026-07-28"), credential: async () => ({ kind: "bearer", token }), fetch: http });
+  const connector = createHttpRemoteConnector({ rules: () => policy("2026-07-28"), credential: async () => ({ kind: "bearer", token }), fetch: http });
   await expect(connector.open(profile, new AbortController().signal, () => undefined, async () => undefined)).rejects.toMatchObject({ code: "upstream_protocol_error" });
   expect(http).toHaveBeenCalledOnce();
 });
@@ -122,7 +150,7 @@ it("W05 cancellation ends a stalled stream without waiting for its cancel promis
 
 it("W05 disallowed destinations never load credentials or make network requests", async () => {
   const secret = vi.fn(async () => ({ kind: "bearer" as const, token })), http = vi.fn();
-  const connector = createHttpRemoteConnector({ policy: () => policy("2026-07-28"), credential: secret, fetch: http });
+  const connector = createHttpRemoteConnector({ rules: () => policy("2026-07-28"), credential: secret, fetch: http });
   await expect(connector.open({ ...profile, endpoint: "https://other.example.com/mcp" }, new AbortController().signal, () => undefined, async () => undefined)).rejects.toMatchObject({ code: "egress_denied" });
   expect(secret).not.toHaveBeenCalled(); expect(http).not.toHaveBeenCalled();
 });
@@ -137,4 +165,56 @@ it("W05 JSON schema validation is non-coercing, bounded and supports approved lo
   expect(validator.validate(schema, { value: 2, extra: true })).toBe(false);
   expect(validator.validate({ type: "string", pattern: "(a+)+$" }, "a")).toBe(false);
   expect(validator.validate({ type: "object", $ref: "https://unvisited.example.com/schema" }, {})).toBe(false);
+});
+
+it.each(["allOf", "anyOf", "oneOf", "prefixItems"])("W05 published local references traverse %s schema arrays during validation", keyword => {
+  const schema = { type: "object", properties: { value: { $ref: "#/$defs/count/" + keyword + "/0" } }, required: ["value"],
+    $defs: { count: { [keyword]: [{ type: "integer", minimum: 1 }] } } };
+  expect(parseRemoteTool({ name: "count", inputSchema: schema, outputSchema: schema })).toBeDefined();
+  const validator = new BoundedRemoteValidator();
+  expect(validator.validate(schema, { value: 2 })).toBe(true);
+  expect(validator.validate(schema, { value: "2" })).toBe(false);
+  expect(validator.validate(schema, { value: 0 })).toBe(false);
+});
+
+it.each(["01", "1", "-", "length"])("W05 schema array references reject an invalid index %s", index => {
+  const schema = { type: "object", properties: { value: { $ref: "#/$defs/count/allOf/" + index } },
+    $defs: { count: { allOf: [{ type: "integer" }] } } };
+  expect(parseRemoteTool({ name: "count", inputSchema: schema })).toBeUndefined();
+  expect(new BoundedRemoteValidator().validate(schema, { value: 2 })).toBe(false);
+});
+
+it("W05 indexed local references retain the expanded schema work budget", () => {
+  const definitions: Record<string, object> = { layer0: { allOf: [{ type: "integer" }] } };
+  for (let i = 1; i <= 20; i++) {
+    const ref = { $ref: "#/$defs/layer" + (i - 1) + "/allOf/0" };
+    definitions["layer" + i] = { allOf: [{ allOf: [ref, ref] }] };
+  }
+  const schema = { type: "object", properties: { value: { $ref: "#/$defs/layer20/allOf/0" } }, $defs: definitions };
+  expect(parseRemoteTool({ name: "count", inputSchema: schema })).toBeDefined();
+  expect(new BoundedRemoteValidator().getValidator(schema)({ value: 2 })).toMatchObject({ valid: false, errorMessage: "remote_schema_budget" });
+});
+
+it.each(["2025-11-25", "2026-07-28"] as const)("W05 %s calls a discovered tool with indexed local input and output references once", async protocol => {
+  const remote = upstream(), dispatched = vi.fn(), authorize = vi.fn(async () => undefined);
+  const schema = { type: "object", properties: { value: { $ref: "#/$defs/count/allOf/0" } }, required: ["value"],
+    $defs: { count: { allOf: [{ type: "integer", minimum: 1 }] } } };
+  const connector = createHttpRemoteConnector({ rules: () => policy(protocol), credential: async () => ({ kind: "bearer", token }),
+    fetch: async (input, init) => {
+      const request = JSON.parse(String(init?.body));
+      const response = await remote.http(input, init);
+      if (request.method !== "tools/list") return response;
+      const reply = await (await guardedRemoteResponse(response, request.id, new AbortController().signal, () => undefined)).json() as { result: { tools: unknown[] } };
+      reply.result.tools = [{ name: "increment", inputSchema: schema, outputSchema: schema }];
+      return Response.json(reply);
+    } });
+  expect(connector.validate(schema, { value: 2 })).toBe(true);
+  expect(connector.validate(schema, { value: "2" })).toBe(false);
+  const session = await connector.open(profile, new AbortController().signal, dispatched, authorize);
+  try {
+    const tools = await session.listTools();
+    expect(tools).toHaveLength(1);
+    expect(await session.callTool(tools[0]!, { value: 2 }, authorize)).toMatchObject({ isError: false, structuredContent: { value: 3 } });
+    expect(remote.invoked).toHaveBeenCalledOnce(); expect(dispatched).toHaveBeenCalledOnce();
+  } finally { await session.close(); }
 });

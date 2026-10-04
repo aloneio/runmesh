@@ -3,7 +3,7 @@ import { centralNodeProblem } from "./central-architecture-policy.mjs";
 import { builtinModules } from "node:module";
 import { readdir, readFile, lstat } from "node:fs/promises";
 import { join, posix } from "node:path";
-import { SOURCE_ROOTS, SOURCE_PACKAGES, MISSING_GENERATED, RETIRED_PATTERNS, layer, dependencyProblem, specifierProblem } from "./architecture-policy.mjs";
+import { SOURCE_ROOTS, SOURCE_PACKAGES, MISSING_GENERATED, RETIRED_PATTERNS, layer, dependencyProblem, specifierProblem, boundaryNodeProblem } from "./architecture-policy.mjs";
 
 const builtin = new Set(builtinModules.map(name => name.replace(/^node:/u, "")));
 const extensions = /\.(?:[cm]?[jt]s|[jt]sx)$/u;
@@ -111,7 +111,7 @@ export async function checkArchitecture(root) {
     for (const [pattern, reason] of RETIRED_PATTERNS) if (pattern.test(text)) failures.push(`${file}: contains ${reason}`);
     let imports;
     try { imports = dependencies(text, file, node => {
-      const reason = centralNodeProblem(file, node);
+      const reason = centralNodeProblem(file, node) ?? boundaryNodeProblem(file, node);
       if (reason) failures.push(`${file}:${node.loc?.start.line ?? 1}: ${reason}`);
     }); }
     catch { failures.push(`${file}: source parsing failed`); continue; }

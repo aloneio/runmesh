@@ -25,6 +25,8 @@ export interface RunnerMutationState {
    * broader mutation_committed field also includes policy mutations, so
    * transport credential finalizers must use this narrower proof. */
   readonly credential_mutation_committed: boolean;
+  /** Exact current-generation operation; null without a committed receipt. */
+  readonly credential_mutation_kind: CredentialMutationKind | null;
   readonly mutation_committed: boolean;
   readonly desired_revision: number | null;
   readonly desired_checksum: string | null;
@@ -261,6 +263,8 @@ export const CLIENT_LAST_USED_WRITE_INTERVAL_MS = 60_000;
 export const AUTH_THROTTLE_FAILURE_THRESHOLD = 5;
 
 export const REGISTRY_HISTORY_CLEANUP_INTERVAL_MS = 15 * 60_000;
+
+export const RUNNER_ENROLLMENT_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 
 export const HISTORY_CLEANUP_DEADLINE_KEY = "maintenance.history-cleanup-deadline.v1";
 

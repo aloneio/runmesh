@@ -93,6 +93,7 @@ export async function enrollRunner(options: EnrollmentOptions): Promise<Enrollme
     throw new EnrollmentOutcomeUnknownError(`enrollment request failed; ${ENROLLMENT_OUTCOME_UNKNOWN_MESSAGE}`);
   }
   if (!response.ok) {
+    void response.body?.cancel().catch(() => undefined);
     // The Worker uses 503 for a fenced/possibly committed mutation.  Keep
     // ordinary client-side 4xx responses actionable without deleting a still
     // usable profile, but fail closed for every server/transport uncertainty.
@@ -183,7 +184,10 @@ async function readCappedJson(response: Response): Promise<unknown> {
   const declared = response.headers.get("content-length");
   if (declared !== null) {
     const declaredBytes = Number(declared);
-    if (!/^\d+$/.test(declared) || !Number.isSafeInteger(declaredBytes) || declaredBytes > MAX_ENROLLMENT_RESPONSE_BYTES) throw new Error("enrollment response is too large");
+    if (!/^\d+$/.test(declared) || !Number.isSafeInteger(declaredBytes) || declaredBytes > MAX_ENROLLMENT_RESPONSE_BYTES) {
+      void response.body?.cancel().catch(() => undefined);
+      throw new Error("enrollment response is too large");
+    }
   }
   if (response.body === null) return undefined;
   const reader = response.body.getReader();
@@ -196,7 +200,8 @@ async function readCappedJson(response: Response): Promise<unknown> {
       const chunk = next.value;
       total += chunk.byteLength;
       if (!Number.isSafeInteger(total) || total > MAX_ENROLLMENT_RESPONSE_BYTES) {
-        await reader.cancel();
+        // Cleanup must not delay reporting an uncertain credential mutation.
+        void reader.cancel().catch(() => undefined);
         throw new Error("enrollment response is too large");
       }
       chunks.push(chunk);

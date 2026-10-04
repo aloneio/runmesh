@@ -1,5 +1,6 @@
 import { safeContextResult } from "../src/mcp/server.js";
 import { ExternalAuditHistory } from "../src/external-audit.js";
+import { RegistryDO } from "../src/registry.js";
 import { env, runInDurableObject } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
 import worker from "../src/index.js";
@@ -342,23 +343,22 @@ it("saving an already enabled recording preference does not move the capture win
 
 it.each([false, true])("the production D1 audit path isolates history writes and failure=%s never undoes execution", async (outage) => {
   const f = await fixture();
-  await runInDurableObject(f.stub, (instance, state) => {
-    instance.setJobRecording("c", true, Date.now());
+  await runInDurableObject(f.stub, async (_instance, state) => {
     const db = outage ? { prepare: () => { throw new Error("daily rows_read limit exceeded"); } } as unknown as D1Database : (env as unknown as { HISTORY_DB: D1Database }).HISTORY_DB;
-    (instance as any).env = { ...(instance as any).env, RUNMESH_AUDIT_BACKEND: "d1", HISTORY_DB: db };
-    (instance as any).externalAudit = new ExternalAuditHistory(db, state.id.toString());
-  });
-  const result = await f.call("shell", { workspace_id: "w", command: "synthetic" });
-  expect(result.body.result.isError, JSON.stringify(result.body)).not.toBe(true);
-  expect(result.body.result.structuredContent.audit_status).toBe(outage ? "degraded" : "recorded");
-  expect(f.forwarded).toHaveLength(1);
-  await runInDurableObject(f.stub, async (instance, state) => {
+    const instance = new RegistryDO(state, { ...env, RUNMESH_AUDIT_BACKEND: "d1", HISTORY_DB: db });
+    await state.blockConcurrencyWhile(async () => {});
+    instance.setJobRecording("c", true, Date.now());
+    f.localEnv.REGISTRY = { idFromName: () => state.id, get: () => ({ fetch: (request: Request) => instance.fetch(request) }) } as unknown as typeof env.REGISTRY;
+    const result = await f.call("shell", { workspace_id: "w", command: "synthetic" });
+    expect(result.body.result.isError, JSON.stringify(result.body)).not.toBe(true);
+    expect(result.body.result.structuredContent.audit_status).toBe(outage ? "degraded" : "recorded");
+    expect(f.forwarded).toHaveLength(1);
     expect(state.storage.sql.exec("SELECT COUNT(*) AS n FROM mcp_calls").one().n).toBe(0);
-    expect(instance.getMcpClient("c")).toBeDefined();
+    expect(instance.listMcpClients().some(client => client.client_id === "c")).toBe(true);
     if (outage) expect(instance.featureHealthSnapshot().some((x) => x.feature === "mcp_audit")).toBe(true);
     else {
       const life = String(state.storage.sql.exec("SELECT lifecycle_id FROM runners WHERE runner_id='r'").one().lifecycle_id);
-      const rows = await (instance as any).externalAudit.list("r", life);
+      const rows = await new ExternalAuditHistory(db, state.id.toString()).list("r", life);
       expect(rows).toHaveLength(1);
       expect(rows[0].method).toBe("exec.run");
     }

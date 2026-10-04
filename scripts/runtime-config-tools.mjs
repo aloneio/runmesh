@@ -13,7 +13,7 @@ export function reviewedReleaseSource(version, state) {
   return `// Generated from reviewed release/release-state.json; activation is never inferred from a version number.\nexport const REVIEWED_RELEASE_VERSION = ${JSON.stringify(state.state === "released" ? version : "")};\n`;
 }
 
-export function missingSecretNames(list) {
+export function missingSecretNames(list, required = REQUIRED_SECRET_NAMES) {
   assert.ok(Array.isArray(list), "Cloudflare secret inventory is unavailable; refusing changes");
   const names = new Set();
   for (const item of list) {
@@ -21,7 +21,7 @@ export function missingSecretNames(list) {
     assert.ok(!names.has(item.name), "Duplicate secret inventory entry");
     names.add(item.name);
   }
-  return REQUIRED_SECRET_NAMES.filter((name) => !names.has(name));
+  return required.filter((name) => !names.has(name));
 }
 
 export function generateMissingSecrets(names) {

@@ -28,6 +28,33 @@ Each MCP client has an independently revocable secret URL and a persisted Runner
 
 Cross-table transactions remain within one Registry. The dependency gate checks application, domain and foundation imports in both CI systems, reporting runtime and type-inclusive cycles separately. See [module boundaries](architecture-remediation.md) for the role matrix and compatibility interfaces.
 
+Managed MCP account connections follow the same boundaries.
+`application/connectors/managed-oauth.ts` owns session authorization, state claims,
+refresh ordering and credential leases. Its repository and protocol ports live in
+`contracts/managed-oauth.ts`; the shared cipher port lives in
+`contracts/secret-storage.ts`. These contracts contain no SDK or SQLite types.
+`platform/connectors/managed-oauth.ts` adapts discovery, registration and tokens
+to the MCP SDK; `managed-oauth-http.ts` bounds public network requests;
+`managed-store.ts` owns synchronous SQLite persistence. Only `capabilities-do.ts`
+assembles them. Architecture fixtures reject SDK imports in these contracts,
+concrete adapter imports in use cases and storage/cipher ownership in the SDK adapter.
+Recoverable Worker credentials use one implementation in `platform/secret-storage.ts`.
+It owns key derivation, authenticated encryption and envelope validation through the
+shared contract, using the existing `INTERNAL_CONTROL_SECRET`. The source gate rejects
+a second Worker cipher implementation and feature dependencies in this adapter.
+Ciphertext and OAuth record limits derive from the same plaintext budget.
+The canonical serializer in `contracts/json.ts` has no feature dependencies;
+catalogs apply their own budgets through `catalog-json.ts`, while credential
+encryption uses the shared serializer directly. The shared ciphertext contract
+validates its envelope without importing catalog or capability contracts; key
+selection remains in the cipher adapter.
+`contracts/base64url.ts` supplies the common byte encoding for ciphertext, password
+verifiers and cursors. Password hashing and request signing retain their distinct
+one-way and integrity roles; Runner profiles use the existing local file-permission
+boundary and never receive the Worker's control secret.
+The control-panel renderer receives explicit display inputs and does not load
+deployment secrets or compute unused endpoint-allowlist readiness.
+
 ## Authorization and state changes
 
 Authenticate each entrypoint and reauthorize protected operations against current policy. Preserve distinct outcomes for a denied request, an unavailable dependency and malformed evidence. RunnerDO's final local policy check and socket send form one synchronous section. Queued Jobs reauthorize immediately before starting.

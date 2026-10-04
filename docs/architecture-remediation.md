@@ -6,11 +6,18 @@ and the [upgrade guide](upgrading.md) for component deployment.
 
 ## Ownership
 
+Runner Git baselines live in `git/baseline.ts`; `git-service.ts` resolves the
+workspace and owns the observation deadline. `git/execution.ts` owns process
+limits and request-scoped snapshot cleanup. Status and index flags share one
+isolated context; the final HEAD check creates a fresh context. No snapshot or
+I/O promise is cached across requests. Baseline regressions exercise these
+operation boundaries, including concurrent index changes and budget exhaustion.
+
 | Area | Owns | Dependencies to keep outside this layer |
 | --- | --- | --- |
 | Worker entry | Fetch/scheduled assembly and routing | Duplicated business decisions |
 | HTTP | Parsing, authentication, CSRF, response representation | Registry implementation/record types |
-| Application | Lifecycle/policy coordination and data projection | HTTP, views, concrete Registry facade |
+| Application | Lifecycle/policy coordination and data projection | HTTP, views, platform adapters, concrete Registry facade |
 | Contracts/domain | Stable types, ports, pure decisions | Platform or presentation implementations |
 | MCP server | SDK assembly, reauthorization, output verification | Registry or RunnerDO classes |
 | MCP results | Safe projection and bounded envelopes | Handlers, dispatch, audit, transport |
@@ -39,6 +46,17 @@ Keep credential verifiers in the authority layer. MCP workspace metadata omits
 configured absolute roots; requested file contents and command output may contain
 paths.
 
+Authentication receipts, enrollment and Runner queries receive operation ports
+from `contracts/control-plane-receipts.ts`. The platform adapter owns signed
+requests, bounded response reads and secret access; HTTP/entry composition supplies
+it to the use cases. Application modules cannot import platform modules, including
+their types. Policy readiness is validated once through its shared contract before
+MCP or administration dispatches an operation.
+
+Renderers import display shapes directly from `contracts/admin-views.ts`.
+`runnerDetailPage` takes one named input object so optional diagnostics, history
+and enrollment values cannot be confused by positional arguments.
+
 ## Native adapters and package declarations
 
 JobManager owns admission, maps, terminal persistence and cancellation/recovery
@@ -54,12 +72,37 @@ projection are separated from native execution, while their coordinators own the
 complete operation. `registry/schema.ts` supplies DDL and checks at synchronous
 Registry startup.
 
+`packages/protocol/src/job-history.ts` owns the history welcome-extension type,
+supported intervals and retention periods, and strict parsing for both peers.
+Worker history defaults and page sizes remain pure display/configuration values;
+Registry schema initialization owns the settings table. History storage validates
+retention against the same protocol values.
+
 ## Browser source and messages
 
-Edit browser behavior in `apps/worker/browser/admin-client.js`. Its bounded
-generator checks syntax and atomically writes the ignored Worker module during
-build, typecheck and Wrangler preparation. Nonce/no-nonce rendering hashes cover
-the original script bytes.
+`apps/worker/browser/admin-client.js` is the browser entry. Central product
+modules live in `browser/central/`: `controller.js` owns busy state, write
+admission and refresh snapshots; `api.js` owns HTTP receipts and pagination;
+`services.js` and `skills.js` own their separate workflows; `view.js` owns
+shared DOM primitives and `messages.js` owns central browser bilingual copy.
+Workflow dependencies are injected by the controller, never imported from peers.
+Architecture fixtures reject reverse imports and direct workflow network calls.
+
+The controller supplies the mounted-view check and navigation port. Removed views
+cannot consume late receipts, start follow-up requests or redirect the new page.
+Already dispatched server operations may still complete; a new view reads current
+state rather than replaying them. Receipts must match collection, item or mutation
+operations; an unconfirmed write requires refresh before another mutation.
+
+The navigation owner discards successful responses superseded by a queued
+destination before mounting controllers or updating history. Only the final
+destination changes the page and URL; full-navigation fallbacks also use it.
+
+The generator bundles only local static JavaScript modules into one CSP-compatible
+script. It bounds the input graph and output, rejects external/dynamic imports and
+path/symlink escapes, checks syntax without executing DOM code, and atomically
+writes the ignored Worker module during build, typecheck and Wrangler preparation.
+Nonce/no-nonce hashes cover the reviewed bundled bytes; DOM tests cover behavior.
 
 `i18n/messages.ts` owns stable bilingual IDs. `message()` accepts typed keys,
 locales and key-specific parameters, with compiler regressions for invalid calls.
@@ -150,15 +193,136 @@ I/O adapters explicitly; reviewed hash/path calculations and platform type ports
 have named exceptions. Patch contracts use `path-contracts.ts` while preserving
 the `PathSnapshot` compatibility export and resolved-path shape.
 
-Eight Job fault scenarios use the atomic-file port. Concurrency, enrollment-fence
+Job fault scenarios use the atomic-file port. Concurrency, enrollment-fence
 recovery and reporting-bridge tests use RegistryRequestPort with real DO storage,
 process execution, cancellation and observable-state assertions.
 
-Four Runtime tests retain private persistence-coordinator interception to preserve
-specific timing: fast-exit durability, late running snapshot, spawn-setup/cancellation
-and child-exit-before-signal. The architecture regression guards these names.
-Replace an exception only after demonstrating equivalent timing and assertions.
+The three Runtime coordination races use an internal JobPersistencePort: fast-exit
+durability, late running snapshot and spawn-setup/cancellation. The supplied
+enqueue callback retains JobManager serialization and identity checks while
+allowing pauses before enqueue or after coordinator completion. Production adds
+no asynchronous boundary; the internal constructor overload is stripped from
+package declarations. AR18 prohibits private persistence interception.
+
+Child-exit-before-signal uses the file/process ports, observes the actual child
+close event and checks durable terminal state and zero termination calls. The
+retention fixture loads valid persisted records, creates running/queued Jobs via
+public admission and verifies opt-in deletion while all four protected states
+survive. Neither migrated test reads or mutates JobManager's private maps.
+
+Registry route parsing lives in `registry/route-inputs.ts`; policy/workspace
+and merged audit response projections live in `registry/route-projections.ts`.
+These functions receive values and do not acquire state or perform I/O. RegistryDO
+continues to own signed-request admission and transaction/nonce ordering. Registry
+state owners retain identity and SQL authority; history coordinators recheck the
+current lifecycle through owner ports after external reads. Pure and route regressions
+preserve validation errors, status codes, projection fields and audit ordering.
+
+Registry authorization route adapters live in registry/routes/: admin owns
+administrator sessions and throttling, clients owns client settings and Runner
+selection, runner-policy owns managed workspace and policy responses, and
+identity owns MCP identity and authorization responses. Each receives its own
+explicit synchronous operation port; none imports RegistryDO, domain owners,
+storage, platform types or another adapter. RegistryDO wires these operations
+and admits requests before invoking a route. There is no await between an
+adapter's authority check and mutation. The architecture gate rejects reverse
+dependencies, asynchronous adapters, scheduling and ambient network access.
+
+Packed Job and external audit route regressions construct RegistryDO with the
+real environment contract and a D1 binding, injecting failures at D1 preparation.
+Transport tests use the Durable Object test callback's storage; schema tests call
+the schema module. These tests no longer replace private environment/history
+fields or read the private context. Archive opt-out, no-write cost checks,
+degraded history and Runner availability assertions remain in place. The gate
+also guards against reintroducing these retired private test seams.
 
 Keep JobManager and RunnerDO as state owners. Run generated-source, contract,
 dependency and fault regressions with the required package, native and browser
 checks; record passes, skips and unexecuted environments for the candidate SHA.
+
+## Native administration and browser composition
+
+Runner creation, token registration, credential rotation/revocation, enrollment
+regeneration, deletion and policy changes use contracts and explicit operation
+ports. These application use cases return typed outcomes and cannot import
+Worker transport, construct Request/Response, read platform globals or acquire
+time/randomness. HTTP modules compose operations and translate outcomes; signed
+RunnerDO mutation transport lives in platform/runner-mutations.ts. Mutation IDs,
+commit evidence, uncertain-write handling and finalization remain one workflow.
+
+Registry runner-lifecycle and runner-policy-read adapters are synchronous. Policy
+revision evidence is queried once through RegistryPolicy.policyMutationId.
+history-routes and transport-routes coordinate only their injected operations;
+they do not own database bindings or import state owners. D1 history failures stay
+explicit and never become a successful empty fallback. Request admission invokes
+the matching coordinator directly, without a yield between authority and a
+synchronous mutation. Alarm scheduling stays with RegistryDO.
+
+The browser entry composes locale, clipboard, page-controls, admin-pages and
+admin-navigation. Initial and mounted pages share one idempotent control binder.
+Navigation has one instance-owned pending/queued state; readiness is projected
+through data-runmesh-navigation and data-runmesh-navigation-busy on the document.
+Tests import modules normally and inspect DOM behavior rather than slicing source
+or depending on private window flags.
+
+Runtime fault tests capture children at JobProcessPort, intercept file operations
+at JobFilePort and load persisted recovery fixtures. Coordination timing uses
+the internal JobPersistencePort. Completion and retained-record operations have scoped
+ports in jobs/completion.ts and jobs/retention.ts; JobManager still exclusively
+owns all maps, publication and process retirement. Synthetic replacement races
+exercise those operations directly, with durable-write, event and retirement
+assertions. Public JobManager tests retain actual child, cancellation, late-output
+and restart coverage. Recovery concurrency tests now run across host platforms
+using controlled process inspections rather than private maps or process.kill
+interception; native process behavior remains covered separately.
+
+Environment discovery lives in apps/runner/src/environment.ts; Runtime and CLI
+consumers depend on environment-contracts.ts rather than the native probe class.
+The packaged ESM/CJS consumers verify structural environment substitution.
+domain/runner-handshake.ts owns pure hello negotiation, Registry receipt parsing
+and welcome projection. RunnerDO retains sockets, epochs, admission and pending
+RPC ownership, including replacement checks and synchronous dispatch ordering.
+Architecture fixtures reject reverse imports, ambient state and scheduling in
+these pure boundaries.
+
+RunnerConnection's public runtime and policy-store options use the exported
+ConnectionRuntimePort and ConnectionPolicyStorePort contracts. Supplied instances
+have one injection path; native runtime construction receives the synchronous
+job-event sink through an internal factory. Packaged ESM/CJS consumers verify
+structural substitution while the factory overload stays out of public declarations.
+Connection version, policy interruption, reconnect acknowledgement and history
+cadence tests observe hello/welcome, wire frames and injected ports. AR18 guards
+these migrated tests against private connection access. Socket identity, policy
+publication and asynchronous ordering remain owned by RunnerConnection.
+
+Development release discovery keeps only verified values and refresh outcome
+counters in the shared runtime. Cold concurrent requests own their timers and
+wait at most one refresh budget for a verified result. Failure cooldowns, lease
+replacement and the original hard cache expiry remain enforced without sharing
+I/O promises or multiplying upstream verification. Regression tests cover
+verification success/failure, bounded waiting, lease replacement and expiry.
+
+A53-01/A53-02: a failed refresh observes persisted verified data again, with a
+one-second deadline covering response headers and body. Recovery rechecks the
+original hard expiry and concurrent memory updates after I/O. The HTTP factory
+requires WorkerEnv and derives both storage and value-state scope from REGISTRY;
+there is no unscoped runtime fallback. Enrollment presentation receives the
+resolved descriptor from its caller. Authenticated HTTP tests exercise Runner
+detail, creation, rotation and enrollment alongside public downloads while one
+refresh is pending. The common bounded JSON reader lives in the Worker foundation
+layer, so distribution and platform adapters share it without reverse imports.
+
+Enrollment redemption requires a mutation identity in both Registry's facade
+and lifecycle implementation. Direct tests now exercise the production mutation
+ledger, including competing redemptions and recovery of the same operation after
+a lost response. The old test-only optional path is removed; credential changes
+remain within the existing synchronous transaction after the RunnerDO fence.
+
+Release recovery is part of the request-owned refresh. Its terminal failure is
+published only after the bounded persistent-cache reread finishes, so cold
+waiters can observe the recovered verified value. The HTTP Registry adapter
+bounds cache reads (headers and body) and writes to five seconds, cancels late
+responses and never retries an uncertain write. Distribution still owns
+descriptor validation, verification timestamps and the original hard expiry;
+no I/O promise crosses requests. Regressions cover delayed recovery, recovery
+timeout and successful discovery despite stalled Registry reads or writes.

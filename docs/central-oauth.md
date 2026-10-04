@@ -1,114 +1,48 @@
-# Central OAuth and ephemeral sessions (development)
+# Authorize an MCP account
 
-[简体中文](central-oauth.zh-CN.md)
+[简体中文](central-oauth.zh-CN.md) · [MCP and Skill guide](central-administration.md)
 
-**W06 implements administrator-mediated OAuth and operation-local legacy MCP
-sessions. Central bindings remain test-only; this is not a production activation.**
+Choose **OAuth** when an MCP uses an account at its provider. Runmesh opens the provider's sign-in and consent pages, then returns you to the control panel. This guide covers the 0.1.6 candidate and development channel.
 
-## Identity and supported providers
+## Connect
 
-An administrator explicitly delegates an upstream authorization to one Runmesh
-MCP client credential generation. Client IDs are not natural-person accounts.
-The binding includes the profile, client, secret generation, resource endpoint
-and approved OAuth configuration digest. Provider authorization, tool approval
-and client capability grants remain separate. OAuth grants no machine permission
-and requires no software installation on a Runner.
+1. Open **MCP & Skill → MCP**, enter the public HTTPS MCP URL, and choose **OAuth**.
+2. Select **Connect**. Runmesh saves the connection and opens the provider's authorization page.
+3. Sign in to the intended account, review the requested access, and complete consent.
+4. Wait for the Runmesh callback to finish. The panel then loads the MCP's tools and shows the connection.
 
-This batch supports pre-registered **public** OAuth clients, authorization code,
-PKCE S256, bearer access tokens, explicit resource indicators and RFC 9207 `iss`.
-Provider metadata must affirm the pinned issuer/endpoints, S256, response type
-`code`, grant `authorization_code`, client authentication `none`, and issuer
-response support. No dynamic registration, confidential client secret, automatic
-scope upgrade, sender-constrained token or arbitrary authentication redirect is
-implemented.
+The account connection is shared by the instance's active AI clients. Review which account and provider permissions you select with that shared use in mind.
 
-The optional `CENTRAL_OAUTH_POLICIES` is a JSON array, without tokens or secrets:
+Runmesh discovers the provider settings from the MCP endpoint. The provider needs OAuth metadata and either client metadata document support or dynamic client registration. Use the endpoint listed in the provider's MCP instructions.
 
-```json
-[{"profile_id":"docs","resource":"https://remote.example.com/mcp","issuer":"https://login.example.com","metadata_endpoint":"https://login.example.com/.well-known/oauth-authorization-server","authorization_endpoint":"https://login.example.com/authorize","token_endpoint":"https://login.example.com/token","oauth_client_id":"registered-public-client","scopes":["read"]}]
-```
+## Reauthorize
 
-Endpoints must be pinned public HTTPS URLs; authorization/token endpoints share
-the issuer origin. Metadata follows the RFC 8414 well-known location and cannot
-add destinations. Public-only Worker fetch routing remains a deployment
-requirement. Requests never follow redirects or forward incoming tokens/cookies.
+Select **Reconnect** on an enabled MCP card to start a fresh authorization flow. It opens the provider even if you authorized this MCP previously. An existing provider session may take you directly to consent or back to Runmesh.
 
-## Administration
+When you explicitly refresh tools and the connection needs sign-in, Runmesh opens authorization automatically. On returning from OAuth, tool discovery continues in the panel.
 
-Use the existing profile API with `action: "create_oauth"`, `connector_id` and
-`endpoint`; the profile ID comes from the path. New profiles are disabled with
-`credential: null`, not a fake bearer. Existing profiles cannot silently change
-authentication mode. Enable/disable does not require decryption keys.
+If you leave the flow before finishing, return to **MCP & Skill** and select **Reconnect** on the saved card. For a paused MCP, select **Enable** first.
 
-The following POST paths under `/admin/central/oauth/` require the existing
-administrator session, same-origin request and matching CSRF header/cookie:
+## Pause sharing or disconnect an account
 
-| Action | Body | Result |
-| --- | --- | --- |
-| `begin` | profile_id, principal: {client_id, secret_version}, expected_revision | Pending link and approved authorization URL |
-| `complete` | state, iss, exactly one of code/error | Single-use callback and safe link metadata |
-| `inspect` | Same selection shape; expected_revision may be 0 for reads | Metadata, never tokens/verifier |
-| `revoke` | Selection plus observed revision | Local revocation and removal of token ciphertext |
+- **Pause** stops access to the MCP's tools and keeps the account connection for later use.
+- **Disconnect account** removes the account connection from Runmesh. Use **Reconnect** to authorize again.
+- To remove the authorization at the provider too, open the provider's connected-app or authorized-app settings and revoke Runmesh there.
 
-There is no ADMIN_TOKEN or MCP-token fallback. Register exactly
-`RUNMESH_PUBLIC_ORIGIN + /admin/central/oauth/callback` with the provider. Open the
-returned URL in the administrator's browser. The fixed landing page removes
-query parameters from history before a same-origin protected POST; Strict cookie
-settings remain unchanged. Different sessions, issuer/configuration changes,
-expired state and callback reuse are rejected. Callback text is never inserted
-into HTML. Infrastructure logs may still see the initial callback URL: disable
-query-string logging there and do not log authorization URLs.
+These actions control future access. Check the provider for the result of any action already submitted before disconnecting.
 
-After linking and enabling, discovery accepts `principal` alongside
-`expected_revision` at `/admin/central/discovery/{profile_id}`. OAuth discovery
-requires it. The resulting catalog still needs approval and independent grants.
-W08 now provides the [administrator and reusable toolset console](central-administration.md);
-OAuth still requires the explicit provider policies and independent grants above.
+## Resolve a sign-in problem
 
-## Tokens, recovery and sessions
+| What you see | Next step |
+| --- | --- |
+| The sign-in page has not opened | Read the Runmesh message, check the MCP URL, and use **Reconnect** on the enabled card. |
+| Consent was cancelled or expired | Return to the panel and select **Reconnect** to start a fresh attempt. |
+| Authorization returned, but tools have not loaded | Select **Refresh tools**; complete sign-in if prompted. |
+| The provider shows an error | Record its error message and the time. Check the provider's session and status before starting a new authorization attempt. |
+| `oauth_configuration_required` | Ask the instance administrator to restore the existing deployment secret and then reconnect. |
 
-PKCE verifiers and tokens use independent-keyring AES-GCM encryption with
-owner/link/generation-bound contexts. SQLite stores only ciphertext and metadata.
-Temporary byte buffers are cleared; JavaScript strings cannot be reliably
-zeroized. This does not protect a compromised runtime. Retain old vault keys
-until links have refreshed or been replaced; no bulk OAuth rekey task is added.
+## Administrator notes
 
-Refresh is demand-driven near expiry. Concurrent requests share one refresh but
-each waiter rechecks its own authorization. A persisted claim precedes using a
-rotating refresh token. An unknown result or restarted in-flight claim requires
-reauthorization, never token replay. Scope expansion and reuse of the same refresh
-token are rejected. If the response omits a replacement refresh token, the new
-access token is usable but the old refresh token is discarded.
+OAuth credentials are encrypted through the shared secret-storage module using the existing `INTERNAL_CONTROL_SECRET`. Preserve that value during upgrades. Changing it requires connected MCP accounts to authorize again.
 
-Revocation is local: it fences future use and removes local token ciphertext.
-It does not revoke provider tokens, stop a dispatched effect or roll it back.
-Client credential revocation/generation changes block old links. Refresh, 401,
-and lost responses never automatically replay tool calls.
-
-Stateless MCP remains the default. A 2025-11-25 egress rule may explicitly add
-`"session":"ephemeral"`. The session ID is captured only during initialization,
-pinned to one operation/credential, and never exposed to the inbound client.
-Unexpected replacements fail closed. Each operation creates a fresh session:
-there is no persistence, pool, automatic reconnect, GET subscription or resume.
-Normal closure makes at most one bounded DELETE when still authorized. Failure,
-cancellation or revocation may prevent remote cleanup; local state is discarded.
-A session expiry does not replay the call; a new explicit operation starts fresh.
-
-## Budgets and verification boundary
-
-Limits: 64 provider policies, 64 pending flows, 1,000 links per owner, 4 active
-authorization operations, 16 KiB command bodies, 32 KiB provider responses,
-2 KiB tokens, five-minute callback TTL and five-second individual operations.
-Flow expiry cleanup is bounded and demand-driven, without alarms or polling.
-Session cleanup is bounded to one second. These are ceilings, not performance
-guarantees. Existing bearer/native paths do not acquire OAuth dependencies.
-
-No deployment binding or secret is installed automatically. Old Worker code does
-not understand OAuth-only profiles; do not reset state or grant machine access
-to disguise rollback incompatibility. Fixture tests do not prove real browser
-consent, public-provider interoperability, or production quotas.
-
-References: [RFC 9700](https://www.rfc-editor.org/rfc/rfc9700.html),
-[RFC 9207](https://www.rfc-editor.org/rfc/rfc9207.html),
-[MCP authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization),
-[MCP sessions](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports).
+Keep callback URLs, authorization codes and tokens out of shared logs and support attachments. For deployment setup, see [runtime configuration](runtime-config.md); for implementation details, see the [OAuth reference](maintainers/central-oauth.md).

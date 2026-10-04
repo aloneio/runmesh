@@ -3,8 +3,23 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { expect, it, vi } from "vitest";
 import { RPC_OPERATION_METHODS, RPC_OPERATION_CONTRACT, RunnerCapabilityReportSchema } from "@aloneio/runmesh-protocol";
-import { RunnerRuntime, EnvironmentInfoService } from "../src/runtime.js";
+import { RunnerRuntime } from "../src/runtime.js";
+import type { EnvironmentWorkspace } from "../src/environment-contracts.js";
+import { EnvironmentInfoService } from "../src/environment.js";
 import { discoverCapabilities } from "../src/connection.js";
+
+it("accepts a structural environment reader and supplies the current readable workspaces", async () => {
+  const root = await mkdtemp(join(tmpdir(), "environment-reader-"));
+  try {
+    const workspace = { workspaceId: "visible", rootPath: await realpath(root), readonly: true, shell: false };
+    const get = vi.fn(async (workspaces: readonly EnvironmentWorkspace[]) => ({ source: "injected", workspaces }));
+    const runtime = new RunnerRuntime({ config: { server: "ws://127.0.0.1", token: "test-token", runnerId: "test-runner", workspaces: [workspace] }, environment: { get } });
+    expect(await runtime.envInfo()).toMatchObject({ source: "injected", workspaces: [{ workspaceId: "visible" }] });
+    runtime.applyPolicy([{ ...workspace, workspaceId: "replacement" }]);
+    expect(await runtime.envInfo()).toMatchObject({ source: "injected", workspaces: [{ workspaceId: "replacement" }] });
+    expect(get).toHaveBeenCalledTimes(2);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 it("R01 advertises the same protected operations and returns bounded capability evidence without persistence", async () => {
   const root = await mkdtemp(join(tmpdir(), "capability-report-"));

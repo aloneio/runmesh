@@ -3,12 +3,13 @@ import { discardMcpBody as discardBody } from "./mcp-errors.js";
 import { MCP_SECRET_RE } from "./constants.js";
 import type { McpAuth } from "../mcp/server.js";
 import { mcpHttpError } from "./mcp-errors.js";
+import { primeMcpResponse } from "./mcp-response.js";
 import { readCappedBytes } from "../body.js";
 import { sha256Hex } from "../security.js";
 import { verifyMcpClient } from "../application/mcp-identity.js";
+import { mcpIdentityVerifier } from "../platform/control-plane-receipts.js";
 import type { WorkerEnv } from "../platform/env.js";
 import type { CentralRemote } from "../contracts/remote.js";
-import { parseRemoteEgress } from "../contracts/remote-values.js";
 import type { CentralSkills } from "../contracts/skills.js";
 import type { CentralDirectory, CentralDirectoryReader } from "../contracts/catalog.js";
 import type { CentralToolVisibility, CentralToolVisibilityReader } from "../contracts/capabilities.js";
@@ -19,25 +20,29 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
   const parts = url.pathname.split("/").filter(Boolean);
   const secret = parts[0];
   if (secret === undefined || !MCP_SECRET_RE.test(secret)) { await discardBody(request); return mcpHttpError(404, "Not found"); }
-  const verified = await verifyMcpClient(env, await sha256Hex(secret)).catch(async error => { await discardBody(request); throw error; });
+  const verified = await verifyMcpClient(mcpIdentityVerifier(env), await sha256Hex(secret)).catch(async error => { await discardBody(request); throw error; });
   if (verified === undefined) { await discardBody(request); return mcpHttpError(404, "Not found"); }
-  // createMcpHandler requires an exact /mcp route. Do not consume request.body
-  // before cloning it: the SDK must receive the original JSON-RPC stream.
+  // createMcpHandler requires an exact /mcp route. Forward the bounded body
+  // and its parsed value; protocol validation remains owned by the SDK.
   const rewritten = new URL(request.url);
   rewritten.pathname = "/mcp";
   rewritten.search = "";
   let forwarded: Request;
   let needsDirectory = false;
   let discoversProviders = false;
+  let calledTool: string | undefined;
+  let parsedBody: unknown;
   if (request.method === "POST") {
     const body = await readCappedBytes(request, MAX_MCP_BODY_BYTES);
     if (body === undefined) return mcpHttpError(413, "request body too large");
     try {
-      const rpc = JSON.parse(new TextDecoder().decode(body)) as { method?: string; params?: { name?: string } };
+      parsedBody = JSON.parse(new TextDecoder().decode(body)) as unknown;
+      const rpc = parsedBody as { method?: string; params?: { name?: string } } | null;
+      if (rpc?.method === "tools/call" && typeof rpc.params?.name === "string") calledTool = rpc.params.name;
       discoversProviders = rpc?.method === "tools/list" || rpc?.method === "resources/list" || rpc?.method === "resources/templates/list";
       needsDirectory = env.CENTRAL_DIRECT_TOOLS_ENABLED === "1" && (rpc?.method === "tools/list" || (rpc?.method === "tools/call" && typeof rpc.params?.name === "string" && (rpc.params.name.startsWith("rm_") || rpc.params.name === "remote_status")));
     } catch { /* The SDK owns malformed JSON-RPC responses. */ }
-    forwarded = new Request(rewritten, { method: request.method, headers: request.headers, body: body.buffer as ArrayBuffer });
+    forwarded = new Request(rewritten, { method: request.method, headers: request.headers, body: body.buffer as ArrayBuffer, signal: request.signal });
   } else {
     forwarded = new Request(rewritten, request);
   }
@@ -48,13 +53,14 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
     scopes: [...verified.scopes],
     extra: { client_label: verified.label, secret_version: verified.secret_version },
   };
-  const [{ createMcpHandler }, { createCodingMcpServer }] = await Promise.all([
+  const [{ createMcpHandler }, { createCodingMcpServer, MCP_TOOL_NAMES }] = await Promise.all([
     import("agents/mcp/server"),
     import("../mcp/server.js"),
   ]);
-  const remote = env.CAPABILITIES === undefined || parseRemoteEgress(env.CENTRAL_MCP_EGRESS) === undefined
+  const nativeCall = calledTool !== undefined && MCP_TOOL_NAMES.some(name => name === calledTool);
+  const remote = nativeCall || env.CAPABILITIES === undefined
     ? undefined : await import("../mcp/providers/remote.js");
-  const skills = env.CAPABILITIES !== undefined && env.CENTRAL_SKILLS_ENABLED === "1"
+  const skills = !nativeCall && env.CAPABILITIES !== undefined && env.CENTRAL_SKILLS_ENABLED === "1"
     ? await import("../mcp/providers/skills.js") : undefined;
   const direct = remote !== undefined && env.CENTRAL_DIRECT_TOOLS_ENABLED === "1" ? await import("../mcp/providers/remote/direct.js") : undefined;
   let visibility: CentralToolVisibility | undefined;
@@ -82,7 +88,14 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
   }
   const handler = createMcpHandler(
     () => {
-      const server = createCodingMcpServer(env, auth);
+      // Stateless calls need only their selected native tool. Discovery still
+      // publishes the full catalog; unknown calls retain an SDK tool handler
+      // even when central providers are disabled. This never caches auth.
+      const selectedNative = calledTool === undefined ? undefined : MCP_TOOL_NAMES.filter(name => name === calledTool);
+      const server = createCodingMcpServer(env, auth, {
+        hideNative: discoversProviders && verified.scopes.length === 0,
+        ...(selectedNative !== undefined && (selectedNative.length > 0 || publishRemote || publishSkills) ? { tools: selectedNative } : {}),
+      });
       if (skills !== undefined && publishSkills) {
         const principal = { client_id: verified.client_id, secret_version: verified.secret_version };
         const owner = () => env.CAPABILITIES!.get(env.CAPABILITIES!.idFromName("central")) as unknown as CentralSkills;
@@ -93,7 +106,7 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
         // Resolving the DO is lazy; server construction and native-only calls
         // do not touch central state or initialize any upstream connection.
         const owner = () => env.CAPABILITIES!.get(env.CAPABILITIES!.idFromName("central")) as unknown as CentralRemote;
-        remote.registerRemoteTools(server, { list: query => owner().listCatalog(principal, query), call: command => owner().callRemote(principal, command) });
+        remote.registerRemoteTools(server, { profiles: () => owner().listRemoteProfiles(principal), list: query => owner().listCatalog(principal, query), call: command => owner().callRemote(principal, command) });
         direct?.registerDirectRemoteTools(server, { list: query => owner().listCatalog(principal, query), call: command => owner().callRemote(principal, command) }, directory);
       }
       return server;
@@ -105,7 +118,7 @@ export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL
       legacy: "stateless",
     },
   );
-  const response = await handler.fetch(forwarded, { authInfo: auth });
+  const response = await primeMcpResponse(await handler.fetch(forwarded, { authInfo: auth, ...(parsedBody !== undefined ? { parsedBody } : {}) }), parsedBody);
   // The MCP credential is carried in the request path.  Do not allow an SDK
   // response (or an intermediary) to cache that path or disclose it through
   // a referrer when a client follows a response link.  These headers also

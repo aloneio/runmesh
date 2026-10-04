@@ -5,7 +5,7 @@ import { parseProfile } from "../../contracts/connector-values.js";
 import { compatibleApprovedTools, verifiedCatalogSnapshot } from "../../domain/capabilities/catalog.js";
 
 /** Advisory stored configuration only: no network, token refresh or execution.
- * Caller checks the exact grant before invoking this narrow reader. */
+ * Caller revalidates client identity; this reader reports shared publication status only. */
 export function createDependencyReader(ports: Pick<CatalogAdminPorts, "repository" | "profile" | "digest">) {
   return async (target: Extract<CapabilityTarget, { kind: "remote_tool" }>, signal: AbortSignal): Promise<SkillDependencyState> => {
     try {

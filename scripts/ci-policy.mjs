@@ -26,6 +26,7 @@ function requiredStep(steps, command) {
   const matches = steps.filter(step => step.run === command);
   assert.equal(matches.length, 1, `missing/duplicate executable step: ${command}`);
   const step = matches[0];
+  assert.equal(step.shell, undefined, "critical steps must use the reviewed default shell");
   assert.ok(step.if === undefined && step["continue-on-error"] === undefined && step["working-directory"] === undefined, `conditional/nonblocking critical step: ${command}`);
 }
 
@@ -45,24 +46,35 @@ export function validateCiWiring(pkg, githubText, gitlabText) {
   eq(order, CHECK_IDS.map(checkCommand), "mandatory checks reordered, removed, or duplicated");
   for (const name of AGGREGATE_JOBS) {
     hardJob(gh.jobs?.[name], name);
+    assert.equal(gh.jobs[name].defaults, undefined, "critical jobs must not override the reviewed shell or working directory");
     for (const step of gh.jobs[name].steps ?? []) {
       if (step.uses?.startsWith("actions/checkout@")) assert.equal(step.with?.["persist-credentials"], false, "checkout must not retain credentials");
       if (step.uses) assert.match(step.uses, /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_./-]+@[a-f0-9]{40}$/u, "actions must use full immutable commits");
     }
   }
-  eq(gh.jobs["native-runner"].strategy?.matrix?.os, ["ubuntu-latest", "windows-latest", "macos-latest"], "native platforms removed");
-  eq(gh.jobs["runner-lts"].strategy?.matrix?.node, ["22.23.2", "24.21.0"], "supported runtimes changed without contract update");
+  eq(gh.jobs["native-runner"].strategy?.matrix, { os: ["ubuntu-latest", "windows-latest", "macos-latest"] }, "native matrix must execute every declared platform");
+  assert.equal(gh.jobs["native-runner"]["runs-on"], "${{ matrix.os }}", "native jobs must run on their matrix platform");
+  eq(gh.jobs["runner-lts"].strategy?.matrix, { node: ["22.23.2", "24.21.0"] }, "LTS matrix must execute every declared runtime");
   for (const command of NATIVE_COMMANDS) requiredStep(gh.jobs["native-runner"].steps, command);
   for (const command of LTS_COMMANDS) requiredStep(gh.jobs["runner-lts"].steps, command);
+  const ltsSteps = gh.jobs["runner-lts"].steps;
+  const runtimeSetup = ltsSteps.filter(step => step.uses?.startsWith("actions/setup-node@")).at(-1);
+  assert.equal(runtimeSetup?.with?.["node-version"], "${{ matrix.node }}", "LTS tests must use the matrix runtime");
+  assert.ok(runtimeSetup.if === undefined && runtimeSetup["continue-on-error"] === undefined, "LTS runtime setup must be unconditional and blocking");
+  for (const command of ["npm run test --workspace=@aloneio/runmesh-runner", "node apps/runner/dist/runmesh.cjs --version"]) {
+    assert.ok(ltsSteps.indexOf(runtimeSetup) < ltsSteps.findIndex(step => step.run === command), "LTS runtime must be selected before its tests");
+  }
   requiredStep(gh.jobs.browser.steps, "npm run test:browser");
   requiredStep(gh.jobs.browser.steps, "npm run browser:install");
   const aggregate = gh.jobs["verify-all"];
+  assert.equal(aggregate?.defaults, undefined, "aggregate must not override the result-check shell or working directory");
   eq(aggregate?.needs, [...AGGREGATE_JOBS], "aggregate must include every required job");
   assert.equal(aggregate.if, "always()", "aggregate must run after failure or skip");
   assert.ok(!aggregate["continue-on-error"] && aggregate.steps?.length === 1);
   const env = Object.fromEntries(AGGREGATE_JOBS.map(name => [name.replaceAll("-", "_").toUpperCase(), `\${{ needs.${name}.result }}`]));
   eq(aggregate.steps[0].env, env, "aggregate must consume actual dependency results");
   assert.equal(aggregate.steps[0].run, Object.keys(env).map(key => `test "$${key}" = success`).join(" && "), "aggregate cannot mask failed dependencies");
+  requiredStep(aggregate.steps, aggregate.steps[0].run);
   const upload = verify.steps.find(s => s.uses === UPLOAD_ACTION);
   assert.ok(upload, "safe result artifact upload missing");
   eq(upload.with?.path, "ci-results/*.json\nci-results/*.xml\n", "artifact scope must remain a report-only whitelist");
@@ -71,7 +83,9 @@ export function validateCiWiring(pkg, githubText, gitlabText) {
 
   hardJob(gl.verify, "GitLab verify"); hardJob(gl.browser, "GitLab browser");
   rules(gl.workflow?.rules, "GitLab workflow"); rules(gl.verify.rules, "GitLab verify"); rules(gl.browser.rules, "GitLab browser");
-  assert.ok(gl.verify.extends === undefined && gl.verify.when === undefined, "unreviewed inherited/manual verification");
+  for (const name of ["verify", "browser"]) {
+    assert.ok(gl[name].extends === undefined && gl[name].when === undefined, "unreviewed inherited/manual " + name);
+  }
   eq(gl.verify.script, ["npm install --global npm@10.9.3", ...CHECK_IDS.map(checkCommand)], "GitLab must execute all checks without shell masking");
   assert.equal(gl.verify.timeout, "30m");
   eq(gl.verify.artifacts?.paths, ["ci-results/*.json", "ci-results/*.xml"], "GitLab artifact whitelist changed");

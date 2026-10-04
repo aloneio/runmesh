@@ -1,70 +1,52 @@
-# Central administration and governance (development)
+# Manage MCP and Skill
 
-[简体中文](central-administration.zh-CN.md)
+[简体中文](central-administration.zh-CN.md) · [Documentation](README.md)
 
-The /admin/central console reuses the existing browser session, CSRF, strict
-cookies and CSP. It provides explicit JSON operations for profile configuration,
-catalog discovery/review, OAuth linking, client grants, reusable toolsets, Skill
-preview/activation and metadata receipts. Read a record first; mutations require
-the observed revision. Failed or unknown mutations are never automatically retried.
+Connect MCP services and install Skills in **MCP & Skill** at `/admin/central`. Then add your AI client to use the shared collection. These features are available in the 0.1.6 candidate and development channel; see [release status](release-readiness.md) for the current production version.
 
-## Shared configuration and grants
+## Set up your collection
 
-GET /admin/central/profiles returns at most 50 credential-free profiles. Supply
-after from next_after to continue; every page independently checks the admin
-session. Profile secrets are write-only and the console clears submitted
-credential input. Existing profile/catalog/OAuth routes retain their contracts.
+| Task | Steps |
+| --- | --- |
+| Connect an MCP | Open **MCP**, enter its public HTTPS MCP URL, choose **No authentication** or **OAuth**, and select **Connect**. For OAuth, sign in on the provider's page and complete consent. |
+| Install a Skill | Open **Skill**, select its folder or `SKILL.md` and supporting text files, then select **Install Skill**. |
+| Connect an AI client | Select **Connect an AI client**, enter a label, choose the access type, and create the connection. Copy the one-time URL into your client's MCP settings. |
 
-GET/POST /admin/central/grants/{client_id} reads or replaces an exact grant. A
-write contains expected_revision, enabled and rules. Every rule references either
-an exact remote tool ID/version/profile or a Skill ID/digest. This does not modify
-native scopes. An unapproved or unavailable capability remains unusable.
+Connected MCP tools and installed Skills are shared with every active AI client in this instance. MCP connections load their tools automatically; the MCP card's **View tools** button shows the available tools. Skill cards provide **View files** to read the installed content.
 
-GET/POST /admin/central/toolsets/{toolset_id} manages up to 64 reusable templates.
-Use action replace, expected_revision, enabled and rules to save one; action
-apply, client_id, toolset_revision and expected_revision applies that exact
-template to one client's grant. Repeat only the assignment for another client.
-Both source and destination revisions are checked. Editing/disabling a template
-does not silently change existing grants: reapply explicitly, or revoke each
-client grant. A template is not a live inheritance mechanism.
+## Choose the AI client's access
 
-## Direct versus discovery directories
+**MCP and Skills** gives the client access to the shared collection. All processing for these connections goes through the control plane.
 
-CENTRAL_DIRECT_TOOLS_ENABLED=1 additionally publishes reviewed direct tools when
-the remote binding/egress configuration is valid. The stable rm_ aliases and
-exact JSON schemas come from saved, ACL-filtered snapshots. No live upstream
-discovery is performed by tools/list. Direct calls and remote_call share the
-same runtime validation, generation checks and invocation implementation.
-Discovery hides the generic remote entries and direct aliases when the current
-client has no enabled remote-tool grant. Skill entry points are independently
-filtered by Skill grants. A new directory request reflects revoked grants; a
-cached name still requires live authorization when called.
+Choose **MCP, Skills and computer access** when the client also needs files or commands on your machines. The computer-permission choices open automatically; select the required read, write and execution permissions. Read is selected initially. Register a Runner and configure its workspaces using the [administrator guide](admin-guide.md).
 
-Direct views are bounded to 8 profiles, 32 tools and 512 KiB. Larger views use
-remote_tools/remote_call. remote_status distinguishes capacity, denied and
-unavailable from an empty successful directory. Central failure preserves native
-registration. Native tool calls do not load the direct directory. Host cache
-refresh still requires real-host acceptance; a known old alias cannot bypass
-current authorization.
+See the [user guide](user-guide.md) for connecting the AI client and starting work.
 
-## Optional persistent governance
+## Change shared content
 
-CENTRAL_GOVERNANCE_ENABLED=1 adds owner-local persistent admission and receipts
-to remote calls. Existing in-flight concurrency limits remain. Before connecting,
-an authorized call must fit 30 requests/client/minute and 120/profile/minute.
-At most 2,048 admission keys are retained. Three successive upstream transport,
-protocol or uncertain-result failures start a 30-second profile cooldown.
-There is no queue, background polling or automatic replay. Disabling this flag
-returns to the earlier concurrency-only baseline; it does not delete tables.
+| Action | Result |
+| --- | --- |
+| MCP: **Refresh tools** | Loads the provider's current tools for all clients. If sign-in is needed, opens authorization. |
+| MCP: **Pause** / **Enable** | Stops or resumes shared access. Enabling refreshes the tool list. |
+| OAuth MCP: **Reconnect** | Starts a new authorization flow with the provider. |
+| OAuth MCP: **Disconnect account** | Removes the locally stored account connection. Select **Reconnect** to authorize again. |
+| Skill: install files with the same name | Shows the proposed replacement; select **Update Skill** to publish it to all clients. |
+| Skill: **Pause** | Stops future reads while keeping the installed files. |
+| Paused Skill: **View files → Enable Skill** | Resumes access to the displayed version. |
 
-Receipts contain only request ID, client ID, profile/tool/version, operation
-state, fixed error code and timestamp. They omit parameters, results, bodies,
-secrets and fake Runner IDs. A completed call stays completed if receipt storage
-fails; runmesh/receipt metadata reports audit_status unavailable. The store keeps
-at most 1,000 receipts, with a 24-hour read window and demand-driven expiry cleanup.
-GET /admin/central/receipts returns the latest 50 to an authenticated administrator.
-There is no client receipt lookup or replay API.
+After a change, refresh the Runmesh connection in AI clients that cache their tool or resource list. Previously delivered Skill content stays in an existing conversation; start a new conversation when you need to work exclusively with the updated content.
 
-These budgets are safety ceilings, not measured production throughput. The
-supported OAuth/session subset remains in [Central OAuth](central-oauth.md);
-[Skill content](central-skills.md) has separate opt-in and content limits.
+## Manage a client's connection
+
+Open **MCP Clients** to manage each client's credential. **Rotate** creates a replacement URL and invalidates the previous one. **Revoke** stops that client's access and retains its record. **Delete** also removes the client record. Review the displayed confirmation before deleting.
+
+Shared MCP and Skill access follows the instance's enabled collection. Computer access additionally follows the client's permissions, selected Runner and approved workspaces. Use separate instances for groups that need different shared collections.
+
+## Continue setup or resolve a problem
+
+- [Connect an MCP](central-remote-mcp.md): URL requirements, authentication and tool refresh.
+- [Authorize an MCP account](central-oauth.md): sign-in, reconnection and account management.
+- [Install and update a Skill](central-skills.md): folder layout, file sizes and updates.
+- [Troubleshooting](troubleshooting.md): the next step for a failed connection or upload.
+
+Implementation details: [administration reference](maintainers/central-administration.md).

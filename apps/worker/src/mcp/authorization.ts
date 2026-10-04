@@ -1,4 +1,5 @@
 import type { ActivePolicyReadiness } from "./contracts.js";
+import { appliedPolicyIdentity } from "../contracts/runner-selection.js";
 import { fail } from "./results/envelope.js";
 import { isRecord } from "./results/primitives.js";
 import { isSafeIdentifier } from "../security.js";
@@ -25,19 +26,12 @@ export async function policyReadiness(env: McpRequestEnv, runnerId: string): Pro
   if (!readiness.ok) return { ok: false, error: readiness };
   if (!isRecord(readiness.value)) return { ok: false, error: fail("authorization_response_invalid", "Policy readiness returned an invalid response.", "Ask the operator to check the control plane; no operation was dispatched.", "not_started") };
   const value = readiness.value;
-  const desiredRevision = typeof value.desired_revision === "number" && Number.isSafeInteger(value.desired_revision) && value.desired_revision > 0 ? value.desired_revision : undefined;
-  const desiredChecksum = typeof value.desired_checksum === "string" && /^[a-f0-9]{64}$/u.test(value.desired_checksum) ? value.desired_checksum : undefined;
-  const appliedRevision = typeof value.applied_revision === "number" && Number.isSafeInteger(value.applied_revision) && value.applied_revision > 0 ? value.applied_revision : undefined;
-  const activeChecksum = typeof value.active_checksum === "string" && /^[a-f0-9]{64}$/u.test(value.active_checksum) ? value.active_checksum : undefined;
-  const reportedRevision = typeof value.runner_reported_policy_revision === "number" && Number.isSafeInteger(value.runner_reported_policy_revision) && value.runner_reported_policy_revision > 0 ? value.runner_reported_policy_revision : undefined;
-  const reportedChecksum = typeof value.runner_reported_policy_checksum === "string" && /^[a-f0-9]{64}$/u.test(value.runner_reported_policy_checksum) ? value.runner_reported_policy_checksum : undefined;
+  const policy = appliedPolicyIdentity(value);
   const connectionEpoch = typeof value.connection_epoch === "number" && Number.isSafeInteger(value.connection_epoch) && value.connection_epoch >= 0 ? value.connection_epoch : undefined;
   const credentialVersion = typeof value.credential_version === "number" && Number.isSafeInteger(value.credential_version) && value.credential_version >= 0 ? value.credential_version : undefined;
   const lifecycleId = typeof value.lifecycle_id === "string" && safeLifecycleId(value.lifecycle_id) ? value.lifecycle_id : undefined;
   const sessionId = typeof value.session_id === "string" && safeJobIdentifier(value.session_id) !== undefined ? value.session_id : undefined;
-  const triad = desiredRevision !== undefined && appliedRevision !== undefined && reportedRevision !== undefined && desiredChecksum !== undefined && activeChecksum !== undefined && reportedChecksum !== undefined
-    && desiredRevision === appliedRevision && reportedRevision === appliedRevision && desiredChecksum === activeChecksum && reportedChecksum === activeChecksum;
-  if (value.ok !== true || desiredRevision === undefined || desiredChecksum === undefined || appliedRevision === undefined || activeChecksum === undefined || reportedRevision === undefined || reportedChecksum === undefined || connectionEpoch === undefined || credentialVersion === undefined || lifecycleId === undefined || sessionId === undefined || !triad) {
+  if (policy === undefined || connectionEpoch === undefined || credentialVersion === undefined || lifecycleId === undefined || sessionId === undefined) {
     const code = value.code === "stale_policy" ? "stale_policy" : "policy_pending";
     return { ok: false, error: fail(code, "The selected runner has no trusted active policy.", "Wait for the runner to reconnect and apply the latest control-plane policy.") };
   }
@@ -46,12 +40,12 @@ export async function policyReadiness(env: McpRequestEnv, runnerId: string): Pro
     value: {
       ok: true,
       policy_status: "applied",
-      desired_revision: desiredRevision,
-      desired_checksum: desiredChecksum,
-      applied_revision: appliedRevision,
-      active_checksum: activeChecksum,
-      runner_reported_policy_revision: reportedRevision,
-      runner_reported_policy_checksum: reportedChecksum,
+      desired_revision: policy.applied_revision,
+      desired_checksum: policy.active_checksum,
+      applied_revision: policy.applied_revision,
+      active_checksum: policy.active_checksum,
+      runner_reported_policy_revision: policy.applied_revision,
+      runner_reported_policy_checksum: policy.active_checksum,
       connection_epoch: connectionEpoch,
       credential_version: credentialVersion,
       lifecycle_id: lifecycleId,

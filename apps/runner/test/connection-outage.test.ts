@@ -5,16 +5,16 @@ import { RunnerConnection, RunnerAuthenticationError, RunnerServiceUnavailableEr
 import { serviceReconnectDelayMs, retryAfterDelayMs } from "../src/backoff.js";
 import type { ConnectionRuntimePort, ConnectionPolicyStorePort, ConnectionTransportFactory } from "../src/connection/ports.js";
 
-function dependencies(createSocket?: ConnectionTransportFactory) {
+function dependencies() {
   const runtime: ConnectionRuntimePort = { initialize: async () => {}, applyPolicy: () => {}, dispatch: async () => undefined,
     configureJobRetention: () => {}, cleanupJobs: async () => {}, needsHistoryReconciliation: () => false,
     syncJobs: async () => [], syncWorkspaceMetadata: () => [], jobs: { list: () => [] } };
   const policyStore: ConnectionPolicyStorePort = { load: async () => undefined, activate: async () => {} };
-  return {runtime, policyStore, ...(createSocket === undefined ? {} : {createSocket})};
+  return {runtime, policyStore};
 }
 function runner(sleep: (ms: number) => Promise<void>, server = "ws://127.0.0.1:1", createSocket?: ConnectionTransportFactory) {
   return new RunnerConnection({ config: { runnerId: "outage-runner", server, token: "synthetic-token", workspaces: [] },
-    sleep, random: () => 0 }, dependencies(createSocket));
+    sleep, random: () => 0, ...dependencies() }, createSocket === undefined ? {} : { createSocket });
 }
 
 describe("availability-aware connection recovery", () => {
@@ -97,7 +97,7 @@ it("stop interrupts a long service cooldown instead of waiting for its timer", a
   const log = vi.spyOn(console, "error").mockImplementation(() => {});
   const connect = vi.fn(() => { throw new RunnerServiceUnavailableError("service unavailable", 900000); });
   const connection = new RunnerConnection({ config: { runnerId: "stop-runner", server: "ws://127.0.0.1:1", token: "synthetic", workspaces: [] },
-    random: () => 0 }, dependencies(connect));
+    random: () => 0, ...dependencies() }, { createSocket: connect });
   try {
     const running = connection.start(); await vi.advanceTimersByTimeAsync(0);
     expect(vi.getTimerCount()).toBe(1); connection.stop(); await running;

@@ -37,9 +37,9 @@ async function fixture(statuses: string[] = ["succeeded"]) {
   return { open, saveHistory, stub, paths, runnerFetch, setReady: () => { ready = true; }, failSnapshot: () => { unavailable = true; } };
 }
 
-it("reads the correct dashboard response and counts active jobs outside the recent 20 records", async () => {
+it.each(["/admin", "/admin?history=1"])("reads the same dashboard and counts active jobs outside the recent 20 records at %s", async (path) => {
   const f = await fixture([...Array<string>(25).fill("running"), ...Array<string>(25).fill("succeeded")]);
-  const response = await f.open("/admin?history=1"); const text = await response.text();
+  const response = await f.open(path); const text = await response.text();
   expect(response.status).toBe(200); expect(response.headers.get("cache-control")).toBe("no-store");
   expect(text).toContain('Active shell jobs</span><strong class="metric-value">25</strong>');
   expect(text).toContain('href="/admin/runners/jobs-runner/jobs/job-49"');
@@ -59,6 +59,7 @@ it("shows recent jobs of all lifecycle states instead of filtering only running"
 it("does not query job snapshots on unrelated top-level pages", async () => {
   const f = await fixture(); expect((await f.open("/admin/settings")).status).toBe(200);
   expect(f.paths).not.toContain("/dashboard"); expect(f.paths.some((path) => path.includes("/jobs"))).toBe(false); expect(f.runnerFetch).not.toHaveBeenCalled();
+  expect(f.paths).not.toContain("/auth/clients"); expect(f.paths).not.toContain("/runners");
 });
 
 it("authenticates job pages before reading metadata or contacting the Runner", async () => {
@@ -89,6 +90,9 @@ it("does not render an unavailable dashboard as zero active jobs or empty histor
   expect(text).toContain('Active shell jobs</span><strong class="metric-value">—</strong>');
   expect(text).toContain('<p class="empty">Job metadata is temporarily unavailable.</p>');
   expect(text).not.toContain('<p class="empty">No recent jobs.</p>');
+  expect(response.status).toBe(200);
+  expect(text).toContain('href="/admin/runners/jobs-runner"');
+  expect(f.paths.filter(path => path === "/runners")).toHaveLength(1);
 });
 
 it("keeps a failed Runner history query distinct from a successfully loaded empty list", async () => {
@@ -109,14 +113,14 @@ it.each(["/admin?history=1", "/admin/runners/jobs-runner?history=jobs&limit=20",
 });
 
 
-it("opening dashboard and Runner details performs no Job or audit reads until requested", async () => {
+it("opening Runner details performs no Job or audit reads until requested", async () => {
   const f = await fixture();
-  for (const path of ["/admin","/admin/runners/jobs-runner"]) {
+  for (const path of ["/admin/runners/jobs-runner"]) {
     f.paths.length=0;
     const response = await f.open(path), body=await response.text();
     expect(response.status).toBe(200);
     expect(f.paths.some((p) => p === "/dashboard" || /\/(jobs|mcp-calls)(?:\?|$)/.test(p))).toBe(false);
-    expect(body.includes("Jobs not loaded.")).toBe(true);
+    expect(body).toContain("Jobs not loaded.");
   }
 });
 

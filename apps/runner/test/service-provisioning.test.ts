@@ -1,11 +1,96 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createServiceProvisioner, renderService, serviceLayout, serviceProfilePath } from "../src/service.js";
+import { createServiceManager, createServiceProvisioner, renderService, serviceLayout, serviceProfilePath } from "../src/service.js";
 
 describe("native service package ownership", () => {
+  it("fails Linux installation when the process exits just after systemd accepts startup", async () => {
+    vi.useFakeTimers();
+    try {
+      let active = false;
+      const manager = createServiceManager({ platform: "linux", mode: "system", executor: {
+        execute: async (_file, args) => {
+          if (args.includes("enable")) { active = true; setTimeout(() => { active = false; }, 1); }
+          return { exitCode: args.includes("is-active") && !active ? 3 : 0 };
+        },
+      } });
+      const outcome = manager.install(renderService({ platform: "linux", mode: "system" })).then(() => "reported success", () => "startup rejected");
+      await vi.runAllTimersAsync();
+      expect(await outcome).toBe("startup rejected");
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.skipIf(process.platform !== "linux" && process.platform !== "darwin")("makes private bootstrap packages readable and traversable without following links", async () => {
+    const platform = process.platform as "linux" | "darwin";
+    const commands: string[][] = [];
+    const provisioner = createServiceProvisioner({ platform, executor: {
+      execute: async (file, args) => {
+        if (file === "find" && args.includes("/opt/runmesh") && args.includes("chmod")) commands.push([...args]);
+        return { exitCode: 0, stdout: "PrimaryGroupID: 501" };
+      },
+    } });
+    await provisioner.provision(renderService({ platform, mode: "system" }), serviceProfilePath(serviceLayout({ platform, mode: "system" })));
+    const parent = await mkdtemp(join(tmpdir(), "runmesh-private-package-"));
+    const root = join(parent, "install"), directory = join(root, "version"), outside = join(parent, "outside");
+    try {
+      await mkdir(root, { mode: 0o700 }); await mkdir(directory, { mode: 0o700 });
+      const executable = join(directory, "runner"), source = join(directory, "source.js");
+      await writeFile(executable, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+      await writeFile(source, "// package code\n", { mode: 0o600 });
+      await writeFile(outside, "private fixture", { mode: 0o600 });
+      await symlink(outside, join(directory, "outside-link"));
+      expect(commands.length).toBeGreaterThan(0);
+      for (const args of commands) {
+        const result = spawnSync("find", args.map(arg => arg === "/opt/runmesh" ? root : arg), { encoding: "utf8", timeout: 10_000 });
+        expect(result.status, result.stderr).toBe(0);
+      }
+      for (const path of [root, directory, executable]) expect((await stat(path)).mode & 0o777).toBe(0o555);
+      expect((await stat(source)).mode & 0o777).toBe(0o444);
+      expect((await stat(outside)).mode & 0o777).toBe(0o600);
+    } finally {
+      await chmod(root, 0o700).catch(() => undefined); await chmod(directory, 0o700).catch(() => undefined);
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform !== "linux" && process.platform !== "darwin").each(["dedicated_user", "privileged_host"] as const)("keeps existing %s runtime state private across repeated provisioning", async executionMode => {
+    const platform = process.platform as "linux" | "darwin";
+    const layout = serviceLayout({ platform, mode: "system" });
+    const commands: { file: string; args: readonly string[] }[] = [];
+    const provisioner = createServiceProvisioner({ platform, executor: {
+      execute: async (file, args) => {
+        if (args.includes(layout.stateRoot) && (file === "chmod" || (file === "find" && args.includes("chmod")))) commands.push({ file, args });
+        return { exitCode: 0, stdout: "PrimaryGroupID: 501" };
+      },
+    } });
+    const parent = await mkdtemp(join(tmpdir(), "runmesh-private-state-"));
+    const root = join(parent, "state"), policy = join(root, "policy"), jobs = join(root, "jobs");
+    const activePolicy = join(policy, "active-policy.json"), job = join(jobs, "job.json"), outside = join(parent, "workspace.txt");
+    try {
+      for (const directory of [root, policy, jobs]) await mkdir(directory, { mode: 0o700 });
+      for (const path of [activePolicy, job, outside]) await writeFile(path, "private fixture", { mode: 0o600 });
+      await symlink(outside, join(root, "workspace-link"));
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        commands.length = 0;
+        await provisioner.provision(renderService({ platform, mode: "system", executionMode }), serviceProfilePath(layout));
+        expect(commands.length).toBeGreaterThan(0);
+        for (const { file, args } of commands) {
+          // Execute only state permission actions against this disposable tree.
+          const mapped = file === "chmod" ? [args[0]!, root] : args.map(arg => arg === layout.stateRoot ? root : arg);
+          const result = spawnSync(file, mapped, { encoding: "utf8", timeout: 10_000 });
+          expect(result.status, result.stderr).toBe(0);
+        }
+        for (const directory of [root, policy, jobs]) expect((await stat(directory)).mode & 0o777).toBe(0o700);
+        for (const path of [activePolicy, job, outside]) {
+          expect((await stat(path)).mode & 0o777).toBe(0o600);
+          expect(await readFile(path, "utf8")).toBe("private fixture");
+        }
+      }
+    } finally { await rm(parent, { recursive: true, force: true }); }
+  });
+
   it.each(["dedicated_user", "privileged_host"] as const)("provisions macOS %s with native account and traversal syntax", async (executionMode) => {
     const commands: { file: string; args: readonly string[] }[] = [];
     const provisioner = createServiceProvisioner({

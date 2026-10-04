@@ -2,7 +2,7 @@
 
 [English](user-guide.md) · [文档目录](README.zh-CN.md)
 
-Runmesh 让兼容 MCP 的 AI 客户端使用管理员批准的机器和工作区。你需要完整的 MCP 地址、支持 Streamable HTTP 的客户端，以及至少一台 Runner 和一个工作区的使用权限。
+Runmesh 将兼容 MCP 的 AI 客户端连接到实例共享的 MCP 工具、Skill 和获准使用的计算机。准备管理员提供的完整 MCP 地址与采用 Streamable HTTP 的客户端即可开始；使用计算机时，还需 Runner 和已批准的工作区。
 
 ## 连接客户端
 
@@ -14,7 +14,13 @@ https://your-host.example/<generated-secret>/mcp
 
 地址本身就是凭据，只在创建或轮换时显示。完整复制秘密路径，去掉误复制的空格、换行，使用地址鉴权即可，无需额外的 Bearer token。真实地址应妥善保管，避免出现在对话、截图、工单或仓库中。
 
-## 确认机器与工作区
+## 使用共享 MCP 工具和 Skill
+
+0.1.6 候选版本与开发渠道中，有效客户端共享实例内启用的 MCP 工具和 Skill。在客户端刷新 Runmesh 连接即可加载当前内容。你可以让 AI 查找可用工具或阅读 Skill；目录工具包括 `remote_profiles`、`remote_tools`、`skill_list` 和 `skill_read`。
+
+这些操作由控制端处理。连接同时具有计算机访问权限时，再按下面的步骤选择机器。管理员连接 MCP 和安装 Skill 的方法见[MCP 和 Skill 指南](central-administration.zh-CN.md)。
+
+## 为计算机访问选择机器与工作区
 
 1. 用 `runner_current` 查看当前选择，再用 `runner_list` 查找目标机器。
 2. 尚未选择 Runner 时，调用 `runner_select`，即使列表中只有一台机器也应明确选择。切换已有选择须提供 `confirm_switch: true`；完成后用 `runner_current` 确认。

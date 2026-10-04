@@ -1,9 +1,8 @@
 import type { CliDependencies } from "./contracts.js";
 import { createServiceManager } from "../service.js";
-import { discoverShellRuntime } from "../runtime.js";
+import { discoverShellRuntime, EnvironmentInfoService } from "../environment.js";
 import type { DoctorCheck } from "./contracts.js";
 import type { DoctorReport } from "./contracts.js";
-import { EnvironmentInfoService } from "../runtime.js";
 import { errorMessage } from "./reporting.js";
 import type { ExecutionMode } from "../service.js";
 import { expectedServiceIdentity } from "../service.js";

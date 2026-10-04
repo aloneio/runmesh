@@ -1,7 +1,7 @@
 import { env, SELF, runInDurableObject } from "cloudflare:test";
 import { WORKER_BRIDGE_TIMEOUT_MS, PROTOCOL_CURRENT_VERSION, PROTOCOL_MIN_VERSION, decodeWireFrame, encodeWireFrame, type WireMessage } from "@aloneio/runmesh-protocol";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { INTERNAL_CONTROL_HEADER, INTERNAL_SIGNATURE_SKEW_MS, internalHeaders, randomBase64Url, sha256Hex } from "../src/security.js";
+import { INTERNAL_CONTROL_HEADER, INTERNAL_SIGNATURE_SKEW_MS, internalHeaders, passwordVerifier, randomBase64Url, sha256Hex } from "../src/security.js";
 import { RegistryDO, RunnerDO } from "../src/index.js";
 
 
@@ -39,13 +39,13 @@ describe("Worker runner transport", () => {
   it("updates heartbeat liveness with one fenced write", async () => {
     const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
     const heartbeatRunnerId = `heartbeat-${crypto.randomUUID()}`;
-    await runInDurableObject(registry, (instance) => {
+    await runInDurableObject(registry, (instance, registryState) => {
       expect(instance.registerRunner(heartbeatRunnerId, "heartbeat-runner", Date.now(), undefined, "dedicated_user")).toBe(true);
       const state = instance.getRunnerExecutionState(heartbeatRunnerId);
       expect(state).toBeDefined();
       const sessionId = `session-${crypto.randomUUID()}`;
       const now = Date.now();
-      (instance as any).ctx.storage.sql.exec("UPDATE runners SET state = 'online', session_id = ? WHERE runner_id = ?", sessionId, heartbeatRunnerId);
+      registryState.storage.sql.exec("UPDATE runners SET state = 'online', session_id = ? WHERE runner_id = ?", sessionId, heartbeatRunnerId);
       const sessionCheck = vi.spyOn(instance, "sessionIsCurrent");
       expect(instance.recordHeartbeat(heartbeatRunnerId, state!.runner.connection_epoch, state!.runner.credential_version, now, state!.lifecycle_id, sessionId)).toBe(true);
       expect(sessionCheck).not.toHaveBeenCalled();
@@ -99,12 +99,12 @@ describe("Worker runner transport", () => {
       expect(instance.registerRunner(auditRunnerId, "audit-runner", Date.now(), undefined, "dedicated_user")).toBe(true);
     });
 
-    const readiness = await runInDurableObject(registry, (instance) => {
+    const readiness = await runInDurableObject(registry, (instance, registryState) => {
       const current = instance.getRunnerExecutionState(auditRunnerId);
       expect(current).toBeDefined();
       const now = Date.now();
       const sessionId = `session-${crypto.randomUUID()}`;
-      (instance as any).ctx.storage.sql.exec("UPDATE runners SET state = 'online', session_id = ?, last_heartbeat_ms = ?, updated_at_ms = ? WHERE runner_id = ?", sessionId, now, now, auditRunnerId);
+      registryState.storage.sql.exec("UPDATE runners SET state = 'online', session_id = ?, last_heartbeat_ms = ?, updated_at_ms = ? WHERE runner_id = ?", sessionId, now, now, auditRunnerId);
       expect(instance.recordHeartbeat(auditRunnerId, current!.runner.connection_epoch, current!.runner.credential_version, now, current!.lifecycle_id, sessionId)).toBe(true);
       return { lifecycleId: current!.lifecycle_id, sessionId, epoch: current!.runner.connection_epoch, credentialVersion: current!.runner.credential_version };
     }) as { lifecycleId: string; sessionId: string; epoch: number; credentialVersion: number };
@@ -158,13 +158,13 @@ describe("Worker runner transport", () => {
   it("stops retrying optional registry writes after a feature breaker trips", async () => {
     const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
     const auditRunnerId = `breaker-${crypto.randomUUID()}`;
-    await runInDurableObject(registry, (instance) => {
+    await runInDurableObject(registry, (instance, registryState) => {
       expect(instance.registerRunner(auditRunnerId, "breaker-runner", Date.now(), undefined, "dedicated_user")).toBe(true);
       const current = instance.getRunnerExecutionState(auditRunnerId);
       expect(current).toBeDefined();
       const now = Date.now();
       const sessionId = `session-${crypto.randomUUID()}`;
-      (instance as any).ctx.storage.sql.exec("UPDATE runners SET state = 'online', session_id = ?, last_heartbeat_ms = ?, updated_at_ms = ? WHERE runner_id = ?", sessionId, now, now, auditRunnerId);
+      registryState.storage.sql.exec("UPDATE runners SET state = 'online', session_id = ?, last_heartbeat_ms = ?, updated_at_ms = ? WHERE runner_id = ?", sessionId, now, now, auditRunnerId);
       expect(instance.recordHeartbeat(auditRunnerId, current!.runner.connection_epoch, current!.runner.credential_version, now, current!.lifecycle_id, sessionId)).toBe(true);
       const readiness = {
         lifecycleId: current!.lifecycle_id,
@@ -193,7 +193,7 @@ describe("Worker runner transport", () => {
         session_id: readiness.sessionId,
         now_ms: completedAtMs,
       };
-      const storage = (instance as any).ctx.storage;
+      const storage = registryState.storage;
       const originalExec = storage.sql.exec.bind(storage.sql);
       let insertAttempts = 0;
       const execSpy = vi.spyOn(storage.sql, "exec").mockImplementation((statement: string, ...params: unknown[]) => {
@@ -232,8 +232,8 @@ describe("Worker runner transport", () => {
 
   it("keeps authentication available when optional quota writes fail", async () => {
     const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
-    await runInDurableObject(registry, (instance) => {
-      const storage = (instance as any).ctx.storage;
+    await runInDurableObject(registry, (instance, registryState) => {
+      const storage = registryState.storage;
       const originalExec = storage.sql.exec.bind(storage.sql);
       let quotaAttempts = 0;
       const execSpy = vi.spyOn(storage.sql, "exec").mockImplementation((statement: string, ...params: unknown[]) => {
@@ -278,6 +278,148 @@ describe("Worker runner transport", () => {
     // injected failure is removed (the initialized case above covers login).
     const healthy = await SELF.fetch("https://worker.test/");
     expect(healthy.status).toBe(200);
+  });
+
+  it.each(["offline", "browser-created", "pre-hello", "online", "enrollment", "rotate", "revoke", "interrupted-revoke"].flatMap(mode => [false, true].map(encoded => ({ mode, encoded }))))("deletes a $mode Runner through an authenticated browser session (encoded=$encoded)", async ({ mode, encoded }) => {
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
+    const session = randomBase64Url(), csrf = randomBase64Url();
+    const hash = await sha256Hex(session), csrfHash = await sha256Hex(csrf);
+    const verifier = await passwordVerifier("synthetic-admin-password");
+    await runInDurableObject(registry, instance => {
+      const now = Date.now();
+      instance.setupAdmin(verifier, now);
+      expect(instance.createAdminSession(hash, csrfHash, now + 60000, now, 1)).toBe(true);
+    });
+    const headers = { origin: "https://worker.test", cookie: `__Host-runmesh_admin_session=${session}; __Host-runmesh_admin_csrf=${csrf}`, "content-type": "application/x-www-form-urlencoded" };
+    const target = encoded ? `browser:delete:${crypto.randomUUID()}` : mode === "browser-created" ? `browser-delete-${crypto.randomUUID()}` : runnerId;
+    const pathId = encodeURIComponent(target);
+    if (encoded && mode !== "browser-created") { const registered = await enroll(target); expect(registered.status).toBe(200); await registered.body?.cancel(); }
+    if (mode === "browser-created") {
+      const created = await SELF.fetch("https://worker.test/admin/runners", { method: "POST", headers,
+        body: new URLSearchParams({ csrf_token: csrf, runner_id: target, display_name: "Disposable Runner", execution_mode: "dedicated_user" }) });
+      expect(created.status, await created.text()).toBe(200);
+    }
+    if (encoded) {
+      const detail = await SELF.fetch("https://worker.test/admin/runners/" + pathId, { headers });
+      expect(detail.status).toBe(200); await detail.body?.cancel();
+    }
+    let socket: WebSocket | null | undefined;
+    if (["enrollment", "rotate", "revoke", "interrupted-revoke"].includes(mode)) {
+      const original = RunnerDO.prototype.fetch;
+      const fault = mode === "interrupted-revoke" ? vi.spyOn(RunnerDO.prototype, "fetch").mockImplementation(function (this: RunnerDO, request: Request) {
+        return new URL(request.url).pathname === "/revoke" ? Promise.resolve(new Response(null, { status: 503 })) : original.call(this, request);
+      }) : undefined;
+      try {
+        const prepared = await SELF.fetch(`https://worker.test/admin/runners/${pathId}/${mode === "interrupted-revoke" ? "revoke" : mode}`, { method: "POST", redirect: "manual", headers,
+          body: new URLSearchParams({ csrf_token: csrf, confirmation: target, execution_mode: "dedicated_user", expected_execution_mode: "dedicated_user" }) });
+        await prepared.body?.cancel();
+        expect(prepared.status).toBe(mode === "interrupted-revoke" ? 503 : mode === "revoke" ? 303 : 200);
+      } finally { fault?.mockRestore(); }
+    }
+    if (mode === "pre-hello" || mode === "online") {
+      const upgrade = await SELF.fetch(`https://worker.test/runner/connect?runner_id=${pathId}`, { headers: { Upgrade: "websocket", Authorization: `Bearer ${token}` } });
+      expect(upgrade.status).toBe(101); socket = upgrade.webSocket; socket?.accept();
+      if (mode === "online") {
+        const welcome = new Promise<void>(resolve => socket?.addEventListener("message", () => resolve(), { once: true }));
+        socket?.send(encodeWireFrame({ type: "runner.hello", protocol_version: PROTOCOL_CURRENT_VERSION, request_id: "delete-online-hello", min_protocol_version: PROTOCOL_MIN_VERSION, max_protocol_version: PROTOCOL_CURRENT_VERSION,
+          runner: { runner_id: target, runner_version: "test", platform: "test", architecture: "test", capabilities: { filesystem: false, process_execution: false, workspace_sync: true, pty: false, network_access: false, max_concurrent_jobs: 1, supported_rpc_methods: [], labels: {} } } }));
+        await welcome;
+      }
+    }
+    const response = await SELF.fetch(`https://worker.test/admin/runners/${pathId}/delete`, {
+      method: "POST", redirect: "manual",
+      headers, body: new URLSearchParams({ csrf_token: csrf, confirmation: target }),
+    });
+    expect(await response.text()).not.toContain("could not fence");
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("/admin");
+    expect(response.headers.get("set-cookie")).toBeNull();
+    socket?.close();
+    await runInDurableObject(registry, instance => { expect(instance.getRunnerExecutionState(target)).toBeUndefined(); });
+  });
+
+  it.each(["validity", "permissions", "version-policy", "emergency-lock", "workspace-create", "workspace-update", "workspace-delete"].flatMap(action => [false, true].map(encoded => ({ action, encoded }))))("manages Runner $action through the browser with encoded identifiers=$encoded", async ({ action, encoded }) => {
+    const target = (encoded ? "policy:runner:" : "policy-runner-") + crypto.randomUUID();
+    const workspaceId = encoded ? "workspace:one" : "workspace-one";
+    const registered = await enroll(target);
+    expect(registered.status).toBe(200); await registered.body?.cancel();
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
+    const session = randomBase64Url(), csrf = randomBase64Url();
+    const hash = await sha256Hex(session), csrfHash = await sha256Hex(csrf);
+    const verifier = await passwordVerifier("synthetic-admin-password");
+    await runInDurableObject(registry, instance => {
+      const now = Date.now();
+      instance.setupAdmin(verifier, now);
+      expect(instance.createAdminSession(hash, csrfHash, now + 60000, now, 1)).toBe(true);
+      if (["workspace-update", "workspace-delete"].includes(action)) expect(instance.createManagedWorkspace(target, {
+        workspace_id: workspaceId, display_name: "Before", root_path: "/tmp/before", enabled: true,
+        permissions: { read: true, edit: false, shell: false, job_control: false },
+      }, now, "fixture-workspace")).toBeDefined();
+    });
+    const response = await SELF.fetch(`https://worker.test/admin/runners/${encodeURIComponent(target)}/${action}`, {
+      method: "POST", redirect: "manual",
+      headers: { origin: "https://worker.test", cookie: `__Host-runmesh_admin_session=${session}; __Host-runmesh_admin_csrf=${csrf}`, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ csrf_token: csrf, confirmation: action === "workspace-delete" ? workspaceId : target,
+        workspace_id: workspaceId, display_name: "After", root_path: "/tmp/after", enabled: "true",
+        read: "true", edit: "false", shell: "false", job_control: "false", update_channel: "pinned", desired_runner_version: "1.2.3" }),
+    });
+    expect(response.status, await response.text()).toBe(303);
+    expect(response.headers.get("location")).toBe(`/admin/runners/${encodeURIComponent(target)}`);
+    if (action.startsWith("workspace-")) {
+      const workspace = await runInDurableObject(registry, instance => instance.getManagedWorkspace(target, workspaceId));
+      if (action === "workspace-delete") expect(workspace).toBeUndefined();
+      else expect(workspace).toMatchObject({ workspace_id: workspaceId, display_name: "After", root_path: "/tmp/after" });
+    }
+  });
+
+  it.each([false, true])("manages client and nested Runner identifiers through signed Registry routes (encoded=%s)", async encoded => {
+    const clientId = (encoded ? "client:" : "client-") + crypto.randomUUID();
+    const target = (encoded ? "override:runner:" : "override-runner-") + crypto.randomUUID();
+    const registered = await enroll(target); expect(registered.status).toBe(200); await registered.body?.cancel();
+    const registry = env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
+    const request = async (path: string, method: string, input?: Record<string, unknown>) => {
+      const body = input === undefined ? "" : JSON.stringify(input);
+      const headers = await internalHeaders("test-internal-control-secret-not-for-production", method, path, body);
+      return registry.fetch(new Request("https://registry.internal" + path, { method, headers, ...(body ? { body } : {}) }));
+    };
+    const created = await request("/auth/clients", "POST", { client_id: clientId, label: "Before", secret_verifier: await sha256Hex(clientId), secret_prefix: "fixture", scopes: ["coding:read"] });
+    expect(created.status).toBe(200); await created.body?.cancel();
+    const clientPath = "/auth/clients/" + encodeURIComponent(clientId);
+    const renamed = await request(clientPath + "/rename", "POST", { label: "After" });
+    expect(renamed.status).toBe(200);
+    expect(await renamed.json()).toMatchObject({ client_id: clientId, label: "After" });
+    const overridePath = clientPath + "/runner-overrides/" + encodeURIComponent(target);
+    const permissions = { read: true, edit: false, shell: false, job_control: false };
+    expect((await request(overridePath, "POST", { permissions })).status).toBe(204);
+    const listed = await request(clientPath + "/runner-overrides", "GET");
+    expect(listed.status).toBe(200);
+    expect(await listed.json()).toMatchObject({ client_id: clientId, overrides: [{ runner_id: target, permissions }] });
+    expect((await request(overridePath, "DELETE")).status).toBe(204);
+    expect(await (await request(clientPath + "/runner-overrides", "GET")).json()).toMatchObject({ overrides: [] });
+  });
+
+  it.each(["rotate", "revoke", "delete"])("routes an encoded Runner ID through the administrative %s API", async action => {
+    const target = "api:runner:" + crypto.randomUUID();
+    const registered = await enroll(target); expect(registered.status).toBe(200); await registered.body?.cancel();
+    const response = await SELF.fetch("https://worker.test/admin/runners/" + encodeURIComponent(target) + "/" + action, {
+      method: "POST", headers: { Authorization: "Bearer " + adminToken, "content-type": "application/json" },
+      body: JSON.stringify({ confirmation: target }),
+    });
+    expect(response.status, await response.text()).toBe(action === "rotate" ? 200 : 204);
+    await runInDurableObject(env.REGISTRY.get(env.REGISTRY.idFromName("registry")), instance => {
+      expect(instance.getRunnerExecutionState(target) === undefined).toBe(action === "delete");
+    });
+  });
+
+  it("does not steal an uncommitted creation fence merely because the Runner row is absent", async () => {
+    const id = `uncommitted-create-${crypto.randomUUID()}`;
+    const object = env.RUNNER.get(env.RUNNER.idFromName(id));
+    for (const [mutation, status] of [["original-create", 204], ["competing-delete", 409]] as const) {
+      const path = "/begin-policy-mutation", body = JSON.stringify({ runner_id: id, mutation_id: mutation });
+      const headers = await internalHeaders("test-internal-control-secret-not-for-production", "POST", path, body);
+      const response = await object.fetch(new Request(`https://runner.internal${path}`, { method: "POST", headers, body }));
+      expect(response.status).toBe(status); await response.body?.cancel();
+    }
   });
 
   it("reports uncertain deletion when RunnerDO rejects transport cleanup", async () => {

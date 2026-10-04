@@ -93,7 +93,7 @@ export function updateStatus(channel: RunnerUpdateChannel, desired: string | und
 }
 
 export function emptyMutationState(): RunnerMutationState {
-  return { runner_exists: false, lifecycle_id: null, runner_state: null, credential_mutation_committed: false, mutation_committed: false, desired_revision: null, desired_checksum: null, applied_revision: null, active_checksum: null, runner_reported_revision: null, runner_reported_checksum: null, policy_status: null, connection_epoch: null, credential_version: null, session_id: null };
+  return { runner_exists: false, lifecycle_id: null, runner_state: null, credential_mutation_committed: false, credential_mutation_kind: null, mutation_committed: false, desired_revision: null, desired_checksum: null, applied_revision: null, active_checksum: null, runner_reported_revision: null, runner_reported_checksum: null, policy_status: null, connection_epoch: null, credential_version: null, session_id: null };
 }
 
 export function decodeRunner(row: RunnerRow): RunnerRecord {
@@ -133,7 +133,8 @@ export function parseJobEvent(value: unknown): { job: { job_id: string; runner_i
 
 export function uniqueIds(values: readonly string[]): boolean { return new Set(values).size === values.length; }
 
-export function parseRunnerId(value: string | undefined): string | undefined { if (value === undefined) return undefined; try { const decoded = decodeURIComponent(value); return isSafeIdentifier(decoded) && IdentifierSchema.safeParse(decoded).success ? decoded : undefined; } catch { return undefined; } }
+/** Decode one raw path component; body and URLSearchParams values are already decoded. */
+export function parsePathIdentifier(value: string | undefined): string | undefined { if (value === undefined) return undefined; try { const decoded = decodeURIComponent(value); return isSafeIdentifier(decoded) && IdentifierSchema.safeParse(decoded).success ? decoded : undefined; } catch { return undefined; } }
 
 export function parseJsonObject(body: string): InternalInput | undefined { try { const value = JSON.parse(body) as unknown; return typeof value === "object" && value !== null && !Array.isArray(value) ? value as InternalInput : undefined; } catch { return undefined; } }
 

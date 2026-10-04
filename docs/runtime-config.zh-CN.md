@@ -2,18 +2,18 @@
 
 [English](runtime-config.md) · [管理员指南](admin-guide.zh-CN.md)
 
-使用源码默认值和两个独立的 Worker 密钥开始部署；有特殊需要时再增加覆盖配置。
+使用源码默认值，并通过初始化工具准备 Worker 密钥；有特殊需要时再增加覆盖配置。
 
 ## 必要密钥
 
 | 名称 | 用途 | 升级时 |
 | --- | --- | --- |
-| `INTERNAL_CONTROL_SECRET` | 验证控制面内部请求 | 保留现有值 |
+| `INTERNAL_CONTROL_SECRET` | 验证控制面内部请求，并派生 OAuth 加密密钥 | 保留现有值；替换后需重新连接 OAuth |
 | `RUNNER_TOKEN_PEPPER` | 保护 Runner 凭据校验值 | 保留现有值；替换会使已有凭据失效 |
 
-每个值分别使用至少 32 字节的密码学安全随机数，编码为文本，保存在 Cloudflare secrets 中。密钥应避开源码、日志和对话。管理员密码通过首次设置页面填写。
+初始化工具使用至少 32 字节的密码学安全随机数分别生成这两个密钥。OAuth 加密密钥自动从 `INTERNAL_CONTROL_SECRET` 派生，无需增加变量。两个值保存在 Cloudflare secrets 中，应避开源码、日志和对话。管理员密码通过首次设置页面填写。
 
-需要通过 API 管理 Runner 时，再配置 `ADMIN_TOKEN`；只使用管理页面的实例保留两个必要密钥即可。
+需要通过 API 管理 Runner 时，再配置 `ADMIN_TOKEN`；仅通过管理页面操作无需配置 ADMIN_TOKEN。
 
 ## 默认值与覆盖项
 
@@ -32,7 +32,7 @@
 
 ## 选择发行物与环境
 
-**0.1.4** 签名正式包已完成独立验证，`release/release-state.json` 中经过审核的激活记录已启用源码中的正式托管分发。部署包含激活记录的 `main` 源码后，检查该 Worker 的发行描述以确认安装可用情况。显式空值 `RUNMESH_SIGNED_RELEASE_AVAILABLE` 仍会关闭托管安装。
+[发行状态](release-readiness.md)列出当前正式包与候选版本。`release/release-state.json` 的 released 记录启用经过独立验签的正式包；candidate 记录关闭该候选版本的正式托管安装。部署包含激活记录的 `main` 源码后，检查该 Worker 的发行描述以确认安装可用情况。显式空值 `RUNMESH_SIGNED_RELEASE_AVAILABLE` 仍会关闭托管安装。
 
 生产使用受保护的 `main`，候选版测试使用独立的 `dev` Worker。开发环境从自己的通道选择已验签预发布；选择不可用时会关闭托管安装。详见[开发预发布](dev-runner-prereleases.zh-CN.md)。
 
@@ -56,7 +56,7 @@ npm run setup:secrets -- --env production --apply
 
 ## 更新或迁移实例
 
-保留 Worker 名称、现有数据绑定、两个必要密钥，以及反向代理地址或紧急关闭安装等有意设置的覆盖项。部署更新后的 Worker，再按[升级指南](upgrading.zh-CN.md)逐台处理 Runner。
+保留 Worker 名称、现有数据绑定、已有的两个密钥，以及反向代理地址或紧急关闭安装等有意设置的覆盖项。部署更新后的 Worker，再按[升级指南](upgrading.zh-CN.md)逐台处理 Runner。
 
 新账号可以创建自己的资源并使用自己的 HTTPS 域名。迁移已有数据需要单独的转移方案，并包含原来的凭据保护密钥。
 

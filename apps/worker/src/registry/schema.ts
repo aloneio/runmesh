@@ -1,3 +1,9 @@
+export function ensureJobHistorySettings(sql: SqlStorage): void {
+  if (sql.exec("SELECT 1 FROM runmesh_data_migrations WHERE id = 'job-history-settings-v1'").toArray().length) return;
+  sql.exec("CREATE TABLE job_history_settings (runner_id TEXT PRIMARY KEY, lifecycle_id TEXT NOT NULL, settings_json TEXT NOT NULL)");
+  sql.exec("INSERT INTO runmesh_data_migrations VALUES ('job-history-settings-v1')");
+}
+
 /** Core schema initialization remains in the original synchronous startup path. */
 export function createCoreRegistrySchema(sql: SqlStorage): void {
   sql.exec(`

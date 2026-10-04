@@ -1,67 +1,116 @@
 import { expect, it, vi } from "vitest";
-import { createCredentialCipher } from "../src/platform/connectors/cipher.js";
-import { encodeBytes, loadCipherKey } from "../src/platform/connectors/keyring.js";
+import { createSecretStorage } from "../src/platform/secret-storage.js";
+import { SECRET_STORAGE_LIMITS, parseEncryptedSecret } from "../src/contracts/secret-storage.js";
+import { encodeBase64Url, decodeBase64Url } from "../src/contracts/base64url.js";
 import { parseCredential, parseProfileCommand } from "../src/contracts/connector-values.js";
-import type { ConnectionProfile } from "../src/contracts/connectors.js";
+import { canonicalJson } from "../src/contracts/json.js";
 
-const keyA = encodeBytes(new Uint8Array(32).fill(1)), keyB = encodeBytes(new Uint8Array(32).fill(2));
-const ring = (active = "key-a", keys: Record<string, string> = { "key-a": keyA }) => JSON.stringify({ schema_version: 1, active_key_id: active, keys });
-const profile: ConnectionProfile = { schema_version: 1, profile_id: "docs-account", connector_id: "docs",
-  endpoint: "https://docs.example/mcp", owner: { kind: "instance_admin" }, revision: 1, enabled: false,
-  credential: { secret_id: "docs-account", secret_version: 1 } };
+const secretA = "a".repeat(32), secretB = "b".repeat(32);
+const context = JSON.stringify(["managed-oauth", "docs-account", "https://docs.example.com/mcp", 1]);
 const credential = { kind: "bearer" as const, token: "synthetic-test-token" };
 
-it("W03 cipher construction is inert and encryption round-trips without plaintext in its envelope", async () => {
-  const load = vi.fn(() => ring()), cipher = createCredentialCipher("namespace-a", load);
+it("W03 shared serialization applies caller budgets without changing data or evaluating getters", () => {
+  const value = { z: "é", a: [1] }, expected = '{"a":[1],"z":"é"}';
+  const bytes = new TextEncoder().encode(expected).byteLength;
+  expect(canonicalJson(value, bytes)).toBe(expected);
+  expect(canonicalJson(value, bytes - 1)).toBeUndefined();
+  expect(canonicalJson(value, bytes, { depth: 1, nodes: 10 })).toBeUndefined();
+  expect(canonicalJson(value, bytes, { depth: 2, nodes: 3 })).toBeUndefined();
+  expect(canonicalJson(value, bytes)).toBe(expected);
+  expect(Object.keys(value)).toEqual(["z", "a"]);
+  const getter = vi.fn(() => "synthetic-secret");
+  expect(canonicalJson(Object.defineProperty({}, "token", { enumerable: true, get: getter }), 1024)).toBeUndefined();
+  expect(getter).not.toHaveBeenCalled();
+});
+
+it("W03 cipher uses the existing control secret and round-trips across restart without storing a key", async () => {
+  const load = vi.fn(() => secretA), cipher = createSecretStorage("namespace-a", load);
   expect(load).not.toHaveBeenCalled();
-  const sealed = await cipher.seal(profile, credential), again = await cipher.seal(profile, credential);
-  expect(sealed.iv).not.toBe(again.iv);
+  const sealed = await cipher.seal(context, credential), again = await cipher.seal(context, credential);
+  expect(sealed.iv).not.toBe(again.iv); expect(sealed.key_id).toBe("internal-control-v1");
   expect(JSON.stringify(sealed)).not.toContain(credential.token);
-  expect(await cipher.open(profile, sealed)).toEqual(credential);
-  expect((await loadCipherKey(ring(), undefined, [])).key.extractable).toBe(false);
+  expect(JSON.stringify(sealed)).not.toContain(secretA);
+  expect(await createSecretStorage("namespace-a", () => secretA).open(context, sealed)).toEqual(credential);
 });
 
 it.each(["profile", "connector", "endpoint", "generation", "namespace", "ciphertext", "key"])("W03 rejects tampered credential binding: %s", async field => {
-  const cipher = createCredentialCipher("namespace-a", () => ring());
-  const sealed = { ...await cipher.seal(profile, credential) };
-  const changed = { ...profile };
-  if (field === "profile") { changed.profile_id = "other"; changed.credential = { secret_id: "other", secret_version: 1 }; }
-  if (field === "connector") changed.connector_id = "other";
-  if (field === "endpoint") changed.endpoint = "https://other.example/mcp";
-  if (field === "generation") changed.credential = { secret_id: profile.profile_id, secret_version: 2 };
+  const cipher = createSecretStorage("namespace-a", () => secretA);
+  const sealed = { ...await cipher.seal(context, credential) };
+  const changed = ["profile", "connector", "endpoint", "generation"].includes(field) ? context + ":" + field : context;
   if (field === "ciphertext") sealed.ciphertext = (sealed.ciphertext[0] === "A" ? "B" : "A") + sealed.ciphertext.slice(1);
-  if (field === "key") sealed.key_id = "missing";
-  const reader = field === "namespace" ? createCredentialCipher("namespace-b", () => ring()) : cipher;
-  await expect(reader.open(changed, sealed)).rejects.toThrow(/^central_credential_unavailable$/u);
+  if (field === "key") {
+    sealed.key_id = "missing";
+    // State can be read and replaced on reconnect; only the cipher selects a key.
+    expect(parseEncryptedSecret(sealed)).toEqual(sealed);
+  }
+  const reader = field === "namespace" ? createSecretStorage("namespace-b", () => secretA) : cipher;
+  await expect(reader.open(changed, sealed)).rejects.toThrow(/^secret_storage_unavailable$/u);
 });
 
-it("W03 key rotation keeps old reads only while their key remains configured", async () => {
-  let keys = ring();
-  const cipher = createCredentialCipher("namespace-a", () => keys);
-  const old = await cipher.seal(profile, credential);
-  keys = ring("key-b", { "key-a": keyA, "key-b": keyB });
-  expect(await cipher.open(profile, old)).toEqual(credential);
-  const next = await cipher.seal(profile, await cipher.open(profile, old));
-  expect(next.key_id).toBe("key-b");
-  keys = ring("key-b", { "key-b": keyB });
-  expect(await cipher.open(profile, next)).toEqual(credential);
-  await expect(cipher.open(profile, old)).rejects.toThrow("central_credential_unavailable");
+it("W03 control-secret rotation requires reconnect and does not use a stale key cache", async () => {
+  let secret = secretA;
+  const cipher = createSecretStorage("namespace-a", () => secret);
+  const old = await cipher.seal(context, credential);
+  secret = secretB;
+  await expect(cipher.open(context, old)).rejects.toThrow("unavailable");
+  const next = await cipher.seal(context, credential);
+  expect(await cipher.open(context, next)).toEqual(credential);
+  secret = secretA;
+  expect(await cipher.open(context, old)).toEqual(credential);
+  await expect(cipher.open(context, next)).rejects.toThrow("unavailable");
 });
 
-it.each([undefined, "null", "{}", "not-json", ring("missing"), ring("key-a", { "key-a": "invalid" }),
-  ring("key-a", { "key-a": keyA, "duplicate": keyA })])("W03 malformed key configuration fails with a fixed message", async raw => {
-  await expect(createCredentialCipher("namespace-a", () => raw).seal(profile, credential)).rejects.toThrow(/^central_credential_unavailable$/u);
+it.each([undefined, null, "", "short", "a".repeat(513), "a".repeat(31) + " ", "a".repeat(31) + String.fromCharCode(0)])("W03 invalid existing secret fails with a fixed message", async raw => {
+  await expect(createSecretStorage("namespace-a", () => raw).seal(context, credential)).rejects.toThrow(/^secret_storage_unavailable$/u);
 });
 
-it("W03 refuses reuse of reserved control credentials as an encryption key", async () => {
-  await expect(createCredentialCipher("namespace-a", () => ring(), () => [keyA]).seal(profile, credential)).rejects.toThrow("central_credential_unavailable");
+it("W03 the shared adapter opens an existing ciphertext without a second format or migration key", async () => {
+  // Generated by the deployed 67a41dc implementation with synthetic values.
+  const stored = { schema_version: 1 as const, key_id: "internal-control-v1", iv: "gcf5lGTRQIEzOByP",
+    ciphertext: "QHTkmItHexJqUsByHKKu6PDOoLiDpiiij_VSoJQ_JcKU525C_B_7JG34i66jqUWF2D_G9NofoeVw5MVdKXqrsLBwWfA" };
+  expect(await createSecretStorage("namespace-a", () => secretA).open("existing-record", stored)).toEqual({ client_secret: "synthetic-existing-client-secret" });
+});
+
+it("W03 derived storage keys cannot be exported", async () => {
+  const derive = vi.spyOn(crypto.subtle, "deriveKey");
+  try {
+    await createSecretStorage("namespace-a", () => secretA).seal(context, credential);
+    const result = derive.mock.results[0];
+    expect(result?.type).toBe("return");
+    const key = await result!.value as CryptoKey;
+    expect(key.extractable).toBe(false);
+    await expect(crypto.subtle.exportKey("raw", key)).rejects.toThrow();
+  } finally { derive.mockRestore(); }
+});
+
+it("W03 shared storage enforces the same UTF-8 budget when sealing and opening", async () => {
+  const cipher = createSecretStorage("namespace-a", () => secretA);
+  const maximum = "a".repeat(SECRET_STORAGE_LIMITS.plaintext_bytes - 2);
+  const sealed = await cipher.seal(context, maximum);
+  expect(parseEncryptedSecret(sealed)).toEqual(sealed);
+  expect(await cipher.open(context, sealed)).toBe(maximum);
+  await expect(cipher.seal(context, maximum + "a")).rejects.toThrow("secret_storage_unavailable");
+  await expect(cipher.seal(context, "é".repeat(SECRET_STORAGE_LIMITS.plaintext_bytes / 2))).rejects.toThrow("secret_storage_unavailable");
+  expect(parseEncryptedSecret({ ...sealed, ciphertext: "a".repeat(SECRET_STORAGE_LIMITS.ciphertext_bytes + 1) })).toBeUndefined();
+});
+
+it("W03 shared byte encoding rejects padding, alternate encodings and oversize values", () => {
+  const bytes = new Uint8Array([0, 127, 255]);
+  expect(decodeBase64Url(encodeBase64Url(bytes), 4)).toEqual(bytes);
+  for (const value of ["", "AA==", "_x", "AA A", "AAAAA"]) expect(decodeBase64Url(value, 4)).toBeUndefined();
+});
+
+it.each([0, false, null, "", [], {}].map(value => [value]))("W03 shared storage round-trips JSON values: %j", async value => {
+  const cipher = createSecretStorage("namespace-a", () => secretA);
+  expect(await cipher.open(context, await cipher.seal(context, value))).toEqual(value);
 });
 
 it("W03 supports the exact token bound and rejects injection, oversize and mixed commands", async () => {
-  const cipher = createCredentialCipher("namespace-a", () => ring());
+  const cipher = createSecretStorage("namespace-a", () => secretA);
   const maximum = { kind: "bearer" as const, token: "a".repeat(4096) };
-  expect(await cipher.open(profile, await cipher.seal(profile, maximum))).toEqual(maximum);
-  for (const token of ["a".repeat(4097), "a\r\nb", "a b", "\"quoted\"", "a\\b", ""]) expect(parseCredential({ kind: "bearer", token })).toBeUndefined();
+  expect(await cipher.open(context, await cipher.seal(context, maximum))).toEqual(maximum);
+  for (const token of ["a".repeat(4097), "a\r\nb", "a b", "a\tb", String.fromCharCode(127), "令牌", ""]) expect(parseCredential({ kind: "bearer", token })).toBeUndefined();
+  for (const token of ["user:grant:opaque-secret", "\"quoted\"", "a\\b"]) expect(parseCredential({ kind: "bearer", token })).toEqual({ kind: "bearer", token });
   expect(parseProfileCommand({ action: "create", profile_id: "p", connector_id: "c", endpoint: "https://user:pass@example.com/mcp", credential })).toBeUndefined();
   expect(parseProfileCommand({ action: "rotate", profile_id: "p", expected_revision: 1, credential, owner: "other" })).toBeUndefined();
 });

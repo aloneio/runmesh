@@ -26,7 +26,7 @@ npm run deploy:worker -- --env development
 npm run deploy:worker -- --env production
 ```
 
-**0.1.4** 已发布为正式版。生产部署使用 `main` 上经过审核的发行激活提交，测试后续改动时使用 development。部署后按下文核对实际运行的源码。
+生产部署使用[发行状态](release-readiness.md)列出的正式版本及 `main` 上对应的已审核发行激活提交，测试后续改动时使用 development。部署后按下文核对实际运行的源码。
 
 从干净的 Git 工作区构建，并在打包完成前保持源码不变。构建会核对实际提交、文件树与 Cloudflare、GitHub、GitLab 的声明。已修改文件、未跟踪的应用文件、源码符号链接、隐藏索引标记或未核实的子模块会阻止确认来源。需要已核实源码身份的部署，应使用 Git 检出目录，而非仅有源码的压缩包。
 

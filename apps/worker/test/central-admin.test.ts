@@ -5,15 +5,48 @@ import { handleCentralAdmin } from "../src/http/central.js";
 import { passwordVerifier, randomBase64Url, sha256Hex } from "../src/security.js";
 import type { WorkerEnv } from "../src/platform/env.js";
 import type { CapabilitiesDOv1 } from "../src/capabilities-do.js";
-import { createCredentialCipher } from "../src/platform/connectors/cipher.js";
+import { handleBrowserAdmin } from "../src/http/admin.js";
+import { localizeHtmlResponse } from "../src/i18n/html.js";
+import { secretCreatedPage } from "../src/admin/auth-views.js";
 
 const registry = () => env.REGISTRY.get(env.REGISTRY.idFromName("registry"));
 const namespace = () => (env as unknown as { CAPABILITIES: DurableObjectNamespace<CapabilitiesDOv1> }).CAPABILITIES;
 const central = () => namespace().get(namespace().idFromName("central"));
 const configured = () => ({ ...env, RUNMESH_PUBLIC_ORIGIN: "https://worker.test" }) as WorkerEnv;
-const creation = { action: "create", connector_id: "test-docs", endpoint: "https://docs.example/mcp",
-  credential: { kind: "bearer", token: "synthetic-private-upstream-token" } };
-const url = (id: string) => `https://worker.test/admin/central/profiles/${id}`;
+const creation = { action: "connect", connector_id: "test-docs", endpoint: "https://docs.example.com/mcp", authentication: "none" };
+
+it("direct public connections and Skill installation are available without deployment endpoint configuration", async () => {
+  const admin = await session();
+  const request = new Request('https://worker.test/admin/central?lang=zh-CN', { headers: admin.headers });
+  const config = { ...configured(), CENTRAL_SKILLS_ENABLED: '1' };
+  const response = localizeHtmlResponse(request, await handleBrowserAdmin(request, config, new URL(request.url)));
+  expect(response.status).toBe(200);
+  const markup = await response.text();
+  expect(markup).toContain('<h1>MCP 和 Skill</h1>');
+  expect(markup).toContain('data-central-tab="services" aria-pressed="true">MCP</button>');
+  expect(markup).toContain('data-central-tab="skills" aria-pressed="false">Skill</button>');
+  expect(markup).toContain('<h2>已连接的 MCP</h2>');
+  expect(markup).not.toContain('class="central-start"');
+  expect(markup).not.toContain('<p class="muted">所有已连接的 AI 客户端');
+  expect(markup).toContain('MCP 地址');
+  expect(markup).toContain('无身份验证');
+  expect(markup).toContain('value="oauth"');
+  expect(markup).not.toContain('<fieldset disabled>');
+  expect(markup).not.toContain('data-central-admin');
+  expect(markup).not.toContain('name="token"');
+  expect(markup).toContain('data-skill-import');
+  expect(markup).toContain('AI 连接');
+  expect(markup).not.toContain('INTERNAL_CONTROL_SECRET');
+});
+
+it("client handoff opens the shared library without putting its credential in the link", () => {
+  const page = secretCreatedPage('MCP client created', 'https://worker.test/synthetic-secret/mcp', 'client-product');
+  expect(page).toContain('href="/admin/central"');
+  expect(page).toContain('Copy this connection URL into your AI client.');
+  expect(page).not.toContain('client=synthetic-secret');
+  expect(secretCreatedPage('MCP client created', 'https://worker.test/synthetic-secret/mcp')).not.toContain('<section class="central-next-step">');
+});
+const url = (id: string) => `https://worker.test/admin/central/profiles/${encodeURIComponent(id)}`;
 
 async function session() {
   const raw = randomBase64Url(), csrf = randomBase64Url();
@@ -26,36 +59,51 @@ async function session() {
     origin: "https://worker.test", "content-type": "application/json", "x-csrf-token": csrf } };
 }
 
-it("W03 admin HTTP stores ciphertext, defaults disabled and checks revisions", async () => {
-  const admin = await session(), id = `profile-${crypto.randomUUID()}`;
+it.each(["profile-", "profile:"])("W03 admin HTTP stores connection metadata, defaults disabled and checks revisions (%s)", async prefix => {
+  const admin = await session(), id = prefix + crypto.randomUUID();
   const call = (value: unknown) => SELF.fetch(url(id), { method: "POST", headers: admin.headers, body: JSON.stringify(value) });
-  const created = await call(creation), body = await created.text();
-  expect(created.status).toBe(200); expect(body).not.toContain(creation.credential.token);
-  expect(JSON.parse(body)).toMatchObject({ state: "written", profile: { enabled: false, revision: 1 } });
-  expect(created.headers.get("cache-control")).toBe("no-store");
-  expect(await (await call({ action: "enable", expected_revision: 1 })).json())
-    .toMatchObject({ profile: { enabled: true, revision: 2, credential: { secret_version: 1 } } });
-  const rotated = { kind: "bearer", token: "synthetic-rotated-upstream-token" };
-  expect(await (await call({ action: "rotate", expected_revision: 2, credential: rotated })).json())
-    .toMatchObject({ profile: { revision: 3, credential: { secret_version: 2 } } });
-  const stale = await call({ action: "disable", expected_revision: 2 });
-  expect(stale.status).toBe(409); expect(await stale.json()).toMatchObject({ error: { current_revision: 3, operation_state: "not_started" } });
-  expect(await (await call({ action: "rekey", expected_revision: 3 })).json())
-    .toMatchObject({ profile: { revision: 4, credential: { secret_version: 3 } } });
-  expect(await (await call({ action: "disable", expected_revision: 4 })).json())
-    .toMatchObject({ profile: { enabled: false, revision: 5 } });
-  const read = await SELF.fetch(url(id), { headers: admin.headers });
-  expect(read.status).toBe(200);
-  expect(await read.json()).toMatchObject({ state: "found", profile: { profile_id: id, revision: 5 } });
-  await runInDurableObject(central(), async (_instance, state) => {
-    const row = state.storage.sql.exec<{ profile_json: string; envelope_json: string }>(
-      "SELECT profile_json,envelope_json FROM connection_profiles_v1 WHERE profile_id=?", id).one();
-    expect(JSON.stringify(row)).not.toContain(rotated.token);
-    expect(JSON.stringify(row)).not.toContain(creation.credential.token);
-    const cipher = createCredentialCipher(state.id.toString(), () => configured().CENTRAL_VAULT_KEYRING);
-    expect(await cipher.open(JSON.parse(row.profile_json), JSON.parse(row.envelope_json))).toEqual(rotated);
+  const created = await call(creation);
+  expect(created.status).toBe(200); expect(created.headers.get("cache-control")).toBe("no-store");
+  expect(await created.json()).toMatchObject({ state: "written", profile: { enabled: false, revision: 1, authentication: "none", credential: null } });
+  expect(await (await call({ action: "enable", expected_revision: 1 })).json()).toMatchObject({ profile: { enabled: true, revision: 2 } });
+  const stale = await call({ action: "disable", expected_revision: 1 });
+  expect(stale.status).toBe(409); expect(await stale.json()).toMatchObject({ error: { current_revision: 2, operation_state: "not_started" } });
+  expect(await (await call({ action: "disable", expected_revision: 2 })).json()).toMatchObject({ profile: { enabled: false, revision: 3 } });
+  expect(await (await SELF.fetch(url(id), { headers: admin.headers })).json()).toMatchObject({ state: "found", profile: { profile_id: id, revision: 3 } });
+  await runInDurableObject(central(), (_instance, state) => {
+    expect(state.storage.sql.exec<{ envelope_json: string }>("SELECT envelope_json FROM connection_profiles_v1 WHERE profile_id=?", id).one().envelope_json).toBe("null");
     expect(state.storage.sql.exec("SELECT name FROM sqlite_master WHERE name IN ('runners','mcp_clients','jobs')").toArray()).toEqual([]);
   });
+});
+
+it.each(["profiles", "catalogs", "discovery", "skills"].flatMap(route =>
+  ["r%2Fx", "r%5Cx", "r%253Ax", "r%", "r%00x", "%3Ar", "r".repeat(129), "r/extra", "r/"].map(segment => [route, segment])
+))("rejects unsafe central %s identifier %s before resolving its owner", async (route, segment) => {
+  const get = vi.fn(() => { throw new Error("must not resolve"); });
+  const config = { ...configured(), CENTRAL_SKILLS_ENABLED: "1", CAPABILITIES: { idFromName: () => "central", get } } as unknown as WorkerEnv;
+  const request = new Request(`https://worker.test/admin/central/${route}/${segment}`, { method: "POST", body: "{}" });
+  const response = await handleCentralAdmin(request, config, new URL(request.url));
+  expect(response.status).toBe(route === "skills" ? 400 : 404);
+  expect(get).not.toHaveBeenCalled();
+});
+
+it.each(["create", "create_oauth", "rotate", "rekey"])("removed profile action %s cannot resolve the owner", async action => {
+  const admin = await session(), get = vi.fn(() => { throw new Error("must not resolve"); });
+  const config = { ...configured(), CAPABILITIES: { idFromName: () => "central", get } } as unknown as WorkerEnv;
+  const request = new Request(url("removed-action"), { method: "POST", headers: admin.headers, body: JSON.stringify({ ...creation, action }) });
+  expect((await handleCentralAdmin(request, config, new URL(request.url))).status).toBe(400); expect(get).not.toHaveBeenCalled();
+});
+
+it.each(["none", "oauth"])("control panel creates an explicit %s connection without a deployment endpoint allowlist", async authentication => {
+  const admin = await session(), id = `direct-${crypto.randomUUID()}`;
+  const config = configured();
+  const request = new Request(url(id), { method: "POST", headers: admin.headers, body: JSON.stringify({ action: "connect",
+    connector_id: id, endpoint: "https://mcp.provider.com/mcp", authentication }) });
+  const response = await handleCentralAdmin(request, config, new URL(request.url));
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ state: "written", profile: { profile_id: id, authentication, credential: null, enabled: false, revision: 1 } });
+  const enabled = await SELF.fetch(url(id), { method: "POST", headers: admin.headers, body: JSON.stringify({ action: "enable", expected_revision: 1 }) });
+  expect(await enabled.json()).toMatchObject({ profile: { authentication, enabled: true, revision: 2 } });
 });
 
 it.each(["no-session", "no-csrf", "wrong-csrf", "cross-origin", "bearer-only"])("W03 rejects %s before resolving the owner", async variant => {
@@ -95,7 +143,7 @@ it("W03 session revoked during a pending request body cannot commit later", asyn
   expect(await central().getProfile(fresh.hash, id)).toEqual({ state: "missing" });
 });
 
-it("W03 concurrent creates commit once without overwriting a competing credential", async () => {
+it("W03 concurrent creates commit once without overwriting a competing connection", async () => {
   const admin = await session(), id = `competing-${crypto.randomUUID()}`;
   const responses = await Promise.all([0, 1].map(() => SELF.fetch(url(id), { method: "POST", headers: admin.headers, body: JSON.stringify(creation) })));
   expect(responses.map(response => response.status).sort()).toEqual([200, 409]);
@@ -116,7 +164,7 @@ it.each([null, {}, { state: "private-status-do-not-reflect" }, { state: "conflic
 it("W03 wrong profile identity and write/read receipts cannot masquerade as success", async () => {
   const admin = await session();
   const profile = { schema_version: 1, profile_id: "other-profile", connector_id: "docs", endpoint: "https://docs.example/mcp",
-    owner: { kind: "instance_admin" }, enabled: false, revision: 1, credential: { secret_id: "other-profile", secret_version: 1 } };
+    owner: { kind: "instance_admin" }, enabled: false, revision: 1, authentication: "oauth", credential: null };
   for (const state of ["found", "written"]) {
     const local = { ...configured(), CAPABILITIES: { idFromName: () => "central", get: () => ({ getProfile: async () => ({ state, profile }) }) } } as unknown as WorkerEnv;
     const request = new Request(url("expected-profile"), { headers: admin.headers });
@@ -134,4 +182,82 @@ it("W03 public input caps and closed routing fields prevent profile creation", a
     expect(response.status).toBe(400);
   }
   expect(await central().getProfile(admin.hash, id)).toEqual({ state: "missing" });
+});
+
+
+it('product service names preserve Unicode without changing endpoint or credential boundaries', async () => {
+  const admin = await session(), id = 'named-' + crypto.randomUUID();
+  const response = await SELF.fetch(url(id), { method: 'POST', headers: admin.headers,
+    body: JSON.stringify({ ...creation, display_name: '团队文档 <script>' }) });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ profile: { display_name: '团队文档 <script>', enabled: false } });
+  expect(await (await SELF.fetch(url(id), { headers: admin.headers })).json()).toMatchObject({ profile: { display_name: '团队文档 <script>' } });
+  for (const display_name of ['', 'a'.repeat(65), 'bad\nname']) {
+    expect((await SELF.fetch(url('invalid-name-' + crypto.randomUUID()), { method: 'POST', headers: admin.headers,
+      body: JSON.stringify({ ...creation, display_name }) })).status).toBe(400);
+  }
+});
+
+async function connectionReceipt(action: "begin" | "complete" | "revoke", receipt: unknown) {
+  const admin = await session(), origin = "https://control.provider.com";
+  const connectionOAuth = vi.fn(async () => receipt);
+  const config = { ...configured(), RUNMESH_PUBLIC_ORIGIN: origin,
+    CAPABILITIES: { idFromName: () => "central", get: () => ({ connectionOAuth }) } } as unknown as WorkerEnv;
+  const body = action === "complete" ? { state: "s".repeat(43), code: "synthetic-code" } : { profile_id: "expected-profile", expected_revision: 2 };
+  const request = new Request(origin + "/admin/central/connections/" + action, { method: "POST",
+    headers: { ...admin.headers, origin }, body: JSON.stringify(body) });
+  const response = await handleCentralAdmin(request, config, new URL(request.url));
+  expect(connectionOAuth).toHaveBeenCalledOnce();
+  return response;
+}
+
+it.each(["begin", "complete", "revoke"] as const)("OAuth %s returns only its public receipt fields", async action => {
+  const safe = action === "begin" ? { state: "started", profile_id: "expected-profile", authorization_url: "https://login.provider.com/authorize?state=synthetic" }
+    : { state: action === "complete" ? "linked" : "revoked", profile_id: "expected-profile" };
+  const response = await connectionReceipt(action, { ...safe, access_token: "private-token-do-not-reflect", client: { client_secret: "private-client-do-not-reflect" } });
+  expect(response.status).toBe(200); expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(await response.json()).toEqual(safe);
+});
+
+it.each([
+  ["begin", { state: "started", profile_id: "other-profile", authorization_url: "https://login.provider.com/authorize" }],
+  ["revoke", { state: "revoked", profile_id: "other-profile" }],
+  ["complete", { state: "linked" }],
+  ["complete", { state: "linked", profile_id: "../private-profile" }],
+  ["begin", { state: "linked", profile_id: "expected-profile" }],
+  ["complete", { state: "started", profile_id: "expected-profile", authorization_url: "https://login.provider.com/authorize" }],
+  ["revoke", { state: "linked", profile_id: "expected-profile" }],
+  ["begin", { state: "failed", code: "private-error-do-not-reflect", operation_state: "unknown" }],
+  ["begin", { state: "failed", code: "unavailable", operation_state: "completed" }],
+  ["begin", { state: "failed", code: "unavailable" }],
+  ["begin", null],
+] as const)("OAuth %s rejects malformed or mismatched receipts: %j", async (action, receipt) => {
+  const response = await connectionReceipt(action, receipt);
+  expect(response.status).toBe(503);
+  expect(await response.json()).toEqual({ error: { code: "oauth_unavailable", operation_state: "unknown" } });
+});
+
+it.each([
+  "javascript:alert(1)", "/authorize", "http://login.provider.com/authorize", "https://127.0.0.1/authorize",
+  "https://user:password@login.provider.com/authorize", "https://login.provider.com/authorize#private",
+  "https://control.provider.com/authorize", "https://login.provider.com/authorize?scope=" + "r".repeat(8192),
+])("OAuth redirect receipt rejects an unsafe destination: %s", async authorization_url => {
+  const response = await connectionReceipt("begin", { state: "started", profile_id: "expected-profile", authorization_url });
+  expect(response.status).toBe(503);
+  expect(await response.json()).toEqual({ error: { code: "oauth_unavailable", operation_state: "unknown" } });
+});
+
+it("OAuth redirect receipts retain the existing bounded long-query support", async () => {
+  const receipt = { state: "started", profile_id: "expected-profile", authorization_url: "https://login.provider.com/authorize?scope=" + "r".repeat(3000) };
+  const response = await connectionReceipt("begin", receipt);
+  expect(response.status).toBe(200); expect(await response.json()).toEqual(receipt);
+});
+
+it.each([
+  ["invalid_request", 400], ["invalid_callback", 400], ["denied", 403], ["conflict", 409],
+  ["provider_unsupported", 503], ["unavailable", 503], ["reauthorization_required", 503],
+] as const)("OAuth preserves the recognized %s failure contract", async (code, status) => {
+  const response = await connectionReceipt("begin", { state: "failed", code, operation_state: "not_started", private_detail: "private-error-do-not-reflect" });
+  expect(response.status).toBe(status);
+  expect(await response.json()).toEqual({ error: { code: "oauth_" + code, operation_state: "not_started" } });
 });

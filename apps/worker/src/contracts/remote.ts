@@ -1,4 +1,4 @@
-import type { CatalogJson, CatalogMutation, CatalogPage, CatalogReadPorts, RemoteToolDefinition } from "./catalog.js";
+import type { CatalogJson, CatalogMutation, CatalogPage, CatalogReadPorts, RemoteToolDefinition, SharedProfiles } from "./catalog.js";
 import type { CapturedIdentity } from "./identity.js";
 import type { ConnectionProfile } from "./connectors.js";
 import type { CentralObservation, CentralReceipt } from "./central-audit.js";
@@ -6,9 +6,9 @@ import type { CentralObservation, CentralReceipt } from "./central-audit.js";
 /** Per-operation safety bounds, not advertised production capacity. */
 export const REMOTE_LIMITS = Object.freeze({ operation_ms: 20_000, request_bytes: 65_536, response_bytes: 1_048_576,
   aggregate_bytes: 2_097_152, fragments: 4096, events: 256, requests: 12, pages: 8, content_items: 32,
-  active: 2, per_client: 1, policies: 64, policy_bytes: 16_384, validation_cost: 1_000_000 });
+  active: 2, per_client: 1, validation_cost: 1_000_000 });
 export type RemoteProtocol = "2026-07-28" | "2025-11-25";
-export interface RemoteEgressRule { readonly endpoint: string; readonly protocol: RemoteProtocol; readonly session?: "ephemeral" }
+export interface RemoteEgressRule { readonly endpoint: string; readonly protocol: RemoteProtocol; readonly session?: "ephemeral" | "optional"; readonly negotiate?: true }
 export interface RemoteCall {
   readonly profile_id: string;
   readonly tool_id: string;
@@ -36,10 +36,12 @@ export function remoteFailureMetadata(value: unknown, observed: unknown) {
   const operation_state = code === "result_unconfirmed" || !["not_started", "completed", "unknown"].includes(observed as string)
     ? "unknown" : observed as "not_started" | "completed" | "unknown";
   return Object.freeze({ code: `remote_${code}`, failure_class: remoteClasses[code], operation_state,
-    next_action: operation_state !== "not_started" ? "inspect_upstream_state" : code === "stale_catalog" ? "refresh_approved_catalog" : "check_central_configuration",
+    next_action: operation_state !== "not_started" ? "inspect_upstream_state" : code === "busy" ? "wait_for_capacity"
+      : code === "stale_catalog" ? "refresh_approved_catalog" : "check_central_configuration",
     recovery_hint: operation_state === "unknown" ? "The upstream action may have executed. Inspect its state before a new invocation; this call was not replayed."
       : operation_state === "completed" ? "The upstream action completed, but its result cannot be returned. Do not treat this response as a rollback."
-      : "Check the central connection, approved catalog and client grant before a new request." });
+      : code === "busy" ? "The MCP connection is busy. Wait briefly, then try again."
+      : "Check the central connection, approved catalog and client connection before a new request." });
 }
 export type RemoteFailure = { readonly state: "failed"; readonly code: RemoteCode;
   readonly operation_state: "not_started" | "completed" | "unknown" };
@@ -47,6 +49,8 @@ export type RemoteOutcome = ({ readonly state: "completed"; readonly operation_s
 
 /** No URLs, headers, tokens, sessions, Runner selection or SDK types in the call port. */
 export interface RemoteSession {
+  /** Synchronous credential/egress validity of observed data, including after close. */
+  current(): boolean;
   listTools(): Promise<readonly RemoteToolDefinition[]>;
   callTool(tool: RemoteToolDefinition, args: { [key: string]: CatalogJson }, beforeDispatch: () => Promise<void>): Promise<RemoteResult>;
   close(): Promise<void>;
@@ -57,9 +61,10 @@ export interface RemoteConnector {
 }
 export type RemoteCallPorts = Omit<CatalogReadPorts, "cursor" | "now"> & { readonly connector: RemoteConnector; readonly observation?: CentralObservation };
 export interface CentralRemote {
+  listRemoteProfiles(principal: CapturedIdentity): Promise<SharedProfiles>;
   listCatalog(principal: CapturedIdentity, query: unknown): Promise<CatalogPage>;
   callRemote(principal: CapturedIdentity, command: unknown): Promise<RemoteOutcome>;
-  discoverRemote(sessionHash: string, profileId: string, expectedRevision: number, principal?: CapturedIdentity): Promise<CatalogMutation | RemoteFailure>;
+  discoverRemote(sessionHash: string, profileId: string, expectedRevision: number): Promise<CatalogMutation | RemoteFailure>;
 }
 
 /** Fixed codes only. Untrusted exception messages are never carried across ports. */

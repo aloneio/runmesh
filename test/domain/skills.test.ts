@@ -28,6 +28,16 @@ it("Skill import bounds encoded bytes, file counts and metadata", () => {
   expect(parseSkillBundle({ ...a, files: Array.from({ length: SKILL_LIMITS.files + 1 }, (_, n) => ({ path: 'f' + n, text: '' })) })).toBeUndefined();
   expect(parseSkillBundle({ ...a, license: 'x'.repeat(257) })).toBeUndefined();
 });
+it("Skill imports support 256 files and one MiB UTF-8 files within an eight MiB package", () => {
+  const a = input(), files = [a.files[0]!, ...Array.from({ length: 255 }, (_, n) => ({ path: 'references/' + n + '.txt', text: n === 0 ? 'x'.repeat(1_048_576) : 'reference' }))];
+  expect(parseSkillBundle({ ...a, files })?.files).toHaveLength(256);
+  files[1]!.text += 'x';
+  expect(parseSkillBundle({ ...a, files })).toBeUndefined();
+  const large = [a.files[0]!, ...Array.from({ length: 8 }, (_, n) => ({ path: 'references/' + n + '.txt', text: 'x'.repeat(1_048_576) }))];
+  expect(parseSkillBundle({ ...a, files: large })).toBeUndefined();
+  large.pop();
+  expect(parseSkillBundle({ ...a, files: large })).toBeDefined();
+});
 it("Skill instructions remain content and cannot add executable policy fields", () => {
   const a = input(), bundle = parseSkillBundle({ ...a, allowed_tools: ["shell"], credentials: "secret" });
   expect(bundle).toBeDefined(); expect(bundle).not.toHaveProperty("credentials"); expect(bundle).not.toHaveProperty("allowed_tools");
@@ -57,7 +67,7 @@ it("Skill remote dependencies report stored readiness, disabled state and incomp
   let profile: ReturnType<typeof catalogProfile> | undefined = catalogProfile();
   let head: CatalogHead = { schema_version: 1, profile_id: 'docs', revision: 1, observed_digest: snapshot.digest, approved_digest: snapshot.digest, approved_names: ['search'] };
   const repository: CatalogRepository = { readHead: () => head, readSnapshot: () => snapshot,
-    stage: () => { throw new Error('write forbidden'); }, approve: () => { throw new Error('write forbidden'); }, disable: () => { throw new Error('write forbidden'); } };
+    publish: () => { throw new Error("write forbidden"); }, stage: () => { throw new Error('write forbidden'); }, approve: () => { throw new Error('write forbidden'); }, disable: () => { throw new Error('write forbidden'); } };
   const read = createDependencyReader({ repository, profile: () => profile, digest: fixtureDigest });
   const target = { kind: 'remote_tool' as const, resource_id: tool.tool_id, version: tool.version, connection_profile_id: 'docs' }, signal = new AbortController().signal;
   expect(await read(target, signal)).toBe('configured');

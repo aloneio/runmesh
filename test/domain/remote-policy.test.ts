@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { parseRemoteCall, parseRemoteEgress, parseRemoteResult, publicMcpEndpoint } from "../../apps/worker/src/contracts/remote-values.js";
+import { parseRemoteCall, parseRemoteResult, publicMcpEndpoint } from "../../apps/worker/src/contracts/remote-values.js";
 
 it.each(["http://api.example.com/mcp", "https://127.0.0.1/mcp", "https://2130706433/mcp", "https://0x7f000001/mcp",
   "https://[::1]/mcp", "https://[::ffff:127.0.0.1]/mcp", "https://10.0.0.1/mcp", "https://169.254.169.254/mcp",
@@ -7,16 +7,6 @@ it.each(["http://api.example.com/mcp", "https://127.0.0.1/mcp", "https://2130706
   "https://host/mcp", "https://api.example.com:8443/mcp", "https://api.example.com./mcp", "https://a@api.example.com/mcp",
   "https://api.example.com/mcp?token=a", "https://api.example.com/mcp#token", "https://*.example.com/mcp"])(
   "W05 denies non-public or ambiguous destinations: %s", value => { expect(publicMcpEndpoint(value)).toBeUndefined(); });
-
-it("W05 policy requires exact canonical destinations and a pinned supported protocol", () => {
-  const endpoint = "https://api.example.com/mcp";
-  const policy = { schema_version: 1, endpoints: [{ endpoint, protocol: "2026-07-28" }] };
-  expect(parseRemoteEgress(JSON.stringify(policy))).toEqual(policy.endpoints);
-  expect(parseRemoteEgress(JSON.stringify({ ...policy, endpoints: [...policy.endpoints, ...policy.endpoints] }))).toBeUndefined();
-  expect(parseRemoteEgress(JSON.stringify({ ...policy, endpoints: [{ endpoint, protocol: "auto" }] }))).toBeUndefined();
-  expect(parseRemoteEgress(JSON.stringify({ ...policy, endpoints: [{ endpoint, protocol: "2026-07-28", headers: {} }] }))).toBeUndefined();
-  expect(parseRemoteEgress(undefined)).toBeUndefined();
-});
 
 it("W05 call inputs cannot override credentials, URL, protocol or authorization", () => {
   const command = { profile_id: "docs", tool_id: "mcp." + "a".repeat(64), version: "b".repeat(64), arguments: { query: "text" } };

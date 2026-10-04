@@ -36,7 +36,7 @@ export function parseCatalogCommand(value: unknown): CatalogCommand | undefined 
     return !catalogDigest(item.digest) || names === undefined ? undefined : { action: "approve", profile_id: item.profile_id,
       expected_revision: item.expected_revision, digest: item.digest, tool_names: names };
   }
-  if (item.action !== "stage" || !catalogKeys(item, ["action", "profile_id", "expected_revision", "tools"])
+  if (!["stage", "publish"].includes(item.action as string) || !catalogKeys(item, ["action", "profile_id", "expected_revision", "tools"])
     || !Array.isArray(item.tools) || item.tools.length > CATALOG_LIMITS.tools
     || catalogJson(item.tools, CATALOG_LIMITS.request_bytes) === undefined) return undefined;
   const tools: RemoteToolDefinition[] = [], seen = new Set<string>();
@@ -46,7 +46,7 @@ export function parseCatalogCommand(value: unknown): CatalogCommand | undefined 
     tools.push(tool); seen.add(tool.name);
   }
   tools.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
-  return { action: "stage", profile_id: item.profile_id, expected_revision: item.expected_revision, tools };
+  return { action: item.action as "stage" | "publish", profile_id: item.profile_id, expected_revision: item.expected_revision, tools };
 }
 
 export function parseCatalogHead(value: unknown): CatalogHead | undefined {
@@ -95,9 +95,9 @@ export function parseCatalogQuery(value: unknown): CatalogQuery | undefined {
 export function parseCatalogCursor(value: unknown): CatalogCursor | undefined {
   const item = catalogObject(value);
   if (item === undefined || !catalogKeys(item, ["schema_version", "client_id", "secret_version", "profile_id", "profile_revision",
-    "grant_revision", "catalog_revision", "offset", "limit", "expires_at_ms"]) || item.schema_version !== 1
+    "catalog_revision", "offset", "limit", "expires_at_ms"]) || item.schema_version !== 2
     || !isCapabilityIdentifier(item.client_id) || !isCapabilityIdentifier(item.profile_id)
-    || ![item.secret_version, item.profile_revision, item.grant_revision, item.catalog_revision, item.expires_at_ms].every(v => catalogRevision(v))
+    || ![item.secret_version, item.profile_revision, item.catalog_revision, item.expires_at_ms].every(v => catalogRevision(v))
     || !Number.isSafeInteger(item.offset) || (item.offset as number) < 1 || (item.offset as number) > CATALOG_LIMITS.tools
     || !Number.isSafeInteger(item.limit) || (item.limit as number) < 1 || (item.limit as number) > CATALOG_LIMITS.page_tools) return undefined;
   return item as unknown as CatalogCursor;

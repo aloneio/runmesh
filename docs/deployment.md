@@ -27,7 +27,7 @@ npm run pack:runner
 | Production | `main` | `runmesh` | Signed stable release verified and activated |
 | Development | `dev` | `runmeshdev` | Candidate source; hosted installation uses its verified dev prerelease channel |
 
-The signed **0.1.4** stable release has completed independent asset verification and reviewed activation. Deploy the activated `main` source for production, then verify the live commit through [build provenance](build-provenance.md). See [release status](release-readiness.md) for package availability.
+The [release status](release-readiness.md) records the current signed stable release and candidate. Deploy the activated `main` source for production, then verify the live commit through [build provenance](build-provenance.md). See [release status](release-readiness.md) for package availability.
 
 In Cloudflare Workers Builds, select the repository root and set the build command to `npm run build`. Use the matching deploy command:
 
@@ -47,7 +47,7 @@ For the maintained GitLab deployment path, configure the host-side `scripts/sync
 
 ## Provision resources and secrets
 
-A standard deployment uses the Worker, SQLite-backed `RegistryDOv2` and `RunnerDOv2`, the `HISTORY_DB` D1 history database, static assets and version metadata. New installations provision their own account resources. Upgrades retain the live resource identities.
+A standard deployment uses the Worker, SQLite-backed `RegistryDOv2`, `RunnerDOv2` and `CapabilitiesDOv1`, the `HISTORY_DB` D1 history database, static assets and version metadata. New installations provision their own account resources. Upgrades retain the live resource identities.
 
 Production uses one Cron Trigger (`*/15 * * * *`) for [D1 history retention](quota-resilience.md#retention). Reserve one slot within the target account's [Cron Trigger allowance](https://developers.cloudflare.com/workers/platform/limits/#account-plan-limits). If deployment reports error `10072`, review existing schedules and remove an obsolete schedule you manage, or increase the account allowance, then rerun deployment. A Worker upload can succeed before trigger configuration fails; verify the final deployment status and the `runmesh` Cron Trigger together.
 
@@ -59,7 +59,7 @@ npm exec --offline -- wrangler secret put RUNNER_TOKEN_PEPPER --env production
 npm exec --offline -- wrangler secret put INTERNAL_CONTROL_SECRET --env production
 ```
 
-Use the appropriate environment for your Worker, and retain both values during updates. Replacing `RUNNER_TOKEN_PEPPER` invalidates enrolled Runner credentials. The [runtime configuration guide](runtime-config.md) includes a helper that initializes only missing secrets.
+Use the appropriate environment for your Worker, and retain both values during updates. MCP OAuth automatically derives its encryption key from `INTERNAL_CONTROL_SECRET` and needs no additional setup. Replacing `RUNNER_TOKEN_PEPPER` invalidates enrolled Runner credentials; replacing `INTERNAL_CONTROL_SECRET` requires OAuth reconnection. The [runtime configuration guide](runtime-config.md) includes a helper that initializes only missing secrets.
 
 The default public origin is the validated HTTPS request URL with a matching Host. A reverse proxy that supplies an internal URL needs an explicit `RUNMESH_PUBLIC_ORIGIN`: an HTTPS origin without path, query, fragment, credentials or whitespace. An empty or invalid override rejects requests requiring a trusted public origin.
 
@@ -102,7 +102,7 @@ Production installation uses the activated stable release. Development discovers
 
 The default `dedicated_user` mode requires explicit OS access to approved workspaces. `runmesh install` provisions Runmesh-owned accounts/directories and starts the service; administrators grant project-directory access separately. Privileged execution requires `--execution-mode privileged_host --confirm-privileged-host`.
 
-POSIX owner-only profiles use directory/file modes `0700`/`0600`. A dedicated system service uses the controlled root/group boundary with `0750`/`0640`. Windows provisioning applies Local Service ACLs to Runmesh-owned paths. Protect profiles as long-lived credentials.
+POSIX owner-only profiles use directory/file modes `0700`/`0600`. A dedicated system service uses the controlled root/group boundary with `0750`/`0640` for its configuration. Runtime state, including policies and Jobs, remains private to the service identity with `0700`/`0600`, including after upgrades and reinstalls. Windows provisioning applies Local Service ACLs to Runmesh-owned paths. Protect profiles as long-lived credentials.
 
 Use the actual service executable for `runmesh --version`, with no additional arguments. Use `doctor --json` for configuration and host-service checks; add `--profile` for a custom profile or `--user` for the current user's service. `status --json` shows the redacted profile summary. Check Windows ACLs separately when diagnosing access.
 

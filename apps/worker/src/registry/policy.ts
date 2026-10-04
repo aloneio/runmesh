@@ -16,6 +16,11 @@ import type { PolicyPorts } from './ports.js';
 /** Policy operations over a single Registry database. Construction has no I/O.
  * SQL text, arguments, transaction callbacks and await positions are retained. */
 export class RegistryPolicy {
+  public policyMutationId(runnerId: string, revision: number): string | null {
+    return this.storage.sql.exec<{ mutation_id: string | null }>(
+      "SELECT mutation_id FROM runner_policy_versions WHERE runner_id = ? AND revision = ?", runnerId, revision,
+    ).toArray()[0]?.mutation_id ?? null;
+  }
   public constructor(private readonly storage: RegistryStorage, private readonly ports: PolicyPorts, private readonly jobHistoryBackend: string | undefined) {}
   public authorizeMcpRpc(input: Record<string, unknown>): { ok: true; record_history?: boolean } | { ok: false; code: string } {
     const deny = (code = "permission_denied") => ({ ok: false as const, code });

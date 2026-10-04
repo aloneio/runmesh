@@ -1,17 +1,26 @@
 // Audit-only tests: an isolated DO and disposable session, never production.
-import { env, runInDurableObject } from "cloudflare:test";
+import { env, runInDurableObject, createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
-import worker from "../src/index.js";
-import { randomBase64Url, sha256Hex, passwordVerifier } from "../src/security.js";
+import worker, { RunnerDO } from "../src/index.js";
+import { internalHeaders, randomBase64Url, sha256Hex, passwordVerifier } from "../src/security.js";
 import { LOGIN_CSRF_COOKIE } from "../src/http/constants.js";
 import { adminUpstreamError } from "../src/http/responses.js";
 import { handleBrowserRunnerAction } from "../src/http/runner-actions.js";
-import { beginRunnerPolicyMutation, cancelRunnerPolicyMutation, mutateRunnerPolicy, pushRunnerPolicy } from "../src/application/runner-policy.js";
-import { deleteRunnerTransport, fenceRunnerTransport, revokeRunnerTransport } from "../src/application/runner-lifecycle.js";
+import { beginRunnerPolicyMutation } from "../src/platform/runner-mutations.js";
+import { cancelRunnerPolicyMutation } from "../src/platform/runner-mutations.js";
+import { mutateRunnerPolicy } from "../src/http/runner-policy.js";
+import { pushRunnerPolicy } from "../src/platform/runner-mutations.js";
+import { deleteRunnerTransport } from "../src/platform/runner-mutations.js";
+import { fenceRunnerTransport } from "../src/platform/runner-mutations.js";
+import { revokeRunnerTransport } from "../src/platform/runner-mutations.js";
 import { runnerMutationState } from "../src/platform/runner-state.js";
+import { developmentDescriptor } from "../src/domain/release-selection.js";
+import { FIXED_RELEASE_VERSION } from "../src/domain/release-config.js";
+import { REVIEWED_RELEASE_VERSION } from "../src/generated-release.js";
+import { registryDevelopmentReleaseCache } from "../src/http/release-cache.js";
 
-async function fixture() {
-  const id = env.REGISTRY.idFromName(`audit-admin-${crypto.randomUUID()}`), stub = env.REGISTRY.get(id);
+async function fixture(registryName = `audit-admin-${crypto.randomUUID()}`) {
+  const id = env.REGISTRY.idFromName(registryName), stub = env.REGISTRY.get(id);
   const session = randomBase64Url(), csrf = randomBase64Url();
   const hash = await sha256Hex(session), csrfHash = await sha256Hex(csrf), verifier = await passwordVerifier("synthetic-admin-password");
   await runInDurableObject(stub, instance => {
@@ -22,6 +31,234 @@ async function fixture() {
   const headers = { origin: "https://audit.test", cookie: `__Host-runmesh_admin_session=${session}; __Host-runmesh_admin_csrf=${csrf}`, "content-type": "application/x-www-form-urlencoded" };
   return { stub, localEnv, hash, csrf, headers };
 }
+
+it("shares one development release refresh across Runner management and public downloads", async () => {
+  // Real RunnerDO mutations resolve the production Registry name. Test storage
+  // isolation keeps this binding disposable along with the authenticated session.
+  const f = await fixture("registry"), runnerId = `release-scope-${crypto.randomUUID()}`;
+  const form = () => new URLSearchParams({ csrf_token: f.csrf, runner_id: runnerId, display_name: "Release scope test", execution_mode: "dedicated_user" });
+  const localEnv = { ...f.localEnv, RUNMESH_ENVIRONMENT: "development", RUNMESH_PUBLIC_ORIGIN: "https://audit.test", RUNMESH_SIGNED_RELEASE_AVAILABLE: "dev", RUNMESH_TEST_MODE: "" };
+  const contexts: ExecutionContext[] = [];
+  const request = async (path: string, init?: RequestInit) => {
+    const context = createExecutionContext(); contexts.push(context);
+    const headers = new Headers(init?.headers); headers.set("host", "audit.test");
+    return worker.fetch(new Request(`https://audit.test${path}`, { ...init, headers }), localEnv, context);
+  };
+  const [major, minor, patch] = FIXED_RELEASE_VERSION.split(".");
+  const version = `${major}.${minor}.${Number(patch) + (REVIEWED_RELEASE_VERSION ? 1 : 0)}-dev.1`;
+  const descriptor = developmentDescriptor({ tag_name: `v${version}`, draft: false, prerelease: true, immutable: true, published_at: "2026-09-16T08:00:00Z",
+    assets: ["LICENSE", "NOTICE", "SHA256SUMS", "THIRD_PARTY_NOTICES.md", "manifest.json", "manifest.sig", "manifest.signature.json", "trust-keyring.json", `runmesh-runner-${version}.tgz`].map(name => ({ name })) });
+  expect(descriptor).toBeDefined();
+  // Seed the trusted storage port; signature verification has its own tests.
+  await registryDevelopmentReleaseCache(localEnv).put(new Request("https://audit.test/cache-fixture"),
+    Response.json({ schema_version: 1, verified_at_ms: Date.now() - 120_000, descriptor }));
+  let finishRefresh!: (response: Response) => void;
+  const pendingRefresh = new Promise<Response>(resolve => { finishRefresh = resolve; });
+  const upstream = vi.spyOn(globalThis, "fetch").mockImplementation(() => pendingRefresh);
+  try {
+    const publicRelease = await request("/runner/releases/dev");
+    expect(publicRelease.status).toBe(200);
+    expect(await publicRelease.json()).toMatchObject({ distributable: true, package_version: version });
+    expect(upstream).toHaveBeenCalledOnce();
+    for (const surface of ["create", "detail", "rotate", "enrollment"] as const) {
+      const path = surface === "create" ? "/admin/runners" : `/admin/runners/${runnerId}${surface === "detail" ? "" : `/${surface}`}`;
+      const body = form(); if (surface !== "create") body.set("expected_execution_mode", "dedicated_user");
+      const response = await request(path, surface === "detail" ? { headers: f.headers } : { method: "POST", headers: f.headers, body });
+      expect(response.status, surface).toBe(200);
+      const page = await response.text();
+      if (surface === "detail") expect(page).toContain(version);
+      else { expect(page).toContain("One-command Runner setup"); expect(page).toContain("/runner/install.sh"); }
+      expect(upstream, surface).toHaveBeenCalledOnce();
+    }
+    const installer = await request("/runner/install.sh");
+    expect(installer.status).toBe(200); expect(await installer.text()).toContain(version);
+    expect(upstream).toHaveBeenCalledOnce();
+  } finally {
+    finishRefresh(new Response("missing", { status: 404 }));
+    try { await Promise.all(contexts.map(context => waitOnExecutionContext(context))); }
+    finally { upstream.mockRestore(); }
+  }
+});
+
+it.each(["/admin/runners-extra", "/admin/runners-extra/r/delete", "/admin/runners//r/delete", "/admin/runners/r/delete/", "/internal/runners//r/rpc", "/internal/runners/r/rpc/"])("rejects a noncanonical Runner route before dispatch: %s", async path => {
+  let mutations = 0;
+  const localEnv = { ...env, RUNNER: { idFromName: () => { mutations++; return "r"; }, get: () => ({ fetch: () => new Response(null, { status: 204 }) }) } } as unknown as typeof env;
+  const body = JSON.stringify({ runner_id: "r", confirmation: "r", execution_mode: "dedicated_user" });
+  const headers = path.startsWith("/internal/") ? await internalHeaders(env.INTERNAL_CONTROL_SECRET!, "POST", path, body)
+    : { Authorization: "Bearer " + env.ADMIN_TOKEN, "content-type": "application/json" };
+  const response = await worker.fetch(new Request("https://audit.test" + path, { method: "POST", headers, body }), localEnv, {} as ExecutionContext);
+  await response.body?.cancel(); expect(response.status).toBe(404); expect(mutations).toBe(0);
+});
+
+it("routes an encoded internal Runner ID while verifying the original signed URL", async () => {
+  const names: string[] = [], bodies: string[] = [];
+  const localEnv = { ...env, RUNNER: { idFromName: (name: string) => { names.push(name); return name; }, get: () => ({ fetch: async (request: Request) => {
+    expect(new URL(request.url).pathname).toBe("/rpc"); bodies.push(await request.text()); return new Response(null, { status: 204 });
+  } }) } } as unknown as typeof env;
+  const path = "/internal/runners/runner%3Aencoded/rpc", body = JSON.stringify({ method: "fixture", params: {} });
+  for (const correct of [false, true]) {
+    const headers = await internalHeaders(env.INTERNAL_CONTROL_SECRET!, "POST", correct ? path : "/internal/runners/runner:encoded/rpc", body);
+    const response = await worker.fetch(new Request("https://audit.test" + path, { method: "POST", headers, body }), localEnv, {} as ExecutionContext);
+    expect(response.status).toBe(correct ? 204 : 404); await response.body?.cancel();
+    expect(names.length).toBe(correct ? 1 : 0);
+  }
+  expect(names).toEqual(["runner:encoded"]); expect(bodies).toEqual([body]);
+});
+
+it.each(["r%2Fx", "r%253Ax", "r%", "r%00x"])("rejects unsafe encoded Runner routes without dispatching a mutation: %s", async segment => {
+  const f = await fixture(); let mutations = 0;
+  const localEnv = { ...f.localEnv, RUNNER: { idFromName: () => { mutations++; return "runner"; }, get: () => ({ fetch: () => new Response(null, { status: 204 }) }) } } as unknown as typeof env;
+  for (const token of [false, true]) {
+    const response = await worker.fetch(new Request("https://audit.test/admin/runners/" + segment + "/delete", {
+      method: "POST", headers: token ? { Authorization: "Bearer " + env.ADMIN_TOKEN, "content-type": "application/json" } : f.headers,
+      body: token ? JSON.stringify({ confirmation: "r:x" }) : new URLSearchParams({ csrf_token: f.csrf, confirmation: "r:x" }),
+    }), localEnv, {} as ExecutionContext);
+    expect(response.status).toBe(404); await response.body?.cancel();
+  }
+  expect(mutations).toBe(0);
+});
+
+it("retains the authenticated console and session when a Runner deletion fence is unavailable", async () => {
+  const f = await fixture(); let fences = 0;
+  const localEnv = { ...f.localEnv, RUNNER: { idFromName: () => "runner", get: () => ({ fetch: () => { fences++; return new Response(null, { status: 503 }); } }) } } as unknown as typeof env;
+  const response = await worker.fetch(new Request("https://audit.test/admin/runners/delete-unavailable/delete", {
+    method: "POST", headers: f.headers, body: new URLSearchParams({ csrf_token: f.csrf, confirmation: "delete-unavailable" }),
+  }), localEnv, {} as ExecutionContext);
+  expect(response.status).toBe(503); expect(fences).toBe(1);
+  expect(response.headers.get("set-cookie")).toBeNull();
+  const page = await response.text();
+  expect(page).toContain('data-app-header'); expect(page).toContain('data-admin-error');
+  expect(page).toContain('Could not start deleting the Runner. Try again.');
+  expect(page).not.toContain('<body class="auth-body">');
+  const next = await worker.fetch(new Request("https://audit.test/admin/runners", { headers: f.headers }), f.localEnv, {} as ExecutionContext);
+  expect(next.status).toBe(200); expect(next.headers.get("location")).toBeNull(); await next.body?.cancel();
+});
+
+it("releases a rejected deletion fence when the browser session is revoked after fencing", async () => {
+  const f = await fixture(), runnerId = `delete-session-race-${crypto.randomUUID()}`;
+  const adminHeaders = { Authorization: "Bearer " + env.ADMIN_TOKEN, "content-type": "application/json" };
+  await runInDurableObject(env.RUNNER.get(env.RUNNER.idFromName(runnerId)), async (_existing, state) => {
+    // Bind the real Runner lifecycle and unique DO storage to this fixture's
+    // unique Registry, without sharing the default Registry's admin setup.
+    const registryBinding = { idFromName: f.localEnv.REGISTRY.idFromName,
+      get: () => env.REGISTRY.get(f.localEnv.REGISTRY.idFromName("registry")) };
+    const runnerEnv = { ...f.localEnv, REGISTRY: registryBinding } as unknown as typeof env;
+    const runner = new RunnerDO(state, runnerEnv), events: string[] = [];
+    const runnerBinding = { idFromName: env.RUNNER.idFromName.bind(env.RUNNER), get: () => ({ fetch: (request: Request) => runner.fetch(request) }) };
+    const baseEnv = { ...runnerEnv, RUNNER: runnerBinding } as unknown as typeof env;
+    const created = await worker.fetch(new Request("https://audit.test/admin/runners", {
+      method: "POST", headers: adminHeaders, body: JSON.stringify({ runner_id: runnerId, execution_mode: "dedicated_user" }),
+    }), baseEnv, {} as ExecutionContext);
+    expect(created.status).toBe(200); await created.body?.cancel();
+    const localEnv = { ...baseEnv,
+      REGISTRY: { idFromName: f.localEnv.REGISTRY.idFromName, get: () => ({ fetch: async (request: Request) => {
+        const response = await registryBinding.get().fetch(request), path = new URL(request.url).pathname;
+        if (path === "/auth/sessions/verify") {
+          expect(response.status).toBe(200);
+          if (!events.includes("session verified")) events.push("session verified");
+        }
+        if (request.method === "DELETE" && path === "/runners/" + runnerId) {
+          expect(response.status).toBe(403); events.push("Registry rejected deletion");
+        }
+        return response;
+      } }) },
+      RUNNER: { ...runnerBinding, get: () => ({ fetch: async (request: Request) => {
+        const response = await runner.fetch(request), path = new URL(request.url).pathname;
+        if (path === "/begin-policy-mutation") {
+          expect(response.status).toBe(204); expect(events).toEqual(["session verified"]); events.push("fence acquired");
+          const logout = await worker.fetch(new Request("https://audit.test/admin/logout", {
+            method: "POST", headers: f.headers, body: new URLSearchParams({ csrf_token: f.csrf }),
+          }), baseEnv, {} as ExecutionContext);
+          expect(logout.status).toBe(303); await logout.body?.cancel(); events.push("session revoked");
+        }
+        if (path === "/cancel-policy-mutation") { expect(response.status).toBe(204); events.push("fence cancelled"); }
+        return response;
+      } }) },
+    } as unknown as typeof env;
+    const rejected = await worker.fetch(new Request(`https://audit.test/admin/runners/${runnerId}/delete`, {
+      method: "POST", headers: f.headers, body: new URLSearchParams({ csrf_token: f.csrf, confirmation: runnerId }),
+    }), localEnv, {} as ExecutionContext);
+    expect(rejected.status, events.join(" -> ")).toBe(400); expect(await rejected.text()).toContain("Runner delete failed.");
+    expect(events).toEqual(["session verified", "fence acquired", "session revoked", "Registry rejected deletion", "fence cancelled"]);
+    // A second authenticated mutation proves the rejected delete preserved the
+    // Runner and released ownership without inspecting private admission state.
+    const next = await worker.fetch(new Request(`https://audit.test/admin/runners/${runnerId}/revoke`, {
+      method: "POST", headers: adminHeaders, body: JSON.stringify({ confirmation: runnerId }),
+    }), baseEnv, {} as ExecutionContext);
+    expect(next.status).toBe(204); await next.body?.cancel();
+  });
+});
+
+it.each(["create", "rename", "rotate", "enrollment", "validity", "permissions", "version-policy", "emergency-lock", "workspace-create", "workspace-update", "workspace-delete", "history-settings"])("keeps invalid Runner %s forms inside the authenticated console", async action => {
+  const f = await fixture();
+  const path = action === "create" ? "/admin/runners" : "/admin/runners/form-test/" + action;
+  const response = await worker.fetch(new Request("https://audit.test" + path, {
+    method: "POST", headers: f.headers,
+    body: new URLSearchParams({ csrf_token: f.csrf, runner_valid_days: "invalid", enrollment_ttl_ms: "invalid" }),
+  }), f.localEnv, {} as ExecutionContext);
+  expect(response.status).toBe(400); expect(response.headers.get("set-cookie")).toBeNull();
+  const page = await response.text();
+  expect(page).toContain('aria-current="page" href="/admin/runners"');
+  expect(page).toContain("data-admin-error"); expect(page).not.toContain('<body class="auth-body">');
+});
+
+it.each(["create", "rotate", "enrollment", "rename", "version-policy"])("retains console navigation when Runner %s dependencies fail", async action => {
+  const f = await fixture(), runnerId = "action-unavailable";
+  const localEnv = { ...f.localEnv, REGISTRY: { idFromName: f.localEnv.REGISTRY.idFromName, get: () => ({ fetch: (request: Request) => {
+    const path = new URL(request.url).pathname;
+    return path === "/runners/" + runnerId || path === "/runners/" + runnerId + "/execution-state" || path === "/runners/" + runnerId + "/rename" || path === "/auth/runners/" + runnerId + "/version-policy"
+      ? Promise.resolve(new Response("PRIVATE_FAILURE", { status: 503 })) : f.stub.fetch(request);
+  } }) } } as unknown as typeof env;
+  const path = action === "create" ? "/admin/runners" : "/admin/runners/" + runnerId + "/" + action;
+  const response = await worker.fetch(new Request("https://audit.test" + path, { method: "POST", headers: f.headers,
+    body: new URLSearchParams({ csrf_token: f.csrf, runner_id: runnerId, display_name: "Test Runner", execution_mode: "dedicated_user", expected_execution_mode: "dedicated_user", update_channel: "stable" }),
+  }), localEnv, {} as ExecutionContext);
+  expect(response.status).toBe(503); expect(response.headers.get("set-cookie")).toBeNull();
+  const page = await response.text();
+  expect(page).toContain('aria-current="page" href="/admin/runners"'); expect(page).not.toContain("PRIVATE_FAILURE");
+  const recovered = await worker.fetch(new Request("https://audit.test/admin/runners", { headers: f.headers }), f.localEnv, {} as ExecutionContext);
+  expect(recovered.status).toBe(200); await recovered.body?.cancel();
+});
+
+it.each(["runner", "workspaces", "enrollment"].flatMap(part => [false, true].map(malformed => ({ part, malformed }))))("distinguishes unavailable Runner $part details from empty settings (malformed: $malformed)", async ({ part, malformed }) => {
+  const f = await fixture(), runnerId = "detail-unavailable";
+  await runInDurableObject(f.stub, instance => { expect(instance.registerRunner(runnerId, "synthetic", Date.now(), undefined, "dedicated_user")).toBe(true); });
+  const paths: Record<string, string> = { runner: "/runners/" + runnerId, workspaces: "/auth/runners/" + runnerId + "/managed-workspaces", enrollment: "/auth/runners/" + runnerId + "/enrollments" };
+  const localEnv = { ...f.localEnv, REGISTRY: { idFromName: f.localEnv.REGISTRY.idFromName, get: () => ({ fetch: (request: Request) =>
+    new URL(request.url).pathname === paths[part] ? Promise.resolve(malformed ? Response.json({}) : new Response("PRIVATE_FAILURE", { status: 503 })) : f.stub.fetch(request),
+  }) } } as unknown as typeof env;
+  const response = await worker.fetch(new Request("https://audit.test/admin/runners/" + runnerId, { headers: f.headers }), localEnv, {} as ExecutionContext);
+  expect(response.status).toBe(503); expect(response.headers.get("set-cookie")).toBeNull();
+  const page = await response.text();
+  expect(page).toContain('aria-current="page" href="/admin/runners"');
+  expect(page).not.toContain("Runner was not found."); expect(page).not.toContain("PRIVATE_FAILURE");
+  expect(page).not.toContain('action="/admin/runners/' + runnerId + '/workspace-create"');
+  const recovered = await worker.fetch(new Request("https://audit.test/admin/runners/" + runnerId, { headers: f.headers }), f.localEnv, {} as ExecutionContext);
+  expect(recovered.status).toBe(200); await recovered.body?.cancel();
+});
+
+it("keeps a confirmed missing Runner inside the console", async () => {
+  const f = await fixture();
+  const response = await worker.fetch(new Request("https://audit.test/admin/runners/missing-runner", { headers: f.headers }), f.localEnv, {} as ExecutionContext);
+  expect(response.status).toBe(404); expect(response.headers.get("set-cookie")).toBeNull();
+  const page = await response.text();
+  expect(page).toContain("Runner was not found."); expect(page).toContain('aria-current="page" href="/admin/runners"');
+});
+
+it.each(["history-settings", "mcp-calls"].flatMap(part => [false, true].map(malformed => ({ part, malformed }))))("keeps Runner management available when optional $part fails (malformed: $malformed)", async ({ part, malformed }) => {
+  const f = await fixture(), runnerId = "optional-unavailable";
+  await runInDurableObject(f.stub, instance => { expect(instance.registerRunner(runnerId, "synthetic", Date.now(), undefined, "dedicated_user")).toBe(true); });
+  const localEnv = { ...f.localEnv, REGISTRY: { idFromName: f.localEnv.REGISTRY.idFromName, get: () => ({ fetch: (request: Request) =>
+    new URL(request.url).pathname === "/runners/" + runnerId + "/" + part ? Promise.resolve(malformed ? Response.json({}) : new Response("PRIVATE_FAILURE", { status: 503 })) : f.stub.fetch(request),
+  }) } } as unknown as typeof env;
+  const response = await worker.fetch(new Request("https://audit.test/admin/runners/" + runnerId + "?history=audit", { headers: f.headers }), localEnv, {} as ExecutionContext);
+  expect(response.status).toBe(200);
+  const page = await response.text();
+  expect(page).toContain('action="/admin/runners/' + runnerId + '/workspace-create"');
+  expect(page).toContain(part === "history-settings" ? "History settings unavailable." : "Audit history unavailable.");
+  expect(page).not.toContain("PRIVATE_FAILURE");
+  if (part === "history-settings") expect(page).not.toContain('action="/admin/runners/' + runnerId + '/history-settings"');
+});
 
 it.each(["create", "rotate"] as const)("does not display an unconfirmed MCP %s credential", async action => {
   const f = await fixture(), original = f.localEnv.REGISTRY.get.bind(f.localEnv.REGISTRY);
@@ -233,7 +470,7 @@ it.each([401, 403, 404])("SEC04 an actual session denial %s still signs out", as
 });
 
 it("SEC04 bounds a stalled authorization body and cancels its reader", async () => {
-  const { boundedJsonResponse } = await import("../src/platform/bounded-json.js");
+  const { boundedJsonResponse } = await import("../src/bounded-json.js");
   let signal: AbortSignal | undefined, cancelled = false;
   const result = await boundedJsonResponse(async value => { signal = value; return new Response(new ReadableStream({ cancel() { cancelled = true; } })); }, 10);
   expect(result).toBeUndefined(); expect(signal?.aborted).toBe(true); expect(cancelled).toBe(true);
@@ -265,7 +502,7 @@ it("SEC04 successful logout revokes the server session before clearing cookies",
 });
 
 it("SEC04 bounds empty response chunks even when they consume no byte budget", async () => {
-  const { boundedJsonResponse } = await import("../src/platform/bounded-json.js");
+  const { boundedJsonResponse } = await import("../src/bounded-json.js");
   let pulls = 0, cancelled = false;
   const stream = new ReadableStream<Uint8Array>({
     pull(controller) {
@@ -279,7 +516,7 @@ it("SEC04 bounds empty response chunks even when they consume no byte budget", a
 });
 
 it("SEC04 accepts occasional empty chunks and fragmented UTF-8 within the byte budget", async () => {
-  const { boundedJsonResponse } = await import("../src/platform/bounded-json.js");
+  const { boundedJsonResponse } = await import("../src/bounded-json.js");
   const value = { value: "中文😀" }, bytes = new TextEncoder().encode(JSON.stringify(value));
   const stream = new ReadableStream<Uint8Array>({ start(controller) {
     for (const byte of bytes) { controller.enqueue(new Uint8Array()); controller.enqueue(Uint8Array.of(byte)); }
@@ -349,7 +586,7 @@ it("SEC04 a completed password change revokes the old server session", async () 
 });
 
 it.each([401, 403, 404, 503])("SEC04 an expired status observation (%s) is unavailable, not a fresh denial", async status => {
-  const { boundedJsonResponse } = await import("../src/platform/bounded-json.js");
+  const { boundedJsonResponse } = await import("../src/bounded-json.js");
   let clock = 0, signal: AbortSignal | undefined;
   const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
   try {
@@ -360,13 +597,52 @@ it.each([401, 403, 404, 503])("SEC04 an expired status observation (%s) is unava
 
 
 it("bounds explicitly parsed denial receipts without broadening default authorization", async () => {
-  const { boundedJsonReceipt, boundedJsonResponse } = await import("../src/platform/bounded-json.js");
+  const { boundedJsonReceipt, boundedJsonResponse } = await import("../src/bounded-json.js");
   const denied = () => Response.json({ ok: false }, { status: 403 });
   expect(await boundedJsonResponse(async () => denied())).toEqual({ status: 403 });
   expect(await boundedJsonReceipt(async () => denied(), [200, 403])).toEqual({ status: 403, value: { ok: false } });
 });
+it("a pre-cancelled observation never starts a request", async () => {
+  const { boundedJsonResponse } = await import("../src/bounded-json.js");
+  const parent = new AbortController(), fetchResponse = vi.fn(async () => Response.json({ ok: true }));
+  parent.abort();
+  expect(await boundedJsonResponse(fetchResponse, 5000, 16384, parent.signal)).toBeUndefined();
+  expect(fetchResponse).not.toHaveBeenCalled();
+});
+it("parent cancellation settles ignored aborts without cancelling another observation", async () => {
+  const { boundedJsonResponse } = await import("../src/bounded-json.js");
+  const parent = new AbortController(), independentParent = new AbortController(), cancel = vi.fn();
+  let finish!: (response: Response) => void, finishIndependent!: (response: Response) => void;
+  let cancelledSignal: AbortSignal | undefined, independentSignal: AbortSignal | undefined;
+  const pending = boundedJsonResponse(signal => { cancelledSignal = signal; return new Promise(resolve => { finish = resolve; }); }, 5000, 16384, parent.signal);
+  const independent = boundedJsonResponse(signal => { independentSignal = signal; return new Promise(resolve => { finishIndependent = resolve; }); }, 5000, 16384, independentParent.signal);
+  parent.abort();
+  const cancelledBeforeCompletion = cancelledSignal?.aborted, independentBeforeCompletion = independentSignal?.aborted;
+  finishIndependent(Response.json({ ok: true }));
+  const result = await pending;
+  finish(new Response(new ReadableStream({ cancel })));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(result).toBeUndefined();
+  expect(cancelledBeforeCompletion).toBe(true);
+  expect(independentBeforeCompletion).toBe(false);
+  expect(await independent).toEqual({ status: 200, value: { ok: true } });
+  expect(independentParent.signal.aborted).toBe(false);
+  expect(cancel).toHaveBeenCalledOnce();
+});
+it.each(["complete", "cancel"])("a bounded observation removes its parent listener after %s", async outcome => {
+  const { boundedJsonResponse } = await import("../src/bounded-json.js");
+  const parent = new AbortController();
+  const added = vi.spyOn(parent.signal, "addEventListener"), removed = vi.spyOn(parent.signal, "removeEventListener");
+  try {
+    const pending = boundedJsonResponse(async () => { if (outcome === "cancel") parent.abort(); return Response.json({ ok: true }); }, 5000, 16384, parent.signal);
+    expect(await pending).toEqual(outcome === "cancel" ? undefined : { status: 200, value: { ok: true } });
+    expect(added).toHaveBeenCalledOnce();
+    expect(removed).toHaveBeenCalledExactlyOnceWith("abort", added.mock.calls[0]?.[1]);
+    expect(parent.signal.aborted).toBe(outcome === "cancel");
+  } finally { added.mockRestore(); removed.mockRestore(); }
+});
 it("a bounded observation cancels a late response even when fetch ignores abort", async () => {
-  const { boundedJsonReceipt } = await import("../src/platform/bounded-json.js");
+  const { boundedJsonReceipt } = await import("../src/bounded-json.js");
   let finish: ((response: Response) => void) | undefined, signal: AbortSignal | undefined;
   const cancel = vi.fn();
   const response = new Response(new ReadableStream<Uint8Array>({ cancel }));
@@ -377,14 +653,14 @@ it("a bounded observation cancels a late response even when fetch ignores abort"
   expect(cancel).toHaveBeenCalledTimes(1);
 });
 it.each([200, 403, 409])("an unfinished explicitly parsed HTTP %s body cannot exhaust the observation deadline", async status => {
-  const { boundedJsonReceipt } = await import("../src/platform/bounded-json.js");
+  const { boundedJsonReceipt } = await import("../src/bounded-json.js");
   const cancel = vi.fn();
   const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode("{")); }, cancel });
   expect(await boundedJsonReceipt(async () => new Response(stream, { status }), [200, 403, 409], 10)).toBeUndefined();
   expect(cancel).toHaveBeenCalledTimes(1);
 });
 it("bounded receipt storage copies reused stream buffers and accepts fragmented valid JSON", async () => {
-  const { boundedJsonReceipt } = await import("../src/platform/bounded-json.js");
+  const { boundedJsonReceipt } = await import("../src/bounded-json.js");
   const encoded = new TextEncoder().encode('{"ok":true,"text":"中文😀"}');
   let offset = 0;
   const reused = new Uint8Array(1);

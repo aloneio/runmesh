@@ -24,12 +24,38 @@ describe("Runner deletion use case", () => {
   it("does not commit after a refused fence", async () => {
     const f = fixture({ fence: async () => ({ ok: false }) }); expect(await deleteRunner(f.ports, "runner", "runner")).toEqual({ state: "unavailable", reason: "fence" }); expect(f.calls).toEqual(["id"]);
   });
+  it("does not retry or commit after losing a fence response", async () => {
+    let attempts = 0;
+    const f = fixture({ fence: async () => { attempts++; throw Error("response lost"); } });
+    expect(await deleteRunner(f.ports, "runner", "runner")).toEqual({ state: "unavailable", reason: "fence" });
+    expect(attempts).toBe(1); expect(f.calls).toEqual(["id"]);
+  });
   it.each([400, 404, 409])("observes and cancels deterministic refusal %s, without repeating deletion", async status => {
     const f = fixture({ remove: async () => ({ ok: false, status }) });
     expect(await deleteRunner(f.ports, "runner", "runner")).toEqual({ state: "rejected", reason: "registry", status }); expect(f.calls).toEqual(["id", "fence", "observe", "cancel"]);
   });
-  it("finalizes a confirmed tombstone rather than cancelling committed deletion", async () => {
-    const f = fixture({ remove: async () => ({ ok: false, status: 404 }), observe: async () => ({ runner_exists: false, mutation_committed: true }) });
+  it("releases a session-rejected deletion only after confirming it did not commit", async () => {
+    const f = fixture({ remove: async () => ({ ok: false, status: 403 }) });
+    expect(await deleteRunner(f.ports, "runner", "runner")).toEqual({ state: "rejected", reason: "registry", status: 403 });
+    expect(f.calls).toEqual(["id", "fence", "observe", "cancel"]);
+  });
+  it.each([undefined, {}, { runner_exists: true }, { runner_exists: false, mutation_committed: false }, { runner_exists: true, mutation_committed: true }])("keeps a session-rejected deletion fenced without uncommitted evidence: %j", async state => {
+    const f = fixture({ remove: async () => ({ ok: false, status: 403 }), observe: async () => state });
+    expect(await deleteRunner(f.ports, "runner", "runner")).toEqual({ state: "unknown", reason: "recovery" });
+    expect(f.calls).toEqual(["id", "fence"]);
+  });
+  it("keeps a session-rejected deletion fenced when observation fails", async () => {
+    const f = fixture({ remove: async () => ({ ok: false, status: 403 }), observe: async () => { throw Error("unavailable"); } });
+    expect(await deleteRunner(f.ports, "runner", "runner")).toEqual({ state: "unknown", reason: "recovery" });
+    expect(f.calls).toEqual(["id", "fence"]);
+  });
+  it("keeps a session-rejected deletion fenced when cancellation is not confirmed", async () => {
+    const f = fixture({ remove: async () => ({ ok: false, status: 403 }), cancel: async () => ({ ok: false }) });
+    expect(await deleteRunner(f.ports, "runner", "runner")).toEqual({ state: "unknown", reason: "cancel" });
+    expect(f.calls).toEqual(["id", "fence", "observe"]);
+  });
+  it.each([403, 404])("finalizes a confirmed tombstone after rejection %s rather than cancelling committed deletion", async status => {
+    const f = fixture({ remove: async () => ({ ok: false, status }), observe: async () => ({ runner_exists: false, mutation_committed: true }) });
     expect(await deleteRunner(f.ports, "runner", "runner")).toEqual({ state: "deleted" }); expect(f.calls).toEqual(["id", "fence", "finalize"]);
   });
   it.each([500, 502, 503])("unknown upstream status %s never releases the fence", async status => {

@@ -1,53 +1,52 @@
-# 中央管理与治理（开发中）
+# 管理 MCP 和 Skill
 
-[English](central-administration.md)
+[English](central-administration.md) · [文档目录](README.zh-CN.md)
 
-/admin/central 复用现有浏览器会话、CSRF、Strict cookie 和 CSP，提供连接档案、
-目录发现/审阅、OAuth、客户端授权、可复用工具集、Skill 预览/启用及元数据回执的
-显式 JSON 操作。先读当前记录，再携带 revision 修改；失败或未知结果不自动重试。
+在「MCP 和 Skill」页面（`/admin/central`）连接 MCP、安装 Skill，再接入 AI 客户端即可使用。这些功能已提供于 0.1.6 候选版本与开发渠道；当前生产版本见[发行状态](release-readiness.md)。
 
-## 共享配置与授权
+## 配置共享内容
 
-GET /admin/central/profiles 每次返回最多 50 个不含凭据明文的档案，以 next_after
-作为下一页 after，每页重新验证管理员会话。凭据仅可写入，页面提交后清空含凭据
-的输入。已有 profile/catalog/OAuth 路由保持原契约。
+| 要做什么 | 操作步骤 |
+| --- | --- |
+| 连接 MCP | 打开「MCP」，填写公网 HTTPS MCP 地址，选择「无身份验证」或 OAuth，点击「连接」。选择 OAuth 后，在提供方页面登录并完成授权。 |
+| 安装 Skill | 打开「Skill」，选择整个文件夹，或选择 `SKILL.md` 及配套文本文件，点击「安装 Skill」。 |
+| 接入 AI 客户端 | 点击「连接 AI 客户端」，填写标签、选择使用方式并创建连接，将一次性地址复制到客户端的 MCP 设置中。 |
 
-GET/POST /admin/central/grants/{client_id} 读取或替换精确授权。修改包含
-expected_revision、enabled、rules；规则引用远端 tool ID/version/profile，或
-Skill ID/digest。它不改变原生 scope，未批准或不可用的能力仍不能执行。
+同一实例中的所有有效 AI 客户端共享已启用的 MCP 工具和 Skill。MCP 连接成功后会自动加载工具，点击卡片上的「查看工具」即可浏览；Skill 卡片上的「查看文件」可阅读已安装内容。
 
-GET/POST /admin/central/toolsets/{toolset_id} 管理最多 64 个可复用模板。保存使用
-action replace、expected_revision、enabled、rules；应用使用 action apply、
-client_id、toolset_revision、expected_revision，只需为第二个客户端再次分配。
-源模板和目标授权均检查 revision。修改/停用模板不静默改变已有客户端授权，须显式
-重新应用或逐个撤销客户端授权；它不是实时权限继承。
+## 选择客户端的使用方式
 
-## 直接目录与发现入口
+「MCP 和 Skill」用于访问共享内容，由控制端处理连接和内容读取。
 
-CENTRAL_DIRECT_TOOLS_ENABLED=1 在远端绑定/出站策略有效时发布审核后的直接工具，
-使用稳定 rm_ 别名和原始 JSON schema。tools/list 只读保存且经 ACL 筛选的快照，
-不向上游实时发现。直接调用和 remote_call 共用参数校验、代次检查与执行实现。
-当前客户端没有已启用的远程工具授权时，发现结果隐藏远程通用入口及直接别名；
-Skill 入口独立按 Skill 授权筛选。重新查询目录会反映撤权，旧缓存名称的调用仍须
-通过实时授权检查。
+需要读写机器上的文件或执行命令时，选择「MCP、Skill 和计算机访问」。页面会自动展开计算机权限，初始勾选读取，可按需要选择写入和执行。再按[管理员指南](admin-guide.zh-CN.md)添加 Runner、配置工作区。
 
-直接视图限制 8 个档案、32 工具、512 KiB；更大目录使用 remote_tools/remote_call。
-remote_status 区分容量、拒绝、故障和正常空目录。中央故障保留原生工具注册，原生
-工具调用不加载直接目录。真实宿主刷新仍需独立验收，旧缓存别名不能绕过当前授权。
+客户端连接与首次使用步骤见[用户指南](user-guide.zh-CN.md)。
 
-## 可选持久化治理
+## 更新和暂停共享内容
 
-CENTRAL_GOVERNANCE_ENABLED=1 为远端调用加入同一状态所有者内的持久准入与回执，
-并保留已有并发上限。授权后、连接前检查每客户端每分钟 30 次、每档案每分钟 120
-次，最多 2,048 个准入键。连续三次上游传输、协议或结果未知故障触发该档案 30 秒
-冷却。不排队、不后台轮询、不自动重放。关闭该标志恢复此前仅并发限制的基线，
-不会删除表。
+| 操作 | 效果 |
+| --- | --- |
+| MCP：「刷新工具」 | 为所有客户端加载提供方的最新工具；需要登录时自动进入授权。 |
+| MCP：「暂停」/「启用」 | 停止或恢复共享；启用时自动刷新工具。 |
+| OAuth MCP：「重新授权」 | 进入提供方页面，开始新的授权流程。 |
+| OAuth MCP：「断开账号连接」 | 移除本地保存的账号连接；再次使用时点击「重新授权」。 |
+| Skill：安装同名文件 | 展示替换内容，确认「更新 Skill」后对所有客户端生效。 |
+| Skill：「暂停」 | 停止后续读取，保留已安装文件。 |
+| 已暂停的 Skill：「查看文件 → 启用 Skill」 | 恢复使用当前展示的版本。 |
 
-回执只含请求 ID、客户端 ID、档案/工具/版本、操作状态、固定错误码、时间戳，
-不保存参数、结果、正文、密钥或虚假 Runner ID。回执写入失败不把已完成调用改成
-失败，runmesh/receipt 元数据返回 audit_status unavailable。最多保留 1,000 条，
-读取窗口 24 小时，过期记录在新写入时清理。GET /admin/central/receipts 向通过
-验证的管理员返回最近 50 条，没有客户端回执查询或重放 API。
+更新后，如果 AI 客户端缓存了工具或资源列表，请刷新其 Runmesh 连接。已经读入对话的 Skill 内容仍保留在该对话中；希望全程使用新内容时，可开启新对话。
 
-这些是安全上限，不是生产吞吐测量。OAuth/会话边界见[中央 OAuth](central-oauth.zh-CN.md)，
-[Skill 内容](central-skills.zh-CN.md)具有独立开关和预算。
+## 管理客户端连接
+
+在「MCP 客户端」中管理各客户端的凭据。「轮换」会生成新地址并使旧地址失效；「撤销」停止该客户端访问并保留记录；「删除」同时移除客户端记录。删除前请核对页面上的确认信息。
+
+MCP 和 Skill 按实例中启用的内容共享。计算机访问还取决于客户端权限、选定 Runner 和已批准的工作区。需要不同共享内容的用户组，可分别使用独立实例。
+
+## 继续配置或处理问题
+
+- [连接 MCP](central-remote-mcp.zh-CN.md)：地址、身份验证与工具刷新。
+- [MCP 账号授权](central-oauth.zh-CN.md)：登录、重新授权与账号管理。
+- [安装与更新 Skill](central-skills.zh-CN.md)：文件结构、大小与更新流程。
+- [故障排查](troubleshooting.zh-CN.md)：连接或上传遇到问题时的处理方法。
+
+实现细节见[管理接口参考](maintainers/central-administration.zh-CN.md)。

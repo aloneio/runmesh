@@ -5,11 +5,16 @@
 
 ## 职责与依赖方向
 
+Runner 的 Git 基线判断位于 `git/baseline.ts`；`git-service.ts` 负责解析工作区
+并设置观察期限。`git/execution.ts` 管理进程上限与请求内快照清理。状态与索引
+标志共用一个隔离上下文，最后的 HEAD 查询重新创建上下文。不跨请求缓存快照
+或 I/O Promise。基线回归通过操作边界验证并发索引变化和预算耗尽。
+
 | 层 | 职责 | 应放在其他层的依赖 |
 | --- | --- | --- |
 | Worker 入口 | fetch／scheduled 装配、顶层分发 | 重复的业务决策 |
 | HTTP | 解析、认证、CSRF、响应格式 | Registry 实现与持久化记录类型 |
-| Application | 生命周期／策略编排、数据投影 | HTTP、页面、Registry facade |
+| Application | 生命周期／策略编排、数据投影 | HTTP、页面、平台适配器、Registry facade |
 | Contracts／Domain | 稳定类型、窄接口、纯决策 | 平台与表现层实现 |
 | MCP Server | SDK 装配、逐次授权、输出验证 | Registry、RunnerDO 具体类 |
 | MCP Results | 安全字段投影、有界输出 | 处理器、派发、审计、传输执行 |
@@ -33,6 +38,14 @@ Registry 管理 HMAC 路由与同步事务，RunnerDO 管理会话派发。
 在授权后选择字段。凭据校验值由权限层保管。MCP 工作区元数据省略配置的绝对根路径；
 请求的文件内容和命令输出仍可能带有路径。
 
+认证回执、注册和 Runner 查询通过 `contracts/control-plane-receipts.ts` 的操作端口
+接收依赖。平台适配器管理签名请求、有界响应读取和机密访问，由 HTTP／入口层注入
+业务用例。Application 模块不能导入平台模块，包括平台类型。MCP 和管理操作通过
+共享契约校验策略是否已应用，再决定是否派发操作。
+
+渲染器直接引用 `contracts/admin-views.ts` 的展示类型。`runnerDetailPage` 接收一个
+具名输入对象，避免诊断、历史和注册码等可选数据在位置参数中混淆。
+
 ## 原生适配器与包声明
 
 JobManager 管理准入、运行记录、终态落盘及取消／恢复顺序。ContextStore 管理
@@ -44,11 +57,29 @@ systemd、launchd、Task Scheduler 分别有自己的适配器。CLI 输入、�
 生命周期命令分别维护。补丁规划、Git 投影与原生执行分开，由协调者管理完整操作。
 `registry/schema.ts` 在 Registry 同步启动阶段提供 DDL 和结构检查。
 
+`packages/protocol/src/job-history.ts` 统一定义历史记录 welcome 扩展的类型、上传间隔、
+保留天数及双方共用的严格解析。Worker 的默认配置和分页大小保持为纯数据，历史设置
+建表归 Registry schema 管理，历史存储使用同一份协议取值校验保留天数。
+
 ## 浏览器源码与文案
 
-在 `apps/worker/browser/admin-client.js` 修改浏览器行为。生成器限制输入大小、
+`apps/worker/browser/admin-client.js` 是浏览器入口。中央产品模块位于
+`browser/central/`：`controller.js` 统一管理忙碌状态、写入准入和刷新快照；
+`api.js` 管理 HTTP 回执与分页；`services.js` 和 `skills.js` 分别管理各自流程；
+`view.js` 管理共用 DOM 操作；`messages.js` 管理中央产品浏览器双语文案。
+流程依赖由控制器注入，不互相导入。架构回归拒绝反向依赖和流程直接联网。
+
+控制器提供视图挂载状态检查和导航端口。已移除的视图不能消费迟到回执、发起后续
+请求或跳转新页面。已发出的服务端操作仍可能完成；新视图重新读取状态，不自动重放。
+回执必须匹配列表、单项或写入操作；无法确认的写入必须刷新后才能继续修改。
+
+导航所有者在挂载控制器或修改浏览器历史前，丢弃已被后续目的地取代的成功响应。
+只由最终目的地改变页面和 URL，完整页面跳转的回退也使用最终目的地。
+
+生成器只打包本地静态 JavaScript 模块，输出一个符合 CSP 的脚本。它限制整个输入图
+和输出大小，拒绝外部／动态依赖及路径／符号链接越界，在不执行 DOM 代码的情况下
 检查语法，并在构建、类型检查和 Wrangler 准备阶段原子生成忽略的 Worker 模块。
-含／不含 nonce 的呈现哈希覆盖原脚本字节。
+含／不含 nonce 的哈希覆盖审阅后的打包字节，DOM 测试验证交互行为。
 
 `i18n/messages.ts` 管理稳定双语 ID。`message()` 接收类型化键、语言和对应参数，
 编译器回归覆盖非法调用。新文案使用这些键，修改措辞时保留键名。
@@ -126,9 +157,68 @@ development 选择已验签的 dev 通道。
 八个 Job 故障场景使用原子文件端口。并发、注册围栏恢复和上报桥接测试使用
 RegistryRequestPort，保留真实 DO 存储、进程执行、取消和可观察状态断言。
 
-四个 Runtime 测试保留私有持久化协调器拦截，以维持特定时点：快速退出耐久性、
-晚到 running 快照、spawn 设置／取消、发信号前子进程退出。
-架构回归登记这些名称；替换例外前先验证等价的时点和断言。
+三个 Runtime 协调竞态改用内部 JobPersistencePort：快速退出耐久性、晚到 running
+快照、spawn 设置／取消。端口接收 JobManager 提供的入队回调，保留串行化和
+身份校验，并允许在入队前或协调完成后暂停。默认生产路径不新增异步边界，
+内部构造重载不会进入发布声明。AR18 禁止重新使用私有持久化拦截。
+
+发信号前子进程退出的测试已改用文件／进程端口，等待真实子进程 close 事件，检查
+持久化终态和零终止调用。保留策略夹具读取有效的落盘记录，通过公共准入创建运行
+和排队 Job，验证主动开启清理后只删除过期终态，四种受保护状态均保留。
+这两项测试均不读写 JobManager 私有映射。
+
+Registry 路由解析位于 `registry/route-inputs.ts`；策略／工作区和合并审计记录
+的响应投影位于 `registry/route-projections.ts`。这些函数只接收值，不获取状态
+或执行 I/O。签名请求准入、事务／nonce 顺序、身份检查、SQL 和异步后的生命周期
+重验仍由 RegistryDO 管理。纯函数与路由回归覆盖原有错误、状态码、字段和审计排序。
+
+Registry 授权路由适配器位于 registry/routes/：admin 负责管理员会话与限流，
+clients 负责客户端设置与 Runner 选择，runner-policy 负责受管工作区及策略响应，
+identity 负责 MCP 身份与授权响应。每组只接收自身明确的同步操作端口，不导入
+RegistryDO、领域实现、存储、平台类型或其他适配器。RegistryDO 完成装配与请求准入，
+路由内的身份检查与修改之间不引入 await。架构门禁拒绝反向依赖、异步适配器、
+调度及直接网络访问。
+
+打包 Job 与外部审计路由回归通过真实环境契约和 D1 绑定构造 RegistryDO，在 D1
+prepare 边界注入故障；Transport 测试使用 DO 测试回调提供的存储，schema 测试调用
+schema 模块。测试不再修改私有环境／历史实例或读取私有 ctx，仍检查历史关闭与
+退出记录、零写入成本、历史降级及 Runner 可用性。架构回归防止这些私有测试接口回流。
 
 继续由 JobManager 和 RunnerDO 管理状态。运行生成代码、契约、依赖和故障回归，
 配合必需的安装包、原生平台与浏览器检查；按候选 SHA 记录通过、跳过和未执行环境。
+
+环境探测实现位于 apps/runner/src/environment.ts，Runtime 与 CLI 的依赖契约
+使用 environment-contracts.ts，安装包的 ESM／CJS 类型检查覆盖结构化替换。
+domain/runner-handshake.ts 负责纯 hello 协商、Registry 回执解析和 welcome 投影。
+RunnerDO 继续独占 socket、epoch、准入和待处理 RPC，保留连接替换重验及同步
+派发顺序。架构负例阻止这些纯边界反向导入、访问环境状态或调度异步工作。
+
+RunnerConnection 的公开 runtime 和 policyStore 选项使用导出的
+ConnectionRuntimePort 与 ConnectionPolicyStorePort 契约，传入实例只有一条注入
+路径；默认运行时通过内部工厂接收同步 Job 事件回调。安装包的 ESM／CJS 消费者
+验证结构化替换，内部工厂重载不进入公开声明。连接版本、策略中断、重连确认和
+历史上传周期测试通过 hello／welcome、协议帧与注入端口检查行为，AR18 防止这些
+已迁移测试再次访问连接私有状态。socket 身份、策略发布及异步顺序仍由
+RunnerConnection 管理。
+
+开发版发布发现的共享运行时只保存已验证值和刷新结果计数。冷缓存并发请求各自
+管理计时器，最多等待一个刷新预算以取得已验证结果。失败冷却、租约更替和缓存
+原始硬过期保持有效，不共享 I/O Promise，也不增加并发上游校验。回归覆盖校验
+成功／失败、等待上限、租约更替及过期。
+
+A53-01/A53-02：刷新失败后重新读取持久化的已验证记录，响应头和响应体合计
+限时一秒；I/O 结束后重验原始硬过期和并发更新的内存值。HTTP 工厂必须接收
+WorkerEnv，从 REGISTRY 同时取得存储和值状态的作用域，删除无作用域运行时
+回退。安装引导展示函数接收调用方已解析的版本。真实认证 HTTP 回归覆盖 Runner
+详情、创建、轮换和重新注册，检查它们与公共下载在刷新进行中共享同一状态。
+通用有界 JSON 读取器移至 Worker 基础层，供分发和平台适配器共用，避免反向依赖。
+
+注册兑换在 Registry facade 与 lifecycle 实现中均要求操作标识。直接调用测试
+通过生产使用的变更账本验证竞争兑换，以及响应丢失后的同操作恢复。删除仅为旧
+测试保留的可选分支；凭据变更继续在取得 RunnerDO 隔离后由原同步事务完成。
+
+版本恢复属于原请求持有的刷新流程，限时持久缓存重读结束后才发布失败状态，
+使冷缓存等待者能够取得恢复后的已验证值。HTTP Registry 适配器为缓存读取
+（响应头和正文）及写入分别设置五秒上限，取消晚到响应，不重试结果未明的写入。
+分发层继续负责描述符校验、验证时间戳和原始硬过期，不跨请求共享 I/O Promise。
+回归覆盖延迟恢复、恢复超时，以及 Registry 读写卡住后仍返回已验证版本。

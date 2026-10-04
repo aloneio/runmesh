@@ -27,12 +27,65 @@ async function fixture(t, sources) {
 }
 
 const bad = [
+  ["history display defaults own SQL", { "apps/worker/src/job-history-settings.ts": 'export function initialize(sql: SqlStorage) { sql.exec("SELECT 1"); }' }],
+  ["history display defaults own network", { "apps/worker/src/job-history-settings.mts": 'export const load = () => fetch("https://example.invalid");' }],
+  ["application to concrete platform adapter", { "apps/worker/src/application/query.ts": 'import "../platform/control-plane.js";', "apps/worker/src/platform/control-plane.ts": "export {};" }],
+  ["application to platform environment types", { "apps/worker/src/application/query.mts": 'import type { WorkerEnv } from "../platform/env.js";', "apps/worker/src/platform/env.ts": "export type WorkerEnv = {};" }],
+  ["request use case owns HTTP response", { "apps/worker/src/application/runner-queries.ts": 'export const reply = () => Response.json({});' }],
+  ["request use case reads incoming HTTP headers", { "apps/worker/src/application/auth-source.ts": 'export const source = (request: Request) => request.headers.get("cf-connecting-ip");' }],
+  ["request use case owns randomness", { "apps/worker/src/application/enrollment.cts": 'export const code = () => crypto.randomUUID();' }],
+  ["request use case owns network", { "apps/worker/src/application/mcp-identity.ts": 'export const verify = () => fetch("https://example.invalid");' }],
+  ["shared schema helper to request state", { "apps/worker/src/mcp/providers/schema-publication.ts": 'import "../server.js";', "apps/worker/src/mcp/server.ts": "export {};" }],
+  ["shared schema helper to client SDK", { "apps/worker/src/mcp/providers/schema-publication.ts": 'import type { Client } from "@modelcontextprotocol/client";' }],
+  ["shared schema helper to ambient network", { "apps/worker/src/mcp/providers/schema-publication.ts": 'export const load = () => fetch("https://example.invalid");' }],
+  ["shared storage cipher to catalog contract", { "apps/worker/src/platform/secret-storage.ts": 'import "../contracts/catalog-json.js";', "apps/worker/src/contracts/catalog-json.ts": 'export {};' }],
+  ["shared ciphertext contract to capability contract", { "apps/worker/src/contracts/secret-storage.ts": 'import "./capabilities.js";', "apps/worker/src/contracts/capabilities.ts": 'export {};' }],
+  ["shared serializer to feature contract", { "apps/worker/src/contracts/json.ts": 'import "./catalog.js";', "apps/worker/src/contracts/catalog.ts": 'export {};' }],
+  ["shared serializer to provider SDK", { "apps/worker/src/contracts/json.ts": 'import "@modelcontextprotocol/client";' }],
+  ["duplicate Worker storage cipher", { "apps/worker/src/platform/other.ts": 'export const algorithm = "AES-GCM";' }],
+  ["shared storage cipher to feature implementation", { "apps/worker/src/platform/secret-storage.ts": 'import "./connectors/managed-store.js";', "apps/worker/src/platform/connectors/managed-store.ts": 'export {};' }],
+  ["Handshake to asynchronous projection", { "apps/worker/src/domain/runner-handshake.ts": 'export async function project() { return {}; }' }],
+  ["Environment contracts to platform types", { "apps/runner/src/environment-contracts.ts": 'import type { PathLike } from "node:fs";' }],
+  ["Handshake to transport owner", { "apps/worker/src/domain/runner-handshake.ts": 'import "../runner-do.js";', "apps/worker/src/runner-do.ts": 'export {};' }],
+  ["Handshake to adapter types", { "apps/worker/src/domain/runner-handshake.ts": 'import type { Binding } from "../platform/env.js";', "apps/worker/src/platform/env.ts": 'export type Binding = {};' }],
+  ["Handshake to ambient clock", { "apps/worker/src/domain/runner-handshake.ts": 'export const now = Date.now();' }],
+  ["Handshake to scheduling", { "apps/worker/src/domain/runner-handshake.ts": 'export const schedule = queueMicrotask;' }],
+  ["Environment contracts to native probes", { "apps/runner/src/environment-contracts.ts": 'import type { EnvironmentInfoService } from "./environment.js";', "apps/runner/src/environment.ts": 'export class EnvironmentInfoService {}' }],
+  ["Environment contracts to process state", { "apps/runner/src/environment-contracts.ts": 'export const platform = process.platform;' }],
+  ["Environment contracts to filesystem", { "apps/runner/src/environment-contracts.ts": 'import "node:fs";' }],
+  ["CLI contract to environment implementation", { "apps/runner/src/cli/contracts.ts": 'import type { EnvironmentInfoService } from "../environment.js";', "apps/runner/src/environment.ts": 'export class EnvironmentInfoService {}' }],
+  ["Environment adapter to runtime", { "apps/runner/src/environment.ts": 'import "./runtime.js";', "apps/runner/src/runtime.ts": 'export {};' }],
+  ["Runner creation to transport", { "apps/worker/src/application/create-runner.ts": 'import "../platform/runner-mutations.js";', "apps/worker/src/platform/runner-mutations.ts": 'export {};' }],
+  ["Runner registration to HTTP response", { "apps/worker/src/application/register-runner.ts": 'export const result = () => new Response();' }],
+  ["Runner policy to ambient network", { "apps/worker/src/application/runner-policy.ts": 'export const mutate = () => fetch("https://example.invalid");' }],
+  ["Runner enrollment to platform types", { "apps/worker/src/application/runner-enrollment.ts": 'export type Binding = DurableObjectNamespace;' }],
+  ["Runner lifecycle to concrete SDK", { "apps/worker/src/application/runner-lifecycle.ts": 'import "undici";' }],
+  ["Registry history coordinator to concrete store", { "apps/worker/src/registry/history-routes.ts": 'import "../job-history-store.js";', "apps/worker/src/job-history-store.ts": 'export {};' }],
+  ["Registry transport coordinator to ambient network", { "apps/worker/src/registry/transport-routes.ts": 'export const connect = () => fetch("https://example.invalid");' }],
+  ["Registry lifecycle routes cannot yield", { "apps/worker/src/registry/routes/runner-lifecycle.ts": 'export async function mutate() {}' }],
+  ["Browser navigation cannot depend on controls", { "apps/worker/browser/admin-navigation.js": 'import "./page-controls.js";', "apps/worker/browser/page-controls.js": 'export {};' }],
+  ["Browser controls cannot depend on navigation", { "apps/worker/browser/page-controls.js": 'import "./admin-navigation.js";', "apps/worker/browser/admin-navigation.js": 'export {};' }],
+  ["managed OAuth contracts to SDK", { "apps/worker/src/contracts/managed-oauth.ts": 'import type { OAuthDiscoveryState } from "@modelcontextprotocol/client";' }],
+  ["managed connection contracts to platform globals", { "apps/worker/src/contracts/managed-connections.ts": 'export const request = globalThis.fetch;' }],
+  ["managed OAuth use case to protocol adapter", { "apps/worker/src/application/connectors/managed-oauth.ts": 'import "../../platform/connectors/managed-oauth.js";', "apps/worker/src/platform/connectors/managed-oauth.ts": 'export {};' }],
+  ["managed OAuth protocol to storage", { "apps/worker/src/platform/connectors/managed-oauth.ts": 'import type { State } from "./managed-store.js";', "apps/worker/src/platform/connectors/managed-store.ts": 'export type State = {};' }],
+  ["managed OAuth protocol to cipher", { "apps/worker/src/platform/connectors/managed-oauth.ts": 'import "../secret-storage.js";', "apps/worker/src/platform/secret-storage.ts": 'export {};' }],
+  ["managed OAuth storage to SDK", { "apps/worker/src/platform/connectors/managed-store.ts": 'import type { OAuthDiscoveryState } from "@modelcontextprotocol/client";' }],
+  ["managed OAuth storage to SDK intermediary", { "apps/worker/src/platform/connectors/managed-store.ts": 'import type { Metadata } from "./provider-types.js";', "apps/worker/src/platform/connectors/provider-types.ts": 'export type Metadata = {};' }],
   ["OAuth contracts to SDK", { "apps/worker/src/contracts/oauth.ts": 'import { Client } from "@modelcontextprotocol/client";' }],
   ["OAuth rules to native Runner state", { "apps/worker/src/application/connectors/oauth.ts": 'import "../../runner-do.js";', "apps/worker/src/runner-do.ts": "export {};" }],
-  ["remote capability to OAuth persistence", { "apps/worker/src/application/capabilities/remote-call.ts": 'import "../../platform/connectors/oauth-store.js";', "apps/worker/src/platform/connectors/oauth-store.ts": "export {};" }],
+  ["remote capability to OAuth persistence", { "apps/worker/src/application/capabilities/remote-call.ts": 'import "../../platform/connectors/managed-store.js";', "apps/worker/src/platform/connectors/managed-store.ts": "export {};" }],
   ["remote contract to client SDK", { "apps/worker/src/contracts/remote.ts": 'import type { Client } from "@modelcontextprotocol/client";' }],
   ["remote invocation to concrete credential adapter", { "apps/worker/src/application/capabilities/remote-call.ts": 'import "../../platform/connectors/cipher.js";', "apps/worker/src/platform/connectors/cipher.ts": "export {};" }],
   ["remote provider to state owner", { "apps/worker/src/mcp/providers/remote.ts": 'import "../../capabilities-do.js";', "apps/worker/src/capabilities-do.ts": "export {};" }],
+  ["central provider to concrete connector", { "apps/worker/src/mcp/providers/remote.ts": 'import "../../platform/connectors/remote-client.js";', "apps/worker/src/platform/connectors/remote-client.ts": "export {};" }],
+  ["central provider to concrete Skill store type", { "apps/worker/src/mcp/providers/skills.mts": 'import type { State } from "../../platform/skills/store.mjs";', "apps/worker/src/platform/skills/store.mts": "export type State = {};" }],
+  ["central provider helper reexports concrete cipher", { "apps/worker/src/mcp/providers/remote/helper.ts": 'export * from "../../../platform/secret-storage.js";', "apps/worker/src/platform/secret-storage.ts": "export {};" }],
+  ["central provider helper dynamically loads concrete Skill store", { "apps/worker/src/mcp/providers/skills/helper.cts": 'void import("../../../platform/skills/store.cjs");', "apps/worker/src/platform/skills/store.cts": "export {};" }],
+  ["central provider to client SDK types", { "apps/worker/src/mcp/providers/remote.ts": 'import type { Client } from "@modelcontextprotocol/client";' }],
+  ["central provider to unreviewed HTTP package", { "apps/worker/src/mcp/providers/remote.ts": 'import { request } from "undici";' }],
+  ["central provider helper direct network", { "apps/worker/src/mcp/providers/remote/request.ts": 'export const load = () => fetch("https://example.invalid");' }],
+  ["central provider helper platform alias", { "apps/worker/src/mcp/providers/skills/request.mts": 'const platform = globalThis; export const load = platform["fetch"];' }],
   ["remote request parser to network", { "apps/worker/src/contracts/remote-values.ts": 'export const connect = globalThis.fetch;' }],
   ["catalog schema contract to SDK", { "apps/worker/src/contracts/catalog-schema.ts": 'import "@modelcontextprotocol/client";' }],
   ["catalog reader to credential implementation", { "apps/worker/src/application/capabilities/catalog-read.ts": 'import "../../platform/connectors/cipher.js";', "apps/worker/src/platform/connectors/cipher.ts": "export {};" }],
@@ -65,6 +118,26 @@ const bad = [
   ["command to CLI facade", { "apps/runner/src/cli/doctor.ts": 'import "../cli.js";', "apps/runner/src/cli.ts": "export {};" }],
   ["patch planner to file mutator", { "apps/runner/src/patch/parse.ts": 'import "./files.js";', "apps/runner/src/patch/files.ts": "export {};" }],
   ["browser to Worker application", { "apps/worker/browser/main.js": 'import "../src/application/delete-runner.js";', "apps/worker/src/application/delete-runner.ts": "export {};" }],
+  ["browser service to Skill workflow", { "apps/worker/browser/central/services.js": 'import "./skills.js";', "apps/worker/browser/central/skills.js": "export {};" }],
+  ["browser API to controller", { "apps/worker/browser/central/api.js": 'import "./controller.js";', "apps/worker/browser/central/controller.js": "export {};" }],
+  ["browser workflow direct fetch", { "apps/worker/browser/central/services.js": 'export const discover = () => fetch("https://example.invalid");' }],
+  ["browser view aliased network", { "apps/worker/browser/central/view.mjs": 'const platform = globalThis; export const load = platform["fetch"];' }],
+  ["browser API owns DOM", { "apps/worker/browser/central/api.js": 'export const find = () => document.querySelector("form");' }],
+  ["browser copy owns navigation", { "apps/worker/browser/central/messages.js": 'export const locale = location.href;' }],
+  ["Registry route parser to domain owner", { "apps/worker/src/registry/route-inputs.ts": 'import "./auth.js";', "apps/worker/src/registry/auth.ts": "export {};" }],
+  ["Registry route projection to persistence", { "apps/worker/src/registry/route-projections.ts": 'import "./storage.js";', "apps/worker/src/registry/storage.ts": "export {};" }],
+  ["Registry route parser ambient clock", { "apps/worker/src/registry/route-inputs.mts": 'export const expires = () => Date.now();' }],
+  ["Registry route projection network", { "apps/worker/src/registry/route-projections.ts": 'export const project = () => fetch("https://example.invalid");' }],
+  ["Registry route adapter to domain owner", { "apps/worker/src/registry/routes/admin.ts": 'import "../auth.js";', "apps/worker/src/registry/auth.ts": "export {};" }],
+  ["Registry route adapter to storage types", { "apps/worker/src/registry/routes/clients.ts": 'import type { Store } from "../storage.js";', "apps/worker/src/registry/storage.ts": "export type Store = {};" }],
+  ["Registry route adapter to peer adapter", { "apps/worker/src/registry/routes/admin.ts": 'import "./clients.js";', "apps/worker/src/registry/routes/clients.ts": "export {};" }],
+  ["Registry domain to route adapter", { "apps/worker/src/registry/auth.ts": 'import "./routes/admin.js";', "apps/worker/src/registry/routes/admin.ts": "export {};" }],
+  ["Registry route adapter to facade types", { "apps/worker/src/registry/routes/admin.ts": 'import type { RegistryDO } from "../../registry.js";', "apps/worker/src/registry.ts": "export type RegistryDO = {};" }],
+  ["Registry route adapter asynchronous function", { "apps/worker/src/registry/routes/clients.ts": 'export const route = async () => new Response();' }],
+  ["Registry route adapter scheduled mutation", { "apps/worker/src/registry/routes/clients.ts": 'export const route = () => queueMicrotask(() => {});' }],
+  ["Registry route adapter ambient clock", { "apps/worker/src/registry/routes/runner-policy.mts": 'export const route = () => Date.now();' }],
+  ["Registry route adapter network", { "apps/worker/src/registry/routes/identity.ts": 'export const route = () => fetch("https://example.invalid");' }],
+  ["Registry route adapter global storage type", { "apps/worker/src/registry/routes/admin.ts": 'export interface Ports { storage: DurableObjectStorage }' }],
 
   ["Registry to admin view", { "apps/worker/src/registry/auth.ts": 'import "../admin/client-views.js";', "apps/worker/src/admin/client-views.ts": "export {};" }],
   ["Registry to HTTP", { "apps/worker/src/registry/auth.ts": 'import "../http/html-response.js";', "apps/worker/src/http/html-response.ts": "export {};" }],
@@ -112,6 +185,16 @@ for (const [name, sources] of bad) test(`AR01 rejects ${name}`, async t => {
   assert.match(result.stderr, /Architecture check failed/);
 });
 
+test("request composition injects platform operations into application ports", async t => {
+  const f = await fixture(t, {
+    "apps/worker/src/contracts/receipts.ts": 'export type Receipt = { status: number; value: unknown }; export type Port = { read(): Promise<Receipt> };',
+    "apps/worker/src/application/auth-source.mts": 'import type { Port } from "../contracts/receipts.js"; export const check = async (port: Port) => (await port.read()).status === 200;',
+    "apps/worker/src/platform/source.ts": 'import type { Port } from "../contracts/receipts.js"; export const port: Port = { read: async () => ({ status: 200, value: {} }) };',
+    "apps/worker/src/index.ts": 'import { check } from "./application/auth-source.mjs"; import { port } from "./platform/source.js"; export const result = () => check(port);',
+  });
+  const result = f.run(); assert.equal(result.status, 0, result.stderr);
+});
+
 test("architecture rejects type-only cycles without confusing them with runtime cycles", async t => {
   const f = await fixture(t, {
     "packages/protocol/src/index.ts": 'export type { A } from "./a.js";',
@@ -134,7 +217,11 @@ test("W01 composition injects central public ports without widening native depen
     "apps/worker/src/application/capabilities/access.ts": 'import type { Port } from "../../contracts/capabilities.js"; import { enabled } from "../../domain/capabilities/grants.js"; export const create = (port: Port) => port;',
     "apps/worker/src/platform/capabilities/owner.ts": 'import "cloudflare:workers"; import type { Port } from "../../contracts/capabilities.js"; export type Adapter = Port;',
     "apps/worker/src/http/central.ts": 'import { create } from "../application/capabilities/access.js"; import "../platform/capabilities/owner.js";',
-    "apps/worker/src/mcp/providers/remote.ts": 'import type { Port } from "../../contracts/capabilities.js"; export const bind = (port: Port) => port;',
+    "apps/worker/src/mcp/providers/remote.ts": 'import type { Port } from "../../contracts/capabilities.js"; import "./remote/helper.js"; import "./schema-publication.js"; export const bind = (port: Port) => port;',
+    "apps/worker/src/mcp/providers/remote/helper.ts": 'import type { McpServer } from "@modelcontextprotocol/server"; import type { ZodType } from "zod"; export type { Port } from "../../../contracts/capabilities.js";',
+    "apps/worker/src/mcp/providers/skills.mts": 'export * from "./skills/helper.mjs"; import "./schema-publication.js";',
+    "apps/worker/src/mcp/providers/schema-publication.ts": 'import type { StandardSchemaWithJSON } from "@modelcontextprotocol/server"; export type Schema = StandardSchemaWithJSON;',
+    "apps/worker/src/mcp/providers/skills/helper.mts": 'import type { Port } from "../../../contracts/capabilities.js"; export type Input = Port;',
   });
   assert.deepEqual((await checkArchitecture(f.root)).failures, []);
 });
@@ -266,32 +353,57 @@ test("AR18 prevents retired private I/O mocks from returning", async () => {
   }
   const parseTest = source => parse(source, { sourceType: "module", plugins: ["typescript"] });
   const property = node => node?.computed ? node.property?.value : node?.property?.name;
+  const connectionPrivateAccesses = source => {
+    const violations = [];
+    const retired = new Set(["applyDesiredPolicy", "forwardJobEvent", "historyPending", "welcomedSocket", "sendSyncNow", "lastSyncSnapshot", "syncTimer", "desiredPolicyRevision", "desiredPolicyChecksum", "appliedPolicyRevision", "appliedPolicyChecksum"]);
+    const unwrap = node => ["TSAsExpression", "TSTypeAssertion", "TSNonNullExpression", "ParenthesizedExpression"].includes(node?.type) ? unwrap(node.expression) : node;
+    visit(parseTest(source), node => {
+      if (["TSAsExpression", "TSTypeAssertion"].includes(node.type) && unwrap(node)?.name === "connection") violations.push("connection assertion");
+      if (node.type === "MemberExpression" && (retired.has(property(node))
+        || unwrap(node.object)?.name === "connection" && !["start", "stop", "rpc", "disconnectTransport"].includes(property(node)))) violations.push(property(node));
+    });
+    return violations;
+  };
+  assert.deepEqual(connectionPrivateAccesses("connection.start(); fixture.socket.open(); socket.send(frame);"), []);
+  for (const source of ["(connection as unknown as State).socket = socket;", "connection['metadata'];", "internals.applyDesiredPolicy(socket, policy);", "internals['historyPending'] = pending;"]) {
+    assert.ok(connectionPrivateAccesses(source).length > 0, "private connection fixture must be rejected");
+  }
+  for (const name of ["connection-handshake", "connection-budgets", "connection-outage", "product"]) {
+    const source = await readFile(join(project, "apps/runner/test/" + name + ".test.ts"), "utf8");
+    assert.deepEqual(connectionPrivateAccesses(source), [], name + ": exercise connection lifecycle and injected ports instead of private state");
+  }
+  for (const name of ["packed-job-integration", "no-record", "transport", "quota-resilience"]) {
+    const source = await readFile(join(project, 'apps/worker/test/' + name + '.test.ts'), "utf8");
+    visit(parseTest(source), node => {
+      if (node.type === "MemberExpression") assert.ok(!["ctx", "packedJobs", "externalAudit", "schemaIsCurrent"].includes(property(node)),
+        name + ": use constructor bindings, public storage fixtures and the schema module");
+      if (node.type === "AssignmentExpression") assert.notEqual(property(node.left), "env", name + ": construct the Registry with its environment");
+    });
+  }
   for (const name of ["concurrency", "enrollment-fence-recovery", "job-reporting-bridge"]) {
     const source = await readFile(join(project, `apps/worker/test/${name}.test.ts`), "utf8");
     visit(parseTest(source), node => {
       if (node.type === "AssignmentExpression") assert.notEqual(property(node.left), "registryRequest", `${name}: use the injected RegistryRequestPort`);
     });
   }
-  // These exact pre-enqueue/post-coordinator races are not equivalent to a
-  // file fault. Keep them explicit rather than weakening their assertions.
-  const remaining = new Set([
-    "waits for fast-exit terminal metadata before returning from start",
-    "does not let a late running metadata write overwrite terminal state",
-    "does not overwrite a queued cancellation after a spawn setup failure races",
-    "does not signal a local PID after the child exits during cancellation persistence",
-  ]);
-  const found = new Set();
   const runtime = parseTest(await readFile(join(project, "apps/runner/test/runtime.test.ts"), "utf8"));
   visit(runtime, node => {
-    if (node.type !== "CallExpression" || node.callee?.name !== "it" || node.arguments[0]?.type !== "StringLiteral") return;
+    if (node.type !== "CallExpression" || node.arguments[0]?.type !== "StringLiteral"
+      || !(node.callee?.name === "it" || node.callee?.type === "CallExpression" && node.callee.callee?.object?.name === "it")) return;
     const name = node.arguments[0].value;
     visit(node.arguments[1], child => {
-      if (child.type !== "AssignmentExpression" || property(child.left) !== "persist") return;
-      assert.ok(remaining.has(name), `${name}: inject JobFilePort rather than replacing persistence coordination`);
-      found.add(name);
+      if (child.type === "TSAsExpression" && child.expression?.type === "TSAsExpression" && child.expression.typeAnnotation?.type === "TSUnknownKeyword")
+        assert.fail(name + ": do not cast JobManager to a private-state test interface");
+      if (child.type === "MemberExpression") {
+        const owner = child.object?.type === "TSNonNullExpression" ? child.object.expression?.name : child.object?.name;
+        assert.ok(!["jobDir", "closeLogHandles", "queueLogAppend", "logWriteChain", "finish", "flushLogs", "pruneRetainedJobsNow", "cancelRecoveredUnknown", "reconcileRecoveredJob"].includes(property(child))
+          && !["persist", "enqueuePersistence"].includes(property(child))
+          && (property(child) !== "jobs" || owner === "runtime")
+          && (property(child) !== "processes" || owner === "probe"),
+          name + ": use persisted fixtures and supported ports rather than private JobManager state");
+      }
     });
   });
-  assert.deepEqual([...found].sort(), [...remaining].sort(), "review the documented exceptions when retiring a coordinator-only race");
 });
 
 test("stdin delivery accepts stream types without broadening planner permissions", async () => {

@@ -8,6 +8,7 @@ import { runnersPage } from "../src/admin/runner-list-view.js";
 import { runnerDetailPage } from "../src/admin/runner-detail-view.js";
 import { adminDocument } from "../src/admin/layout.js";
 import { html, htmlHeaders, redirect } from "../src/http/html-response.js";
+import { localizeHtmlResponse } from "../src/i18n/html.js";
 
 // Hashes were captured by evaluating the pre-refactor renderers at the fixed
 // baseline. Reviewed i18n annotations and login copy changes retain their
@@ -24,9 +25,11 @@ describe("AR04 rendering compatibility", () => {
       args.unshift({ ...presentation, configuredModes: new Map(Object.entries(presentation.configuredModes)) });
     }
     if (fixture.fn === "runnerDetailPage") {
-      if (args[2] === null) args[2] = undefined;
-      if (args[3] === null) args[3] = undefined;
-      args.unshift((fixture as unknown as { presentation: unknown }).presentation);
+      const [runner, workspaces, jobs, environment, csrf, release] = args;
+      args.splice(0, args.length, {
+        presentation: (fixture as unknown as { presentation: unknown }).presentation,
+        runner, workspaces, jobs: jobs ?? undefined, environment: environment ?? undefined, csrf, release,
+      });
     }
     const render = views[fixture.fn as keyof typeof views] as (...args: unknown[]) => string;
     const value = render(...args);
@@ -34,11 +37,45 @@ describe("AR04 rendering compatibility", () => {
     expect(sha256Hex(value)).toBe(fixture.sha256);
   });
 
+  it.each([true, false])("shows computer permissions for the initial access mode when central is %s", async (centralEnabled) => {
+    const content = clientsPage({ clients: [], runners: [], jobs: [], snapshot: {}, notices: [] }, "fixture-csrf", centralEnabled);
+    expect(content).toContain(`<details data-client-computer-permissions${centralEnabled ? "" : " open"}>`);
+    expect(content.includes('<option value="central">')).toBe(centralEnabled);
+    expect(content).toContain('<input type="checkbox" name="scopes" value="coding:read" checked>');
+    expect(content).toContain('<input type="checkbox" name="scopes" value="coding:write">');
+    expect(content).toContain('<input type="checkbox" name="scopes" value="coding:exec">');
+    for (const locale of ["en", "zh-CN"] as const) {
+      const response = localizeHtmlResponse(new Request(`https://worker.test/admin/clients?lang=${locale}`),
+        new Response(`<html><body>${content}</body></html>`, { headers: { "content-type": "text/html" } }));
+      const localized = await response.text();
+      expect(localized).toContain(`<details data-client-computer-permissions${centralEnabled ? "" : " open"}>`);
+      expect(localized).toContain(`<summary>${locale === "en" ? "Computer permissions" : "计算机权限"}</summary>`);
+      expect(localized).toContain('<input type="checkbox" name="scopes" value="coding:read" checked>');
+    }
+  });
+
   it("keeps untrusted names escaped and rendering synchronous", () => {
     const content = secretCreatedPage("<img src=x onerror=alert(1)>", "https://example.test/a?x=<b>&y=\"");
     expect(typeof content).toBe("string");
     expect(content).toContain("&lt;img src=x onerror=alert(1)&gt;");
     expect(content).not.toContain("<img src=x onerror=alert(1)>");
+  });
+
+  it.each(["active", "scheduled", "expired"] as const)("shows a used enrollment code as consumed regardless of its %s window", async window => {
+    const now = fixtures.clock_ms;
+    const content = runnerDetailPage({
+      presentation: { configuredMode: "dedicated_user", reportedMode: "dedicated_user", maxValidityDays: 3650, dayMs: 86400000 },
+      runner: { runner_id: "enrollment-fixture" }, workspaces: [], csrf: "fixture-csrf", release: { latest_version: "0.1.6", distributable: true },
+      enrollment: { not_before_ms: window === "scheduled" ? now + 1000 : now - 1000, expires_at_ms: window === "expired" ? now - 1 : now + 2000, used_at_ms: now - 500 },
+    });
+    for (const locale of ["en", "zh-CN"] as const) {
+      const localized = await localizeHtmlResponse(new Request('https://worker.test/admin/runners/enrollment-fixture?lang=' + locale),
+        new Response('<html><body>' + content + '</body></html>', { headers: { "content-type": "text/html" } })).text();
+      const heading = locale === "en" ? "Latest enrollment code" : "最新注册码";
+      expect(localized).toContain('<h2>' + heading + '</h2><span class="badge offline">' + (locale === "en" ? "Used" : "已使用") + '</span>');
+      expect(localized).toContain('/admin/runners/enrollment-fixture/enrollment');
+      expect(localized).toContain(locale === "en" ? "Each code can be used once. Generate a new code to enroll again." : "注册码仅可使用一次；重新注册请生成新注册码。");
+    }
   });
 
   it("keeps response status, no-store cookies and CSP nonce bound to the owned script", async () => {

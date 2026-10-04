@@ -18,7 +18,22 @@ External SDK imports are checked against Worker roles. HTTP/MCP adapters can loa
 
 Connection submodules depend on narrow ports, while the connection coordinator owns runtime, policy and Job integration. Release models and selection stay separate from release I/O and installer rendering. Patch data contracts use `path-contracts.ts`. See [the ownership reference](architecture-remediation.md#ar09ar14-platform-boundaries-and-failure-seams) for the corresponding roles.
 
-Fixtures cover `.mts`, `.cts`, JSX, bare built-ins such as `dgram` and `dns/promises`, type-only Cloudflare imports, renamed barrels, nested modules and reverse coordinator dependencies. Positive fixtures cover native adapters, pure hashing and type-only platform ports. Four named Runtime persistence-coordinator test exceptions retain timing that a file-write fault cannot reproduce; replacing one requires equivalent fault timing and assertions.
+Fixtures cover `.mts`, `.cts`, JSX, bare built-ins such as `dgram` and `dns/promises`, type-only Cloudflare imports, renamed barrels, nested modules and reverse coordinator dependencies. Positive fixtures cover native adapters, pure hashing and type-only platform ports. Three named Runtime persistence-coordinator test exceptions retain timing that a file-write fault cannot reproduce; replacing one requires equivalent fault timing and assertions.
+
+Central MCP providers consume public contracts, helpers within their own provider and reviewed server/schema SDKs. They cannot import application or platform implementations, unreviewed external packages, client SDKs, or platform I/O globals. Fixtures include direct imports, types, re-exports, nested helpers and dynamic imports. Protocol execution and persistence are injected through ports by composition.
+
+Native Runner mutation use cases have a stricter boundary than request adapters:
+only contracts, rules and peer use cases are allowed, with no HTTP/platform globals.
+Application modules cannot import platform adapters or their environment types.
+Authentication, enrollment and Runner query use cases consume operation ports and
+parsed receipts; they cannot own HTTP objects, network globals or random generation.
+History display defaults cannot own SQL or network access.
+Registry mutation route adapters cannot yield; asynchronous history/transport
+coordinators receive narrow ports and cannot import concrete storage or owners.
+Browser navigation and page controls cannot import each other. Runtime tests may
+not reintroduce private maps/methods or unknown-cast test interfaces outside the
+three documented persist exceptions; public runtime.jobs and the process probe
+are explicitly distinguished from private JobManager state.
 
 ## Scope and limits
 

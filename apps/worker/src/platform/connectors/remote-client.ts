@@ -5,15 +5,15 @@ import type { CredentialLease } from "../../contracts/oauth.js";
 import { parseCredential, parseProfile } from "../../contracts/connector-values.js";
 import { catalogJson, catalogObject } from "../../contracts/catalog-json.js";
 import { parseRemoteTool } from "../../contracts/catalog-values.js";
-import { REMOTE_LIMITS, RemoteFault, type RemoteConnector } from "../../contracts/remote.js";
-import { parseRemoteEgress, parseRemoteResult, publicMcpEndpoint } from "../../contracts/remote-values.js";
+import { REMOTE_LIMITS, RemoteFault, type RemoteConnector, type RemoteEgressRule } from "../../contracts/remote.js";
+import { parseRemoteResult, publicMcpEndpoint } from "../../contracts/remote-values.js";
 import { guardedRemoteResponse, boundedWireJson } from "./remote-response.js";
 import { BoundedRemoteValidator } from "./remote-validation.js";
 import { createRemoteSessionState } from "./remote-session.js";
 
 export interface HttpRemotePorts {
-  readonly policy: () => unknown;
-  readonly credential: (profile: ConnectionProfile, signal: AbortSignal, authorize: () => Promise<void>) => Promise<CredentialInput | CredentialLease>;
+  readonly rules: (profile: ConnectionProfile) => readonly RemoteEgressRule[] | undefined;
+  readonly credential: (profile: ConnectionProfile, signal: AbortSignal, authorize: () => Promise<void>) => Promise<CredentialInput | CredentialLease | null>;
   readonly fetch?: FetchLike;
   readonly selfOrigin?: string;
 }
@@ -25,14 +25,15 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
   return {
     validate: (schema, value) => validator.validate(schema, value),
     async open(rawProfile, parent, dispatched, authorize) {
-      const profile = parseProfile(rawProfile), rules = parseRemoteEgress(ports.policy());
+      const profile = parseProfile(rawProfile);
+      const rules = profile === undefined ? undefined : ports.rules(profile);
       const rule = profile === undefined ? undefined : rules?.find(rule => rule.endpoint === profile.endpoint);
       if (profile === undefined || rule === undefined || !profile.enabled || publicMcpEndpoint(profile.endpoint) === undefined
         || (ports.selfOrigin !== undefined && new URL(profile.endpoint).origin === ports.selfOrigin)) throw new RemoteFault("egress_denied");
       if (parent.aborted) throw new RemoteFault("operation_timed_out");
       const egressCurrent = (): boolean => {
-        const live = parseRemoteEgress(ports.policy())?.find(value => value.endpoint === profile.endpoint);
-        return live?.protocol === rule.protocol && live.session === rule.session;
+        const live = ports.rules(profile)?.find(value => value.endpoint === profile.endpoint);
+        return live?.protocol === rule.protocol && live.session === rule.session && live.negotiate === rule.negotiate;
       };
       const admitCredential = async () => {
         await authorize();
@@ -41,15 +42,16 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
       };
       await admitCredential();
       const supplied = await ports.credential(profile, parent, admitCredential);
-      const leased = "credential" in supplied;
-      const credential = parseCredential(leased ? supplied.credential : supplied);
+      const leased = supplied !== null && "credential" in supplied;
+      const credential = supplied === null && profile.authentication === "none" ? null : parseCredential(leased ? supplied.credential : supplied);
       const credentialCurrent = (): boolean => !leased || supplied.current();
       if (parent.aborted) throw new RemoteFault("operation_timed_out");
       if (credential === undefined) throw new RemoteFault("dependency_unavailable");
+      let protocol: string = rule.protocol;
       const controller = new AbortController(), signal = controller.signal;
       const abort = () => controller.abort(); parent.addEventListener("abort", abort, { once: true });
-      const sessionState = createRemoteSessionState(rule, { policy: ports.policy, authorize, current: credentialCurrent,
-        token: credential.token, signal, send: (url, init) => (ports.fetch ?? fetch)(url, init) });
+      const sessionState = createRemoteSessionState(rule, { authorize, current: credentialCurrent,
+        token: credential?.token, protocol: () => protocol, egressCurrent, signal, send: (url, init) => (ports.fetch ?? fetch)(url, init) });
       let requests = 0, totalBytes = 0, totalTools = 0, callSent = false, lastFault: RemoteFault | undefined;
       let beforeCall: (() => Promise<void>) | undefined;
       const ids = new Set<string | number>(), cursors = new Set<string>();
@@ -66,15 +68,21 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
           if (message.jsonrpc !== "2.0" || typeof method !== "string") throw new RemoteFault("upstream_protocol_error");
           if (method === "notifications/cancelled") return new Response(null, { status: 202 });
           if (!["initialize", "notifications/initialized", "server/discover", "tools/list", "tools/call"].includes(method)) throw new RemoteFault("unsupported_interaction");
-          if ((rule.protocol === "2026-07-28" && (method === "initialize" || method === "notifications/initialized"))
-            || (rule.protocol === "2025-11-25" && method === "server/discover")) throw new RemoteFault("upstream_protocol_error");
+          if (!rule.negotiate && ((rule.protocol === "2026-07-28" && (method === "initialize" || method === "notifications/initialized"))
+            || (rule.protocol === "2025-11-25" && method === "server/discover"))) throw new RemoteFault("upstream_protocol_error");
           if (method !== "notifications/initialized") {
             if ((typeof message.id !== "number" && typeof message.id !== "string") || ids.has(message.id)) throw new RemoteFault("upstream_protocol_error");
             ids.add(message.id);
           }
+          if (rule.negotiate) {
+            const selected = new Headers(init.headers).get("mcp-protocol-version");
+            if (selected && !["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"].includes(selected)) throw new RemoteFault("upstream_protocol_error");
+            protocol = selected ?? (method === "server/discover" ? "2026-07-28" : protocol);
+          }
           const params = catalogObject(message.params), headers = new Headers({ "content-type": "application/json",
-            accept: "application/json, text/event-stream", "mcp-protocol-version": rule.protocol,
-            "mcp-method": method, "x-runmesh-mcp-hop": "1", authorization: `Bearer ${credential.token}` });
+            accept: "application/json, text/event-stream", "mcp-protocol-version": protocol,
+            "mcp-method": method, "x-runmesh-mcp-hop": "1" });
+          if (credential !== null) headers.set("authorization", `Bearer ${credential.token}`);
           sessionState.headers(headers);
           if (method === "tools/list") {
             const cursor = params?.cursor ?? "";
@@ -102,7 +110,10 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
           let response = await (ports.fetch ?? fetch)(profile.endpoint, { method: "POST", body: init.body,
             headers, redirect: "manual", credentials: "omit", cache: "no-store", signal });
           if (signal.aborted) { void response.body?.cancel().catch(() => undefined); throw new RemoteFault("operation_timed_out"); }
-          if (response.status === 429 || response.status >= 500 || response.status === 401 || response.status === 403) {
+          if (response.status === 401 || response.status === 403) {
+            void response.body?.cancel().catch(() => undefined); throw new RemoteFault("authorization_required");
+          }
+          if (response.status === 429 || response.status >= 500) {
             void response.body?.cancel().catch(() => undefined); throw new RemoteFault("upstream_unavailable");
           }
           response = sessionState.response(response, method);
@@ -115,7 +126,7 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
           const text = await guarded.text();
           if (!credentialCurrent() || !egressCurrent()) throw new RemoteFault("result_withheld");
           // Detect direct reflection of our bearer; this is not a general DLP promise.
-          if (credential.token.length >= 12 && text.includes(credential.token)) throw new RemoteFault("result_invalid");
+          if (credential !== null && credential.token.length >= 12 && text.includes(credential.token)) throw new RemoteFault("result_invalid");
           if (sessionState.reflected(text)) throw new RemoteFault("result_invalid");
           if (method === "tools/list") {
             const reply = boundedWireJson(text), result = catalogObject(reply.result);
@@ -134,8 +145,8 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
       };
       const client = new Client({ name: "runmesh-central", version: "1" }, { capabilities: {}, enforceStrictCapabilities: true,
         jsonSchemaValidator: validator, defaultCacheTtlMs: 0, listMaxPages: REMOTE_LIMITS.pages,
-        inputRequired: { autoFulfill: false, maxRounds: 0 }, supportedProtocolVersions: [rule.protocol],
-        versionNegotiation: { mode: rule.protocol === "2026-07-28" ? { pin: rule.protocol } : "legacy", probe: { maxRetries: 0 } } });
+        inputRequired: { autoFulfill: false, maxRounds: 0 }, supportedProtocolVersions: rule.negotiate ? ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"] : [rule.protocol],
+        versionNegotiation: { mode: rule.negotiate ? "auto" : rule.protocol === "2026-07-28" ? { pin: rule.protocol } : "legacy", probe: { maxRetries: 0 } } });
       const transport = new StreamableHTTPClientTransport(new URL(profile.endpoint), { fetch: guardedFetch, protocolVersion: rule.protocol,
         reconnectionOptions: { maxRetries: 0, initialReconnectionDelay: 0, maxReconnectionDelay: 0, reconnectionDelayGrowFactor: 1 } });
       client.onerror = () => undefined;
@@ -147,6 +158,7 @@ export function createHttpRemoteConnector(ports: HttpRemotePorts): RemoteConnect
         if (signal.aborted || client.getServerCapabilities()?.tools === undefined) throw new RemoteFault("upstream_protocol_error");
       } catch (error) { await close(); throw lastFault ?? (error instanceof RemoteFault ? error : new RemoteFault("upstream_protocol_error")); }
       return {
+        current: () => !parent.aborted && credentialCurrent() && egressCurrent(),
         async listTools() {
           try {
             const response = await client.listTools({}, { signal, timeout: REMOTE_LIMITS.operation_ms });
