@@ -6,7 +6,7 @@ independently usable review/snapshot path.
 
 [简体中文](central-catalog.zh-CN.md)
 
-**Available in Runmesh 0.1.6.** See [release status](release-readiness.md) for deployment and upgrade steps.
+See [release status](release-readiness.md) for deployment and upgrade steps.
 All authenticated instance clients share the enabled published selection. The
 control panel connects MCP URLs with no authentication or OAuth, then discovers
 and automatically publishes every discovered tool in one revision. No manual

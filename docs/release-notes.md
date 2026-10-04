@@ -2,6 +2,28 @@
 
 [Chinese](release-notes.zh-CN.md) · [Documentation](README.md) · [Upgrade guide](upgrading.md)
 
+## 0.1.7 — published stable release
+
+Runmesh 0.1.7 is published as an [immutable stable release](https://github.com/aloneio/runmesh/releases/tag/v0.1.7) with a signed portable Runner package. The public package has been independently verified. See [release status](release-readiness.md) for deployment and upgrade steps.
+
+### Runner services
+
+- Linux user services use the current account's local service manager for installation, status checks, stopping, restarting and removal.
+- On Linux, macOS and Windows, user services consistently start in user mode. Updating an existing service refreshes its launch settings while retaining custom program paths and arguments.
+
+### MCP connections and reliability
+
+- Temporary control-plane interruptions preserve the existing OAuth connection. Authorization opens when the account needs to sign in again.
+- Runner connections release unused responses during disconnects and temporary control-plane failures.
+
+### Security
+
+- Updated Hono to 4.13.7, which fixes GHSA-hxh3-vqpv-xpqv in JSX rendering.
+
+### Upgrade
+
+Follow the [upgrade guide](upgrading.md) to update the control plane and Runner. For a user service, run `install --user` with the updated service executable and existing profile to apply its launch update. Existing account connections, Runner profiles and workspace settings carry over.
+
 ## 0.1.6 — published stable release
 
 Runmesh 0.1.6 is published as an [immutable stable release](https://github.com/aloneio/runmesh/releases/tag/v0.1.6) with a signed portable Runner package. The public package has been independently verified. See [release status](release-readiness.md) for deployment and upgrade steps.

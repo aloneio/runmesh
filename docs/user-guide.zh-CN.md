@@ -12,11 +12,11 @@ Runmesh 将兼容 MCP 的 AI 客户端连接到实例共享的 MCP 工具、Skil
 https://your-host.example/<generated-secret>/mcp
 ```
 
-地址本身就是凭据，只在创建或轮换时显示。完整复制秘密路径，去掉误复制的空格、换行，使用地址鉴权即可，无需额外的 Bearer token。真实地址应妥善保管，避免出现在对话、截图、工单或仓库中。
+地址本身就是凭据，只在创建或轮换时显示。完整复制含凭据的路径，去掉误复制的空格、换行，使用地址鉴权即可，无需额外的 Bearer token。真实地址应妥善保管，避免出现在对话、截图、工单或仓库中。
 
 ## 使用共享 MCP 工具和 Skill
 
-在 Runmesh 0.1.6 中，有效客户端共享实例内启用的 MCP 工具和 Skill。在客户端刷新 Runmesh 连接即可加载当前内容。你可以让 AI 查找可用工具或阅读 Skill；目录工具包括 `remote_profiles`、`remote_tools`、`skill_list` 和 `skill_read`。
+有效客户端共享实例内启用的 MCP 工具和 Skill。在客户端刷新 Runmesh 连接即可加载当前内容。你可以让 AI 查找可用工具或阅读 Skill；目录工具包括 `remote_profiles`、`remote_tools`、`skill_list` 和 `skill_read`。
 
 这些操作由控制端处理。连接同时具有计算机访问权限时，再按下面的步骤选择机器。管理员连接 MCP 和安装 Skill 的方法见[MCP 和 Skill 指南](central-administration.zh-CN.md)。
 
@@ -83,7 +83,7 @@ Runner 重启后，尚未启动的排队任务会变为 `interrupted`，恢复�
 
 ## 日志、输入与取消
 
-前台回执可能只含末尾输出。正数 `offset` 表示该响应省略了前面的字节，可用 `job` 工具的 `logs` 动作分页读取仍保留的内容。原样使用返回的游标；工具目录禁止时，不要把游标与新的偏移或末尾模式混用。
+前台回执可能只含末尾输出。正数 `offset` 表示该响应省略了前面的字节，可用 `job` 工具的 `logs` 动作分页读取仍保留的内容。读取下一页时，原样使用返回的游标，并保持任务 ID 和输出流不变。需要从新偏移或末尾读取时，按工具目录中的参数发起新请求。
 
 本地日志有大小上限，`output_truncated` 可能表示部分字节已永久丢弃。应用另有日志采集时，可请管理员一并检查。
 

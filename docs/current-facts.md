@@ -247,7 +247,9 @@ Generated from the checked-out source by `npm run generate:facts` and validated 
   ],
   "reviewed_release_record": {
     "version": "0.1.7",
-    "state": "candidate"
+    "state": "released",
+    "commit": "e4a3931f5ea4d9b7f43fbdf422eab006ef61c9ac",
+    "manifest_sha256": "9b71f360c694c8961447211d5a0764b23e7a8dbca06e500b12c13de7a55c468a"
   },
   "observations": {
     "test_execution": "not_run",

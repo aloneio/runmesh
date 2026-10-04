@@ -27,7 +27,7 @@ Read the [security model](security.md) and [permission model](permission-model.m
 
 ## Versions and features
 
-The latest published stable release is **0.1.6**, which includes shared MCP connections and Skills. Deploy the compatible Worker and refresh the client's tool catalog to use them. For computer access, install the appropriate Runner package on each execution machine.
+Runmesh shares enabled MCP tools and Skills with connected clients. Deploy the compatible Worker and refresh the client's tool catalog to use them. For computer access, install the appropriate Runner package on each execution machine.
 
 Check [release status](release-readiness.md) for package availability and [build provenance](build-provenance.md) for your deployed Worker. [Development prereleases](dev-runner-prereleases.md) provide a separate testing channel.
 

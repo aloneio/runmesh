@@ -6,11 +6,11 @@
 
 ## 选择目标版本
 
-Runmesh 0.1.6 将已启用的 MCP 工具与当前 Skill 共享给实例中的所有有效客户端。升级前，请核对共享内容与客户端范围；部署后刷新客户端目录和 Skill 版本。停止某个客户端的访问时，撤销其凭据；停止共享某个 MCP 或 Skill 时，在控制端暂停它。计算机访问保留原有 Runner 和工作区权限，具体操作见[MCP 和 Skill 指南](central-administration.zh-CN.md)。
+Runmesh 将已启用的 MCP 工具与当前 Skill 共享给实例中的所有有效客户端。升级前，请核对共享内容与客户端范围；部署后刷新客户端目录和 Skill 版本。停止某个客户端的访问时，撤销其凭据；停止共享某个 MCP 或 Skill 时，在控制端暂停它。计算机访问保留原有 Runner 和工作区权限，具体操作见[MCP 和 Skill 指南](central-administration.zh-CN.md)。
 
 先读[版本说明](release-notes.zh-CN.md)和[发行状态](release-readiness.md)。生产升级使用已发布、独立验签的正式包；候选版和开发预发布放在独立测试环境。
 
-升级到 0.1.6 时，加入 MCP、Skill 生产绑定，并保留现有 Registry 和 Runner 命名空间。已有的两个密钥和资源标识保持不变；OAuth 加密使用 `INTERNAL_CONTROL_SECRET`。先部署经过审核的发行激活版本，核对运行中的 Worker，再更新 Runner。下文 0.1.3 升至 0.1.4 的流程是受管服务更新的历史示例。
+控制端应包含 MCP、Skill 生产绑定，并保留现有 Registry 和 Runner 命名空间。已有的两个密钥和资源标识保持不变；OAuth 加密使用 `INTERNAL_CONTROL_SECRET`。先部署经过审核的发行激活版本，核对运行中的 Worker，再更新 Runner。下文 0.1.3 升至 0.1.4 的流程是受管服务更新的历史示例。
 
 分别安排以下更新：
 

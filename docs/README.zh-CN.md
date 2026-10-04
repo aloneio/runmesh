@@ -27,7 +27,7 @@
 
 ## 版本与功能
 
-最新已发布正式版为 **0.1.6**，包含共享 MCP 连接和 Skill。部署兼容 Worker 并刷新客户端工具目录后，即可使用。需要计算机访问时，再在执行任务的机器上安装对应 Runner 包。
+Runmesh 将已启用的 MCP 工具和 Skill 共享给已连接客户端。部署兼容 Worker 并刷新客户端工具目录后，即可使用。需要计算机访问时，再在执行任务的机器上安装对应 Runner 包。
 
 安装包的可用状态见[发行状态](release-readiness.md)，已部署 Worker 的核对方法见[构建来源](build-provenance.zh-CN.md)。[开发预发布](dev-runner-prereleases.zh-CN.md)提供单独的测试渠道。
 

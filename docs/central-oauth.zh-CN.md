@@ -2,7 +2,7 @@
 
 [English](central-oauth.md) · [MCP 和 Skill 指南](central-administration.zh-CN.md)
 
-需要使用提供方账号的 MCP 选择「OAuth」。Runmesh 会打开提供方的登录与授权页面，完成后返回控制端。本指南适用于 Runmesh 0.1.6。
+需要使用提供方账号的 MCP 选择「OAuth」。Runmesh 会打开提供方的登录与授权页面，完成后返回控制端。
 
 ## 连接账号
 

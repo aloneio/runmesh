@@ -2,7 +2,7 @@
 
 [简体中文](central-oauth.zh-CN.md) · [MCP and Skill guide](central-administration.md)
 
-Choose **OAuth** when an MCP uses an account at its provider. Runmesh opens the provider's sign-in and consent pages, then returns you to the control panel. This guide covers Runmesh 0.1.6.
+Choose **OAuth** when an MCP uses an account at its provider. Runmesh opens the provider's sign-in and consent pages, then returns you to the control panel.
 
 ## Connect
 

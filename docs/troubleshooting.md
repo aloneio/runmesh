@@ -47,7 +47,7 @@ For shared MCP or Skill access, use the connection checks below. For computer ac
 
 Confirm `runner_current` and the workspace ID from `workspace_list`. Ask the administrator to check client scopes and Runner restrictions, the authorization period, workspace permissions and policy acknowledgement. The Runner's service account also needs OS access.
 
-Use the [permission runbook](runbooks/permission-denial.md) to identify the denying layer before changing access. An unavailable dependency leaves that part of the diagnosis unresolved.
+Use the [permission runbook](runbooks/permission-denial.md) to identify the denying layer before changing access. If a required service is unavailable, restore it and repeat the permission checks before changing access.
 
 ## Connected MCP or OAuth needs attention
 

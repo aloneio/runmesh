@@ -2,7 +2,7 @@
 
 [English](central-administration.md) · [文档目录](README.zh-CN.md)
 
-在「MCP 和 Skill」页面（`/admin/central`）连接 MCP、安装 Skill，再接入 AI 客户端即可使用。Runmesh 0.1.6 提供这些功能；已签名安装包、部署和升级步骤见[发行状态](release-readiness.md)。
+在「MCP 和 Skill」页面（`/admin/central`）连接 MCP、安装 Skill，再接入 AI 客户端即可使用。已签名安装包、部署和升级步骤见[发行状态](release-readiness.md)。
 
 ## 配置共享内容
 
@@ -10,7 +10,7 @@
 | --- | --- |
 | 连接 MCP | 打开「MCP」，填写公网 HTTPS MCP 地址，选择「无身份验证」或 OAuth，点击「连接」。选择 OAuth 后，在提供方页面登录并完成授权。 |
 | 安装 Skill | 打开「Skill」，选择整个文件夹，或选择 `SKILL.md` 及配套文本文件，点击「安装 Skill」。 |
-| 接入 AI 客户端 | 点击「连接 AI 客户端」，填写标签、选择使用方式并创建连接，将一次性地址复制到客户端的 MCP 设置中。 |
+| 接入 AI 客户端 | 点击「连接 AI 客户端」，填写标签、选择使用方式并创建连接，将创建时显示的地址复制到客户端的 MCP 设置中。 |
 
 同一实例中的所有有效 AI 客户端共享已启用的 MCP 工具和 Skill。MCP 连接成功后会自动加载工具，点击卡片上的「查看工具」即可浏览；Skill 卡片上的「查看文件」可阅读已安装内容。
 
