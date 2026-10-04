@@ -14,7 +14,7 @@
 | `requires_job_check` | 该动作还会检查 Job 实际所属工作区 |
 | `host_catalog_state` | `not_observed`：需单独查看 MCP 应用实际加载的工具目录 |
 
-报告缺失时为 `not_reported`，格式错误或版本不支持时为 `invalid`，两者的方法支持状态均为 `unknown`。有效的部分列表可以指出未支持的方法。判断能力时使用方法列表，确认构建来源时使用已验证的发行包；版本号和契约摘要各有用途。
+报告缺失时为 `not_reported`，未通过能力报告 schema 校验时为 `invalid`，两者的方法支持状态均为 `unknown`。报告有效时，列表中的方法为 `supported`，未列出的方法为 `unsupported`。请用报告的方法列表判断能力，用已验证的发行包确认构建来源。
 
 原生目录包含 10 个工具、26 个 Runner 动作和 27 个受保护 RPC 方法，其中包括内部工作区列表方法。每次原生操作需要满足自身 scope、当前策略及工作区权限；实时文件、执行和 Context 操作还需要可用的 Runner 连接。MCP 和 Skill 库会另外提供发现、调用工具及已连接 MCP 的工具，这些共享能力不需要选择 Runner。
 

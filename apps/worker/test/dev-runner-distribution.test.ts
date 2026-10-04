@@ -7,7 +7,7 @@ import { discoverDevelopmentRunnerRelease as discoverRelease, resolveRunnerRelea
 import { FIXED_RELEASE_VERSION, installerReleaseTarget, renderPosixInstaller, renderPowerShellInstaller } from "../src/installer.js";
 import { isDevelopmentReleaseVersion } from "../src/domain/release-selection.js";
 import { runnerInstallScript, runnerRelease } from "../src/http/distribution.js";
-import { boundedJson, readDevelopmentReleaseCache, releaseFetch } from "../src/distribution/release-io.js";
+import { boundedJson, readDevelopmentReleaseCache, releaseFetch, DevelopmentReleaseError, developmentReleaseFailure, safeDevelopmentReleaseFailure } from "../src/distribution/release-io.js";
 
 // Each call models a new isolate, with the real runtime algorithm enabled.
 function discoverDevelopmentRunnerRelease(fetchImpl: typeof fetch, verify: DevelopmentReleaseVerifier, cache?: DevelopmentReleaseCache | null, schedule?: DevelopmentReleaseRefreshScheduler) {
@@ -408,7 +408,7 @@ describe("development Runner distribution", () => {
 
       const installerResponse = await runnerInstallScript(new Request("https://runmeshdev.example/runner/install.sh"), new URL("https://runmeshdev.example/runner/install.sh"), runtimeEnv);
       expect(installerResponse.headers.get("cache-control")).toBe("no-store");
-      expect(await installerResponse.text()).toContain("Development never falls back to the stable Runner");
+      expect(await installerResponse.text()).toContain("Development Runner download failed");
     } finally {
       vi.stubGlobal("fetch", originalFetch);
     }
@@ -1172,4 +1172,89 @@ it("a failed older refresh cannot replace a concurrent verified runtime value wi
   expect((await older).package_version).toBe(devVersion(1));
   expect(dependencies.runtime.cached?.verified_at_ms).toBe(newerVerification);
   expect(cache.put).toHaveBeenCalledTimes(1);
+});
+
+it("reports one refresh failure after retries without duplicate waiter or cooldown events", async () => {
+  vi.useFakeTimers();
+  const onRefreshFailure = vi.fn(), fetchImpl = responseFetch({ private_token: "PRIVATE_SENTINEL" }, 503);
+  const dependencies: DevelopmentReleaseDependencies = { fetch: fetchImpl, verify: async () => undefined, cache: undefined,
+    now: () => Date.now(), runtime: createDevelopmentReleaseRuntime(), onRefreshFailure };
+  const pending = Promise.all(Array.from({ length: 4 }, () => resolveRelease(devEnv, dependencies)));
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect((await pending).every(value => !value.distributable)).toBe(true);
+  expect(fetchImpl).toHaveBeenCalledTimes(3);
+  expect(onRefreshFailure.mock.calls).toEqual([[{ phase: "discovery", reason: "http_error", http_status: 503 }]]);
+  expect(await resolveRelease(devEnv, dependencies)).toMatchObject({ distributable: false });
+  expect(onRefreshFailure).toHaveBeenCalledOnce();
+});
+
+it.each(["manifest", "signature", "signature_descriptor"] as const)("reports the actual %s download failure without asset URLs or response values", async phase => {
+  const version = devVersion(0), target = installerReleaseTarget(version, "dev"), onRefreshFailure = vi.fn();
+  const failedUrl = phase === "manifest" ? target.manifest_url : phase === "signature" ? target.signature_url : target.signature_descriptor_url;
+  const fetchImpl = vi.fn(async (input: RequestInfo | URL) => String(input).includes("api.github.com")
+    ? Response.json([release(version, "2026-09-16T08:00:00Z")])
+    : new Response("PRIVATE_SENTINEL", { status: String(input) === failedUrl ? 404 : 200 }));
+  const dependencies: DevelopmentReleaseDependencies = { fetch: fetchImpl, verify: verifyDevelopmentRunnerRelease, cache: undefined,
+    now: () => Date.now(), runtime: createDevelopmentReleaseRuntime(), onRefreshFailure };
+  expect(await resolveRelease(devEnv, dependencies)).toMatchObject({ distributable: false });
+  expect(onRefreshFailure.mock.calls).toEqual([[{ phase, reason: "http_error", http_status: 404 }]]);
+  expect(JSON.stringify(onRefreshFailure.mock.calls)).not.toMatch(/PRIVATE_SENTINEL|github|https/u);
+});
+
+it("reports a failed background refresh once after recovery while preserving its cached result even when observation throws", async () => {
+  const seed = await discoverDevelopmentRunnerRelease(responseFetch([release(devVersion(0), "2026-09-16T08:00:00Z")]), async () => undefined);
+  const now = Date.now(), stored = { schema_version: 1, verified_at_ms: now - 120_000, descriptor: seed };
+  const cache = { match: vi.fn(async () => Response.json(stored)), put: vi.fn(async () => undefined) };
+  let finish!: (value: Response) => void;
+  const onRefreshFailure = vi.fn(() => { throw new Error("PRIVATE_SENTINEL"); }), tasks: Promise<void>[] = [];
+  const dependencies: DevelopmentReleaseDependencies = { fetch: vi.fn(() => new Promise<Response>(resolve => { finish = resolve; })), verify: async () => undefined,
+    cache, now: () => now, runtime: createDevelopmentReleaseRuntime(), onRefreshFailure };
+  expect(await resolveRelease(devEnv, dependencies, task => tasks.push(task))).toEqual(seed);
+  expect(onRefreshFailure).not.toHaveBeenCalled();
+  finish(new Response(null, { status: 404 }));
+  await Promise.all(tasks);
+  expect(cache.match).toHaveBeenCalledTimes(2);
+  expect(onRefreshFailure.mock.calls).toEqual([[{ phase: "discovery", reason: "http_error", http_status: 404 }]]);
+  expect(await resolveRelease(devEnv, dependencies)).toEqual(seed);
+  expect(cache.put).not.toHaveBeenCalled();
+  expect(dependencies.runtime.cached?.verified_at_ms).toBe(stored.verified_at_ms);
+});
+
+it("keeps successful refreshes and cache hits quiet even when a newer candidate was rejected", async () => {
+  const onRefreshFailure = vi.fn();
+  const verify = vi.fn(async (descriptor: { package_version: string }) => {
+    if (descriptor.package_version === devVersion(1)) throw new DevelopmentReleaseError("PRIVATE_SENTINEL", { phase: "verification", reason: "invalid_signature" });
+  });
+  const dependencies: DevelopmentReleaseDependencies = { fetch: responseFetch([release(devVersion(0), "2026-09-16T08:00:00Z"), release(devVersion(1), "2026-09-16T09:00:00Z")]),
+    verify, cache: undefined, now: () => Date.now(), runtime: createDevelopmentReleaseRuntime(), onRefreshFailure };
+  expect(await resolveRelease(devEnv, dependencies)).toMatchObject({ package_version: devVersion(0), distributable: true });
+  expect(await resolveRelease(devEnv, dependencies)).toMatchObject({ package_version: devVersion(0), distributable: true });
+  expect(verify).toHaveBeenCalledTimes(2); expect(onRefreshFailure).not.toHaveBeenCalled();
+});
+
+it("retains the newest candidate's failure when all candidates fail and classifies unknown exceptions without their messages", async () => {
+  const onRefreshFailure = vi.fn();
+  const dependencies: DevelopmentReleaseDependencies = { fetch: responseFetch([release(devVersion(0), "2026-09-16T08:00:00Z"), release(devVersion(1), "2026-09-16T09:00:00Z")]),
+    verify: async descriptor => {
+      if (descriptor.package_version === devVersion(1)) throw new DevelopmentReleaseError("PRIVATE_SENTINEL", { phase: "verification", reason: "invalid_signature" });
+      throw new Error("PRIVATE_SENTINEL");
+    }, cache: undefined, now: () => Date.now(), runtime: createDevelopmentReleaseRuntime(), onRefreshFailure };
+  expect(await resolveRelease(devEnv, dependencies)).toMatchObject({ distributable: false });
+  expect(onRefreshFailure.mock.calls).toEqual([[{ phase: "verification", reason: "invalid_signature" }]]);
+  expect(developmentReleaseFailure(new Error("PRIVATE_SENTINEL"), "verification")).toEqual({ phase: "verification", reason: "unexpected" });
+});
+
+it("projects only fixed release diagnostic fields at the HTTP observability boundary", () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  try {
+    const dependencies = developmentReleaseDependencies({ ...env, REGISTRY: {} } as never);
+    dependencies.onRefreshFailure?.({ phase: "signature", reason: "http_error", http_status: 503, url: "PRIVATE_SENTINEL", message: "PRIVATE_SENTINEL" } as never);
+    expect(warn.mock.calls).toEqual([[{ event: "dev_runner_release_refresh_failed", phase: "signature", reason: "http_error", http_status: 503 }]]);
+    for (const value of [{ phase: "PRIVATE_SENTINEL", reason: "http_error" }, { phase: "signature", reason: "PRIVATE_SENTINEL" },
+      { phase: { toString: () => "signature", secret: "PRIVATE_SENTINEL" }, reason: "http_error" }]) {
+      expect(safeDevelopmentReleaseFailure(value)).toEqual({ phase: "discovery", reason: "unexpected" });
+    }
+    for (const http_status of ["503", 99, 600, 503.5, NaN]) expect(safeDevelopmentReleaseFailure({ phase: "discovery", reason: "http_error", http_status }))
+      .toEqual({ phase: "discovery", reason: "http_error" });
+  } finally { warn.mockRestore(); }
 });

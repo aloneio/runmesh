@@ -37,9 +37,9 @@ Control-panel connections negotiate a supported MCP version with the saved endpo
 users do not configure protocol versions. The official MCP client SDK is pinned
 to 2.0.0 and isolated in a platform adapter. Its Cloudflare JSON
 Schema interpreter validates the already restricted catalog schema dialect
-without dynamic code generation. Arguments are not coerced and defaults are not
-silently inserted. A conservative expanded-schema/data work ceiling rejects
-expensive inputs rather than accepting an unbounded synchronous computation.
+without dynamic code generation. Arguments retain their supplied types and
+values, including omitted fields. Validation rejects inputs whose estimated
+expanded-schema/data work exceeds the configured ceiling.
 
 Both JSON and request-scoped SSE responses are supported. Text, image, audio,
 embedded resources, resource links, structured results and tool-level `isError`

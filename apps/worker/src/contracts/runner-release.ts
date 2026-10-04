@@ -63,6 +63,11 @@ export interface CachedDevelopmentReleaseRecord {
 
 export type DevelopmentReleaseVerifier = (descriptor: RunnerReleaseDescriptor, fetchImpl: typeof fetch) => Promise<void>;
 export type DevelopmentReleaseRefreshScheduler = (work: Promise<void>) => void;
+export interface DevelopmentReleaseFailure {
+  readonly phase: "discovery" | "manifest" | "signature" | "signature_descriptor" | "verification";
+  readonly reason: "http_error" | "network_error" | "timeout" | "invalid_response" | "invalid_signature" | "invalid_manifest" | "no_candidate" | "unexpected";
+  readonly http_status?: number;
+}
 /** Only values and launch counters may cross requests, never an I/O promise. */
 export interface DevelopmentReleaseRuntime {
   cached?: { readonly expires_at_ms: number; readonly verified_at_ms: number; readonly descriptor: RunnerReleaseDescriptor };
@@ -77,4 +82,6 @@ export interface DevelopmentReleaseDependencies {
   readonly cache: DevelopmentReleaseCache | undefined;
   readonly now: () => number;
   readonly runtime: DevelopmentReleaseRuntime;
+  /** Synchronous observation, once per failed refresh after cache recovery. */
+  readonly onRefreshFailure?: (failure: DevelopmentReleaseFailure) => void;
 }
