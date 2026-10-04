@@ -6,7 +6,7 @@ import { ADMIN_SESSION_COOKIE } from "./constants.js";
 import { adminDocument } from "../admin/layout.js";
 import { centralPage } from "../admin/central-view.js";
 import { adminError } from "./responses.js";
-import { adminClientError, adminRunnerError, adminSectionError, adminUpstreamError } from "./responses.js";
+import { adminClientError, adminRunnerError, adminSectionError, adminUpstreamError, adminUpstreamRedirect } from "./responses.js";
 import { boundedJsonResponse } from "../bounded-json.js";
 import { adminPage } from "./admin-presentation.js";
 import { adminSession } from "./session.js";
@@ -151,7 +151,9 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
     const settings = parseJobHistorySettings({mode:form.get("mode"),interval_seconds:Number(form.get("interval_seconds")),retention_days:Number(form.get("retention_days")),local_retention_days:Number(form.get("local_retention_days"))});
     if (settings === undefined || (settings.local_retention_days > 0 && form.get("confirm_local_cleanup") !== "true")) return adminRunnerError(400,"Invalid settings or local cleanup not confirmed.");
     const response = await registryPost(env,`/runners/${encodeURIComponent(historyAction[1]!)}/history-settings`,{...settings});
-    return response.ok ? redirect(`/admin/runners/${encodeURIComponent(historyAction[1]!)}`) : adminRunnerError(response.status === 404 ? 404 : 503,"History settings could not be saved.");
+    if (response.ok) return adminUpstreamRedirect(response, `/admin/runners/${encodeURIComponent(historyAction[1]!)}`);
+    void response.body?.cancel().catch(() => undefined);
+    return adminRunnerError(response.status === 404 ? 404 : 503,"History settings could not be saved.");
   }
   if (url.pathname === "/admin/password") return changePassword(env, form);
   if (url.pathname === "/admin/clients") return createClient(env, form, publicOrigin);
@@ -183,7 +185,7 @@ export async function handleBrowserAdmin(request: Request, env: WorkerEnv, url: 
     const confirmValue = form.get("confirm_switch");
     const confirmSwitch = confirmValue === "true" || confirmValue === "on" || confirmValue === "1";
     const response = await registryPost(env, `/auth/clients/${encodeURIComponent(clientId)}/active-runner`, { runner_id: runnerId, confirm_switch: confirmSwitch });
-    if (response.status === 200) { void response.body?.cancel().catch(() => undefined); return redirect(`/admin/clients/${encodeURIComponent(clientId)}`); }
+    if (response.status === 200) return adminUpstreamRedirect(response, `/admin/clients/${encodeURIComponent(clientId)}`);
     if (response.status === 409) {
       let code: unknown;
       try { code = record(await response.json())?.code; } catch { code = undefined; }
@@ -244,8 +246,7 @@ function secretUrl(base: string, secret: string): string { const url = new URL(b
 
 function adminMutationResponse(response: Response, location: string, message: string, completedStatus = 200): Response {
   if (response.status !== completedStatus) return adminUpstreamError(response, message, 400, adminClientError);
-  void response.body?.cancel().catch(() => undefined);
-  return redirect(location);
+  return adminUpstreamRedirect(response, location);
 }
 
 async function persistClientCredential(env: WorkerEnv, path: string, clientId: string, secret: string, fields: Record<string, unknown> = {}): Promise<Response | undefined> {

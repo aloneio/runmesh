@@ -2,7 +2,7 @@ import { createRunnerFromControlPlane, rotateRunnerFromControlPlane, revokeRunne
 import type { DevelopmentReleaseRefreshScheduler } from "../distribution/release.js";
 import { deleteRunnerFromControlPlane } from "./runner-deletion.js";
 import { adminRunnerError } from "./responses.js";
-import { adminUpstreamError } from "./responses.js";
+import { adminUpstreamError, adminUpstreamRedirect } from "./responses.js";
 import { configuredWorkspacePreset } from "./input.js";
 import { enrollmentWindowFromForm } from "./input.js";
 import { executionModeForExistingRunner } from "./input.js";
@@ -57,7 +57,7 @@ export async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, 
     const state = await runnerExecutionSnapshot(runnerQueryPorts(env), runnerId);
     if (state.snapshot === undefined) return adminRunnerError(state.status === 404 ? 404 : 503, "Runner authorization could not read the Runner state.");
     const response = await registryPost(env, `/auth/runners/${encodeURIComponent(runnerId)}/validity`, { valid_from_ms: window.valid_from_ms, valid_until_ms: window.valid_until_ms, expected_lifecycle_id: state.snapshot.lifecycleId });
-    return response.ok ? redirect(`/admin/runners/${encodeURIComponent(runnerId)}`) : adminUpstreamError(response, "Runner authorization validity could not be updated.", response.status === 409 ? 409 : 400, adminRunnerError);
+    return response.ok ? adminUpstreamRedirect(response, `/admin/runners/${encodeURIComponent(runnerId)}`) : adminUpstreamError(response, "Runner authorization validity could not be updated.", response.status === 409 ? 409 : 400, adminRunnerError);
   }
   if (action === "version-policy") {
     const updateChannel = form.get("update_channel"); const desired = form.get("desired_runner_version");
@@ -66,25 +66,25 @@ export async function handleBrowserRunnerAction(env: WorkerEnv, form: FormData, 
     const payload = { update_channel: updateChannel, ...(updateChannel === "pinned" && typeof desired === "string" && desired.length > 0 ? { desired_runner_version: desired } : {}), ...(updateChannel === "stable" && latest !== null ? { latest_runner_version: latest } : {}) };
     if (updateChannel === "pinned" && !(typeof desired === "string" && validRunnerVersion(desired))) return adminRunnerError(400, "Pinned Runner version must be an exact version.");
     const response = await registryPost(env, `/auth/runners/${encodeURIComponent(runnerId)}/version-policy`, payload);
-    return response.ok ? redirect(`/admin/runners/${encodeURIComponent(runnerId)}`) : adminUpstreamError(response, "Runner update policy could not be updated.", 400, adminRunnerError);
+    return response.ok ? adminUpstreamRedirect(response, `/admin/runners/${encodeURIComponent(runnerId)}`) : adminUpstreamError(response, "Runner update policy could not be updated.", 400, adminRunnerError);
   }
   if (action === "permissions") {
     const permissions = permissionsFromForm(form);
     if (permissions === undefined) return adminRunnerError(400, "Runner permissions are invalid.");
     const response = await mutateRunnerPolicy(env, runnerId, { path: `/auth/runners/${encodeURIComponent(runnerId)}/permissions`, method: "POST", payload: { permissions } });
-    return response.ok ? redirect(`/admin/runners/${encodeURIComponent(runnerId)}`) : adminUpstreamError(response, "Runner permission profile could not be updated.", 400, adminRunnerError);
+    return response.ok ? adminUpstreamRedirect(response, `/admin/runners/${encodeURIComponent(runnerId)}`) : adminUpstreamError(response, "Runner permission profile could not be updated.", 400, adminRunnerError);
   }
   if (action === "emergency-lock") {
     if (form.get("confirmation") !== runnerId) return adminRunnerError(400, "Type the Runner ID to confirm emergency lock.");
     const response = await mutateRunnerPolicy(env, runnerId, { path: `/auth/runners/${encodeURIComponent(runnerId)}/emergency-lock`, method: "POST", payload: { confirmation: runnerId } });
-    return response.ok ? redirect(`/admin/runners/${encodeURIComponent(runnerId)}`) : adminUpstreamError(response, "Emergency lock could not be applied.", 400, adminRunnerError);
+    return response.ok ? adminUpstreamRedirect(response, `/admin/runners/${encodeURIComponent(runnerId)}`) : adminUpstreamError(response, "Emergency lock could not be applied.", 400, adminRunnerError);
   }
   if (action.startsWith("workspace-")) return handleBrowserWorkspaceAction(env, form, runnerId, action as "workspace-create" | "workspace-update" | "workspace-delete");
   if (action === "rename") {
     const displayName = form.get("display_name");
     if (typeof displayName !== "string" || !validLabel(displayName)) return adminRunnerError(400, "Runner display name is invalid.");
     const response = await runnerRegistryRequest(env, runnerId, "/rename", "POST", JSON.stringify({ display_name: displayName }));
-    return response.ok ? redirect("/admin") : adminUpstreamError(response, "Runner rename failed.", 400, adminRunnerError);
+    return response.ok ? adminUpstreamRedirect(response, "/admin") : adminUpstreamError(response, "Runner rename failed.", 400, adminRunnerError);
   }
   if (action === "delete") {
     const result = await deleteRunnerFromControlPlane(env, runnerId, form.get("confirmation"));
@@ -145,7 +145,7 @@ async function handleBrowserWorkspaceAction(env: WorkerEnv, form: FormData, runn
     if (form.get("confirmation") !== workspaceId) return adminRunnerError(400, "Type the Workspace ID to confirm deletion.");
     const response = await mutateRunnerPolicy(env, runnerId, { path: `/auth/runners/${encodeURIComponent(runnerId)}/managed-workspaces/${encodeURIComponent(workspaceId)}`, method: "DELETE", payload: { confirmation: workspaceId } });
     if (!response.ok) return adminUpstreamError(response, "Workspace could not be deleted.", 400, adminRunnerError);
-    return redirect(returnToDetail);
+    return adminUpstreamRedirect(response, returnToDetail);
   }
   const displayName = form.get("display_name"); const rootPath = form.get("root_path");
   if (typeof displayName !== "string" || !validLabel(displayName) || typeof rootPath !== "string" || !isAbsolutePath(rootPath)) return adminRunnerError(400, "Workspace name or absolute root path is invalid.");
@@ -157,5 +157,5 @@ async function handleBrowserWorkspaceAction(env: WorkerEnv, form: FormData, runn
   const payload = { workspace_id: workspaceId, display_name: displayName, root_path: rootPath, enabled, permissions };
   const response = await mutateRunnerPolicy(env, runnerId, { path: action === "workspace-create" ? `/auth/runners/${encodeURIComponent(runnerId)}/managed-workspaces` : `/auth/runners/${encodeURIComponent(runnerId)}/managed-workspaces/${encodeURIComponent(workspaceId)}`, method: action === "workspace-create" ? "POST" : "PUT", payload });
   if (!response.ok) return adminUpstreamError(response, "Workspace could not be saved.", 400, adminRunnerError);
-  return redirect(returnToDetail);
+  return adminUpstreamRedirect(response, returnToDetail);
 }

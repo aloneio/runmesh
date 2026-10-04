@@ -171,6 +171,7 @@
         "apps/worker/test/remote-transport.test.ts",
         "apps/worker/test/request-body.test.ts",
         "apps/worker/test/rpc-contract.test.ts",
+        "apps/worker/test/runner-action-responses.test.ts",
         "apps/worker/test/runner-admission-initialization.test.ts",
         "apps/worker/test/runner-capability-admission.test.ts",
         "apps/worker/test/runner-hello-maintenance.test.ts",
