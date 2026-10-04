@@ -10,7 +10,7 @@ Runmesh 将已启用的 MCP 工具与当前 Skill 共享给实例中的所有有
 
 先读[版本说明](release-notes.zh-CN.md)和[发行状态](release-readiness.md)。生产升级使用已发布、独立验签的正式包；候选版和开发预发布放在独立测试环境。
 
-控制端应包含 MCP、Skill 生产绑定，并保留现有 Registry 和 Runner 命名空间。已有的两个密钥和资源标识保持不变；OAuth 加密使用 `INTERNAL_CONTROL_SECRET`。先部署经过审核的发行激活版本，核对运行中的 Worker，再更新 Runner。下文 0.1.3 升至 0.1.4 的流程是受管服务更新的历史示例。
+控制端应包含 MCP、Skill 生产绑定，并保留现有 Registry 和 Runner 命名空间。已有的两个密钥和资源标识保持不变；OAuth 加密使用 `INTERNAL_CONTROL_SECRET`。先部署经过审核的发行激活版本，核对运行中的 Worker，再更新 Runner。下文的受管系统服务流程用于将 Runner 0.1.6 更新到 0.1.7。
 
 分别安排以下更新：
 
@@ -72,9 +72,9 @@ if ($LASTEXITCODE -ne 0) { throw '请检查 Runner 健康检查结果。' }
 
 确认显示的版本与目标一致，再完成下文的验收。原有 Runner 注册信息和配置继续沿用。
 
-## 将标准受管 Runner 从 0.1.3 更新到 0.1.4
+## 将标准受管 Runner 从 0.1.6 更新到 0.1.7
 
-托管命令用于首次安装和同版本重新注册。已有 0.1.3 安装先在旁边准备经过验签的 0.1.4 目录，在维护窗口切换 `current` 链接，再按原服务定义启动。这样保留 Runner ID、凭据、工作区策略、配置和状态，以及服务账号与启动参数。
+托管命令用于首次安装和同版本重新注册。已有 0.1.6 安装先在旁边准备经过验签的 0.1.7 目录，在维护窗口切换 `current` 链接，再按原服务定义启动。这样保留 Runner ID、凭据、工作区策略、配置和状态，以及服务账号与启动参数。
 
 本流程适用于**由托管安装器创建的标准系统服务**。先确认服务通过下表的 `current` 路径启动，`current` 链接指向对应的 `versions` 目录，启动器使用相对路径访问私有 Node。用户级服务按[更新用户级服务](#更新用户级服务)操作；自定义系统路径或外部 Node 布局由服务维护者按原程序包部署方式更新。
 
@@ -84,11 +84,11 @@ if ($LASTEXITCODE -ne 0) { throw '请检查 Runner 健康检查结果。' }
 | macOS | `/opt/runmesh/current/bin/runmesh` | `/Library/LaunchDaemons/io.alone.runmesh.runner.plist` |
 | Windows | `C:\Program Files\Runmesh\current\runmesh.cmd` | 已有 `RunmeshRunner` 计划任务；原 XML 位于 `C:\ProgramData\Runmesh\RunmeshRunner.xml` |
 
-在同一个 root／管理员会话中操作，并确保没有其他安装或维护同时运行。先完成上文的备份和任务排空，再按[独立验签与校验和步骤](portable-runner-installation.md#independently-verify-a-downloaded-package)验证 `runmesh-runner-0.1.4.tgz`。暂存包使用可信的 Node/npm；保留的私有 Node 应满足 22.x 中的 22.23.2 及以上版本，或 24.x 中的 24.21.0 及以上版本。
+在同一个 root／管理员会话中操作，并确保没有其他安装或维护同时运行。先完成上文的备份和任务排空，再按[独立验签与校验和步骤](portable-runner-installation.md#independently-verify-a-downloaded-package)验证 `runmesh-runner-0.1.7.tgz`。暂存包使用可信的 Node/npm；保留的私有 Node 应满足 22.x 中的 22.23.2 及以上版本，或 24.x 中的 24.21.0 及以上版本。
 
 ### Linux 与 macOS
 
-执行[共用的 POSIX 暂存命令](upgrading.md#stage-the-package-on-linux-or-macos)，将 `ARTIFACT` 替换为已经独立验签的安装包绝对路径。命令记录旧目录 `OLD`，在新目录安装 0.1.4，保留兼容的私有运行时与相对路径启动器，并核对新版本。这时原服务仍运行旧包。保留输出的 `OLD` 路径，供恢复时使用；新目录保持管理员所有权和服务账号的读取、执行权限。
+执行[共用的 POSIX 暂存命令](upgrading.md#stage-the-package-on-linux-or-macos)，将 `ARTIFACT` 替换为已经独立验签的安装包绝对路径。命令记录旧目录 `OLD`，在新目录安装 0.1.7，保留兼容的私有运行时与相对路径启动器，并核对新版本。这时原服务仍运行旧包。保留输出的 `OLD` 路径，供恢复时使用；新目录保持管理员所有权和服务账号的读取、执行权限。
 
 切换前暂停服务：
 
@@ -101,13 +101,13 @@ if ($LASTEXITCODE -ne 0) { throw '请检查 Runner 健康检查结果。' }
 
 在管理员 PowerShell 中执行[Windows 暂存与切换命令](upgrading.md#stage-and-switch-on-windows)。将 `$Artifact` 替换为已验签包的绝对路径；确认当前 junction、旧版本和新版本目录均位于标准安装根目录内。
 
-暂存步骤保留私有 Node 与相对路径启动器，安装并核对新的 Runner 包。确认新文件继承了安装根目录的访问策略，服务账号可以读取和执行。切换步骤保存计划任务原启用状态，暂时禁用并停止任务，等待退出后，将旧 junction 留作 `current.previous-0.1.3`，再将新 junction 命名为 `current`。任务的操作、账号、参数和其他设置保持不变。
+暂存步骤保留私有 Node 与相对路径启动器，安装并核对新的 Runner 包。确认新文件继承了安装根目录的访问策略，服务账号可以读取和执行。切换步骤保存计划任务原启用状态，暂时禁用并停止任务，等待退出后，将旧 junction 留作 `current.previous-0.1.6`，再将新 junction 命名为 `current`。任务的操作、账号、参数和其他设置保持不变。
 
-原本启用的任务会恢复启用并启动；原本禁用的任务保持禁用，由维护者选择启动时间。检查入口程序版本，运行中的服务通过 `doctor --json` 后，再完成下文验收。保留旧版本目录和 `current.previous-0.1.3`，直至验收结束。
+原本启用的任务会恢复启用并启动；原本禁用的任务保持禁用，由维护者选择启动时间。检查入口程序版本，运行中的服务通过 `doctor --json` 后，再完成下文验收。保留旧版本目录和 `current.previous-0.1.6`，直至验收结束。
 
 ### 恢复旧包
 
-验收失败时，按同一平台步骤暂停服务。POSIX 将 `current.next` 指向记录的 `OLD` 目录，再用相同 Node 命令替换 `current`；此时传入的预期旧目标应为当前 0.1.4 目录。Windows 在任务禁用且停止后，把新的 `current` junction 改名为一个尚未使用的 `current.failed-0.1.4`，再把 `current.previous-0.1.3` 改回 `current`。使用原服务定义启动，并恢复任务原启用状态。
+验收失败时，按同一平台步骤暂停服务。POSIX 将 `current.next` 指向记录的 `OLD` 目录，再用相同 Node 命令替换 `current`；此时传入的预期旧目标应为当前 0.1.7 目录。Windows 在任务禁用且停止后，把新的 `current` junction 改名为一个尚未使用的 `current.failed-0.1.7`，再把 `current.previous-0.1.6` 改回 `current`。使用原服务定义启动，并恢复任务原启用状态。
 
 保留配置、状态和经过验证的安装包，直到确认恢复组合可用。验收完成后，清理本次创建的维护暂存、npm 配置文件，按备份策略保留上一版本。
 

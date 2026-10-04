@@ -127,28 +127,35 @@ export async function waitForUiNavigation(tab, expected, { now = Date.now, pause
  const deadline = now() + 5000, url = new URL(expected.url).href;
  let navigationState = "frame_pending";
  const read = (method, params) => tab(method, params, Math.max(1, deadline - now()));
- const matchesFrame = frame => frame?.url === url
+ // Same-document navigation commits the live DOM URL independently of the
+ // browser process's Frame.url metadata. Full loads also own a specific loader.
+ const matchesFrame = frame => frame !== undefined && (expected.loaderId === undefined || frame.url === url)
   && (expected.frameId === undefined || frame.id === expected.frameId)
   && (expected.loaderId === undefined || frame.loaderId === expected.loaderId);
+ const readState = async () => {
+  const value = await read("Runtime.evaluate", {
+   expression: "({url:location.href,locale:document.documentElement?.lang,complete:document.readyState==='complete',initialized:document.documentElement?.getAttribute('data-runmesh-navigation')==='ready',busy:document.documentElement?.getAttribute('data-runmesh-navigation-busy')==='true'})",
+   returnByValue: true,
+  });
+  if (value.exceptionDetails) throw new Error("Browser navigation readiness evaluation failed");
+  return value.result?.value;
+ };
+ const unmetCondition = state => state?.url !== url ? state?.busy === true ? "navigation_busy" : "location_pending"
+  : state.locale !== expected.locale ? "locale_pending" : state.complete !== true ? "document_pending"
+  : state.initialized !== true ? "initialization_pending" : state.busy !== false ? "navigation_busy" : undefined;
  while (now() < deadline) {
   try {
    const { frameTree } = await read("Page.getFrameTree");
    navigationState = "frame_pending";
    if (matchesFrame(frameTree.frame)) {
-    const value = await read("Runtime.evaluate", {
-     expression: "({url:location.href,locale:document.documentElement?.lang,complete:document.readyState==='complete',initialized:document.documentElement?.getAttribute('data-runmesh-navigation')==='ready',busy:document.documentElement?.getAttribute('data-runmesh-navigation-busy')==='true'})",
-     returnByValue: true,
-    });
-    if (value.exceptionDetails) throw new Error("Browser navigation readiness evaluation failed");
-    const state = value.result?.value;
-    navigationState = state?.url !== url ? "frame_changed" : state.locale !== expected.locale ? "locale_pending"
-     : state.complete !== true ? "document_pending" : state.initialized !== true ? "initialization_pending"
-     : state.busy !== false ? "navigation_busy" : "frame_changed";
-    if (state?.url === url && state.locale === expected.locale && state.complete === true && state.initialized === true && state.busy === false) {
+    const condition = unmetCondition(await readState());
+    navigationState = condition ?? "frame_changed";
+    if (condition === undefined) {
      const current = (await read("Page.getFrameTree")).frameTree.frame;
      if (matchesFrame(current) && current.loaderId === frameTree.frame.loaderId) {
-      if (now() < deadline) return;
-      navigationState = "deadline_exhausted";
+      const confirmed = unmetCondition(await readState());
+      navigationState = confirmed ?? "deadline_exhausted";
+      if (confirmed === undefined && now() < deadline) return;
      }
     }
    }

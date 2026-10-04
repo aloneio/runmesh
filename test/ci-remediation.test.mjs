@@ -177,7 +177,7 @@ function navigationFixture() {
   } };
   fixture.tab = async (method, params, budget) => {
     fixture.budgets.push(budget);
-    if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main-frame", loaderId: state.loaderId, url: state.url } } };
+    if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main-frame", loaderId: state.loaderId, url: state.frameUrl ?? state.url } } };
     assert.equal(method, "Runtime.evaluate");
     if (fixture.evaluateError) { const error = fixture.evaluateError; fixture.evaluateError = undefined; throw error; }
     fixture.evaluatedLoaders.push(state.loaderId);
@@ -295,7 +295,7 @@ test("CI04 full navigation waits beyond a ready old document for the requested l
   };
   await waitForUiNavigation(h.tab, expected, h.clock);
   assert.equal(h.polls, 3);
-  assert.deepEqual(h.evaluatedLoaders, ["new-document", "new-document"]);
+  assert.deepEqual(h.evaluatedLoaders, ["new-document", "new-document", "new-document"]);
   assert.ok(h.budgets.every(budget => budget > 0 && budget <= 5000));
 });
 
@@ -311,6 +311,42 @@ test("CI04 SPA and cookie reload readiness require the target locale and complet
   assert.equal(h.polls, 3);
 });
 
+test("CI04 completed SPA navigation uses the actual DOM URL while frame metadata catches up", async () => {
+  const h = navigationFixture(), expected = { url: "http://127.0.0.1:1234/admin/clients", locale: h.state.locale };
+  h.state.frameUrl = h.state.url;
+  h.state.url = expected.url;
+  await waitForUiNavigation(h.tab, expected, { ...h.clock, stage: "clients_navigation" });
+  assert.equal(h.polls, 0);
+  assert.deepEqual(h.evaluatedLoaders, ["new-document", "new-document"]);
+});
+
+test("CI04 SPA frame metadata cannot certify an incorrect live DOM URL", async () => {
+  const h = navigationFixture(), expected = { url: "http://127.0.0.1:1234/admin/clients", locale: h.state.locale };
+  h.state.frameUrl = expected.url;
+  await assert.rejects(waitForUiNavigation(h.tab, expected, { ...h.clock, stage: "clients_navigation" }), error => {
+    assert.equal(browserErrorDiagnostic(error).navigation_state, "location_pending");
+    return true;
+  });
+  assert.equal(h.elapsed, 5000);
+});
+
+test("CI04 SPA completion rechecks the live URL and busy flag after verifying the loader", async () => {
+  for (const changed of [{ url: "http://127.0.0.1:1234/admin/clients" }, { loading: true }]) {
+    const h = navigationFixture(), expected = { url: h.state.url, locale: h.state.locale }, read = h.tab;
+    let frameReads = 0;
+    const tab = async (...args) => {
+      const result = await read(...args);
+      if (args[0] === "Page.getFrameTree" && ++frameReads === 2) Object.assign(h.state, changed);
+      return result;
+    };
+    await assert.rejects(waitForUiNavigation(tab, expected, { ...h.clock, stage: "clients_navigation" }), error => {
+      assert.equal(browserErrorDiagnostic(error).navigation_state, changed.loading ? "navigation_busy" : "location_pending");
+      return true;
+    });
+    assert.equal(h.elapsed, 5000);
+  }
+});
+
 test("CI04 an unmet browser navigation deadline fails instead of inspecting the old page", async () => {
   const h = navigationFixture();
   await assert.rejects(waitForUiNavigation(h.tab, { url: h.state.url, locale: "en" }, h.clock), /navigation readiness timed out after 5000 ms/u);
@@ -319,7 +355,7 @@ test("CI04 an unmet browser navigation deadline fails instead of inspecting the 
 
 test("CI04 navigation timeout retains its stage and last unmet condition without private browser state", async () => {
   for (const [changed, condition] of [
-    [{ url: "http://127.0.0.1:1234/private?token=secret" }, "frame_pending"],
+    [{ url: "http://127.0.0.1:1234/private?token=secret" }, "location_pending"],
     [{ locale: "private-locale" }, "locale_pending"],
     [{ readyState: "loading" }, "document_pending"],
     [{ initialized: false }, "initialization_pending"],

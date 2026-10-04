@@ -258,7 +258,7 @@ describe.sequential("self-hosted admin and MCP client authentication", () => {
     const shellText = await shell.text(); const powershellText = await powershell.text();
     for (const text of [shellText, powershellText]) {
       expect(text).not.toMatch(/ADMIN_TOKEN|MCP_SECRET|RUNMESH_TOKEN|Bearer /i);
-      expect(text).toContain("not enabled on this deployment");
+      expect(text).toContain("Runner download failed. Check the release status in your Runmesh administrator page, then try again.");
       expect(text).not.toMatch(/npm install|--code\s+[A-Za-z0-9_-]{20,}|trust-keyring\.json/i);
     }
     expect(await release.json()).toMatchObject({ channel: "stable", distributable: false, package_name: "", package_spec: "", artifact: null, manifest_url: null, release_key_id: null, protocol: { min_version: 2, max_version: 2 } });

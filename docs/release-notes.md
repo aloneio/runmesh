@@ -48,7 +48,7 @@ Runmesh 0.1.6 is published as an [immutable stable release](https://github.com/a
 
 Runmesh 0.1.6 adds shared MCP connections and Skills. Preserve the existing deployment secrets so connected OAuth accounts retain their credentials. Deploy the reviewed release activation, install the signed Runner package and refresh client catalogs using the [upgrade guide](upgrading.md).
 
-Recording the stable release starts the next patch series for development downloads. Existing prereleases retain their original version and contents.
+After the stable release is verified and activated, new development batches use the next patch series. The installation page offers the currently verified, protocol-compatible development package.
 
 ## 0.1.5 — published stable release
 
