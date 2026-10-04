@@ -5,6 +5,7 @@ import { createManagedOAuthProtocol } from "./platform/connectors/managed-oauth.
 import { createManagedOAuth } from './application/connectors/managed-oauth.js';
 import { ManagedOAuthState } from "./platform/connectors/managed-store.js";
 import type { ManagedConnections } from "./contracts/managed-connections.js";
+import { OAuthFault } from "./contracts/oauth.js";
 import type { AdminDecision, CentralAdministration, ProfileResult } from "./contracts/connectors.js";
 import type { CentralToolVisibility } from "./contracts/capabilities.js";
 import { isCapabilityIdentifier } from "./contracts/capabilities.js";
@@ -220,7 +221,11 @@ export class CapabilitiesDOv1 extends DurableObject<WorkerEnv> implements Centra
           throw new RemoteFault("permission_denied");
         if (record.profile.authentication === "none") return null;
         try { return await this.#managedOAuth().credential(profile, signal, authorize); }
-        catch { throw new RemoteFault("authorization_required"); }
+        catch (error) {
+          if (error instanceof RemoteFault) throw error;
+          if (error instanceof OAuthFault && error.code === "reauthorization_required") throw new RemoteFault("authorization_required");
+          throw new RemoteFault("dependency_unavailable");
+        }
       } });
   }
 

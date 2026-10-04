@@ -34,17 +34,49 @@ Runmesh 0.1.6 将已启用的 MCP 工具与当前 Skill 共享给实例中的所
 
 1. **演练目标组合。** 验证签名发行物，在测试环境使用目标 Worker、Runner、服务账号和 MCP 客户端。
 2. **部署 Worker。** 通过现有生产 `main` 路径更新，保留资源绑定和密钥值。替换 `RUNNER_TOKEN_PEPPER` 会使已注册 Runner 凭据失效。
-3. **逐台更新 Runner。** 依据可信源码中的公钥验签。标准托管系统安装按下文的受管升级流程操作，保留配置、状态和上一份已验证包。
+3. **逐台更新 Runner。** 依据可信源码中的公钥验签，按下文的用户级服务或标准系统服务流程更新，保留配置、状态和上一份已验证包。
 4. **刷新客户端目录。** 在各 MCP 客户端重新加载 Runmesh 连接和工具定义。
 5. **完成验收后**恢复日常工作。
 
 [便携式安装示例](portable-runner-installation.md)用于首次安装。已有实例在包更新期间保留注册信息；凭据恢复和完整卸载分别按对应维护流程操作。
 
+## 更新用户级服务
+
+Linux、macOS 和 Windows 的用户级服务，均使用服务所属账号完成更新。先完成上文的维护准备，通过系统服务管理器停止服务，再按原部署方式更新已经验签的程序包。让服务原有的程序路径指向更新后的包，并保留配置、状态和服务定义。
+
+使用更新后的程序和原配置文件运行以下命令。`install --user` 会更新服务定义并启动服务；从 0.1.7 起，还会自动补齐用户级启动标记，保留自定义程序路径和其他参数。
+
+Linux 或 macOS：
+
+```sh
+set -e
+RUNNER='/absolute/path/to/service/bin/runmesh'
+PROFILE='/absolute/path/to/existing/profile.json'
+"$RUNNER" --version
+"$RUNNER" install --user --profile "$PROFILE"
+"$RUNNER" doctor --user --profile "$PROFILE" --json
+```
+
+Windows 在服务所属账号的 PowerShell 会话中执行：
+
+```powershell
+$Runner = 'C:\path\to\service\runmesh.cmd'
+$RunnerProfile = 'C:\path\to\existing\profile.json'
+& $Runner --version
+if ($LASTEXITCODE -ne 0) { throw '请检查 Runner 程序路径。' }
+& $Runner install --user --profile $RunnerProfile
+if ($LASTEXITCODE -ne 0) { throw '请检查服务安装命令的输出。' }
+& $Runner doctor --user --profile $RunnerProfile --json
+if ($LASTEXITCODE -ne 0) { throw '请检查 Runner 健康检查结果。' }
+```
+
+确认显示的版本与目标一致，再完成下文的验收。原有 Runner 注册信息和配置继续沿用。
+
 ## 将标准受管 Runner 从 0.1.3 更新到 0.1.4
 
 托管命令用于首次安装和同版本重新注册。已有 0.1.3 安装先在旁边准备经过验签的 0.1.4 目录，在维护窗口切换 `current` 链接，再按原服务定义启动。这样保留 Runner ID、凭据、工作区策略、配置和状态，以及服务账号与启动参数。
 
-本流程适用于**由托管安装器创建的标准系统服务**。先确认服务通过下表的 `current` 路径启动，`current` 链接指向对应的 `versions` 目录，启动器使用相对路径访问私有 Node。用户级服务、自定义路径或外部 Node 布局由服务维护者按原部署方式安排更新。
+本流程适用于**由托管安装器创建的标准系统服务**。先确认服务通过下表的 `current` 路径启动，`current` 链接指向对应的 `versions` 目录，启动器使用相对路径访问私有 Node。用户级服务按[更新用户级服务](#更新用户级服务)操作；自定义系统路径或外部 Node 布局由服务维护者按原程序包部署方式更新。
 
 | 系统 | 保持不变的程序入口 | 保持不变的服务定义 |
 | --- | --- | --- |

@@ -61,7 +61,7 @@ export async function serviceCommand(parsed: ParsedCommand, store: ProfileStore,
     // over a stale/mismatched profile field when reconstructing the previous
     // lifecycle request, so rollback reloads the same identity that was
     // running before this attempt.
-    const inferredPreviousMode = existingManaged && existingManifest !== undefined
+    const inferredPreviousMode = manifest.mode === "user" ? "dedicated_user" : existingManaged && existingManifest !== undefined
       ? inferExecutionModeFromManifest(manifest.platform, existingManifest)
       : previousExecutionMode === "dedicated_user" || previousExecutionMode === "privileged_host" ? previousExecutionMode : "dedicated_user";
     const previousManifestCandidate = renderService({

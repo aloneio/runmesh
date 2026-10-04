@@ -103,9 +103,10 @@ function cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): void {
   try { void reader.cancel().catch(() => undefined); } catch { /* cancellation is best effort */ }
 }
 
-function cancelBody(request: Request): void {
+/** Release an unused body without delaying the caller's status or header decision. */
+export function cancelBody(message: Request | Response): void {
   try {
-    void request.body?.cancel().catch(() => undefined);
+    void message.body?.cancel().catch(() => undefined);
   } catch {
     // The body may already be consumed or cancelled.
   }

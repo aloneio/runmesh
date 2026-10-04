@@ -8,7 +8,7 @@ Generated from the checked-out source by `npm run generate:facts` and validated 
 {
   "schema_version": 1,
   "evidence": "source_checkout_only",
-  "product_version": "0.1.6",
+  "product_version": "0.1.7",
   "protocol": {
     "minimum": 2,
     "current": 2
@@ -246,10 +246,8 @@ Generated from the checked-out source by `npm run generate:facts` and validated 
     "HISTORY_DB"
   ],
   "reviewed_release_record": {
-    "version": "0.1.6",
-    "state": "released",
-    "commit": "85d5ea419c65d03ebc9d79c9b2e7f2491c6b256b",
-    "manifest_sha256": "da6a85ee8752d54fa2c45785f4b9fac8e3cfdbea29ec2291263e5c8c1163c33f"
+    "version": "0.1.7",
+    "state": "candidate"
   },
   "observations": {
     "test_execution": "not_run",

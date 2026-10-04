@@ -34,17 +34,49 @@ Pause new submissions and drain queued/running Jobs before restarting a Runner. 
 
 1. **Rehearse the target combination.** Verify the signed release and exercise the Worker, Runner, service account and intended MCP client in a test environment.
 2. **Deploy the Worker.** Use the existing production `main` deployment path, preserving resource bindings and secret values. Replacing `RUNNER_TOKEN_PEPPER` invalidates enrolled Runner credentials.
-3. **Update each Runner.** Verify its archive against the trusted source keyring. For a standard hosted system installation, follow the managed upgrade procedure below. Preserve profile/state and keep the previous verified package available for recovery.
+3. **Update each Runner.** Verify its archive against the trusted source keyring. Follow the user-service steps or standard managed system-service procedure below, keeping profile/state and the previous verified package available for recovery.
 4. **Refresh the client catalog.** Reload the Runmesh connection and tool definitions in each MCP client.
 5. **Complete acceptance checks**, then resume ordinary workloads.
 
 Use the [portable installation examples](portable-runner-installation.md) for first installation. Existing installations keep their enrollment during package updates; credential recovery and complete removal have their own maintenance procedures.
 
+## Update a user service
+
+For user services on Linux, macOS and Windows, perform the update in the account that owns the service. Complete the maintenance preparation above, stop the service through its service manager, and update the verified package using your existing deployment method. Keep the service's executable path pointing to the updated package and retain its profile, state and service definition.
+
+Run these commands with that updated executable and the existing profile. `install --user` refreshes the managed service and starts it. From 0.1.7, it also updates the user-service launch flag while preserving custom executable paths and other arguments.
+
+On Linux or macOS:
+
+```sh
+set -e
+RUNNER='/absolute/path/to/service/bin/runmesh'
+PROFILE='/absolute/path/to/existing/profile.json'
+"$RUNNER" --version
+"$RUNNER" install --user --profile "$PROFILE"
+"$RUNNER" doctor --user --profile "$PROFILE" --json
+```
+
+On Windows, use PowerShell in the service owner's session:
+
+```powershell
+$Runner = 'C:\path\to\service\runmesh.cmd'
+$RunnerProfile = 'C:\path\to\existing\profile.json'
+& $Runner --version
+if ($LASTEXITCODE -ne 0) { throw 'Check the Runner executable path.' }
+& $Runner install --user --profile $RunnerProfile
+if ($LASTEXITCODE -ne 0) { throw 'Review the service installation output.' }
+& $Runner doctor --user --profile $RunnerProfile --json
+if ($LASTEXITCODE -ne 0) { throw 'Review the Runner health checks.' }
+```
+
+Confirm the displayed version matches your target, then complete the acceptance checks below. The existing Runner registration and profile carry over.
+
 ## Update a standard managed Runner from 0.1.3 to 0.1.4
 
 The hosted command handles fresh installation and same-version enrollment refresh. To update an existing package, stage the verified 0.1.4 package beside 0.1.3, switch the `current` link during the maintenance window, and start the existing service definition. This keeps the Runner ID, credential, workspace policy, profile/state, service account and service arguments intact.
 
-This procedure covers standard **system installations created by the hosted installer**. Confirm that the service launches through the `current` path below, that `current` is a link to the corresponding `versions` directory, and that the existing launchers use their relative private runtime. Use your service owner's deployment procedure for user services, custom paths or an external Node layout.
+This procedure covers standard **system installations created by the hosted installer**. Confirm that the service launches through the `current` path below, that `current` is a link to the corresponding `versions` directory, and that the existing launchers use their relative private runtime. For user services, follow [Update a user service](#update-a-user-service). For custom system paths or an external Node layout, use your service owner's package-deployment procedure.
 
 | System | Stable executable | Unchanged service definition |
 | --- | --- | --- |

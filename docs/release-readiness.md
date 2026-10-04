@@ -6,6 +6,7 @@
 
 | Version | Status | Use |
 | --- | --- | --- |
+| `0.1.7` | CANDIDATE; regression and release verification in progress | Linux user-service management and MCP connection reliability fixes |
 | `0.1.6` | RELEASED; signed public package independently verified | Installation and upgrades with the reviewed control-plane activation |
 | `0.1.5` | RELEASED; previous signed stable distribution | Existing installations and recovery |
 | `0.1.4` | RELEASED; previous stable distribution | Existing installations and historical recovery |
