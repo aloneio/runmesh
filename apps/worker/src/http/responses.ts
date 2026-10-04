@@ -1,7 +1,7 @@
 import { adminScript } from "../admin/client-script.js";
 import { adminStyles } from "../admin-styles.js";
 import { escapeHtml } from "../admin/format.js";
-import { html } from "./html-response.js";
+import { html, redirect } from "./html-response.js";
 import { languageSwitch } from "../admin/brand.js";
 import { meshMarkSvg } from "../admin/brand.js";
 import { adminDocument } from "../admin/layout.js";
@@ -25,6 +25,12 @@ export function throttleError(retryAfterMs: number): Response {
 }
 
 export function adminError(status: number, message: string, cookies: readonly string[] = []): Response { const response = html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><link rel="icon" href="/assets/favicon.png" type="image/png"><title>Runmesh · Agent Control Plane</title>${adminStyles()}</head><body class="auth-body">${languageSwitch()}<main class="auth-shell"><section class="auth-card error-card"><div class="secret-brand-row">${meshMarkSvg("error-mesh-mark")}<span class="brand-name">Runmesh</span></div><p class="brand-kicker">Runmesh</p><h1>Runmesh</h1><p class="subtitle">Agent Control Plane</p><p class="lede" data-admin-error>${escapeHtml(message)}</p><p><a class="button secondary" href="/">Return</a></p></section></main>${adminScript()}</body></html>`, cookies.length === 0 ? [] : cookies); return new Response(response.body, { status, headers: response.headers }); }
+
+/** A redirect owns the unused upstream receipt; cleanup never replays a write. */
+export function adminUpstreamRedirect(upstream: Response, location: string): Response {
+  void upstream.body?.cancel().catch(() => undefined);
+  return redirect(location);
+}
 
 /** A dependency outage is not evidence of invalid administrator input.
  * Discard the upstream body without exposing diagnostics or replaying writes. */

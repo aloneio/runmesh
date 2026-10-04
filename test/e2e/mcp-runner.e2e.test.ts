@@ -21,6 +21,7 @@ type ToolResult = {
 };
 type JsonRpc = { readonly result?: ToolResult; readonly error?: { readonly code?: number; readonly message?: string } };
 type McpClient = { readonly endpoint: string };
+type CleanupJob = { readonly id: string | undefined; readonly client: McpClient | undefined; readonly workspaceId?: string };
 type CookieJar = Map<string, string>;
 type FormFields = Record<string, string | readonly string[]>;
 
@@ -561,17 +562,22 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(existsSync(join(workspace, "ga-too-large.txt"))).toBe(false);
   });
 
-  it("multiple MCP clients queue commands on the same Runner while reads remain available", async () => {
+  it("multiple MCP clients queue commands on the same Runner while reads remain available", async ({ onTestFinished }) => {
     const {adminJar,csrf}=await adminCredentials();
     const other=await createMcpClient("Queue Client B",["coding:read","coding:write","coding:exec"],adminJar,csrf);
     expect((await mcpTool("runner_select",{runner_id:runnerId},other)).isError).not.toBe(true);
     const holdCommand=(path:string)=>nodeCommand(`const fs=require('node:fs');const t=setInterval(()=>{if(fs.existsSync(${JSON.stringify(path)}))clearInterval(t)},15)`);
-    const first=await mcpTool("shell",{workspace_id:"workspace-1",command:holdCommand('.queue-e2e-release-1'),background:true,request_id:"queue-first"});
-    const firstId=first.structuredContent?.job_id as string;expect(typeof firstId).toBe("string");
-    const second=await mcpTool("shell",{workspace_id:"workspace-1",command:holdCommand('.queue-e2e-release-2'),background:true,request_id:"queue-second-slot"});
-    const secondSlotId=second.structuredContent?.job_id as string;expect(typeof secondSlotId).toBe("string");
+    const cleanupErrors: unknown[] = [];
+    onTestFinished(() => { if (cleanupErrors.length) throw new AggregateError(cleanupErrors, "Queue fixture cleanup failed"); });
+    let firstId: string | undefined;
+    let secondSlotId: string | undefined;
     let queuedId:string|undefined;
+    let replayId: string | undefined;
     try {
+      const first=await mcpTool("shell",{workspace_id:"workspace-1",command:holdCommand('.queue-e2e-release-1'),background:true,request_id:"queue-first"});
+      firstId=first.structuredContent?.job_id as string;expect(typeof firstId).toBe("string");
+      const second=await mcpTool("shell",{workspace_id:"workspace-1",command:holdCommand('.queue-e2e-release-2'),background:true,request_id:"queue-second-slot"});
+      secondSlotId=second.structuredContent?.job_id as string;expect(typeof secondSlotId).toBe("string");
       const start=Date.now();
       const queued=await mcpTool("shell",{workspace_id:"workspace-1",command:nodeCommand("process.stdout.write('second-client')"),request_id:"queue-third",wait_ms:8000},other);
       queuedId=queued.structuredContent?.job_id as string;
@@ -586,14 +592,18 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       const logs=await mcpTool("job",{action:"logs",workspace_id:"workspace-1",job_id:queuedId,stream:"stdout",limit:1024},other);
       expect(logs.structuredContent?.data).toBe("second-client");
       const replay=await mcpTool("shell",{workspace_id:"workspace-1",command:nodeCommand("process.stdout.write('second-client')"),request_id:"queue-third",background:true},other);
+      replayId = replay.structuredContent?.job_id as string | undefined;
       expect(replay.structuredContent?.job_id).toBe(queuedId);
     } finally {
-      await writeFile(join(workspace,".queue-e2e-release-1"),"release");
-      await writeFile(join(workspace,".queue-e2e-release-2"),"release");
-      if(queuedId)await mcpTool("job",{action:"cancel",workspace_id:"workspace-1",job_id:queuedId},other);
-      await mcpTool("job",{action:"cancel",workspace_id:"workspace-1",job_id:firstId});
-      await mcpTool("job",{action:"cancel",workspace_id:"workspace-1",job_id:secondSlotId});
-      await waitFor(async()=>!['running','cancelling','queued'].includes(String((await mcpTool("job",{action:"get",workspace_id:"workspace-1",job_id:firstId})).structuredContent?.status)),8000);
+      // Release markers also settle a launch whose HTTP reply did not expose its Job ID.
+      await attemptCleanup(cleanupErrors, () => writeFile(join(workspace,".queue-e2e-release-1"),"release"));
+      await attemptCleanup(cleanupErrors, () => writeFile(join(workspace,".queue-e2e-release-2"),"release"));
+      await cleanupJobs([
+        { id: queuedId, client: other, workspaceId: "workspace-1" },
+        { id: firstId, client: clientA, workspaceId: "workspace-1" },
+        { id: secondSlotId, client: clientA, workspaceId: "workspace-1" },
+        { id: replayId, client: other, workspaceId: "workspace-1" },
+      ], cleanupErrors, { timeoutMs: 8000, sharedBudget: true });
     }
   });
 
@@ -603,19 +613,26 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     await checkUiWithChromium(workerUrl,cookieHeader(adminJar),process.env.RUNMESH_BROWSER_OUTPUT);
   },45000);
 
-  it("GA-007 busy Runner returns a retryable busy error, not invalid parameters", async () => {
-    const first = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("setTimeout(()=>{},10000)"), background: true });
-    const firstId = first.structuredContent?.job_id as string;
-    expect(typeof firstId).toBe("string");
-    const second = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("setTimeout(()=>{},10000)"), background: true });
-    const secondId = second.structuredContent?.job_id as string;
-    expect(typeof secondId).toBe("string");
+  it("GA-007 busy Runner returns a retryable busy error, not invalid parameters", async ({ onTestFinished }) => {
+    const cleanupErrors: unknown[] = [];
+    onTestFinished(() => { if (cleanupErrors.length) throw new AggregateError(cleanupErrors, "Busy fixture cleanup failed"); });
+    let firstId: string | undefined;
+    let secondId: string | undefined;
+    let thirdId: string | undefined;
     try {
+      const first = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("setTimeout(()=>{},10000)"), background: true });
+      firstId = first.structuredContent?.job_id as string;
+      expect(typeof firstId).toBe("string");
+      const second = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("setTimeout(()=>{},10000)"), background: true });
+      secondId = second.structuredContent?.job_id as string;
+      expect(typeof secondId).toBe("string");
       const third = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('never')"), background: true, queue: false });
+      thirdId = third.structuredContent?.job_id as string | undefined;
       expect(third).toMatchObject({ isError: true, structuredContent: { error: { code: "busy" } } });
     } finally {
-      for (const id of [firstId, secondId]) await mcpTool("job", { action: "cancel", job_id: id });
-      for (const id of [firstId, secondId]) await waitFor(async () => ["cancelled", "succeeded", "failed"].includes(String((await mcpTool("job", { action: "get", job_id: id })).structuredContent?.status)), 12000);
+      await cleanupJobs([
+        { id: firstId, client: clientA }, { id: secondId, client: clientA }, { id: thirdId, client: clientA },
+      ], cleanupErrors, { timeoutMs: 12000 });
     }
   });
 
@@ -992,6 +1009,43 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(response.status).toBe(200);
     const endpoint = oneTimeMcpUrl(await response.text());
     return { endpoint };
+  }
+
+  async function attemptCleanup(errors: unknown[], operation: () => Promise<void>): Promise<boolean> {
+    try { await operation(); return true; }
+    catch (error) { errors.push(error); return false; }
+  }
+
+  async function cleanupJobs(jobs: readonly CleanupJob[], errors: unknown[], options: { readonly timeoutMs: number; readonly sharedBudget?: boolean }): Promise<void> {
+    const seen = new Set<string>();
+    const owned = jobs.filter(job => {
+      if (typeof job.id !== "string" || seen.has(job.id)) return false;
+      seen.add(job.id); return true;
+    });
+    for (const job of owned) {
+      await attemptCleanup(errors, async () => {
+        const result = await mcpTool("job", { action: "cancel", job_id: job.id, ...(job.workspaceId === undefined ? {} : { workspace_id: job.workspaceId }) }, job.client);
+        expect(result.isError).not.toBe(true);
+      });
+    }
+    // Queue cleanup shares its original eight-second wait across all Jobs.
+    // Busy cleanup retains its existing per-Job wait budget.
+    for (const batch of options.sharedBudget ? [owned] : owned.map(job => [job])) {
+      const pending = new Set(batch);
+      await attemptCleanup(errors, () => waitFor(async () => {
+        for (const job of pending) {
+          const observed = await attemptCleanup(errors, async () => {
+            const result = await mcpTool("job", { action: "get", job_id: job.id, ...(job.workspaceId === undefined ? {} : { workspace_id: job.workspaceId }) }, job.client);
+            expect(result.isError).not.toBe(true);
+            expect(typeof result.structuredContent?.status).toBe("string");
+            if (["cancelled", "succeeded", "failed", "interrupted"].includes(String(result.structuredContent?.status))) pending.delete(job);
+          });
+          // Keep the failed observation as a separate cleanup error; do not replay it.
+          if (!observed) pending.delete(job);
+        }
+        return pending.size === 0;
+      }, options.timeoutMs));
+    }
   }
 
   async function mcpTool(name: string, args: Record<string, unknown>, client = clientA): Promise<ToolResult> {

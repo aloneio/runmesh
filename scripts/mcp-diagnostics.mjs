@@ -2,7 +2,14 @@
 // this boundary; no response text, request arguments, IDs or log lines escape.
 const contentTypes = ["json", "html", "text", "sse", "other", "absent"];
 const bodyKinds = ["json_rpc_error", "empty", "non_json", "invalid_json", "not_rpc_error", "oversized", "read_timeout", "read_error"];
-const phases = ["read_initial", "read_continuation", "other"];
+const phases = ["read_initial", "read_continuation", "runner_select", "shell", "job_get", "job_logs", "job_cancel", "other"];
+const runtimeSignatures = new Map([
+  ["network_connection_lost", "Network connection lost."],
+  ["cross_request_io", "Cannot perform I/O on behalf of a different request."],
+  ["cross_request_promise", "A promise was resolved or rejected from a different request context than the one it was created in."],
+  ["hung_request", "The Workers runtime canceled this request because it detected that your Worker's code had hung and would never generate a response."],
+  ["locked_reader", "This ReadableStream is locked to a reader."],
+]);
 const rpcCodes = [-32700, -32600, -32601, -32602, -32603, -32000, "other", "absent"];
 const rpcIds = ["matches", "null", "absent", "other"];
 const errorKinds = ["type_error", "range_error", "syntax_error", "abort_error", "error", "other"];
@@ -47,9 +54,18 @@ export async function mcpHttpFailure(response, requestId, name, args) {
   const type = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
   const content_type = type === undefined ? "absent" : type === "application/json" ? "json"
     : type === "text/html" ? "html" : type === "text/plain" ? "text" : type === "text/event-stream" ? "sse" : "other";
-  const phase = name === "read" ? (args.cursor === undefined ? "read_initial" : "read_continuation") : "other";
+  const phase = name === "read" ? (args.cursor === undefined ? "read_initial" : "read_continuation")
+    : name === "runner_select" || name === "shell" ? name
+    : name === "job" && ["get", "logs", "cancel"].includes(args.action) ? `job_${args.action}` : "other";
   const observed = await boundedBody(response);
   const detail = { content_type, phase, body_kind: observed.body_kind ?? "non_json", rpc_code: "absent", rpc_id: "absent" };
+  if (observed.bytes !== undefined && content_type === "text") {
+    // Miniflare can format an uncaught runtime error as a text stack. Retain
+    // only its fixed signature, not the stack or a claim about its root cause.
+    const text = new TextDecoder().decode(observed.bytes);
+    const signature = [...runtimeSignatures].find(([, literal]) => ["", "Error: ", "TypeError: "].some(prefix => text.startsWith(prefix + literal)));
+    if (signature) detail.runtime_signature = signature[0];
+  }
   if (observed.bytes !== undefined && content_type === "json") {
     try {
       const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(observed.bytes));
@@ -70,8 +86,10 @@ export function mcpHttpDiagnostic(text) {
   try {
     const value = JSON.parse(raw);
     if (!record(value) || !contentTypes.includes(value.content_type) || !phases.includes(value.phase)
-      || !bodyKinds.includes(value.body_kind) || !rpcCodes.includes(value.rpc_code) || !rpcIds.includes(value.rpc_id)) return undefined;
-    return { content_type: value.content_type, phase: value.phase, body_kind: value.body_kind, rpc_code: value.rpc_code, rpc_id: value.rpc_id };
+      || !bodyKinds.includes(value.body_kind) || !rpcCodes.includes(value.rpc_code) || !rpcIds.includes(value.rpc_id)
+      || (value.runtime_signature !== undefined && !runtimeSignatures.has(value.runtime_signature))) return undefined;
+    return { content_type: value.content_type, phase: value.phase, body_kind: value.body_kind, rpc_code: value.rpc_code, rpc_id: value.rpc_id,
+      ...(value.runtime_signature === undefined ? {} : { runtime_signature: value.runtime_signature }) };
   } catch { return undefined; }
 }
 

@@ -179,6 +179,43 @@ test("MCP HTTP classification does not publish custom media types, IDs, bodies o
   assert.deepEqual(browserErrorDiagnostic(empty).mcp_response, { content_type: "absent", phase: "read_initial", body_kind: "empty", rpc_code: "absent", rpc_id: "absent" });
 });
 
+test("MCP queued-command failure phases distinguish each operation without arguments", async () => {
+  for (const [name, args, phase] of [
+    ["runner_select", { runner_id: "private-runner" }, "runner_select"],
+    ["shell", { command: "private-command" }, "shell"],
+    ["job", { action: "get", job_id: "private-job" }, "job_get"],
+    ["job", { action: "logs", cursor: "private-cursor" }, "job_logs"],
+    ["job", { action: "cancel", job_id: "private-job" }, "job_cancel"],
+    ["job", { action: "private-action" }, "other"],
+    ["private-tool", { action: "cancel" }, "other"],
+  ]) {
+    const error = await mcpHttpFailure(new Response("private-body", { status: 500 }), 123, name, args);
+    assert.equal(browserErrorDiagnostic(error).mcp_response.phase, phase);
+    assert.ok(!error.message.includes("private"));
+  }
+});
+
+test("MCP text failures preserve fixed runtime signatures without publishing a stack", async () => {
+  for (const [runtime_signature, text] of [
+    ["network_connection_lost", "Network connection lost."],
+    ["cross_request_io", "Cannot perform I/O on behalf of a different request."],
+    ["cross_request_promise", "A promise was resolved or rejected from a different request context than the one it was created in."],
+    ["hung_request", "The Workers runtime canceled this request because it detected that your Worker's code had hung and would never generate a response."],
+    ["locked_reader", "This ReadableStream is locked to a reader."],
+  ]) {
+    const prefix = runtime_signature === "locked_reader" ? "TypeError: " : "Error: ";
+    const error = await mcpHttpFailure(new Response(`${prefix}${text}\n at https://private-token/mcp:1:2`, { status: 500 }), 123, "job", { action: "get" });
+    const evidence = browserErrorDiagnostic(error).mcp_response;
+    assert.equal(evidence.runtime_signature, runtime_signature);
+    assert.equal(evidence.phase, "job_get");
+    assert.equal(evidence.body_kind, "non_json");
+    assert.ok(!error.message.includes("private"));
+    assert.equal(mcpHttpDiagnostic("RUNMESH_E2E_MCP_HTTP_DIAGNOSTIC=" + JSON.stringify({ ...evidence, runtime_signature: "private-error" })), undefined);
+  }
+  const unknown = await mcpHttpFailure(new Response("Error: private-error", { status: 500 }), 1, "shell", {});
+  assert.equal(browserErrorDiagnostic(unknown).mcp_response.runtime_signature, undefined);
+});
+
 test("MCP error body diagnostics bound bytes, chunks and stalled reads without waiting for cancellation", async () => {
   let cancelled = 0;
   const response = new Response(new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(4097)); },
