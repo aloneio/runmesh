@@ -80,7 +80,8 @@ export function createRunnerPolicyRoutes(ports: RunnerPolicyRoutePorts): Registr
       const permissions = permissionSetField(input.permissions);
       const mutationId = mutationIdField(input);
       if (mutationId === undefined) return Response.json({ error: "mutation_id is required" }, { status: 400 });
-      const runner = permissions === undefined ? undefined : ports.setRunnerPermissions(runnerId, permissions, nowMs, mutationId);
+      if (permissions === undefined) return Response.json({ error: "invalid runner permissions" }, { status: 400 });
+      const runner = ports.setRunnerPermissions(runnerId, permissions, nowMs, mutationId);
       return runner === undefined ? new Response("not found", { status: 404 }) : Response.json(runner);
     }
     if (method === "POST" && action === "runners" && runnerId !== undefined && segments[2] === "emergency-lock" && isSafeIdentifier(runnerId)) {

@@ -481,7 +481,7 @@ const definitions = {
   "text.unique.runtime": { en: "Unique runtime", "zh-CN": "唯一运行时" },
   "text.revision.applied.desired": { en: "Revision applied / desired", "zh-CN": "已应用 / 期望版本" },
   "text.heartbeat": { en: "Heartbeat", "zh-CN": "心跳" },
-  "text.policy.is.recorded.for.operators.package.download.update.and.rollback.remain.deferred": { en: "Policy is recorded for operators; package download, update, and rollback remain deferred.", "zh-CN": "策略仅供操作员查看；软件包下载、更新和回滚暂不执行。" },
+  "text.choose.target.version.and.update.runner.host": { en: "Select the target version, then install it on the Runner host and restart the service.", "zh-CN": "选择目标版本后，在 Runner 主机上安装该版本并重启服务。" },
   "text.hosted.distribution.is.not.configured.portable.artifact.manual.version.management.only": { en: "Hosted distribution is not configured. Portable artifact/manual version management only.", "zh-CN": "托管分发尚未配置；目前只能使用便携版制品并手动管理版本。" },
   "text.effective.global.scopes": { en: "Effective Global Scopes", "zh-CN": "生效的全局权限范围" },
   "text.read.2": { en: "Read", "zh-CN": "读取" },

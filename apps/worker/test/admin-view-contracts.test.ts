@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { sha256Hex } from "@aloneio/runmesh-protocol";
+import { sha256Hex, LOCKED_PERMISSION_SET, PERMISSION_BITS, normalizeUiPermissionSet } from "@aloneio/runmesh-protocol";
 import fixtures from "./fixtures/admin-render-golden.json";
 import { authEntryDocument, secretCreatedPage } from "../src/admin/auth-views.js";
 import { overviewPage, settingsPage } from "../src/admin/dashboard-views.js";
@@ -9,6 +9,8 @@ import { runnerDetailPage } from "../src/admin/runner-detail-view.js";
 import { adminDocument } from "../src/admin/layout.js";
 import { html, htmlHeaders, redirect } from "../src/http/html-response.js";
 import { localizeHtmlResponse } from "../src/i18n/html.js";
+import { permissionForm, managedWorkspaceForm, workspaceProfile } from "../src/admin/forms.js";
+import { workspacePermissionPreset } from "../src/contracts/permission-profiles.js";
 
 // Hashes were captured by evaluating the pre-refactor renderers at the fixed
 // baseline. Reviewed i18n annotations and login copy changes retain their
@@ -59,6 +61,21 @@ describe("AR04 rendering compatibility", () => {
     expect(typeof content).toBe("string");
     expect(content).toContain("&lt;img src=x onerror=alert(1)&gt;");
     expect(content).not.toContain("<img src=x onerror=alert(1)>");
+  });
+
+  it("renders permission dependencies and workspace presets from the shared policy", () => {
+    const forms = [permissionForm("r", LOCKED_PERMISSION_SET, "csrf"), managedWorkspaceForm("r", undefined, "csrf")];
+    for (const form of forms) for (const name of PERMISSION_BITS) {
+      const enabled = normalizeUiPermissionSet({ ...LOCKED_PERMISSION_SET, [name]: true });
+      const required = PERMISSION_BITS.filter(bit => bit !== name && enabled[bit]).join(" ");
+      expect(form).toContain(`<select name="${name}" data-permission-requires="${required}">`);
+    }
+    for (const name of ["read_only", "edit_only", "controlled_exec"]) {
+      const permissions = workspacePermissionPreset(name)!;
+      expect(workspaceProfile(permissions)).toBe(name);
+      const enabled = PERMISSION_BITS.filter(bit => permissions[bit]).join(" ");
+      expect(forms[1]).toContain(`<option value="${name}" data-permission-preset="${enabled}"`);
+    }
   });
 
   it.each(["active", "scheduled", "expired"] as const)("shows a used enrollment code as consumed regardless of its %s window", async window => {

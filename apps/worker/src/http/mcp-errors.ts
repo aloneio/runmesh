@@ -1,16 +1,18 @@
 import { readCappedBytes } from "../body.js";
 
-export type McpHandlerStage = "handler_dispatch" | "server_factory" | "sdk_transport";
+export type McpHandlerStage = "request_validation" | "identity_verification" | "request_body" | "module_loading" | "provider_setup"
+  | "handler_dispatch" | "server_factory" | "sdk_transport" | "response_priming" | "response_headers";
 
-/** Fixed SDK diagnostics; exception messages and stacks can contain MCP secrets. */
+/** Fixed MCP boundary diagnostics; exception messages and stacks can contain secrets. */
 export function reportMcpHandlerError(error: unknown, stage: McpHandlerStage): void {
   const kind = error instanceof TypeError ? "type_error" : error instanceof RangeError ? "range_error"
     : error instanceof SyntaxError ? "syntax_error" : error instanceof DOMException && error.name === "AbortError" ? "abort_error"
       : error instanceof Error ? "error" : "other";
-  // Exact literals from the installed Agents/MCP SDK. All variable exception
+  // Exact literals from the runtime and installed Agents/MCP SDK. All variable exception
   // text remains private, including messages that only contain these phrases.
   let reason = "unknown";
   switch (error instanceof Error ? error.message : undefined) {
+    case "Network connection lost.": reason = "network_connection_lost"; break;
     case "Invalid verified OAuth request context": reason = "invalid_auth_context"; break;
     case "Conflicting verified OAuth client identity": reason = "conflicting_auth_context"; break;
     case "Cannot register capabilities after connecting to transport": reason = "already_connected"; break;

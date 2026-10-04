@@ -4,6 +4,7 @@ import { handleMcpSecret } from "../src/http/mcp.js";
 import { MCP_TOOL_NAMES } from "../src/mcp/server.js";
 import type { WorkerEnv } from "../src/platform/env.js";
 import { createMcpWorkerDiagnosticForwarder, mcpWorkerFailureEvidence } from "../../../scripts/mcp-diagnostics.mjs";
+import * as mcpResponse from "../src/http/mcp-response.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -39,6 +40,39 @@ function fixture(central = true, scopes: string[] = ["coding:read"], clientId = 
   }
   return { rpc, rpcBody, registry, principals };
 }
+
+it.each([
+  ["identity", "Network connection lost.", "network_connection_lost"],
+  ["identity", "Network connection lost. private-token", "unknown"],
+  ["response", "Network connection lost.", "network_connection_lost"],
+  ["response", "private-response-token", "unknown"],
+] as const)("preserves an escaping %s failure and records only its fixed outer boundary", async (boundary, message, reason) => {
+  const f = fixture(false), lines: string[] = [];
+  const error = new Error(message); error.stack = "private-stack-and-token";
+  const forward = createMcpWorkerDiagnosticForwarder((line: string) => lines.push(line));
+  const log = vi.spyOn(console, "warn").mockImplementation((line: unknown) => { forward(String(line) + "\n"); });
+  if (boundary === "identity") vi.spyOn(crypto.subtle, "digest").mockRejectedValueOnce(error);
+  else vi.spyOn(mcpResponse, "primeMcpResponse").mockImplementationOnce(async response => {
+    // Finish the real SDK stream before injecting the response-boundary error.
+    await response.text();
+    throw error;
+  });
+  await expect(f.rpcBody(JSON.stringify({ jsonrpc: "2.0", id: 123, method: "tools/call", params: { name: "read", arguments: {} } }))).rejects.toBe(error);
+  expect(f.registry).toHaveBeenCalledTimes(boundary === "identity" ? 0 : 1);
+  expect(log).toHaveBeenCalledOnce();
+  expect(mcpWorkerFailureEvidence(lines.join(""))).toEqual([{ event: "mcp_handler_error", kind: "error",
+    stage: boundary === "identity" ? "identity_verification" : "response_priming", reason }]);
+  expect(JSON.stringify(log.mock.calls)).not.toContain("private");
+});
+
+it("preserves the original escaping error when the diagnostic logger fails", async () => {
+  const f = fixture(false), error = new Error("Network connection lost.");
+  vi.spyOn(crypto.subtle, "digest").mockRejectedValueOnce(error);
+  const log = vi.spyOn(console, "warn").mockImplementation(() => { throw new Error("private-logger-failure"); });
+  await expect(f.rpcBody(JSON.stringify({ jsonrpc: "2.0", id: 123, method: "tools/list" }))).rejects.toBe(error);
+  expect(log).toHaveBeenCalledOnce();
+  expect(f.registry).not.toHaveBeenCalled();
+});
 
 it.each(["factory", "transport"] as const)("SDK %s errors keep HTTP 500 and reach safe CI evidence without exception details", async boundary => {
   const f = fixture(false), lines: string[] = [];

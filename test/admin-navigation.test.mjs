@@ -173,6 +173,57 @@ function controlsFixture() {
   return { controls, copied, root };
 }
 
+function permissionFormFixture(withProfile = false) {
+  const form = element(), requirements = { read: "", edit: "read", shell: "read edit job_control", job_control: "read" };
+  const selects = Object.fromEntries(Object.entries(requirements).map(([name, required]) => {
+    const select = element(); select.name = name; select.value = String(name === "read");
+    select.setAttribute("data-permission-requires", required);
+    return [name, select];
+  }));
+  const profile = withProfile ? element() : null;
+  if (profile) {
+    profile.value = "read_only";
+    Object.defineProperty(profile, "selectedOptions", { get: () => [{ getAttribute: () => ({
+      read_only: "read", edit_only: "read edit", controlled_exec: "read edit shell job_control",
+    })[profile.value] ?? null }] });
+  }
+  form.querySelectorAll = selector => selector === "select[data-permission-requires]" ? Object.values(selects) : [];
+  form.querySelector = selector => selector === 'select[name="profile"]' ? profile : null;
+  return { form, selects, profile, values: () => Object.fromEntries(Object.entries(selects).map(([name, select]) => [name, select.value === "true"])),
+    change(name, value) { selects[name].value = String(value); selects[name].dispatch("change"); } };
+}
+
+test("permission controls visibly enable Shell dependencies and remove dependent grants within their own form", () => {
+  const h = controlsFixture(), runner = permissionFormFixture(), workspace = permissionFormFixture(true);
+  const root = h.root({ form: [runner.form, workspace.form] });
+  h.controls.bindPageControls(root); h.controls.bindPageControls(root);
+  runner.change("shell", true);
+  assert.deepEqual(runner.values(), { read: true, edit: true, shell: true, job_control: true });
+  assert.deepEqual(workspace.values(), { read: true, edit: false, shell: false, job_control: false });
+  runner.change("edit", false);
+  assert.deepEqual(runner.values(), { read: true, edit: false, shell: false, job_control: true });
+  runner.change("read", false);
+  assert.deepEqual(runner.values(), { read: false, edit: false, shell: false, job_control: false });
+  runner.change("job_control", true);
+  assert.deepEqual(runner.values(), { read: true, edit: false, shell: false, job_control: true });
+  assert.equal(runner.selects.shell.events.get("change").length, 1);
+});
+
+test("workspace presets update visible permissions and explicit changes switch the form to Custom", () => {
+  const h = controlsFixture(), workspace = permissionFormFixture(true);
+  h.controls.bindPageControls(h.root({ form: [workspace.form] }));
+  workspace.profile.value = "controlled_exec"; workspace.profile.dispatch("change");
+  assert.deepEqual(workspace.values(), { read: true, edit: true, shell: true, job_control: true });
+  workspace.change("edit", false);
+  assert.equal(workspace.profile.value, "custom");
+  assert.deepEqual(workspace.values(), { read: true, edit: false, shell: false, job_control: true });
+  workspace.profile.value = "read_only"; workspace.profile.dispatch("change");
+  assert.deepEqual(workspace.values(), { read: true, edit: false, shell: false, job_control: false });
+  workspace.change("shell", true);
+  assert.equal(workspace.profile.value, "custom");
+  assert.deepEqual(workspace.values(), { read: true, edit: true, shell: true, job_control: true });
+});
+
 test("command panel heights shrink after a wider resize and retain the selected operating system", () => {
   const h = controlsFixture();
   const panels = [false, true, true].map((hidden, index) => ({ hidden, style: {}, naturalHeight: 500 + 100 * index,
@@ -204,7 +255,7 @@ test("initial and dynamic password controls update the same icon and accessible 
 });
 test("rebinding execution-mode controls does not duplicate listeners or lose initial synchronization", () => {
   const h = controlsFixture(), input = element(), confirmation = {}, warning = {}; input.value = "privileged_host";
-  const form = { querySelectorAll: () => [input], querySelector: selector => selector === '[input-unused]' ? null : selector.includes(":checked") ? input : selector === "[data-privileged-confirmation]" ? confirmation : selector === ".privileged-host-warning" ? warning : null };
+  const form = { querySelectorAll: selector => selector === 'input[name="execution_mode"],select[name="execution_mode"]' ? [input] : [], querySelector: selector => selector === '[input-unused]' ? null : selector.includes(":checked") ? input : selector === "[data-privileged-confirmation]" ? confirmation : selector === ".privileged-host-warning" ? warning : null };
   const root = h.root({ form: [form] }); h.controls.bindPageControls(root); h.controls.bindPageControls(root);
   assert.equal(input.events.get("change").length, 1); assert.equal(confirmation.required, true); assert.equal(warning.hidden, false);
   input.value = "dedicated_user"; input.dispatch("change"); assert.equal(confirmation.required, false); assert.equal(warning.hidden, true);

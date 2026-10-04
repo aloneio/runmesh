@@ -216,7 +216,7 @@ export function runnerDetailPage({ presentation, runner, workspaces, jobs, envir
       <div class="section-title">
         <h2>${message("text.version.policy", "en")}</h2>
       </div>
-      <p class="muted font-12">${message("text.policy.is.recorded.for.operators.package.download.update.and.rollback.remain.deferred", "en")}</p>
+      <p class="muted font-12">${message("text.choose.target.version.and.update.runner.host", "en")}</p>
       ${distributionNotice}
       <form method="post" action="/admin/runners/${encodeURIComponent(runnerId)}/version-policy" class="form-grid version-policy-form">
         <input type="hidden" name="csrf_token" value="${escapeHtml(csrf)}">

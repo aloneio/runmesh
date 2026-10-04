@@ -2,7 +2,7 @@
 // this boundary; no response text, request arguments, IDs or log lines escape.
 const contentTypes = ["json", "html", "text", "sse", "other", "absent"];
 const bodyKinds = ["json_rpc_error", "empty", "non_json", "invalid_json", "not_rpc_error", "oversized", "read_timeout", "read_error"];
-const phases = ["read_initial", "read_continuation", "runner_select", "shell", "job_get", "job_logs", "job_cancel", "other"];
+const phases = ["read_initial", "read_continuation", "runner_select", "shell", "edit", "job_get", "job_logs", "job_cancel", "other"];
 const runtimeSignatures = new Map([
   ["network_connection_lost", "Network connection lost."],
   ["cross_request_io", "Cannot perform I/O on behalf of a different request."],
@@ -13,8 +13,9 @@ const runtimeSignatures = new Map([
 const rpcCodes = [-32700, -32600, -32601, -32602, -32603, -32000, "other", "absent"];
 const rpcIds = ["matches", "null", "absent", "other"];
 const errorKinds = ["type_error", "range_error", "syntax_error", "abort_error", "error", "other"];
-const stages = ["handler_dispatch", "server_factory", "sdk_transport"];
-const reasons = ["invalid_auth_context", "conflicting_auth_context", "already_connected", "unknown"];
+const stages = ["request_validation", "identity_verification", "request_body", "module_loading", "provider_setup",
+  "handler_dispatch", "server_factory", "sdk_transport", "response_priming", "response_headers"];
+const reasons = ["invalid_auth_context", "conflicting_auth_context", "already_connected", "network_connection_lost", "unknown"];
 const HTTP_MARKER = "RUNMESH_E2E_MCP_HTTP_DIAGNOSTIC=";
 const WORKER_MARKER = "RUNMESH_E2E_MCP_WORKER_EVENT=";
 const jobStatuses = ["queued", "running", "cancelling", "succeeded", "failed", "cancelled", "interrupted", "unknown", "absent", "other"];
@@ -56,7 +57,7 @@ export async function mcpHttpFailure(response, requestId, name, args) {
   const content_type = type === undefined ? "absent" : type === "application/json" ? "json"
     : type === "text/html" ? "html" : type === "text/plain" ? "text" : type === "text/event-stream" ? "sse" : "other";
   const phase = name === "read" ? (args.cursor === undefined ? "read_initial" : "read_continuation")
-    : name === "runner_select" || name === "shell" ? name
+    : name === "runner_select" || name === "shell" || name === "edit" ? name
     : name === "job" && ["get", "logs", "cancel"].includes(args.action) ? `job_${args.action}` : "other";
   const observed = await boundedBody(response);
   const detail = { content_type, phase, body_kind: observed.body_kind ?? "non_json", rpc_code: "absent", rpc_id: "absent" };

@@ -19,7 +19,8 @@ const canonicalSource = path => path.replace(/\.(?:[cm]?[jt]s|[jt]sx)$/u, ".ts")
 const browserRoot = "apps/worker/browser/";
 const browserDependencies = {
   "admin-client.ts": ["central/controller.ts", "runner-actions.ts", "locale.ts", "page-controls.ts", "admin-pages.ts", "admin-navigation.ts"],
-  "page-controls.ts": ["clipboard.ts"],
+  "page-controls.ts": ["clipboard.ts", "permission-controls.ts"],
+  "permission-controls.ts": [],
   "locale.ts": [], "clipboard.ts": [], "admin-pages.ts": [], "admin-navigation.ts": [],
   "runner-actions.ts": [],
   "central/controller.ts": ["central/api.ts", "central/messages.ts", "central/view.ts", "central/services.ts", "central/skills.ts"],
