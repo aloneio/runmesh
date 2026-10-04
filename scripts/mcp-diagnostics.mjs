@@ -52,22 +52,41 @@ async function boundedBody(response) {
   }
 }
 
-export async function mcpHttpFailure(response, requestId, name, args) {
+function responseContentType(response) {
   const type = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
-  const content_type = type === undefined ? "absent" : type === "application/json" ? "json"
+  return type === undefined ? "absent" : type === "application/json" ? "json"
     : type === "text/html" ? "html" : type === "text/plain" ? "text" : type === "text/event-stream" ? "sse" : "other";
+}
+
+function responseRuntimeSignature(observed, contentType) {
+  if (observed.bytes === undefined || contentType !== "text") return undefined;
+  // Miniflare can format an uncaught runtime error as a text stack. Retain
+  // only its fixed signature, not the stack or a claim about its root cause.
+  const text = new TextDecoder().decode(observed.bytes);
+  return [...runtimeSignatures].find(([, literal]) => ["", "Error: ", "TypeError: "].some(prefix => text.startsWith(prefix + literal)))?.[0];
+}
+
+export async function adminSetupHttpDiagnostic(response, stage) {
+  const content_type = responseContentType(response);
+  const observed = await boundedBody(response);
+  const runtime_signature = responseRuntimeSignature(observed, content_type);
+  const detail = {
+    stage: ["runner_permissions", "workspace_create", "readonly_workspace_create", "context_workspace_create"].includes(stage) ? stage : "other",
+    status: response.status, content_type, body_kind: observed.body_kind ?? "present",
+    ...(runtime_signature === undefined ? {} : { runtime_signature }),
+  };
+  return `RUNMESH_E2E_ADMIN_SETUP_DIAGNOSTIC=${JSON.stringify(detail)}`;
+}
+
+export async function mcpHttpFailure(response, requestId, name, args) {
+  const content_type = responseContentType(response);
   const phase = name === "read" ? (args.cursor === undefined ? "read_initial" : "read_continuation")
     : name === "runner_select" || name === "shell" || name === "edit" ? name
     : name === "job" && ["get", "logs", "cancel"].includes(args.action) ? `job_${args.action}` : "other";
   const observed = await boundedBody(response);
   const detail = { content_type, phase, body_kind: observed.body_kind ?? "non_json", rpc_code: "absent", rpc_id: "absent" };
-  if (observed.bytes !== undefined && content_type === "text") {
-    // Miniflare can format an uncaught runtime error as a text stack. Retain
-    // only its fixed signature, not the stack or a claim about its root cause.
-    const text = new TextDecoder().decode(observed.bytes);
-    const signature = [...runtimeSignatures].find(([, literal]) => ["", "Error: ", "TypeError: "].some(prefix => text.startsWith(prefix + literal)));
-    if (signature) detail.runtime_signature = signature[0];
-  }
+  const runtime_signature = responseRuntimeSignature(observed, content_type);
+  if (runtime_signature !== undefined) detail.runtime_signature = runtime_signature;
   if (observed.bytes !== undefined && content_type === "json") {
     try {
       const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(observed.bytes));

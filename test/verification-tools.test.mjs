@@ -10,7 +10,7 @@ import { checkDomainImports, inventoryTests, validateTestPlan, validateTestWirin
 import { summarizeVitest, packageEvidence } from "../scripts/test-evidence.mjs";
 import { browserFailureEvidence, browserErrorDiagnostic, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
 import { UI_BROWSER_STAGES, UI_BROWSER_NAVIGATION_STATES } from "../scripts/ui-browser-contract.mjs";
-import { createMcpWorkerDiagnosticForwarder, jobCompletionDiagnostic, mcpHttpFailure, mcpHttpDiagnostic, mcpWorkerFailureEvidence } from "../scripts/mcp-diagnostics.mjs";
+import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, jobCompletionDiagnostic, mcpHttpFailure, mcpHttpDiagnostic, mcpWorkerFailureEvidence } from "../scripts/mcp-diagnostics.mjs";
 import { renderExamples, renderFacts, validateExampleCoverage, verifyDocReferences } from "../scripts/project-facts.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -146,6 +146,34 @@ test("browser navigation diagnostics retain only complete fixed condition marker
     "Browser navigation readiness timed out\nprivate-response RUNMESH_E2E_UI_NAVIGATION_STATE=navigation_busy (stage: clients_navigation)",
     "Browser navigation readiness timed out\nRUNMESH_E2E_UI_NAVIGATION_STATE=navigation_busy (stage: clients_navigation)private-response"])
     assert.equal(browserErrorDiagnostic({ message }).navigation_state, undefined);
+});
+
+test("admin setup response diagnostics retain fixed stages and runtime signatures without response content", async () => {
+  for (const stage of ["runner_permissions", "workspace_create", "readonly_workspace_create", "context_workspace_create", "private-stage"]) {
+    const response = new Response("Error: Network connection lost.\n at https://private-token/admin", {
+      status: 500, headers: { "content-type": "text/plain; private=header", "set-cookie": "private-cookie", location: "https://private-location" },
+    });
+    const diagnostic = await adminSetupHttpDiagnostic(response, stage);
+    assert.equal(diagnostic, "RUNMESH_E2E_ADMIN_SETUP_DIAGNOSTIC=" + JSON.stringify({
+      stage: stage === "private-stage" ? "other" : stage, status: 500, content_type: "text", body_kind: "present", runtime_signature: "network_connection_lost",
+    }));
+    assert.ok(!diagnostic.includes("private"));
+  }
+  const html = await adminSetupHttpDiagnostic(new Response("<html>private-body Error: Network connection lost.</html>", {
+    status: 503, headers: { "content-type": "text/html" },
+  }), "runner_permissions");
+  assert.equal(html, 'RUNMESH_E2E_ADMIN_SETUP_DIAGNOSTIC={"stage":"runner_permissions","status":503,"content_type":"html","body_kind":"present"}');
+});
+
+test("admin setup diagnostics bound response inspection without retrying the mutation", async () => {
+  let cancelled = false;
+  const stalled = new Response(new ReadableStream({ cancel() { cancelled = true; } }), { status: 500 });
+  const result = await adminSetupHttpDiagnostic(stalled, "runner_permissions");
+  assert.equal(result, 'RUNMESH_E2E_ADMIN_SETUP_DIAGNOSTIC={"stage":"runner_permissions","status":500,"content_type":"absent","body_kind":"read_timeout"}');
+  assert.equal(cancelled, true);
+  const oversized = await adminSetupHttpDiagnostic(new Response("private".repeat(1000), { status: 500 }), "workspace_create");
+  assert.ok(oversized.includes('"body_kind":"oversized"'));
+  assert.ok(!oversized.includes("private"));
 });
 
 test("MCP HTTP failures retain only a bounded status from the exact fixed marker", () => {

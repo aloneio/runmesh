@@ -12,7 +12,7 @@ import { isolatedGitEnvironment, trustedGitCwd } from "../../apps/runner/src/git
 import { catalogContract, MCP_CATALOG_SUMMARY } from "../../apps/worker/src/mcp/catalog-contract.js";
 import { fromJsonSchema } from "@modelcontextprotocol/server";
 import { inspectInputCases } from "../helpers/inspect-input-cases.js";
-import { createMcpWorkerDiagnosticForwarder, mcpHttpFailure } from "../../scripts/mcp-diagnostics.mjs";
+import { adminSetupHttpDiagnostic, createMcpWorkerDiagnosticForwarder, mcpHttpFailure } from "../../scripts/mcp-diagnostics.mjs";
 
 type ToolResult = {
   readonly content?: { readonly type: string; readonly text: string }[];
@@ -185,12 +185,16 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     runnerOutput = runnerLog;
     const { adminJar: policyAdminJar, csrf: policyCsrf } = await adminCredentials();
     const runnerPermissionResponse = await submitForm(`/admin/runners/${runnerId}/permissions`, { csrf_token: policyCsrf, read: "true", edit: "true", shell: "true", job_control: "true" }, policyAdminJar);
+    if (runnerPermissionResponse.status !== 303) console.error(await adminSetupHttpDiagnostic(runnerPermissionResponse, "runner_permissions"));
     expect(runnerPermissionResponse.status).toBe(303);
     const workspaceResponse = await submitForm(`/admin/runners/${runnerId}/workspace-create`, { csrf_token: policyCsrf, workspace_id: "workspace-1", display_name: "Coding workspace", root_path: workspace, enabled: "true", profile: "coding", read: "true", edit: "true", shell: "true", job_control: "true" }, policyAdminJar);
+    if (workspaceResponse.status !== 303) console.error(await adminSetupHttpDiagnostic(workspaceResponse, "workspace_create"));
     expect(workspaceResponse.status).toBe(303);
     const readonlyResponse = await submitForm(`/admin/runners/${runnerId}/workspace-create`, { csrf_token: policyCsrf, workspace_id: "readonly-1", display_name: "Read only workspace", root_path: readonlyWorkspace, enabled: "true", profile: "read_only", read: "true", edit: "false", shell: "false", job_control: "false" }, policyAdminJar);
+    if (readonlyResponse.status !== 303) console.error(await adminSetupHttpDiagnostic(readonlyResponse, "readonly_workspace_create"));
     expect(readonlyResponse.status).toBe(303);
     const contextResponse = await submitForm(`/admin/runners/${runnerId}/workspace-create`, { csrf_token: policyCsrf, workspace_id: "context-1", display_name: "Context workspace", root_path: contextWorkspace, enabled: "true", profile: "coding", read: "true", edit: "true", shell: "true", job_control: "true" }, policyAdminJar);
+    if (contextResponse.status !== 303) console.error(await adminSetupHttpDiagnostic(contextResponse, "context_workspace_create"));
     expect(contextResponse.status).toBe(303);
     await waitFor(async () => {
       const status = await fetch(`${workerUrl}/admin/runners/${runnerId}`, { headers: { cookie: cookieHeader(policyAdminJar) } });

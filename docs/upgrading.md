@@ -10,7 +10,7 @@ Runmesh shares enabled MCP tools and active Skills with every valid client in th
 
 Read the [release notes](release-notes.md) and [release status](release-readiness.md). Production upgrades use published, independently verified signed packages; candidate and development prereleases belong in a separate test environment.
 
-Include the MCP and Skill production bindings alongside the existing Registry and Runner namespaces. Retain both existing secrets and resource identities; OAuth encryption uses `INTERNAL_CONTROL_SECRET`. Deploy the reviewed release activation and verify the running Worker before updating Runners. The 0.1.3-to-0.1.4 procedure below is a historical example of the managed service update steps.
+Include the MCP and Skill production bindings alongside the existing Registry and Runner namespaces. Retain both existing secrets and resource identities; OAuth encryption uses `INTERNAL_CONTROL_SECRET`. Deploy the reviewed release activation and verify the running Worker before updating Runners. The managed system-service procedure below updates Runner 0.1.6 to 0.1.7.
 
 Plan these updates separately:
 
@@ -72,9 +72,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Review the Runner health checks.' }
 
 Confirm the displayed version matches your target, then complete the acceptance checks below. The existing Runner registration and profile carry over.
 
-## Update a standard managed Runner from 0.1.3 to 0.1.4
+## Update a standard managed Runner from 0.1.6 to 0.1.7
 
-The hosted command handles fresh installation and same-version enrollment refresh. To update an existing package, stage the verified 0.1.4 package beside 0.1.3, switch the `current` link during the maintenance window, and start the existing service definition. This keeps the Runner ID, credential, workspace policy, profile/state, service account and service arguments intact.
+The hosted command handles fresh installation and same-version enrollment refresh. To update an existing package, stage the verified 0.1.7 package beside 0.1.6, switch the `current` link during the maintenance window, and start the existing service definition. This keeps the Runner ID, credential, workspace policy, profile/state, service account and service arguments intact.
 
 This procedure covers standard **system installations created by the hosted installer**. Confirm that the service launches through the `current` path below, that `current` is a link to the corresponding `versions` directory, and that the existing launchers use their relative private runtime. For user services, follow [Update a user service](#update-a-user-service). For custom system paths or an external Node layout, use your service owner's package-deployment procedure.
 
@@ -84,7 +84,7 @@ This procedure covers standard **system installations created by the hosted inst
 | macOS | `/opt/runmesh/current/bin/runmesh` | `/Library/LaunchDaemons/io.alone.runmesh.runner.plist` |
 | Windows | `C:\Program Files\Runmesh\current\runmesh.cmd` | Existing `RunmeshRunner` scheduled task; source XML at `C:\ProgramData\Runmesh\RunmeshRunner.xml` |
 
-Run the steps in one root/elevated administrator session with no other installation or maintenance running. First complete the backup and Job-draining steps above. Verify `runmesh-runner-0.1.4.tgz` using the [independent signature and checksum procedure](portable-runner-installation.md#independently-verify-a-downloaded-package). Use a trusted Node/npm installation for staging. The retained private Node must satisfy 22.23.2+ within 22.x, or 24.21.0+ within 24.x.
+Run the steps in one root/elevated administrator session with no other installation or maintenance running. First complete the backup and Job-draining steps above. Verify `runmesh-runner-0.1.7.tgz` using the [independent signature and checksum procedure](portable-runner-installation.md#independently-verify-a-downloaded-package). Use a trusted Node/npm installation for staging. The retained private Node must satisfy 22.23.2+ within 22.x, or 24.21.0+ within 24.x.
 
 ### Stage the package on Linux or macOS
 
@@ -93,13 +93,13 @@ Set `ARTIFACT` to the absolute path of the independently verified archive. These
 ```sh
 set -eu
 umask 022
-ARTIFACT='/absolute/path/runmesh-runner-0.1.4.tgz'
+ARTIFACT='/absolute/path/runmesh-runner-0.1.7.tgz'
 ROOT=/opt/runmesh
-NEW="$ROOT/versions/0.1.4"
+NEW="$ROOT/versions/0.1.7"
 test -L "$ROOT/current"
 OLD=$(CDPATH= cd "$ROOT/current" && pwd -P)
 case "$OLD" in "$ROOT"/versions/*) ;; *) exit 1 ;; esac
-test "$("$OLD/bin/runmesh" --version)" = 0.1.3
+test "$("$OLD/bin/runmesh" --version)" = 0.1.6
 test -f "$OLD/runtime/node" && test ! -L "$OLD/runtime/node"
 test -f "$OLD/bin/runmesh" && test ! -L "$OLD/bin/runmesh"
 test -f "$OLD/bin/runmesh-runner" && test ! -L "$OLD/bin/runmesh-runner"
@@ -117,7 +117,7 @@ cp "$OLD/runtime/node" "$NEW/runtime/node"
 rm "$NEW/bin/runmesh" "$NEW/bin/runmesh-runner"
 cp "$OLD/bin/runmesh" "$OLD/bin/runmesh-runner" "$NEW/bin/"
 chmod 0755 "$NEW/runtime/node" "$NEW/bin/runmesh" "$NEW/bin/runmesh-runner"
-test "$("$NEW/bin/runmesh" --version)" = 0.1.4
+test "$("$NEW/bin/runmesh" --version)" = 0.1.7
 "$NEW/bin/runmesh" --help
 chmod -R a-w "$NEW"
 printf 'Previous version directory: %s\n' "$OLD"
@@ -146,11 +146,11 @@ Use elevated PowerShell. Confirm the task's current action, principal, arguments
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$Artifact = 'C:\absolute\path\runmesh-runner-0.1.4.tgz'
+$Artifact = 'C:\absolute\path\runmesh-runner-0.1.7.tgz'
 $Root = 'C:\Program Files\Runmesh'
 $Current = Join-Path $Root 'current'
-$New = Join-Path $Root 'versions\0.1.4'
-$Previous = Join-Path $Root 'current.previous-0.1.3'
+$New = Join-Path $Root 'versions\0.1.7'
+$Previous = Join-Path $Root 'current.previous-0.1.6'
 $Next = Join-Path $Root 'current.next'
 $Link = Get-Item -LiteralPath $Current -Force
 if ($Link.LinkType -ne 'Junction') { throw 'Expected the managed current junction.' }
@@ -160,7 +160,7 @@ foreach ($Path in @($New, $Previous, $Next)) {
   if (Test-Path -LiteralPath $Path) { throw "Inspect the existing upgrade path: $Path" }
 }
 $OldRunner = Join-Path $Old 'runmesh.cmd'
-if ((& $OldRunner --version).Trim() -ne '0.1.3' -or $LASTEXITCODE -ne 0) { throw 'Expected Runner 0.1.3.' }
+if ((& $OldRunner --version).Trim() -ne '0.1.6' -or $LASTEXITCODE -ne 0) { throw 'Expected Runner 0.1.6.' }
 & (Join-Path $Old 'runtime\node.exe') -e 'const [m,n,p]=process.versions.node.split(".").map(Number);if(!((m===22&&(n>23||n===23&&p>=2))||(m===24&&(n>21||n===21&&p>=0))))process.exit(1)'
 if ($LASTEXITCODE -ne 0) { throw 'Use a verified compatible private runtime before upgrading.' }
 $NpmConfig = Join-Path ([IO.Path]::GetTempPath()) ('runmesh-upgrade-npm-' + [guid]::NewGuid().ToString('N'))
@@ -181,7 +181,7 @@ foreach ($Name in @('runmesh.cmd', 'runmesh-runner.cmd')) {
   Copy-Item -LiteralPath (Join-Path $Old $Name) -Destination (Join-Path $New $Name) -Force
 }
 $NewRunner = Join-Path $New 'runmesh.cmd'
-if ((& $NewRunner --version).Trim() -ne '0.1.4' -or $LASTEXITCODE -ne 0) { throw 'Staged Runner version differs.' }
+if ((& $NewRunner --version).Trim() -ne '0.1.7' -or $LASTEXITCODE -ne 0) { throw 'Staged Runner version differs.' }
 & $NewRunner --help
 if ($LASTEXITCODE -ne 0) { throw 'Staged Runner help check failed.' }
 ```
@@ -199,7 +199,7 @@ while ((Get-ScheduledTask -TaskName 'RunmeshRunner' -TaskPath '\').State -eq 'Ru
   Start-Sleep -Milliseconds 200
 }
 New-Item -ItemType Junction -Path $Next -Target $New | Out-Null
-Rename-Item -LiteralPath $Current -NewName 'current.previous-0.1.3'
+Rename-Item -LiteralPath $Current -NewName 'current.previous-0.1.6'
 Rename-Item -LiteralPath $Next -NewName 'current'
 if ($WasEnabled) {
   Enable-ScheduledTask -TaskName 'RunmeshRunner' -TaskPath '\' | Out-Null
@@ -213,11 +213,11 @@ if ($WasEnabled) {
 }
 ```
 
-An originally disabled task stays disabled; its operator chooses when to start it. Preserve the old version directory and `current.previous-0.1.3` junction through acceptance.
+An originally disabled task stays disabled; its operator chooses when to start it. Preserve the old version directory and `current.previous-0.1.6` junction through acceptance.
 
 ### Recover the previous package
 
-If acceptance fails, pause the service using the same platform steps. On POSIX, create `current.next` pointing to the recorded `OLD` directory and rename it over `current` with the same Node command, supplying the current 0.1.4 target as the expected old argument. On Windows, while the task is disabled and stopped, rename the new `current` junction to an unused `current.failed-0.1.4` name, then rename `current.previous-0.1.3` back to `current`. Start through the unchanged service definition and restore the task's previous enabled state.
+If acceptance fails, pause the service using the same platform steps. On POSIX, create `current.next` pointing to the recorded `OLD` directory and rename it over `current` with the same Node command, supplying the current 0.1.7 target as the expected old argument. On Windows, while the task is disabled and stopped, rename the new `current` junction to an unused `current.failed-0.1.7` name, then rename `current.previous-0.1.6` back to `current`. Start through the unchanged service definition and restore the task's previous enabled state.
 
 Keep profile, state and verified packages until the compatible recovery combination is confirmed. Once acceptance is complete, remove only the maintenance staging/config files that you created and retain the previous package according to your backup policy.
 

@@ -5,5 +5,5 @@ export const UI_BROWSER_STAGES = Object.freeze([
   "mobile_layout", "browser_close",
 ]);
 export const UI_BROWSER_NAVIGATION_STATES = Object.freeze([
-  "frame_pending", "document_pending", "locale_pending", "initialization_pending", "navigation_busy", "frame_changed", "context_changed", "deadline_exhausted",
+  "frame_pending", "location_pending", "document_pending", "locale_pending", "initialization_pending", "navigation_busy", "frame_changed", "context_changed", "deadline_exhausted",
 ]);
