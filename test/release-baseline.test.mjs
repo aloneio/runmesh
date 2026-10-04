@@ -64,6 +64,17 @@ test("unmerged main and candidate-only version bumps cannot become release basel
     assert.equal(f.calls.some(c => c[0] === "api" || c[0] === "verifyManifest"), false);
   }
 });
+
+test("only a complete candidate state identifies an expected stable publication window", async () => {
+  const candidate = fixture(); candidate.data.state = { version: candidate.data.version, state: "candidate", release_branch: "main" };
+  await assert.rejects(observeStableBaseline(candidate.sourceSha, candidate.io), { code: "stable_baseline_unpublished" });
+  assert.equal(candidate.calls.some(c => c[0] === "api" || c[0] === "verifyManifest"), false);
+  for (const changed of [{ version: "0.1.4" }, { release_branch: "dev" }, { state: "unknown" },
+    { release_commit: "c".repeat(40) }, { manifest_sha256: "f".repeat(64) }, { extra: true }]) {
+    const f = fixture(); f.data.state = { ...candidate.data.state, ...changed };
+    await assert.rejects(observeStableBaseline(f.sourceSha, f.io), { code: "stable_baseline_invalid" });
+  }
+});
 for (const [key, value] of [["tag_name", "v0.1.2"], ["draft", true], ["prerelease", true], ["immutable", false]]) test(`invalid latest stable ${key} is rejected`, async () => {
   const f = fixture(); f.data.release[key] = value; await assert.rejects(observeStableBaseline(f.sourceSha, f.io));
 });

@@ -292,6 +292,26 @@ test("uses a verified absolute Windows taskkill path for process-tree cleanup", 
   }
 });
 
+test("E2E wrapper exits promptly when its test process cannot spawn", async () => {
+  const f = await fixture();
+  try {
+    const scripts = join(f.root, "scripts");
+    await mkdir(scripts);
+    for (const name of ["run-e2e.mjs", "windows-tools.mjs"])
+      await writeFile(join(scripts, name), await readFile(join(repositoryRoot, "scripts", name)));
+    // Isolate provenance generation; the real wrapper and OS spawn failure
+    // still run in a separate Node process.
+    await writeFile(join(scripts, "build-provenance.mjs"), "export async function writeBuildProvenance() {}\n");
+    const preload = join(f.root, "missing-executable.mjs");
+    await writeFile(preload, `Object.defineProperty(process, "execPath", { value: ${JSON.stringify(join(f.root, "missing-node"))} });\n`);
+    await assert.rejects(execFileAsync(process.execPath, ["--import", pathToFileURL(preload).href, join(scripts, "run-e2e.mjs")], {
+      cwd: f.root, windowsHide: true, timeout: 5000,
+      env: { ...process.env, RUNMESH_E2E_TIMEOUT_MS: "30000" },
+    }), error => error.code === 1 && error.killed === false && /ENOENT/u.test(error.stderr)
+      && !/E2E tests did not finish/u.test(error.stderr));
+  } finally { await f.cleanup(); }
+});
+
 test("builds a single portable development artifact manifest from the product version", async () => {
   const f = await fixture();
   try {

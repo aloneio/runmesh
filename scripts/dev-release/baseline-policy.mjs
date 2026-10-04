@@ -4,6 +4,18 @@ const commit = /^[a-f0-9]{40}$/u, hash = /^[a-f0-9]{64}$/u;
 const stable = /^(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/u;
 export function baselineError(code, message) { return Object.assign(new Error(`${code}: ${message}`), { code }); }
 
+export function requirePublishedStableState(version, state) {
+  if (state?.version !== version || state.release_branch !== "main" || !["candidate", "released"].includes(state.state)) {
+    throw baselineError("stable_baseline_invalid", "main release state must match its version and release branch");
+  }
+  if (state.state === "candidate") {
+    if (Object.keys(state).sort().join(",") !== "release_branch,state,version") {
+      throw baselineError("stable_baseline_invalid", "candidate release state contains unexpected publication fields");
+    }
+    throw baselineError("stable_baseline_unpublished", "main has not completed reviewed stable publication");
+  }
+}
+
 export function validateStableReleaseProof(value) {
   assert.ok(value && typeof value === "object" && !Array.isArray(value), "published stable proof is required");
   assert.deepEqual(Object.keys(value).sort(), ["commit_sha", "manifest_sha256", "release_id"]);
@@ -16,9 +28,7 @@ export function validateStableReleaseProof(value) {
  * against a keyring read from the fixed main commit, never from the download. */
 export function stableBaseline({ mainSha, version, state, release, tag, manifest, manifestSha256, mainIncluded }) {
   assert.match(mainSha, commit); assert.match(version, stable);
-  if (state?.version !== version || state.state !== "released" || state.release_branch !== "main") {
-    throw baselineError("stable_baseline_unpublished", "main must have reviewed published-release evidence; a version bump alone is not a release");
-  }
+  requirePublishedStableState(version, state);
   if (mainIncluded !== true) throw baselineError("stable_baseline_not_in_dev", "sync the selected main baseline into dev through a reviewed merge before releasing");
   assert.ok(release && Number.isSafeInteger(release.id) && release.id > 0);
   assert.equal(release.tag_name, `v${version}`, "main and latest published stable version differ");

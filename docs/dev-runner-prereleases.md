@@ -41,9 +41,9 @@ The batch index continues across stable releases. If the verified stable baselin
 
 Each new batch verifies that main's version, latest immutable stable release, signed manifest and reviewed release-state record agree. The selected main commit must be an ancestor of the fixed dev source. Synchronize main into dev through a reviewed merge when this ancestry check fails.
 
-The first attempt records the source SHA/tree, main baseline, release identity, manifest hash, run ID, planned version and timestamp in a frozen plan. Actions retains that plan for 90 days. Retries use the same plan and version. An expired or missing plan requires maintainer investigation.
+When a verified stable baseline is available, the first attempt records the source SHA/tree, main baseline, release identity, manifest hash, run ID, planned version and timestamp in a frozen plan. Actions retains each planning outcome—plan or deferral—for 90 days. Retries reuse that outcome. An expired or missing record requires maintainer investigation.
 
-For the next stable version, follow the [release status and publication checklist](release-readiness.md). Dev release planning resumes after main's signed release has completed verification and activation.
+While main prepares a stable release, a due batch records a **deferred** outcome. Retries retain that decision, and independent CI continues to verify the source. After main's signed release completes verification and activation, the next due dev push can plan a new batch. Follow the [release status and publication checklist](release-readiness.md) for the stable release.
 
 ## Build and publish
 

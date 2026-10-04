@@ -1,14 +1,25 @@
 import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
 import { summarizeVitest } from "./test-evidence.mjs";
+import { UI_BROWSER_STAGES } from "./ui-browser-contract.mjs";
 
 export const REQUIRED_BROWSER_TEST = "renders stable single-locale dashboard and navigation in Chromium";
 const browserSources = ["ui-browser-check.mjs", "product-browser-check.mjs", "product-browser-fixture.mjs",
   "navigation-browser-check.mjs", "layout-browser-check.mjs", "runner-browser-check.mjs", "skill-upload-browser-check.mjs", "run-browser-e2e.mjs"];
 const browserOperations = ["Runtime.evaluate", "Page.navigate", "Page.getFrameTree", "Target.createTarget", "Target.attachToTarget",
-  "Page.enable", "Runtime.enable", "Network.enable", "Network.setCookies", "Network.setCookie", "Emulation.setDeviceMetricsOverride", "Browser.close"];
+  "Inspector.enable", "Page.enable", "Runtime.enable", "Network.enable", "Network.setCookies", "Network.setCookie", "Emulation.setDeviceMetricsOverride", "Browser.close"];
 const failureKinds = [
   [/Browser startup timed out/u, "browser_startup_timeout"],
+  [/Browser connection timed out/u, "browser_connection_timeout"],
+  [/Browser connection closed/u, "browser_connection_closed"],
+  [/Browser process exited/u, "browser_process_exited"],
+  [/Browser process failed/u, "browser_process_failed"],
+  [/Browser renderer crashed/u, "browser_renderer_crashed"],
+  [/Browser target detached/u, "browser_target_detached"],
+  [/Browser socket error/u, "browser_socket_error"],
+  [/Browser request send failed/u, "browser_send_failed"],
+  [/Browser protocol response invalid/u, "browser_protocol_invalid"],
+  [/Browser closed/u, "browser_closed"],
   [/Browser navigation readiness timed out/u, "browser_navigation_timeout"],
   [/Browser operation timed out/u, "browser_operation_timeout"],
   [/Execution context was destroyed|Cannot find (?:default execution context|context with specified id)|Inspected target navigated or closed/u, "navigation_context_lost"],
@@ -34,6 +45,8 @@ function failureDetails(messages) {
   }
   const operation = /Browser operation timed out: ([A-Za-z.]+)(?=$|[\s)])/mu.exec(text)?.[1];
   if (details.kind === "browser_operation_timeout" && browserOperations.includes(operation)) details.operation = operation;
+  const stage = /\(stage: ([a-z_]+)\)\r?$/mu.exec(text)?.[1];
+  if (details.kind.startsWith("browser_") && UI_BROWSER_STAGES.includes(stage)) details.stage = stage;
   return details;
 }
 

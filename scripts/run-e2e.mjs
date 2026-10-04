@@ -37,6 +37,11 @@ const timeoutTimer = setTimeout(() => {
 }, timeoutMs);
 
 child.once("error", (error) => {
+  // A failed spawn emits close, but not exit. Do not keep the gate alive until
+  // its full test budget when there is no child process to wait for.
+  clearTimeout(timeoutTimer);
+  clearTimeout(stopTimer);
+  clearTimeout(forceExitTimer);
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   process.exitCode = 1;
 });

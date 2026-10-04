@@ -1,11 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFile, writeFile, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { readFile, writeFile, mkdir, mkdtemp, readdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { parse } from "yaml";
-import { DEV_RELEASE_INTERVAL, releaseCadence, nextDevVersion, createDevPlan, validateDevPlan, assertPlanContext } from "../scripts/dev-release/policy.mjs";
+import { DEV_RELEASE_INTERVAL, releaseCadence, nextDevVersion, createDevPlan, validateDevPlan, assertPlanContext, validateDevDeferral } from "../scripts/dev-release/policy.mjs";
+import { baselineError } from "../scripts/dev-release/baseline-policy.mjs";
+import { prepareDevelopmentPlan } from "../scripts/dev-release/plan.mjs";
 import { devAssetNames, planMessage, publishDevelopmentRelease } from "../scripts/dev-release/publisher.mjs";
 import { githubJson } from "../scripts/dev-release/github.mjs";
 import { buildManifest, buildDevelopmentManifest } from "../scripts/release-manifest.mjs";
@@ -16,6 +18,88 @@ import { readPlan } from "../scripts/dev-release/io.mjs";
 const plan = () => createDevPlan({ source_sha: "a".repeat(40), source_tree: "b".repeat(40), stable_sha: "c".repeat(40), stable_version: "0.1.3", stable_release: { release_id: 9, commit_sha: "c".repeat(40), manifest_sha256: "f".repeat(64) }, push_number: 5, run_id: 123, published_at: "2026-09-16T00:00:00Z" });
 const env = () => ({ GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/heads/dev", GITHUB_REPOSITORY: "aloneio/runmesh", GITHUB_SHA: "a".repeat(40), GITHUB_RUN_NUMBER: "5", GITHUB_RUN_ID: "123" });
 async function temp(t) { const dir = await mkdtemp(join(tmpdir(), "runmesh-dev-release-test-")); t.after(() => rm(dir, { recursive: true, force: true })); return dir; }
+
+async function planningFixture(t, deferred = false) {
+  const directory = await temp(t), p = plan(); let observations = 0;
+  const ports = { directory,
+    git: async (...args) => {
+      if (args.join(" ") === "rev-parse HEAD^{tree}") return p.source_tree;
+      assert.deepEqual(args, ["show", "-s", "--format=%ct", p.source_sha]); return String(Date.parse(p.published_at) / 1000);
+    },
+    observeStableBaseline: async source => {
+      assert.equal(source, p.source_sha); observations++;
+      if (deferred) throw baselineError("stable_baseline_unpublished", "main awaits publication");
+      return { stable_sha: p.stable_sha, stable_version: p.stable_version, stable_release: p.stable_release };
+    },
+    assertSource: async value => { assert.equal(value.source_sha, p.source_sha); assert.equal(value.source_tree, p.source_tree); },
+  };
+  return { directory, ports, observations: () => observations,
+    run: (attempt = 1, changed = {}) => prepareDevelopmentPlan({ ...env(), GITHUB_RUN_ATTEMPT: String(attempt), ...changed }, ports) };
+}
+
+test("ready development planning persists the exact plan and reuses it without a new baseline observation", async t => {
+  const f = await planningFixture(t), first = await f.run();
+  assert.deepEqual(first, { ready: true, plan: plan() });
+  assert.deepEqual(await readdir(f.directory), ["plan.json"]);
+  const saved = await readFile(join(f.directory, "plan.json"), "utf8");
+  f.ports.observeStableBaseline = async () => { throw new Error("main is now candidate; the frozen plan remains unchanged"); };
+  assert.deepEqual(await f.run(2), first);
+  assert.equal(await readFile(join(f.directory, "plan.json"), "utf8"), saved);
+  assert.equal(f.observations(), 1);
+});
+
+test("an unpublished stable window freezes a deferred outcome without reserving a plan or version", async t => {
+  const f = await planningFixture(t, true), first = await f.run();
+  assert.equal(first.ready, false); assert.deepEqual(await readdir(f.directory), ["deferred.json"]);
+  assert.deepEqual(validateDevDeferral(first.deferred), first.deferred);
+  assert.equal(first.deferred.reason, "stable_baseline_unpublished");
+  assert.equal(Object.hasOwn(first.deferred, "version"), false); assert.equal(Object.hasOwn(first.deferred, "tag"), false);
+  const saved = await readFile(join(f.directory, "deferred.json"), "utf8");
+  f.ports.observeStableBaseline = async () => { throw new Error("must not reobserve even after main is released"); };
+  assert.deepEqual(await f.run(2), first); assert.equal(f.observations(), 1);
+  assert.equal(await readFile(join(f.directory, "deferred.json"), "utf8"), saved);
+  await assert.rejects(f.run(1), /already exists/u);
+});
+
+test("API, signature, ancestry and malformed baseline errors remain failed planning attempts", async t => {
+  for (const code of ["stable_baseline_invalid", "stable_baseline_not_in_dev", "http_403", "signature_invalid"]) {
+    const f = await planningFixture(t); f.ports.observeStableBaseline = async () => { throw baselineError(code, "failure"); };
+    await assert.rejects(f.run(), { code }); assert.deepEqual(await readdir(f.directory), []);
+  }
+});
+
+test("source validation failure leaves no ready or deferred planning outcome", async t => {
+  for (const deferred of [false, true]) {
+    const f = await planningFixture(t, deferred);
+    f.ports.assertSource = async () => { throw new Error("source checkout is dirty or does not match the recorded tree"); };
+    await assert.rejects(f.run(), /source checkout/u);
+    assert.deepEqual(await readdir(f.directory), []);
+  }
+});
+
+test("first planning attempt rejects a mismatched repository, branch or source before saving", async t => {
+  for (const deferred of [false, true]) {
+    for (const changed of [{ GITHUB_REPOSITORY: "fork/runmesh" }, { GITHUB_REF: "refs/heads/main" }, { GITHUB_SHA: "d".repeat(40) }]) {
+      const f = await planningFixture(t, deferred);
+      await assert.rejects(f.run(1, changed)); assert.deepEqual(await readdir(f.directory), []);
+    }
+  }
+});
+
+test("deferred retries require one intact outcome bound to the source, branch, repository and run", async t => {
+  const empty = await planningFixture(t); await assert.rejects(empty.run(2), /exactly one/u);
+  const both = await planningFixture(t, true); await both.run();
+  await writeFile(join(both.directory, "plan.json"), JSON.stringify(plan()));
+  await assert.rejects(both.run(2), /exactly one/u);
+  const f = await planningFixture(t, true), first = await f.run(), file = join(f.directory, "deferred.json");
+  for (const changed of [{ repository: "fork/runmesh" }, { ref: "refs/heads/main" }, { source_sha: "d".repeat(40) },
+    { source_tree: "e".repeat(40) }, { run_id: 124 }, { push_number: 10 }, { reason: "http_503" }, { version: "0.1.4-dev.0" }]) {
+    await writeFile(file, JSON.stringify({ ...first.deferred, ...changed })); await assert.rejects(f.run(2));
+  }
+  for (const text of ["{invalid", " ".repeat(4097)]) { await writeFile(file, text); await assert.rejects(f.run(2)); }
+  await rm(file); await mkdir(file); await assert.rejects(f.run(2));
+  assert.equal(f.observations(), 1);
+});
 
 test("only every fifth dedicated push is due; attempts and commit counts are irrelevant", () => {
   assert.equal(DEV_RELEASE_INTERVAL, 5);
@@ -183,6 +267,12 @@ test("workflow is dev-push-only, counts independently, isolates signing and reta
   assert.deepEqual(workflow.on, { push: { branches: ["dev"] } });
   assert.equal(workflow.permissions.contents, "read"); assert.ok(workflow.concurrency.group.includes("github.run_id")); assert.equal(workflow.concurrency["cancel-in-progress"], false);
   assert.equal(workflow.jobs.plan.if, "needs.cadence.outputs.due == 'true'");
+  assert.equal(workflow.jobs.plan.outputs.ready, "${{ steps.plan.outputs.ready }}");
+  for (const job of ["verification", "build", "publish"]) assert.equal(workflow.jobs[job].if, "needs.plan.outputs.ready == 'true'");
+  const outcomeArtifact = workflow.jobs.plan.steps.find(step => step.uses?.startsWith("actions/upload-artifact@"));
+  assert.equal(outcomeArtifact.if, "github.run_attempt == 1");
+  assert.deepEqual(outcomeArtifact.with.path.trim().split(/\r?\n/u), [".dev-release/plan.json", ".dev-release/deferred.json"]);
+  assert.equal(outcomeArtifact.with["if-no-files-found"], "error"); assert.equal(outcomeArtifact.with.overwrite, false);
   assert.equal(workflow.jobs.verification.uses, "./.github/workflows/ci.yml"); assert.equal(workflow.jobs.verification.with.release_verification, true);
   assert.deepEqual(workflow.jobs.publish.needs, ["plan", "verification", "build"]); assert.equal(workflow.jobs.publish.environment, "dev-release");
   assert.equal(workflow.jobs.publish.permissions.contents, "write");
