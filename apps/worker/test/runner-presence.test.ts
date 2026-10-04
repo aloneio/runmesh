@@ -92,6 +92,6 @@ it.each(["offline", "stale"] as const)("keeps runner_current and runner_list val
   // It must not be confused with a successfully authenticated offline Runner.
   expect(denied.status).toBe(404);
   expect(denied.headers.get("content-type")).toContain("application/json");
-  expect(await denied.json()).toMatchObject({ jsonrpc: "2.0", id: null, error: { code: -32000 } });
+  expect(await denied.json()).toMatchObject({ jsonrpc: "2.0", id: "runner_current", error: { code: -32000 } });
   expect(dispatch).not.toHaveBeenCalled();
 });
