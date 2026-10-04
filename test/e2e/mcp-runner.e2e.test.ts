@@ -996,7 +996,10 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
       headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
       body: JSON.stringify({ jsonrpc: "2.0", id: requestId++, method: "tools/call", params: { name, arguments: args } }),
     });
-    expect(response.status).toBe(200);
+    if (response.status !== 200) {
+      void response.body?.cancel().catch(() => undefined);
+      throw new Error(`RUNMESH_E2E_MCP_HTTP_STATUS=${response.status}`);
+    }
     return readMcp(response);
   }
 

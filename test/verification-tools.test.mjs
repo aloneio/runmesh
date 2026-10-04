@@ -102,6 +102,21 @@ test("colored browser failure stacks retain safe assertion locations", () => {
   assert.ok(!JSON.stringify(summary).includes("private"));
 });
 
+test("MCP HTTP failures retain only a bounded status from the exact fixed marker", () => {
+  for (const status of [100, 429, 502, 503, 599]) {
+    const summary = browserFailureEvidence({ testResults: [{ assertionResults: [{ status: "failed", failureMessages: [
+      `\u001b[31mError: RUNMESH_E2E_MCP_HTTP_STATUS=${status}\u001b[39m\r\n    at mcpMessage (/private/test/e2e/mcp-runner.e2e.test.ts:1001:13)\nprivate-cookie private-response`,
+    ] }] }] });
+    assert.deepEqual(summary.failures, [{ test_index: 1, required_browser_check: false, kind: "mcp_http_failure", http_status: status,
+      location: { file: "test/e2e/mcp-runner.e2e.test.ts", line: 1001, column: 13 } }]);
+    assert.ok(!JSON.stringify(summary).includes("private"));
+  }
+  assert.deepEqual(browserErrorDiagnostic(new Error("RUNMESH_E2E_MCP_HTTP_STATUS=503")), { kind: "mcp_http_failure", http_status: 503 });
+  for (const marker of ["99", "600", "0503", "5030", "503.1", "503 private-token", "503?cookie=private-token", "private-response"])
+    assert.deepEqual(browserErrorDiagnostic({ message: "RUNMESH_E2E_MCP_HTTP_STATUS=" + marker }), { kind: "unclassified" });
+  assert.deepEqual(browserErrorDiagnostic({ message: "private-response RUNMESH_E2E_MCP_HTTP_STATUS=503" }), { kind: "unclassified" });
+});
+
 test("direct browser failures use optional error stacks and retain only allowlisted source coordinates", () => {
   const error = { code: "ERR_ASSERTION", message: "private-response", stack: "AssertionError: private-token\n    at check (C:\\private\\scripts\\product-browser-check.mjs:108:10)" };
   assert.deepEqual(browserErrorDiagnostic(error), { kind: "assertion_failed", location: { file: "scripts/product-browser-check.mjs", line: 108, column: 10 } });
