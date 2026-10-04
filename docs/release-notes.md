@@ -2,9 +2,9 @@
 
 [Chinese](release-notes.zh-CN.md) · [Documentation](README.md) · [Upgrade guide](upgrading.md)
 
-## 0.1.6 — release candidate
+## 0.1.6 — published stable release
 
-This candidate is being prepared for release; the current stable package remains 0.1.5. Try the candidate in the development environment and follow [release status](release-readiness.md) for publication.
+Runmesh 0.1.6 is published as an [immutable stable release](https://github.com/aloneio/runmesh/releases/tag/v0.1.6) with a signed portable Runner package. The public package has been independently verified. See [release status](release-readiness.md) for deployment and upgrade steps.
 
 ### MCP and Skill
 
@@ -22,11 +22,11 @@ This candidate is being prepared for release; the current stable package remains
 - Git checks identify concurrent workspace changes more consistently and catch invalid timeout settings before starting a command.
 - English and Chinese guides now separate MCP/Skill setup from computer access, with direct instructions for OAuth, Skill updates and version selection.
 
-### Upgrade preparation
+### Upgrade
 
-The candidate adds shared MCP connections and Skills to production deployments. Preserve the existing deployment secrets so connected OAuth accounts retain their credentials. Install the signed release after publication and activation, then refresh client catalogs using the [upgrade guide](upgrading.md).
+Runmesh 0.1.6 adds shared MCP connections and Skills. Preserve the existing deployment secrets so connected OAuth accounts retain their credentials. Deploy the reviewed release activation, install the signed Runner package and refresh client catalogs using the [upgrade guide](upgrading.md).
 
-Development downloads continue on their current prerelease series during candidate preparation. The next patch series starts after stable publication is recorded.
+Recording the stable release starts the next patch series for development downloads. Existing prereleases retain their original version and contents.
 
 ## 0.1.5 — published stable release
 

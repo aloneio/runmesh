@@ -6,11 +6,11 @@ For a compatible protocol-v2 upgrade, keep the current Worker, Durable Object na
 
 ## Choose the target version
 
-The 0.1.6 candidate shares enabled MCP tools and active Skills with every valid client in the instance. Review the shared collection and intended client access before upgrading a development instance. After deployment, refresh client catalogs and Skill versions. To stop one client's access, revoke its credential; to stop sharing an MCP or Skill, pause it in the control panel. Computer access keeps its Runner and workspace permissions. See the [MCP and Skill guide](central-administration.md).
+Runmesh 0.1.6 shares enabled MCP tools and active Skills with every valid client in the instance. Review the shared collection and intended client access before upgrading. After deployment, refresh client catalogs and Skill versions. To stop one client's access, revoke its credential; to stop sharing an MCP or Skill, pause it in the control panel. Computer access keeps its Runner and workspace permissions. See the [MCP and Skill guide](central-administration.md).
 
 Read the [release notes](release-notes.md) and [release status](release-readiness.md). Production upgrades use published, independently verified signed packages; candidate and development prereleases belong in a separate test environment.
 
-For the 0.1.6 candidate, rehearse the production MCP and Skill bindings alongside the existing Registry and Runner namespaces. Retain both existing secrets and resource identities; OAuth encryption automatically uses `INTERNAL_CONTROL_SECRET` without another variable. Schedule the production upgrade after the signed release is published and activated. The 0.1.3-to-0.1.4 procedure below is a historical example of the managed service update steps.
+For 0.1.6, include the MCP and Skill production bindings alongside the existing Registry and Runner namespaces. Retain both existing secrets and resource identities; OAuth encryption uses `INTERNAL_CONTROL_SECRET`. Deploy the reviewed release activation and verify the running Worker before updating Runners. The 0.1.3-to-0.1.4 procedure below is a historical example of the managed service update steps.
 
 Plan these updates separately:
 

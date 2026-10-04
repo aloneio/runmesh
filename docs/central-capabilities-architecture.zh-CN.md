@@ -2,7 +2,7 @@
 
 [English](central-capabilities-architecture.md)
 
-当前开发版本采用实例共享能力库：同一实例内，所有通过身份验证且凭证有效的客户端，都可使用已启用、已发布的 MCP 工具和当前 Skill。管理员在控制台连接服务、安装 Skill，无需再逐客户端分配能力。生产启用仍须满足[发布门槛](central-rollout.md)。
+Runmesh 0.1.6 采用实例共享能力库：同一实例内，所有通过身份验证且凭证有效的客户端，都可使用已启用、已发布的 MCP 工具和当前 Skill。管理员在控制台连接服务、安装 Skill，无需再逐客户端分配能力。[发布记录](central-rollout.md)汇总部署与验收证据。
 
 ## 所有权与依赖方向
 

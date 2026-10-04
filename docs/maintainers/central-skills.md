@@ -1,4 +1,4 @@
-# Shared Skill content (development)
+# Shared Skill content
 
 > Maintainer reference: interfaces, protocol and verification boundaries. For everyday use, see the [user guide](../central-skills.md).
 
@@ -20,7 +20,7 @@ Preview does not write. Stage does not publish; activate publishes the selected
 digest. Source/license are optional metadata in the normal install flow.
 
 CAPABILITIES and CENTRAL_SKILLS_ENABLED=1 enable these optional surfaces.
-Development enables them. The 0.1.6 candidate includes them in production configuration; production promotion remains separate. Central
+Runmesh 0.1.6 includes them in both development and production source configurations. See [release status](../release-readiness.md) for deployment and upgrade steps. Central
 discovery revalidates the client credential; a failed lookup preserves native
 tools. Native-only calls do not resolve central storage. Native Runner access is
 independent and is never granted by Skill content, allowed-tools or annotations.

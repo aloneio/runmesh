@@ -2,7 +2,7 @@
 
 [简体中文](central-skills.zh-CN.md) · [MCP and Skill guide](central-administration.md)
 
-Install a Skill's instructions and supporting text files once, then make them available to your connected AI clients. This guide covers the 0.1.6 candidate and development channel.
+Install a Skill's instructions and supporting text files once, then make them available to your connected AI clients. This guide covers Runmesh 0.1.6.
 
 ## Prepare the files
 

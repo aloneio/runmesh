@@ -27,9 +27,9 @@ Runmesh 把 ChatGPT、Claude、Cursor 等支持 MCP 的客户端连接到你自�
 - 让 AI 辅助维护家庭服务器、开发机或 CI 主机；
 - 为团队提供统一的 MCP 接入地址，同时保留每台机器的本地控制权；
 - 运行测试、构建和其他可能持续数分钟甚至数小时的任务；
-- 管理多个 Runner，并限制每个客户端可以使用的机器、目录和能力。
+- 管理多个 Runner 及其工作区，按客户端设置计算机权限，并可按需限定 Runner 访问。
 
-0.1.6 候选版本还将 MCP 连接与 Skill 安装集成到控制端。填写 MCP 地址并选择身份验证方式，或安装一个 Skill 文件夹，即可通过 AI 客户端使用共享内容。详见[MCP 和 Skill 指南](docs/central-administration.zh-CN.md)与[发行状态](docs/release-readiness.md)。
+Runmesh 0.1.6 将 MCP 连接与 Skill 安装集成到控制端。填写 MCP 地址并选择身份验证方式，或安装一个 Skill 文件夹，即可通过 AI 客户端使用共享内容。详见[MCP 和 Skill 指南](docs/central-administration.zh-CN.md)与[发行状态](docs/release-readiness.md)。
 
 ## 开始使用
 

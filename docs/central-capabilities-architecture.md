@@ -2,7 +2,7 @@
 
 [简体中文](central-capabilities-architecture.zh-CN.md)
 
-Current development behavior: every valid authenticated client in an instance shares the enabled, published MCP tools and active Skills. Administrators connect MCP services and install Skills in the control panel. Clients do not need individual capability assignments. Production activation remains subject to the [rollout gates](central-rollout.md).
+Runmesh 0.1.6 behavior: every valid authenticated client in an instance shares the enabled, published MCP tools and active Skills. Administrators connect MCP services and install Skills in the control panel. Clients do not need individual capability assignments. The [rollout ledger](central-rollout.md) records deployment and acceptance evidence.
 
 ## Ownership and dependency direction
 

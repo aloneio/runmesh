@@ -2,7 +2,7 @@
 
 [简体中文](central-administration.zh-CN.md) · [Documentation](README.md)
 
-Connect MCP services and install Skills in **MCP & Skill** at `/admin/central`. Then add your AI client to use the shared collection. These features are available in the 0.1.6 candidate and development channel; see [release status](release-readiness.md) for the current production version.
+Connect MCP services and install Skills in **MCP & Skill** at `/admin/central`. Then add your AI client to use the shared collection. These features are available in Runmesh 0.1.6; see [release status](release-readiness.md) for signed packages and deployment and upgrade steps.
 
 ## Set up your collection
 
