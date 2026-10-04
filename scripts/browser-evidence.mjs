@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { stripVTControlCharacters } from "node:util";
 import { summarizeVitest } from "./test-evidence.mjs";
-import { UI_BROWSER_STAGES } from "./ui-browser-contract.mjs";
+import { UI_BROWSER_STAGES, UI_BROWSER_NAVIGATION_STATES } from "./ui-browser-contract.mjs";
 import { jobCompletionDiagnostic, mcpHttpDiagnostic } from "./mcp-diagnostics.mjs";
 
 export const REQUIRED_BROWSER_TEST = "renders stable single-locale dashboard and navigation in Chromium";
@@ -57,6 +57,8 @@ function failureDetails(messages) {
   if (details.kind === "browser_operation_timeout" && browserOperations.includes(operation)) details.operation = operation;
   const stage = /\(stage: ([a-z_]+)\)\r?$/mu.exec(text)?.[1];
   if (details.kind.startsWith("browser_") && UI_BROWSER_STAGES.includes(stage)) details.stage = stage;
+  const navigationState = /^RUNMESH_E2E_UI_NAVIGATION_STATE=([a-z_]+) \(stage: [a-z_]+\)\r?$/mu.exec(text)?.[1];
+  if (details.kind === "browser_navigation_timeout" && UI_BROWSER_NAVIGATION_STATES.includes(navigationState)) details.navigation_state = navigationState;
   return details;
 }
 

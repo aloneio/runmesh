@@ -123,8 +123,9 @@ export function createUiBrowserProtocol(socket, child, { onEvent = () => {}, sta
  };
 }
 /** A ready previous document is not evidence that the requested navigation finished. */
-export async function waitForUiNavigation(tab, expected, { now = Date.now, pause = sleep } = {}) {
+export async function waitForUiNavigation(tab, expected, { now = Date.now, pause = sleep, stage = "browser_setup" } = {}) {
  const deadline = now() + 5000, url = new URL(expected.url).href;
+ let navigationState = "frame_pending";
  const read = (method, params) => tab(method, params, Math.max(1, deadline - now()));
  const matchesFrame = frame => frame?.url === url
   && (expected.frameId === undefined || frame.id === expected.frameId)
@@ -132,24 +133,32 @@ export async function waitForUiNavigation(tab, expected, { now = Date.now, pause
  while (now() < deadline) {
   try {
    const { frameTree } = await read("Page.getFrameTree");
+   navigationState = "frame_pending";
    if (matchesFrame(frameTree.frame)) {
     const value = await read("Runtime.evaluate", {
-     expression: "({url:location.href,locale:document.documentElement?.lang,ready:document.readyState==='complete'&&document.documentElement?.getAttribute('data-runmesh-navigation')==='ready'&&document.documentElement?.getAttribute('data-runmesh-navigation-busy')!=='true'})",
+     expression: "({url:location.href,locale:document.documentElement?.lang,complete:document.readyState==='complete',initialized:document.documentElement?.getAttribute('data-runmesh-navigation')==='ready',busy:document.documentElement?.getAttribute('data-runmesh-navigation-busy')==='true'})",
      returnByValue: true,
     });
     if (value.exceptionDetails) throw new Error("Browser navigation readiness evaluation failed");
     const state = value.result?.value;
-    if (state?.url === url && state.locale === expected.locale && state.ready === true) {
+    navigationState = state?.url !== url ? "frame_changed" : state.locale !== expected.locale ? "locale_pending"
+     : state.complete !== true ? "document_pending" : state.initialized !== true ? "initialization_pending"
+     : state.busy !== false ? "navigation_busy" : "frame_changed";
+    if (state?.url === url && state.locale === expected.locale && state.complete === true && state.initialized === true && state.busy === false) {
      const current = (await read("Page.getFrameTree")).frameTree.frame;
-     if (matchesFrame(current) && current.loaderId === frameTree.frame.loaderId && now() < deadline) return;
+     if (matchesFrame(current) && current.loaderId === frameTree.frame.loaderId) {
+      if (now() < deadline) return;
+      navigationState = "deadline_exhausted";
+     }
     }
    }
   } catch (error) {
    if (error?.code !== -32000 || !navigationContextErrors.has(error.message)) throw error;
+   navigationState = "context_changed";
   }
   await pause(Math.min(50, Math.max(0, deadline - now())));
  }
- throw new Error("Browser navigation readiness timed out after 5000 ms");
+ throw browserError(`Browser navigation readiness timed out after 5000 ms\nRUNMESH_E2E_UI_NAVIGATION_STATE=${navigationState}`, stage);
 }
 /** Isolated local-test browser only. Never opens a user's browser profile. */
 export async function checkUiWithChromium(origin,cookie,output){
@@ -175,7 +184,7 @@ export async function checkUiWithChromium(origin,cookie,output){
    stage="dashboard_navigation";
    const url=`${origin}/admin?lang=${locale}`, navigation=await tab("Page.navigate",{url});
    assert.equal(navigation.errorText,undefined);assert.ok(navigation.loaderId);
-   await waitForUiNavigation(tab,{url,locale,frameId:navigation.frameId,loaderId:navigation.loaderId});
+   await waitForUiNavigation(tab,{url,locale,frameId:navigation.frameId,loaderId:navigation.loaderId},{stage});
    stage="dashboard_initial";
    const first=await evaluate(`(()=>{const panel=[...document.querySelectorAll('.panel')].find(p=>/^(Your AI connections|你的 AI 连接|Recent jobs|最近任务)$/.test(p.querySelector('h2')?.textContent||''));if(!panel)throw Error('Missing dashboard activity panel');window.__uiPanel=panel;window.__uiMutations=0;new MutationObserver(m=>window.__uiMutations+=m.length).observe(panel,{childList:true,subtree:true,characterData:true,attributes:true});const r=panel.getBoundingClientRect();return {lang:document.documentElement.lang,heading:panel.querySelector('h2').textContent,text:panel.textContent,top:r.top,height:r.height,opacity:getComputedStyle(panel).opacity}})()`);
    const requestsBefore=requests.length;await sleep(1000);stage="dashboard_idle";
@@ -187,14 +196,14 @@ export async function checkUiWithChromium(origin,cookie,output){
    // Exercise mounted SPA navigation and an explicit refresh in the selected locale.
    stage="clients_navigation";
    await evaluate("document.querySelector('.control-nav a[href=\"/admin/clients\"]').click()");
-   await waitForUiNavigation(tab,{url:`${origin}/admin/clients`,locale});
+   await waitForUiNavigation(tab,{url:`${origin}/admin/clients`,locale},{stage});
    stage="clients_details";
    console.log(JSON.stringify({browser_navigation:await evaluate("({path:location.pathname,title:document.title,heading:document.querySelector('h1')?.textContent,nav:!!document.querySelector('.control-nav'),locale:document.documentElement.lang})")}));
    assert.equal(await evaluate("location.pathname"),"/admin/clients");
    assert.equal(await evaluate("document.documentElement.lang"),locale);
    stage="dashboard_return";
    await evaluate("document.querySelector('.control-nav a[href=\"/admin\"]').click()");
-   await waitForUiNavigation(tab,{url:`${origin}/admin`,locale});
+   await waitForUiNavigation(tab,{url:`${origin}/admin`,locale},{stage});
    stage="dashboard_headings";
    const labels=await evaluate("[...document.querySelectorAll('h2')].map(h=>h.textContent)");assert.ok(labels.includes(first.heading));
   }
@@ -203,7 +212,7 @@ export async function checkUiWithChromium(origin,cookie,output){
   stage="locale_navigation";
   await tab("Network.setCookie",{name:"runmesh_lang",value:"en",url:origin,path:"/"});
   await evaluate("document.querySelector('.control-nav a[href=\"/admin/clients\"]').click()");
-  await waitForUiNavigation(tab,{url:`${origin}/admin/clients`,locale:"en"});
+  await waitForUiNavigation(tab,{url:`${origin}/admin/clients`,locale:"en"},{stage});
   stage="locale_details";
   assert.equal(await evaluate("document.documentElement.lang"),"en");
   stage="mobile_layout";
