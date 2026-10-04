@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { checkDomainImports, inventoryTests, validateTestPlan, validateTestWiring } from "../scripts/verification-plan.mjs";
 import { summarizeVitest, packageEvidence } from "../scripts/test-evidence.mjs";
-import { browserFailureEvidence, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
+import { browserFailureEvidence, browserErrorDiagnostic, REQUIRED_BROWSER_TEST } from "../scripts/browser-evidence.mjs";
 import { renderExamples, renderFacts, validateExampleCoverage, verifyDocReferences } from "../scripts/project-facts.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -56,16 +56,70 @@ test("format gate reads quoted Git paths and untracked browser sources", async t
   assert.ok(run().stderr.includes("new browser.js: invalid UTF-8"));
 });
 
-test("failed browser diagnostics retain only status counts and the required check state", () => {
+test("failed browser diagnostics retain status counts without copying private reporter values", () => {
   const summary = browserFailureEvidence({ testResults: [{ name: "/private/source", assertionResults: [
     { title: REQUIRED_BROWSER_TEST, status: "failed", failureMessages: ["cookie=private-token"] },
     { title: "private fixture", status: "passed", failureMessages: ["private stdout"] },
     { status: "pending" },
   ] }] });
-  assert.deepEqual(summary, { report_available: true, required_browser_checks: 1, required_browser_status: "failed", failed_tests: 1, skipped_tests: 1 });
+  assert.deepEqual(summary, { report_available: true, required_browser_checks: 1, required_browser_status: "failed", failed_tests: 1, skipped_tests: 1,
+    failures: [{ test_index: 1, required_browser_check: true, kind: "unclassified" }], truncated: false });
   assert.ok(!JSON.stringify(summary).includes("private"));
   assert.deepEqual(browserFailureEvidence(undefined), { report_available: false });
   assert.equal(browserFailureEvidence({ testResults: [{ assertionResults: [{ title: REQUIRED_BROWSER_TEST, status: "private-token" }] }] }).required_browser_status, "unknown");
+});
+
+test("browser failure messages preserve the failing assertion location without its values or absolute path", () => {
+  const raw = { testResults: [{ assertionResults: [{ title: REQUIRED_BROWSER_TEST, status: "failed", failureMessages: [
+    "AssertionError [ERR_ASSERTION]: Expected private-cookie to equal private-token\n    at checkUiWithChromium (/private/build/scripts/ui-browser-check.mjs:63:17)\n    at /private/build/test/e2e/mcp-runner.e2e.test.ts:597:5",
+  ] }] }] };
+  const summary = browserFailureEvidence(raw);
+  assert.deepEqual(summary.failures, [{ test_index: 1, required_browser_check: true, kind: "assertion_failed",
+    location: { file: "scripts/ui-browser-check.mjs", line: 63, column: 17 } }]);
+  assert.ok(!JSON.stringify(summary).includes("private"));
+});
+
+test("browser diagnostic classes distinguish navigation, startup, operation and test timeouts", () => {
+  for (const [message, kind] of [
+    ["Browser startup timed out", "browser_startup_timeout"],
+    ["Browser navigation readiness timed out after 5000 ms", "browser_navigation_timeout"],
+    ["Execution context was destroyed.", "navigation_context_lost"],
+    ["Cannot find context with specified id", "navigation_context_lost"],
+    ["Test timed out in 45000ms", "test_timeout"], ["Hook timed out in 30000ms", "hook_timeout"],
+  ]) assert.equal(browserErrorDiagnostic(new Error(message + " private-cookie")).kind, kind);
+  assert.deepEqual(browserErrorDiagnostic(new Error("Browser operation timed out: Runtime.evaluate\nprivate-token")),
+    { kind: "browser_operation_timeout", operation: "Runtime.evaluate" });
+  assert.deepEqual(browserErrorDiagnostic(new Error("Browser operation timed out: private.token")), { kind: "browser_operation_timeout" });
+  assert.equal(browserErrorDiagnostic({ code: -32000, message: "Execution context was destroyed." }).kind, "navigation_context_lost");
+});
+
+test("colored browser failure stacks retain safe assertion locations", () => {
+  const summary = browserFailureEvidence({ testResults: [{ assertionResults: [{ title: REQUIRED_BROWSER_TEST, status: "failed", failureMessages: [
+    "\u001b[31mAssertionError\u001b[39m: private-cookie\n    at check (\u001b[36m/private/build/scripts/ui-browser-check.mjs\u001b[39m:\u001b[33m63:17\u001b[39m)",
+  ] }] }] });
+  assert.deepEqual(summary.failures, [{ test_index: 1, required_browser_check: true, kind: "assertion_failed",
+    location: { file: "scripts/ui-browser-check.mjs", line: 63, column: 17 } }]);
+  assert.ok(!JSON.stringify(summary).includes("private"));
+});
+
+test("direct browser failures use optional error stacks and retain only allowlisted source coordinates", () => {
+  const error = { code: "ERR_ASSERTION", message: "private-response", stack: "AssertionError: private-token\n    at check (C:\\private\\scripts\\product-browser-check.mjs:108:10)" };
+  assert.deepEqual(browserErrorDiagnostic(error), { kind: "assertion_failed", location: { file: "scripts/product-browser-check.mjs", line: 108, column: 10 } });
+  assert.deepEqual(browserErrorDiagnostic({ message: "private-cookie", stack: "at /private/scripts/private-token.mjs:123:456" }), { kind: "unclassified" });
+  assert.deepEqual(browserErrorDiagnostic({ code: 1, stdout: "private-token", stderr: "private-cookie" }), { kind: "process_exit" });
+  assert.deepEqual(browserErrorDiagnostic(undefined), { kind: "unclassified" });
+});
+
+test("browser diagnostics bound retained failures and message inspection", () => {
+  const summary = browserFailureEvidence({ testResults: [{ assertionResults: Array.from({ length: 40 }, () => ({
+    status: "failed", title: "private-title", failureMessages: ["private-response"],
+  })) }] });
+  assert.equal(summary.failed_tests, 40); assert.equal(summary.failures.length, 16); assert.equal(summary.truncated, true);
+  assert.ok(JSON.stringify(summary).length < 4096); assert.ok(!JSON.stringify(summary).includes("private"));
+  const messages = Array.from({ length: 8 }, () => " ".repeat(16384));
+  messages.push("AssertionError at /private/scripts/ui-browser-check.mjs:1:1");
+  const bounded = browserFailureEvidence({ testResults: [{ assertionResults: [{ status: "failed", failureMessages: messages }] }] });
+  assert.deepEqual(bounded.failures, [{ test_index: 1, required_browser_check: false, kind: "unclassified" }]);
 });
 
 test("AR08 architecture references cannot name missing source paths", async () => {

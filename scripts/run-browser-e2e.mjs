@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { mkdtemp, readFile, lstat, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { browserEvidence, browserFailureEvidence } from "./browser-evidence.mjs";
+import { browserEvidence, browserFailureEvidence, browserErrorDiagnostic } from "./browser-evidence.mjs";
 import { writeSupplement } from "./ci-supplement.mjs";
 import { ROOT, gateEvidence, sourceObservation, writeGateReport } from "./ci-report.mjs";
 
@@ -38,13 +38,14 @@ try {
   await writeSupplement("browser-tests", { schema_version: 1, evidence: "real_local_browser_e2e", attestation: "self_reported", source, ...evidence, runtime: { node: process.version, platform: process.platform, arch: process.arch }, production: "not_run" });
   console.log(JSON.stringify({ browser_gate: "passed", guided_product: guidedProduct, ...evidence })); code = 0;
 } catch (error) {
-  // Do not publish subprocess stderr, raw reports, cookies, or screenshots.
+  // Publish only classified failures and public source coordinates, never raw
+  // subprocess stderr, reports, assertion values, cookies, or screenshots.
   let failure = { report_available: false };
   try {
     const stat = await lstat(path);
     if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= 8 * 1024 * 1024) failure = browserFailureEvidence(JSON.parse(await readFile(path, "utf8")));
   } catch { /* A missing or malformed private report remains unavailable. */ }
-  const diagnostics = { stage, subprocess_exit_code: stage === "test_execution" && Number.isSafeInteger(error?.code) ? error.code : null, ...failure };
+  const diagnostics = { stage, error: browserErrorDiagnostic(error), subprocess_exit_code: stage === "test_execution" && Number.isSafeInteger(error?.code) ? error.code : null, ...failure };
   await writeSupplement("browser-tests", { schema_version: 1, state: "failed", source, ...diagnostics });
   console.error(JSON.stringify({ browser_gate: "failed", ...diagnostics }));
   console.error("browser_gate_failed: missing, skipped or failing real browser evidence; inspect the CI job");
