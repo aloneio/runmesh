@@ -1,5 +1,5 @@
 import { MAX_MCP_BODY_BYTES } from "./constants.js";
-import { discardMcpBody as discardBody } from "./mcp-errors.js";
+import { readRejectedMcpRequestId } from "./mcp-errors.js";
 import { MCP_SECRET_RE } from "./constants.js";
 import type { McpAuth } from "../mcp/server.js";
 import { mcpHttpError } from "./mcp-errors.js";
@@ -16,12 +16,12 @@ import type { CentralToolVisibility, CentralToolVisibilityReader } from "../cont
 
 /** The URL segment is the only MCP credential. Authorization headers are ignored. */
 export async function handleMcpSecret(request: Request, env: WorkerEnv, url: URL): Promise<Response> {
-  if (request.headers.has("x-runmesh-mcp-hop")) { await discardBody(request); return mcpHttpError(508, "MCP relay recursion rejected"); }
+  if (request.headers.has("x-runmesh-mcp-hop")) return mcpHttpError(508, "MCP relay recursion rejected", await readRejectedMcpRequestId(request));
   const parts = url.pathname.split("/").filter(Boolean);
   const secret = parts[0];
-  if (secret === undefined || !MCP_SECRET_RE.test(secret)) { await discardBody(request); return mcpHttpError(404, "Not found"); }
-  const verified = await verifyMcpClient(mcpIdentityVerifier(env), await sha256Hex(secret)).catch(async error => { await discardBody(request); throw error; });
-  if (verified === undefined) { await discardBody(request); return mcpHttpError(404, "Not found"); }
+  if (secret === undefined || !MCP_SECRET_RE.test(secret)) return mcpHttpError(404, "Not found", await readRejectedMcpRequestId(request));
+  const verified = await verifyMcpClient(mcpIdentityVerifier(env), await sha256Hex(secret)).catch(async error => { await readRejectedMcpRequestId(request); throw error; });
+  if (verified === undefined) return mcpHttpError(404, "Not found", await readRejectedMcpRequestId(request));
   // createMcpHandler requires an exact /mcp route. Forward the bounded body
   // and its parsed value; protocol validation remains owned by the SDK.
   const rewritten = new URL(request.url);

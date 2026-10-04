@@ -20,7 +20,7 @@ it.each(["/mcp", "/short/mcp", "/" + secret + "/mcp"])("returns parseable, non-d
   expect(response.headers.get("referrer-policy")).toBe("no-referrer");
   expect(response.headers.get("x-content-type-options")).toBe("nosniff");
   const body = await response.json();
-  expect(body).toMatchObject({ jsonrpc: "2.0", id: null, error: { code: -32000 } });
+  expect(body).toMatchObject({ jsonrpc: "2.0", id: "connection-test", error: { code: -32000 } });
   expect(JSON.stringify(body)).not.toContain(secret);
   expect(JSON.stringify(body)).not.toContain("secret_verifier");
 });
@@ -30,20 +30,52 @@ it("keeps recursion rejection JSON and does not authenticate or dispatch it", as
   const localEnv = { ...env, REGISTRY: { idFromName: access, get: access } } as unknown as typeof env;
   const response = await worker.fetch(request("/" + secret + "/mcp", { "x-runmesh-mcp-hop": "1" }), localEnv, {} as ExecutionContext);
   expect(response.status).toBe(508);
-  expect(await response.json()).toMatchObject({ jsonrpc: "2.0", id: null, error: { code: -32000 } });
+  expect(await response.json()).toMatchObject({ jsonrpc: "2.0", id: "connection-test", error: { code: -32000 } });
   expect(access).not.toHaveBeenCalled();
 });
 
 it("returns a structured configuration failure before the MCP handler starts", async () => {
   const response = await worker.fetch(request("/" + secret + "/mcp"), { ...env, INTERNAL_CONTROL_SECRET: undefined }, {} as ExecutionContext);
   expect(response.status).toBe(503);
-  expect(await response.json()).toMatchObject({ jsonrpc: "2.0", id: null, error: { code: -32000 } });
+  expect(await response.json()).toMatchObject({ jsonrpc: "2.0", id: "connection-test", error: { code: -32000 } });
 });
 
 it("does not alter ordinary non-MCP not-found responses", async () => {
   const response = await worker.fetch(request("/unknown-route"), env, {} as ExecutionContext);
   expect(response.status).toBe(404);
   expect(await response.text()).toBe("Not found");
+});
+
+it.each(["cached-tool-call", 0, -3.5, null])("correlates a rejected tools/call with request id %s without dispatch", async id => {
+  const access = vi.fn(() => { throw new Error("Must reject before Registry or provider access"); });
+  const localEnv = { ...env, REGISTRY: { idFromName: access, get: access }, CAPABILITIES: { idFromName: access, get: access } } as unknown as typeof env;
+  const response = await worker.fetch(new Request("https://worker.test/short/mcp", {
+    method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "skill_read", arguments: { path: "SKILL.md" } } }),
+  }), localEnv, {} as ExecutionContext);
+  expect(response.status).toBe(404);
+  expect(await response.json()).toEqual({ jsonrpc: "2.0", id, error: { code: -32000, message: "Not found" } });
+  expect(access).not.toHaveBeenCalled();
+});
+
+it.each([
+  "{", "null", "[]", '[{"jsonrpc":"2.0","id":1,"method":"tools/call"}]',
+  '{"jsonrpc":"1.0","id":1,"method":"tools/call"}', '{"jsonrpc":"2.0","id":1,"result":{}}',
+  '{"jsonrpc":"2.0","method":"tools/call"}', '{"jsonrpc":"2.0","id":{},"method":"tools/call"}',
+  '{"jsonrpc":"2.0","id":[],"method":"tools/call"}', '{"jsonrpc":"2.0","id":true,"method":"tools/call"}',
+  '{"jsonrpc":"2.0","id":1e999,"method":"tools/call"}',
+])("uses a null response id for malformed or uncorrelatable rejected input %s", async body => {
+  const response = await worker.fetch(new Request("https://worker.test/short/mcp", { method: "POST", body }), env, {} as ExecutionContext);
+  expect(response.status).toBe(404);
+  expect(await response.json()).toEqual({ jsonrpc: "2.0", id: null, error: { code: -32000, message: "Not found" } });
+});
+
+it("does not recover an id from invalid UTF-8", async () => {
+  const prefix = new TextEncoder().encode('{"jsonrpc":"2.0","method":"tools/call","id":"');
+  const suffix = new TextEncoder().encode('"}');
+  const body = new Uint8Array([...prefix, 0xff, ...suffix]);
+  const response = await worker.fetch(new Request("https://worker.test/short/mcp", { method: "POST", body }), env, {} as ExecutionContext);
+  expect(response.status).toBe(404);
+  expect(await response.json()).toMatchObject({ id: null });
 });
 
 it("bounds rejected body consumption without changing the concealed rejection", async () => {
@@ -107,4 +139,11 @@ it("preserves client routing and permissions while refusing old and revoked cred
   const revoked = await initialize(replacement);
   expect(revoked.status).toBe(404);
   expect(await revoked.json()).toEqual(rejection);
+  const providerAccess = vi.fn(() => { throw new Error("Revoked calls must not enter the provider"); });
+  const cachedCall = await worker.fetch(new Request("https://worker.test/" + replacement + "/mcp", {
+    method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: 42, method: "tools/call", params: { name: "skill_list", arguments: {} } }),
+  }), { ...localEnv, CAPABILITIES: { idFromName: providerAccess, get: providerAccess } } as unknown as typeof env, {} as ExecutionContext);
+  expect(cachedCall.status).toBe(404);
+  expect(await cachedCall.json()).toEqual({ jsonrpc: "2.0", id: 42, error: { code: -32000, message: "Not found" } });
+  expect(providerAccess).not.toHaveBeenCalled();
 });

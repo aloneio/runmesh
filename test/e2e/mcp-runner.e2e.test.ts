@@ -232,7 +232,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(direct.status).toBe(404);
     expect(direct.headers.get("content-type")).toContain("application/json");
     const rejection = await direct.json();
-    expect(rejection).toEqual({ jsonrpc: "2.0", id: null, error: { code: -32000, message: "Not found" } });
+    expect(rejection).toEqual({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: "Not found" } });
     const invalid = await fetch(`${workerUrl}/${"x".repeat(43)}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body });
     const invalidBody = await invalid.text();
     expect(invalid.status, invalidBody).toBe(404);
