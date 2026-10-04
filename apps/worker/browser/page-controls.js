@@ -35,6 +35,9 @@ function createPageControls({
     root.querySelectorAll(".enrollment-command-panels").forEach(function (container) {
       var panels = Array.prototype.slice.call(container.querySelectorAll("[data-panel]"));
       if (!panels.length) return;
+      panels.forEach(function (panel) {
+        panel.style.minHeight = "";
+      });
       var max = 0;
       panels.forEach(function (panel) {
         var wasHidden = panel.hidden;

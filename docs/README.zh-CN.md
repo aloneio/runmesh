@@ -10,6 +10,9 @@
 | --- | --- |
 | 连接 MCP 客户端并执行第一个任务 | [用户指南](user-guide.zh-CN.md) |
 | 部署控制平面、添加机器和授予权限 | [管理员指南](admin-guide.zh-CN.md) |
+| 连接 MCP、安装 Skill 并共享给 AI 客户端 | [MCP 和 Skill 指南](central-administration.zh-CN.md) |
+| 完成 OAuth 登录或重新授权 MCP 账号 | [账号授权](central-oauth.zh-CN.md) |
+| 准备 Skill 文件夹与更新内容 | [Skill 安装](central-skills.zh-CN.md) |
 | 更新已有实例，同时保留数据和配置 | [升级指南](upgrading.zh-CN.md) |
 | 排查连接、权限、安装和任务问题 | [故障排查](troubleshooting.zh-CN.md) |
 | 区分已发布功能与下一版改进 | [版本说明](release-notes.zh-CN.md) |
@@ -24,16 +27,13 @@
 
 ## 版本与功能
 
-最新已发布正式版为 **0.1.5**，本文档介绍该版本的功能。使用新功能时，需要部署兼容 Worker、安装对应 Runner 包，并刷新客户端工具目录。
+最新已发布正式版为 **0.1.5**；**0.1.6** 为正在开发验证的候选版本，包含共享 MCP 连接和 Skill。涉及候选功能的指南会注明适用版本。使用新增计算机能力时，需要部署兼容 Worker、安装对应 Runner 包，并刷新客户端工具目录。
 
 安装包的可用状态见[发行状态](release-readiness.md)，已部署 Worker 的核对方法见[构建来源](build-provenance.zh-CN.md)。[开发预发布](dev-runner-prereleases.zh-CN.md)提供单独的测试渠道。
 
 ## 高级参考与维护者资料
 
-仅用于开发：[中央 MCP 与 Skill 基础架构](central-capabilities-architecture.zh-CN.md)
-说明共享发布、客户端身份和模块边界。开发环境支持 MCP 直连和 Skill 安装，生产启用另行验收。
-开发使用说明见[版本化 Skill 内容](central-skills.zh-CN.md)、
-[中央管理与治理](central-administration.zh-CN.md)和[灰度与待验收项](central-rollout.md)。
+[中央 MCP 与 Skill 架构](central-capabilities-architecture.zh-CN.md)说明共享发布、客户端身份和模块边界。实现参考包括[管理接口](maintainers/central-administration.zh-CN.md)、[HTTP 传输](maintainers/central-remote-mcp.zh-CN.md)、[OAuth](maintainers/central-oauth.zh-CN.md)和[Skill 版本存储](maintainers/central-skills.zh-CN.md)。维护者通过[发布验收清单](central-rollout.md)跟踪验收进度。
 
 集成开发可查看 [MCP 调用约定](mcp-agent-call-contract.md)、[工具示例](tool-examples.md)、[工具目录刷新](mcp-connector-refresh.md)、[能力契约](capability-contracts.zh-CN.md)和[工作区 Context 存储](context-storage.zh-CN.md)。维护者可查看[架构](architecture.md)、[验证流程](verification.zh-CN.md)和 [main 晋级策略](main-promotion-policy.zh-CN.md)。
 

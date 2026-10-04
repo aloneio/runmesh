@@ -24,15 +24,16 @@ Each execution machine runs a Runmesh Runner, which connects to the control plan
 
 Runmesh is useful for maintaining servers, sharing a controlled development machine with a team, running builds and operational tasks, and giving each client a precise set of machines, workspaces, and capabilities.
 
+The 0.1.6 candidate also brings MCP connections and Skills into the control panel. Connect an MCP with its URL and authentication choice, or install a Skill folder, then use the shared collection from your AI clients. See the [MCP and Skill guide](docs/central-administration.md) and [release status](docs/release-readiness.md).
+
 ## Get started
 
 If an administrator has given you an MCP URL:
 
 1. Paste the complete URL into an MCP Streamable HTTP client.
-2. Call `runner_list` to see available machines.
-3. Call `runner_current`. If no machine is selected, call `runner_select` with the intended Runner ID, then confirm with `runner_current`.
-4. Call `workspace_list` to see the workspaces approved for you.
-5. Start with `read` or `inspect`; use `edit`, `shell`, or `job` only when needed.
+2. Refresh the Runmesh connection to load the tools and Skills your instance shares.
+3. For computer access, call `runner_list` to see available machines, then `runner_current` to check your selection. If needed, call `runner_select` with the intended Runner ID and confirm with `runner_current`.
+4. On the selected Runner, call `workspace_list` to see your approved workspaces. Start with `read` or `inspect`, then use `edit`, `shell`, or `job` for the task.
 
 The MCP URL is a credential, shown when a client is created or rotated. Store it securely and share it only with its intended user. See the [user guide](docs/user-guide.md) for the complete workflow.
 
@@ -41,10 +42,10 @@ The MCP URL is a credential, shown when a client is created or rotated. Store it
 Use the signed stable release listed in [release status](docs/release-readiness.md) for production, with the corresponding activated `main` source for Worker deployment. Test upcoming changes in the separate `dev` environment described in the [deployment reference](docs/deployment.md).
 
 1. Deploy a released production Worker from `main`, configure `INTERNAL_CONTROL_SECRET` and `RUNNER_TOKEN_PEPPER`, and set the first administrator password before exposing the instance to untrusted visitors.
-2. Add a machine on the **Runner** page. Keep the default `dedicated_user` execution mode unless you need and accept host-level privileges.
+2. For computer access, add a machine on the **Runner** page. Keep the default `dedicated_user` execution mode unless you need and accept host-level privileges.
 3. Copy the one-time enrollment command and run it on the target machine.
 4. Add approved workspaces and permissions in the Runner details page.
-5. Create an MCP client with the least privileges needed; new clients default to `coding:read`. Copy its one-time URL.
+5. Create an MCP client and copy its one-time URL. On instances with shared MCP and Skills, choose that access type for the shared collection or add computer access; computer permissions start with Read selected.
 6. Share the URL with its intended user, and rotate or revoke it when necessary.
 
 The standard installer downloads a fixed, verified release, supplies the runtime, enrolls the Runner, and configures its service. If hosted installation is unavailable, the dashboard shows the offline-verifiable portable procedure. See the [administrator guide](docs/admin-guide.md).
@@ -91,7 +92,8 @@ A new deployment provisions its own resources. For an existing v2 installation, 
 - [Security model](docs/security.md): credential handling and trust boundaries.
 - [Portable installation](docs/portable-runner-installation.md): offline verification and manual setup.
 - [Deployment reference](docs/deployment.md): Cloudflare and advanced operations.
-- [Release notes](docs/release-notes.md): changes and known limits for each release.
+- [MCP and Skill guide](docs/central-administration.md): connect MCP accounts, install Skills and manage the shared collection.
+- [Release notes](docs/release-notes.md): changes and upgrade guidance for each release.
 
 The [documentation index](docs/README.md) also links to architecture, protocol and maintainer references, with dated records available for historical context.
 

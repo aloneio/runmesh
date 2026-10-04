@@ -7,7 +7,9 @@ import { adminDocument } from '../apps/worker/dist/admin/layout.js';
 export async function checkAdminNavigation(executable) {
   const requests = [], errors = [];
   let phase, arrived, release;
-  const pageFor = path => adminDocument('Navigation fixture', '<p data-navigation-fixture>' + path + '</p>', 'dashboard');
+  const pageFor = path => adminDocument('Navigation fixture', '<p data-navigation-fixture>' + path + '</p>'
+    + (path === '/admin/clients' ? '<div style="height:1800px"></div><section id="add-client"><h2>Add a client</h2></section><div style="height:1000px"></div>' : '')
+    + (path === '/admin/settings' ? '<a href="/admin/clients#add-client" data-fragment-link>Add a client</a>' : ''), 'dashboard');
   const server = createServer((req, res) => {
     const path = new URL(req.url, 'http://127.0.0.1').pathname;
     const navigation = req.headers['sec-fetch-mode'] === 'navigate';
@@ -60,8 +62,28 @@ export async function checkAdminNavigation(executable) {
         assert.deepEqual(requests.filter(request => request.navigation).map(request => request.path), ['/admin', destination]);
       } finally { arrived = undefined; release = undefined; await page.close(); }
     }
+    const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    page.on('pageerror', error => errors.push(error.message));
+    try {
+      await page.goto(origin + '/admin/clients');
+      await page.waitForFunction(() => document.documentElement.getAttribute('data-runmesh-navigation') === 'ready');
+      await page.locator('#add-client').scrollIntoViewIfNeeded();
+      assert.ok(await page.evaluate(() => scrollY > 500), 'The starting page is scrolled well below the fold');
+      await page.locator('nav a[href="/admin/settings"]').click();
+      await page.waitForURL(origin + '/admin/settings');
+      await page.waitForFunction(() => document.documentElement.getAttribute('data-runmesh-navigation-busy') === 'false');
+      assert.ok(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight + 1), 'A short page must shrink to its content instead of inheriting the previous tall page');
+      assert.ok(await page.locator('#main-content').evaluate(node => node.getBoundingClientRect().top >= document.querySelector('.app-header').getBoundingClientRect().bottom - 1), 'A new page heading remains below the sticky header');
+      await page.locator('[data-fragment-link]').click();
+      await page.waitForURL(origin + '/admin/clients#add-client');
+      await page.waitForFunction(() => document.documentElement.getAttribute('data-runmesh-navigation-busy') === 'false');
+      assert.deepEqual(await page.locator('#add-client').evaluate(node => {
+        const gap = node.getBoundingClientRect().top - document.querySelector('.app-header').getBoundingClientRect().bottom;
+        return { focused: document.activeElement === node, visibleBelowHeader: gap >= 0 && gap <= 32 };
+      }), { focused: true, visibleBelowHeader: true }, 'Fragment navigation must focus the requested section and place it below the current header');
+    } finally { await page.close(); }
     assert.deepEqual(errors, []);
-    return { state: 'passed', scenarios: scenarios.length, stalled_headers_recover: true, stalled_body_recovers: true, latest_destination_preserved: true, screenshots: 0 };
+    return { state: 'passed', scenarios: scenarios.length + 2, stalled_headers_recover: true, stalled_body_recovers: true, latest_destination_preserved: true, short_page_height_restored: true, fragment_focus_and_scroll_restored: true, screenshots: 0 };
   } finally {
     await browser?.close();
     server.closeAllConnections();

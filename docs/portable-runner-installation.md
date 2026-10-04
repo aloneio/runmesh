@@ -2,7 +2,7 @@
 
 Use this page to transfer a package from another machine, verify it independently, or install it manually. Verification and local package installation can run offline; enrollment and ordinary Runner operation require access to the Worker. For dashboard setup, start with the [administrator guide](admin-guide.md).
 
-Choose a package using [release status](release-readiness.md). The latest published stable package is **0.1.4**. Reviewed activation enables stable hosted distribution in source; check your Worker's release descriptor below before installing. Development has its own verified prerelease channel. Manual installation needs an external Node runtime: 22.23.2+ within 22.x, or 24.21.0+ within 24.x.
+Choose a package using [release status](release-readiness.md), then check your Worker's release descriptor below before installing. Production uses the verified stable channel, and development has its own verified prerelease channel. Manual installation needs an external Node runtime: 22.23.2+ within 22.x, or 24.21.0+ within 24.x.
 
 Ordinary HTTPS deployments use the validated request address. For a reverse proxy, configure the optional `RUNMESH_PUBLIC_ORIGIN` as described in [runtime configuration](runtime-config.md). An invalid origin closes hosted installation.
 
@@ -10,10 +10,10 @@ For hosted installation, check `channel` and `distributable` in `/runner/release
 
 ## Choose how to verify
 
-The one-command path trusts the script served by your HTTPS Worker. The current stable installer template fixes these release inputs:
+The one-command path uses the script served by your HTTPS Worker. Its release descriptor selects a version, and the installer fixes these inputs for that version:
 
-- version `0.1.4` and tag `v0.1.4`;
-- the exact GitHub release-asset URLs and `runmesh-runner-0.1.4.tgz` name;
+- the version and matching release tag;
+- the exact GitHub release-asset URLs and `runmesh-runner-<version>.tgz` name;
 - signing key ID `runmesh-preview-2026-01`;
 - the reviewed Ed25519 public key from `release/trust-keyring.json`.
 

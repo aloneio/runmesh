@@ -1,6 +1,6 @@
 # 中央工具目录发布（开发版）
 
-W05 可选实时发现／调用适配器及其明确限制见[受控中央 HTTP MCP](central-remote-mcp.zh-CN.md)。
+W05 可选实时发现／调用适配器及其明确限制见[受控中央 HTTP MCP](maintainers/central-remote-mcp.zh-CN.md)。
 本文介绍可独立使用的目录审核与快照流程。
 
 [English](central-catalog.md)

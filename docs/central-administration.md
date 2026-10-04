@@ -1,115 +1,52 @@
-# Services and Skills in the control panel (development)
+# Manage MCP and Skill
 
-[简体中文](central-administration.zh-CN.md)
+[简体中文](central-administration.zh-CN.md) · [Documentation](README.md)
 
-## Connect, publish and use
+Connect MCP services and install Skills in **MCP & Skill** at `/admin/central`. Then add your AI client to use the shared collection. These features are available in the 0.1.6 candidate and development channel; see [release status](release-readiness.md) for the current production version.
 
-Open /admin/central with your administrator browser session. Enter a public HTTPS
-MCP URL and select No authentication or OAuth. The service name is optional.
-When omitted, the name is derived from the hostname and shortened to fit its
-display limit; the saved MCP URL remains complete.
-OAuth settings are discovered automatically; providers requiring manual client
-preregistration are not automatically connectable. The saved service is displayed
-before opening OAuth, so a failed sign-in handoff retains its recovery controls.
-After signing in, return to
-the control panel. A successful connection discovers and publishes every tool
-atomically; no separate approval is required. Existing enabled connections with
-unpublished tools finish on opening the library. View tools is read-only; Refresh
-tools updates the shared catalog immediately. Resuming a paused service refreshes
-its tools automatically.
+## Set up your collection
 
-An unavailable pending service does not block other connections. Recovery reports
-each failed service and refreshes the library before a different service can
-write; it never retries the failed connection in the same pass. If that refresh
-fails, recovery stops. Returning from OAuth also resumes other pending services.
-Ready-to-use messages require the refreshed service to remain enabled and its
-complete tool catalog to remain published.
+| Task | Steps |
+| --- | --- |
+| Connect an MCP | Open **MCP**, enter its public HTTPS MCP URL, choose **No authentication** or **OAuth**, and select **Connect**. For OAuth, sign in on the provider's page and complete consent. |
+| Install a Skill | Open **Skill**, select its folder or `SKILL.md` and supporting text files, then select **Install Skill**. |
+| Connect an AI client | Select **Connect an AI client**, enter a label, choose the access type, and create the connection. Copy the one-time URL into your client's MCP settings. |
 
-Select SKILL.md and supporting text files, or a complete Skill folder, to install
-a Skill. Its name and description come from frontmatter. Installing saves,
-approves and activates the files atomically; scripts never execute. Replacing
-an installed Skill requires confirmation and the currently observed revision.
-The success message also verifies that the installed version is still active
-after refresh; a concurrent pause or replacement is reported instead.
+Connected MCP tools and installed Skills are shared with every active AI client in this instance. MCP connections load their tools automatically; the MCP card's **View tools** button shows the available tools. Skill cards provide **View files** to read the installed content.
 
-Create an AI connection and copy its one-time URL into the AI client. Every valid
-authenticated client in the instance shares all enabled published MCP tools and
-active Skills. There is no Client access tab, individual assignment, reusable
-grant template or advanced JSON console. No Runner is needed for these features.
-Clients may need to refresh their tool or Skill list after publication changes.
+## Choose the AI client's access
 
-## Shared access
+**MCP and Skills** gives the client access to the shared collection. All processing for these connections goes through the control plane.
 
-All valid clients use the shared library. Per-client grants, toolset assignment,
-client-bound OAuth and manual bearer profile APIs are removed. Their routes return
-the ordinary HTTP 404 unknown-route response without resolving the state owner.
-This development feature has no legacy compatibility layer.
+Choose **MCP, Skills and computer access** when the client also needs files or commands on your machines. The computer-permission choices open automatically; select the required read, write and execution permissions. Read is selected initially. Register a Runner and configure its workspaces using the [administrator guide](admin-guide.md).
 
-Revoke or rotate a client's connection credential to stop that credential from
-being used. Pause a service or Skill to stop sharing that capability with every
-client. For separate capability trust boundaries, use separate instances.
-Native computer scopes and Runner/workspace permissions remain independent;
-sharing central capabilities never creates machine access.
+See the [user guide](user-guide.md) for connecting the AI client and starting work.
 
-Updates publish the active Skill version to all clients. A cached old digest is
-rejected; refresh skill_list and use its new digest for every attachment. Old
-bundles remain available to administrators for explicit rollback. Disabling or
-revoking access cannot erase content already delivered to a client's context.
+## Change shared content
 
-## Publication, identity and connection boundaries
+| Action | Result |
+| --- | --- |
+| MCP: **Refresh tools** | Loads the provider's current tools for all clients. If sign-in is needed, opens authorization. |
+| MCP: **Pause** / **Enable** | Stops or resumes shared access. Enabling refreshes the tool list. |
+| OAuth MCP: **Reconnect** | Starts a new authorization flow with the provider. |
+| OAuth MCP: **Disconnect account** | Removes the locally stored account connection. Select **Reconnect** to authorize again. |
+| Skill: install files with the same name | Shows the proposed replacement; select **Update Skill** to publish it to all clients. |
+| Skill: **Pause** | Stops future reads while keeping the installed files. |
+| Paused Skill: **View files → Enable Skill** | Resumes access to the displayed version. |
 
-Successful discovery publishes the complete catalog in one revision. Failed or
-partial discovery preserves the current publication. Stale tool schemas require
-a refresh; invoking a tool does not change its catalog or replay the operation.
-Each call revalidates client identity, enabled profile, published catalog, content
-version and credential state before dispatch
-and again before returning output. An upstream action may already have executed
-when a later check withholds its result; that does not mean it was rolled back.
-Unknown or conflicting outcomes are never automatically replayed.
+After a change, refresh the Runmesh connection in AI clients that cache their tool or resource list. Previously delivered Skill content stays in an existing conversation; start a new conversation when you need to work exclusively with the updated content.
 
-Upstream OAuth consent remains required for OAuth services. Reconnect or
-disconnect the upstream account from its service card. OAuth credentials remain
-available across a pause/resume of sharing; old in-flight leases stay invalid,
-and an explicitly disconnected account still requires fresh sign-in. They remain
-encrypted and absent from read APIs. Managed connections accept only their saved
-public HTTPS destination, without private-network routing or redirects. OAuth
-encryption uses the existing deployment secret without an additional variable.
-Upstream credentials are managed through the OAuth connection lifecycle.
+## Manage a client's connection
 
-GET /admin/central/profiles returns up to 50 credential-free profiles; use
-next_after as after to continue. Each page checks the administrator session.
-Mutations require same-origin session/CSRF admission and exact revisions.
-Failed refreshes invalidate pending confirmations and block further writes
-until the library refresh succeeds.
-Confirmed input-validation rejections let you correct the service URL/name or
-Skill files and submit again without refreshing the library. This does not retry
-the request automatically; uncertain writes and revision conflicts still require
-a refresh. Controls remain disabled throughout an active operation, including
-cards recreated by an intermediate refresh.
+Open **MCP Clients** to manage each client's credential. **Rotate** creates a replacement URL and invalidates the previous one. **Revoke** stops that client's access and retains its record. **Delete** also removes the client record. Review the displayed confirmation before deleting.
 
-## Discovery and optional governance
+Shared MCP and Skill access follows the instance's enabled collection. Computer access additionally follows the client's permissions, selected Runner and approved workspaces. Use separate instances for groups that need different shared collections.
 
-remote_profiles lists the bounded shared service directory. remote_tools reads
-published tools for its profile_id with cursor pagination; remote_call invokes
-one exact tool/version. CENTRAL_DIRECT_TOOLS_ENABLED=1 also publishes direct rm_
-aliases with their published schemas, bounded to eight profiles and 32 tools.
-Larger libraries use remote_profiles, remote_tools and remote_call; they are not
-silently truncated. Discovery never contacts upstream services.
+## Continue setup or resolve a problem
 
-Connecting or refreshing a service closes any operation-scoped upstream session
-before publishing its discovered tools, then rechecks authorization and revisions.
-This prevents publication's own version change from blocking session cleanup.
+- [Connect an MCP](central-remote-mcp.md): URL requirements, authentication and tool refresh.
+- [Authorize an MCP account](central-oauth.md): sign-in, reconnection and account management.
+- [Install and update a Skill](central-skills.md): folder layout, file sizes and updates.
+- [Troubleshooting](troubleshooting.md): the next step for a failed connection or upload.
 
-CENTRAL_SKILLS_ENABLED=1 exposes skill_list, skill_read and the matching MCP
-resource surfaces. skill_list scans at most 128 heads per page and returns
-next_after; continue even when a page contains no active Skills.
-
-CENTRAL_GOVERNANCE_ENABLED=1 enables bounded durable call budgets, cooldowns and
-metadata receipts. Receipts exclude arguments, results and credentials. Audit
-failure does not replay calls or change completed results. This is not a billing
-system or a promise of distributed rate limiting.
-
-Local browser checks use no screenshots and cover immediate availability, OAuth
-callbacks, Skill updates, stale confirmations, failed refresh and no replay.
-Real supplier consent, two real AI hosts and production promotion require the
-separate evidence in [the rollout ledger](central-rollout.md).
+Implementation details: [administration reference](maintainers/central-administration.md).

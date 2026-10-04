@@ -1,152 +1,46 @@
-# Controlled central HTTP MCP (development)
+# Connect an MCP
 
-This page describes the current controlled remote transport. Managed OAuth and
-operation-local sessions are documented in [Central OAuth](central-oauth.md).
-All deployment activation remains explicit.
+[简体中文](central-remote-mcp.zh-CN.md) · [MCP and Skill guide](central-administration.md)
 
-[简体中文](central-remote-mcp.zh-CN.md)
+Add an MCP once in the control panel, then use its enabled tools from your connected AI clients. This guide covers the 0.1.6 candidate and development channel.
 
-**Development implementation; no production activation.** Central HTTP discovery
-and invocation connect control-panel profiles to the reviewed catalog.
-The development configuration now has an independent central binding and explicit
-Skills, direct-directory and governance opt-ins. Managed connections store their
-endpoint policy through the control panel. OAuth encryption derives its key from
-the existing deployment secret without an additional variable.
-Production remains unchanged. This is not a published release or evidence of
-successful public-network acceptance.
+## Add the connection
 
-## What is implemented
+1. Open **MCP & Skill → MCP**.
+2. Paste the provider's public HTTPS MCP endpoint into **MCP URL**, for example `https://mcp.example.com/mcp`.
+3. Choose **No authentication** for a public MCP, or **OAuth** for an account connection.
+4. Optionally enter a name, then select **Connect**. An omitted name is filled from the hostname.
+5. For OAuth, complete sign-in and consent on the provider's page. Runmesh returns to the panel and loads the tools.
 
-The Worker is the unified entry point. A client does not install upstream MCPs on
-each Runner. Central operations can run without any Runner registration, selection
-or machine permission. The client continues to reason and may separately invoke
-the existing Runner tools; Runmesh does not execute upstream text as shell code.
+Use the direct endpoint on the standard HTTPS port. The URL should contain its hostname and MCP path; keep account credentials in the OAuth flow. If the provider gives you a download or setup page, obtain its MCP endpoint from its connection instructions.
 
-remote_profiles lists services with published tools. remote_tools reads the
-reviewed definitions for one profile; remote_call accepts the profile, exact
-tool ID/version and arguments. Every valid authenticated client shares these
-publications; no grant rows are needed. Client credentials, disabled services,
-upstream OAuth and exact live schemas are still checked. Native-only calls do
-not resolve central storage, credentials or upstream connections. Discovery failures
-preserve native tools. Large libraries use bounded service/tool discovery.
+OAuth providers can use a client metadata document or automatic client registration. See [MCP account authorization](central-oauth.md) for the sign-in flow.
 
-## Protocol support
+## Use and refresh tools
 
-Control-panel connections negotiate a supported MCP version with the saved endpoint;
-users do not configure protocol versions. The official MCP client SDK is pinned
-to 2.0.0 and isolated in a platform adapter. Its Cloudflare JSON
-Schema interpreter validates the already restricted catalog schema dialect
-without dynamic code generation. Arguments are not coerced and defaults are not
-silently inserted. A conservative expanded-schema/data work ceiling rejects
-expensive inputs rather than accepting an unbounded synchronous computation.
+Select **View tools** on the MCP card to see tool names and descriptions. Enabled tools are shared with the instance's active AI clients. To connect a client, follow the [user guide](user-guide.md).
 
-Both JSON and request-scoped SSE responses are supported. Text, image, audio,
-embedded resources, resource links, structured results and tool-level `isError`
-are retained. Links are data and are never fetched by the relay. Progress/log
-notifications are bounded and discarded; root transport metadata is not forwarded
-into a client's authentication UI. There is no continuous progress relay.
+When the provider changes its tools, select **Refresh tools**. The complete tool list is published together. If refresh fails, the saved catalog is retained; follow the panel's message to restore the connection and refresh again.
 
-Managed OAuth and operation-local sessions are supported; see [OAuth](central-oauth.md).
-Arbitrary headers, query credentials, stdio hosting, persistent sessions, GET subscriptions,
-resumption, tasks, sampling, elicitation and multi-round interactions are unsupported.
-Failed calls are not replayed.
+Runmesh exposes direct tools for smaller collections and directory tools for browsing larger collections. An AI client can use `remote_profiles` to find MCPs, `remote_tools` to read a tool definition, and `remote_call` to invoke it with the returned tool ID and version. Refresh the client's catalog after adding or changing a connection.
 
-## Connection and publication flow
+## Pause or resume
 
-Enter a public HTTPS MCP URL and select No authentication or OAuth in the control panel.
-The saved enabled connection is exact outbound admission; no environment allowlist or
-manual bearer configuration is supported. OAuth uses the existing deployment secret. Nonstandard
-HTTPS ports, IP literals, private hosts, wildcards, URL credentials, queries and fragments are rejected.
+**Pause** stops tool access for every client and keeps the saved connection. **Enable** resumes sharing and reloads tools. For OAuth MCPs, the account connection is retained through pause/resume; **Disconnect account** removes the local account connection. Details are in the [authorization guide](central-oauth.md).
 
-Create and enable a profile using the existing protected administration API.
-POST `/admin/central/discovery/{profile_id}` with `{"expected_revision":0}` and
-the administrator's existing session, same origin and matching CSRF token. The
-complete bounded tools/list result is stored and published atomically in one
-catalog revision. Every discovered tool is immediately available to authenticated
-clients; the connection requires no additional review or approval in the
-[control panel](central-administration.md). Client credentials remain required;
-publication grants no Runner permissions.
+## Connection format and size
 
-The discovery endpoint permits no caller URL, token, HTTP headers or command.
-Partial pages, duplicate tools, unsupported schemas, timeouts and failed upstream
-observations leave the previously reviewed catalog intact. An actual change in
-the selected tool's description/schema/annotations blocks invocation until the
-catalog is refreshed, which publishes all current tools. The call does not publish changes
-or create a new catalog revision for every request.
+Runmesh connects to public HTTPS MCP endpoints using Streamable HTTP, including JSON and request-scoped SSE responses. It forwards returned text, images, audio, resources and structured results to the client. Each call uses its own upstream session.
 
-## Trust and execution boundaries
-
-Outbound requests use a newly constructed header set and the service access token only for OAuth connections. Client URL secrets, inbound Authorization, browser cookies,
-Runner tokens and control-plane secrets are not forwarded. Headers needed by the
-pinned protocol are set by the adapter. Redirects are not followed. Authentication belongs to the managed OAuth adapter;
-no automatic reconnect or tool replay is configured.
-`x-runmesh-mcp-hop` rejects relay recursion on incoming Runmesh MCP endpoints.
-
-Preserve `global_fetch_strictly_public`, already enabled in the repository's
-Wrangler configuration. It routes same-zone requests through the public front
-door instead of bypassing zone security. Standalone workerd deployments must
-retain the default public-only global outbound network and DNS address filtering;
-do not wire this adapter to a private network, VPC binding, origin binding or a
-fetch implementation with broader access. Exact allowlisting is a separate
-application control, not a claim that a DNS preflight pins a later connection.
-Deployment/network acceptance still needs independent verification.
-
-Every operation uses a fresh SDK client and credential context. Permission and
-profile generation checks occur before decryption, before network rounds, and
-again immediately before tools/call. A fresh tools/list checks the selected tool
-against its approved definition. Catalog, profile and identity revisions
-are rechecked after awaited work. There is no cache that turns old tool visibility
-into current execution permission.
-
-After dispatch, failures can mean the action executed but its response was lost.
-The response reports `operation_state: unknown`; neither read-only hints nor
-idempotency annotations trigger an automatic retry. When a valid result arrives
-after the client's access was revoked, output is withheld while the action is
-reported completed. Local cancellation or deadline expiry cannot roll back an
-upstream effect. No exactly-once or cross-owner atomic transaction is promised.
-An outer MCP disconnect cannot prove that the owner RPC was canceled.
-
-Completed calls close their operation-local session before the final client and
-publication checks. Credential leases and outbound policy are checked again after
-that asynchronous cleanup; a changed authority withholds the result without
-replaying the completed action. Failed cleanup alone does not discard a valid
-result. Discovery retains the same credential/policy fence through catalog
-hashing and the final publication transaction.
-
-## Bounded operation and persistence
-
-| Budget | Initial ceiling |
+| Item | Limit |
 | --- | --- |
-| One owner operation | 20 seconds |
-| Active operations per owner / per client | 2 / 1; no waiting queue |
-| Outbound request / response | 64 KiB / 1 MiB |
-| Aggregate response bytes | 2 MiB |
-| HTTP requests / tools/list pages | 12 / 8 |
-| Tools in a complete catalog | 128, within existing W04 byte/node bounds |
-| Body fragments / SSE events | 4,096 / 256 |
+| Complete tool catalog | 128 tools |
+| Outbound request | 64 KiB |
+| One upstream response | 1 MiB |
+| Combined upstream responses in one operation | 2 MiB |
 | Returned content items | 32 |
-| Outbound endpoint policy | 64 entries / 16 KiB |
+| Operation time | 20 seconds |
 
-These are admission ceilings, not throughput or cost guarantees. They include
-connect, list, validation and execution work. Transient concurrency state is not
-a distributed rate limiter. Restart does not replay work. Calls do not create
-Runner Jobs, write argument/result payloads to audit tables or install timers
-outside their request lifetime. W09 adds optional metadata-only durable call
-receipts, owner-local rate limits and cooldown via CENTRAL_GOVERNANCE_ENABLED=1;
-see [administration and governance](central-administration.md). Broader cost
-measurements and live acceptance remain external gates.
+For large outputs, use the provider's paginated or filtered tools. If a call times out after dispatch, check the result in the provider before repeating an action that changes data.
 
-## Verification scope and references
-
-Tests cover the official client/server SDKs across real Fetch Request/Response
-objects, an actual local DO/SQLite and Registry authorization chain, and synthetic
-upstream handlers. They include both protocol lanes, fragmented UTF-8 SSE,
-credential isolation, changed schemas, revoked access, concurrent admission,
-oversize/invalid responses and post-dispatch failures. They do not connect to
-private accounts or claim live public-provider interoperability.
-
-Primary implementation references:
-- [Official TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)
-- [Cloudflare public fetch compatibility flag](https://developers.cloudflare.com/workers/configuration/compatibility-flags/#global-fetch-strictly-public)
-- [workerd public-only network and DNS filtering](https://github.com/cloudflare/workerd/blob/main/src/workerd/server/workerd.capnp)
-- [Cloudflare-compatible JSON Schema interpreter](https://github.com/cfworker/cfworker/tree/main/packages/json-schema)
+For errors, see [troubleshooting](troubleshooting.md). Protocol and deployment details are in the [transport reference](maintainers/central-remote-mcp.md).

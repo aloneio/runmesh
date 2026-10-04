@@ -1796,7 +1796,7 @@ html[lang="zh-CN"] legend,html[lang="zh-CN"] h3,html[lang="zh-CN"] .eyebrow,html
   .runner-actions .inline-action-form:first-of-type,.client-table .inline-action-form:first-of-type{grid-column:auto}
   .enrollment-dialog{padding:22px 18px}
   .enrollment-dialog .dialog-actions{align-items:stretch;flex-direction:column}
-  .enrollment-dialog .dialog-actions form{width:100%;flex-direction:column;align-items:stretch}
+  .enrollment-dialog .dialog-actions form{width:100%;flex:0 1 auto;flex-direction:column;align-items:stretch}
   .enrollment-dialog .dialog-actions form .button,.enrollment-dialog .dialog-actions>a{width:100%}
   .secret-card{padding:24px 20px}
 }

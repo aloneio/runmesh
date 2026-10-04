@@ -68,4 +68,4 @@ The normal connection flow asks for a service name, MCP URL and no-authenticatio
 
 Regression coverage includes two independently authenticated clients without grant records, absent grant storage, active Skill version changes, more than 128 Skill heads, larger remote directories, credential revocation/rotation, disabled profiles, schema drift, OAuth boundaries, retired routes and unchanged native Runner admission. Browser checks cover the product workflow without screenshots. The full verification plan, architecture gate and exact-commit CI remain release requirements.
 
-See [administration](central-administration.md), [catalog review](central-catalog.md), [remote MCP](central-remote-mcp.md), [Skills](central-skills.md) and [OAuth](central-oauth.md) for feature-specific contracts.
+See [administration](maintainers/central-administration.md), [catalog review](central-catalog.md), [remote MCP](maintainers/central-remote-mcp.md), [Skills](maintainers/central-skills.md) and [OAuth](maintainers/central-oauth.md) for feature-specific contracts. The [MCP and Skill guide](central-administration.md) covers the user workflow.

@@ -1,65 +1,65 @@
-# 共享 Skill 内容（开发版）
+# 安装与更新 Skill
 
-[English](central-skills.md)
+[English](central-skills.md) · [MCP 和 Skill 指南](central-administration.zh-CN.md)
 
-## 安装与发布
+安装一份 Skill 的说明与配套文本文件，已连接的 AI 客户端即可使用。本指南适用于 0.1.6 候选版本与开发渠道。
 
-控制端选择 SKILL.md 与配套文本文件或文件夹即可安装。
-POST /admin/central/skill-installations 从已验证元数据提取标识、名称和说明，原子
-保存、批准并启用 bundle。同名更新需显式确认并携带当前 revision。所有凭据有效
-的客户端共享当前版本，无需逐客户端授权或模板分配，不执行脚本。
+## 准备文件
 
-底层 GET/POST /admin/central/skills/{skill_id} 保留 preview、stage、activate、
-disable 和旧内容查看功能。修改要求管理员会话、同源 CSRF 和精确 revision。
-preview 不写入；stage 不发布；activate 发布选定摘要。日常安装无需手填来源和许可证。
+把 `SKILL.md` 放在所选文件夹根目录，参考资料等文本文件放在该目录内：
 
-CAPABILITIES 与 CENTRAL_SKILLS_ENABLED=1 启用这些可选接口。开发环境已启用，0.1.6 候选源码也已包含生产配置，正式发布另行验收。发现请求实时验证客户端凭据；故障保留原生工具，原生调用不读取中央
-状态。Skill 内容、allowed-tools 和注解不授予 Runner、计算机或工作区权限。
+```text
+project-review/
+  SKILL.md
+  references/
+    checklist.md
+```
 
-## 内容与存储边界
+`SKILL.md` 开头提供名称和说明，各占一行：
 
-SKILL.md 必须含 name、description 元数据。仅支持单行标量（包括简单引号），不
-支持通用多行 YAML、锚点或别名。名称为小写字母、数字和内部连字符，最多 64 UTF-8
-字节。内容由用户提供，摘要只校验一致性，不证明作者或可信度；来源和许可证不独立验证。
+```markdown
+---
+name: project-review
+description: 按项目检查清单进行审查，并报告可执行的改进项。
+---
 
-仅接受文本文件集合，不支持压缩包、远程链接或可执行安装。拒绝绝对路径、路径穿越、
-空段、Windows 保留名及数据流、反斜杠、大小写冲突。文件对象只含 path、text。
-上限：256 文件、单文件 1 MiB、规范化 bundle 8 MiB、管理请求 12 MiB、每 Skill
-32 版本、1,000 个 Skill、总存储 256 MiB。它们不是实测容量承诺，不自动删除旧内容腾空间。
-文件大小按 UTF-8 字节计算，包大小包含 JSON 编码和元数据。浏览器与服务端使用同一份
-限制。文件内容分行存储，避免超过 SQLite 单行大小上限。已有内容会原子升级，保留摘要、
-版本修订号和发布状态。
+阅读 references/checklist.md，检查项目并汇总发现。
+```
 
-## 列出、读取、更新与停用
+名称使用小写字母、数字和内部连字符，最多 64 个 UTF-8 字节。所有文件保存为 UTF-8 文本。下载得到压缩包时，先解压，再选择包含 `SKILL.md` 的 Skill 文件夹。选择文件夹会保留子目录结构，单独选择的文件放在根目录。
 
-skill_list 只返回当前启用且批准的元数据，不读取正文。每页扫描最多 128 个 head，
-用 next_after 作为 after 继续，直到 null；停用项目导致空页时也要继续。也可只指定
-skill_id，但不能与 after 同时使用。after 仅表示位置，不是授权令牌或快照保证，
-每页独立验证凭据与发布 revision，并发更新时可能需要重新发现。
+## 安装
 
-skill_read 接受 skill_id、digest、path（默认 SKILL.md）。只允许当前启用且已批准
-的 digest。更新对所有客户端生效，旧摘要请求被拒绝，须重新 skill_list 并使用同一
-新摘要读取正文和附件。旧 bundle 保留给管理员检查或使用当前 revision 显式回退。
-停用阻止读取但不删数据；撤销客户端凭据阻止该客户端访问，但无法清除已交付的内容。
+1. 打开「MCP 和 Skill → Skill」。
+2. 通过「Skill 文件夹」选择整个目录，或通过「Skill 文件」选择 `SKILL.md` 与配套文件。
+3. 点击「安装 Skill」。
+4. 在已安装卡片上点击「查看文件」，核对内容。
 
-资源接口复用同一实时校验，URI 为 runmesh-skill://bundle/{skill_id}/{digest}/{path}。
-resources/list 遍历有界分页、列出 SKILL.md；分页失败或循环时明确失败，不返回部分
-成功。附件按需读取，读取期间身份或发布变化会扣留内容；脚本始终作为文本返回。
+Skill 随即向实例中的所有有效 AI 客户端开放。在客户端刷新 Runmesh 工具或资源列表，再用 `skill_list` 查找，用 `skill_read` 读取正文与附件。提供 MCP 资源浏览功能的客户端也可从资源列表打开 Skill。
 
-## 依赖元数据
+Skill 文件以文本交付。AI 客户端根据说明使用可用工具，每个工具按各自权限执行。共享前请核对 Skill 的来源和内容。
 
-可选 runmesh.json 文本附件包含 schema_version: 1、requiredCapabilities，最多八个
-精确 CapabilityTarget（kind、resource_id、version；remote_tool 另含
-connection_profile_id）。这是 Runmesh 扩展，不是标准 Skill 元数据。附件计入摘要，
-拒绝重复、额外字段及不支持种类。
+## 更新、暂停与恢复
 
-skill_list 返回声明，skill_read 根据共享发布状态报告 configured、not_configured、
-disabled、incompatible、unavailable。resources/read 返回同样的 runmesh/dependencies 元数据。
-Skill 依赖的当前摘要须与声明精确一致。检查不证明上游在线或 OAuth 有效，不自动
-安装、启用、调用或递归加载依赖，不授予任何权限；实际调用独立检查当前准入条件。
+更新时选择同名 Skill 的新文件，点击「安装 Skill」，核对展示的文件后点击「更新 Skill」。新版本会对所有客户端生效。
 
-## 验证边界
+「暂停」停止后续读取并保留文件。恢复时点击「查看文件 → 启用 Skill」。已经读入对话的内容仍留在该对话中；任务需要全程使用新版本时，可开启新对话。
 
-本地领域、SQLite、Worker/Registry/MCP 和浏览器测试覆盖发布、revision 冲突、旧摘要
-拒绝、两个无授权行客户端、不创建旧授权存储、凭据撤销、超过 128 条及空页、资源一致性、
-路径拒绝、不读取正文和原生权限不变；不替代[真实宿主验收](central-rollout.md)。
+更新后，客户端重新调用 `skill_list`，使用返回的新摘要读取 `SKILL.md` 和所有附件，使任务始终使用同一版本的内容。
+
+## 文件与存储上限
+
+| 项目 | 上限 |
+| --- | --- |
+| 每个 Skill 的文件数 | 256 个 |
+| 单文件大小 | 1 MiB |
+| 上传包，含编码后的路径与元数据 | 8 MiB |
+| 每个 Skill 保留的版本数 | 32 个 |
+| 每个实例的 Skill 数 | 1,000 个 |
+| 每个实例的 Skill 内容总存储 | 256 MiB |
+
+大小按 UTF-8 字节计算。所选目录保留 Skill 说明和相关参考资料，将依赖目录、构建产物与无关文件移出。文件使用正斜杠分隔的相对路径，名称在忽略大小写后也应各不相同。达到存储上限时，已有内容会保留，页面提示相应上限。
+
+上传内容需要调整时，按页面提示修正文件，重新选择并提交。常见上传与更新问题见[故障排查](troubleshooting.zh-CN.md)。
+
+API 分页、可选依赖元数据和版本管理见[Skill 参考](maintainers/central-skills.zh-CN.md)。
