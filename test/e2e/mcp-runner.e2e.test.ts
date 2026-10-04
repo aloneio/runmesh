@@ -62,6 +62,7 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
   let requestId = 10;
   let workspace = "";
   let readonlyWorkspace = "";
+  let contextWorkspace = "";
   let root = "";
   let workerPersist = "";
   let runnerState = "";
@@ -118,10 +119,12 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     root = await mkdtemp(join(tmpdir(), "mcp-runner-e2e-"));
     workspace = join(root, "workspace");
     readonlyWorkspace = join(root, "readonly-workspace");
+    contextWorkspace = join(root, "context-workspace");
     workerPersist = join(root, "wrangler-state");
     runnerState = join(root, "runner-state");
     await mkdir(workspace, { recursive: true });
     await mkdir(readonlyWorkspace, { recursive: true });
+    await mkdir(contextWorkspace, { recursive: true });
     await writeFile(join(workspace, "note.txt"), "hello from a real local runner\n");
     await writeFile(join(workspace, "utf8.txt"), "Hello你好😀éWorld", "utf8");
 
@@ -182,6 +185,8 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
     expect(workspaceResponse.status).toBe(303);
     const readonlyResponse = await submitForm(`/admin/runners/${runnerId}/workspace-create`, { csrf_token: policyCsrf, workspace_id: "readonly-1", display_name: "Read only workspace", root_path: readonlyWorkspace, enabled: "true", profile: "read_only", read: "true", edit: "false", shell: "false", job_control: "false" }, policyAdminJar);
     expect(readonlyResponse.status).toBe(303);
+    const contextResponse = await submitForm(`/admin/runners/${runnerId}/workspace-create`, { csrf_token: policyCsrf, workspace_id: "context-1", display_name: "Context workspace", root_path: contextWorkspace, enabled: "true", profile: "coding", read: "true", edit: "true", shell: "true", job_control: "true" }, policyAdminJar);
+    expect(contextResponse.status).toBe(303);
     await waitFor(async () => {
       const status = await fetch(`${workerUrl}/admin/runners/${runnerId}`, { headers: { cookie: cookieHeader(policyAdminJar) } });
       const html = await status.text();
@@ -848,16 +853,22 @@ describe.sequential("real local MCP → Worker → Runner RPC", () => {
   });
 
   it("R04 retains one checkpoint revision for repeated observed Job evidence across real MCP calls", async () => {
-    const started = await mcpTool("shell", { workspace_id: "workspace-1", command: nodeCommand("process.stdout.write('observed-evidence')") });
+    // R03 creates Git history in workspace-1. Keep this Job-idempotency case
+    // in its own non-Git workspace: a fresh Git sample is also checkpoint
+    // content, and an unavailable sample must retain its unknown state.
+    expect(existsSync(join(contextWorkspace, ".git"))).toBe(false);
+    const workspaceId = "context-1";
+    const started = await mcpTool("shell", { workspace_id: workspaceId, command: nodeCommand("process.stdout.write('observed-evidence')") });
     expect(started.isError, JSON.stringify(started)).not.toBe(true);
     const id = started.structuredContent?.job_id;
     expect(typeof id).toBe("string");
     // Idempotency excludes observation time, but includes the Job's status.
     // Wait for durable completion so both checkpoints observe the same facts.
-    await waitFor(async () => (await mcpTool("job", { action: "get", workspace_id: "workspace-1", job_id: id })).structuredContent?.status === "succeeded", 10_000);
-    const input = { action: "checkpoint", workspace_id: "workspace-1", turn_id: "e2e-observed-retry", goal: "retain one observed checkpoint", expected_revision: 0, evidence: [{ kind: "job", job_id: id }] };
+    await waitFor(async () => (await mcpTool("job", { action: "get", workspace_id: workspaceId, job_id: id })).structuredContent?.status === "succeeded", 10_000);
+    const input = { action: "checkpoint", workspace_id: workspaceId, turn_id: "e2e-observed-retry", goal: "retain one observed checkpoint", expected_revision: 0, evidence: [{ kind: "job", job_id: id }] };
     const first = await mcpTool("context", input);
     expect(first.isError, JSON.stringify(first)).not.toBe(true);
+    expect(first.structuredContent?.context).toMatchObject({ base_commit: null, base_commit_status: null, base_worktree_state: "unknown" });
     expect((first.structuredContent?.context as { evidence: unknown }).evidence).toEqual([
       expect.objectContaining({ kind: "job", job_id: id, job_status: "succeeded", exit_code: 0 }),
     ]);
